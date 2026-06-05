@@ -28,6 +28,7 @@ import {
 import { registerTrustedSkillName, clearTrustedSkillNamesForTesting } from '../_lib/trusted-skill-registry.js';
 import type { TrustedSkillResult } from '../trusted-skill-result.js';
 import type { PluginSkillBody } from './skill-bridge.js';
+import { RECON_ALLOWED_TOOLS } from './nesting.js';
 
 const abortSignal = new AbortController().signal;
 
@@ -1534,6 +1535,202 @@ describe('SkillExecutor', () => {
       const firstCtorCall = capturedCtorArgs[0];
       const ctorOpts = firstCtorCall?.[0];
       expect(ctorOpts?.backgroundRegistry).toBeUndefined();
+    });
+  });
+
+  describe('read-only skill enforcement (RECON allowlist + readOnlyBash)', () => {
+    function captureForkConfig(): { mockForkSubagent: ReturnType<typeof vi.fn> } {
+      const mockForkSubagent = vi.fn().mockResolvedValue({
+        runToResult: vi.fn().mockResolvedValue({
+          status: 'succeeded',
+          message: { content: 'ok' },
+        }),
+        teardown: vi.fn().mockResolvedValue(undefined),
+      });
+      vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockImplementation(mockForkSubagent);
+      vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
+      return { mockForkSubagent };
+    }
+
+    it('passes RECON_ALLOWED_TOOLS + readOnlyBash to the factory for a read-only registry skill', async () => {
+      captureForkConfig();
+      vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({ 'system.md': 'fake prompt' });
+      registerSkill({
+        name: 'recon-fork-skill',
+        description: 'test',
+        context: 'fork',
+        readOnly: true,
+        handler: vi.fn(),
+      });
+      const childProviderFactory = vi.fn().mockReturnValue({ name: 'sentinel' });
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        childProviderFactory: childProviderFactory as never,
+      });
+
+      await executor.execute(makeCall({ name: 'recon-fork-skill' }));
+
+      expect(childProviderFactory).toHaveBeenCalledOnce();
+      const factoryArgs = childProviderFactory.mock.calls[0]?.[0];
+      expect(factoryArgs?.allowedTools).toEqual([...RECON_ALLOWED_TOOLS]);
+      expect(factoryArgs?.readOnlyBash).toBe(true);
+    });
+
+    it('enforces read-only for ground-state by NAME even without the frontmatter flag', async () => {
+      // ground-state is in DEFAULT_READ_ONLY_SKILLS, so a registry entry that
+      // does NOT set readOnly still gets the recon allowlist + bash gate.
+      captureForkConfig();
+      vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({ 'system.md': 'fake prompt' });
+      registerSkill({
+        name: 'ground-state',
+        description: 'test',
+        context: 'fork',
+        // readOnly intentionally omitted — name-keyed enforcement must still fire.
+        handler: vi.fn(),
+      });
+      const childProviderFactory = vi.fn().mockReturnValue({ name: 'sentinel' });
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        childProviderFactory: childProviderFactory as never,
+      });
+
+      await executor.execute(makeCall({ name: 'ground-state' }));
+
+      const factoryArgs = childProviderFactory.mock.calls[0]?.[0];
+      expect(factoryArgs?.allowedTools).toEqual([...RECON_ALLOWED_TOOLS]);
+      expect(factoryArgs?.readOnlyBash).toBe(true);
+    });
+
+    it('does NOT restrict a normal (read-write) skill', async () => {
+      captureForkConfig();
+      vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({ 'system.md': 'fake prompt' });
+      registerSkill({
+        name: 'normal-fork-skill',
+        description: 'test',
+        context: 'fork',
+        handler: vi.fn(),
+      });
+      const childProviderFactory = vi.fn().mockReturnValue({ name: 'sentinel' });
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        childProviderFactory: childProviderFactory as never,
+      });
+
+      await executor.execute(makeCall({ name: 'normal-fork-skill' }));
+
+      const factoryArgs = childProviderFactory.mock.calls[0]?.[0];
+      // No allowlist override and no bash gate — the factory falls back to
+      // CHILD_ALLOWED_TOOLS (full write surface).
+      expect(factoryArgs?.allowedTools).toBeUndefined();
+      expect(factoryArgs?.readOnlyBash).toBeUndefined();
+    });
+
+    it('passes RECON allowlist + readOnlyBash for a read-only PLUGIN skill', async () => {
+      const { mockForkSubagent } = captureForkConfig();
+      const childProviderFactory = vi.fn().mockReturnValue({ name: 'sentinel' });
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        pluginConfigs: undefined,
+        childProviderFactory: childProviderFactory as never,
+      });
+
+      // Stub a read-only plugin body so executePluginSkill is reached.
+      const body: PluginSkillBody = {
+        body: 'fake plugin body',
+        pluginPath: '/fake/plugin',
+        readOnly: true,
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (executor as any).pluginBodies = new Map([['recon-plugin', body]]);
+
+      await executor.execute(makeCall({ name: 'recon-plugin', arguments: 'go' }));
+
+      expect(mockForkSubagent).toHaveBeenCalledOnce();
+      const factoryArgs = childProviderFactory.mock.calls[0]?.[0];
+      expect(factoryArgs?.allowedTools).toEqual([...RECON_ALLOWED_TOOLS]);
+      expect(factoryArgs?.readOnlyBash).toBe(true);
+    });
+
+    it('with NO factory, a read-only skill still gets a recon provider (fallback path)', async () => {
+      const { mockForkSubagent } = captureForkConfig();
+      // No childProviderFactory configured → the no-factory branch of
+      // buildForkedChildConfig runs. A read-only skill must still receive an
+      // explicit read-only recon provider rather than the bare (full-write)
+      // singleton. (depth defaults to 0 < maxDepth, so execute() proceeds to
+      // the fork — this exercises the `!childProviderFactory` half of the
+      // early-return condition.)
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        // childProviderFactory intentionally omitted.
+      });
+
+      const body: PluginSkillBody = {
+        body: 'fake plugin body',
+        pluginPath: '/fake/plugin',
+        readOnly: true,
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (executor as any).pluginBodies = new Map([['fallback-recon', body]]);
+
+      await executor.execute(makeCall({ name: 'fallback-recon' }));
+
+      const forkCall = mockForkSubagent.mock.calls[0]?.[0];
+      // A provider IS set (the read-only recon fallback) — unlike a normal
+      // skill with no factory, which gets `provider: undefined` (see the
+      // "omits provider when no childProviderFactory is configured" test above).
+      expect(forkCall?.config?.provider).toBeDefined();
+    });
+
+    it('with NO factory, a NORMAL skill gets no provider (proves the fallback is read-only-gated)', async () => {
+      const { mockForkSubagent } = captureForkConfig();
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        // childProviderFactory intentionally omitted.
+      });
+
+      const body: PluginSkillBody = {
+        body: 'fake plugin body',
+        pluginPath: '/fake/plugin',
+        // readOnly omitted → normal read-write skill.
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (executor as any).pluginBodies = new Map([['fallback-normal', body]]);
+
+      await executor.execute(makeCall({ name: 'fallback-normal' }));
+
+      const forkCall = mockForkSubagent.mock.calls[0]?.[0];
+      expect(forkCall?.config?.provider).toBeUndefined();
     });
   });
 

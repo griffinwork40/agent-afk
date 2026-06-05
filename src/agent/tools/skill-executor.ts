@@ -23,6 +23,9 @@ import { collectSkillEntries, discoverPluginSkillBodies, type PluginSkillBody } 
 import type { SdkPluginConfig } from '../types/sdk-types.js';
 import {
   DEFAULT_MAX_NESTING_DEPTH,
+  DEFAULT_READ_ONLY_SKILLS,
+  RECON_ALLOWED_TOOLS,
+  buildReadOnlyReconProvider,
   createStubParentSession,
   type ChildProviderFactoryArgs,
 } from './nesting.js';
@@ -263,12 +266,19 @@ export class SkillExecutor {
           call,
         );
       }
+      // Read-only enforcement: a plugin skill is read-only when its SKILL.md
+      // frontmatter declares `read-only: true` (surfaced as `pluginSkill.readOnly`)
+      // OR its name is in DEFAULT_READ_ONLY_SKILLS (name-keyed so any copy of
+      // the SKILL.md is protected — e.g. the bundled `ground-state`).
+      const readOnly =
+        pluginSkill.readOnly === true || DEFAULT_READ_ONLY_SKILLS.has(parsed.name);
       return await this.executePluginSkill(
         parsed.name,
         pluginSkill.body,
         pluginSkill.pluginPath,
         parsed.arguments,
         call,
+        readOnly,
       );
     }
 
@@ -291,6 +301,7 @@ export class SkillExecutor {
       name: string;
       context?: 'inline' | 'fork' | 'load';
       model?: string;
+      readOnly?: boolean;
     },
     args: string | undefined,
     call: ToolCall,
@@ -427,12 +438,25 @@ export class SkillExecutor {
   private buildForkedChildConfig(
     baseConfig: AgentConfig,
     signal: AbortSignal,
+    // When true, this is a read-only skill (frontmatter `read-only: true` or a
+    // name in DEFAULT_READ_ONLY_SKILLS). The forked child is built with the
+    // RECON tool allowlist (no write_file/edit_file) and the mutating-bash
+    // gate — on BOTH the factory path and the depth-cap/no-factory fallback.
+    readOnly = false,
   ): { childConfig: AgentConfig; childManager: SubagentManager | undefined } {
     const depth = this.ctx.depth ?? 0;
     const maxDepth = this.ctx.maxDepth ?? DEFAULT_MAX_NESTING_DEPTH;
     const childConfig: AgentConfig = { ...baseConfig };
 
     if (!this.ctx.childProviderFactory || depth >= maxDepth) {
+      // Depth-cap / no-factory fallback. The child would otherwise inherit the
+      // bare provider singleton with the full write surface and no bash gate,
+      // silently defeating read-only enforcement. Build an explicit read-only
+      // recon provider so the constraint holds even here (no agent/skill fan-out
+      // is possible at the cap anyway, so the missing executors are harmless).
+      if (readOnly) {
+        childConfig.provider = buildReadOnlyReconProvider(childConfig.model);
+      }
       return { childConfig, childManager: undefined };
     }
 
@@ -478,6 +502,12 @@ export class SkillExecutor {
       ...(this.ctx.backgroundRegistry !== undefined
         ? { backgroundRegistry: this.ctx.backgroundRegistry }
         : {}),
+      // Propagate read-only constraints into the SubagentExecutor that will
+      // handle `agent` tool calls from this skill-forked child. Without this,
+      // a depth-2 fan-out (`ground-state → agent → depth-2`) loses the
+      // allowlist — the grandchild SubagentExecutor's `childProviderFactory`
+      // call omits allowedTools/readOnlyBash and falls back to CHILD_ALLOWED_TOOLS.
+      ...(readOnly ? { allowedTools: [...RECON_ALLOWED_TOOLS], readOnlyBash: true as const } : {}),
     });
     const childSkillExecutor = this.ctx.childSkillExecutorFactory
       ? this.ctx.childSkillExecutorFactory(depth + 1, maxDepth, signal)
@@ -491,6 +521,11 @@ export class SkillExecutor {
       childExecutor,
       ...(childSkillExecutor !== undefined ? { childSkillExecutor } : {}),
       ...(childConfig.model !== undefined ? { model: childConfig.model } : {}),
+      // Read-only enforcement: hand the factory the RECON allowlist (strips
+      // write_file/edit_file) and turn on the mutating-bash gate. The child
+      // keeps `agent`/`skill` (so surveyor fan-out still works) and read-only
+      // bash (git status/log/diff for dirty-tree detection).
+      ...(readOnly ? { allowedTools: [...RECON_ALLOWED_TOOLS], readOnlyBash: true } : {}),
     });
 
     return { childConfig, childManager };
@@ -501,6 +536,7 @@ export class SkillExecutor {
       name: string;
       context?: 'inline' | 'fork' | 'load';
       model?: string;
+      readOnly?: boolean;
     },
     args: string | undefined,
     call: ToolCall,
@@ -508,6 +544,11 @@ export class SkillExecutor {
     if (call.signal.aborted) {
       return { content: 'Skill call aborted', isError: true };
     }
+
+    // A skill is enforced read-only when its frontmatter declares it OR its
+    // name is in DEFAULT_READ_ONLY_SKILLS (keying on name protects any copy of
+    // the SKILL.md). Threaded into buildForkedChildConfig below.
+    const readOnly = skill.readOnly === true || DEFAULT_READ_ONLY_SKILLS.has(skill.name);
 
     // Load prompts from the skill's directory
     let systemPrompt: string | undefined;
@@ -569,6 +610,7 @@ export class SkillExecutor {
         ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
       } as AgentConfig,
       call.signal,
+      readOnly,
     );
 
     // Invariant: `handle` is declared OUTSIDE the try so finally can call
@@ -794,6 +836,9 @@ export class SkillExecutor {
     pluginPath: string,
     args: string | undefined,
     call: ToolCall,
+    // Read-only enforcement flag, computed at the call site from the plugin
+    // body's `readOnly` frontmatter OR DEFAULT_READ_ONLY_SKILLS membership.
+    readOnly = false,
   ): Promise<ToolResult> {
     if (call.signal.aborted) {
       return { content: 'Skill call aborted', isError: true };
@@ -845,6 +890,7 @@ export class SkillExecutor {
         ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
       } as AgentConfig,
       call.signal,
+      readOnly,
     );
 
     // Invariant: same trace-sealing rule as executeForkedRegistrySkill above.

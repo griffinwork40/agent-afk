@@ -130,6 +130,15 @@ export interface AnthropicDirectProviderOptions {
    */
   readOnlyMemory?: boolean;
   /**
+   * When true, the per-query {@link SessionToolDispatcher} blocks mutating
+   * `bash` commands (read-only recon — git status/log/diff, ls, cat, find,
+   * grep — is allowed). Set by `createChildProviderFactory` /
+   * `buildReadOnlyReconProvider` for a read-only skill's forked child, paired
+   * with `permissions.allowedTools = RECON_ALLOWED_TOOLS` (which strips
+   * `write_file`/`edit_file`). Defaults to false.
+   */
+  readOnlyBash?: boolean;
+  /**
    * Optional MCP manager. When provided, every tool exposed by a
    * `connected` MCP server is merged into the provider's tool schema list
    * and the per-query dispatcher's handler map. Pre/PostToolUse hooks
@@ -162,6 +171,8 @@ export class AnthropicDirectProvider implements ModelProvider {
   private readonly composeExecutor: import('../../tools/compose-executor.js').ComposeExecutor | undefined;
   private readonly surface: string;
   private readonly readOnlyMemory: boolean;
+  /** When true, the per-query dispatcher blocks mutating bash (read-only skill child). */
+  private readonly readOnlyBash: boolean;
   /** When set, MCP tools are merged into `schemas` + dispatcher handlers per query. */
   private readonly mcpManager: import('../../mcp/index.js').McpManager | undefined;
   /**
@@ -241,6 +252,7 @@ export class AnthropicDirectProvider implements ModelProvider {
     this.composeExecutor = opts.composeExecutor;
     this.surface = opts.surface ?? 'cli';
     this.readOnlyMemory = opts.readOnlyMemory === true;
+    this.readOnlyBash = opts.readOnlyBash === true;
     this.mcpManager = opts.mcpManager;
     if (opts.mcpManager) {
       // Subscribe to the refresh hook to invalidate the MCP tool/handler caches.
@@ -342,6 +354,10 @@ export class AnthropicDirectProvider implements ModelProvider {
       sessionId: opts?.sessionId,
       parentSessionId: opts?.parentSessionId,
       ...(opts?.traceWriter ? { traceWriter: opts.traceWriter } : {}),
+      // Read-only-skill bash gate: forwarded from the provider's stored flag
+      // (set by createChildProviderFactory / buildReadOnlyReconProvider) so a
+      // read-only skill's forked child can't run mutating shell commands.
+      readOnlyBash: this.readOnlyBash,
     });
   }
 

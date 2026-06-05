@@ -232,6 +232,83 @@ Content`
     expect(skills).toHaveLength(0);
   });
 
+  it('should parse read-only: true frontmatter into metadata.readOnly', () => {
+    const skillDir = join(tmpDir, 'skills');
+    const fs = require('fs');
+    fs.mkdirSync(skillDir, { recursive: true });
+
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      `---
+name: recon-skill
+description: A read-only recon skill
+read-only: true
+---
+Content`
+    );
+
+    const skills = extractPluginSkills(tmpDir);
+    expect(skills).toHaveLength(1);
+    expect(skills[0]!.readOnly).toBe(true);
+  });
+
+  it('should also accept the camelCase readOnly spelling', () => {
+    const skillDir = join(tmpDir, 'skills');
+    const fs = require('fs');
+    fs.mkdirSync(skillDir, { recursive: true });
+
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      `---
+name: recon-skill-camel
+description: A read-only recon skill
+readOnly: true
+---
+Content`
+    );
+
+    const skills = extractPluginSkills(tmpDir);
+    expect(skills[0]!.readOnly).toBe(true);
+  });
+
+  it('should leave readOnly undefined when frontmatter omits it', () => {
+    const skillDir = join(tmpDir, 'skills');
+    const fs = require('fs');
+    fs.mkdirSync(skillDir, { recursive: true });
+
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      `---
+name: rw-skill
+description: A normal skill
+---
+Content`
+    );
+
+    const skills = extractPluginSkills(tmpDir);
+    expect(skills[0]!.readOnly).toBeUndefined();
+  });
+
+  it('should not set readOnly for a non-true value', () => {
+    const skillDir = join(tmpDir, 'skills');
+    const fs = require('fs');
+    fs.mkdirSync(skillDir, { recursive: true });
+
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      `---
+name: maybe-skill
+description: A skill with a bogus read-only value
+read-only: maybe
+---
+Content`
+    );
+
+    const skills = extractPluginSkills(tmpDir);
+    // Only the literal string "true" opts in — a typo must not strip write tools.
+    expect(skills[0]!.readOnly).toBeUndefined();
+  });
+
   it('should parse quoted YAML values', () => {
     const skillDir = join(tmpDir, 'skills');
     const fs = require('fs');

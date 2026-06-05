@@ -24,6 +24,7 @@ import type { SkillExecutor } from './skill-executor.js';
 import type { ComposeExecutor } from './compose-executor.js';
 import type { ToolHandler, ToolHandlerContext, ConcurrencyClassifier } from './types.js';
 import { checkToolPermission, type ToolPermissionConfig } from './permissions.js';
+import { classifyBashCommand } from './readonly-bash.js';
 import { getSessionGrantsPath } from '../../paths.js';
 import type { TraceWriter } from '../trace/index.js';
 import { builtinToolSchemas, agentTool, skillTool, composeTool } from './schemas.js';
@@ -121,6 +122,18 @@ export interface SessionToolDispatcherOptions {
   /** Witness-layer trace writer. When provided, every PreToolUse and
    *  PostToolUse dispatch records a `hook_decision` event. */
   traceWriter?: TraceWriter;
+  /**
+   * When true, this dispatcher belongs to a read-only skill's forked subagent:
+   * any `bash` call whose command is classified as MUTATING (see
+   * `classifyBashCommand`) is blocked with an isError result before the
+   * handler runs. Read-only bash (git status/log/diff, ls, cat, find, grep,
+   * etc.) is allowed through. This is the bash half of read-only-skill
+   * enforcement — the tool-allowlist half (no `write_file`/`edit_file`) is set
+   * via `permissions.allowedTools = RECON_ALLOWED_TOOLS` at provider
+   * construction. Set by `createChildProviderFactory` / `buildReadOnlyReconProvider`.
+   * Defaults to false.
+   */
+  readOnlyBash?: boolean;
 }
 
 export class SessionToolDispatcher implements ToolDispatcher {
@@ -152,6 +165,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly sessionId: string | undefined;
   private readonly parentSessionId: string | undefined;
   private readonly traceWriter: TraceWriter | undefined;
+  /** When true, mutating `bash` commands are blocked (read-only skill child). */
+  private readonly readOnlyBash: boolean;
 
   constructor(opts: SessionToolDispatcherOptions) {
     this.handlers = opts.handlers;
@@ -167,6 +182,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this.sessionId = opts.sessionId;
     this.parentSessionId = opts.parentSessionId;
     this.traceWriter = opts.traceWriter;
+    this.readOnlyBash = opts.readOnlyBash === true;
 
     // When caller passes arrays by reference (provider sharing pattern), use
     // them directly so mutations are visible without rebuilding. Otherwise
@@ -326,6 +342,38 @@ export class SessionToolDispatcher implements ToolDispatcher {
     return this.schemas;
   }
 
+  /**
+   * Read-only-skill bash gate. Returns an isError {@link ToolResult} when the
+   * dispatcher is in `readOnlyBash` mode AND `call` is a `bash` invocation
+   * whose command classifies as MUTATING; otherwise returns `null` (allow).
+   *
+   * Invariant: this runs AFTER the permission check at both call sites
+   * (`execute()` single-path and `executeBatch()` phase-1), mirroring a
+   * PreToolUse gate but living in the dispatcher because — unlike the hook
+   * registry — it needs the raw `call.input.command` string. The input shape
+   * is guarded: a non-object input or missing/non-string `command` is treated
+   * as a no-op pass-through (the handler will surface its own validation
+   * error), so we never throw here.
+   */
+  private checkReadOnlyBash(call: ToolCall): ToolResult | null {
+    if (!this.readOnlyBash || call.name !== 'bash') return null;
+    const input = call.input;
+    const command =
+      typeof input === 'object' && input !== null
+        ? (input as Record<string, unknown>)['command']
+        : undefined;
+    if (typeof command !== 'string') return null;
+    const verdict = classifyBashCommand(command);
+    if (!verdict.mutating) return null;
+    return {
+      content:
+        `Bash command blocked: read-only skill may not run mutating commands ` +
+        `(${verdict.reason ?? 'mutation detected'}). Allowed: read-only recon ` +
+        `(git status/log/diff, ls, cat, find, grep).`,
+      isError: true,
+    };
+  }
+
   async execute(call: ToolCall): Promise<ToolResult> {
     if (call.signal.aborted) {
       return { content: 'Tool call aborted', isError: true };
@@ -366,6 +414,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
         isError: true,
       };
     }
+
+    // 2b. Read-only-skill bash gate. Runs after the permission check so the
+    // allowlist denial (if any) takes precedence; blocks mutating bash while
+    // letting read-only recon through.
+    const bashBlock = this.checkReadOnlyBash(call);
+    if (bashBlock) return bashBlock;
 
     // 3. Agent tool — provider-level dispatch
     if (call.name === 'agent') {
@@ -504,6 +558,17 @@ export class SessionToolDispatcher implements ToolDispatcher {
           isError: true,
         };
         blocked.add(i);
+        continue;
+      }
+
+      // Read-only-skill bash gate — mirror the permission-denied branch:
+      // set the result and add to `blocked` so this call is excluded from
+      // execution in phase 2.
+      const bashBlock = this.checkReadOnlyBash(call);
+      if (bashBlock) {
+        results[i] = bashBlock;
+        blocked.add(i);
+        continue;
       }
     }
 

@@ -46,8 +46,14 @@ const PINNED_HASHES = {
   gather: '26ef18dde7db7c313655b0fe3097f14966763298ff5a2fe643ccf18d0f6b29c0',
   'ground-claim':
     'd877c1e7de08ecb8788677f6a8f3b51f5d48cefefbf4019af2e37ac1484a95bb',
+  // Hash bumped to add `read-only: true` frontmatter — the agent-afk
+  // read-only-skill enforcement feature (forked child gets the RECON tool
+  // allowlist + mutating-bash guard). Bundled-only for now; the upstream
+  // ground-state SKILL.md should mirror the frontmatter when the feature
+  // lands there. The bundled-only `read-only: true` line is allowlisted in
+  // INTENTIONAL_DIFFS['ground-state'] below so the normalized-drift test passes.
   'ground-state':
-    'ae4c167296e96b640a54cd4cd317e5810894cffff6dac3c022b1433dff003105',
+    '9ab4972937286ef56b79560a67949c7557750db8a8ba216d4de628f529b10d86',
   // intent-lock is bundled-only (no upstream counterpart).
   // Hash bumps need no parallel PR — document the change in the
   // commit message instead.
@@ -242,6 +248,19 @@ const INTENTIONAL_DIFFS: Partial<Record<SkillName, RegExp[]>> = {
     // Upstream side: /agent-workflow-amplifiers:contract invocation.
     /\/agent-workflow-amplifiers:contract/,
   ],
+
+  // ground-state — agent-afk-only read-only-skill enforcement frontmatter:
+  //   The bundled copy carries `read-only: true` in its frontmatter. This is
+  //   the marker the agent-afk runtime keys on to give ground-state's forked
+  //   reconnaissance subagent a restricted RECON tool allowlist (no
+  //   write_file/edit_file) plus a mutating-bash guard — enforcing the
+  //   "This skill never edits files" constraint that was previously prose-only
+  //   (the subagent had FULL write tools and was observed making 22 edit_file +
+  //   27 bash calls in one session). The upstream ground-state SKILL.md has no
+  //   equivalent enforcement layer yet, so the frontmatter line is bundled-only.
+  //   When upstream adopts read-only enforcement, mirror the frontmatter there
+  //   and remove this allowlist entry. Flagged for cross-repo reconciliation.
+  'ground-state': [/^read-only: true$/],
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

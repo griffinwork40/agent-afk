@@ -94,6 +94,15 @@ export interface SkillMetadata {
   /** Long-form CLI flags this skill accepts (e.g. ['--auto', '--ship']). Surfaces in tab completion and `/help`. */
   flags?: readonly string[];
   /**
+   * Read-only enforcement flag (default absent → read-write). When `true`, a
+   * forked subagent for this skill (`context: 'fork'`) is built with the
+   * RECON tool allowlist (no `write_file`/`edit_file`) and a mutating-bash
+   * guard. A skill is ALSO treated read-only when its name is in
+   * `DEFAULT_READ_ONLY_SKILLS` (nesting.ts) regardless of this flag — keying
+   * on name protects users running any copy of the SKILL.md.
+   */
+  readOnly?: boolean;
+  /**
    * Public/internal tier gate.
    *
    * Invariant: skills tagged 'internal' are filtered from end-user surfaces

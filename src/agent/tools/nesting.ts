@@ -39,6 +39,20 @@ export interface ChildProviderFactoryArgs {
    * (legacy default, preserved for the Anthropic-everywhere path).
    */
   model?: AgentModelInput;
+  /**
+   * Tool allowlist for the forked child's provider. When set, becomes the
+   * child provider's `permissions.allowedTools`. Used to pass
+   * {@link RECON_ALLOWED_TOOLS} for a read-only skill's child (stripping
+   * `write_file`/`edit_file`). When undefined, defaults to
+   * {@link CHILD_ALLOWED_TOOLS} (full write surface — the legacy default).
+   */
+  allowedTools?: string[];
+  /**
+   * When true, the child provider's per-query dispatcher blocks mutating
+   * `bash` commands. Set together with `allowedTools: RECON_ALLOWED_TOOLS`
+   * for a read-only skill's forked child. Defaults to false.
+   */
+  readOnlyBash?: boolean;
 }
 
 /** Minimal session stub for child executors that only need an abort signal. */
@@ -71,6 +85,46 @@ export function createStubParentSession(
 // buildPhaseRestrictedProvider-style opt-in builder (see nesting.ts around line 207), not by
 // extending this global default.
 export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', 'agent', 'skill'];
+
+// Recon allowlist for a READ-ONLY skill's forked child. This is the tool half
+// of read-only-skill enforcement (the bash half is the dispatcher's
+// `readOnlyBash` gate). A read-only skill (e.g. `ground-state`) is pure
+// pre-flight reconnaissance: it reads files, greps, lists, scrapes, recalls
+// memory, runs read-only bash (git status/log/diff for dirty-tree detection),
+// and fans out surveyors via `agent`/`skill`. It must NOT mutate the repo — so
+// `write_file` and `edit_file` are excluded entirely, and `bash` is admitted
+// only behind the mutating-command guard.
+//
+// Excluded vs CHILD_ALLOWED_TOOLS: write_file, edit_file (file mutation),
+// send_telegram (side-effecting notification), browser_* (stateful automation
+// that can submit forms / mutate remote state), terminal_font_size +
+// ask_question (environment / operator-prompt tools with no recon role), and
+// all schedule tools (create/list/get_history/cancel — scheduling is a
+// mutation of daemon state). `bash` IS included (read-only recon needs it) and
+// is gated by classifyBashCommand in the dispatcher. `agent`/`skill` ARE
+// included so the surveyor fan-out the SKILL.md prescribes still works.
+export const RECON_ALLOWED_TOOLS: readonly string[] = [
+  'read_file',
+  'glob',
+  'grep',
+  'list_directory',
+  'bash',
+  'web_scrape',
+  ...AWARENESS_TOOL_NAMES,
+  'memory_search',
+  'agent',
+  'skill',
+];
+
+// Skills treated as read-only by NAME, independent of their SKILL.md
+// frontmatter. Keying on name (not just the `read-only:` frontmatter flag)
+// protects users running ANY copy of the SKILL.md — including a bundled or
+// vendored copy whose frontmatter has not been (or cannot be) edited. A skill
+// is enforced read-only when `frontmatter.readOnly === true` OR its name is in
+// this set. Initially contains only `ground-state` (the proven offender: it
+// made 22 edit_file + 27 bash calls in one session despite "never edits files"
+// prose). Add a name here only for skills that are genuinely read-only recon.
+export const DEFAULT_READ_ONLY_SKILLS: ReadonlySet<string> = new Set(['ground-state']);
 
 /**
  * Bootstrap-time options captured by closure into the factory returned by
@@ -109,11 +163,16 @@ export interface CreateChildProviderFactoryOptions {
 export function createChildProviderFactory(
   opts: CreateChildProviderFactoryOptions = {},
 ): (args: ChildProviderFactoryArgs) => ModelProvider {
-  return ({ childExecutor, childSkillExecutor, model }) => {
+  return ({ childExecutor, childSkillExecutor, model, allowedTools, readOnlyBash }) => {
     const providerOpts = {
-      permissions: { allowedTools: CHILD_ALLOWED_TOOLS },
+      // A read-only skill's child passes `allowedTools: RECON_ALLOWED_TOOLS`
+      // (no write_file/edit_file); everyone else gets the full CHILD_ALLOWED_TOOLS.
+      permissions: { allowedTools: allowedTools ?? CHILD_ALLOWED_TOOLS },
       subagentExecutor: childExecutor,
       ...(childSkillExecutor !== undefined ? { skillExecutor: childSkillExecutor } : {}),
+      // Bash gate (read-only skill child). Forwarded into BOTH provider
+      // constructors so the per-query dispatcher blocks mutating shell commands.
+      ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
     };
     const route = providerForModel(typeof model === 'string' ? model : undefined);
     if (route === 'openai-compatible') {
@@ -129,6 +188,36 @@ export function createChildProviderFactory(
     // from subagents would cause uncoordinated fan-out into the shared store.
     return new AnthropicDirectProvider({ ...providerOpts, readOnlyMemory: true });
   };
+}
+
+/**
+ * Build a provider for a READ-ONLY skill's forked child when the normal
+ * factory path is NOT available — i.e. when `childProviderFactory` is unset or
+ * the nesting depth cap was hit (the branch in
+ * {@link SkillExecutor.buildForkedChildConfig} that returns early without a
+ * factory-built provider). In that fallback the child would otherwise inherit
+ * the bare provider singleton — with the full write surface and no bash gate —
+ * silently defeating read-only enforcement.
+ *
+ * This helper builds a minimal provider with:
+ *   - `permissions.allowedTools = RECON_ALLOWED_TOOLS` (no write_file/edit_file)
+ *   - `readOnlyBash: true` (dispatcher blocks mutating bash)
+ *   - `readOnlyMemory: true` (consistency with the factory path)
+ *   - NO `subagentExecutor` / `skillExecutor` — at the depth cap the child
+ *     cannot fan out further anyway, so `agent`/`skill` would be dead schema.
+ *
+ * Routed by `providerForModel(model)` exactly like
+ * {@link createChildProviderFactory} and {@link buildPhaseRestrictedProvider}.
+ */
+export function buildReadOnlyReconProvider(model: AgentModelInput | undefined): ModelProvider {
+  // Materialize the allowlist per call so test/runtime mutation of the shared
+  // array doesn't bleed across siblings (mirrors buildPhaseRestrictedProvider).
+  const permissions = { allowedTools: [...RECON_ALLOWED_TOOLS] };
+  const route = providerForModel(typeof model === 'string' ? model : undefined);
+  if (route === 'openai-compatible') {
+    return new OpenAICompatibleProvider({ permissions, readOnlyBash: true, readOnlyMemory: true });
+  }
+  return new AnthropicDirectProvider({ permissions, readOnlyBash: true, readOnlyMemory: true });
 }
 
 /**

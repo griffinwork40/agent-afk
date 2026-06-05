@@ -79,6 +79,14 @@ export interface OpenAICompatibleProviderOptions {
    */
   readOnlyMemory?: boolean;
   /**
+   * When true, the per-query {@link SessionToolDispatcher} blocks mutating
+   * `bash` commands (read-only recon allowed). Parity with
+   * `AnthropicDirectProviderOptions.readOnlyBash`. Set by
+   * `createChildProviderFactory` / `buildReadOnlyReconProvider` for a
+   * read-only skill's forked child. Defaults to false.
+   */
+  readOnlyBash?: boolean;
+  /**
    * Caller-provided dispatcher. When set, the provider does NOT build its
    * own — the caller owns lifecycle. Mirrors anthropic-direct's `externalTools`
    * option used by tests and the nesting fixture.
@@ -336,6 +344,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
     if (opts.sessionId !== undefined) dispatcherOpts.sessionId = opts.sessionId;
     if (opts.parentSessionId !== undefined) dispatcherOpts.parentSessionId = opts.parentSessionId;
     if (opts.traceWriter !== undefined) dispatcherOpts.traceWriter = opts.traceWriter;
+    // Read-only-skill bash gate — parity with anthropic-direct. Forwarded from
+    // the provider's construction-time flag so a read-only skill's forked
+    // OpenAI-routed child also blocks mutating shell commands.
+    if (this.providerOpts.readOnlyBash === true) dispatcherOpts.readOnlyBash = true;
 
     return new SessionToolDispatcher(dispatcherOpts);
   }

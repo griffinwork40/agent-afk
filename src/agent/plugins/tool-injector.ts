@@ -28,6 +28,15 @@ export interface PluginSkillMetadata {
    * historical fork behavior.
    */
   context?: string;
+  /**
+   * Read-only enforcement flag from the `read-only:` (or `readOnly:`)
+   * frontmatter field. When `true`, a forked subagent for this skill is
+   * built with the RECON tool allowlist (no `write_file`/`edit_file`) and a
+   * bash-command guard that blocks mutating shell invocations. See
+   * `nesting.ts` (`RECON_ALLOWED_TOOLS`, `DEFAULT_READ_ONLY_SKILLS`) and the
+   * dispatcher's `readOnlyBash` gate.
+   */
+  readOnly?: boolean;
   /** Markdown content after the frontmatter closing `---`. */
   body?: string;
   /**
@@ -146,6 +155,13 @@ function parseSkillMetadata(skillPath: string): PluginSkillMetadata {
         }
       } else if (key === 'context') {
         metadata.context = value.replace(/^["']|["']$/g, '');
+      } else if (key === 'read-only' || key === 'readOnly') {
+        // Accept both the kebab (`read-only`) and camel (`readOnly`) spellings.
+        // Only the literal string `true` opts in; any other value (or a typo)
+        // leaves the skill read-write so a mistake can't silently strip the
+        // child's write tools.
+        const raw = value.replace(/^["']|["']$/g, '').trim();
+        if (raw === 'true') metadata.readOnly = true;
       }
     }
 

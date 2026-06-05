@@ -156,6 +156,13 @@ export interface PluginSkillBody {
    * subagent (see docs/skill-load-mode.md). Undefined → historical fork path.
    */
   context?: string;
+  /**
+   * Read-only enforcement flag from SKILL.md frontmatter `read-only:`. When
+   * `true`, the forked subagent is built with the RECON tool allowlist and a
+   * mutating-bash guard (see `nesting.ts` / dispatcher `readOnlyBash`).
+   * Absent → historical full-write fork.
+   */
+  readOnly?: boolean;
 }
 
 /**
@@ -190,6 +197,7 @@ export function discoverPluginSkillBodies(
           body: skill.body,
           pluginPath: plugin.path,
           ...(skill.context !== undefined ? { context: skill.context } : {}),
+          ...(skill.readOnly === true ? { readOnly: true } : {}),
         });
       }
     }
