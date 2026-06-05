@@ -281,6 +281,49 @@ exit 0
 });
 
 // ---------------------------------------------------------------------------
+// stdin EPIPE race (CI regression)
+// ---------------------------------------------------------------------------
+
+describe('stdin EPIPE race (regression)', () => {
+  it('does not leak an unhandled error when the child exits before stdin flushes', async () => {
+    // Repro for the CI-only failure where all tests "passed" (8111) yet the job
+    // exited non-zero with 6 "Errors": a large stdin payload (well over the OS
+    // pipe buffer, so the write is buffered and flushes ASYNCHRONOUSLY) sent to
+    // a command that exits immediately WITHOUT reading stdin. The child's stdin
+    // read end closes while the parent's write is still pending → async EPIPE on
+    // proc.stdin. Without an 'error' listener on proc.stdin, Node escalates it to
+    // an unhandled error that vitest counts among "Errors". tool_input is echoed
+    // verbatim into the stdin JSON payload (see command-executor.ts), so a large
+    // command string inflates stdin past the pipe buffer. Several run in parallel
+    // to make the race deterministic.
+    const bigInput = 'x'.repeat(256 * 1024); // 256 KB ≫ pipe buffer (~64 KB)
+    const ctx: HookContext = {
+      event: 'PreToolUse',
+      sessionId: 'test-session',
+      toolName: 'bash',
+      input: { command: bigInput },
+    };
+
+    const leaked: unknown[] = [];
+    const onErr = (e: unknown) => leaked.push(e);
+    process.on('uncaughtException', onErr);
+    process.on('unhandledRejection', onErr);
+    try {
+      const results = await Promise.all(
+        Array.from({ length: 16 }, () => executeCommand(makeOpts('exit 0', ctx))),
+      );
+      // Give any async stdin 'error' a tick to surface before asserting.
+      await new Promise((r) => setTimeout(r, 150));
+      for (const result of results) expect(result.decision).toEqual({});
+      expect(leaked).toEqual([]);
+    } finally {
+      process.off('uncaughtException', onErr);
+      process.off('unhandledRejection', onErr);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Env injection
 // ---------------------------------------------------------------------------
 
