@@ -1,6 +1,7 @@
 ---
 name: contract
 description: "Reference convention for sub-agent I/O schemas. Loaded by orchestrator skills via /contract and into agents via the `skills:` field."
+context: load
 ---
 
 # Contract
