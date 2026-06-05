@@ -38,7 +38,12 @@ const PINNED_HASHES = {
   contract: '0b7febafec024e8dd4404f75e84d21ee72b1b1846d6e2610aaa82ba77f9d6f2d',
   'devils-advocate':
     '84275b097fa3ed270b0b71c87e2dad0366794fd7efc7a47d29abaa85da97f974',
-  gather: 'ec2964fb1f47970fffba6bafacb4dc4f0c76291a7cc0da92ff069a0a986decb4',
+  // gather + parallelize carry a bundled-only `context: load` frontmatter line
+  // (2026-06 skill-execution-mode work). `context` is an agent-afk-specific
+  // field; Claude Code upstream skills are natively inline/progressive-disclosure,
+  // so there is NO upstream counterpart to back-port — permanent bundled-only
+  // divergence (allowlisted in INTENTIONAL_DIFFS below). See docs/skill-load-mode.md.
+  gather: '26ef18dde7db7c313655b0fe3097f14966763298ff5a2fe643ccf18d0f6b29c0',
   'ground-claim':
     'd877c1e7de08ecb8788677f6a8f3b51f5d48cefefbf4019af2e37ac1484a95bb',
   'ground-state':
@@ -48,8 +53,9 @@ const PINNED_HASHES = {
   // commit message instead.
   'intent-lock':
     '7a466075e5a64c1145b97aa24b9a6990a3ee1dc818b93c158433e53d7416aef0',
+  // parallelize: bundled-only `context: load` added — see the gather note above.
   parallelize:
-    '74b1a7cf866d630dce0d33323663a8b818f149b5f4d4ef60feba1aeb3472e49b',
+    'be8b2a301fe35d86d96d4be6f8418bf497dd9050767a3837cf057d7d5a1cd719',
   // refactor is bundled-only (no upstream example-plugin counterpart); verbatim
   // copy of the user-scope /refactor at ~/.afk/skills/.
   refactor: '23ab4836653159deeafbca45e516af8d43e8c5275535613e36f7bcb2d77de64e',
@@ -148,12 +154,19 @@ const INTENTIONAL_DIFFS: Partial<Record<SkillName, RegExp[]>> = {
     // skill namespace on bundled vs upstream.
     /^\/contract$/,
     /\/agent-workflow-amplifiers:contract/,
+    // Bundled-only agent-afk execution-mode field (no upstream equivalent —
+    // Claude Code skills are natively inline). See docs/skill-load-mode.md.
+    /^context: load$/,
   ],
   'shadow-verify': [
     // Same structural divergence as devils-advocate.
     /^\/contract$/,
     /\/agent-workflow-amplifiers:contract/,
   ],
+
+  // gather: bundled-only `context: load` execution-mode field (no upstream
+  // equivalent — Claude Code skills are natively inline). See docs/skill-load-mode.md.
+  gather: [/^context: load$/],
 
   // research — 1-line divergence, #441 back-port gap:
   //   "if the research-agent is not available" (bundled) vs

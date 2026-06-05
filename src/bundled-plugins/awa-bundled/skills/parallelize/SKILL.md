@@ -1,6 +1,7 @@
 ---
 name: parallelize
 description: "When finished creating the plan in plan mode, run /parallelize so Claude dispatches one planning agent to transform the current approach into a plan to orchestrate waves of parallel sub-agents."
+context: load
 ---
 
 ## Sub-agent contract
