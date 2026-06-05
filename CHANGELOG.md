@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.81.1] - 2026-06-05
+
+### Fixed
+- anchor flat-leaf tool roots with col-0 ◉ beside a nesting root (#3) (c1d84e0)
+
 ## [3.81.0] - 2026-06-05
 
 ### Added
