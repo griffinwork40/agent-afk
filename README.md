@@ -1,8 +1,8 @@
 # Agent AFK
 
-> Past the happy path of AI coding.
+> Works while you're away.
 >
-> One prompt, one agent, one clean diff is the easy case. **Agent AFK** is the runtime for everything after — multi-session work, nested subagents, verification loops, and traces you can actually read. Local-first. Bring your own model.
+> Start a coding run before dinner. Agent AFK works locally, texts you when it's done or stuck, and leaves behind a PR, trace, and Telegram thread showing exactly what happened.
 
 [![npm version](https://img.shields.io/npm/v/agent-afk.svg)](https://www.npmjs.com/package/agent-afk)
 [![Node](https://img.shields.io/node/v/agent-afk.svg)](https://nodejs.org/)
