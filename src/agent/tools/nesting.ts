@@ -1,0 +1,246 @@
+/**
+ * Shared nesting constants and factories for Agent + Skill tool child sessions.
+ *
+ * Extracted here to avoid circular imports between subagent-executor and
+ * skill-executor and to de-duplicate the identical factory lambdas that were
+ * copy-pasted across chat.ts, bootstrap.ts, and telegram.ts.
+ *
+ * @module agent/tools/nesting
+ */
+
+import type { IAgentSession } from '../types.js';
+import type { ModelProvider } from '../provider.js';
+import type { AgentModelInput } from '../types.js';
+import { AnthropicDirectProvider } from '../providers/anthropic-direct/index.js';
+import { OpenAICompatibleProvider } from '../providers/openai-compatible/index.js';
+import { providerForModel } from '../providers/index.js';
+import { BUILTIN_TOOL_NAMES } from './schemas.js';
+import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
+import { READ_ONLY_PHASE_TOOLS } from '../tool-category.js';
+import { SkillExecutor } from './skill-executor.js';
+import type { SubagentExecutor } from './subagent-executor.js';
+import type { TraceWriter } from '../trace/index.js';
+import type { BackgroundAgentRegistry } from '../background-registry.js';
+
+export const DEFAULT_MAX_NESTING_DEPTH = 3;
+
+export interface ChildProviderFactoryArgs {
+  childExecutor: SubagentExecutor;
+  childSkillExecutor?: SkillExecutor;
+  /**
+   * Resolved child model. Drives the provider selection so an OpenAI-routed
+   * child (gpt-*, o*, codex-*, HF-style `org/model`) gets an
+   * `OpenAICompatibleProvider` instead of inheriting the hardcoded
+   * `AnthropicDirectProvider` — which previously caused local-only sessions
+   * (e.g. `afk interactive --model gpt-4o`) to silently dispatch every
+   * `agent`/`skill` subagent to api.anthropic.com.
+   *
+   * When undefined, the factory falls back to `AnthropicDirectProvider`
+   * (legacy default, preserved for the Anthropic-everywhere path).
+   */
+  model?: AgentModelInput;
+}
+
+/** Minimal session stub for child executors that only need an abort signal. */
+export function createStubParentSession(
+  signal: AbortSignal,
+): Pick<IAgentSession, 'sessionId' | 'getInputStreamRef' | 'abortSignal'> {
+  return {
+    sessionId: undefined,
+    getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+    abortSignal: signal,
+  };
+}
+
+// 'compose' is intentionally excluded from child allowed tools. Compose nodes
+// are task workers — if they could use the compose tool they could spawn nested
+// DAGs, leading to unbounded fan-out and recursive orchestration. Do NOT add
+// 'compose' here without a depth-limit mechanism similar to DEFAULT_MAX_NESTING_DEPTH.
+//
+// Awareness tools (`get_runtime_state`) are critical for children — the tool's
+// description explicitly invites callers to use it "when uncertain about your
+// current nesting depth". Source of truth: `agent/awareness/tool.ts`.
+//
+// 'memory_search' is included because READ_ONLY_PHASE_TOOLS (src/agent/tool-category.ts:175)
+// — the most restricted role in the system (mint's spec/research/plan phases) — already trusts
+// it ("read-only by construction"). Excluding memory_search for general sub-agents while
+// allowing it in the more restricted role is incoherent. 'memory_update' and 'procedure_write'
+// are deliberately NOT included: memory_update with target:"hot" mutates HOT.md, which is
+// injected into every future session's system prompt — blast radius too large for unsupervised
+// sub-agent writes. If specific skills need memory write access, do it per-skill via a
+// buildPhaseRestrictedProvider-style opt-in builder (see nesting.ts around line 207), not by
+// extending this global default.
+export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', 'agent', 'skill'];
+
+/**
+ * Bootstrap-time options captured by closure into the factory returned by
+ * {@link createChildProviderFactory}. Held at factory-construction (not
+ * passed per-call) because the values are session-wide and rarely change
+ * between sibling dispatches — folding them into closure keeps every
+ * call site in the executors free of provider-routing detail.
+ */
+export interface CreateChildProviderFactoryOptions {
+  /**
+   * OpenAI-compatible endpoint URL. Forwarded as `baseURL` when the factory
+   * builds an `OpenAICompatibleProvider` for an OpenAI-routed child. Sourced
+   * at bootstrap from `cliConfig.openaiBaseUrl` (env `AFK_OPENAI_BASE_URL`)
+   * so local-server runs (mlx_lm.server, Ollama, vLLM, llama.cpp,
+   * LM Studio) keep hitting their configured shim rather than the default
+   * api.openai.com.
+   */
+  openaiBaseUrl?: string;
+}
+
+/**
+ * Build the factory the executors use to construct provider instances for
+ * forked child sessions.
+ *
+ * Routing: branches on `providerForModel(model)` (passed per-call by the
+ * executor) so a gpt-4o-routed child gets `OpenAICompatibleProvider` and a
+ * sonnet-routed child gets `AnthropicDirectProvider`. Both providers accept
+ * the same `{ permissions, subagentExecutor, skillExecutor }` surface
+ * (verified at openai-compatible/index.ts:45-72 vs anthropic-direct).
+ *
+ * Without this routing the executors would inherit the historic hardcoded
+ * `AnthropicDirectProvider`, and an OpenAI-routed parent would silently
+ * dispatch every subagent to api.anthropic.com — the bug reported in the
+ * "local models (openai) dispatching anthropic-direct subagents" thread.
+ */
+export function createChildProviderFactory(
+  opts: CreateChildProviderFactoryOptions = {},
+): (args: ChildProviderFactoryArgs) => ModelProvider {
+  return ({ childExecutor, childSkillExecutor, model }) => {
+    const providerOpts = {
+      permissions: { allowedTools: CHILD_ALLOWED_TOOLS },
+      subagentExecutor: childExecutor,
+      ...(childSkillExecutor !== undefined ? { skillExecutor: childSkillExecutor } : {}),
+    };
+    const route = providerForModel(typeof model === 'string' ? model : undefined);
+    if (route === 'openai-compatible') {
+      return new OpenAICompatibleProvider({
+        ...providerOpts,
+        ...(opts.openaiBaseUrl !== undefined ? { baseURL: opts.openaiBaseUrl } : {}),
+        readOnlyMemory: true,
+      });
+    }
+    // Child sessions get read-only memory access — they may call `memory_search`
+    // to recall prior facts but cannot persist new memory (no `memory_update` /
+    // `procedure_write`). The parent session is the only writer; allowing writes
+    // from subagents would cause uncoordinated fan-out into the shared store.
+    return new AnthropicDirectProvider({ ...providerOpts, readOnlyMemory: true });
+  };
+}
+
+/**
+ * Build a depth-aware factory that produces a {@link SkillExecutor} for a
+ * grandchild session at the given `depth`.
+ *
+ * The factory closes over `childProviderFactory` so the grandchild
+ * SkillExecutor itself can fan out further (up to `maxDepth`). The
+ * returned factory recursively references itself via the local `factory`
+ * variable so any depth in the chain — skill→skill→skill — gets the same
+ * nesting wiring. Without this propagation, the first nested skill child
+ * would have `agent`/`skill` tools, but its skill grandchildren would
+ * silently fall back to the bare provider (the same bug the depth-0
+ * caller fixes).
+ */
+export function createChildSkillExecutorFactory(
+  defaultModel: AgentModelInput,
+  apiKey: string | undefined,
+  childProviderFactory: (args: ChildProviderFactoryArgs) => ModelProvider,
+  baseUrl?: string,
+  traceWriter?: TraceWriter,
+  backgroundRegistry?: BackgroundAgentRegistry,
+  cwd?: string,
+  resolveApiKeyForModel?: (model: string) => string | undefined,
+): (depth: number, maxDepth: number, signal: AbortSignal) => SkillExecutor {
+  const factory: (depth: number, maxDepth: number, signal: AbortSignal) => SkillExecutor = (
+    depth,
+    maxDepth,
+    signal,
+  ) =>
+    new SkillExecutor({
+      parentSession: createStubParentSession(signal),
+      defaultModel,
+      apiKey,
+      ...(baseUrl !== undefined ? { baseUrl } : {}),
+      depth,
+      maxDepth,
+      childProviderFactory,
+      childSkillExecutorFactory: factory,
+      // Trace writer propagates through every depth so grandchild skill forks
+      // remain visible. Optional so non-traced call sites (tests, telegram,
+      // threads) keep working.
+      ...(traceWriter !== undefined ? { traceWriter } : {}),
+      // Invariant: background-mode dispatch requires the registry on every
+      // SkillExecutor in the nesting chain too, not just the root. A
+      // grandchild plugin-skill subagent calling `agent` with
+      // `mode:"background"` reaches the registry through SkillExecutor →
+      // buildForkedChildConfig → SubagentExecutor.ctx.backgroundRegistry.
+      // Optional: chat/threads/telegram surfaces deliberately omit it.
+      ...(backgroundRegistry !== undefined ? { backgroundRegistry } : {}),
+      // Worktree isolation: forward cwd through every depth so a
+      // grandchild SkillExecutor's per-call SubagentManager (and its
+      // recursive SubagentExecutor's childManager) all anchor to the
+      // worktree. Mirrors traceWriter / backgroundRegistry propagation.
+      // Without this, a depth ≥ 2 skill dispatch silently loses worktree
+      // isolation even though the depth-0 wiring was correct.
+      ...(cwd !== undefined ? { cwd } : {}),
+      // Per-model credential resolver: propagates so every depth in the
+      // skill chain resolves credentials by child model rather than the
+      // pre-captured parent apiKey. Optional — backward compat fallback to
+      // apiKey when absent.
+      ...(resolveApiKeyForModel !== undefined ? { resolveApiKeyForModel } : {}),
+    });
+  return factory;
+}
+
+/**
+ * Phase roles for forked subagents in orchestration skills (e.g. mint).
+ *
+ * - `'read-only'`: dispatcher rejects any tool not in `READ_ONLY_PHASE_TOOLS`.
+ *   Used for plan-only phases (spec, research, plan) that must not mutate the
+ *   repo before user approval.
+ * - `'read-write'`: no enforcement; default behavior.
+ *
+ * Type lives in `nesting.ts` (not `subagent.ts`) so the dispatcher and the
+ * fork-time helper share the same authoritative source.
+ */
+export type PhaseRole = 'read-only' | 'read-write';
+
+/**
+ * Build a provider whose `permissions.allowedTools` is restricted to
+ * `READ_ONLY_PHASE_TOOLS`. Routed by model: OpenAI-compatible models get an
+ * `OpenAICompatibleProvider`; everything else falls back to
+ * `AnthropicDirectProvider`. Both providers thread `permissions` through to
+ * their per-query `SessionToolDispatcher`, which enforces the allowlist at
+ * `dispatcher.ts:348` via `checkToolPermission`.
+ *
+ * Invariant: this is the ONLY path that connects a phase role to the
+ * dispatcher's permission gate. Setting `AgentConfig.tools.allowedTools`
+ * directly is NOT equivalent — that field is read only by
+ * `emitSubagentLifecycle` for telemetry (`subagent.ts:380-382`) and does
+ * not reach the dispatcher.
+ *
+ * @see {@link READ_ONLY_PHASE_TOOLS} for the allowed-tool set.
+ * @see `SubagentManager.forkSubagent` for the caller wiring.
+ */
+export function buildPhaseRestrictedProvider(
+  // Parameter kept for forward-compat: future phase roles (e.g.
+  // 'read-only-with-network', 'read-only-no-memory') will pass distinct
+  // values here. The `_` prefix silences `noUnusedParameters` until then.
+  _role: 'read-only',
+  model: AgentModelInput | undefined,
+): ModelProvider {
+  // The allowlist is materialized once per fork so any test or runtime
+  // mutation of the array doesn't bleed across sibling subagents.
+  const permissions = { allowedTools: [...READ_ONLY_PHASE_TOOLS] };
+  const route = providerForModel(typeof model === 'string' ? model : undefined);
+  if (route === 'openai-compatible') {
+    return new OpenAICompatibleProvider({ permissions });
+  }
+  // 'anthropic' / 'anthropic-direct' / fallback all route here. Mirrors the
+  // resolveProvider() default to keep the read-only path consistent with
+  // the unrestricted path.
+  return new AnthropicDirectProvider({ permissions });
+}

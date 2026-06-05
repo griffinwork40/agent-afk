@@ -1,0 +1,386 @@
+/**
+ * Agent session configuration types.
+ * @module agent/types/config-types
+ */
+
+import type {
+  AgentDefinition,
+  EffortLevel,
+  HookCallbackMatcher,
+  HookEvent,
+  OnElicitation,
+  PermissionMode,
+  SdkPluginConfig,
+  SettingSource,
+  ThinkingConfig,
+} from './sdk-types.js';
+import type { HookRegistry } from '../hooks.js';
+import type { ModelProvider } from '../provider.js';
+import type { TraceWriter } from '../trace/index.js';
+import type { AgentModelInput } from './model-types.js';
+import type { CanUseTool, PermissionBubbler } from './permission-types.js';
+
+/** Tool permissions configuration */
+export interface ToolConfig {
+  /** List of allowed tool names. Empty array means no tools allowed. */
+  allowedTools?: string[];
+  /** List of tool names that are disallowed. */
+  disallowedTools?: string[];
+}
+
+/** Text-only turns restored from an AFK session sidecar. */
+export interface ResumeHistoryTurn {
+  user: string;
+  assistant: string;
+}
+
+/** Agent session configuration */
+export interface AgentConfig {
+  /**
+   * Model to use. Accepts short aliases (`opus`, `opus_1m`, `sonnet`,
+   * `sonnet_1m`, `haiku`) that get expanded to full Claude model IDs, OR
+   * any raw string that downstream providers understand (e.g. `auto` when
+   * routing through `cursor-api-proxy`, or a full `claude-*` ID).
+   * Unknown strings pass through to the SDK untouched — see `resolveModelId`.
+   */
+  model: AgentModelInput;
+
+  /** Anthropic API key. Optional when using system claude binary with OAuth. */
+  apiKey?: string;
+
+  /** Base URL for Anthropic API (optional) */
+  baseUrl?: string;
+
+  /**
+   * Base URL for an OpenAI-compatible Chat Completions endpoint (optional).
+   * Forwarded as the SDK's `baseURL` option when the openai-compatible
+   * provider builds its client — overrides any construction-time default.
+   *
+   * Symmetric counterpart of `baseUrl` (Anthropic): used to point at
+   * self-hosted OpenAI-compatible servers like `mlx_lm.server`, Ollama's
+   * OpenAI-compat endpoint, vLLM, LM Studio, llama.cpp's server, etc.
+   *
+   * When set via `AFK_OPENAI_BASE_URL`, the env loader also injects a
+   * placeholder `apiKey` (sourced from `AFK_OPENAI_API_KEY`, default
+   * `'local'`) so the OpenAI SDK can construct a client against servers
+   * that do not validate keys.
+   */
+  openaiBaseUrl?: string;
+
+  /** Maximum number of conversation turns (optional) */
+  maxTurns?: number;
+
+  /**
+   * Controls Claude's extended-thinking / reasoning behavior. When omitted,
+   * the SDK picks the model-appropriate default (adaptive on Opus 4.6+).
+   * See the SDK's `ThinkingConfig` union.
+   */
+  thinking?: ThinkingConfig;
+
+  /**
+   * Effort level guiding adaptive thinking depth. `'xhigh'` is Opus 4.7 only;
+   * `'max'` is Opus 4.6/4.7 only — the SDK/API rejects unsupported pairs.
+   */
+  effort?: EffortLevel;
+
+  /** Tool configuration (optional) */
+  tools?: ToolConfig;
+
+  /** Claude SDK permission mode */
+  permissionMode?: PermissionMode;
+
+  /** Hook callbacks for SDK events (V2). */
+  hooks?: Partial<Record<HookEvent, HookCallbackMatcher[]>>;
+
+  /** Custom permission handler for tool usage (V2). */
+  canUseTool?: CanUseTool;
+
+  /**
+   * Bubbles tool permission requests to a parent handler.
+   * Used by SubagentManager to forward canUseTool from child sessions to the
+   * parent. Takes lower precedence than an explicit `canUseTool`.
+   */
+  permissionBubbler?: PermissionBubbler;
+
+  /** Which settings to load (user, project, local). Passed through when SDK V2 supports it. */
+  settingSources?: SettingSource[];
+
+  /**
+   * Extra plugins to load on top of whatever AFK auto-discovers under
+   * `~/.afk/plugins/`. Each entry is passed to the SDK's `plugins:` option as
+   * `{ type: 'local', path }`. Useful for dev paths outside the plugins dir or
+   * for programmatic overrides.
+   */
+  plugins?: SdkPluginConfig[];
+
+  /** System prompt: string or preset with optional append. Passed through when SDK V2 supports it. */
+  systemPrompt?:
+    | string
+    | { type: 'preset'; preset: 'claude_code'; append?: string };
+
+  /**
+   * Provenance string describing where `systemPrompt` came from — e.g.
+   * `"env:AFK_SYSTEM_PROMPT"`, `"file:/abs/path/afk.config.json"`,
+   * `"afk-md:/abs/path/AFK.md"`, `"none"`.
+   *
+   * Provenance-only: consumed by the prompt-dump debug feature
+   * (`src/agent/session/prompt-dump.ts`). Must NOT be forwarded to the
+   * SDK options object in `buildQueryOptions`.
+   */
+  systemPromptSource?: string;
+
+  /**
+   * MCP server config — typed entry-point for `~/.afk/config/mcp.json`.
+   *
+   * Populated by `loadMcpConfig()` and consumed by the bootstrap path
+   * which constructs an `McpManager` and threads it into the provider.
+   * Forwarded provider-side; not part of the Anthropic Messages API
+   * request payload.
+   */
+  mcpServers?: Record<string, import('../mcp/types.js').McpServerConfig>;
+
+  /** Subagent definitions. Passed through when SDK V2 supports it. */
+  agents?: Record<string, AgentDefinition>;
+
+  /** Main agent name when using agents. Passed through when SDK V2 supports it. */
+  agent?: string;
+
+  /**
+   * Working directory for the session.
+   *
+   * Used as the `cwd` option for shell-spawning tool handlers (bash, grep)
+   * and as the default base path for glob/grep when the model omits an
+   * explicit `path` argument. Also forwarded to child subagent configs so
+   * forked sessions inherit the parent's working tree.
+   *
+   * The Node process's `process.cwd()` is NEVER mutated — multiple sessions
+   * with distinct `cwd` values can run concurrently in the same process.
+   * Falls back to `process.cwd()` when unset.
+   */
+  cwd?: string;
+
+  /**
+   * Allowed roots for read-class tools (read_file, glob, grep,
+   * list_directory). When omitted the dispatcher defaults to `[cwd]`.
+   */
+  readRoots?: string[];
+
+  /**
+   * Allowed roots for write-class tools (write_file, edit_file). When
+   * omitted the dispatcher defaults to `[cwd]`.
+   */
+  writeRoots?: string[];
+
+  /**
+   * Extra environment variables to inject into Bash-tool subprocess spawns
+   * for THIS session. Merged into the child's env on top of `process.env`,
+   * with these entries winning on collision.
+   *
+   * Forwarded to the dispatcher and surfaced via `ToolHandlerContext.env`
+   * on every handler invocation. Per-session (not process-global) so
+   * concurrent forked subagents — e.g. plugin-skill dispatches — don't
+   * clobber each other's `PLUGIN_ROOT`.
+   *
+   * Currently consumed only by the Bash handler; other handlers are free
+   * to read this same key when env-aware behavior is added.
+   */
+  env?: Record<string, string>;
+
+  /** Enable file checkpointing for rewind. Passed through when SDK V2 supports it. */
+  enableFileCheckpointing?: boolean;
+
+  /** Path to the Claude Code executable. Uses the SDK's built-in CLI if not specified. */
+  pathToClaudeCodeExecutable?: string;
+
+  /** Continue the most recent persisted session in the current working directory */
+  continue?: boolean;
+
+  /** Resume a specific persisted session ID */
+  resume?: string;
+
+  /**
+   * Text transcript to seed providers that do not have native session
+   * persistence. Native providers can ignore this and use {@link resume}.
+   */
+  resumeHistory?: ResumeHistoryTurn[];
+
+  /** Override or seed the SDK session ID */
+  sessionId?: string;
+
+  /** Resume a persisted session at a specific assistant message UUID */
+  resumeSessionAt?: string;
+
+  /** Fork a resumed session into a new session ID */
+  forkSession?: boolean;
+
+  /** Persist the Claude session to disk. Defaults to true. */
+  persistSession?: boolean;
+
+  /**
+   * External abort signal. When it fires the session aborts its internal
+   * controller, interrupts the SDK, and subsequent {@link IAgentSession.sendMessage}
+   * calls throw {@link AbortError}.
+   */
+  abortSignal?: AbortSignal;
+
+  /**
+   * Per-turn timeout in ms for {@link IAgentSession.sendMessage}. On expiry the
+   * session's internal controller aborts (cascading to subagents) and the call
+   * throws {@link TimeoutError}. Defaults to `0` (no timeout) — set explicitly
+   * to enforce a per-turn deadline.
+   */
+  timeoutMs?: number;
+
+  /**
+   * Harness-owned hook registry. When provided, `AgentSession` dispatches
+   * `SessionStart` before the SDK query is consumed and `SessionEnd` when
+   * the session closes. `SubagentManager` uses the same registry (or a
+   * child-specific one) to dispatch `SubagentStart` / `SubagentStop`.
+   *
+   * Distinct from {@link AgentConfig.hooks}, which configures native SDK
+   * hook callbacks. The two can coexist — this is harness policy; that is
+   * SDK event plumbing.
+   */
+  hookRegistry?: HookRegistry;
+
+  /**
+   * Witness-layer trace writer. When provided, {@link IAgentSession}
+   * emits structured trace events for tool calls, hook decisions,
+   * subagent lifecycle transitions, budget breaches, aborts,
+   * compaction, closure, and the terminal seal. Subagent forks
+   * **share** the parent's writer — child events appear in the same
+   * trace file with a `subagentId` annotation in their payload.
+   *
+   * See `docs/philosophy/afk-contract.md` for the contract this
+   * writer makes enforceable, and `src/agent/trace/` for shapes.
+   */
+  traceWriter?: TraceWriter;
+
+  /**
+   * Model provider. Defaults to the Anthropic SDK adapter
+   * (`anthropicProvider`) when omitted. Supplying a custom provider lets
+   * the harness drive non-Anthropic backends without touching session
+   * logic. See `src/agent/provider.ts`.
+   */
+  provider?: ModelProvider;
+
+  // --- SDK adoption wave (Wave 0 shared surface) ---
+  // Each field is a thin passthrough into the provider's underlying
+  // request options. Guarded by buildQueryOptions so omitting them
+  // preserves pre-adoption behavior.
+
+  /**
+   * Hard cost ceiling for the whole session, in USD. When the SDK detects
+   * cumulative spend has crossed this threshold it aborts cleanly. Useful
+   * as a safety net for the daemon + bypass-permissions posture.
+   */
+  maxBudgetUsd?: number;
+
+  /**
+   * Soft per-task token budget. When set, the SDK surfaces the remaining
+   * token budget to the model so it can pace tool use. Unlike
+   * {@link maxBudgetUsd} this does not forcibly abort — it just informs
+   * task planning. Stored as a plain number for CLI ergonomics;
+   * `buildQueryOptions` wraps it into the SDK's `{ total }` shape.
+   *
+   * @see https://docs.anthropic.com — `task-budgets-2026-03-13` beta header
+   */
+  taskBudget?: number;
+
+  /**
+   * Hard per-response output-token cap. Propagated to the SDK subprocess as
+   * `CLAUDE_CODE_MAX_OUTPUT_TOKENS` — the SDK has no programmatic equivalent
+   * on its `Options` type as of 0.2.114. Accepts `Number.POSITIVE_INFINITY`
+   * as a "model max" sentinel; `buildQueryOptions` resolves it using the
+   * resolved model id.
+   */
+  maxOutputTokens?: number;
+
+  /**
+   * When true, the SDK streams partial assistant message chunks in addition
+   * to final messages. Useful for richer TUI / bridge rendering.
+   */
+  includePartialMessages?: boolean;
+
+  /**
+   * When true, the SDK surfaces hook lifecycle events in the message stream
+   * (PreToolUse / PostToolUse / Elicitation / etc). Complementary to the
+   * harness's own {@link hookRegistry}; this is SDK-side visibility.
+   */
+  includeHookEvents?: boolean;
+
+  /**
+   * When true, the SDK emits human-readable progress summaries for long
+   * subagent runs. Maps naturally to progress banners in the REPL and
+   * incremental edits in Telegram/iMessage bridges.
+   */
+  agentProgressSummaries?: boolean;
+
+  /**
+   * Callback invoked when an MCP server requests elicitation (OAuth URL,
+   * form field, consent prompt, etc.). When omitted the SDK auto-declines,
+   * preserving current behavior. Agent-afk installs an elicitation router
+   * in `src/agent/elicitation-router.ts` that the CLI wires to a REPL
+   * prompt; bridges can install their own handler.
+   */
+  onElicitation?: OnElicitation;
+
+  /**
+   * When true (the default), the provider automatically waits for the
+   * OAuth subscription reset and replays the in-flight turn instead of
+   * surfacing a raw 429 error. Set to false to disable auto-resume and
+   * surface the error immediately after showing the usage-limit card.
+   */
+  autoResumeOnUsageLimit?: boolean;
+
+  // --- Awareness metadata (Phase 1: get_runtime_state) ---
+  // Pure metadata fields surfaced through the `get_runtime_state` tool's
+  // `self` view. All optional — top-level sessions leave them undefined and
+  // the snapshot reports `null` for the missing values. Populated by
+  // `SubagentManager.forkSubagent` + `SubagentExecutor` for forked children
+  // so subagents can introspect their place in the topology.
+
+  /** Parent session ID when this session was forked as a subagent. */
+  parentSessionId?: string;
+
+  /** Nesting depth assigned at fork (0-indexed). Top-level → undefined. */
+  depth?: number;
+
+  /** Maximum allowed nesting depth at fork time. */
+  maxDepth?: number;
+
+  /** Phase enforcement tag inherited from `ForkSubagentOptions.phaseRole`. */
+  phaseRole?: 'read-only' | 'read-write';
+
+  /**
+   * When true, the session is a skill-dispatch sub-agent (forked by
+   * `SkillExecutor` or the user-skill handler in `skills/user-skills.ts`).
+   * Providers use this flag to omit the `SLASH_COMMAND_ROUTING_PROMPT`
+   * paragraph and to strip the `ask_question` escape-hatch tool from the
+   * assembled toolset. Skill sub-agents receive a "Run the <name> skill"
+   * directive (no `<command-name>` tag); without these adjustments the routing
+   * instruction and the ask_question tool push them to ask the operator "which
+   * skill?" instead of engaging with the SKILL.md body in their system prompt.
+   *
+   * Default: `false` (main sessions keep the routing instruction and tool).
+   */
+  isSkillDispatch?: boolean;
+
+  /**
+   * Opt-in automatic compaction. When the context window fills past the
+   * configured threshold, `compact()` fires automatically at the next idle
+   * turn boundary (no tool call in flight, not already compacting).
+   *
+   * - `false` (default) — disabled; compact only via `/compact` or
+   *   `session.compact()` programmatically.
+   * - `true` — enabled with the default threshold of 0.90 (90%).
+   * - `{ threshold: 0.85 }` — enabled with a custom fraction (0–1 exclusive).
+   *
+   * The threshold is evaluated against
+   * `(inputTokens + outputTokens + cachedInputTokens + cacheCreationTokens) / contextLimit`
+   * from the last completed turn. Auto-compaction is guarded by
+   * `abort.isIdle()` so it never fires while a turn is in flight, and
+   * by the existing re-entrance lock in `compact-handler.ts`.
+   */
+  autoCompact?: boolean | { threshold: number };
+}

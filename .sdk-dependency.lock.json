@@ -1,0 +1,11 @@
+{
+  "generated_at": "2026-05-25T05:50:50.814Z",
+  "symbols": {
+    "@anthropic-ai/sdk": {
+      "default as Anthropic": {
+        "kind": "runtime",
+        "reason": "Anthropic SDK client constructor — the singular entry point used to instantiate the client that backs every messages.create() call in src/agent/providers/anthropic-direct/. Removing this import would require swapping the provider implementation entirely."
+      }
+    }
+  }
+}

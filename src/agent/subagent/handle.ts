@@ -1,0 +1,482 @@
+/**
+ * Subagent handle implementation: lifecycle, message routing, and cancellation.
+ *
+ * Wraps a child `AgentSession` with status management, timeout handling,
+ * abort-graph wiring, and optional hook dispatch on stop.
+ *
+ * @module agent/subagent/handle
+ */
+
+import type { ZodType } from 'zod';
+import { AbortGraph } from '../abort-graph.js';
+import { debugLog } from '../../utils/debug.js';
+import type { HookRegistry } from '../hooks.js';
+import { withTimeout } from '../timeout.js';
+import type { IAgentSession, Message } from '../types.js';
+import type { OutputEvent, SubagentProgressSink, SubagentProgressMeta } from '../types/session-types.js';
+import { getCurrentSink } from '../_lib/skill-sink-channel.js';
+import { dispatchSubagentStop } from '../subagent-hooks.js';
+import { emitSubagentLifecycle } from '../trace/emit.js';
+import type { TraceWriter } from '../trace/index.js';
+import {
+  buildResultFromMessage,
+  buildResultFromError,
+  createEmptyTrace,
+  type SubagentResult,
+  type SubagentStatus,
+  type SubagentTrace,
+} from './result.js';
+
+export interface SubagentHandle<T = unknown> {
+  /** Stable ID for tracking. */
+  readonly id: string;
+  /** Current status. */
+  readonly status: SubagentStatus;
+  /** Underlying child session (created eagerly). */
+  readonly session: IAgentSession;
+  /** Start a single turn against the child. Resolves to the raw assistant message. */
+  run(prompt: string): Promise<Message>;
+  /** Run and return a {@link SubagentResult} (honors `outputSchema` if set). */
+  runToResult(prompt: string): Promise<SubagentResult<T>>;
+  /** Fire-and-forget run with optional completion callback and per-event progress hook. */
+  runInBackground(
+    prompt: string,
+    onResult?: (result: SubagentResult<T>) => void,
+    onProgress?: (event: OutputEvent) => void,
+  ): void;
+  /** Interrupt and close the child session. */
+  cancel(): Promise<void>;
+  /**
+   * Release the child session after its run has resolved on its own. Fires
+   * `SubagentStop` with the true terminal status (`'succeeded'`/`'failed'`,
+   * or `'cancelled'` as fallback if no run completed). Unlike {@link cancel},
+   * this does NOT mutate `status` or notify the abort-graph — it is the
+   * explicit "work is done, tear down quietly" lifecycle endpoint used after
+   * a successful `run()` / `runToResult()`. Idempotent; composes with
+   * `cancel()` via the shared `stopDispatched` guard.
+   */
+  teardown(): Promise<void>;
+}
+
+/**
+ * @internal
+ * Concrete implementation of {@link SubagentHandle}. Not part of the public
+ * API — constructor argument order may change between releases without a
+ * semver bump. External code should depend on the {@link SubagentHandle}
+ * interface only.
+ */
+export class SubagentHandleImpl<T> implements SubagentHandle<T> {
+  private currentStatus: SubagentStatus = 'idle';
+  private inFlight: Promise<Message> | null = null;
+  private lastMessage: string | undefined;
+  private lastDurationMs: number | undefined;
+  /**
+   * The latest non-running / non-idle status reached by the handle. Captured
+   * on every `run()` resolution so a subsequent `cancel()` can dispatch
+   * `SubagentStop` with the *true* terminal status ('succeeded' / 'failed')
+   * instead of clobbering it to 'cancelled'. Unset until the first run
+   * resolves — if the handle is cancelled before any run, the status is
+   * genuinely 'cancelled'.
+   */
+  private latestTerminalStatus: SubagentStatus | undefined;
+  /** Guard so teardown-side SubagentStop fires exactly once per handle. */
+  private stopDispatched = false;
+  /** Optional sink for streaming progress events. Never mutated after construction. */
+  private readonly progressSink: SubagentProgressSink | undefined;
+  /** Optional parent session ID for context injection tracing. */
+  private parentId: string | undefined;
+  /** Accumulated execution trace for the most recent run. */
+  private currentTrace: SubagentTrace = createEmptyTrace();
+  /**
+   * Assistant text streamed during the most recent run. Captured as an
+   * instance field (rather than a local in streamToFinalMessage) so the
+   * accumulated content survives the throw boundary when the stream is
+   * aborted, errored, or timed out. Surfaced as `SubagentResult.partialOutput`
+   * by `runToResult` so the parent receives whatever findings the child
+   * managed to produce instead of just the error.
+   */
+  private lastStreamedContent: string = '';
+
+  /** @internal — positional argument order is not part of any public contract. */
+  constructor(
+    public readonly id: string,
+    public readonly session: IAgentSession,
+    private readonly controller: AbortController,
+    private readonly abortGraph: AbortGraph,
+    private readonly outputSchema: ZodType<T> | undefined,
+    private readonly timeoutMs: number,
+    private readonly hookRegistry: HookRegistry | undefined,
+    private readonly onTerminal: () => void,
+    private readonly parentInputStreamRef?: ReturnType<IAgentSession['getInputStreamRef']>,
+    private readonly parentAbortSignal?: AbortSignal,
+    private readonly agentType?: string,
+    progressSink?: SubagentProgressSink,
+    parentId?: string,
+    private readonly traceWriter?: TraceWriter,
+    /**
+     * Optional callback invoked after a successful `run()`. Carries the
+     * subagent's token usage and optional cost so the parent session can
+     * accumulate them into the `session_sealed` rollup fields without
+     * reaching back into the handle's private state.
+     */
+    private readonly onSubagentSucceeded?: (
+      usage: SubagentTrace['usage'],
+      costUsd: number | undefined,
+    ) => void,
+  ) {
+    this.progressSink = progressSink;
+    this.parentId = parentId;
+  }
+
+  get status(): SubagentStatus {
+    return this.currentStatus;
+  }
+
+  async run(prompt: string, sinkOverride?: SubagentProgressSink): Promise<Message> {
+    if (this.currentStatus === 'running') throw new Error(`Subagent ${this.id} is already running`);
+    if (this.currentStatus === 'cancelled') throw new Error(`Subagent ${this.id} is cancelled`);
+
+    this.currentStatus = 'running';
+    const startTime = Date.now();
+    const p = withTimeout(this.streamToFinalMessage(prompt, sinkOverride), this.timeoutMs, {
+      controller: this.controller,
+      label: this.id,
+    });
+    this.inFlight = p;
+    try {
+      const msg = await p;
+      this.lastMessage = msg.content;
+      this.lastDurationMs = Date.now() - startTime;
+      this.currentStatus = 'succeeded';
+      this.latestTerminalStatus = 'succeeded';
+      // Witness layer: subagent_lifecycle.succeeded fires before onTerminal()
+      // so the trace records the terminal transition even if the manager
+      // tears the handle down immediately after. Fire-and-forget.
+      void emitSubagentLifecycle(this.traceWriter, {
+        transition: 'succeeded',
+        subagentId: this.id,
+        durationMs: this.lastDurationMs,
+        turnCount: this.currentTrace.turnCount,
+        outputBytes: Buffer.byteLength(this.lastMessage, 'utf8'),
+      });
+      // Propagate usage and cost to the parent session's rollup accumulators.
+      // Fire synchronously before onTerminal() so the session_sealed event
+      // always captures this subagent's contribution even if onTerminal()
+      // triggers an immediate session teardown.
+      //
+      // `msg.metadata.totalCostUsd` is populated by the provider's
+      // stream-consumer (turn.completed retroactively mutates the assistant
+      // message's metadata in place — see stream-consumer.ts), so by the time
+      // `run()` reads `msg` here the cost is present for providers that report
+      // it. It is `undefined` for backends without pricing data, which
+      // `recordSubagentCompletion` already tolerates.
+      const costUsd =
+        typeof msg.metadata?.totalCostUsd === 'number' ? msg.metadata.totalCostUsd : undefined;
+      this.onSubagentSucceeded?.(this.currentTrace.usage, costUsd);
+      this.onTerminal();
+      return msg;
+    } catch (err) {
+      this.lastDurationMs = Date.now() - startTime;
+      // currentStatus is 'cancelled' only when cancel() already ran and
+      // emitted its own lifecycle event. In that case we suppress the
+      // failed event here to avoid a double-emit for the same termination.
+      if ((this.currentStatus as string) !== 'cancelled') {
+        // Cascade classification: when our controller's signal is aborted
+        // at this point AND cancel() didn't fire (otherwise status would
+        // already be 'cancelled'), the throw unwound because an ancestor
+        // cascade hit our controller. Treat this as 'cancelled', not
+        // 'failed' — the subagent did no wrong; it was torn down
+        // externally. The trace and the result-object status must agree so
+        // downstream consumers (operator dashboard, future ActiveWorkRegistry)
+        // can correctly attribute cascade terminations vs. genuine failures.
+        if (this.controller.signal.aborted) {
+          void emitSubagentLifecycle(this.traceWriter, {
+            transition: 'cancelled',
+            subagentId: this.id,
+            source: 'cascade',
+          });
+          this.currentStatus = 'cancelled';
+          this.latestTerminalStatus = 'cancelled';
+        } else {
+          void emitSubagentLifecycle(this.traceWriter, {
+            transition: 'failed',
+            subagentId: this.id,
+            errorClass: err instanceof Error ? err.constructor.name : 'Unknown',
+            errorMessage: err instanceof Error ? err.message : String(err),
+            partialOutputBytes: Buffer.byteLength(this.lastStreamedContent, 'utf8'),
+          });
+          this.currentStatus = 'failed';
+          this.latestTerminalStatus = 'failed';
+        }
+      }
+      this.onTerminal();
+      throw err;
+    } finally {
+      this.inFlight = null;
+    }
+  }
+
+  /**
+   * Consume the streaming message iterator, forward events to progressSink,
+   * and reconstruct the final Message from terminal events.
+   *
+   * @param sinkOverride — per-invocation sink that takes precedence over
+   *   `this.progressSink`. Used by `runInBackground` to tee events to the
+   *   caller's `onProgress` without permanently mutating the handle's field.
+   */
+  private async streamToFinalMessage(
+    prompt: string,
+    sinkOverride?: SubagentProgressSink,
+  ): Promise<Message> {
+    let finalMessage: Message | undefined;
+    let streamError: Error | undefined;
+
+    // Reset partial-content accumulator before each run. Surviving across the
+    // throw boundary is the whole point — the local `streamedContent` of the
+    // previous version got dropped on the floor when the iterator threw.
+    this.lastStreamedContent = '';
+    this.currentTrace = createEmptyTrace();
+
+    const activeSink = sinkOverride ?? this.progressSink ?? getCurrentSink();
+
+    const meta: SubagentProgressMeta = {
+      subagentId: this.id,
+      ...(this.parentId !== undefined && { parentId: this.parentId }),
+      ...(this.agentType !== undefined && { agentType: this.agentType }),
+    };
+
+    for await (const event of this.session.sendMessageStream(prompt)) {
+      if (activeSink) {
+        activeSink(event, meta);
+      }
+
+      if (event.type === 'chunk') {
+        const chunk = event.chunk;
+        if (chunk.type === 'content') {
+          this.lastStreamedContent += chunk.content;
+        } else if (chunk.type === 'tool_use_detail') {
+          this.currentTrace.toolCalls.push({
+            id: chunk.toolUseId,
+            name: chunk.toolName,
+            // Privacy: store byte length only — never raw input content, which
+            // routinely contains secrets (tokens, file contents, env vars).
+            inputBytes: Buffer.byteLength(chunk.toolInput, 'utf8'),
+          });
+        } else if (chunk.type === 'tool_result') {
+          this.currentTrace.toolResults.push({
+            toolUseId: chunk.toolUseId,
+            isError: chunk.isError,
+            truncated: chunk.truncated,
+            sizeBytes: chunk.sizeBytes,
+          });
+        } else if (chunk.type === 'thinking') {
+          this.currentTrace.thinkingPresent = true;
+        }
+      }
+
+      if (event.type === 'message') {
+        finalMessage = event.message;
+        // Count the turn as soon as the assistant message is received; this
+        // ensures error-path traces (where 'done' is never reached) also
+        // reflect completed turns.
+        this.currentTrace.turnCount++;
+      } else if (event.type === 'error') {
+        streamError = event.error;
+        break;
+      } else if (event.type === 'done') {
+        if (typeof event.metadata?.usage === 'object' && event.metadata.usage !== null) {
+          const u = event.metadata.usage as Record<string, unknown>;
+          this.currentTrace.usage = {
+            inputTokens: typeof u['input_tokens'] === 'number' ? u['input_tokens'] : undefined,
+            outputTokens: typeof u['output_tokens'] === 'number' ? u['output_tokens'] : undefined,
+            cacheReadTokens: typeof u['cache_read_input_tokens'] === 'number' ? u['cache_read_input_tokens'] : undefined,
+            cacheCreationTokens: typeof u['cache_creation_input_tokens'] === 'number' ? u['cache_creation_input_tokens'] : undefined,
+          };
+        }
+        break;
+      }
+    }
+
+    if (streamError) throw streamError;
+    if (finalMessage) return finalMessage;
+    if (this.lastStreamedContent.length > 0) {
+      return { role: 'assistant', content: this.lastStreamedContent, timestamp: new Date() };
+    }
+    throw new Error(`Subagent ${this.id} produced no terminal message`);
+  }
+
+  async runToResult(prompt: string, sinkOverride?: SubagentProgressSink): Promise<SubagentResult<T>> {
+    try {
+      const message = await this.run(prompt, sinkOverride);
+      return buildResultFromMessage(this.id, this.currentStatus, message, this.outputSchema, this.currentTrace);
+    } catch (err) {
+      const result = buildResultFromError<T>(this.id, this.currentStatus, err, this.currentTrace);
+      // Preserve any assistant text streamed before the failure so the parent
+      // receives partial findings rather than just an opaque error. The
+      // raw string fragment is the best we have when a structured parse
+      // never got a chance to run. `partialOutput` is typed as `T | string`
+      // on `SubagentResult` so this assignment is honest — no cast needed.
+      if (this.lastStreamedContent.length > 0) {
+        result.partialOutput = this.lastStreamedContent;
+      }
+      return result;
+    }
+  }
+
+  runInBackground(
+    prompt: string,
+    onResult?: (result: SubagentResult<T>) => void,
+    onProgress?: (event: OutputEvent) => void,
+  ): void {
+    let sinkOverride: SubagentProgressSink | undefined;
+    if (onProgress) {
+      // Build a tee sink that is local to this invocation. We capture the
+      // existing sink now and forward to both without touching this.progressSink,
+      // so foreground callers (run / runToResult) are unaffected and repeated
+      // runInBackground calls don't accumulate nested wrappers on the field.
+      const baseSink = this.progressSink ?? getCurrentSink();
+      sinkOverride = (event, meta) => {
+        onProgress(event);
+        baseSink?.(event, meta);
+      };
+    }
+    // R1: .catch() is required — if onResult throws, or if a bug allows an
+    // error to escape runToResult's own try/catch, the unhandled rejection
+    // would leak into the daemon and leave the handle stuck in 'running'.
+    // External constraint: Node process-level 'unhandledRejection' — any
+    // naked void promise that rejects terminates the process in strict mode.
+    void this.runToResult(prompt, sinkOverride).then((result) => {
+      onResult?.(result);
+    }).catch((err: unknown) => {
+      debugLog('runInBackground: unexpected rejection after runToResult', err);
+      console.error('Subagent runInBackground failed unexpectedly:', err);
+    });
+  }
+
+  async cancel(): Promise<void> {
+    // Two idempotency paths: a prior `cancel()` flipped `currentStatus`; a
+    // prior `teardown()` already fired the stop hook without touching status.
+    // Either case means nothing to do here.
+    if (this.currentStatus === 'cancelled' || this.stopDispatched) return;
+
+    // Preserve the real terminal status for SubagentStop — a successful run
+    // followed by a teardown-cancel is still a 'succeeded' subagent from the
+    // hook's perspective. Falls back to 'cancelled' when no run resolved.
+    const reportedStatus: SubagentStatus = this.latestTerminalStatus ?? 'cancelled';
+    this.currentStatus = 'cancelled';
+
+    // Witness layer: emit subagent_lifecycle.cancelled BEFORE the abort
+    // cascade fires. Two reasons for the ordering:
+    //   1. Trace ordering preserves causality — the cancelled lifecycle
+    //      record is the explicit user-initiated termination; the
+    //      cascade abort events that follow descend from it.
+    //   2. If the cascade triggers a child's run() to throw, the child's
+    //      catch block sees `currentStatus === 'cancelled'` and skips
+    //      its own failed-emission. Without emitting first, the child's
+    //      failed event would race with our cancelled event.
+    // source='explicit' marks this as a caller-initiated cancel — distinct
+    // from cascade-driven cancellation which will be emitted by the
+    // abort-graph wiring in a follow-up commit.
+    void emitSubagentLifecycle(this.traceWriter, {
+      transition: 'cancelled',
+      subagentId: this.id,
+      source: 'explicit',
+    });
+
+    try {
+      this.abortGraph.abort(this.id, 'cancelled');
+    } catch {
+      // graph abort is best-effort
+    }
+    try {
+      if (this.inFlight) await this.session.interrupt();
+    } catch {
+      // ignore interrupt errors
+    }
+    try {
+      await this.session.close();
+    } finally {
+      await this.dispatchStopAndRelease(reportedStatus);
+    }
+  }
+
+  async teardown(): Promise<void> {
+    // Idempotent — once the stop hook has fired (via either path), teardown
+    // is a no-op. Intentional: `handle.status` stays truthful for succeeded
+    // runs; no abort-graph notification, no currentStatus mutation.
+    if (this.stopDispatched) return;
+
+    // Use the real terminal status when available. Never-ran handles fall
+    // back to 'cancelled' — same fallback as cancel() for consistency.
+    const reportedStatus: SubagentStatus = this.latestTerminalStatus ?? 'cancelled';
+
+    try {
+      // Defensive: teardown on an in-flight run is not the primary use case
+      // (callers should `cancel()` instead), but if it happens, interrupt so
+      // `session.close()` doesn't hang on the live query.
+      if (this.inFlight) await this.session.interrupt();
+    } catch {
+      // ignore interrupt errors
+    }
+    try {
+      await this.session.close();
+    } finally {
+      await this.dispatchStopAndRelease(reportedStatus);
+    }
+  }
+
+  /**
+   * Dispatch `SubagentStop` and release the handle from the manager's active
+   * map. Shared by `cancel()` and `teardown()` — the only difference between
+   * those is pre-work (abort-graph notification, currentStatus mutation).
+   * Guarded by `stopDispatched` so concurrent paths fire the hook exactly once.
+   */
+  private async dispatchStopAndRelease(reportedStatus: SubagentStatus): Promise<void> {
+    if (this.stopDispatched) {
+      // The other path already fired the hook. onTerminal() is idempotent on
+      // the manager's active-map delete, so calling it again is safe — but we
+      // do NOT re-dispatch the hook.
+      this.onTerminal();
+      return;
+    }
+    this.stopDispatched = true;
+
+    const decision = await dispatchSubagentStop(
+      this.hookRegistry,
+      {
+        event: 'SubagentStop',
+        subagentId: this.id,
+        status: reportedStatus,
+        lastMessage: this.lastMessage,
+        agentType: this.agentType,
+        durationMs: this.lastDurationMs,
+        // Always emit the trace, even when empty. SubagentResult.trace is always
+        // populated; emitting undefined here created an inconsistent contract
+        // where tool-free subagents looked traceless to hook consumers.
+        trace: this.currentTrace,
+      },
+      this.traceWriter ? { traceWriter: this.traceWriter } : {},
+    );
+
+    // Inject context into parent if handler provided it and parent ref exists.
+    // Abort precedence: if the parent's abortSignal was provided AND is set,
+    // skip injection — the parent's query loop will unwind before it can
+    // consume the message. Matches the abort-graph invariant that abort is
+    // terminal for side effects. Injection failures are logged, not propagated.
+    if (decision.injectContext && this.parentInputStreamRef) {
+      if (this.parentAbortSignal?.aborted) {
+        debugLog(
+          `Skipping SubagentStop injectContext for ${this.id}: parent is aborted`,
+        );
+      } else {
+        try {
+          this.parentInputStreamRef.pushUserMessage(decision.injectContext);
+        } catch (err) {
+          debugLog(`Failed to inject context from SubagentStop handler: ${String(err)}`);
+        }
+      }
+    }
+
+    this.onTerminal();
+  }
+}

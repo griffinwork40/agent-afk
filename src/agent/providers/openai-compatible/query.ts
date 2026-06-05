@@ -1,0 +1,792 @@
+/**
+ * OpenAI-compatible ProviderQuery implementation.
+ *
+ * Owns one OpenAI client + one logical session (a sequence of Chat
+ * Completions calls sharing message history). Slice 3 adds tool dispatch
+ * via the shared `SessionToolDispatcher` (the same dispatcher anthropic-direct
+ * uses) — hooks fire from there, permission checks land there, and the
+ * built-in handlers (`bash`, `read_file`, `write_file`, `edit_file`, `glob`,
+ * `grep`, `list_directory`, `send_telegram`) are reused without copying.
+ *
+ * Lifecycle:
+ *   - constructor is synchronous; emits `session.init` on first iterator pull
+ *   - main loop awaits user turns from `promptStream`, races against
+ *     `closedPromise` so `close()` unblocks a "waiting for next turn" state
+ *   - each user turn opens a new AbortController; `interrupt()` aborts it
+ *   - `runTurn` iterates model→tools→model until the model stops calling tools
+ *     (or `MAX_TOOL_ITERATIONS` is hit, matching anthropic-direct/loop.ts)
+ *
+ * Things deliberately deferred:
+ *   - File checkpointing / rewindFiles (deferred — `canRewind: false`)
+ *   - Compact (provider opts out by leaving `compact` undefined)
+ *   - Reasoning effort knob for o-series (will be wired when AgentConfig
+ *     `effort` flows through cleanly)
+ *
+ * @module agent/providers/openai-compatible/query
+ */
+
+import OpenAI from 'openai';
+import { randomUUID } from 'node:crypto';
+import type { AgentConfig } from '../../types/config-types.js';
+import type {
+  ProviderQuery,
+  ProviderEvent,
+  ProviderUserTurn,
+  ProviderSessionInfo,
+  ProviderContextUsage,
+  ProviderRewindResult,
+  ProviderModelInfo,
+  ProviderCommandInfo,
+  ProviderAgentInfo,
+  ProviderMcpServerStatus,
+  ProviderAccountInfo,
+  ProviderUsage,
+} from '../../provider.js';
+import { sumProviderUsage } from '../../usage.js';
+import { contextLimitFor } from '../../model-limits.js';
+import { collectSkillEntries } from '../../tools/skill-bridge.js';
+import { debugLog } from '../../../utils/debug.js';
+import {
+  resolveOpenAIAuth,
+  formatAuthDiagnostic,
+  type OpenAIAuthResolution,
+} from './auth.js';
+import { buildMessages, flattenUserContent, type OpenAIMessage } from './messages.js';
+import {
+  createStreamState,
+  translateChunk,
+  usageFromState,
+  finalizedToolCalls,
+  isToolCallStop,
+  type OpenAIChunk,
+  type StreamState,
+} from './translate.js';
+import {
+  toolDefsToOpenAIFunctions,
+  accumulatedToolCallsToToolCalls,
+  assistantMessageWithToolCalls,
+  toolResultsToMessages,
+  type OpenAIFunctionTool,
+} from './loop.js';
+import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
+import type { ToolResult } from '../anthropic-direct/types.js';
+import { contextWindowTokensUsed, buildContextUsageFields } from '../anthropic-direct/query/auto-compact.js';
+import { PLAN_MODE_ADDENDUM_TEXT } from '../anthropic-direct/plan-mode-addendum.js';
+
+const PROVIDER_NAME = 'openai-compatible';
+
+/**
+ * Hard cap on tool-call iterations within a single user turn. Mirrors
+ * `anthropic-direct/loop.ts:MAX_ITERATIONS` (50 there) — a runaway model
+ * shouldn't be able to call tools forever. Picked the same value so the
+ * two providers behave identically on this edge case.
+ */
+const MAX_TOOL_ITERATIONS = 50;
+
+/**
+ * Test injection hook for the OpenAI client. Set to a factory to swap in a
+ * mock client; pass `null` to restore the real constructor. Not part of the
+ * stable surface — tests reach into this module directly.
+ */
+export type OpenAIClientFactory = (opts: { apiKey: string; baseURL?: string }) => OpenAI;
+let clientFactory: OpenAIClientFactory | null = null;
+export function __setOpenAIClientFactory(factory: OpenAIClientFactory | null): void {
+  clientFactory = factory;
+}
+
+/** Construction options. */
+export interface OpenAICompatibleQueryOptions {
+  /** Pre-resolved auth. Carries the source tag for session.init. */
+  auth: OpenAIAuthResolution;
+  /** Optional baseURL override (NVIDIA NIM, Together, etc.). Defaults to OpenAI. */
+  baseURL?: string;
+  /** Model id, passed straight through to the API. */
+  model: string;
+  /** Synthetic session id emitted on `session.init` before the first wire call. */
+  synthesizedSessionId: string;
+  /** Caller-side prompt stream (lazy). */
+  promptStream: AsyncIterable<ProviderUserTurn>;
+  /** Full AgentConfig. */
+  config: AgentConfig;
+  /**
+   * Tool dispatcher to route every tool call through. When omitted, tool
+   * calls are not offered to the model (no `tools[]` in the request) and
+   * the loop reduces to slice-2 text-only behavior. The harness's typical
+   * wiring constructs a `SessionToolDispatcher` here so hooks, permissions,
+   * and the shared handler set all just work.
+   */
+  toolDispatcher?: ToolDispatcher;
+  /** Optional MCP manager — populates `session.init` and `mcpServerStatus()`. */
+  mcpManager?: import('../../mcp/index.js').McpManager;
+}
+
+function normalizePermissionMode(mode: string | undefined): string {
+  return mode ?? 'default';
+}
+
+/** Internal record used to drive the per-turn iteration loop. */
+interface IterationResult {
+  state: StreamState;
+  events: ProviderEvent[];
+  /** Final assistant text accumulated this iteration. */
+  text: string;
+  /** True when this iteration ended in tool_calls (we need to dispatch and loop). */
+  needsToolDispatch: boolean;
+}
+
+export class OpenAICompatibleQuery implements ProviderQuery {
+  private readonly client: OpenAI;
+  private readonly opts: OpenAICompatibleQueryOptions;
+  private readonly initSessionId: string;
+  private readonly toolDispatcher: ToolDispatcher | undefined;
+  /** Pre-computed tool catalog — recomputed only if dispatcher.toolDefs changes (it doesn't today). */
+  private readonly openAITools: OpenAIFunctionTool[] | undefined;
+
+  /** Running conversation state for multi-turn sessions. */
+  private priorTurns: OpenAIMessage[] = [];
+
+  private currentModel: string;
+  private currentPermissionMode: string;
+
+  private abortController: AbortController | null = null;
+  private pendingAbortReason: 'interrupted' | 'closed' | null = null;
+  private closed = false;
+  private closeResolve: (() => void) | null = null;
+  private readonly closedPromise: Promise<'__closed__'>;
+
+  /**
+   * Last completed turn's accumulated usage — drives `getContextUsage()`.
+   * Set on every `turn.completed` emission (see runTurn below). Mirrors
+   * `anthropic-direct/query.ts:186` so the REPL status line gets a real
+   * context-% reading on OpenAI models instead of falling through to the
+   * sampler's local-stats approximation.
+   */
+  private lastUsage: ProviderUsage | null = null;
+
+  constructor(opts: OpenAICompatibleQueryOptions) {
+    this.opts = opts;
+    this.initSessionId = opts.synthesizedSessionId;
+    this.currentModel = opts.model;
+    this.currentPermissionMode = normalizePermissionMode(opts.config.permissionMode);
+    this.toolDispatcher = opts.toolDispatcher;
+
+    // Pre-compute the OpenAI tool catalog once. Only `SessionToolDispatcher`
+    // (and not the structural `ToolDispatcher` minimal interface) exposes
+    // `toolDefs`, so we duck-type the read.
+    if (this.toolDispatcher) {
+      const td = this.toolDispatcher as { toolDefs?: readonly unknown[] };
+      if (Array.isArray(td.toolDefs) && td.toolDefs.length > 0) {
+        this.openAITools = toolDefsToOpenAIFunctions(
+          td.toolDefs as Parameters<typeof toolDefsToOpenAIFunctions>[0],
+        );
+      }
+    }
+
+    if (opts.auth.apiKey === null) {
+      this.client = null as unknown as OpenAI;
+    } else {
+      const ctor = clientFactory ?? defaultClientFactory;
+      const clientOpts: { apiKey: string; baseURL?: string } = { apiKey: opts.auth.apiKey };
+      if (opts.baseURL !== undefined) clientOpts.baseURL = opts.baseURL;
+      this.client = ctor(clientOpts);
+    }
+
+    this.closedPromise = new Promise<'__closed__'>((resolve) => {
+      this.closeResolve = () => resolve('__closed__');
+    });
+  }
+
+  async *[Symbol.asyncIterator](): AsyncIterator<ProviderEvent> {
+    const info: ProviderSessionInfo = {
+      sessionId: this.initSessionId,
+      model: this.currentModel,
+      permissionMode: this.currentPermissionMode,
+      cwd: process.cwd(),
+      tools: this.openAITools ? this.openAITools.map((t) => t.function.name) : [],
+      slashCommands: [],
+      skills: [],
+      plugins: [],
+      mcpServers: this.opts.mcpManager?.getServerStates().map((s) => ({
+        name: s.serverName,
+        status: s.status,
+      })) ?? [],
+      apiKeySource: this.opts.auth.source,
+      version: PROVIDER_NAME,
+    };
+    yield { type: 'session.init', info };
+
+    if (this.opts.auth.apiKey === null) {
+      yield { type: 'error', error: new Error(formatAuthDiagnostic(this.opts.auth)) };
+      return;
+    }
+
+    const promptIterator = this.opts.promptStream[Symbol.asyncIterator]();
+    try {
+      while (!this.closed) {
+        const nextOrClose = await Promise.race([promptIterator.next(), this.closedPromise]);
+        if (nextOrClose === '__closed__') break;
+        const turnResult = nextOrClose as IteratorResult<ProviderUserTurn>;
+        if (turnResult.done) break;
+
+        const userText = flattenUserContent(turnResult.value.content);
+        yield* this.runTurn(userText);
+      }
+    } catch (iterErr) {
+      const e = iterErr instanceof Error ? iterErr : new Error(String(iterErr));
+      yield { type: 'error', error: e };
+    } finally {
+      try {
+        await promptIterator.return?.();
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  }
+
+  /**
+   * Drive a single user turn through the model + tool loop.
+   *
+   * Loop shape (mirrors anthropic-direct/loop.ts:runTurn):
+   *   1. Append user message to priorTurns.
+   *   2. iteration: call model → stream → translate chunks.
+   *   3. If finish_reason was tool_calls: dispatch via toolDispatcher,
+   *      append assistant{tool_calls} + tool{result} to priorTurns, GOTO 2.
+   *   4. Else: emit assistant.message + turn.completed, exit.
+   *
+   * Sums usage across iterations and emits a single `turn.completed` at the
+   * end with the aggregate (mirrors how anthropic-direct accumulates usage
+   * across the tool-call loop into one final event).
+   */
+  private async *runTurn(userText: string): AsyncGenerator<ProviderEvent> {
+    const controller = new AbortController();
+    this.abortController = controller;
+    if (this.pendingAbortReason !== null && !controller.signal.aborted) {
+      controller.abort(this.pendingAbortReason);
+      this.pendingAbortReason = null;
+    }
+    if (controller.signal.aborted) return;
+
+    // Wall-clock anchor for the REPL footer's `◦ Xs · $cost · N tok` line.
+    // Set after the abort gate so an immediately-aborted turn doesn't yield
+    // a duration anyway (it just returns silently — there's no
+    // turn.completed yield on that path). Mirrors `loopStartTime` in
+    // anthropic-direct/loop.ts.
+    const turnStartTime = Date.now();
+    const taskId = randomUUID();
+
+    this.priorTurns.push({ role: 'user', content: userText });
+
+    // Aggregate usage across all tool-loop iterations for this turn via the
+    // shared sumProviderUsage helper. Critical: cache fields (cachedInputTokens,
+    // cacheCreationTokens) must be take-latest, NOT cumulative — they describe
+    // the per-call cache footprint of the same cached prefix on each iteration,
+    // and summing them N-times across N iterations inflates the apparent
+    // context by ~N×. See src/agent/usage.ts docstring.
+    let accumulatedUsage: ProviderUsage = {
+      stopReason: null,
+      resultSubtype: 'success',
+      isError: false,
+    };
+    let finalAssistantText = '';
+    // Track the reasoning trace from the last iteration so DeepSeek-R1-class
+    // thinking-mode providers see it echoed on the final assistant turn —
+    // omitting it on the NEXT user-turn's request yields a 400 ("The
+    // `reasoning_content` in the thinking mode must be passed back to the
+    // API"). Stays empty for non-thinking providers (real OpenAI o-series
+    // doesn't expose reasoning), in which case the field is omitted entirely.
+    let finalReasoningText = '';
+
+    for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+      if (controller.signal.aborted) {
+        if (this.abortController === controller) this.abortController = null;
+        return;
+      }
+
+      const result = yield* this.runIteration(controller);
+      if (result === null) {
+        // Stream errored or aborted — events were already yielded; bail.
+        if (this.abortController === controller) this.abortController = null;
+        return;
+      }
+
+      const roundUsage = usageFromState(result.state);
+      accumulatedUsage = sumProviderUsage(accumulatedUsage, roundUsage);
+      // Context-window footprint for THIS round. Unlike Anthropic, OpenAI's
+      // `prompt_tokens` (→ inputTokens) already INCLUDES cached tokens
+      // (`cached_tokens` is a subset), so the window total is input + output —
+      // adding cache would double-count. Computed from the single round (not
+      // cumulative) and re-stamped each iteration; sumProviderUsage discards it.
+      accumulatedUsage.contextWindowTokens =
+        (roundUsage.inputTokens ?? 0) + (roundUsage.outputTokens ?? 0);
+      // Mirror anthropic-direct: refresh lastUsage each round so
+      // getContextUsage() shows live mid-turn context on the status line.
+      // The post-loop assignment below still sets the final value.
+      this.lastUsage = accumulatedUsage;
+      if (result.text.length > 0) finalAssistantText = result.text;
+      finalReasoningText = result.state.reasoningText;
+
+      if (!result.needsToolDispatch) {
+        // Normal text-only completion — fall through to emit terminal events.
+        break;
+      }
+
+      // Tool-call path: dispatch, append history, loop.
+      yield* this.dispatchAndAppend(result.state, controller.signal);
+
+      {
+        const lastToolName = finalizedToolCalls(result.state).at(-1)?.name;
+        yield {
+          type: 'progress',
+          progress: {
+            taskId,
+            description: 'Tool-use loop',
+            summary: `Iteration ${iter + 1}: used ${lastToolName ?? 'unknown'}`,
+            lastToolName,
+            totalTokens: accumulatedUsage.totalTokens ?? 0,
+            toolUses: iter + 1,
+            durationMs: Date.now() - turnStartTime,
+          },
+          sessionId: this.initSessionId,
+        };
+      }
+
+      if (controller.signal.aborted) {
+        if (this.abortController === controller) this.abortController = null;
+        return;
+      }
+    }
+
+    if (this.abortController === controller) this.abortController = null;
+
+    if (finalAssistantText.length > 0) {
+      const assistantTurn: OpenAIMessage = {
+        role: 'assistant',
+        content: finalAssistantText,
+      };
+      if (finalReasoningText.length > 0) {
+        assistantTurn.reasoning_content = finalReasoningText;
+      }
+      this.priorTurns.push(assistantTurn);
+    }
+
+    // Capture for getContextUsage() before yielding turn.completed — matches
+    // the timing in anthropic-direct/query.ts:292 where lastUsage is set on
+    // the turn.completed handler. Doing it here (vs. in [Symbol.asyncIterator])
+    // means the field is correct even if the outer consumer breaks early.
+    this.lastUsage = accumulatedUsage;
+
+    yield {
+      type: 'assistant.message',
+      text: finalAssistantText,
+      sessionId: this.initSessionId,
+    };
+    yield {
+      type: 'turn.completed',
+      usage: { ...accumulatedUsage, durationMs: Date.now() - turnStartTime },
+      sessionId: this.initSessionId,
+    };
+  }
+
+  /**
+   * One iteration = one model call + chunk drain. Returns `null` if the
+   * stream errored or was aborted (events for those cases already yielded
+   * via the catch blocks). Otherwise returns a record describing whether
+   * tools need to be dispatched.
+   *
+   * Note: yields delta events (text/reasoning) as they arrive but does NOT
+   * yield `assistant.message` / `turn.completed` — those are the parent
+   * `runTurn`'s responsibility once the iteration loop has settled.
+   */
+  private async *runIteration(
+    controller: AbortController,
+  ): AsyncGenerator<ProviderEvent, IterationResult | null> {
+    const messages = buildMessages({
+      config: this.opts.config,
+      ...(this.opts.config.resumeHistory !== undefined
+        ? { resumeHistory: this.opts.config.resumeHistory }
+        : {}),
+      priorTurns: this.priorTurns,
+    });
+
+    // Inject plan-mode posture addendum so the model understands write refusals.
+    if (this.currentPermissionMode === 'plan' && messages[0]?.role === 'system') {
+      messages[0] = {
+        ...messages[0],
+        content: (messages[0].content as string) + '\n\n' + PLAN_MODE_ADDENDUM_TEXT,
+      };
+    }
+
+    const state = createStreamState();
+
+    const requestBody: Record<string, unknown> = {
+      model: this.currentModel,
+      messages,
+      stream: true,
+      stream_options: { include_usage: true },
+    };
+    // Only attach `tools` when the dispatcher actually has any — empty
+    // arrays make some providers reject the request.
+    if (this.openAITools && this.openAITools.length > 0) {
+      requestBody['tools'] = this.openAITools;
+    }
+
+    let stream: AsyncIterable<OpenAIChunk>;
+    try {
+      stream = (await this.client.chat.completions.create(requestBody as never, {
+        signal: controller.signal,
+      })) as unknown as AsyncIterable<OpenAIChunk>;
+    } catch (err) {
+      if (controller.signal.aborted) return null;
+      const e = err instanceof Error ? err : new Error(String(err));
+      yield { type: 'error', error: e };
+      return null;
+    }
+
+    try {
+      for await (const chunk of stream) {
+        if (this.closed) return null;
+        for (const ev of translateChunk(chunk, state, this.initSessionId)) {
+          yield ev;
+        }
+      }
+    } catch (err) {
+      if (controller.signal.aborted) return null;
+      const e = err instanceof Error ? err : new Error(String(err));
+      yield { type: 'error', error: e };
+      return null;
+    }
+
+    return {
+      state,
+      events: [],
+      text: state.assistantText,
+      needsToolDispatch: isToolCallStop(state) && state.toolCallsByIndex.size > 0,
+    };
+  }
+
+  /**
+   * After an iteration produced tool calls: emit `tool.use.start` per call,
+   * dispatch through the shared dispatcher (which runs PreToolUse hooks +
+   * permission checks + the actual handler + PostToolUse hooks), then emit
+   * `tool.output` per result, then append the assistant{tool_calls} +
+   * tool{result} messages to running history for the next iteration.
+   */
+  private async *dispatchAndAppend(
+    state: StreamState,
+    signal: AbortSignal,
+  ): AsyncGenerator<ProviderEvent> {
+    if (!this.toolDispatcher) {
+      // Shouldn't reach here — runIteration won't return needsToolDispatch=true
+      // when we have no dispatcher because we don't send `tools[]` — but
+      // belt-and-braces against a misbehaving model.
+      return;
+    }
+
+    const accumulated = finalizedToolCalls(state);
+    const { calls, parseErrors } = accumulatedToolCallsToToolCalls(accumulated, signal);
+
+    // Emit tool.use.start BEFORE dispatching, matching anthropic-direct.
+    for (const call of calls) {
+      yield {
+        type: 'tool.use.start',
+        toolUseId: call.id,
+        toolName: call.name,
+        toolInput: summarizeToolInput(call.input),
+        sessionId: this.initSessionId,
+      };
+    }
+
+    // Build results — start with synthetic errors for any JSON parse failures.
+    const results: { call: typeof calls[number]; result: ToolResult }[] = [];
+
+    if (signal.aborted) {
+      // Aborted before dispatch — synthesize aborted results and emit outputs.
+      for (const call of calls) {
+        const result: ToolResult = { content: 'Tool call aborted', isError: true };
+        results.push({ call, result });
+        yield {
+          type: 'tool.output',
+          toolUseId: call.id,
+          toolName: call.name,
+          content: result.content,
+          isError: true,
+          sessionId: this.initSessionId,
+        };
+      }
+    } else {
+      // Real dispatch — batch when available, sequential fallback.
+      let dispatcherResults: ToolResult[];
+      try {
+        if (this.toolDispatcher.executeBatch) {
+          dispatcherResults = await this.toolDispatcher.executeBatch(calls);
+        } else {
+          dispatcherResults = [];
+          for (const call of calls) {
+            if (signal.aborted) {
+              dispatcherResults.push({ content: 'Tool call aborted', isError: true });
+              continue;
+            }
+            try {
+              dispatcherResults.push(await this.toolDispatcher.execute(call));
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              dispatcherResults.push({
+                content: `Tool execution threw: ${message}`,
+                isError: true,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        dispatcherResults = calls.map(() => ({
+          content: `Tool batch execution failed: ${message}`,
+          isError: true,
+        }));
+      }
+
+      for (let i = 0; i < calls.length; i++) {
+        const call = calls[i]!;
+        let result = dispatcherResults[i]!;
+        // Layer parse-error diagnostics in front of the dispatcher result —
+        // the model needs to know its arguments were malformed.
+        const parseErr = parseErrors.get(call.id);
+        if (parseErr !== undefined) {
+          result = {
+            content: `${parseErr}\n--\n${result.content}`,
+            isError: true,
+            ...(result.truncated === true ? { truncated: true } : {}),
+          };
+        }
+        results.push({ call, result });
+        yield {
+          type: 'tool.output',
+          toolUseId: call.id,
+          toolName: call.name,
+          content: result.content,
+          ...(result.isError === true ? { isError: true } : {}),
+          ...(result.truncated === true ? { truncated: true } : {}),
+          sessionId: this.initSessionId,
+        };
+        if (result.render?.diff) {
+          yield {
+            type: 'tool.diff',
+            toolUseId: call.id,
+            diff: result.render.diff,
+            sessionId: this.initSessionId,
+          };
+        }
+      }
+    }
+
+    // Append the assistant turn (with tool_calls) and the tool-result
+    // messages to running history so the next iteration's request includes
+    // them. OpenAI is strict about this order: assistant{tool_calls} must
+    // precede the tool{} messages, and each tool{} must reference a
+    // tool_call_id that exists in the assistant turn.
+    //
+    // `state.reasoningText` is threaded in so DeepSeek-R1-class thinking-mode
+    // providers see the reasoning trace echoed back on the assistant turn —
+    // omitting it on those providers yields a 400 ("The `reasoning_content`
+    // in the thinking mode must be passed back to the API"). Empty text is
+    // a no-op for non-thinking providers (the field is omitted entirely).
+    this.priorTurns.push(
+      assistantMessageWithToolCalls(state.assistantText, accumulated, state.reasoningText) as unknown as OpenAIMessage,
+    );
+    for (const m of toolResultsToMessages(results)) {
+      this.priorTurns.push(m as unknown as OpenAIMessage);
+    }
+  }
+
+  // ---- ProviderQuery surface ------------------------------------------------
+
+  async interrupt(): Promise<void> {
+    const c = this.abortController;
+    if (c && !c.signal.aborted) {
+      c.abort('interrupted');
+      return;
+    }
+    this.pendingAbortReason = 'interrupted';
+  }
+
+  async setModel(model?: string): Promise<void> {
+    if (model !== undefined) this.currentModel = model;
+  }
+
+  async setPermissionMode(mode: string): Promise<void> {
+    this.currentPermissionMode = normalizePermissionMode(mode);
+  }
+
+  setCwd(cwd: string): void {
+    this.toolDispatcher?.setResolveBase?.(cwd);
+  }
+
+  async supportedCommands(): Promise<ProviderCommandInfo[]> {
+    // Mirrors anthropic-direct/query.ts:supportedCommands — surfaces every
+    // skill discovered by skill-bridge (built-in TS skills, ~/.afk/skills/,
+    // and plugin SKILL.md files) so the REPL slash registry can register a
+    // passthrough /<skill> for each one. Without this, /reload-plugins
+    // reports 0 skills on OpenAI sessions and typing /mint does not
+    // autocomplete. collectSkillEntries() is provider-agnostic (no model
+    // SDK imports) so the body lifts unchanged.
+    //
+    // Extract to a shared helper module when a third provider lands.
+    try {
+      const entries = collectSkillEntries();
+      return entries.map((e) => {
+        const info: ProviderCommandInfo = {
+          name: e.name,
+          description: e.description,
+        };
+        if (e.argumentHint) info.argumentHint = e.argumentHint;
+        return info;
+      });
+    } catch {
+      // Discovery is best-effort — the REPL stays usable without it.
+      return [];
+    }
+  }
+
+  async supportedModels(): Promise<ProviderModelInfo[]> {
+    return [
+      { value: 'gpt-4o', displayName: 'GPT-4o', description: 'OpenAI flagship multimodal' },
+      { value: 'gpt-4o-mini', displayName: 'GPT-4o mini', description: 'Fast/cheap GPT-4o' },
+      { value: 'gpt-4.1', displayName: 'GPT-4.1', description: 'Long-context GPT-4' },
+      { value: 'gpt-4.1-mini', displayName: 'GPT-4.1 mini', description: 'Fast 4.1 variant' },
+      { value: 'o1', displayName: 'o1', description: 'Reasoning model' },
+      { value: 'o1-mini', displayName: 'o1 mini', description: 'Fast reasoning' },
+      { value: 'o3-mini', displayName: 'o3 mini', description: 'Newer reasoning, faster' },
+    ];
+  }
+
+  async supportedAgents(): Promise<ProviderAgentInfo[]> {
+    return [];
+  }
+
+  async getContextUsage(): Promise<ProviderContextUsage> {
+    // Mirrors anthropic-direct/query.ts:getContextUsage. Reads `this.lastUsage`
+    // (set on every turn.completed in runTurn above) and computes a context-%
+    // against the model's window via contextLimitFor(). All the ingredients
+    // are provider-neutral — `ProviderUsage` is defined at src/agent/provider.ts
+    // and `contextLimitFor` lives at src/agent/model-limits.ts.
+    //
+    // Uses the context-window footprint (`contextWindowTokens`, set per-round in
+    // the loop above). For OpenAI that is prompt + completion (= input +
+    // output) since `prompt_tokens` already includes cached tokens; falls back
+    // to input+output when absent. See auto-compact.ts:contextWindowTokensUsed.
+    const last = this.lastUsage;
+    const contextLimit = contextLimitFor(this.currentModel);
+    let percentage: number | undefined;
+    if (last && contextLimit > 0) {
+      const used = contextWindowTokensUsed(last);
+      percentage = Math.min(100, Math.max(0, (used / contextLimit) * 100));
+    }
+    // Translate the camelCase ProviderUsage into the snake_case apiUsage +
+    // top-level totalTokens the REPL consumers read. See buildContextUsageFields.
+    const { totalTokens, apiUsage } = buildContextUsageFields(last);
+    return {
+      tools: [],
+      agents: [],
+      isAutoCompactEnabled: false,
+      apiUsage,
+      totalTokens,
+      ...(percentage !== undefined ? { percentage } : {}),
+      maxTokens: contextLimit,
+    };
+  }
+
+  async mcpServerStatus(): Promise<ProviderMcpServerStatus[]> {
+    if (!this.opts.mcpManager) return [];
+    return this.opts.mcpManager.getServerStates().map((s) => ({
+      name: s.serverName,
+      status: s.status,
+    }));
+  }
+
+  async accountInfo(): Promise<ProviderAccountInfo> {
+    return { authSource: this.opts.auth.source };
+  }
+
+  async rewindFiles(
+    _userMessageId: string,
+    _options?: { dryRun?: boolean },
+  ): Promise<ProviderRewindResult> {
+    return {
+      canRewind: false,
+      error: `${PROVIDER_NAME} provider does not support file checkpoint rewind yet.`,
+    };
+  }
+
+  close(): void {
+    this.closed = true;
+    const c = this.abortController;
+    if (c && !c.signal.aborted) {
+      c.abort('closed');
+    } else {
+      this.pendingAbortReason = 'closed';
+    }
+    this.closeResolve?.();
+    debugLog(`🟢 ${PROVIDER_NAME}: closed`);
+  }
+}
+
+function defaultClientFactory(opts: { apiKey: string; baseURL?: string }): OpenAI {
+  const clientOpts: ConstructorParameters<typeof OpenAI>[0] = { apiKey: opts.apiKey };
+  if (opts.baseURL !== undefined) clientOpts.baseURL = opts.baseURL;
+  return new OpenAI(clientOpts);
+}
+
+/**
+ * Best-effort one-line summary of a tool input. Mirrors the same-named
+ * helper in anthropic-direct/loop.ts so `tool.use.start` events render
+ * identically across providers.
+ */
+function summarizeToolInput(input: unknown): string {
+  if (!input || typeof input !== 'object') return '';
+  const obj = input as Record<string, unknown>;
+  const path = obj['file_path'] ?? obj['path'] ?? obj['filePath'];
+  if (typeof path === 'string') return ' ' + path;
+  const cmd = obj['command'] ?? obj['cmd'];
+  if (typeof cmd === 'string') {
+    const firstLine = cmd.split('\n')[0]!;
+    return ' ' + (firstLine.length > 80 ? firstLine.slice(0, 77) + '…' : firstLine);
+  }
+  const query = obj['query'] ?? obj['pattern'] ?? obj['url'] ?? obj['description'];
+  if (typeof query === 'string') return ' ' + query;
+  return '';
+}
+
+/**
+ * Resolve auth + construct a query. Provider entrypoint uses this; tests
+ * use the constructor directly via the test-injection hook.
+ *
+ * The provider that *calls* this is responsible for constructing the
+ * `toolDispatcher` (typically a `SessionToolDispatcher`) and threading it
+ * through `opts.toolDispatcher`. See `OpenAICompatibleProvider.query()`.
+ */
+export function buildQueryFromConfig(
+  config: AgentConfig,
+  promptStream: AsyncIterable<ProviderUserTurn>,
+  options: {
+    baseURL?: string;
+    toolDispatcher?: ToolDispatcher;
+    mcpManager?: import('../../mcp/index.js').McpManager;
+  } = {},
+): OpenAICompatibleQuery {
+  const auth = resolveOpenAIAuth(config.apiKey);
+  const synthesizedSessionId =
+    config.resume ?? `openai-pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const model = typeof config.model === 'string' ? config.model : 'gpt-4o-mini';
+
+  const opts: OpenAICompatibleQueryOptions = {
+    auth,
+    model,
+    synthesizedSessionId,
+    promptStream,
+    config,
+  };
+  if (options.baseURL !== undefined) opts.baseURL = options.baseURL;
+  if (options.toolDispatcher !== undefined) opts.toolDispatcher = options.toolDispatcher;
+  if (options.mcpManager !== undefined) opts.mcpManager = options.mcpManager;
+  return new OpenAICompatibleQuery(opts);
+}

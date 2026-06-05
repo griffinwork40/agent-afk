@@ -1,0 +1,197 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Opt JS-based actions into Node.js 24 ahead of the June 2026 default flip.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  lint-build:
+    name: Lint & Build
+    # GitHub-hosted runner. CI is triggered by `pull_request` — once this repo is
+    # public, fork PRs run here, so it must NOT use a self-hosted runner (running
+    # untrusted fork code on self-hosted infra is an RCE vector). Public repos get
+    # unlimited free GitHub-hosted minutes. The release/publish workflows stay
+    # self-hosted (trusted tag/main-push triggers).
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint (tsc --noEmit)
+        run: pnpm lint
+
+      - name: Audit env-var access (no scattered process.env reads outside src/config/env.ts)
+        run: pnpm audit:env:check
+
+      - name: Audit env-registry docs (docs/env-registry.{json,md} in sync with src/config/env.ts)
+        run: pnpm scan:env:check
+
+      - name: Build
+        run: pnpm build
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test (with coverage gate)
+        run: pnpm test:coverage
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
+
+  # Exercise the publish-path esbuild bundle on every PR so prompt-inlining
+  # regressions, externalised-dep mistakes, or shebang/permission bugs are
+  # caught before `prepublishOnly` fires at release time.
+  #
+  # History: before this job existed, only `pnpm build` (tsc) ran on PRs.
+  # The esbuild path (`scripts/build-dist.mjs`) ran ONLY at `prepublishOnly`
+  # during `pnpm publish`, so any regression surfaced as a failed publish
+  # mid-release. See docs/development.md for the two-pipeline rationale.
+  publish-bundle:
+    name: Publish Bundle Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build publish bundle (esbuild)
+        run: pnpm build:dist
+
+      - name: Assert bundle entry points exist and are executable
+        run: |
+          set -e
+          for entry in cli.mjs telegram.mjs index.mjs postinstall.mjs; do
+            if [ ! -f "dist/$entry" ]; then
+              echo "::error::dist/$entry missing after build:dist" >&2
+              exit 1
+            fi
+          done
+          # cli.mjs and telegram.mjs must be executable (chmod 755 in build-dist.mjs)
+          for entry in cli.mjs telegram.mjs; do
+            if [ ! -x "dist/$entry" ]; then
+              echo "::error::dist/$entry exists but is not executable" >&2
+              exit 1
+            fi
+          done
+          echo "All bundle entry points present and executable."
+
+      - name: Assert bundled-plugins shipped in the publish bundle
+        # Guards the exact regression this job exists to catch: build:dist
+        # historically never copied src/bundled-plugins/, so the published npm
+        # tarball shipped zero bundled skills. The runtime resolves them from
+        # <dist>/bundled-plugins/ — if they are missing the feature is silently dead.
+        run: |
+          set -e
+          PLUGIN_JSON="dist/bundled-plugins/awa-bundled/.claude-plugin/plugin.json"
+          if [ ! -f "$PLUGIN_JSON" ]; then
+            echo "::error::$PLUGIN_JSON missing after build:dist — bundled skills would not ship in the npm tarball" >&2
+            exit 1
+          fi
+          COUNT=$(find dist/bundled-plugins/awa-bundled/skills -name SKILL.md | wc -l | tr -d ' ')
+          if [ "$COUNT" -lt 1 ]; then
+            echo "::error::no bundled SKILL.md files under dist/bundled-plugins after build:dist" >&2
+            exit 1
+          fi
+          echo "Bundled-plugins present in dist: $COUNT skills."
+
+      - name: Smoke test — bundled CLI runs and reports version
+        # Provide a dummy ANTHROPIC_API_KEY so the CLI's startup credential
+        # check passes — `--version` runs after the global init, and the init
+        # exits non-zero when no credential source is found. This is a
+        # pre-existing CLI design quirk; the smoke test bypasses it by
+        # stubbing the credential rather than making API calls. The key value
+        # itself is never used (the bundle never reaches a network step).
+        #
+        # GitHub Actions defaults `shell: bash -e`, which would abort this
+        # step the moment `node` exits non-zero without printing diagnostics.
+        # Use `set +e` + explicit `$?` so we always surface stdout/stderr and
+        # the exit code — necessary when the bundle is genuinely broken (the
+        # failure case this job exists to catch).
+        # TODO: track removal — real fix is to short-circuit --version/--help
+        # before auth-init in src/cli/index.ts (see issue to avoid permanent debt).
+        env:
+          ANTHROPIC_API_KEY: sk-ant-dummy-not-used-version-only
+        shell: bash
+        run: |
+          set +e
+          OUTPUT=$(node dist/cli.mjs --version 2>&1)
+          EXIT_CODE=$?
+          echo "afk --version exit code: $EXIT_CODE"
+          echo "afk --version output (start)"
+          echo "$OUTPUT"
+          echo "afk --version output (end)"
+          if [ "$EXIT_CODE" -ne 0 ]; then
+            echo "::error::dist/cli.mjs --version exited with code $EXIT_CODE — bundle is broken (see output above)" >&2
+            exit 1
+          fi
+          if ! echo "$OUTPUT" | grep -qE '[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::dist/cli.mjs --version exited 0 but printed no semver — bundle is broken" >&2
+            exit 1
+          fi
+          echo "Smoke test passed."

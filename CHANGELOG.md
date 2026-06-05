@@ -1,0 +1,2428 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+Entries in the [Unreleased] section may include a short commit hash suffix
+(e.g. `- add thing (abc1234)`). The hash is used by `/changelog` and the
+auto-release workflow to deduplicate commits across successive runs.
+
+## [Unreleased]
+
+## [3.80.6] - 2026-06-05
+
+### Fixed
+- exclude internal-tier skills from the published npm bundle (#713) (952079a3)
+
+## [3.80.5] - 2026-06-04
+
+### Fixed
+- emit literal apostrophe in OG meta to stop Reddit double-encoding (#712) (3c634593)
+
+### Changed
+- Open-core relicense: Apache-2.0 + DCO + community files (#691) (3e4e4200)
+
+## [3.80.4] - 2026-06-04
+
+### Fixed
+- ship bundled-plugins (the `awa-bundled` orchestration skills) in the published npm tarball — `build:dist` (the publish path) never copied `src/bundled-plugins/`, so `npm install` got zero bundled skills; both build paths now route through one shared copy helper, guarded by a unit test and a `publish-bundle` CI assertion (#703) (00211e3)
+- emit twitter:url meta tag (last #514 migration parity gap) (#710) (05e24c3)
+
+## [3.80.3] - 2026-06-04
+
+### Fixed
+- restore #502 session-player terminal + 2 copy regressions (#709) (be1e214b)
+## [3.80.2] - 2026-06-04
+
+### Fixed
+- keep non-last ancestor spine continuous through nested subtrees (#708) (983d06f0)
+
+## [3.80.1] - 2026-06-04
+
+### Fixed
+- retry mid-stream 529 / overloaded_error events (#704) (04aca58)
+
+## [3.80.0] - 2026-06-04
+
+### Added
+- add /name command to show or set the session name (#700) (d5bca28e)
+
+## [3.79.0] - 2026-06-04
+
+### Added
+- config-driven shell-command hooks + TUI clear-band reset (reconciles #644 + #646) (#693) (cde08779)
+
+## [3.78.1] - 2026-06-04
+
+### Fixed
+- correct stale settings — models, codex removal, thinking enum (#699) (c5825b3)
+
+## [3.78.0] - 2026-06-04
+
+### Added
+- add tool call counting script and corresponding npm command (207eaff)
+
+## [3.77.1] - 2026-06-03
+
+### Fixed
+- harden rate-limiter against XFF spoofing + non-POST token burn (#698) (4f3ae30)
+
+## [3.77.0] - 2026-06-03
+
+### Added
+- migrate vanilla landing page to Next.js 15 App Router (#514) (02adee41)
+
+## [3.76.1] - 2026-06-03
+
+### Fixed
+- topology-spine seam — keep live-ancestor columns open in committed band + overlay (#687) (f1024e5)
+
+## [3.76.0] - 2026-06-03
+
+### Added
+- @-file picker — tilde/absolute path completion + content injection (#688) (10aa3a00)
+
+## [3.75.0] - 2026-06-03
+
+### Added
+- replace Firecrawl with local Readability/Turndown scraper + Brave search (#671) (8158044)
+
+## [3.74.0] - 2026-06-03
+
+### Added
+- provider-level readOnlyMemory enforcement for child sessions (#690) (8853eb0)
+
+## [3.73.1] - 2026-06-03
+
+### Fixed
+- scope audit-fit Glob rule, thread ship heal iters (#692) (619e4ad)
+
+## [3.73.0] - 2026-06-03
+
+### Added
+- durable named sessions + Telegram→CLI resume bridge (phases 1–2) (#672) (44c60e4)
+
+## [3.72.0] - 2026-06-03
+
+### Added
+- add /fork to branch a conversation into a parallel session (#670) (5e24f1a)
+
+## [3.71.3] - 2026-06-03
+
+### Fixed
+- silence depth-2 nesting ghost row (recursive no-visible-descendant) (#678) (9ff5060)
+
+## [3.71.2] - 2026-06-03
+
+### Fixed
+- silence headerEmitted nested-skill overlay label leak + lock spine continuity (#662) (a2ffb17b)
+
+### Changed
+- extract key-dispatch cluster from terminal-compositor (KeyDispatchHost) (#669) (435f2937)
+
+## [3.71.1] - 2026-06-03
+
+### Fixed
+- stop hiding @-file completions past the dropdown cap (#667) (73c4c5a6)
+
+### Changed
+- decompose TerminalCompositor — extract paste, autocomplete, render, committed-band clusters (#665) (fb501146)
+
+## [3.71.0] - 2026-06-03
+
+### Added
+- default `afk --worktree` to the remote default branch (origin/main) (#666) (8c055dd)
+
+## [3.70.8] - 2026-06-03
+
+### Fixed
+- count cached tokens in context-window % and auto-compact (#648) (b2e428c6)
+
+## [3.70.7] - 2026-06-03
+
+### Fixed
+- clamp each banner line to terminal width (#664) (f64049e1)
+
+## [3.70.6] - 2026-06-03
+
+### Fixed
+- bundle poller entrypoint + resolve bundled dist layout (#663) (cd4faa2)
+
+### Changed
+- relocate per-model credential resolver to agent layer (#658) (a01a259)
+
+## [3.70.5] - 2026-06-02
+
+### Fixed
+- collectSkillEntries() scans user + project skills fresh from disk (#656) (9553467c)
+
+## [3.70.4] - 2026-06-02
+
+### Fixed
+- fork-time credential fallback to parent's cached token (#657) (a5ca163c)
+
+## [3.70.3] - 2026-06-02
+
+### Fixed
+- advance branch-tracked installs by commit, not ref-name (#655) (dc627f9)
+
+## [3.70.2] - 2026-06-02
+
+### Fixed
+- poll-retry the no-ts 429 path so same-account resets auto-resume (#638) (c5258c8)
+
+## [3.70.1] - 2026-06-02
+
+### Fixed
+- drop stale resize ghost-erase snapshot on shrink (#653) (94c48366)
+
+## [3.70.0] - 2026-06-02
+
+### Added
+- cross-provider REPL ghost-text suggestions (#606) (babeac5f)
+
+## [3.69.3] - 2026-06-02
+
+### Fixed
+- erase old frame + committed band on terminal resize (stop ghost rows) (#650) (bfa9e3bb)
+
+## [3.69.2] - 2026-06-02
+
+### Fixed
+- preserve committed lines + close scrollback gap when band caps under tall overlays (#645) (cf18529a)
+
+## [3.69.1] - 2026-06-02
+
+### Fixed
+- reset committed band on /clear to prevent transcript resurrection (#647) (459f03e2)
+
+## [3.69.0] - 2026-06-02
+
+### Added
+- instrument startup-latency session_phase waterfall (follow-up to #637) (#639) (21a90466)
+
+## [3.68.0] - 2026-06-02
+
+### Added
+- pin the verdict-ledger rail to its own reserved footer row (#629) (98eb8e73)
+
+### Fixed
+- resolve subagent/skill child credentials by child model (#640) (e305d0fa)
+
+## [3.67.2] - 2026-06-01
+
+### Fixed
+- anchor childless NESTING overlay heads with ◉ (fix floating-spine bug) (#642) (3c708ae)
+
+## [3.67.1] - 2026-06-01
+
+### Fixed
+- heal footer bars + re-pin full committed band after full-screen scroll (#641) (8120a5ad)
+
+## [3.67.0] - 2026-06-01
+
+### Added
+- add session_phase waterfall events + session_sealed subagent token rollup (#637) (fec76ed)
+
+## [3.66.0] - 2026-06-01
+
+### Added
+- public/internal tier gate via audience field + AFK_INTERNAL (#569) (e4a3490e)
+
+## [3.65.0] - 2026-06-01
+
+### Added
+- add context: 'load' in-context skill execution mode (#630) (e87293f5)
+
+### Changed
+- sync review skill with upstream example-plugin (close #441) (#635) (62207782)
+
+## [3.64.0] - 2026-06-01
+
+### Added
+- enrich /reload-plugins output with plugin versions, source breakdown, and reload delta (#636) (f572365)
+
+## [3.63.0] - 2026-06-01
+
+### Added
+- pin loop-stage rail as reserved footer row via LoopStageBar (#634) (ea469d40)
+
+## [3.62.0] - 2026-06-01
+
+### Added
+- add bundled /refactor structural-change skill (#633) (8f2cff6)
+
+## [3.61.0] - 2026-06-01
+
+### Added
+- add bundled /simplify code-simplification skill (#631) (cb16af7)
+
+## [3.60.7] - 2026-06-01
+
+### Fixed
+- ESC soft-stop registers on first press and stops dropping the next message (#626) (4d6dc92)
+
+## [3.60.6] - 2026-06-01
+
+### Fixed
+- re-pin committed band above frame on overlay shrink (#627) (e82c10dc)
+
+### Changed
+- unify card/error/usage boxes onto the drawBox primitive (#628) (fb6418bf)
+- move loop-stage rail to bottom of live overlay (#625) (419f91c6)
+
+## [3.60.5] - 2026-06-01
+
+### Fixed
+- strip terminal_font_size from skill-dispatch sub-agents + anchor review arg (#624) (e70a8f9)
+
+## [3.60.4] - 2026-06-01
+
+### Fixed
+- born-named worktrees — defer creation to first turn, never move a live worktree (#617) (322d6c3d)
+
+## [3.60.3] - 2026-06-01
+
+### Fixed
+- match shadow-verify orchestrators at word boundaries (#623) (0b2105d)
+
+## [3.60.2] - 2026-06-01
+
+### Fixed
+- clamp over-wide drawBox titles + extend sanitizer test coverage (#622) (89adbbf)
+
+## [3.60.1] - 2026-06-01
+
+### Fixed
+- strip OSC/DCS/C1 escapes from bash/grep/subagent tool output (#621) (4719a771)
+
+## [3.60.0] - 2026-06-01
+
+### Added
+- extract canonical terminal sanitizer + add drawBox primitive (#620) (20f457e)
+
+## [3.59.1] - 2026-05-31
+
+### Fixed
+- stop skill-dispatch sub-agents from asking "which skill?" (#619) (8da8808)
+
+## [3.59.0] - 2026-05-31
+
+### Added
+- ack inbound with 👀 reaction + clean-final streaming mode (#615) (df6eefb0)
+
+## [3.58.0] - 2026-05-31
+
+### Added
+- interleave per-phase thinking summaries on TTY (#614) (c38aabf2)
+
+## [3.57.1] - 2026-05-31
+
+### Fixed
+- frame ask_question as a last resort, not a first move (#616) (1ca68136)
+
+## [3.57.0] - 2026-05-31
+
+### Added
+- `!cmd` shell-passthrough with foreground + background modes (#565) (c8dbe1e9)
+
+## [3.56.5] - 2026-05-31
+
+### Fixed
+- ESC soft-stop no longer auto-fires a phantom turn (#611) (d8ee37a)
+
+## [3.56.4] - 2026-05-31
+
+### Fixed
+- preserve URLs in tool-lane arg rendering (#612) (2fe02ee)
+
+## [3.56.3] - 2026-05-31
+
+### Fixed
+- align nested subagent thinking-tail with its tool children (#613) (da53956)
+
+## [3.56.2] - 2026-05-31
+
+### Fixed
+- report 1M context window for opus_1m/sonnet_1m aliases (#610) (f3a138fa)
+
+### Changed
+- extract spinner state machine into SpinnerController (#609) (b6659b38)
+
+## [3.56.1] - 2026-05-31
+
+### Fixed
+- /tokens always shows 0 tokens and NaNm total (#607) (b0945e7)
+
+### Changed
+- decompose 590-line dispatchKey into ordered handler methods (#608) (d56e50a)
+
+## [3.56.0] - 2026-05-31
+
+### Added
+- truncate large pastes into compact placeholders (#574) (4a79762)
+
+## [3.55.1] - 2026-05-31
+
+### Fixed
+- single-copy commitAbove + hasCommitted-gated evict-on-growth (#592) (92211df)
+
+## [3.55.0] - 2026-05-31
+
+### Added
+- wire default witness trace writer into daemon + Telegram sessions (#604) (0319ebe4)
+
+## [3.54.0] - 2026-05-31
+
+### Added
+- refresh context usage in status line mid-turn (#527) (a41d882b)
+
+## [3.53.6] - 2026-05-30
+
+### Fixed
+- remove 5-min timeout, abort is sole unblock path (#602) (96dcce4)
+
+## [3.53.5] - 2026-05-30
+
+### Fixed
+- substitute $ARGUMENT/$ARGUMENTS in plugin SKILL.md body (#566) (10b821b)
+
+## [3.53.4] - 2026-05-30
+
+### Fixed
+- wire skill/agent/compose executors into daemon sessions (#595) (cd033635)
+
+## [3.53.3] - 2026-05-30
+
+### Fixed
+- route /ground-state as a pre-write trigger, not "exploratory" (#598) (4c912c8)
+
+### Changed
+- change hero eyebrow pill from 'Any model' to 'CLI' (#600) (793a954)
+
+## [3.53.2] - 2026-05-30
+
+### Fixed
+- enforce read-only contract via hard-constraint prompt (#596) (15d3e10c)
+
+## [3.53.1] - 2026-05-30
+
+### Fixed
+- clear stale compositor overlay on /clear and /info (#594) (1827bd50)
+
+## [3.53.0] - 2026-05-30
+
+### Added
+- improve bot UX (items 2–8) (#588) (5b00421d)
+
+## [3.52.1] - 2026-05-30
+
+### Fixed
+- preserve typed buffer as queued on ESC soft-stop (#593) (0f496a48)
+
+### Changed
+- extract types/helpers from terminal-compositor.ts (#591) (8c08c27d)
+
+## [3.52.0] - 2026-05-30
+
+### Added
+- queue messages during compaction (#586) (f7976ab9)
+
+## [3.51.2] - 2026-05-30
+
+### Fixed
+- allow get_runtime_state in read-only phase forks (#584) (86b00561)
+
+## [3.51.1] - 2026-05-30
+
+### Fixed
+- inject advisory-lock path to de-flake CI tests (#582) (297d51e6)
+
+## [3.51.0] - 2026-05-29
+
+### Added
+- inject SKILL_ROOT + validate names per agentskills.io spec (#578) (ff6a09e3)
+
+## [3.50.2] - 2026-05-29
+
+### Fixed
+- erase every row in commitAbove Phase 1 to stop multi-line splice (#581) (99ff7ec6)
+
+## [3.50.1] - 2026-05-29
+
+### Fixed
+- compositor respects bg status bar reserved rows (#575) (78579649)
+
+### Changed
+- drop duplicate test gate to eliminate self-hosted double-load (#580) (2fccfe73)
+- split rendering god-classes into coherent modules (#573) (21eab719)
+- bump default testTimeout to 15s (#579) (460ab1d8)
+
+## [3.50.0] - 2026-05-29
+
+### Added
+- migrate opus default to claude-opus-4-8 (#576) (f225660)
+
+## [3.49.0] - 2026-05-29
+
+### Added
+- namespace-normalized drift comparison for bundled SKILL.md (closes #440) (#570) (d73b396b)
+
+## [3.48.0] - 2026-05-29
+
+### Added
+- highlight /mint in mint green ;) (#577) (a582e7a)
+
+## [3.47.1] - 2026-05-29
+
+### Fixed
+- route between-turn slash output through persistent compositor (#564) (2422a227)
+
+## [3.47.0] - 2026-05-29
+
+### Added
+- integration branch — #510 + #531 + re-enable (#563) (ec4fbd53)
+- allow memory_search in child allowlist (#567) (a0b46f74)
+
+### Fixed
+- compute NEXT version from LAST_TAG, not package.json (0d9e65ec)
+- make auto-release race-safe (atomic push + tag-list sort) (f7a9871c)
+- don't inherit <command-name> routing in sub-agent prompts (#568) (c4d0690a)
+- print last-turn banner so users see context after screen clear (#455) (3ee3c90b)
+
+### Changed
+- Update project description in AFK.md (d268d95d)
+- gate toolchain setup on bump!=none in auto-release (#562) (7b194d7e)
+- move playwright from optionalDependencies to dependencies (#561) (ca7cafd6)
+- add dev-only invariant guard (follow-up to #557) (#559) (1db191b2)
+- dedupe LAUNCHCTL_TIMEOUT_MS + fix docstring mode mismatch (#558) (86c686e0)
+- split launchd.ts into per-concern modules (#505) (1a3048ba)
+
+## [3.45.3] - 2026-05-28
+
+### Fixed
+- allow live frame to visually shrink (ratchet fix) (#557) (326ca92)
+
+## [3.45.2] - 2026-05-28
+
+### Fixed
+- close two soft-stop races — arm-to-handler window + late-ESC after done (#544) (b0ba748)
+
+## [3.45.1] - 2026-05-28
+
+### Fixed
+- echo reasoning_content on assistant turns for thinking-mode providers (#549) (0bf93d8)
+
+## [3.45.0] - 2026-05-28
+
+### Added
+- auto-delete worktree on zero-turn session exit (#556) (f72ef7e)
+
+## [3.44.0] - 2026-05-28
+
+### Added
+- native browser-control tools (Phase 1) (#553) (aaf8b11)
+
+## [3.43.1] - 2026-05-28
+
+### Fixed
+- plugin-skill forward path runs preflights symmetrically (#476) (0720782)
+
+## [3.43.0] - 2026-05-28
+
+### Added
+- Phase 2 — workspace baseline, presence files, `afk sessions` command (#548) (74a39ac)
+
+## [3.43.0] - 2026-05-28
+
+### Added
+- Phase 2 — workspace baseline (\`workspace\` view in \`get_runtime_state\`): branch, HEAD SHA, dirty count, remote URL (33a8935)
+- Phase 2 — session presence files at \`~/.afk/state/presence/\`; top-level sessions write on start, remove on exit (33a8935)
+- \`afk sessions\` command: list active presence-file sessions in a table (33a8935)
+
+### Fixed
+- Provider-aware API key routing: \`getApiKey()\` no longer leaks Claude OAuth token into openai-compatible Bearer header (33a8935)
+## [3.42.6] - 2026-05-28
+
+### Fixed
+- bound user-card height + repair frame-shrink orphan rows (110d8dc)
+
+## [3.42.5] - 2026-05-28
+
+### Fixed
+- honor ESC soft-stop in runSkillDispatchTurn's stream loop (5ee73b8)
+
+## [3.42.4] - 2026-05-28
+
+### Fixed
+- add get_runtime_state to permission allowlists (16e5446)
+
+### Changed
+- update waitlist welcome email copy (e3f9a0d)
+
+## [3.42.3] - 2026-05-28
+
+### Fixed
+- regenerate env-registry docs with AFK_DEBUG_COMPOSITOR entry (acd251c)
+- emit \x1b[2K before Phase 1 CUP-positioned text write (4ffd15c)
+
+## [3.42.2] - 2026-05-28
+
+### Fixed
+- honor late-ESC after done event — suppress turn-complete (e5ace8c)
+
+## [3.42.1] - 2026-05-28
+
+### Fixed
+- plug Claude-OAuth-token leak into openai-compatible Bearer (d17fb89)
+
+## [3.42.0] - 2026-05-28
+
+### Added
+- Phase 1 — get_runtime_state tool + session identity fragment (5590e9d)
+
+### Fixed
+- patch PR #542 review — externalTools reach, cwd sanitisation, permissionMode bucket, depth contract (566f7ed)
+
+## [3.41.3] - 2026-05-28
+
+### Fixed
+- preflight collision check + preamble bleed recovery (340aed1)
+
+## [3.41.2] - 2026-05-28
+
+### Fixed
+- safety-net tool flush owns its trailing blank (44a1c2c)
+- harden rhythm-contract assertions against silent regressions (12f5fe0)
+
+### Changed
+- unify vertical spacing under single-owner trailing rhythm (451717e)
+- add code-vs-runtime dual-referent signal class (#541) (0e596ca)
+
+## [3.41.1] - 2026-05-27
+
+### Fixed
+- restore declared anchorRow on rearm; assert eviction-before-render ordering (4b959d2)
+- floor commitAbove CUP target at anchorRow so first echo skips banner (deda6e2)
+- protect pre-arm scrollback rows from CUP-positioned frame overwrite (d6a6df0)
+
+### Changed
+- lock spine topology at Bug #5 regression site (d01aac8)
+
+## [3.41.0] - 2026-05-27
+
+### Added
+- ESC soft-stop — halt stream, preserve completed work (e4f9cd0)
+
+### Changed
+- banner hint says Esc instead of Ctrl+C (670ea00)
+
+## [3.40.1] - 2026-05-27
+
+### Fixed
+- align subagent thinking-tail with tool-child content column (9b71491)
+
+## [3.40.0] - 2026-05-27
+
+### Added
+- readline-parity word/line navigation in TerminalCompositor (39d0cdc)
+
+### Fixed
+- scrub ANSI/control bytes from subagent label extraction (6dbe791)
+- summarize agent/Task/skill JSON args to stop spine JSON leak (9a1626b)
+- route PAGER through env registry to satisfy audit:env:check (4807fda)
+
+### Changed
+- update .gitignore and add TypeScript environment file for Next.js (3c2435e)
+- temporarily disable ask_question built-in tool (ccb51d2)
+
+## [3.39.3] - 2026-05-27
+
+### Fixed
+- close arm-window race + add shrink-path coverage (57cf89e)
+- reset CupFrameRenderer geometry on SIGWINCH to stop ghost rows (0a56d8d)
+
+### Changed
+- add Vercel analytics to landing page (ff7bbaa)
+
+## [3.39.2] - 2026-05-27
+
+### Fixed
+- restore cursor visibility when CupFrameRenderer frame write fails (8b56a9c)
+
+### Changed
+- document log-update fallback invariant on StreamingMarkdownRenderer (48a6927)
+- replace trivially-passing newline-count with render-spy frame inspection (05b65bf)
+
+## [3.39.1] - 2026-05-27
+
+### Fixed
+- enhance scrollback functionality for visible text accumulation (9cc4c55)
+- make scrollback actually reach the terminal scrollback buffer (1c00a0a)
+
+## [3.39.0] - 2026-05-27
+
+### Added
+- add /transcript command to view full session in $PAGER (d2f72db)
+
+## [3.38.0] - 2026-05-27
+
+### Added
+- add optional `cwd` param for per-call worktree isolation (717b0a6)
+
+## [3.37.0] - 2026-05-27
+
+### Added
+- provider-agnostic routing — AFK_PROVIDER + env-hint + third-party prefixes (84e1dfc)
+
+## [3.36.5] - 2026-05-27
+
+### Fixed
+- enforce read-only permission boundary on spec/research/plan phases (1fa7a54)
+
+## [3.36.4] - 2026-05-27
+
+### Fixed
+- throttle overlay repaints + park cursor at DECSTBM bottom anchor (f3ef030)
+
+## [3.36.3] - 2026-05-27
+
+### Fixed
+- park clear() cursor at rows-1 so commitAbove pushes scrollback (9690b9f)
+
+## [3.36.2] - 2026-05-27
+
+### Fixed
+- strip resume-context from config in reset() so /clear starts fresh (8eabebe)
+
+## [3.36.1] - 2026-05-27
+
+### Fixed
+- route ask_question elicitation through compositor onSubmit (f4beb24)
+
+## [3.36.0] - 2026-05-27
+
+### Added
+- close anthropic-direct parity gaps (U1+U2+I1-I3) (b8d99e5)
+
+### Changed
+- split render.ts into per-component modules (25dd6f3)
+
+## [3.35.0] - 2026-05-27
+
+### Added
+- append agentafk.com footer to changelog Threads posts (5574130)
+
+## [3.34.0] - 2026-05-27
+
+### Added
+- auto-send welcome email via Resend on signup (ebda376)
+
+## [3.33.0] - 2026-05-26
+
+### Added
+- add tool-failure-density detector (b9c2ef3)
+
+## [3.32.2] - 2026-05-26
+
+### Fixed
+- verdict-card off-by-2 overflow causing broken bordered completion box (0a2a885)
+
+## [3.32.1] - 2026-05-26
+
+### Fixed
+- forward cwd through skill and depth-2 subagent dispatch (d25315e)
+
+## [3.32.0] - 2026-05-26
+
+### Added
+- rebuild hero terminal as session-player with goblin mascot (#502) (9b67f40)
+
+### Changed
+- update AFK.md for provider rename and DAG executor status (83ca176)
+
+## [3.31.0] - 2026-05-26
+
+### Added
+- declare AgentSession.abort() on IAgentSession (d5f9a00)
+
+### Fixed
+- runtime-guard AgentSession.abort against reserved reasons (e79609e)
+- classify SIGINT/SIGTERM/SIGHUP as abort, not model_end_turn (d4a2dea)
+
+### Changed
+- cover signal-handler -> session.abort wiring (37d43bf)
+
+## [3.30.2] - 2026-05-26
+
+### Fixed
+- forward backgroundRegistry to forked child SubagentExecutors (6a13aff)
+
+## [3.30.1] - 2026-05-26
+
+### Fixed
+- colorize slash-command submit echo on compositor path (362e785)
+
+## [3.30.0] - 2026-05-26
+
+### Added
+- add AFK Dark VS Code / Cursor editor theme (a9af988)
+
+## [3.29.3] - 2026-05-26
+
+### Fixed
+- forward image attachments through plugin-skill dispatch (b0f014c)
+
+## [3.29.2] - 2026-05-26
+
+### Fixed
+- align Blocked directive bullets with parser needles (e689a82)
+- inject end-of-turn directive in code, not prompt file (beba476)
+
+### Changed
+- remove duplicate end-of-turn block + update stale mock (0be1835)
+
+## [3.29.1] - 2026-05-26
+
+### Fixed
+- add absence-claim grounding, lower shadow-verify threshold (9edc34a)
+
+### Changed
+- enlarge waitlist count pill for stronger social proof (2017d98)
+
+## [3.29.0] - 2026-05-26
+
+### Added
+- elicitation REPL prompt + Telegram inline-keyboard surfaces (36e4cb6)
+- ask_question built-in tool + elicitation router serial queue (6823914)
+
+### Fixed
+- close PR #451 review blockers — router hang + skip-contract docs (1954a47)
+- resolve all PR #451 hard blockers and medium issues (c7469d7)
+- resolve remaining blockers + mediums from ask_question PR #451 review (73ad745)
+- close shadow-verify gaps from PR #451 resolve pass (3be7523)
+- resolve 3 blockers + 5 mediums from ask_question PR review (8e0e475)
+
+## [3.28.1] - 2026-05-26
+
+### Fixed
+- paint stage rail once per event — drop pre-switch repaint (e821db1)
+
+## [3.28.0] - 2026-05-26
+
+### Added
+- add topic tag to Threads release posts (391f799)
+
+## [3.27.6] - 2026-05-26
+
+### Fixed
+- update waitlist call-to-action and placeholder text (71edd9c)
+
+## [3.27.5] - 2026-05-26
+
+### Fixed
+- route Threads changelog post to release-dedicated account (#493) (7c6a0a6)
+
+## [3.27.4] - 2026-05-26
+
+### Fixed
+- insert blank row between chrome and input prompt (#490) (b89b092)
+- unbreak Threads changelog post — timeout race + shell quoting (#489) (5b6179f)
+
+## [3.27.3] - 2026-05-26
+
+### Fixed
+- add structured `truncated` flag on ToolResult for overflow detection (#481) (8b6c49a)
+
+## [3.27.2] - 2026-05-26
+
+### Fixed
+- keep cwd live across worktree-autoname rename (#488) (8134f98)
+
+### Changed
+- move tool-result rendering upstream of truncation + bash JSON summary (#484) (6ba4e63)
+- Update waitlist button label to remove arrow for improved clarity (940a1e9)
+- Update waitlist count label for improved clarity and engagement (4f986d6)
+- Update hero section text and button label for improved clarity and branding consistency (2ab1fb0)
+- Revise hero section description for clarity (0495578)
+
+## [3.27.1] - 2026-05-26
+
+### Fixed
+- guard teardown errors in skill-executor finally blocks (703d57e)
+- seal child skill sessions and handle SIGHUP (22ed629)
+
+## [3.27.0] - 2026-05-26
+
+### Added
+- auto-post changelog to Threads on tag push (f09ef31)
+
+## [3.26.2] - 2026-05-26
+
+### Fixed
+- repair tool-lane topology spine across three severing sites (#470) (935cfdd)
+
+## [3.26.1] - 2026-05-26
+
+### Fixed
+- skip CUP anchor on first arm() to eliminate banner→prompt gap (72b6c41)
+
+## [3.26.0] - 2026-05-26
+
+### Added
+- surface skip reasons with dim diagnostic line (b55a7bb)
+
+### Fixed
+- resolve short model aliases before SDK send (0a2af18)
+
+## [3.25.2] - 2026-05-25
+
+### Fixed
+- update toolInput format in stream-renderer and turn-handler tests (5ca0379)
+
+## [3.25.1] - 2026-05-25
+
+### Fixed
+- address 7 review findings from PR #449 (#467) (d82b43a)
+
+## [3.25.0] - 2026-05-25
+
+### Added
+- emit tool.overflow_kill on bash/grep SIGKILL (#475) (75accba)
+
+## [3.24.1] - 2026-05-25
+
+### Fixed
+- re-issue CUP anchor on terminal resize so REPL frame survives SIGWINCH (#453) (88e3180)
+
+## [3.24.0] - 2026-05-25
+
+### Added
+- capture-mode for clean demo recordings + multi-file diff separators (#426) (0174a6d)
+
+## [3.23.1] - 2026-05-25
+
+### Fixed
+- drop breadcrumb labels — anonymous anchors in live overlay (3f54014)
+
+## [3.23.0] - 2026-05-25
+
+### Added
+- cap diff flush output at 30 lines with AFK_DIFF_LINES escape hatch (3b2de51)
+- add stdin input + session resume for headless parity (634710b)
+- add stream-json output format for headless consumers (ca4dc0c)
+- left-anchored subagent topology spine with ◉ turn-root (d025508)
+
+### Fixed
+- address PR #447 review — 4 highs + 5 mediums (335b2b0)
+- address 3 blockers and 5 medium issues from PR #419 review (4c5632c)
+- clamp orchestrator-root overlay lines to terminal width (5bb0458)
+
+### Changed
+- Merge pull request #447 from griffinwork40/feat/diff-flush-cap (6972db4)
+- Merge branch 'main' into feat/diff-flush-cap (b667502)
+- resolve origin/main into feat/diff-flush-cap for PR #447 (4a8e86f)
+- Merge branch 'main' into afk/20260520-085208-212510 (76fc918)
+- swap tree connectors to ├─ / ╰─ for spine renderer (039891c)
+
+## [3.22.0] - 2026-05-25
+
+### Added
+- replace Jina with Firecrawl as markdown/search upstream (0f1581a)
+
+## [3.21.1] - 2026-05-25
+
+### Fixed
+- restore [queued] suffix so Enter mid-stream gives feedback (23d5dae)
+
+## [3.21.0] - 2026-05-25
+
+### Added
+- Sprint 3 — replay-mode eval-gen + eval-cases CLI (83288c6)
+- Sprint 2 — template-mode propose + closure/subagent detectors + triage (f26b298)
+
+## [3.20.4] - 2026-05-25
+
+### Fixed
+- unstick REPL after usage-limit auto-resume (#448) (cd45c94)
+
+## [3.20.3] - 2026-05-25
+
+### Fixed
+- preserve multi-line clipboard paste in compositor (7b1d33a)
+
+## [3.20.2] - 2026-05-25
+
+### Fixed
+- loud-fail empty fenced code blocks with placeholder text (2b7b68f)
+
+## [3.20.1] - 2026-05-25
+
+### Fixed
+- reset scan cache on update so new SKILL.md is visible without restart (F2) (7f2f8bc)
+- require name+description keys explicitly in generate.md (56d665c)
+
+## [3.20.0] - 2026-05-25
+
+### Added
+- auto-cd parent shell into preserved worktree on exit (b2b0d71)
+
+### Fixed
+- address shell-init review — H1/H2 portability, M1/M4 correctness (fb2af1d)
+- harden cd-on-exit marker and shell-init wrapper after PR review (71970e8)
+
+## [3.19.0] - 2026-05-25
+
+### Added
+- emit skill.dispatched/completed for inline registry skills (57994eb)
+
+### Fixed
+- stream photo download with size cap instead of buffering (7407e12)
+
+### Changed
+- repair corrupted lock file from aborted schema migration (7ec2f27)
+- remove obsolete .afk-worktree-meta.json file (1d4b153)
+
+## [3.18.2] - 2026-05-25
+
+### Fixed
+- apply dropdown selection on Enter — Stage 3e port gap (54c5a37)
+
+## [3.18.1] - 2026-05-25
+
+### Fixed
+- clamp duration at 0 on clock skew (review C2) (9f98c44)
+- cap duration at thinking→acting boundary + render above response (f3ee1a3)
+
+## [3.18.0] - 2026-05-25
+
+### Added
+- add /font-size REPL command sharing terminal_font_size handler (52aa482)
+- add terminal_font_size built-in tool (97c3849)
+
+### Fixed
+- emit trailing blank after subagent done-block (42d8be5)
+- prefer last verdict within tier (qualify self-correction) (546b1ea)
+- generator sub-agent is tool-less; wire generate.md prompt (11d3b8d)
+
+## [3.17.3] - 2026-05-25
+
+### Fixed
+- anchor overlay breadcrumb spine with dim ◉ marker (c13a1fe)
+- add headerEmitted guard to renderFlushChildren (a021a7d)
+
+### Changed
+- long-comment prefix convention + targeted comment shrinks (1fffa7c)
+
+## [3.17.2] - 2026-05-24
+
+### Fixed
+- mirror formatAgentSummary spine topology in formatAgentHeader/Children (#450) (34b76fe)
+
+## [3.17.1] - 2026-05-24
+
+### Fixed
+- route AFK_SKILL_STREAM_VERBOSE through env.ts (post-merge audit gap) (4a02a16)
+- unblock CI on PR-416 — install.test fake + AGENT_AFK_ASCII env registry (952060b)
+- close PR-416 review findings — hook bypass, HTTPS gap, Git ≥2.31 dependency (c9e2660)
+- plugin install hardening — HTTPS-only, git hook suppression, install warning, skill prompt-loader path guard (S7-step1/P3) (1e845ac)
+
+## [3.17.0] - 2026-05-24
+
+### Added
+- left-anchored subagent topology spine with ◉ turn-root (#350) (1bab3bf)
+
+## [3.16.0] - 2026-05-24
+
+### Added
+- wire persistent compositor into REPL — Stage 3e (4e28e5d)
+- InputSurface armCompositor lifecycle + idle-mode compositor semantics (f0c129f)
+- port bracketed-paste + clipboard image attachments to TerminalCompositor (9e7dc88)
+- StreamRenderer can borrow a TerminalCompositor; promptText accepts () => string (1be7b9a)
+- add idle input mode + onSubmit hook to TerminalCompositor (9dab928)
+- thread promptText through StreamRenderer → compositor (c5bebc7)
+
+### Fixed
+- wire skill onCancel through borrowed compositor with capture+restore (a855dc0)
+- route in-stream notifications through completionWriter (extends ed4318b) (38bf6b1)
+- clear autocompleteState before persistent-compositor repaints (50632aa)
+- anchor first log-update frame at terminal bottom in compositor.arm() (ce1dcfe)
+- render dim breadcrumb for headerEmitted ancestors so live children don't appear orphaned (H4) (efbdaf8)
+- preserve in-flight subagent rows when orchestrator emits content chunks (H3) (1a0dece)
+- isolate borrow-dispose cleanup steps so setSpinner throw cannot strand stale overlay (7729dab)
+- address PR #424 review findings (H1–H8, M1, M4, M6, M7, L2) (03d1f89)
+- close Stage-3e compositor duplication — borrow path + post-arm raw writes (ed4318b)
+- widen setInputMode flush invariant to any → idle (3241dba)
+- agent-turn input parity — slash colorization, always-on caret, Tab applies dropdown (8f95d0c)
+
+### Changed
+- Merge pull request #424 from griffinwork40/afk/20260523-120253-4b3e3e (920ad3c)
+- Merge branch 'main' into afk/20260523-120253-4b3e3e (4f02680)
+- extract createSkillRenderer factory + fix latent /init borrow bug (53950e0)
+- Merge branch 'main' into afk/20260523-120253-4b3e3e (c4b374d)
+- add InputSurface ↔ TerminalCompositor integration coverage (f3c441e)
+- make slash Writer route-aware via optional WriterSink (03518e8)
+- introduce InputSurface as the long-lived REPL input abstraction (8cf9393)
+
+## [3.15.0] - 2026-05-24
+
+### Added
+- handle photo messages with optional caption (b71c12a)
+
+### Fixed
+- apply PR #396 review blockers — capability guard, SSRF URL assert, gate reorder (6979270)
+- resolve PR #396 review blockers — token leak, busy-spin, MIME sniff, tautological test (9f2a703)
+- resolve PR #396 security and reliability blockers (152e162)
+- apply PR #396 review fixes (85ad3dd)
+
+### Changed
+- regression tests for busy-spin cascade gate (PR #396) (a07882a)
+
+## [3.14.0] - 2026-05-24
+
+### Added
+- add stream-json output format (#419) (69a0bf8)
+
+## [3.13.3] - 2026-05-24
+
+### Fixed
+- aggregate timeout, production-visible warn, dispatch defaults (9543b6b)
+- hook dispatch timeout + subagent fork AbortGraph cleanup (R3/R4) (a7ab48d)
+
+## [3.13.2] - 2026-05-24
+
+### Fixed
+- isolate pnpm/action-setup dest per-job to runner.temp (e3874d0)
+
+## [3.13.1] - 2026-05-24
+
+### Fixed
+- populate ProviderUsage.durationMs on every turn.completed yield (07bbe2a)
+- bound cwd-fallback tests to tempDir, not process.cwd() (0714f67)
+
+## [3.13.0] - 2026-05-24
+
+### Added
+- add drift test + port cwd anchor to ship (71f65a3)
+- centralized env-var registry + audit gate (#429) (8edd275)
+- route child sessions via providerForModel (263e25e)
+- handle oauth-limit-no-ts 429, /reauth slash command, account info in pause card (4c02593)
+
+### Fixed
+- remove duplicate proc.on close handler that broke logic (991dedb)
+- bump .brand__wordmark font-size to 19px (59f7e3f)
+- tool-lane truncation, bash exit-code labeling, skill partial-output preservation (#423) (ac537a4)
+- 6 bugs from 463k-token MLX overrun — allow-list, context clamp, mlx-community limits (f2b200f)
+- address PR #412 review feedback — process-group kill, descendant test, token formula, non-blocking polish (f1e9bc5)
+- bash SIGKILL on timeout/abort + auto-compact formula drops cache fields (S10/P5) (bb7eade)
+- resolve /review 425 F1+F2+F3 blockers (2004fc7)
+- resolve all HIGH/MEDIUM PR review blockers on V8 overflow guard (31c848b)
+- guard grep and bash handlers against V8 max-string-length crash (799e7a7)
+- route OpenAI-parent subagents to OpenAICompatibleProvider (ab0a7fa)
+- plugin skill slash commands dispatch via skill-invocation payload, not raw text (fe21349)
+- actually rebuild SDK client on hot-swap + wire /reauth to swap running session (a68cbaa)
+- suppress overlay re-render of already-committed ancestor headers (4725717)
+
+### Changed
+- route auto-release + publish to self-hosted runner (411c483)
+- drop #4ade80 from changelog favicon, swap to accent-soft (5603702)
+- persistence reframe + contour-layer + 2nd signal-field (168edbe)
+- lock #4ade80 to success-state, trim .access::before to 1 radial (bcaaf49)
+- surface memory feature in hero typewriter + runtime section (5adbebb)
+- Remove comment on brand wordmark font size (962e598)
+- bump topbar logo mark from 28px to 34px (1e09d03)
+- route lint-build + test to self-hosted runner (mac-afk-1) (4d9d3ba)
+
+## [3.12.1] - 2026-05-23
+
+### Fixed
+- address PR #415 follow-ups (exit code, unref, prod logging) (81f1628)
+- reliability micro — runInBackground catch, close await, waitForReset unref, farm finally (R1/R2/R5/R6) (56dadef)
+
+## [3.12.0] - 2026-05-23
+
+### Added
+- add /cd command to set per-chat working directory (e563d12)
+
+## [3.11.1] - 2026-05-23
+
+### Fixed
+- prose-question guard (H1) + codebase lane override (H2) (#418) (78c9ec3)
+
+### Changed
+- remove vestigial bootstrap scripts (#421) (545dce4)
+
+## [3.11.0] - 2026-05-23
+
+### Added
+- dead-owner verdict, /worktree slash, boot-time auto-prune (#364) (2bf6d41)
+
+## [3.10.5] - 2026-05-23
+
+### Fixed
+- plugin install/remove invalidate scan cache + removePlugin name guard (F2/S8) (b57a066)
+
+## [3.10.4] - 2026-05-23
+
+### Fixed
+- AFK_HOME validation + migrateDirOnce EXDEV fallback (F1/F5) (f617705)
+
+## [3.10.3] - 2026-05-23
+
+### Fixed
+- extend write denylist with AFK config + tool tokens (S4) (01b2ba8)
+
+## [3.10.2] - 2026-05-23
+
+### Fixed
+- auth wizard no-echo + creds/transcript 0o600 (S1/S2/S3) (#413) (4dddba7)
+
+### Changed
+- git rm test-bot files + correct CLAUDE.md runDAG description (S16) (#409) (7f7b7d9)
+
+## [3.10.1] - 2026-05-23
+
+### Fixed
+- propagate worktree cwd into subagents and preflights (#408) (c61a5a1)
+
+## [3.10.0] - 2026-05-23
+
+### Added
+- auto-compaction (opt-in) + SDK dependency lock (#405) (f9e052a)
+
+## [3.9.1] - 2026-05-23
+
+### Fixed
+- preserve cursor across DECSTBM toggles in withFullScrollRegion (#407) (f962403)
+
+## [3.9.0] - 2026-05-23
+
+### Added
+- background-subagent TUI parity (Ctrl+B hints, per-job status rows, auto-deny elicitations) (#362) (d2e5f8f)
+
+## [3.8.10] - 2026-05-23
+
+### Fixed
+- forbid direct push to default branch + invented convention (63f3ed3)
+
+## [3.8.9] - 2026-05-23
+
+### Fixed
+- bump pinned qualify hash to match merged rule-5 paragraph (#399 follow-up) (1f5c587)
+
+## [3.8.8] - 2026-05-23
+
+### Fixed
+- re-wrap streaming TUI overlay on terminal resize (220060b)
+
+## [3.8.7] - 2026-05-23
+
+### Fixed
+- inline Copy button on install command, drop forced overflow (35ac697)
+
+### Changed
+- explain why rule 5 systematically fires on gate/guard skills (e6cbf29)
+
+## [3.8.6] - 2026-05-23
+
+### Fixed
+- narrow skill anti-recursion guard to same-skill only (436620e)
+
+## [3.8.5] - 2026-05-23
+
+### Fixed
+- emit subagent.completed/.failed for background dispatches + fork-throws path (1a8172a)
+
+## [3.8.4] - 2026-05-23
+
+### Fixed
+- accept null in hypothesis schema, tighten prompt (810bf18)
+- clamp thinkingTail rows to terminal width (ab7f8b9)
+
+## [3.8.3] - 2026-05-23
+
+### Fixed
+- preserve attachment indicator after message submit (1ab1d57)
+
+## [3.8.2] - 2026-05-23
+
+### Fixed
+- guard user-echo writes against DECSTBM sub-region scroll loss (9d516e7)
+
+## [3.8.1] - 2026-05-23
+
+### Fixed
+- label-aware overflow — count honesty, sibilant plural, sanitize (ef51ee4)
+
+## [3.8.0] - 2026-05-23
+
+### Added
+- P04 trace instrumentation around runPreflight (f9fb92f)
+- wrap plugin-forward manifest in <system-reminder> (999d856)
+- wire plugin-forward path + review-pr preflight (8982c79)
+- wire native skill handler + optional manifest block (586cffe)
+- add SkillInvocation types + registry (67b1dad)
+
+### Fixed
+- H2/H3/H4/M2 — PR #317 review blockers (22fb669)
+- C03/C04/A03/F12 small correctness and documentation (1988d7d)
+- P02/P03/F08/F10/F11/C05 review-pr hardening (8f3ed6a)
+- P01/P05/F07 artifact-dir — rate-limited prune, warn logging, random fallback id (8276e8f)
+- F04/F05/F06 filesystem safety hardening + T02 tests (5211786)
+- C01 — preflight only runs on plugin-forward path, not native slash commands (9e980e2)
+- F01/F02/F03 security chain + C02 registry key correction (5cbe1a6)
+- prune artifact dirs older than 7 days on each call (ae26ca7)
+
+### Changed
+- Merge pull request #317 from griffinwork40/afk/20260518-preflight-deferred (62971f0)
+- Merge branch 'main' into afk/20260518-preflight-deferred (7ff04bb)
+- Merge branch 'main' into afk/20260518-preflight-deferred (2b806fb)
+- Merge remote-tracking branch 'origin/main' into HEAD (0e12b97)
+- T03/T04/T05 additional coverage (b40df4b)
+- A01/A02/A05/T06 registry test-isolation + explicit init (6d36849)
+- remove unnecessary as-unknown-as sessionId cast (ef20153)
+- Merge remote-tracking branch 'origin/main' into afk/20260518-055423-b599b7 (a37a979)
+
+## [3.7.3] - 2026-05-23
+
+### Fixed
+- guard label-aware overflow against pre-merge placeholders (8c8cae2)
+- preserve dispatch labels in tool-lane overflow (f396d73)
+
+## [3.7.2] - 2026-05-23
+
+### Fixed
+- preserve isolated newline deltas in streaming TTY renderer (8357dda)
+
+## [3.7.1] - 2026-05-22
+
+### Fixed
+- normalize case + scope tier-3 regex locally (b919d23)
+- tighten verdict parser — tier-2 modifier gap + tier-3 nearby-anchor fallback (ff1a78a)
+
+## [3.7.0] - 2026-05-22
+
+### Added
+- Phase 1A — read-only witness-trace scanner + failure cards (eee58d4)
+
+### Changed
+- skip setOverlay repaint when overlay text is unchanged (28cfe3b)
+
+## [3.6.0] - 2026-05-22
+
+### Added
+- render live thinking overlay as a wrapped paragraph (ba42900)
+
+## [3.5.0] - 2026-05-22
+
+### Added
+- add npm install command with copy button to #access section (#384) (b8a292b)
+
+## [3.4.0] - 2026-05-22
+
+### Added
+- add MCP client support — stdio + remote (HTTP/SSE) + OAuth + live refresh (#374) (a3e8c4c)
+
+## [3.3.4] - 2026-05-22
+
+### Fixed
+- propagate traceWriter through SkillExecutor + surface wall-clock in Done summary (#378) (6721351)
+
+## [3.3.3] - 2026-05-22
+
+### Fixed
+- close 4 schema gaps surfaced by telemetry audit (#383) (c42481c)
+
+## [3.3.2] - 2026-05-22
+
+### Fixed
+- defensive verdict parsing + write-step name-collision guard (#382) (a66d8fd)
+
+## [3.3.1] - 2026-05-22
+
+### Fixed
+- summarize bash JSON output + move tool-result rendering upstream of truncation (#380) (1f33c1a)
+
+### Changed
+- PR #376 follow-ups (f430388)
+
+## [3.3.0] - 2026-05-22
+
+### Added
+- surface visible extended thinking on Opus 4.7 + default to max effort (824015a)
+- route HF-style org/model ids to openai-compatible (a95111c)
+
+### Fixed
+- widen effort=max default to opus-4-6/sonnet-4-6 + fix effort beta header value (1632b33)
+- stop flag dropdown from auto-popping on every space (fc100ee)
+- suppress 💡 suggestion echo when it duplicates the response (39fecb0)
+
+## [3.2.1] - 2026-05-22
+
+### Fixed
+- eager-emit ancestor frame headers in ToolLane.flushSource (2c2e103)
+
+## [3.2.0] - 2026-05-21
+
+### Added
+- route Messages traffic through a local Anthropic-compatible server (#239) (2578100)
+
+## [3.1.0] - 2026-05-21
+
+### Added
+- hydrate stats + welcome banner on session resume (#316) (2142890)
+
+### Changed
+- add founder anecdote + finalize 'Built by' credit (#308) (139bc02)
+
+## [3.0.1] - 2026-05-21
+
+### Fixed
+- launchctl-throws test uses telegram, not daemon (b2341b0)
+
+## [3.0.0] - 2026-05-21
+
+### Breaking
+- **`SlashContext.session` type changed from `AgentSession` to `SessionRef`** (breaking for external slash-command authors). Update any direct reads of `ctx.session.<method>` to `ctx.session.current.<method>`. All built-in handlers have been migrated. Required to make the mid-session swap mechanism transparent to slash commands through a stable pointer. (#355)
+- **Tool schema wire-boundary projection.** Internal `AnthropicToolDef` fields (`category`, `concurrencySafe`, `riskClass`) are now stripped at the wire boundary via a `WireToolDef` projection; the Messages API call signature is narrower. External code synthesizing tool definitions should target `AnthropicToolDef` (rich, internal) — the projection happens inside the provider. (#367)
+- **Layering rehome.** `keychain`, tool-category classification, telegram error predicates, and `upsertEnvVar` moved out of `src/cli/` / `src/telegram/` to their canonical homes (`src/agent/auth/`, `src/agent/tool-category.ts`, `src/utils/`). Re-export shims preserve backward-compat for known internal callers; deep imports into old paths from external code may need updating. (#361)
+
+### Added
+- **`afk service install/uninstall/status`** — macOS LaunchAgent install for always-on `afk telegram` / `afk daemon` (auto-start on login, relaunch on crash). Paired with `/service-setup` skill that walks the user through install end-to-end. (dc69966, dfcedff, #346)
+- **Pixel-art goblin mascot** in the interactive loading screen via half-block renderer (10×10 sprite, pupils + cheek highlights). (#354)
+- **Loading-screen tips + dropdown tooltip hints** in the CLI for first-run discoverability. (#294)
+- **Daemon pull-trigger mode** with a queue store — daemon can now drain a persisted queue instead of cron-only execution. (issue #337, slice 1)
+- **OpenAI-compatible provider REPL surface parity** with anthropic-direct (streaming, tool dispatch, auth diagnose). Closes the GPT/o-series migration off the legacy openai-codex provider. (3e932be)
+- **PLUGIN_ROOT env** injected into plugin-skill subagent processes so vendored plugin assets can resolve their own root.
+
+### Fixed
+- **`tools.0.custom.<field>: Extra inputs are not permitted`** 400 from the Anthropic Messages API — internal tool classification metadata no longer leaks across the wire. (#367)
+- **`/review` api-compat false positives** on dead code — added a reachability pre-check so removed-but-unused exports stop firing the api-compat dimension. (#349)
+- **`/ground-state` charter drift** — read-only contract is now enforced inside `SKILL.md` so the skill cannot mutate state. (c7321cb)
+- **Plugin sandbox escape via symlink** — `assertWithinPluginsDir` now `realpath`s both `parentDir` and `dest`'s `dirname` before the containment check. (#339)
+- **Skill-frame teardown on child `flushSource` drain** — child-stream completion no longer orphans the parent skill frame. (a6758c0)
+- **Subagent stream-renderer leak on error** — throttle entry is now cleaned up on the error path. (bbe85be)
+- redact credential-shaped strings in resume-swap error reasons (PR #355 H-1/H-2 follow-up) — SDK 401/403 errors during `buildSession` or `waitForInitialization` no longer echo `Bearer` / `sk-ant-…` to the terminal.
+- guard `stored.startedAt` with `?? Date.now()` fallback so legacy stored sessions saved before the field existed do not produce `NaN` status-line durations after `/resume`.
+- reset the verdict ledger (terminal-state trajectory rail) on `/resume` — outgoing session trajectory no longer contaminates the resumed session.
+
+### Changed
+- **`query.ts` decomposed** into single-responsibility units: `repairOrphanToolUses` (5e2de54), `SessionState` bag (e456201), `AbortCoordinator` (739d600), `RetryLayer` for OAuth 401 + 429 (5d2fa8d), and `compactHistory` handler (95bf4b9). Zero behavior change; the monolith is gone.
+- **Schema-as-source-of-truth for tool classification.** `SAFE_TOOLS`, `WRITE_TOOLS`, and the read-tool predicate are now derived from `AnthropicToolDef.{category, concurrencySafe, riskClass}` rather than 6+ drifting hand-maintained lists. (#361)
+- **`sumProviderUsage` promoted** out of a provider-specific location to `src/agent/usage.ts` so both providers share the same accumulator. (c481852)
+- **Operator-legibility phase 1 polish** across the interactive surface. (7fa2773)
+
+### Known
+- `/allow-dir` filesystem grants persist across `/resume` — the underlying `AnthropicDirectProvider` is process-scoped (constructed once at bootstrap, reused by the swap), so its `_sharedReadRoots` cache survives session boundaries. This is intentional given the current API surface (no `resetGrants` exists). To revoke grants, exit and restart `afk`.
+
+## [2.33.0] - 2026-05-20
+
+### Added
+- unify REPL input surface across user and agent turns (38c1bde)
+- footer mark + complete Twitter card tags (d4cadb8)
+- Handoff Arc brand identity — bigger, brand-able mark + favicon family + OG card (cff7409)
+- phase reducer + test-runner detector + risk classifier (pure-function trio) (f9fb3f4)
+
+### Fixed
+- address PR #332 review — 2 bugs + 2 test gaps (98266ca)
+- repair orphan tool_use blocks to prevent 400 on next turn (d14f347)
+- anchor inline-handler subagents under their skill's lane entry (a265bbd)
+- correct-by-construction HTML conversion via placeholder pass (0ed4a79)
+
+### Changed
+- v2.32.0 (efaf032)
+- split tool/chrome roles and retheme code-block syntax (7518a73)
+- split blue-family palette across semantic roles (c238b78)
+
+## [2.32.0] - 2026-05-20
+
+### Added
+- phase reducer + test-runner detector + risk classifier (pure-function trio) (f9fb3f4)
+
+## [2.31.1] - 2026-05-20
+
+### Fixed
+- unblock npm publish by deflaking `/tasks` recency-sort test — `BackgroundAgentRegistry.register()` returns a snapshot copy, so post-register `startedAt` mutation was a no-op; on fast CI the sort fell back to insertion order. Test now stubs `Date.now()` before each `register()` so the live `InternalJob.startedAt` carries the intended timestamp.
+
+## [2.31.0] - 2026-05-20
+
+### Added
+- route GPT/o-series to openai-compatible + retire openai-codex (slice 5/5) (8ae2ab9)
+- wire openai-compatible provider + auth diagnose command (slice 4/5) (6e94ec5)
+- tool dispatch via SessionToolDispatcher (slice 3/5) (4e8e935)
+- text-only streaming end-to-end (slice 2/5) (ddfd623)
+- auth resolver + diagnostic (slice 1/5) (9ee440a)
+
+### Changed
+- Merge pull request #304 from griffinwork40/feat/openai-compatible-provider (858d9fb)
+- Merge branch 'main' into feat/openai-compatible-provider (65995e6)
+
+## [2.30.0] - 2026-05-20
+
+### Added
+- Phase 3 — tool schemas, handlers, CLI command, handler tests (05ff23d)
+- Phase 2 — daemon integration (notifyOn, REST routes, port file, load-persisted) (e3a7aa4)
+- Phase 1 — data layer (schedule-store + paths + tests) (523736b)
+
+### Fixed
+- materialize notifyOn='failure' default at write time (f272608)
+
+### Changed
+- throttle-gate markdown render + fire-and-forget PostToolUse (9b03eb0)
+
+## [2.29.4] - 2026-05-20
+
+### Fixed
+- zombie-state hardening for background work + Haiku 4.5 pricing (5e4c376)
+
+## [2.29.3] - 2026-05-20
+
+### Fixed
+- chronological interleave for subagent done-blocks (#328) (8ba83ea)
+
+## [2.29.2] - 2026-05-20
+
+### Fixed
+- forward image attachments through slash commands (C+D hybrid) (961539f)
+
+## [2.29.1] - 2026-05-20
+
+### Fixed
+- tighten KEY=value replacer to avoid misleading length=0 (#214) (9c96379)
+- refresh lastActivity on inflight createSession rejection (#213) (881903e)
+- redact secrets in scheduler errorMessage (#212) (74e99b8)
+
+### Changed
+- unit tests for assertSafePluginName / assertWithinPluginsDir (#216) (5062a68)
+- document POSIX-dead startsWith('/') as Windows guard (#215) (7db4bc6)
+
+## [2.29.0] - 2026-05-20
+
+### Added
+- wave 4 — executor wiring + create-session-factory (daf6e5f)
+- wave 3 — reply sink posts replies via threads CLI (752aef6)
+- wave 2 — classify, route, dispatch per-user agent sessions (5657b45)
+- add polling-based mention ingress (wave 1: read path) (6476164)
+
+### Fixed
+- close shared MemoryStore on daemon shutdown (36b2cd0)
+
+## [2.28.0] - 2026-05-20
+
+### Changed
+- **edit_file tool result format** — `tool_result` content for `edit_file` is now a single-line message (e.g. `Replaced 1 occurrence in path/to/file`). The diff context previously appended after a double-newline (`${resultMsg}\n\n${diffContext}`) is no longer included in `tool_result` content; it is emitted out-of-band as a `tool_diff` event (CLI-only render channel). Consumers that parsed the multi-line format must update accordingly. (#313)
+
+### Added
+- inline colored diffs for edit_file/write_file (#313) (6fbb370)
+
+### Changed
+- Shorten hero eyebrow pill so it doesn't wrap on mobile (1b2175c)
+- async-first hero copy + SEO meta updates (#312) (2dda5f4)
+
+## [2.27.1] - 2026-05-19
+
+### Changed
+- `afk daemon` is now invokable without `--task` or `--cron`; trigger defaults to `sessionstart` and task defaults to `/forge-friction --auto` when neither flag, env var (`AFK_DAEMON_TASK`), nor `afk.config.json` `daemon.task` provides a value (closes Daemon Gap B)
+- `afk daemon --cron <expr>` (without an explicit `--trigger`) now auto-selects `cron` trigger mode, matching the intent of providing a cron expression
+- `afk.config.json.example` updated to show the `daemon.task` / `daemon.taskId` fields
+
+### Fixed
+- default trigger to sessionstart; pass --cron flag through (Gap B) (#311) (bdf3ef9)
+
+## [2.27.0] - 2026-05-19
+
+### Added
+- unify /tasks across turn-detach and subagent-job facilities (20b8d2b)
+- wire BackgroundAgentRegistry into BackgroundStatusBar (8295f2d)
+- add EventEmitter surface to BackgroundAgentRegistry + BackgroundItem union (8b12d8b)
+- cap concurrent jobs + TTL eviction + cancel-source attribution (03ae081)
+
+### Fixed
+- improve join() eviction error message (M-1) + TTL eviction tests (M-3) (d2977aa)
+- store cancelSource per-job to fix cascade attribution dead code (H-1) (7f6ba33)
+- add CANCEL_DRAIN_TIMEOUT_MS to cancelAll() to prevent teardown hang (C-2) (05da7f6)
+- wire setTasksRegistry in repl-loop bootstrap (C-1) (9afd4c9)
+
+### Changed
+- add BackgroundJobCapError teardown coverage (H-2) (a5c2a8b)
+- clarify Phase 3 commit message drafting process (a895e5f)
+
+## [2.26.7] - 2026-05-19
+
+### Fixed
+- add Dispatch protocol section to enforce parallel sibling dispatch (68e88d5)
+
+### Changed
+- narrow /mint routing trigger and demote from lead bullet (e36a9db)
+
+## [2.26.6] - 2026-05-19
+
+### Fixed
+- add Write-step invariants to prevent skill_name="unknown" silent-failure (c303850)
+
+## [2.26.5] - 2026-05-19
+
+### Fixed
+- resolve PR #321 review blockers and majors (95c04dc)
+
+### Changed
+- emit in-flight badge inline via completionWriter (d612533)
+
+## [2.26.4] - 2026-05-19
+
+### Fixed
+- distinguish 'nothing-to-summarize' from 'history-too-short' (72e31c2)
+- resolve session-stuck and malformed-HTML regressions (P0) (352f46d)
+
+## [2.26.3] - 2026-05-19
+
+### Fixed
+- correct-by-construction fixes for fenced code, ordered lists, hr, blockquote (bab3b09)
+
+## [2.26.2] - 2026-05-19
+
+### Fixed
+- trailing newline after lists + ordered-list start-number honoring (108a5b6)
+
+### Changed
+- regression tests for ordered-list renumbering + trailing newline (6e0a7ec)
+- rewrite README for the npm audience; move dev docs under docs/ (de2b70a)
+- align package metadata with proprietary status (0842463)
+- memoize disk-tier reads on the cold-start path (fd4e0cc)
+
+## [2.26.1] - 2026-05-19
+
+### Changed
+- tool-output render registry; memory tools summarized via `chunk.display` upstream of truncation
+
+### Fixed
+- bash tool-lane no longer leaks truncated raw JSON for commands like `gh pr view --json`; structured JSON output renders as `{key1, key2, …}` / `[N items]` via the render registry
+- move tool-result rendering upstream of truncation + bash JSON summary (#302) (5c1b220)
+
+## [2.26.0] - 2026-05-19
+
+### Added
+- skill-invocation plumbing — types, registry, native handler, plugin-forward, review-pr (#287) (0cb3e72)
+
+## [2.25.3] - 2026-05-19
+
+### Fixed
+- improve handling of pre-aborted signals (abaf41a)
+
+### Changed
+- Delete .github/workflows/claude.yml (0fce048)
+- Delete .github/workflows/claude-code-review.yml (c87d4b5)
+
+## [2.25.2] - 2026-05-19
+
+### Fixed
+- retry transient 529/503 errors with exponential backoff (b846a8e)
+
+## [2.25.1] - 2026-05-19
+
+### Fixed
+- auto-start bot after allowlist save (95378a7)
+- resolve bot entrypoint in bundled dist layout (816c8d2)
+
+## [2.25.0] - 2026-05-19
+
+### Added
+- background mode for fire-and-forget subagent dispatch (#288) (e970152)
+
+### Fixed
+- close JSDoc above backgroundRegistry field (db2b97a)
+
+### Changed
+- soften hero terminal prompts (d6d9765)
+- rename web_fetch tool to web_scrape (ed7115b)
+
+## [2.24.0] - 2026-05-18
+
+### Security
+- sanitise all MCP-server-controlled strings (server name, message, URL, elicitation id,
+  field descriptions, type names, enum values, field keys) at the terminal-write boundary;
+  extends ANSI sanitiser to cover OSC sequences (`ESC ] … BEL/ST`) and 8-bit C1 controls
+  (`0x80–0x9F`, including C1 CSI `0x9B`) (#277, follow-up to #275)
+- filter `__proto__` / `constructor` / `prototype` keys from MCP schema; build accept
+  payload via `Object.create(null)`; spread to plain object at return — defence-in-depth
+  against JSON-route prototype pollution from a malicious MCP server (#277)
+
+### Changed
+- **BREAKING (REPL elicitation):** form-mode request with no usable schema properties now
+  returns `{ action: 'decline' }` instead of inventing `{ action: 'accept', content:
+  { response: <text> } }`. The synthetic `response` key was not in the MCP spec and
+  risked server-side schema rejection. (#277)
+- form-mode optional-field skip now surfaces `fieldDef.default` in the accept payload
+  when a default is declared; previously the key was omitted regardless of whether a
+  default existed. The downstream guard `outcome.value !== undefined` still omits the
+  key when no default is declared, preserving "user skipped" semantics for the
+  no-default case. (#277)
+
+### Fixed
+- `afk telegram start` now resolves the bot entrypoint in the published flattened
+  bundle layout (`dist/telegram.mjs` as sibling of `dist/cli.mjs`). Previously the
+  resolver assumed the tsc layout (`dist/telegram/manager.js` + `dist/telegram.js`)
+  and threw `Telegram entrypoint not found` on every global install, making the
+  bot unstartable from `afk telegram start` / `pnpm telegram:start` /
+  `/telegram-setup`. Priority order: bundled `.mjs` sibling → tsc `.js` one-up →
+  dev `.ts` one-up. Bundled wins when both layouts coexist because spawning the
+  unbundled `dist/telegram.js` would re-import deps the bundle inlined.
+- `/telegram-setup` skill now auto-starts the bot after saving the allowlist
+  instead of asking. The bot is the whole point of setup; the previous "want me
+  to start it? (yes/no)" step left users stuck wondering why their messages
+  weren't being received.
+- trim input before checking `:cancel` / `:decline` escape hatches; previously
+  `' :cancel '` fell through as a literal value, trapping required fields in an
+  unbounded loop (#277)
+- required field absent from `schema.properties` now declines with a diagnostic before
+  prompting any field, instead of silently producing a schema-invalid accept payload (#277)
+- between-field abort detection: form-mode now checks `signal.aborted` at the top of
+  each field prompt and between outer-loop iterations, so an abort fired in the
+  microtask gap between fields is honoured before the next prompt label is printed (#277)
+- cap form-mode `required[]` array iteration at `MAX_FIELDS * 2` to bound allocation
+  on a malicious 1M-element required list (#277)
+- emit a one-shot warning when `MAX_FIELDS=64` or `MAX_ENUM_VALUES=256` caps trigger,
+  so users can diagnose why a partial form or rejected enum value appears (#277)
+- `synthesizeAgentEntry` now computes `maxWidth` and passes it through to both
+  Agent-creation paths (`ToolLane.mergeAgentLabel` and `addStartWithAgentContext`);
+  previously both passed `undefined`, causing `formatToolLine` to skip truncation on
+  narrow terminals (#277)
+
+### Tests
+- add direct unit tests for `sanitizeSchemaString` (`src/cli/_lib/sanitize.test.ts`)
+  covering identity, Unicode preservation, 7-bit CSI, OSC, C1 controls, and truncation
+  semantics (#277)
+- add TTY-path coverage for `handleSubagentEvent` asserting compositor `setOverlay`
+  fires on tool_use_detail and that subagent prose does not leak into parent scrollback
+  on TTY (#277)
+
+### Added
+- preserve @ in file dropdown + highlight @path tokens in buffer (c4e448e)
+
+### Changed
+- redesign hero into 2-column grid with anchored social proof (c8ec384)
+- simplify header to Changelog + Join waitlist CTA (9b1a8cd)
+- cap section padding so trimmed content isn't dwarfed (93f77b1)
+- salvage non-overlapping wins from #298 (48b873e)
+- Feat/form mode elicitation (#284) (1819add)
+
+## [2.23.0] - 2026-05-18
+
+### Added
+- three-layer upgrade safety — postinstall kill, error sanitization, version drift check (3232f90)
+
+### Changed
+- accept "sure" as approval signal alongside approve/yes/lgtm (5d2fc5a)
+
+## [2.22.2] - 2026-05-18
+
+### Fixed
+- reduce text density and increase breathing room (#297) (04f74a9)
+
+## [2.22.1] - 2026-05-18
+
+### Fixed
+- Escape dismisses dropdown; uniform muted color for all trigger kinds (#282) (789f108)
+
+## [2.22.0] - 2026-05-18
+
+### Added
+- cap live overlay at 6 root rows with elision summary (#276) (862cf1b)
+- implement access waitlist form and update access section messaging (e265bbb)
+
+### Fixed
+- restore seedBuffer auto-submit fast-path (regression from e51ec5d) (#292) (1ba7976)
+
+### Changed
+- remove aliases from /changelog command and update related tests (a3ee0e6)
+
+## [2.21.0] - 2026-05-18
+
+### Added
+- Day 4b + 4c + 4d — inline-button digest + Discard/Diff/Respawn/OpenPR callbacks + schema v3 [speculative branch farm] (#273) (df7bf36)
+
+## [2.20.0] - 2026-05-18
+
+### Added
+- show effective cwd in the persistent bottom status line (0a2a46d)
+
+## [2.19.1] - 2026-05-18
+
+### Fixed
+- bust waitlist-count cache on insert + lower JS cache TTL (91836ee)
+
+### Changed
+- added .vercel to .gitignore (dd50366)
+
+## [2.19.0] - 2026-05-18
+
+### Added
+- seedBuffer fast-path with echo + repl-loop test coverage (PR #271 review feedback) (37cfaa6)
+- auto-rename worktrees from first user message via haiku (55600c9)
+
+### Fixed
+- C1 provider.setCwd() proxy + H2 live AgentSession T19 + M4/M8 residuals (6da5d9a)
+- emit console.warn when no text blocks returned (T21b) (7c9bf00)
+- correctness fixes C1/CA2/C3/C4 from PR #271 review (6fca5c5)
+
+### Changed
+- add coverage for T1/T10/T13/T15/T19/T21+T22 from PR #271 review (ed89c62)
+- fire first-turn hook concurrently with runTurn (P1) (7a8fe23)
+
+## [2.18.0] - 2026-05-18
+
+### Added
+- swap waitlist storage from Supabase to Neon (9e7ca44)
+
+## [2.17.0] - 2026-05-18
+
+### Added
+- subagent permission system + worktree isolation (#242) (1ffaeb7)
+
+## [2.16.0] - 2026-05-18
+
+### Added
+- waitlist signup via Supabase with live count in hero (3e2a003)
+
+### Fixed
+- thread session cwd through all tool handlers and surfaces (519991b)
+
+## [2.15.1] - 2026-05-18
+
+### Fixed
+- move subagent narration below tool children (0704363)
+
+## [2.15.0] - 2026-05-18
+
+### Added
+- route subagent done-blocks above prose when emitted pre-markdown (89d2d47)
+
+### Changed
+- assert agentType propagates from SubagentExecutor to renderer (7e94a0a)
+
+## [2.14.4] - 2026-05-18
+
+### Fixed
+- resolve /review findings on PR #275 (a187db5)
+
+## [2.14.3] - 2026-05-18
+
+### Fixed
+- address PR #278 review feedback — banner, --pin, robustness (e7f148f)
+
+### Changed
+- add coverage for update command, fetchLatestVersion, and banner ordering (e33da04)
+
+## [2.14.2] - 2026-05-18
+
+### Fixed
+- prevent heredoc newlines from corrupting tree connector rendering (76d719e)
+
+## [2.14.1] - 2026-05-18
+
+### Fixed
+- show update banner on startup and add `afk update` command (c4e48da)
+
+## [2.14.0] - 2026-05-18
+
+### Added
+- implement form-mode field-by-field REPL handler (330e043)
+
+### Fixed
+- collapse redundant Agent row by merging label into parent entry (4b5ea2e)
+
+## [2.13.1] - 2026-05-17
+
+### Fixed
+- surface truncation as warning + spill full output to disk (2892755)
+
+### Changed
+- extract ReplRenderer output seam; route mid-turn writes through compositor (#272) (e51ec5d)
+
+## [2.13.0] - 2026-05-17
+
+### Added
+- persist tool events in session archives (#268) (3f73a32)
+
+## [2.12.1] - 2026-05-17
+
+### Fixed
+- summarize memory tool JSON in tool-lane outcomes (af5cda2)
+
+## [2.12.0] - 2026-05-17
+
+### Added
+- centralized user-facing error handling (0943e9f)
+
+## [2.11.0] - 2026-05-17
+
+### Added
+- witness layer — durable trace evidence for AFK sessions (#270) (76bf752)
+- readline keybindings — history ring, /keys reference (8ea7f1d)
+- friendly usage-limit UX + auto-resume + account hot-swap (e187421)
+- render slash commands in brand orange in agent output (1936150)
+- add daily sweep automation for stale and empty worktrees (99cfd38)
+- closure ritual on /plan off — defer flip until model emits the plan (a847049)
+- per-turn system-prompt addendum when permissionMode === 'plan' (52ec054)
+- plan mode as honest safety primitive — Shift+Tab / /plan toggle with hook-level refusal (bd15a7c)
+- tool-lane rendering fixes — outcome nouns, bash cd-prefix, dispatch-children cap, fence-detection (#232) (1789348)
+- pop flag dropdown on space after slash command (fa37ba8)
+- add /telegram-setup skill with secret-isolated config helpers (8fe0369)
+- export AGENT_SURFACE=afk at startup (4ebc9a3)
+
+### Fixed
+- resolve 11 of 12 deferred review findings (second pass) (6c1da05)
+- resolve 13 review findings on readline-keybindings PR (a11a217)
+- incremental subagent scrollback commit + per-source flush (0270d10)
+- filter incomplete thinking blocks before API round-trip (79e050d)
+- UX audit — state-first copy, force-exit distinction, Shift+Tab pending fix (33a1318)
+- suppress subagent prose on TTY; route to transient thinking tail (#256) (255fc39)
+- clear abortController on suspended-yield and pendingAbort early-return (9aa31b0)
+- wire subagent sink for Telegram; emit thinking summary on non-TTY (ffb0cf7)
+
+### Changed
+- unify raw chalk usages and fix bullet/heading semantics (83c8a4e)
+- Print resume command on interactive exit (8d8e039)
+- correct ambiguous 'SDK' wording in plan-mode comments (0bceaa5)
+- Audit/resolve findings c1 c10 (#233) (c59ed1c)
+- project headings and lists in card-line renderer (5dbf1e8)
+- project headings and lists in card-line renderer (8e93fbb)
+- document pre-split archive directory (647d432)
+
+### Fixed
+- tool-lane no longer leaks raw memory-tool JSON when results exceed the 80-char single-line truncation cap
+
+## [2.9.1] - 2026-05-16
+
+### Fixed
+- address review feedback on PR #250 (d5e5fe9)
+- postinstall works on fresh worktree; mask bot-token input in setup wizard (898b330)
+- propagate agentType at raw agent dispatch site (Bug #2) (f04b5f5)
+- clamp tree-child lines to terminal width (12e23e3)
+
+### Changed
+- bounded stalled lifecycle; replace checkPauseAnnotations (Bug #3) (929a350)
+- unify tool-use counter; isolate progress-event field (Bug #4) (412610e)
+- extract declarative assignConnectors; fix Bug #5 overflow connector (715d81e)
+- introduce CommitCoordinator; serialize scrollback writes; apply committing guard (1832a37)
+- Phase 1 failing tests — rendering bugs #1–#5 + snapshot pins (RED) (cc354bb)
+- Phase 2 rendering refactor — amended spec (post /devils-advocate) (7bfb89c)
+- Phase 0 reconnaissance — handoff brief + architecture docs (ad2c3d9)
+
+## [2.9.0] - 2026-05-16
+
+### Added
+- max_tool_calls_per_node budget via chained progressSink (ad07780)
+- per-node max-runtime timeout with honest abort propagation (406c93d)
+- preserve partial assistant content on failure path (36acee4)
+
+### Fixed
+- resolve three PR review issues — TDZ guard, type leak, clamp warning (4127d11)
+
+## [2.8.1] - 2026-05-16
+
+### Fixed
+- wire child provider into forked skill children (0749128)
+
+### Changed
+- Merge pull request #209 from griffinwork40/fix/skill-executor-child-provider (af1126c)
+
+## [2.8.0] - 2026-05-16
+
+### Added
+- cascade subagent thinking into parent tool/thinking lanes (f402759)
+
+### Changed
+- Merge pull request #221 from griffinwork40/feat/cascade-subagent-thinking-runtime (fcbfba8)
+- keep memory tools in READ/WRITE categories (0bdd75a)
+- add AFK.md for agent-afk CLI and architecture overview (0d840ad)
+- Merge pull request #240 from griffinwork40/claude/subagent-thinking-merge-pr-wvXy6 (c79c33b)
+- Merge branch 'main' into feat/cascade-subagent-thinking-runtime (4edc107)
+
+## [2.7.1] - 2026-05-15
+
+### Fixed
+- drop data-reveal from outer changelog section (5f793dc)
+- commit generated changelog.html so /changelog renders (ed45256)
+
+### Changed
+- drop unreleased section and per-release link buttons (ab5533f)
+- reposition around the pressure path + add founder pricing (5ded07a)
+- remove stray .afk-work worktree gitlinks (60422fb)
+- rewrite src/agent/README, drop IMPLEMENTATION.md, prune SDK refs (1e34874)
+- fix stale @anthropic-ai/claude-agent-sdk references (824ef5e)
+
+## [2.7.0] - 2026-05-15
+
+### Added
+- group same-tool siblings + categorical overflow + bash summarizer (ba43dda)
+
+## [2.6.4] - 2026-05-15
+
+### Fixed
+- address review findings on thinking-render-bugs (547cb78)
+- surface thinking content during turns (232697f)
+
+## [2.6.3] - 2026-05-15
+
+### Fixed
+- anchor fence detection to line start (fc5654d)
+
+## [2.6.2] - 2026-05-15
+
+### Fixed
+- attribute nested subagents and silence stdout debug leak (77e224c)
+
+### Changed
+- add telemetry-split orchestration plan (0be9561)
+
+## [2.6.1] - 2026-05-15
+
+### Fixed
+- align user-echo card content with inline prompt column (8019e2b)
+
+## [2.6.0] - 2026-05-14
+
+### Added
+- expose dispatchSkill callback on SkillExecutionContext (a4515bf)
+
+## [2.5.0] - 2026-05-14
+
+### Added
+- badge/ledger/events subsystem with session wiring (1cd0753)
+
+### Fixed
+- ledger shallow-copy, stats degraded-ctx message, inconclusive display; add clearRegistryForTesting; /stats tests (6c4bd46)
+- emit complete in finally so status bar clears on handler throw; refactor layer inversion (91591fe)
+
+## [2.4.1] - 2026-05-14
+
+### Fixed
+- update budget tests to use transformProviderEvent; fix loop translatorErrored to emit turn.completed on abort only (bb420ab)
+- restore timeout enforcement, remove unsafe getOutputStream (cb0cdb0)
+- remove MessageQueue indirection, fix interrupt crash (d30c95c)
+
+### Changed
+- Merge pull request #203 from griffinwork40/worktree-shimmering-spinning-frost (b69dfef)
+- resolve conflicts with origin/main — keep PR #203 no-MessageQueue architecture, port budget enforcement (C6) to sync transformProviderEvent (2c90daf)
+- Merge branch 'main' into worktree-shimmering-spinning-frost (b6c5da5)
+
+## [2.4.0] - 2026-05-14
+
+### Added
+- **C6** `--max-budget-usd` is now enforced: `AgentSession` accumulates `totalCostUsd` from each `turn.completed` event and aborts the internal `AbortController` when the ceiling is crossed. The abort reason surfaces as `"Budget ceiling reached: $X.XXXX >= $Y.YYYY"`.
+- **C9** WAL supersede crash window narrowed: `supersedeFact()` now stores `(old_content, old_created_at, new_content, new_created_at)` fingerprints in the supersede WAL entry alongside the legacy `(old_fact_id, new_fact_id)` rowids. `replayWAL()` resolves fingerprints to current rowids first, falling back to raw rowids for pre-fix WAL entries.
+
+### Fixed
+- **C5** Telegram `SessionManager.getSession()` race condition: concurrent calls for the same `chatId` now share a single in-flight creation `Promise` via a `pendingSessions` guard, preventing duplicate session spawns.
+- **C7** `parseProvider()` in `shared-helpers.ts` now accepts an optional `memoryStore` parameter and threads it into the constructed `AnthropicDirectProvider`, ensuring only one SQLite connection is opened when `--provider anthropic-direct` is passed explicitly. Applied in both `chat.ts` and `interactive/bootstrap.ts`.
+- **C8** `runDAG` in `dag.ts` leaked an `AbortSignal` listener on the outer signal when the DAG completed normally. Fixed by using a named handler (`forwardAbort`) removed in a `finally` block. Per-node listeners are also explicitly removed in `finally` after each node completes.
+
+### Security
+- **C1** Plugin/marketplace path traversal: validate manifest `name` with `SAFE_PLUGIN_NAME` regex and `assertWithinPluginsDir()` before any `join()`-based directory creation in `src/agent/plugins/install.ts` and `src/agent/marketplaces/install.ts`.
+- **C2** `permissionMode` default changed from `'bypassPermissions'` to `'default'` in `session-setup.ts`. Callers that previously relied on the implicit bypass must now pass `permissionMode: 'bypassPermissions'` explicitly in their `AgentConfig`.
+- **C3** `write_file` now refuses to write to a built-in denylist of credential/system paths (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `/etc`, `/System`, `/private/etc`, `/usr/local/etc`). Additional paths can be appended via the `AFK_WRITE_DENYLIST` env var (colon-separated absolute paths).
+- **C4** `bash` handler now emits a one-time `[security]` warning to stderr when `AFK_PERMISSION_MODE=bypassPermissions`, surfacing the shell-injection risk. Full `execFile` migration is deferred (tracked C4).
+- **C10** Scheduler telemetry (`forge-telemetry.jsonl`) now runs `redactInlineSecrets()` over both the `command` and `responseExcerpt` fields before writing. `INLINE_SECRET_PATTERNS` extended to cover OpenAI `sk-*` keys, Telegram bot tokens, and mixed-case `KEY=`/`TOKEN=` patterns.
+
+### Added
+- render skill tool children + spinner elapsed time (d4e48b6)
+- enforce --max-budget-usd via turn.completed cost accumulation (C6) (8e1a223)
+
+### Fixed
+- idempotent supersedeFact on UNIQUE constraint collision (3419306)
+- throw BudgetExceededError instead of bare return on budget abort (917f7a9)
+- add memory tools to interactive REPL allowlist (0a2b2b0)
+- WAL supersede crash window — store content fingerprints instead of raw rowids (C9) (e9f5fde)
+- correctness fixes — session-manager race guard, dual MemoryStore, DAG signal leak (C5, C7, C8) (1567f7d)
+- fix list newline collapse and card border off-by-one (5d8cf8f)
+- show all rawBody lines in asking verdict card fallback (ee9dad8)
+- categorize memory_search/memory_update/procedure_write tools (5b3733f)
+- prevent schema mismatch on hypothesis synthesis (a9944de)
+- wrap blockquote content before prefixing with bar (20b108b)
+- add newline wrapping for H3+ headings (1aa9aae)
+
+### Changed
+- include parentId in fork assertion (9968994)
+- drop stale "atlas" surface variant (305972c)
+- add clarifying comments for colon-separator caveat and Telegram permissionMode (6c0ebcf)
+- fix symlink test — existsSync guard + AFK_WRITE_DENYLIST symlink case (0c6646e)
+- resolve PR #211 review findings — C2/C3/C4/C5/C6/C9 (0945a2d)
+- harden plugin paths, permission default, write_file denylist, bash warning, telemetry redaction (C1-C4, C10) (967a285)
+- refresh to match v2.3.x architecture (34f094d)
+- wire coverage gate into CI + add real loop.ts tests (3166367)
+- prune slop tests, enforce coverage floor (4811e64)
+
+## [2.3.1] - 2026-05-14
+
+### Fixed
+- repair release pipeline + dev start scripts (c83ede0)
+
+## [2.3.0] - 2026-05-14
+
+### Added
+- add /init slash command to scan project and generate AFK.md (af56752)
+
+## [2.2.0] - 2026-05-14
+
+### Added
+- nest compose-spawned subagents under the compose tool-lane entry (90bea64)
+
+### Fixed
+- resolve review findings on compose subagent nesting (#202) (a627cab)
+
+## [2.1.0] - 2026-05-14
+
+### Added
+- background tasks — Ctrl+B detach, /bg, persistent status bar (#196)
+- clipboard failure msg, debug logging, dual-probe
+- add Ctrl+X to discard clipboard image attachments
+- auto-discover project-level AFK.md as system prompt source (#186)
+
+### Fixed
+- pass full user input to recordTurn for background tasks
+- resolve review findings on background tasks (#200)
+- preserve paragraph breaks in stripCommandTags and extractSkillTag (#201)
+- move console.log before compositor arm to prevent ghost spinner
+- close research-agent contract gap + harden mint invariant
+
+### Changed
+- add guidelines for ordered-operation sequences
+- add 'Crafted by Griffin Long' footer credit linked to graisol.com
+
+### Added
+- background tasks — Ctrl+B detach, /bg, persistent status bar (#196) (0209cb4)
+- clipboard failure msg, debug logging, dual-probe (88a3114)
+- add Ctrl+X to discard clipboard image attachments (c68e47c)
+- auto-discover project-level AFK.md as system prompt source (#186) (4061d7c)
+
+### Fixed
+- pass full user input to recordTurn for background tasks (de62c22)
+- resolve review findings on background tasks (#200) (0c8fb76)
+- preserve paragraph breaks in stripCommandTags and extractSkillTag (#201) (7f7c636)
+- move console.log before compositor arm to prevent ghost spinner (af028fc)
+- close research-agent contract gap + harden mint invariant (e528568)
+
+### Changed
+- bump version to 2.0.0 and update changelog (4395866)
+- add guidelines for ordered-operation sequences (70a65b4)
+- add 'Crafted by Griffin Long' footer credit linked to graisol.com (26b12c2)
+
+## [1.21.0] - 2026-05-14
+
+### Added
+- add afk-worktrees-status.sh read-only inspector (#198) (eaeaaa7)
+
+## [1.20.0] - 2026-05-13
+
+### Added
+- add send_telegram built-in tool for operator notifications (#187) (c7150a1)
+
+## [1.19.0] - 2026-05-13
+
+### Added
+- surface execution trace from child sessions to parent (#193) (4af131b)
+
+## [1.18.0] - 2026-05-13
+
+### Fixed
+- `SubagentExecutor` success path now coerces non-string `message.content` (e.g. SDK
+  `ContentBlock[]`) to a string via `JSON.stringify`, so `ToolResult.content` is always
+  a valid string. Prevents downstream consumers from receiving an object where a string
+  is contracted.
+
+### Added
+- push primitive + onTaskComplete callback for daemon (#160) (eea6063)
+
+### Changed
+- Feat/orchestration (#188) (1b42c6a)
+
+## [1.17.0] - 2026-05-13
+
+### Added
+- add Phase 1 triage, named outcomes, and multi-file routing (#194) (6465414)
+
+### Changed
+- Feat/landing changelog page (#190) (7a35bb8)
+- Fix/clipboard image paste (#189) (4a21501)
+
+## [1.16.1] - 2026-05-13
+
+### Fixed
+- decouple AFK telemetry from ~/.claude/agent-framework (#191) (01160ba)
+
+## [1.16.0] - 2026-05-13
+
+### Added
+- repaint stage rail on transitions + enable extended thinking by default (4750263)
+
+## [1.15.2] - 2026-05-13
+
+### Fixed
+- add blank line between paragraphs in markdown rendering (c4949d7)
+
+## [1.15.1] - 2026-05-13
+
+### Fixed
+- render inline markdown in card bodies (#165) (0d803a6)
+
+## [1.15.0] - 2026-05-13
+
+### Added
+- activate compose tool in production entrypoints (#185) (3d93f00)
+
+## [1.14.6] - 2026-05-13
+
+### Fixed
+- resume on JSON-string {userApproved:true} from skill-tool boundary (#166) (f7387d3)
+
+## [1.14.5] - 2026-05-13
+
+### Fixed
+- truncate /skills descriptions and add detail view (#181) (905edb9)
+
+## [1.14.4] - 2026-05-13
+
+### Fixed
+- per-call signal check in executeBatch parallel branch (#182) (4c87ee7)
+
+## [1.14.3] - 2026-05-13
+
+### Fixed
+- repair clipboard image paste on macOS (Cmd+V + binary readback) (#163) (7b6e0d7)
+
+## [1.14.2] - 2026-05-13
+
+### Fixed
+- normalize paragraph spacing and fix overlay alignment (#184) (7cc3752)
+
+## [1.14.1] - 2026-05-13
+
+### Fixed
+- restore cursor, honest spinner, durable interrupt notice, honest --stream (#183) (e50c1ba)
+
+## [1.14.0] - 2026-05-13
+
+### Added
+- add compose tool for DAG-based parallel subagent orchestration (#173) (a78027f)
+
+## [1.13.4] - 2026-05-13
+
+### Fixed
+- use dirname on fileURLToPath before joining relative paths (1251a74)
+
+## [1.13.3] - 2026-05-13
+
+### Fixed
+- auto-submit queued messages instead of requiring a second Enter (92a1c83)
+
+## [1.13.2] - 2026-05-13
+
+### Fixed
+- update description for clarity and improve commit process guidance (e986f1c)
+
+## [1.13.1] - 2026-05-13
+
+### Fixed
+- add memory tools to allowlist and prevent dangling tool_use on abort (6162b2c)
+
+## [1.13.0] - 2026-05-13
+
+### Added
+- add completion glyphs to tool result display (8d0d756)
+
+## [1.12.0] - 2026-05-13
+
+### Added
+- add auto-update checker with notify/auto/off policy (bbc9ae5)
+
+## [1.11.0] - 2026-05-13
+
+### Added
+- improve subagent visibility in nested skill runs (eed3ba6)
+
+## [1.10.4] - 2026-05-13
+
+### Fixed
+- convert skill-name XML tags to styled badges and fix tool glyph casing (b754e41)
+
+## [1.10.3] - 2026-05-13
+
+### Fixed
+- eliminate streaming line duplication and table garbling (ca6a204)
+
+### Changed
+- broaden skill to accept PR numbers, SHAs, branches, and patch files (246824c)
+
+## [1.10.2] - 2026-05-13
+
+### Fixed
+- correct skill count, add email fallback, ship OG image (640521a)
+
+## [1.10.1] - 2026-05-13
+
+### Fixed
+- add blank line between user input and agent response (44107d6)
+
+## [1.10.0] - 2026-05-12
+
+### Added
+- highlight slash commands anywhere in the input buffer (d5e570c)
+
+## [1.9.0] - 2026-05-12
+
+### Added
+- add system prompt instructions for cross-session memory tools (1421e8e)
+
+### Changed
+- bump version to 1.8.1 (7bfa67a)
+- update CLI entry points to use .mjs extension for improved module compatibility (678ce17)
+- consolidate duplicated 1.8.0 Added subhead (88be7f3)
+
+## [1.8.0] - 2026-05-12
+
+### Added
+- Telegram bot integration: `afk telegram {start|stop|status|restart|logs|setup}` CLI subcommands (#154) (f2eb50d)
+- User-scope config at `~/.afk/config/afk.env` — Telegram tokens and allowlist stored outside the project tree
+- `afk telegram setup` interactive wizard with keychain/file/env token storage options
+- File-authoritative override for Telegram config keys: `~/.afk/config/afk.env` wins over shell env for `TELEGRAM_BOT_TOKEN`, `AFK_TELEGRAM_ALLOWED_CHAT_IDS`, `TELEGRAM_VERBOSE`, `TELEGRAM_DATA_DIR`
+- Bot identity validation at startup via `getMe` before handing token to Telegraf
+
+### Fixed
+- Shell-shadowed bot token: file value now overrides stale shell exports for Telegram-specific keys (inverse of dotenv precedence, intentional for operator-managed config)
+
+## [1.7.0] - 2026-05-12
+
+### Added
+- cross-session memory system + mint state persistence (#115) (40231c6)
+
+## [1.6.0] - 2026-05-12
+
+### Added
+- add --dump-prompt debug flag for SDK prompt verification (#34) (c49fb7d)
+
+## [1.5.1] - 2026-05-12
+
+### Fixed
+- show early tool-use indicator during model generation (#123) (0b91592)
+
+## [1.5.0] - 2026-05-12
+
+### Added
+- add /changelog page rendered from CHANGELOG.md (#158) (90f413c)
+
+### Fixed
+- improve terminal rendering spacing and wrapping (#156) (72adfa7)
+- include bundled plugins in system prompt manifest (#153) (7d64db8)
+
+## [1.4.0] - 2026-05-12
+
+### Changed
+- Enhance routing telemetry with detailed event structure and telemetry emission
+- phase 1 orchestration pressure — frame main session as coordinator
+
+### Added
+- surface parallelize-dispatch failures via discriminated union (#152) (47caa39)
+
+### Fixed
+- handle drainQueue rejection in processOne finally (5bc2690)
+- preserve slash command highlighting after submission (3afa120)
+
+### Changed
+- add orchestration pressure audit (d0a03a3)
+
+## [1.3.1] - 2026-05-12
+
+### Fixed
+- reset context bar on /clear (1b5f637)
+- flush tool lane to scrollback on subagent done (ab8dea6)
+
+### Changed
+- address review feedback from #151 review (3395c33)
+- co-locate unit tests with the files they exercise (56a6d36)
+- add colocate-tests migration helper (3dfd2aa)
+
+## [1.3.0] - 2026-05-11
+
+### Added
+- runtime positioning + reversibility-aware autonomy section (1a3af3f)
+
+### Fixed
+- correct overclaims, restore working CTA (639790d)
+
+## [1.2.1] - 2026-05-11
+
+### Added
+- add /changelog command to generate release entries from git log
+- bundle orchestration skills into the binary
+- auto-refresh OAuth token on 401 instead of crashing
+- implement word and line deletion commands
+- make AFK's execution shape legible — verdict cards, stage rail, ledger
+- add failure geometry to SALVAGE rework prompt
+
+### Fixed
+- stream subagent content in real time during skill execution — replaces line-buffered rendering with `StreamingMarkdownRenderer` so users see live markdown output instead of a spinner
+- harden /changelog flag parsing and improve test mocks
+- resolve review findings in /changelog command
+- add 401 retry integration tests and deduplicate concurrent refreshes
+- persist assistant turns in message history
+
+### Changed
+- unify feedback on spinner, kill thinking indicator
+- add Failure Geometry documentation to outline agent workflow design patterns
+- centralize last hardcoded ~/.claude/ path in audit-fit
+- centralize path resolution on AFK_HOME, fix surface tags
+- opt actions into Node.js 24 (FORCE_JAVASCRIPT_ACTIONS_TO_NODE24)
+
+### Fixed
+- restore plain bullets in /changelog (PR #145 H-1) (3432991)
+- resolve PR #145 review blockers (e1acf82)
+- resolve review blockers — dedup, atomic writes, correct dist path (4cd81b2)
+- strip command breadcrumb XML tags from rendered output (#142) (a0812a6)
+- add spacing around tool-lane flush in stream renderer (1bbd7a9)
+- recognize informal approval patterns in parseMintInput (e9f8a60)
+- correct inflated context-% meter on anthropic-direct (#143) (aff2475)
+
+### Changed
+- extract shared utils + add auto-release CI (328ae85)
+
+## [0.2.4] - 2026-05-10
+
+### Added
+- `~/.afk/` config home — CLI, Telegram, and daemon resolve user-scope state there, decoupling AFK from `~/.claude/`
+- Plugin auto-discovery (`~/.afk/plugins/`) and `afk plugin {install|update|list|remove|enable|disable}` CLI (git-based MVP, no marketplace)
+- 1M-context model variants (`opus_1m`, `sonnet_1m`)
+- Bracketed-paste input box with atomic multi-line paste handling
+- Terminal resize reflow — width-aware boxes, dividers, status line, todo panel, streaming markdown commit wrap (`ResizeBus` + `wrap-ansi`)
+- Plugin-skill SDK bridge — `/skills`, `/reload-plugins`, `/agents` via passthrough handlers; replaces the bespoke `skill-bridge.ts` stubs
+- Beautiful-TUI: live progress lane, context-pane (todo surface above prompt with structural-fingerprint dedupe), shared `InputCore` powering compositor + input-box, palette `heading`/`label` semantic roles, width-aware debug banner
+- Provider abstraction (`src/agent/providers/{anthropic,openai-codex}.ts`) — model family selects the runtime backend via `providerForModel()`
+- `AbortGraph` — transitive parent→child cancellation across subagent trees
+- `withTimeout` / `TimeoutError` helpers
+- Zod `outputSchema` on `SubagentResult<T>` and `ForkSubagentOptions` — extraction + parsing in `src/agent/subagent/{handle,result}.ts`
+- Hooks infrastructure — SessionStart/End, SubagentStart/Stop, PreToolUse/PostToolUse with `decision: 'block'` short-circuit
+- `--model` pass-through for non-Anthropic routes — `auto`, full SDK IDs, and codex models flow through to the SDK untouched
+- SDK dependency tracking — `pnpm audit:sdk` snapshot + `.sdk-dependency.lock.json` allowlist + CI gate via `pnpm audit:sdk:check`
+
+### Fixed
+- `StreamEvent` schema — `delta.type` made optional to tolerate `message_delta` events (was hard-failing every successful turn)
+- `/clear` rebuilds the SDK session instead of forwarding a string
+- `listSessions` skips SDK PID-registry sidecars; `/resume` formatter guards NaN / undefined timestamps
+- CLI: tool names and file paths now surface in interactive output
+
+### Changed
+- All AFK state lives under `~/.afk/`, never `~/.claude/`
+- Project is pnpm-only — `npm install` will desync the lockfile
+
+## [0.1.0] - 2026-02-09
+
+### Added
+- Initial release
+- Project infrastructure
+- Testing framework
+- Basic CLI commands
+
+[Unreleased]: https://github.com/griffinwork40/agent-afk/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/griffinwork40/agent-afk/releases/tag/v0.1.0

@@ -1,0 +1,769 @@
+/**
+ * Tests for `BackgroundAgentRegistry`.
+ *
+ * These tests stub `SubagentHandle` rather than wire a real
+ * `SubagentManager` + provider — the registry's contract is with the
+ * handle interface, not with the underlying SDK. The stub captures the
+ * `onResult` callback so each test can drive the terminal-state
+ * transition deterministically.
+ */
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as os from 'node:os';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
+vi.mock('../utils/debug.js', () => ({ debugLog: vi.fn() }));
+
+// Set up a temp AFK_HOME for disk tests so they don't touch real ~/.afk
+const bgTestTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-registry-test-'));
+process.env['AFK_HOME'] = bgTestTmpDir;
+
+// Hoisted mock so BackgroundAgentRegistry picks up the mocked appendRoutingDecision.
+const appendRoutingDecision = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('./routing-telemetry.js', () => ({ appendRoutingDecision }));
+
+import { BackgroundAgentRegistry } from './background-registry.js';
+import { InMemoryTraceWriter } from './trace/writer.js';
+import type { SubagentHandle, SubagentResult, SubagentStatus } from './subagent.js';
+import type { Message } from './types.js';
+
+interface StubHandle extends SubagentHandle {
+  /** Captured by `runInBackground` — invoke to trigger terminal-state. */
+  __fireTerminal: (result: SubagentResult) => void;
+  __cancelCalled: number;
+  /** Captured onProgress callback, if any. */
+  __onProgress?: (event: import('./types/session-types.js').OutputEvent) => void;
+  /** Fire a progress event through the captured onProgress callback. */
+  __fireProgress: (event: import('./types/session-types.js').OutputEvent) => void;
+}
+
+function createStubHandle(id: string): StubHandle {
+  let capturedResult: ((r: SubagentResult) => void) | undefined;
+  let capturedProgress: ((event: import('./types/session-types.js').OutputEvent) => void) | undefined;
+  const stub: Partial<StubHandle> & Record<string, unknown> = {
+    id,
+    status: 'idle' as SubagentStatus,
+    __cancelCalled: 0,
+    runInBackground(
+      _prompt: string,
+      onResult?: (r: SubagentResult) => void,
+      onProgress?: (event: import('./types/session-types.js').OutputEvent) => void,
+    ) {
+      capturedResult = onResult;
+      capturedProgress = onProgress;
+      stub['__onProgress'] = onProgress;
+    },
+    async cancel() {
+      (stub.__cancelCalled as number)++;
+      // Real handle would synthesize a cancelled result; the registry
+      // installs its own terminal callback via runInBackground, so we fire
+      // that here to mimic the cascade.
+      capturedResult?.({
+        id,
+        status: 'cancelled' as SubagentStatus,
+      });
+    },
+    __fireTerminal(result: SubagentResult) {
+      capturedResult?.(result);
+    },
+    __fireProgress(event: import('./types/session-types.js').OutputEvent) {
+      capturedProgress?.(event);
+    },
+    async run() { throw new Error('not implemented'); },
+    async runToResult() { throw new Error('not implemented'); },
+    async teardown() { /* no-op */ },
+  };
+  return stub as StubHandle;
+}
+
+function successResult(id: string, content: string): SubagentResult {
+  const message: Message = {
+    id: `msg-${id}`,
+    type: 'message',
+    role: 'assistant',
+    content,
+    model: 'sonnet',
+    stop_reason: 'end_turn',
+    stop_sequence: null,
+    usage: { input_tokens: 0, output_tokens: 0 },
+  } as unknown as Message;
+  return { id, status: 'succeeded' as SubagentStatus, message };
+}
+
+function failureResult(id: string, message: string): SubagentResult {
+  return {
+    id,
+    status: 'failed' as SubagentStatus,
+    error: { name: 'TestError', message },
+  };
+}
+
+describe('BackgroundAgentRegistry', () => {
+  let writer: InMemoryTraceWriter;
+  let registry: BackgroundAgentRegistry;
+
+  beforeEach(() => {
+    writer = new InMemoryTraceWriter();
+    registry = new BackgroundAgentRegistry({ traceWriter: writer });
+  });
+
+  it('register() returns a snapshot with status=running and a fresh jobId', () => {
+    const handle = createStubHandle('sub-1');
+    const job = registry.register({ handle, prompt: 'investigate stash {2}', model: 'sonnet' });
+
+    expect(job.status).toBe('running');
+    expect(job.jobId).toMatch(/^bg-/);
+    expect(job.subagentId).toBe('sub-1');
+    expect(job.label).toBe('investigate stash {2}');
+    expect(job.model).toBe('sonnet');
+    expect(job.result).toBeUndefined();
+    expect(job.endedAt).toBeUndefined();
+  });
+
+  it('emits a background_agent.started witness event on register()', () => {
+    const handle = createStubHandle('sub-1');
+    registry.register({ handle, prompt: 'do thing', model: 'sonnet' });
+
+    const started = writer.events.filter((e) => e.kind === 'background_agent');
+    expect(started).toHaveLength(1);
+    const ev = started[0]!;
+    expect(ev.kind).toBe('background_agent');
+    if (ev.kind === 'background_agent' && ev.payload.transition === 'started') {
+      expect(ev.payload.subagentId).toBe('sub-1');
+      expect(ev.payload.label).toBe('do thing');
+      expect(ev.payload.model).toBe('sonnet');
+    } else {
+      throw new Error('expected started transition');
+    }
+  });
+
+  it('truncates label to 80 chars', () => {
+    const long = 'x'.repeat(200);
+    const handle = createStubHandle('sub-1');
+    const job = registry.register({ handle, prompt: long, model: 'sonnet' });
+    expect(job.label).toHaveLength(80);
+  });
+
+  it('returns immediately — does NOT block on terminal state', async () => {
+    const handle = createStubHandle('sub-1');
+    const before = Date.now();
+    registry.register({ handle, prompt: 'p', model: 'sonnet' });
+    const after = Date.now();
+    // <50ms is generous — register() should be microsecond-scale
+    expect(after - before).toBeLessThan(50);
+    // No terminal state yet
+    expect(registry.list()[0]?.status).toBe('running');
+  });
+
+  it('join() resolves with the completed result and emits .completed + .joined', async () => {
+    const handle = createStubHandle('sub-1');
+    const job = registry.register({ handle, prompt: 'p', model: 'sonnet' });
+
+    // Fire terminal completion
+    handle.__fireTerminal(successResult('sub-1', 'final answer'));
+
+    const result = await registry.join(job.jobId);
+    expect(result.status).toBe('succeeded');
+
+    const bgEvents = writer.events.filter((e) => e.kind === 'background_agent');
+    const transitions = bgEvents.map((e) =>
+      e.kind === 'background_agent' ? e.payload.transition : null,
+    );
+    expect(transitions).toEqual(['started', 'completed', 'joined']);
+  });
+
+  it('join() on an unknown jobId rejects', async () => {
+    await expect(registry.join('does-not-exist')).rejects.toThrow(/not found/);
+  });
+
+  it('join() resolves immediately on an already-terminal job', async () => {
+    const handle = createStubHandle('sub-1');
+    const job = registry.register({ handle, prompt: 'p', model: 'sonnet' });
+    handle.__fireTerminal(successResult('sub-1', 'done'));
+
+    // First join — initial settle
+    await registry.join(job.jobId);
+
+    // Second join — should resolve from the cached settle
+    const second = await registry.join(job.jobId);
+    expect(second.status).toBe('succeeded');
+
+    // joined should have fired twice
+    const joinedCount = writer.events.filter(
+      (e) => e.kind === 'background_agent' && e.payload.transition === 'joined',
+    ).length;
+    expect(joinedCount).toBe(2);
+  });
+
+  it('failed job: join() returns failed result; .failed witness event fires', async () => {
+    const handle = createStubHandle('sub-1');
+    const job = registry.register({ handle, prompt: 'p', model: 'sonnet' });
+    handle.__fireTerminal(failureResult('sub-1', 'boom'));
+
+    const result = await registry.join(job.jobId);
+    expect(result.status).toBe('failed');
+    expect(registry.get(job.jobId)?.status).toBe('failed');
+
+    const failed = writer.events.find(
+      (e) => e.kind === 'background_agent' && e.payload.transition === 'failed',
+    );
+    expect(failed).toBeDefined();
+    if (failed?.kind === 'background_agent' && failed.payload.transition === 'failed') {
+      expect(failed.payload.errorClass).toBe('TestError');
+      expect(failed.payload.errorMessage).toBe('boom');
+    }
+  });
+
+  it('cancelJob() calls handle.cancel() and transitions to cancelled', async () => {
+    const handle = createStubHandle('sub-1');
+    const job = registry.register({ handle, prompt: 'p', model: 'sonnet' });
+
+    const ok = await registry.cancelJob(job.jobId);
+    expect(ok).toBe(true);
+    expect(handle.__cancelCalled).toBe(1);
+    expect(registry.get(job.jobId)?.status).toBe('cancelled');
+
+    const cancelled = writer.events.find(
+      (e) => e.kind === 'background_agent' && e.payload.transition === 'cancelled',
+    );
+    expect(cancelled).toBeDefined();
+  });
+
+  it('cancelJob() on a terminal job returns false and does not re-cancel', async () => {
+    const handle = createStubHandle('sub-1');
+    const job = registry.register({ handle, prompt: 'p', model: 'sonnet' });
+    handle.__fireTerminal(successResult('sub-1', 'done'));
+
+    const ok = await registry.cancelJob(job.jobId);
+    expect(ok).toBe(false);
+    expect(handle.__cancelCalled).toBe(0);
+  });
+
+  it('cancelJob() on unknown id returns false', async () => {
+    const ok = await registry.cancelJob('nope');
+    expect(ok).toBe(false);
+  });
+
+  it('cancelAll() cancels every running job; ignores terminal ones', async () => {
+    const h1 = createStubHandle('s1');
+    const h2 = createStubHandle('s2');
+    const h3 = createStubHandle('s3');
+    registry.register({ handle: h1, prompt: 'a', model: 'sonnet' });
+    registry.register({ handle: h2, prompt: 'b', model: 'sonnet' });
+    const j3 = registry.register({ handle: h3, prompt: 'c', model: 'sonnet' });
+
+    // Make j3 already-terminal
+    h3.__fireTerminal(successResult('s3', 'done'));
+
+    await registry.cancelAll();
+    expect(h1.__cancelCalled).toBe(1);
+    expect(h2.__cancelCalled).toBe(1);
+    expect(h3.__cancelCalled).toBe(0);
+    expect(registry.get(j3.jobId)?.status).toBe('completed');
+  });
+
+  // H-1: cancelAll() must emit trace events with source: 'cascade'.
+  // Before this fix the source parameter was unreachable because runInBackground's
+  // terminal callback always invoked markTerminal with 2 args (no source arg).
+  // The fix stores cancelSource per-job before calling handle.cancel().
+  it('cancelAll() emits cancelled trace event with source: "cascade" (H-1)', async () => {
+    const h1 = createStubHandle('cascade-1');
+    registry.register({ handle: h1, prompt: 'work', model: 'sonnet' });
+
+    await registry.cancelAll();
+
+    const cancelledEvent = writer.events.find(
+      (e) => e.kind === 'background_agent' && e.payload.transition === 'cancelled',
+    );
+    expect(cancelledEvent).toBeDefined();
+    if (cancelledEvent?.kind === 'background_agent' && cancelledEvent.payload.transition === 'cancelled') {
+      expect(cancelledEvent.payload.source).toBe('cascade');
+    } else {
+      throw new Error('expected cancelled event with cascade source');
+    }
+  });
+
+  it('cancelJob() emits cancelled trace event with source: "explicit" (H-1 contrast)', async () => {
+    const h1 = createStubHandle('explicit-1');
+    const job = registry.register({ handle: h1, prompt: 'work', model: 'sonnet' });
+
+    await registry.cancelJob(job.jobId);
+
+    const cancelledEvent = writer.events.find(
+      (e) => e.kind === 'background_agent' && e.payload.transition === 'cancelled',
+    );
+    expect(cancelledEvent).toBeDefined();
+    if (cancelledEvent?.kind === 'background_agent' && cancelledEvent.payload.transition === 'cancelled') {
+      expect(cancelledEvent.payload.source).toBe('explicit');
+    } else {
+      throw new Error('expected cancelled event with explicit source');
+    }
+  });
+
+  // C-2: cancelAll() must not hang session teardown when a provider never
+  // settles after abort. The CANCEL_DRAIN_TIMEOUT_MS (5 s) guard should
+  // resolve the Promise.race and allow teardown to proceed.
+  describe('cancelAll() drain timeout (C-2)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('resolves within the timeout even when a job terminalSettled never fires', async () => {
+      vi.useFakeTimers();
+
+      // Build a stub handle whose cancel() never fires the terminal callback —
+      // simulating a provider that stalls after abort.
+      let captured: ((r: SubagentResult) => void) | undefined;
+      const hangingHandle: Partial<StubHandle> & Record<string, unknown> = {
+        id: 'hang-1',
+        status: 'idle' as SubagentStatus,
+        __cancelCalled: 0,
+        runInBackground(_prompt: string, onResult?: (r: SubagentResult) => void) {
+          captured = onResult;
+          // Intentionally never called: simulates a detached job that ignores abort.
+          void captured; // keep reference alive
+        },
+        async cancel() {
+          (hangingHandle.__cancelCalled as number)++;
+          // Deliberately does NOT call captured() — the terminal callback
+          // never fires, so terminalSettled never resolves.
+        },
+        async run() { throw new Error('not implemented'); },
+        async runToResult() { throw new Error('not implemented'); },
+        async teardown() { /* no-op */ },
+        __fireTerminal(_result: SubagentResult) {
+          // never used in this test
+        },
+      };
+
+      registry.register({ handle: hangingHandle as StubHandle, prompt: 'hang', model: 'sonnet' });
+
+      // Start cancelAll — it should eventually resolve after the drain timeout.
+      const cancelPromise = registry.cancelAll();
+
+      // Before advancing time: the promise is pending (hanging).
+      let resolved = false;
+      void cancelPromise.then(() => { resolved = true; });
+
+      // Flush microtasks (handle.cancel() resolves synchronously in our stub).
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Still pending because terminalSettled never fired.
+      expect(resolved).toBe(false);
+
+      // Advance past CANCEL_DRAIN_TIMEOUT_MS (5 000 ms).
+      await vi.advanceTimersByTimeAsync(5100);
+
+      // cancelAll must now have resolved.
+      await cancelPromise;
+      expect(resolved).toBe(true);
+
+      // Sanity: cancel was issued on the hanging job.
+      expect(hangingHandle.__cancelCalled).toBe(1);
+    });
+  });
+
+  it('list() returns jobs in registration order', () => {
+    const h1 = createStubHandle('s1');
+    const h2 = createStubHandle('s2');
+    const j1 = registry.register({ handle: h1, prompt: 'a', model: 'sonnet' });
+    const j2 = registry.register({ handle: h2, prompt: 'b', model: 'sonnet' });
+    const ids = registry.list().map((j) => j.jobId);
+    expect(ids).toEqual([j1.jobId, j2.jobId]);
+  });
+
+  it('no traceWriter: register/cancel/join still work (witness emissions become no-ops)', async () => {
+    const silent = new BackgroundAgentRegistry({});
+    const handle = createStubHandle('sub-1');
+    const job = silent.register({ handle, prompt: 'p', model: 'sonnet' });
+    handle.__fireTerminal(successResult('sub-1', 'done'));
+    const result = await silent.join(job.jobId);
+    expect(result.status).toBe('succeeded');
+  });
+
+  // M-3: TTL eviction — terminal jobs must be removed from the registry after
+  // TERMINAL_EVICT_TTL_MS (5 minutes). Zero test coverage before this fix.
+  describe('TTL eviction (M-3)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('job is evicted from registry after TERMINAL_EVICT_TTL_MS (~5 min)', async () => {
+      vi.useFakeTimers();
+
+      const handle = createStubHandle('evict-1');
+      const job = registry.register({ handle, prompt: 'evict me', model: 'sonnet' });
+
+      // Fire terminal — schedules the eviction timer.
+      handle.__fireTerminal(successResult('evict-1', 'done'));
+
+      // Job is in the registry immediately after settling.
+      expect(registry.get(job.jobId)).toBeDefined();
+
+      // Advance past TERMINAL_EVICT_TTL_MS (5 * 60 * 1000 = 300 000 ms).
+      await vi.advanceTimersByTimeAsync(301_000);
+
+      // Job must now be evicted.
+      expect(registry.get(job.jobId)).toBeUndefined();
+    });
+
+    it('job is NOT evicted before TERMINAL_EVICT_TTL_MS elapses', async () => {
+      vi.useFakeTimers();
+
+      const handle = createStubHandle('evict-2');
+      const job = registry.register({ handle, prompt: 'not yet', model: 'sonnet' });
+      handle.__fireTerminal(successResult('evict-2', 'done'));
+
+      // Advance to just before the TTL.
+      await vi.advanceTimersByTimeAsync(299_000);
+
+      // Job must still be present.
+      expect(registry.get(job.jobId)).toBeDefined();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Transcript ring buffer
+  // ---------------------------------------------------------------------------
+  describe('transcript ring buffer', () => {
+    it('appendTranscript accumulates text for a known job', () => {
+      const handle = createStubHandle('t1');
+      const job = registry.register({ handle, prompt: 'p', model: 'sonnet' });
+
+      registry.appendTranscript(job.jobId, 'hello ');
+      registry.appendTranscript(job.jobId, 'world');
+
+      expect(registry.getTranscript(job.jobId)).toBe('hello world');
+    });
+
+    it('appendTranscript trims to MAX_TRANSCRIPT_TAIL_BYTES from the front', async () => {
+      const { MAX_TRANSCRIPT_TAIL_BYTES } = await import('./background-registry.js');
+      const handle = createStubHandle('t2');
+      const job = registry.register({ handle, prompt: 'p', model: 'sonnet' });
+
+      // Write more than the limit
+      const bigChunk = 'x'.repeat(MAX_TRANSCRIPT_TAIL_BYTES + 100);
+      registry.appendTranscript(job.jobId, bigChunk);
+
+      const tail = registry.getTranscript(job.jobId);
+      expect(tail).toBeDefined();
+      expect(tail!.length).toBe(MAX_TRANSCRIPT_TAIL_BYTES);
+      // Should contain the *last* bytes, not the first
+      expect(tail).toBe('x'.repeat(MAX_TRANSCRIPT_TAIL_BYTES));
+    });
+
+    it('appendTranscript is a silent no-op for unknown jobId', () => {
+      // Must not throw
+      expect(() => registry.appendTranscript('no-such-job', 'text')).not.toThrow();
+    });
+
+    it('getTranscript returns undefined for unknown jobId', () => {
+      expect(registry.getTranscript('no-such-job')).toBeUndefined();
+    });
+
+    it('getTranscript returns accumulated text for a known job', () => {
+      const handle = createStubHandle('t3');
+      const job = registry.register({ handle, prompt: 'p', model: 'sonnet' });
+
+      registry.appendTranscript(job.jobId, 'part one ');
+      registry.appendTranscript(job.jobId, 'part two');
+
+      expect(registry.getTranscript(job.jobId)).toBe('part one part two');
+    });
+  });
+
+  describe('event emitter surface', () => {
+    it('register() emits exactly one started event with the registered job snapshot', () => {
+      const handle = createStubHandle('sub-ee-1');
+      const listener = vi.fn();
+      registry.on('started', listener);
+
+      const job = registry.register({ handle, prompt: 'start test', model: 'sonnet' });
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      const [emittedJob] = listener.mock.calls[0] as [ReturnType<typeof registry.get>];
+      expect(emittedJob?.jobId).toBe(job.jobId);
+      expect(emittedJob?.status).toBe('running');
+    });
+
+    it('completing a job emits exactly one settled event', () => {
+      const handle = createStubHandle('sub-ee-2');
+      const listener = vi.fn();
+      registry.on('settled', listener);
+
+      const job = registry.register({ handle, prompt: 'complete test', model: 'sonnet' });
+      handle.__fireTerminal(successResult('sub-ee-2', 'all done'));
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      const [emittedJob] = listener.mock.calls[0] as [ReturnType<typeof registry.get>];
+      expect(emittedJob?.jobId).toBe(job.jobId);
+      expect(emittedJob?.status).toBe('completed');
+    });
+
+    it('failing a job emits exactly one settled event', () => {
+      const handle = createStubHandle('sub-ee-3');
+      const listener = vi.fn();
+      registry.on('settled', listener);
+
+      const job = registry.register({ handle, prompt: 'fail test', model: 'sonnet' });
+      handle.__fireTerminal(failureResult('sub-ee-3', 'explosion'));
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      const [emittedJob] = listener.mock.calls[0] as [ReturnType<typeof registry.get>];
+      expect(emittedJob?.jobId).toBe(job.jobId);
+      expect(emittedJob?.status).toBe('failed');
+    });
+
+    it('cancelJob() emits exactly one settled event', async () => {
+      const handle = createStubHandle('sub-ee-4');
+      const listener = vi.fn();
+      registry.on('settled', listener);
+
+      const job = registry.register({ handle, prompt: 'cancel test', model: 'sonnet' });
+      await registry.cancelJob(job.jobId);
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      const [emittedJob] = listener.mock.calls[0] as [ReturnType<typeof registry.get>];
+      expect(emittedJob?.jobId).toBe(job.jobId);
+      expect(emittedJob?.status).toBe('cancelled');
+    });
+
+    it('join() resolves and emits exactly one joined event', async () => {
+      const handle = createStubHandle('sub-ee-5');
+      const listener = vi.fn();
+      registry.on('joined', listener);
+
+      const job = registry.register({ handle, prompt: 'join test', model: 'sonnet' });
+      handle.__fireTerminal(successResult('sub-ee-5', 'result'));
+
+      await registry.join(job.jobId);
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      const [emittedJob] = listener.mock.calls[0] as [ReturnType<typeof registry.get>];
+      expect(emittedJob?.jobId).toBe(job.jobId);
+    });
+
+    it('started event payload includes the same jobId returned by register()', () => {
+      const handle = createStubHandle('sub-ee-6');
+      const listener = vi.fn();
+      registry.on('started', listener);
+
+      const job = registry.register({ handle, prompt: 'id check', model: 'sonnet' });
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      const [emittedJob] = listener.mock.calls[0] as [ReturnType<typeof registry.get>];
+      expect(emittedJob?.jobId).toBe(job.jobId);
+    });
+
+    it('removed listener is not invoked after removal', () => {
+      const h1 = createStubHandle('sub-ee-7a');
+      const h2 = createStubHandle('sub-ee-7b');
+      const listener = vi.fn();
+      registry.on('settled', listener);
+
+      // First job — listener should fire once when terminal fires
+      const j1 = registry.register({ handle: h1, prompt: 'first', model: 'sonnet' });
+      h1.__fireTerminal(successResult('sub-ee-7a', 'done'));
+
+      expect(registry.get(j1.jobId)?.status).toBe('completed');
+      expect(listener).toHaveBeenCalledTimes(1);
+
+      // Remove the listener
+      registry.off('settled', listener);
+
+      // Second job — listener must NOT fire
+      registry.register({ handle: h2, prompt: 'second', model: 'sonnet' });
+      h2.__fireTerminal(successResult('sub-ee-7b', 'done'));
+
+      expect(listener).toHaveBeenCalledTimes(1); // still 1, not 2
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Persistent log tests (disk I/O via BgJobLogWriter)
+  // ---------------------------------------------------------------------------
+
+  describe('persistent log via BgJobLogWriter', () => {
+    it('register() writes meta.json to disk with status=running', async () => {
+      const handle = createStubHandle('sub-disk-1');
+      const job = registry.register({ handle, prompt: 'disk job', model: 'haiku' });
+
+      // Allow the async writeMeta to settle
+      await new Promise((r) => setTimeout(r, 100));
+
+      const { BgJobLogReader } = await import('./bg-job-log.js');
+      const meta = await BgJobLogReader.readMeta(job.jobId);
+      expect(meta).not.toBeNull();
+      expect(meta!.status).toBe('running');
+      expect(meta!.jobId).toBe(job.jobId);
+      expect(meta!.model).toBe('haiku');
+    });
+
+    it('progress events flow to the disk writer', async () => {
+      const handle = createStubHandle('sub-disk-2');
+      const job = registry.register({ handle, prompt: 'event job', model: 'sonnet' });
+
+      // Fire a progress event
+      handle.__fireProgress({
+        type: 'chunk',
+        chunk: { type: 'content', content: 'hello' } as any,
+      });
+
+      // Allow stream to flush
+      await new Promise((r) => setTimeout(r, 150));
+
+      const { BgJobLogReader } = await import('./bg-job-log.js');
+
+      // We can't easily read mid-stream (writer is still open), but we can
+      // verify the log file exists after firing terminal + close.
+      handle.__fireTerminal(successResult('sub-disk-2', 'done'));
+      await new Promise((r) => setTimeout(r, 200));
+
+      const events = [];
+      for await (const e of BgJobLogReader.readEvents(job.jobId)) {
+        events.push(e);
+      }
+      // Should have at least the content event
+      expect(events.some((e) => e.type === 'chunk')).toBe(true);
+    });
+
+    it('text events feed appendTranscript()', () => {
+      const handle = createStubHandle('sub-disk-3');
+      const job = registry.register({ handle, prompt: 'transcript job', model: 'sonnet' });
+
+      // Fire a content chunk via onProgress
+      handle.__fireProgress({
+        type: 'chunk',
+        chunk: { type: 'content', content: 'transcript text' } as any,
+      });
+
+      // Check the transcript tail was updated
+      const tail = registry.getTranscript(job.jobId);
+      expect(tail).toContain('transcript text');
+    });
+
+    it('terminal callback updates meta with endedAt + final status', async () => {
+      const handle = createStubHandle('sub-disk-4');
+      const job = registry.register({ handle, prompt: 'terminal job', model: 'sonnet' });
+
+      handle.__fireTerminal(successResult('sub-disk-4', 'completed output'));
+
+      // Allow the async writeMeta to settle
+      await new Promise((r) => setTimeout(r, 200));
+
+      const { BgJobLogReader } = await import('./bg-job-log.js');
+      const meta = await BgJobLogReader.readMeta(job.jobId);
+      expect(meta).not.toBeNull();
+      expect(meta!.status).toBe('completed');
+      expect(meta!.endedAt).toBeDefined();
+      expect(meta!.endedAt).toBeGreaterThan(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Routing-telemetry surface (A1: bgsub-completion-telemetry)
+  //
+  // These tests assert that markTerminal() calls appendRoutingDecision with
+  // the correct event name for each terminal-state transition.
+  // -------------------------------------------------------------------------
+  describe('routing-telemetry events (A1)', () => {
+    beforeEach(() => {
+      appendRoutingDecision.mockClear();
+    });
+
+    it('success: emits subagent.completed with correct fields', () => {
+      const handle = createStubHandle('rt-succ-1');
+      const job = registry.register({
+        handle,
+        prompt: 'search for bugs',
+        model: 'sonnet',
+        parentSessionId: 'parent-sess-123',
+      });
+
+      handle.__fireTerminal(successResult('rt-succ-1', 'bugs found'));
+
+      const completedCalls = appendRoutingDecision.mock.calls.filter(
+        (c) => (c[0] as Record<string, unknown>)?.['event'] === 'subagent.completed',
+      );
+      expect(completedCalls).toHaveLength(1);
+      const entry = completedCalls[0]![0] as Record<string, unknown>;
+      expect(entry['event']).toBe('subagent.completed');
+      expect(entry['subagent_id']).toBe(job.subagentId);
+      expect(entry['parent_session_id']).toBe('parent-sess-123');
+      expect(entry['status']).toBe('succeeded');
+      expect(typeof entry['duration_ms']).toBe('number');
+      expect(typeof entry['content_chars']).toBe('number');
+    });
+
+    it('success: does NOT emit subagent.failed on the happy path', () => {
+      const handle = createStubHandle('rt-succ-2');
+      registry.register({ handle, prompt: 'p', model: 'sonnet' });
+      handle.__fireTerminal(successResult('rt-succ-2', 'done'));
+
+      const failedCalls = appendRoutingDecision.mock.calls.filter(
+        (c) => (c[0] as Record<string, unknown>)?.['event'] === 'subagent.failed',
+      );
+      expect(failedCalls).toHaveLength(0);
+    });
+
+    it('failure: emits subagent.failed with correct fields', () => {
+      const handle = createStubHandle('rt-fail-1');
+      const job = registry.register({
+        handle,
+        prompt: 'p',
+        model: 'sonnet',
+        parentSessionId: 'parent-sess-456',
+      });
+
+      handle.__fireTerminal(failureResult('rt-fail-1', 'something exploded'));
+
+      const failedCalls = appendRoutingDecision.mock.calls.filter(
+        (c) => (c[0] as Record<string, unknown>)?.['event'] === 'subagent.failed',
+      );
+      expect(failedCalls).toHaveLength(1);
+      const entry = failedCalls[0]![0] as Record<string, unknown>;
+      expect(entry['event']).toBe('subagent.failed');
+      expect(entry['subagent_id']).toBe(job.subagentId);
+      expect(entry['parent_session_id']).toBe('parent-sess-456');
+      expect(entry['status']).toBe('failed');
+      expect(typeof entry['duration_ms']).toBe('number');
+    });
+
+    it('cancellation: emits subagent.failed (cancelled treated as non-success)', async () => {
+      const handle = createStubHandle('rt-cancel-1');
+      const job = registry.register({
+        handle,
+        prompt: 'p',
+        model: 'sonnet',
+        parentSessionId: 'parent-sess-789',
+      });
+
+      await registry.cancelJob(job.jobId);
+
+      const failedCalls = appendRoutingDecision.mock.calls.filter(
+        (c) => (c[0] as Record<string, unknown>)?.['event'] === 'subagent.failed',
+      );
+      expect(failedCalls).toHaveLength(1);
+      const entry = failedCalls[0]![0] as Record<string, unknown>;
+      expect(entry['event']).toBe('subagent.failed');
+      expect(entry['subagent_id']).toBe(job.subagentId);
+      expect(entry['parent_session_id']).toBe('parent-sess-789');
+    });
+
+    it('parentSessionId is optional — omitting it works without errors', () => {
+      const handle = createStubHandle('rt-noparent-1');
+      registry.register({ handle, prompt: 'p', model: 'sonnet' });
+      handle.__fireTerminal(successResult('rt-noparent-1', 'done'));
+
+      const completedCalls = appendRoutingDecision.mock.calls.filter(
+        (c) => (c[0] as Record<string, unknown>)?.['event'] === 'subagent.completed',
+      );
+      expect(completedCalls).toHaveLength(1);
+      // parent_session_id omitted → should be undefined (not present or undefined is fine)
+      const entry = completedCalls[0]![0] as Record<string, unknown>;
+      expect(entry['parent_session_id']).toBeUndefined();
+    });
+  });
+});

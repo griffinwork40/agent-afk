@@ -1,0 +1,14 @@
+src/
+tests/
+scripts/
+*.ts
+*.map
+tsconfig.json
+.env*
+.claude/
+CLAUDE.md
+.sdk-dependency.lock.json
+docs/
+prompts/
+vitest.config.*
+.gitignore

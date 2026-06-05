@@ -1,0 +1,116 @@
+# agent-afk
+
+## What This Is
+
+Standalone TypeScript CLI + daemon + Telegram bot built on `@anthropic-ai/sdk`. Runs **outside** Claude Code as its own process. Binary: `afk`. Node ≥20, pnpm-only (lockfile is pnpm-specific).
+
+## Commands
+
+```bash
+pnpm install                                       # pnpm exclusively
+pnpm build                                         # tsc + copy *.md prompts → dist/
+pnpm test                                          # vitest run (all)
+pnpm test -- src/agent/session.test.ts             # single file
+pnpm test -- -t "sends a message"                  # single test by name
+pnpm test:watch                                    # vitest watch
+pnpm lint                                          # tsc --noEmit (strict)
+
+pnpm audit:sdk                                     # regenerate docs/sdk-dependency.md
+pnpm audit:sdk:check                               # CI gate: fail on unlocked SDK symbols
+pnpm audit:sdk:update-lock                         # add new symbols → .sdk-dependency.lock.json (edit `reason` before commit)
+```
+
+### Running
+
+```bash
+pnpm dev                  # tsx watch — live-reloads CLI
+afk chat "hello"          # one-shot
+afk interactive           # REPL (alias: afk i)
+afk daemon                # cron-based headless runner
+pnpm telegram:start       # Telegram bot
+```
+
+## Architecture
+
+Three layers under `src/`:
+
+| Path | Purpose |
+|------|---------|
+| `src/agent/` | Provider-agnostic session harness. `AgentSession` is the single runtime entry point; delegates to a `ModelProvider` from `providerForModel()`. |
+| `src/agent/providers/anthropic-direct/` | Wraps `@anthropic-ai/sdk` Messages API. Default for `claude-*`, `opus`, `sonnet`, `haiku`. `'anthropic'` is a silent alias. |
+| `src/agent/providers/openai-compatible/` | Talks directly to OpenAI's Chat Completions API (and any compatible endpoint via baseURL). Default for `gpt-*`, `o1*`, `o3*`, `o4*`, `codex-*`, **and** HuggingFace-style `org/model` ids (mlx-community/…, Qwen/…) served by local OpenAI-shim runners (MLX, llama.cpp, vLLM, ollama-openai). `'openai-codex'` is a deprecated alias from the pre-2026-05-18 codex-sdk era. |
+| `src/cli/` | Commander-based terminal surface. Commands in `src/cli/commands/`. REPL: `commands/interactive/` (bootstrap → loop → turn → markdown stream → cleanup). Slash commands in `src/cli/slash/` via Levenshtein-hint dispatcher. |
+| `src/telegram/` | Telegraf bot, per-chat session management, allowlist via `AFK_TELEGRAM_ALLOWED_CHAT_IDS`. |
+| `src/skills/` | Headless mirrors of plugin orchestration skills. Each has `prompts/` (markdown) loaded by `src/skills/_lib/prompt-loader.ts`. |
+| `src/skills/_agents/` | Vendored agent definitions. Drift detection: `vendored.test.ts`. |
+
+Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/session/stream-consumer.ts`. **Nothing outside `src/agent/providers/` imports from any model SDK directly.**
+
+### Cross-cutting subsystems
+
+- **Hooks** (`src/agent/hooks.ts`, `hook-registry.ts`) — SessionStart/End, SubagentStart/Stop, PreToolUse/PostToolUse. Sequential; `decision: 'block'` short-circuits. SubagentStop supports `injectContext` for parent-session context injection.
+- **SubagentManager** (`src/agent/subagent.ts`) — Forks child `AgentSession`s with permission bubbling, transitive abort via `AbortGraph`, optional Zod output schemas.
+- **AbortGraph** (`src/agent/abort-graph.ts`) — Tree of `AbortController`s. Parent abort cascades down; child abort notifies up (never auto-aborts parent). Abort beats hook decisions.
+- **Elicitation Router** (`src/agent/elicitation-router.ts`) — Module-scope handler bridging SDK elicitations to REPL/Telegram/iMessage surfaces.
+- **Plugins** (`src/agent/plugins-scanner.ts`, `src/agent/plugins/`) — Scans `~/.afk/plugins/` at session construction; install/remove/update + git-based sources.
+- **MCP client** (`src/agent/mcp/`) — Wraps `@modelcontextprotocol/sdk`. `McpManager.fromConfig()` connects every server resolved by `loadMcpConfig()`. Config layers (lowest → highest priority): plugin-contributed `<plugin>/.claude-plugin/mcp.json` → `~/.afk/config/mcp.json` → `<cwd>/.mcp.json` → `--mcp-config <path>`. Per-name conflicts: higher layer wins, displaced source surfaced as a warning. Transports: stdio + streamable-HTTP + SSE fallback + OAuth. Tools are bridged as `mcp__<server>__<tool>` and read fresh per-query in the dispatcher so `notifications/tools/list_changed` refreshes are picked up without restarting the session. Per-surface manager (REPL); subagents share parent by reference. Sampling capability deliberately not advertised — eliminates the "stub or hang" footgun. `/mcp` lists servers; `/mcp auth` surfaces pending OAuth URLs from `~/.afk/state/mcp/server-status.json`.
+
+### User-scope state
+
+All AFK state under `~/.afk/` (never `~/.claude/`):
+
+```
+~/.afk/
+  config/    afk.env, afk.config.json, mcp.json
+  state/     sessions/  todos/  daemon/
+  plugins/   logs/  cache/
+  agent-framework/   # AFK telemetry + briefs (via paths.ts)
+```
+
+`mcp.json` is the MCP server registry. Schema matches Claude Code's `mcpServers` block for portability — see `src/agent/mcp/types.ts` for fields. Loaded eagerly at session bootstrap from layered sources (plugin → user-global → project-local `<cwd>/.mcp.json` → `--mcp-config` flag, higher wins). Servers connect in parallel; failures are non-fatal unless `alwaysLoad: true`. Tools are exposed as `mcp__<server>__<tool>` and routed via the standard dispatcher (Pre/PostToolUse hooks fire automatically). `tools/list_changed` notifications trigger an in-place tool-list refresh — the next tool_use round sees the updated set without restart.
+
+The plugin surface writes to `~/.claude/agent-framework/` independently — no shared state.
+
+### System prompt discovery
+
+`loadConfig()` resolves `systemPrompt` in 4-tier precedence (highest wins):
+
+| Tier | Source | `systemPromptSource` |
+|------|--------|----------------------|
+| 1 | `AFK_SYSTEM_PROMPT` env | `env:AFK_SYSTEM_PROMPT` |
+| 2 | `afk.config.json` (cwd → `~/.afk/config/` → legacy) | `file:<abs>` |
+| 3 | `AFK.md` (cwd → `$AFK_HOME/`) | `afk-md:<abs>` |
+| 4 | None | `undefined` |
+
+`AFK.md` is plain markdown, no frontmatter. Empty/whitespace → treated as absent. `systemPromptSource` threads into `AgentSession` for `--dump-prompt` provenance; never forwarded to the SDK.
+
+## Conventions
+
+- **`tsconfig.json` is maximally strict**: `noUnusedLocals`, `noUnusedParameters`, `noUncheckedIndexedAccess`, `noPropertyAccessFromIndexSignature`. All code must pass `tsc --noEmit`.
+- The agent-afk system prompt is a raw string from config or file, sent to the Messages API as-is. No SDK preset is loaded.
+- `AgentSession` constructor is **synchronous**; SDK lifecycle runs async via `initSdkLifecycle()` and surfaces through the provider event stream.
+- DAG executor (`src/agent/dag.ts`, 266 LOC) is fully implemented: layer-by-layer Kahn execution, per-node `AbortController`s, fail-fast with transitive skip, node-level timeouts.
+- **SDK dependency tracking**: every import from `@anthropic-ai/sdk` is in `.sdk-dependency.lock.json`. CI fails on unlocked new symbols. After adding an SDK import, run `pnpm audit:sdk:update-lock` and edit the new entry's `reason` field before commit.
+- Build copies `*.md` prompt files from `src/` into `dist/` via `scripts/copy-prompts.js` — required for built skills to find their prompts.
+- Vendored agents under `src/skills/_agents/` must stay byte-equal to upstream — drift detection enforces it.
+
+### Long-comment prefix convention
+
+Any source-comment block ≥15 contiguous lines must open with one of:
+
+- `// Invariant:` — ordering constraint, protocol rule, externally-governed semantic. Stays inline.
+- `// Contract:` — param/return/throws semantics, type-narrowing rationale. Stays inline.
+- `// History:` — root-cause, decision log, postmortem. Migrates to `docs/<area>.md` on next touch; leave a ≤5-line summary + link in place.
+
+Choose the prefix before writing the body. When in doubt between `Invariant:` and `History:`, use `Invariant:` — false-shrink is a regression.
+
+### Ordered-operation sequences
+
+Before generating sequences of terminal writes, async state mutations, or persistence-then-UI ops:
+
+- Name the external constraint governing the sequence (protocol / event-loop boundary / semantic invariant).
+- Emit the constraint as a code comment, not just in reasoning.
+- TUI code: write teardown **before** setup in the source file so the inverse is never orphaned.
+- No optimistic rendering — never emit a UI update before its dependent write has a confirmed result, unless explicitly specified.
+
+Source: pattern card `agents-fail-ordered-sequences-when-constraint-is-externally-governed` (charged).

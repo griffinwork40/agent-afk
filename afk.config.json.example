@@ -1,0 +1,83 @@
+{
+  "model": "sonnet",
+  "maxTokens": 4096,
+  "temperature": 1.0,
+  "systemPrompt": "You are a helpful AI assistant.",
+  "daemon": {
+    "task": "/forge-friction --auto",
+    "taskId": "default"
+  },
+
+  // ---------------------------------------------------------------------------
+  // Shell-command hooks (opt-in; requires enableShellHooks: true in
+  // ~/.afk/config/settings.json or ~/.afk/config/afk.config.json)
+  //
+  // Hooks fire at lifecycle events (PreToolUse, PostToolUse, SessionStart,
+  // SessionEnd, SubagentStart, SubagentStop). The spawned command receives a
+  // JSON payload on stdin and communicates decisions via exit code + stdout:
+  //
+  //   exit 0  → decision from JSON stdout (optional; {} = continue as normal)
+  //   exit 2  → block the operation (stderr becomes the reason shown to users)
+  //   other   → non-blocking error (logged, operation continues)
+  //
+  // JSON stdout fields (all optional):
+  //   { "continue": false }                   → block (alias for exit 2)
+  //   { "decision": "block", "reason": "…" }  → block with explanation
+  //   { "hookSpecificOutput": { "additionalContext": "…" } }
+  //                                           → SubagentStop: inject context
+  //                                             into parent session
+  //
+  // The trust gate (enableShellHooks) must be set in a USER-GLOBAL file
+  // (~/.afk/config/settings.json or ~/.afk/config/afk.config.json).
+  // Setting it only in project-local files (.afk/settings.json or
+  // afk.config.json in the project root) is intentionally ignored — this
+  // prevents a cloned repo from auto-executing arbitrary scripts.
+  //
+  // Two distinct gates, BOTH only honored in a user-global file:
+  //   enableShellHooks   → master switch; without it, no shell hooks run.
+  //   allowProjectHooks  → additionally admit hook DEFINITIONS that live in a
+  //                        project-local file. Default false: even with shell
+  //                        hooks globally enabled, hooks defined in a cloned
+  //                        repo's afk.config.json / .afk/settings.json are
+  //                        dropped unless you opt in here. Leave false unless
+  //                        you fully trust the repos you run AFK in.
+  // ---------------------------------------------------------------------------
+
+  // "enableShellHooks": true,   ← move this to ~/.afk/config/settings.json
+  // "allowProjectHooks": false, ← only set true (user-global) to trust repo-local hooks
+
+  // "hooks": {
+  //   "PreToolUse": [
+  //     {
+  //       "matcher": "bash",
+  //       "hooks": [
+  //         {
+  //           "type": "command",
+  //           "command": "~/.afk/hooks/pre-bash-check.sh",
+  //           "timeout_ms": 5000
+  //         }
+  //       ]
+  //     },
+  //     {
+  //       "matcher": "/^write_/",
+  //       "hooks": [
+  //         {
+  //           "type": "command",
+  //           "command": "~/.afk/hooks/write-guard.sh"
+  //         }
+  //       ]
+  //     }
+  //   ],
+  //   "SessionStart": [
+  //     {
+  //       "hooks": [
+  //         {
+  //           "type": "command",
+  //           "command": "~/.afk/hooks/on-session-start.sh",
+  //           "timeout_ms": 3000
+  //         }
+  //       ]
+  //     }
+  //   ]
+  // }
+}

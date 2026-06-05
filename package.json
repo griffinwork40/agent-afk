@@ -1,0 +1,108 @@
+{
+  "name": "agent-afk",
+  "version": "3.80.7",
+  "description": "CLI tool for interacting with AI agents via multiple interfaces",
+  "main": "dist/index.mjs",
+  "type": "module",
+  "bin": {
+    "afk": "dist/cli.mjs"
+  },
+  "files": [
+    "dist/",
+    "NOTICE"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.mjs || true",
+    "build": "tsc && node scripts/copy-prompts.js",
+    "dev": "tsx watch src/cli/index.ts",
+    "start": "node dist/cli/index.js",
+    "start:chat": "node dist/cli/index.js chat",
+    "start:interactive": "node dist/cli/index.js interactive",
+    "start:status": "node dist/cli/index.js status",
+    "telegram": "node dist/cli/index.js telegram start",
+    "telegram:setup": "node dist/cli/index.js telegram setup",
+    "telegram:start": "node dist/cli/index.js telegram start",
+    "telegram:stop": "node dist/cli/index.js telegram stop",
+    "telegram:status": "node dist/cli/index.js telegram status",
+    "telegram:restart": "node dist/cli/index.js telegram restart",
+    "telegram:logs": "node dist/cli/index.js telegram logs",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest watch",
+    "lint": "tsc --noEmit",
+    "audit:sdk": "tsx scripts/audit-sdk-dependency.ts",
+    "audit:sdk:check": "tsx scripts/audit-sdk-dependency.ts --check",
+    "audit:sdk:update-lock": "tsx scripts/audit-sdk-dependency.ts --update-lock",
+    "audit:env": "tsx scripts/audit-env-access.ts",
+    "audit:env:check": "tsx scripts/audit-env-access.ts --check",
+    "audit:env:list": "tsx scripts/audit-env-access.ts --list",
+    "scan:env": "tsx scripts/render-env-registry.ts",
+    "scan:env:check": "tsx scripts/render-env-registry.ts --check",
+    "stats:tools": "tsx scripts/count-tool-calls.ts",
+    "clean": "rm -rf dist",
+    "build:dist": "node scripts/build-dist.mjs",
+    "prepublishOnly": "npm run clean && npm run build:dist",
+    "release": "node scripts/release.mjs",
+    "release:dry": "node scripts/release.mjs --dry-run"
+  },
+  "keywords": [
+    "cli",
+    "ai",
+    "agent",
+    "telegram",
+    "chatbot"
+  ],
+  "author": "Griffin Long",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/griffinwork40/agent-afk.git"
+  },
+  "homepage": "https://github.com/griffinwork40/agent-afk#readme",
+  "bugs": {
+    "url": "https://github.com/griffinwork40/agent-afk/issues"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.74.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@mozilla/readability": "^0.6.0",
+    "ansi-escapes": "^7.3.0",
+    "better-sqlite3": "^12.9.0",
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.7",
+    "emphasize": "^7.0.0",
+    "jsdom": "^29.1.1",
+    "log-update": "^8.0.0",
+    "marked": "^17.0.5",
+    "node-cron": "^4.2.1",
+    "openai": "^6.38.0",
+    "ora": "^8.1.1",
+    "playwright": "^1.49.0",
+    "string-width": "^8.2.0",
+    "telegraf": "^4.16.3",
+    "turndown": "^7.2.4",
+    "wrap-ansi": "^10.0.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/jest": "^30.0.0",
+    "@types/jsdom": "^28.0.3",
+    "@types/node": "^22.19.10",
+    "@types/node-cron": "^3.0.11",
+    "@types/turndown": "^5.0.6",
+    "@vitest/coverage-v8": "^2.1.8",
+    "@xterm/headless": "^6.0.0",
+    "esbuild": "^0.28.0",
+    "jest": "^30.2.0",
+    "memfs": "^4.56.10",
+    "ts-jest": "^29.4.6",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

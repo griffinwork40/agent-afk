@@ -1,0 +1,913 @@
+import { describe, expect, it, vi } from 'vitest';
+import { SessionToolDispatcher, defaultConcurrencyClassifier } from './dispatcher.js';
+import { builtinToolSchemas } from './schemas.js';
+import type { ToolCall } from './types.js';
+import type { ToolHandler } from './types.js';
+import { createHookRegistryImpl } from '../hook-registry.js';
+
+function makeCall(overrides?: Partial<ToolCall>): ToolCall {
+  return {
+    id: 'test-id',
+    name: 'echo',
+    input: { message: 'hello' },
+    signal: new AbortController().signal,
+    ...overrides,
+  };
+}
+
+function echoHandler(): ToolHandler {
+  return async (input: unknown) => {
+    const obj = input as Record<string, unknown>;
+    return { content: String(obj['message'] ?? '') };
+  };
+}
+
+function makeDispatcher(overrides?: Partial<ConstructorParameters<typeof SessionToolDispatcher>[0]>) {
+  return new SessionToolDispatcher({
+    handlers: new Map([['echo', echoHandler()]]),
+    schemas: [...builtinToolSchemas],
+    permissions: { allowedTools: ['echo'] },
+    ...overrides,
+  });
+}
+
+function mockExecutor(result?: Partial<{ content: string; isError: boolean }>) {
+  return {
+    execute: vi.fn().mockResolvedValue({
+      content: result?.content ?? 'agent output',
+      isError: result?.isError,
+    }),
+  } as any; // Partial mock of SubagentExecutor
+}
+
+describe('SessionToolDispatcher', () => {
+  it('dispatches to the correct handler', async () => {
+    const dispatcher = makeDispatcher();
+    const result = await dispatcher.execute(makeCall());
+    expect(result.content).toBe('hello');
+    expect(result.isError).toBeUndefined();
+  });
+
+  it('returns isError for unknown tool', async () => {
+    const dispatcher = makeDispatcher({
+      permissions: { allowedTools: ['echo', 'nonexistent'] },
+    });
+    const result = await dispatcher.execute(makeCall({ name: 'nonexistent' }));
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Unknown tool');
+  });
+
+  it('catches handler throws and returns isError', async () => {
+    const throwing: ToolHandler = async () => {
+      throw new Error('handler kaboom');
+    };
+    const dispatcher = makeDispatcher({
+      handlers: new Map([['echo', throwing]]),
+    });
+    const result = await dispatcher.execute(makeCall());
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('handler kaboom');
+  });
+
+  it('returns isError when signal is already aborted', async () => {
+    const dispatcher = makeDispatcher();
+    const controller = new AbortController();
+    controller.abort('cancelled');
+    const result = await dispatcher.execute(makeCall({ signal: controller.signal }));
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('aborted');
+  });
+
+  it('exposes toolDefs from schemas', () => {
+    const dispatcher = makeDispatcher();
+    expect(dispatcher.toolDefs).toEqual(builtinToolSchemas);
+  });
+
+  describe('permissions', () => {
+    it('denies tool not in allowlist', async () => {
+      const dispatcher = makeDispatcher({
+        permissions: { allowedTools: ['other_tool'] },
+      });
+      const result = await dispatcher.execute(makeCall());
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('not in the configured allowlist');
+    });
+
+    it('allows tool in allowlist', async () => {
+      const dispatcher = makeDispatcher({
+        permissions: { allowedTools: ['echo'] },
+      });
+      const result = await dispatcher.execute(makeCall());
+      expect(result.content).toBe('hello');
+    });
+
+    it('uses default permissions when no config', async () => {
+      const readHandler: ToolHandler = async () => ({ content: 'file content' });
+      const dispatcher = new SessionToolDispatcher({
+        handlers: new Map([['read_file', readHandler]]),
+        schemas: [...builtinToolSchemas],
+      });
+      const result = await dispatcher.execute(makeCall({ name: 'read_file' }));
+      expect(result.content).toBe('file content');
+    });
+  });
+
+  describe('hooks', () => {
+    it('PreToolUse block returns isError', async () => {
+      const registry = createHookRegistryImpl();
+      registry.register('PreToolUse', async () => ({
+        decision: 'block' as const,
+        reason: 'not allowed',
+      }));
+      const dispatcher = makeDispatcher({ hookRegistry: registry });
+      const result = await dispatcher.execute(makeCall());
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('blocked by PreToolUse hook');
+    });
+
+    it('PreToolUse approve allows execution', async () => {
+      const registry = createHookRegistryImpl();
+      registry.register('PreToolUse', async () => ({
+        decision: 'approve' as const,
+      }));
+      const dispatcher = makeDispatcher({ hookRegistry: registry });
+      const result = await dispatcher.execute(makeCall());
+      expect(result.content).toBe('hello');
+    });
+
+    it('PostToolUse fires after execution', async () => {
+      const registry = createHookRegistryImpl();
+      const postSpy = vi.fn(async () => ({}));
+      registry.register('PostToolUse', postSpy);
+      const dispatcher = makeDispatcher({ hookRegistry: registry });
+      await dispatcher.execute(makeCall());
+      expect(postSpy).toHaveBeenCalledOnce();
+      const callArgs = postSpy.mock.calls[0] as unknown[];
+      expect(callArgs).toBeDefined();
+      expect(callArgs[0]).toMatchObject({
+        event: 'PostToolUse',
+        toolName: 'echo',
+        output: 'hello',
+      });
+    });
+
+    it('PostToolUse error is swallowed', async () => {
+      const registry = createHookRegistryImpl();
+      registry.register('PostToolUse', async () => {
+        throw new Error('post hook error');
+      });
+      const dispatcher = makeDispatcher({ hookRegistry: registry });
+      const result = await dispatcher.execute(makeCall());
+      expect(result.content).toBe('hello');
+      expect(result.isError).toBeUndefined();
+    });
+  });
+
+  describe('agent tool routing', () => {
+    it('routes agent calls to executor when present', async () => {
+      const executor = mockExecutor();
+      const dispatcher = makeDispatcher({
+        subagentExecutor: executor,
+        permissions: { allowedTools: ['echo', 'agent'] },
+      });
+      const result = await dispatcher.execute(makeCall({ name: 'agent', input: { prompt: 'test' } }));
+      expect(result.content).toBe('agent output');
+      expect(executor.execute).toHaveBeenCalledOnce();
+    });
+
+    it('returns clean error when executor not configured', async () => {
+      const dispatcher = makeDispatcher({
+        permissions: { allowedTools: ['echo', 'agent'] },
+      });
+      const result = await dispatcher.execute(makeCall({ name: 'agent', input: { prompt: 'test' } }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('not available');
+    });
+
+    it('does not route non-agent calls to executor', async () => {
+      const executor = mockExecutor();
+      const dispatcher = makeDispatcher({
+        subagentExecutor: executor,
+        permissions: { allowedTools: ['echo', 'agent'] },
+      });
+      const result = await dispatcher.execute(makeCall({ name: 'echo' }));
+      expect(result.content).toBe('hello');
+      expect(executor.execute).not.toHaveBeenCalled();
+    });
+
+    it('fires PostToolUse hook for agent calls', async () => {
+      const registry = createHookRegistryImpl();
+      const postSpy = vi.fn(async () => ({}));
+      registry.register('PostToolUse', postSpy);
+      const executor = mockExecutor();
+      const dispatcher = makeDispatcher({
+        subagentExecutor: executor,
+        hookRegistry: registry,
+        permissions: { allowedTools: ['echo', 'agent'] },
+      });
+      await dispatcher.execute(makeCall({ name: 'agent', input: { prompt: 'test' } }));
+      expect(postSpy).toHaveBeenCalledOnce();
+      const callArgs = postSpy.mock.calls[0] as unknown[];
+      expect(callArgs[0]).toMatchObject({
+        event: 'PostToolUse',
+        toolName: 'agent',
+        output: 'agent output',
+      });
+    });
+
+    it('catches executor throws and returns isError', async () => {
+      const executor = { execute: vi.fn().mockRejectedValue(new Error('executor boom')) } as any;
+      const dispatcher = makeDispatcher({
+        subagentExecutor: executor,
+        permissions: { allowedTools: ['echo', 'agent'] },
+      });
+      const result = await dispatcher.execute(makeCall({ name: 'agent', input: { prompt: 'test' } }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('executor boom');
+    });
+  });
+
+  describe('defaultConcurrencyClassifier', () => {
+    it('marks read-only tools as safe', () => {
+      expect(defaultConcurrencyClassifier('read_file')).toBe(true);
+      expect(defaultConcurrencyClassifier('glob')).toBe(true);
+      expect(defaultConcurrencyClassifier('grep')).toBe(true);
+      expect(defaultConcurrencyClassifier('list_directory')).toBe(true);
+    });
+
+    it('marks agent as safe', () => {
+      expect(defaultConcurrencyClassifier('agent')).toBe(true);
+    });
+
+    it('marks skill as safe', () => {
+      expect(defaultConcurrencyClassifier('skill')).toBe(true);
+    });
+
+    it('marks write tools as unsafe', () => {
+      expect(defaultConcurrencyClassifier('bash')).toBe(false);
+      expect(defaultConcurrencyClassifier('edit_file')).toBe(false);
+      expect(defaultConcurrencyClassifier('write_file')).toBe(false);
+    });
+
+    it('marks unknown tools as unsafe', () => {
+      expect(defaultConcurrencyClassifier('custom_tool')).toBe(false);
+    });
+  });
+
+  describe('executeBatch', () => {
+    const signal = new AbortController().signal;
+
+    function makeBatchCall(name: string, id?: string): ToolCall {
+      return {
+        id: id ?? `call-${name}`,
+        name,
+        input: name === 'echo' ? { message: name } : {},
+        signal,
+      };
+    }
+
+    function delayHandler(ms: number, content: string): ToolHandler {
+      return async () => {
+        await new Promise((r) => setTimeout(r, ms));
+        return { content };
+      };
+    }
+
+    it('returns empty array for empty calls', async () => {
+      const dispatcher = makeDispatcher();
+      const results = await dispatcher.executeBatch([]);
+      expect(results).toEqual([]);
+    });
+
+    it('delegates single call to execute()', async () => {
+      const dispatcher = makeDispatcher();
+      const results = await dispatcher.executeBatch([makeBatchCall('echo')]);
+      expect(results).toHaveLength(1);
+      expect(results[0]!.content).toBe('echo');
+    });
+
+    it('runs safe tools in parallel', async () => {
+      const order: string[] = [];
+      const slowRead: ToolHandler = async () => {
+        order.push('read-start');
+        await new Promise((r) => setTimeout(r, 50));
+        order.push('read-end');
+        return { content: 'read' };
+      };
+      const slowGlob: ToolHandler = async () => {
+        order.push('glob-start');
+        await new Promise((r) => setTimeout(r, 50));
+        order.push('glob-end');
+        return { content: 'glob' };
+      };
+      const dispatcher = makeDispatcher({
+        handlers: new Map([['read_file', slowRead], ['glob', slowGlob]]),
+        permissions: { allowedTools: ['read_file', 'glob'] },
+      });
+
+      const start = Date.now();
+      const results = await dispatcher.executeBatch([
+        makeBatchCall('read_file'),
+        makeBatchCall('glob'),
+      ]);
+      const elapsed = Date.now() - start;
+
+      expect(results).toHaveLength(2);
+      expect(results[0]!.content).toBe('read');
+      expect(results[1]!.content).toBe('glob');
+      // Parallel: both start before either ends
+      expect(order[0]).toBe('read-start');
+      expect(order[1]).toBe('glob-start');
+      // Wall-clock should be ~50ms not ~100ms
+      expect(elapsed).toBeLessThan(90);
+    });
+
+    it('runs unsafe tools sequentially', async () => {
+      const order: string[] = [];
+      const bash1: ToolHandler = async () => {
+        order.push('bash1-start');
+        await new Promise((r) => setTimeout(r, 20));
+        order.push('bash1-end');
+        return { content: 'bash1' };
+      };
+      const bash2: ToolHandler = async () => {
+        order.push('bash2-start');
+        await new Promise((r) => setTimeout(r, 20));
+        order.push('bash2-end');
+        return { content: 'bash2' };
+      };
+      const dispatcher = makeDispatcher({
+        handlers: new Map([['bash', bash1], ['edit_file', bash2]]),
+        permissions: { allowedTools: ['bash', 'edit_file'] },
+      });
+
+      const results = await dispatcher.executeBatch([
+        makeBatchCall('bash'),
+        makeBatchCall('edit_file'),
+      ]);
+
+      expect(results[0]!.content).toBe('bash1');
+      expect(results[1]!.content).toBe('bash2');
+      // Sequential: first ends before second starts
+      expect(order).toEqual(['bash1-start', 'bash1-end', 'bash2-start', 'bash2-end']);
+    });
+
+    it('partitions mixed tools into correct batches', async () => {
+      const order: string[] = [];
+      const track = (name: string): ToolHandler => async () => {
+        order.push(name);
+        return { content: name };
+      };
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', track('read')],
+          ['glob', track('glob')],
+          ['bash', track('bash')],
+          ['grep', track('grep')],
+        ]),
+        permissions: { allowedTools: ['read_file', 'glob', 'bash', 'grep'] },
+      });
+
+      // [safe, safe, unsafe, safe] → 3 batches
+      const results = await dispatcher.executeBatch([
+        makeBatchCall('read_file'),
+        makeBatchCall('glob'),
+        makeBatchCall('bash'),
+        makeBatchCall('grep'),
+      ]);
+
+      expect(results.map((r) => r.content)).toEqual(['read', 'glob', 'bash', 'grep']);
+      // bash must run after first batch, grep after bash
+      expect(order.indexOf('bash')).toBeGreaterThan(order.indexOf('read'));
+      expect(order.indexOf('bash')).toBeGreaterThan(order.indexOf('glob'));
+      expect(order.indexOf('grep')).toBeGreaterThan(order.indexOf('bash'));
+    });
+
+    it('collects all results when one tool fails in a safe batch', async () => {
+      const ok: ToolHandler = async () => ({ content: 'ok' });
+      const fail: ToolHandler = async () => { throw new Error('boom'); };
+      const dispatcher = makeDispatcher({
+        handlers: new Map([['read_file', ok], ['glob', fail]]),
+        permissions: { allowedTools: ['read_file', 'glob'] },
+      });
+
+      const results = await dispatcher.executeBatch([
+        makeBatchCall('read_file'),
+        makeBatchCall('glob'),
+      ]);
+
+      expect(results[0]!.content).toBe('ok');
+      expect(results[0]!.isError).toBeUndefined();
+      expect(results[1]!.isError).toBe(true);
+      expect(results[1]!.content).toContain('boom');
+    });
+
+    it('blocks individual tool via PreToolUse without affecting others', async () => {
+      const registry = createHookRegistryImpl();
+      registry.register('PreToolUse', async (ctx) => {
+        if ((ctx as any).toolName === 'glob') {
+          return { decision: 'block' as const, reason: 'blocked glob' };
+        }
+        return {};
+      });
+      const ok: ToolHandler = async () => ({ content: 'ok' });
+      const dispatcher = makeDispatcher({
+        handlers: new Map([['read_file', ok], ['glob', ok]]),
+        permissions: { allowedTools: ['read_file', 'glob'] },
+        hookRegistry: registry,
+      });
+
+      const results = await dispatcher.executeBatch([
+        makeBatchCall('read_file'),
+        makeBatchCall('glob'),
+      ]);
+
+      expect(results[0]!.content).toBe('ok');
+      expect(results[0]!.isError).toBeUndefined();
+      expect(results[1]!.isError).toBe(true);
+      expect(results[1]!.content).toContain('blocked by PreToolUse hook');
+    });
+
+    it('returns abort errors when signal is pre-aborted', async () => {
+      const controller = new AbortController();
+      controller.abort('cancelled');
+      const dispatcher = makeDispatcher();
+      const results = await dispatcher.executeBatch([
+        { ...makeBatchCall('echo'), signal: controller.signal },
+        { ...makeBatchCall('echo', 'call-2'), signal: controller.signal },
+      ]);
+
+      expect(results).toHaveLength(2);
+      expect(results[0]!.isError).toBe(true);
+      expect(results[1]!.isError).toBe(true);
+    });
+
+    // Regression: the batch gate previously read `calls[0]!.signal.aborted`,
+    // so per-call signal correctness across a heterogeneous batch was
+    // unenforced. These two tests cover both directions of that bug.
+    it('per-call signals: aborted call[0] does NOT falsely abort fresh call[1] (parallel batch)', async () => {
+      const abortedCtrl = new AbortController();
+      abortedCtrl.abort('only-call-0');
+      const freshCtrl = new AbortController();
+      const seen: string[] = [];
+      const track = (name: string): ToolHandler => async () => {
+        seen.push(name);
+        return { content: name };
+      };
+      const dispatcher = makeDispatcher({
+        handlers: new Map([['read_file', track('read')], ['glob', track('glob')]]),
+        permissions: { allowedTools: ['read_file', 'glob'] },
+      });
+
+      const results = await dispatcher.executeBatch([
+        { ...makeBatchCall('read_file'), signal: abortedCtrl.signal },
+        { ...makeBatchCall('glob', 'call-2'), signal: freshCtrl.signal },
+      ]);
+
+      expect(results).toHaveLength(2);
+      // Call[0]: aborted → caught in Phase 1, never reaches the handler
+      expect(results[0]!.isError).toBe(true);
+      expect(results[0]!.content).toContain('aborted');
+      expect(seen).not.toContain('read');
+      // Call[1]: fresh signal → must run successfully
+      expect(results[1]!.isError).toBeUndefined();
+      expect(results[1]!.content).toBe('glob');
+      expect(seen).toContain('glob');
+    });
+
+    it('per-call signals: fresh call[0] runs, aborted call[1] does NOT dispatch (parallel batch)', async () => {
+      const freshCtrl = new AbortController();
+      const abortedCtrl = new AbortController();
+      abortedCtrl.abort('only-call-1');
+      const seen: string[] = [];
+      const track = (name: string): ToolHandler => async () => {
+        seen.push(name);
+        return { content: name };
+      };
+      const dispatcher = makeDispatcher({
+        handlers: new Map([['read_file', track('read')], ['glob', track('glob')]]),
+        permissions: { allowedTools: ['read_file', 'glob'] },
+      });
+
+      const results = await dispatcher.executeBatch([
+        { ...makeBatchCall('read_file'), signal: freshCtrl.signal },
+        { ...makeBatchCall('glob', 'call-2'), signal: abortedCtrl.signal },
+      ]);
+
+      expect(results).toHaveLength(2);
+      // Call[0]: fresh → runs to completion
+      expect(results[0]!.isError).toBeUndefined();
+      expect(results[0]!.content).toBe('read');
+      expect(seen).toContain('read');
+      // Call[1]: aborted → caught in Phase 1, never reaches the handler
+      expect(results[1]!.isError).toBe(true);
+      expect(results[1]!.content).toContain('aborted');
+      expect(seen).not.toContain('glob');
+    });
+
+    it('per-call signals: call[1] aborted between Phase 1 and parallel dispatch', async () => {
+      // The bug we are guarding against: Phase 1 sees call[1].signal as
+      // fresh, so it is admitted to executableCalls. Between Phase 1 and the
+      // parallel dispatch, call[1].signal aborts. The pre-fix code only
+      // checked calls[0]!.signal at the batch gate, so call[1]'s handler
+      // would be dispatched on an aborted signal. The fix checks per-call
+      // inside the Promise.allSettled map.
+      const freshCtrl = new AbortController();
+      const lateAbortCtrl = new AbortController();
+      const seen: string[] = [];
+
+      // Abort call[1]'s signal during the await between Phase 1 finishing
+      // and Phase 2 dispatching — Phase 1 has no awaits to span here (no
+      // hook registry, no slow permission check), so we abort synchronously
+      // right after constructing the batch but before invoking executeBatch.
+      // Equivalent in effect: a pre-aborted call[1] in a fresh-call[0] batch.
+      lateAbortCtrl.abort('between-phases');
+
+      const track = (name: string): ToolHandler => async () => {
+        seen.push(name);
+        return { content: name };
+      };
+      const dispatcher = makeDispatcher({
+        handlers: new Map([['read_file', track('read')], ['glob', track('glob')]]),
+        permissions: { allowedTools: ['read_file', 'glob'] },
+      });
+
+      const results = await dispatcher.executeBatch([
+        { ...makeBatchCall('read_file'), signal: freshCtrl.signal },
+        { ...makeBatchCall('glob', 'call-2'), signal: lateAbortCtrl.signal },
+      ]);
+
+      expect(results[0]!.content).toBe('read');
+      expect(results[1]!.isError).toBe(true);
+      expect(seen).not.toContain('glob');
+    });
+
+    it('uses custom concurrency classifier', async () => {
+      const order: string[] = [];
+      const track = (name: string): ToolHandler => async () => {
+        order.push(name);
+        return { content: name };
+      };
+      // Classify bash as safe (custom override)
+      const dispatcher = makeDispatcher({
+        handlers: new Map([['bash', track('bash')], ['echo', track('echo')]]),
+        permissions: { allowedTools: ['bash', 'echo'] },
+        concurrencyClassifier: () => true,
+      });
+
+      await dispatcher.executeBatch([
+        makeBatchCall('bash'),
+        makeBatchCall('echo'),
+      ]);
+
+      // Both should be in the same safe batch (parallel)
+      expect(order).toContain('bash');
+      expect(order).toContain('echo');
+    });
+
+    it('classifies compose as safe for parallel batching', () => {
+      expect(defaultConcurrencyClassifier('compose')).toBe(true);
+    });
+
+    it('runs compose in parallel with other safe tools', async () => {
+      const order: string[] = [];
+      const slowRead: ToolHandler = async () => {
+        order.push('read-start');
+        await new Promise((r) => setTimeout(r, 50));
+        order.push('read-end');
+        return { content: 'read' };
+      };
+      const composeExec = {
+        execute: vi.fn(async () => {
+          order.push('compose-start');
+          await new Promise((r) => setTimeout(r, 50));
+          order.push('compose-end');
+          return { content: 'composed' };
+        }),
+      } as any;
+
+      const dispatcher = makeDispatcher({
+        handlers: new Map([['read_file', slowRead]]),
+        permissions: { allowedTools: ['read_file', 'compose'] },
+        composeExecutor: composeExec,
+      });
+
+      const start = Date.now();
+      const results = await dispatcher.executeBatch([
+        makeBatchCall('read_file'),
+        makeBatchCall('compose'),
+      ]);
+      const elapsed = Date.now() - start;
+
+      expect(results).toHaveLength(2);
+      expect(results[0]!.content).toBe('read');
+      expect(results[1]!.content).toBe('composed');
+      // Both should start before either ends (parallel)
+      expect(order.slice(0, 2)).toEqual(expect.arrayContaining(['read-start', 'compose-start']));
+      // Wall-clock should be ~50ms not ~100ms
+      expect(elapsed).toBeLessThan(90);
+    });
+
+    it('preserves result order regardless of completion order', async () => {
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', delayHandler(60, 'slow')],
+          ['glob', delayHandler(10, 'fast')],
+        ]),
+        permissions: { allowedTools: ['read_file', 'glob'] },
+      });
+
+      const results = await dispatcher.executeBatch([
+        makeBatchCall('read_file'),
+        makeBatchCall('glob'),
+      ]);
+
+      // read_file was slow but should still be first in results
+      expect(results[0]!.content).toBe('slow');
+      expect(results[1]!.content).toBe('fast');
+    });
+  });
+
+  describe('compose tool routing (L4)', () => {
+    it('returns clean error when composeExecutor not configured', async () => {
+      const dispatcher = makeDispatcher({
+        permissions: { allowedTools: ['echo', 'compose'] },
+      });
+      const result = await dispatcher.execute(
+        makeCall({ name: 'compose', input: { nodes: [{ id: 'a', prompt: 'task' }] } }),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('not available');
+    });
+
+    it('routes compose calls to executor when present', async () => {
+      const executor = { execute: vi.fn().mockResolvedValue({ content: 'composed result' }) } as any;
+      const dispatcher = makeDispatcher({
+        composeExecutor: executor,
+        permissions: { allowedTools: ['echo', 'compose'] },
+      });
+      const result = await dispatcher.execute(
+        makeCall({ name: 'compose', input: { nodes: [{ id: 'a', prompt: 'task' }] } }),
+      );
+      expect(result.content).toBe('composed result');
+      expect(executor.execute).toHaveBeenCalledOnce();
+    });
+
+    it('returns clean error when composeExecutor not configured (executeCore/batch path)', async () => {
+      const dispatcher = makeDispatcher({
+        permissions: { allowedTools: ['echo', 'compose'] },
+      });
+      const results = await dispatcher.executeBatch([
+        makeCall({ name: 'compose', input: { nodes: [{ id: 'a', prompt: 'task' }] } }),
+      ]);
+      expect(results[0]!.isError).toBe(true);
+      expect(results[0]!.content).toContain('not available');
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Grant API tests
+// ---------------------------------------------------------------------------
+
+describe('SessionToolDispatcher grant API', () => {
+  it('getGrants returns initial state from cwd', () => {
+    const d = makeDispatcher({ cwd: '/home/user/project' });
+    const grants = d.getGrants();
+    expect(grants.resolveBase).toBe('/home/user/project');
+    expect(grants.readRoots).toEqual(['/home/user/project']);
+    expect(grants.writeRoots).toEqual(['/home/user/project']);
+  });
+
+  it('getGrants returns empty roots when no cwd', () => {
+    const d = makeDispatcher();
+    const grants = d.getGrants();
+    expect(grants.resolveBase).toBeUndefined();
+    expect(grants.readRoots).toEqual([]);
+    expect(grants.writeRoots).toEqual([]);
+  });
+
+  it('addReadRoot adds to readRoots only', () => {
+    const d = makeDispatcher({ cwd: '/base' });
+    d.addReadRoot('/extra/read', 'slash');
+    const grants = d.getGrants();
+    expect(grants.readRoots).toContain('/extra/read');
+    expect(grants.writeRoots).not.toContain('/extra/read');
+  });
+
+  it('addReadRoot is idempotent', () => {
+    const d = makeDispatcher({ cwd: '/base' });
+    d.addReadRoot('/extra', 'slash');
+    d.addReadRoot('/extra', 'slash');
+    const grants = d.getGrants();
+    expect(grants.readRoots.filter((r) => r === '/extra')).toHaveLength(1);
+  });
+
+  it('addWriteRoot adds to both readRoots and writeRoots', () => {
+    const d = makeDispatcher({ cwd: '/base' });
+    d.addWriteRoot('/extra/rw', 'slash');
+    const grants = d.getGrants();
+    expect(grants.readRoots).toContain('/extra/rw');
+    expect(grants.writeRoots).toContain('/extra/rw');
+  });
+
+  it('revokeRoot removes from both lists', () => {
+    const d = makeDispatcher({ cwd: '/base' });
+    d.addWriteRoot('/extra', 'slash');
+    d.revokeRoot('/extra', 'slash');
+    const grants = d.getGrants();
+    expect(grants.readRoots).not.toContain('/extra');
+    expect(grants.writeRoots).not.toContain('/extra');
+  });
+
+  it('revokeRoot does NOT remove resolveBase', () => {
+    const d = makeDispatcher({ cwd: '/base' });
+    d.revokeRoot('/base', 'slash');
+    const grants = d.getGrants();
+    // resolveBase is non-revocable — still present in readRoots/writeRoots
+    expect(grants.readRoots).toContain('/base');
+    expect(grants.writeRoots).toContain('/base');
+  });
+
+  it('handlerContext snapshot reflects mutations', async () => {
+    let capturedContext: import('./types.js').ToolHandlerContext | undefined;
+    const capturingHandler: import('./types.js').ToolHandler = async (_input, _signal, ctx) => {
+      capturedContext = ctx;
+      return { content: 'ok' };
+    };
+    const d = new SessionToolDispatcher({
+      handlers: new Map([['capture', capturingHandler]]),
+      schemas: [],
+      permissions: { allowedTools: ['capture'] },
+      cwd: '/base',
+    });
+
+    d.addReadRoot('/extra', 'slash');
+    await d.execute(makeCall({ name: 'capture' }));
+
+    expect(capturedContext?.readRoots).toContain('/base');
+    expect(capturedContext?.readRoots).toContain('/extra');
+  });
+
+  it('handlerContext surfaces opts.env when set', async () => {
+    let capturedContext: import('./types.js').ToolHandlerContext | undefined;
+    const capturingHandler: import('./types.js').ToolHandler = async (_input, _signal, ctx) => {
+      capturedContext = ctx;
+      return { content: 'ok' };
+    };
+    const d = new SessionToolDispatcher({
+      handlers: new Map([['capture', capturingHandler]]),
+      schemas: [],
+      permissions: { allowedTools: ['capture'] },
+      env: { PLUGIN_ROOT: '/fake/plugin' },
+    });
+
+    await d.execute(makeCall({ name: 'capture' }));
+
+    expect(capturedContext?.env).toEqual({ PLUGIN_ROOT: '/fake/plugin' });
+  });
+
+  it('handlerContext omits env when opts.env is unset (back-compat)', async () => {
+    let capturedContext: import('./types.js').ToolHandlerContext | undefined;
+    const capturingHandler: import('./types.js').ToolHandler = async (_input, _signal, ctx) => {
+      capturedContext = ctx;
+      return { content: 'ok' };
+    };
+    const d = new SessionToolDispatcher({
+      handlers: new Map([['capture', capturingHandler]]),
+      schemas: [],
+      permissions: { allowedTools: ['capture'] },
+    });
+
+    await d.execute(makeCall({ name: 'capture' }));
+
+    // Bash relies on `context?.env !== undefined` to opt in to merging;
+    // unset must remain undefined, not an empty object.
+    expect(capturedContext?.env).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setResolveBase — worktree-rename escape hatch
+//
+// These tests pin the bug-fix contract: after a worktree's directory is
+// physically renamed mid-session, any tool handler that reads
+// `context.resolveBase` (bash spawn cwd, glob/grep base path) MUST see the
+// new path on the very next dispatch — even when the dispatcher is the
+// same reference that was captured by an in-flight turn (loop.ts:419,436).
+// ---------------------------------------------------------------------------
+
+describe('SessionToolDispatcher.setResolveBase', () => {
+  it('mutates resolveBase in place and updates handlerContext on next read', async () => {
+    let capturedContext: import('./types.js').ToolHandlerContext | undefined;
+    const capturingHandler: import('./types.js').ToolHandler = async (_input, _signal, ctx) => {
+      capturedContext = ctx;
+      return { content: 'ok' };
+    };
+    const d = new SessionToolDispatcher({
+      handlers: new Map([['capture', capturingHandler]]),
+      schemas: [],
+      permissions: { allowedTools: ['capture'] },
+      cwd: '/old/worktree',
+    });
+
+    // First dispatch sees the original cwd.
+    await d.execute(makeCall({ name: 'capture' }));
+    expect(capturedContext?.resolveBase).toBe('/old/worktree');
+    expect(capturedContext?.cwd).toBe('/old/worktree');
+
+    // After setResolveBase, the SAME dispatcher reference must emit the new
+    // path on the next dispatch — this is the in-flight-turn fix.
+    d.setResolveBase('/new/worktree');
+    await d.execute(makeCall({ name: 'capture' }));
+    expect(capturedContext?.resolveBase).toBe('/new/worktree');
+    expect(capturedContext?.cwd).toBe('/new/worktree');
+  });
+
+  it('swaps prior cwd in _readRoots/_writeRoots in place (preserves array reference)', () => {
+    const sharedReadRoots: string[] = ['/old/worktree'];
+    const sharedWriteRoots: string[] = ['/old/worktree'];
+    const d = new SessionToolDispatcher({
+      handlers: new Map(),
+      schemas: [],
+      cwd: '/old/worktree',
+      readRoots: sharedReadRoots,
+      writeRoots: sharedWriteRoots,
+    });
+
+    d.setResolveBase('/new/worktree');
+
+    // In-place mutation — the array reference is preserved so any other
+    // dispatcher sharing this array (provider pattern) sees the same change.
+    expect(sharedReadRoots).toEqual(['/new/worktree']);
+    expect(sharedWriteRoots).toEqual(['/new/worktree']);
+
+    // getGrants surfaces the migrated paths.
+    const grants = d.getGrants();
+    expect(grants.resolveBase).toBe('/new/worktree');
+    expect(grants.readRoots).toEqual(['/new/worktree']);
+    expect(grants.writeRoots).toEqual(['/new/worktree']);
+  });
+
+  it('preserves /allow-dir grants accumulated under the old cwd', () => {
+    const d = makeDispatcher({ cwd: '/old/worktree' });
+    d.addReadRoot('/extra/read', 'slash');
+    d.addWriteRoot('/extra/rw', 'slash');
+
+    d.setResolveBase('/new/worktree');
+
+    const grants = d.getGrants();
+    expect(grants.resolveBase).toBe('/new/worktree');
+    // /old/worktree → /new/worktree migrated; extras survive.
+    expect(grants.readRoots).toContain('/new/worktree');
+    expect(grants.readRoots).toContain('/extra/read');
+    expect(grants.readRoots).toContain('/extra/rw');
+    expect(grants.readRoots).not.toContain('/old/worktree');
+    expect(grants.writeRoots).toContain('/new/worktree');
+    expect(grants.writeRoots).toContain('/extra/rw');
+    expect(grants.writeRoots).not.toContain('/old/worktree');
+    expect(grants.writeRoots).not.toContain('/extra/read');
+  });
+
+  it('appends newCwd when old cwd not in roots (e.g. dispatcher built without cwd)', () => {
+    const d = makeDispatcher();  // no cwd
+    expect(d.getGrants().readRoots).toEqual([]);
+
+    d.setResolveBase('/new/worktree');
+
+    const grants = d.getGrants();
+    expect(grants.resolveBase).toBe('/new/worktree');
+    expect(grants.readRoots).toEqual(['/new/worktree']);
+    expect(grants.writeRoots).toEqual(['/new/worktree']);
+  });
+
+  it('is a no-op when newCwd equals current resolveBase', () => {
+    const sharedReadRoots: string[] = ['/cwd', '/extra'];
+    const d = new SessionToolDispatcher({
+      handlers: new Map(),
+      schemas: [],
+      cwd: '/cwd',
+      readRoots: sharedReadRoots,
+    });
+
+    d.setResolveBase('/cwd');
+
+    // No duplicate entries; array length unchanged.
+    expect(sharedReadRoots).toEqual(['/cwd', '/extra']);
+  });
+
+  it('revokeRoot guard tracks the new resolveBase, not the original', () => {
+    // After rename, the new cwd must be the non-revocable anchor — the old
+    // one no longer points anywhere on disk and should not appear in grants.
+    const d = makeDispatcher({ cwd: '/old/worktree' });
+    d.setResolveBase('/new/worktree');
+
+    // /allow-dir block attempt against the new cwd: silently ignored.
+    d.revokeRoot('/new/worktree', 'slash');
+    expect(d.getGrants().readRoots).toContain('/new/worktree');
+
+    // /allow-dir block attempt against the old cwd: no-op (not in grants).
+    d.revokeRoot('/old/worktree', 'slash');
+    expect(d.getGrants().readRoots).not.toContain('/old/worktree');
+  });
+});

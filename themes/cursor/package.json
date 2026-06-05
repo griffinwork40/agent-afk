@@ -1,0 +1,22 @@
+{
+  "name": "agent-afk-theme",
+  "displayName": "AFK Dark",
+  "description": "Companion editor theme for agent-afk. Matches the Ghostty terminal theme: GitHub-Dark structure with the AFK warm-orange accent (#E67E4C) and a slightly desaturated palette.",
+  "version": "0.1.0",
+  "publisher": "agent-afk",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": ["Themes"],
+  "keywords": ["theme", "dark", "github", "afk"],
+  "contributes": {
+    "themes": [
+      {
+        "label": "AFK Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/agent-afk-color-theme.json"
+      }
+    ]
+  }
+}

@@ -1,0 +1,65 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 1 — single completed tool entry 1`] = `"  ● Read("README.md") — ✓ 42 lines"`;
+
+exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 2 — multi-tool entry (3 tools, all completed) 1`] = `
+"  ● Read("a.ts") — ✓ 10 lines
+  $ Bash("ls -la") — ✓ 5 lines
+  ● Glob("**/*.ts") — ✓ 23 paths"
+`;
+
+exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 3 — tool entry with error result 1`] = `"  $ Bash("npm test") — ✗ Error: 3 tests failed"`;
+
+exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 4 — subagent Agent entry with children, completed 1`] = `
+"◉ → Agent(snap-researcher) [subagent]
+│ ├─ ● Read("src/main.ts") — ✓ 88 lines
+│ ├─ ● Grep("TODO") — ✓ 7 matches
+│ ╰─ Done (2 tools · 3.1s)"
+`;
+
+exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 5 — subagent Agent entry with overflow (4 children, MAX=3) 1`] = `
+"◉ → Agent(snap-overflower) [subagent] — 4 tools
+│ ├─ ● Read("snap0.ts") — ✓ snap-result-0
+│ ├─ $ Bash("snap1.ts") — ✓ snap-result-1
+│ ├─ ● Grep("snap2.ts") — ✓ snap-result-2
+│ ├─ … +1 (1 Glob)
+│ ╰─ Done (4 tools · 4.0s)"
+`;
+
+exports[`Spine renderer scenarios > ASCII fallback — AGENT_AFK_ASCII=1 swaps box-drawing for ASCII glyphs 1`] = `
+"o → Agent(ascii) [subagent]
+| +- ● Read("x.ts") — ✓ 10 lines
+| \\- Done (1 tool · 0.5s)"
+`;
+
+exports[`Spine renderer scenarios > abort — Agent without a Done synthetic still renders spine + children 1`] = `
+"◉ → Agent(aborted) [subagent]
+│ ╰─ ● Read("file.ts") — ✓ partial"
+`;
+
+exports[`Spine renderer scenarios > nested — Agent inside Agent: outer spine continues past inner block 1`] = `
+"◉ → Agent(mint) [subagent]
+│ ├─ ● Read("daemon.ts") — ✓ 311 lines
+│ ├─ → Agent(gather) [subagent]
+│ │ ├─ ● Read("cron.ts") — ✓ 42 lines
+│ │ ╰─ ● Grep("interval") — ✓ 6 matches
+│ ╰─ Done (4 tools · 8.0s)"
+`;
+
+exports[`Spine renderer scenarios > parallel — three sibling Agents each get their own turn-root + spine 1`] = `
+"◉ → Agent(anthropic-port) [subagent]
+│ ├─ ✎ Edit("anthropic-port.ts") — ✓ edited
+│ ╰─ Done (1 tool · 2.0s)
+◉ → Agent(openai-port) [subagent]
+│ ├─ ✎ Edit("openai-port.ts") — ✓ edited
+│ ╰─ Done (1 tool · 2.0s)
+◉ → Agent(codex-port) [subagent]
+│ ├─ ✎ Edit("codex-port.ts") — ✓ edited
+│ ╰─ Done (1 tool · 2.0s)"
+`;
+
+exports[`Spine renderer scenarios > sequential — single subagent block renders ◉-rooted spine 1`] = `
+"◉ → Agent(diagnose) [subagent]
+│ ├─ ● Read("abort-graph.ts") — ✓ 144 lines
+│ ╰─ Done (1 tool · 1.5s)"
+`;

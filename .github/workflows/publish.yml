@@ -1,0 +1,78 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  # Manual re-fire — dispatch against an existing v* tag (select it as the ref
+  # in the GitHub UI) to retry a failed publish. The "Verify tag matches
+  # package.json version" step is the guardrail.
+  workflow_dispatch:
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+# Opt JS-based actions into Node.js 24 ahead of the June 2026 default flip.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  publish:
+    name: Publish to npm
+    # GitHub-hosted on purpose: this is a PUBLIC repo, so self-hosted runners
+    # would expose the host to fork-PR code execution. Tag pushes are a trusted
+    # (maintainer-only) trigger, and npm provenance attestation requires the
+    # build to run in public GitHub Actions.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write    # GitHub Release creation
+      id-token: write    # npm provenance attestation (OIDC)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tag matches package.json version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(jq -r .version package.json)
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test
+
+      # prepublishOnly runs `npm run clean && npm run build:dist`, so the
+      # published tarball is built fresh here. --provenance emits a signed
+      # attestation linking this exact tarball to the public source commit +
+      # this workflow run (visible as a "Provenance" badge on npmjs.com).
+      - name: Publish to npm (with provenance)
+        run: pnpm publish --no-git-checks --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
