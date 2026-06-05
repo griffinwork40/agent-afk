@@ -5,10 +5,12 @@
  * @module agent/memory/memory-store.test
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import Database from 'better-sqlite3';
+import type BetterSqlite3 from 'better-sqlite3';
 import { MemoryStore } from './memory-store.js';
 
 // ---------------------------------------------------------------------------
@@ -168,5 +170,58 @@ describe('saveHot — truncation covenant', () => {
     const u = store.hotUsage();
     expect(u.chars).toBe(0);
     expect(u.truncated).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SQLite connection setup — pragma ordering invariant
+//
+// Regression guard: the module-load singleton in openai-compatible/index.ts
+// opens the shared global memory DB on import, so parallel vitest workers (and
+// real multi-surface AFK runs) race to open the same file. If journal_mode=WAL
+// is switched before busy_timeout is installed, contended opens throw
+// SQLITE_BUSY instead of waiting — which flaked CI's coverage run on whichever
+// test files lost the race. busy_timeout must be set first.
+// ---------------------------------------------------------------------------
+
+describe('SQLite connection setup — pragma ordering', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = join(
+      tmpdir(),
+      `afk-pragma-order-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(dir, { recursive: true });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('sets busy_timeout before journal_mode=WAL so concurrent opens wait instead of throwing', () => {
+    const calls: string[] = [];
+    const original = Database.prototype.pragma;
+    vi.spyOn(Database.prototype, 'pragma').mockImplementation(function (
+      this: BetterSqlite3.Database,
+      ...args: Parameters<BetterSqlite3.Database['pragma']>
+    ) {
+      if (typeof args[0] === 'string') calls.push(args[0]);
+      return original.apply(this, args);
+    } as BetterSqlite3.Database['pragma']);
+
+    // Constructing the store runs the connection-setup pragmas.
+    new MemoryStore(dir);
+
+    const busyIdx = calls.findIndex((c) => c.includes('busy_timeout'));
+    const walIdx = calls.findIndex((c) => c.includes('journal_mode'));
+
+    expect(busyIdx, 'busy_timeout pragma should be issued').toBeGreaterThanOrEqual(0);
+    expect(walIdx, 'journal_mode pragma should be issued').toBeGreaterThanOrEqual(0);
+    expect(
+      busyIdx,
+      'busy_timeout must precede journal_mode=WAL — otherwise the WAL switch has no busy handler and throws SQLITE_BUSY under concurrent opens',
+    ).toBeLessThan(walIdx);
   });
 });

@@ -168,8 +168,14 @@ export class MemoryStore {
     mkdirSync(join(this.dir, PROCEDURES_DIR), { recursive: true });
 
     this.db = new Database(join(this.dir, DB_FILE));
-    this.db.pragma('journal_mode = WAL');
+    // Invariant: busy_timeout MUST be set before journal_mode=WAL. Switching the
+    // journal mode acquires a brief write lock on the database; without a busy
+    // handler already installed, a concurrent opener — parallel test workers, or
+    // multiple AFK surfaces sharing the global memory dir — throws SQLITE_BUSY
+    // immediately instead of waiting. Setting the timeout first makes the WAL
+    // switch (and every later write) wait up to 5s for a contended lock.
     this.db.pragma('busy_timeout = 5000');
+    this.db.pragma('journal_mode = WAL');
 
     // Schema versioning guard — prevents silent corruption when the schema
     // evolves across agent-afk versions.
