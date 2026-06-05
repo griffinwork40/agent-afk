@@ -1,6 +1,7 @@
 ---
 name: gather
 description: "Parallel context-gathering for a code area. Use when you need to understand a module, feature, or subsystem and would otherwise read 3+ files sequentially — dispatches two agents in parallel to map structure and test coverage in one wave."
+context: load
 ---
 
 ## Dispatch protocol
