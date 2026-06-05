@@ -94,3 +94,79 @@ describe('supersedeFact — UNIQUE constraint idempotency', () => {
     expect(() => store.supersedeFact(99999, 'x')).toThrow(/not found/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// saveHot — truncation covenant (non-fatal cap, protected head, atomic write)
+// ---------------------------------------------------------------------------
+
+const MAX_HOT_CHARS = 5250;
+
+describe('saveHot — truncation covenant', () => {
+  it('writes under-cap content verbatim and reports usage', () => {
+    const content = '# identity: Griffin — prefers pnpm, terse output\n- active project: agent-afk';
+    const usage = store.saveHot(content);
+    expect(store.loadHot()).toBe(content);
+    expect(usage.truncated).toBe(false);
+    expect(usage.chars).toBe(content.length);
+    expect(usage.maxTokens).toBe(1500);
+    expect(usage.pct).toBeLessThan(100);
+    expect(usage.pct).toBeGreaterThanOrEqual(0);
+  });
+
+  it('never throws on oversize input — truncates to fit the cap instead', () => {
+    const huge = Array.from({ length: 400 }, (_, i) => `line ${i} ${'x'.repeat(20)}`).join('\n');
+    expect(huge.length).toBeGreaterThan(MAX_HOT_CHARS);
+    expect(() => store.saveHot(huge)).not.toThrow();
+    const written = store.loadHot()!;
+    expect(written.length).toBeLessThanOrEqual(MAX_HOT_CHARS);
+  });
+
+  it('appends a visible truncation sentinel and flags truncated=true', () => {
+    const usage = store.saveHot('x'.repeat(6000)); // single giant line, no newlines
+    expect(usage.truncated).toBe(true);
+    expect(store.loadHot()).toContain('HOT TRUNCATED');
+  });
+
+  it('protects the identity head — leading content always survives truncation', () => {
+    const head = '# identity: Griffin — prefers pnpm, terse output\n';
+    const huge =
+      head + Array.from({ length: 400 }, (_, i) => `fact ${i} ${'y'.repeat(20)}`).join('\n');
+    store.saveHot(huge);
+    expect(store.loadHot()!.startsWith(head)).toBe(true);
+  });
+
+  it('cuts at a complete line (no half-lines) when truncating multi-line content', () => {
+    const lines = Array.from({ length: 400 }, (_, i) => `entry-${i}-${'z'.repeat(20)}`);
+    store.saveHot(lines.join('\n'));
+    const written = store.loadHot()!;
+    const body = written
+      .split('\n')
+      .filter((l) => l.length > 0 && !l.includes('HOT TRUNCATED'));
+    expect(body.at(-1)).toMatch(/^entry-\d+-z+$/);
+  });
+
+  it('backs up the prior HOT.md before overwriting', () => {
+    store.saveHot('first version');
+    store.saveHot('second version');
+    expect(existsSync(join(tmpDir, 'HOT.md.bak'))).toBe(true);
+  });
+
+  it('writes atomically — leaves no .tmp file behind', () => {
+    store.saveHot('content');
+    expect(existsSync(join(tmpDir, 'HOT.md.tmp'))).toBe(false);
+  });
+
+  it('hotUsage() reports current usage and detects a truncated file', () => {
+    store.saveHot('x'.repeat(6000));
+    const u = store.hotUsage();
+    expect(u.truncated).toBe(true);
+    expect(u.tokens).toBeGreaterThan(0);
+    expect(u.maxTokens).toBe(1500);
+  });
+
+  it('hotUsage() returns zeroed usage when no HOT.md exists', () => {
+    const u = store.hotUsage();
+    expect(u.chars).toBe(0);
+    expect(u.truncated).toBe(false);
+  });
+});

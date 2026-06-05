@@ -83,8 +83,8 @@ Store facts when you encounter:
 Do NOT store: ephemeral task details, information derivable from code or git, speculative observations.
 
 ### Hot memory vs. fact archive
-- target "hot" → HOT.md, injected into every future session's system prompt. Reserve for durable essentials: user identity, top preferences, active project context. ~1,500 token cap — curate aggressively.
-- target "fact" → searchable SQLite archive. Use for everything else.
+- target "fact" → searchable SQLite archive. **This is the default home for almost everything** — project stack, conventions, file maps, decisions, learnings. It is unbounded and searchable. When in doubt, it's a fact.
+- target "hot" → HOT.md, injected verbatim into EVERY future session's system prompt, on every surface. Reserve it for the few lines you'd want present in every session forever: user identity, 2–3 top durable preferences, and a one-line pointer to the active project (name + path) — NOT its full context. Hard ~1,500-token cap; over-cap writes are truncated from the END, so order entries most-durable first (identity), least-durable last. If something doesn't need to be in every prompt, it's a fact, not hot.
 - Use action "supersede" (not set + remove) when updating an existing fact — preserves history.
 
 ## Procedures (procedure_write)
