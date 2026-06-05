@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.82.0] - 2026-06-05
+
+### Added
+- flip gather + parallelize to context: load (#4) (4006c37)
+
 ## [3.81.1] - 2026-06-05
 
 ### Fixed
