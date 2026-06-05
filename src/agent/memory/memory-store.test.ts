@@ -174,23 +174,25 @@ describe('saveHot — truncation covenant', () => {
 });
 
 // ---------------------------------------------------------------------------
-// SQLite connection setup — pragma ordering invariant
+// SQLite connection setup — WAL-mode concurrency
 //
-// Regression guard: the module-load singleton in openai-compatible/index.ts
-// opens the shared global memory DB on import, so parallel vitest workers (and
-// real multi-surface AFK runs) race to open the same file. If journal_mode=WAL
-// is switched before busy_timeout is installed, contended opens throw
-// SQLITE_BUSY instead of waiting — which flaked CI's coverage run on whichever
-// test files lost the race. busy_timeout must be set first.
+// The provider module-load singletons open the shared global memory DB on
+// import, so parallel vitest workers (and real multi-surface AFK runs) cold-open
+// the same file at once. Enabling WAL needs a brief EXCLUSIVE lock that SQLite
+// does NOT cover with busy_timeout, so a contended switch throws SQLITE_BUSY
+// immediately — which flaked CI's coverage run on whichever test files lost the
+// race ("database is locked", 0 tests collected). enableWalMode() defends this:
+// busy_timeout is set first (so the mode READ is protected), the switch is
+// skipped when the DB is already WAL, and the cold-start race is bound-retried.
 // ---------------------------------------------------------------------------
 
-describe('SQLite connection setup — pragma ordering', () => {
+describe('SQLite connection setup — WAL-mode concurrency', () => {
   let dir: string;
 
   beforeEach(() => {
     dir = join(
       tmpdir(),
-      `afk-pragma-order-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      `afk-wal-setup-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     );
     mkdirSync(dir, { recursive: true });
   });
@@ -200,7 +202,8 @@ describe('SQLite connection setup — pragma ordering', () => {
     if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
   });
 
-  it('sets busy_timeout before journal_mode=WAL so concurrent opens wait instead of throwing', () => {
+  /** Capture every pragma source string while still executing the real pragma. */
+  function spyPragmaOrder(): string[] {
     const calls: string[] = [];
     const original = Database.prototype.pragma;
     vi.spyOn(Database.prototype, 'pragma').mockImplementation(function (
@@ -210,18 +213,79 @@ describe('SQLite connection setup — pragma ordering', () => {
       if (typeof args[0] === 'string') calls.push(args[0]);
       return original.apply(this, args);
     } as BetterSqlite3.Database['pragma']);
+    return calls;
+  }
 
-    // Constructing the store runs the connection-setup pragmas.
+  it('sets busy_timeout before any journal_mode pragma so the mode read is protected', () => {
+    const calls = spyPragmaOrder();
+
     new MemoryStore(dir);
 
     const busyIdx = calls.findIndex((c) => c.includes('busy_timeout'));
-    const walIdx = calls.findIndex((c) => c.includes('journal_mode'));
+    const journalIdx = calls.findIndex((c) => c.includes('journal_mode'));
 
     expect(busyIdx, 'busy_timeout pragma should be issued').toBeGreaterThanOrEqual(0);
-    expect(walIdx, 'journal_mode pragma should be issued').toBeGreaterThanOrEqual(0);
+    expect(journalIdx, 'journal_mode pragma should be issued').toBeGreaterThanOrEqual(0);
     expect(
       busyIdx,
-      'busy_timeout must precede journal_mode=WAL — otherwise the WAL switch has no busy handler and throws SQLITE_BUSY under concurrent opens',
-    ).toBeLessThan(walIdx);
+      'busy_timeout must precede journal_mode pragmas so contended mode reads wait instead of throwing',
+    ).toBeLessThan(journalIdx);
+  });
+
+  it('skips the exclusive-lock WAL switch when the database is already in WAL mode', () => {
+    // First open switches the on-disk DB to WAL (persisted in the header).
+    new MemoryStore(dir);
+
+    const calls = spyPragmaOrder();
+    // Second open of the same dir should observe 'wal' and NOT re-issue the switch.
+    new MemoryStore(dir);
+
+    expect(calls.some((c) => c === 'journal_mode' || c.startsWith('journal_mode '))).toBe(true);
+    expect(
+      calls.some((c) => /journal_mode\s*=\s*WAL/i.test(c)),
+      'WAL switch must be skipped once the DB is already WAL (avoids a needless exclusive lock)',
+    ).toBe(false);
+  });
+
+  it('retries the WAL switch on SQLITE_BUSY and still constructs', () => {
+    let walSwitchAttempts = 0;
+    const original = Database.prototype.pragma;
+    vi.spyOn(Database.prototype, 'pragma').mockImplementation(function (
+      this: BetterSqlite3.Database,
+      ...args: Parameters<BetterSqlite3.Database['pragma']>
+    ) {
+      const src = args[0];
+      if (typeof src === 'string' && /journal_mode\s*=\s*WAL/i.test(src)) {
+        walSwitchAttempts++;
+        if (walSwitchAttempts < 3) {
+          const err = new Error('database is locked') as Error & { code: string };
+          err.code = 'SQLITE_BUSY';
+          throw err;
+        }
+      }
+      return original.apply(this, args);
+    } as BetterSqlite3.Database['pragma']);
+
+    // Two simulated SQLITE_BUSY collisions must not make construction throw.
+    expect(() => new MemoryStore(dir)).not.toThrow();
+    expect(walSwitchAttempts).toBeGreaterThanOrEqual(3);
+  });
+
+  it('does not swallow a non-BUSY SQLite error from the WAL switch', () => {
+    const original = Database.prototype.pragma;
+    vi.spyOn(Database.prototype, 'pragma').mockImplementation(function (
+      this: BetterSqlite3.Database,
+      ...args: Parameters<BetterSqlite3.Database['pragma']>
+    ) {
+      const src = args[0];
+      if (typeof src === 'string' && /journal_mode\s*=\s*WAL/i.test(src)) {
+        const err = new Error('disk I/O error') as Error & { code: string };
+        err.code = 'SQLITE_IOERR';
+        throw err;
+      }
+      return original.apply(this, args);
+    } as BetterSqlite3.Database['pragma']);
+
+    expect(() => new MemoryStore(dir)).toThrow(/disk I\/O error/);
   });
 });

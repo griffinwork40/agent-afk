@@ -168,14 +168,10 @@ export class MemoryStore {
     mkdirSync(join(this.dir, PROCEDURES_DIR), { recursive: true });
 
     this.db = new Database(join(this.dir, DB_FILE));
-    // Invariant: busy_timeout MUST be set before journal_mode=WAL. Switching the
-    // journal mode acquires a brief write lock on the database; without a busy
-    // handler already installed, a concurrent opener — parallel test workers, or
-    // multiple AFK surfaces sharing the global memory dir — throws SQLITE_BUSY
-    // immediately instead of waiting. Setting the timeout first makes the WAL
-    // switch (and every later write) wait up to 5s for a contended lock.
+    // busy_timeout makes ordinary contended reads/writes wait up to 5s rather
+    // than failing fast; set it first so it covers everything below.
     this.db.pragma('busy_timeout = 5000');
-    this.db.pragma('journal_mode = WAL');
+    this.enableWalMode();
 
     // Schema versioning guard — prevents silent corruption when the schema
     // evolves across agent-afk versions.
@@ -225,6 +221,37 @@ export class MemoryStore {
     }
 
     this.replayWAL();
+  }
+
+  /**
+   * Switch the database into WAL mode, tolerant of concurrent cold opens.
+   *
+   * Invariant: enabling WAL requires a brief EXCLUSIVE lock, and SQLite does
+   * NOT honor busy_timeout for the journal-mode change — a contended switch
+   * throws SQLITE_BUSY immediately instead of waiting. The global memory DB is
+   * cold-opened concurrently by every AFK surface (and, under vitest, by every
+   * parallel worker via the provider module-load singletons), so the switch
+   * races. WAL is a property persisted in the DB header, so once any opener
+   * wins, the rest only need to observe it: read the mode first (a lock-free
+   * query) and skip the switch when already 'wal', otherwise bound-retry the
+   * brief cold-start contention window. WAL is a concurrency optimization, not
+   * a correctness requirement, but we still surface a non-BUSY error or an
+   * exhausted retry budget rather than masking a genuinely broken DB.
+   */
+  private enableWalMode(): void {
+    const MAX_ATTEMPTS = 50;
+    const BACKOFF_MS = 20;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        if (this.db.pragma('journal_mode', { simple: true }) === 'wal') return;
+        this.db.pragma('journal_mode = WAL');
+        return;
+      } catch (err) {
+        const busy = (err as { code?: string } | null)?.code === 'SQLITE_BUSY';
+        if (!busy || attempt >= MAX_ATTEMPTS) throw err;
+        sleepSync(BACKOFF_MS);
+      }
+    }
   }
 
   // ── Hot memory ──────────────────────────────────────────────
@@ -753,6 +780,16 @@ export class MemoryStore {
       debugLog('WAL append failed (non-fatal):', String(err));
     }
   }
+}
+
+/**
+ * Block the current thread for `ms` without a busy loop, via a never-notified
+ * Atomics.wait on a private SharedArrayBuffer. Used only to back off a
+ * contended WAL-mode switch during MemoryStore construction (rare, bounded).
+ * Node permits Atomics.wait on the main thread (unlike browsers).
+ */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 const SAFE_PROCEDURE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
