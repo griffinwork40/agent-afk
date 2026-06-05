@@ -13,13 +13,7 @@
 npm install -g agent-afk
 ```
 
-Requires Node ≥ 20. Then point it at an API key:
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-# or, for Anthropic OAuth:
-afk login
-```
+Requires Node ≥ 20.
 
 Smoke test:
 
