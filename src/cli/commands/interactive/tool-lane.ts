@@ -304,6 +304,27 @@ export class ToolLane {
       visibleRoots = rootEntries.filter((e) => !e.result || visibleDoneSet.has(e));
     }
 
+    // Invariant: when the overlay mixes a NESTING root (skill / Agent / compose
+    // — each anchors a col-0 ◉ turn-root marker and a descendant spine drawn at
+    // col 0 by renderOverlayChildren) with flat-leaf roots, the flat roots must
+    // ALSO anchor their own col-0 ◉. A flat leaf's bare 2-space lead places its
+    // `●` glyph at col 2 (the NESTING block's depth-1 connector column) with a
+    // BLANK col 0 — so a main-session read_file dispatched after a subagent
+    // renders directly below a `│` spine with nothing in col 0, reading as a
+    // severed / orphaned node that "fell out" of the subagent tree. Anchoring
+    // col 0 with ◉ turns the `│ → ◉` transition into an honest "spine ended,
+    // new root begins" signal, making every root unambiguously parallel to the
+    // dispatch head. A pure flat-leaf turn (no NESTING root) keeps the clean
+    // 2-space lead — there is no spine to collide with, so the marker would be
+    // gratuitous noise on the common case. Mirrors the "each root anchors its
+    // own col-0 ◉ / blank marker" note in tool-lane-render-children.ts. The
+    // scrollback commit path groups same-tool flat roots into one labeled
+    // `×N` line (renderGroupedRootTools), which is not orphan-prone, so it is
+    // intentionally left at the 2-space lead — only the live overlay renders
+    // flat roots as separate rows that can collide with a sibling spine.
+    const hasNestingRoot = visibleRoots.some((e) => NESTING_TOOLS.has(e.toolName));
+    const flatRootLead = hasNestingRoot ? palette.dim(g.turnRoot) : '  ';
+
     for (const entry of visibleRoots) {
       const children = childMap.get(entry.toolUseId);
 
@@ -434,7 +455,7 @@ export class ToolLane {
         }
       } else {
         if (entry.result) {
-          lines.push(clamp('  ' + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName)));
+          lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName)));
           if (entry.diff && !entry.result.isError) {
             // Diff hangs under the outcome line, indented one level deeper
             // (4 spaces) so it visually attaches to this tool entry.
@@ -443,7 +464,7 @@ export class ToolLane {
             }
           }
         } else {
-          lines.push(clamp('  ' + entry.prefix + palette.dim(' …')));
+          lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' …')));
           if (entry.thinkingTail) {
             // Childless Agent entries (a child just opened its thinking block
             // and hasn't yet emitted content or a tool_use) get the tail right
