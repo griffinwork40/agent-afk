@@ -50,14 +50,21 @@ describe('Hot memory', () => {
     expect(store.loadHot()).toBe('version 2');
   });
 
-  it('rejects content exceeding token cap', () => {
-    const big = 'x'.repeat(5300);
-    expect(() => store.saveHot(big)).toThrow('exceeds');
+  it('truncates (never throws) when content exceeds the cap', () => {
+    // Truncation covenant: oversize hot writes are clamped to fit, not
+    // rejected. A hard throw here was a dead-end that forced a destructive
+    // manual re-trim (see fix(memory): HOT.md non-fatal).
+    const usage = store.saveHot('x'.repeat(5300));
+    expect(usage.truncated).toBe(true);
+    const written = store.loadHot()!;
+    expect(written.length).toBeLessThanOrEqual(5250);
+    expect(written).toContain('HOT TRUNCATED');
   });
 
   it('accepts content at the cap boundary', () => {
     const ok = 'x'.repeat(5250);
-    store.saveHot(ok);
+    const usage = store.saveHot(ok);
+    expect(usage.truncated).toBe(false);
     expect(store.loadHot()).toBe(ok);
   });
 });
