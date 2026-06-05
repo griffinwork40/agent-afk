@@ -11,6 +11,20 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.81.0] - 2026-06-05
+
+### Added
+- add auto-release workflow for automated versioning and publishing (4d93403)
+
+### Fixed
+- make HOT.md non-fatal — truncation covenant (#2) (0f91a0f)
+
+### Changed
+- hermetically lock AFK_INTERNAL tier in audience-gate tests (#1) (aeeaa41)
+- Update README to simplify API key instructions (02ba5f9)
+- Revise README for clearer description of Agent AFK (a7da9ce)
+- Initial public release — Agent AFK (0a23cff)
+
 ## [3.80.6] - 2026-06-05
 
 ### Fixed
