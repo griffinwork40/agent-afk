@@ -58,9 +58,28 @@ describe('formatMemorySearchDisplay', () => {
 });
 
 describe('formatMemoryUpdateDisplay', () => {
-  it('hot/set → "hot memory saved"', () => {
+  it('hot/set (legacy shape, no usage) → "hot memory saved"', () => {
     const content = JSON.stringify({ saved: true, target: 'hot' });
     expect(formatMemoryUpdateDisplay(content)).toBe('hot memory saved');
+  });
+
+  it('hot/set with usage → "hot memory saved (N% of cap)"', () => {
+    const content = JSON.stringify({
+      saved: true,
+      target: 'hot',
+      usage: { tokens: 1180, maxTokens: 1500, pct: 79 },
+    });
+    expect(formatMemoryUpdateDisplay(content)).toBe('hot memory saved (79% of cap)');
+  });
+
+  it('hot/set truncated → "hot memory saved (truncated to fit cap)"', () => {
+    const content = JSON.stringify({
+      saved: true,
+      target: 'hot',
+      truncated: true,
+      usage: { tokens: 1500, maxTokens: 1500, pct: 100 },
+    });
+    expect(formatMemoryUpdateDisplay(content)).toBe('hot memory saved (truncated to fit cap)');
   });
 
   it('fact/set → "fact #N set"', () => {

@@ -56,7 +56,7 @@ export function formatMemorySearchDisplay(rawContent: string): string | null {
 
 /**
  * memory_update returns one of:
- * - `{saved, target:'hot'}`                                  → "hot memory saved"
+ * - `{saved, target:'hot', usage, truncated?}`               → "hot memory saved [(N% of cap) | (truncated to fit cap)]"
  * - `{id, action:'set', target:'fact'}`                      → "fact #N set"
  * - `{id, action:'supersede', target:'fact', supersedes}`    → "fact #N supersedes #M"
  * - `{removed, action:'remove', target:'fact'}`              → "fact removed" / "fact not found"
@@ -69,7 +69,15 @@ export function formatMemoryUpdateDisplay(rawContent: string): string | null {
     const parsed: unknown = JSON.parse(rawContent);
     if (!parsed || typeof parsed !== 'object') return null;
     const o = parsed as Record<string, unknown>;
-    if (o['target'] === 'hot' && o['saved'] === true) return 'hot memory saved';
+    if (o['target'] === 'hot' && o['saved'] === true) {
+      if (o['truncated'] === true) return 'hot memory saved (truncated to fit cap)';
+      const usage = o['usage'];
+      if (usage && typeof usage === 'object') {
+        const pct = (usage as Record<string, unknown>)['pct'];
+        if (typeof pct === 'number') return `hot memory saved (${pct}% of cap)`;
+      }
+      return 'hot memory saved';
+    }
     if (o['target'] === 'fact') {
       if (o['action'] === 'remove') {
         return o['removed'] === true ? 'fact removed' : 'fact not found';

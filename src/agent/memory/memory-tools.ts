@@ -8,7 +8,7 @@
  */
 
 import type { AnthropicToolDef, ToolHandler } from '../tools/types.js';
-import { MemoryStore } from './memory-store.js';
+import { MemoryStore, HOT_SOFT_WARN_RATIO } from './memory-store.js';
 import type {
   FactCategory,
   MemoryUpdateAction,
@@ -186,8 +186,27 @@ export function createMemoryHandlers(
             isError: true,
           };
         }
-        store.saveHot(parsed.content);
-        return { content: JSON.stringify({ saved: true, target: 'hot' }) };
+        const usage = store.saveHot(parsed.content);
+        const result: Record<string, unknown> = {
+          saved: true,
+          target: 'hot',
+          usage: { tokens: usage.tokens, maxTokens: usage.maxTokens, pct: usage.pct },
+        };
+        if (usage.truncated) {
+          // Non-fatal overflow: saveHot kept the content and truncated the
+          // tail. Tell the agent so it moves detail to the fact archive
+          // rather than re-submitting an even larger blob.
+          result['truncated'] = true;
+          result['note'] =
+            'Hot memory exceeded the ~1,500-token cap and was truncated from the end ' +
+            '(lowest-priority lines dropped; a sentinel marks the cut). Keep hot memory to a ' +
+            'few durable essentials — move detail to the fact archive with target:"fact".';
+        } else if (usage.pct >= HOT_SOFT_WARN_RATIO * 100) {
+          result['warning'] =
+            `Hot memory is at ${usage.pct}% of the ~1,500-token cap. ` +
+            'Move non-essential lines to the fact archive (target:"fact") before it truncates.';
+        }
+        return { content: JSON.stringify(result) };
       }
 
       // target === 'fact'
