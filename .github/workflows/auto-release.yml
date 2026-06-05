@@ -1,0 +1,173 @@
+name: Auto Release
+
+# Auto-release on merge to main — single-workflow, no-PAT model.
+#
+# On every push to main this computes a SemVer bump from Conventional Commits
+# since the last tag, and — if there is anything releasable — builds, gates on
+# lint+test, bumps package.json, stamps the CHANGELOG (via
+# scripts/generate-changelog.mjs), commits `chore(release): vX.Y.Z`, tags it,
+# pushes, then publishes to npm with provenance and cuts a GitHub Release —
+# ALL IN ONE JOB.
+#
+# Invariant: because the publish happens INLINE in this same job, nothing needs
+# to re-trigger a downstream workflow. That is the entire reason no RELEASE_PAT
+# is required. The bump commit + tag are pushed with the default GITHUB_TOKEN;
+# GitHub suppresses workflow re-triggering for GITHUB_TOKEN-authored pushes, so
+# the tag push does NOT fire publish.yml — which is fine and intended here (no
+# double publish). The `chore(release):` loop guard below is what stops THIS
+# workflow from re-running on the bump commit it just pushed.
+#
+# publish.yml remains the manual / recovery path: a human `pnpm release` from a
+# laptop pushes a tag under real credentials → publish.yml fires; or dispatch it
+# (workflow_dispatch) against an existing tag to retry a publish that failed
+# after the tag was already pushed here.
+#
+# NOTE: the publish/lint/test steps overlap with publish.yml. That duplication
+# is intentional for now (the two workflows answer different triggers). If it
+# becomes a maintenance burden, fold publish.yml into a `workflow_call` reusable
+# workflow and call it from both — left out here to keep this self-contained.
+
+on:
+  push:
+    branches: [main]
+
+# Serialize releases so two quick merges cannot race on the version bump / tag
+# push. cancel-in-progress: false ⇒ the second merge waits, then computes its
+# bump on top of the first one's tag.
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+# Opt JS-based actions into Node.js 24 ahead of the June 2026 default flip
+# (mirrors ci.yml / publish.yml).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  release:
+    name: Bump, tag, publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Loop guard: skip the `chore(release):` commit this job itself pushes,
+    # otherwise that push-to-main would recurse into another release.
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    permissions:
+      contents: write # push the release commit + tag, create the GitHub Release
+      id-token: write # npm provenance attestation (OIDC)
+    steps:
+      - name: Checkout tip of main (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          # Operate on the branch TIP, not the triggering SHA: under the
+          # concurrency lock this guarantees a second release run sees the first
+          # run's bump commit, so versions never collide on rapid merges.
+          ref: main
+          # parseCommits() and `git describe --tags` need full history + tags;
+          # the default shallow fetch (depth 1, no tags) breaks both.
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Compute next version from Conventional Commits
+        id: bump
+        run: |
+          set -euo pipefail
+          CURRENT=$(jq -r .version package.json)
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          if [ -n "$LAST_TAG" ]; then RANGE="${LAST_TAG}..HEAD"; else RANGE="HEAD"; fi
+          LOG=$(git log --format='%s%n%b' "$RANGE")
+
+          # Conventional Commits → SemVer. `!:` suffix or a "BREAKING CHANGE"
+          # footer ⇒ major; `feat:` ⇒ minor; `fix|perf|refactor:` ⇒ patch.
+          # Anything else (docs/chore/test/ci/style only) ⇒ no release.
+          BUMP=none
+          if grep -qE '^[a-z]+(\([^)]*\))?!:' <<<"$LOG" || grep -q 'BREAKING CHANGE' <<<"$LOG"; then
+            BUMP=major
+          elif grep -qE '^feat(\([^)]*\))?:' <<<"$LOG"; then
+            BUMP=minor
+          elif grep -qE '^(fix|perf|refactor)(\([^)]*\))?:' <<<"$LOG"; then
+            BUMP=patch
+          fi
+
+          if [ "$BUMP" = none ]; then
+            echo "No releasable commits since ${LAST_TAG:-repo start} — skipping."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          IFS=. read -r MA MI PA <<<"$CURRENT"
+          case "$BUMP" in
+            major) NEXT="$((MA + 1)).0.0" ;;
+            minor) NEXT="${MA}.$((MI + 1)).0" ;;
+            patch) NEXT="${MA}.${MI}.$((PA + 1))" ;;
+          esac
+          echo "Bump: $BUMP   $CURRENT -> $NEXT"
+          {
+            echo "release=true"
+            echo "next=$NEXT"
+          } >> "$GITHUB_OUTPUT"
+
+      # ── Everything below runs only when there is a releasable bump. ──
+
+      - name: Build (emit dist/changelog.js for the changelog generator)
+        if: steps.bump.outputs.release == 'true'
+        run: pnpm build
+
+      # Gate before tagging/publishing so we never push a tag or hit npm with a
+      # broken tree. ci.yml already covers PRs; this re-checks the merged result.
+      - name: Lint & test
+        if: steps.bump.outputs.release == 'true'
+        run: pnpm lint && pnpm test
+
+      - name: Bump package.json + stamp CHANGELOG
+        if: steps.bump.outputs.release == 'true'
+        run: |
+          set -euo pipefail
+          pnpm version "${{ steps.bump.outputs.next }}" --no-git-tag-version
+          node scripts/generate-changelog.mjs "${{ steps.bump.outputs.next }}"
+
+      - name: Commit, tag, and push
+        if: steps.bump.outputs.release == 'true'
+        run: |
+          set -euo pipefail
+          NEXT="${{ steps.bump.outputs.next }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json CHANGELOG.md
+          git commit -m "chore(release): v${NEXT}"
+          git tag -a "v${NEXT}" -m "v${NEXT}"
+          # Pushed with the default GITHUB_TOKEN. This deliberately does NOT
+          # re-trigger publish.yml (anti-recursion) — we publish inline below.
+          git push origin HEAD:main --follow-tags
+
+      # Inline publish: the working tree already holds the bumped package.json +
+      # fresh dist, and prepublishOnly rebuilds the tarball, so publish directly.
+      # --provenance emits a signed attestation (needs id-token: write + a public
+      # repo + GitHub-hosted Actions — all true here).
+      - name: Publish to npm (with provenance)
+        if: steps.bump.outputs.release == 'true'
+        run: pnpm publish --no-git-checks --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Not on a tag ref (this is a push: main event), so the tag must be named
+      # explicitly. The tag already exists on the remote from the push above.
+      - name: Create GitHub Release
+        if: steps.bump.outputs.release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.bump.outputs.next }}
+          generate_release_notes: true
