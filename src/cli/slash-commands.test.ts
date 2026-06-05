@@ -84,7 +84,17 @@ function makeCtx(overrides: Partial<SlashContext> = {}): { ctx: SlashContext; li
 }
 
 describe('slash commands — registration', () => {
-  beforeEach(() => { resetRegistry(); registerAll(); });
+  // Lock the internal tier (AFK_INTERNAL not '1') before registerAll() so the
+  // audience gate — read at registration time inside registerBuiltinSkillCommands
+  // — hides internal skills like /audit-fit regardless of the shell environment
+  // (a maintainer machine may export AFK_INTERNAL=1 via ~/.afk/config/afk.env).
+  // Mirrors the hermetic pattern in skill-bridge.test.ts / loading-tips.test.ts.
+  beforeEach(() => {
+    resetRegistry();
+    vi.stubEnv('AFK_INTERNAL', '');
+    registerAll();
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
 
   it('registers every Tier-1 + Tier-3 command at bootstrap', () => {
     const names = list().map((c) => c.name);

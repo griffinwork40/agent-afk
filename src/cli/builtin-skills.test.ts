@@ -9,10 +9,16 @@ import { list, lookup, resetRegistry } from './slash/registry.js';
 describe('builtin-skills slash registration', () => {
   // Each test calls registerAll() itself AFTER stubbing AFK_INTERNAL as
   // needed — the audience gate is read at registration time, so the env
-  // stub must precede the registerAll call.
+  // stub must precede the registerAll call. Default the tier to LOCKED
+  // (AFK_INTERNAL not '1') so internal skills like /audit-fit stay hidden
+  // regardless of the shell environment (a maintainer machine may export
+  // AFK_INTERNAL=1 via ~/.afk/config/afk.env). The unlocked-tier test
+  // re-stubs to '1' itself. Mirrors the hermetic pattern in
+  // skill-bridge.test.ts / loading-tips.test.ts.
   beforeEach(() => {
     resetRegistry();
     vi.unstubAllEnvs();
+    vi.stubEnv('AFK_INTERNAL', '');
   });
 
   afterEach(() => {

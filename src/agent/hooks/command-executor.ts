@@ -196,11 +196,22 @@ export async function executeCommand(
     timer.unref();
 
     // --- Write stdin ---
+    // Invariant: writing to a short-lived hook child's stdin can fail with
+    // EPIPE when the child exits before the write flushes (common for hooks
+    // that ignore stdin). Node delivers that failure ASYNCHRONOUSLY via the
+    // stream's 'error' event — a synchronous try/catch cannot observe it — so
+    // without a listener it escalates to an unhandled error that crashes the
+    // process (and fails CI: vitest counts it among "Errors" and exits
+    // non-zero). The hook decision is derived from stdout + exit code in the
+    // 'close' handler, never from the stdin write, so a dropped write is benign.
+    proc.stdin!.on('error', () => {
+      /* swallow EPIPE/ECONNRESET — child closed its stdin read end early */
+    });
     try {
       proc.stdin!.write(stdinPayload);
       proc.stdin!.end();
     } catch {
-      // Ignore write errors (e.g. if the process already exited).
+      // Ignore synchronous write errors (e.g. stream already destroyed).
     }
 
     // --- Process close ---
