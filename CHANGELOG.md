@@ -11,6 +11,20 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.83.0] - 2026-06-06
+
+### Added
+- flip default skill execution from fork to load (#7) (0deb564)
+
+### Changed
+- Update SKILL.md (d987a3e)
+- Add context field to review skill documentation (13a5ae6)
+
+## [3.82.0] - 2026-06-05
+
+### Added
+- flip gather + parallelize to context: load (#4) (4006c37)
+
 ## [3.81.1] - 2026-06-05
 
 ### Fixed

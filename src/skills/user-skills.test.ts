@@ -443,9 +443,13 @@ Body.
 
 // ---------------------------------------------------------------------------
 // Fix A — SKILL_ROOT injection into forked subagent env
+//
+// These fixtures use `context: fork` because SKILL_ROOT-as-subagent-env only
+// applies to the fork path (the handler injects it). Load-mode skills expand
+// `${SKILL_ROOT}` in-place into the body instead — covered separately below.
 // ---------------------------------------------------------------------------
 
-describe('SKILL_ROOT injection (Fix A)', () => {
+describe('SKILL_ROOT injection (Fix A — fork path)', () => {
   beforeEach(() => {
     _resetRegistry();
     mkdirSync(skillsDir, { recursive: true });
@@ -470,6 +474,7 @@ describe('SKILL_ROOT injection (Fix A)', () => {
       `---
 name: ${skillName}
 description: Processes PDF files
+context: fork
 ---
 
 You process PDF files. Scripts are in \${SKILL_ROOT}/scripts/.
@@ -498,6 +503,7 @@ You process PDF files. Scripts are in \${SKILL_ROOT}/scripts/.
       `---
 name: ${skillName}
 description: Runs data analysis
+context: fork
 ---
 
 You analyze data.
@@ -517,5 +523,88 @@ You analyze data.
     expect(skillRoot.endsWith(skillName)).toBe(true);
     // Must be absolute (starts with /).
     expect(skillRoot.startsWith('/')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// context: load default (2026-06 load-by-default flip)
+//
+// Disk skills now honor the SKILL.md `context:` field with the same default as
+// plugin skills: in-context LOAD unless `context: fork` is explicit. Load mode
+// is wired by setting `context: 'load'` + `loadBody` (with `${SKILL_ROOT}`
+// expanded in-place) on the registered metadata, so the SkillExecutor's load
+// path returns the body to the current agent instead of forking.
+// ---------------------------------------------------------------------------
+
+describe('context: load default', () => {
+  beforeEach(() => {
+    _resetRegistry();
+    mkdirSync(skillsDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // cleanup best-effort
+    }
+  });
+
+  function writeSkill(name: string, frontmatterExtra: string, body: string): string {
+    const dir = join(skillsDir, name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: a ${name} skill${frontmatterExtra}\n---\n\n${body}\n`,
+    );
+    return dir;
+  }
+
+  it('a SKILL.md WITHOUT a context field registers as load (context=load + loadBody)', () => {
+    writeSkill('leaf-skill', '', 'Do the leaf thing.');
+    scanAndRegisterUserSkills();
+    const skill = getSkill('leaf-skill');
+    expect(skill.context).toBe('load');
+    expect(skill.loadBody).toContain('Do the leaf thing.');
+  });
+
+  it('context: load is honored explicitly', () => {
+    writeSkill('explicit-load', '\ncontext: load', 'Loaded body.');
+    scanAndRegisterUserSkills();
+    const skill = getSkill('explicit-load');
+    expect(skill.context).toBe('load');
+    expect(skill.loadBody).toContain('Loaded body.');
+  });
+
+  it('context: fork leaves context unset (routes to the forking handler) and sets no loadBody', () => {
+    writeSkill('forker', '\ncontext: fork', 'Forked body.');
+    scanAndRegisterUserSkills();
+    const skill = getSkill('forker');
+    // Fork disk skills stay on the inline→handler path; the executor's own
+    // fork branch expects prompts/system.md, which disk skills do not have.
+    expect(skill.context).toBeUndefined();
+    expect(skill.loadBody).toBeUndefined();
+  });
+
+  it('expands ${SKILL_ROOT} and $SKILL_ROOT in the load body to the absolute skill dir', () => {
+    const dir = writeSkill(
+      'rooted',
+      '',
+      'Run "${SKILL_ROOT}/scripts/go.sh" then $SKILL_ROOT/bin/x.',
+    );
+    scanAndRegisterUserSkills();
+    const skill = getSkill('rooted');
+    expect(skill.loadBody).toContain(`"${dir}/scripts/go.sh"`);
+    expect(skill.loadBody).toContain(`${dir}/bin/x`);
+    expect(skill.loadBody).not.toContain('$SKILL_ROOT');
+    expect(skill.loadBody).not.toContain('${SKILL_ROOT}');
+  });
+
+  it('an unknown context value (typo) falls through to the load default', () => {
+    writeSkill('typoed', '\ncontext: lod', 'Body.');
+    scanAndRegisterUserSkills();
+    const skill = getSkill('typoed');
+    expect(skill.context).toBe('load');
+    expect(skill.loadBody).toContain('Body.');
   });
 });

@@ -35,9 +35,9 @@ const __dirname = dirname(__filename);
 // test cannot prevent that on its own — but the hash-bump moment forces the
 // developer to look at both copies.
 const PINNED_HASHES = {
-  contract: '0b7febafec024e8dd4404f75e84d21ee72b1b1846d6e2610aaa82ba77f9d6f2d',
+  contract: '748eaf01deda592913f463b23c81a6be3a89ae3b316f31f531a8488dc5bc1a7c',
   'devils-advocate':
-    '84275b097fa3ed270b0b71c87e2dad0366794fd7efc7a47d29abaa85da97f974',
+    'a86982c9d8e2ec65e409f92b2715f551c4d6861b08bb10ac5e20e1e6f1717efa',
   // gather + parallelize carry a bundled-only `context: load` frontmatter line
   // (2026-06 skill-execution-mode work). `context` is an agent-afk-specific
   // field; Claude Code upstream skills are natively inline/progressive-disclosure,
@@ -45,35 +45,35 @@ const PINNED_HASHES = {
   // divergence (allowlisted in INTENTIONAL_DIFFS below). See docs/skill-load-mode.md.
   gather: '26ef18dde7db7c313655b0fe3097f14966763298ff5a2fe643ccf18d0f6b29c0',
   'ground-claim':
-    'd877c1e7de08ecb8788677f6a8f3b51f5d48cefefbf4019af2e37ac1484a95bb',
-  // Hash bumped to add `read-only: true` frontmatter — the agent-afk
-  // read-only-skill enforcement feature (forked child gets the RECON tool
-  // allowlist + mutating-bash guard). Bundled-only for now; the upstream
-  // ground-state SKILL.md should mirror the frontmatter when the feature
-  // lands there. The bundled-only `read-only: true` line is allowlisted in
+    '1fe26f35fe858932ba1a42e5c2d4927e3b404a7b7995680b37b3e84a63912b72',
+  // ground-state carries TWO bundled-only frontmatter lines after the merge of
+  // the read-only-skill feature (PR #5) and the 2026-06 load-by-default flip
+  // (PR #7): `read-only: true` (forked child gets the RECON tool allowlist +
+  // mutating-bash guard) AND `context: fork` (pins it to forking so the recon
+  // wave keeps dispatching). Both lines are allowlisted in
   // INTENTIONAL_DIFFS['ground-state'] below so the normalized-drift test passes.
   'ground-state':
-    '9ab4972937286ef56b79560a67949c7557750db8a8ba216d4de628f529b10d86',
+    'f8b23fdeb98994b69ec9620bc3a73991a6767e830b5a8d5c8e2d9a53a1f16013',
   // intent-lock is bundled-only (no upstream counterpart).
   // Hash bumps need no parallel PR — document the change in the
   // commit message instead.
   'intent-lock':
-    '7a466075e5a64c1145b97aa24b9a6990a3ee1dc818b93c158433e53d7416aef0',
+    'a0844035c011205eaab9b61e793c4dbe32a48eea0f84ae9fa7b7b4a59e801066',
   // parallelize: bundled-only `context: load` added — see the gather note above.
   parallelize:
     'be8b2a301fe35d86d96d4be6f8418bf497dd9050767a3837cf057d7d5a1cd719',
   // refactor is bundled-only (no upstream example-plugin counterpart); verbatim
   // copy of the user-scope /refactor at ~/.afk/skills/.
-  refactor: '23ab4836653159deeafbca45e516af8d43e8c5275535613e36f7bcb2d77de64e',
-  research: '0d04d0a05891ed1b63679e5a0237b743364a6165731a8f694c5584ed7661505f',
-  review: '816ea27cf665be23c67cf887d639d40e1435954f80ceeb43740bcd7f39c205e7',
+  refactor: '9cb84710ddf2cf63e1a648460a64656d3f4a9aae8e21753b031556070740c51e',
+  research: '10692d77e392cedce928f66cb5dec27dbc2066f48cfc33047820f56506da762a',
+  review: '581a1068ea9e47b4309b3fbf2701ad8ec1de1fb7b5b171bb8b607395fe290033',
   'shadow-verify':
-    '8bce741e55be049a196ed6c71efd0acd271f272a8e2202917c3f1243b875eb33',
-  ship: '4b9a0e40372c36f953ad6d37347e1682950c9825ca5e312fae4e9b320cde975f',
+    '9b1ea7db65485f849ae6dfb9a6f69a102d7ccc6e5230b561dc76ef8c666475f8',
+  ship: '95f6410600af55fa9fa0312a48d3eebb37ef18ca98dd73ccba840b7136f83b69',
   // simplify is bundled-only (no upstream example-plugin counterpart).
   simplify:
-    'b863890eead7011c90d4f93b65e5a1533c8f88292728ec771f8b128e9535d996',
-  spec: 'c08f3b4fbe1f585b1e8354a000e0d2d3a48455ad322c7a27112d509aa9698fe7',
+    'f9c9e93b1263ed782b5703b6f30fd981908b0af1fa219d0124405a318ff2756e',
+  spec: '167e7cbb84de5b716efa11bb9f20a6e4b940f6f9a6d1812a7fbd735dae4f67dd',
 } as const;
 
 type SkillName = keyof typeof PINNED_HASHES;
@@ -154,6 +154,14 @@ const INTENTIONAL_DIFFS: Partial<Record<SkillName, RegExp[]>> = {
     /^\/contract$/,
     // Upstream side: /agent-workflow-amplifiers:contract invocation.
     /\/agent-workflow-amplifiers:contract/,
+    // Bundled-only agent-afk execution-mode field. LOAD (not fork): the current
+    // agent orchestrates the critic wave and the advisory recommendation feeds
+    // ITS OWN decision (structurally identical to /parallelize). The critics +
+    // synthesizer stay independent as dispatched sub-agents either way, so fork
+    // adds an orchestration layer without adding independence. (Moved fork→load
+    // by user review, 2026-06.) Claude Code skills are natively inline → no
+    // upstream counterpart. See docs/skill-load-mode.md.
+    /^context: load$/,
   ],
   parallelize: [
     // Same structural divergence as devils-advocate — different contract
@@ -168,6 +176,10 @@ const INTENTIONAL_DIFFS: Partial<Record<SkillName, RegExp[]>> = {
     // Same structural divergence as devils-advocate.
     /^\/contract$/,
     /\/agent-workflow-amplifiers:contract/,
+    // Bundled-only `context: fork` pin — independence of the verifier wave
+    // requires an isolated context, so it must keep forking after the
+    // load-by-default flip. See devils-advocate note.
+    /^context: fork$/,
   ],
 
   // gather: bundled-only `context: load` execution-mode field (no upstream
@@ -185,6 +197,10 @@ const INTENTIONAL_DIFFS: Partial<Record<SkillName, RegExp[]>> = {
   research: [
     /if the research-agent is not available/,
     /if the private plugin is not installed/,
+    // Bundled-only `context: fork` pin — research fans out parallel
+    // context-gathering sub-agents and must keep that work in an isolated
+    // context after the load-by-default flip. See devils-advocate note.
+    /^context: fork$/,
   ],
 
   // ship — 3 divergences, all #441 back-port gaps:
@@ -227,6 +243,10 @@ const INTENTIONAL_DIFFS: Partial<Record<SkillName, RegExp[]>> = {
     /then proceed immediately to commit\. Do not wait for approval\./,
     // Bullet ordering divergence (3 above).
     /\*\*Never\*\* `git push origin main` \(or `master`\)\. Pushing the feature branch is the only allowed form\./,
+    // Bundled-only `context: fork` pin — /ship is a heavy multi-phase release
+    // orchestrator kept in an isolated context after the load-by-default flip.
+    // See devils-advocate note.
+    /^context: fork$/,
   ],
 
   // review — namespace-only divergence (back-port landed; #441 closed):
@@ -247,20 +267,36 @@ const INTENTIONAL_DIFFS: Partial<Record<SkillName, RegExp[]>> = {
     /^\/contract$/,
     // Upstream side: /agent-workflow-amplifiers:contract invocation.
     /\/agent-workflow-amplifiers:contract/,
+    // Bundled-only `context: fork` pin — review dispatches parallel dimension
+    // agents and must keep that work isolated after the load-by-default flip.
+    // (Already carried `context: fork` before the flip; allowlisted here for
+    // the co-located drift comparison.) See devils-advocate note.
+    /^context: fork$/,
   ],
 
-  // ground-state — agent-afk-only read-only-skill enforcement frontmatter:
-  //   The bundled copy carries `read-only: true` in its frontmatter. This is
-  //   the marker the agent-afk runtime keys on to give ground-state's forked
-  //   reconnaissance subagent a restricted RECON tool allowlist (no
-  //   write_file/edit_file) plus a mutating-bash guard — enforcing the
-  //   "This skill never edits files" constraint that was previously prose-only
-  //   (the subagent had FULL write tools and was observed making 22 edit_file +
-  //   27 bash calls in one session). The upstream ground-state SKILL.md has no
-  //   equivalent enforcement layer yet, so the frontmatter line is bundled-only.
-  //   When upstream adopts read-only enforcement, mirror the frontmatter there
-  //   and remove this allowlist entry. Flagged for cross-repo reconciliation.
-  'ground-state': [/^read-only: true$/],
+  // ground-state — TWO bundled-only frontmatter lines, both allowlisted:
+  //   1. `read-only: true` (read-only-skill feature): the marker the agent-afk
+  //      runtime keys on to give ground-state's forked reconnaissance subagent a
+  //      restricted RECON tool allowlist (no write_file/edit_file) plus a
+  //      mutating-bash guard — enforcing the "never edits files" constraint that
+  //      was previously prose-only (the subagent had FULL write tools and was
+  //      observed making 22 edit_file + 27 bash calls in one session).
+  //   2. `context: fork` (2026-06 load-by-default flip): pins ground-state to
+  //      forking so its recon wave keeps dispatching.
+  //   The upstream ground-state SKILL.md has neither layer yet, so both lines are
+  //   bundled-only. When upstream adopts either, mirror the frontmatter there and
+  //   drop the matching pattern. Flagged for cross-repo reconciliation.
+  'ground-state': [/^read-only: true$/, /^context: fork$/],
+  spec: [/^context: fork$/],
+
+  // ground-claim: bundled-only `context: load` field. Unlike the fork-pinned
+  // skills, ground-claim dispatches NO sub-agents — it is a pre-answer guard
+  // that must run in the caller's context to see the reasoning it grounds
+  // (a forked guard cannot inspect the parent's accumulated context). A
+  // /devils-advocate review (2026-06) flagged the original fork pin as a
+  // semantic error and moved it to load. Claude Code skills are natively
+  // inline → no upstream counterpart. See docs/skill-load-mode.md.
+  'ground-claim': [/^context: load$/],
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
