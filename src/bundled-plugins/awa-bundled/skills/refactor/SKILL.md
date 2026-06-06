@@ -7,6 +7,7 @@ failure_modes:
   - dependency blindness
   - false completeness
   - premature execution
+context: fork
 ---
 
 ## Sub-agent contract
