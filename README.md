@@ -87,7 +87,6 @@ afk chat "refactor this" --model codex
 | `opus` | Complex reasoning, multi-step planning, long contexts |
 | `sonnet` | Day-to-day default — balanced speed and capability |
 | `haiku` | Fast, cheap, one-shots |
-| `codex` | OpenAI's GPT-5 family via `@openai/codex-sdk` |
 
 ## Useful commands
 
