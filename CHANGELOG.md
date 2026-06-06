@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.84.0] - 2026-06-06
+
+### Added
+- redesign /skills listing + detail UX (phase 1) (#14) (cf5e6f0)
+
 ## [3.83.1] - 2026-06-06
 
 ### Fixed
