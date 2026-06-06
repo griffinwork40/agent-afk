@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.83.1] - 2026-06-06
+
+### Fixed
+- clamp diff body lines to terminal width in nested tool-lane paths (#9) (a3b38b5)
+
 ## [3.83.0] - 2026-06-06
 
 ### Added
