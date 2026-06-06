@@ -13,13 +13,15 @@
 npm install -g agent-afk
 ```
 
-Requires Node ≥ 20.
+Requires Node ≥ 22.
 
 Smoke test:
 
 ```bash
-afk chat "hello"
+afk --version    # confirm the install (works before login)
 afk doctor       # environment self-check
+afk login        # save an Anthropic API key or OAuth token
+afk chat "hello"
 ```
 
 ## What you can do with it

@@ -12,7 +12,7 @@
     "NOTICE"
   ],
   "scripts": {
-    "postinstall": "node scripts/postinstall.mjs || true",
+    "postinstall": "node dist/postinstall.mjs || node scripts/postinstall.mjs || true",
     "build": "tsc && node scripts/copy-prompts.js",
     "dev": "tsx watch src/cli/index.ts",
     "start": "node dist/cli/index.js",
@@ -63,7 +63,7 @@
     "url": "https://github.com/griffinwork40/agent-afk/issues"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",
