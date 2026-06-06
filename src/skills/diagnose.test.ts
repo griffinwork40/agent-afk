@@ -41,7 +41,7 @@ function createValidVerificationResult(
 ): z.infer<typeof VerificationResultSchema> {
   return {
     hypothesis_id: hypothesisId,
-    reproducer_passed: passed,
+    predicted_pass: passed,
     regressions: [],
     confidence: passed ? 0.9 : 0.2,
     verification_log: `Verification for ${hypothesisId}: ${passed ? 'PASSED' : 'FAILED'}`,
@@ -119,12 +119,36 @@ describe('Diagnose Skill', () => {
     it('requires all fields including confidence', () => {
       const invalid = {
         hypothesis_id: 'h1',
-        reproducer_passed: true,
+        predicted_pass: true,
         regressions: [],
         // missing confidence and verification_log
       };
       const result = VerificationResultSchema.safeParse(invalid);
       expect(result.success).toBe(false);
+    });
+
+    it('accepts predicted_pass field (new name)', () => {
+      const valid = {
+        hypothesis_id: 'h1',
+        predicted_pass: true,
+        regressions: [],
+        confidence: 0.9,
+        verification_log: 'Read fix at src/file.ts:42. Type narrowing looks correct.',
+      };
+      expect(VerificationResultSchema.safeParse(valid).success).toBe(true);
+    });
+
+    it('rejects object with old reproducer_passed key (field renamed)', () => {
+      // reproducer_passed was renamed to predicted_pass — the old key is unknown
+      // and the required predicted_pass field is missing, so parse must fail.
+      const withOldKey = {
+        hypothesis_id: 'h1',
+        reproducer_passed: true, // old name — schema no longer recognizes it
+        regressions: [],
+        confidence: 0.9,
+        verification_log: 'old format',
+      };
+      expect(VerificationResultSchema.safeParse(withOldKey).success).toBe(false);
     });
 
     it('allows empty regressions array', () => {
@@ -664,7 +688,7 @@ describe('Diagnose Skill', () => {
     });
     const v = (id: string, passed: boolean, regressions: string[] = []): VerificationResult => ({
       hypothesis_id: id,
-      reproducer_passed: passed,
+      predicted_pass: passed,
       regressions,
       confidence: passed ? 0.9 : 0.2,
       verification_log: '',
@@ -741,6 +765,53 @@ describe('Diagnose Skill', () => {
         outcome: 'bogus' as unknown,
       };
       expect(DiagnosisResultSchema.safeParse(result).success).toBe(false);
+    });
+  });
+
+  describe('verify prompt honest-labeling regression', () => {
+    let verifyPrompt: string;
+
+    beforeEach(() => {
+      const prompts = loadSkillPrompts('diagnose');
+      verifyPrompt = prompts['verify.md'] ?? '';
+    });
+
+    it('does not instruct applying the fix or running commands', () => {
+      // The verifier is read-only (Edit/Write/Bash disabled) so the prompt
+      // must not tell it to apply the fix or execute the reproducer.
+      expect(verifyPrompt).not.toMatch(/apply the (proposed|minimal) fix/i);
+      expect(verifyPrompt).not.toMatch(/run the reproducer/i);
+      expect(verifyPrompt).not.toMatch(/run related test suite/i);
+    });
+
+    it('contains read-only / prediction language', () => {
+      expect(verifyPrompt).toMatch(/static|read-only|prediction/i);
+      expect(verifyPrompt).toMatch(/Edit.*Write.*Bash|Bash.*disabled|read.only restrictions/i);
+    });
+
+    it('uses predicted_pass in the JSON example block', () => {
+      expect(verifyPrompt).toContain('"predicted_pass"');
+      expect(verifyPrompt).not.toContain('"reproducer_passed"');
+    });
+
+    it('VerificationResultSchema accepts predicted_pass and rejects reproducer_passed', () => {
+      const withNew = {
+        hypothesis_id: 'h1',
+        predicted_pass: true,
+        regressions: [],
+        confidence: 0.8,
+        verification_log: 'Read code — fix looks correct.',
+      };
+      expect(VerificationResultSchema.safeParse(withNew).success).toBe(true);
+
+      const withOld = {
+        hypothesis_id: 'h1',
+        reproducer_passed: true,
+        regressions: [],
+        confidence: 0.8,
+        verification_log: 'old format',
+      };
+      expect(VerificationResultSchema.safeParse(withOld).success).toBe(false);
     });
   });
 

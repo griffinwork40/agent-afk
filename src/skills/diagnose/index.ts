@@ -209,7 +209,10 @@ export type PremiseVerification = z.infer<typeof PremiseVerificationSchema>;
  */
 export const VerificationResultSchema = z.object({
   hypothesis_id: z.string(),
-  reproducer_passed: z.boolean(),
+  // Static code-reading prediction: true if the fix is predicted to make the
+  // reproducer pass based on reading code; false otherwise. This is NOT an
+  // executed test result — the verifier runs read-only (Edit/Write/Bash disabled).
+  predicted_pass: z.boolean(),
   regressions: z.array(z.string()),
   confidence: z.number().min(0).max(1),
   verification_log: z.string(),
@@ -673,17 +676,17 @@ async function handler(
 
   const verificationResults = await Promise.all(verificationPromises);
 
-  // Phase 5: Select winner. Among hypotheses whose reproducer passed with
+  // Phase 5: Select winner. Among hypotheses whose predicted_pass is true with
   // no regressions, take the highest-confidence one (tiebreak); fall back
-  // to any reproducer_passed result so we preserve the prior behavior of
+  // to any predicted_pass result so we preserve the prior behavior of
   // surfacing a winner even when regressions exist. Sort is stable, so
   // ties between equal-confidence results resolve to the earlier hypothesis.
   const cleanPasses = verificationResults
-    .filter((r) => r.reproducer_passed && r.regressions.length === 0)
+    .filter((r) => r.predicted_pass && r.regressions.length === 0)
     .slice()
     .sort((a, b) => b.confidence - a.confidence);
   const winner =
-    cleanPasses[0] ?? verificationResults.find((r) => r.reproducer_passed);
+    cleanPasses[0] ?? verificationResults.find((r) => r.predicted_pass);
 
   // Phase 6: Compute named outcome and the advisory next-skill recommendation.
   const outcome = computeOutcome(hypotheses, verificationResults);
@@ -833,7 +836,7 @@ export function computeOutcome(
 ): DiagnosisOutcome {
   if (hypotheses.length === 0) return 'no_hypotheses';
   const passes = verificationResults.filter(
-    (r) => r.reproducer_passed && r.regressions.length === 0,
+    (r) => r.predicted_pass && r.regressions.length === 0,
   );
   if (passes.length === 1) return 'clear_winner';
   if (passes.length >= 2) return 'multiple_plausible';
@@ -974,7 +977,7 @@ async function testHypothesisInWorktree(
     if (verificationResult.status !== 'succeeded' || !verificationResult.output) {
       return {
         hypothesis_id: hypothesis.id,
-        reproducer_passed: false,
+        predicted_pass: false,
         regressions: [],
         confidence: 0,
         verification_log: `Verification failed: ${describeFailure(verificationResult)}`,
@@ -985,7 +988,7 @@ async function testHypothesisInWorktree(
   } catch (error) {
     return {
       hypothesis_id: hypothesis.id,
-      reproducer_passed: false,
+      predicted_pass: false,
       regressions: [],
       confidence: 0,
       verification_log: `Error during verification: ${error instanceof Error ? error.message : String(error)}`,
