@@ -84,11 +84,25 @@ export interface SkillMetadata {
    * - `'inline'` — call the handler directly in-process (TS orchestrators).
    * - `'fork'` — route through a subagent fork using the skill's
    *   `prompts/system.md` (delegation; isolated child context).
-   * - `'load'` — load `prompts/system.md` into the CURRENT session as the tool
-   *   result; the calling agent executes it with its existing tools
-   *   (progressive disclosure; no fork). See docs/skill-load-mode.md.
+   * - `'load'` — load `prompts/system.md` (or {@link loadBody}, when set) into
+   *   the CURRENT session as the tool result; the calling agent executes it
+   *   with its existing tools (progressive disclosure; no fork). See
+   *   docs/skill-load-mode.md.
    */
   context?: 'inline' | 'fork' | 'load';
+  /**
+   * In-context body for `context: 'load'` skills whose body does NOT live at
+   * the built-in `src/skills/<name>/prompts/system.md` convention — i.e.
+   * disk-scanned user/project skills, whose body is the SKILL.md content.
+   *
+   * When set, {@link SkillExecutor.executeLoadedRegistrySkill} returns this
+   * string (after `$ARGUMENT(S)` substitution) instead of calling
+   * `loadSkillPrompts(name)`. Built-in load skills leave it unset and keep
+   * resolving their body from the prompts/ directory. `${SKILL_ROOT}` /
+   * `$SKILL_ROOT` placeholders MUST already be expanded by the registrant,
+   * because load mode runs in the current agent (no subagent env injection).
+   */
+  loadBody?: string;
   /** Where the skill came from. Absent or 'builtin' = vendored TS skill; 'user' = scanned from ~/.afk/skills/; 'project' = scanned from <cwd>/.afk/skills/. Plugin skills don't enter this registry. */
   origin?: 'builtin' | 'user' | 'project';
   /** Long-form CLI flags this skill accepts (e.g. ['--auto', '--ship']). Surfaces in tab completion and `/help`. */

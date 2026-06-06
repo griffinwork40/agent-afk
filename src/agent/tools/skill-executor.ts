@@ -247,26 +247,30 @@ export class SkillExecutor {
       // getSkill throws on not-found — fall through to plugin lookup.
     }
 
-    // 2. Try plugin skills (SKILL.md body → subagent dispatch, or in-context
-    //    load when the SKILL.md frontmatter declares `context: load`).
+    // 2. Try plugin skills (SKILL.md body). Default is in-context LOAD; a
+    //    plugin skill forks a subagent ONLY when its frontmatter explicitly
+    //    declares `context: fork`. (History: the default was fork until
+    //    2026-06; flipped to load so authored skills act in-context by
+    //    default. Isolation-critical bundled skills are pinned to
+    //    `context: fork`. See docs/skill-load-mode.md.)
     const pluginSkill = this.getPluginSkillBody(parsed.name);
     if (pluginSkill) {
-      if (pluginSkill.context === 'load') {
-        const bodyWithRoot = pluginSkill.body.replace(
-          /\$\{?PLUGIN_ROOT\}?/g,
-          () => pluginSkill.pluginPath,
-        );
-        return this.executeLoadedPluginSkill(
+      if (pluginSkill.context === 'fork') {
+        return await this.executePluginSkill(
           parsed.name,
-          bodyWithRoot,
+          pluginSkill.body,
+          pluginSkill.pluginPath,
           parsed.arguments,
           call,
         );
       }
-      return await this.executePluginSkill(
+      const bodyWithRoot = pluginSkill.body.replace(
+        /\$\{?PLUGIN_ROOT\}?/g,
+        () => pluginSkill.pluginPath,
+      );
+      return this.executeLoadedPluginSkill(
         parsed.name,
-        pluginSkill.body,
-        pluginSkill.pluginPath,
+        bodyWithRoot,
         parsed.arguments,
         call,
       );
@@ -291,6 +295,7 @@ export class SkillExecutor {
       name: string;
       context?: 'inline' | 'fork' | 'load';
       model?: string;
+      loadBody?: string;
     },
     args: string | undefined,
     call: ToolCall,
@@ -702,13 +707,17 @@ export class SkillExecutor {
   }
 
   /**
-   * Load path for a registry skill (`context: 'load'`). Resolves
-   * `prompts/system.md` (same convention as the fork path), substitutes args,
-   * and returns the framed body for in-context execution. Never forks and
-   * never calls the skill's `handler`.
+   * Load path for a registry skill (`context: 'load'`). Resolves the body in
+   * priority order:
+   *   1. `skill.loadBody` — set by disk-scanned user/project skills, whose
+   *      body is the SKILL.md content (not the built-in prompts/ convention).
+   *      `${SKILL_ROOT}` is already expanded by the registrant.
+   *   2. `loadSkillPrompts(name)['system.md']` — the built-in convention.
+   * Substitutes `$ARGUMENT(S)` and returns the framed body for in-context
+   * execution. Never forks and never calls the skill's `handler`.
    */
   private executeLoadedRegistrySkill(
-    skill: { name: string; model?: string },
+    skill: { name: string; model?: string; loadBody?: string },
     args: string | undefined,
     call: ToolCall,
   ): ToolResult {
@@ -717,19 +726,23 @@ export class SkillExecutor {
     }
     const startMs = Date.now();
     let body: string;
-    try {
-      const prompts = loadSkillPrompts(skill.name);
-      const system = prompts['system.md'];
-      if (!system) {
-        return {
-          content: `Skill "${skill.name}" has context: "load" but no prompts/system.md found`,
-          isError: true,
-        };
+    if (skill.loadBody !== undefined) {
+      body = skill.loadBody;
+    } else {
+      try {
+        const prompts = loadSkillPrompts(skill.name);
+        const system = prompts['system.md'];
+        if (!system) {
+          return {
+            content: `Skill "${skill.name}" has context: "load" but no prompts/system.md found`,
+            isError: true,
+          };
+        }
+        body = system;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { content: `Failed to load skill prompts: ${message}`, isError: true };
       }
-      body = system;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return { content: `Failed to load skill prompts: ${message}`, isError: true };
     }
     const substituted = this.substituteSkillArgs(body, args);
     this.emitLoadTelemetry(skill.name, substituted.length, Date.now() - startMs, skill.model);

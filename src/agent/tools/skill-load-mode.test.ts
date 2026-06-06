@@ -9,7 +9,8 @@
  *   - the framed body + arg echo reach the model as the tool result;
  *   - `$ARGUMENT(S)` substitution applies;
  *   - SKILL.md frontmatter `context: load` flows end-to-end to the executor;
- *   - plugin skills WITHOUT `context: load` keep the historical fork path.
+ *   - plugin skills default to LOAD (since 2026-06); they fork ONLY when the
+ *     frontmatter explicitly declares `context: fork`.
  *
  * See docs/skill-load-mode.md.
  */
@@ -170,7 +171,22 @@ describe('context: load — plugin skills', () => {
     expect(mockFork).not.toHaveBeenCalled();
   });
 
-  it('regression: a plugin skill WITHOUT context: load still forks a subagent', async () => {
+  it('a plugin skill WITHOUT a context field now LOADS in-context (default flipped 2026-06)', async () => {
+    const mockFork = spyNoFork();
+    const executor = makeExecutor();
+    setPluginBodies(executor, [
+      ['plugin-default', { body: 'DEFAULT-BODY for $ARGUMENTS', pluginPath: '/fake' }],
+    ]);
+
+    const result = await executor.execute(makeCall({ name: 'plugin-default', arguments: 'task-y' }));
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('DEFAULT-BODY for task-y');
+    expect(result.content).toContain('loaded into your current context');
+    expect(mockFork).not.toHaveBeenCalled();
+  });
+
+  it('a plugin skill with context: fork still forks a subagent (explicit opt-in)', async () => {
     const mockFork = vi.fn().mockResolvedValue({
       runToResult: vi.fn().mockResolvedValue({ status: 'succeeded', message: { content: 'forked' } }),
       teardown: vi.fn().mockResolvedValue(undefined),
@@ -180,7 +196,7 @@ describe('context: load — plugin skills', () => {
 
     const executor = makeExecutor();
     setPluginBodies(executor, [
-      ['plugin-fork', { body: 'historical fork body', pluginPath: '/fake' }],
+      ['plugin-fork', { body: 'fork body', pluginPath: '/fake', context: 'fork' }],
     ]);
 
     const result = await executor.execute(makeCall({ name: 'plugin-fork' }));
@@ -240,7 +256,10 @@ describe('context: load — SKILL.md frontmatter parsing (end-to-end)', () => {
     }
   });
 
-  it('leaves context undefined when frontmatter omits it (fork default preserved)', () => {
+  it('parser leaves context undefined when frontmatter omits it (executor applies the load default)', () => {
+    // The PARSER stays neutral: an omitted `context:` yields `undefined`. The
+    // load-vs-fork default is applied downstream by SkillExecutor.execute()
+    // (undefined → load since 2026-06), NOT baked in at parse time.
     const dir = mkdtempSync(join(tmpdir(), 'afk-load-fm-'));
     try {
       const skillDir = join(dir, 'skills', 'demo2');

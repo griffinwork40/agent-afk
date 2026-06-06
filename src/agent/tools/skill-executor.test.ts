@@ -1125,7 +1125,7 @@ describe('SkillExecutor', () => {
         },
       });
       (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
-        new Map([[skillName, { body: 'plugin body text', pluginPath: '/fake/plugin' }]]);
+        new Map([[skillName, { body: 'plugin body text', pluginPath: '/fake/plugin', context: 'fork' }]]);
       return { executor, teardown };
     }
 
@@ -1163,7 +1163,7 @@ describe('SkillExecutor', () => {
         },
       });
       (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
-        new Map([['plugin-throw', { body: 'plugin body', pluginPath: '/fake/plugin' }]]);
+        new Map([['plugin-throw', { body: 'plugin body', pluginPath: '/fake/plugin', context: 'fork' }]]);
 
       const result = await executor.execute(makeCall({ name: 'plugin-throw' }));
       expect(result.isError).toBe(true);
@@ -1213,7 +1213,7 @@ describe('SkillExecutor', () => {
       // Pre-populate the cache so `getPluginSkillBody` returns a body for
       // our synthetic name without invoking `discoverPluginSkillBodies`.
       (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
-        new Map([['nest-pin-plugin', { body: 'plugin-body-text', pluginPath: '/fake/plugin' }]]);
+        new Map([['nest-pin-plugin', { body: 'plugin-body-text', pluginPath: '/fake/plugin', context: 'fork' }]]);
 
       await executor.execute(makeCall({ name: 'nest-pin-plugin' }));
 
@@ -1285,7 +1285,7 @@ describe('SkillExecutor', () => {
 
       // Stub the plugin body lookup so executePluginSkill is reached.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (executor as any).pluginBodies = new Map([['nested', { body: 'fake plugin body', pluginPath: '/fake/plugin' }]]);
+      (executor as any).pluginBodies = new Map([['nested', { body: 'fake plugin body', pluginPath: '/fake/plugin', context: 'fork' }]]);
 
       await executor.execute(makeCall({ name: 'nested', arguments: 'go' }));
 
@@ -1348,7 +1348,7 @@ describe('SkillExecutor', () => {
       });
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (executor as any).pluginBodies = new Map([['no-factory', { body: 'body', pluginPath: '/fake/plugin' }]]);
+      (executor as any).pluginBodies = new Map([['no-factory', { body: 'body', pluginPath: '/fake/plugin', context: 'fork' }]]);
 
       await executor.execute(makeCall({ name: 'no-factory' }));
 
@@ -1372,7 +1372,7 @@ describe('SkillExecutor', () => {
       });
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (executor as any).pluginBodies = new Map([['deep', { body: 'body', pluginPath: '/fake/plugin' }]]);
+      (executor as any).pluginBodies = new Map([['deep', { body: 'body', pluginPath: '/fake/plugin', context: 'fork' }]]);
 
       await executor.execute(makeCall({ name: 'deep' }));
 
@@ -1740,7 +1740,7 @@ describe('SkillExecutor', () => {
       });
 
       (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
-        new Map([['plugin-cancelled-partial', { body: 'plugin-body', pluginPath: '/fake/plugin' }]]);
+        new Map([['plugin-cancelled-partial', { body: 'plugin-body', pluginPath: '/fake/plugin', context: 'fork' }]]);
 
       const result = await executor.execute(makeCall({ name: 'plugin-cancelled-partial' }));
 
@@ -1768,7 +1768,7 @@ describe('SkillExecutor', () => {
       });
 
       (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
-        new Map([['plugin-cancelled-no-partial', { body: 'plugin-body', pluginPath: '/fake/plugin' }]]);
+        new Map([['plugin-cancelled-no-partial', { body: 'plugin-body', pluginPath: '/fake/plugin', context: 'fork' }]]);
 
       const result = await executor.execute(makeCall({ name: 'plugin-cancelled-no-partial' }));
 
@@ -1808,7 +1808,7 @@ describe('SkillExecutor', () => {
       });
 
       (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
-        new Map([[skillName, { body, pluginPath: '/fake/plugin' }]]);
+        new Map([[skillName, { body, pluginPath: '/fake/plugin', context: 'fork' }]]);
 
       return { executor, mockForkSubagent };
     }
@@ -1912,7 +1912,7 @@ describe('SkillExecutor', () => {
         },
       });
       (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
-        new Map([['plugin-no-args', { body, pluginPath: '/fake/plugin' }]]);
+        new Map([['plugin-no-args', { body, pluginPath: '/fake/plugin', context: 'fork' }]]);
 
       await executor.execute(makeCall({ name: 'plugin-no-args' }));
 

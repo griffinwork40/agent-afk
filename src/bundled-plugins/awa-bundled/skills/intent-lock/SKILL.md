@@ -1,6 +1,7 @@
 ---
 name: intent-lock
 description: "Fires before multi-step work when the user's request contains ambiguous referents ('the text', 'her Y'), characterizations of unverified entities ('the meeting is substantive'), or identity assumptions (which contact = the user). Emits a one-sentence interpretation lock for fast async correction; escalates to Asking only when interpretation gates an irreversible action AND multiple plausible reads exist."
+context: load
 ---
 
 ## When to invoke

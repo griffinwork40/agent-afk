@@ -1,6 +1,7 @@
 ---
 name: ship
 description: "Release pipeline for already-done local work. Dispatches /ground-state pre-flight, runs the project test suite, drafts a commit message, pushes, and opens a PR with a structured verification summary. Use when local changes are ready to hand off to review — e.g. 'ship this', 'push and open a PR', 'release this work'. Add --verify to trigger an adversarial verifier wave on the diff before a human reads the PR."
+context: fork
 ---
 
 ## Sub-agent contract

@@ -22,10 +22,10 @@ export interface PluginSkillMetadata {
   description?: string;
   argumentHint?: string;
   /**
-   * Execution mode from the `context:` frontmatter field. When `'load'`, the
-   * skill body is loaded into the current session instead of forking a
-   * subagent (see docs/skill-load-mode.md). Absent/other values keep the
-   * historical fork behavior.
+   * Execution mode from the `context:` frontmatter field. The skill forks a
+   * subagent ONLY when this is `'fork'`; absent/`'load'`/other values load the
+   * body into the current session (the default since 2026-06; see
+   * docs/skill-load-mode.md).
    */
   context?: string;
   /** Markdown content after the frontmatter closing `---`. */
