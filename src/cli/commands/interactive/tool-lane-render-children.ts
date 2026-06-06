@@ -264,8 +264,18 @@ function renderOverlayChildren(
           // since the connector itself is 3 cells (`├─ ` / `╰─ `) — the diff
           // hangs visually past it without claiming a sibling slot.
           const diffIndent = indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';
+          // Clamp each diff body line to terminal width. Diff lines are
+          // model-controlled (file content) and routinely exceed `cols`;
+          // without clamping the terminal soft-wraps the overflow to column 0
+          // with no spine gutter, orphaning a flush-left continuation between
+          // siblings (the same orphan-wrap bug every other row-producing path
+          // here guards against). In the live overlay an unclamped wrap also
+          // desyncs the compositor's logical-line row accounting from
+          // log-update's wrap-aware count, making the block flicker on each
+          // repaint. Mirrors the clamp on the root-overlay diff path in
+          // tool-lane.ts.
           for (const line of formatDiffBlock(child.diff, 'overlay', diffIndent)) {
-            lines.push(line);
+            lines.push(clampLineToTerminal(line, cols));
           }
         }
       } else {
@@ -425,8 +435,13 @@ function renderFlushChildren(
           // the overlay path: continue (or close) this child's spine column,
           // then 2 cells past the connector.
           const diffIndent = indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';
+          // Clamp each diff body line to terminal width — see the matching
+          // note on the overlay diff path above. Scrollback is append-only:
+          // an unclamped line that soft-wraps to column 0 orphans its
+          // continuation past the spine gutter permanently, with no repaint
+          // able to repair it.
           for (const line of formatDiffBlock(child.diff, 'flush', diffIndent)) {
-            lines.push(line);
+            lines.push(clampLineToTerminal(line, cols));
           }
         }
       } else {
