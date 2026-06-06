@@ -13,6 +13,9 @@ import {
   classifyAndExtract,
   fixSpansMultipleFiles,
   computeOutcome,
+  runReproducerBaseline,
+  buildVerifierUserPrompt,
+  type BaselineResult,
   type DiagnosisResult,
   type Hypothesis,
   type VerificationResult,
@@ -815,4 +818,228 @@ describe('Diagnose Skill', () => {
     });
   });
 
+});
+
+// =============================================================================
+// runReproducerBaseline — injectable-exec seam tests (no real processes)
+// =============================================================================
+
+/**
+ * Build a fake exec function that the tests inject at the `exec` parameter of
+ * runReproducerBaseline.  All shapes that promisify(execFile) can resolve or
+ * reject are modelled here.
+ */
+type ExecResult = { stdout: string; stderr: string };
+type FakeExec = (
+  file: string,
+  args: string[],
+  opts: object,
+) => Promise<ExecResult>;
+
+function fakeExecSuccess(stdout: string, stderr = ''): FakeExec {
+  return async () => ({ stdout, stderr });
+}
+
+function fakeExecFailure(opts: {
+  code?: number | null;
+  stdout?: string;
+  stderr?: string;
+  killed?: boolean;
+  signal?: string;
+}): FakeExec {
+  return async () => {
+    const err = Object.assign(new Error('process error'), {
+      code: opts.code ?? 1,
+      stdout: opts.stdout ?? '',
+      stderr: opts.stderr ?? '',
+      killed: opts.killed ?? false,
+      signal: opts.signal,
+    });
+    throw err;
+  };
+}
+
+describe('runReproducerBaseline', () => {
+  const CWD = '/fake/repo';
+
+  afterEach(() => {
+    // Restore env after each test that mutates it.
+    delete process.env['AFK_DIAGNOSE_BASELINE'];
+  });
+
+  it('captures non-zero exit code into exitCode without throwing', async () => {
+    const exec = fakeExecFailure({ code: 1, stdout: 'test output', stderr: 'error line' });
+    const result = await runReproducerBaseline('npm test', CWD, exec as never);
+
+    expect(result.skipped).toBe(false);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('test output');
+    expect(result.stderr).toBe('error line');
+    expect(result.timedOut).toBe(false);
+  });
+
+  it('captures zero exit (reproducer passed on current code)', async () => {
+    const exec = fakeExecSuccess('all tests passed', '');
+    const result = await runReproducerBaseline('npm test', CWD, exec as never);
+
+    expect(result.skipped).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('all tests passed');
+    expect(result.stderr).toBe('');
+    expect(result.timedOut).toBe(false);
+  });
+
+  it('sets timedOut when killed === true', async () => {
+    const exec = fakeExecFailure({ code: null, stdout: 'partial', stderr: '', killed: true });
+    const result = await runReproducerBaseline('npm test', CWD, exec as never);
+
+    expect(result.timedOut).toBe(true);
+    expect(result.stdout).toBe('partial');
+  });
+
+  it('sets timedOut when signal is SIGTERM', async () => {
+    const exec = fakeExecFailure({ code: null, stdout: '', stderr: '', killed: false, signal: 'SIGTERM' });
+    const result = await runReproducerBaseline('npm test', CWD, exec as never);
+
+    expect(result.timedOut).toBe(true);
+  });
+
+  it('truncates stdout to last 4000 chars with marker', async () => {
+    const big = 'A'.repeat(5000);
+    const exec = fakeExecFailure({ code: 1, stdout: big, stderr: '' });
+    const result = await runReproducerBaseline('npm test', CWD, exec as never);
+
+    expect(result.stdout.length).toBeLessThanOrEqual(4000 + '...[truncated]\n'.length);
+    expect(result.stdout.startsWith('...[truncated]\n')).toBe(true);
+    // Tail characters must be preserved
+    expect(result.stdout.endsWith('A'.repeat(100))).toBe(true);
+  });
+
+  it('truncates stderr to last 4000 chars with marker', async () => {
+    const big = 'E'.repeat(5000);
+    const exec = fakeExecFailure({ code: 1, stdout: '', stderr: big });
+    const result = await runReproducerBaseline('npm test', CWD, exec as never);
+
+    expect(result.stderr.startsWith('...[truncated]\n')).toBe(true);
+  });
+
+  it('does not truncate output under the limit', async () => {
+    const short = 'X'.repeat(100);
+    const exec = fakeExecSuccess(short, 'err');
+    const result = await runReproducerBaseline('npm test', CWD, exec as never);
+
+    expect(result.stdout).toBe(short);
+  });
+
+  it('skips when command is empty string', async () => {
+    const exec = vi.fn() as unknown as FakeExec;
+    const result = await runReproducerBaseline('', CWD, exec as never);
+
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toContain('no reproducer command detected');
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('skips when AFK_DIAGNOSE_BASELINE=0 is set', async () => {
+    process.env['AFK_DIAGNOSE_BASELINE'] = '0';
+    const exec = vi.fn() as unknown as FakeExec;
+    const result = await runReproducerBaseline('npm test', CWD, exec as never);
+
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toContain('AFK_DIAGNOSE_BASELINE=0');
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('does NOT skip when AFK_DIAGNOSE_BASELINE is unset (default enabled)', async () => {
+    delete process.env['AFK_DIAGNOSE_BASELINE'];
+    const exec = fakeExecSuccess('ok', '');
+    const result = await runReproducerBaseline('npm test', CWD, exec as never);
+
+    expect(result.skipped).toBe(false);
+  });
+});
+
+// =============================================================================
+// buildVerifierUserPrompt
+// =============================================================================
+
+function skippedBaseline(reason = 'no reproducer command detected'): BaselineResult {
+  return { skipped: true, reason, exitCode: null, stdout: '', stderr: '', timedOut: false };
+}
+
+function measuredBaseline(overrides: Partial<BaselineResult> = {}): BaselineResult {
+  return {
+    skipped: false,
+    exitCode: 1,
+    stdout: 'test output',
+    stderr: 'error line',
+    timedOut: false,
+    ...overrides,
+  };
+}
+
+describe('buildVerifierUserPrompt', () => {
+  const hyp = {
+    id: 'h1',
+    claim: 'Type mismatch',
+    location: 'src/foo.ts:42',
+    proposed_fix: 'Change to number',
+  };
+
+  it('includes the BASELINE block when not skipped', () => {
+    const baseline = measuredBaseline({ exitCode: 1, stdout: 'FAIL', stderr: '' });
+    const prompt = buildVerifierUserPrompt(hyp, 'npm test', '/wt/path', baseline);
+
+    expect(prompt).toContain('BASELINE');
+    expect(prompt).toContain('exit code: 1');
+    expect(prompt).toContain('$ npm test');
+    expect(prompt).toContain('FAIL');
+  });
+
+  it('includes "(not run: …)" form when skipped', () => {
+    const baseline = skippedBaseline('no reproducer command detected');
+    const prompt = buildVerifierUserPrompt(hyp, 'npm test', '/wt/path', baseline);
+
+    expect(prompt).toContain('BASELINE');
+    expect(prompt).toContain('(not run: no reproducer command detected)');
+    expect(prompt).not.toContain('exit code:');
+  });
+
+  it('appends TIMED OUT note when timedOut is true', () => {
+    const baseline = measuredBaseline({ exitCode: null, timedOut: true });
+    const prompt = buildVerifierUserPrompt(hyp, 'npm test', '/wt/path', baseline);
+
+    expect(prompt).toContain('TIMED OUT');
+  });
+
+  it('includes guidance to set stance: blocks when exit code is 0', () => {
+    const baseline = measuredBaseline({ exitCode: 0 });
+    const prompt = buildVerifierUserPrompt(hyp, 'npm test', '/wt/path', baseline);
+
+    expect(prompt).toContain('exit code: 0');
+    expect(prompt).toMatch(/stance.*blocks/i);
+  });
+
+  it('does not include stance:blocks guidance when exit code is non-zero', () => {
+    const baseline = measuredBaseline({ exitCode: 1 });
+    const prompt = buildVerifierUserPrompt(hyp, 'npm test', '/wt/path', baseline);
+
+    expect(prompt).not.toMatch(/stance.*blocks/i);
+  });
+
+  it('includes the worktree path', () => {
+    const baseline = skippedBaseline();
+    const prompt = buildVerifierUserPrompt(hyp, 'npm test', '/isolated/worktree', baseline);
+
+    expect(prompt).toContain('/isolated/worktree');
+  });
+
+  it('includes hypothesis fields', () => {
+    const baseline = skippedBaseline();
+    const prompt = buildVerifierUserPrompt(hyp, 'npm test', '/wt', baseline);
+
+    expect(prompt).toContain('Type mismatch');
+    expect(prompt).toContain('src/foo.ts:42');
+    expect(prompt).toContain('Change to number');
+  });
 });

@@ -160,6 +160,175 @@ export function parseShadowVerifyOutput(raw: string): Verification[] {
 
 const execFile = promisify(execFileCallback);
 
+// ---------------------------------------------------------------------------
+// Baseline reproducer execution
+// ---------------------------------------------------------------------------
+
+/**
+ * The result of running the reproducer command ONCE on the current/unfixed
+ * code at the repo root — before any worktree is created.
+ */
+export interface BaselineResult {
+  skipped: boolean;
+  reason?: string;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+}
+
+/**
+ * Truncate a string to its LAST `maxLen` characters, prefixing with a marker
+ * when truncation occurred.  Test failures surface at the end of output.
+ */
+function tailTruncate(s: string, maxLen: number): string {
+  if (s.length <= maxLen) return s;
+  return `...[truncated]\n${s.slice(s.length - maxLen)}`;
+}
+
+/**
+ * Run the detected reproducer command ONCE on the current/unfixed code and
+ * return the measured result as ground truth for the verifier.
+ *
+ * @param command  The raw shell command string extracted by detectReproducer.
+ * @param cwd      MUST be parsedInput.repoPath (the real repo root, which has
+ *                 node_modules). Worktrees lack gitignored deps.
+ * @param exec     Injectable execFile shim — defaults to the module-level
+ *                 promisified execFile so tests can fake it without spawning
+ *                 real processes.
+ *
+ * // Invariant: The parent (orchestrator TS code) executes the SINGLE detected
+ * // reproducer command — NOT a model-chosen command — directly at the repo
+ * // root. This is bounded and faithful to what the developer would run by
+ * // hand, but a true execution sandbox (container / network-egress isolation)
+ * // is tracked as a separate follow-up. The kill switch
+ * // AFK_DIAGNOSE_BASELINE=0 disables execution entirely for environments
+ * // where running untrusted commands at session time is unacceptable.
+ */
+export async function runReproducerBaseline(
+  command: string,
+  cwd: string,
+  exec: typeof execFile = execFile,
+): Promise<BaselineResult> {
+  const TRUNCATE_LEN = 4000;
+
+  // Kill switch: opt out of baseline execution.
+  if (process.env['AFK_DIAGNOSE_BASELINE'] === '0') {
+    return {
+      skipped: true,
+      reason: 'disabled via AFK_DIAGNOSE_BASELINE=0',
+      exitCode: null,
+      stdout: '',
+      stderr: '',
+      timedOut: false,
+    };
+  }
+
+  // Guard: don't run if there's no command.
+  if (!command || !command.trim()) {
+    return {
+      skipped: true,
+      reason: 'no reproducer command detected',
+      exitCode: null,
+      stdout: '',
+      stderr: '',
+      timedOut: false,
+    };
+  }
+
+  try {
+    // Run via shell so the full reproducer string (pipes, env vars, etc.) works.
+    const result = await exec('/bin/sh', ['-c', command], {
+      cwd,
+      timeout: 120_000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    // Zero-exit path — reproducer passed on current code.
+    return {
+      skipped: false,
+      exitCode: 0,
+      stdout: tailTruncate(result.stdout, TRUNCATE_LEN),
+      stderr: tailTruncate(result.stderr, TRUNCATE_LEN),
+      timedOut: false,
+    };
+  } catch (err: unknown) {
+    // promisified execFile rejects on non-zero exit — that IS the expected
+    // baseline case (failing test/reproducer on unfixed code). Read the
+    // structured error properties rather than treating this as a real error.
+    const e = err as {
+      code?: number | string | null;
+      stdout?: string;
+      stderr?: string;
+      killed?: boolean;
+      signal?: string;
+    };
+    const timedOut = e.killed === true || e.signal === 'SIGTERM';
+    const exitCode = typeof e.code === 'number' ? e.code : null;
+    return {
+      skipped: false,
+      exitCode,
+      stdout: tailTruncate(e.stdout ?? '', TRUNCATE_LEN),
+      stderr: tailTruncate(e.stderr ?? '', TRUNCATE_LEN),
+      timedOut,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Verifier prompt construction
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the user prompt sent to the read-only verifier subagent.
+ * Exported for unit testing.
+ */
+export function buildVerifierUserPrompt(
+  hypothesis: { id: string; claim: string; location?: string; proposed_fix?: string },
+  reproducer: string,
+  worktreePath: string,
+  baseline: BaselineResult,
+): string {
+  const baselineBlock = buildBaselineBlock(baseline, reproducer);
+  return (
+    `Test this hypothesis:\n\n` +
+    `Claim: ${hypothesis.claim}\n` +
+    `Location: ${hypothesis.location ?? 'unknown'}\n` +
+    `Proposed fix: ${hypothesis.proposed_fix ?? 'unknown'}\n` +
+    `Reproducer: ${reproducer}\n\n` +
+    `Working directory (isolated): ${worktreePath}\n\n` +
+    baselineBlock
+  );
+}
+
+/**
+ * Render the BASELINE block appended to the verifier prompt.
+ */
+function buildBaselineBlock(baseline: BaselineResult, reproducer: string): string {
+  const lines: string[] = [
+    'BASELINE (measured by the orchestrator on the CURRENT/unfixed code at the repo root — ground truth you MUST NOT contradict):',
+  ];
+  if (baseline.skipped) {
+    lines.push(`(not run: ${baseline.reason ?? 'unknown reason'})`);
+  } else {
+    lines.push(`$ ${reproducer}`);
+    lines.push(
+      `exit code: ${baseline.exitCode ?? 'unknown'}${baseline.timedOut ? ' (TIMED OUT)' : ''}`,
+    );
+    lines.push('stdout (tail):');
+    lines.push(baseline.stdout || '(empty)');
+    lines.push('stderr (tail):');
+    lines.push(baseline.stderr || '(empty)');
+    if (baseline.exitCode === 0) {
+      lines.push(
+        'NOTE: The reproducer PASSED on the current (unfixed) code (exit 0). ' +
+          'The failure may not reproduce or the reproducer may be wrong — set ' +
+          '`stance: "blocks"` and lower confidence.',
+      );
+    }
+  }
+  return lines.join('\n');
+}
+
 /**
  * Schema for a single hypothesis.
  *
@@ -662,6 +831,37 @@ async function handler(
 
   // Phase 4: Test hypotheses in isolated worktrees
   const reproduceCommand = reproducer || parsedInput.failure;
+
+  // Run the reproducer ONCE at the repo root (which has node_modules) to get
+  // a ground-truth baseline BEFORE any worktree is created.  Only run when a
+  // real shell command was detected via detectReproducer — never run prose
+  // failure descriptions.  The baseline is NON-FATAL: any error degrades to
+  // skipped rather than crashing the skill.
+  let baseline: BaselineResult;
+  if (reproducer) {
+    try {
+      baseline = await runReproducerBaseline(reproducer, parsedInput.repoPath);
+    } catch (baselineErr) {
+      baseline = {
+        skipped: true,
+        reason: `baseline execution error: ${baselineErr instanceof Error ? baselineErr.message : String(baselineErr)}`,
+        exitCode: null,
+        stdout: '',
+        stderr: '',
+        timedOut: false,
+      };
+    }
+  } else {
+    baseline = {
+      skipped: true,
+      reason: 'no reproducer command detected',
+      exitCode: null,
+      stdout: '',
+      stderr: '',
+      timedOut: false,
+    };
+  }
+
   const verificationPromises = hypotheses_to_test.map((hypothesis) =>
     testHypothesisInWorktree(
       hypothesis,
@@ -671,6 +871,7 @@ async function handler(
       verifyPrompt,
       manager,
       skillCallId,
+      baseline,
     ),
   );
 
@@ -922,6 +1123,7 @@ async function testHypothesisInWorktree(
   // rather than orphaning at root. Optional — `undefined` preserves legacy
   // (raw session UUID → render-at-root) behavior.
   skillCallId?: string,
+  baseline?: BaselineResult,
 ): Promise<VerificationResult> {
   const worktreePath = join(tmpdir(), `diagnose-hyp-${hypothesis.id}-${Date.now()}`);
   let verifierHandle: SubagentHandle<VerificationResult> | undefined;
@@ -965,12 +1167,15 @@ async function testHypothesisInWorktree(
       ...(skillCallId ? { parentId: skillCallId } : {}),
     });
 
-    const userPrompt = `Test this hypothesis:\n\n` +
-      `Claim: ${hypothesis.claim}\n` +
-      `Location: ${hypothesis.location || 'unknown'}\n` +
-      `Proposed fix: ${hypothesis.proposed_fix || 'unknown'}\n` +
-      `Reproducer: ${reproducer}\n\n` +
-      `Working directory (isolated): ${worktreePath}`;
+    const effectiveBaseline: BaselineResult = baseline ?? {
+      skipped: true,
+      reason: 'baseline not computed',
+      exitCode: null,
+      stdout: '',
+      stderr: '',
+      timedOut: false,
+    };
+    const userPrompt = buildVerifierUserPrompt(hypothesis, reproducer, worktreePath, effectiveBaseline);
 
     const verificationResult = await verifierHandle.runToResult(userPrompt);
 
