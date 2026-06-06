@@ -63,6 +63,10 @@ const GIT_TAG_MUTATING = /\bgit\b[^|;&]*\s+tag\s+-/i;
 const GIT_BRANCH_MUTATING = /\bgit\b[^|;&]*\s+branch\s+-[dDmM]\b/i;
 // `git remote add|remove|rm|set-url|rename`; bare `git remote [-v]` (list) is fine.
 const GIT_REMOTE_MUTATING = /\bgit\b[^|;&]*\s+remote\s+(add|remove|rm|set-url|rename)\b/i;
+// `git worktree remove|prune|move|lock|unlock` mutates the worktree list / filesystem.
+// Bare `git worktree list` is read-only and is intentionally not matched.
+const GIT_WORKTREE_MUTATING =
+  /\bgit\b[^|;&]*\s+worktree\s+(remove|prune|move|lock|unlock)\b/i;
 // `git stash` in any form EXCEPT the read-only `stash list` / `stash show`.
 // A bare `git stash` (implicit push) mutates, so it must be blocked too.
 const GIT_STASH_MUTATING = /\bgit\b[^|;&]*\s+stash\b(?!\s+(list|show)\b)/i;
@@ -90,6 +94,16 @@ const GH_NOUN_MUTATING =
 const GH_API_WRITE_METHOD =
   /\bgh\s+api\b.*(-X|--method)\s+(POST|PUT|PATCH|DELETE)\b/i;
 const GH_API_FIELD = /\bgh\s+api\b.*(\s-f\b|\s-F\b|--field\b)/i;
+// `gh secret/variable/workflow/run/cache/ssh-key/gpg-key <mutating-verb>` — extended
+// write subcommands not covered by the generic GH_NOUN_MUTATING pattern above.
+const GH_EXTENDED_MUTATING =
+  /\bgh\s+(secret|variable|workflow|release|run|cache|ssh-key|gpg-key)\s+(set|run|rerun|cancel|upload|delete|enable|disable)\b/i;
+
+// ── pipe-to-shell ──────────────────────────────────────────────────────────
+// `curl … | bash`, `cat install.sh | sh`, etc. — any pipe whose right-hand side
+// is a shell interpreter is arbitrary remote code execution. Must run against the
+// RAW command so the full pipeline is visible.
+const PIPE_TO_SHELL = /\|\s*(sh|bash|zsh|dash)\b/i;
 
 // ── filesystem mutations ───────────────────────────────────────────────────
 // Bare destructive/creative filesystem verbs. Word-boundary anchored so we
@@ -112,6 +126,21 @@ const FIND_EXEC_MUTATING =
 const CMD_START = String.raw`(?:^|[\n;|&(]|\$\()\s*`;
 const PATCH_CMD = new RegExp(CMD_START + String.raw`patch\b`, 'i');
 const INSTALL_CMD = new RegExp(CMD_START + String.raw`install\b`, 'i');
+// `source` / `. <script>` execute the named file in the current shell, producing
+// arbitrary side effects. CMD_START-anchored so a filepath containing `source`
+// isn't matched.
+const SOURCE_CMD = new RegExp(CMD_START + String.raw`(?:source\b|\.\s+\S)`, 'i');
+
+// ── archive extraction ─────────────────────────────────────────────────────
+// Archive extraction writes files to disk.  These run in STRIPPED_RULES so a
+// quoted grep search term like `grep "tar xzf"` isn't misread as a real invocation.
+// `tar … x …` — any tar flag set that includes `x` (extract mode).
+const TAR_EXTRACT = /\btar\b[^|;&]*\s-?[a-zA-Z]*x[a-zA-Z]*\b/i;
+// `unzip` in command position.
+const UNZIP_CMD = new RegExp(CMD_START + String.raw`unzip\b`, 'i');
+// `cpio -i` (copy-in / extract) writes files; `cpio -o`/`-p` (copy-out / pass)
+// are read-only and intentionally not matched.
+const CPIO_EXTRACT = /\bcpio\b[^|;&]*\s-[a-zA-Z]*i\b/i;
 
 // ── in-place edits ─────────────────────────────────────────────────────────
 // `sed -i ...` and `perl -i` / `perl -<flags>i` edit files in place.
@@ -160,12 +189,16 @@ const ALLOWED_REDIRECTS =
 const ARITHMETIC_EXPANSION = /\$\(\(.*?\)\)/g;
 // After stripping allowed redirects, a surviving redirection operator is a
 // write to a real path. Match `>`/`>>` UNLESS the preceding char makes it part
-// of `=>`, `->`, `<>`, `>>` (second `>`), `>&`/`&>` (fd-dup, stripped above), or
-// arithmetic comparison — i.e. exclude `[=<>&-]` immediately before, and forbid
-// a following `&`. Unlike the old whitespace-anchored form, this also catches
-// token-adjacent redirects (`echo x>file`) while keeping arrow/comparison
-// tokens (`=>`, `->`) — high-frequency in TS/Rust recon — allowed.
-const REAL_REDIRECT = /(?<![=<>&-])>>?(?!&)/;
+// of `=>`, `->`, `<>`, `>>` (second `>`), or an arithmetic comparison — i.e.
+// exclude `[=<>-]` immediately before, and forbid a following `&`.
+// Note: `&` is intentionally NOT in the lookbehind. `&>/dev/null` is already
+// removed by ALLOWED_REDIRECTS above; any surviving `&>` targeting a real path
+// is rewritten to `>` before this check (see `redirectView` construction below),
+// so keeping `&` in the lookbehind would create a blind spot.
+// Unlike the old whitespace-anchored form, this also catches token-adjacent
+// redirects (`echo x>file`) while keeping arrow/comparison tokens (`=>`, `->`)
+// — high-frequency in TS/Rust recon — allowed.
+const REAL_REDIRECT = /(?<![=<>-])>>?(?!&)/;
 
 // Rules evaluated against the RAW command string (Pass 1). These must see the
 // full command (flag positions, chaining). Interpreter payload writes are
@@ -181,6 +214,9 @@ const RAW_RULES: readonly MutationRule[] = [
   { re: GH_NOUN_MUTATING, reason: 'gh write operation' },
   { re: GH_API_WRITE_METHOD, reason: 'gh api write method (POST/PUT/PATCH/DELETE)' },
   { re: GH_API_FIELD, reason: 'gh api field payload (-f/-F/--field)' },
+  { re: GH_EXTENDED_MUTATING, reason: 'gh extended write operation (secret/variable/workflow/run/cache)' },
+  { re: GIT_WORKTREE_MUTATING, reason: 'git worktree mutation (remove/prune/move)' },
+  { re: PIPE_TO_SHELL, reason: 'pipe-to-shell (RCE via piped interpreter)' },
   { re: SED_INPLACE, reason: 'sed in-place edit (-i)' },
   { re: PERL_INPLACE, reason: 'perl in-place edit (-i)' },
   { re: PKG_INSTALL, reason: 'package install/modify' },
@@ -198,6 +234,10 @@ const STRIPPED_RULES: readonly MutationRule[] = [
   { re: FIND_DELETE, reason: 'find -delete (file removal)' },
   { re: PATCH_CMD, reason: 'patch (applies a diff to files)' },
   { re: INSTALL_CMD, reason: 'install (writes files)' },
+  { re: SOURCE_CMD, reason: 'source/dot-source executes a script' },
+  { re: TAR_EXTRACT, reason: 'tar extract (writes files)' },
+  { re: UNZIP_CMD, reason: 'unzip (writes files)' },
+  { re: CPIO_EXTRACT, reason: 'cpio extract (-i mode writes files)' },
 ];
 
 /**
@@ -257,9 +297,15 @@ export function classifyBashCommand(command: string): { mutating: boolean; reaso
   // Pass 3 — output redirection. Strip the allowed no-op sinks and arithmetic
   // comparisons from the stripped view, then look for a surviving `>`/`>>`
   // write to a real path.
+  // Step 1: strip arithmetic expansions and allowed sinks (`>/dev/null`, `2>&1`, etc.).
+  // Step 2: rewrite any surviving `&>>?` that targets a real path (i.e. NOT
+  //   `/dev/null`) to a plain `>>`/`>` so REAL_REDIRECT can catch it.  The
+  //   ALLOWED_REDIRECTS pass above already removed `&>/dev/null` / `&>>/dev/null`,
+  //   so anything still bearing `&>` here is a write to a real file.
   const redirectView = unquoted
     .replace(ARITHMETIC_EXPANSION, ' ')
-    .replace(ALLOWED_REDIRECTS, ' ');
+    .replace(ALLOWED_REDIRECTS, ' ')
+    .replace(/&(>>?)/g, '$1');  // normalize &> realfile → > realfile (ALLOWED_REDIRECTS already removed &>/dev/null)
   if (REAL_REDIRECT.test(redirectView)) {
     return { mutating: true, reason: 'output redirection to a file (`>`/`>>`)' };
   }

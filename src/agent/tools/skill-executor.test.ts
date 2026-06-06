@@ -1706,6 +1706,25 @@ describe('SkillExecutor', () => {
       // skill with no factory, which gets `provider: undefined` (see the
       // "omits provider when no childProviderFactory is configured" test above).
       expect(forkCall?.config?.provider).toBeDefined();
+      // The provider must be read-only — it must NOT grant write_file.
+      // Introspect through the provider's permissions allowedTools list.
+      const provider = forkCall?.config?.provider;
+      const allowedTools: string[] | undefined = (provider as any)?.permissions?.allowedTools;
+      expect(allowedTools, 'provider must have an allowedTools list').toBeDefined();
+      expect(
+        allowedTools?.includes('write_file'),
+        'write_file must NOT be in the fallback provider allowedTools',
+      ).toBe(false);
+      expect(
+        allowedTools?.includes('edit_file'),
+        'edit_file must NOT be in the fallback provider allowedTools',
+      ).toBe(false);
+      // The provider must carry readOnlyBash: true so the dispatcher blocks
+      // mutating bash commands — the other half of read-only enforcement.
+      expect(
+        (provider as any)?.readOnlyBash,
+        'fallback provider must have readOnlyBash: true',
+      ).toBe(true);
     });
 
     it('with NO factory, a NORMAL skill gets no provider (proves the fallback is read-only-gated)', async () => {
