@@ -258,6 +258,52 @@ describe('InputSurface', () => {
       // The pending Promise must have been rejected by dispose().
       await expect(readPromise).rejects.toThrow('disposed');
     });
+
+    it('readLine repaints the prompt before blocking even when already idle (regression: fresh-session prompt invisible until first keypress)', async () => {
+      // Regression: on a fresh `afk interactive` session, armCompositor()
+      // paints the prompt (streaming→idle repaint), then footer subsystems
+      // (loop-stage bar, bg bar) bump StatusLine.extraRows and overwrite the
+      // prompt row. The first readLine() then calls setInputMode('idle') on an
+      // ALREADY-idle compositor — a no-op for the repaint, because the
+      // `prev !== mode` guard (terminal-compositor.ts) suppresses idle→idle
+      // repaints — so the prompt stayed invisible until the user's first
+      // keypress triggered a repaint. readLine() must repaint explicitly so
+      // the prompt shows up immediately. We assert the surface-level invariant
+      // ("readLine paints the prompt before blocking") rather than a specific
+      // call count, so the test stays green under either fix shape.
+      const stdout = makeMockStdout();
+      const stdin = makeMockStdin();
+      const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+
+      await surface.armCompositor({
+        promptFn: () => 'afk › ',
+        onCancel: () => {},
+        stdout,
+        stdin,
+      });
+      const compositor = surface.getCompositor()!;
+      expect(compositor).not.toBeNull();
+      // armCompositor leaves the compositor in idle mode — so the readLine
+      // below exercises the idle→idle (no mode change) path exactly.
+      expect(compositor.getInputMode()).toBe('idle');
+
+      // Spy AFTER arm so we measure only the readLine-triggered repaint, not
+      // armCompositor's own streaming→idle paint. vi.spyOn calls through, so
+      // the real prompt still renders.
+      const repaintSpy = vi.spyOn(compositor, 'repaint');
+
+      // Start readLine but do NOT submit — it blocks waiting for Enter. The
+      // act of calling readLine (idle→idle setInputMode, no queue) must paint
+      // the prompt at least once before blocking. Pre-fix this was zero.
+      const readPromise = surface.readLine({ promptFn: () => 'afk › ' });
+
+      expect(repaintSpy).toHaveBeenCalled();
+
+      // Cleanup: dispose rejects the in-flight readLine promise.
+      repaintSpy.mockRestore();
+      await surface.dispose();
+      await expect(readPromise).rejects.toThrow('disposed');
+    });
   });
 
   /**
