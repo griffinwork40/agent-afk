@@ -2,6 +2,7 @@
 name: ground-claim
 description: "Use when the user asks a meta-capability question about a system/framework/repo ('what does X enable', 'what can this do', 'list the capabilities'). Forces file-read grounding with path:line citations before answering; tags any unverifiable claim as [UNVERIFIED]."
 argument-hint: "<the meta-capability question>"
+context: load
 ---
 
 ## Trigger

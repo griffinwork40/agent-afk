@@ -1,6 +1,7 @@
 ---
 name: ground-state
 description: "Before starting any non-trivial implementation (multi-file edits, new features, config changes, anything that writes), dispatch a parallel pre-flight reconnaissance wave to triangulate git state, project infrastructure, and prior-session memory. Produces a 5-line ground-truth snapshot that grounds the implementation and catches wrong-branch edits, assumed-no-CI, stale origin, and missed memory context before the first edit."
+context: fork
 ---
 
 ## Sub-agent contract
