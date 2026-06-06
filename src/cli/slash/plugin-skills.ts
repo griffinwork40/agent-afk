@@ -49,6 +49,9 @@ import { getMarketplaceCacheDir } from '../../paths.js';
 import { listSkills, getSkill, isSkillVisible, listVisibleSkills, type SkillMetadata } from '../../skills/index.js';
 import { palette } from '../palette.js';
 import { divider } from '../render.js';
+import { wrapToWidth } from '../wrap.js';
+import { getTerminalWidth } from '../terminal-size.js';
+import { padDisplayRight, displayWidth } from '../display.js';
 import { registerPluginAgents } from './plugin-agents.js';
 import { registerOrReplace, register } from './registry.js';
 import {
@@ -315,6 +318,9 @@ export function makeForwardHandler(skill: DiscoveredSkill, flags?: readonly stri
   };
 }
 
+/** Where a listing row's skill came from. Drives the friendly source label. */
+type SkillSource = 'builtin' | 'user' | 'project' | 'plugin';
+
 /** A row in the unified `/skills` listing. */
 interface ListingRow {
   /** Slash form for tab-completion / invocation, e.g. `/mint` or `/example-plugin:mint`. */
@@ -322,13 +328,20 @@ interface ListingRow {
   /** Display form preferred when present, e.g. `/mint <idea>` or `/forge [--brief]`. */
   display: string;
   description: string;
-  /** Source label rendered as a dim badge. Vendored is unlabeled. */
-  sourceLabel?: 'user' | 'plugin';
+  /** Origin of the skill — surfaced as a friendly source label, never a raw badge. */
+  source: SkillSource;
 }
 
 interface ListingGroup {
   main: ListingRow;
   alts: ListingRow[];
+}
+
+/** Map a registry skill's `origin` (absent = vendored) to a listing source. */
+function registryOriginToSource(origin: SkillMetadata['origin']): SkillSource {
+  if (origin === 'user') return 'user';
+  if (origin === 'project') return 'project';
+  return 'builtin';
 }
 
 function buildListingGroups(plugins: DiscoveredSkill[], internalUnlocked: boolean): Map<string, ListingGroup> {
@@ -344,22 +357,22 @@ function buildListingGroups(plugins: DiscoveredSkill[], internalUnlocked: boolea
     }
   };
 
-  // Pass 1: registry skills. Vendored + user — vendored has no badge,
-  // user gets the (user) badge. Names already account for collision
-  // (user-skills.ts shifts colliding names to `user:<name>`).
+  // Pass 1: registry skills (vendored + user + project). Names already account
+  // for collision (user-skills.ts shifts colliding names to `<origin>:<name>`),
+  // so a `user:mint` lands as an alt under the vendored `mint` via addRow's
+  // bare-name keying.
   for (const name of listVisibleSkills(internalUnlocked)) {
     const skill = getSkill(name);
     const slashName = `/${name}`;
     const display = skill.argumentHint
       ? `${slashName} ${skill.argumentHint}`
       : slashName;
-    const row: ListingRow = {
+    addRow({
       slashName,
       display,
       description: skill.description,
-    };
-    if (skill.origin === 'user') row.sourceLabel = 'user';
-    addRow(row);
+      source: registryOriginToSource(skill.origin),
+    });
   }
 
   // Pass 2: plugin skills. Group by bare name so a colliding plugin entry
@@ -380,44 +393,74 @@ function buildListingGroups(plugins: DiscoveredSkill[], internalUnlocked: boolea
       slashName,
       display,
       description: skill.description,
-      sourceLabel: 'plugin',
+      source: 'plugin',
     });
   }
 
   return groups;
 }
 
-function truncateDescription(text: string, max = 80): string {
-  const dot = text.indexOf('. ');
-  const firstSentence = dot >= 0 ? text.slice(0, dot + 1) : text;
-  const base = firstSentence.length <= max ? firstSentence : text;
-  if (base.length <= max) return base;
-  return base.slice(0, max - 1) + '…';
+/** Human-friendly source label — replaces the old raw `(user)`/`(plugin)` badges. */
+function friendlySource(source: SkillSource): string {
+  switch (source) {
+    case 'builtin':
+      return 'built-in';
+    case 'user':
+      return 'user';
+    case 'project':
+      return 'project';
+    case 'plugin':
+      return 'plugin';
+  }
 }
 
-function renderListingGroup(ctx: SlashContext, group: ListingGroup, displayWidth: number): void {
-  const main = group.main;
-  const displayCell = palette.warning(main.display.padEnd(displayWidth));
-  const badge = main.sourceLabel ? palette.dim(`(${main.sourceLabel}) `) : '';
-  ctx.out.line(`  ${displayCell} ${badge}${palette.dim(truncateDescription(main.description))}`);
+/** Sort comparator: alphabetical by bare skill name. */
+function byBareName(a: ListingGroup, b: ListingGroup): number {
+  const an = bareName(a.main.slashName.replace(/^\//, ''));
+  const bn = bareName(b.main.slashName.replace(/^\//, ''));
+  return an.localeCompare(bn);
+}
 
-  for (const alt of group.alts) {
-    const altCell = palette.warning(alt.display.padEnd(Math.max(0, displayWidth - 4)));
-    const altBadge = alt.sourceLabel
-      ? palette.dim(`(${alt.sourceLabel} alt) `)
-      : palette.dim('(alt) ');
-    ctx.out.line(
-      `    ${palette.dim('└')} ${altCell} ${altBadge}${palette.dim(truncateDescription(alt.description))}`,
-    );
+/**
+ * Render one skill as a wrapped two-column row: padded name on the left, the
+ * word-wrapped description on the right (continuation lines hang under the
+ * description column). When a name is too wide for the gutter it takes its own
+ * line. Shadowed/alternative forms render as a dim `↳ also:` continuation line
+ * — visible by default, never hidden behind a flag.
+ */
+function renderGroupRows(
+  ctx: SlashContext,
+  group: ListingGroup,
+  nameW: number,
+  descW: number,
+): void {
+  const { main, alts } = group;
+  const wrapped = wrapToWidth(main.description, descW).split('\n');
+
+  if (displayWidth(main.display) > nameW - 1) {
+    // Name too wide for the gutter — give it its own line, hang the description.
+    ctx.out.line('  ' + palette.warning(main.display));
+    for (const line of wrapped) {
+      ctx.out.line('  ' + ' '.repeat(nameW) + palette.dim(line));
+    }
+  } else {
+    const paddedName = padDisplayRight(palette.warning(main.display), nameW);
+    ctx.out.line('  ' + paddedName + palette.dim(wrapped[0] ?? ''));
+    for (const extra of wrapped.slice(1)) {
+      ctx.out.line('  ' + ' '.repeat(nameW) + palette.dim(extra));
+    }
+  }
+
+  if (alts.length > 0) {
+    const altForms = alts.map((a) => a.slashName).join(', ');
+    for (const altLine of wrapToWidth(`↳ also: ${altForms}`, descW).split('\n')) {
+      ctx.out.line('  ' + ' '.repeat(nameW) + palette.dim(altLine));
+    }
   }
 }
 
 function renderUnifiedListing(ctx: SlashContext, plugins: DiscoveredSkill[], internalUnlocked: boolean): void {
   const groups = buildListingGroups(plugins, internalUnlocked);
-  const total = Array.from(groups.values()).reduce(
-    (n, g) => n + 1 + g.alts.length,
-    0,
-  );
 
   ctx.out.line();
   if (groups.size === 0) {
@@ -426,24 +469,51 @@ function renderUnifiedListing(ctx: SlashContext, plugins: DiscoveredSkill[], int
     return;
   }
 
-  ctx.out.line(palette.bold('Skills') + palette.dim(`  (${total} loaded)`));
-  ctx.out.line(divider());
+  const allGroups = Array.from(groups.values());
+  const altCount = allGroups.reduce((n, g) => n + g.alts.length, 0);
 
-  // Compute the maximum width for the display column so everything aligns.
-  const sortedKeys = Array.from(groups.keys()).sort();
-  const maxDisplay =
-    sortedKeys.reduce((m, k) => {
-      const g = groups.get(k)!;
-      return Math.max(m, g.main.display.length);
-    }, 0) + 2;
+  // Built-in skills carry the richest metadata and are the modal starting
+  // point, so they get their own block at the top. Everything else (user,
+  // project, plugin) follows in a second block. Within each, alphabetical.
+  const builtinGroups = allGroups.filter((g) => g.main.source === 'builtin').sort(byBareName);
+  const otherGroups = allGroups.filter((g) => g.main.source !== 'builtin').sort(byBareName);
 
-  for (const key of sortedKeys) {
-    renderListingGroup(ctx, groups.get(key)!, maxDisplay);
+  // Column widths mirror the help-table layout: name column capped at ~45% of
+  // the terminal, the rest for the wrapped description. Width-aware so narrow
+  // terminals stay readable.
+  const termW = Math.max(20, getTerminalWidth());
+  const maxDisplay = allGroups.reduce((m, g) => Math.max(m, displayWidth(g.main.display)), 0);
+  const nameW = Math.min(maxDisplay + 2, Math.max(10, Math.floor((termW - 2) * 0.45)));
+  const descW = Math.max(12, termW - 2 - nameW);
+
+  // Header + a one-line source legend listing only the sources actually present.
+  ctx.out.line(palette.bold('Skills') + palette.dim(`  (${allGroups.length})`));
+  const present = new Set(allGroups.map((g) => g.main.source));
+  const legend = (['builtin', 'user', 'project', 'plugin'] as const)
+    .filter((s) => present.has(s))
+    .map(friendlySource)
+    .join(' · ');
+  ctx.out.line(palette.dim(`  ${legend} — /skills <name> for details`));
+
+  if (builtinGroups.length > 0) {
+    ctx.out.line();
+    ctx.out.line(divider('Built-in'));
+    for (const g of builtinGroups) renderGroupRows(ctx, g, nameW, descW);
+  }
+  if (otherGroups.length > 0) {
+    ctx.out.line();
+    ctx.out.line(builtinGroups.length > 0 ? divider('Plugins & user skills') : divider());
+    for (const g of otherGroups) renderGroupRows(ctx, g, nameW, descW);
   }
 
   ctx.out.line();
-  ctx.out.line(palette.dim('  Tip: /skills <name> for full details on a skill.'));
-  ctx.out.line(palette.dim('  Source: vendored (no badge), (user), (plugin). Shadowed entries listed under their winner.'));
+  ctx.out.line(
+    palette.dim(
+      altCount > 0
+        ? '  Tip: ↳ also lines show alternative (shadowed) forms · /skills <name> for full details'
+        : '  Tip: /skills <name> for full details on a skill',
+    ),
+  );
   ctx.out.line();
 }
 
@@ -457,6 +527,31 @@ function tryGetRegistrySkill(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Collect the shadowed/alternative forms of a bare skill name — namespaced
+ * registry collisions (`user:`/`project:`) plus shadowed plugin entries. These
+ * are surfaced (not hidden) so a user always knows an alternative exists.
+ */
+function collectAlternatives(
+  bare: string,
+  internalUnlocked: boolean,
+): Array<{ slash: string; source: SkillSource }> {
+  const alternatives: Array<{ slash: string; source: SkillSource }> = [];
+
+  for (const name of listVisibleSkills(internalUnlocked)) {
+    if (name.includes(':') && bareName(name) === bare) {
+      const source = registryOriginToSource(getSkill(name).origin);
+      alternatives.push({ slash: `/${name}`, source });
+    }
+  }
+  for (const collision of state.collisions) {
+    if (collision.bare === bare) {
+      alternatives.push({ slash: collision.altSlash, source: 'plugin' });
+    }
+  }
+  return alternatives;
 }
 
 function renderSkillDetail(
@@ -475,6 +570,7 @@ function renderSkillDetail(
   if (!registrySkill && !pluginSkill) {
     ctx.out.line();
     ctx.out.line(palette.dim(`  No skill found matching "${cleaned}".`));
+    ctx.out.line(palette.dim('  Run /skills to see everything available.'));
     ctx.out.line();
     return;
   }
@@ -483,31 +579,56 @@ function renderSkillDetail(
   const description = registrySkill?.description ?? pluginSkill!.description;
   const hint = registrySkill?.argumentHint ?? pluginSkill?.argumentHint;
   const displayName = hint ? `/${name} ${hint}` : `/${name}`;
-  const origin = registrySkill
-    ? registrySkill.origin ?? 'builtin'
+  const source: SkillSource = registrySkill
+    ? registryOriginToSource(registrySkill.origin)
     : 'plugin';
+
+  // Wrap the body to the terminal width (capped) so long descriptions read as
+  // paragraphs instead of one runaway line.
+  const termW = Math.max(20, getTerminalWidth());
+  const bodyW = Math.max(20, Math.min(termW - 2, 100));
 
   ctx.out.line();
   ctx.out.line(`  ${palette.warning(displayName)}`);
   ctx.out.line();
-  ctx.out.line(`  ${description}`);
-
-  if (registrySkill?.whenToUse) {
-    ctx.out.line();
-    ctx.out.line(`  ${palette.bold('When to use:')}`);
-    ctx.out.line(`  ${palette.dim(registrySkill.whenToUse)}`);
+  for (const line of wrapToWidth(description, bodyW).split('\n')) {
+    ctx.out.line(`  ${line}`);
   }
 
-  const flags = registrySkill?.flags;
-  const pluginFlags = harvestPluginSkillFlags().get(cleaned);
-  const allFlags = flags ?? pluginFlags;
-  if (allFlags && allFlags.length > 0) {
+  // "When to use": structured field for vendored skills; for plugin/user skills
+  // fall back to plucking a "Use when…" sentence out of the description. Skip
+  // when it would merely echo the description verbatim.
+  const whenToUse = registrySkill?.whenToUse ?? extractHintFromDescription(description);
+  if (whenToUse && whenToUse !== description.trim()) {
     ctx.out.line();
-    ctx.out.line(`  ${palette.bold('Flags:')} ${palette.dim(allFlags.join(', '))}`);
+    ctx.out.line(`  ${palette.bold('When to use')}`);
+    for (const line of wrapToWidth(whenToUse, bodyW).split('\n')) {
+      ctx.out.line(`  ${palette.dim(line)}`);
+    }
+  }
+
+  const flags = registrySkill?.flags ?? harvestPluginSkillFlags().get(cleaned);
+  if (flags && flags.length > 0) {
+    ctx.out.line();
+    ctx.out.line(`  ${palette.bold('Flags')}  ${palette.dim(flags.join(', '))}`);
   }
 
   ctx.out.line();
-  ctx.out.line(`  ${palette.bold('Source:')} ${palette.dim(origin)}`);
+  ctx.out.line(`  ${palette.bold('Source')}  ${palette.dim(friendlySource(source))}`);
+
+  const alternatives = collectAlternatives(name, internalUnlocked);
+  if (alternatives.length > 0) {
+    ctx.out.line();
+    ctx.out.line(`  ${palette.bold('Alternatives')}`);
+    for (const alt of alternatives) {
+      ctx.out.line(
+        `  ${palette.dim('↳')} ${palette.warning(alt.slash)} ${palette.dim(
+          `(${friendlySource(alt.source)} — shadowed by /${name})`,
+        )}`,
+      );
+    }
+  }
+
   ctx.out.line();
 }
 
@@ -525,8 +646,11 @@ export const initialSkillsCmd: SlashCommand = {
   hint: 'When you want to browse every skill the session can dispatch — pass a name for full details on one.',
   async handler(ctx, args) {
     const internalUnlocked = env.AFK_INTERNAL === '1';
-    if (args.trim()) {
-      renderSkillDetail(ctx, args.trim(), [], internalUnlocked);
+    const trimmed = args.trim();
+    // A leading-dash token (e.g. `--all`) is reserved for future verbose modes;
+    // for now it just renders the full listing rather than 404 as a skill name.
+    if (trimmed && !trimmed.startsWith('-')) {
+      renderSkillDetail(ctx, trimmed, [], internalUnlocked);
     } else {
       renderUnifiedListing(ctx, [], internalUnlocked);
     }
@@ -544,8 +668,11 @@ function makeDynamicSkillsCmd(plugins: DiscoveredSkill[]): SlashCommand {
     hint: 'When you want to browse every skill the session can dispatch — pass a name for full details on one.',
     async handler(ctx, args) {
       const internalUnlocked = env.AFK_INTERNAL === '1';
-      if (args.trim()) {
-        renderSkillDetail(ctx, args.trim(), plugins, internalUnlocked);
+      const trimmed = args.trim();
+      // A leading-dash token (e.g. `--all`) is reserved for future verbose
+      // modes; for now it renders the full listing rather than 404 as a name.
+      if (trimmed && !trimmed.startsWith('-')) {
+        renderSkillDetail(ctx, trimmed, plugins, internalUnlocked);
       } else {
         renderUnifiedListing(ctx, plugins, internalUnlocked);
       }

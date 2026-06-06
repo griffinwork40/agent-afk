@@ -666,7 +666,7 @@ describe('plugin-skills bridge', () => {
     expect(uniqueRes.handled).toBe(true);
   });
 
-  it('/skills after init renders main rows + alt continuation rows for shadowed plugins', async () => {
+  it('/skills after init surfaces shadowed plugins as inline "↳ also:" alternatives', async () => {
     const sess = fakeSession({
       supportedCommands: vi.fn().mockResolvedValue([
         { name: 'mint', description: 'One-prompt feature delivery', argumentHint: '' },
@@ -680,10 +680,13 @@ describe('plugin-skills bridge', () => {
     // Vendored mains still appear with their slash forms.
     expect(joined).toContain('/mint');
     expect(joined).toContain('/diagnose');
-    // Plugin alt rows surface the namespaced fallback + plugin description.
+    // Shadowed plugin collisions surface inline as compact "↳ also:" references
+    // to the namespaced fallback form — visible by default, not hidden.
+    expect(joined).toContain('↳ also:');
     expect(joined).toContain('/plugin:mint');
-    expect(joined).toContain('One-prompt feature delivery');
-    expect(joined).toContain('plugin alt');
+    expect(joined).toContain('/plugin:diagnose');
+    // The old raw "(plugin alt)" badge + duplicated alt description are gone.
+    expect(joined).not.toContain('plugin alt');
   });
 
   it('registerPluginSkills() handles SDK errors gracefully and returns null', async () => {
