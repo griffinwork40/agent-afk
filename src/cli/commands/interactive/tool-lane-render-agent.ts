@@ -10,7 +10,7 @@ import {
   shortenPaths,
 } from './tool-lane-format.js';
 import type { ToolEntry, Entry } from './tool-lane-render.js';
-import { getGlyphs } from './tool-lane-render.js';
+import { getGlyphs, clampLineToTerminal } from './tool-lane-render.js';
 import { renderFlushChildren } from './tool-lane-render-children.js';
 
 /**
@@ -199,6 +199,11 @@ function renderGroupedRootTools(
   homeDir?: string,
 ): string[] {
   const lines: string[] = [];
+  // Read once per call: diff body lines below are clamped to this width so
+  // long file content never soft-wraps to column 0 in scrollback (orphaning
+  // its continuation past the indent). Mirrors the clamp on every other
+  // diff-emission path; see tool-lane-render-children.ts.
+  const cols = getTerminalWidth();
   for (const toolName of groupOrder) {
     const entries = groups.get(toolName)!;
     if (entries.length === 1) {
@@ -210,7 +215,7 @@ function renderGroupedRootTools(
           // the outcome line (2 for the row indent, 2 more to clear the
           // tool-name column visually).
           for (const line of formatDiffBlock(e.diff, 'flush', '    ')) {
-            lines.push(line);
+            lines.push(clampLineToTerminal(line, cols));
           }
         }
       } else {
@@ -242,7 +247,7 @@ function renderGroupedRootTools(
           lines.push('    ' + palette.dim(`── ${label} ──`));
         }
         for (const line of formatDiffBlock(e.diff!, 'flush', '    ')) {
-          lines.push(line);
+          lines.push(clampLineToTerminal(line, cols));
         }
       }
     }
