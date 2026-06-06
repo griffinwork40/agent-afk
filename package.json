@@ -1,6 +1,6 @@
 {
   "name": "agent-afk",
-  "version": "3.84.0",
+  "version": "3.84.1",
   "description": "CLI tool for interacting with AI agents via multiple interfaces",
   "main": "dist/index.mjs",
   "type": "module",

@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.84.1] - 2026-06-06
+
+### Fixed
+- unblock pre-auth CLI commands; require Node >= 22 (#16) (10ddd77)
+
+### Changed
+- Remove codex reference from README (5394b09)
+
 ## [3.84.0] - 2026-06-06
 
 ### Added
