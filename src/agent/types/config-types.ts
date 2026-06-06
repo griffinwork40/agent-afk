@@ -18,6 +18,7 @@ import type { HookRegistry } from '../hooks.js';
 import type { ModelProvider } from '../provider.js';
 import type { TraceWriter } from '../trace/index.js';
 import type { AgentModelInput } from './model-types.js';
+import type { ModelSlots } from '../session/model-slots.js';
 import type { CanUseTool, PermissionBubbler } from './permission-types.js';
 
 /** Tool permissions configuration */
@@ -44,6 +45,17 @@ export interface AgentConfig {
    * Unknown strings pass through to the SDK untouched — see `resolveModelId`.
    */
   model: AgentModelInput;
+
+  /**
+   * User-configurable model-slot bindings (Stage 1). Rebinds the three
+   * capability tiers (`small`/`medium`/`large`) to concrete model ids. When
+   * present, installed process-globally so every routing call site resolves
+   * tier aliases correctly. Normally populated by `loadConfig()` from the
+   * `models` block in afk.config.json + `AFK_MODEL_{SMALL,MEDIUM,LARGE}` env;
+   * passing it directly here is supported for library/test use. Stage 2 will
+   * add per-slot provider/baseUrl/apiKey. See `agent/session/model-slots.ts`.
+   */
+  models?: ModelSlots;
 
   /** Anthropic API key. Optional when using system claude binary with OAuth. */
   apiKey?: string;

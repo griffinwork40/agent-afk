@@ -9,20 +9,26 @@
  */
 
 import type { AgentModelInput, ClaudeModel } from '../types.js';
+import { DEFAULT_SLOT_BINDINGS, resolveModelInput } from './model-slots.js';
 
 /**
- * Canonical short-alias → full model-ID mapping.
+ * Canonical short-alias → full model-ID mapping for the built-in Claude
+ * aliases. Derived from {@link DEFAULT_SLOT_BINDINGS} so the legacy alias table
+ * and the slot defaults cannot drift. Retained for the call sites that still
+ * key on the legacy alias set (`providers/index.ts` `CLAUDE_SHORT_ALIASES`,
+ * `model-limits.ts`, and CLI casing-normalization). The `readonly` assertion
+ * prevents accidental mutation by importers.
  *
- * Exported so `src/agent/providers/index.ts` can derive `CLAUDE_SHORT_ALIASES`
- * from this map rather than maintaining a separate enumeration that can drift.
- * The `readonly` assertion prevents accidental mutation by importers.
+ * Note: actual model selection now flows through the slot resolver
+ * ({@link resolveModelId} → `resolveModelInput`), which honors user rebindings
+ * of these aliases. `MODEL_MAP` reflects only the *default* bindings.
  */
 export const MODEL_MAP: Readonly<Record<ClaudeModel, string>> = {
-  opus: 'claude-opus-4-8',
-  opus_1m: 'claude-opus-4-8',
-  sonnet: 'claude-sonnet-4-6',
-  sonnet_1m: 'claude-sonnet-4-6',
-  haiku: 'claude-haiku-4-5-20251001',
+  opus: DEFAULT_SLOT_BINDINGS.large.id,
+  opus_1m: DEFAULT_SLOT_BINDINGS.large.id,
+  sonnet: DEFAULT_SLOT_BINDINGS.medium.id,
+  sonnet_1m: DEFAULT_SLOT_BINDINGS.medium.id,
+  haiku: DEFAULT_SLOT_BINDINGS.small.id,
 };
 
 export function isValidModel(model: string): model is ClaudeModel {
@@ -37,10 +43,12 @@ export function getModelId(shortName: ClaudeModel): string {
   return modelId;
 }
 
+/**
+ * Resolve a model input to the concrete id sent to the provider SDK. Delegates
+ * to the slot resolver so user-configured tier rebindings (small/medium/large,
+ * custom names, and the legacy haiku/sonnet/opus aliases) all expand to their
+ * bound id. Raw ids and the `auto` sentinel pass through unchanged.
+ */
 export function resolveModelId(model: AgentModelInput | undefined): string | undefined {
-  if (model === undefined) return undefined;
-  if (typeof model === 'string' && isValidModel(model)) {
-    return getModelId(model);
-  }
-  return model;
+  return resolveModelInput(model);
 }
