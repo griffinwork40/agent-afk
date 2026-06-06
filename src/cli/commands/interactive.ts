@@ -131,6 +131,24 @@ export function isAutonameEnabled(options: CliOptions, config: CliConfig): boole
   return true;
 }
 
+/**
+ * The hint line rendered under the welcome banner at session startup.
+ *
+ * Kept deliberately short and first-session-oriented: it teaches the handful
+ * of controls a newcomer needs on day one (help, switching models, how to
+ * interrupt a turn, how to leave). `/resume` is intentionally NOT listed here —
+ * it does nothing for a brand-new user (no prior sessions exist to resume), and
+ * for a user who IS resuming it is redundant with the "Resuming … · N prior
+ * turns" metaLine the banner already shows. `/resume` stays fully discoverable
+ * via `/help` and the `--resume` / `--continue` launch flags, so trimming it
+ * from the busiest line of the startup screen costs no real capability.
+ *
+ * Pure + exported so the content is unit-testable without booting a session.
+ */
+export function startupHintLine(): string {
+  return '/help · /model · Esc to interrupt · /exit to quit';
+}
+
 export function registerInteractiveCommand(program: Command): void {
   program
     .command('interactive', { isDefault: true })
@@ -641,7 +659,7 @@ export function registerInteractiveCommand(program: Command): void {
           ...(worktreeHandle !== undefined ? { worktree: worktreeHandle.branch } : {}),
           cwd: worktreeCwd ?? process.cwd(),
           ...(resumeMeta !== undefined ? { metaLine: resumeMeta } : {}),
-          hintLine: '/help · /model · /resume · Esc to interrupt · /exit to quit',
+          hintLine: startupHintLine(),
         }));
         // Surface boot-time prune outcome AFTER the banner so it lives at the
         // same scrollback rank as the status line — close enough to be seen,
