@@ -2,6 +2,7 @@
 name: simplify
 description: "Discovers incidental complexity, duplication, and dead code in a codebase and produces a ranked, behavior-preserving reduction plan — optionally applying safe changes. Dispatches four parallel read-only discovery lenses (clone detection, dead code, complexity hotspots, wrong abstraction), synthesizes into a prioritized reduction plan, and gates apply mode behind /refactor and a hard test check."
 argument-hint: "[target] [--apply] [--all]"
+context: fork
 ---
 
 ## Sub-agent contract

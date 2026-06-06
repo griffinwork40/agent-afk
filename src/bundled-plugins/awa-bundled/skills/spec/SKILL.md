@@ -2,6 +2,7 @@
 name: spec
 description: "Takes a loose idea and transforms it into a structured, actionable spec ready for implementation. Use when the user passes an idea, feature request, or problem description that needs scoping before building."
 argument-hint: "<idea or feature request>"
+context: fork
 ---
 
 ## Triage: bugs route to /diagnose

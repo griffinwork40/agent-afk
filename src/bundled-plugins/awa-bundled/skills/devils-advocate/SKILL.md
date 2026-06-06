@@ -1,6 +1,7 @@
 ---
 name: devils-advocate
 description: "Adversarially critique a proposal by generating alternatives. Dispatches 3 parallel critics (pragmatist, paranoid, architect lenses) — each invents one alternative approach — then a synthesis step ranks all 4 options and recommends the top choice. Use when a plan, fix, scoping, decomposition, or named recommendation will drive decisions and you want structured alternative-generation before committing. Complements /shadow-verify — that skill re-derives factual claims; this one critiques whether the chosen approach itself is best."
+context: load
 ---
 
 ## Sub-agent contract

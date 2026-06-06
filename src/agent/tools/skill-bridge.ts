@@ -151,9 +151,10 @@ export interface PluginSkillBody {
   body: string;
   pluginPath: string;
   /**
-   * Execution mode from SKILL.md frontmatter `context:`. When `'load'`, the
-   * executor loads the body into the current session instead of forking a
-   * subagent (see docs/skill-load-mode.md). Undefined → historical fork path.
+   * Execution mode from SKILL.md frontmatter `context:`. The executor forks a
+   * subagent ONLY when this is `'fork'`; undefined/`'load'`/other values load
+   * the body into the current session (the default since 2026-06; see
+   * docs/skill-load-mode.md).
    */
   context?: string;
 }

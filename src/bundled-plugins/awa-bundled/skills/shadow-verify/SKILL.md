@@ -1,6 +1,7 @@
 ---
 name: shadow-verify
 description: "Dispatch a parallel adversarial verifier wave after any high-stakes sub-agent investigation (code reviews, audits, findings reports, large refactors). Shadow verifiers independently re-derive 2–3 key claims from scratch and flag disagreements before the user acts. Use when sub-agent output will drive decisions, file changes, commits, or external side-effects."
+context: fork
 ---
 
 ## Sub-agent contract

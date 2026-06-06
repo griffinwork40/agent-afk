@@ -2,9 +2,17 @@
  * Disk-based skill scanner.
  *
  * Discovers SKILL.md files under a given directory, parses their YAML
- * frontmatter, and registers each as a skill whose handler dispatches a
- * subagent with the SKILL.md body as the system prompt and the user's
- * input as the first message.
+ * frontmatter, and registers each as a skill.
+ *
+ * Execution mode follows the SKILL.md `context:` frontmatter field, with the
+ * same default as plugin skills (skill-executor.ts): in-context **load**
+ * unless the author explicitly opts into `context: fork`.
+ *   - default / `context: load` → the SKILL.md body is returned as the tool
+ *     result and the CURRENT agent carries it out with its existing tools
+ *     (progressive disclosure; `${SKILL_ROOT}` expanded in-place). No fork.
+ *   - `context: fork` → the handler dispatches a subagent with the SKILL.md
+ *     body as the system prompt and the user's input as the first message
+ *     (delegation; isolated child context).
  *
  * Two scopes use this scanner:
  *   - **User-scope** (`~/.afk/skills/`) — global user skills.
@@ -42,6 +50,12 @@ interface ParsedSkillMd {
   body: string;
   /** Absolute path of the skill's root directory (e.g. `~/.afk/skills/<name>/`). */
   dir: string;
+  /**
+   * Execution mode from the `context:` frontmatter field. Only the three
+   * well-known values are accepted; anything else (typo, omitted) is left
+   * `undefined` and treated as the default (load) by the registrant.
+   */
+  context?: 'inline' | 'fork' | 'load';
 }
 
 /**
@@ -115,6 +129,12 @@ function parseUserSkillMd(content: string, dirname: string): ParsedSkillMd | nul
   const out: ParsedSkillMd = { name, description, body, dir: '' };
   if (argumentHint && argumentHint.length > 0) out.argumentHint = argumentHint;
   if (flags.length > 0) out.flags = flags;
+  // Only accept the three well-known modes; an unknown value (typo) falls
+  // through to the default (load) rather than silently mis-routing.
+  const rawContext = parsed.frontmatter['context'];
+  if (rawContext === 'inline' || rawContext === 'fork' || rawContext === 'load') {
+    out.context = rawContext;
+  }
   return out;
 }
 
@@ -258,6 +278,21 @@ export function scanSkillsFromDir(
     };
     if (parsed.argumentHint) meta.argumentHint = parsed.argumentHint;
     if (parsed.flags && parsed.flags.length > 0) meta.flags = parsed.flags;
+    // Default to in-context LOAD; fork only when `context: fork` is explicit
+    // (symmetric with the plugin-skill default in skill-executor.ts). In load
+    // mode we set `context: 'load'` + `loadBody` so the executor's load path
+    // returns the body to the current agent instead of invoking the (forking)
+    // handler. In fork mode we leave `context` unset so the registry executor
+    // falls through to the handler, which forks via makeUserSkillHandler — the
+    // disk-skill body is NOT at the built-in prompts/system.md path the
+    // executor's own fork branch expects, so we must keep using the handler.
+    if (parsed.context !== 'fork') {
+      meta.context = 'load';
+      // SKILL_ROOT is expanded in-place here, not via subagent env, because
+      // load mode runs in the CURRENT agent. Mirrors the PLUGIN_ROOT expansion
+      // in skill-executor.ts's plugin load path.
+      meta.loadBody = parsed.body.replace(/\$\{?SKILL_ROOT\}?/g, () => parsed.dir);
+    }
     registerSkill(meta);
     count++;
   }
