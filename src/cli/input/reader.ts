@@ -18,6 +18,7 @@ import * as ansiEscapes from 'ansi-escapes';
 import stringWidth from 'string-width';
 import { list as listSlashCommands } from '../slash/registry.js';
 import { stripAnsi } from '../display.js';
+import { acquireStdinClaim } from './stdin-claim.js';
 import { InputCore, type InputCoreState } from '../input-core.js';
 import { colorizeInputBuffer, type SlashRegistryView } from '../input-highlight.js';
 import { describeAttachmentSummary, renderStatusLine, type ImageAttachment } from './attachments.js';
@@ -49,9 +50,18 @@ export async function readWithAutocompleteTty(
   // mode; entering raw mode again would double-set and confuse restoration.
   // In practice this guard never fires (compositor is always disarmed between
   // turns), but it is correct-by-default for future call sites.
-  const rawMode: RawModeHandle = opts.compositor?.isArmed()
+  const compositorArmed = opts.compositor?.isArmed() ?? false;
+  const rawMode: RawModeHandle = compositorArmed
     ? { restore: () => {} }
     : enterRawMode(stdin, stdout);
+
+  // Stdin claim: acquire here so the single-consumer stdin invariant is
+  // structurally enforced (see src/cli/input/stdin-claim.ts). Skip when the
+  // compositor is already armed — it holds its own claim and this reader is
+  // acting as a subordinate consumer under the compositor's keypress handler.
+  const stdinClaim = compositorArmed
+    ? null
+    : acquireStdinClaim('reader.readWithAutocomplete');
 
   // Bottom-row reservation: increment extraRows by 1 so the DECSTBM scroll
   // region leaves space for the composer prompt. Captured + restored in the
@@ -856,5 +866,8 @@ export async function readWithAutocompleteTty(
     // Idempotent — also called from any abort path inside the keypress
     // handler so the terminal is restored exactly once.
     rawMode.restore();
+    // Release the stdin claim after restoring raw mode so the TTY is in a
+    // consistent state before the next acquirer can proceed.
+    stdinClaim?.release();
   }
 }

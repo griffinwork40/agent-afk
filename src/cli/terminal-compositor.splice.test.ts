@@ -158,7 +158,7 @@ describe('commitAbove Phase 1 multi-line splice regression', () => {
   let writes: ReturnType<typeof collectWrites>;
   let compositor: TerminalCompositor;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     stdout = makeMockStdout(COLS, ROWS);
     stdin = makeMockStdin();
     writes = collectWrites(stdout);
@@ -169,8 +169,9 @@ describe('commitAbove Phase 1 multi-line splice regression', () => {
       onCancel: vi.fn(),
       scrollRegion,
     });
-    await compositor.arm();
-    writes; // capture clears happen inside each test
+    // NOTE: do NOT arm here — tests that create their own compositor would
+    // conflict with the shared claim. The one test that uses this shared
+    // compositor arms it explicitly; afterEach's disarm() is idempotent.
   });
 
   afterEach(() => {
@@ -180,6 +181,7 @@ describe('commitAbove Phase 1 multi-line splice regression', () => {
   it(
     'no rendered line carries a splice after committing a shorter multi-line block over a longer one',
     async () => {
+      await compositor.arm();
       // External constraint (ONLCR): the real TTY converts bare \n to \r\n in
       // output mode. @xterm/headless must mirror this with convertEol:true so
       // the LF-based cursor positioning in Phase 1 lands at column 1 on each
