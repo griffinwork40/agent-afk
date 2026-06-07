@@ -10,7 +10,7 @@ import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
 import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import { formatDuration, formatCost, formatTokens } from '../format-utils.js';
-import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getDefaultSubagentModel, loadSystemPrompt, loadConfigSystemPrompt } from '../shared-helpers.js';
+import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getDefaultSubagentModel, resolveBaseSystemPrompt } from '../shared-helpers.js';
 import { loadConfig } from '../config.js';
 import { assembleSystemPrompt } from '../../agent/routing-directive.js';
 import { renderMarkdownToTerminal } from '../formatter.js';
@@ -300,15 +300,13 @@ export function registerChatCommand(program: Command): void {
         }
 
         const apiKey = getApiKey();
-        // Dual-path system-prompt resolution: `basePrompt` is sourced via
-        // `loadConfigSystemPrompt`/`loadSystemPrompt` (string-only path), while
-        // `systemPromptSource` provenance comes from `loadConfig()`. Both walk the
-        // same 3-tier precedence (env → afk.config.json → AFK.md) in the same order,
-        // so in production they agree. Any future caller that invokes one without
-        // the other risks an orphaned source tag — keep them paired.
-        const basePrompt = loadConfigSystemPrompt() ?? loadSystemPrompt();
+        // System-prompt layering: the framework base (`prompts/system-prompt.md`)
+        // is unconditional; the operator overlay (env → afk.config.json → AFK.md)
+        // is appended on top via resolveBaseSystemPrompt(), never substituted for
+        // the base. `source` is the layered provenance string surfaced by
+        // --dump-prompt (`framework`, `framework+afk-md:/path`, …).
+        const { prompt: basePrompt, source: systemPromptSource } = resolveBaseSystemPrompt();
         const cliConfig = loadConfig();
-        const systemPromptSource = cliConfig.systemPromptSource;
         const autoRouting = cliConfig.autoRouting?.chat ?? false;
         const systemPrompt = assembleSystemPrompt(basePrompt, autoRouting, 'one-shot');
 

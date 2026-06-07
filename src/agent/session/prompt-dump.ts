@@ -16,7 +16,11 @@ import { dirname } from 'path';
 export type PromptShape = 'string' | 'string[]' | 'preset' | 'undefined';
 
 export interface SystemPromptProvenance {
-  source: string; // e.g. "env:AFK_SYSTEM_PROMPT", "file:/abs/path", "afk-md:/abs/path/AFK.md", "none"
+  // e.g. "env:AFK_SYSTEM_PROMPT", "file:/abs/path", "afk-md:/abs/path/AFK.md", "none".
+  // Top-level surfaces layer the framework base under the operator overlay and
+  // report a composed value: "framework" (base only), "framework+afk-md:/path"
+  // (base + overlay), etc. See resolveBaseSystemPrompt() in cli/shared-helpers.ts.
+  source: string;
   shape: PromptShape;
   length?: number; // chars for string, joined length for string[], append length for preset
 }

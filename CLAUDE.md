@@ -121,16 +121,18 @@ grep -rn --include='*.ts' '^[[:space:]]*//' src/ \
 
 ### System Prompt Discovery
 
-`loadConfig()` resolves `systemPrompt` through a 4-tier precedence chain (highest wins):
+The base system prompt is **layered**: the framework prompt (`prompts/system-prompt.md`, inlined at publish-build) is the unconditional foundation, and the resolved operator overlay is **appended** on top beneath an `# Operator configuration` header — never a replacement. `resolveBaseSystemPrompt()` (`src/cli/shared-helpers.ts`) does the layering for every top-level surface (chat, REPL, Telegram, farm).
 
-| Tier | Source | `systemPromptSource` value |
+`loadConfig()` resolves the **operator overlay** across three tiers (highest wins); `loadConfig().systemPrompt` is that overlay alone:
+
+| Tier | Overlay source | `loadConfig().systemPromptSource` value |
 |------|--------|---------------------------|
 | 1 | `AFK_SYSTEM_PROMPT` env var | `"env:AFK_SYSTEM_PROMPT"` |
 | 2 | `afk.config.json` (`cwd` → `~/.afk/config/` → legacy) | `"file:<abs path>"` |
 | 3 | `AFK.md` (`cwd` → `$AFK_HOME/`) | `"afk-md:<abs path>"` |
-| 4 | None | `systemPromptSource` is `undefined` |
+| — | None | `systemPromptSource` is `undefined` |
 
-`AFK.md` is plain Markdown with no frontmatter. Empty or whitespace-only files are treated as absent (tier 4). The `systemPromptSource` field is populated on `CliConfig` and threaded into `AgentSession` config for `--dump-prompt` provenance tracking; it is never forwarded to the SDK.
+`AFK.md` is plain Markdown with no frontmatter. Empty or whitespace-only files are treated as absent. The framework base is always present regardless of overlay tier. `--dump-prompt` reports a composed `systemPromptSource` (`"framework"`, `"framework+afk-md:<path>"`, …) and the full text in `options.system`; the composed prompt is never forwarded to the SDK as a preset. Every overlay appends — there is currently no full-replace escape hatch (a future `AFK_BASE_PROMPT=0` would add one).
 
 ## Ordered-operation sequences
 
