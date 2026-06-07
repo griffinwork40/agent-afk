@@ -119,6 +119,19 @@ export function handleOrchestratorEvent(
 
   switch (event.type) {
     case 'progress':
+      // Invariant: lastProgressByTask holds at most one entry. The orchestrator
+      // runs exactly one tool-use loop at a time, and subagent progress is
+      // firewalled to handleSubagentEvent (it carries a non-null subagentId and
+      // never reaches this map — see stream-renderer.ts isOrchestrator branch),
+      // so only the single live loop ever writes here. clear() before set()
+      // evicts a stale entry left by a SECOND runTurn invocation that shares
+      // this live renderer: loop.ts mints a fresh taskId per runTurn, and a
+      // retry that replays the turn without rebuilding the renderer (the 401
+      // auth-retry path; ANY retry on the skill-dispatch renderer, which —
+      // unlike turn-handler.ts — never rebuilds on 'resumed') would otherwise
+      // leave two distinct taskIds accumulated here, rendering two stacked
+      // "Tool-use loop" banners. The live loop's next progress event wipes it.
+      lastProgressByTask.clear();
       lastProgressByTask.set(event.progress.taskId, event.progress);
       if (ctx.isTTY) setComposedOverlay(ctx, lastProgressByTask);
       return;
