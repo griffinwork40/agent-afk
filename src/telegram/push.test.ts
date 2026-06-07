@@ -217,6 +217,22 @@ describe('pushIfConfigured', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
+  test('splits long text into Telegram-safe chunks', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 't';
+    process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'] = '42';
+    const fetchImpl = makeFetchOk();
+    const text = 'x'.repeat(9000);
+
+    const result = await pushIfConfigured(text, { fetchImpl });
+
+    expect(result).toHaveLength(3);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    const calls = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const sent = calls.map((c) => JSON.parse(c[1].body).text as string);
+    expect(sent.every((chunk) => chunk.length <= 4096)).toBe(true);
+    expect(sent.join('')).toBe(text);
+  });
+
   test('forwards reply_markup to every chat when provided', async () => {
     process.env['TELEGRAM_BOT_TOKEN'] = 't';
     process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'] = '111,222';
@@ -230,6 +246,28 @@ describe('pushIfConfigured', () => {
     for (const c of calls) {
       const body = JSON.parse(c[1].body);
       expect(body.reply_markup).toEqual(replyMarkup);
+    }
+  });
+
+  test('attaches reply_markup only to the first chunk per chat', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 't';
+    process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'] = '111,222';
+    const fetchImpl = makeFetchOk();
+    const replyMarkup = {
+      inline_keyboard: [[{ text: 'Open', callback_data: 'afk:f:x:slug' }]],
+    };
+
+    await pushIfConfigured('x'.repeat(5000), { fetchImpl, replyMarkup });
+
+    const calls = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(4);
+    for (let i = 0; i < calls.length; i++) {
+      const body = JSON.parse(calls[i][1].body);
+      if (i === 0 || i === 2) {
+        expect(body.reply_markup).toEqual(replyMarkup);
+      } else {
+        expect(body.reply_markup).toBeUndefined();
+      }
     }
   });
 });
