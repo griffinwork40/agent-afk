@@ -26,6 +26,10 @@ import type { IHistoryRing } from './input/types.js';
 import { renderStatusLine, type ImageAttachment } from './input/attachments.js';
 import { SpinnerController } from './input/spinner.js';
 import {
+  acquireStdinClaim,
+  type StdinClaimHandle,
+} from './input/stdin-claim.js';
+import {
   type CompositorInputMode,
   type CompositorScrollRegionGuard,
   type KeyInfo,
@@ -218,6 +222,8 @@ export class TerminalCompositor {
   /** @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost). */
   backgrounded = false;
   private wasRaw = false;
+  /** Held while armed; released on disarm(). */
+  private stdinClaim: StdinClaimHandle | null = null;
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   logUpdate: LogUpdateFn | null = null;
 
@@ -752,6 +758,11 @@ export class TerminalCompositor {
     // the helper with the same value, so it wins regardless of order.
     emitKeypressEventsImmediateEscape(this.stdin);
 
+    // Acquire the process-wide stdin claim immediately before attaching the
+    // keypress listener so the invariant is upheld: only one stdin consumer
+    // may be live at a time. Released in disarm().
+    this.stdinClaim = acquireStdinClaim('TerminalCompositor.arm');
+
     this.handleKeypress = (char, key) => this.dispatchKey(char, key);
     this.stdin.on('keypress', this.handleKeypress);
 
@@ -910,6 +921,13 @@ export class TerminalCompositor {
       } catch {
         /* noop */
       }
+    }
+
+    // Release the stdin claim before marking as unarmed so a subscriber
+    // that checks isArmed() inside an acquire call sees the correct state.
+    if (this.stdinClaim) {
+      this.stdinClaim.release();
+      this.stdinClaim = null;
     }
 
     this.armed = false;
