@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.87.1] - 2026-06-07
+
+### Fixed
+- keep verdict card's closing border visible in tight frames; ASCII-safe affordances (#32) (9e08de4)
+
+### Changed
+- control-plane reframe — README hero + package metadata (#37) (caf39da)
+- Port afk-workshop#734: feat(cli): add `afk trace show` — human-readable witness trace reader (#36) (71b0f35)
+- Port afk-workshop#733: feat(cli): add /review --post {github,telegram} publishers (#35) (7830a0f)
+
 ## [3.87.0] - 2026-06-07
 
 ### Added
