@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**91 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**93 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -21,6 +21,8 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_MAX_TOKENS` | number |  | `4096` | `8192` | Cap on total tokens per turn (input + output). Default 4096. |
 | `AFK_MODEL` | string |  | `sonnet` | `claude-opus-4-5` | Default model for agent turns. Accepts short aliases (opus, sonnet, haiku) or full model IDs. |
 | `AFK_OPENAI_BASE_URL` | string |  |  | `http://127.0.0.1:8000/v1` | Base URL override for the OpenAI-compatible provider. Used for local shims (mlx_lm.server, Ollama, vLLM, LM Studio). The OpenAI SDK appends `/chat/completions` itself — a value ending in `/chat/completions` will be stripped at config-load time with a one-shot warning. |
+| `AFK_OPENAI_CHATGPT_OAUTH` | boolean |  |  | `1` | Opt into using ChatGPT-subscription OAuth credentials from ~/.codex/auth.json (auth_mode: chatgpt) as OpenAI provider auth. Off by default. READ-ONLY: AFK never refreshes these tokens — re-run `codex` when the access token expires. Routes requests over the Responses API to the private ChatGPT backend (chatgpt.com/backend-api). |
+| `AFK_OPENAI_USE_RESPONSES` | boolean |  |  | `1` | Opt the OpenAI-compatible provider into the OpenAI Responses API instead of Chat Completions for API-key sessions. Truthy values: 1, true, yes, on. The ChatGPT-subscription OAuth path uses Responses automatically regardless of this flag. |
 | `AFK_PROMPT_CACHE_TTL` | string |  | `1h` | `1h` | TTL for Anthropic prompt-cache blocks. Accepts 5m or 1h. |
 | `AFK_PROVIDER` | string |  |  | `openai-compatible` | Force provider selection (anthropic \| anthropic-direct \| openai \| openai-compatible \| openai-codex). Overrides the model-name heuristic. Same surface as the --provider CLI flag; CLI flag wins when both are set. |
 | `AFK_SUGGEST_ENABLED` | boolean |  |  |  | Enable the LLM-backed ghost-text suggestion tier in the interactive REPL. Set to 1/true/yes/on to activate. Off by default. |

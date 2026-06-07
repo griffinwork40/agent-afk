@@ -267,6 +267,22 @@
       "category": "model"
     },
     {
+      "name": "AFK_OPENAI_CHATGPT_OAUTH",
+      "description": "Opt into using ChatGPT-subscription OAuth credentials from ~/.codex/auth.json (auth_mode: chatgpt) as OpenAI provider auth. Off by default. READ-ONLY: AFK never refreshes these tokens — re-run `codex` when the access token expires. Routes requests over the Responses API to the private ChatGPT backend (chatgpt.com/backend-api).",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_OPENAI_USE_RESPONSES",
+      "description": "Opt the OpenAI-compatible provider into the OpenAI Responses API instead of Chat Completions for API-key sessions. Truthy values: 1, true, yes, on. The ChatGPT-subscription OAuth path uses Responses automatically regardless of this flag.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "model"
+    },
+    {
       "name": "AFK_PROMPT_CACHE_TTL",
       "description": "TTL for Anthropic prompt-cache blocks. Accepts 5m or 1h.",
       "type": "string",

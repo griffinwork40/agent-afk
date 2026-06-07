@@ -326,6 +326,22 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_OPENAI_USE_RESPONSES',
+    description: 'Opt the OpenAI-compatible provider into the OpenAI Responses API instead of Chat Completions for API-key sessions. Truthy values: 1, true, yes, on. The ChatGPT-subscription OAuth path uses Responses automatically regardless of this flag.',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'model',
+  },
+  {
+    name: 'AFK_OPENAI_CHATGPT_OAUTH',
+    description: 'Opt into using ChatGPT-subscription OAuth credentials from ~/.codex/auth.json (auth_mode: chatgpt) as OpenAI provider auth. Off by default. READ-ONLY: AFK never refreshes these tokens — re-run `codex` when the access token expires. Routes requests over the Responses API to the private ChatGPT backend (chatgpt.com/backend-api).',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'model',
+  },
+  {
     name: 'AFK_PROVIDER',
     description: 'Force provider selection (anthropic | anthropic-direct | openai | openai-compatible | openai-codex). Overrides the model-name heuristic. Same surface as the --provider CLI flag; CLI flag wins when both are set.',
     type: 'string',
@@ -918,6 +934,8 @@ export const env = {
   get AFK_LOCAL_API_KEY(): string | undefined { return process.env['AFK_LOCAL_API_KEY']; },
   get AFK_LOCAL_BASE_URL(): string | undefined { return process.env['AFK_LOCAL_BASE_URL']; },
   get AFK_OPENAI_BASE_URL(): string | undefined { return process.env['AFK_OPENAI_BASE_URL']; },
+  get AFK_OPENAI_USE_RESPONSES(): string | undefined { return process.env['AFK_OPENAI_USE_RESPONSES']; },
+  get AFK_OPENAI_CHATGPT_OAUTH(): string | undefined { return process.env['AFK_OPENAI_CHATGPT_OAUTH']; },
   get AFK_PROVIDER(): string | undefined { return process.env['AFK_PROVIDER']; },
   get BRAVE_SEARCH_API_KEY(): string | undefined { return process.env['BRAVE_SEARCH_API_KEY']; },
 

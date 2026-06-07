@@ -1,10 +1,26 @@
 # Provider-Agnostic Wire Seam — Spec
 
-**Status:** Draft  
+**Status:** Draft (Phases 2C–2D partially implemented)  
 **Worktree:** `example-worktree`  
 **Repo:** `~/projects/agent-afk`
 
 ---
+
+> **Implementation status (update).** The OpenAI **Responses API** wire path and
+> a **read-only** ChatGPT-subscription OAuth path have landed in the
+> `openai-compatible` provider behind two off-by-default flags
+> (`AFK_OPENAI_USE_RESPONSES`, `AFK_OPENAI_CHATGPT_OAUTH`). See
+> `docs/openai-responses-and-chatgpt-oauth.md`. Notes correcting this spec:
+>
+> - **Open Question #1 resolved:** the ChatGPT backend does **not** serve a
+>   drop-in `/chat/completions`; the subscription path uses the **Responses API**
+>   (`chatgpt.com/backend-api/codex/responses`, `OpenAI-Beta: responses=experimental`).
+>   So a dedicated Responses wire adapter — not a header swap — was required
+>   (`responses-translate.ts`, `responses-messages.ts`).
+> - **Phase 2E (owned token refresh) deliberately deferred.** The shipped path is
+>   read-only: on expiry AFK asks the user to re-run `codex`. The single-use
+>   refresh-token hazard (Open Question #2) is unresolved and remains opt-in/manual.
+> - Tokens are read from `~/.codex/auth.json`; AFK does **not** write back to it.
 
 ## Executive Summary
 

@@ -68,6 +68,10 @@ import {
   toolResultsToMessages,
   type OpenAIFunctionTool,
 } from './loop.js';
+import { translateResponsesEvent, type ResponsesStreamEvent } from './responses-translate.js';
+import { buildResponsesRequest } from './responses-messages.js';
+import { resolveWireMode, envFlagEnabled, type WireMode } from './responses-config.js';
+import { env } from '../../../config/env.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import type { ToolResult } from '../anthropic-direct/types.js';
 import { contextWindowTokensUsed, buildContextUsageFields } from '../anthropic-direct/query/auto-compact.js';
@@ -88,7 +92,11 @@ const MAX_TOOL_ITERATIONS = 50;
  * mock client; pass `null` to restore the real constructor. Not part of the
  * stable surface — tests reach into this module directly.
  */
-export type OpenAIClientFactory = (opts: { apiKey: string; baseURL?: string }) => OpenAI;
+export type OpenAIClientFactory = (opts: {
+  apiKey: string;
+  baseURL?: string;
+  defaultHeaders?: Record<string, string>;
+}) => OpenAI;
 let clientFactory: OpenAIClientFactory | null = null;
 export function __setOpenAIClientFactory(factory: OpenAIClientFactory | null): void {
   clientFactory = factory;
@@ -118,6 +126,13 @@ export interface OpenAICompatibleQueryOptions {
   toolDispatcher?: ToolDispatcher;
   /** Optional MCP manager — populates `session.init` and `mcpServerStatus()`. */
   mcpManager?: import('../../mcp/index.js').McpManager;
+  /**
+   * Force the OpenAI Responses API instead of Chat Completions (the public,
+   * API-key opt-in — equivalent to `AFK_OPENAI_USE_RESPONSES=1`). The
+   * ChatGPT-subscription path (`auth.source === 'chatgpt-oauth'`) selects
+   * Responses automatically regardless of this flag.
+   */
+  useResponsesApi?: boolean;
 }
 
 function normalizePermissionMode(mode: string | undefined): string {
@@ -141,6 +156,8 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   private readonly toolDispatcher: ToolDispatcher | undefined;
   /** Pre-computed tool catalog — recomputed only if dispatcher.toolDefs changes (it doesn't today). */
   private readonly openAITools: OpenAIFunctionTool[] | undefined;
+  /** Which wire this session speaks: Chat Completions (default) or Responses. */
+  private readonly wireMode: WireMode;
 
   /** Running conversation state for multi-turn sessions. */
   private priorTurns: OpenAIMessage[] = [];
@@ -182,12 +199,25 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       }
     }
 
+    // Resolve the wire (Chat Completions vs Responses) once. The ChatGPT-
+    // subscription path also supplies a baseURL override (the private ChatGPT
+    // backend) + required headers; the public Responses opt-in supplies neither.
+    // Env read goes through the central `env` module (env-access audit).
+    const responsesOptIn =
+      (opts.useResponsesApi ?? false) || envFlagEnabled(env.AFK_OPENAI_USE_RESPONSES);
+    const wire = resolveWireMode(opts.auth, responsesOptIn);
+    this.wireMode = wire.mode;
+
     if (opts.auth.apiKey === null) {
       this.client = null as unknown as OpenAI;
     } else {
       const ctor = clientFactory ?? defaultClientFactory;
-      const clientOpts: { apiKey: string; baseURL?: string } = { apiKey: opts.auth.apiKey };
-      if (opts.baseURL !== undefined) clientOpts.baseURL = opts.baseURL;
+      const clientOpts: { apiKey: string; baseURL?: string; defaultHeaders?: Record<string, string> } = {
+        apiKey: opts.auth.apiKey,
+      };
+      const baseURL = wire.baseURL ?? opts.baseURL;
+      if (baseURL !== undefined) clientOpts.baseURL = baseURL;
+      if (wire.headers !== undefined) clientOpts.defaultHeaders = wire.headers;
       this.client = ctor(clientOpts);
     }
 
@@ -418,42 +448,82 @@ export class OpenAICompatibleQuery implements ProviderQuery {
 
     const state = createStreamState();
 
-    const requestBody: Record<string, unknown> = {
-      model: this.currentModel,
-      messages,
-      stream: true,
-      stream_options: { include_usage: true },
-    };
-    // Only attach `tools` when the dispatcher actually has any — empty
-    // arrays make some providers reject the request.
-    if (this.openAITools && this.openAITools.length > 0) {
-      requestBody['tools'] = this.openAITools;
-    }
+    if (this.wireMode === 'responses') {
+      // Responses API path. `messages` (built + plan-mode-adjusted above) is
+      // converted to the Responses input shape; the system prompt becomes
+      // `instructions`, tool calls/results become function_call/_output items.
+      const req = buildResponsesRequest(messages, this.openAITools);
+      const requestBody: Record<string, unknown> = {
+        model: this.currentModel,
+        input: req.input,
+        stream: true,
+      };
+      if (req.instructions !== undefined) requestBody['instructions'] = req.instructions;
+      if (req.tools && req.tools.length > 0) requestBody['tools'] = req.tools;
 
-    let stream: AsyncIterable<OpenAIChunk>;
-    try {
-      stream = (await this.client.chat.completions.create(requestBody as never, {
-        signal: controller.signal,
-      })) as unknown as AsyncIterable<OpenAIChunk>;
-    } catch (err) {
-      if (controller.signal.aborted) return null;
-      const e = err instanceof Error ? err : new Error(String(err));
-      yield { type: 'error', error: e };
-      return null;
-    }
-
-    try {
-      for await (const chunk of stream) {
-        if (this.closed) return null;
-        for (const ev of translateChunk(chunk, state, this.initSessionId)) {
-          yield ev;
-        }
+      let stream: AsyncIterable<ResponsesStreamEvent>;
+      try {
+        stream = (await this.client.responses.create(requestBody as never, {
+          signal: controller.signal,
+        })) as unknown as AsyncIterable<ResponsesStreamEvent>;
+      } catch (err) {
+        if (controller.signal.aborted) return null;
+        const e = err instanceof Error ? err : new Error(String(err));
+        yield { type: 'error', error: e };
+        return null;
       }
-    } catch (err) {
-      if (controller.signal.aborted) return null;
-      const e = err instanceof Error ? err : new Error(String(err));
-      yield { type: 'error', error: e };
-      return null;
+
+      try {
+        for await (const event of stream) {
+          if (this.closed) return null;
+          for (const ev of translateResponsesEvent(event, state, this.initSessionId)) {
+            yield ev;
+          }
+        }
+      } catch (err) {
+        if (controller.signal.aborted) return null;
+        const e = err instanceof Error ? err : new Error(String(err));
+        yield { type: 'error', error: e };
+        return null;
+      }
+    } else {
+      const requestBody: Record<string, unknown> = {
+        model: this.currentModel,
+        messages,
+        stream: true,
+        stream_options: { include_usage: true },
+      };
+      // Only attach `tools` when the dispatcher actually has any — empty
+      // arrays make some providers reject the request.
+      if (this.openAITools && this.openAITools.length > 0) {
+        requestBody['tools'] = this.openAITools;
+      }
+
+      let stream: AsyncIterable<OpenAIChunk>;
+      try {
+        stream = (await this.client.chat.completions.create(requestBody as never, {
+          signal: controller.signal,
+        })) as unknown as AsyncIterable<OpenAIChunk>;
+      } catch (err) {
+        if (controller.signal.aborted) return null;
+        const e = err instanceof Error ? err : new Error(String(err));
+        yield { type: 'error', error: e };
+        return null;
+      }
+
+      try {
+        for await (const chunk of stream) {
+          if (this.closed) return null;
+          for (const ev of translateChunk(chunk, state, this.initSessionId)) {
+            yield ev;
+          }
+        }
+      } catch (err) {
+        if (controller.signal.aborted) return null;
+        const e = err instanceof Error ? err : new Error(String(err));
+        yield { type: 'error', error: e };
+        return null;
+      }
     }
 
     return {
@@ -730,9 +800,14 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   }
 }
 
-function defaultClientFactory(opts: { apiKey: string; baseURL?: string }): OpenAI {
+function defaultClientFactory(opts: {
+  apiKey: string;
+  baseURL?: string;
+  defaultHeaders?: Record<string, string>;
+}): OpenAI {
   const clientOpts: ConstructorParameters<typeof OpenAI>[0] = { apiKey: opts.apiKey };
   if (opts.baseURL !== undefined) clientOpts.baseURL = opts.baseURL;
+  if (opts.defaultHeaders !== undefined) clientOpts.defaultHeaders = opts.defaultHeaders;
   return new OpenAI(clientOpts);
 }
 
@@ -771,6 +846,7 @@ export function buildQueryFromConfig(
     baseURL?: string;
     toolDispatcher?: ToolDispatcher;
     mcpManager?: import('../../mcp/index.js').McpManager;
+    useResponsesApi?: boolean;
   } = {},
 ): OpenAICompatibleQuery {
   const auth = resolveOpenAIAuth(config.apiKey);
@@ -788,5 +864,6 @@ export function buildQueryFromConfig(
   if (options.baseURL !== undefined) opts.baseURL = options.baseURL;
   if (options.toolDispatcher !== undefined) opts.toolDispatcher = options.toolDispatcher;
   if (options.mcpManager !== undefined) opts.mcpManager = options.mcpManager;
+  if (options.useResponsesApi !== undefined) opts.useResponsesApi = options.useResponsesApi;
   return new OpenAICompatibleQuery(opts);
 }
