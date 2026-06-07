@@ -14,6 +14,7 @@
  */
 
 import type { FetchFn, SearchBackend, SearchResult } from './types.js';
+import { sanitizeForDisplay } from '../utils/terminal-sanitize.js';
 
 const BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search';
 /** Brave caps `count` at 20 per request. */
@@ -78,7 +79,8 @@ export function createBraveSearchBackend(opts: BraveBackendOptions): SearchBacke
         let detail = '';
         try {
           const body = await res.text();
-          if (body) detail = `: ${body.length > 200 ? body.slice(0, 200) + '…' : body}`;
+          const clean = sanitizeForDisplay(body);
+          if (clean) detail = `: ${clean.length > 200 ? clean.slice(0, 200) + '…' : clean}`;
         } catch {
           // Ignore — proceed with status only.
         }

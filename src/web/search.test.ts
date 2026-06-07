@@ -106,6 +106,23 @@ describe('createBraveSearchBackend — result mapping', () => {
       backend.search('q', { limit: 10, timeoutMs: 5000, signal: signal() }),
     ).rejects.toThrow(/Brave Search HTTP 422.*quota exceeded/);
   });
+
+  it('sanitizes control characters from HTTP error bodies before throwing', async () => {
+    const fetchFn = vi.fn(async () => braveErr(500, 'bad\x1b[31mred\x1b[0m\nbody\x07'));
+    const backend = createBraveSearchBackend({ apiKey: 'k', fetchFn: fetchFn as unknown as typeof fetch });
+
+    let message = '';
+    try {
+      await backend.search('q', { limit: 10, timeoutMs: 5000, signal: signal() });
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(message).toContain('Brave Search HTTP 500 Error: badred body');
+    expect(message).not.toContain('\x1b');
+    expect(message).not.toContain('\n');
+    expect(message).not.toContain('\x07');
+  });
 });
 
 describe('resolveSearchBackend', () => {
