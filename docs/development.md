@@ -86,7 +86,7 @@ Vendored agents under `src/skills/_agents/` must stay byte-equal to upstream —
 ## Conventions
 
 - **`tsconfig.json` is maximally strict**: `noUnusedLocals`, `noUnusedParameters`, `noUncheckedIndexedAccess`, `noPropertyAccessFromIndexSignature`. All code must pass `tsc --noEmit`.
-- The agent-afk system prompt is a raw string from config or file. No SDK preset is loaded.
+- The agent-afk system prompt is the framework base (`prompts/system-prompt.md`) with the operator overlay (env/config/AFK.md) appended via `resolveBaseSystemPrompt()`, sent as a raw string. No SDK preset is loaded.
 - `AgentSession` constructor is **synchronous**; SDK lifecycle runs async via `initSdkLifecycle()` and surfaces through the provider event stream.
 - DAG executor (`src/agent/dag.ts`) is a Phase 2 stub — types exported but `runDAG` throws.
 - **SDK dependency tracking**: every import from `@anthropic-ai/sdk` is in `.sdk-dependency.lock.json`. CI fails on unlocked new symbols. After adding an SDK import, run `pnpm audit:sdk:update-lock` and edit the new entry's `reason` field before commit.

@@ -70,7 +70,7 @@ AFK_TELEGRAM_ALLOWED_CHAT_IDS=12345678
 AFK_MAX_BUDGET_USD=5.00
 ```
 
-**Project-scoped system prompt.** Drop an `AFK.md` at your project root and `afk` reads it as the system prompt whenever you run from that directory. No frontmatter needed.
+**Project-scoped system prompt.** Drop an `AFK.md` at your project root and `afk` appends it to its built-in framework prompt whenever you run from that directory — your instructions layer on top of the base, they don't replace it. No frontmatter needed.
 
 **Check what resolved.** `afk config` dumps the live configuration. `afk doctor` validates keys, paths, and provider connectivity.
 
