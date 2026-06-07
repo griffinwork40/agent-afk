@@ -32,6 +32,22 @@ export const DEFAULT_RESPONSES_INSTRUCTIONS = 'You are a helpful assistant.';
 /** Env var that opts a normal API-key session into the Responses API. */
 export const RESPONSES_OPT_IN_ENV = 'AFK_OPENAI_USE_RESPONSES';
 
+/**
+ * True for Claude/Anthropic-family model ids (claude-*, the short aliases
+ * opus/sonnet/haiku and their versioned forms, and local-* shim ids). Used to
+ * fail fast with a clear message when such a model is requested on the ChatGPT
+ * backend — which only serves OpenAI gpt-5.x and rejects everything else with
+ * an opaque error. Kept self-contained (no import from providers/index.ts) to
+ * avoid an import cycle through the provider registry.
+ */
+export function isClaudeFamilyModel(model: string | undefined): boolean {
+  const m = (model ?? '').trim().toLowerCase();
+  if (!m) return false;
+  if (m.startsWith('claude-') || m.startsWith('claude_') || m === 'claude') return true;
+  if (m.startsWith('local-') || m.startsWith('local_')) return true;
+  return /^(opus|sonnet|haiku)(?:[._-].*)?$/.test(m);
+}
+
 export type WireMode = 'chat-completions' | 'responses';
 
 export interface WireResolution {

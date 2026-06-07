@@ -20,6 +20,7 @@ type ClientOpts = { apiKey: string; baseURL?: string; defaultHeaders?: Record<st
 let clientOptsSeen: ClientOpts | null = null;
 let createArgsSeen: Record<string, unknown> | null = null;
 let pendingEvents: ResponsesStreamEvent[] = [];
+let pendingCreateError: unknown = null;
 
 function installResponsesMock(): void {
   const factory: OpenAIClientFactory = (opts) => {
@@ -28,6 +29,7 @@ function installResponsesMock(): void {
       responses: {
         create: async (args: { stream?: boolean }, options?: { signal?: AbortSignal }) => {
           createArgsSeen = args as Record<string, unknown>;
+          if (pendingCreateError) throw pendingCreateError;
           const events = pendingEvents.slice();
           return (async function* () {
             for (const e of events) {
@@ -51,6 +53,7 @@ afterEach(() => {
   clientOptsSeen = null;
   createArgsSeen = null;
   pendingEvents = [];
+  pendingCreateError = null;
 });
 
 async function* singleInput(content: string): AsyncIterable<ProviderUserTurn> {
@@ -169,5 +172,47 @@ describe('query — Responses wire (ChatGPT subscription auth)', () => {
     await collect(query);
     expect(createArgsSeen!['instructions']).toBe(DEFAULT_RESPONSES_INSTRUCTIONS);
     expect(createArgsSeen!['store']).toBe(false);
+  });
+
+  it('fails fast with a clear error for a Claude-family model (the subagent/skill case) — never hits the backend', async () => {
+    installResponsesMock();
+    pendingEvents = [{ type: 'response.completed', response: { status: 'completed' } }];
+    const auth: OpenAIAuthResolution = { apiKey: 'tok', source: 'chatgpt-oauth', accountId: 'acct_z' };
+    const query = new OpenAICompatibleQuery({
+      auth,
+      model: 'sonnet',
+      synthesizedSessionId: 'sess-5',
+      promptStream: singleInput('hi'),
+      config: config({ model: 'sonnet' }),
+    });
+    const events = await collect(query);
+    const err = events.find((e) => e.type === 'error') as { type: 'error'; error: Error } | undefined;
+    expect(err).toBeDefined();
+    expect(err!.error.message).toContain('sonnet');
+    expect(err!.error.message).toContain('gpt-5');
+    // Must short-circuit before any request to the ChatGPT backend.
+    expect(createArgsSeen).toBeNull();
+  });
+
+  it('clarifies an opaque ChatGPT-backend 400 into an actionable message', async () => {
+    installResponsesMock();
+    pendingCreateError = Object.assign(new Error('400 status code (no body)'), {
+      status: 400,
+      error: { detail: "The 'gpt-5.1' model is not supported when using Codex with a ChatGPT account." },
+    });
+    const auth: OpenAIAuthResolution = { apiKey: 'tok', source: 'chatgpt-oauth', accountId: 'acct_z' };
+    const query = new OpenAICompatibleQuery({
+      auth,
+      model: 'gpt-5.1', // not Claude-family → passes the guard, reaches the backend
+      synthesizedSessionId: 'sess-6',
+      promptStream: singleInput('hi'),
+      config: config(),
+    });
+    const events = await collect(query);
+    const err = events.find((e) => e.type === 'error') as { type: 'error'; error: Error } | undefined;
+    expect(err).toBeDefined();
+    expect(err!.error.message).toContain('gpt-5.1');
+    expect(err!.error.message).toContain('gpt-5.5');
+    expect(err!.error.message).toContain('Backend said');
   });
 });

@@ -70,7 +70,7 @@ import {
 } from './loop.js';
 import { translateResponsesEvent, type ResponsesStreamEvent } from './responses-translate.js';
 import { buildResponsesRequest } from './responses-messages.js';
-import { resolveWireMode, envFlagEnabled, DEFAULT_RESPONSES_INSTRUCTIONS, type WireMode } from './responses-config.js';
+import { resolveWireMode, envFlagEnabled, isClaudeFamilyModel, DEFAULT_RESPONSES_INSTRUCTIONS, type WireMode } from './responses-config.js';
 import { env } from '../../../config/env.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import type { ToolResult } from '../anthropic-direct/types.js';
@@ -427,6 +427,35 @@ export class OpenAICompatibleQuery implements ProviderQuery {
    * yield `assistant.message` / `turn.completed` — those are the parent
    * `runTurn`'s responsibility once the iteration loop has settled.
    */
+  /**
+   * Turn an opaque ChatGPT-backend failure into an actionable message. That
+   * backend returns 400 for unsupported models, and the OpenAI SDK often
+   * surfaces it as "400 status code (no body)". Only rewrites 400s on the
+   * ChatGPT backend; every other error passes through unchanged.
+   */
+  private clarifyResponsesError(err: unknown, isChatGptBackend: boolean): Error {
+    const e = err instanceof Error ? err : new Error(String(err));
+    if (!isChatGptBackend) return e;
+    const status =
+      err && typeof err === 'object' && 'status' in err
+        ? (err as { status?: number }).status
+        : undefined;
+    if (status !== 400 && !/\b400\b/.test(e.message)) return e;
+    let detail: string | undefined;
+    const inner = (err as { error?: unknown } | null)?.error;
+    if (inner && typeof inner === 'object') {
+      const d = inner as { detail?: unknown; message?: unknown };
+      if (typeof d.detail === 'string') detail = d.detail;
+      else if (typeof d.message === 'string') detail = d.message;
+    }
+    return new Error(
+      `ChatGPT/Codex backend rejected model "${this.currentModel}" (HTTP 400). A ChatGPT ` +
+        `subscription only serves certain OpenAI models on this backend (gpt-5.5 works; ` +
+        `gpt-5, gpt-5.1, gpt-5.2 and *-codex do not). ` +
+        (detail ? `Backend said: ${detail}` : `No error body was returned.`),
+    );
+  }
+
   private async *runIteration(
     controller: AbortController,
   ): AsyncGenerator<ProviderEvent, IterationResult | null> {
@@ -449,6 +478,26 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     const state = createStreamState();
 
     if (this.wireMode === 'responses') {
+      const isChatGptBackend = this.opts.auth.source === 'chatgpt-oauth';
+
+      // The ChatGPT/Codex backend serves only OpenAI gpt-5.x and rejects other
+      // model families with an opaque 400 (no body). Subagents/skills commonly
+      // request a Claude model (e.g. `sonnet`), and a global AFK_PROVIDER=
+      // openai-compatible force-routes it here. Fail fast with an actionable
+      // message instead of the bare 400.
+      if (isChatGptBackend && isClaudeFamilyModel(this.currentModel)) {
+        yield {
+          type: 'error',
+          error: new Error(
+            `Model "${this.currentModel}" can't run on a ChatGPT subscription — the ChatGPT/Codex ` +
+              `backend only supports OpenAI gpt-5.x models. This usually means a subagent or skill ` +
+              `requested a Claude model. Pass a gpt-5.x model to it (e.g. model: "gpt-5.5"), or run ` +
+              `it on a provider configured with the matching API key.`,
+          ),
+        };
+        return null;
+      }
+
       // Responses API path. `messages` (built + plan-mode-adjusted above) is
       // converted to the Responses input shape; the system prompt becomes
       // `instructions`, tool calls/results become function_call/_output items.
@@ -462,7 +511,6 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       // requirements the public Responses API does not: a non-empty
       // `instructions`, and `store: false`. Scope both to that path so the
       // public API-key path keeps its defaults.
-      const isChatGptBackend = this.opts.auth.source === 'chatgpt-oauth';
       const instructions =
         req.instructions ?? (isChatGptBackend ? DEFAULT_RESPONSES_INSTRUCTIONS : undefined);
       if (instructions !== undefined) requestBody['instructions'] = instructions;
@@ -476,8 +524,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         })) as unknown as AsyncIterable<ResponsesStreamEvent>;
       } catch (err) {
         if (controller.signal.aborted) return null;
-        const e = err instanceof Error ? err : new Error(String(err));
-        yield { type: 'error', error: e };
+        yield { type: 'error', error: this.clarifyResponsesError(err, isChatGptBackend) };
         return null;
       }
 
@@ -490,8 +537,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         }
       } catch (err) {
         if (controller.signal.aborted) return null;
-        const e = err instanceof Error ? err : new Error(String(err));
-        yield { type: 'error', error: e };
+        yield { type: 'error', error: this.clarifyResponsesError(err, isChatGptBackend) };
         return null;
       }
     } else {

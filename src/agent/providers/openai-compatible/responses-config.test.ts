@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   resolveWireMode,
   envFlagEnabled,
+  isClaudeFamilyModel,
   buildChatGptOAuthHeaders,
   CHATGPT_BACKEND_BASE_URL,
   RESPONSES_OPT_IN_ENV,
@@ -38,6 +39,22 @@ describe('envFlagEnabled', () => {
   });
   it('treats undefined/empty/0/false/no as disabled', () => {
     for (const v of [undefined, '', '0', 'false', 'no']) expect(envFlagEnabled(v)).toBe(false);
+  });
+});
+
+describe('isClaudeFamilyModel', () => {
+  it('detects Claude/Anthropic-family ids (incl. versioned + short aliases + local shims)', () => {
+    for (const m of [
+      'sonnet', 'opus', 'haiku', 'opus-4', 'sonnet-4.5', 'haiku-3.5', 'opus_1m',
+      'claude-3-5-sonnet', 'claude_x', 'claude', 'local-foo',
+    ]) {
+      expect(isClaudeFamilyModel(m)).toBe(true);
+    }
+  });
+  it('does not match OpenAI / unknown / empty ids', () => {
+    for (const m of ['gpt-5.5', 'gpt-5', 'o3', 'codex-x', 'mistral-large', undefined, '']) {
+      expect(isClaudeFamilyModel(m)).toBe(false);
+    }
   });
 });
 
