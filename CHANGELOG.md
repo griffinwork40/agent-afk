@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.87.0] - 2026-06-07
+
+### Added
+- layer operator config over an unconditional framework base (#34) (ff03920)
+
 ## [3.86.0] - 2026-06-07
 
 ### Added
