@@ -44,6 +44,7 @@ import type {
 } from '../../provider.js';
 import { sumProviderUsage } from '../../usage.js';
 import { contextLimitFor } from '../../model-limits.js';
+import { resolveModelId } from '../../session/model-resolution.js';
 import { collectSkillEntries } from '../../tools/skill-bridge.js';
 import { debugLog } from '../../../utils/debug.js';
 import {
@@ -906,7 +907,14 @@ export function buildQueryFromConfig(
   const auth = resolveOpenAIAuth(config.apiKey);
   const synthesizedSessionId =
     config.resume ?? `openai-pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const model = typeof config.model === 'string' ? config.model : 'gpt-4o-mini';
+  // Resolve model-slot aliases (small/medium/large, custom names, and the
+  // legacy haiku/sonnet/opus aliases) to their bound concrete id BEFORE the id
+  // reaches the request body — mirroring anthropic-direct, which already calls
+  // resolveModelId internally. Without this, a subagent/skill that picks an
+  // alias (e.g. `sonnet`) on this provider would route correctly but still send
+  // the literal alias to the backend. Idempotent for concrete ids and `auto`.
+  const rawModel = typeof config.model === 'string' ? config.model : 'gpt-4o-mini';
+  const model = resolveModelId(rawModel) ?? rawModel;
 
   const opts: OpenAICompatibleQueryOptions = {
     auth,
