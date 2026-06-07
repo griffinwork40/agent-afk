@@ -212,7 +212,7 @@ export function registerDaemonCommand(program: Command): void {
     .option('--effort <level>', "Effort level: low|medium|high|xhigh|max")
     .option(
       '--trigger <mode>',
-      'Trigger mode: cron | sessionstart | both | pull. Defaults to cron.',
+      "Trigger mode: cron | sessionstart | both | pull. Defaults to 'cron' when --cron is set, else 'sessionstart'.",
     )
     .option(
       '--sessionstart-cooldown-ms <ms>',

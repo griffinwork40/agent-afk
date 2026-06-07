@@ -1,7 +1,7 @@
 import { execFileSync } from 'child_process';
 import { existsSync, realpathSync } from 'fs';
 import { homedir } from 'os';
-import { resolve } from 'path';
+import { delimiter, dirname, resolve } from 'path';
 import { resolveEntrypoint as resolveTelegramEntrypoint } from '../../telegram/manager.js';
 import { type ServiceName } from './paths.js';
 
@@ -27,8 +27,13 @@ export interface PlistOptions {
    */
   watchPaths?: string[];
   /**
-   * Extra env vars to inject. Keep small — the running process already
-   * inherits the user's login env via launchd's user-context bootstrap.
+   * Extra env vars to inject.
+   *
+   * // Invariant: a `gui/<uid>` launchd job does NOT inherit the user's
+   * // interactive-shell environment — it bootstraps with a minimal PATH
+   * // (/usr/bin:/bin:/usr/sbin:/sbin). Anything the service or its child
+   * // processes need on PATH (node via nvm/fnm/volta, Homebrew's git/gh)
+   * // must be set here explicitly. See {@link resolveServicePath}.
    */
   environmentVariables?: Record<string, string>;
 }
@@ -111,6 +116,55 @@ export function renderPlist(opts: PlistOptions): string {
   lines.push('</dict>');
   lines.push('</plist>');
   return lines.join('\n') + '\n';
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Environment resolution
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Standard system bin directories every launchd job should see, after the
+ * node dir. Homebrew (`/opt/homebrew/bin`, `/usr/local/bin`) is where the
+ * `afk` binary, `git`, and `gh` usually live — the daemon shells out to
+ * these from its spawned agent sessions.
+ */
+const BASE_SERVICE_PATH_DIRS: readonly string[] = [
+  '/usr/local/bin',
+  '/opt/homebrew/bin',
+  '/usr/bin',
+  '/bin',
+  '/usr/sbin',
+  '/sbin',
+];
+
+/**
+ * Build the `PATH` value a launchd service must run with.
+ *
+ * // Invariant: launchd bootstraps `gui/<uid>` jobs with a minimal PATH
+ * // (/usr/bin:/bin:/usr/sbin:/sbin) that excludes Homebrew and
+ * // version-manager (nvm/fnm/volta/asdf) node installs. The installed
+ * // `afk` binary's `#!/usr/bin/env node` shebang then fails to resolve
+ * // `node` → the job exits 127 and silently crash-loops under KeepAlive
+ * // (this is the exact failure the `daemon` service hit). We prepend
+ * // dirname(process.execPath) — the node interpreter running the
+ * // installer, guaranteed to contain a working `node` — then the standard
+ * // system bin dirs so the service's own child processes (git, gh, …)
+ * // resolve too. Dedup keeps first-wins order so a node living in a base
+ * // dir (e.g. Homebrew's) is listed exactly once, at the front.
+ *
+ * Pure: `execPath` is injectable for tests.
+ */
+export function resolveServicePath(execPath: string = process.execPath): string {
+  const nodeDir = dirname(execPath);
+  const seen = new Set<string>();
+  const dirs: string[] = [];
+  for (const d of [nodeDir, ...BASE_SERVICE_PATH_DIRS]) {
+    if (d.length > 0 && !seen.has(d)) {
+      seen.add(d);
+      dirs.push(d);
+    }
+  }
+  return dirs.join(delimiter);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
