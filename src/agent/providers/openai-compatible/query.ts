@@ -70,7 +70,7 @@ import {
 } from './loop.js';
 import { translateResponsesEvent, type ResponsesStreamEvent } from './responses-translate.js';
 import { buildResponsesRequest } from './responses-messages.js';
-import { resolveWireMode, envFlagEnabled, type WireMode } from './responses-config.js';
+import { resolveWireMode, envFlagEnabled, DEFAULT_RESPONSES_INSTRUCTIONS, type WireMode } from './responses-config.js';
 import { env } from '../../../config/env.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import type { ToolResult } from '../anthropic-direct/types.js';
@@ -458,7 +458,15 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         input: req.input,
         stream: true,
       };
-      if (req.instructions !== undefined) requestBody['instructions'] = req.instructions;
+      // The private ChatGPT backend (subscription path) has two hard
+      // requirements the public Responses API does not: a non-empty
+      // `instructions`, and `store: false`. Scope both to that path so the
+      // public API-key path keeps its defaults.
+      const isChatGptBackend = this.opts.auth.source === 'chatgpt-oauth';
+      const instructions =
+        req.instructions ?? (isChatGptBackend ? DEFAULT_RESPONSES_INSTRUCTIONS : undefined);
+      if (instructions !== undefined) requestBody['instructions'] = instructions;
+      if (isChatGptBackend) requestBody['store'] = false;
       if (req.tools && req.tools.length > 0) requestBody['tools'] = req.tools;
 
       let stream: AsyncIterable<ResponsesStreamEvent>;

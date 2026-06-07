@@ -12,7 +12,7 @@ import type { ProviderEvent, ProviderUserTurn } from '../../provider.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import { __setOpenAIClientFactory, OpenAICompatibleQuery, type OpenAIClientFactory } from './query.js';
 import type { ResponsesStreamEvent } from './responses-translate.js';
-import { CHATGPT_BACKEND_BASE_URL } from './responses-config.js';
+import { CHATGPT_BACKEND_BASE_URL, DEFAULT_RESPONSES_INSTRUCTIONS } from './responses-config.js';
 import type { OpenAIAuthResolution } from './auth.js';
 
 type ClientOpts = { apiKey: string; baseURL?: string; defaultHeaders?: Record<string, string> };
@@ -118,6 +118,8 @@ describe('query — Responses wire (public opt-in)', () => {
     expect(createArgsSeen!['instructions']).toBe('You are helpful.');
     expect(createArgsSeen!['input']).toEqual([{ role: 'user', content: 'what is 2+2?' }]);
     expect(createArgsSeen!['stream']).toBe(true);
+    // Public API-key path must NOT force store:false (that's a ChatGPT-backend rule).
+    expect(createArgsSeen!['store']).toBeUndefined();
   });
 });
 
@@ -148,5 +150,24 @@ describe('query — Responses wire (ChatGPT subscription auth)', () => {
       'OpenAI-Beta': 'responses=experimental',
       originator: 'agent-afk',
     });
+    // Backend requirements: store:false + the (system-prompt) instructions present.
+    expect(createArgsSeen!['store']).toBe(false);
+    expect(createArgsSeen!['instructions']).toBe('You are helpful.');
+  });
+
+  it('supplies default instructions when the session has no system prompt (backend requires non-empty)', async () => {
+    installResponsesMock();
+    pendingEvents = [{ type: 'response.completed', response: { status: 'completed' } }];
+    const auth: OpenAIAuthResolution = { apiKey: 'tok', source: 'chatgpt-oauth', accountId: 'acct_z' };
+    const query = new OpenAICompatibleQuery({
+      auth,
+      model: 'gpt-5.5',
+      synthesizedSessionId: 'sess-4',
+      promptStream: singleInput('hi'),
+      config: config({ systemPrompt: undefined }),
+    });
+    await collect(query);
+    expect(createArgsSeen!['instructions']).toBe(DEFAULT_RESPONSES_INSTRUCTIONS);
+    expect(createArgsSeen!['store']).toBe(false);
   });
 });

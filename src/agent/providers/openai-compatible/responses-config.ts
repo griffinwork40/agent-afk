@@ -21,6 +21,14 @@ import type { OpenAIAuthResolution } from './auth.js';
 /** Private ChatGPT backend that bills against a ChatGPT subscription. */
 export const CHATGPT_BACKEND_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 
+/**
+ * Fallback `instructions` for the ChatGPT backend, which rejects requests with
+ * `{"detail":"Instructions are required"}` when the field is empty. Only used
+ * when the session has no system prompt of its own (rare — AFK normally has
+ * one). The public Responses API does not require this.
+ */
+export const DEFAULT_RESPONSES_INSTRUCTIONS = 'You are a helpful assistant.';
+
 /** Env var that opts a normal API-key session into the Responses API. */
 export const RESPONSES_OPT_IN_ENV = 'AFK_OPENAI_USE_RESPONSES';
 
