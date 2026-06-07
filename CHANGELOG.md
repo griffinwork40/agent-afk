@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.86.0] - 2026-06-07
+
+### Added
+- push full redacted task response to Telegram (#31) (dd73b2e)
+
 ## [3.85.0] - 2026-06-07
 
 ### Added
