@@ -60,6 +60,8 @@ import {
   type ParsedSkillMd,
 } from './_lib/flag-harvest.js';
 import { runSkillDispatchTurn } from './_lib/run-skill-dispatch-turn.js';
+import { parsePostFlag, runReviewPostPublish, type PostTarget } from './_lib/review-post.js';
+import { parsePrRef } from './preflight/review-pr.js';
 import {
   runPreflight,
   getSkillPreflightDir,
@@ -238,6 +240,36 @@ export function makeForwardHandler(skill: DiscoveredSkill, flags?: readonly stri
       args: string,
       attachments?: readonly ImageAttachment[],
     ): Promise<SlashResult> {
+      // `/review --post <github|telegram>` — parsed here at the dispatch layer
+      // and stripped from the args BEFORE they reach the (read-only) review
+      // skill, so the skill never sees `--post` as a review target and never
+      // posts anything itself. Publishing happens after the verified output
+      // lands (see runReviewPostPublish, below). Gated on the bare name so the
+      // flag is review-only; every other plugin skill is unaffected.
+      const isReview = bareName(skill.name) === 'review';
+      let dispatchArgs = args;
+      let postTargets: PostTarget[] = [];
+      let prRefFromArgs: string | null = null;
+      if (isReview) {
+        const parsed = parsePostFlag(args);
+        postTargets = parsed.targets;
+        dispatchArgs = parsed.cleanedArgs;
+        for (const u of parsed.unknown) {
+          ctx.out.warn(`/review: unknown --post target "${u}" — expected "github" or "telegram".`);
+        }
+        if (postTargets.length === 0 && parsed.unknown.length === 0 && /--post\b/.test(args)) {
+          ctx.out.warn('/review: --post needs a target — try "--post github" or "--post telegram".');
+        }
+        // Reuse the preflight's PR-ref parser so `/review 277 --post github`
+        // comments on PR 277; a local-diff review (no PR ref) resolves the
+        // current branch's PR at publish time instead.
+        try {
+          prRefFromArgs = parsePrRef(dispatchArgs);
+        } catch {
+          prRefFromArgs = null;
+        }
+      }
+
       // Mirror makeImmediateHandler: build the 2-block skill-invocation payload
       // (breadcrumb + dispatch instruction) and stream it through the session,
       // rather than returning 'forward' and letting the REPL send raw '/skill'
@@ -258,10 +290,10 @@ export function makeForwardHandler(skill: DiscoveredSkill, flags?: readonly stri
       };
 
       try {
-        await runSkillDispatchTurn(ctx, {
+        const finalAssistantText = await runSkillDispatchTurn(ctx, {
           skillName: skill.name,
           skillMeta,
-          args,
+          args: dispatchArgs,
           attachments,
           // SkillPreflight — runtime-owned context gathering, runs inside
           // the armed renderer. Symmetric with makeImmediateHandler
@@ -284,7 +316,7 @@ export function makeForwardHandler(skill: DiscoveredSkill, flags?: readonly stri
               : skill.name;
             const inv: SkillInvocation = {
               skillName: bareSkillName,
-              rawArgs: args,
+              rawArgs: dispatchArgs,
               source: 'plugin',
               capabilities: { compose: true, subagents: true },
             };
@@ -307,6 +339,18 @@ export function makeForwardHandler(skill: DiscoveredSkill, flags?: readonly stri
             return preflightResult?.manifestBlock;
           },
         });
+
+        // Publish AFTER the verified review output lands. runReviewPostPublish
+        // is fail-soft — it never throws and never suppresses the stdout the
+        // renderer already streamed, so a posting failure can't be mistaken
+        // for a review failure in the catch below.
+        if (isReview && postTargets.length > 0) {
+          await runReviewPostPublish(ctx.out, {
+            targets: postTargets,
+            reviewText: finalAssistantText,
+            prRefFromArgs,
+          });
+        }
       } catch (err) {
         ctx.out.line();
         ctx.out.error(
