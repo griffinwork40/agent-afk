@@ -7,7 +7,7 @@ import os from 'os';
 import { startDaemon } from '../../agent/daemon.js';
 import { getQueueDir } from '../../paths.js';
 import { pushIfConfigured } from '../../telegram/push.js';
-import type { TelemetryRecord } from '../../agent/daemon/scheduler.js';
+import type { TaskCompletionDetails, TelemetryRecord } from '../../agent/daemon/scheduler.js';
 import {
   COMPILED_DEFAULT_TASK,
   COMPILED_DEFAULT_TASK_ID,
@@ -179,7 +179,10 @@ export function buildDaemonSessionFactory(
  * Format a daemon telemetry record for an out-of-band notification
  * (e.g. Telegram push). Short, scannable, status-first.
  */
-function formatTaskCompletion(record: TelemetryRecord): string {
+export function formatTaskCompletion(
+  record: TelemetryRecord,
+  details: TaskCompletionDetails = {},
+): string {
   const icon =
     record.status === 'success' ? '✅' : record.status === 'skipped' ? '⏭️' : '❌';
   const durationSec = (record.durationMs / 1000).toFixed(1);
@@ -189,8 +192,9 @@ function formatTaskCompletion(record: TelemetryRecord): string {
   ];
   if (record.skipReason) lines.push(`skipReason=${record.skipReason}`);
   if (record.errorMessage) lines.push(`error: ${record.errorMessage.slice(0, 400)}`);
-  if (record.responseExcerpt) {
-    lines.push('', record.responseExcerpt.slice(0, 600));
+  const responseText = details.responseText ?? record.responseExcerpt;
+  if (responseText) {
+    lines.push('', responseText);
   }
   return lines.join('\n');
 }
@@ -375,8 +379,8 @@ export function registerDaemonCommand(program: Command): void {
           ...(options.briefsDir !== undefined ? { briefsDir: options.briefsDir } : {}),
           ...(trigger === 'pull' ? { pullPollIntervalMs: 30_000, queueDir: getQueueDir() } : {}),
           tasks,
-          onTaskComplete: (record: TelemetryRecord) => {
-            void pushIfConfigured(formatTaskCompletion(record)).catch(() => undefined);
+          onTaskComplete: (record: TelemetryRecord, details?: TaskCompletionDetails) => {
+            void pushIfConfigured(formatTaskCompletion(record, details)).catch(() => undefined);
           },
         });
 

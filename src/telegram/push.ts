@@ -16,6 +16,7 @@
 import type { InlineKeyboardMarkup } from 'telegraf/types';
 
 import { parseAllowedChatIds } from './allowlist.js';
+import { splitLongMessage } from './formatter.js';
 import { env } from '../config/env.js';
 
 const TELEGRAM_API_BASE = 'https://api.telegram.org';
@@ -108,8 +109,8 @@ export async function push(options: PushOptions): Promise<PushResult> {
 }
 
 /**
- * Push to every chat in `AFK_TELEGRAM_ALLOWED_CHAT_IDS`, but only if
- * `TELEGRAM_BOT_TOKEN` is also set. Returns `null` if unconfigured (so
+ * Push to every chat in `AFK_TELEGRAM_ALLOWED_CHAT_IDS`, splitting long text
+ * into sequential Telegram-safe messages. Returns `null` if unconfigured (so
  * callers don't need to gate every call site).
  */
 export async function pushIfConfigured(
@@ -125,16 +126,19 @@ export async function pushIfConfigured(
   const chatIds = parseAllowedChatIds(env.AFK_TELEGRAM_ALLOWED_CHAT_IDS);
   if (chatIds.size === 0) return null;
 
+  const chunks = splitLongMessage(text);
   const results: PushResult[] = [];
   for (const chatId of chatIds) {
-    results.push(await push({
-      token,
-      chatId,
-      text,
-      ...(opts.parseMode !== undefined ? { parseMode: opts.parseMode } : {}),
-      ...(opts.replyMarkup !== undefined ? { replyMarkup: opts.replyMarkup } : {}),
-      ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
-    }));
+    for (let i = 0; i < chunks.length; i++) {
+      results.push(await push({
+        token,
+        chatId,
+        text: chunks[i] ?? '',
+        ...(opts.parseMode !== undefined ? { parseMode: opts.parseMode } : {}),
+        ...(opts.replyMarkup !== undefined && i === 0 ? { replyMarkup: opts.replyMarkup } : {}),
+        ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
+      }));
+    }
   }
   return results;
 }
