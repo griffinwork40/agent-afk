@@ -11,6 +11,21 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.85.0] - 2026-06-07
+
+### Added
+- trim /resume from startup welcome hint (#18) (a64aa7b)
+
+### Fixed
+- make auto-release push atomic to prevent orphaned tags (#30) (4bd20e8)
+- sanitize Brave error body before embedding (#26) (d9df988)
+- collapse orchestrator progress map to at-most-one entry (#27) (0e79887)
+- repaint REPL prompt on fresh interactive session (#15) (108a383)
+
+### Changed
+- Port afk-workshop#689: feat(cli): process-wide stdin-claim guard (phantom-turn root-cause fix) (#28) (39ce1c7)
+- Port afk-workshop#727: fix(service): launchd daemon crash-loops (exit 127) — bake PATH into plist; + correct --trigger help (#25) (b675e78)
+
 ## [3.84.1] - 2026-06-06
 
 ### Fixed
