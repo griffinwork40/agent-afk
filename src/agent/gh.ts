@@ -2,17 +2,21 @@
  * GitHub CLI (`gh`) agent-layer utilities.
  *
  * Pure agent-layer: no Telegraf knowledge, no Telegram imports. Provides:
- *   - `GhError`         — typed error class for `gh` failures
- *   - `checkGhReady`    — probes `gh` presence and auth with a module-level TTL cache
- *   - `createPr`        — creates a GitHub PR via `gh pr create`, returns the PR URL
+ *   - `GhError`                — typed error class for `gh` failures
+ *   - `checkGhReady`           — probes `gh` presence and auth with a module-level TTL cache
+ *   - `createPr`               — creates a GitHub PR via `gh pr create`, returns the PR URL
+ *   - `postPrComment`          — posts a comment to a PR via `gh pr comment --body-file -` (stdin)
+ *   - `resolveCurrentBranchPr` — resolves the current branch's open PR number, or null
  *
- * All `gh` invocations use `execFile` (no shell) — branch refs and titles come
- * from the manifest, but argv isolation is the defence-in-depth.
+ * All `gh` invocations use `execFile` / `spawn` (no shell) — branch refs and
+ * titles come from the manifest, but argv isolation is the defence-in-depth.
+ * `postPrComment` feeds the body through stdin so arbitrary markdown (backticks,
+ * quotes, newlines) never has to survive argv-escaping or hit an argv length cap.
  *
  * @module agent/gh
  */
 
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -232,5 +236,137 @@ export async function createPr(opts: CreatePrOpts, execFn?: ExecFn): Promise<str
     const exitCode = e.exitCode ?? 1;
     const kind = classifyStderr(stderr, code, e.killed);
     throw new GhError(`gh pr create failed (${kind}): ${stderr.trim()}`, kind, exitCode, stderr);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// postPrComment — post a review/comment body to a PR via stdin
+// ---------------------------------------------------------------------------
+
+/**
+ * Exec function that feeds `input` to the child's stdin and captures stdout —
+ * the shape required for `gh pr comment <ref> --body-file -`, where `-` reads
+ * the body from stdin. Injectable so tests never spawn a real `gh`.
+ */
+export type ExecWithInputFn = (
+  file: string,
+  args: string[],
+  input: string,
+) => Promise<{ stdout: string; stderr: string }>;
+
+/** Error shape `classifyStderr` reads — attached to rejections below. */
+interface ExecError extends Error {
+  stderr?: string;
+  exitCode?: number;
+  code?: string;
+  killed?: boolean;
+}
+
+/**
+ * Default stdin-feeding exec via `spawn` (no shell). Applies the same 20 s
+ * hard timeout as `defaultExecFn`; on timeout the child is SIGTERM'd and the
+ * rejection carries `killed: true` so `classifyStderr` maps it to `'timeout'`.
+ */
+function defaultExecWithInput(
+  file: string,
+  args: string[],
+  input: string,
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    let killedByTimeout = false;
+
+    const timer = setTimeout(() => {
+      killedByTimeout = true;
+      child.kill('SIGTERM');
+    }, EXEC_TIMEOUT_MS);
+
+    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+
+    child.on('error', (err: NodeJS.ErrnoException) => {
+      clearTimeout(timer);
+      reject(Object.assign(new Error(err.message), {
+        ...(err.code !== undefined ? { code: err.code } : {}),
+        stderr,
+      }) as ExecError);
+    });
+
+    child.on('close', (code: number | null) => {
+      clearTimeout(timer);
+      if (killedByTimeout) {
+        reject(Object.assign(new Error(`${file} timed out`), { killed: true, stderr }) as ExecError);
+        return;
+      }
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      reject(Object.assign(new Error(`${file} exited ${code ?? 'null'}`), {
+        exitCode: code ?? 1,
+        stderr,
+      }) as ExecError);
+    });
+
+    // EPIPE guard: if `gh` exits before draining stdin, the write errors — the
+    // close/error handler owns the real outcome, so swallow the stdin error.
+    child.stdin?.on('error', () => { /* ignore */ });
+    child.stdin?.end(input);
+  });
+}
+
+export interface PostPrCommentOpts {
+  /**
+   * PR selector forwarded to `gh pr comment`: a number, a full PR URL, or a
+   * branch name. Empty string → `gh` resolves the current branch's PR.
+   */
+  pr: string;
+  /** Comment body (markdown). Sent via stdin, so any content is safe. */
+  body: string;
+}
+
+/**
+ * Post a comment to a GitHub PR via `gh pr comment <ref> --body-file -`,
+ * feeding the body through stdin. Returns the created comment URL (trimmed,
+ * may be empty if `gh` prints nothing). Throws `GhError` on failure with a
+ * discriminated `kind`.
+ */
+export async function postPrComment(
+  opts: PostPrCommentOpts,
+  execFn?: ExecWithInputFn,
+): Promise<string> {
+  const exec = execFn ?? defaultExecWithInput;
+  const args = ['pr', 'comment'];
+  const ref = opts.pr.trim();
+  if (ref) args.push(ref);
+  args.push('--body-file', '-');
+
+  try {
+    const { stdout } = await exec('gh', args, opts.body);
+    return stdout.trim();
+  } catch (err: unknown) {
+    const e = err as ExecError;
+    const stderr = e.stderr ?? '';
+    const kind = classifyStderr(stderr, e.code, e.killed);
+    throw new GhError(`gh pr comment failed (${kind}): ${stderr.trim()}`, kind, e.exitCode ?? 1, stderr);
+  }
+}
+
+/**
+ * Resolve the open PR number for the current branch via
+ * `gh pr view --json number`. Returns the number as a string, or `null` when
+ * there is no open PR for the branch (or `gh` fails) — never throws. Used to
+ * give `--post github` a target when the review ran against a local diff.
+ */
+export async function resolveCurrentBranchPr(execFn?: ExecFn): Promise<string | null> {
+  const exec = execFn ?? defaultExecFn;
+  try {
+    const { stdout } = await exec('gh', ['pr', 'view', '--json', 'number', '--jq', '.number']);
+    const n = stdout.trim();
+    return /^\d+$/.test(n) ? n : null;
+  } catch {
+    return null;
   }
 }
