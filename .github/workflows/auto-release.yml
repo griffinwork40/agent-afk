@@ -139,19 +139,39 @@ jobs:
           pnpm version "${{ steps.bump.outputs.next }}" --no-git-tag-version
           node scripts/generate-changelog.mjs "${{ steps.bump.outputs.next }}"
 
-      - name: Commit, tag, and push
+      - name: Commit, tag, and push (atomic + rebase-retry)
         if: steps.bump.outputs.release == 'true'
         run: |
           set -euo pipefail
           NEXT="${{ steps.bump.outputs.next }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add package.json CHANGELOG.md
-          git commit -m "chore(release): v${NEXT}"
-          git tag -a "v${NEXT}" -m "v${NEXT}"
-          # Pushed with the default GITHUB_TOKEN. This deliberately does NOT
-          # re-trigger publish.yml (anti-recursion) — we publish inline below.
-          git push origin HEAD:main --follow-tags
+
+          # Invariant: the branch update and the tag must land together or not
+          # at all. The prior `git push --follow-tags` pushed refs independently,
+          # so a concurrent PR merge that turned the branch push into a
+          # non-fast-forward still let the TAG land — orphaning vX.Y.Z on the
+          # remote and deadlocking every later run at `git tag -a` ("tag already
+          # exists"). `--atomic` closes that gap; on rejection we re-sync to the
+          # new main tip, re-apply the bump + changelog, and retry. The push uses
+          # the default GITHUB_TOKEN, which by design does NOT re-trigger
+          # publish.yml (anti-recursion) — we publish inline below.
+          for attempt in 1 2 3; do
+            git add package.json CHANGELOG.md
+            git commit -m "chore(release): v${NEXT}"
+            git tag -a "v${NEXT}" -m "v${NEXT}"
+            if git push --atomic origin "HEAD:main" "refs/tags/v${NEXT}"; then
+              exit 0
+            fi
+            echo "::warning::Release push rejected (attempt ${attempt}/3); re-syncing to origin/main and re-applying the bump."
+            git tag -d "v${NEXT}"
+            git fetch origin main
+            git reset --hard origin/main
+            pnpm version "${NEXT}" --no-git-tag-version
+            node scripts/generate-changelog.mjs "${NEXT}"
+          done
+          echo "::error::Release push failed after 3 attempts — persistent contention on main. Re-run this job once main settles."
+          exit 1
 
       # Inline publish: the working tree already holds the bumped package.json +
       # fresh dist, and prepublishOnly rebuilds the tarball, so publish directly.
