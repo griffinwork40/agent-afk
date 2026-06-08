@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.89.1] - 2026-06-08
+
+### Fixed
+- make TerminalCompositor wrap-aware so soft-wrapped frame lines don't clobber committed text (#39) (a7ace49)
+
 ## [3.89.0] - 2026-06-08
 
 ### Added
