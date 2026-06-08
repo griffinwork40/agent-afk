@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.89.4] - 2026-06-08
+
+### Fixed
+- resolve session credential by session model, not env default (#42) (0959c40)
+- harvest argument-hint flags so /review --post completes (#48) (9d43b98)
+
 ## [3.89.3] - 2026-06-08
 
 ### Changed
