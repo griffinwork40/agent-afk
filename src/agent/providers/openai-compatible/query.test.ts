@@ -500,25 +500,32 @@ describe('OpenAICompatibleQuery — model-slot resolution in request body', () =
 
 describe('OpenAICompatibleQuery — auth failure path', () => {
   it('emits session.init then error when no auth is resolvable', async () => {
-    // Don't set apiKey on config; env is empty in test env; no codex auth.
-    const noAuthDeps = { OPENAI_API_KEY: process.env['OPENAI_API_KEY'] };
-    delete process.env['OPENAI_API_KEY'];
-    try {
-      const q = buildQueryFromConfig({ model: 'gpt-4o-mini' } as AgentConfig, singleInput('hi'));
-      const events = await collect(q);
-      expect(events[0]?.type).toBe('session.init');
-      expect(events[1]?.type).toBe('error');
-      if (events[1]?.type === 'error') {
-        // Diagnostic must say API key is required and reference env+codex paths
-        expect(events[1].error.message).toContain('OPENAI_API_KEY');
-      }
-      // Crucially: no wire call was made.
-      expect(createCalls).toHaveLength(0);
-    } finally {
-      if (noAuthDeps.OPENAI_API_KEY !== undefined) {
-        process.env['OPENAI_API_KEY'] = noAuthDeps.OPENAI_API_KEY;
-      }
+    // Use hermetic auth deps so this test is isolated from the host machine's
+    // real credentials. Without this, a developer whose ~/.codex/auth.json
+    // contains a ChatGPT OAuth bundle (and AFK_OPENAI_CHATGPT_OAUTH=1) will
+    // resolve a real access_token — bypassing the no-auth path entirely and
+    // sending the request on the Responses API wire. The mock only stubs
+    // chat.completions.create, so this.client.responses.create would crash
+    // with "Cannot read properties of undefined (reading 'create')".
+    const noAuthDeps = {
+      readEnv: (_key: string) => undefined, // suppress OPENAI_API_KEY, CODEX_API_KEY, AFK_OPENAI_CHATGPT_OAUTH
+      homedir: () => '/nonexistent-test-home',
+      readFile: (_path: string) => null, // no ~/.codex/auth.json
+    };
+    const q = buildQueryFromConfig(
+      { model: 'gpt-4o-mini' } as AgentConfig,
+      singleInput('hi'),
+      { authDeps: noAuthDeps },
+    );
+    const events = await collect(q);
+    expect(events[0]?.type).toBe('session.init');
+    expect(events[1]?.type).toBe('error');
+    if (events[1]?.type === 'error') {
+      // Diagnostic must say API key is required and reference env+codex paths
+      expect(events[1].error.message).toContain('OPENAI_API_KEY');
     }
+    // Crucially: no wire call was made.
+    expect(createCalls).toHaveLength(0);
   });
 
   it('emits a specific diagnostic when only ChatGPT OAuth is present', async () => {
