@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.89.3] - 2026-06-08
+
+### Changed
+- reorder + dedup framework system prompt (Stage 1) (#45) (0de370b)
+
 ## [3.89.2] - 2026-06-08
 
 ### Fixed
