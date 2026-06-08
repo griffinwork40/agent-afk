@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.89.6] - 2026-06-08
+
+### Fixed
+- re-pin committed band on overlay collapse to kill the blank-space gap (#50) (5c76889)
+
 ## [3.89.5] - 2026-06-08
 
 ### Fixed
