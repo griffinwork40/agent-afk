@@ -51,6 +51,7 @@ import {
   resolveOpenAIAuth,
   formatAuthDiagnostic,
   type OpenAIAuthResolution,
+  type AuthResolverDeps,
 } from './auth.js';
 import { buildMessages, flattenUserContent, type OpenAIMessage } from './messages.js';
 import {
@@ -902,9 +903,15 @@ export function buildQueryFromConfig(
     toolDispatcher?: ToolDispatcher;
     mcpManager?: import('../../mcp/index.js').McpManager;
     useResponsesApi?: boolean;
+    /**
+     * Optional env + fs injection point forwarded to `resolveOpenAIAuth`.
+     * Tests pass a hermetic stub here to prevent reading real host credentials
+     * (e.g. `~/.codex/auth.json`) from the developer's machine.
+     */
+    authDeps?: AuthResolverDeps;
   } = {},
 ): OpenAICompatibleQuery {
-  const auth = resolveOpenAIAuth(config.apiKey);
+  const auth = resolveOpenAIAuth(config.apiKey, options.authDeps);
   const synthesizedSessionId =
     config.resume ?? `openai-pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   // Resolve model-slot aliases (small/medium/large, custom names, and the
