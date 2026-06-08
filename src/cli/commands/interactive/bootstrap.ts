@@ -331,6 +331,8 @@ export async function bootstrapSession(
     defaultModel: sessionModel,
     defaultSubagentModel: getDefaultSubagentModel(sessionModel),
     apiKey,
+    // Per-model credential resolver — mirrors #640 for the compose fork-path.
+    resolveApiKeyForModel: getApiKeyForModel,
     ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
     systemPrompt: basePrompt ?? '',
   });

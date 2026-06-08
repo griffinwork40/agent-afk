@@ -144,6 +144,8 @@ export function buildDaemonSessionFactory(
       defaultModel: opts.model,
       defaultSubagentModel: getDefaultSubagentModel(opts.model),
       ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
+      // Per-model credential resolver — mirrors #640 for the compose fork-path.
+      resolveApiKeyForModel: getApiKeyForModel,
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       systemPrompt: '',
     });

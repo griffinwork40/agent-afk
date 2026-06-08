@@ -1339,4 +1339,161 @@ describe('ComposeExecutor', () => {
       expect(nodeIdx).toBeGreaterThan(warningIdx);
     });
   });
+
+  describe('resolveApiKeyForModel — per-node credential resolution', () => {
+    // Regression: "Anthropic node starves when parent is OpenAI-routed."
+    //
+    // `getApiKey()` captures ONE credential keyed to the *main* model at
+    // bootstrap. When the main model is OpenAI-routed, that credential is an
+    // OpenAI key (or undefined) — but compose nodes that default to 'sonnet'
+    // (Anthropic-routed) need an Anthropic keychain/env credential instead.
+    // Forwarding the parent's pre-captured ctx.apiKey verbatim to every node
+    // made Anthropic-routed nodes throw "requires config.apiKey". The fix
+    // injects a resolver that re-derives the credential by the *node's* model
+    // at fork time. See compose-executor.ts: resolvedNodeApiKey wiring.
+    //
+    // These tests probe the executor boundary only (SubagentDAGNode.apiKey
+    // forwarding). The manager-level config.apiKey || parentApiKey fallback
+    // (SubagentManager.forkSubagent) is exercised in subagent.test.ts and is
+    // intentionally out of scope here.
+
+    it('resolves the node apiKey by the node model, not the parent ctx.apiKey', async () => {
+      // Parent is OpenAI-routed: ctx.apiKey is the OpenAI credential.
+      // An Anthropic-routed 'sonnet' node must NOT inherit it — it must get
+      // the Anthropic credential the resolver returns for its own model.
+      const resolveApiKeyForModel = vi.fn((model: string) =>
+        model === 'sonnet' ? 'anthropic-keychain-token' : 'openai-key',
+      );
+
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext({
+        defaultModel: 'gpt-4o',
+        apiKey: 'openai-key',
+        resolveApiKeyForModel,
+      }));
+
+      // The orchestrating agent chooses each node's model explicitly via
+      // `n.model` — that choice drives per-node credential resolution. A node
+      // without an explicit model inherits ctx.defaultModel ('gpt-4o' here),
+      // so set it to 'sonnet' to exercise the Anthropic-under-OpenAI-parent path.
+      await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'task a', model: 'sonnet' }],
+      }));
+
+      // Resolver called with the node's own model ('sonnet'), not the parent's.
+      expect(resolveApiKeyForModel).toHaveBeenCalledWith('sonnet');
+      // DAG node carries the resolved Anthropic key, not the parent's OpenAI key.
+      const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
+      expect(dagOpts.nodes[0].apiKey).toBe('anthropic-keychain-token');
+    });
+
+    it('resolves by the explicit per-node model override', async () => {
+      // When a node specifies model: 'opus', the resolver is called with
+      // 'opus' — not with the default subagent model or ctx.defaultModel.
+      const resolveApiKeyForModel = vi.fn(() => 'resolved-for-opus');
+
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext({
+        defaultModel: 'gpt-4o',
+        apiKey: 'parent-key',
+        resolveApiKeyForModel,
+      }));
+
+      await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'task a', model: 'opus' }],
+      }));
+
+      expect(resolveApiKeyForModel).toHaveBeenCalledWith('opus');
+      const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
+      expect(dagOpts.nodes[0].apiKey).toBe('resolved-for-opus');
+    });
+
+    it('preserves explicit same-provider ctx.apiKey over ambient resolver credentials', async () => {
+      // Threads and other per-session surfaces may pass an explicit Anthropic
+      // session token in ctx.apiKey while the process env/keychain has a
+      // different ambient Anthropic credential. Same-provider compose nodes
+      // must keep the session token rather than silently switching accounts.
+      const resolveApiKeyForModel = vi.fn(() => 'ambient-anthropic-token');
+
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext({
+        defaultModel: 'sonnet',
+        apiKey: 'session-anthropic-token',
+        resolveApiKeyForModel,
+      }));
+
+      await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'task a' }],
+      }));
+
+      expect(resolveApiKeyForModel).not.toHaveBeenCalled();
+      const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
+      expect(dagOpts.nodes[0].apiKey).toBe('session-anthropic-token');
+    });
+
+    it('falls back to ctx.apiKey when no resolver is injected (backward compat)', async () => {
+      // Pre-fix behavior: no resolver → node inherits ctx.apiKey verbatim.
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext({
+        apiKey: 'legacy-key',
+        // no resolveApiKeyForModel
+      }));
+
+      await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'task a' }],
+      }));
+
+      const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
+      // Node receives the ctx.apiKey as its per-node apiKey (backward compat path).
+      expect(dagOpts.nodes[0].apiKey).toBe('legacy-key');
+    });
+
+    it('does not inject the resolver value into an OpenAI-routed node config (cross-provider anti-leak guard)', async () => {
+      // The nodeIsOpenAI guard forces resolvedNodeApiKey = undefined for
+      // OpenAI-routed nodes, so the node fork config carries no apiKey field.
+      // This means the openai-compatible provider reads OPENAI_API_KEY from
+      // env directly, rather than being handed a potentially-wrong credential.
+      //
+      // Note: this test proves the executor boundary only. The manager-level
+      // `config.apiKey || parentApiKey` fallback in SubagentManager.forkSubagent
+      // is unchanged and out of scope — the node falling back to parentApiKey
+      // (ctx.apiKey) inside forkSubagent is the same pre-existing behavior as
+      // the agent/skill paths and is intentional.
+      const resolveApiKeyForModel = vi.fn(() => 'anthropic-token-must-not-reach-openai-node');
+
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext({
+        apiKey: 'some-parent-key',
+        resolveApiKeyForModel,
+      }));
+
+      await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'task a', model: 'gpt-4o' }],
+      }));
+
+      // The executor must NOT inject the resolver's value into the node config.
+      const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
+      expect(dagOpts.nodes[0].apiKey).toBeUndefined();
+    });
+
+    it('proceeds without error when resolver is present and ctx.apiKey is absent (keyless-parent setup)', async () => {
+      // When resolveApiKeyForModel is provided, the keyless precondition guard
+      // is relaxed — a local-shim OpenAI parent with no apiKey can still serve
+      // Anthropic-routed compose nodes via the resolver.
+      const resolveApiKeyForModel = vi.fn(() => 'anthropic-key-from-env');
+
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext({
+        apiKey: undefined,
+        resolveApiKeyForModel,
+      }));
+
+      const result = await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'task a' }],
+      }));
+
+      expect(result.isError).toBeFalsy();
+      expect(mockRunSubagentDAG).toHaveBeenCalledOnce();
+    });
+  });
 });

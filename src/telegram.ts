@@ -312,6 +312,8 @@ async function main() {
           defaultModel: sessionConfig.model,
           defaultSubagentModel: getDefaultSubagentModel(sessionConfig.model),
           apiKey: telegramApiKey,
+          // Per-model credential resolver — mirrors #640 for the compose fork-path.
+          resolveApiKeyForModel: getApiKeyForModel,
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
           systemPrompt: layeredBasePrompt ?? '',
         });
