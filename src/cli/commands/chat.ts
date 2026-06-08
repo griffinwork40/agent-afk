@@ -495,6 +495,8 @@ export function registerChatCommand(program: Command): void {
           defaultModel: options.model,
           defaultSubagentModel: getDefaultSubagentModel(options.model),
           apiKey,
+          // Per-model credential resolver — mirrors #640 for the compose fork-path.
+          resolveApiKeyForModel: getApiKeyForModel,
           ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
           systemPrompt: basePrompt ?? '',
         });
