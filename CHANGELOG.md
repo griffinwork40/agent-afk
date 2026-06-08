@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.89.2] - 2026-06-08
+
+### Fixed
+- enforce read-only tool gating for recon skills (ground-state) (#5) (6aeeaaa)
+
 ## [3.89.1] - 2026-06-08
 
 ### Fixed
