@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.89.0] - 2026-06-08
+
+### Added
+- per-model ProviderRouter — switch models across providers in one session, no AFK_PROVIDER (#38) (ab87afc)
+
+### Fixed
+- stop streaming markdown tables leaving ghost rows in the live overlay (#40) (a632844)
+
 ## [3.88.0] - 2026-06-08
 
 ### Added
