@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.89.8] - 2026-06-08
+
+### Fixed
+- ship uses --body-file/-F instead of heredoc-in-$() (#53) (a89b9db)
+
+### Changed
+- isolate no-auth tests from host credentials via AuthResolverDeps injection (#56) (5be979f)
+
 ## [3.89.7] - 2026-06-08
 
 ### Fixed
