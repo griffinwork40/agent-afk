@@ -16,7 +16,9 @@ import { debugLog } from '../../utils/debug.js';
 import { AbortError, BudgetExceededError, TimeoutError } from '../../utils/errors.js';
 import { emitClosure, emitSessionPhase } from '../trace/emit.js';
 import type { HookRegistry } from '../hooks.js';
-import { resolveProvider } from '../providers/index.js';
+import { resolveProvider, providerForModel } from '../providers/index.js';
+import { ProviderRouter } from '../providers/router/provider-router.js';
+import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import type { ProviderCompactResult, ProviderEvent, ProviderQuery } from '../provider.js';
 import { DEFAULT_SESSION_TIMEOUT_MS, RESET_DRAIN_TIMEOUT_MS, withTimeout } from '../timeout.js';
 import { dispatchSessionEnd, dispatchSessionStart } from './hooks-dispatch.js';
@@ -150,14 +152,32 @@ export class AgentSession implements IAgentSession {
     this.stateManager = new SessionStateManager(sessionIdentity, metadata);
     this.inputStream = new QueryInputStream(() => this.sessionId);
 
-    // Route on the original model (alias) so an explicit per-slot `provider`
-    // override is honored — resolveProvider → providerForModel resolves the slot.
-    const provider = this.config.provider ?? resolveProvider(this.config.model as string);
-    debugLog(`🟢 AgentSession: Creating query session via provider=${provider.name}`);
-    this.providerQuery = provider.query({
-      prompt: this.inputStream.createIterable(),
-      config: this.config,
-    });
+    // Provider selection.
+    //   - Caller-injected provider (`config.provider`): use it directly,
+    //     unchanged. Telegram/daemon inject a configured provider this way.
+    //   - Otherwise: install a ProviderRouter that routes EACH turn to the
+    //     provider for the currently-selected model, so `/model` can cross
+    //     provider families in one session without a global AFK_PROVIDER. The
+    //     swap happens below this session, so the accumulators and
+    //     SessionStart/SessionEnd hooks reset here are untouched by a model
+    //     switch. Routing still honors AFK_PROVIDER when set (it resolves to a
+    //     single family, so the router never swaps) — it is now an optional
+    //     escape hatch, not a requirement.
+    const promptIterable = this.inputStream.createIterable();
+    if (this.config.provider) {
+      debugLog(`🟢 AgentSession: Creating query session via injected provider=${this.config.provider.name}`);
+      this.providerQuery = this.config.provider.query({ prompt: promptIterable, config: this.config });
+    } else {
+      debugLog(`🟢 AgentSession: Creating query session via ProviderRouter`);
+      this.providerQuery = new ProviderRouter(
+        { prompt: promptIterable, config: this.config },
+        {
+          resolveProvider: (m) => resolveProvider(m),
+          providerNameForModel: (m) => providerForModel(m),
+          resolveApiKey: (m) => resolveCredentialForModel(m),
+        },
+      );
+    }
 
     this.conversationHistory = [];
     this.turnCount = 0;
