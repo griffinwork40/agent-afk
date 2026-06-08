@@ -69,7 +69,17 @@ const GIT_WORKTREE_MUTATING =
   /\bgit\b[^|;&]*\s+worktree\s+(remove|prune|move|lock|unlock)\b/i;
 // `git stash` in any form EXCEPT the read-only `stash list` / `stash show`.
 // A bare `git stash` (implicit push) mutates, so it must be blocked too.
+// Invariant: `classifyBashCommand` strips `stash@{N}` reflog refs (see
+// STASH_REFLOG_REF) BEFORE this rule runs. Without that, the greedy `[^|;&]*`
+// backtracks onto the literal `stash` inside the argument `stash@{0}`, where the
+// negative lookahead sees `@` (not `list`/`show`) and fires — misclassifying the
+// read `git stash show stash@{0}` as a mutation.
 const GIT_STASH_MUTATING = /\bgit\b[^|;&]*\s+stash\b(?!\s+(list|show)\b)/i;
+// A git reflog reference (`stash@{0}`, `stash@{2 days ago}`). Always an ARGUMENT,
+// never a command verb — stripping it before classification cannot hide a
+// mutation (the real subcommand verb is left in place) and prevents the
+// GIT_STASH_MUTATING backtracking false-positive described above.
+const STASH_REFLOG_REF = /\bstash@\{[^}]*\}/gi;
 // `git config` WRITES take two forms, both blocked:
 //   1. an explicit write/unset/edit flag (`--add`, `--unset`, `--edit`, …); or
 //   2. a `[scope] <key> <value>` set form — a config key followed by a value
@@ -101,8 +111,15 @@ const GH_EXTENDED_MUTATING =
 
 // ── pipe-to-shell ──────────────────────────────────────────────────────────
 // `curl … | bash`, `cat install.sh | sh`, etc. — any pipe whose right-hand side
-// is a shell interpreter is arbitrary remote code execution. Must run against the
-// RAW command so the full pipeline is visible.
+// is a shell interpreter is arbitrary remote code execution. Evaluated in
+// STRIPPED_RULES (Pass 2), NOT against the raw command: a REAL pipe-to-shell
+// operator is never inside quotes (quoting `| bash` makes it a literal string,
+// not a pipe), so running against the data-string-stripped view drops false
+// positives such as `grep -rn '| bash' src/` (a recon search for the literal
+// text) while still catching every genuine pipeline — which by definition
+// survives stripping. The `sh -c "…| bash"` obfuscation form (a quoted payload
+// handed to an interpreter) is intentionally out of scope per the module's
+// stated threat model (well-behaved recon agent, not a hostile process).
 const PIPE_TO_SHELL = /\|\s*(sh|bash|zsh|dash)\b/i;
 
 // ── filesystem mutations ───────────────────────────────────────────────────
@@ -216,7 +233,6 @@ const RAW_RULES: readonly MutationRule[] = [
   { re: GH_API_FIELD, reason: 'gh api field payload (-f/-F/--field)' },
   { re: GH_EXTENDED_MUTATING, reason: 'gh extended write operation (secret/variable/workflow/run/cache)' },
   { re: GIT_WORKTREE_MUTATING, reason: 'git worktree mutation (remove/prune/move)' },
-  { re: PIPE_TO_SHELL, reason: 'pipe-to-shell (RCE via piped interpreter)' },
   { re: SED_INPLACE, reason: 'sed in-place edit (-i)' },
   { re: PERL_INPLACE, reason: 'perl in-place edit (-i)' },
   { re: PKG_INSTALL, reason: 'package install/modify' },
@@ -230,6 +246,7 @@ const RAW_RULES: readonly MutationRule[] = [
 // short generic tokens that recur as quoted search terms / arguments, so they
 // must not see the contents of plain string literals.
 const STRIPPED_RULES: readonly MutationRule[] = [
+  { re: PIPE_TO_SHELL, reason: 'pipe-to-shell (RCE via piped interpreter)' },
   { re: FS_MUTATING, reason: 'filesystem mutation' },
   { re: FIND_DELETE, reason: 'find -delete (file removal)' },
   { re: PATCH_CMD, reason: 'patch (applies a diff to files)' },
@@ -271,9 +288,14 @@ export function classifyBashCommand(command: string): { mutating: boolean; reaso
   }
 
   // Pass 1 — rules that must see the FULL command (flag-bearing gh/curl/git/pkg
-  // forms).
+  // forms). First neutralize `stash@{N}` reflog refs → ` `: they are arguments,
+  // never verbs, and the literal `stash` inside them otherwise lets
+  // GIT_STASH_MUTATING's greedy prefix backtrack onto the argument and misclassify
+  // the read `git stash show stash@{0}` as a mutation. Stripping the ref cannot
+  // hide a mutation — the real subcommand verb (`drop`/`pop`/`apply`/…) remains.
+  const rawForRules = command.replace(STASH_REFLOG_REF, ' ');
   for (const rule of RAW_RULES) {
-    if (rule.re.test(command)) {
+    if (rule.re.test(rawForRules)) {
       return { mutating: true, reason: rule.reason };
     }
   }

@@ -108,6 +108,38 @@ describe('classifyBashCommand', () => {
     });
   });
 
+  // ── Fix #1 (review PR #5): git stash reflog refs (`stash@{N}`) must not
+  // trigger the GIT_STASH_MUTATING backtracking false-positive. The read forms
+  // `git stash show stash@{0}` / `git stash list stash@{N}` must pass, while a
+  // mutating subcommand carrying a reflog arg (drop/pop/apply) must still block.
+  describe('git stash reflog refs are classified by subcommand, not the @{N} arg', () => {
+    const allowed: string[] = [
+      'git stash show stash@{0}',
+      'git stash show stash@{1}',
+      'git stash show -p stash@{0}',
+      'git stash list stash@{0}',
+      'git stash show "stash@{0}"', // quoted reflog ref
+    ];
+    for (const cmd of allowed) {
+      it(`allows: ${cmd}`, () => {
+        expect(classifyBashCommand(cmd).mutating, `expected "${cmd}" read-only`).toBe(false);
+      });
+    }
+
+    const blocked: Array<[string, string]> = [
+      ['git stash drop stash@{0}', 'stash drop <ref>'],
+      ['git stash pop stash@{1}', 'stash pop <ref>'],
+      ['git stash apply stash@{0}', 'stash apply <ref>'],
+      ['git stash', 'bare git stash (implicit push)'],
+      ['git stash push -m x', 'stash push'],
+    ];
+    for (const [cmd, label] of blocked) {
+      it(`blocks: ${label} (${cmd})`, () => {
+        expect(classifyBashCommand(cmd).mutating, `expected "${cmd}" mutating`).toBe(true);
+      });
+    }
+  });
+
   // ── Finding 1 (HIGH): FS verbs inside quoted search terms must not block ──
   describe('filesystem verbs inside quoted args are not over-blocked', () => {
     const allowed: string[] = [
@@ -379,6 +411,14 @@ describe('classifyBashCommand', () => {
       'echo hello | cat',
       'ps aux | grep node',
       'curl https://x | jq .',   // jq is not a shell
+      // ── Fix #4 (review PR #5): a `| sh`/`| bash` inside a QUOTED search term
+      // is recon data, not a pipe. PIPE_TO_SHELL now runs in STRIPPED_RULES so
+      // these are no longer over-blocked. A real (unquoted) pipe still survives
+      // stripping and is caught by the `blocked` cases above.
+      "grep -rn '| bash' src/",
+      "grep -rn '| sh' .",
+      'rg "| zsh" src',
+      "git log --oneline | grep '| bash'",
     ];
     for (const cmd of allowed) {
       it(`allows: ${cmd}`, () => {
