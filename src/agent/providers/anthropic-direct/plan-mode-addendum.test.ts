@@ -82,10 +82,10 @@ describe('plan-mode-addendum', () => {
       expect(PLAN_MODE_ADDENDUM_TEXT).toContain('shadow-verify');
     });
 
-    it('names the closure requirements', () => {
-      // The closure ritual (slice 2) seeds a prompt asking for these
-      // exact three sections. The addendum prepares the model for that
-      // shape so the closure prompt does not arrive cold.
+    it('names the plan-readiness requirements', () => {
+      // When the plan is ready the model states these three sections; on
+      // `/plan off` that plan is saved to a file and implemented. The addendum
+      // primes the model to keep the plan concrete enough to act on directly.
       const text = PLAN_MODE_ADDENDUM_TEXT.toLowerCase();
       expect(text).toContain('chosen approach');
       expect(text).toContain('risks');

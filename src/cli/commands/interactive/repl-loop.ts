@@ -20,7 +20,7 @@ import { renderDebugBanner } from '../../debug-banner.js';
 import { isDebugEnabled, debugLog } from '../../../utils/debug.js';
 import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
-import { togglePlanMode, flushPendingPlanExit } from '../../plan-mode-toggle.js';
+import { togglePlanMode } from '../../plan-mode-toggle.js';
 import {
   autoRegisterPluginPassthroughs,
   getPluginShadowingNoticeLines,
@@ -258,14 +258,10 @@ export async function runReplLoop(
     onShiftTab: () => {
       // Replicated from the user-turn onShiftTab handler below — the
       // persistent compositor uses ONE onShiftTab across both phases
-      // (plan-mode toggle is REPL-global, not turn-scoped).
-      const s = ctx.slashCtx;
-      if (s.stats.planMode && s.stats.pendingPlanExit) {
-        s.stats.pendingPlanExit = false;
-        togglePlanMode(s, false, { closureSummarySkipped: true }).catch(() => {});
-      } else {
-        togglePlanMode(s).catch(() => {});
-      }
+      // (plan-mode toggle is REPL-global, not turn-scoped). Shift+Tab is a
+      // raw flip with no seeded turn: the "exit plan mode without saving or
+      // implementing" escape hatch (cf. `/plan off`, which saves + implements).
+      togglePlanMode(ctx.slashCtx).catch(() => {});
       ctx.statusLine.rearm();
     },
     // StatusLine doubles as DECSTBM scroll-region guard so commitAbove
@@ -701,22 +697,11 @@ export async function runReplLoop(
           promptFn: () => buildPrompt(ctx.stats.model, ctx.stats.planMode),
           onSigint: sigintHandler,
           onShiftTab: () => {
-            // Shift+Tab is the keyboard speed lane. When a closure exit
-            // is pending, route through force-exit so:
-            //   1. `pendingPlanExit` is cleared (otherwise the next
-            //      onAfterTurn would re-fire flushPendingPlanExit and
-            //      emit a second OFF line on an already-default mode).
-            //   2. The OFF copy distinguishes force-exit from a normal
-            //      exit so the user knows the closure summary was
-            //      skipped.
-            // Otherwise (no pending), this is a plain toggle.
-            const s = ctx.slashCtx;
-            if (s.stats.planMode && s.stats.pendingPlanExit) {
-              s.stats.pendingPlanExit = false;
-              togglePlanMode(s, false, { closureSummarySkipped: true }).catch(() => {});
-            } else {
-              togglePlanMode(s).catch(() => {});
-            }
+            // Shift+Tab is the keyboard speed lane: a raw plan-mode flip with
+            // no seeded turn. It exits plan mode WITHOUT saving or implementing
+            // the plan — the manual-takeover escape hatch. (`/plan off`, by
+            // contrast, flips and then seeds a save-and-implement turn.)
+            togglePlanMode(ctx.slashCtx).catch(() => {});
             ctx.statusLine.rearm();
           },
         });
@@ -939,9 +924,6 @@ export async function runReplLoop(
         },
         async onAfterTurn() {
           await ctx.contextSampler.onTurn(ctx.stats.totalTurns);
-          // Closure-ritual completion: if `/plan off` deferred the flip,
-          // the closure response has now landed — flush the pending exit.
-          await flushPendingPlanExit(ctx.slashCtx);
           ctx.statusLine.rearm();
           // Reset the loop-stage bar to 'observing' so the footer rail shows
           // a clean "waiting" state between turns rather than the last active

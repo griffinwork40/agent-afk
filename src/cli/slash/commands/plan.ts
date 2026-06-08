@@ -1,132 +1,109 @@
 /**
- * /plan — toggle plan mode, with a closure ritual on exit.
+ * /plan — toggle plan mode, and on exit save the plan + implement it.
  *
  * Usage:
  *   /plan                    — toggle plan mode on/off
- *   /plan on                 — set plan mode on (clears pending exit if any)
- *   /plan off                — request exit; first call starts the closure
- *                              ritual, second call (while pending) force-exits
+ *   /plan on                 — enter plan mode
+ *   /plan off                — exit plan mode, then save the plan to a file
+ *                              and implement it (see "Exit behavior" below)
  *   /plan <free text>        — enter plan mode and pre-fill the prompt with
  *                              <free text> for immediate submission
  *
- * Enforcement: in plan mode, write_file, edit_file, and write-intent bash
- * commands are refused by the plan-mode gate hook (PR #255). This is
- * hook-level refusal in agent-afk's own harness — the model is not lied
- * to about which permission mode it is in, and there is no upstream
- * permission-mode layer being relied on. (agent-afk talks to the
- * Anthropic Messages API directly via `@anthropic-ai/sdk`; it does not
- * use `@anthropic-ai/claude-agent-sdk`.)
+ * Enforcement: in plan mode, write_file, edit_file, memory_update,
+ * procedure_write, and write-intent bash are refused by the plan-mode gate
+ * hook (`src/agent/plan-mode-gate.ts`). This is hook-level refusal in
+ * agent-afk's own harness — the model is not lied to about which permission
+ * mode it is in, and there is no upstream permission-mode layer being relied
+ * on. (agent-afk talks to the Anthropic Messages API directly via
+ * `@anthropic-ai/sdk`; it does not use `@anthropic-ai/claude-agent-sdk`.)
  *
  * Posture: the `anthropic-direct` provider appends a planning-topology
  * addendum to the system prompt whenever permissionMode === 'plan', so the
  * model sees plan mode at turn start and knows which skills match each step
- * of the shape. The addendum stays active during the closure-ritual turn.
+ * of the shape.
  *
- * Closure ritual: `/plan off` (or bare `/plan` while in plan mode) does NOT
- * flip the mode immediately. It sets `stats.pendingPlanExit = true`, keeps
- * `planMode` true (so write enforcement is unbroken), and returns a
- * `{ kind: 'submit' }` result that seeds the closure prompt as the next
- * user message. The model emits its final plan in three sections; after
- * that turn completes, `onAfterTurn` in the REPL loop performs the flip.
+ * Exit behavior (`/plan off`, or bare `/plan` while in plan mode):
+ *   1. Flip the session to `default` mode IMMEDIATELY. This is the critical
+ *      ordering: the flip happens BEFORE the next turn so that turn runs with
+ *      writes permitted and without the plan-mode addendum. (The prior design
+ *      deferred the flip to keep writes refused through a closure-summary
+ *      turn; the new design needs the opposite — the model must write the
+ *      plan file and then act on it.)
+ *   2. Seed a `{ kind: 'submit' }` turn whose prompt tells the model: the user
+ *      has exited plan mode, save the plan you developed to a markdown file
+ *      under `<cwd>/.afk/plans/`, then implement it. The REPL auto-submits the
+ *      seeded message on the next loop iteration; that turn runs in `default`
+ *      mode, so the writes land.
  *
- * Escape hatches:
- *   - `/plan off` again while pending = force-exit (immediate flip, no turn).
- *   - Shift+Tab from the REPL = immediate flip via raw `togglePlanMode`,
- *     bypasses the ritual. (Keyboard speed lane.)
- *   - `/plan on` while pending = cancel pending, stay in plan mode.
+ * If the flip fails (a transient `setPermissionMode` rejection — surfaced by
+ * `togglePlanMode`, which leaves `planMode` unchanged), no implement turn is
+ * seeded: seeding one while writes are still refused would only produce a
+ * wall of gate refusals.
+ *
+ * Escape hatch: Shift+Tab from the REPL performs a raw `togglePlanMode` flip
+ * with no seeded turn — exit plan mode WITHOUT saving or implementing. Use it
+ * to take manual control after planning.
+ *
+ * Scope: plan mode is a REPL-only conversation affordance. Other surfaces
+ * (Telegram) never enter plan mode (their sessions are constructed with
+ * `planMode: false` and no toggle path), so this command's exit behavior is
+ * exercised only by the REPL's `{ kind: 'submit' }` consumer.
  */
 
+import { getProjectPlansDir } from '../../../paths.js';
 import { togglePlanMode } from '../../plan-mode-toggle.js';
 import { palette } from '../../palette.js';
 import type { SlashCommand, SlashContext, SlashResult } from '../types.js';
 
 /**
- * The closure prompt seeded into the user's next message buffer when the
- * ritual begins. The model has already been told what to emit by the
- * plan-mode system-prompt addendum; this prompt is the explicit ask.
+ * Build the prompt seeded into the user's next message buffer when plan mode
+ * is exited via `/plan off`. `plansDir` is an absolute path to the session's
+ * `<cwd>/.afk/plans/` directory; the model picks a descriptive filename within
+ * it (the `write_file` tool creates the directory if absent).
  */
-export const PLAN_MODE_CLOSURE_PROMPT = [
-  'You are about to exit plan mode. Before I flip permissions back to default on the next turn, emit your final plan in three sections:',
-  '',
-  '  - **Chosen approach** — the plan you recommend, in one to three sentences.',
-  '  - **Risks named** — the concrete failure modes, constraints, or unknowns this plan does not eliminate.',
-  '  - **Alternatives considered** — the options you weighed and why you rejected them.',
-  '',
-  'This is the record. Be specific. Do not propose write actions in this turn — writes are still refused until the mode flips.',
-].join('\n');
-
-async function startClosureRitual(ctx: SlashContext): Promise<SlashResult> {
-  ctx.stats.pendingPlanExit = true;
-  ctx.ui.repaintStatusLine();
-  // State-first copy: lead with "still ON" so the user does not mistake
-  // the deferred exit for a normal exit. Both escape hatches named with
-  // their exact gestures. Mirrors the badge style of the ON message
-  // (`●` warning, dim secondary text).
-  ctx.out.success(
-    palette.warning('● plan exit queued') +
-    palette.dim(
-      ' — plan mode still ON; writes still refused.' +
-      ' Submitting closure summary (chosen approach, risks, alternatives);' +
-      ' mode flips after the model responds.' +
-      ' Force-exit now: /plan off again or Shift+Tab.',
-    ),
-  );
-  return { kind: 'submit', message: PLAN_MODE_CLOSURE_PROMPT };
-}
-
-async function forceExit(ctx: SlashContext): Promise<SlashResult> {
-  // Clear the pending flag BEFORE calling togglePlanMode so the helper
-  // does not re-fire flushPendingPlanExit on the next onAfterTurn. The
-  // `closureSummarySkipped` option tells togglePlanMode to emit the
-  // distinguishing OFF copy.
-  ctx.stats.pendingPlanExit = false;
-  await togglePlanMode(ctx, false, { closureSummarySkipped: true });
-  return 'continue';
-}
-
-async function cancelPendingExit(ctx: SlashContext): Promise<SlashResult> {
-  ctx.stats.pendingPlanExit = false;
-  ctx.ui.repaintStatusLine();
-  ctx.out.success(
-    palette.warning('● plan mode ON') +
-    palette.dim(' — plan exit cancelled, staying in plan mode.'),
-  );
-  return 'continue';
+export function buildPlanExitPrompt(plansDir: string): string {
+  return [
+    'The user has switched off plan mode. Writes are now permitted. Do two things, in order:',
+    '',
+    `1. Save the plan. Write the plan you developed in this conversation to a new markdown file under \`${plansDir}/\` — pick a short, descriptive kebab-case filename (e.g. \`${plansDir}/refactor-auth-flow.md\`). Capture the full plan: the chosen approach, the concrete step-by-step changes, the risks named, and the alternatives considered. This is the durable record.`,
+    '',
+    '2. Implement the plan. Work through the steps you just recorded, verifying as you go — run the project\'s lint/test gates where they apply. End in a terminal state: Done with evidence, Blocked with the exact unblock condition, or Asking one precise question.',
+  ].join('\n');
 }
 
 /**
- * Reached when the user submits `/plan <free text>` while a closure
- * exit is pending. Their new prompt replaces the queued closure summary
- * — emit a one-liner so the swap is visible.
+ * Exit plan mode and seed the save-and-implement turn. Flips to `default`
+ * FIRST (so the seeded turn runs unrestricted), then returns the submit
+ * result. On flip failure, returns `'continue'` without seeding a turn.
  */
-function noteFreeTextCancelledRitual(ctx: SlashContext): void {
+async function exitAndImplement(ctx: SlashContext): Promise<SlashResult> {
+  await togglePlanMode(ctx, false);
+  if (ctx.stats.planMode) {
+    // Flip failed — togglePlanMode already surfaced the error and left
+    // planMode unchanged. Do NOT seed an implement turn while writes are
+    // still refused; the model would only collect gate refusals.
+    return 'continue';
+  }
+  const plansDir = getProjectPlansDir(ctx.stats.cwd ?? process.cwd());
   ctx.out.info(
-    palette.dim('(plan exit cancelled — submitting your prompt instead.)'),
+    palette.dim(`  → saving the plan to ${plansDir}/, then implementing it.`),
   );
+  return { kind: 'submit', message: buildPlanExitPrompt(plansDir) };
 }
 
 export const planCmd: SlashCommand = {
   name: '/plan',
   usage: '/plan [on|off|<prompt>]',
-  summary: 'Toggle plan mode (write_file, edit_file, and write-intent bash refused)',
-  hint: 'When you want the model to think through an approach without touching files — refuses writes until you flip back. Shift+Tab toggles too.',
+  summary: 'Toggle plan mode; /plan off saves the plan to a file then implements it',
+  hint: 'Think through an approach without touching files — writes are refused until you exit. /plan off saves the plan + implements it; Shift+Tab exits without implementing.',
   async handler(ctx, args): Promise<SlashResult> {
     const arg = args.trim();
     const argLower = arg.toLowerCase();
 
     // Free-text arg: enter plan mode unconditionally and submit as prompt.
     if (arg !== '' && argLower !== 'on' && argLower !== 'off') {
-      const wasPending = !!ctx.stats.pendingPlanExit;
       if (!ctx.stats.planMode) {
         await togglePlanMode(ctx, true);
-      }
-      // Re-engaging planning via free-text mid-ritual cancels the pending
-      // exit — user is asking for more planning, not closure. Surface the
-      // swap so the user does not think their new prompt is being queued
-      // *after* a closure turn.
-      if (wasPending) {
-        ctx.stats.pendingPlanExit = false;
-        noteFreeTextCancelledRitual(ctx);
       }
       return { kind: 'submit', message: arg };
     }
@@ -137,10 +114,9 @@ export const planCmd: SlashCommand = {
       !ctx.stats.planMode;
 
     if (desired === true) {
-      if (ctx.stats.pendingPlanExit) return cancelPendingExit(ctx);
       if (ctx.stats.planMode) {
-        // Already on, no pending exit — nothing to do. togglePlanMode would
-        // emit a no-op success line; suppress it for ergonomics.
+        // Already on — nothing to do. togglePlanMode would emit a no-op
+        // success line; suppress it for ergonomics.
         return 'continue';
       }
       await togglePlanMode(ctx, true);
@@ -149,12 +125,11 @@ export const planCmd: SlashCommand = {
 
     // desired === false
     if (!ctx.stats.planMode) {
-      // Already off — toggle to make the message explicit (no-op effect on
-      // the gate but the user sees the affordance).
+      // Already off — toggle to surface the affordance (no-op on the gate).
+      // No plan to save, so no implement turn is seeded.
       await togglePlanMode(ctx, false);
       return 'continue';
     }
-    if (ctx.stats.pendingPlanExit) return forceExit(ctx);
-    return startClosureRitual(ctx);
+    return exitAndImplement(ctx);
   },
 };

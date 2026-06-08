@@ -1,19 +1,21 @@
 /**
- * Shared toggle helper for plan mode + closure-ritual terminator.
+ * Shared toggle helper for plan mode.
  *
- * `togglePlanMode` is used by the /plan slash command, the Shift+Tab
- * keybinding in the REPL input loop, and the closure-ritual terminator
- * `flushPendingPlanExit` — all three paths emit identical copy and update
- * the same stats/status-line plumbing.
+ * `togglePlanMode` is used by the /plan slash command and the Shift+Tab
+ * keybinding in the REPL input loop. Both paths emit identical copy and
+ * update the same stats/status-line plumbing. It flips the session permission
+ * mode (`'plan'` <-> `'default'`) and mirrors the result onto
+ * `stats.planMode` — the value the REPL prompt and status line read.
  *
- * `flushPendingPlanExit` is the post-turn flip for the D-light closure
- * ritual: when `/plan off` deferred the mode flip (setting
- * `stats.pendingPlanExit = true` and seeding a closure prompt), the REPL
- * calls this helper from `onAfterTurn` after the closure response lands.
- * If the underlying `session.setPermissionMode` call fails (e.g., the
- * provider's query handle is closing or already torn down), the pending
- * flag is preserved so a subsequent `/plan off` force-exits cleanly
- * instead of starting a fresh ritual.
+ * Exit semantics differ by entry point and live in the callers, not here:
+ *   - `/plan off` (slash command) flips to default, then seeds a turn that
+ *     saves the plan to a file and implements it (see `slash/commands/plan.ts`).
+ *   - Shift+Tab calls this helper raw — a bare flip with no seeded turn, the
+ *     "exit without implementing" escape hatch.
+ *
+ * If `setPermissionMode` rejects (e.g. the provider's query handle is closing
+ * or already torn down), `stats.planMode` is left unchanged and the failure is
+ * surfaced via `ctx.out.error` so the caller can detect a no-op flip.
  */
 
 import { palette } from './palette.js';
@@ -21,24 +23,9 @@ import type { SlashContext } from './slash/types.js';
 
 let hasShownFirstUseTip = false;
 
-export interface TogglePlanModeOptions {
-  /**
-   * When the toggle goes plan → default AND this is true, the OFF copy
-   * notes that the closure summary was skipped. Set this in the two
-   * force-exit paths:
-   *   - second `/plan off` while `pendingPlanExit` is true
-   *   - Shift+Tab while `pendingPlanExit` is true
-   * Leave false (default) in the normal post-closure flush, where the
-   * model just emitted the closure summary and the flip is the expected
-   * terminus of the ritual.
-   */
-  closureSummarySkipped?: boolean;
-}
-
 export async function togglePlanMode(
   ctx: SlashContext,
   desired?: boolean,
-  opts: TogglePlanModeOptions = {},
 ): Promise<void> {
   const current = ctx.stats.planMode;
   const next = desired !== undefined ? desired : !current;
@@ -48,17 +35,14 @@ export async function togglePlanMode(
     ctx.stats.planMode = next;
     ctx.ui.repaintStatusLine();
     if (next) {
-      const tip = hasShownFirstUseTip ? '' : palette.dim(' Shift+Tab or /plan to exit.');
+      const tip = hasShownFirstUseTip
+        ? ''
+        : palette.dim(' /plan off saves the plan + implements; Shift+Tab just exits.');
       if (!hasShownFirstUseTip) hasShownFirstUseTip = true;
       ctx.out.success(
         palette.warning('● plan mode ON') +
         palette.dim(' — write_file, edit_file, and write-intent bash are refused.') +
         tip,
-      );
-    } else if (opts.closureSummarySkipped) {
-      ctx.out.success(
-        palette.success('○ plan mode OFF') +
-        palette.dim(' — force-exit (closure summary skipped). Default permissions restored.'),
       );
     } else {
       ctx.out.success(
@@ -69,26 +53,5 @@ export async function togglePlanMode(
     ctx.out.error(
       `Could not toggle plan mode: ${err instanceof Error ? err.message : String(err)}`,
     );
-  }
-}
-
-/**
- * Post-turn closure-ritual terminator.
- *
- * Called from the REPL's `onAfterTurn` hook. When the user's previous
- * `/plan off` deferred the flip (set `stats.pendingPlanExit = true`), the
- * closure response from the model has now landed on history — flip the
- * mode to default. Clears `pendingPlanExit` only if the flip succeeded,
- * so a transient `setPermissionMode` failure leaves the user able to
- * retry `/plan off` as a clean force-exit instead of starting a fresh
- * ritual.
- *
- * Idempotent: no-op when `pendingPlanExit` is unset.
- */
-export async function flushPendingPlanExit(ctx: SlashContext): Promise<void> {
-  if (!ctx.stats.pendingPlanExit) return;
-  await togglePlanMode(ctx, false);
-  if (!ctx.stats.planMode) {
-    ctx.stats.pendingPlanExit = false;
   }
 }
