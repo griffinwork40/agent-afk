@@ -24,7 +24,7 @@ import { env } from '../../../config/env.js';
 // History: browser_event witness emission is a no-op in this handler.
 // See browser-open.ts for the full rationale.
 
-const PLAYWRIGHT_MISSING_HINTS = ['Cannot find package', 'ERR_MODULE_NOT_FOUND'];
+import { isPlaywrightMissing, playwrightMissingHint } from './playwright-hints.js';
 
 const VALID_TARGET_KINDS = ['semantic', 'element_id', 'selector'] as const;
 
@@ -128,13 +128,8 @@ export function createBrowserScreenshotHandler(opts: BrowserHandlerOptions = {})
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (PLAYWRIGHT_MISSING_HINTS.some((hint) => msg.includes(hint))) {
-        return {
-          content:
-            'browser tools require the optional `playwright` peer dependency. ' +
-            'Install via: pnpm add playwright. Or pick a different tool.',
-          isError: true,
-        };
+      if (isPlaywrightMissing(msg)) {
+        return { content: playwrightMissingHint(msg), isError: true };
       }
       return { content: `browser_screenshot failed to get provider: ${msg}`, isError: true };
     }

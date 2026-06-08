@@ -22,17 +22,29 @@ import type { BrowserConfig } from '../types.js';
 // Version resolution
 // ---------------------------------------------------------------------------
 
-// Contract: resolve once at module load time. A missing / malformed
-// package.json falls back to 'unknown' without crashing the process.
+// In bundled (esbuild) builds, `__AFK_VERSION__` is replaced at compile time
+// via esbuild's `define` option (see scripts/build-dist.mjs). Declared here so
+// tsc accepts the reference; it is undefined in dev/tsx/vitest runs.
+declare const __AFK_VERSION__: string | undefined;
+
+// Contract: resolve once at module load time. Falls back to 'unknown' without
+// crashing the process.
 function resolveAFKVersion(): string {
+  // Build-time injected literal — the source of truth in the published binary,
+  // where this module is bundled into dist/cli.mjs and import.meta.dirname
+  // points at dist/, so the relative package.json walk below would miss.
   try {
-    // import.meta.dirname is Node ≥20 ESM. The package.json is three
-    // directories above src/browser/playwright/.
-    const pkgPath = path.resolve(
-      // The cast is safe: we target Node ≥20 where import.meta.dirname exists.
-      import.meta.dirname,
-      '../../../package.json',
-    );
+    if (typeof __AFK_VERSION__ === 'string' && __AFK_VERSION__.length > 0) {
+      return __AFK_VERSION__;
+    }
+  } catch {
+    // ReferenceError where the define wasn't applied (dev/tsx) — fall through.
+  }
+
+  // Dev fallback (tsx / vitest): import.meta.dirname is the real source dir,
+  // and the package.json is three directories above src/browser/playwright/.
+  try {
+    const pkgPath = path.resolve(import.meta.dirname, '../../../package.json');
     const raw = fs.readFileSync(pkgPath, 'utf8');
     const parsed = JSON.parse(raw) as { version?: unknown };
     return typeof parsed['version'] === 'string' ? parsed['version'] : 'unknown';
