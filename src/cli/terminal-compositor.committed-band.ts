@@ -30,6 +30,9 @@ export interface CommittedBandHost {
   committedBand: string[];
   committedBandTopRow: number;
   committedBandBottomRow: number;
+  /** Most-recent committed block covered by a full-viewport frame, awaiting
+   *  re-pin on the next collapse (see {@link repositionCommittedBand}). */
+  coveredBand: string[];
   /** Re-entrancy guard: suppresses a repaint during the clear→write window. */
   committing: boolean;
   /** Suppresses the shrink re-pin (repositionCommittedBand) for a commit. */
@@ -103,7 +106,20 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   const rows = Math.max(1, self.stdout.rows ?? 24);
   const stripped = text.endsWith('\n') ? text.slice(0, -1) : text;
   const newlineCount = (stripped.match(/\n/g)?.length ?? 0);
-  const lineCount = Math.max(1, newlineCount + 1);
+  const logicalLineCount = Math.max(1, newlineCount + 1);
+  // Physical (wrap-aware) row count. A committed line wider than the terminal
+  // soft-wraps to >1 physical row, so the LOGICAL count (newlines+1) under-counts
+  // the rows the block actually occupies. That under-count made Phase 1 scroll too
+  // few rows (LF×lineCount) — stranding wrapped overflow rows on screen — and
+  // mis-sized fitsAboveFrame / bandOverflow. Mirror the frame side (a7ace49 / #39),
+  // which derives its geometry from CupFrameRenderer.measure()'s physical row count
+  // via the shared wrapToPhysicalLines helper; reuse the same measure() here so the
+  // band and frame can't drift. (a7ace49 flagged this site as the tracked follow-up:
+  // "commitAbove()'s lineCount is still logical — a separate wrap-blind site.")
+  // Logical fallback for stubs without measure().
+  const lineCount = self.logUpdate.measure
+    ? Math.max(1, self.logUpdate.measure(stripped, rows).lineCount)
+    : logicalLineCount;
   const textLines = stripped.split('\n');
 
   // Decide where the committed text is written so it lands in scrollback
@@ -364,13 +380,28 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
       self.committedBand = capped;
       self.committedBandBottomRow = newTopRow - 1;
       self.committedBandTopRow = bandTop;
+      // An on-screen band is now authoritative — any previously covered block is
+      // stale (this commit supersedes it).
+      self.coveredBand = [];
     } else {
       clearCommittedBand(self);
     }
   } else {
-    // No above-frame area (frame fills the viewport, or nothing rendered yet):
-    // the committed text lives only in scrollback — nothing to re-pin.
+    // No above-frame area: the frame fills the viewport (newTopRow ≤ 1) or
+    // nothing has rendered yet. The block is already in scrollback (Phase 1's
+    // overflow archive). Rather than DROP it, PARK it in coveredBand so the
+    // moment the overlay collapses repositionCommittedBand re-pins it adjacent
+    // to the frame — without this the band is empty on collapse and
+    // CupFrameRenderer shrink-pads blank rows nothing refills (the "massive
+    // blank gap" in big-gap.txt). Cap to the viewport height; the re-pin caps
+    // again to the real above-frame room. clearCommittedBand() resets coveredBand
+    // first, so set it AFTER. (newTopRow ≤ 1 ⇒ nothing rendered yet has no block
+    // to park — textLines is the just-committed content either way.)
     clearCommittedBand(self);
+    if (newTopRow <= 1 && textLines.length > 0) {
+      const cap = Math.max(1, rows - 1);
+      self.coveredBand = textLines.length > cap ? textLines.slice(textLines.length - cap) : textLines;
+    }
   }
   self.commitInFlight = false;
   self.debugLog('commitAbove:phase3:done');
@@ -380,6 +411,12 @@ export function clearCommittedBand(self: CommittedBandHost): void {
   self.committedBand = [];
   self.committedBandTopRow = 0;
   self.committedBandBottomRow = 0;
+  // Drop any covered-but-retained content too: every clear path (disarm, /clear,
+  // resetCommittedBand, fits-path empties) means there is no longer a band to
+  // re-pin, so a stale coveredBand must not resurrect old transcript on the next
+  // shrink. Sites that intentionally PARK content in coveredBand set it AFTER
+  // calling this (commitAbove's full-viewport branch).
+  self.coveredBand = [];
 }
 
 /**
@@ -464,9 +501,27 @@ export function repositionCommittedBand(
   preRenderFrameTop: number,
   targetBottomRow: number,
 ): void {
-  if (self.commitInFlight || !self.logUpdate || self.committedBand.length === 0) return;
+  if (self.commitInFlight || !self.logUpdate) return;
   const floor = Math.max(self.anchorRow ?? 1, 1);
   const targetBottom = desiredTopRow - 1;
+  // Promote covered content the moment the frame shrinks enough to show it. A
+  // full-viewport frame (newTopRow ≤ 1) parked the most-recent block in
+  // coveredBand (commitAbove) instead of dropping it; re-pin it now adjacent to
+  // the new frame top so the collapse shows it hugging the frame rather than a
+  // run of shrink-pad blank rows (the "massive blank gap"). While the frame
+  // still fills the viewport (targetBottom < floor) this is a no-op and the
+  // block stays parked. The block is already in scrollback (Phase 1 archive), so
+  // the only cost of the re-pin is an off-screen scrollback copy (no-gap default).
+  if (self.committedBand.length === 0 && self.coveredBand.length > 0 && targetBottom >= floor) {
+    self.committedBand = self.coveredBand;
+    self.coveredBand = [];
+    // Treat the promoted band as having occupied the just-erased covered frame
+    // footprint so renderErasedBand fires and it paints at the position the fit
+    // math computes below (committedBandTopRow = 1 also makes `moved` true).
+    self.committedBandTopRow = 1;
+    self.committedBandBottomRow = Math.max(1, preRenderFrameTop, targetBottom);
+  }
+  if (self.committedBand.length === 0) return;
   // On upward growth (targetBottom < committedBandBottomRow) the band must be
   // re-pinned above the NEW frame top: preserveRowsBeforeFrameRender either
   // left the whole band in place (it fits) or already scrolled the overflow

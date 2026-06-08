@@ -275,6 +275,17 @@ export class TerminalCompositor {
   committedBandTopRow = 0;
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   committedBandBottomRow = 0;
+  // Content COVERED by a full-viewport frame (desiredTopRow ≤ 1) rather than
+  // displayed: when the overlay fills the screen there is no above-frame row to
+  // show the committed band, but the overlay is transient. Stashing the most-
+  // recent committed block here (instead of dropping it) lets
+  // repositionCommittedBand re-pin it adjacent to the frame the moment the
+  // overlay collapses — otherwise the band is empty on collapse and
+  // CupFrameRenderer shrink-pads blank rows that nothing refills (the "massive
+  // blank gap"). Invalidated whenever an on-screen band is (re-)established or
+  // the band is reset (clearCommittedBand). See repositionCommittedBand().
+  /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
+  coveredBand: string[] = [];
 
   // Resize ghost-erase state. On SIGWINCH the immediate handler snapshots the
   // pre-resize on-screen footprint of the compositor (old live-frame rows +
