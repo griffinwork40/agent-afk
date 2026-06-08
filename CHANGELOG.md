@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.89.7] - 2026-06-08
+
+### Fixed
+- unblock native browser tools in the bundled ESM binary (#51) (fa29619)
+
 ## [3.89.6] - 2026-06-08
 
 ### Fixed
