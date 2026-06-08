@@ -43,6 +43,8 @@ import type {
 } from '../types.js';
 import { QueryInputStream } from './input-iterable.js';
 import { resolveModelId } from './model-resolution.js';
+import { setSlotBindings } from './model-slots.js';
+import { applySlotCredentials } from './slot-credentials.js';
 import {
   buildInitialState,
   wireAbortSignal,
@@ -130,13 +132,27 @@ export class AgentSession implements IAgentSession {
    * SessionStart/SessionEnd hooks fire on each cycle.
    */
   private initSdkLifecycle(): void {
+    // Safety net for direct construction (library/test) that bypasses
+    // `loadConfig()`: install any caller-provided slot bindings process-globally
+    // so `resolveModelId`/`resolveProvider` below resolve tier aliases. The CLI
+    // path already installed them in `loadConfig`; this is idempotent.
+    if (this.config.models) setSlotBindings(this.config.models);
+
+    // Stage 2: apply the resolved model's per-slot provider credentials
+    // (provider/baseUrl/apiKey) onto this session's config so the active
+    // provider reads them at query time. No-op unless the model resolves to a
+    // slot carrying explicit credentials.
+    applySlotCredentials(this.config);
+
     const resolvedModel = resolveModelId(this.config.model) ?? (this.config.model as string);
     const { sessionIdentity, metadata } = buildInitialState(this.config, resolvedModel);
 
     this.stateManager = new SessionStateManager(sessionIdentity, metadata);
     this.inputStream = new QueryInputStream(() => this.sessionId);
 
-    const provider = this.config.provider ?? resolveProvider(resolvedModel);
+    // Route on the original model (alias) so an explicit per-slot `provider`
+    // override is honored — resolveProvider → providerForModel resolves the slot.
+    const provider = this.config.provider ?? resolveProvider(this.config.model as string);
     debugLog(`🟢 AgentSession: Creating query session via provider=${provider.name}`);
     this.providerQuery = provider.query({
       prompt: this.inputStream.createIterable(),

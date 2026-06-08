@@ -2,6 +2,14 @@ import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { config as dotenvConfig } from 'dotenv';
 import { getModelId, isValidModel } from '../agent/session/model-resolution.js';
+import {
+  computeSlotBindings,
+  parseModelsConfig,
+  setSlotBindings,
+  type ModelSlotBinding,
+  type ModelSlots,
+  type SlotName,
+} from '../agent/session/model-slots.js';
 import { providerForModel, type BundledProviderName } from '../agent/providers/index.js';
 import type { AgentModelInput } from '../agent/types.js';
 import {
@@ -48,6 +56,12 @@ export interface CliConfig {
    */
   baseUrl?: string;
   model: AgentModelInput;
+  /**
+   * Resolved model-slot bindings (defaults ← afk.config.json `models` block ←
+   * `AFK_MODEL_{SMALL,MEDIUM,LARGE}` env). Always populated by `loadConfig()`,
+   * which also installs them process-globally via `setSlotBindings`.
+   */
+  models?: ModelSlots;
   maxTokens: number;
   temperature: number;
   /**
@@ -183,8 +197,30 @@ export interface CliConfig {
   enableShellHooks?: boolean;
 }
 
+/** One per-tier model binding in afk.config.json's `models` block. */
+interface ModelSlotConfigEntry {
+  id?: string;
+  name?: string;
+  provider?: string;
+  baseUrl?: string;
+  apiKey?: string;
+}
+
 interface ConfigFileSchema {
   model?: string;
+  /**
+   * Per-tier model bindings. Each slot accepts a bare id string
+   * (`"small": "gpt-4o-mini"`) or an object with an optional custom `name` and
+   * optional Stage 2 per-slot provider credentials
+   * (`"small": { "id": "gpt-4o-mini", "name": "fast", "provider": "openai",
+   * "baseUrl": "http://localhost:8080/v1", "apiKey": "…" }`). Parsed defensively
+   * by `parseModelsConfig`; unknown keys / malformed entries are ignored.
+   */
+  models?: {
+    small?: string | ModelSlotConfigEntry;
+    medium?: string | ModelSlotConfigEntry;
+    large?: string | ModelSlotConfigEntry;
+  };
   maxTokens?: number;
   temperature?: number;
   systemPrompt?: string;
@@ -440,7 +476,13 @@ function loadEnvConfig(): Partial<CliConfig> {
  * neither, so stale entries would survive otherwise. Future plugin-install
  * style hooks that mutate config files should call this too.
  */
-let jsonConfigCache: { config: Partial<CliConfig>; sourcePath: string | undefined } | undefined;
+let jsonConfigCache:
+  | {
+      config: Partial<CliConfig>;
+      sourcePath: string | undefined;
+      modelsPartial: Partial<Record<SlotName, ModelSlotBinding>>;
+    }
+  | undefined;
 let afkMdCache: { value: { content: string; path: string } | null } | undefined;
 
 /**
@@ -478,7 +520,11 @@ export function _resetConfigCache(): void {
  * Memoized via `jsonConfigCache` — see the cache block above for the
  * invalidation contract.
  */
-function loadJsonConfig(): { config: Partial<CliConfig>; sourcePath: string | undefined } {
+function loadJsonConfig(): {
+  config: Partial<CliConfig>;
+  sourcePath: string | undefined;
+  modelsPartial: Partial<Record<SlotName, ModelSlotBinding>>;
+} {
   if (jsonConfigCache !== undefined) return jsonConfigCache;
   const configPaths = [
     join(process.cwd(), 'afk.config.json'),
@@ -493,6 +539,7 @@ function loadJsonConfig(): { config: Partial<CliConfig>; sourcePath: string | un
         const json: ConfigFileSchema = JSON.parse(content);
 
         const config: Partial<CliConfig> = {};
+        const modelsPartial = parseModelsConfig(json.models);
 
         if (typeof json.model === 'string' && json.model.length > 0) {
           const loweredModel = json.model.toLowerCase();
@@ -614,7 +661,7 @@ function loadJsonConfig(): { config: Partial<CliConfig>; sourcePath: string | un
           }
         }
 
-        jsonConfigCache = { config, sourcePath: configPath };
+        jsonConfigCache = { config, sourcePath: configPath, modelsPartial };
         return jsonConfigCache;
       } catch (error) {
         console.error(`Warning: Failed to parse ${configPath}:`, error);
@@ -622,7 +669,7 @@ function loadJsonConfig(): { config: Partial<CliConfig>; sourcePath: string | un
     }
   }
 
-  jsonConfigCache = { config: {}, sourcePath: undefined };
+  jsonConfigCache = { config: {}, sourcePath: undefined, modelsPartial: {} };
   return jsonConfigCache;
 }
 
@@ -674,7 +721,7 @@ function loadAfkMd(): { content: string; path: string } | null {
  */
 export function loadConfig(overrides?: Partial<CliConfig>): CliConfig {
   const envConfig = loadEnvConfig();
-  const { config: jsonConfig, sourcePath: jsonSourcePath } = loadJsonConfig();
+  const { config: jsonConfig, sourcePath: jsonSourcePath, modelsPartial } = loadJsonConfig();
 
   // Last-wins shallow merge for nested daemon — see Gap B spec. The schema
   // stays flat for top-level fields; the `daemon` block is treated as a
@@ -727,6 +774,15 @@ export function loadConfig(overrides?: Partial<CliConfig>): CliConfig {
     ...(merged.hooks !== undefined ? { hooks: merged.hooks } : {}),
     ...(merged.enableShellHooks !== undefined ? { enableShellHooks: merged.enableShellHooks } : {}),
   };
+
+  // Resolve + install the process-global model-slot bindings (Stage 1).
+  // Precedence: explicit `overrides.models` > afk.config.json `models` block
+  // ← `AFK_MODEL_{SMALL,MEDIUM,LARGE}` env (env wins, mirroring AFK_MODEL >
+  // afk.config.json). Installed globally so every routing call site resolves
+  // tier aliases without per-site plumbing — see model-slots.ts.
+  const slotBindings = overrides?.models ?? computeSlotBindings(modelsPartial);
+  setSlotBindings(slotBindings);
+  config.models = slotBindings;
 
   // Fail loud when a `local-*` model is requested without a local server
   // configured. Catching this here saves a confused 401 from api.anthropic.com.

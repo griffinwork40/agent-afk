@@ -44,6 +44,7 @@ import type {
 } from '../../provider.js';
 import { sumProviderUsage } from '../../usage.js';
 import { contextLimitFor } from '../../model-limits.js';
+import { resolveModelId } from '../../session/model-resolution.js';
 import { collectSkillEntries } from '../../tools/skill-bridge.js';
 import { debugLog } from '../../../utils/debug.js';
 import {
@@ -68,6 +69,10 @@ import {
   toolResultsToMessages,
   type OpenAIFunctionTool,
 } from './loop.js';
+import { translateResponsesEvent, type ResponsesStreamEvent } from './responses-translate.js';
+import { buildResponsesRequest } from './responses-messages.js';
+import { resolveWireMode, envFlagEnabled, isClaudeFamilyModel, DEFAULT_RESPONSES_INSTRUCTIONS, type WireMode } from './responses-config.js';
+import { env } from '../../../config/env.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import type { ToolResult } from '../anthropic-direct/types.js';
 import { contextWindowTokensUsed, buildContextUsageFields } from '../anthropic-direct/query/auto-compact.js';
@@ -88,7 +93,11 @@ const MAX_TOOL_ITERATIONS = 50;
  * mock client; pass `null` to restore the real constructor. Not part of the
  * stable surface — tests reach into this module directly.
  */
-export type OpenAIClientFactory = (opts: { apiKey: string; baseURL?: string }) => OpenAI;
+export type OpenAIClientFactory = (opts: {
+  apiKey: string;
+  baseURL?: string;
+  defaultHeaders?: Record<string, string>;
+}) => OpenAI;
 let clientFactory: OpenAIClientFactory | null = null;
 export function __setOpenAIClientFactory(factory: OpenAIClientFactory | null): void {
   clientFactory = factory;
@@ -118,6 +127,13 @@ export interface OpenAICompatibleQueryOptions {
   toolDispatcher?: ToolDispatcher;
   /** Optional MCP manager — populates `session.init` and `mcpServerStatus()`. */
   mcpManager?: import('../../mcp/index.js').McpManager;
+  /**
+   * Force the OpenAI Responses API instead of Chat Completions (the public,
+   * API-key opt-in — equivalent to `AFK_OPENAI_USE_RESPONSES=1`). The
+   * ChatGPT-subscription path (`auth.source === 'chatgpt-oauth'`) selects
+   * Responses automatically regardless of this flag.
+   */
+  useResponsesApi?: boolean;
 }
 
 function normalizePermissionMode(mode: string | undefined): string {
@@ -141,6 +157,8 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   private readonly toolDispatcher: ToolDispatcher | undefined;
   /** Pre-computed tool catalog — recomputed only if dispatcher.toolDefs changes (it doesn't today). */
   private readonly openAITools: OpenAIFunctionTool[] | undefined;
+  /** Which wire this session speaks: Chat Completions (default) or Responses. */
+  private readonly wireMode: WireMode;
 
   /** Running conversation state for multi-turn sessions. */
   private priorTurns: OpenAIMessage[] = [];
@@ -182,12 +200,25 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       }
     }
 
+    // Resolve the wire (Chat Completions vs Responses) once. The ChatGPT-
+    // subscription path also supplies a baseURL override (the private ChatGPT
+    // backend) + required headers; the public Responses opt-in supplies neither.
+    // Env read goes through the central `env` module (env-access audit).
+    const responsesOptIn =
+      (opts.useResponsesApi ?? false) || envFlagEnabled(env.AFK_OPENAI_USE_RESPONSES);
+    const wire = resolveWireMode(opts.auth, responsesOptIn);
+    this.wireMode = wire.mode;
+
     if (opts.auth.apiKey === null) {
       this.client = null as unknown as OpenAI;
     } else {
       const ctor = clientFactory ?? defaultClientFactory;
-      const clientOpts: { apiKey: string; baseURL?: string } = { apiKey: opts.auth.apiKey };
-      if (opts.baseURL !== undefined) clientOpts.baseURL = opts.baseURL;
+      const clientOpts: { apiKey: string; baseURL?: string; defaultHeaders?: Record<string, string> } = {
+        apiKey: opts.auth.apiKey,
+      };
+      const baseURL = wire.baseURL ?? opts.baseURL;
+      if (baseURL !== undefined) clientOpts.baseURL = baseURL;
+      if (wire.headers !== undefined) clientOpts.defaultHeaders = wire.headers;
       this.client = ctor(clientOpts);
     }
 
@@ -397,6 +428,35 @@ export class OpenAICompatibleQuery implements ProviderQuery {
    * yield `assistant.message` / `turn.completed` — those are the parent
    * `runTurn`'s responsibility once the iteration loop has settled.
    */
+  /**
+   * Turn an opaque ChatGPT-backend failure into an actionable message. That
+   * backend returns 400 for unsupported models, and the OpenAI SDK often
+   * surfaces it as "400 status code (no body)". Only rewrites 400s on the
+   * ChatGPT backend; every other error passes through unchanged.
+   */
+  private clarifyResponsesError(err: unknown, isChatGptBackend: boolean): Error {
+    const e = err instanceof Error ? err : new Error(String(err));
+    if (!isChatGptBackend) return e;
+    const status =
+      err && typeof err === 'object' && 'status' in err
+        ? (err as { status?: number }).status
+        : undefined;
+    if (status !== 400 && !/\b400\b/.test(e.message)) return e;
+    let detail: string | undefined;
+    const inner = (err as { error?: unknown } | null)?.error;
+    if (inner && typeof inner === 'object') {
+      const d = inner as { detail?: unknown; message?: unknown };
+      if (typeof d.detail === 'string') detail = d.detail;
+      else if (typeof d.message === 'string') detail = d.message;
+    }
+    return new Error(
+      `ChatGPT/Codex backend rejected model "${this.currentModel}" (HTTP 400). A ChatGPT ` +
+        `subscription only serves certain OpenAI models on this backend (gpt-5.5 works; ` +
+        `gpt-5, gpt-5.1, gpt-5.2 and *-codex do not). ` +
+        (detail ? `Backend said: ${detail}` : `No error body was returned.`),
+    );
+  }
+
   private async *runIteration(
     controller: AbortController,
   ): AsyncGenerator<ProviderEvent, IterationResult | null> {
@@ -418,42 +478,107 @@ export class OpenAICompatibleQuery implements ProviderQuery {
 
     const state = createStreamState();
 
-    const requestBody: Record<string, unknown> = {
-      model: this.currentModel,
-      messages,
-      stream: true,
-      stream_options: { include_usage: true },
-    };
-    // Only attach `tools` when the dispatcher actually has any — empty
-    // arrays make some providers reject the request.
-    if (this.openAITools && this.openAITools.length > 0) {
-      requestBody['tools'] = this.openAITools;
-    }
+    if (this.wireMode === 'responses') {
+      const isChatGptBackend = this.opts.auth.source === 'chatgpt-oauth';
 
-    let stream: AsyncIterable<OpenAIChunk>;
-    try {
-      stream = (await this.client.chat.completions.create(requestBody as never, {
-        signal: controller.signal,
-      })) as unknown as AsyncIterable<OpenAIChunk>;
-    } catch (err) {
-      if (controller.signal.aborted) return null;
-      const e = err instanceof Error ? err : new Error(String(err));
-      yield { type: 'error', error: e };
-      return null;
-    }
-
-    try {
-      for await (const chunk of stream) {
-        if (this.closed) return null;
-        for (const ev of translateChunk(chunk, state, this.initSessionId)) {
-          yield ev;
-        }
+      // The ChatGPT/Codex backend serves only OpenAI gpt-5.x and rejects other
+      // model families with an opaque 400 (no body). Subagents/skills commonly
+      // request a Claude model (e.g. `sonnet`), and a global AFK_PROVIDER=
+      // openai-compatible force-routes it here. Fail fast with an actionable
+      // message instead of the bare 400.
+      if (isChatGptBackend && isClaudeFamilyModel(this.currentModel)) {
+        yield {
+          type: 'error',
+          error: new Error(
+            `Model "${this.currentModel}" can't run on a ChatGPT subscription — the ChatGPT/Codex ` +
+              `backend only supports OpenAI gpt-5.x models. This usually means a subagent or skill ` +
+              `requested a Claude model. Pass a gpt-5.x model to it (e.g. model: "gpt-5.5"), or run ` +
+              `it on a provider configured with the matching API key.`,
+          ),
+        };
+        return null;
       }
-    } catch (err) {
-      if (controller.signal.aborted) return null;
-      const e = err instanceof Error ? err : new Error(String(err));
-      yield { type: 'error', error: e };
-      return null;
+
+      // Responses API path. `messages` (built + plan-mode-adjusted above) is
+      // converted to the Responses input shape; the system prompt becomes
+      // `instructions`, tool calls/results become function_call/_output items.
+      const req = buildResponsesRequest(messages, this.openAITools);
+      const requestBody: Record<string, unknown> = {
+        model: this.currentModel,
+        input: req.input,
+        stream: true,
+      };
+      // The private ChatGPT backend (subscription path) has two hard
+      // requirements the public Responses API does not: a non-empty
+      // `instructions`, and `store: false`. Scope both to that path so the
+      // public API-key path keeps its defaults.
+      const instructions =
+        req.instructions ?? (isChatGptBackend ? DEFAULT_RESPONSES_INSTRUCTIONS : undefined);
+      if (instructions !== undefined) requestBody['instructions'] = instructions;
+      if (isChatGptBackend) requestBody['store'] = false;
+      if (req.tools && req.tools.length > 0) requestBody['tools'] = req.tools;
+
+      let stream: AsyncIterable<ResponsesStreamEvent>;
+      try {
+        stream = (await this.client.responses.create(requestBody as never, {
+          signal: controller.signal,
+        })) as unknown as AsyncIterable<ResponsesStreamEvent>;
+      } catch (err) {
+        if (controller.signal.aborted) return null;
+        yield { type: 'error', error: this.clarifyResponsesError(err, isChatGptBackend) };
+        return null;
+      }
+
+      try {
+        for await (const event of stream) {
+          if (this.closed) return null;
+          for (const ev of translateResponsesEvent(event, state, this.initSessionId)) {
+            yield ev;
+          }
+        }
+      } catch (err) {
+        if (controller.signal.aborted) return null;
+        yield { type: 'error', error: this.clarifyResponsesError(err, isChatGptBackend) };
+        return null;
+      }
+    } else {
+      const requestBody: Record<string, unknown> = {
+        model: this.currentModel,
+        messages,
+        stream: true,
+        stream_options: { include_usage: true },
+      };
+      // Only attach `tools` when the dispatcher actually has any — empty
+      // arrays make some providers reject the request.
+      if (this.openAITools && this.openAITools.length > 0) {
+        requestBody['tools'] = this.openAITools;
+      }
+
+      let stream: AsyncIterable<OpenAIChunk>;
+      try {
+        stream = (await this.client.chat.completions.create(requestBody as never, {
+          signal: controller.signal,
+        })) as unknown as AsyncIterable<OpenAIChunk>;
+      } catch (err) {
+        if (controller.signal.aborted) return null;
+        const e = err instanceof Error ? err : new Error(String(err));
+        yield { type: 'error', error: e };
+        return null;
+      }
+
+      try {
+        for await (const chunk of stream) {
+          if (this.closed) return null;
+          for (const ev of translateChunk(chunk, state, this.initSessionId)) {
+            yield ev;
+          }
+        }
+      } catch (err) {
+        if (controller.signal.aborted) return null;
+        const e = err instanceof Error ? err : new Error(String(err));
+        yield { type: 'error', error: e };
+        return null;
+      }
     }
 
     return {
@@ -730,9 +855,14 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   }
 }
 
-function defaultClientFactory(opts: { apiKey: string; baseURL?: string }): OpenAI {
+function defaultClientFactory(opts: {
+  apiKey: string;
+  baseURL?: string;
+  defaultHeaders?: Record<string, string>;
+}): OpenAI {
   const clientOpts: ConstructorParameters<typeof OpenAI>[0] = { apiKey: opts.apiKey };
   if (opts.baseURL !== undefined) clientOpts.baseURL = opts.baseURL;
+  if (opts.defaultHeaders !== undefined) clientOpts.defaultHeaders = opts.defaultHeaders;
   return new OpenAI(clientOpts);
 }
 
@@ -771,12 +901,20 @@ export function buildQueryFromConfig(
     baseURL?: string;
     toolDispatcher?: ToolDispatcher;
     mcpManager?: import('../../mcp/index.js').McpManager;
+    useResponsesApi?: boolean;
   } = {},
 ): OpenAICompatibleQuery {
   const auth = resolveOpenAIAuth(config.apiKey);
   const synthesizedSessionId =
     config.resume ?? `openai-pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const model = typeof config.model === 'string' ? config.model : 'gpt-4o-mini';
+  // Resolve model-slot aliases (small/medium/large, custom names, and the
+  // legacy haiku/sonnet/opus aliases) to their bound concrete id BEFORE the id
+  // reaches the request body — mirroring anthropic-direct, which already calls
+  // resolveModelId internally. Without this, a subagent/skill that picks an
+  // alias (e.g. `sonnet`) on this provider would route correctly but still send
+  // the literal alias to the backend. Idempotent for concrete ids and `auto`.
+  const rawModel = typeof config.model === 'string' ? config.model : 'gpt-4o-mini';
+  const model = resolveModelId(rawModel) ?? rawModel;
 
   const opts: OpenAICompatibleQueryOptions = {
     auth,
@@ -788,5 +926,6 @@ export function buildQueryFromConfig(
   if (options.baseURL !== undefined) opts.baseURL = options.baseURL;
   if (options.toolDispatcher !== undefined) opts.toolDispatcher = options.toolDispatcher;
   if (options.mcpManager !== undefined) opts.mcpManager = options.mcpManager;
+  if (options.useResponsesApi !== undefined) opts.useResponsesApi = options.useResponsesApi;
   return new OpenAICompatibleQuery(opts);
 }

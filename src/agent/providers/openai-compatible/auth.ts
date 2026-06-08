@@ -26,11 +26,18 @@
  * }
  * ```
  *
- * When `auth_mode === 'chatgpt'` (the ChatGPT-account OAuth path), this
- * resolver deliberately returns `'no-usable-auth-codex-oauth'` instead of
- * the access_token. ChatGPT OAuth refresh lives in the Codex Rust binary and
- * is not safe for AFK to own — see `docs/specs/provider-agnostic-wire-seam.md`
- * for the full rationale and `~/.codex/auth.json` schema notes.
+ * When `auth_mode === 'chatgpt'` (the ChatGPT-account OAuth path):
+ *   - By default this resolver returns `'no-usable-auth-codex-oauth'` (the
+ *     token is present but unused), preserving the historical safe behavior.
+ *   - When the explicit opt-in flag `AFK_OPENAI_CHATGPT_OAUTH` is truthy, the
+ *     resolver returns the `access_token` tagged `'chatgpt-oauth'` plus the
+ *     decoded `accountId`/`expiresAt`. This is READ-ONLY: AFK never refreshes
+ *     these tokens (refresh stays with the `codex` binary, whose single-use
+ *     refresh tokens make concurrent AFK-owned refresh unsafe). On expiry the
+ *     diagnostic asks the user to re-run `codex`.
+ *
+ * See `docs/specs/provider-agnostic-wire-seam.md` for the full rationale and
+ * `~/.codex/auth.json` schema notes.
  *
  * Safety: this module never logs token material. All diagnostics surface
  * only the source tag and (where relevant) a 4-char `last4` fingerprint —
@@ -48,6 +55,7 @@ export type OpenAIAuthSource =
   | 'config'
   | 'env'
   | 'codex-cli'
+  | 'chatgpt-oauth'
   | 'no-usable-auth'
   | 'no-usable-auth-codex-oauth';
 
@@ -63,6 +71,10 @@ export interface OpenAIAuthResolution {
   last4?: string;
   /** Env var that supplied the key when source === 'env'. */
   envVar?: 'OPENAI_API_KEY' | 'CODEX_API_KEY';
+  /** ChatGPT account id (source === 'chatgpt-oauth') — sent as the `chatgpt-account-id` header. */
+  accountId?: string;
+  /** Access-token expiry as epoch SECONDS (source === 'chatgpt-oauth'), decoded from the JWT `exp` claim. */
+  expiresAt?: number;
 }
 
 /** Minimal env + fs surface so the resolver can be tested without touching disk. */
@@ -140,8 +152,20 @@ export function resolveOpenAIAuth(
       return { apiKey: parsed.apiKey, source: 'codex-cli', last4: last4Of(parsed.apiKey) };
     }
     if (parsed.kind === 'chatgpt') {
-      // Found a Codex login but it's the OAuth path we can't use.
-      // Surface this distinctly so the diagnostic can give a precise next step.
+      // ChatGPT-subscription OAuth. Gated behind an explicit opt-in flag (off
+      // by default): the backend is undocumented and AFK does NOT refresh
+      // these tokens (read-only — refresh stays with `codex`). When disabled,
+      // surface distinctly so the diagnostic can give a precise next step.
+      if (chatGptOAuthEnabled(readEnv) && parsed.accessToken) {
+        const res: OpenAIAuthResolution = {
+          apiKey: parsed.accessToken,
+          source: 'chatgpt-oauth',
+          last4: last4Of(parsed.accessToken),
+        };
+        if (parsed.accountId !== undefined) res.accountId = parsed.accountId;
+        if (parsed.expiresAt !== undefined) res.expiresAt = parsed.expiresAt;
+        return res;
+      }
       return { apiKey: null, source: 'no-usable-auth-codex-oauth' };
     }
     // `parsed.kind === 'invalid' | 'no-key'` falls through to no-usable-auth.
@@ -152,7 +176,7 @@ export function resolveOpenAIAuth(
 
 type CodexAuthParse =
   | { kind: 'apikey'; apiKey: string }
-  | { kind: 'chatgpt' }
+  | { kind: 'chatgpt'; accessToken?: string; accountId?: string; expiresAt?: number }
   | { kind: 'no-key' }
   | { kind: 'invalid' };
 
@@ -175,8 +199,26 @@ export function parseCodexAuthJson(raw: string): CodexAuthParse {
   if (typeof keyField === 'string' && keyField.length > 0) {
     return { kind: 'apikey', apiKey: keyField };
   }
-  if (o['auth_mode'] === 'chatgpt') {
-    return { kind: 'chatgpt' };
+  // ChatGPT OAuth: detected via `auth_mode` OR (defensively) the presence of a
+  // `tokens.access_token` — some Codex CLI versions omit `auth_mode`.
+  const tokens = o['tokens'];
+  const tokenBag =
+    typeof tokens === 'object' && tokens !== null ? (tokens as Record<string, unknown>) : null;
+  const accessToken = tokenBag && typeof tokenBag['access_token'] === 'string'
+    ? (tokenBag['access_token'] as string)
+    : undefined;
+  if (o['auth_mode'] === 'chatgpt' || accessToken) {
+    const result: { kind: 'chatgpt'; accessToken?: string; accountId?: string; expiresAt?: number } = {
+      kind: 'chatgpt',
+    };
+    if (accessToken) result.accessToken = accessToken;
+    if (tokenBag) {
+      const accountId = extractChatGptAccountId(tokenBag);
+      if (accountId !== undefined) result.accountId = accountId;
+      const expiresAt = extractChatGptExpiry(tokenBag);
+      if (expiresAt !== undefined) result.expiresAt = expiresAt;
+    }
+    return result;
   }
   // File exists, parsed cleanly, but has no usable API key and no OAuth bundle.
   return { kind: 'no-key' };
@@ -184,6 +226,75 @@ export function parseCodexAuthJson(raw: string): CodexAuthParse {
 
 function last4Of(s: string): string {
   return s.length <= 4 ? s : s.slice(-4);
+}
+
+/** Truthy check for the ChatGPT-subscription OAuth opt-in flag (off by default). */
+function chatGptOAuthEnabled(readEnv: (key: string) => string | undefined): boolean {
+  const v = readEnv('AFK_OPENAI_CHATGPT_OAUTH');
+  if (!v) return false;
+  const n = v.trim().toLowerCase();
+  return n === '1' || n === 'true' || n === 'yes' || n === 'on';
+}
+
+/**
+ * Decode a JWT payload WITHOUT signature verification. We only ever read this
+ * from the local `~/.codex/auth.json` (already trusted, mode 600), purely to
+ * surface the account id / expiry for headers + diagnostics — never to make a
+ * trust decision. Returns null on any malformed input.
+ */
+export function decodeJwtClaims(token: string): Record<string, unknown> | null {
+  const parts = token.split('.');
+  if (parts.length < 2 || !parts[1]) return null;
+  try {
+    const json = Buffer.from(parts[1], 'base64url').toString('utf-8');
+    const obj: unknown = JSON.parse(json);
+    return typeof obj === 'object' && obj !== null ? (obj as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extract the ChatGPT account id from a Codex token bag. Prefers an explicit
+ * `account_id` field; falls back to the JWT claim (both the namespaced
+ * `https://api.openai.com/auth.chatgpt_account_id` form Codex/Codex-CLI use
+ * and a flat `chatgpt_account_id`).
+ */
+function extractChatGptAccountId(tokens: Record<string, unknown>): string | undefined {
+  const direct = tokens['account_id'];
+  if (typeof direct === 'string' && direct.length > 0) return direct;
+  for (const key of ['access_token', 'id_token']) {
+    const tok = tokens[key];
+    if (typeof tok !== 'string') continue;
+    const claims = decodeJwtClaims(tok);
+    if (!claims) continue;
+    const ns = claims['https://api.openai.com/auth'];
+    if (typeof ns === 'object' && ns !== null) {
+      const acct = (ns as Record<string, unknown>)['chatgpt_account_id'];
+      if (typeof acct === 'string' && acct.length > 0) return acct;
+    }
+    const flat = claims['chatgpt_account_id'];
+    if (typeof flat === 'string' && flat.length > 0) return flat;
+  }
+  return undefined;
+}
+
+/** Extract the access-token expiry (epoch seconds) from the JWT `exp` claim. */
+function extractChatGptExpiry(tokens: Record<string, unknown>): number | undefined {
+  const tok = tokens['access_token'];
+  if (typeof tok !== 'string') return undefined;
+  const exp = decodeJwtClaims(tok)?.['exp'];
+  return typeof exp === 'number' ? exp : undefined;
+}
+
+/** Render a short "expires in …" / "EXPIRED" suffix for the diagnostic line. */
+function formatExpiry(expiresAt?: number): string {
+  if (typeof expiresAt !== 'number') return '';
+  const secondsLeft = expiresAt - Math.floor(Date.now() / 1000);
+  if (secondsLeft <= 0) return ', EXPIRED — re-run `codex` to refresh';
+  const h = Math.floor(secondsLeft / 3600);
+  const m = Math.floor((secondsLeft % 3600) / 60);
+  return `, expires in ${h > 0 ? `${h}h ` : ''}${m}m`;
 }
 
 /**
@@ -199,11 +310,16 @@ export function formatAuthDiagnostic(resolution: OpenAIAuthResolution): string {
       return `using ${resolution.envVar ?? 'OPENAI_API_KEY'} env var (…${resolution.last4 ?? '????'})`;
     case 'codex-cli':
       return `using Codex CLI API key from ~/.codex/auth.json (…${resolution.last4 ?? '????'})`;
+    case 'chatgpt-oauth': {
+      const acct = resolution.accountId ? `…${resolution.accountId.slice(-4)}` : 'unknown';
+      const expiry = formatExpiry(resolution.expiresAt);
+      return `using ChatGPT subscription OAuth from ~/.codex/auth.json (account ${acct}${expiry})`;
+    }
     case 'no-usable-auth-codex-oauth':
       return (
-        'AFK OpenAI provider currently requires API key auth. ' +
-        'Found ChatGPT/OAuth credentials in ~/.codex/auth.json but no API key. ' +
-        'Run `codex login --api-key` or set OPENAI_API_KEY.'
+        'Found ChatGPT/OAuth credentials in ~/.codex/auth.json but the OpenAI provider is in API-key mode. ' +
+        'To use your ChatGPT subscription, set AFK_OPENAI_CHATGPT_OAUTH=1 (read-only; AFK will not refresh the token — ' +
+        're-run `codex` when it expires). Otherwise run `codex login --api-key` or set OPENAI_API_KEY.'
       );
     case 'no-usable-auth':
     default:

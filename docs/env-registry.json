@@ -251,11 +251,83 @@
     },
     {
       "name": "AFK_MODEL",
-      "description": "Default model for agent turns. Accepts short aliases (opus, sonnet, haiku) or full model IDs.",
+      "description": "Default model for agent turns. Accepts slot names (small, medium, large), legacy aliases (opus, sonnet, haiku), or full model IDs.",
       "type": "string",
       "required": false,
       "default": "sonnet",
       "example": "claude-opus-4-5",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_LARGE",
+      "description": "Bind the \"large\" capability tier (most capable) to a model id/alias. Overrides afk.config.json models.large.",
+      "type": "string",
+      "required": false,
+      "example": "claude-opus-4-8",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_LARGE_API_KEY",
+      "description": "Per-slot API key for the \"large\" tier (Stage 2). Overrides global credentials for this tier only.",
+      "type": "string",
+      "required": false,
+      "category": "model",
+      "secret": true
+    },
+    {
+      "name": "AFK_MODEL_LARGE_BASE_URL",
+      "description": "Per-slot endpoint base URL for the \"large\" tier (Stage 2). Anthropic Messages base or OpenAI-compatible base per the tier provider.",
+      "type": "string",
+      "required": false,
+      "example": "http://localhost:8080/v1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_MEDIUM",
+      "description": "Bind the \"medium\" capability tier (general-use) to a model id/alias. Overrides afk.config.json models.medium.",
+      "type": "string",
+      "required": false,
+      "example": "claude-sonnet-4-6",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_MEDIUM_API_KEY",
+      "description": "Per-slot API key for the \"medium\" tier (Stage 2). Overrides global credentials for this tier only.",
+      "type": "string",
+      "required": false,
+      "category": "model",
+      "secret": true
+    },
+    {
+      "name": "AFK_MODEL_MEDIUM_BASE_URL",
+      "description": "Per-slot endpoint base URL for the \"medium\" tier (Stage 2). Anthropic Messages base or OpenAI-compatible base per the tier provider.",
+      "type": "string",
+      "required": false,
+      "example": "http://localhost:8080/v1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_SMALL",
+      "description": "Bind the \"small\" capability tier (cheap/fast) to a model id/alias. Overrides afk.config.json models.small.",
+      "type": "string",
+      "required": false,
+      "example": "gpt-4o-mini",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_SMALL_API_KEY",
+      "description": "Per-slot API key for the \"small\" tier (Stage 2). Overrides global credentials for this tier only.",
+      "type": "string",
+      "required": false,
+      "category": "model",
+      "secret": true
+    },
+    {
+      "name": "AFK_MODEL_SMALL_BASE_URL",
+      "description": "Per-slot endpoint base URL for the \"small\" tier (Stage 2). Anthropic Messages base or OpenAI-compatible base per the tier provider.",
+      "type": "string",
+      "required": false,
+      "example": "http://localhost:8080/v1",
       "category": "model"
     },
     {
@@ -264,6 +336,22 @@
       "type": "string",
       "required": false,
       "example": "http://127.0.0.1:8000/v1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_OPENAI_CHATGPT_OAUTH",
+      "description": "Opt into using ChatGPT-subscription OAuth credentials from ~/.codex/auth.json (auth_mode: chatgpt) as OpenAI provider auth. Off by default. READ-ONLY: AFK never refreshes these tokens — re-run `codex` when the access token expires. Routes requests over the Responses API to the private ChatGPT backend (chatgpt.com/backend-api).",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_OPENAI_USE_RESPONSES",
+      "description": "Opt the OpenAI-compatible provider into the OpenAI Responses API instead of Chat Completions for API-key sessions. Truthy values: 1, true, yes, on. The ChatGPT-subscription OAuth path uses Responses automatically regardless of this flag.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
       "category": "model"
     },
     {

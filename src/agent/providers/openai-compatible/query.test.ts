@@ -28,6 +28,7 @@ import type { ToolHandler } from '../../tools/types.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../anthropic-direct/plan-mode-addendum.js';
 import { computeLineDiff } from '../../../utils/diff.js';
 import type { ToolCall, ToolResult } from '../anthropic-direct/types.js';
+import { setSlotBindings, resetSlotBindings } from '../../session/model-slots.js';
 
 // ---- helpers --------------------------------------------------------------
 
@@ -449,6 +450,51 @@ describe('OpenAICompatibleQuery — text streaming', () => {
       { role: 'assistant', content: 'prev a' },
       { role: 'user', content: 'next q' },
     ]);
+  });
+});
+
+describe('OpenAICompatibleQuery — model-slot resolution in request body', () => {
+  afterEach(() => {
+    resetSlotBindings();
+  });
+
+  it('resolves a slot alias to its bound id before sending (closes the subagent-on-ChatGPT-backend gap)', async () => {
+    // Bind every tier to gpt-5.5 — the only model a ChatGPT subscription
+    // accepts. A subagent/skill that picks `sonnet` (the alias the LLM copies
+    // from the agent tool's examples) must therefore reach the backend AS
+    // gpt-5.5, not the literal string `sonnet`.
+    setSlotBindings({
+      small: { id: 'gpt-5.5' },
+      medium: { id: 'gpt-5.5' },
+      large: { id: 'gpt-5.5' },
+    });
+    pendingChunks = [
+      { choices: [{ delta: { content: 'ok' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    const q = buildQueryFromConfig(baseConfig({ model: 'sonnet' }), singleInput('hi'));
+    const events = await collect(q);
+    const sentModel = (createCalls[0]!.args as { model: string }).model;
+    expect(sentModel).toBe('gpt-5.5');
+    expect(sentModel).not.toBe('sonnet');
+    // The normalized session.init reflects the resolved id too.
+    const init = events[0];
+    if (init?.type === 'session.init') expect(init.info.model).toBe('gpt-5.5');
+  });
+
+  it('passes a concrete model id through unchanged (idempotent)', async () => {
+    setSlotBindings({
+      small: { id: 'gpt-5.5' },
+      medium: { id: 'gpt-5.5' },
+      large: { id: 'gpt-5.5' },
+    });
+    pendingChunks = [
+      { choices: [{ delta: { content: 'ok' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    const q = buildQueryFromConfig(baseConfig({ model: 'gpt-4o-mini' }), singleInput('hi'));
+    await collect(q);
+    expect((createCalls[0]!.args as { model: string }).model).toBe('gpt-4o-mini');
   });
 });
 
