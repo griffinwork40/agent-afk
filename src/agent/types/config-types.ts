@@ -276,6 +276,29 @@ export interface AgentConfig {
    */
   provider?: ModelProvider;
 
+  /**
+   * Fully-wired provider factory for mid-session cross-family model switching.
+   *
+   * When set (and `provider` is unset), `AgentSession` installs a `ProviderRouter`
+   * that calls this factory on every turn to resolve the active provider for the
+   * current model. The factory receives the model string and must return a
+   * fully-wired `ModelProvider` — one with `subagentExecutor`, `skillExecutor`,
+   * `composeExecutor`, `memoryStore`, `mcpManager`, and permission lists already
+   * configured. This is the mechanism that allows the REPL's `/model` command to
+   * switch across provider families (e.g. Claude → GPT) without dropping the
+   * `agent`/`skill`/`compose` tools or MCP bridges.
+   *
+   * Ignored when `provider` is explicitly set (injected-provider path, used by
+   * Telegram and the daemon, takes precedence). When both are unset, `AgentSession`
+   * falls back to the bare `resolveProvider` function which builds providers
+   * without executor/MCP wiring — suitable for one-shot and non-interactive paths.
+   *
+   * @param model - The resolved model string for the upcoming turn, or
+   *   `undefined` when no model has been selected yet. Matches the value that
+   *   would be passed to `providerForModel()`.
+   */
+  providerFactory?: (model: string | undefined) => ModelProvider;
+
   // --- SDK adoption wave (Wave 0 shared surface) ---
   // Each field is a thin passthrough into the provider's underlying
   // request options. Guarded by buildQueryOptions so omitting them

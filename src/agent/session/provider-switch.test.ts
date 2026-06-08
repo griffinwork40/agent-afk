@@ -4,6 +4,11 @@
  * with BOTH SDKs mocked. Proves the cross-provider switch works end-to-end and
  * that the session's turn accumulator is NOT reset by the swap (the property
  * that the rejected session-level "fork-on-switch" would have broken).
+ *
+ * Also tests the providerFactory path: when config.providerFactory is set and
+ * config.provider is unset, the ProviderRouter uses the factory as its
+ * resolveProvider — so each family swap calls the factory for the new family
+ * (enabling fully-wired providers without executor/MCP loss on cross-family swaps).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
@@ -12,6 +17,9 @@ import type OpenAI from 'openai';
 import { AgentSession } from './agent-session.js';
 import { __setAnthropicClientFactory } from '../providers/anthropic-direct/index.js';
 import { __setOpenAIClientFactory } from '../providers/openai-compatible/query.js';
+import { AnthropicDirectProvider } from '../providers/anthropic-direct/index.js';
+import { OpenAICompatibleProvider } from '../providers/openai-compatible/index.js';
+import { providerForModel } from '../providers/index.js';
 import { resetSlotBindings } from './model-slots.js';
 
 vi.mock('../../utils/debug.js', () => ({ debugLog: vi.fn() }));
@@ -134,6 +142,62 @@ describe('AgentSession — cross-provider switch via ProviderRouter', () => {
       const serialized = JSON.stringify(req?.messages ?? []);
       expect(serialized).toContain('what is the secret?');
       expect(serialized).toContain('the secret is 42');
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('providerFactory: router uses the factory for each family, factory called per-turn family', async () => {
+    // This test proves Bug B fix: when config.providerFactory is set and
+    // config.provider is unset, the ProviderRouter calls the factory — not the
+    // bare resolveProvider — so fully-wired providers are built on each swap.
+
+    anthropicCreateMock.mockImplementation(() => fromArray(anthropicTextStream('from anthropic factory')));
+    openaiCreateMock.mockImplementation(() => fromArray(openaiChunks('from openai factory')));
+
+    // Track factory invocations per family.
+    const factoryCalls: string[] = [];
+
+    // Deterministic factory: builds a fully-wired (mocked-SDK) provider per family.
+    const testProviderFactory = (model: string | undefined) => {
+      const family = providerForModel(model);
+      factoryCalls.push(family);
+      if (family === 'openai-compatible') {
+        return new OpenAICompatibleProvider();
+      }
+      return new AnthropicDirectProvider();
+    };
+
+    // config.provider is unset → ProviderRouter installs; factory is used.
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      apiKey: 'sk-ant-oat01-test',
+      providerFactory: testProviderFactory,
+    });
+
+    try {
+      // Turn 1: startup model is Anthropic — factory called for anthropic family.
+      const reply1 = await session.sendMessage('hello');
+      expect(reply1.content).toContain('from anthropic factory');
+      expect(anthropicCreateMock).toHaveBeenCalledTimes(1);
+      expect(openaiCreateMock).not.toHaveBeenCalled();
+
+      // Cross-family switch via /model.
+      await session.setModel('gpt-4o-mini');
+
+      // Turn 2: router picks openai family — factory called for openai family.
+      const reply2 = await session.sendMessage('hello again');
+      expect(reply2.content).toContain('from openai factory');
+      expect(openaiCreateMock).toHaveBeenCalledTimes(1);
+      // Anthropic was NOT called again.
+      expect(anthropicCreateMock).toHaveBeenCalledTimes(1);
+
+      // The factory was invoked at least once for each family.
+      expect(factoryCalls).toContain('anthropic-direct');
+      expect(factoryCalls).toContain('openai-compatible');
+
+      // Turn count survived the provider swap (not reset by family switch).
+      expect(session.getTurnCount()).toBe(2);
     } finally {
       await session.close();
     }

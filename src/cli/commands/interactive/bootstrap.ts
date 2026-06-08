@@ -68,7 +68,13 @@ interface BuildAgentSessionDeps {
   thinking: ThinkingConfig | undefined;
   effort: EffortLevel | undefined;
   maxOutputTokens: number | undefined;
-  provider: ModelProvider;
+  /**
+   * Fully-wired provider factory. Passed as `config.providerFactory` so the
+   * ProviderRouter builds a wired provider (with executors, memoryStore,
+   * mcpManager) on every turn — enabling cross-family /model swaps without
+   * losing the agent/skill/compose tools or MCP bridges.
+   */
+  providerFactory: (model: string | undefined) => ModelProvider;
   hookRegistry: HookRegistry;
   traceWriter: TraceWriter | undefined;
   cwd: string | undefined;
@@ -100,7 +106,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
       ? { autoResumeOnUsageLimit: deps.autoResumeOnUsageLimit }
       : {}),
     ...(deps.baseUrl !== undefined ? { baseUrl: deps.baseUrl } : {}),
-    provider: deps.provider,
+    providerFactory: deps.providerFactory,
   }));
 }
 
@@ -384,17 +390,31 @@ export async function bootstrapSession(
     }
   }
 
-  // Pass sharedMemoryStore so that when --provider anthropic-direct is explicit
-  // both paths share the same SQLite DB (C7: avoid dual MemoryStore instances).
-  const provider = parseProvider(options.provider, {
-    subagentExecutor,
-    skillExecutor,
-    composeExecutor,
-    memoryStore: sharedMemoryStore,
-    model: String(sessionModel),
-    ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
-    ...(mcpManager !== undefined ? { mcpManager } : {}),
-  })
+  // Build a fully-wired provider factory that the ProviderRouter will call on
+  // every turn. The factory closes over the executors, memoryStore, mcpManager,
+  // and openaiBaseUrl captured above so every provider it builds (regardless of
+  // family) carries the full tool surface — agent/skill/compose tools, MCP
+  // bridges, and the shared MemoryStore. This is what allows mid-session /model
+  // cross-family switches (e.g. Claude → GPT) without losing any tool wiring.
+  //
+  // When --provider is explicit (options.provider is set), parseProvider returns
+  // a single fixed provider; the factory wraps it in a constant so the router
+  // still works but always returns the same family. This preserves the
+  // AFK_PROVIDER / --provider escape-hatch behavior.
+  //
+  // The MCP tool wire names are stable for the manager lifetime, so they can be
+  // captured once in the closure without re-querying on every factory call.
+  const mcpToolWireNames = mcpManager?.getMcpToolWireNames() ?? [];
+  const providerFactory = (model: string | undefined): ModelProvider =>
+    parseProvider(options.provider, {
+      subagentExecutor,
+      skillExecutor,
+      composeExecutor,
+      memoryStore: sharedMemoryStore,
+      model: model !== undefined ? model : String(sessionModel),
+      ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
+      ...(mcpManager !== undefined ? { mcpManager } : {}),
+    })
     ?? new AnthropicDirectProvider({
       permissions: {
         allowedTools: [
@@ -404,7 +424,7 @@ export async function bootstrapSession(
           'agent',
           'skill',
           'compose',
-          ...(mcpManager?.getMcpToolWireNames() ?? []),
+          ...mcpToolWireNames,
         ],
       },
       subagentExecutor,
@@ -414,6 +434,11 @@ export async function bootstrapSession(
       surface: 'cli',
       ...(mcpManager !== undefined ? { mcpManager } : {}),
     });
+
+  // Build the startup provider (for /allow-dir wiring below). The factory is
+  // called with the session's startup model so the initial provider matches
+  // what the router would pick for turn 1 — no behavioral change at startup.
+  const startupProvider = providerFactory(String(sessionModel));
 
   // Create stats before session so the plan-mode gate getter can close over it.
   const stats = createSessionStats(sessionModel);
@@ -471,7 +496,7 @@ export async function bootstrapSession(
     effort,
     maxOutputTokens,
     ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
-    provider,
+    providerFactory,
     hookRegistry,
     traceWriter: trace?.writer,
     cwd: extras?.cwd,
@@ -665,11 +690,14 @@ export async function bootstrapSession(
 
   registerAll();
 
-  // Wire /allow-dir to the provider's grant API so the slash command can
-  // mutate read/write roots across turns. Only AnthropicDirectProvider
+  // Wire /allow-dir to the startup provider's grant API so the slash command
+  // can mutate read/write roots across turns. The startup provider is the
+  // AnthropicDirectProvider built for the session's initial model; we wire it
+  // once here and do not rewire on /model swaps because directory grants are a
+  // session-level concept (not per-model). Only AnthropicDirectProvider
   // implements the GrantManager interface; other providers are no-ops.
-  if (provider instanceof AnthropicDirectProvider) {
-    setAllowDirDispatcher(provider);
+  if (startupProvider instanceof AnthropicDirectProvider) {
+    setAllowDirDispatcher(startupProvider);
   }
 
   const rl = readline.createInterface({
