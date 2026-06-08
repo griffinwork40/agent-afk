@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.88.0] - 2026-06-08
+
+### Added
+- Responses API + ChatGPT-subscription OAuth + user-configurable model slots (#33) (fe0ba5d)
+
 ## [3.87.1] - 2026-06-07
 
 ### Fixed
