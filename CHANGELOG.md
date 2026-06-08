@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.89.5] - 2026-06-08
+
+### Fixed
+- wire ProviderRouter into the REPL so /model crosses provider families (#47) (eca4ed2)
+
+### Changed
+- Port afk-workshop#643: resolve compose node credentials by node model (#46) (f5fde53)
+
 ## [3.89.4] - 2026-06-08
 
 ### Fixed
