@@ -133,6 +133,65 @@ flags: [--x, --y]
     expect(result.get('inline-flags')).toEqual(['--x', '--y']);
   });
 
+  it('harvests flags from the argument-hint frontmatter field', () => {
+    // argument-hint is the standard Claude Code / agentskills.io-compatible
+    // field for declaring the CLI surface. Flags written there must complete
+    // in the dropdown without a proprietary `flags:` field. Regression guard
+    // for /review --post (PR #35), which lived only in the dispatch layer.
+    mkdirSync(join(tmpRoot, 'plugins', 'test-plugin', 'skills', 'review'), { recursive: true });
+    writeFileSync(
+      join(tmpRoot, 'plugins', 'test-plugin', 'skills', 'review', 'SKILL.md'),
+      `---
+name: review
+description: Review changes
+argument-hint: "[--staged|--head] [--post github|telegram]"
+---
+
+# Review skill body with no flag mentions.
+`,
+    );
+
+    const result = harvestPluginSkillFlags(tmpRoot);
+    expect(result.get('review')).toEqual(['--head', '--post', '--staged']); // sorted
+  });
+
+  it('unions argument-hint flags with body flags (no frontmatter flags:)', () => {
+    mkdirSync(join(tmpRoot, 'plugins', 'test-plugin', 'skills', 'merged'), { recursive: true });
+    writeFileSync(
+      join(tmpRoot, 'plugins', 'test-plugin', 'skills', 'merged', 'SKILL.md'),
+      `---
+name: merged
+description: Test skill
+argument-hint: "[--post github|telegram]"
+---
+
+Add --verify to trigger the extra wave.
+`,
+    );
+
+    const result = harvestPluginSkillFlags(tmpRoot);
+    expect(result.get('merged')).toEqual(['--post', '--verify']); // argHint ∪ body, sorted
+  });
+
+  it('frontmatter flags: still wins over argument-hint', () => {
+    mkdirSync(join(tmpRoot, 'plugins', 'test-plugin', 'skills', 'explicit'), { recursive: true });
+    writeFileSync(
+      join(tmpRoot, 'plugins', 'test-plugin', 'skills', 'explicit', 'SKILL.md'),
+      `---
+name: explicit
+description: Test skill
+flags: [--only-this]
+argument-hint: "[--ignored-hint]"
+---
+
+Body mentions --also-ignored.
+`,
+    );
+
+    const result = harvestPluginSkillFlags(tmpRoot);
+    expect(result.get('explicit')).toEqual(['--only-this']);
+  });
+
   it('parses block-form frontmatter flags', () => {
     mkdirSync(join(tmpRoot, 'plugins', 'test-plugin', 'skills', 'block-flags'), {
       recursive: true,

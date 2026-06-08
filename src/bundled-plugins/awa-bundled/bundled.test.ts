@@ -66,7 +66,7 @@ const PINNED_HASHES = {
   // copy of the user-scope /refactor at ~/.afk/skills/.
   refactor: '9cb84710ddf2cf63e1a648460a64656d3f4a9aae8e21753b031556070740c51e',
   research: '10692d77e392cedce928f66cb5dec27dbc2066f48cfc33047820f56506da762a',
-  review: '581a1068ea9e47b4309b3fbf2701ad8ec1de1fb7b5b171bb8b607395fe290033',
+  review: '31a17d8c3bace684b7fce22588d54ce3e95462acdf397fc1673f3590192e0944',
   'shadow-verify':
     '9b1ea7db65485f849ae6dfb9a6f69a102d7ccc6e5230b561dc76ef8c666475f8',
   ship: '95f6410600af55fa9fa0312a48d3eebb37ef18ca98dd73ccba840b7136f83b69',
@@ -272,6 +272,15 @@ const INTENTIONAL_DIFFS: Partial<Record<SkillName, RegExp[]>> = {
     // (Already carried `context: fork` before the flip; allowlisted here for
     // the co-located drift comparison.) See devils-advocate note.
     /^context: fork$/,
+    // argument-hint divergence — bundled-only `--post {github,telegram}` flag.
+    // `/review --post` is an agent-afk dispatch-layer publishing feature (PR #35,
+    // 7830a0f) handled in src/cli/slash/plugin-skills.ts; the upstream
+    // example-plugin review skill has NO --post publisher, so its argument-hint
+    // omits the flag. Anchored on the stable line prefix so it removes the
+    // argument-hint line from BOTH sides (bundled w/ --post, upstream w/o),
+    // leaving the rest of the line guarded. No upstream back-port applies —
+    // the feature does not exist there. (bundled.test.ts workflow option 4.)
+    /^argument-hint: "\[diff\|pr-url\|pr-number/,
   ],
 
   // ground-state — TWO bundled-only frontmatter lines, both allowlisted:
