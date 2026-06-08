@@ -58,6 +58,25 @@ export interface GitOptions {
   env?: NodeJS.ProcessEnv;
 }
 
+export interface CheckoutOptions extends GitOptions {
+  /**
+   * Pass `git checkout --force`, discarding local modifications to tracked
+   * files so the checkout cannot abort on a dirty working tree.
+   *
+   * Use ONLY for the managed plugin/marketplace cache under
+   * `~/.afk/plugins/cache/`, whose working tree is a disposable mirror of a
+   * remote ref — never for a user workspace. Without it, a tracked file that
+   * drifted in the cache (a partial prior update, a stray edit, a filter that
+   * slipped past hardening) wedges every future update with "Your local
+   * changes would be overwritten by checkout".
+   *
+   * `--force` overwrites dirty TRACKED files but leaves UNTRACKED files in
+   * place (it is not `clean -fd`), so locally-added content the user has not
+   * committed survives the reset.
+   */
+  force?: boolean;
+}
+
 /**
  * `-c` flags prepended to every git invocation that touches working-tree
  * state of an untrusted repo (clone, fetch, checkout).
@@ -151,13 +170,20 @@ export async function listTags(repo: string, opts: GitOptions = {}): Promise<str
  * never leave the workspace in a confusing "detached HEAD but tracking a
  * remote branch" state after checking out a tag.
  *
+ * Pass `opts.force` to add `--force` for the managed cache — see
+ * {@link CheckoutOptions.force}. The ref always stays the final positional
+ * argument so callers that inspect the last arg keep working.
+ *
  * Hardened: post-checkout hook fires unconditionally on `git checkout`,
  * including `--detach`. This is THE primary RCE vector inside an untrusted
  * cloned repo — previously unprotected before this hardening.
  */
-export async function checkout(repo: string, ref: string, opts: GitOptions = {}): Promise<void> {
+export async function checkout(repo: string, ref: string, opts: CheckoutOptions = {}): Promise<void> {
   const runner = opts.runner ?? defaultRunner;
-  await runner(withHardening(['checkout', '--detach', ref]), repo, opts.env);
+  const args = ['checkout', '--detach'];
+  if (opts.force) args.push('--force');
+  args.push(ref);
+  await runner(withHardening(args), repo, opts.env);
 }
 
 /**
