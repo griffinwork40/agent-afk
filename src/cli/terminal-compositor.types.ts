@@ -39,6 +39,16 @@ export interface LogUpdateFn {
    * coordinates.
    */
   resetGeometry?: () => void;
+  /**
+   * Optional method exposed by CupFrameRenderer. Predicts the physical top row
+   * the next `render(content, targetBottomRow)` will use (after hard-wrapping
+   * at `stdout.columns`), without rendering or mutating tracked state. Used by
+   * `repaint()`/`repaintPickerFrame()` to size committed-band eviction + re-pin
+   * against the PHYSICAL frame footprint rather than the logical line count,
+   * which under-counts whenever a frame line soft-wraps (review #592). Absent on
+   * test stubs — callers fall back to the logical line count.
+   */
+  measure?: (content: string, targetBottomRow: number) => { topRow: number; lineCount: number };
 }
 
 export interface KeyInfo {
