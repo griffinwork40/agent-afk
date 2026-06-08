@@ -1,7 +1,7 @@
 {
   "name": "agent-afk",
-  "version": "3.83.0",
-  "description": "CLI tool for interacting with AI agents via multiple interfaces",
+  "version": "3.89.1",
+  "description": "Local-first control plane for long-running AI agent work — delegation, traces, resumable sessions, verification, and notifications.",
   "main": "dist/index.mjs",
   "type": "module",
   "bin": {
@@ -9,10 +9,11 @@
   },
   "files": [
     "dist/",
+    "scripts/postinstall.mjs",
     "NOTICE"
   ],
   "scripts": {
-    "postinstall": "node scripts/postinstall.mjs || true",
+    "postinstall": "node dist/postinstall.mjs || node scripts/postinstall.mjs || true",
     "build": "tsc && node scripts/copy-prompts.js",
     "dev": "tsx watch src/cli/index.ts",
     "start": "node dist/cli/index.js",
@@ -46,11 +47,15 @@
     "release:dry": "node scripts/release.mjs --dry-run"
   },
   "keywords": [
-    "cli",
-    "ai",
-    "agent",
+    "ai-agent",
+    "agent-runtime",
+    "control-plane",
+    "orchestration",
+    "verification",
+    "local-first",
+    "mcp",
     "telegram",
-    "chatbot"
+    "cli"
   ],
   "author": "Griffin Long",
   "license": "Apache-2.0",
@@ -63,7 +68,7 @@
     "url": "https://github.com/griffinwork40/agent-afk/issues"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",

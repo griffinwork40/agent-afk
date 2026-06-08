@@ -87,7 +87,7 @@ export interface SchedulerOptions {
    * notification failures never crash the scheduler. Used for out-of-band
    * notifications (Telegram push, webhooks, etc.).
    */
-  onTaskComplete?: (record: TelemetryRecord) => void | Promise<void>;
+  onTaskComplete?: (record: TelemetryRecord, details?: TaskCompletionDetails) => void | Promise<void>;
   /**
    * Poll interval (ms) for the pull-trigger queue. When > 0, `startPullLoop()`
    * will set up a `setInterval` that dequeues one task per tick when idle.
@@ -114,6 +114,11 @@ export interface TelemetryRecord {
   skipReason?: SessionStartSkipReason;
   /** Human-readable label from ScheduledTaskConfig, if available. */
   name?: string;
+}
+
+export interface TaskCompletionDetails {
+  /** Full successful task response for out-of-band notifications; not persisted to telemetry. */
+  responseText?: string;
 }
 
 interface RegisteredEntry {
@@ -296,13 +301,14 @@ export class CronScheduler {
       session = spawned.session;
       memoryStore = spawned.memoryStore;
       const response = await session.sendMessage(task.command);
+      const responseText = redactInlineSecrets(response.content);
       const record: TelemetryRecord = {
         ...baseRecord,
         durationMs: this.now() - startTimeMs,
         status: 'success',
-        responseExcerpt: redactInlineSecrets(response.content.slice(0, 280)),
+        responseExcerpt: responseText.slice(0, 280),
       };
-      this.writeTelemetry(record, task);
+      this.writeTelemetry(record, task, { responseText });
       return record;
     } catch (err) {
       const record: TelemetryRecord = {
@@ -461,10 +467,14 @@ export class CronScheduler {
     }
   }
 
-  private writeTelemetry(record: TelemetryRecord, task?: ScheduledTask): void {
+  private writeTelemetry(
+    record: TelemetryRecord,
+    task?: ScheduledTask,
+    details?: TaskCompletionDetails,
+  ): void {
     try {
       appendFileSync(this.telemetryPath(), `${JSON.stringify(record)}\n`, 'utf-8');
-      this.fireOnTaskComplete(record, task);
+      this.fireOnTaskComplete(record, task, details);
     } catch (err) {
       // Telemetry failure must not crash the daemon. Log to stderr and move on.
       const msg = err instanceof Error ? err.message : String(err);
@@ -473,7 +483,11 @@ export class CronScheduler {
     }
   }
 
-  private fireOnTaskComplete(record: TelemetryRecord, task?: ScheduledTask): void {
+  private fireOnTaskComplete(
+    record: TelemetryRecord,
+    task?: ScheduledTask,
+    details?: TaskCompletionDetails,
+  ): void {
     const cb = this.options.onTaskComplete;
     if (!cb) return;
     // notifyOn filter — only applies when the triggering task is known
@@ -485,7 +499,7 @@ export class CronScheduler {
     // Fire-and-forget. Notification callbacks must not block telemetry
     // writes or crash the scheduler — every error is swallowed and logged.
     try {
-      const result = cb(record);
+      const result = cb(record, details);
       if (result instanceof Promise) {
         void result.catch((err: unknown) => {
           const msg = err instanceof Error ? err.message : String(err);

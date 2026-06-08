@@ -186,8 +186,9 @@ describe('formatAuthDiagnostic', () => {
     const msg = formatAuthDiagnostic({ apiKey: null, source: 'no-usable-auth-codex-oauth' });
     expect(msg).toContain('codex login --api-key');
     expect(msg).toContain('OPENAI_API_KEY');
-    // Critical: must explain WHY ChatGPT OAuth isn't usable.
-    expect(msg).toContain('API key auth');
+    // Critical: must explain WHY ChatGPT OAuth isn't usable AND how to opt in.
+    expect(msg).toContain('API-key mode');
+    expect(msg).toContain('AFK_OPENAI_CHATGPT_OAUTH');
   });
 
   it('renders no-usable-auth with all 3 next steps', () => {
@@ -205,5 +206,61 @@ describe('formatAuthDiagnostic', () => {
     });
     expect(msg).not.toContain('VERYSECRET');
     expect(msg).not.toContain('sk-VERY');
+  });
+});
+
+describe('resolveOpenAIAuth — ChatGPT-subscription OAuth (flag-gated, read-only)', () => {
+  /** Build an unsigned JWT (header.payload.sig) with the given payload claims. */
+  function makeJwt(payload: Record<string, unknown>): string {
+    const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+    return `${b64({ alg: 'none', typ: 'JWT' })}.${b64(payload)}.sig`;
+  }
+  const ACCESS = makeJwt({
+    'https://api.openai.com/auth': { chatgpt_account_id: 'acct_from_jwt' },
+    exp: 9999999999,
+  });
+  const chatgptAuthJson = (extra: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      auth_mode: 'chatgpt',
+      OPENAI_API_KEY: null,
+      tokens: { access_token: ACCESS, refresh_token: 'rt_x', ...extra },
+    });
+  const flagOn = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? '1' : undefined);
+
+  it('stays read-only-rejected when the opt-in flag is OFF (default)', () => {
+    const r = resolveOpenAIAuth(undefined, deps({ readFile: () => chatgptAuthJson() }));
+    expect(r.source).toBe('no-usable-auth-codex-oauth');
+    expect(r.apiKey).toBeNull();
+  });
+
+  it('returns the access token tagged chatgpt-oauth when the flag is ON', () => {
+    const r = resolveOpenAIAuth(undefined, deps({ readEnv: flagOn, readFile: () => chatgptAuthJson() }));
+    expect(r.source).toBe('chatgpt-oauth');
+    expect(r.apiKey).toBe(ACCESS);
+    expect(r.accountId).toBe('acct_from_jwt');
+    expect(r.expiresAt).toBe(9999999999);
+  });
+
+  it('prefers an explicit account_id field over the JWT claim', () => {
+    const r = resolveOpenAIAuth(undefined, deps({ readEnv: flagOn, readFile: () => chatgptAuthJson({ account_id: 'acct_explicit' }) }));
+    expect(r.accountId).toBe('acct_explicit');
+  });
+
+  it('lets an explicit API key still win over OAuth even with the flag ON', () => {
+    const r = resolveOpenAIAuth('sk-explicit-1234', deps({ readEnv: flagOn, readFile: () => chatgptAuthJson() }));
+    expect(r.source).toBe('config');
+    expect(r.apiKey).toBe('sk-explicit-1234');
+  });
+
+  it('parseCodexAuthJson extracts accessToken/accountId/expiresAt from the token bag', () => {
+    const r = parseCodexAuthJson(chatgptAuthJson());
+    expect(r).toMatchObject({ kind: 'chatgpt', accessToken: ACCESS, accountId: 'acct_from_jwt', expiresAt: 9999999999 });
+  });
+
+  it('renders the chatgpt-oauth diagnostic with a masked account id (last4 only)', () => {
+    const msg = formatAuthDiagnostic({ apiKey: 'tok', source: 'chatgpt-oauth', accountId: 'acct_wxyz', expiresAt: 9999999999 });
+    expect(msg).toContain('ChatGPT subscription');
+    expect(msg).toContain('wxyz');
+    expect(msg).not.toContain('acct_wxyz');
   });
 });

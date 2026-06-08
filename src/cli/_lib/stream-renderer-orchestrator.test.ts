@@ -944,3 +944,65 @@ describe('handleOrchestratorEvent — per-phase interleaved thinking (TTY)', () 
     expect(source.thinkingPhaseStartedAt).toBeUndefined();
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// progress arm — at-most-one-entry invariant (duplicate banner regression)
+// ────────────────────────────────────────────────────────────────────────────
+
+function progressEvent(taskId: string, description: string): OutputEvent {
+  return {
+    type: 'progress',
+    progress: {
+      taskId,
+      description,
+      totalTokens: 1000,
+      toolUses: 1,
+      durationMs: 1000,
+    },
+  };
+}
+
+describe('handleOrchestratorEvent — progress arm (duplicate banner regression)', () => {
+  /**
+   * Two `progress` events with DIFFERENT taskIds — as produced when two
+   * runTurn invocations share one live renderer (a 401 auth-retry replay, or
+   * any retry on the skill-dispatch renderer, which never rebuilds on
+   * 'resumed'). loop.ts mints a fresh taskId per runTurn, so without the
+   * clear() the map would accumulate two entries and the overlay would render
+   * two stacked "◦ Tool-use loop" banners.
+   *
+   * Expect: lastProgressByTask holds EXACTLY ONE entry (the latest task), and
+   * the composed overlay renders EXACTLY ONE banner.
+   */
+  it('collapses two distinct-taskId progress events to a single map entry + one banner', () => {
+    const setOverlay = vi.fn<(overlay: string) => void>();
+    const compositor = {
+      setOverlay,
+      commitAbove: vi.fn(),
+      setSpinner: vi.fn(),
+    } as unknown as OrchestratorCtx['compositor'];
+
+    const ctx = makeCtx(new ToolLane(), { isTTY: true, compositor });
+    const source: SourceState = freshSourceState('__main__');
+    const lastProgress = new Map();
+    const fire = (e: OutputEvent) => handleOrchestratorEvent(e, source, ctx, lastProgress);
+
+    // Stale entry from a first runTurn, then a fresh taskId from a second
+    // runTurn replaying through the same renderer.
+    fire(progressEvent('task-1-stale', 'Iteration 6: used bash'));
+    fire(progressEvent('task-2-live', 'Iteration 15: used memory_update'));
+
+    // Invariant: at most one entry. The second taskId evicts the first.
+    expect(lastProgress.size).toBe(1);
+    expect(lastProgress.has('task-2-live')).toBe(true);
+    expect(lastProgress.has('task-1-stale')).toBe(false);
+
+    // The composed overlay renders one banner, not two: exactly one '◦' glyph
+    // (one banner block) and only the live task's description survives.
+    const lastOverlay = setOverlay.mock.calls.at(-1)?.[0] ?? '';
+    const bannerCount = (lastOverlay.match(/◦/g) ?? []).length;
+    expect(bannerCount).toBe(1);
+    expect(lastOverlay).toContain('Iteration 15: used memory_update');
+    expect(lastOverlay).not.toContain('Iteration 6: used bash');
+  });
+});

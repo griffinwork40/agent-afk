@@ -65,6 +65,7 @@ import { registerWorktreeCommand } from './commands/worktree.js';
 import { registerUpdateCommand } from './commands/update.js';
 import { registerScheduleCommand } from './commands/schedule.js';
 import { registerBgCommand } from './commands/bg.js';
+import { registerTraceCommand } from './commands/trace.js';
 import { registerServiceCommand } from './commands/service.js';
 import { registerImproveCommand } from './commands/improve.js';
 import { registerShellInitCommand } from './commands/shell-init.js';
@@ -114,6 +115,7 @@ registerWorktreeCommand(program);
 registerUpdateCommand(program);
 registerScheduleCommand(program);
 registerBgCommand(program);
+registerTraceCommand(program);
 registerServiceCommand(program);
 registerImproveCommand(program);
 registerShellInitCommand(program);
@@ -135,13 +137,45 @@ Examples:
 );
 
 /**
+ * Commands that cannot do anything useful without an Anthropic credential.
+ * Everything else (login, doctor, --version, --help, config, …) must work
+ * pre-auth — a fresh install's first commands are exactly those.
+ */
+const AUTH_GATED_COMMANDS = new Set(['chat', 'c', 'interactive', 'i', 'daemon', 'farm']);
+
+/**
+ * Pure function. Decides whether the invoked command needs the credential
+ * gate. `--version`/`--help` never gate. A leading non-flag arg is the
+ * subcommand (commander convention); only AUTH_GATED_COMMANDS gate. No
+ * subcommand (bare `afk`, or program flags like `--model opus`) means the
+ * REPL is starting, which needs auth.
+ *
+ * Exported for unit testing.
+ */
+export function needsCredentialGate(argv: string[]): boolean {
+  const args = argv.slice(2);
+  if (args.some((a) => a === '--version' || a === '-V' || a === '--help' || a === '-h')) {
+    return false;
+  }
+  const first = args[0];
+  const sub = first && !first.startsWith('-') ? first : undefined;
+  if (sub === undefined) return true; // bare `afk` → REPL → needs auth
+  return AUTH_GATED_COMMANDS.has(sub);
+}
+
+/**
  * First-run detector. When no credential is present and the resolved provider
  * is anthropic-direct, offers an interactive wizard (TTY) or prints a helpful
  * error (non-TTY) instead of surfacing a cryptic provider error.
  *
+ * Only fires for commands that actually need a credential (see
+ * needsCredentialGate) — `afk --version`, `afk login`, `afk doctor` etc. must
+ * never be blocked by the gate they would be used to satisfy or diagnose.
+ *
  * Exported so it can be tested independently without running program.parse().
  */
-export async function runFirstRunDetector(): Promise<void> {
+export async function runFirstRunDetector(argv: string[] = process.argv): Promise<void> {
+  if (!needsCredentialGate(argv)) return;
   const credential = loadCredential();
   const provider = providerForModel(getModel() as string);
   if (!credential && provider === 'anthropic-direct') {

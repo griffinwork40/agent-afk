@@ -1,8 +1,8 @@
 # Agent AFK
 
-> Works while you're away.
+> Delegate the work. Keep the judgment.
 >
-> Start a coding run before dinner. Agent AFK works locally, texts you when it's done or stuck, and leaves behind a PR, trace, and Telegram thread showing exactly what happened.
+> **Agent AFK** is a local-first control plane for long-running AI agent work. Hand off multi-session, headless tasks to parallel agents — then stay in control with traces you can read (`afk trace show`), resumable sessions, verification passes before anything ships, and a phone ping the moment work lands in a terminal state. Bring your own model.
 
 [![npm version](https://img.shields.io/npm/v/agent-afk.svg)](https://www.npmjs.com/package/agent-afk)
 [![Node](https://img.shields.io/node/v/agent-afk.svg)](https://nodejs.org/)
@@ -13,19 +13,22 @@
 npm install -g agent-afk
 ```
 
-Requires Node ≥ 20.
+Requires Node ≥ 22.
 
 Smoke test:
 
 ```bash
-afk chat "hello"
+afk --version    # confirm the install (works before login)
 afk doctor       # environment self-check
+afk login        # save an Anthropic API key or OAuth token
+afk chat "hello"
 ```
 
 ## What you can do with it
 
 - **Chat from your terminal** — `afk chat "..."` for one-shot, `afk i` for a REPL with full tool access (Bash, file ops, web fetch, grep/glob, subagents).
 - **Hand long work off to a daemon** — `afk daemon` runs headless. Pair it with `send_telegram` and you get pings on your phone when work lands in a terminal state.
+- **Read the trace** — every run writes an append-only record of what the agent did. `afk trace show` prints it back as a human-readable receipt — tool calls, gate decisions, subagent lifecycles, cost — so you can audit a run without reaching for `jq`.
 - **Message Claude from Telegram** — `afk telegram setup` walks you through bot token + allowlist. After that you have a private chat surface backed by the same session manager as the REPL.
 - **Built-in orchestrators** — `/mint`, `/diagnose`, `/spec`, `/research`, `/ship`, `/review` dispatch subagent waves. `/mint` takes a feature idea and runs spec → research → plan → parallelize → build → verify → ship. `/diagnose` forks parallel root-cause hypotheses for failing tests and bugs.
 
@@ -68,7 +71,7 @@ AFK_TELEGRAM_ALLOWED_CHAT_IDS=12345678
 AFK_MAX_BUDGET_USD=5.00
 ```
 
-**Project-scoped system prompt.** Drop an `AFK.md` at your project root and `afk` reads it as the system prompt whenever you run from that directory. No frontmatter needed.
+**Project-scoped system prompt.** Drop an `AFK.md` at your project root and `afk` appends it to its built-in framework prompt whenever you run from that directory — your instructions layer on top of the base, they don't replace it. No frontmatter needed.
 
 **Check what resolved.** `afk config` dumps the live configuration. `afk doctor` validates keys, paths, and provider connectivity.
 
@@ -87,7 +90,6 @@ afk chat "refactor this" --model codex
 | `opus` | Complex reasoning, multi-step planning, long contexts |
 | `sonnet` | Day-to-day default — balanced speed and capability |
 | `haiku` | Fast, cheap, one-shots |
-| `codex` | OpenAI's GPT-5 family via `@openai/codex-sdk` |
 
 ## Useful commands
 

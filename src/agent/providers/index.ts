@@ -23,16 +23,20 @@ import type { ModelProvider } from '../provider.js';
 import { anthropicDirectProvider, AnthropicDirectProvider } from './anthropic-direct/index.js';
 import { OpenAICompatibleProvider } from './openai-compatible/index.js';
 import { MODEL_MAP } from '../session/model-resolution.js';
+import { resolveBinding, type ModelSlots } from '../session/model-slots.js';
 import { env } from '../../config/env.js';
 
 /**
  * Short aliases that route to the `anthropic-direct` provider.
  *
- * Derived from `MODEL_MAP` so the two sources cannot drift. The single
- * explicit addition is `'auto'` — an intentional model-router sentinel that
- * does not resolve to a fixed full ID (the provider selects the model
- * dynamically at run time). It has no entry in `MODEL_MAP` by design and is
- * kept here with this comment so future readers understand why it's present.
+ * Since `providerForModel` now resolves slot aliases to their concrete bound
+ * id *before* consulting this set, the load-bearing entry is `'auto'` — the
+ * model-router sentinel that resolves to itself (no fixed id; the provider
+ * selects the model dynamically at run time). The `MODEL_MAP`-derived keys are
+ * a defensive fallback: under default bindings a resolved alias like `sonnet`
+ * becomes `claude-sonnet-4-6` and routes via the `claude-` prefix below, so
+ * those keys are not normally hit. Kept (and derived from `MODEL_MAP` to avoid
+ * drift) so any path that bypasses resolution still locks to Anthropic.
  */
 const CLAUDE_SHORT_ALIASES = new Set([
   ...Object.keys(MODEL_MAP),
@@ -78,6 +82,12 @@ export interface ProviderRouteHints {
    * the request previously went silently to api.anthropic.com.
    */
   openaiBaseUrl?: string;
+  /**
+   * Explicit model-slot bindings override. When omitted, the process-global
+   * bindings installed by `loadConfig()` (or defaults+env) are used. Tests pass
+   * this to route against a rebound tier table without mutating module state.
+   */
+  slots?: ModelSlots;
 }
 
 /**
@@ -108,10 +118,13 @@ function normalizeExplicitProvider(raw: string | undefined): BundledProviderName
  * Tier order (highest wins):
  *   1. **Explicit override** — `hints.explicit` (from `--provider` flag) or
  *      `AFK_PROVIDER` env var. Always wins. Unrecognized values fall through.
- *   2. **Claude lock** — short aliases (`sonnet`, `opus`, …), `claude-*`,
- *      `claude_*`, and `local-*` (PR #239 Anthropic-compatible shim path).
- *      Beats the env-hint tier so `AFK_OPENAI_BASE_URL=… afk -m sonnet`
- *      still routes to Anthropic.
+ *   2. **Claude lock** — applied to the *resolved* id (slot aliases are
+ *      expanded first): `claude-*`, `claude_*`, `local-*` (PR #239
+ *      Anthropic-compatible shim path), and the `auto` sentinel. Beats the
+ *      env-hint tier so `AFK_OPENAI_BASE_URL=… afk -m sonnet` still routes to
+ *      Anthropic when `sonnet` is bound to a Claude id (the default). If the
+ *      user rebinds a tier to a non-Anthropic id, the resolved id falls through
+ *      to Tier 3/4 and routes accordingly.
  *   3. **OpenAI patterns** — `gpt-*`, `o[134]*`, `codex-*`, plus common
  *      third-party shims (`deepseek-*`, `mistral-*`, `mixtral-*`, `llama-*`,
  *      `qwen-*`) and HF-style `org/model` ids.
@@ -142,8 +155,25 @@ export function providerForModel(
   const explicit = normalizeExplicitProvider(explicitRaw);
   if (explicit) return explicit;
 
-  // Tier 2: Claude lock (beats env-hint tier — see Tier 4 docstring)
-  const lowered = (model ?? '').trim().toLowerCase();
+  // Resolve slot aliases / custom names → the full binding BEFORE any pattern
+  // matching, so a tier rebound to a non-Anthropic model (e.g. small→gpt-4o-mini)
+  // routes to the correct provider. This is the resolution-before-routing step:
+  // every raw call site of providerForModel (subagent dispatch, nesting
+  // childProviderFactory, CLI/Telegram surfaces) gets correct routing for free
+  // without per-site changes. Idempotent: full ids and the `auto` sentinel pass
+  // through unchanged.
+  const binding = resolveBinding(model, hints?.slots);
+
+  // Per-slot explicit provider override (Stage 2). Honored after the global
+  // --provider / AFK_PROVIDER tier but before id inference, so a tier bound to
+  // a bare id on a shim (no gpt-/org-model signal) still routes to its declared
+  // provider rather than defaulting to anthropic-direct.
+  if (binding.provider === 'anthropic') return 'anthropic-direct';
+  if (binding.provider === 'openai') return 'openai-compatible';
+
+  // Tier 2: Claude lock (beats env-hint tier — see Tier 4 docstring), applied
+  // to the resolved bound id.
+  const lowered = binding.id.trim().toLowerCase();
   if (lowered) {
     if (CLAUDE_SHORT_ALIASES.has(lowered)) return 'anthropic-direct';
     if (lowered.startsWith('claude-') || lowered.startsWith('claude_')) return 'anthropic-direct';

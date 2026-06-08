@@ -548,6 +548,107 @@ describe('ToolLane.upsertTextChild / removeTextChildrenUnder', () => {
         ).toBeLessThanOrEqual(cols);
       }
     });
+
+    /**
+     * Regression for the "weird wrapping in the diff" + "write_file text comes
+     * and goes" report: a diff body line under a subagent child (rendered via
+     * renderOverlayChildren, NOT the root-entry path) was pushed RAW with no
+     * clampLineToTerminal. A long line of file content then soft-wrapped to
+     * column 0 with no `│` spine gutter, orphaning the continuation between
+     * sibling rows. In the live overlay the same overflow also desyncs the
+     * compositor's logical-line row accounting (frameLines.length, which
+     * assumes 1 line = 1 visual row) from log-update's wrap-aware count,
+     * making the block flicker ("comes and goes") on every repaint.
+     *
+     * The width assertion is the proxy for both symptoms: if every emitted
+     * line fits within `cols`, the terminal never soft-wraps, so there is no
+     * orphaned continuation AND no row-count desync.
+     */
+    it('overlay diff under a subagent child fits within terminal width (no orphan-wrap / flicker)', () => {
+      const lane = new ToolLane();
+      const cols = process.stdout.columns ?? 88;
+      lane.addStartWithAgentContext('synth-A', 'Agent', '(skill-diagnose)', undefined);
+      lane.addStartWithAgentContext('edit-1', 'edit_file', ' verification-prompt.md', 'synth-A');
+      lane.addResult('edit-1', makeResult('Edited verification-prompt.md'));
+      // A diff whose body line is far wider than 88 cols — the failure shape
+      // from the screenshot ("- You are testing a hypothesis … propo" wrapped
+      // to "sed fix resolves the failure." at column 0).
+      lane.addDiff('edit-1', {
+        addedLines: 1,
+        removedLines: 1,
+        hunks: [{
+          oldStart: 1, oldLines: 1, newStart: 1, newLines: 1,
+          lines: [
+            { kind: '-', text: 'You are testing a hypothesis in an isolated worktree to determine if a proposed fix resolves the failure.' },
+            { kind: '+', text: 'You are performing a **static code-reading assessment** of a proposed fix in an isolated worktree to determine whether it would resolve the failure.' },
+          ],
+        }],
+      });
+
+      const overlay = lane.getOverlay();
+      // Sanity: the diff actually rendered (so this test can fail loudly if a
+      // future refactor stops emitting the block).
+      expect(stripAnsi(overlay)).toContain('across 1 hunk');
+      for (const line of overlay.split('\n')) {
+        expect(
+          displayWidth(stripAnsi(line)),
+          `overlay diff line exceeds terminal width (${cols}): ${JSON.stringify(line)}`,
+        ).toBeLessThanOrEqual(cols);
+      }
+    });
+
+    it('scrollback (flush) diff under a subagent child fits within terminal width', () => {
+      const lane = new ToolLane();
+      const cols = process.stdout.columns ?? 88;
+      lane.addStartWithAgentContext('synth-A', 'Agent', '(skill-diagnose)', undefined);
+      lane.addStartWithAgentContext('edit-1', 'edit_file', ' verification-prompt.md', 'synth-A');
+      lane.addResult('edit-1', makeResult('Edited verification-prompt.md'));
+      lane.addDiff('edit-1', {
+        addedLines: 1,
+        removedLines: 0,
+        hunks: [{
+          oldStart: 1, oldLines: 0, newStart: 1, newLines: 1,
+          lines: [
+            { kind: '+', text: 'A reproducer command or failing test that demonstrates the regression before the fix is applied and passes cleanly afterward.' },
+          ],
+        }],
+      });
+
+      const flushed = lane.flush().join('\n');
+      for (const line of flushed.split('\n')) {
+        expect(
+          displayWidth(stripAnsi(line)),
+          `flush diff line exceeds terminal width (${cols}): ${JSON.stringify(line)}`,
+        ).toBeLessThanOrEqual(cols);
+      }
+    });
+
+    it('scrollback (flush) diff under a grouped write_file ×2 fits within terminal width', () => {
+      const lane = new ToolLane();
+      const cols = process.stdout.columns ?? 88;
+      // Two root-level write_file calls → renderGroupedRootTools path.
+      lane.addStart('tu_a', 'write_file', '(a.ts)');
+      lane.addStart('tu_b', 'write_file', '(b.ts)');
+      lane.addResult('tu_a', makeResult('Wrote a.ts'));
+      lane.addResult('tu_b', makeResult('Wrote b.ts'));
+      const longLine = 'const veryLongIdentifierForTheRegressionTest = someModule.callWithAReallyLongArgumentListThatExceedsEightyEightColumns(alpha, beta, gamma);';
+      lane.addDiff('tu_a', {
+        addedLines: 1, removedLines: 0,
+        hunks: [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: 1, lines: [{ kind: '+', text: longLine }] }],
+      });
+      lane.addDiff('tu_b', {
+        addedLines: 1, removedLines: 0,
+        hunks: [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: 1, lines: [{ kind: '+', text: longLine }] }],
+      });
+
+      const flushed = lane.flush().join('\n');
+      for (const line of flushed.split('\n')) {
+        expect(
+          displayWidth(stripAnsi(line)),
+          `grouped flush diff line exceeds terminal width (${cols}): ${JSON.stringify(line)}`,
+        ).toBeLessThanOrEqual(cols);
+      }
+    });
   });
 });
 

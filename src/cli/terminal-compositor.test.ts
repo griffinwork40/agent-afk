@@ -16,6 +16,14 @@ import { TerminalCompositor } from './terminal-compositor.js';
 import { CupFrameRenderer } from './cup-frame-renderer.js';
 import { createAutocompleteState } from './input/autocomplete-state.js';
 import { register as registerSlashCommand, resetRegistry as resetSlashRegistry } from './slash/registry.js';
+import { __resetStdinClaimForTests, currentStdinClaimHolder } from './input/stdin-claim.js';
+
+// Module-level beforeEach: reset the stdin-claim singleton before every test
+// regardless of which describe block it lives in. This prevents claim leaks
+// when a test calls arm() without a corresponding disarm() in its teardown.
+beforeEach(() => {
+  __resetStdinClaimForTests();
+});
 
 type MockStdout = NodeJS.WriteStream & {
   isTTY: boolean;
@@ -74,6 +82,8 @@ describe('TerminalCompositor', () => {
     stdout = makeMockStdout();
     stdin = makeMockStdin();
     writes = collectWrites(stdout);
+    // Reset the process-wide StdinClaim singleton so each test starts clean.
+    __resetStdinClaimForTests();
   });
 
   describe('arm/disarm lifecycle', () => {
@@ -132,6 +142,27 @@ describe('TerminalCompositor', () => {
       c.disarm();
       expect(clearSpy).toHaveBeenCalledTimes(1);
       expect(doneSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('arm() acquires the stdin claim under TerminalCompositor.arm', async () => {
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      expect(currentStdinClaimHolder()).toBeNull();
+      await c.arm();
+      expect(currentStdinClaimHolder()).toBe('TerminalCompositor.arm');
+      c.disarm();
+      expect(currentStdinClaimHolder()).toBeNull();
+    });
+
+    it('arm() throws a conflict error if another holder already holds the claim', async () => {
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      // Manually acquire before arm() to simulate a concurrent consumer.
+      const { acquireStdinClaim } = await import('./input/stdin-claim.js');
+      const handle = acquireStdinClaim('test-interloper');
+      try {
+        await expect(c.arm()).rejects.toThrow('stdin claim conflict');
+      } finally {
+        handle.release();
+      }
     });
   });
 

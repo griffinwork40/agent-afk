@@ -15,6 +15,7 @@
  */
 
 import type { ClaudeModel } from './types.js';
+import { resolveModelInput } from './session/model-slots.js';
 
 /**
  * Keys cover both short aliases (`opus`, `sonnet`, `haiku`, `*_1m`) and the
@@ -45,7 +46,17 @@ const DEFAULT_MAX_OUTPUT = 64_000;
  * Accepts short aliases and full IDs; unknown models fall back to 64k.
  */
 export function maxOutputTokensFor(model: ClaudeModel | string): number {
-  return MODEL_MAX_OUTPUT_TOKENS[model] ?? DEFAULT_MAX_OUTPUT;
+  const lowered = String(model).trim().toLowerCase();
+  // Preserve explicit *_1m aliases (a context-window choice) before resolution.
+  const oneM = MODEL_MAX_OUTPUT_TOKENS[lowered];
+  if (lowered.endsWith('_1m') && oneM !== undefined) return oneM;
+  // Resolve slot alias → bound id so a rebound tier gets the correct cap.
+  const id = resolveModelInput(model) ?? String(model);
+  return (
+    MODEL_MAX_OUTPUT_TOKENS[id] ??
+    MODEL_MAX_OUTPUT_TOKENS[id.toLowerCase()] ??
+    DEFAULT_MAX_OUTPUT
+  );
 }
 
 /**
@@ -134,12 +145,17 @@ function routesToOpenAICompatible(model: string): boolean {
  *   - everything else (Anthropic): 200k
  */
 export function contextLimitFor(model: ClaudeModel | string): number {
-  // Try exact match first (Claude short aliases are already lowercase).
-  // Fall through to a lowercased lookup so mixed-case HF-style ids
-  // (e.g. "mlx-community/Qwen3-30B-A3B-4bit") still hit their entry.
-  const known = MODEL_CONTEXT_LIMITS[model] ?? MODEL_CONTEXT_LIMITS[model.toLowerCase()];
+  const lowered = String(model).trim().toLowerCase();
+  // Preserve explicit *_1m aliases (1M context window) before resolution.
+  const oneM = MODEL_CONTEXT_LIMITS[lowered];
+  if (lowered.endsWith('_1m') && oneM !== undefined) return oneM;
+  // Resolve slot alias → bound id, then look up the concrete id. A lowercased
+  // fallback lets mixed-case HF-style ids (e.g.
+  // "mlx-community/Qwen3-30B-A3B-4bit") still hit their entry.
+  const id = resolveModelInput(model) ?? String(model);
+  const known = MODEL_CONTEXT_LIMITS[id] ?? MODEL_CONTEXT_LIMITS[id.toLowerCase()];
   if (known !== undefined) return known;
-  return routesToOpenAICompatible(model)
+  return routesToOpenAICompatible(id)
     ? DEFAULT_CONTEXT_LIMIT_OPENAI_COMPATIBLE
     : DEFAULT_CONTEXT_LIMIT;
 }

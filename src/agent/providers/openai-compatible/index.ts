@@ -211,7 +211,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
       toolDispatcher?: ToolDispatcher;
       mcpManager?: import('../../mcp/index.js').McpManager;
     } = {};
-    if (this.providerOpts.baseURL !== undefined) buildOpts.baseURL = this.providerOpts.baseURL;
+    // Per-slot / per-session baseURL (`config.openaiBaseUrl`, set by
+    // applySlotCredentials) wins over the construction-time global
+    // (`providerOpts.baseURL`, from AFK_OPENAI_BASE_URL) so a tier bound to its
+    // own endpoint overrides the process default. See model-slots Stage 2.
+    const effectiveBaseURL = config.openaiBaseUrl ?? this.providerOpts.baseURL;
+    if (effectiveBaseURL !== undefined) buildOpts.baseURL = effectiveBaseURL;
     buildOpts.toolDispatcher = dispatcher;
     if (this.providerOpts.mcpManager !== undefined) buildOpts.mcpManager = this.providerOpts.mcpManager;
 

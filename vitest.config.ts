@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    setupFiles: ['./src/__test-utils__/stdin-claim-reset.ts'],
     // testTimeout: bumped from vitest default 5000ms to 15000ms.
     // Many CLI/bootstrap tests do `await import('./bootstrap.js')` (directly or
     // via vi.doMock setup) and the transitive import graph can exceed 5s under

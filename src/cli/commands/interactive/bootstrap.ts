@@ -12,7 +12,7 @@ import type { HookRegistry } from '../../../agent/hooks.js';
 import type { TraceWriter } from '../../../agent/trace/index.js';
 import {
   parseThinking, parseEffort, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getThinking, getEffort,
-  getMaxOutputTokens, getDefaultSubagentModel, loadSystemPrompt, loadConfigSystemPrompt,
+  getMaxOutputTokens, getDefaultSubagentModel, resolveBaseSystemPrompt,
 } from '../../shared-helpers.js';
 import { loadConfig } from '../../config.js';
 import { assembleSystemPrompt } from '../../../agent/routing-directive.js';
@@ -133,15 +133,13 @@ export async function bootstrapSession(
   effort = parseEffort(options.effort) ?? getEffort();
   maxOutputTokens = parseMaxOutputTokens(options.maxOutputTokens) ?? getMaxOutputTokens();
 
-  // Dual-path system-prompt resolution: `basePrompt` is sourced via
-  // `loadConfigSystemPrompt`/`loadSystemPrompt` (string-only path), while
-  // `systemPromptSource` provenance comes from `loadConfig()`. Both walk the
-  // same 3-tier precedence (env → afk.config.json → AFK.md) in the same order,
-  // so in production they agree. Any future caller that invokes one without
-  // the other risks an orphaned source tag — keep them paired.
-  const basePrompt = loadConfigSystemPrompt() ?? loadSystemPrompt();
+  // System-prompt layering: the framework base (`prompts/system-prompt.md`)
+  // is unconditional; the operator overlay (env → afk.config.json → AFK.md)
+  // is appended on top via resolveBaseSystemPrompt(), never substituted for
+  // the base. `source` is the layered provenance string surfaced by
+  // --dump-prompt (`framework`, `framework+afk-md:/path`, …).
+  const { prompt: basePrompt, source: systemPromptSource } = resolveBaseSystemPrompt();
   const cliConfig = loadConfig();
-  const systemPromptSource = cliConfig.systemPromptSource;
   const autoRouting = cliConfig.autoRouting?.interactive ?? true;
   const systemPrompt = assembleSystemPrompt(basePrompt, autoRouting, 'repl');
 

@@ -5,7 +5,7 @@
  * AgentSession or filesystem path is ever touched.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -149,6 +149,42 @@ describe('CronScheduler telemetry — errorMessage redaction', () => {
     expect(record.status).toBe('success');
     expect(record.responseExcerpt).not.toContain(rawSecret);
     expect(record.responseExcerpt).toMatch(/REDACTED/);
+
+    await scheduler.stop();
+  });
+
+  it('passes full redacted response to completion callback without persisting it', async () => {
+    const rawSecret = 'sk-ant-api03-secretkeyABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstu';
+    const tail = 'TAIL_AFTER_EXCERPT';
+    const response = `${'x'.repeat(350)}${rawSecret}\n${tail}`;
+    const onTaskComplete = vi.fn();
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => makeSession({ response }),
+      onTaskComplete,
+    });
+
+    scheduler.register({
+      taskId: 'full-response-test',
+      command: 'query',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    });
+
+    const record = await scheduler.tick('full-response-test');
+
+    expect(record.status).toBe('success');
+    expect(record.responseExcerpt).not.toContain(tail);
+    expect(onTaskComplete).toHaveBeenCalledOnce();
+    const [callbackRecord, details] = onTaskComplete.mock.calls[0]!;
+    expect(callbackRecord).toBe(record);
+    expect(details?.responseText).toContain(tail);
+    expect(details?.responseText).toContain('REDACTED');
+    expect(details?.responseText).not.toContain(rawSecret);
+
+    const line = readFileSync(telemetryPath, 'utf-8').trim();
+    expect(line).not.toContain(tail);
+    expect(line).not.toContain(rawSecret);
 
     await scheduler.stop();
   });

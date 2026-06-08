@@ -64,23 +64,30 @@ The plugin surface writes to `~/.claude/agent-framework/` independently — no s
 
 ## System prompt discovery
 
-`loadConfig()` resolves `systemPrompt` in 4-tier precedence (highest wins):
+The base system prompt is **layered**. The framework prompt (`prompts/system-prompt.md`, inlined into the bundle at publish-build) is the unconditional foundation; the resolved operator overlay is **appended** on top of it beneath an `# Operator configuration` header — it never replaces the framework base. `resolveBaseSystemPrompt()` (`src/cli/shared-helpers.ts`) performs the layering for every top-level surface (one-shot `chat`, REPL, Telegram, farm), and `composeSystemPrompt()` is the pure compose primitive.
 
-| Tier | Source | `systemPromptSource` |
+`loadConfig()` resolves the **operator overlay** across three tiers (highest wins); `loadConfig().systemPrompt` is that overlay alone (unchanged — it does not include the framework base):
+
+| Tier | Overlay source | `loadConfig().systemPromptSource` |
 |------|--------|----------------------|
 | 1 | `AFK_SYSTEM_PROMPT` env | `env:AFK_SYSTEM_PROMPT` |
 | 2 | `afk.config.json` (cwd → `~/.afk/config/` → legacy) | `file:<abs>` |
 | 3 | `AFK.md` (cwd → `$AFK_HOME/`) | `afk-md:<abs>` |
-| 4 | None | `undefined` |
+| — | None | `undefined` |
 
-`AFK.md` is plain markdown, no frontmatter. Empty/whitespace → treated as absent. `systemPromptSource` threads into `AgentSession` for `--dump-prompt` provenance; never forwarded to the SDK.
+`AFK.md` is plain markdown, no frontmatter. Empty/whitespace → treated as absent. The framework base is always present regardless of overlay tier, so an absent overlay just means the model gets the framework prompt alone. The composed prompt is sent to the Messages API as a raw string (never as an SDK preset).
+
+> **Escape hatch (not yet implemented):** every overlay appends — there is currently no way to fully replace the framework base. A future opt-out (e.g. `AFK_BASE_PROMPT=0`) would restore clean-slate behavior; until then the framework base is unconditional.
 
 **Bootstrapping `AFK.md`:** run `/init` in the REPL to scan the current project and generate a tailored `AFK.md` at the repo root. Implementation: `src/cli/slash/commands/init.ts`.
 
-**Provenance tracking:** When using `--dump-prompt`, the `systemPromptSource` field in the dump shows which tier won:
-- `"env:AFK_SYSTEM_PROMPT"` — tier 1
-- `"file:/abs/path/afk.config.json"` — tier 2
-- `"afk-md:/abs/path/AFK.md"` — tier 3
+**Provenance tracking:** `--dump-prompt` reports a layered `systemPromptSource`, and the full composed text lands in the dump's `options.system` field:
+- `"framework"` — base only, no overlay configured
+- `"framework+env:AFK_SYSTEM_PROMPT"` — base + tier-1 overlay
+- `"framework+file:/abs/path/afk.config.json"` — base + tier-2 overlay
+- `"framework+afk-md:/abs/path/AFK.md"` — base + tier-3 overlay
+
+(`loadConfig().systemPromptSource` keeps its un-prefixed overlay-only value; the `framework+…` composition is applied by `resolveBaseSystemPrompt()` at the surface.)
 
 ## Prompt caching (anthropic-direct provider)
 

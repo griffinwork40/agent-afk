@@ -67,8 +67,9 @@ vi.mock('../errors/index.js', () => ({
 }));
 
 import { startDaemon } from '../../agent/daemon.js';
+import { pushIfConfigured } from '../../telegram/push.js';
 import { loadConfig } from '../config.js';
-import { registerDaemonCommand } from './daemon.js';
+import { formatTaskCompletion, registerDaemonCommand } from './daemon.js';
 import {
   resolveTriggerMode,
   resolveDefaultTask,
@@ -79,6 +80,7 @@ import {
 
 const mockStartDaemon = vi.mocked(startDaemon);
 const mockLoadConfig = vi.mocked(loadConfig);
+const mockPushIfConfigured = vi.mocked(pushIfConfigured);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -262,5 +264,47 @@ describe('afk daemon (CLI integration)', () => {
     const opts = mockStartDaemon.mock.calls[0]?.[0];
     const mainTask = opts?.tasks?.find((t) => t.taskId !== 'worktree-prune');
     expect(mainTask?.command).toBe('/flag-task');
+  });
+
+  it('formats full completion response text when callback details include it', () => {
+    const fullResponse = `${'a'.repeat(700)}\nfinal line`;
+    const formatted = formatTaskCompletion(
+      {
+        taskId: 'nightly',
+        command: 'run',
+        trigger: 'cron',
+        triggeredAt: new Date(0).toISOString(),
+        durationMs: 1200,
+        status: 'success',
+        responseExcerpt: 'short excerpt',
+      },
+      { responseText: fullResponse },
+    );
+
+    expect(formatted).toContain('daemon task: nightly (success)');
+    expect(formatted).toContain('final line');
+    expect(formatted).not.toContain('short excerpt');
+  });
+
+  it('forwards scheduler completion details to Telegram notification formatting', async () => {
+    await runDaemon();
+
+    const opts = mockStartDaemon.mock.calls[0]?.[0];
+    opts?.onTaskComplete?.(
+      {
+        taskId: 'nightly',
+        command: 'run',
+        trigger: 'cron',
+        triggeredAt: new Date(0).toISOString(),
+        durationMs: 1200,
+        status: 'success',
+        responseExcerpt: 'short excerpt',
+      },
+      { responseText: 'full daemon output' },
+    );
+
+    expect(mockPushIfConfigured).toHaveBeenCalledWith(
+      expect.stringContaining('full daemon output'),
+    );
   });
 });

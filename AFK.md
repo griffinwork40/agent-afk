@@ -73,21 +73,23 @@ The plugin surface writes to `~/.claude/agent-framework/` independently — no s
 
 ### System prompt discovery
 
-`loadConfig()` resolves `systemPrompt` in 4-tier precedence (highest wins):
+The base system prompt is **layered**: the framework prompt (`prompts/system-prompt.md`, inlined at publish-build) is the unconditional foundation; the resolved operator overlay is **appended** on top beneath an `# Operator configuration` header — never a replacement. `resolveBaseSystemPrompt()` (`src/cli/shared-helpers.ts`) layers them for every top-level surface (chat, REPL, Telegram, farm).
 
-| Tier | Source | `systemPromptSource` |
+`loadConfig()` resolves the **operator overlay** across three tiers (highest wins); `loadConfig().systemPrompt` is that overlay alone:
+
+| Tier | Overlay source | `loadConfig().systemPromptSource` |
 |------|--------|----------------------|
 | 1 | `AFK_SYSTEM_PROMPT` env | `env:AFK_SYSTEM_PROMPT` |
 | 2 | `afk.config.json` (cwd → `~/.afk/config/` → legacy) | `file:<abs>` |
 | 3 | `AFK.md` (cwd → `$AFK_HOME/`) | `afk-md:<abs>` |
-| 4 | None | `undefined` |
+| — | None | `undefined` |
 
-`AFK.md` is plain markdown, no frontmatter. Empty/whitespace → treated as absent. `systemPromptSource` threads into `AgentSession` for `--dump-prompt` provenance; never forwarded to the SDK.
+`AFK.md` is plain markdown, no frontmatter. Empty/whitespace → treated as absent. The framework base is always present regardless of overlay tier (this file, `AFK.md`, is itself a tier-3 overlay appended to the framework base). `--dump-prompt` reports a composed `systemPromptSource` (`framework`, `framework+afk-md:<path>`, …); never forwarded to the SDK as a preset. Every overlay appends — no full-replace escape hatch yet (a future `AFK_BASE_PROMPT=0` would add one).
 
 ## Conventions
 
 - **`tsconfig.json` is maximally strict**: `noUnusedLocals`, `noUnusedParameters`, `noUncheckedIndexedAccess`, `noPropertyAccessFromIndexSignature`. All code must pass `tsc --noEmit`.
-- The agent-afk system prompt is a raw string from config or file, sent to the Messages API as-is. No SDK preset is loaded.
+- The agent-afk system prompt is the framework base (`prompts/system-prompt.md`) with the operator overlay (env/config/AFK.md) appended, composed by `resolveBaseSystemPrompt()` and sent to the Messages API as a raw string. No SDK preset is loaded.
 - `AgentSession` constructor is **synchronous**; SDK lifecycle runs async via `initSdkLifecycle()` and surfaces through the provider event stream.
 - DAG executor (`src/agent/dag.ts`, 266 LOC) is fully implemented: layer-by-layer Kahn execution, per-node `AbortController`s, fail-fast with transitive skip, node-level timeouts.
 - **SDK dependency tracking**: every import from `@anthropic-ai/sdk` is in `.sdk-dependency.lock.json`. CI fails on unlocked new symbols. After adding an SDK import, run `pnpm audit:sdk:update-lock` and edit the new entry's `reason` field before commit.

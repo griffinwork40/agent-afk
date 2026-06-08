@@ -16,7 +16,7 @@
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // vi.hoisted: the mock fn must exist before vi.mock factories run
@@ -52,6 +52,7 @@ import {
   renderPlist,
   resolveAfkBinary,
   resolveProgramArguments,
+  resolveServicePath,
   SERVICE_NAMES,
   serviceStatus,
   uninstallService,
@@ -339,6 +340,30 @@ describe('resolveProgramArguments', () => {
   });
 });
 
+describe('resolveServicePath', () => {
+  it('prepends the installer node dir, then standard system bins', () => {
+    const parts = resolveServicePath('/Users/me/.nvm/versions/node/v24.11.0/bin/node').split(':');
+    // node dir first — so `#!/usr/bin/env node` resolves under launchd's
+    // minimal bootstrap PATH (the exit-127 daemon crash-loop fix).
+    expect(parts[0]).toBe('/Users/me/.nvm/versions/node/v24.11.0/bin');
+    for (const d of ['/usr/local/bin', '/opt/homebrew/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin']) {
+      expect(parts).toContain(d);
+    }
+  });
+
+  it('dedups the node dir when it already lives in a standard bin (Homebrew node)', () => {
+    const parts = resolveServicePath('/opt/homebrew/bin/node').split(':');
+    expect(parts[0]).toBe('/opt/homebrew/bin');
+    expect(parts.filter((d) => d === '/opt/homebrew/bin')).toHaveLength(1);
+  });
+
+  it('is non-empty and colon-joined', () => {
+    const p = resolveServicePath('/usr/local/bin/node');
+    expect(p.length).toBeGreaterThan(0);
+    expect(p).toContain(':');
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────
 // I/O-bearing surface: installService / uninstallService / serviceStatus.
 // Tests redirect HOME + AFK_HOME to a per-test tmpdir; child_process is
@@ -410,6 +435,23 @@ describe('install/uninstall/status I/O', () => {
       // Mask out the high bits so this passes under any umask.
       const mode = statSync(expectedPath).mode & 0o777;
       expect(mode).toBe(0o600);
+    });
+
+    it('injects EnvironmentVariables.PATH led by the installer node dir (launchd minimal-PATH fix)', () => {
+      // Regression for the exit-127 daemon crash-loop: launchd bootstraps a
+      // minimal PATH that excludes nvm/Homebrew node, so the afk shebang
+      // (`#!/usr/bin/env node`) could not resolve node. installService must
+      // bake an explicit PATH into every service plist.
+      mockExecFileSync.mockReturnValue('' as never);
+      const result = installService('telegram', { _entrypointExistsCheck: () => true });
+      expect(result.kind).toBe('installed');
+      if (result.kind !== 'installed') return;
+
+      const contents = readFileSync(result.plistPath, 'utf-8');
+      expect(contents).toContain('<key>EnvironmentVariables</key>');
+      expect(contents).toContain('<key>PATH</key>');
+      // The node interpreter running this test must be on the injected PATH.
+      expect(contents).toContain(dirname(process.execPath));
     });
 
     it('returns already-installed if plist exists, without invoking launchctl', () => {

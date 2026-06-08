@@ -330,6 +330,7 @@ export async function runReplLoop(
   // Invariant: install the REPL elicitation handler AFTER armCompositor
   // resolves so it routes through the persistent compositor's onSubmit
   // path (single stdin consumer) rather than through `rl.question()`.
+  // (also enforced structurally by StdinClaim — see src/cli/input/stdin-claim.ts)
   //
   // External constraint (single-consumer stdin): when the TerminalCompositor
   // is armed, it owns a raw-mode `keypress` listener on process.stdin and

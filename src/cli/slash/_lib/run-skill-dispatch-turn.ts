@@ -80,11 +80,16 @@ export interface RunSkillDispatchTurnParams {
  * expected to wrap this in their own try/catch for error reporting;
  * this helper only owns the renderer lifecycle (arm/finally-dispose)
  * and preflight failure isolation.
+ *
+ * Returns the text of the final assistant `message` event seen on the stream
+ * (`''` when none / when soft-stopped before any landed). Callers that don't
+ * need it simply ignore the return; `/review --post` consumes it to publish
+ * the verified review after the skill's terminal output.
  */
 export async function runSkillDispatchTurn(
   ctx: SlashContext,
   params: RunSkillDispatchTurnParams,
-): Promise<void> {
+): Promise<string> {
   const renderer = createSkillRenderer(ctx, {
     skillName: params.skillName,
     onCancel: () => {
@@ -93,6 +98,10 @@ export async function runSkillDispatchTurn(
   });
 
   let softStopRequested = false;
+  // Captured for post-dispatch consumers (e.g. `/review --post`). The last
+  // assistant message on the stream is the skill's terminal output — for
+  // review that's the post-shadow-verify merge recommendation + findings.
+  let finalAssistantText = '';
 
   try {
     await renderer.arm();
@@ -144,6 +153,12 @@ export async function runSkillDispatchTurn(
           ctx.session.current.interrupt().catch(() => { /* best effort */ });
           break;
         }
+        // Capture the latest assistant message text BEFORE sinking — read-only,
+        // never mutates the event, and only runs when soft-stop did not break
+        // above (so an interrupted skill yields no stale post-text).
+        if (event.type === 'message' && event.message.role === 'assistant') {
+          finalAssistantText = event.message.content;
+        }
         renderer.sink(event);
       }
     });
@@ -151,4 +166,6 @@ export async function runSkillDispatchTurn(
     ctx.setSoftStopHandler?.(null);
     await renderer.dispose();
   }
+
+  return finalAssistantText;
 }

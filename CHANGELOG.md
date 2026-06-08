@@ -11,6 +11,77 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.89.1] - 2026-06-08
+
+### Fixed
+- make TerminalCompositor wrap-aware so soft-wrapped frame lines don't clobber committed text (#39) (a7ace49)
+
+## [3.89.0] - 2026-06-08
+
+### Added
+- per-model ProviderRouter — switch models across providers in one session, no AFK_PROVIDER (#38) (ab87afc)
+
+### Fixed
+- stop streaming markdown tables leaving ghost rows in the live overlay (#40) (a632844)
+
+## [3.88.0] - 2026-06-08
+
+### Added
+- Responses API + ChatGPT-subscription OAuth + user-configurable model slots (#33) (fe0ba5d)
+
+## [3.87.1] - 2026-06-07
+
+### Fixed
+- keep verdict card's closing border visible in tight frames; ASCII-safe affordances (#32) (9e08de4)
+
+### Changed
+- control-plane reframe — README hero + package metadata (#37) (caf39da)
+- Port afk-workshop#734: feat(cli): add `afk trace show` — human-readable witness trace reader (#36) (71b0f35)
+- Port afk-workshop#733: feat(cli): add /review --post {github,telegram} publishers (#35) (7830a0f)
+
+## [3.87.0] - 2026-06-07
+
+### Added
+- layer operator config over an unconditional framework base (#34) (ff03920)
+
+## [3.86.0] - 2026-06-07
+
+### Added
+- push full redacted task response to Telegram (#31) (dd73b2e)
+
+## [3.85.0] - 2026-06-07
+
+### Added
+- trim /resume from startup welcome hint (#18) (a64aa7b)
+
+### Fixed
+- make auto-release push atomic to prevent orphaned tags (#30) (4bd20e8)
+- sanitize Brave error body before embedding (#26) (d9df988)
+- collapse orchestrator progress map to at-most-one entry (#27) (0e79887)
+- repaint REPL prompt on fresh interactive session (#15) (108a383)
+
+### Changed
+- Port afk-workshop#689: feat(cli): process-wide stdin-claim guard (phantom-turn root-cause fix) (#28) (39ce1c7)
+- Port afk-workshop#727: fix(service): launchd daemon crash-loops (exit 127) — bake PATH into plist; + correct --trigger help (#25) (b675e78)
+
+## [3.84.1] - 2026-06-06
+
+### Fixed
+- unblock pre-auth CLI commands; require Node >= 22 (#16) (10ddd77)
+
+### Changed
+- Remove codex reference from README (5394b09)
+
+## [3.84.0] - 2026-06-06
+
+### Added
+- redesign /skills listing + detail UX (phase 1) (#14) (cf5e6f0)
+
+## [3.83.1] - 2026-06-06
+
+### Fixed
+- clamp diff body lines to terminal width in nested tool-lane paths (#9) (a3b38b5)
+
 ## [3.83.0] - 2026-06-06
 
 ### Added
