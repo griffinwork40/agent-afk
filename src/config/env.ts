@@ -323,7 +323,7 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   // ── System prompt ─────────────────────────────────────────────────────────
   {
     name: 'AFK_SYSTEM_PROMPT',
-    description: 'Raw system-prompt string. Tier-1 source (highest priority over afk.config.json and AFK.md).',
+    description: 'Raw operator-overlay prompt. Highest-priority overlay (over afk.config.json and AFK.md). Appended on top of the framework base (prompts/system-prompt.md) under an "# Operator configuration" header — it augments, never replaces, the base.',
     type: 'string',
     required: false,
     example: 'You are a helpful agent.',

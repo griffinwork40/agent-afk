@@ -57,6 +57,7 @@ vi.mock('../shared-helpers.js', () => ({
   getDefaultSubagentModel: vi.fn(() => 'sonnet'),
   loadSystemPrompt: vi.fn(() => undefined),
   loadConfigSystemPrompt: vi.fn(() => undefined),
+  resolveBaseSystemPrompt: vi.fn(() => ({ prompt: undefined, source: 'none' })),
 }));
 
 vi.mock('../../agent/routing-directive.js', () => ({

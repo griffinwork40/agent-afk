@@ -6,7 +6,14 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
-import { checkGhReady, createPr, GhError, _resetCacheForTest } from './gh.js';
+import {
+  checkGhReady,
+  createPr,
+  postPrComment,
+  resolveCurrentBranchPr,
+  GhError,
+  _resetCacheForTest,
+} from './gh.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -257,5 +264,70 @@ describe('checkGhReady — in-flight dedup (C5)', () => {
     // Because of in-flight dedup, execFn should have been called only twice
     // (once for `gh --version`, once for `gh auth status`) — not 4 times.
     expect(exec).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// postPrComment
+// ---------------------------------------------------------------------------
+
+describe('postPrComment', () => {
+  it('success — feeds body via stdin, returns trimmed comment URL', async () => {
+    const exec = vi
+      .fn()
+      .mockResolvedValue({ stdout: 'https://github.com/o/r/pull/5#issuecomment-1\n', stderr: '' });
+    const url = await postPrComment({ pr: '5', body: '## Review\n- nit: foo' }, exec);
+    expect(url).toBe('https://github.com/o/r/pull/5#issuecomment-1');
+    // PR selector present, --body-file - reads stdin, body passed as 3rd arg.
+    expect(exec).toHaveBeenCalledWith(
+      'gh',
+      ['pr', 'comment', '5', '--body-file', '-'],
+      '## Review\n- nit: foo',
+    );
+  });
+
+  it('empty pr selector — omits the ref so gh resolves the current branch PR', async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: 'ok', stderr: '' });
+    await postPrComment({ pr: '', body: 'b' }, exec);
+    expect(exec).toHaveBeenCalledWith('gh', ['pr', 'comment', '--body-file', '-'], 'b');
+  });
+
+  it('unauthed stderr — throws GhError with kind: unauthed', async () => {
+    const exec = vi
+      .fn()
+      .mockRejectedValue({ stderr: 'authentication required: please log in', exitCode: 1 });
+    await expect(postPrComment({ pr: '5', body: 'b' }, exec)).rejects.toThrow(GhError);
+    await expect(postPrComment({ pr: '5', body: 'b' }, exec)).rejects.toMatchObject({
+      kind: 'unauthed',
+    });
+  });
+
+  it('timeout (killed) — throws GhError with kind: timeout', async () => {
+    const exec = vi.fn().mockRejectedValue({ killed: true, stderr: '' });
+    await expect(postPrComment({ pr: '5', body: 'b' }, exec)).rejects.toMatchObject({
+      kind: 'timeout',
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveCurrentBranchPr
+// ---------------------------------------------------------------------------
+
+describe('resolveCurrentBranchPr', () => {
+  it('returns the trimmed PR number on success', async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: '42\n', stderr: '' });
+    expect(await resolveCurrentBranchPr(exec)).toBe('42');
+    expect(exec).toHaveBeenCalledWith('gh', ['pr', 'view', '--json', 'number', '--jq', '.number']);
+  });
+
+  it('returns null when gh fails (no open PR for the branch)', async () => {
+    const exec = vi.fn().mockRejectedValue(new Error('no pull requests found'));
+    expect(await resolveCurrentBranchPr(exec)).toBeNull();
+  });
+
+  it('returns null when stdout is not a number', async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: 'null\n', stderr: '' });
+    expect(await resolveCurrentBranchPr(exec)).toBeNull();
   });
 });

@@ -295,7 +295,13 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
     const maxRun = Math.max(0, newTopRow - anchorFloor);
     const newPainted = Math.min(textLines.length, maxRun);
     if (newPainted > 0) {
-      const newLines = textLines.slice(0, newPainted);
+      // Tail-slice (not head): when the block is taller than the above-frame
+      // room (overflow path, newPainted < lineCount), keep the LAST lines. A
+      // block's final line — e.g. a verdict card's closing border `╰──╯` and
+      // its affordance — must survive, not its opening line; dropping the
+      // bottom left boxes rendered un-closed. In the fits path newPainted ===
+      // lineCount, so this is the whole array (no behavior change there).
+      const newLines = textLines.slice(textLines.length - newPainted);
       const contiguousPriorBand =
         fitsAboveFrame &&
         newPainted === lineCount &&
@@ -332,11 +338,20 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
         }
       } else {
         // Overflow (block taller than the above-frame region): Phase 1 already
-        // archived the whole block to scrollback at anchorFloor; paint only
-        // the top lines that fit, anchored at the floor (legacy behavior).
-        const textStartRow = Math.max(anchorFloor, newTopRow - lineCount);
-        for (let i = 0; i < textLines.length; i++) {
-          const row = textStartRow + i;
+        // archived the whole block to scrollback at anchorFloor. Paint the
+        // BOTTOM lines that fit (anchored so the block's final line lands at
+        // newTopRow-1, immediately above the frame), matching scrollback
+        // semantics — newest content sits at the bottom; older lines scroll
+        // up into history. Top-anchoring instead dropped the block's last
+        // line, so a verdict card taller than the room above the live frame
+        // rendered with no closing border `╰──╯` (the "cut-off bottom" bug).
+        // The dropped top lines stay recoverable via the Phase-1 archive.
+        // `capped` (== these same tail lines, via the tail-slice above) is the
+        // band we track, so repositionCommittedBand repaints them on resize.
+        const room = Math.max(0, newTopRow - anchorFloor);
+        const startIdx = Math.max(0, textLines.length - room);
+        for (let i = startIdx; i < textLines.length; i++) {
+          const row = anchorFloor + (i - startIdx);
           if (row >= newTopRow) break;
           out += `\x1b[${row};1H\x1b[2K${textLines[i] ?? ''}`;
         }

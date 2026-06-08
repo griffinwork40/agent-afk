@@ -11,6 +11,26 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.88.0] - 2026-06-08
+
+### Added
+- Responses API + ChatGPT-subscription OAuth + user-configurable model slots (#33) (fe0ba5d)
+
+## [3.87.1] - 2026-06-07
+
+### Fixed
+- keep verdict card's closing border visible in tight frames; ASCII-safe affordances (#32) (9e08de4)
+
+### Changed
+- control-plane reframe — README hero + package metadata (#37) (caf39da)
+- Port afk-workshop#734: feat(cli): add `afk trace show` — human-readable witness trace reader (#36) (71b0f35)
+- Port afk-workshop#733: feat(cli): add /review --post {github,telegram} publishers (#35) (7830a0f)
+
+## [3.87.0] - 2026-06-07
+
+### Added
+- layer operator config over an unconditional framework base (#34) (ff03920)
+
 ## [3.86.0] - 2026-06-07
 
 ### Added

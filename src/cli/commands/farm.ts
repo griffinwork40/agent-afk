@@ -14,7 +14,7 @@ import chalk from 'chalk';
 import { createFarm, setFarmMemoryFactId } from '../../agent/worktree.js';
 import { runSubagentDAG } from '../../agent/dag-subagent.js';
 import { SubagentManager } from '../../agent/subagent.js';
-import { loadSystemPrompt, loadConfigSystemPrompt, getModel } from '../shared-helpers.js';
+import { resolveBaseSystemPrompt, getModel } from '../shared-helpers.js';
 import {
   scoreBranch,
   writeScore,
@@ -324,7 +324,8 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
 
   const baseSha = manifest.baseRef;
   const resolvedModel = model ?? (getModel() as string);
-  const systemPrompt = loadConfigSystemPrompt() ?? loadSystemPrompt() ?? '';
+  // Framework base (`prompts/system-prompt.md`) + operator overlay, layered.
+  const systemPrompt = resolveBaseSystemPrompt().prompt ?? '';
 
   // -- Build DAG nodes --
   const nodes: SubagentDAGNode[] = manifest.branches.map((b) => ({
