@@ -46,6 +46,14 @@ export function formatPendingBuffer(
 
   if (isInOpenCodeFence(buffer)) {
     pendingRender = '\n▍ streaming code…\n';
+  } else if (isInOpenTable(buffer)) {
+    // A streaming table has no internal blank line, so the whole (growing)
+    // table stays in the pending buffer until a trailing blank line commits
+    // it. Painting that growing table into the live overlay every chunk leaves
+    // ghost rows once it exceeds the viewport height — so substitute a
+    // fixed-height placeholder here, exactly as the open-code-fence path does.
+    // The full table still renders once at commit via formatBlockForCommit.
+    pendingRender = '\n▍ streaming table…\n';
   } else {
     pendingRender = renderTextBlock(buffer, contentWidth);
   }
@@ -117,6 +125,35 @@ export function isInOpenCodeFence(text: string): boolean {
   const tildeFences = (text.match(/^~~~[^\n]*$/gm) ?? []).length;
   // Odd count for either family means an unclosed fence
   return backtickFences % 2 === 1 || tildeFences % 2 === 1;
+}
+
+/**
+ * Detect whether the pending buffer contains an in-progress GFM table,
+ * identified by its delimiter row (e.g. `|---|:--:|`) — a line composed only
+ * of pipes, dashes, optional alignment colons, and spaces.
+ *
+ * Mirrors {@link isInOpenCodeFence}: when this is true, `formatPendingBuffer`
+ * renders a compact placeholder instead of the growing table, because a table
+ * taller than the viewport leaves un-clearable ghost rows in the live overlay
+ * (the absolute-cursor erase in CupFrameRenderer cannot reclaim rows that have
+ * scrolled past the top of the viewport into scrollback).
+ *
+ * Requiring BOTH a pipe and a dash excludes horizontal rules (`---`, no pipe),
+ * setext underlines, and prose lines that merely contain a stray pipe.
+ */
+export function isInOpenTable(text: string): boolean {
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim();
+    if (
+      line.length >= 3 &&
+      line.includes('|') &&
+      line.includes('-') &&
+      /^[|:\- ]+$/.test(line)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
