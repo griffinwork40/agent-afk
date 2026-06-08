@@ -520,7 +520,15 @@ export function registerChatCommand(program: Command): void {
         // the AgentSession.
         session = new AgentSession(injectHotMemory({
           model: sessionModel,
-          apiKey,
+          // Resolve the credential for the ACTUAL session model, not the
+          // env-derived default (`getApiKey()` keys off AFK_MODEL/CLAUDE_MODEL).
+          // Without this, `--model gpt-5.5` while CLAUDE_MODEL is a Claude id
+          // injects the Anthropic OAuth token into the OpenAI provider, which
+          // (a) leaks sk-ant-… to api.openai.com and (b) shadows Codex ChatGPT
+          // OAuth (resolveOpenAIAuth treats a non-empty config key as Tier 1).
+          // getApiKeyForModel routes via providerForModel → correct family
+          // (anti-leak invariant, credential-resolver.ts).
+          apiKey: getApiKeyForModel(sessionModel),
           maxTurns: parseInt(options.maxTurns, 10),
           hookRegistry: createDefaultHookRegistry((info) => {
             console.log(formatSubagentCompletion(info));
