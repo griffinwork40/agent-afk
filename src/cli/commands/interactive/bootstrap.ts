@@ -85,7 +85,13 @@ interface BuildAgentSessionDeps {
 export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
   return new AgentSession(injectHotMemory({
     model: deps.model,
-    apiKey: getApiKey(),
+    // Resolve the credential for the ACTUAL session model, not the env-derived
+    // default. `getApiKey()` keys off AFK_MODEL/CLAUDE_MODEL, so launching
+    // `afk -m gpt-5.5` while CLAUDE_MODEL is a Claude id would inject the
+    // Anthropic OAuth token into the OpenAI provider — leaking sk-ant-… to
+    // OpenAI and shadowing Codex ChatGPT OAuth. getApiKeyForModel routes via
+    // providerForModel → the correct family (anti-leak invariant).
+    apiKey: getApiKeyForModel(deps.model),
     maxTurns: deps.maxTurns,
     hookRegistry: deps.hookRegistry,
     ...(deps.systemPrompt !== undefined ? { systemPrompt: deps.systemPrompt } : {}),
