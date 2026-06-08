@@ -45,7 +45,7 @@ import {
   formatPluginVersion,
   type InstalledPlugin,
 } from '../../agent/plugins/inventory.js';
-import { getMarketplaceCacheDir } from '../../paths.js';
+import { getMarketplaceCacheDir, getBundledPluginsDir } from '../../paths.js';
 import { listSkills, getSkill, isSkillVisible, listVisibleSkills, type SkillMetadata } from '../../skills/index.js';
 import { palette } from '../palette.js';
 import { divider } from '../render.js';
@@ -54,11 +54,7 @@ import { getTerminalWidth } from '../terminal-size.js';
 import { padDisplayRight, displayWidth } from '../display.js';
 import { registerPluginAgents } from './plugin-agents.js';
 import { registerOrReplace, register } from './registry.js';
-import {
-  extractFlagsFromBody,
-  parseSkillMd,
-  type ParsedSkillMd,
-} from './_lib/flag-harvest.js';
+import { harvestFlagsFromSkillMd } from './_lib/flag-harvest.js';
 import { runSkillDispatchTurn } from './_lib/run-skill-dispatch-turn.js';
 import { parsePostFlag, runReviewPostPublish, type PostTarget } from './_lib/review-post.js';
 import { parsePrRef } from './preflight/review-pr.js';
@@ -164,11 +160,7 @@ export function harvestPluginSkillFlags(cacheRoot?: string): Map<string, string[
       const skillName = pathParts[pathParts.length - 2];
       if (!skillName) continue;
 
-      const parsed: ParsedSkillMd = parseSkillMd(content);
-      const flags =
-        parsed.frontmatterFlags && parsed.frontmatterFlags.length > 0
-          ? parsed.frontmatterFlags
-          : extractFlagsFromBody(parsed.body);
+      const flags = harvestFlagsFromSkillMd(content);
 
       if (flags.length === 0) continue;
 
@@ -180,6 +172,27 @@ export function harvestPluginSkillFlags(cacheRoot?: string): Map<string, string[
 
   walk(root, 0);
   return result;
+}
+
+/**
+ * Harvest flags from BOTH the marketplace cache AND the bundled-plugins dir,
+ * merging per-skill (union, deduped, sorted).
+ *
+ * Why both: `session.supportedCommands()` surfaces bundled skills (e.g. the
+ * `awa-bundled` /review), but a plugin skill's flags live only in its SKILL.md
+ * and the plain `harvestPluginSkillFlags()` walks only the cache. Without the
+ * bundled-dir pass, a bundled-only skill gets NO flag completion in the
+ * dropdown even though its argument-hint declares flags. Walking both keeps the
+ * completion set consistent regardless of whether a skill is installed
+ * (cache) or shipped (bundled).
+ */
+function harvestAllPluginSkillFlags(): Map<string, string[]> {
+  const merged = harvestPluginSkillFlags();
+  for (const [name, flags] of harvestPluginSkillFlags(getBundledPluginsDir())) {
+    const existing = merged.get(name) ?? [];
+    merged.set(name, Array.from(new Set([...existing, ...flags])).sort());
+  }
+  return merged;
 }
 
 /**
@@ -651,7 +664,7 @@ function renderSkillDetail(
     }
   }
 
-  const flags = registrySkill?.flags ?? harvestPluginSkillFlags().get(cleaned);
+  const flags = registrySkill?.flags ?? harvestAllPluginSkillFlags().get(cleaned);
   if (flags && flags.length > 0) {
     ctx.out.line();
     ctx.out.line(`  ${palette.bold('Flags')}  ${palette.dim(flags.join(', '))}`);
@@ -757,7 +770,7 @@ export async function registerPluginSkills(
     ...(c.argumentHint ? { argumentHint: c.argumentHint } : {}),
   }));
 
-  const harvestedFlags = harvestPluginSkillFlags();
+  const harvestedFlags = harvestAllPluginSkillFlags();
   // Reserved names = registry skills that are ACTUALLY VISIBLE at the
   // current tier. Internal-tier skills (forge, audit-fit) that are hidden
   // by the audience gate don't reserve their slash — otherwise a plugin
