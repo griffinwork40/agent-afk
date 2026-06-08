@@ -58,3 +58,14 @@ OMIT `signal` when the assessment was inconclusive (e.g., the relevant code
 could not be located). Do not invent a stance to fill the slot.
 
 IMPORTANT: You are working in an isolated worktree with read-only restrictions. Edit, Write, and Bash tools are disabled — your verdict is a static code-reading prediction, not an executed test result. If reading alone cannot determine the outcome, set `stance: "blocks"` and reduce confidence.
+
+## BASELINE block
+
+Your prompt will include a **BASELINE** block measured by the orchestrator (the deterministic parent process) by running the reproducer ONCE on the current/unfixed code at the repo root — before any worktree was created. Treat this as ground truth:
+
+- Use the baseline exit code and output to anchor your `predicted_pass` prediction and `confidence`.
+- If the baseline shows exit code 0 (the reproducer PASSED on the current/unfixed code), the failure may not reproduce or the reproducer may be wrong — set `stance: "blocks"` and lower confidence.
+- If the baseline shows a non-zero exit code, the failure reproduces as expected — your assessment of whether the proposed fix would make it pass is the core question.
+- If the baseline was not run (shown as "(not run: …)"), proceed with code reading alone and note the reduced certainty in `confidence`.
+
+You MUST NOT contradict what the baseline reports. The baseline is measured fact; your code-reading assessment builds on top of it.
