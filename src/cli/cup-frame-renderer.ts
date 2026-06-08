@@ -80,6 +80,46 @@ export class CupFrameRenderer {
   }
 
   /**
+   * Wrap `content` to `width` exactly as render() does — {trim:false,
+   * hard:true, wordWrap:false} with a guaranteed trailing newline for
+   * consistent normalization — and return the physical (post-wrap) visible
+   * lines, trailing empty element(s) dropped. Shared by render() and measure()
+   * so the physical row count can never drift between them.
+   */
+  private static wrapToPhysicalLines(content: string, width: number): string[] {
+    const raw = content.endsWith('\n') ? content : `${content}\n`;
+    const wrapped = wrapAnsi(raw, width, { trim: false, hard: true, wordWrap: false });
+    const allLines = wrapped.split('\n');
+    while (allLines.length > 0 && allLines[allLines.length - 1] === '') {
+      allLines.pop();
+    }
+    return allLines;
+  }
+
+  /**
+   * Predict the physical top row the next `render(content, targetBottomRow)`
+   * will use, WITHOUT rendering or mutating tracked state. CupFrameRenderer
+   * hard-wraps at `stream.columns`, so a frame line wider than the terminal
+   * occupies >1 physical row. Callers (TerminalCompositor repaint /
+   * repaintPickerFrame) use this to size committed-band eviction + re-pin
+   * against the PHYSICAL frame footprint; the logical line count under-counts
+   * whenever a line soft-wraps and re-pins the band INSIDE the frame, where the
+   * next render's erase pass clobbers it (review #592).
+   *
+   * Returns the raw (wrapped, pre-shrink-padding) top: shrink padding is a
+   * transient one-render artifact handled inside render(), and the band is
+   * pinned against the real content top — `bottomRow - rawLineCount + 1`. In
+   * the common case where nothing wraps this equals the logical line count, so
+   * callers see byte-identical geometry.
+   */
+  measure(content: string, targetBottomRow: number): { topRow: number; lineCount: number } {
+    const width = this.stream.columns ?? 80;
+    const rawLineCount = Math.max(1, CupFrameRenderer.wrapToPhysicalLines(content, width).length);
+    const bottomRow = Math.max(1, targetBottomRow);
+    return { topRow: Math.max(1, bottomRow - rawLineCount + 1), lineCount: rawLineCount };
+  }
+
+  /**
    * Render `content` so that the last content line sits at `targetBottomRow`.
    * Lines are positioned with CUP escapes — no `\n` is written for line
    * transitions, so the DECSTBM scroll region is never triggered.
@@ -94,18 +134,9 @@ export class CupFrameRenderer {
     const width = this.stream.columns ?? 80;
     const useSyncOutput = this.stream.isTTY === true;
 
-    // Wrap exactly as log-update did: {trim: false, hard: true, wordWrap: false}
-    // plus a guaranteed trailing newline so wrap-ansi normalises consistently.
-    const raw = content.endsWith('\n') ? content : `${content}\n`;
-    const wrapped = wrapAnsi(raw, width, { trim: false, hard: true, wordWrap: false });
-
-    // Split into lines. The trailing `\n` from wrapping produces a final empty
-    // element — drop it so `lineCount` reflects visible lines only.
-    const allLines = wrapped.split('\n');
-    // Drop trailing empty element(s) from the normalized trailing newline.
-    while (allLines.length > 0 && allLines[allLines.length - 1] === '') {
-      allLines.pop();
-    }
+    // Wrap via the shared helper measure() also uses, so the physical row count
+    // repaint() predicted (via measure) matches what we actually render here.
+    const allLines = CupFrameRenderer.wrapToPhysicalLines(content, width);
     const rawLineCount = Math.max(1, allLines.length);
 
     // Invariant (bottom-anchored shrink coverage): when raw content shrinks
