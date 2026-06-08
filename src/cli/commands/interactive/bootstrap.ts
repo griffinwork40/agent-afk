@@ -44,6 +44,8 @@ import { SkillExecutor } from '../../../agent/tools/skill-executor.js';
 import { ComposeExecutor } from '../../../agent/tools/compose-executor.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory } from '../../../agent/tools/nesting.js';
 import { AnthropicDirectProvider } from '../../../agent/providers/anthropic-direct/index.js';
+import { providerForModel } from '../../../agent/providers/index.js';
+import { createMemoizedProviderFactory } from './provider-factory.js';
 import { BUILTIN_TOOL_NAMES } from '../../../agent/tools/schemas.js';
 import { AWARENESS_TOOL_NAMES } from '../../../agent/awareness/index.js';
 import { McpManager, loadMcpConfig, getMcpConfigPath } from '../../../agent/mcp/index.js';
@@ -390,22 +392,24 @@ export async function bootstrapSession(
     }
   }
 
-  // Build a fully-wired provider factory that the ProviderRouter will call on
-  // every turn. The factory closes over the executors, memoryStore, mcpManager,
-  // and openaiBaseUrl captured above so every provider it builds (regardless of
-  // family) carries the full tool surface — agent/skill/compose tools, MCP
-  // bridges, and the shared MemoryStore. This is what allows mid-session /model
-  // cross-family switches (e.g. Claude → GPT) without losing any tool wiring.
+  // Build a fully-wired provider factory that the ProviderRouter calls to
+  // resolve the active provider — at session init and again on each cross-family
+  // /model swap (NOT every turn; the router reuses the active inner across turns
+  // of the same family). The builder closes over the executors, memoryStore,
+  // mcpManager, and openaiBaseUrl captured above so every provider it builds
+  // (regardless of family) carries the full tool surface — agent/skill/compose
+  // tools, MCP bridges, and the shared MemoryStore. This is what allows
+  // mid-session /model cross-family switches (e.g. Claude → GPT) without losing
+  // any tool wiring.
   //
   // When --provider is explicit (options.provider is set), parseProvider returns
-  // a single fixed provider; the factory wraps it in a constant so the router
-  // still works but always returns the same family. This preserves the
-  // AFK_PROVIDER / --provider escape-hatch behavior.
+  // a single fixed provider, so the builder always yields the same family. This
+  // preserves the AFK_PROVIDER / --provider escape-hatch behavior.
   //
   // The MCP tool wire names are stable for the manager lifetime, so they can be
-  // captured once in the closure without re-querying on every factory call.
+  // captured once in the closure without re-querying on every build.
   const mcpToolWireNames = mcpManager?.getMcpToolWireNames() ?? [];
-  const providerFactory = (model: string | undefined): ModelProvider =>
+  const buildProvider = (model: string | undefined): ModelProvider =>
     parseProvider(options.provider, {
       subagentExecutor,
       skillExecutor,
@@ -435,9 +439,25 @@ export async function bootstrapSession(
       ...(mcpManager !== undefined ? { mcpManager } : {}),
     });
 
-  // Build the startup provider (for /allow-dir wiring below). The factory is
-  // called with the session's startup model so the initial provider matches
-  // what the router would pick for turn 1 — no behavioral change at startup.
+  // Memoize by provider family so the `startupProvider` built below for /allow-dir
+  // wiring is the SAME instance the router's buildInner reuses for turn 1.
+  // Without this, the two call sites mint separate instances with independent
+  // read/write grant roots, and /allow-dir grants are silently dropped (they land
+  // on the startup instance, never on the query runner). The cache key mirrors
+  // parseProvider's own routing: the --provider override first (a fixed family),
+  // otherwise providerForModel with the same openaiBaseUrl hint — so a key never
+  // aliases two different provider families.
+  const providerFactory = createMemoizedProviderFactory(buildProvider, (model) =>
+    options.provider ??
+    providerForModel(
+      model !== undefined ? model : String(sessionModel),
+      cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : undefined,
+    ),
+  );
+
+  // Build the startup provider (for /allow-dir wiring below). Because the factory
+  // memoizes by family, this returns the SAME instance the router reuses for
+  // turn 1, so grants added via setAllowDirDispatcher reach the query runner.
   const startupProvider = providerFactory(String(sessionModel));
 
   // Create stats before session so the plan-mode gate getter can close over it.
@@ -691,10 +711,18 @@ export async function bootstrapSession(
   registerAll();
 
   // Wire /allow-dir to the startup provider's grant API so the slash command
-  // can mutate read/write roots across turns. The startup provider is the
-  // AnthropicDirectProvider built for the session's initial model; we wire it
-  // once here and do not rewire on /model swaps because directory grants are a
-  // session-level concept (not per-model). Only AnthropicDirectProvider
+  // can mutate read/write roots across turns.
+  //
+  // Invariant: `startupProvider` MUST be the same instance the ProviderRouter
+  // uses to run queries, or grants land on a dead instance and are silently
+  // dropped. The per-family memoization in `providerFactory` above guarantees
+  // this — the router's `buildInner` calls the same factory with a same-family
+  // model and gets the cached instance back. Do not remove that cache without
+  // rewiring this dispatcher to the router's active inner.
+  //
+  // We wire once here and do not rewire on /model swaps: directory grants are a
+  // session-level concept (not per-model), and a Claude→GPT→Claude swap reuses
+  // the cached Claude instance with its grants intact. Only AnthropicDirectProvider
   // implements the GrantManager interface; other providers are no-ops.
   if (startupProvider instanceof AnthropicDirectProvider) {
     setAllowDirDispatcher(startupProvider);

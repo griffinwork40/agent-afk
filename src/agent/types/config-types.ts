@@ -280,13 +280,20 @@ export interface AgentConfig {
    * Fully-wired provider factory for mid-session cross-family model switching.
    *
    * When set (and `provider` is unset), `AgentSession` installs a `ProviderRouter`
-   * that calls this factory on every turn to resolve the active provider for the
-   * current model. The factory receives the model string and must return a
-   * fully-wired `ModelProvider` — one with `subagentExecutor`, `skillExecutor`,
-   * `composeExecutor`, `memoryStore`, `mcpManager`, and permission lists already
-   * configured. This is the mechanism that allows the REPL's `/model` command to
-   * switch across provider families (e.g. Claude → GPT) without dropping the
-   * `agent`/`skill`/`compose` tools or MCP bridges.
+   * that calls this factory to resolve the active provider for the current model
+   * — once at session initialization and again on each cross-family `/model`
+   * switch (the router reuses the active inner across turns of the same family,
+   * so the factory is NOT called every turn). The factory receives the model
+   * string and must return a fully-wired `ModelProvider` — one with
+   * `subagentExecutor`, `skillExecutor`, `composeExecutor`, `memoryStore`,
+   * `mcpManager`, and permission lists already configured. This is the mechanism
+   * that allows the REPL's `/model` command to switch across provider families
+   * (e.g. Claude → GPT) without dropping the `agent`/`skill`/`compose` tools or
+   * MCP bridges.
+   *
+   * Implementations that hold per-instance state (e.g. `/allow-dir` grant roots)
+   * should memoize by family so repeated calls for the same family return the
+   * same instance — see `createMemoizedProviderFactory` in the REPL bootstrap.
    *
    * Ignored when `provider` is explicitly set (injected-provider path, used by
    * Telegram and the daemon, takes precedence). When both are unset, `AgentSession`
