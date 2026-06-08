@@ -496,6 +496,22 @@
       "category": "telegram"
     },
     {
+      "name": "AFK_TELEGRAM_NOTIFY_MODE",
+      "description": "Outbound notification fan-out: primary (default — one chat), broadcast (every allowed chat), or custom (afk.config.json telegram.notify.targets). The afk.config.json telegram.notify.mode takes precedence.",
+      "type": "string",
+      "required": false,
+      "example": "broadcast",
+      "category": "telegram"
+    },
+    {
+      "name": "AFK_TELEGRAM_PRIMARY_CHAT_ID",
+      "description": "Default chat ID for outbound notifications (primary-mode routing). When unset, notifications go to the first private/DM chat in AFK_TELEGRAM_ALLOWED_CHAT_IDS. The afk.config.json telegram.notify block takes precedence.",
+      "type": "string",
+      "required": false,
+      "example": "123456789",
+      "category": "telegram"
+    },
+    {
       "name": "AFK_TELEGRAM_TRACE",
       "description": "Set to 1 to dump raw bridge traffic between the agent and the Telegram bot — debugging only.",
       "type": "boolean",
