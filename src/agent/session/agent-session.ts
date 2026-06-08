@@ -169,10 +169,18 @@ export class AgentSession implements IAgentSession {
       this.providerQuery = this.config.provider.query({ prompt: promptIterable, config: this.config });
     } else {
       debugLog(`🟢 AgentSession: Creating query session via ProviderRouter`);
+      // When config.providerFactory is set, use it as resolveProvider so every
+      // provider built during a cross-family /model swap is fully wired (with
+      // subagentExecutor, skillExecutor, composeExecutor, memoryStore, mcpManager,
+      // and permission lists). When absent, fall back to the bare resolveProvider
+      // which is suitable for one-shot and test paths that need no executors.
+      const resolveProviderFn = this.config.providerFactory
+        ? this.config.providerFactory
+        : (m: string | undefined) => resolveProvider(m);
       this.providerQuery = new ProviderRouter(
         { prompt: promptIterable, config: this.config },
         {
-          resolveProvider: (m) => resolveProvider(m),
+          resolveProvider: resolveProviderFn,
           providerNameForModel: (m) => providerForModel(m),
           resolveApiKey: (m) => resolveCredentialForModel(m),
         },
