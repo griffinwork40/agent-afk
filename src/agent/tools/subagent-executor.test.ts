@@ -1041,6 +1041,51 @@ describe('SubagentExecutor', () => {
       expect(config.provider).toBeUndefined();
       expect(factory).not.toHaveBeenCalled();
     });
+
+    it('B1: forwards ctx.allowedTools and ctx.readOnlyBash into childProviderFactory and recursive child executor', async () => {
+      // When a read-only skill's child SubagentExecutor fans out via `agent`,
+      // the grandchild provider must receive allowedTools + readOnlyBash so the
+      // constraint survives depth-2+ fan-out (ground-state → agent → depth-2).
+      const RECON_TOOLS = ['read_file', 'glob', 'grep', 'list_directory', 'bash', 'agent', 'skill'];
+      let capturedChildExecutorCtx: SubagentExecutorContext | undefined;
+
+      const factory = vi.fn().mockImplementation(({ childExecutor }: { childExecutor: SubagentExecutor }) => {
+        capturedChildExecutorCtx = (childExecutor as any).ctx as SubagentExecutorContext;
+        return { name: 'p', query: vi.fn() };
+      });
+
+      const manager = mockManager();
+      const exec = new SubagentExecutor({
+        subagentManager: manager as any,
+        parentSession: {
+          sessionId: 'root',
+          getInputStreamRef: vi.fn(),
+          abortSignal: new AbortController().signal,
+        },
+        defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+        childProviderFactory: factory,
+        depth: 0,
+        maxDepth: DEFAULT_MAX_NESTING_DEPTH,
+        allowedTools: RECON_TOOLS,
+        readOnlyBash: true,
+      });
+
+      await exec.execute(makeCall());
+
+      // (1) childProviderFactory was called with allowedTools and readOnlyBash spread in.
+      expect(factory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          allowedTools: RECON_TOOLS,
+          readOnlyBash: true,
+        }),
+      );
+
+      // (2) The recursive child SubagentExecutor also received both fields,
+      //     so depth-3+ forks remain gated.
+      expect(capturedChildExecutorCtx).toBeDefined();
+      expect(capturedChildExecutorCtx!.allowedTools).toEqual(RECON_TOOLS);
+      expect(capturedChildExecutorCtx!.readOnlyBash).toBe(true);
+    });
   });
 
   // Regression: Edit B — forkSubagent must receive parentId: call.id so

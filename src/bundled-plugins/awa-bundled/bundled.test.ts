@@ -46,8 +46,14 @@ const PINNED_HASHES = {
   gather: '26ef18dde7db7c313655b0fe3097f14966763298ff5a2fe643ccf18d0f6b29c0',
   'ground-claim':
     '1fe26f35fe858932ba1a42e5c2d4927e3b404a7b7995680b37b3e84a63912b72',
+  // ground-state carries TWO bundled-only frontmatter lines after the merge of
+  // the read-only-skill feature (PR #5) and the 2026-06 load-by-default flip
+  // (PR #7): `read-only: true` (forked child gets the RECON tool allowlist +
+  // mutating-bash guard) AND `context: fork` (pins it to forking so the recon
+  // wave keeps dispatching). Both lines are allowlisted in
+  // INTENTIONAL_DIFFS['ground-state'] below so the normalized-drift test passes.
   'ground-state':
-    '92c40063ac3492d49b7cc2fdaaf3090552cde3f949de53a0fe5820e08b7d75b5',
+    'f8b23fdeb98994b69ec9620bc3a73991a6767e830b5a8d5c8e2d9a53a1f16013',
   // intent-lock is bundled-only (no upstream counterpart).
   // Hash bumps need no parallel PR — document the change in the
   // commit message instead.
@@ -268,10 +274,19 @@ const INTENTIONAL_DIFFS: Partial<Record<SkillName, RegExp[]>> = {
     /^context: fork$/,
   ],
 
-  // ground-state, spec: bundled-only `context: fork` pins added in the 2026-06
-  // load-by-default flip so these orchestration skills keep forking. No other
-  // divergence from upstream. See devils-advocate note.
-  'ground-state': [/^context: fork$/],
+  // ground-state — TWO bundled-only frontmatter lines, both allowlisted:
+  //   1. `read-only: true` (read-only-skill feature): the marker the agent-afk
+  //      runtime keys on to give ground-state's forked reconnaissance subagent a
+  //      restricted RECON tool allowlist (no write_file/edit_file) plus a
+  //      mutating-bash guard — enforcing the "never edits files" constraint that
+  //      was previously prose-only (the subagent had FULL write tools and was
+  //      observed making 22 edit_file + 27 bash calls in one session).
+  //   2. `context: fork` (2026-06 load-by-default flip): pins ground-state to
+  //      forking so its recon wave keeps dispatching.
+  //   The upstream ground-state SKILL.md has neither layer yet, so both lines are
+  //   bundled-only. When upstream adopts either, mirror the frontmatter there and
+  //   drop the matching pattern. Flagged for cross-repo reconciliation.
+  'ground-state': [/^read-only: true$/, /^context: fork$/],
   spec: [/^context: fork$/],
 
   // ground-claim: bundled-only `context: load` field. Unlike the fork-pinned

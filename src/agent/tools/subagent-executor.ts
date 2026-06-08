@@ -126,6 +126,18 @@ export interface SubagentExecutorContext {
    * applies.
    */
   cwd?: string;
+  /**
+   * Tool allowlist to propagate to grandchild providers when this executor
+   * is itself a read-only skill's child. Forwarded into `childProviderFactory`
+   * so the read-only constraint survives `agent` fan-out (depth ≥ 2).
+   * When undefined, `childProviderFactory` defaults to `CHILD_ALLOWED_TOOLS`.
+   */
+  allowedTools?: string[];
+  /**
+   * When true, the mutating-bash gate is forwarded to grandchild providers.
+   * Set together with `allowedTools` for read-only skill fan-out propagation.
+   */
+  readOnlyBash?: boolean;
 }
 
 export type AgentExecutionMode = 'foreground' | 'background';
@@ -517,6 +529,11 @@ export class SubagentExecutor {
         // ITS own childManager for depth-3+ forks, also receives cwd. The
         // chain holds for arbitrary depth up to maxDepth.
         ...(this.ctx.cwd !== undefined ? { cwd: this.ctx.cwd } : {}),
+        // Propagate read-only constraints so depth ≥ 2 forks (this depth-1
+        // child calling the `agent` tool) keep the same tool allowlist and
+        // bash gate that the originating read-only skill imposed.
+        ...(this.ctx.allowedTools !== undefined ? { allowedTools: this.ctx.allowedTools } : {}),
+        ...(this.ctx.readOnlyBash ? { readOnlyBash: true } : {}),
       });
       const childSkillExecutor = this.ctx.childSkillExecutorFactory
         ? this.ctx.childSkillExecutorFactory(depth + 1, maxDepth, call.signal)
@@ -530,6 +547,12 @@ export class SubagentExecutor {
         childExecutor,
         ...(childSkillExecutor !== undefined ? { childSkillExecutor } : {}),
         ...(childConfig.model !== undefined ? { model: childConfig.model } : {}),
+        // Read-only propagation: when this executor is itself a read-only
+        // skill's child (e.g. ground-state fanning out via `agent`), forward
+        // the allowlist and bash gate so the grandchild provider stays gated.
+        // Mirrors skill-executor.ts:522 for the `agent` tool fan-out path.
+        ...(this.ctx.allowedTools !== undefined ? { allowedTools: this.ctx.allowedTools } : {}),
+        ...(this.ctx.readOnlyBash ? { readOnlyBash: true } : {}),
       });
     }
 

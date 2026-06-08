@@ -163,6 +163,62 @@ describe('SessionToolDispatcher', () => {
     });
   });
 
+  describe('readOnlyBash gate', () => {
+    // A `bash` handler that echoes its command, plus a dispatcher in
+    // readOnlyBash mode with `bash` allowlisted (so the gate — not the
+    // permission check — is what decides).
+    function bashHandler(): ToolHandler {
+      return async (input: unknown) => {
+        const obj = input as Record<string, unknown>;
+        return { content: `ran: ${String(obj['command'] ?? '')}` };
+      };
+    }
+    function makeBashDispatcher(readOnlyBash: boolean) {
+      return new SessionToolDispatcher({
+        handlers: new Map([['bash', bashHandler()]]),
+        schemas: [...builtinToolSchemas],
+        permissions: { allowedTools: ['bash'] },
+        readOnlyBash,
+      });
+    }
+    function bashCall(command: string): ToolCall {
+      return makeCall({ name: 'bash', input: { command } });
+    }
+
+    it('blocks a mutating bash command with isError when readOnlyBash is true', async () => {
+      const dispatcher = makeBashDispatcher(true);
+      const result = await dispatcher.execute(bashCall('git commit -m x'));
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('read-only skill may not run mutating commands');
+    });
+
+    it('lets a read-only bash command through the gate when readOnlyBash is true', async () => {
+      const dispatcher = makeBashDispatcher(true);
+      const result = await dispatcher.execute(bashCall('git status'));
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toBe('ran: git status');
+    });
+
+    it('does not gate bash when readOnlyBash is false', async () => {
+      const dispatcher = makeBashDispatcher(false);
+      const result = await dispatcher.execute(bashCall('git commit -m x'));
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toBe('ran: git commit -m x');
+    });
+
+    it('blocks mutating bash on the batch path too', async () => {
+      const dispatcher = makeBashDispatcher(true);
+      const [blocked, allowed] = await dispatcher.executeBatch([
+        bashCall('rm -rf /tmp/x'),
+        bashCall('git diff'),
+      ]);
+      expect(blocked!.isError).toBe(true);
+      expect(blocked!.content).toContain('read-only skill may not run mutating commands');
+      expect(allowed!.isError).toBeUndefined();
+      expect(allowed!.content).toBe('ran: git diff');
+    });
+  });
+
   describe('agent tool routing', () => {
     it('routes agent calls to executor when present', async () => {
       const executor = mockExecutor();
