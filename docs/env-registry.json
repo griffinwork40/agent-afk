@@ -381,6 +381,14 @@
       "category": "browser"
     },
     {
+      "name": "AFK_SESSION_LEDGER_DISABLED",
+      "description": "Disable the per-session durable event ledger (state/sessions/<id>/events.jsonl). Set to 1 to skip ledger writes; live cross-surface watching (e.g. the Telegram /watch command) will report no activity for sessions started while disabled.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "debug"
+    },
+    {
       "name": "AFK_SESSIONSTART_COOLDOWN_MS",
       "description": "Cooldown in milliseconds between SessionStart trigger fires in the daemon. Prevents thundering-herd on rapid restarts.",
       "type": "number",
