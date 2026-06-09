@@ -330,11 +330,14 @@ export interface AgentConfig {
   taskBudget?: number;
 
   /**
-   * Hard per-response output-token cap. Propagated to the SDK subprocess as
-   * `CLAUDE_CODE_MAX_OUTPUT_TOKENS` — the SDK has no programmatic equivalent
-   * on its `Options` type as of 0.2.114. Accepts `Number.POSITIVE_INFINITY`
-   * as a "model max" sentinel; `buildQueryOptions` resolves it using the
-   * resolved model id.
+   * Hard per-response output-token cap (the Messages-API `max_tokens`).
+   * Resolved by `resolveMaxTokens` in the anthropic-direct provider and
+   * clamped to the model's output ceiling (`maxOutputTokensFor`): an
+   * over-ceiling value is reduced to the ceiling rather than sent verbatim
+   * (which the API would reject with HTTP 400). Any non-finite or non-positive
+   * value — including the `Number.POSITIVE_INFINITY` "model max" sentinel that
+   * `parseMaxOutputTokens` emits for `--max-output-tokens max` — falls back to
+   * the model ceiling.
    */
   maxOutputTokens?: number;
 
