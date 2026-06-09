@@ -4,7 +4,7 @@
  * Shared by both `anthropic-direct` and `openai-compatible` providers so the
  * resulting snapshot shape is provider-agnostic. The provider supplies live
  * accessors (lambdas), not snapshots, so subsequent `get_runtime_state` calls
- * see up-to-date subagent and MCP tool counts.
+ * see up-to-date subagent counts, MCP tool counts, and git workspace state.
  *
  * @module agent/awareness/runtime-source
  */
@@ -73,18 +73,13 @@ export interface RuntimeSourceDeps {
  * those exposed as live accessors. For Phase 1 this is fine — identity fields
  * (`sessionId`, `depth`, `parentSessionId`, etc.) do not change mid-session.
  *
- * Phase 2: `getWorkspace()` returns the git baseline captured once via
- * `gatherWorkspace(deps.cwd)` at construction time. Git state changes rarely
- * and the model only needs orientation — a session-start snapshot is enough.
- * Callers that need a fresher snapshot should construct a new source.
+ * `getWorkspace()` recomputes git workspace state on every call via
+ * `gatherWorkspace(deps.cwd)`, mirroring the live `getTools()`/`getSubagents()`
+ * accessors. This costs 4 `spawnSync` git calls per invocation, but means the
+ * model sees the *current* dirty-file count / HEAD / branch when it orients,
+ * not a frozen session-start snapshot that silently goes stale as files change.
  */
 export function buildRuntimeStateSource(deps: RuntimeSourceDeps): RuntimeStateSource {
-  // Gather the workspace baseline once, synchronously, at construction time.
-  // `gatherWorkspace` runs 4 spawnSync git calls but the result is stable for
-  // the session lifetime. Caching it here means every `get_runtime_state`
-  // call returns the same object without re-spawning.
-  const workspace: RuntimeWorkspace = gatherWorkspace(deps.cwd);
-
   return {
     getSelf(): RuntimeSelf {
       return {
@@ -112,7 +107,10 @@ export function buildRuntimeStateSource(deps: RuntimeSourceDeps): RuntimeStateSo
       return deps.getSubagents();
     },
     getWorkspace(): RuntimeWorkspace {
-      return workspace;
+      // Live: recompute per call so the snapshot reflects edits made since
+      // session start — the agent's own writes AND concurrent external writers.
+      // Cost: 4 spawnSync git calls per call (see gatherWorkspace).
+      return gatherWorkspace(deps.cwd);
     },
   };
 }

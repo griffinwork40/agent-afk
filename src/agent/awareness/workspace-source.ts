@@ -1,10 +1,11 @@
 /**
  * Workspace baseline gatherer (Phase 2).
  *
- * Captures git state via synchronous child-process calls at session-start
- * time. The result is cached by the caller — `gatherWorkspace` itself is
- * stateless and always performs 4 `spawnSync` calls (branch, SHA, status,
- * remote). Callers who need the result more than once should cache it.
+ * Captures git state via synchronous child-process calls. `gatherWorkspace`
+ * itself is stateless and always performs 4 `spawnSync` calls (branch, SHA,
+ * status, remote); whether to cache the result or call it fresh for liveness
+ * is the caller's choice (see `runtime-source.ts`, which calls it per-read so
+ * the model sees current state).
  *
  * Design:
  *   - Uses `spawnSync` rather than `execSync` to avoid shell injection on
@@ -63,8 +64,10 @@ function gitOutput(cwd: string, args: string[]): string | null {
  * Individual field nullability is finer-grained: `branch` being null while
  * `headSha` is set indicates a detached HEAD.
  *
- * Callers MUST cache the returned object — this function performs 4
- * synchronous process spawns on every call.
+ * This function performs 4 synchronous process spawns on every call. Callers
+ * that need only a one-time baseline should cache the result; callers that need
+ * liveness (e.g. `get_runtime_state` reflecting the current dirty state) call
+ * it fresh each time and accept the per-call spawn cost.
  */
 export function gatherWorkspace(cwd: string): RuntimeWorkspace {
   // Verify this is a git repo first — avoids running 3 more commands when it's not.
