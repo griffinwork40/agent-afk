@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.90.1] - 2026-06-09
+
+### Fixed
+- route subagent overlay refreshes through OverlayComposer (#63) (baf325d)
+
 ## [3.90.0] - 2026-06-09
 
 ### Added
