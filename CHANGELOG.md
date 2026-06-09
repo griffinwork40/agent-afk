@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.89.9] - 2026-06-09
+
+### Fixed
+- clamp max_tokens to model ceiling and guard thinking budget (#58) (7d02d4b)
+
 ## [3.89.8] - 2026-06-08
 
 ### Fixed
