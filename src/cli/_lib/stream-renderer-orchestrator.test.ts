@@ -1006,3 +1006,128 @@ describe('handleOrchestratorEvent — progress arm (duplicate banner regression)
     expect(lastOverlay).not.toContain('Iteration 6: used bash');
   });
 });
+
+// ─── Skill-nesting gate ──────────────────────────────────────────────────────
+//
+// When a skill-dispatch turn is active (ctx.activeSkillName set) and the model
+// dispatches a NESTING tool (agent/Agent/Task/compose), the tool entry must be
+// registered under the skill spine (agentContext = skill entry's toolUseId).
+//
+// Flat leaf tools (bash, read_file, etc.) must NOT be nested: they must stay at
+// root so flushCompletedRoots can eagerly commit them.
+// ────────────────────────────────────────────────────────────────────────────
+
+function skillToolStartEvent(id: string, toolName: string, input: string): OutputEvent {
+  return {
+    type: 'chunk',
+    chunk: { type: 'tool_use_detail', toolUseId: id, toolName, toolInput: input },
+  };
+}
+
+function makeSkillCtx(
+  toolLane: ToolLane,
+  activeSkillName: string,
+): OrchestratorCtx {
+  const { writer } = makeWriter();
+  return {
+    out: writer,
+    isTTY: false,
+    compositor: null,
+    toolLane,
+    thinkingLane: new ThinkingLane(),
+    thinkingMode: 'off',
+    streamingMarkdown: { current: null },
+    activeSkillName,
+  };
+}
+
+describe('handleOrchestratorEvent — skill-nesting gate', () => {
+  const source: SourceState = freshSourceState('__main__');
+
+  it('nests agent tool under skill entry when activeSkillName is set (a)', () => {
+    // (a) NESTING tool dispatched after skill — agentContext = skill entry id.
+    const toolLane = new ToolLane();
+    const ctx = makeSkillCtx(toolLane, 'review');
+
+    // Skill entry registered first (simulates the model calling the skill tool).
+    handleOrchestratorEvent(
+      skillToolStartEvent('skill-tu-1', 'skill', '(review)'),
+      source, ctx, new Map(),
+    );
+    expect(toolLane.hasEntry('skill-tu-1')).toBe(true);
+
+    // Model then dispatches an agent subagent.
+    handleOrchestratorEvent(
+      skillToolStartEvent('agent-tu-1', 'agent', '"review-w1"'),
+      source, ctx, new Map(),
+    );
+
+    // agent entry must be parented under the skill entry.
+    type PrivateLane = { entries: Map<string, { agentContext?: string }> };
+    const entries = (toolLane as unknown as PrivateLane).entries;
+    const agentEntry = entries.get('agent-tu-1');
+    expect(agentEntry, 'agent entry must exist').toBeDefined();
+    expect(agentEntry?.agentContext, 'agent must be nested under skill').toBe('skill-tu-1');
+  });
+
+  it('flat leaf tools stay at root (agentContext undefined) when activeSkillName is set (b)', () => {
+    // (b) FLAT tool in the same skill turn — must NOT be nested.
+    const toolLane = new ToolLane();
+    const ctx = makeSkillCtx(toolLane, 'review');
+
+    handleOrchestratorEvent(
+      skillToolStartEvent('skill-tu-2', 'skill', '(review)'),
+      source, ctx, new Map(),
+    );
+    handleOrchestratorEvent(
+      skillToolStartEvent('bash-tu-1', 'Bash', '"ls"'),
+      source, ctx, new Map(),
+    );
+
+    type PrivateLane = { entries: Map<string, { agentContext?: string }> };
+    const entries = (toolLane as unknown as PrivateLane).entries;
+    const bashEntry = entries.get('bash-tu-1');
+    expect(bashEntry, 'bash entry must exist').toBeDefined();
+    expect(bashEntry?.agentContext, 'flat tool must stay at root').toBeUndefined();
+  });
+
+  it('agent tool stays at root when activeSkillName is NOT set (c)', () => {
+    // (c) Current behavior pinned: no activeSkillName → agent roots normally.
+    const toolLane = new ToolLane();
+    const ctx = makeCtx(toolLane); // no activeSkillName
+
+    // Register a skill entry (the model happened to call skill mid-turn).
+    toolLane.addStart('skill-tu-3', 'skill', '(diagnose)');
+
+    handleOrchestratorEvent(
+      skillToolStartEvent('agent-tu-3', 'agent', '"diag-w1"'),
+      source, ctx, new Map(),
+    );
+
+    type PrivateLane = { entries: Map<string, { agentContext?: string }> };
+    const entries = (toolLane as unknown as PrivateLane).entries;
+    const agentEntry = entries.get('agent-tu-3');
+    expect(agentEntry, 'agent entry must exist').toBeDefined();
+    expect(agentEntry?.agentContext, 'no activeSkillName → agent stays at root').toBeUndefined();
+  });
+
+  it('compose tool is also nested under skill when activeSkillName is set', () => {
+    // DAG_TOOLS member — same gate as agent/Agent/Task.
+    const toolLane = new ToolLane();
+    const ctx = makeSkillCtx(toolLane, 'diagnose');
+
+    handleOrchestratorEvent(
+      skillToolStartEvent('skill-tu-4', 'skill', '(diagnose)'),
+      source, ctx, new Map(),
+    );
+    handleOrchestratorEvent(
+      skillToolStartEvent('compose-tu-1', 'compose', '(parallel)'),
+      source, ctx, new Map(),
+    );
+
+    type PrivateLane = { entries: Map<string, { agentContext?: string }> };
+    const entries = (toolLane as unknown as PrivateLane).entries;
+    const composeEntry = entries.get('compose-tu-1');
+    expect(composeEntry?.agentContext).toBe('skill-tu-4');
+  });
+});

@@ -4418,3 +4418,149 @@ describe('TerminalCompositor — background-status-bar coexistence', () => {
     c.disarm();
   });
 });
+
+describe('TerminalCompositor — content-following placement', () => {
+  // These tests verify the content-following behaviour introduced to eliminate
+  // the blank-row gap that appeared on tall terminals between a welcome banner
+  // and the live input frame.
+  //
+  // Core invariant: content-following fires ONLY when anchorRow > 1 (a pre-arm
+  // banner is declared) AND commitInFlight is false (not inside Phase 2 of
+  // commitAbove). Without a banner the frame is always unconditionally
+  // bottom-pinned — all resize-ghost, shrink-gap, and scrollback-gap invariants
+  // assume this and are preserved. The banner case uses
+  //   contentFloor = max(anchorRow, committedBandBottomRow)
+  //   targetBottomRow = min(absoluteBottom, contentFloor + physicalRows)
+  // so the frame starts just below the banner and marches down as committed
+  // content accumulates, reaching absoluteBottom once the band fills the
+  // viewport (at which point the path is identical to the old bottom-pin).
+
+  let stdout: MockStdout;
+  let stdin: MockStdin;
+  let writes: ReturnType<typeof collectWrites>;
+
+  beforeEach(() => {
+    stdout = makeMockStdout();
+    stdin = makeMockStdin();
+    writes = collectWrites(stdout);
+  });
+
+  it('cold start: no banner, no content — frame stays bottom-pinned', async () => {
+    // Before any commit and without a banner, the content-following branch is
+    // inactive. The frame must land at the standard bottom row (rows-1).
+    stdout.rows = 70;
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), promptText: '> ' });
+    await c.arm();
+    const out = writes.all();
+    // 1-line idle frame → bottom-pinned at row 69 (70-1).
+    expect(out).toContain('\x1b[69;1H');
+    c.disarm();
+  });
+
+  it('tall terminal + banner: frame follows committed content instead of unconditional bottom-pin', async () => {
+    // Core fix: rows=70, anchorRow=15 (14-row welcome banner). When the
+    // committed band is at a low row (far above absoluteBottom=69), the next
+    // standalone repaint must use content-following rather than bottom-pinning.
+    //
+    // Patch committedBandBottomRow=16 to simulate the state after a small
+    // number of commits (band near the banner). Content-following:
+    //   contentFloor = max(anchorRow=15, committedBandBottomRow=16) = 16
+    //   physicalRows = 3 (overlay + gap + input)
+    //   targetBottomRow = min(absoluteBottom=69, 16+3) = 19
+    // Frame lands at rows 17-19, not row 69 — the gap is gone.
+    stdout.rows = 70;
+    const c2 = new TerminalCompositor({
+      stdout, stdin, onCancel: vi.fn(), promptText: '> ',
+      anchorRow: 15,
+    });
+    await c2.arm();
+    // Manually force a small committedBandBottomRow by patching internal state
+    // via the typed cast the compositor tests already use.
+    const internals = c2 as unknown as {
+      committedBand: string[];
+      committedBandTopRow: number;
+      committedBandBottomRow: number;
+      hasCommitted: boolean;
+      logUpdate: { resetGeometry?: () => void };
+    };
+    internals.committedBand = ['COMMITTED'];
+    internals.committedBandTopRow = 16;
+    internals.committedBandBottomRow = 16;
+    internals.hasCommitted = true;
+    // Reset CupFrameRenderer geometry so its erase pass on the next render
+    // doesn't re-visit the stale previous-frame row (row 69 from arm()).
+    internals.logUpdate.resetGeometry?.();
+    writes.clear();
+    c2.setOverlay('FOLLOW_TEST');
+    const out2 = writes.all();
+    // Frame must NOT be at row 69 (the old unconditional bottom-pin).
+    expect(out2).not.toContain('\x1b[69;1H');
+    // The overlay text must appear in the output (frame rendered).
+    expect(out2).toContain('FOLLOW_TEST');
+    c2.disarm();
+  });
+
+  it('no-banner session: frame stays bottom-pinned regardless of committed content', async () => {
+    // Without a banner (anchorRow undefined or ≤1), the content-following path
+    // is never taken. The frame is always at absoluteBottom = rows-1-extraRows
+    // regardless of how many commits have accumulated — this preserves all
+    // resize-ghost, shrink-gap, and scrollback-gap invariants.
+    stdout.rows = 24;
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), promptText: '> ' });
+    await c.arm();
+
+    // Commit several lines — with no banner the frame should stay bottom-pinned.
+    for (let i = 0; i < 5; i++) {
+      c.commitAbove(`LINE_${i}`);
+    }
+    writes.clear();
+    c.setOverlay('AFTER_COMMITS');
+    const out = writes.all();
+
+    // Frame must always be at absoluteBottom = rows-1 = 23 (no banner → no
+    // content-following, regardless of committed content).
+    expect(out).toContain('\x1b[23;1H');
+    c.disarm();
+  });
+
+  it('reserved extraRows: targetBottomRow never enters reserved rows even when following content', async () => {
+    // extraRows=2 → absoluteBottom = 24-1-2 = 21.
+    // With a banner (anchorRow=5) and committed content, content-following must
+    // still cap at absoluteBottom=21 — never write into bg-status-bar rows 22-23.
+    const mockScrollRegion = {
+      withFullScrollRegion<T>(fn: () => T): T { return fn(); },
+      getExtraRows(): number { return 2; },
+    };
+    stdout.rows = 24;
+    const c = new TerminalCompositor({
+      stdout, stdin, onCancel: vi.fn(), promptText: '> ',
+      anchorRow: 5,
+      scrollRegion: mockScrollRegion,
+    });
+    await c.arm();
+    // Commit enough lines so content-following would try to reach absoluteBottom.
+    for (let i = 0; i < 25; i++) {
+      c.commitAbove(`LINE_${i}`);
+    }
+    writes.clear();
+    c.setOverlay('EXTRA_ROW_TEST');
+    const out = writes.all();
+    // Collect CUP rows, excluding the eviction-scroll CUP at physicalBottom=24.
+    // evictRowsToScrollback writes `\x1b[24;1H\n...` to trigger DECSTBM scroll;
+    // that row is intentionally at the physical margin (not a frame content row).
+    const physicalBottom = stdout.rows; // 24
+    const re = /\x1b\[(\d+);\d+H/g;
+    let m: RegExpExecArray | null;
+    let maxFrameRow = 0;
+    while ((m = re.exec(out)) !== null) {
+      const row = parseInt(m[1]!, 10);
+      if (row !== physicalBottom) {
+        maxFrameRow = Math.max(maxFrameRow, row);
+      }
+    }
+    expect(maxFrameRow).toBeGreaterThan(0);
+    // Frame content must stay at or below absoluteBottom = 21 (extraRows=2).
+    expect(maxFrameRow).toBeLessThanOrEqual(21);
+    c.disarm();
+  });
+});
