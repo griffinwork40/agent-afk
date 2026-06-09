@@ -67,12 +67,16 @@ const PINNED_HASHES = {
   refactor: '9cb84710ddf2cf63e1a648460a64656d3f4a9aae8e21753b031556070740c51e',
   research: '10692d77e392cedce928f66cb5dec27dbc2066f48cfc33047820f56506da762a',
   review: '31a17d8c3bace684b7fce22588d54ce3e95462acdf397fc1673f3590192e0944',
-  // Hash bumped 2026-06-09: reconciles the SKILL.md edit landed in #57
-  // ("skip adversarial re-derivation on text-terminal sessions"), which changed
-  // the bundled copy but did not bump this pin — leaving the snapshot test red
-  // on main. The behavior change is intentional; this records the new content.
+  // Hash bumped 2026-06-09 (PR #52): records the confidence-trigger enhancement
+  // landed in this branch's commit 1e35850 — adds high-confidence language
+  // ("confident", "certain", "clearly", ≥80%) as a verification trigger in its
+  // own right, a three-way CONFIRMED/REFUTED/UNVERIFIABLE verdict with
+  // [was: …]/[needs-human-review] annotations, and a bounded 3-round retry loop.
+  // The behavior change is intentional; this records the new content.
+  // BACK-PORT GAP: the same enhancement should land in the upstream example-plugin
+  // shadow-verify skill (drift test is skipped here — example-plugin not co-located).
   'shadow-verify':
-    '58afb3387766498a7b4321bac56196a2654e0bca1153e2c0f7d66154e2fa8705',
+    'f0afcda66931ea4129d99081be1103ace69ab7252353855ed04ca14a48343110',
   // Hash bumped 2026-06: Phase 4 (commit) + Phase 8 (PR) switched from the
   // `--body "$(cat <<'EOF' … EOF)"` heredoc-in-command-substitution antipattern
   // to the file-based form (`git commit -F` / `gh pr create --body-file`). The
