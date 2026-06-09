@@ -1,6 +1,6 @@
 ---
 name: shadow-verify
-description: "Dispatch a parallel adversarial verifier wave after any high-stakes sub-agent investigation (code reviews, audits, findings reports, large refactors) — or whenever a sub-agent asserts a claim with high-confidence language (\"confident\", \"certain\", \"clearly\", \u226580%), since confidence is a trigger, not a verdict. Shadow verifiers independently re-derive 2–3 key claims from scratch using tool calls only, returning CONFIRMED/REFUTED/UNVERIFIABLE, and flag disagreements before the user acts. Use when sub-agent output will drive decisions, file changes, commits, or external side-effects."
+description: "Dispatch a parallel adversarial verifier wave after any high-stakes sub-agent investigation (code reviews, audits, findings reports, large refactors) — or whenever a sub-agent asserts a claim with high-confidence language (confident, certain, clearly, ≥80%), since confidence is a trigger, not a verdict. Shadow verifiers independently re-derive 2–3 key claims from scratch using tool calls only, returning CONFIRMED/REFUTED/UNVERIFIABLE, and flag disagreements before the user acts. Use when sub-agent output will drive decisions, file changes, commits, or external side-effects."
 context: fork
 ---
 

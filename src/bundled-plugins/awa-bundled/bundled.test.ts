@@ -73,10 +73,14 @@ const PINNED_HASHES = {
   // own right, a three-way CONFIRMED/REFUTED/UNVERIFIABLE verdict with
   // [was: …]/[needs-human-review] annotations, and a bounded 3-round retry loop.
   // The behavior change is intentional; this records the new content.
+  // Hash re-bumped during PR #52 review: the frontmatter description used YAML
+  // escape sequences that parseSkillMetadata (tool-injector.ts) renders
+  // literally — replaced with a literal ≥ and unquoted terms so the
+  // model-facing description is clean.
   // BACK-PORT GAP: the same enhancement should land in the upstream example-plugin
   // shadow-verify skill (drift test is skipped here — example-plugin not co-located).
   'shadow-verify':
-    'f0afcda66931ea4129d99081be1103ace69ab7252353855ed04ca14a48343110',
+    '07aeb4724877001351de868012d796841fb3b9596e0086cd4b302a17c183c977',
   // Hash bumped 2026-06: Phase 4 (commit) + Phase 8 (PR) switched from the
   // `--body "$(cat <<'EOF' … EOF)"` heredoc-in-command-substitution antipattern
   // to the file-based form (`git commit -F` / `gh pr create --body-file`). The
