@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.92.1] - 2026-06-09
+
+### Fixed
+- repair skill-dispatch turn rendering and accounting regressions (#68) (61d377c)
+
 ## [3.92.0] - 2026-06-09
 
 ### Added
