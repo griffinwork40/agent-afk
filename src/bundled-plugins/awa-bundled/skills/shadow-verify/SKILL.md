@@ -25,7 +25,7 @@ Bound the loop: at most 3 verification rounds per session. Claims still unresolv
 Any time sub-agent output will drive user decisions, file edits, commits, external side-effects, or is the basis of a user-facing summary. Treat **high-confidence language as a trigger in its own right**: when a review/audit sub-agent asserts a claim with markers like "confident", "certain", "clearly", "obviously", "must be", or a stated probability ≥ 80%, verify it as if it were decision-driving regardless of stakes. Confidence is a trigger, not a verdict.
 
 **Skip when:**
-Sub-agent ran inside an orchestrator skill that already verifies (`resolve`, `diagnose`, `appmap`); sub-agent returned explicit failure; work was purely exploratory and no decision follows.
+Sub-agent ran inside an orchestrator skill that already verifies (`resolve`, `diagnose`, `appmap`); sub-agent returned explicit failure; work was purely exploratory and no decision follows; or the session is **text-terminal** — a pure explanation, architecture walkthrough, onboarding Q&A, or capability map that names no mutated artifact (file/PR/commit/test), where there are no re-checkable state claims for adversarial verifiers to re-derive (assess coverage, coherence, and citation density instead of dispatching re-derivation sub-agents).
 
 ## Appendix: verification methods by domain (non-binding)
 

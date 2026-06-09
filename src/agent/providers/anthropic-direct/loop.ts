@@ -148,9 +148,24 @@ async function createWithRetry(
   }
 }
 
-function summarizeToolInput(input: unknown): string {
+function summarizeToolInput(toolName: string, input: unknown): string {
   if (!input || typeof input !== 'object') return '';
   const obj = input as Record<string, unknown>;
+  // Skill dispatch: the `name` field IS the skill being invoked (diagnose,
+  // review, mint, …). Surface it as a paren-wrapped label so the tool lane
+  // renders `skill(diagnose)` instead of a bare `skill [skill]` — matching the
+  // `Agent(<label>)` dispatch convention and the paren-wrap signal the overflow
+  // renderer keys on (cli/commands/interactive/tool-lane-render-grouping-overflow.ts).
+  // Unlike `agent`, a skill's label is fully known from the tool input, so it
+  // needs no deferred mergeAgentLabel promotion — and it MUST be surfaced here
+  // because load-mode skills never fork a child Agent row to carry the name.
+  if (toolName === 'skill' || toolName === 'Skill') {
+    const skillName = obj['name'];
+    if (typeof skillName === 'string' && skillName.length > 0) {
+      return `(${skillName.length > 60 ? skillName.slice(0, 59) + '…' : skillName})`;
+    }
+    return '';
+  }
   const path = obj['file_path'] ?? obj['path'] ?? obj['filePath'];
   if (typeof path === 'string') return ' ' + path;
   const cmd = obj['command'] ?? obj['cmd'];
@@ -524,7 +539,7 @@ export async function* runTurn(
         type: 'tool.use.start',
         toolUseId: block.id,
         toolName: block.name,
-        toolInput: summarizeToolInput(block.input),
+        toolInput: summarizeToolInput(block.name, block.input),
         sessionId: input.ctx.sessionId,
       };
     }

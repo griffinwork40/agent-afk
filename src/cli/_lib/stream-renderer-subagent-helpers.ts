@@ -271,6 +271,15 @@ export function finalizeSubagent(
     syntheticResult(summary, false),
   );
   if (ctx.isTTY && ctx.compositor) {
-    ctx.compositor.setOverlay(ctx.toolLane.getOverlay());
+    // Route the final Done-row overlay through the composer when present so it
+    // recomposes all active slots in z-order instead of clobbering the overlay
+    // region with the tool-lane alone (overlay-composer.ts invariant: the
+    // composer is the sole writer of compositor.setOverlay during a turn).
+    if (ctx.overlayComposer) {
+      ctx.overlayComposer.markDirty('tool-lane');
+      ctx.overlayComposer.flush();
+    } else {
+      ctx.compositor.setOverlay(ctx.toolLane.getOverlay());
+    }
   }
 }

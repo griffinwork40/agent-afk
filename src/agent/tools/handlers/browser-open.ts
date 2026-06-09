@@ -28,7 +28,7 @@ import { env } from '../../../config/env.js';
 // semantic layer. Until then, browser_event emission lives in the dispatcher
 // tier, not in these handlers. See design doc: design-native-browser-control.
 
-const PLAYWRIGHT_MISSING_HINTS = ['Cannot find package', 'ERR_MODULE_NOT_FOUND'];
+import { isPlaywrightMissing, playwrightMissingHint } from './playwright-hints.js';
 
 type WaitForOption = 'load' | 'domcontentloaded' | 'networkidle';
 
@@ -130,13 +130,8 @@ export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): Tool
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (PLAYWRIGHT_MISSING_HINTS.some((hint) => msg.includes(hint))) {
-        return {
-          content:
-            'browser tools require the optional `playwright` peer dependency. ' +
-            'Install via: pnpm add playwright. Or pick a different tool.',
-          isError: true,
-        };
+      if (isPlaywrightMissing(msg)) {
+        return { content: playwrightMissingHint(msg), isError: true };
       }
       return { content: `browser_open failed to get provider: ${msg}`, isError: true };
     }

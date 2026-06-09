@@ -29,7 +29,7 @@ import { env } from '../../../config/env.js';
 // helpers (truncateTargetText, hashSelector) are imported and called so the
 // logic is in place for when browser_event emission is wired.
 
-const PLAYWRIGHT_MISSING_HINTS = ['Cannot find package', 'ERR_MODULE_NOT_FOUND'];
+import { isPlaywrightMissing, playwrightMissingHint } from './playwright-hints.js';
 
 const VALID_ACTIONS: readonly ActAction[] = [
   'click', 'fill', 'press', 'select', 'hover', 'scroll_to', 'wait_for',
@@ -200,13 +200,8 @@ export function createBrowserActHandler(opts: BrowserHandlerOptions = {}): ToolH
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (PLAYWRIGHT_MISSING_HINTS.some((hint) => msg.includes(hint))) {
-        return {
-          content:
-            'browser tools require the optional `playwright` peer dependency. ' +
-            'Install via: pnpm add playwright. Or pick a different tool.',
-          isError: true,
-        };
+      if (isPlaywrightMissing(msg)) {
+        return { content: playwrightMissingHint(msg), isError: true };
       }
       return { content: `browser_act failed to get provider: ${msg}`, isError: true };
     }

@@ -309,9 +309,9 @@ export function getTaskBudget(): number | undefined {
  * `buildQueryOptions`, encoded here as `Number.POSITIVE_INFINITY`). Rejects
  * zero, negatives, NaN, and non-integer strings.
  *
- * The resolved number is exported to the SDK subprocess via
- * `CLAUDE_CODE_MAX_OUTPUT_TOKENS`; the SDK itself has no programmatic
- * max-output-tokens option as of 0.2.114.
+ * The resolved number flows to `AgentConfig.maxOutputTokens`, where
+ * `resolveMaxTokens` (anthropic-direct provider) clamps it to the model's
+ * output ceiling before it becomes the Messages-API `max_tokens`.
  */
 export function parseMaxOutputTokens(raw: string | undefined): number | undefined {
   if (raw === undefined) return undefined;

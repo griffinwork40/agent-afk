@@ -9,6 +9,7 @@
  * @module browser/config
  */
 
+import { readFileSync } from 'node:fs';
 import { join } from 'path';
 import { env as defaultEnv } from '../config/env.js';
 import { getAfkConfigDir } from '../paths.js';
@@ -124,11 +125,15 @@ function parseBooleanEnv(raw: string | undefined): boolean {
 function defaultReadFileSync(path: string): string | undefined {
   // Contract: returns the file contents as a string, or undefined when the
   // file does not exist. Throws for any error other than ENOENT.
+  //
+  // Invariant: must use the static `node:fs` import, never a runtime
+  // require('fs'). The published binary is bundled to ESM (build-dist.mjs sets
+  // format:'esm'), where esbuild replaces a runtime require() with a shim that
+  // throws `Dynamic require of "fs" is not supported`. That shim is what
+  // previously made every browser_* tool fail at provider construction, since
+  // loadBrowserConfig() runs on the first getBrowserProvider() call.
   try {
-    // Use synchronous Node built-in — this function is called once at startup.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const fs = require('fs') as typeof import('fs');
-    return fs.readFileSync(path, 'utf8');
+    return readFileSync(path, 'utf8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw err;

@@ -30,6 +30,7 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   sonnet: 64_000,
   sonnet_1m: 64_000,
   haiku: 64_000,
+  fable: 128_000,
   'claude-opus-4-8': 128_000,
   // 'claude-opus-4-7' removed — retired model; MODEL_MAP.opus now points to
   // claude-opus-4-8. Kept here as a comment so git blame reveals the removal.
@@ -37,6 +38,8 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // 2026-05-28.)
   'claude-sonnet-4-6': 64_000,
   'claude-haiku-4-5-20251001': 64_000,
+  // Claude Fable 5 (Mythos-class, GA 2026-06-09): 128k max output.
+  'claude-fable-5': 128_000,
 } as const;
 
 const DEFAULT_MAX_OUTPUT = 64_000;
@@ -84,6 +87,12 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   sonnet: 200_000,
   sonnet_1m: 1_000_000,
   haiku: 200_000,
+  // Claude Fable 5 ships a 1M-token context window natively (no `_1m` opt-in,
+  // unlike opus/sonnet whose base window is 200k). Keyed by both the `fable`
+  // alias and the `claude-fable-5` wire id so lookups hit either side of the
+  // alias boundary.
+  fable: 1_000_000,
+  'claude-fable-5': 1_000_000,
   // OpenAI flagship + cost-tier models (windows per OpenAI platform docs
   // as of 2026-Q1). Listed here so the openai-compatible provider's
   // getContextUsage() returns an accurate percentage instead of the

@@ -60,7 +60,7 @@ ANTHROPIC_API_KEY=sk-ant-...
 Optional, in order of usefulness:
 
 ```bash
-# Pick a model — opus | sonnet | haiku (Anthropic) or codex (OpenAI)
+# Pick a model — opus | sonnet | haiku | fable (Anthropic) or codex (OpenAI)
 AFK_MODEL=sonnet
 
 # Enable the Telegram bot + send_telegram tool
@@ -87,6 +87,7 @@ afk chat "refactor this" --model codex
 
 | Model | Best for |
 |---|---|
+| `fable` | Most capable — Claude Fable 5 (Mythos-class), hardest reasoning + long-horizon agentic work (1M context) |
 | `opus` | Complex reasoning, multi-step planning, long contexts |
 | `sonnet` | Day-to-day default — balanced speed and capability |
 | `haiku` | Fast, cheap, one-shots |

@@ -58,16 +58,16 @@ Read the cumulative diff: `git diff --stat origin/<default>...HEAD` + full `git 
 Before committing, review the **file list** to stage — don't sweep in untracked config/scratch/secret files. Print the draft message + file list to the user as info-only output, then **immediately** invoke Phase 4. **This is not a gate. Do not ask "does this look good?" Do not wait for approval.** The user surface is one continuous turn: draft → commit → push → PR URL.
 
 **Phase 4 — Commit.**
-Stage only the confirmed files. Commit via HEREDOC to preserve formatting:
+Stage only the confirmed files, then write the commit message to a temp file with your file-writing tool — **NOT** a shell heredoc — and commit with `-F`:
 
 ```
-git commit -m "$(cat <<'EOF'
-<subject>
-
-<body>
-EOF
-)"
+# 1. Write the subject + body to a temp file (e.g. .git/COMMIT_BODY.txt) using
+#    your file-writing tool. The content never passes through the shell.
+# 2. Commit from that file:
+git commit -F .git/COMMIT_BODY.txt
 ```
+
+Going through a file keeps backticks, `$(...)`, and quotes in the message literal. **Never** assemble the message inline as `git commit -m "$(cat <<'EOF' … EOF)"` — a backtick or `$(` in the body is parsed by the shell *before* `git` runs, so the commit fails or records a mangled message. `.git/` is never staged, so the temp file can't sneak into the commit (in a linked worktree `.git` is a file, not a dir — write to the path printed by `git rev-parse --git-dir` instead).
 
 Never `--amend` (creates a new commit each time). Never bypass hooks (`--no-verify`).
 
@@ -108,16 +108,20 @@ Structure:
 ```
 
 **Phase 8 — Open PR.**
+Write the PR body (from Phase 7) to a temp file with your file-writing tool — **NOT** a shell heredoc — then pass it with `--body-file`:
+
 ```
+# 1. Write the Phase 7 PR body to a temp file (e.g. .git/PR_BODY.md) using your
+#    file-writing tool. The body never passes through the shell.
+# 2. Open the PR from that file:
 gh pr create \
   --title "<subject line of the commit>" \
-  --body "$(cat <<'EOF'
-<PR body from Phase 7>
-EOF
-)" \
+  --body-file .git/PR_BODY.md \
   --base <default-branch> \
   [--draft]
 ```
+
+PR bodies are markdown: they routinely carry backticks (inline code), `$(...)`, and quotes. **Never** inline the body as `--body "$(cat <<'EOF' … EOF)"` — the shell parses backticks/`$(` inside the command substitution before `gh` ever runs, so the call fails (or worse, opens the PR with a truncated/garbled body and you don't notice). `--body-file` reads the file verbatim: no shell quoting, no escaping. Only `--title` stays inline — keep it a single plain line with no backticks.
 
 Return the PR URL to the user. Done.
 
