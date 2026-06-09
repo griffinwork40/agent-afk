@@ -28,7 +28,7 @@ import { formatResumeCommand } from '../../cli/resume-command.js';
 type LogFn = (...args: unknown[]) => void;
 
 /** Canonical short aliases accepted by /model and the inline keyboard. */
-export const MODEL_ALIASES_HINT = ['small', 'medium', 'large', 'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku'] as const;
+export const MODEL_ALIASES_HINT = ['small', 'medium', 'large', 'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable'] as const;
 
 /**
  * Handle /clear command (SDK /clear - clear conversation history)
