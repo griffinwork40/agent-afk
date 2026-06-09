@@ -1,0 +1,91 @@
+/**
+ * Unit tests for the pure closure-reason classifier extracted from
+ * AgentSession (`closure-reason.ts`). Covers the precedence rules in
+ * `classifyClosureReason` and the `isTruncationStopReason` predicate.
+ */
+import { describe, it, expect } from 'vitest';
+import {
+  classifyClosureReason,
+  isTruncationStopReason,
+  type ClosureReasonInputs,
+} from './closure-reason.js';
+
+const base: ClosureReasonInputs = {
+  dispatchReason: 'close',
+  maxTurnsHit: false,
+  hookBlocked: false,
+  abort: null,
+  lastStopReason: undefined,
+};
+
+describe('isTruncationStopReason', () => {
+  it('flags Anthropic max_tokens and OpenAI length', () => {
+    expect(isTruncationStopReason('max_tokens')).toBe(true);
+    expect(isTruncationStopReason('length')).toBe(true);
+  });
+
+  it('does not flag clean / tool / unknown stop reasons', () => {
+    expect(isTruncationStopReason('end_turn')).toBe(false);
+    expect(isTruncationStopReason('stop')).toBe(false);
+    expect(isTruncationStopReason('tool_use')).toBe(false);
+    expect(isTruncationStopReason(undefined)).toBe(false);
+  });
+});
+
+describe('classifyClosureReason', () => {
+  it('returns model_end_turn for a clean close', () => {
+    expect(classifyClosureReason(base)).toBe('model_end_turn');
+  });
+
+  it('reports truncated when the final turn hit the token ceiling', () => {
+    expect(classifyClosureReason({ ...base, lastStopReason: 'max_tokens' })).toBe('truncated');
+    expect(classifyClosureReason({ ...base, lastStopReason: 'length' })).toBe('truncated');
+  });
+
+  it('reports max_turns_exceeded with the highest precedence', () => {
+    expect(classifyClosureReason({ ...base, maxTurnsHit: true })).toBe('max_turns_exceeded');
+    // The turn-cap throw surfaces as a generic error/abort — the flag must win.
+    expect(
+      classifyClosureReason({ ...base, maxTurnsHit: true, dispatchReason: 'error' }),
+    ).toBe('max_turns_exceeded');
+    expect(classifyClosureReason({ ...base, maxTurnsHit: true, abort: 'abort' })).toBe(
+      'max_turns_exceeded',
+    );
+  });
+
+  it('reports hook_blocked when a SessionStart hook blocked', () => {
+    expect(
+      classifyClosureReason({ ...base, hookBlocked: true, dispatchReason: 'error' }),
+    ).toBe('hook_blocked');
+  });
+
+  it('prefers max_turns_exceeded over hook_blocked if both are set', () => {
+    expect(classifyClosureReason({ ...base, maxTurnsHit: true, hookBlocked: true })).toBe(
+      'max_turns_exceeded',
+    );
+  });
+
+  it('maps a generic init/runtime error to abort', () => {
+    expect(classifyClosureReason({ ...base, dispatchReason: 'error' })).toBe('abort');
+  });
+
+  it('preserves prior behavior: a generic error outranks the abort-signal class', () => {
+    // Pre-refactor order: dispatchReason==='error' returned 'abort' before
+    // inspecting the abort signal.
+    expect(
+      classifyClosureReason({ ...base, dispatchReason: 'error', abort: 'budget_exceeded' }),
+    ).toBe('abort');
+  });
+
+  it('maps classified abort signals when not a generic error', () => {
+    expect(classifyClosureReason({ ...base, abort: 'budget_exceeded' })).toBe('budget_exceeded');
+    expect(classifyClosureReason({ ...base, abort: 'timeout' })).toBe('timeout');
+    expect(classifyClosureReason({ ...base, abort: 'abort' })).toBe('abort');
+  });
+
+  it('an abort signal outranks a truncation stop reason', () => {
+    expect(
+      classifyClosureReason({ ...base, abort: 'timeout', lastStopReason: 'max_tokens' }),
+    ).toBe('timeout');
+  });
+});

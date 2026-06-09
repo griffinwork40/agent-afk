@@ -17,7 +17,7 @@ import type { SlashCommand } from '../types.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 
 /** Display hint only — not used for validation. Full model IDs (org/model) are also accepted. */
-const MODEL_ALIASES_HINT = ['small', 'medium', 'large', 'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku'] as const;
+const MODEL_ALIASES_HINT = ['small', 'medium', 'large', 'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable'] as const;
 
 const costCmd: SlashCommand = {
   name: '/cost',
@@ -218,7 +218,7 @@ const resetCmd: SlashCommand = {
 
 const modelCmd: SlashCommand = {
   name: '/model',
-  usage: '/model <small|medium|large|opus|sonnet|haiku|org/model>',
+  usage: '/model <small|medium|large|opus|sonnet|haiku|fable|org/model>',
   summary: 'Switch the active model mid-session',
   hint: 'Switch the capability tier (small/medium/large — or your configured names) or pass a full model id. Upgrade to large for a hard problem, downshift to small for cheap iteration — context carries over. Also accepts HuggingFace-style ids (e.g. mlx-community/Qwen3-30B-A3B-4bit).',
   async handler(ctx, args) {

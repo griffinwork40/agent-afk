@@ -142,6 +142,28 @@ describe('parseTerminalState — bullet field mapping', () => {
     expect(v?.whatWasDone).toBe('thing one');
     expect(v?.evidence).toBe('thing two');
   });
+
+  // Regression: models emit `**Label:** value`, putting the colon inside the
+  // bold span. The split stranded the closing `**` at the head of the value,
+  // leaking a literal `**` into the card and the ledger rail.
+  it('strips orphaned bold markers from labels and values (**Label:** form)', () => {
+    const text = `prose\n\nDone\n- **What was done:** built the parser\n- **Evidence:** see tests/parse.test.ts\n- **Deferred:** integrate with renderer`;
+    const v = parseTerminalState(text);
+    expect(v?.whatWasDone).toBe('built the parser');
+    expect(v?.evidence).toBe('see tests/parse.test.ts');
+    expect(v?.deferred).toBe('integrate with renderer');
+    expect(v?.whatWasDone).not.toContain('**');
+    expect(v?.evidence).not.toContain('**');
+  });
+
+  it('preserves balanced bold and globs/paths inside values', () => {
+    const text = `prose\n\nDone\n- What was done: touched **all** of src/**/*.ts\n- Evidence: see __init__ wiring`;
+    const v = parseTerminalState(text);
+    // A balanced `**all**` and a glob `src/**/*.ts` (no space after `**`) must
+    // survive the orphaned-marker strip untouched.
+    expect(v?.whatWasDone).toBe('touched **all** of src/**/*.ts');
+    expect(v?.evidence).toBe('see __init__ wiring');
+  });
 });
 
 describe('parseTerminalState — tail-anchored window', () => {

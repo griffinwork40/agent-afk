@@ -319,6 +319,38 @@ describe('renderMarkdownToTerminal', () => {
       expect(out).toContain('**literal**');
     });
 
+    // Regression: a value like `** No code changed` (an orphaned bold close
+    // stranded by the `**Label:** value` bullet split) leaked a literal `**`.
+    // marked treats `** ` as plain text since it is not a valid CommonMark
+    // opener, so the formatter must drop the orphaned leading marker.
+    it('strips an orphaned leading bold marker followed by a space', () => {
+      const out = stripAnsi(renderCardLine('** No code changed — just a /gather map'));
+      expect(out).not.toContain('**');
+      expect(out).toBe('No code changed — just a /gather map');
+    });
+
+    // The whitespace guard must spare globs, which have no space after the
+    // leading marker — so the orphaned-marker strip never fires on them.
+    // (Balanced emphasis like `__init__` is still transformed by marked itself,
+    // independent of this strip; we assert only the strip's whitespace guard.)
+    it('does not strip a leading marker that lacks a trailing space (globs)', () => {
+      expect(renderCardLine('**/*.ts changed')).toContain('**/*.ts');
+      expect(stripAnsi(renderCardLine('__lib leading underscore'))).toContain('__lib');
+    });
+
+    // Regression: the orphaned-marker strip must also apply on the
+    // raw-passthrough path. A body like `** > quote` (orphaned `**` + blockquote)
+    // or `** ---` (orphaned `**` + hr) lexes to a passthrough type; returning the
+    // original `text` there leaked the literal `**`. The passthrough branch must
+    // return the normalized (marker-stripped) text instead.
+    it('strips an orphaned marker even when the body lexes to a raw-passthrough type', () => {
+      expect(stripAnsi(renderCardLine('** > quoted summary line'))).not.toContain('**');
+      expect(stripAnsi(renderCardLine('** > quoted summary line'))).toBe('> quoted summary line');
+      expect(stripAnsi(renderCardLine('** ---'))).not.toContain('**');
+      // A passthrough body with NO leading orphan is returned byte-identical.
+      expect(renderCardLine('> a normal quote')).toBe('> a normal quote');
+    });
+
     // Nested inline: recursive renderInlineTokens should style both layers.
     it('renders nested inline markdown (bold containing italic)', () => {
       const out = renderCardLine('**bold _and italic_ text**');

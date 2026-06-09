@@ -4,10 +4,19 @@
  * MCP tools by server correctly.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { buildRuntimeStateSource } from './runtime-source.js';
+import { gatherWorkspace } from './workspace-source.js';
 import type { AnthropicToolDef } from '../tools/types.js';
-import type { RuntimeSubagents } from './types.js';
+import type { RuntimeSubagents, RuntimeWorkspace } from './types.js';
+
+// `getWorkspace()` delegates to the real `gatherWorkspace`, which spawns git
+// subprocesses against the test's cwd — nondeterministic and slow. Mock it so
+// the tests can assert the *call discipline* (fresh per read vs. frozen at
+// construction) deterministically, without depending on a real repo.
+vi.mock('./workspace-source.js', () => ({
+  gatherWorkspace: vi.fn(),
+}));
 
 // --- Fixture builders --------------------------------------------------------
 
@@ -225,5 +234,54 @@ describe('buildRuntimeStateSource.getSubagents', () => {
   it('returns empty result shape when no subagent executor is wired', () => {
     const src = buildRuntimeStateSource(defaultDeps());
     expect(src.getSubagents()).toEqual({ active: [], backgroundJobs: [] });
+  });
+});
+
+// --- getWorkspace ------------------------------------------------------------
+
+describe('buildRuntimeStateSource.getWorkspace', () => {
+  const ws = (dirtyCount: number): RuntimeWorkspace => ({
+    branch: 'main',
+    headSha: 'abc1234',
+    dirty: dirtyCount > 0,
+    dirtyCount,
+    remoteUrl: 'git@github.com:acme/repo.git',
+  });
+
+  beforeEach(() => {
+    vi.mocked(gatherWorkspace).mockReset();
+  });
+
+  it('recomputes workspace state on every call — not frozen at construction', () => {
+    // Regression guard: getWorkspace() previously returned a single
+    // construction-time snapshot, so the model saw a stale dirtyCount no matter
+    // how many files changed mid-session. It must now pull fresh on each read,
+    // mirroring the live getTools()/getSubagents() accessors.
+    vi.mocked(gatherWorkspace)
+      .mockReturnValueOnce(ws(0)) // clean at first orientation
+      .mockReturnValueOnce(ws(3)); // 3 files written since
+
+    const src = buildRuntimeStateSource(defaultDeps());
+
+    expect(src.getWorkspace().dirtyCount).toBe(0);
+    // The frozen implementation would still report 0 here — this is the line
+    // that fails against the pre-unfreeze code.
+    expect(src.getWorkspace().dirtyCount).toBe(3);
+    expect(vi.mocked(gatherWorkspace)).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not gather eagerly at construction (no spawn until first read)', () => {
+    vi.mocked(gatherWorkspace).mockReturnValue(ws(0));
+    buildRuntimeStateSource(defaultDeps());
+    // The old code spawned 4 git processes at construction even if no one ever
+    // read the workspace. The unfrozen version is lazy.
+    expect(vi.mocked(gatherWorkspace)).not.toHaveBeenCalled();
+  });
+
+  it('passes deps.cwd through to gatherWorkspace on each read', () => {
+    vi.mocked(gatherWorkspace).mockReturnValue(ws(0));
+    const src = buildRuntimeStateSource({ ...defaultDeps(), cwd: '/custom/work' });
+    src.getWorkspace();
+    expect(vi.mocked(gatherWorkspace)).toHaveBeenCalledWith('/custom/work');
   });
 });

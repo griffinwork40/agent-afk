@@ -78,6 +78,7 @@ describe('Config Loader', () => {
       expect(isValidModel('sonnet')).toBe(true);
       expect(isValidModel('sonnet_1m')).toBe(true);
       expect(isValidModel('haiku')).toBe(true);
+      expect(isValidModel('fable')).toBe(true);
     });
 
     it('should reject invalid model names', () => {
@@ -94,6 +95,7 @@ describe('Config Loader', () => {
       expect(getModelId('sonnet')).toBe('claude-sonnet-4-6');
       expect(getModelId('sonnet_1m')).toBe('claude-sonnet-4-6');
       expect(getModelId('haiku')).toBe('claude-haiku-4-5-20251001');
+      expect(getModelId('fable')).toBe('claude-fable-5');
     });
   });
 

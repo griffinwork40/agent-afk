@@ -5,8 +5,10 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  CLAUDE_FABLE_5_ID,
   computeSlotBindings,
   DEFAULT_SLOT_BINDINGS,
+  DIRECT_MODEL_ALIASES,
   getSlotBindings,
   parseModelsConfig,
   resetSlotBindings,
@@ -95,6 +97,39 @@ describe('resolveModelInput', () => {
     expect(resolveModelInput('mlx-community/Qwen3-32B-4bit')).toBe('mlx-community/Qwen3-32B-4bit');
     expect(resolveModelInput('auto')).toBe('auto');
     expect(resolveModelInput(undefined)).toBeUndefined();
+  });
+});
+
+describe('Claude Fable 5 fixed-id alias', () => {
+  it('exposes the canonical wire id via the direct-alias table', () => {
+    expect(CLAUDE_FABLE_5_ID).toBe('claude-fable-5');
+    expect(DIRECT_MODEL_ALIASES['fable']).toBe('claude-fable-5');
+  });
+
+  it('resolves the `fable` alias straight to claude-fable-5 (case-insensitive)', () => {
+    expect(resolveModelInput('fable')).toBe('claude-fable-5');
+    expect(resolveModelInput('FABLE')).toBe('claude-fable-5');
+    expect(resolveModelInput('  Fable  ')).toBe('claude-fable-5');
+    expect(resolveBinding('fable')).toEqual({ id: 'claude-fable-5' });
+  });
+
+  it('is NOT a capability tier — slotForInput never matches it', () => {
+    // fable sits above the large/opus slot, so it has no tier of its own.
+    expect(slotForInput('fable')).toBeUndefined();
+  });
+
+  it('stays pinned to claude-fable-5 regardless of slot rebindings', () => {
+    // The direct alias bypasses slot bindings entirely: rebinding every tier to
+    // an OpenAI id must not drag `fable` off claude-fable-5.
+    const rebound = makeSlots({ small: 'gpt-4o-mini', medium: 'gpt-4o', large: 'gpt-4o' });
+    expect(resolveModelInput('fable', rebound)).toBe('claude-fable-5');
+  });
+
+  it('reports the 1M context window and 128k max output', () => {
+    expect(contextLimitFor('fable')).toBe(1_000_000);
+    expect(contextLimitFor('claude-fable-5')).toBe(1_000_000);
+    expect(maxOutputTokensFor('fable')).toBe(128_000);
+    expect(maxOutputTokensFor('claude-fable-5')).toBe(128_000);
   });
 });
 

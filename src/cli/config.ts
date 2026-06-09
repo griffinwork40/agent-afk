@@ -98,6 +98,19 @@ export interface CliConfig {
     };
   };
   /**
+   * Telegram outbound notification routing, sourced from afk.config.json
+   * `telegram.notify`. Stays `undefined` when the user has no `telegram` block —
+   * the resolver in `src/telegram/notify-routing.ts` owns the defaults (deliver
+   * to the primary/DM chat). See `loadTelegramConfig()`.
+   */
+  telegram?: {
+    notify?: {
+      mode?: 'primary' | 'broadcast' | 'custom';
+      primaryChatId?: number;
+      targets?: number[];
+    };
+  };
+  /**
    * `afk interactive` defaults.
    *
    * Currently scopes worktree auto-naming knobs; future interactive-only
@@ -239,6 +252,19 @@ interface ConfigFileSchema {
       maxAgeDaysClean?: number;
       maxAgeDaysDirty?: number;
       scope?: string;
+    };
+  };
+  /**
+   * Telegram outbound notification routing. Separate from the inbound allowlist
+   * (`AFK_TELEGRAM_ALLOWED_CHAT_IDS`, which gates who may command the bot).
+   * Parsed defensively below; consumed via `loadTelegramConfig()` →
+   * `src/telegram/notify-routing.ts`.
+   */
+  telegram?: {
+    notify?: {
+      mode?: 'primary' | 'broadcast' | 'custom';
+      primaryChatId?: number;
+      targets?: number[];
     };
   };
   interactive?: {
@@ -598,6 +624,28 @@ function loadJsonConfig(): {
           config.daemon = daemon;
         }
 
+        if (json.telegram && typeof json.telegram === 'object') {
+          const telegram: NonNullable<ConfigFileSchema['telegram']> = {};
+          const notify = json.telegram.notify;
+          if (notify && typeof notify === 'object') {
+            const parsed: NonNullable<NonNullable<ConfigFileSchema['telegram']>['notify']> = {};
+            if (notify.mode === 'primary' || notify.mode === 'broadcast' || notify.mode === 'custom') {
+              parsed.mode = notify.mode;
+            }
+            if (typeof notify.primaryChatId === 'number' && Number.isFinite(notify.primaryChatId)) {
+              parsed.primaryChatId = notify.primaryChatId;
+            }
+            if (Array.isArray(notify.targets)) {
+              const targets = notify.targets.filter(
+                (t): t is number => typeof t === 'number' && Number.isFinite(t),
+              );
+              if (targets.length > 0) parsed.targets = targets;
+            }
+            telegram.notify = parsed;
+          }
+          config.telegram = telegram;
+        }
+
         if (json.updatePolicy && ['notify', 'auto', 'off'].includes(json.updatePolicy)) {
           config.updatePolicy = json.updatePolicy as 'notify' | 'auto' | 'off';
         }
@@ -719,6 +767,18 @@ function loadAfkMd(): { content: string; path: string } | null {
  * `ANTHROPIC_API_KEY` is only fatal for the Anthropic path, and callers
  * running Codex get a friendlier message from the provider itself.
  */
+/**
+ * Read the parsed `telegram` block from afk.config.json (cwd → ~/.afk/config →
+ * legacy), or `{}` when absent. Backed by the memoized `loadJsonConfig`, so it
+ * is side-effect-free — unlike `loadConfig`, which installs process-global
+ * model-slot bindings and can throw on a misconfigured `local-*` model, neither
+ * of which belongs on the notification push path. The `AFK_TELEGRAM_PRIMARY_CHAT_ID`
+ * env override is merged separately in `src/telegram/notify-routing.ts`.
+ */
+export function loadTelegramConfig(): NonNullable<CliConfig['telegram']> {
+  return loadJsonConfig().config.telegram ?? {};
+}
+
 export function loadConfig(overrides?: Partial<CliConfig>): CliConfig {
   const envConfig = loadEnvConfig();
   const { config: jsonConfig, sourcePath: jsonSourcePath, modelsPartial } = loadJsonConfig();
@@ -766,6 +826,7 @@ export function loadConfig(overrides?: Partial<CliConfig>): CliConfig {
     ...(systemPromptSource !== undefined ? { systemPromptSource } : {}),
     ...(merged.autoRouting !== undefined ? { autoRouting: merged.autoRouting } : {}),
     ...(merged.daemon !== undefined ? { daemon: merged.daemon } : {}),
+    ...(merged.telegram !== undefined ? { telegram: merged.telegram } : {}),
     ...(merged.bgSummaries !== undefined ? { bgSummaries: merged.bgSummaries } : {}),
     ...(merged.maxSummaryCallsPerSession !== undefined
       ? { maxSummaryCallsPerSession: merged.maxSummaryCallsPerSession }

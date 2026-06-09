@@ -13,6 +13,59 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ### Changed
 - `/plan off` now exits plan mode, saves the plan you developed to a markdown file under `<cwd>/.afk/plans/`, and implements it — replacing the closure-summary ritual (which only emitted a 3-section recap to the transcript). The mode flips to `default` *before* the seeded turn so writes are permitted for the save + implementation. Shift+Tab still exits plan mode without saving or implementing (the manual-takeover escape hatch). The deferred-flip `pendingPlanExit` machinery is removed.
+## [3.90.2] - 2026-06-09
+
+### Added
+- telegram: configurable outbound notification routing via `telegram.notify` in afk.config.json (`mode`, `primaryChatId`, `targets`) plus `AFK_TELEGRAM_NOTIFY_MODE` / `AFK_TELEGRAM_PRIMARY_CHAT_ID` env overrides. New pure resolver `src/telegram/notify-routing.ts`.
+
+### Changed
+- telegram: outbound notifications (daemon alerts, `send_telegram`, OAuth prompts, `/review`, digests) now default to a single **primary** chat — the first private/DM chat in `AFK_TELEGRAM_ALLOWED_CHAT_IDS` — instead of broadcasting to every allowed chat. Separates the inbound allowlist (who may command the bot) from outbound delivery. Single-chat setups are unaffected; multi-chat setups can restore fan-out with `mode: "broadcast"` (or `AFK_TELEGRAM_NOTIFY_MODE=broadcast`).
+
+### Added
+- route outbound notifications to a primary chat, not all allowed chats (#54) (e542bb2)
+
+### Fixed
+- strip orphaned bold markers in verdict cards; dedupe deferred row (#65) (917ac66)
+
+## [3.90.1] - 2026-06-09
+
+### Fixed
+- route subagent overlay refreshes through OverlayComposer (#63) (baf325d)
+
+## [3.90.0] - 2026-06-09
+
+### Added
+- add Claude Fable 5 (claude-fable-5) (#64) (cdbc3f1)
+
+### Fixed
+- recompute git workspace state per read instead of freezing at session start (#62) (05b5174)
+
+### Changed
+- extract compositor frame composition to frame.ts (#61) (9f5c54e)
+- awa-bundled/shadow-verify: skip adversarial re-derivation on text-terminal sessions (#57) (fad6885)
+
+## [3.89.11] - 2026-06-09
+
+### Fixed
+- surface the skill name in the tool lane (#59) (a8728f1)
+
+## [3.89.10] - 2026-06-09
+
+### Fixed
+- emit honest closure reasons (truncated, hook_blocked, max_turns_exceeded) (#60) (19206fe)
+
+## [3.89.9] - 2026-06-09
+
+### Fixed
+- clamp max_tokens to model ceiling and guard thinking budget (#58) (7d02d4b)
+
+## [3.89.8] - 2026-06-08
+
+### Fixed
+- ship uses --body-file/-F instead of heredoc-in-$() (#53) (a89b9db)
+
+### Changed
+- isolate no-auth tests from host credentials via AuthResolverDeps injection (#56) (5be979f)
 
 ## [3.89.7] - 2026-06-08
 
