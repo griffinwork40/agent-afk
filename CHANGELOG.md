@@ -11,11 +11,20 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.90.2] - 2026-06-09
+
 ### Added
 - telegram: configurable outbound notification routing via `telegram.notify` in afk.config.json (`mode`, `primaryChatId`, `targets`) plus `AFK_TELEGRAM_NOTIFY_MODE` / `AFK_TELEGRAM_PRIMARY_CHAT_ID` env overrides. New pure resolver `src/telegram/notify-routing.ts`.
 
 ### Changed
 - telegram: outbound notifications (daemon alerts, `send_telegram`, OAuth prompts, `/review`, digests) now default to a single **primary** chat — the first private/DM chat in `AFK_TELEGRAM_ALLOWED_CHAT_IDS` — instead of broadcasting to every allowed chat. Separates the inbound allowlist (who may command the bot) from outbound delivery. Single-chat setups are unaffected; multi-chat setups can restore fan-out with `mode: "broadcast"` (or `AFK_TELEGRAM_NOTIFY_MODE=broadcast`).
+
+### Added
+- route outbound notifications to a primary chat, not all allowed chats (#54) (e542bb2)
+
+### Fixed
+- strip orphaned bold markers in verdict cards; dedupe deferred row (#65) (917ac66)
+
 ## [3.90.1] - 2026-06-09
 
 ### Fixed
