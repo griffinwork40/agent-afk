@@ -22,7 +22,7 @@ When a sub-agent (or wave) returns investigation findings, code-review conclusio
 Any time sub-agent output will drive user decisions, file edits, commits, external side-effects, or is the basis of a user-facing summary.
 
 **Skip when:**
-Sub-agent ran inside an orchestrator skill that already verifies (`resolve`, `diagnose`, `appmap`); sub-agent returned explicit failure; work was purely exploratory and no decision follows.
+Sub-agent ran inside an orchestrator skill that already verifies (`resolve`, `diagnose`, `appmap`); sub-agent returned explicit failure; work was purely exploratory and no decision follows; or the session is **text-terminal** — a pure explanation, architecture walkthrough, onboarding Q&A, or capability map that names no mutated artifact (file/PR/commit/test), where there are no re-checkable state claims for adversarial verifiers to re-derive (assess coverage, coherence, and citation density instead of dispatching re-derivation sub-agents).
 
 ## Appendix: verification methods by domain (non-binding)
 
