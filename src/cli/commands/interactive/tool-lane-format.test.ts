@@ -6,7 +6,7 @@
  * Pure-function tests; no ToolLane / no terminal state.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import {
   summarizeToolArgs,
   formatOutcome,
@@ -19,7 +19,8 @@ import {
   MAX_OVERLAY_DIFF_LINES,
   FLUSH_DIFF_LINES_DEFAULT,
 } from './tool-lane-format.js';
-import { stripAnsi } from '../../display.js';
+import { resetHyperlinksEnabledForTest } from '../../hyperlink.js';
+import { stripAnsi, displayWidth } from '../../display.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import type { DiffPayload } from '../../../utils/diff.js';
 
@@ -592,6 +593,82 @@ describe('shortenPaths — URL-safety + fs-path collapsing', () => {
     expect(shortenPaths('see https://x.com/a/b/c then /Users/me/proj/src/y.ts')).toBe(
       'see https://x.com/a/b/c then y.ts',
     );
+  });
+});
+
+describe('shortenPaths — OSC 8 hyperlink emission', () => {
+  afterEach(() => resetHyperlinksEnabledForTest());
+
+  it('emits no escapes when hyperlinks are disabled (non-TTY default)', () => {
+    resetHyperlinksEnabledForTest(false);
+    expect(shortenPaths('/Users/me/proj/src/x.ts')).toBe('x.ts');
+  });
+
+  it('wraps the collapsed basename in a file:// link to the full path when enabled', () => {
+    resetHyperlinksEnabledForTest(true);
+    const out = shortenPaths('/Users/me/proj/src/x.ts');
+    expect(stripAnsi(out)).toBe('x.ts');
+    expect(out).toContain('\x1b]8;;file:///Users/me/proj/src/x.ts\x1b\\');
+    expect(out).toContain('\x1b]8;;\x1b\\'); // close sequence present
+  });
+
+  it('zero-width invariant: linked output measures identical to plain output', () => {
+    resetHyperlinksEnabledForTest(true);
+    const linked = shortenPaths('git -C /Users/me/proj/agent-afk log');
+    resetHyperlinksEnabledForTest(false);
+    const plain = shortenPaths('git -C /Users/me/proj/agent-afk log');
+    expect(displayWidth(linked)).toBe(displayWidth(plain));
+    expect(stripAnsi(linked)).toBe(plain);
+  });
+
+  it('does not linkify URLs or short paths', () => {
+    resetHyperlinksEnabledForTest(true);
+    expect(shortenPaths(' https://example.com/docs/api/reference')).toBe(
+      ' https://example.com/docs/api/reference',
+    );
+    expect(shortenPaths('/tmp/file.ts')).toBe('/tmp/file.ts');
+  });
+
+  it('percent-encodes spaces in the link target', () => {
+    resetHyperlinksEnabledForTest(true);
+    const out = shortenPaths('/Users/me/My\u00a0Project/src/x.ts');
+    // Path with non-break space segment still produces an encoded URI and
+    // an intact visible basename.
+    expect(stripAnsi(out)).toContain('x.ts');
+  });
+
+  it('formatToolLine keeps the link intact through width budgeting', () => {
+    resetHyperlinksEnabledForTest(true);
+    const out = formatToolLine('read_file(/Users/me/proj/src/index.ts)', 80);
+    expect(stripAnsi(out)).toContain('index.ts');
+    expect(out).toContain('file:///Users/me/proj/src/index.ts');
+    // Balanced open/close: no link bleed past the row.
+    const opens = (out.match(/\x1b\]8;;file[^\x1b]*\x1b\\/g) ?? []).length;
+    const closes = (out.match(/\x1b\]8;;\x1b\\/g) ?? []).length;
+    expect(opens).toBe(closes);
+  });
+});
+
+describe('formatOutcome — persistedPath hyperlink', () => {
+  afterEach(() => resetHyperlinksEnabledForTest());
+
+  it('links the ~-shortened display path to the absolute path when enabled', () => {
+    resetHyperlinksEnabledForTest(true);
+    const out = formatOutcome(
+      makeResult({ persistedPath: '/home/u/.afk/state/out.txt' }),
+      '/home/u',
+    );
+    expect(stripAnsi(out)).toContain('saved → ~/.afk/state/out.txt');
+    expect(out).toContain('file:///home/u/.afk/state/out.txt');
+  });
+
+  it('renders plain text when disabled', () => {
+    resetHyperlinksEnabledForTest(false);
+    const out = formatOutcome(
+      makeResult({ persistedPath: '/home/u/.afk/state/out.txt' }),
+      '/home/u',
+    );
+    expect(out).not.toContain(']8;;');
   });
 });
 

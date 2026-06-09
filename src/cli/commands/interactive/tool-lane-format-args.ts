@@ -5,6 +5,7 @@ import {
   styleForToolName,
 } from '../../tool-category.js';
 import { truncateDisplayWidth, displayWidth } from '../../display.js';
+import { fileHyperlink, hyperlinksEnabled } from '../../hyperlink.js';
 import { sanitizeLabel } from './tool-lane-format-sanitize.js';
 
 /**
@@ -35,9 +36,29 @@ export function shortenPaths(text: string): string {
   return result;
 }
 
-/** Collapse absolute paths with 3+ segments to their basename. */
+/**
+ * Collapse absolute paths with 3+ segments to their basename.
+ *
+ * When the terminal supports OSC 8 hyperlinks, the collapsed basename is
+ * emitted as a clickable link targeting the full original path as a
+ * `file://` URL — the display text (and therefore layout, wrapping, and
+ * truncation budgets) is byte-identical in width to the plain basename
+ * because OSC sequences are zero display columns. Cmd+click in VS Code /
+ * Cursor / iTerm2 / WezTerm / kitty / Ghostty opens the full path even
+ * though only the basename is shown.
+ *
+ * Injection safety: the regex match comes from toolInput that was already
+ * ANSI-stripped at storage time (tool-lane.ts addStart), and
+ * `fileHyperlink` percent-encodes the URI via `pathToFileURL`, so path
+ * content cannot smuggle escape bytes into the emitted sequence. We emit
+ * the only OSC 8 in the pipeline — model-controlled escapes never survive
+ * to this point.
+ */
 function collapseFsPaths(text: string): string {
-  return text.replace(/\/(?:[^/\s,)]+\/){2,}([^/\s,)]+)/g, '$1');
+  const linkify = hyperlinksEnabled();
+  return text.replace(/\/(?:[^/\s,)]+\/){2,}([^/\s,)]+)/g, (fullPath, basename: string) =>
+    linkify ? fileHyperlink(basename, fullPath) : basename,
+  );
 }
 
 /**

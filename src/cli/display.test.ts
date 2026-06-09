@@ -20,6 +20,40 @@ describe('display utilities', () => {
     expect(scrubbed).not.toContain('\x1b');
   });
 
+  describe('truncateDisplayWidth — OSC 8 hyperlink bleed guard', () => {
+    const OSC8_CLOSE = '\x1b]8;;\x1b\\';
+    const link = (text: string, url: string) => `\x1b]8;;${url}\x1b\\${text}${OSC8_CLOSE}`;
+
+    it('re-closes a hyperlink span when the cut lands inside it', () => {
+      // `prefix ` (7 cols) + linked `long-basename.ts` — truncating at 12
+      // keeps the OSC 8 open but drops the original close. Without the
+      // bleed guard, everything rendered after this string joins the link.
+      const text = 'prefix ' + link('long-basename.ts', 'file:///a/b/long-basename.ts');
+      const out = truncateDisplayWidth(text, 12);
+      const opens = (out.match(/\x1b\]8;;[^\x1b]+\x1b\\/g) ?? []).length;
+      const closes = (out.match(/\x1b\]8;;\x1b\\/g) ?? []).length;
+      expect(opens).toBe(1);
+      expect(closes).toBe(1);
+      // Close must come after the ellipsis (remnant stays clickable) and
+      // before the SGR reset tail.
+      expect(out.indexOf(OSC8_CLOSE)).toBeGreaterThan(out.indexOf('…'));
+    });
+
+    it('does not add a spurious close when the link was fully consumed before the cut', () => {
+      const text = link('x.ts', 'file:///a/b/x.ts') + ' trailing-text-that-overflows';
+      const out = truncateDisplayWidth(text, 10);
+      // One close from the intact link; no extra appended.
+      const closes = (out.match(/\x1b\]8;;\x1b\\/g) ?? []).length;
+      expect(closes).toBe(1);
+    });
+
+    it('zero-width invariant: linked and plain text truncate to identical visible output', () => {
+      const plain = 'read x.ts now';
+      const linked = 'read ' + link('x.ts', 'file:///a/b/x.ts') + ' now';
+      expect(stripAnsi(truncateDisplayWidth(linked, 8))).toBe(truncateDisplayWidth(plain, 8));
+    });
+  });
+
   it('steps grapheme boundaries across emoji and combining sequences', () => {
     expect(previousGraphemeIndex('🙂a', '🙂a'.length)).toBe(2);
     expect(previousGraphemeIndex('éa', 'éa'.length)).toBe(2);

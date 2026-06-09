@@ -1,6 +1,7 @@
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
+import { fileHyperlink, hyperlinksEnabled } from '../../hyperlink.js';
 import { categorizeTool } from '../../tool-category.js';
 import { sanitizeLabel, sanitizeTextParagraph } from './tool-lane-format-sanitize.js';
 
@@ -96,7 +97,15 @@ export function formatOutcome(
     const displayPath = chunk.persistedPath.startsWith(effectiveHomeDir)
       ? '~' + chunk.persistedPath.slice(effectiveHomeDir.length)
       : chunk.persistedPath;
-    return resultColor(`saved → ${displayPath}`);
+    // OSC 8 hyperlink: keep the compact `~/…` display text but link to the
+    // full absolute path so the saved file is Cmd+clickable in supporting
+    // terminals. fileHyperlink percent-encodes the URI; zero display width
+    // so layout is unchanged. Color wrapping the link is safe — SGR and
+    // OSC 8 sequences nest independently.
+    const linked = hyperlinksEnabled()
+      ? fileHyperlink(displayPath, chunk.persistedPath)
+      : displayPath;
+    return resultColor(`saved → ${linked}`);
   }
   if (chunk.lineCount !== undefined && chunk.lineCount > 1) {
     return resultColor(`${chunk.lineCount} ${outcomeNoun(toolName, chunk.lineCount)}`);
