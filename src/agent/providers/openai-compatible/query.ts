@@ -51,6 +51,7 @@ import {
   resolveOpenAIAuth,
   formatAuthDiagnostic,
   type OpenAIAuthResolution,
+  type AuthResolverDeps,
 } from './auth.js';
 import { buildMessages, flattenUserContent, type OpenAIMessage } from './messages.js';
 import {
@@ -616,7 +617,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         type: 'tool.use.start',
         toolUseId: call.id,
         toolName: call.name,
-        toolInput: summarizeToolInput(call.input),
+        toolInput: summarizeToolInput(call.name, call.input),
         sessionId: this.initSessionId,
       };
     }
@@ -871,9 +872,21 @@ function defaultClientFactory(opts: {
  * helper in anthropic-direct/loop.ts so `tool.use.start` events render
  * identically across providers.
  */
-function summarizeToolInput(input: unknown): string {
+function summarizeToolInput(toolName: string, input: unknown): string {
   if (!input || typeof input !== 'object') return '';
   const obj = input as Record<string, unknown>;
+  // Skill dispatch: the `name` field IS the skill being invoked (diagnose,
+  // review, mint, …). Surface it as a paren-wrapped label so the tool lane
+  // renders `skill(diagnose)` instead of a bare `skill [skill]`. Mirrors the
+  // anthropic-direct helper exactly so labels render identically across
+  // providers — see the rationale comment in anthropic-direct/loop.ts.
+  if (toolName === 'skill' || toolName === 'Skill') {
+    const skillName = obj['name'];
+    if (typeof skillName === 'string' && skillName.length > 0) {
+      return `(${skillName.length > 60 ? skillName.slice(0, 59) + '…' : skillName})`;
+    }
+    return '';
+  }
   const path = obj['file_path'] ?? obj['path'] ?? obj['filePath'];
   if (typeof path === 'string') return ' ' + path;
   const cmd = obj['command'] ?? obj['cmd'];
@@ -902,9 +915,15 @@ export function buildQueryFromConfig(
     toolDispatcher?: ToolDispatcher;
     mcpManager?: import('../../mcp/index.js').McpManager;
     useResponsesApi?: boolean;
+    /**
+     * Optional env + fs injection point forwarded to `resolveOpenAIAuth`.
+     * Tests pass a hermetic stub here to prevent reading real host credentials
+     * (e.g. `~/.codex/auth.json`) from the developer's machine.
+     */
+    authDeps?: AuthResolverDeps;
   } = {},
 ): OpenAICompatibleQuery {
-  const auth = resolveOpenAIAuth(config.apiKey);
+  const auth = resolveOpenAIAuth(config.apiKey, options.authDeps);
   const synthesizedSessionId =
     config.resume ?? `openai-pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   // Resolve model-slot aliases (small/medium/large, custom names, and the

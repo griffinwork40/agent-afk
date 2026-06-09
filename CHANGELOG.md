@@ -11,6 +11,29 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.89.11] - 2026-06-09
+
+### Fixed
+- surface the skill name in the tool lane (#59) (a8728f1)
+
+## [3.89.10] - 2026-06-09
+
+### Fixed
+- emit honest closure reasons (truncated, hook_blocked, max_turns_exceeded) (#60) (19206fe)
+
+## [3.89.9] - 2026-06-09
+
+### Fixed
+- clamp max_tokens to model ceiling and guard thinking budget (#58) (7d02d4b)
+
+## [3.89.8] - 2026-06-08
+
+### Fixed
+- ship uses --body-file/-F instead of heredoc-in-$() (#53) (a89b9db)
+
+### Changed
+- isolate no-auth tests from host credentials via AuthResolverDeps injection (#56) (5be979f)
+
 ## [3.89.7] - 2026-06-08
 
 ### Fixed

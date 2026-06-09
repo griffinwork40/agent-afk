@@ -1093,6 +1093,58 @@ describe('loop.ts runTurn', () => {
       expect(loopEmittedStart.toolInput).toContain('test pattern');
     }
   });
+
+  // Regression: skill dispatch must surface WHICH skill in the tool lane.
+  // The skill tool's input is `{ name, arguments }` — none of the
+  // file_path/command/query fields match, so summarizeToolInput used to
+  // return '' and the lane rendered a bare `skill [skill]` with no hint of
+  // which skill ran. The fix returns the paren-wrapped skill name so the
+  // lane renders `skill(diagnose)`.
+  it('summarizeToolInput surfaces the skill name as a paren-wrapped label for skill dispatch', async () => {
+    let callIdx = 0;
+    const client = makeClient(() => {
+      callIdx += 1;
+      if (callIdx === 1) {
+        return fromArray(
+          makeToolUseStream('toolu_s', 'skill', '{"name":"diagnose","arguments":"flaky test"}'),
+        );
+      }
+      return fromArray(makeTextStream('Done'));
+    });
+
+    const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'ok' }));
+    const messages: MessageParam[] = [{ role: 'user', content: 'diagnose this' }];
+    const abortController = new AbortController();
+
+    const events = await collect(
+      runTurn({
+        client,
+        messages,
+        system: null,
+        tools: [{ name: 'skill', input_schema: { type: 'object' } }],
+        toolDispatcher: dispatcher,
+        model: 'claude-test',
+        maxTokens: 1024,
+        headers: {},
+        signal: abortController.signal,
+        ctx,
+      }),
+    );
+
+    // Loop emits tool.use.start with the summarized label; translate emits ' …'.
+    const loopEmittedStart = events.find(
+      (e) => e.type === 'tool.use.start' && e.toolInput !== ' …',
+    );
+    expect(loopEmittedStart).toBeDefined();
+    if (loopEmittedStart?.type === 'tool.use.start') {
+      // Paren-wrapped so the renderer treats it as a promoted dispatch label
+      // (matching `Agent(<label>)`), not a leaf-tool ` arg` suffix.
+      expect(loopEmittedStart.toolInput).toBe('(diagnose)');
+      // The skill `arguments` field is intentionally NOT echoed — the name
+      // alone identifies which skill ran, matching the Agent(label) form.
+      expect(loopEmittedStart.toolInput).not.toContain('flaky test');
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
