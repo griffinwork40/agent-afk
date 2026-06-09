@@ -56,6 +56,26 @@ describe('renderVerdictCard', () => {
     expect(out).toContain('Objective satisfied');
   });
 
+  // Regression: models sometimes emit identical text for the "done" and
+  // "deferred" fields, producing a confusing duplicate row in the card.
+  it('done: suppresses a deferred row that merely echoes the done field', () => {
+    const state: TerminalState = {
+      kind: 'done',
+      whatWasDone: 'No code changed — this was a design map',
+      evidence: 'see runtime-source.ts:86',
+      deferred: 'No code changed — this was a design map',
+      rawBody: '',
+    };
+    const out = stripAnsi(renderVerdictCard(state));
+    expect(out).toContain('No code changed — this was a design map');
+    expect(out).not.toContain('deferred');
+    // A genuinely distinct deferred field is still shown.
+    const state2: TerminalState = { ...state, deferred: 'integrate with renderer' };
+    const out2 = stripAnsi(renderVerdictCard(state2));
+    expect(out2).toContain('deferred');
+    expect(out2).toContain('integrate with renderer');
+  });
+
   it('blocked: shows blocker, unblock condition, and a recovery affordance', () => {
     const state: TerminalState = {
       kind: 'blocked',
