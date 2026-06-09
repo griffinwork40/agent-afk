@@ -11,7 +11,7 @@
 import { env } from '../../../config/env.js';
 import { push, type PushOptions, type PushResult } from '../../../telegram/push.js';
 import type { ToolHandler } from '../types.js';
-import { parseAllowedChatIds } from '../../../telegram/allowlist.js';
+import { resolveConfiguredNotifyTargets } from '../../../telegram/notify-routing.js';
 
 const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
 
@@ -55,8 +55,8 @@ export function createSendTelegramHandler(
       };
     }
 
-    const allowedIds = parseAllowedChatIds(env.AFK_TELEGRAM_ALLOWED_CHAT_IDS);
-    if (allowedIds.size === 0) {
+    const targets = resolveConfiguredNotifyTargets();
+    if (targets.length === 0) {
       return {
         content:
           'Telegram is not configured: AFK_TELEGRAM_ALLOWED_CHAT_IDS is empty or unset. ' +
@@ -65,7 +65,6 @@ export function createSendTelegramHandler(
       };
     }
 
-    const targets = [...allowedIds];
     const failures: string[] = [];
 
     for (const chatId of targets) {

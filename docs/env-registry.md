@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**102 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**104 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -62,6 +62,8 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_TELEGRAM_ALLOWED_CHAT_IDS` | string |  |  | `123456789,987654321` | Comma-separated list of Telegram chat IDs allowed to interact with the bot. Required when the bot is running. |
 | `AFK_TELEGRAM_BOT_TOKEN` | string |  |  |  | Alternative env var name for the Telegram bot token, accepted by the setup wizard. |
 | `AFK_TELEGRAM_CWD` | string |  |  |  | Override the working directory used by the Telegram bot when spawning agent sessions. |
+| `AFK_TELEGRAM_NOTIFY_MODE` | string |  |  | `broadcast` | Outbound notification fan-out: primary (default — one chat), broadcast (every allowed chat), or custom (afk.config.json telegram.notify.targets). The afk.config.json telegram.notify.mode takes precedence. |
+| `AFK_TELEGRAM_PRIMARY_CHAT_ID` | string |  |  | `123456789` | Default chat ID for outbound notifications (primary-mode routing). When unset, notifications go to the first private/DM chat in AFK_TELEGRAM_ALLOWED_CHAT_IDS. The afk.config.json telegram.notify block takes precedence. |
 | `TELEGRAM_BOT_TOKEN` | string |  |  |  | Telegram bot token from @BotFather. Required to run the Telegram bot surface. |
 | `TELEGRAM_DATA_DIR` | string |  |  |  | Override the directory where Telegram bot state is stored. Defaults to ~/.afk/state/telegram/. |
 | `TELEGRAM_VERBOSE` | boolean |  |  | `1` | Set to 1 to log per-message details from the Telegram bot — chat IDs, message text, latency. |

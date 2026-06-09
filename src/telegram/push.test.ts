@@ -5,6 +5,11 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { push, pushIfConfigured } from './push';
 
+// loadTelegramConfig reads afk.config.json; mock it so these tests are hermetic
+// (notify routing is then driven purely by the env vars set per-test). The pure
+// resolver is exhaustively covered in notify-routing.test.ts.
+vi.mock('../cli/config.js', () => ({ loadTelegramConfig: vi.fn(() => ({})) }));
+
 function makeFetchOk(): typeof fetch {
   return vi.fn(async () => new Response(JSON.stringify({ ok: true, result: {} }), {
     status: 200,
@@ -157,19 +162,26 @@ describe('push', () => {
 });
 
 describe('pushIfConfigured', () => {
-  const originalToken = process.env['TELEGRAM_BOT_TOKEN'];
-  const originalAllow = process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'];
+  const NOTIFY_KEYS = [
+    'TELEGRAM_BOT_TOKEN',
+    'AFK_TELEGRAM_ALLOWED_CHAT_IDS',
+    'AFK_TELEGRAM_NOTIFY_MODE',
+    'AFK_TELEGRAM_PRIMARY_CHAT_ID',
+  ] as const;
+  const original: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    delete process.env['TELEGRAM_BOT_TOKEN'];
-    delete process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'];
+    for (const k of NOTIFY_KEYS) {
+      original[k] = process.env[k];
+      delete process.env[k];
+    }
   });
 
   afterEach(() => {
-    if (originalToken !== undefined) process.env['TELEGRAM_BOT_TOKEN'] = originalToken;
-    else delete process.env['TELEGRAM_BOT_TOKEN'];
-    if (originalAllow !== undefined) process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'] = originalAllow;
-    else delete process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'];
+    for (const k of NOTIFY_KEYS) {
+      if (original[k] !== undefined) process.env[k] = original[k];
+      else delete process.env[k];
+    }
   });
 
   test('returns null when token unset', async () => {
@@ -208,9 +220,20 @@ describe('pushIfConfigured', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  test('fans out to multiple chat IDs', async () => {
+  test('defaults to the primary (DM) chat for a multi-chat allowlist — no fan-out', async () => {
     process.env['TELEGRAM_BOT_TOKEN'] = 't';
     process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'] = '111,222,333';
+    const fetchImpl = makeFetchOk();
+    const result = await pushIfConfigured('hi', { fetchImpl });
+    expect(result).toHaveLength(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(JSON.parse((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1].body).chat_id).toBe(111);
+  });
+
+  test('fans out to multiple chat IDs in broadcast mode', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 't';
+    process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'] = '111,222,333';
+    process.env['AFK_TELEGRAM_NOTIFY_MODE'] = 'broadcast';
     const fetchImpl = makeFetchOk();
     const result = await pushIfConfigured('hi', { fetchImpl });
     expect(result).toHaveLength(3);
@@ -236,6 +259,7 @@ describe('pushIfConfigured', () => {
   test('forwards reply_markup to every chat when provided', async () => {
     process.env['TELEGRAM_BOT_TOKEN'] = 't';
     process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'] = '111,222';
+    process.env['AFK_TELEGRAM_NOTIFY_MODE'] = 'broadcast';
     const fetchImpl = makeFetchOk();
     const replyMarkup = {
       inline_keyboard: [[{ text: 'OK', callback_data: 'afk:f:x:slug' }]],
@@ -252,6 +276,7 @@ describe('pushIfConfigured', () => {
   test('attaches reply_markup only to the first chunk per chat', async () => {
     process.env['TELEGRAM_BOT_TOKEN'] = 't';
     process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'] = '111,222';
+    process.env['AFK_TELEGRAM_NOTIFY_MODE'] = 'broadcast';
     const fetchImpl = makeFetchOk();
     const replyMarkup = {
       inline_keyboard: [[{ text: 'Open', callback_data: 'afk:f:x:slug' }]],
