@@ -249,6 +249,7 @@ export const CompactionPayloadPersistedSchema = z.object({
 
 export const ClosureReasonSchema = z.enum([
   'model_end_turn',
+  'truncated',
   'iteration_cap',
   'abort',
   'timeout',
