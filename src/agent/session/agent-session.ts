@@ -22,6 +22,8 @@ import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import type { ProviderCompactResult, ProviderEvent, ProviderQuery } from '../provider.js';
 import { DEFAULT_SESSION_TIMEOUT_MS, RESET_DRAIN_TIMEOUT_MS, withTimeout } from '../timeout.js';
 import { dispatchSessionEnd, dispatchSessionStart } from './hooks-dispatch.js';
+import { HookBlockedError } from '../../utils/errors.js';
+import { classifyClosureReason } from './closure-reason.js';
 import type {
   AccountInfo,
   AgentConfig,
@@ -90,6 +92,12 @@ export class AgentSession implements IAgentSession {
    *  `tool_use_loop_capped`, `max_tokens`). Undefined when no turn
    *  completed in this session. */
   private lastStopReason: string | undefined;
+  /**
+   * Terminal-cause flags set at their origin sites so `deriveClosureReason`
+   * reports the specific reason instead of a generic abort. Reset by `reset()`.
+   */
+  private maxTurnsHit = false;
+  private hookBlocked = false;
   /**
    * Wall-clock timestamp captured at construction — used to compute the
    * `session_init_done` phase duration and the `session_init_start` emit.
@@ -193,6 +201,8 @@ export class AgentSession implements IAgentSession {
     this.sessionRunningCostUsd = 0;
     this.sessionRunningTokens = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
     this.lastStopReason = undefined;
+    this.maxTurnsHit = false;
+    this.hookBlocked = false;
     this.sessionEndDispatched = false;
     this.currentState = 'idle';
     this.subagentCompletedCount = 0;
@@ -250,6 +260,11 @@ export class AgentSession implements IAgentSession {
       }
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
+      // Origin signal for `hook_blocked`: a SessionStart hook that blocks
+      // throws HookBlockedError up through pullInitialization() to here.
+      if (error instanceof HookBlockedError) {
+        this.hookBlocked = true;
+      }
       if (!this.stateManager.isInitializationSettled()) {
         this.stateManager.rejectInitializationOnce(error);
       }
@@ -822,21 +837,16 @@ export class AgentSession implements IAgentSession {
 
   /**
    * Emit the `closure` trace event with the session's terminal
-   * classification. Maps the `dispatchSessionEndOnce` reason plus the
-   * abort signal's reason value into the {@link ClosureReason} enum.
+   * classification. Delegates the precedence rules to the pure
+   * {@link classifyClosureReason} (`./closure-reason.ts`), which maps the
+   * `dispatchSessionEndOnce` reason, the terminal-cause flags (`maxTurnsHit`,
+   * `hookBlocked`), the pre-classified abort reason, and the last provider
+   * stop reason into a {@link ClosureReason}.
    *
-   * Classification rules:
-   *  - `dispatchReason === 'error'` → `'abort'` (init-time error, treated
-   *    as a generic abort termination)
-   *  - aborted signal with `BudgetExceededError` reason → `'budget_exceeded'`
-   *  - aborted signal with a `TimeoutError` reason → `'timeout'`
-   *  - aborted signal otherwise (and `signal.reason !== 'closed'`)
-   *    → `'abort'`
-   *  - non-aborted normal close/reset → `'model_end_turn'`
-   *
-   * The other ClosureReason values (`iteration_cap`, `hook_blocked`,
-   * `max_turns_exceeded`) require explicit signaling from their origin
-   * sites and are deferred to a later commit.
+   * Wired reasons: `model_end_turn`, `truncated`, `abort`, `timeout`,
+   * `budget_exceeded`, `hook_blocked`, `max_turns_exceeded`. `iteration_cap`
+   * remains deferred — it is wired alongside the tool-use loop cap that
+   * produces it.
    */
   private async emitClosure(dispatchReason: string): Promise<void> {
     const writer = this.config.traceWriter;
@@ -864,23 +874,29 @@ export class AgentSession implements IAgentSession {
   }
 
   private deriveClosureReason(dispatchReason: string): import('../trace/index.js').ClosureReason {
-    if (dispatchReason === 'error') return 'abort';
+    // Pre-classify the abort-signal reason here (needs the concrete error
+    // classes); the precedence decision tree lives in the pure
+    // classifyClosureReason so it is unit-testable without a live session.
+    let abort: 'budget_exceeded' | 'timeout' | 'abort' | null = null;
     const signal = this.abortController.signal;
     if (signal.aborted && signal.reason !== 'closed') {
       const r = signal.reason;
-      if (r instanceof BudgetExceededError) return 'budget_exceeded';
-      if (r instanceof TimeoutError) return 'timeout';
-      // Some abort paths pass the error's message string rather than
-      // the error instance — match the well-known prefixes as a fallback
-      // so the classification stays accurate when the abort reason has
-      // been stringified upstream.
-      if (typeof r === 'string') {
-        if (r.startsWith('Budget ')) return 'budget_exceeded';
-        if (r.includes('timed out')) return 'timeout';
-      }
-      return 'abort';
+      if (r instanceof BudgetExceededError) abort = 'budget_exceeded';
+      else if (r instanceof TimeoutError) abort = 'timeout';
+      // Some abort paths pass the error's message string rather than the
+      // error instance — match the well-known prefixes as a fallback so the
+      // classification stays accurate when the abort reason was stringified.
+      else if (typeof r === 'string' && r.startsWith('Budget ')) abort = 'budget_exceeded';
+      else if (typeof r === 'string' && r.includes('timed out')) abort = 'timeout';
+      else abort = 'abort';
     }
-    return 'model_end_turn';
+    return classifyClosureReason({
+      dispatchReason,
+      maxTurnsHit: this.maxTurnsHit,
+      hookBlocked: this.hookBlocked,
+      abort,
+      lastStopReason: this.lastStopReason,
+    });
   }
 
   /**
@@ -992,6 +1008,9 @@ export class AgentSession implements IAgentSession {
       throw new Error('Cannot send message: session is busy');
     }
     if (this.config.maxTurns && this.turnCount >= this.config.maxTurns) {
+      // Origin signal for `max_turns_exceeded`: the throw below surfaces as a
+      // generic dispatch error, so flag the specific cause for the closure.
+      this.maxTurnsHit = true;
       throw new Error(`Maximum turns (${this.config.maxTurns}) exceeded`);
     }
   }

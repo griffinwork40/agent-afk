@@ -304,6 +304,9 @@ export interface CompactionPayloadPersisted {
 
 export type ClosureReason =
   | 'model_end_turn'
+  // Model's final turn was cut off by the output-token ceiling
+  // (Anthropic `max_tokens` / OpenAI `length`), not a clean completion.
+  | 'truncated'
   | 'iteration_cap'
   | 'abort'
   | 'timeout'
