@@ -11,6 +11,18 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.90.0] - 2026-06-09
+
+### Added
+- add Claude Fable 5 (claude-fable-5) (#64) (cdbc3f1)
+
+### Fixed
+- recompute git workspace state per read instead of freezing at session start (#62) (05b5174)
+
+### Changed
+- extract compositor frame composition to frame.ts (#61) (9f5c54e)
+- awa-bundled/shadow-verify: skip adversarial re-derivation on text-terminal sessions (#57) (fad6885)
+
 ## [3.89.11] - 2026-06-09
 
 ### Fixed

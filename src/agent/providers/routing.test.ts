@@ -61,6 +61,7 @@ describe('providerForModel', () => {
       'sonnet',
       'sonnet_1m',
       'haiku',
+      'fable',
       'auto',
     ])('routes short alias %s to anthropic', (alias) => {
       expect(providerForModel(alias)).toBe('anthropic-direct');
@@ -71,6 +72,7 @@ describe('providerForModel', () => {
       'claude-sonnet-4-6',
       'claude-haiku-4-5-20251001',
       'claude-sonnet-4',
+      'claude-fable-5',
     ])('routes full Claude id %s to anthropic', (id) => {
       expect(providerForModel(id)).toBe('anthropic-direct');
     });
@@ -408,8 +410,10 @@ describe('createChildProviderFactory — child provider routing', () => {
     'opus',
     'opus_1m',
     'haiku',
+    'fable',
     'claude-opus-4-8',
     'claude-sonnet-4-6',
+    'claude-fable-5',
   ])('routes Claude id %s to AnthropicDirectProvider', (model) => {
     const factory = createChildProviderFactory();
     const provider = factory({ childExecutor, childSkillExecutor, model });
@@ -548,8 +552,10 @@ describe('getDefaultSubagentModel — parent-aware fallback', () => {
     'opus',
     'opus_1m',
     'haiku',
+    'fable',
     'claude-opus-4-8',
     'claude-sonnet-4-6',
+    'claude-fable-5',
   ])('defaults to "sonnet" for Claude parent %s (preserves cost-mgmt intent)', (parent) => {
     expect(getDefaultSubagentModel(parent)).toBe('sonnet');
   });

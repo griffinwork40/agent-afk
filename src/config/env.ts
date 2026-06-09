@@ -166,7 +166,7 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'AFK_MODEL',
-    description: 'Default model for agent turns. Accepts slot names (small, medium, large), legacy aliases (opus, sonnet, haiku), or full model IDs.',
+    description: 'Default model for agent turns. Accepts slot names (small, medium, large), legacy aliases (opus, sonnet, haiku), the fixed-id fable alias (Claude Fable 5), or full model IDs.',
     type: 'string',
     required: false,
     default: 'sonnet',

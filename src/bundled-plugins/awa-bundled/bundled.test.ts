@@ -67,8 +67,12 @@ const PINNED_HASHES = {
   refactor: '9cb84710ddf2cf63e1a648460a64656d3f4a9aae8e21753b031556070740c51e',
   research: '10692d77e392cedce928f66cb5dec27dbc2066f48cfc33047820f56506da762a',
   review: '31a17d8c3bace684b7fce22588d54ce3e95462acdf397fc1673f3590192e0944',
+  // Hash bumped 2026-06-09: reconciles the SKILL.md edit landed in #57
+  // ("skip adversarial re-derivation on text-terminal sessions"), which changed
+  // the bundled copy but did not bump this pin — leaving the snapshot test red
+  // on main. The behavior change is intentional; this records the new content.
   'shadow-verify':
-    '9b1ea7db65485f849ae6dfb9a6f69a102d7ccc6e5230b561dc76ef8c666475f8',
+    '58afb3387766498a7b4321bac56196a2654e0bca1153e2c0f7d66154e2fa8705',
   // Hash bumped 2026-06: Phase 4 (commit) + Phase 8 (PR) switched from the
   // `--body "$(cat <<'EOF' … EOF)"` heredoc-in-command-substitution antipattern
   // to the file-based form (`git commit -F` / `gh pr create --body-file`). The

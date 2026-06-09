@@ -105,6 +105,23 @@ const LEGACY_ALIAS_TO_SLOT: Readonly<Record<string, SlotName>> = {
  */
 export const AUTO_SENTINEL = 'auto';
 
+/** Claude Fable 5 wire id — Anthropic's most-capable widely-released model. */
+export const CLAUDE_FABLE_5_ID = 'claude-fable-5';
+
+/**
+ * Fixed-id model aliases that are NOT capability tiers. Unlike the slot aliases
+ * (`small`/`medium`/`large`) and the legacy tier aliases (`haiku`/`sonnet`/
+ * `opus`), these name one concrete pinned model and are never rebound by user
+ * slot config. `fable` → Claude Fable 5 (`claude-fable-5`), the Mythos-class
+ * model GA'd 2026-06-09; it sits above the `large`/opus tier and so has no slot
+ * of its own — keeping it a direct alias means adding it does not displace any
+ * existing tier binding. Consulted by {@link resolveBinding} after slot
+ * resolution and before the raw-id passthrough.
+ */
+export const DIRECT_MODEL_ALIASES: Readonly<Record<string, string>> = {
+  fable: CLAUDE_FABLE_5_ID,
+};
+
 /**
  * Process-global resolved bindings, installed by `loadConfig()` via
  * {@link setSlotBindings}. `undefined` until installed; callers fall back to
@@ -237,6 +254,10 @@ export function resolveBinding(
   if (input === undefined) return { id: '' };
   const slot = slotForInput(input, bindings);
   if (slot) return bindings[slot];
+  // Fixed-id aliases (e.g. `fable` → claude-fable-5) are not tiers, so they
+  // bypass slot bindings and resolve straight to their pinned wire id.
+  const directId = DIRECT_MODEL_ALIASES[input.trim().toLowerCase()];
+  if (directId) return { id: directId };
   return { id: input };
 }
 
