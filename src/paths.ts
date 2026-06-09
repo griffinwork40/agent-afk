@@ -98,6 +98,21 @@ export function getProjectPluginsDir(): string {
   return join(getProjectAfkDir(), 'plugins');
 }
 
+/**
+ * Project-scoped plans directory: `<cwd>/.afk/plans/`.
+ *
+ * Home for the plan artifact the model writes when the user exits plan mode
+ * (`/plan off`). Takes an explicit `cwd` because the REPL tracks the session's
+ * effective working directory (`stats.cwd`, stamped at REPL bootstrap)
+ * separately from the Node host's `process.cwd()` — the two diverge under
+ * `afk i --worktree`, and the plan must land in the session's worktree, not
+ * the host's launch dir. The default keeps parity with the param-less sibling
+ * `getProject*Dir` helpers for non-REPL callers.
+ */
+export function getProjectPlansDir(cwd: string = process.cwd()): string {
+  return join(cwd, '.afk', 'plans');
+}
+
 export function getPluginsIndexPath(): string {
   return join(getPluginsDir(), '.index.json');
 }

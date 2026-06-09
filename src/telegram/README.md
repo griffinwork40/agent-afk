@@ -35,7 +35,9 @@ afk telegram logs -f
    Telegram's 10-edit-per-minute limit.
 5. **`formatter.ts`** — Message formatting, command listing, markdown
    escaping.
-6. **`allowlist.ts`** — Parses + enforces `AFK_TELEGRAM_ALLOWED_CHAT_IDS`.
+6. **`allowlist.ts`** — Parses + enforces the inbound `AFK_TELEGRAM_ALLOWED_CHAT_IDS`
+   gate. Outbound notification routing lives in **`notify-routing.ts`** (see
+   [Notification routing](#notification-routing)).
 7. **`manager.ts`** — Background-process lifecycle (spawn detached, PID
    file, SIGTERM→SIGKILL, status). State lives under
    `~/.afk/state/telegram/` and `~/.afk/logs/telegram.log`.
@@ -100,13 +102,52 @@ Aligned with the Agent SDK's slash command surface:
 | Variable                          | Required | Notes                                   |
 | --------------------------------- | -------- | --------------------------------------- |
 | `TELEGRAM_BOT_TOKEN`              | Yes      | From [@BotFather](https://t.me/BotFather) |
-| `AFK_TELEGRAM_ALLOWED_CHAT_IDS`   | Yes      | Comma-separated numeric chat IDs (gates who can message the bot) |
+| `AFK_TELEGRAM_ALLOWED_CHAT_IDS`   | Yes      | Comma-separated numeric chat IDs — the **inbound gate** (who can message the bot) |
+| `AFK_TELEGRAM_NOTIFY_MODE`        | No       | Outbound fan-out: `primary` (default — one chat), `broadcast` (every allowed chat), `custom` |
+| `AFK_TELEGRAM_PRIMARY_CHAT_ID`    | No       | Default chat for outbound notifications. Defaults to the first private/DM chat in the allowlist |
 | `ANTHROPIC_API_KEY` *or* `CLAUDE_CODE_OAUTH_TOKEN` | One of (or keychain) | See Auth section |
 | `CLAUDE_MODEL` *or* `AFK_MODEL`   | No       | Default `opus`                          |
 | `TELEGRAM_VERBOSE`                | No       | `true` to log every chat event          |
 | `TELEGRAM_DATA_DIR`               | No       | Override session-store location         |
 
-`afk telegram setup` walks you through the first three.
+`afk telegram setup` walks you through the first two required vars.
+
+## Notification routing
+
+The **inbound allowlist** (`AFK_TELEGRAM_ALLOWED_CHAT_IDS`) governs who may *command*
+the bot. **Outbound notifications** (daemon task/crash alerts, the `send_telegram`
+tool, MCP OAuth prompts, `/review` posts, digests) are routed separately — by
+default to a single **primary** chat, not fanned out to every allowed chat.
+
+Resolution (`src/telegram/notify-routing.ts`), highest precedence first:
+
+1. `afk.config.json` `telegram.notify` block (structured source of truth)
+2. env overrides (`AFK_TELEGRAM_NOTIFY_MODE`, `AFK_TELEGRAM_PRIMARY_CHAT_ID`)
+3. heuristic default: the first **positive** (private/DM) chat id in the allowlist
+   — Telegram DM ids are positive, group/channel ids negative — else the first
+   allowed id
+
+```jsonc
+// afk.config.json
+{
+  "telegram": {
+    "notify": {
+      "mode": "primary",                     // "primary" (default) | "broadcast" | "custom"
+      "primaryChatId": 123456789,            // optional; overrides the DM heuristic
+      "targets": [123456789, -1001234567890] // used only when mode === "custom"
+    }
+  }
+}
+```
+
+- `broadcast` restores the legacy fan-out to every allowed chat.
+- `custom` targets are **not** constrained to the allowlist (an announce-only
+  group the bot posts to but takes no commands from is valid); Telegram's own
+  bot-messaging rules gate actual delivery.
+- **Behavior change:** previously every notification fanned out to all allowed
+  chats. Single-chat setups are unaffected; multi-chat setups now default to the
+  primary chat — set `mode: "broadcast"` (or `AFK_TELEGRAM_NOTIFY_MODE=broadcast`)
+  to restore the old behavior.
 
 ## Testing
 

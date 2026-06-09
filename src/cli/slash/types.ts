@@ -72,20 +72,6 @@ export interface SessionStats {
   model: AgentModelInput;
   /** Plan-mode toggle — when true, session uses 'plan' PermissionMode. */
   planMode: boolean;
-  /**
-   * Closure-ritual flag. Set by `/plan off` when the user first asks to
-   * exit plan mode: the runtime keeps `planMode` true, seeds a closure
-   * prompt for the model to respond to, and flips to default in
-   * `onAfterTurn` once the closure response lands. A second `/plan off`
-   * while this flag is true performs a force-exit and clears the flag
-   * without launching a turn.
-   *
-   * Shift+Tab is the keyboard escape hatch and never sets this flag —
-   * it always performs an immediate flip via the raw `togglePlanMode`
-   * helper. `/plan on` while this flag is true clears it (user changed
-   * their mind about exiting).
-   */
-  pendingPlanExit?: boolean;
   /** SDK session ID once initialized. Populated from ResponseMetadata. */
   sessionId?: string;
   /**

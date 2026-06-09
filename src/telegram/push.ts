@@ -15,7 +15,7 @@
 
 import type { InlineKeyboardMarkup } from 'telegraf/types';
 
-import { parseAllowedChatIds } from './allowlist.js';
+import { resolveConfiguredNotifyTargets } from './notify-routing.js';
 import { splitLongMessage } from './formatter.js';
 import { env } from '../config/env.js';
 
@@ -109,9 +109,11 @@ export async function push(options: PushOptions): Promise<PushResult> {
 }
 
 /**
- * Push to every chat in `AFK_TELEGRAM_ALLOWED_CHAT_IDS`, splitting long text
- * into sequential Telegram-safe messages. Returns `null` if unconfigured (so
- * callers don't need to gate every call site).
+ * Push a notification to the configured delivery targets, splitting long text
+ * into sequential Telegram-safe messages. Targets are resolved by
+ * `resolveConfiguredNotifyTargets()` — by default a single "primary" chat, not
+ * the whole allowlist (see notify-routing.ts). Returns `null` if unconfigured
+ * (no token, or no resolvable targets) so callers don't gate every call site.
  */
 export async function pushIfConfigured(
   text: string,
@@ -123,8 +125,8 @@ export async function pushIfConfigured(
 ): Promise<PushResult[] | null> {
   const token = env.TELEGRAM_BOT_TOKEN;
   if (!token) return null;
-  const chatIds = parseAllowedChatIds(env.AFK_TELEGRAM_ALLOWED_CHAT_IDS);
-  if (chatIds.size === 0) return null;
+  const chatIds = resolveConfiguredNotifyTargets();
+  if (chatIds.length === 0) return null;
 
   const chunks = splitLongMessage(text);
   const results: PushResult[] = [];
