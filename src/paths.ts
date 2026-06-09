@@ -399,6 +399,50 @@ export function getBgJobMeta(jobId: string): string {
   return join(getBgJobDir(jobId), 'meta.json');
 }
 
+// ---------------------------------------------------------------------------
+// Session event-ledger paths
+// ---------------------------------------------------------------------------
+
+/**
+ * Session ids flow into ledger paths from provider-issued identifiers AND
+ * from caller-supplied CLI/Telegram arguments (`afk attach <id>`, `/watch
+ * <id>`), so the same traversal defense as bg job ids applies. UUIDs and
+ * slugified names both fit the charset.
+ */
+const LEDGER_SESSION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+const LEDGER_SESSION_ID_MAX_LEN = 128;
+
+/** Non-throwing safety check for session ids used in ledger paths. */
+export function isSafeLedgerSessionId(sessionId: string): boolean {
+  return (
+    typeof sessionId === 'string' &&
+    sessionId.length > 0 &&
+    sessionId.length <= LEDGER_SESSION_ID_MAX_LEN &&
+    LEDGER_SESSION_ID_PATTERN.test(sessionId)
+  );
+}
+
+/**
+ * Per-session ledger directory: `~/.afk/state/sessions/<sessionId>/`.
+ * Shares the sessions dir with sidecar `<id>.json` files and mint-state
+ * subdirs — the ledger adds `events.jsonl` inside the per-id subdir.
+ * @throws if `sessionId` fails {@link isSafeLedgerSessionId}.
+ */
+export function getSessionLedgerDir(sessionId: string): string {
+  if (!isSafeLedgerSessionId(sessionId)) {
+    throw new Error(`Invalid session id for ledger path: ${JSON.stringify(sessionId)}`);
+  }
+  return join(getSessionsDir(), sessionId);
+}
+
+/**
+ * Append-only JSONL event ledger for a session.
+ * @throws if `sessionId` fails {@link isSafeLedgerSessionId}.
+ */
+export function getSessionLedgerPath(sessionId: string): string {
+  return join(getSessionLedgerDir(sessionId), 'events.jsonl');
+}
+
 /**
  * Path to the MCP server-status file.
  *

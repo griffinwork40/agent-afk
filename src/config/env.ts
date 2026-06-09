@@ -754,6 +754,17 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'debug',
   },
   {
+    name: 'AFK_SESSION_LEDGER_DISABLED',
+    description:
+      'Disable the per-session durable event ledger (state/sessions/<id>/events.jsonl). ' +
+      'Set to 1 to skip ledger writes; live cross-surface watching (e.g. the Telegram ' +
+      '/watch command) will report no activity for sessions started while disabled.',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'debug',
+  },
+  {
     name: 'DEBUG',
     description: 'Standard Node `debug`-package convention. When set to 1, enables verbose logging in several modules alongside AFK_DEBUG.',
     type: 'string',
@@ -1093,6 +1104,7 @@ export const env = {
   get AFK_DEBUG_CLIPBOARD(): string | undefined { return process.env['AFK_DEBUG_CLIPBOARD']; },
   get AFK_DEBUG_COMPOSITOR(): string | undefined { return process.env['AFK_DEBUG_COMPOSITOR']; },
   get AFK_TRACE_DISABLED(): string | undefined { return process.env['AFK_TRACE_DISABLED']; },
+  get AFK_SESSION_LEDGER_DISABLED(): string | undefined { return process.env['AFK_SESSION_LEDGER_DISABLED']; },
   get DEBUG(): string | undefined { return process.env['DEBUG']; },
   get AGENT_AFK_ASCII(): string | undefined { return process.env['AGENT_AFK_ASCII']; },
 

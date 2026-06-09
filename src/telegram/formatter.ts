@@ -260,6 +260,8 @@ export function formatHelp(sdkCommands?: string[]): string {
     '  /model      — Switch Claude model',
     '  /cd         — Change working directory',
     '  /name       — Show or set the session name',
+    '  /watch      — Live-tail a CLI session from this chat',
+    '  /unwatch    — Stop watching a session',
     '',
     'Also works from the CLI.',
   ];

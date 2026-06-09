@@ -46,6 +46,8 @@ import type {
   SlashCommand,
 } from '../types.js';
 import { QueryInputStream } from './input-iterable.js';
+import { SessionLedgerWriter } from '../session-ledger.js';
+import { env } from '../../config/env.js';
 import { resolveModelId } from './model-resolution.js';
 import { setSlotBindings } from './model-slots.js';
 import { applySlotCredentials } from './slot-credentials.js';
@@ -114,6 +116,16 @@ export class AgentSession implements IAgentSession {
   } = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
   /** Cumulative USD cost rolled up from completed subagents. */
   private subagentRunningCostUsd = 0;
+  /**
+   * Durable per-session event ledger (`~/.afk/state/sessions/<id>/events.jsonl`).
+   * Created lazily on the first turn once the provider has issued a session id.
+   * Top-level sessions only — subagents are observable via the bg-job log and
+   * witness traces; mirroring them here would multiply files per session.
+   * Null when disabled (env opt-out), gated off (subagent), or after close.
+   */
+  private ledger: SessionLedgerWriter | null = null;
+  /** Set true once ledger creation has been attempted (success or not). */
+  private ledgerInitAttempted = false;
 
   constructor(config: AgentConfig) {
     this.config = config;
@@ -459,6 +471,12 @@ export class AgentSession implements IAgentSession {
     this.conversationHistory.push(userMessage);
     this.inputStream.pushUserMessage(content);
 
+    // Durable ledger: initialization is deferred to here (not the
+    // constructor) because the provider-issued session id only exists after
+    // `session.init` — which `initPromise` above has just drained.
+    this.ensureLedger();
+    this.ledger?.recordUser(historySummary);
+
     const deps = this.buildTransformDeps();
 
     try {
@@ -470,6 +488,7 @@ export class AgentSession implements IAgentSession {
 
         if (output) {
           if (output.type === 'done') this.turnCount++;
+          this.ledger?.recordEvent(output);
           yield output;
           if (output.type === 'done' || output.type === 'error') break;
         }
@@ -477,6 +496,51 @@ export class AgentSession implements IAgentSession {
     } finally {
       if (this.currentState === 'streaming') this.currentState = 'idle';
     }
+  }
+
+  /**
+   * Create the session ledger writer on first use.
+   *
+   * Gates (all must pass):
+   *   - top-level session (subagents: `depth`/`parentSessionId` set at fork);
+   *   - `AFK_SESSION_LEDGER_DISABLED` is not `'1'`;
+   *   - the provider has issued a session id.
+   *
+   * One attempt per lifecycle: if the id is unavailable or unsafe the first
+   * time, the session simply runs unledgered — never throws, never retries
+   * per-event (the `ledgerInitAttempted` latch keeps the hot path cheap).
+   */
+  private ensureLedger(): void {
+    if (this.ledgerInitAttempted) return;
+    this.ledgerInitAttempted = true;
+    if (this.config.depth !== undefined || this.config.parentSessionId !== undefined) return;
+    if (env.AFK_SESSION_LEDGER_DISABLED === '1') return;
+    const id = this.sessionId;
+    if (!id) return;
+    const writer = new SessionLedgerWriter(id);
+    if (!writer.active) return;
+    this.ledger = writer;
+    const meta = this.getSessionMetadata();
+    writer.record({
+      kind: 'meta',
+      sessionId: id,
+      model: meta.model ?? String(this.config.model),
+      ...(meta.cwd !== undefined ? { cwd: meta.cwd } : {}),
+    });
+  }
+
+  /**
+   * Seal the ledger with a terminal record and flush. Idempotent.
+   * `close()`/`reset()` await the returned promise so tailers see the
+   * terminal record before teardown completes; the abort path
+   * fire-and-forgets it (abort handlers cannot block on disk I/O).
+   */
+  private sealLedger(reason: string): Promise<void> {
+    const ledger = this.ledger;
+    if (!ledger) return Promise.resolve();
+    this.ledger = null;
+    this.ledgerInitAttempted = false;
+    return ledger.close(reason);
   }
 
   private summarizeContentBlocks(blocks: ContentBlockParam[]): string {
@@ -547,6 +611,7 @@ export class AgentSession implements IAgentSession {
     }
 
     await this.dispatchSessionEndOnce('reset');
+    await this.sealLedger('reset');
 
     try {
       await this.providerQuery.close();
@@ -597,6 +662,7 @@ export class AgentSession implements IAgentSession {
   }
 
   private async onAbort(): Promise<void> {
+    void this.sealLedger('abort');
     try {
       await this.providerQuery.interrupt();
     } catch {
@@ -777,6 +843,7 @@ export class AgentSession implements IAgentSession {
   async close(): Promise<void> {
     if (this.currentState === 'closed') return;
     this.currentState = 'closed';
+    await this.sealLedger('close');
     if (!this.abortController.signal.aborted) {
       this.abortController.abort('closed');
     }
