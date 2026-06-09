@@ -392,12 +392,11 @@ describe('/plan', () => {
     expect(ctx.ui.repaintStatusLine).toHaveBeenCalledTimes(1);
   });
 
-  it('argless /plan from default mode enters plan mode immediately (no ritual)', async () => {
+  it('argless /plan from default mode enters plan mode immediately', async () => {
     const sess = fakeSession();
     const { ctx } = makeCtx({ session: { current: sess } as unknown as SlashContext['session'] });
     const res = await dispatch('/plan', ctx);
     expect(ctx.stats.planMode).toBe(true);
-    expect(ctx.stats.pendingPlanExit).toBeFalsy();
     expect(res.result).toBe('continue');
   });
 
@@ -433,54 +432,47 @@ describe('/plan', () => {
     expect(res.result).toBe('continue');
   });
 
-  // ───────── closure ritual ─────────
+  // ───────── exit and implement ─────────
 
-  describe('closure ritual', () => {
-    it('/plan off while in plan mode defers the flip and seeds the closure prompt', async () => {
+  describe('exit and implement', () => {
+    function submitMessage(res: Awaited<ReturnType<typeof dispatch>>): string {
+      return typeof res.result === 'object' && res.result !== null && 'kind' in res.result
+        ? (res.result as { message: string }).message
+        : '';
+    }
+    function submitKind(res: Awaited<ReturnType<typeof dispatch>>): string | null {
+      return typeof res.result === 'object' && res.result !== null && 'kind' in res.result
+        ? res.result.kind
+        : null;
+    }
+
+    it('/plan off while in plan mode flips to default FIRST, then seeds a save-and-implement turn', async () => {
       const sess = fakeSession();
       const stats = makeStats();
       stats.planMode = true;
-      const { ctx, lines } = makeCtx({ session: { current: sess } as unknown as SlashContext['session'], stats });
+      const { ctx } = makeCtx({ session: { current: sess } as unknown as SlashContext['session'], stats });
 
       const res = await dispatch('/plan off', ctx);
 
-      // Mode is NOT flipped yet — PR #255's hook gate is still armed.
-      expect(sess.setPermissionMode).not.toHaveBeenCalled();
-      expect(ctx.stats.planMode).toBe(true);
-      // Pending-exit flag set.
-      expect(ctx.stats.pendingPlanExit).toBe(true);
-      // Closure prompt seeded as next user message.
+      // The flip MUST happen before the turn so writes are permitted when the
+      // seeded message runs (the model has to write the plan file + implement).
+      expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
+      expect(ctx.stats.planMode).toBe(false);
+
+      // A submit turn is seeded.
       expect(res.handled).toBe(true);
-      expect(
-        typeof res.result === 'object' && res.result !== null && 'kind' in res.result
-          ? res.result.kind
-          : null,
-      ).toBe('submit');
-      const message =
-        typeof res.result === 'object' && res.result !== null && 'kind' in res.result
-          ? (res.result as { message: string }).message
-          : '';
-      // Closure asks for the three sections — the addendum prepared the model
-      // for this exact shape, so the names must match.
-      expect(message.toLowerCase()).toContain('chosen approach');
-      expect(message.toLowerCase()).toContain('risks named');
-      expect(message.toLowerCase()).toContain('alternatives considered');
+      expect(submitKind(res)).toBe('submit');
 
-      // User-facing copy: state-first, names both escape hatches with
-      // exact gestures. These assertions are the load-bearing UX
-      // guarantee: the user must not mistake a deferred exit for a
-      // normal exit.
-      const lower = lines.join('\n').toLowerCase();
-      expect(lower).toContain('plan exit queued');
-      expect(lower).toContain('still on');
-      expect(lower).toContain('writes still refused');
-      // Both escape hatches named with exact gestures.
-      expect(lower).toContain('/plan off again');
-      expect(lower).toContain('shift+tab');
-      expect(lower).toContain('force-exit');
+      const message = submitMessage(res);
+      const lower = message.toLowerCase();
+      // Names the exit, the save step (under .afk/plans), and the implement step.
+      expect(lower).toContain('switched off plan mode');
+      expect(message).toContain('.afk/plans');
+      expect(lower).toContain('save the plan');
+      expect(lower).toContain('implement the plan');
     });
 
-    it('bare /plan while in plan mode also starts the closure ritual', async () => {
+    it('bare /plan while in plan mode also exits and seeds save-and-implement', async () => {
       const sess = fakeSession();
       const stats = makeStats();
       stats.planMode = true;
@@ -488,118 +480,38 @@ describe('/plan', () => {
 
       const res = await dispatch('/plan', ctx);
 
-      expect(sess.setPermissionMode).not.toHaveBeenCalled();
-      expect(ctx.stats.planMode).toBe(true);
-      expect(ctx.stats.pendingPlanExit).toBe(true);
-      expect(
-        typeof res.result === 'object' && res.result !== null && 'kind' in res.result
-          ? res.result.kind
-          : null,
-      ).toBe('submit');
+      expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
+      expect(ctx.stats.planMode).toBe(false);
+      expect(submitKind(res)).toBe('submit');
+      expect(submitMessage(res)).toContain('.afk/plans');
     });
 
-    it('/plan off while pendingPlanExit is true force-exits and clears the flag', async () => {
-      const sess = fakeSession();
+    it('does NOT seed an implement turn when the flip fails (writes still refused)', async () => {
+      // If setPermissionMode rejects, togglePlanMode leaves planMode true and
+      // surfaces an error. Seeding an implement turn while writes are refused
+      // would only produce gate refusals — so the handler returns 'continue'.
+      const sess = fakeSession({
+        setPermissionMode: vi.fn().mockRejectedValue(new Error('handle closing')),
+      });
       const stats = makeStats();
       stats.planMode = true;
-      stats.pendingPlanExit = true;
-      const { ctx, lines } = makeCtx({ session: { current: sess } as unknown as SlashContext['session'], stats });
+      const { ctx } = makeCtx({ session: { current: sess } as unknown as SlashContext['session'], stats });
 
       const res = await dispatch('/plan off', ctx);
 
       expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
-      expect(ctx.stats.planMode).toBe(false);
-      expect(ctx.stats.pendingPlanExit).toBe(false);
-      expect(res.result).toBe('continue');
-
-      // Force-exit copy MUST be distinguishable from a normal exit so
-      // the user knows the closure summary was skipped.
-      const joined = lines.join('\n').toLowerCase();
-      expect(joined).toContain('plan mode off');
-      expect(joined).toContain('force-exit');
-      expect(joined).toContain('closure summary skipped');
-    });
-
-    it('/plan on while pendingPlanExit is true cancels the pending exit, keeps plan mode', async () => {
-      const sess = fakeSession();
-      const stats = makeStats();
-      stats.planMode = true;
-      stats.pendingPlanExit = true;
-      const { ctx, lines } = makeCtx({ session: { current: sess } as unknown as SlashContext['session'], stats });
-
-      const res = await dispatch('/plan on', ctx);
-
-      // No setPermissionMode call — already in plan mode; we just cleared
-      // the pending flag.
-      expect(sess.setPermissionMode).not.toHaveBeenCalled();
       expect(ctx.stats.planMode).toBe(true);
-      expect(ctx.stats.pendingPlanExit).toBe(false);
-      expect(res.result).toBe('continue');
-
-      // Cancel copy uses "plan exit cancelled" (not internal "ritual" jargon).
-      const joined = lines.join('\n').toLowerCase();
-      expect(joined).toContain('plan mode on');
-      expect(joined).toContain('plan exit cancelled');
-    });
-
-    it('bare /plan while pendingPlanExit is true force-exits (same as second /plan off)', async () => {
-      const sess = fakeSession();
-      const stats = makeStats();
-      stats.planMode = true;
-      stats.pendingPlanExit = true;
-      const { ctx } = makeCtx({ session: { current: sess } as unknown as SlashContext['session'], stats });
-
-      const res = await dispatch('/plan', ctx);
-
-      expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
-      expect(ctx.stats.planMode).toBe(false);
-      expect(ctx.stats.pendingPlanExit).toBe(false);
       expect(res.result).toBe('continue');
     });
 
-    it('/plan <free text> while pendingPlanExit is true cancels the pending exit and submits', async () => {
-      const sess = fakeSession();
-      const stats = makeStats();
-      stats.planMode = true;
-      stats.pendingPlanExit = true;
-      const { ctx, lines } = makeCtx({ session: { current: sess } as unknown as SlashContext['session'], stats });
-
-      const res = await dispatch('/plan more discovery please', ctx);
-
-      // Re-engaging planning cancels the closure ritual.
-      expect(ctx.stats.pendingPlanExit).toBe(false);
-      expect(ctx.stats.planMode).toBe(true);
-      expect(res.result).toEqual({ kind: 'submit', message: 'more discovery please' });
-
-      // User sees a notice that the swap happened — otherwise their new
-      // prompt could feel ambiguous (was it queued after a closure turn?).
-      const joined = lines.join('\n').toLowerCase();
-      expect(joined).toContain('plan exit cancelled');
-    });
-
-    it('/plan <free text> while NOT pending emits no extra cancel notice', async () => {
-      const sess = fakeSession();
-      const stats = makeStats();
-      stats.planMode = true;
-      // No pending exit — entering free-text from a clean plan-mode
-      // state should be silent (no spurious "cancelled" line).
-      const { ctx, lines } = makeCtx({ session: { current: sess } as unknown as SlashContext['session'], stats });
-
-      await dispatch('/plan more discovery please', ctx);
-
-      const joined = lines.join('\n').toLowerCase();
-      expect(joined).not.toContain('plan exit cancelled');
-    });
-
-    it('/plan off from default mode is a no-op flip (no ritual when nothing to close)', async () => {
+    it('/plan off from default mode is a plain no-op flip (no plan to save)', async () => {
       const sess = fakeSession();
       const { ctx } = makeCtx({ session: { current: sess } as unknown as SlashContext['session'] });
       const res = await dispatch('/plan off', ctx);
-      // Calls through to togglePlanMode which sets to 'default' — already
-      // default, but the call is harmless and emits the OFF copy.
+      // togglePlanMode sets 'default' — already default, harmless, emits OFF copy.
+      // No submit turn: there is no plan to save when not in plan mode.
       expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
       expect(ctx.stats.planMode).toBe(false);
-      expect(ctx.stats.pendingPlanExit).toBeFalsy();
       expect(res.result).toBe('continue');
     });
   });

@@ -86,7 +86,6 @@ vi.mock('../../debug-banner.js', () => ({ renderDebugBanner: () => '' }));
 vi.mock('../../../utils/debug.js', () => ({ isDebugEnabled: () => false }));
 vi.mock('../../plan-mode-toggle.js', () => ({
   togglePlanMode: vi.fn(async () => {}),
-  flushPendingPlanExit: vi.fn(async () => {}),
 }));
 
 // Fake TerminalCompositor for the completionWriter idle-wiring test.
@@ -173,7 +172,7 @@ function makeMinimalCtx(backgroundRegistry: BackgroundAgentRegistry): Interactiv
     contextSampler: { onTurn: vi.fn(async () => {}), getRatio: () => undefined },
     completionWriter: { fn: () => {}, idleFn: () => {} },
     replRenderer: { writeLine: vi.fn(), setCompositor: vi.fn() },
-    slashCtx: { stats: { planMode: false, pendingPlanExit: false } },
+    slashCtx: { stats: { planMode: false } },
     rl: { close: vi.fn() },
     options: { thinkingUi: undefined },
     backgroundRegistry,

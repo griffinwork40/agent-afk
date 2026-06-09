@@ -508,7 +508,7 @@ describe('performResumeSwap — waitForInitialization rejection', () => {
 // Tests — stats.planMode reset on swap (LOW-12b)
 // ---------------------------------------------------------------------------
 
-describe('performResumeSwap — stats.planMode and pendingPlanExit reset', () => {
+describe('performResumeSwap — stats.planMode reset', () => {
   it('resets stats.planMode to false on successful swap with stored session', async () => {
     const { deps, stats } = buildDeps();
     stats.planMode = true;
@@ -521,13 +521,6 @@ describe('performResumeSwap — stats.planMode and pendingPlanExit reset', () =>
     stats.planMode = true;
     await performResumeSwap(makeTarget('bare-id'), deps);
     expect(stats.planMode).toBe(false);
-  });
-
-  it('clears pendingPlanExit on successful swap', async () => {
-    const { deps, stats } = buildDeps();
-    stats.pendingPlanExit = true;
-    await performResumeSwap(makeTarget('t-plan', makeStoredSession()), deps);
-    expect(stats.pendingPlanExit).toBeUndefined();
   });
 });
 

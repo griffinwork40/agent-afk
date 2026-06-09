@@ -184,10 +184,8 @@ export async function performResumeSwap(
   // planMode is user-controlled state that does NOT persist in StoredSession
   // (by design: it's a per-session UI toggle, not a durable preference).
   // Carrying it forward would cause the resumed session to inherit an
-  // unexpected permission mode from the outgoing session. pendingPlanExit
-  // must also be cleared; leaving it set while planMode is false is incoherent.
+  // unexpected permission mode from the outgoing session.
   deps.stats.planMode = false;
-  delete deps.stats.pendingPlanExit;
 
   // Step 8 — Update ctx.resumeTarget for potential banner helpers.
   // Wrapped in try/catch so a misbehaving onSwapped handler cannot abort the
