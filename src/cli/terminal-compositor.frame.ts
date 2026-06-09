@@ -70,6 +70,10 @@ export interface FrameHost {
   hasCommitted: boolean;
   anchorRow: number | undefined;
   lastKnownRows: number;
+  /** True while commitAbove is executing (Phase 1 → Phase 3). Guards Phase 2
+   *  repaints from applying content-following, which would misplace the frame
+   *  and cause Phase 3 to write into the banner zone. */
+  commitInFlight: boolean;
   // ── collaborators ──
   readonly scrollRegion?: CompositorScrollRegionGuard;
   readonly stdout: NodeJS.WriteStream;
@@ -201,7 +205,42 @@ export function repaint(self: FrameHost): void {
   // row when the user navigates across a hinted ↔ un-hinted boundary.
   if (hintRow !== null) frameLines.push(hintRow);
   frameLines.push(inputLine);
-  const targetBottomRow = Math.max(1, (self.stdout.rows ?? 24) - 1 - extraRows);
+  // Invariant: absoluteBottom is the maximum row the compositor may ever write
+  // to — the row just above the bg-status-bar DECSTBM reservation. It is the
+  // hard upper bound for targetBottomRow in ALL branches below.
+  const absoluteBottom = Math.max(1, (self.stdout.rows ?? 24) - 1 - extraRows);
+  const frame = frameLines.join('\n');
+  // Invariant: content-following placement fires only when ALL conditions hold:
+  //   1. A pre-arm banner is declared (anchorRow > 1). Banner occupies rows
+  //      1..(anchorRow-1); the frame should start at anchorRow+physicalRows-1
+  //      on tall terminals so it is adjacent to the banner instead of floating
+  //      far below it. Without a banner the frame is unconditionally bottom-
+  //      pinned — all resize-ghost, shrink-gap, and scrollback-gap invariants
+  //      (which assume bottom-pinned frames on no-banner sessions) are preserved.
+  //   2. commitInFlight is false. During Phase 2 of commitAbove the frame must
+  //      render at absoluteBottom so Phase 3 can place committed text in the
+  //      above-frame region at anchorRow..(newTopRow-1). Banner-following during
+  //      Phase 2 would move the frame to ~anchorRow, leaving Phase 3 no room to
+  //      write outside the banner zone (textStartRow would equal anchorRow,
+  //      causing the Phase 3 loop to fire 0 iterations and dropping the commit).
+  //
+  // contentFloor = max(anchorRow, committedBandBottomRow):
+  //   • anchorRow (not anchorRow-1) is the minimum floor so the frame top lands
+  //     at anchorRow+1, giving Phase 3 exactly one row at anchorRow for text.
+  //   • committedBandBottomRow grows as commits accumulate, naturally marching
+  //     the frame down until contentFloor + physicalRows ≥ absoluteBottom, at
+  //     which point targetBottomRow = absoluteBottom (identical to old path).
+  const hasBanner = self.anchorRow !== undefined && self.anchorRow > 1;
+  let targetBottomRow: number;
+  if (hasBanner && !self.commitInFlight) {
+    const physicalRows = self.logUpdate.measure
+      ? self.logUpdate.measure(frame, absoluteBottom).lineCount
+      : Math.max(1, frameLines.length);
+    const contentFloor = Math.max(self.anchorRow!, self.committedBandBottomRow);
+    targetBottomRow = Math.min(absoluteBottom, contentFloor + physicalRows);
+  } else {
+    targetBottomRow = absoluteBottom;
+  }
   // Anchor-row enforcement: when an upper-bound was supplied (typically by
   // the surface that knows how many rows the welcome banner / update-
   // notice consumed before arm), make sure the frame's top row does not
@@ -213,7 +252,6 @@ export function repaint(self: FrameHost): void {
   // shifts up by the same number of rows because the pre-arm content has
   // moved upward in the viewport — re-running this branch on the next
   // repaint with the same lineCount finds no deficit.
-  const frame = frameLines.join('\n');
   // Wrap-aware top row: CupFrameRenderer hard-wraps at stdout.columns, so a
   // frame line wider than the terminal occupies >1 physical row. Sizing the
   // committed-band eviction/re-pin off the LOGICAL line count

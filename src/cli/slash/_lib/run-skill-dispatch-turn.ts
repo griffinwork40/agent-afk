@@ -31,12 +31,22 @@
  * the renderer lifecycle and preflight-failure isolation.
  */
 
-import type { SlashContext } from '../types.js';
+import type { SlashContext, ToolEvent } from '../types.js';
 import type { SkillMetadata } from '../../../skills/index.js';
+import type { ResponseMetadata } from '../../../agent/types/message-types.js';
 import type { ImageAttachment } from '../../input/attachments.js';
 import { createSkillRenderer } from './create-skill-renderer.js';
+import { recordTurn } from '../session-stats.js';
 import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import { buildSkillInvocationMessage } from './skill-message-bridge.js';
+
+/**
+ * Minimum ms between onContextProgress fires during a skill-dispatch turn.
+ * Mirrors `CONTEXT_PROGRESS_MIN_INTERVAL_MS` in turn-handler.ts — both
+ * paths throttle the (sampler refresh + status repaint) to the same cadence
+ * so a tool-heavy skill turn doesn't hammer the provider's context endpoint.
+ */
+const CONTEXT_PROGRESS_MIN_INTERVAL_MS = 15_000;
 
 export interface RunSkillDispatchTurnParams {
   /**
@@ -102,6 +112,14 @@ export async function runSkillDispatchTurn(
   // assistant message on the stream is the skill's terminal output — for
   // review that's the post-shadow-verify merge recommendation + findings.
   let finalAssistantText = '';
+  // Turn-completion bookkeeping — mirrors turn-handler.ts's doneFired /
+  // doneMeta / toolEvents trio so the skill turn can be folded into
+  // SessionStats + the transcript exactly like a normal turn.
+  let doneFired = false;
+  let doneMeta: ResponseMetadata | undefined;
+  let lastContextProgressMs = 0;
+  const toolEvents: ToolEvent[] = [];
+  const pendingTools = new Map<string, ToolEvent>();
 
   try {
     await renderer.arm();
@@ -159,12 +177,65 @@ export async function runSkillDispatchTurn(
         if (event.type === 'message' && event.message.role === 'assistant') {
           finalAssistantText = event.message.content;
         }
+        // Turn bookkeeping (orchestrator events only — subagent events route
+        // through renderer.sink with meta and never reach this loop):
+        //   - tool_use_detail / tool_result → ToolEvent list for recordTurn,
+        //     plus the throttled status-line refresh on results (mirrors
+        //     turn-handler.ts's onContextProgress block).
+        //   - done → metadata for stats/cost accounting.
+        if (event.type === 'chunk' && event.chunk.type === 'tool_use_detail') {
+          const c = event.chunk;
+          const te: ToolEvent = { toolName: c.toolName, toolUseId: c.toolUseId, input: c.toolInput };
+          pendingTools.set(c.toolUseId, te);
+          toolEvents.push(te);
+        } else if (event.type === 'chunk' && event.chunk.type === 'tool_result') {
+          const c = event.chunk;
+          const pending = pendingTools.get(c.toolUseId);
+          if (pending) {
+            pending.result = c.content;
+            pending.isError = c.isError;
+            pendingTools.delete(c.toolUseId);
+          }
+          if (ctx.onContextProgress) {
+            const now = Date.now();
+            if (now - lastContextProgressMs >= CONTEXT_PROGRESS_MIN_INTERVAL_MS) {
+              lastContextProgressMs = now;
+              try {
+                const r = ctx.onContextProgress();
+                if (r instanceof Promise) await r;
+              } catch {
+                // Best-effort: never let a status refresh break the turn.
+              }
+            }
+          }
+        } else if (event.type === 'done') {
+          doneFired = true;
+          doneMeta = event.metadata;
+        }
         renderer.sink(event);
       }
     });
   } finally {
     ctx.setSoftStopHandler?.(null);
     await renderer.dispose();
+    // Reset the footer stage rail to its between-turns "observing" state.
+    // Mirrors repl-loop.ts's onAfterTurn reset for normal turns — without
+    // this, the rail freezes at the skill turn's last active stage.
+    try { ctx.onStageChange?.('observing'); } catch { /* best-effort */ }
+  }
+
+  // Completed-turn accounting — gated on doneFired && !softStopRequested,
+  // matching turn-handler.ts's recordTurn guard: an interrupted skill turn
+  // must not be folded into totals as if it completed.
+  if (doneFired && !softStopRequested) {
+    const userInput = `/${params.skillName}${params.args ? ' ' + params.args : ''}`;
+    recordTurn(ctx.stats, userInput, finalAssistantText, doneMeta, toolEvents);
+    // Push the freshly-recorded totals to the status line now — the REPL's
+    // post-dispatch `statusLine.rearm()` only re-flushes the PREVIOUS fields.
+    try { ctx.ui.repaintStatusLine(); } catch { /* best-effort */ }
+    // Transcript parity with repl-loop.ts's onTurnComplete append. appendTurn
+    // no-ops on empty assistantText and swallows I/O errors itself.
+    await ctx.transcript?.appendTurn(userInput, finalAssistantText).catch(() => { /* best-effort */ });
   }
 
   return finalAssistantText;

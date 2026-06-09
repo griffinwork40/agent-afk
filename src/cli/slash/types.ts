@@ -173,6 +173,41 @@ export interface SlashContext {
    * persistent compositor (Telegram, daemon's slash dispatcher).
    */
   setSoftStopHandler?: (handler: (() => void) | null) => void;
+  /**
+   * Fired whenever the loop stage transitions (Observe → Model → Choose →
+   * Act → Update) during a skill-dispatch turn. Carries the new stage name.
+   *
+   * Symmetry: mirrors the `TurnHandles.onStageChange` field consumed by
+   * `runTurn` — same shape, same wiring (REPL → `LoopStageBar.repaint`).
+   * Threaded into the skill renderer by `createSkillRenderer` so the
+   * footer stage rail advances during `/skill` turns exactly as it does
+   * during normal turns. Absent (`undefined`) on non-TTY surfaces
+   * (Telegram, daemon) — the renderer treats this as a no-op.
+   */
+  onStageChange?: (stage: import('../commands/interactive/loop-stage.js').LoopStage) => void;
+  /**
+   * Fired mid-turn on tool_result events during a skill-dispatch turn so
+   * the REPL can refresh the context sampler and repaint the status line
+   * with live context usage.
+   *
+   * Symmetry: mirrors the `TurnHandles.onContextProgress` field consumed
+   * by `runTurn` — same shape, same throttle expectation (the dispatcher
+   * throttles internally; callers need not debounce). Best-effort: errors
+   * are swallowed by the caller. Absent on non-interactive surfaces.
+   */
+  onContextProgress?: () => void | Promise<void>;
+  /**
+   * Session transcript sink. `runSkillDispatchTurn` appends the completed
+   * skill exchange (`/<skill> <args>` → final assistant text) so skill
+   * turns survive into the autosaved markdown transcript exactly like
+   * normal turns (which append via `repl-loop.ts`'s `onTurnComplete`).
+   *
+   * Structural subset of `TranscriptHandle` (commands/interactive/
+   * transcript.ts) — declared inline to keep this neutral slash-layer
+   * module free of an upward import. Absent on surfaces without a
+   * transcript (Telegram, daemon, tests).
+   */
+  transcript?: { appendTurn(userInput: string, assistantText: string): Promise<void> };
 }
 
 /** The handler's return value — controls the REPL's next action. */

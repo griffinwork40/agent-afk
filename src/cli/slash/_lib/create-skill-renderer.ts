@@ -74,5 +74,10 @@ export function createSkillRenderer(ctx: SlashContext, opts: SkillRendererOpts):
     activeSkillName: opts.skillName,
     onCancel: opts.onCancel ?? (() => { /* no-op */ }),
     ...(borrowedCompositor ? { compositor: borrowedCompositor } : {}),
+    // Thread the REPL's LoopStageBar repaint callback so the footer stage
+    // rail (observe → model → choose → act → update) advances during skill
+    // turns. Mirrors the turn-handler.ts wiring of h.onStageChange. Absent
+    // on non-TTY surfaces — the renderer simply never fires it.
+    ...(ctx.onStageChange ? { onStageChange: ctx.onStageChange } : {}),
   });
 }

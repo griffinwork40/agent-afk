@@ -1,6 +1,6 @@
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import { palette } from '../../palette.js';
-import { SUBAGENT_TOOLS, NESTING_TOOLS } from '../../tool-category.js';
+import { SUBAGENT_TOOLS, NESTING_TOOLS, SKILL_TOOLS } from '../../tool-category.js';
 import { formatToolLine, formatToolResultLine, formatOutcome, formatDiffBlock, doneGlyph, sanitizeLabel } from './tool-lane-format.js';
 import type { DiffPayload } from '../../../utils/diff.js';
 import { getTerminalWidth } from '../../terminal-size.js';
@@ -256,6 +256,30 @@ export class ToolLane {
   hasEntry(id: string): boolean {
     const entry = this.entries.get(id);
     return entry?.kind === 'tool';
+  }
+
+  /**
+   * Returns the toolUseId of the most-recent live `SKILL_TOOLS` entry in the
+   * lane (scanning `order` from newest to oldest), or `undefined` if none.
+   *
+   * Used by the orchestrator's skill-nesting gate: when a skill-dispatch turn
+   * is active (`ctx.activeSkillName` set) and the model dispatches a NESTING
+   * tool (`agent`, `Agent`, `Task`, `compose`), this id becomes the
+   * `agentContext` so the subagent nests under the skill spine instead of
+   * anchoring a second root.
+   *
+   * "Live" means the entry is still present in `this.entries` — flushed
+   * entries no longer appear in the lane and are not valid nesting parents.
+   */
+  findLastSkillEntryId(): string | undefined {
+    for (let i = this.order.length - 1; i >= 0; i--) {
+      const id = this.order[i]!;
+      const entry = this.entries.get(id);
+      if (entry?.kind === 'tool' && SKILL_TOOLS.has(entry.toolName)) {
+        return id;
+      }
+    }
+    return undefined;
   }
 
   getOverlay(): string {

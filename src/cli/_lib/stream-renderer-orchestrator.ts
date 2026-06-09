@@ -22,7 +22,7 @@ import {
   type StageTrackerState,
 } from '../commands/interactive/loop-stage.js';
 import { stripCommandTags, extractSkillTag } from '../slash/_lib/command-tags.js';
-import { styleForCategory } from '../tool-category.js';
+import { styleForCategory, SUBAGENT_TOOLS, DAG_TOOLS } from '../tool-category.js';
 import { formatThinkingParagraph } from '../commands/interactive/thinking-paragraph.js';
 import { formatProgressBanner } from '../commands/interactive/progress-banner.js';
 import { getTerminalWidth } from '../terminal-size.js';
@@ -184,11 +184,44 @@ export function handleOrchestratorEvent(
           flushToolLaneToScrollback(ctx);
           commitThinkingPhase(source, ctx);
         }
+        // Invariant: skill-nesting gate — when this is a skill-dispatch turn
+        // (ctx.activeSkillName set) AND the incoming tool is a NESTING_CLASS
+        // tool (SUBAGENT_TOOLS ∪ DAG_TOOLS: 'agent','Agent','Task','compose'),
+        // nest it under the skill spine by passing the skill entry's id as
+        // agentContext. This collapses the overlay from two separate roots
+        // (◉ skill + ◉ Agent) into a single nested tree (◉ skill │ ╰─ Agent).
+        //
+        // Scope constraints — ONLY nest NESTING-class tools, never flat leaves:
+        // - Flat tools (bash, read_file, etc.) must stay at root (agentContext
+        //   undefined) so flushCompletedRoots can eagerly commit them. That
+        //   path filters out any entry with agentContext, so nesting flat tools
+        //   would break the tool-use-loop visibility invariant documented at
+        //   ~line 150-178. NESTING tools have their own commit path via
+        //   stream-renderer.ts:537-600 (coordinator.drainSubagent) and are
+        //   already gone from the lane by the time the next eager flush fires.
+        //
+        // - Only when ctx.activeSkillName is set (slash-skill dispatch turns).
+        //   Normal turns where the model calls `skill` mid-turn are unaffected.
+        //
+        // - The skill anchor is the most-recent live 'skill' entry in the lane
+        //   (findLastSkillEntryId). If none, agentContext falls back to
+        //   undefined (current behavior), so the gate is always safe.
+        //
+        // - mergeAgentLabel preserves existing agentContext (does not mutate
+        //   it), so nesting set here survives the synthesizeAgentEntry merge.
+        //   flushSource walks the agentContext chain upward via eager ancestor-
+        //   header emission (tool-lane.ts:586-617), so the skill header lands
+        //   in scrollback before its Agent child's done-block.
+        const isNestingTool = SUBAGENT_TOOLS.has(chunk.toolName) || DAG_TOOLS.has(chunk.toolName);
+        const agentCtx: string | undefined =
+          ctx.activeSkillName && isNestingTool
+            ? ctx.toolLane.findLastSkillEntryId()
+            : undefined;
         ctx.toolLane.addStartWithAgentContext(
           chunk.toolUseId,
           chunk.toolName,
           chunk.toolInput,
-          undefined,
+          agentCtx,
         );
         source.stats.toolUses += 1;
         // Tool gap: the model is waiting on tool execution rather than

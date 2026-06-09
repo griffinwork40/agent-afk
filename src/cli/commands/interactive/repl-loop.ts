@@ -439,6 +439,22 @@ export async function runReplLoop(
   // turn is silently dropped at the compositor's onSoftStop because
   // the surface's softStopHandler ref stays null.
   ctx.slashCtx.setSoftStopHandler = (handler) => surface.setSoftStopHandler(handler);
+  // Mirror the TurnHandles.onStageChange / onContextProgress wiring (see the
+  // runTurn handles object below) onto SlashContext so skill-dispatch turns
+  // (`/review`, `/mint`, plugin skills) drive the SAME footer rails as normal
+  // turns. Without these, the LoopStageBar stays frozen at "observe" and the
+  // status line stays at 0%/$0.00 for the entire skill turn — the renderer
+  // built by createSkillRenderer had no callback to fire.
+  ctx.slashCtx.onStageChange = (stage) => loopStageBar?.repaint(stage);
+  ctx.slashCtx.onContextProgress = async () => {
+    await ctx.contextSampler.refresh();
+    ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler));
+  };
+  // Transcript parity for skill turns: runSkillDispatchTurn appends the
+  // completed `/skill args → assistant text` exchange through this handle,
+  // matching the normal-turn append at onTurnComplete below. Without it,
+  // skill-turn output is absent from the autosaved markdown transcript.
+  ctx.slashCtx.transcript = transcript;
 
   // Wire the armed surface into the elicitation handler's compositor ref so
   // ask_question suspend/resume can yield stdin raw-mode to rl.question.

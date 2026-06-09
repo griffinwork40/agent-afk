@@ -252,6 +252,86 @@ describe('runReplLoop — C-1 regression: setTasksRegistry wired in bootstrap', 
 });
 
 /**
+ * Regression test — skill-dispatch UI handles wired onto SlashContext.
+ *
+ * Before this fix, `runReplLoop` wired `getCompositor` and
+ * `setSoftStopHandler` onto `ctx.slashCtx` but NOT `onStageChange` /
+ * `onContextProgress` / `transcript`. Skill-dispatch turns (`/review`,
+ * `/mint`, plugin skills) therefore ran with a frozen loop-stage rail, a
+ * status line stuck at 0%/$0.00, and no transcript record of the turn.
+ */
+describe('runReplLoop — skill-dispatch handles wired onto slashCtx', () => {
+  it('wires onStageChange, onContextProgress, and transcript before the loop body', async () => {
+    const backgroundRegistry = new BackgroundAgentRegistry({});
+    const ctx = makeMinimalCtx(backgroundRegistry);
+    // contextSampler.refresh is required by the onContextProgress closure.
+    (ctx.contextSampler as unknown as { refresh: unknown }).refresh = vi.fn(async () => {});
+    (ctx.statusLine as unknown as { repaint: unknown }).repaint = vi.fn();
+    const transcript = makeTranscript();
+
+    // Capture slashCtx wiring state at dispatch time (inside the loop body,
+    // after the wiring block, before teardown).
+    const slashMod = await import('../../slash/registry.js');
+    const captured = {
+      hasStage: false,
+      hasProgress: false,
+      transcriptIsHandle: false,
+    };
+    vi.mocked(slashMod.dispatch).mockImplementationOnce(async () => {
+      const s = ctx.slashCtx;
+      captured.hasStage = typeof s.onStageChange === 'function';
+      captured.hasProgress = typeof s.onContextProgress === 'function';
+      captured.transcriptIsHandle = s.transcript === (transcript as unknown);
+      return { handled: true, result: 'exit' as const };
+    });
+
+    const turnState: TurnState = {
+      turnInFlight: false,
+      lastSigintAt: 0,
+      activeCompositor: null,
+    } as TurnState;
+
+    await runReplLoop(ctx, transcript as never, turnState, vi.fn());
+
+    expect(captured.hasStage).toBe(true);
+    expect(captured.hasProgress).toBe(true);
+    expect(captured.transcriptIsHandle).toBe(true);
+  });
+
+  it('slashCtx.onContextProgress refreshes the sampler and repaints the status line', async () => {
+    const backgroundRegistry = new BackgroundAgentRegistry({});
+    const ctx = makeMinimalCtx(backgroundRegistry);
+    const refresh = vi.fn(async () => {});
+    const repaint = vi.fn();
+    (ctx.contextSampler as unknown as { refresh: unknown }).refresh = refresh;
+    // formatStatusFields reads sampler.getDetail() — the minimal ctx stub
+    // only provides getRatio, so add the detail accessor here.
+    (ctx.contextSampler as unknown as { getDetail: unknown }).getDetail = () => undefined;
+    (ctx.statusLine as unknown as { repaint: unknown }).repaint = repaint;
+
+    const slashMod = await import('../../slash/registry.js');
+    let progressFired = false;
+    vi.mocked(slashMod.dispatch).mockImplementationOnce(async () => {
+      await ctx.slashCtx.onContextProgress?.();
+      progressFired = true;
+      return { handled: true, result: 'exit' as const };
+    });
+
+    const turnState: TurnState = {
+      turnInFlight: false,
+      lastSigintAt: 0,
+      activeCompositor: null,
+    } as TurnState;
+
+    await runReplLoop(ctx, makeTranscript() as never, turnState, vi.fn());
+
+    expect(progressFired).toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(repaint).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
  * Regression test — between-turn completionWriter idle wiring.
  *
  * Repro: in v3.45.3, typing `/model claude-opus-4-8` between turns produced
