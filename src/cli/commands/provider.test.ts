@@ -36,21 +36,28 @@ describe('buildProviderAuthDiagnose', () => {
   });
 
   it('returns nonzero exit code with actionable message when no auth resolves', () => {
-    // Force the codex auth path to miss by using a fake HOME — actually,
-    // simpler to assert behavior: when nothing's set and the test
-    // environment has no real codex auth that contains an api key, we
-    // either get no-usable-auth OR no-usable-auth-codex-oauth. Both are
-    // nonzero exit codes.
-    const r = buildProviderAuthDiagnose(undefined);
-    if (r.exitCode !== 0) {
-      // We're in a no-auth state — verify the message is actionable.
-      expect(r.message.toLowerCase()).toMatch(/openai_api_key|codex login/);
-    } else {
-      // Real codex CLI auth is present on this machine. Skip the
-      // actionability assertion; the source tag must still be one of the
-      // legitimate-auth values.
-      expect(['config', 'env', 'codex-cli']).toContain(r.source);
-    }
+    // Inject hermetic deps so this test is isolated from the host machine's
+    // real credentials. Without this, a developer whose ~/.codex/auth.json
+    // contains a ChatGPT OAuth bundle (and AFK_OPENAI_CHATGPT_OAUTH=1) would
+    // cause resolveOpenAIAuth to return source:'chatgpt-oauth' with a real
+    // access_token — making exitCode 0 and source outside the allowlist below.
+    const hermeticDeps = {
+      readEnv: (key: string) => {
+        // Expose only the env vars already cleared by beforeEach (OPENAI_API_KEY,
+        // CODEX_API_KEY) as absent, and explicitly suppress the OAuth opt-in flag.
+        if (key === 'OPENAI_API_KEY' || key === 'CODEX_API_KEY' || key === 'AFK_OPENAI_CHATGPT_OAUTH') {
+          return undefined;
+        }
+        return undefined;
+      },
+      homedir: () => '/nonexistent-test-home',
+      readFile: (_path: string) => null, // no ~/.codex/auth.json
+    };
+    const r = buildProviderAuthDiagnose(undefined, hermeticDeps);
+    // With no env vars and no filesystem auth the resolver must return
+    // no-usable-auth (exitCode 1) with an actionable message.
+    expect(r.exitCode).toBe(1);
+    expect(r.message.toLowerCase()).toMatch(/openai_api_key|codex login/);
   });
 
   it('never includes raw key material in the returned message', () => {

@@ -9,7 +9,7 @@
  */
 
 import type { AgentModelInput, ClaudeModel } from '../types.js';
-import { DEFAULT_SLOT_BINDINGS, resolveModelInput } from './model-slots.js';
+import { CLAUDE_FABLE_5_ID, DEFAULT_SLOT_BINDINGS, resolveModelInput } from './model-slots.js';
 
 /**
  * Canonical short-alias → full model-ID mapping for the built-in Claude
@@ -22,6 +22,9 @@ import { DEFAULT_SLOT_BINDINGS, resolveModelInput } from './model-slots.js';
  * Note: actual model selection now flows through the slot resolver
  * ({@link resolveModelId} → `resolveModelInput`), which honors user rebindings
  * of these aliases. `MODEL_MAP` reflects only the *default* bindings.
+ *
+ * The `fable` entry is a fixed-id alias (`DIRECT_MODEL_ALIASES`), not a tier —
+ * it names one concrete model above the opus/large slot and is never rebound.
  */
 export const MODEL_MAP: Readonly<Record<ClaudeModel, string>> = {
   opus: DEFAULT_SLOT_BINDINGS.large.id,
@@ -29,6 +32,10 @@ export const MODEL_MAP: Readonly<Record<ClaudeModel, string>> = {
   sonnet: DEFAULT_SLOT_BINDINGS.medium.id,
   sonnet_1m: DEFAULT_SLOT_BINDINGS.medium.id,
   haiku: DEFAULT_SLOT_BINDINGS.small.id,
+  // Fixed-id alias (above the large/opus tier — not a slot). Derived from the
+  // canonical id in model-slots.ts so the alias table cannot drift from the
+  // direct-alias resolver.
+  fable: CLAUDE_FABLE_5_ID,
 };
 
 export function isValidModel(model: string): model is ClaudeModel {

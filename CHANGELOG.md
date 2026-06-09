@@ -16,6 +16,45 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ### Changed
 - telegram: outbound notifications (daemon alerts, `send_telegram`, OAuth prompts, `/review`, digests) now default to a single **primary** chat — the first private/DM chat in `AFK_TELEGRAM_ALLOWED_CHAT_IDS` — instead of broadcasting to every allowed chat. Separates the inbound allowlist (who may command the bot) from outbound delivery. Single-chat setups are unaffected; multi-chat setups can restore fan-out with `mode: "broadcast"` (or `AFK_TELEGRAM_NOTIFY_MODE=broadcast`).
+## [3.90.1] - 2026-06-09
+
+### Fixed
+- route subagent overlay refreshes through OverlayComposer (#63) (baf325d)
+
+## [3.90.0] - 2026-06-09
+
+### Added
+- add Claude Fable 5 (claude-fable-5) (#64) (cdbc3f1)
+
+### Fixed
+- recompute git workspace state per read instead of freezing at session start (#62) (05b5174)
+
+### Changed
+- extract compositor frame composition to frame.ts (#61) (9f5c54e)
+- awa-bundled/shadow-verify: skip adversarial re-derivation on text-terminal sessions (#57) (fad6885)
+
+## [3.89.11] - 2026-06-09
+
+### Fixed
+- surface the skill name in the tool lane (#59) (a8728f1)
+
+## [3.89.10] - 2026-06-09
+
+### Fixed
+- emit honest closure reasons (truncated, hook_blocked, max_turns_exceeded) (#60) (19206fe)
+
+## [3.89.9] - 2026-06-09
+
+### Fixed
+- clamp max_tokens to model ceiling and guard thinking budget (#58) (7d02d4b)
+
+## [3.89.8] - 2026-06-08
+
+### Fixed
+- ship uses --body-file/-F instead of heredoc-in-$() (#53) (a89b9db)
+
+### Changed
+- isolate no-auth tests from host credentials via AuthResolverDeps injection (#56) (5be979f)
 
 ## [3.89.7] - 2026-06-08
 

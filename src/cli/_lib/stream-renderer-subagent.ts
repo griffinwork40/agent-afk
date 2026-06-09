@@ -237,7 +237,20 @@ export function handleSubagentEvent(
             const lastOverlay = _overlayLastUpdate.get(parentId) ?? 0;
             if (now - lastOverlay >= 1500) {
               _overlayLastUpdate.set(parentId, now);
-              ctx.compositor.setOverlay(ctx.toolLane.getOverlay());
+              // Route the throttled refresh through the composer when present so
+              // it recomposes ALL active slots in z-order. A direct
+              // compositor.setOverlay would overwrite the single overlay region
+              // with only the tool-lane, clobbering the markdown-pending /
+              // stage-rail / thinking-tail slots — the OverlayComposer is the
+              // sole writer of compositor.setOverlay while a turn is live (see
+              // overlay-composer.ts). Falls back to direct setOverlay only when
+              // no composer is wired (tests / non-TTY).
+              if (ctx.overlayComposer) {
+                ctx.overlayComposer.markDirty('tool-lane');
+                ctx.overlayComposer.flush();
+              } else {
+                ctx.compositor.setOverlay(ctx.toolLane.getOverlay());
+              }
             }
           }
         } else {
@@ -285,7 +298,14 @@ export function handleSubagentEvent(
             const lastOverlay = _overlayLastUpdate.get(parentId) ?? 0;
             if (now - lastOverlay >= 1500) {
               _overlayLastUpdate.set(parentId, now);
-              ctx.compositor.setOverlay(ctx.toolLane.getOverlay());
+              // Route through the composer when present (see content path above)
+              // so the throttled refresh never clobbers sibling overlay slots.
+              if (ctx.overlayComposer) {
+                ctx.overlayComposer.markDirty('tool-lane');
+                ctx.overlayComposer.flush();
+              } else {
+                ctx.compositor.setOverlay(ctx.toolLane.getOverlay());
+              }
             }
           }
         }
@@ -329,7 +349,15 @@ export function handleSubagentEvent(
         ctx.toolLane.addResult(parentId, syntheticResult(errorSummary, true));
       }
       if (ctx.isTTY && ctx.compositor) {
-        ctx.compositor.setOverlay(ctx.toolLane.getOverlay());
+        // Route through the composer when present so the error's terminal
+        // overlay recomposes all slots instead of clobbering the overlay
+        // region with the tool-lane alone (overlay-composer.ts invariant).
+        if (ctx.overlayComposer) {
+          ctx.overlayComposer.markDirty('tool-lane');
+          ctx.overlayComposer.flush();
+        } else {
+          ctx.compositor.setOverlay(ctx.toolLane.getOverlay());
+        }
       }
       return;
 

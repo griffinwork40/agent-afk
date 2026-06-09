@@ -118,11 +118,14 @@ const LABEL_DISPLAY_MAX = 60;
  *
  * Why the paren-wrap shape check matters: between the early `tool.use.start`
  * fire (`translate.ts` emits `' …'`) and the post-stream `tool.use.start`
- * (`loop.ts` emits `summarizeToolInput(input)`, which returns `''` for
- * dispatch tools), and the subsequent `mergeAgentLabel`/`Agent(<label>)`
- * synthesis, dispatch entries carry placeholder `toolInput` values that
- * MUST NOT be rendered as labels. Paren-wrapped `(label)` is the protocol
- * signal that the entry has been promoted to its labeled form.
+ * (`loop.ts` emits `summarizeToolInput(name, input)`, which returns `''` for
+ * `agent`/`compose` whose label is only known after dispatch), and the
+ * subsequent `mergeAgentLabel`/`Agent(<label>)` synthesis, those dispatch
+ * entries carry placeholder `toolInput` values that MUST NOT be rendered as
+ * labels. Paren-wrapped `(label)` is the protocol signal that the entry has
+ * been promoted to its labeled form. (`skill` is the exception: its label is
+ * the input's `name` field, so `summarizeToolInput` returns the paren-wrapped
+ * `(skillname)` directly — already promoted, no deferred merge needed.)
  *
  * Only called with real tool / grouped siblings (never overflow or
  * resultSummary synthetics) — those are added AFTER the overflow is computed.
