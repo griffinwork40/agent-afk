@@ -243,6 +243,73 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
     }
   });
 
+  // Cross-provider parity: the openai-compatible `summarizeToolInput` is a
+  // separate copy of the anthropic-direct helper (they must render identically
+  // — see the docstring on each). This guards the skill-label behavior against
+  // drift between the two copies: a skill dispatch must surface the skill name
+  // as a paren-wrapped label in tool.use.start so the tool lane shows
+  // `skill(diagnose)` rather than a bare `skill [skill]`.
+  it('surfaces the skill name as a paren-wrapped label in tool.use.start', async () => {
+    const fixture = makeDispatcher();
+
+    // Turn 1: model dispatches the skill tool. Turn 2: final text so the
+    // query terminates. The skill handler is unregistered in the fixture, but
+    // tool.use.start fires BEFORE dispatch (query.ts), so the label is emitted
+    // regardless of whether the dispatch itself succeeds.
+    scriptedTurns = [
+      {
+        chunks: [
+          {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'call_skill',
+                      type: 'function',
+                      function: { name: 'skill', arguments: '{"name":"diagnose","arguments":"flaky test"}' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+            usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+          },
+        ],
+      },
+      {
+        chunks: [
+          { choices: [{ delta: { content: 'done' } }] },
+          {
+            choices: [{ delta: {}, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 5, completion_tokens: 1, total_tokens: 6 },
+          },
+        ],
+      },
+    ];
+
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'config', last4: 'test' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid-skill',
+      promptStream: singleInput('diagnose this'),
+      config: baseConfig(),
+      toolDispatcher: fixture.dispatcher,
+    });
+
+    const events = await collect(q);
+    const start = events.find((e) => e.type === 'tool.use.start');
+    expect(start?.type).toBe('tool.use.start');
+    if (start?.type === 'tool.use.start') {
+      expect(start.toolName).toBe('skill');
+      expect(start.toolInput).toBe('(diagnose)');
+    }
+  });
+
   it("includes the tool catalog as 'tools' in the request", async () => {
     const fixture = makeDispatcher();
     scriptedTurns = [
