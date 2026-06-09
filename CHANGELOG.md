@@ -11,8 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.91.0] - 2026-06-09
+
 ### Changed
 - `/plan off` now exits plan mode, saves the plan you developed to a markdown file under `<cwd>/.afk/plans/`, and implements it — replacing the closure-summary ritual (which only emitted a 3-section recap to the transcript). The mode flips to `default` *before* the seeded turn so writes are permitted for the save + implementation. Shift+Tab still exits plan mode without saving or implementing (the manual-takeover escape hatch). The deferred-flip `pendingPlanExit` machinery is removed.
+
+### Added
+- /plan off saves the plan to a file then implements it (#55) (266249d)
+
 ## [3.90.2] - 2026-06-09
 
 ### Added
