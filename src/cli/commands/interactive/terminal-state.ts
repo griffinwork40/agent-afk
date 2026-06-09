@@ -191,13 +191,24 @@ function extractBullets(bodyLines: string[]): Bullet[] {
 
     const colonIdx = content.indexOf(':');
     if (colonIdx > 0 && colonIdx < 60) {
+      // Models commonly emit `**Label:** value`, placing the colon *inside*
+      // the bold span. Splitting on that colon strands the opening `**` on the
+      // label and the closing `**` at the head of the value. Strip both:
+      // balanced `**label**`/`__label__`, an orphaned leading opener on the
+      // label, and an orphaned closer at the value head — the latter only when
+      // followed by whitespace, which spares globs (`**/*.ts`) and identifiers
+      // (`__init__`) that have no space after the marker.
       const label = content
         .slice(0, colonIdx)
         .trim()
         .replace(/^\*\*(.+?)\*\*$/, '$1')
         .replace(/^__(.+?)__$/, '$1')
+        .replace(/^(?:\*\*|__)\s*/, '')
         .toLowerCase();
-      const value = content.slice(colonIdx + 1).trim();
+      const value = content
+        .slice(colonIdx + 1)
+        .trim()
+        .replace(/^(?:\*\*|__)\s/, '');
       out.push({ label, value });
     } else {
       out.push({ label: '', value: content });

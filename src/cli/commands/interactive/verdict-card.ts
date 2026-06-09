@@ -166,7 +166,12 @@ function collectRows(state: TerminalState): Row[] {
     case 'done':
       push('done', state.whatWasDone);
       push('evidence', state.evidence);
-      push('deferred', state.deferred);
+      // Skip a deferred row that merely echoes the done field — models
+      // sometimes emit identical text for both, producing a confusing
+      // duplicate row in the card.
+      if (state.deferred?.trim() !== state.whatWasDone?.trim()) {
+        push('deferred', state.deferred);
+      }
       break;
     case 'blocked':
       push('blocks', state.whatBlocks);
