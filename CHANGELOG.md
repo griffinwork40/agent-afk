@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.89.11] - 2026-06-09
+
+### Fixed
+- surface the skill name in the tool lane (#59) (a8728f1)
+
 ## [3.89.10] - 2026-06-09
 
 ### Fixed
