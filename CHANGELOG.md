@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.92.0] - 2026-06-09
+
+### Added
+- OSC 8 hyperlinks on tool-lane file paths — clickable without layout change (#67) (155d415)
+- durable per-session event ledger + Telegram /watch live-tail (#66) (fb5a593)
+
 ## [3.91.0] - 2026-06-09
 
 ### Changed
