@@ -126,10 +126,17 @@ export async function arm(self: LifecycleHost & KeyDispatchHost): Promise<void> 
     self.logUpdate = new CupFrameRenderer(self.stdout) as unknown as LogUpdateFn;
   }
 
+  // Invariant (claim-before-mutate): take the stdin claim BEFORE raw mode /
+  // bracketed-paste — a conflict then rejects arm() with nothing to roll back.
+  self.stdinClaim = acquireStdinClaim('TerminalCompositor.arm');
+
   self.wasRaw = self.stdin.isRaw ?? false;
   try {
     self.stdin.setRawMode(true);
   } catch {
+    // setRawMode failed — release the claim so it doesn't leak, then bail.
+    self.stdinClaim?.release();
+    self.stdinClaim = null;
     self.logUpdate = null;
     self.wasRaw = false;
     return;
@@ -159,11 +166,6 @@ export async function arm(self: LifecycleHost & KeyDispatchHost): Promise<void> 
   // reader.ts, elicitation-repl.ts) locks the timeout in; all of them call
   // the helper with the same value, so it wins regardless of order.
   emitKeypressEventsImmediateEscape(self.stdin);
-
-  // Acquire the process-wide stdin claim immediately before attaching the
-  // keypress listener so the invariant is upheld: only one stdin consumer
-  // may be live at a time. Released in disarm().
-  self.stdinClaim = acquireStdinClaim('TerminalCompositor.arm');
 
   // Contract: dispatchKey is private on TerminalCompositor and is not
   // surfaced in LifecycleHost. The keypress listener calls InputDispatch.dispatchKey
