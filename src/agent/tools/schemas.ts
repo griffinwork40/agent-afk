@@ -488,7 +488,8 @@ export const createScheduleTool: AnthropicToolDef = {
   description:
     'Create a new scheduled task that the daemon will run on a cron expression. ' +
     'The task is saved to ~/.afk/config/schedules.json and live-synced to the running daemon if available. ' +
-    'Returns the new task ID (slug) on success.',
+    'Returns the new task ID (slug) on success, plus daemonSynced/syncDetail — when daemonSynced is false, ' +
+    'no running daemon picked up the change and it applies on the next daemon (re)start.',
   input_schema: {
     type: 'object',
     properties: {
@@ -567,7 +568,9 @@ export const cancelScheduleTool: AnthropicToolDef = {
   description:
     'Disable or permanently remove a scheduled task. ' +
     'If permanent is false (default), sets enabled: false so the task can be re-enabled later. ' +
-    'If permanent is true, removes the task from the store entirely.',
+    'If permanent is true, removes the task from the store entirely. ' +
+    'The result includes daemonSynced/syncDetail — when daemonSynced is false, a running daemon ' +
+    'still has the task registered until it restarts.',
   input_schema: {
     type: 'object',
     properties: {

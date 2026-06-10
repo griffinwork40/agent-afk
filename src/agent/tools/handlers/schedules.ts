@@ -3,7 +3,10 @@
  *
  * Four tools: create_schedule, list_schedules, get_schedule_history,
  * cancel_schedule. All call schedule-store.ts for persistence. Write ops
- * also attempt to live-sync to a running daemon via the port file.
+ * also attempt to live-sync to a running daemon via the port file and
+ * surface the outcome as `daemonSynced`/`syncDetail` in the result — a
+ * daemon that booted before the change will NOT see it until restarted,
+ * and callers must be able to tell.
  *
  * Pattern: follows send-telegram.ts — manual input validation, isError: true
  * on failure, no thrown exceptions.
@@ -24,34 +27,70 @@ import {
 } from '../../daemon/schedule-store.js';
 import { getTelemetryPath, getDaemonStateDir } from '../../../paths.js';
 
+/** Outcome of a live-sync attempt against a running daemon. */
+export interface DaemonSyncResult {
+  /** True when the running daemon's state matches the store after the call. */
+  synced: boolean;
+  /** Machine-readable detail, e.g. 'synced', 'already-registered', 'daemon-not-detected (no port file)'. */
+  detail: string;
+}
+
 // TODO: extract to src/agent/daemon/http-client.ts when shared with CLI
 /**
- * Attempt to notify the running daemon of a task change.
- * Swallows all errors silently — file store is the source of truth.
- * STALE-FILE NOTE: port file may be stale after SIGKILL; fetch will fail
- * and be silently swallowed.
+ * Attempt to notify the running daemon of a task change and report the
+ * outcome. Never throws — the file store is the source of truth and a
+ * failed sync must not fail the write — but the result is surfaced to the
+ * caller so a daemon that will not see the change until restart is visible
+ * instead of silently assumed in sync.
+ *
+ * End-state semantics: a 409 on POST (already registered) and a 404 on
+ * DELETE (not registered) both mean the daemon already matches the desired
+ * outcome, so they count as synced.
  */
 async function trySyncToDaemon(
   method: 'POST' | 'DELETE',
   path: string,
   body?: unknown,
-): Promise<void> {
+): Promise<DaemonSyncResult> {
+  let port: number;
   try {
     const portFile = join(getDaemonStateDir('default'), 'port');
-    if (!existsSync(portFile)) return;
+    if (!existsSync(portFile)) {
+      return { synced: false, detail: 'daemon-not-detected (no port file)' };
+    }
     const portStr = readFileSync(portFile, 'utf-8').trim();
-    const port = parseInt(portStr, 10);
-    if (Number.isNaN(port)) return;
-    await fetch(`http://localhost:${port}${path}`, {
+    port = parseInt(portStr, 10);
+    if (Number.isNaN(port)) {
+      return { synced: false, detail: 'daemon-not-detected (invalid port file)' };
+    }
+  } catch {
+    return { synced: false, detail: 'daemon-not-detected (unreadable port file)' };
+  }
+  try {
+    const res = await fetch(`http://localhost:${port}${path}`, {
       method,
       headers: { 'Content-Type': 'application/json' },
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(2000),
     });
+    if (res.ok) return { synced: true, detail: 'synced' };
+    if (method === 'POST' && res.status === 409) {
+      return { synced: true, detail: 'already-registered' };
+    }
+    if (method === 'DELETE' && res.status === 404) {
+      return { synced: true, detail: 'not-registered' };
+    }
+    return { synced: false, detail: `daemon-rejected (HTTP ${res.status})` };
   } catch {
-    // Daemon not running or unreachable — silent failure
+    // STALE-FILE NOTE: port file may be stale after SIGKILL; fetch fails here.
+    return { synced: false, detail: 'daemon-unreachable (stale port file or network error)' };
   }
 }
+
+/** Human-actionable note attached to results when live-sync did not land. */
+const SYNC_FAILED_NOTE =
+  'Change saved to schedules.json, but a running daemon (if any) did not pick it up — ' +
+  'it will apply on the next daemon (re)start.';
 
 export const createScheduleHandler: ToolHandler = async (input, _signal) => {
   if (!input || typeof input !== 'object') {
@@ -87,14 +126,18 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
     enabled: typeof obj['enabled'] === 'boolean' ? obj['enabled'] : true,
   });
 
-  // Attempt live-sync to daemon
-  await trySyncToDaemon('POST', '/tasks', {
-    taskId: config.id,
-    command: config.command,
-    cron: config.cron,
-    trigger: config.trigger,
-    notifyOn: config.notifyOn,
-  });
+  // Attempt live-sync to daemon. Disabled tasks are deliberately NOT
+  // registered — the daemon only loads enabled tasks at boot, and live-
+  // registering a disabled task would make it fire anyway.
+  const sync = config.enabled
+    ? await trySyncToDaemon('POST', '/tasks', {
+        taskId: config.id,
+        command: config.command,
+        cron: config.cron,
+        trigger: config.trigger,
+        notifyOn: config.notifyOn,
+      })
+    : { synced: true, detail: 'not-applicable (task disabled)' };
 
   return {
     content: JSON.stringify({
@@ -102,6 +145,9 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
       name: config.name,
       cron: config.cron,
       enabled: config.enabled,
+      daemonSynced: sync.synced,
+      syncDetail: sync.detail,
+      ...(sync.synced ? {} : { syncNote: SYNC_FAILED_NOTE }),
     }),
   };
 };
@@ -187,9 +233,10 @@ export const cancelScheduleHandler: ToolHandler = async (input, _signal) => {
     return { content: JSON.stringify({ error: 'task not found' }) };
   }
 
+  let sync: DaemonSyncResult;
   if (permanent) {
     removeSchedule(taskId);
-    await trySyncToDaemon('DELETE', `/tasks/${taskId}`);
+    sync = await trySyncToDaemon('DELETE', `/tasks/${taskId}`);
   } else {
     const schedules = loadSchedules();
     const updated = schedules.map((s) =>
@@ -197,8 +244,17 @@ export const cancelScheduleHandler: ToolHandler = async (input, _signal) => {
     );
     saveSchedules(updated);
     // Unregister from running daemon — task won't auto-restart unless daemon restarts
-    await trySyncToDaemon('DELETE', `/tasks/${taskId}`);
+    sync = await trySyncToDaemon('DELETE', `/tasks/${taskId}`);
   }
 
-  return { content: JSON.stringify({ ok: true, taskId, permanent }) };
+  return {
+    content: JSON.stringify({
+      ok: true,
+      taskId,
+      permanent,
+      daemonSynced: sync.synced,
+      syncDetail: sync.detail,
+      ...(sync.synced ? {} : { syncNote: SYNC_FAILED_NOTE }),
+    }),
+  };
 };
