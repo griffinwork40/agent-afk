@@ -11,6 +11,10 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Fixed
+- commit content to scrollback in banner sessions — eliminates blank-gap, duplication, and lost-commit regressions when the REPL prints a banner before arming (#74) (2411b88)
+- never reap a worktree hosting a live session (#73) (6f82cb8)
+
 ## [3.92.2] - 2026-06-10
 
 ### Fixed
