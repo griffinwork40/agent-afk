@@ -18,6 +18,7 @@
  */
 
 import { InputCore, type InputCoreState } from './input-core.js';
+import { nextGraphemeIndex } from './display.js';
 import { readClipboardImage } from './input/clipboard-image.js';
 import { MAX_DROPDOWN_ROWS } from './terminal-compositor.autocomplete.js';
 import * as Paste from './terminal-compositor.paste.js';
@@ -756,6 +757,18 @@ function handleTab(self: KeyDispatchHost, key: KeyInfo): boolean {
   return false;
 }
 
+/**
+ * True when `s` is a single printable grapheme cluster (one visual character):
+ * not a control char (< ' '), and exactly one grapheme — so multi-UTF-16-unit
+ * emoji (surrogate pairs, variation selectors, skin-tone modifiers) count as
+ * one printable character, while escape sequences and multi-char fragments are
+ * rejected. Replaces the old `s.length === 1` UTF-16 code-unit test that
+ * silently dropped all astral / composed emoji.
+ */
+function isPrintableGrapheme(s: string): boolean {
+  return s >= ' ' && nextGraphemeIndex(s, 0) === s.length;
+}
+
 function handlePrintable(self: KeyDispatchHost, char: string | undefined, key: KeyInfo): void {
   // Ignore remaining nav/modifier combos that aren't cancel-combos.
   const ignored = ['tab', 'pageup', 'pagedown'];
@@ -763,13 +776,12 @@ function handlePrintable(self: KeyDispatchHost, char: string | undefined, key: K
   if (key?.ctrl || key?.meta) return;
 
   // Printable: prefer `char`; fall back to key.sequence when char is absent
-  // (some terminals emit only sequence for certain keys).
+  // (some terminals emit only sequence for certain keys). isPrintableGrapheme
+  // admits multi-UTF-16-unit emoji that the old `length === 1` test dropped.
   const printable =
-    typeof char === 'string' && char.length === 1 && char >= ' '
+    typeof char === 'string' && isPrintableGrapheme(char)
       ? char
-      : typeof key?.sequence === 'string' &&
-          key.sequence.length === 1 &&
-          key.sequence >= ' '
+      : typeof key?.sequence === 'string' && isPrintableGrapheme(key.sequence)
         ? key.sequence
         : null;
   if (printable !== null) {

@@ -1582,6 +1582,19 @@ describe('TerminalCompositor', () => {
       expect(c.getBuffer().text).toBe('hi');
     });
 
+    it('printable emoji (multi-UTF-16-unit graphemes) are inserted, not dropped', async () => {
+      // Regression: the printable filter used `char.length === 1`, a UTF-16
+      // code-UNIT count — it silently dropped surrogate-pair emoji
+      // ('😀'.length === 2) and variation-selector / skin-tone emoji
+      // ('❤️', '👍🏽'). Each is a single printable grapheme and must insert.
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      stdin.emit('keypress', '😀', { sequence: '😀' });
+      stdin.emit('keypress', '❤️', { sequence: '❤️' });
+      expect(c.getBuffer().text).toBe('😀❤️');
+      c.disarm();
+    });
+
     it('backspace shrinks buffer', async () => {
       const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
       await c.arm();
