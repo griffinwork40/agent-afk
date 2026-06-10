@@ -11,7 +11,6 @@
 
 import { Command } from 'commander';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { handleCommandError } from '../errors/index.js';
 import {
   loadSchedules,
@@ -20,36 +19,8 @@ import {
   removeSchedule,
   getSchedule,
 } from '../../agent/daemon/schedule-store.js';
-import { getDaemonStateDir, getTelemetryPath } from '../../paths.js';
-
-// TODO: extract to src/agent/daemon/http-client.ts when shared with tool handlers
-/**
- * Attempt to notify the running daemon of a task change.
- * Swallows all errors silently — file store is the source of truth.
- * STALE-FILE NOTE: port file may be stale after SIGKILL; fetch will fail
- * and be silently swallowed.
- */
-async function trySyncToDaemon(
-  method: 'POST' | 'DELETE',
-  path: string,
-  body?: unknown,
-): Promise<void> {
-  try {
-    const portFile = join(getDaemonStateDir('default'), 'port');
-    if (!existsSync(portFile)) return;
-    const portStr = readFileSync(portFile, 'utf-8').trim();
-    const port = parseInt(portStr, 10);
-    if (Number.isNaN(port)) return;
-    await fetch(`http://localhost:${port}${path}`, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(2000),
-    });
-  } catch {
-    // Daemon not running or unreachable — silent failure
-  }
-}
+import { getTelemetryPath } from '../../paths.js';
+import { trySyncToDaemon, SYNC_FAILED_NOTE } from '../../agent/daemon/http-client.js';
 
 export function registerScheduleCommand(program: Command): void {
   const schedule = program.command('schedule').description('Manage scheduled daemon tasks');
@@ -82,12 +53,13 @@ export function registerScheduleCommand(program: Command): void {
             notifyOn: opts.notify as 'failure' | 'always' | 'never',
             enabled: !opts.disabled,
           });
-          await trySyncToDaemon('POST', '/tasks', {
+          const syncAdd = await trySyncToDaemon('POST', '/tasks', {
             taskId: config.id,
             command: config.command,
             cron: config.cron,
             trigger: config.trigger,
           });
+          if (!syncAdd.synced) console.error(`⚠️  ${SYNC_FAILED_NOTE}`);
           console.log(`✅ Added: ${config.id} — ${config.name}`);
         } catch (err) {
           handleCommandError(err);
@@ -137,7 +109,8 @@ export function registerScheduleCommand(program: Command): void {
           console.error(`Task not found: ${id}`);
           process.exit(1);
         }
-        await trySyncToDaemon('DELETE', `/tasks/${id}`);
+        const syncRemove = await trySyncToDaemon('DELETE', `/tasks/${id}`);
+        if (!syncRemove.synced) console.error(`⚠️  ${SYNC_FAILED_NOTE}`);
         console.log(`✅ Removed: ${id}`);
       } catch (err) {
         handleCommandError(err);
@@ -158,12 +131,13 @@ export function registerScheduleCommand(program: Command): void {
           s.id === id ? { ...s, enabled: true, updatedAt: new Date().toISOString() } : s,
         ),
       );
-      await trySyncToDaemon('POST', '/tasks', {
+      const syncEnable = await trySyncToDaemon('POST', '/tasks', {
         taskId: config.id,
         command: config.command,
         cron: config.cron,
         trigger: config.trigger,
       });
+      if (!syncEnable.synced) console.error(`⚠️  ${SYNC_FAILED_NOTE}`);
       console.log(`✅ Enabled: ${id}`);
     } catch (err) {
       handleCommandError(err);
@@ -184,7 +158,8 @@ export function registerScheduleCommand(program: Command): void {
           s.id === id ? { ...s, enabled: false, updatedAt: new Date().toISOString() } : s,
         ),
       );
-      await trySyncToDaemon('DELETE', `/tasks/${id}`);
+      const syncDisable = await trySyncToDaemon('DELETE', `/tasks/${id}`);
+      if (!syncDisable.synced) console.error(`⚠️  ${SYNC_FAILED_NOTE}`);
       console.log(`✅ Disabled: ${id}`);
     } catch (err) {
       handleCommandError(err);

@@ -14,9 +14,8 @@
  * @module agent/tools/handlers/schedules
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import type { ToolHandler } from '../types.js';
 import {
   loadSchedules,
@@ -25,72 +24,14 @@ import {
   removeSchedule,
   getSchedule,
 } from '../../daemon/schedule-store.js';
-import { getTelemetryPath, getDaemonStateDir } from '../../../paths.js';
+import { getTelemetryPath } from '../../../paths.js';
+import {
+  type DaemonSyncResult,
+  trySyncToDaemon,
+  SYNC_FAILED_NOTE,
+} from '../../daemon/http-client.js';
 
-/** Outcome of a live-sync attempt against a running daemon. */
-export interface DaemonSyncResult {
-  /** True when the running daemon's state matches the store after the call. */
-  synced: boolean;
-  /** Machine-readable detail, e.g. 'synced', 'already-registered', 'daemon-not-detected (no port file)'. */
-  detail: string;
-}
-
-// TODO: extract to src/agent/daemon/http-client.ts when shared with CLI
-/**
- * Attempt to notify the running daemon of a task change and report the
- * outcome. Never throws — the file store is the source of truth and a
- * failed sync must not fail the write — but the result is surfaced to the
- * caller so a daemon that will not see the change until restart is visible
- * instead of silently assumed in sync.
- *
- * End-state semantics: a 409 on POST (already registered) and a 404 on
- * DELETE (not registered) both mean the daemon already matches the desired
- * outcome, so they count as synced.
- */
-async function trySyncToDaemon(
-  method: 'POST' | 'DELETE',
-  path: string,
-  body?: unknown,
-): Promise<DaemonSyncResult> {
-  let port: number;
-  try {
-    const portFile = join(getDaemonStateDir('default'), 'port');
-    if (!existsSync(portFile)) {
-      return { synced: false, detail: 'daemon-not-detected (no port file)' };
-    }
-    const portStr = readFileSync(portFile, 'utf-8').trim();
-    port = parseInt(portStr, 10);
-    if (Number.isNaN(port)) {
-      return { synced: false, detail: 'daemon-not-detected (invalid port file)' };
-    }
-  } catch {
-    return { synced: false, detail: 'daemon-not-detected (unreadable port file)' };
-  }
-  try {
-    const res = await fetch(`http://localhost:${port}${path}`, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(2000),
-    });
-    if (res.ok) return { synced: true, detail: 'synced' };
-    if (method === 'POST' && res.status === 409) {
-      return { synced: true, detail: 'already-registered' };
-    }
-    if (method === 'DELETE' && res.status === 404) {
-      return { synced: true, detail: 'not-registered' };
-    }
-    return { synced: false, detail: `daemon-rejected (HTTP ${res.status})` };
-  } catch {
-    // STALE-FILE NOTE: port file may be stale after SIGKILL; fetch fails here.
-    return { synced: false, detail: 'daemon-unreachable (stale port file or network error)' };
-  }
-}
-
-/** Human-actionable note attached to results when live-sync did not land. */
-const SYNC_FAILED_NOTE =
-  'Change saved to schedules.json, but a running daemon (if any) did not pick it up — ' +
-  'it will apply on the next daemon (re)start.';
+export type { DaemonSyncResult };
 
 export const createScheduleHandler: ToolHandler = async (input, _signal) => {
   if (!input || typeof input !== 'object') {
@@ -126,9 +67,10 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
     enabled: typeof obj['enabled'] === 'boolean' ? obj['enabled'] : true,
   });
 
-  // Attempt live-sync to daemon. Disabled tasks are deliberately NOT
-  // registered — the daemon only loads enabled tasks at boot, and live-
-  // registering a disabled task would make it fire anyway.
+  // Attempt live-sync to daemon. Enabled tasks are POST-registered. Disabled
+  // tasks send an idempotent DELETE so any stale live registration (e.g. a
+  // re-create-as-disabled over an existing enabled id) is removed — a 404
+  // (not registered) counts as synced under end-state semantics.
   const sync = config.enabled
     ? await trySyncToDaemon('POST', '/tasks', {
         taskId: config.id,
@@ -137,7 +79,7 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
         trigger: config.trigger,
         notifyOn: config.notifyOn,
       })
-    : { synced: true, detail: 'not-applicable (task disabled)' };
+    : await trySyncToDaemon('DELETE', `/tasks/${config.id}`);
 
   return {
     content: JSON.stringify({

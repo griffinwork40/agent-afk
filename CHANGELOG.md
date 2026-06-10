@@ -12,7 +12,7 @@ auto-release workflow to deduplicate commits across successive runs.
 ## [Unreleased]
 
 ### Fixed
-- schedule live-sync no longer fails silently: `create_schedule`/`cancel_schedule` results now include `daemonSynced` + `syncDetail` (and a `syncNote` when the change will only apply on the next daemon start); transient `afk daemon --once` runs no longer overwrite-then-delete the service daemon's port-discovery file (new `writePortFile` option + content-guarded unlink); daemon `POST /tasks` accepts `cronExpression` as an alias for `cron`; creating a disabled schedule no longer live-registers it into the running daemon
+- schedule live-sync no longer fails silently: `create_schedule`/`cancel_schedule` results now include `daemonSynced` + `syncDetail` (and a `syncNote` when the change will only apply on the next daemon start); transient `afk daemon --once` runs no longer overwrite-then-delete the service daemon's port-discovery file (new `writePortFile` option + content-guarded unlink); daemon `POST /tasks` accepts `cronExpression` as an alias for `cron`; creating a disabled schedule no longer live-registers it into the running daemon; `afk schedule` CLI subcommands (add/remove/enable/disable) now surface live-sync status via the shared http-client instead of failing silently; creating a disabled schedule now sends an idempotent DELETE to unregister any stale live daemon registration
 
 ## [3.92.3] - 2026-06-10
 

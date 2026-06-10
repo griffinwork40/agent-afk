@@ -348,7 +348,7 @@ describe('live-sync surface (daemonSynced)', () => {
       );
       const parsed = JSON.parse(result.content as string) as SyncShape;
       expect(parsed.daemonSynced).toBe(true);
-      expect(parsed.syncDetail).toMatch(/disabled/);
+      expect(parsed.syncDetail).toMatch(/not-registered|synced/);
       const tasks = (await (await fetch(`http://localhost:${handle.port}/tasks`)).json()) as Array<{
         taskId: string;
       }>;
