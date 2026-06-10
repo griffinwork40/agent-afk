@@ -133,7 +133,11 @@ export async function updatePlugin(
     };
   }
 
-  await git.checkout(dir, isBranch ? remoteRef : pickedSemverTag ? `refs/tags/${targetRef}` : targetRef, gitOpts);
+  // force: the cache under ~/.afk/plugins/cache/ is a disposable mirror of the
+  // remote, not a user workspace. Discard any tracked-file drift so a dirty
+  // cache (partial prior update, stray edit) can't wedge the checkout. Untracked
+  // files survive --force, so locally-added content is preserved.
+  await git.checkout(dir, isBranch ? remoteRef : pickedSemverTag ? `refs/tags/${targetRef}` : targetRef, { ...gitOpts, force: true });
   const commit = await git.getCommitSha(dir, gitOpts);
   const version = readPluginManifest(dir).version;
   const ts = now().toISOString();
