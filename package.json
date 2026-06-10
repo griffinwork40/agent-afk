@@ -39,6 +39,8 @@
     "audit:env:list": "tsx scripts/audit-env-access.ts --list",
     "scan:env": "tsx scripts/render-env-registry.ts",
     "scan:env:check": "tsx scripts/render-env-registry.ts --check",
+    "fix:pins": "tsx scripts/update-hash-pins.ts",
+    "fix:pins:check": "tsx scripts/update-hash-pins.ts --check",
     "stats:tools": "tsx scripts/count-tool-calls.ts",
     "clean": "rm -rf dist",
     "build:dist": "node scripts/build-dist.mjs",
