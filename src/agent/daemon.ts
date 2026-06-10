@@ -12,7 +12,7 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
+import { writeFileSync, unlinkSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { AgentConfig } from './types.js';
 import { CronScheduler, type SchedulerOptions, type TelemetryRecord } from './daemon/scheduler.js';
@@ -49,6 +49,14 @@ export interface DaemonOptions {
   pullPollIntervalMs?: number;
   /** Override the queue directory for pull-mode dequeue (defaults to `getQueueDir()`). */
   queueDir?: string;
+  /**
+   * Write the port-discovery file under the daemon state dir so tool handlers
+   * (create_schedule / cancel_schedule live-sync) can find this instance.
+   * Defaults to true. Set false for transient instances (`--once` ticks,
+   * tests) so they do not overwrite — and then delete — the long-running
+   * service daemon's port file, silently severing live-sync until restart.
+   */
+  writePortFile?: boolean;
 }
 
 export interface DaemonHandle {
@@ -91,18 +99,21 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
 
   // Port file path — written on listen, deleted on stop.
   // STALE-FILE NOTE: SIGKILL cannot be intercepted — a stale port file may
-  // survive a crash. Tool handlers handle this silently via fetch failure.
+  // survive a crash. Tool handlers report this as 'daemon-unreachable'.
+  const writePortFile = options.writePortFile !== false;
   const portFilePath = join(getDaemonStateDir('default'), 'port');
-  mkdirSync(dirname(portFilePath), { recursive: true });
 
   const server = createServer((req, res) => handleRequest(req, res, scheduler));
   const port = await listen(server, options.port ?? DEFAULT_PORT);
 
   // Write the port file so tool handlers can find the running daemon.
-  try {
-    writeFileSync(portFilePath, String(port), 'utf-8');
-  } catch {
-    // Best-effort; daemon still functional without port file
+  if (writePortFile) {
+    try {
+      mkdirSync(dirname(portFilePath), { recursive: true });
+      writeFileSync(portFilePath, String(port), 'utf-8');
+    } catch {
+      // Best-effort; daemon still functional without port file
+    }
   }
 
   return {
@@ -122,11 +133,23 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
     },
     async stop() {
       await scheduler.stop();
-      // Delete port file on graceful shutdown
-      try {
-        unlinkSync(portFilePath);
-      } catch {
-        // Port file may not exist (tests with port: 0, or already deleted)
+      // Delete the port file on graceful shutdown — but only if it still
+      // records OUR port. Another daemon instance may have (re)claimed the
+      // path since we wrote it; unconditionally unlinking would sever
+      // live-sync discovery for that instance.
+      // Invariant: the read→unlink below is not atomic (Node fs has no
+      // compare-and-delete). A residual TOCTOU window remains — a competing
+      // instance could rewrite the file between the read and the unlink. It is
+      // accepted: the path is localhost-only and the worst case is a live
+      // daemon losing port-file discovery until its next (re)start.
+      if (writePortFile) {
+        try {
+          if (readFileSync(portFilePath, 'utf-8').trim() === String(port)) {
+            unlinkSync(portFilePath);
+          }
+        } catch {
+          // Port file may not exist (tests with port: 0, or already deleted)
+        }
       }
       await closeServer(server);
     },
@@ -196,20 +219,25 @@ async function handleRequestAsync(
       return;
     }
     const obj = body as Record<string, unknown>;
+    // Tolerant reader: GET /tasks returns `cronExpression`, so accept it as
+    // an alias for `cron` on the way in (round-trip symmetry for manual ops).
+    const cronValue = obj['cron'] ?? obj['cronExpression'];
     if (
       typeof obj['taskId'] !== 'string' ||
       typeof obj['command'] !== 'string' ||
-      typeof obj['cron'] !== 'string'
+      typeof cronValue !== 'string'
     ) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'taskId, command, and cron are required strings' }));
+      res.end(
+        JSON.stringify({ error: 'taskId, command, and cron (or cronExpression) are required strings' }),
+      );
       return;
     }
     const task: ScheduledTask = {
       taskId: obj['taskId'] as string,
       command: obj['command'] as string,
       trigger: (obj['trigger'] as TriggerMode | undefined) ?? 'cron',
-      cronExpression: obj['cron'] as string,
+      cronExpression: cronValue,
       ...(obj['notifyOn'] !== undefined
         ? { notifyOn: obj['notifyOn'] as ScheduledTask['notifyOn'] }
         : {}),

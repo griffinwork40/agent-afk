@@ -367,6 +367,9 @@ export function registerDaemonCommand(program: Command): void {
       try {
         const handle = await startDaemon({
           port,
+          // Transient one-tick runs must not claim (and on exit delete) the
+          // shared port-discovery file the service daemon's live-sync needs.
+          ...(options.once ? { writePortFile: false } : {}),
           sessionConfig: {
             model: daemonModel,
             ...(daemonApiKey !== undefined ? { apiKey: daemonApiKey } : {}),

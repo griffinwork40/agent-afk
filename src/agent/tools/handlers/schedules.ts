@@ -3,7 +3,10 @@
  *
  * Four tools: create_schedule, list_schedules, get_schedule_history,
  * cancel_schedule. All call schedule-store.ts for persistence. Write ops
- * also attempt to live-sync to a running daemon via the port file.
+ * also attempt to live-sync to a running daemon via the port file and
+ * surface the outcome as `daemonSynced`/`syncDetail` in the result — a
+ * daemon that booted before the change will NOT see it until restarted,
+ * and callers must be able to tell.
  *
  * Pattern: follows send-telegram.ts — manual input validation, isError: true
  * on failure, no thrown exceptions.
@@ -11,9 +14,8 @@
  * @module agent/tools/handlers/schedules
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import type { ToolHandler } from '../types.js';
 import {
   loadSchedules,
@@ -22,36 +24,14 @@ import {
   removeSchedule,
   getSchedule,
 } from '../../daemon/schedule-store.js';
-import { getTelemetryPath, getDaemonStateDir } from '../../../paths.js';
+import { getTelemetryPath } from '../../../paths.js';
+import {
+  type DaemonSyncResult,
+  trySyncToDaemon,
+  SYNC_FAILED_NOTE,
+} from '../../daemon/http-client.js';
 
-// TODO: extract to src/agent/daemon/http-client.ts when shared with CLI
-/**
- * Attempt to notify the running daemon of a task change.
- * Swallows all errors silently — file store is the source of truth.
- * STALE-FILE NOTE: port file may be stale after SIGKILL; fetch will fail
- * and be silently swallowed.
- */
-async function trySyncToDaemon(
-  method: 'POST' | 'DELETE',
-  path: string,
-  body?: unknown,
-): Promise<void> {
-  try {
-    const portFile = join(getDaemonStateDir('default'), 'port');
-    if (!existsSync(portFile)) return;
-    const portStr = readFileSync(portFile, 'utf-8').trim();
-    const port = parseInt(portStr, 10);
-    if (Number.isNaN(port)) return;
-    await fetch(`http://localhost:${port}${path}`, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(2000),
-    });
-  } catch {
-    // Daemon not running or unreachable — silent failure
-  }
-}
+export type { DaemonSyncResult };
 
 export const createScheduleHandler: ToolHandler = async (input, _signal) => {
   if (!input || typeof input !== 'object') {
@@ -87,14 +67,19 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
     enabled: typeof obj['enabled'] === 'boolean' ? obj['enabled'] : true,
   });
 
-  // Attempt live-sync to daemon
-  await trySyncToDaemon('POST', '/tasks', {
-    taskId: config.id,
-    command: config.command,
-    cron: config.cron,
-    trigger: config.trigger,
-    notifyOn: config.notifyOn,
-  });
+  // Attempt live-sync to daemon. Enabled tasks are POST-registered. Disabled
+  // tasks send an idempotent DELETE so any stale live registration (e.g. a
+  // re-create-as-disabled over an existing enabled id) is removed — a 404
+  // (not registered) counts as synced under end-state semantics.
+  const sync = config.enabled
+    ? await trySyncToDaemon('POST', '/tasks', {
+        taskId: config.id,
+        command: config.command,
+        cron: config.cron,
+        trigger: config.trigger,
+        notifyOn: config.notifyOn,
+      })
+    : await trySyncToDaemon('DELETE', `/tasks/${config.id}`);
 
   return {
     content: JSON.stringify({
@@ -102,6 +87,9 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
       name: config.name,
       cron: config.cron,
       enabled: config.enabled,
+      daemonSynced: sync.synced,
+      syncDetail: sync.detail,
+      ...(sync.synced ? {} : { syncNote: SYNC_FAILED_NOTE }),
     }),
   };
 };
@@ -187,9 +175,10 @@ export const cancelScheduleHandler: ToolHandler = async (input, _signal) => {
     return { content: JSON.stringify({ error: 'task not found' }) };
   }
 
+  let sync: DaemonSyncResult;
   if (permanent) {
     removeSchedule(taskId);
-    await trySyncToDaemon('DELETE', `/tasks/${taskId}`);
+    sync = await trySyncToDaemon('DELETE', `/tasks/${taskId}`);
   } else {
     const schedules = loadSchedules();
     const updated = schedules.map((s) =>
@@ -197,8 +186,17 @@ export const cancelScheduleHandler: ToolHandler = async (input, _signal) => {
     );
     saveSchedules(updated);
     // Unregister from running daemon — task won't auto-restart unless daemon restarts
-    await trySyncToDaemon('DELETE', `/tasks/${taskId}`);
+    sync = await trySyncToDaemon('DELETE', `/tasks/${taskId}`);
   }
 
-  return { content: JSON.stringify({ ok: true, taskId, permanent }) };
+  return {
+    content: JSON.stringify({
+      ok: true,
+      taskId,
+      permanent,
+      daemonSynced: sync.synced,
+      syncDetail: sync.detail,
+      ...(sync.synced ? {} : { syncNote: SYNC_FAILED_NOTE }),
+    }),
+  };
 };

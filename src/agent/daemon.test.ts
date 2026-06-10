@@ -19,6 +19,7 @@ import type { AgentConfig, Message } from './types.js';
 import { validateScheduledTask, type ScheduledTask } from './daemon/triggers.js';
 import { CronScheduler } from './daemon/scheduler.js';
 import { startDaemon, type DaemonHandle } from './daemon.js';
+import { getDaemonStateDir } from '../paths.js';
 
 // node-cron schedules tasks against real wall-clock time. We never let them
 // fire — every test uses scheduler.tick(taskId) directly to invoke the
@@ -865,3 +866,67 @@ type SessionFactoryReturn = NonNullable<
     ? () => R
     : never
   : never;
+
+describe('port file lifecycle', () => {
+  let tmpHome: string;
+  const portFilePath = (): string => join(getDaemonStateDir('default'), 'port');
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), 'agent-afk-portfile-'));
+    vi.stubEnv('AFK_HOME', tmpHome);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  it('writes the port file by default and removes it on stop', async () => {
+    const h = await startDaemon({ port: 0 });
+    expect(readFileSync(portFilePath(), 'utf-8').trim()).toBe(String(h.port));
+    await h.stop();
+    expect(existsSync(portFilePath())).toBe(false);
+  });
+
+  it('writePortFile: false skips the port file entirely', async () => {
+    const h = await startDaemon({ port: 0, writePortFile: false });
+    expect(existsSync(portFilePath())).toBe(false);
+    await h.stop();
+    expect(existsSync(portFilePath())).toBe(false);
+  });
+
+  it('stop() leaves a port file it no longer owns intact', async () => {
+    const h = await startDaemon({ port: 0 });
+    // Another instance (re)claims the discovery path while we are running —
+    // unconditional unlink would sever live-sync for that instance.
+    writeFileSync(portFilePath(), '65501', 'utf-8');
+    await h.stop();
+    expect(existsSync(portFilePath())).toBe(true);
+    expect(readFileSync(portFilePath(), 'utf-8')).toBe('65501');
+  });
+
+  it('POST /tasks accepts cronExpression as an alias for cron', async () => {
+    const h = await startDaemon({ port: 0, writePortFile: false });
+    try {
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: 'alias-task',
+          command: '/x',
+          cronExpression: '59 23 31 12 *',
+        }),
+      });
+      expect(res.status).toBe(201);
+      const list = (await (await fetch(`http://localhost:${h.port}/tasks`)).json()) as Array<{
+        taskId: string;
+        cronExpression: string;
+      }>;
+      expect(
+        list.some((t) => t.taskId === 'alias-task' && t.cronExpression === '59 23 31 12 *'),
+      ).toBe(true);
+    } finally {
+      await h.stop();
+    }
+  });
+});
