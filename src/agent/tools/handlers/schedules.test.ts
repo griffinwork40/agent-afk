@@ -348,7 +348,10 @@ describe('live-sync surface (daemonSynced)', () => {
       );
       const parsed = JSON.parse(result.content as string) as SyncShape;
       expect(parsed.daemonSynced).toBe(true);
-      expect(parsed.syncDetail).toMatch(/not-registered|synced/);
+      // The disabled-create path DELETEs an unregistered id → daemon 404 →
+      // 'not-registered'. Assert exactly that; a 'synced' (HTTP 200) here would
+      // mean the task was registered first, which is the bug this guards.
+      expect(parsed.syncDetail).toBe('not-registered');
       const tasks = (await (await fetch(`http://localhost:${handle.port}/tasks`)).json()) as Array<{
         taskId: string;
       }>;

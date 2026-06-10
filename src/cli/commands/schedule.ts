@@ -53,12 +53,19 @@ export function registerScheduleCommand(program: Command): void {
             notifyOn: opts.notify as 'failure' | 'always' | 'never',
             enabled: !opts.disabled,
           });
-          const syncAdd = await trySyncToDaemon('POST', '/tasks', {
-            taskId: config.id,
-            command: config.command,
-            cron: config.cron,
-            trigger: config.trigger,
-          });
+          // Mirror the create_schedule tool handler: enabled tasks are
+          // POST-registered; a disabled task sends an idempotent DELETE so it
+          // is never live-registered into (and fired by) a running daemon —
+          // a 404 (not registered) counts as synced under end-state semantics.
+          const syncAdd = config.enabled
+            ? await trySyncToDaemon('POST', '/tasks', {
+                taskId: config.id,
+                command: config.command,
+                cron: config.cron,
+                trigger: config.trigger,
+                notifyOn: config.notifyOn,
+              })
+            : await trySyncToDaemon('DELETE', `/tasks/${config.id}`);
           if (!syncAdd.synced) console.error(`⚠️  ${SYNC_FAILED_NOTE}`);
           console.log(`✅ Added: ${config.id} — ${config.name}`);
         } catch (err) {
@@ -136,6 +143,7 @@ export function registerScheduleCommand(program: Command): void {
         command: config.command,
         cron: config.cron,
         trigger: config.trigger,
+        notifyOn: config.notifyOn,
       });
       if (!syncEnable.synced) console.error(`⚠️  ${SYNC_FAILED_NOTE}`);
       console.log(`✅ Enabled: ${id}`);

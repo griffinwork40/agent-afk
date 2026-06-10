@@ -137,6 +137,11 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
       // records OUR port. Another daemon instance may have (re)claimed the
       // path since we wrote it; unconditionally unlinking would sever
       // live-sync discovery for that instance.
+      // Invariant: the read→unlink below is not atomic (Node fs has no
+      // compare-and-delete). A residual TOCTOU window remains — a competing
+      // instance could rewrite the file between the read and the unlink. It is
+      // accepted: the path is localhost-only and the worst case is a live
+      // daemon losing port-file discovery until its next (re)start.
       if (writePortFile) {
         try {
           if (readFileSync(portFilePath, 'utf-8').trim() === String(port)) {
