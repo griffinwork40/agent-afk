@@ -15,20 +15,14 @@
  * further editing unqueues cleanly.
  */
 
-import { emitKeypressEventsImmediateEscape } from './input/emit-keypress.js';
 import { env } from '../config/env.js';
-import { CupFrameRenderer } from './cup-frame-renderer.js';
 import { palette } from './palette.js';
-import { ResizeBus } from './terminal-size.js';
 import { InputCore, type InputCoreState } from './input-core.js';
 import type { AutocompleteState } from './input/autocomplete-state.js';
 import type { IHistoryRing } from './input/types.js';
 import type { ImageAttachment } from './input/attachments.js';
 import { SpinnerController } from './input/spinner.js';
-import {
-  acquireStdinClaim,
-  type StdinClaimHandle,
-} from './input/stdin-claim.js';
+import type { StdinClaimHandle } from './input/stdin-claim.js';
 import {
   type CompositorInputMode,
   type CompositorScrollRegionGuard,
@@ -44,8 +38,9 @@ import * as Paste from './terminal-compositor.paste.js';
 import * as Autocomplete from './terminal-compositor.autocomplete.js';
 import * as Render from './terminal-compositor.render.js';
 import * as CommittedBand from './terminal-compositor.committed-band.js';
-import * as InputDispatch from './terminal-compositor.input-dispatch.js';
 import * as Frame from './terminal-compositor.frame.js';
+import * as InputMode from './terminal-compositor.input-mode.js';
+import * as Lifecycle from './terminal-compositor.lifecycle.js';
 
 // Re-export public types so existing importers of './terminal-compositor.js'
 // continue to work without any import-path changes.
@@ -62,7 +57,8 @@ export type {
 export class TerminalCompositor {
   /** @internal Relaxed from `private` — read by sibling free-function modules via Host interfaces. */
   readonly stdout: NodeJS.WriteStream;
-  private readonly stdin: NodeJS.ReadStream;
+  /** @internal Relaxed from `private` for the lifecycle module (LifecycleHost). */
+  readonly stdin: NodeJS.ReadStream;
   /**
    * Per-turn cancel + background + shift-tab handlers — see
    * {@link TerminalCompositorOptions.onCancel} et al. Mutable so the
@@ -119,7 +115,8 @@ export class TerminalCompositor {
    * lifecycle from the caller's declared intent, not the previous
    * cycle's evicted residue.
    */
-  private declaredAnchorRow: number | undefined;
+  /** @internal Relaxed from `private` for the lifecycle module (LifecycleHost). */
+  declaredAnchorRow: number | undefined;
 
   /**
    * Submission handler — see {@link TerminalCompositorOptions.onSubmit}.
@@ -212,8 +209,9 @@ export class TerminalCompositor {
    * Saved input mode at the moment `enterPickerMode()` was called.
    * Restored by `exitPickerMode()` so picker-mode is a transparent
    * borrow of the input region (no permanent mode change).
+   * @internal Relaxed from `private` for the input-mode module (InputModeHost).
    */
-  private pickerSavedMode: CompositorInputMode = 'streaming';
+  pickerSavedMode: CompositorInputMode = 'streaming';
 
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   armed = false;
@@ -223,9 +221,11 @@ export class TerminalCompositor {
   canceled = false;
   /** @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost). */
   backgrounded = false;
-  private wasRaw = false;
-  /** Held while armed; released on disarm(). */
-  private stdinClaim: StdinClaimHandle | null = null;
+  /** @internal Relaxed from `private` for the lifecycle module (LifecycleHost). */
+  wasRaw = false;
+  /** Held while armed; released on disarm().
+   * @internal Relaxed from `private` for the lifecycle module (LifecycleHost). */
+  stdinClaim: StdinClaimHandle | null = null;
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   logUpdate: LogUpdateFn | null = null;
 
@@ -236,9 +236,12 @@ export class TerminalCompositor {
   /** @internal Relaxed from `private` — read/written by sibling free-function modules via Host interfaces. */
   queued = false;
 
-  private handleKeypress: ((char: string | undefined, key: KeyInfo) => void) | null = null;
-  private resizeUnsub: (() => void) | null = null;
-  private resizeImmediateUnsub: (() => void) | null = null;
+  /** @internal Relaxed from `private` for the lifecycle module (LifecycleHost). */
+  handleKeypress: ((char: string | undefined, key: KeyInfo) => void) | null = null;
+  /** @internal Relaxed from `private` for the lifecycle module (LifecycleHost). */
+  resizeUnsub: (() => void) | null = null;
+  /** @internal Relaxed from `private` for the lifecycle module (LifecycleHost). */
+  resizeImmediateUnsub: (() => void) | null = null;
 
   /** @internal Relaxed from `private` for the frame module (FrameHost). */
   readonly spinnerController: SpinnerController;
@@ -408,7 +411,8 @@ export class TerminalCompositor {
   /**
    * Temporarily yield stdin raw-mode and the keypress listener so an
    * external readline interface (e.g. `rl.question()` used by the
-   * elicitation handler) can receive keystrokes cleanly.
+   * elicitation handler) can receive keystrokes cleanly. Body extracted
+   * to terminal-compositor.lifecycle.ts — see {@link Lifecycle.suspendInput}.
    *
    * The compositor remains "armed" (armed=true) throughout — `resumeInput()`
    * restores the listener and raw mode without going through the full
@@ -416,31 +420,17 @@ export class TerminalCompositor {
    * no-op. Must be paired with a matching `resumeInput()`.
    */
   suspendInput(): void {
-    if (!this.armed || this.suspended) return;
-    // Clear the live overlay so the compositor frame doesn't visually
-    // compete with the readline prompt that is about to appear below it.
-    if (this.logUpdate) {
-      try { this.logUpdate.clear(this.scrollRegion?.getExtraRows() ?? 0); this.logUpdate.done(); } catch { /* noop */ }
-    }
-    if (this.handleKeypress) {
-      this.stdin.removeListener('keypress', this.handleKeypress);
-    }
-    try { this.stdin.setRawMode(false); } catch { /* noop */ }
-    this.suspended = true;
+    Lifecycle.suspendInput(this);
   }
 
   /**
    * Restore the keypress listener and raw mode after a `suspendInput()`
-   * call. Idempotent: calling when not suspended is a no-op.
+   * call. Body extracted to terminal-compositor.lifecycle.ts — see
+   * {@link Lifecycle.resumeInput}. Idempotent: calling when not suspended
+   * is a no-op.
    */
   resumeInput(): void {
-    if (!this.armed || !this.suspended) return;
-    try { this.stdin.setRawMode(true); } catch { /* noop */ }
-    if (this.handleKeypress) {
-      this.stdin.on('keypress', this.handleKeypress);
-    }
-    this.suspended = false;
-    this.repaint();
+    Lifecycle.resumeInput(this);
   }
 
   /**
@@ -512,448 +502,76 @@ export class TerminalCompositor {
 
   /**
    * Rent the input region to a picker overlay — see
-   * {@link PickerController}. While active, the compositor's input
-   * buffer + dropdown + hint rows are hidden, and all keystrokes
-   * route to `controller.onKey`. The picker is responsible for its
-   * own cancel/confirm semantics; the compositor offers no Enter/Esc
-   * defaults in picker mode.
-   *
-   * Invariant: the autocomplete dropdown must NOT bleed into the
-   * picker frame, so this method calls `autocompleteState?.reset()`.
-   * The previous `inputMode` is saved and restored by
-   * {@link exitPickerMode}.
+   * {@link PickerController}. Body extracted to
+   * terminal-compositor.input-mode.ts — see {@link InputMode.enterPickerMode}.
    *
    * @throws if a picker is already active (callers must `exitPickerMode`
    * before installing a new controller).
    */
   enterPickerMode(controller: PickerController): void {
-    if (this.pickerController) {
-      throw new Error('enterPickerMode: a picker is already active; call exitPickerMode first');
-    }
-    this.pickerSavedMode = this.inputMode;
-    this.pickerController = controller;
-    this.inputMode = 'picker';
-    // Clear the autocomplete dropdown so its rows don't render on top
-    // of the picker frame (see compositor risk #2 in the integration
-    // brief — repaint composes dropdown rows from autocompleteState
-    // and ignores inputMode otherwise).
-    this.autocompleteState?.reset();
-    this.repaint();
+    InputMode.enterPickerMode(this, controller);
   }
 
   /**
-   * Exit picker mode and restore the previous input mode. The picker
-   * controller is cleared and the compositor resumes rendering its
-   * own input buffer + dropdown rows.
+   * Exit picker mode and restore the previous input mode. Body extracted to
+   * terminal-compositor.input-mode.ts — see {@link InputMode.exitPickerMode}.
    *
    * No-op when no picker is active (idempotent — safe to call from
    * cleanup paths that don't know whether `enterPickerMode` was reached).
    */
   exitPickerMode(): void {
-    if (!this.pickerController) return;
-    this.pickerController = null;
-    this.inputMode = this.pickerSavedMode;
-    this.repaint();
+    InputMode.exitPickerMode(this);
   }
 
   /**
-   * Force a repaint while the picker is active. The picker calls
-   * this after mutating its internal selection state so the next
-   * `renderRows()` invocation reflects the new state.
+   * Force a repaint while the picker is active. Body extracted to
+   * terminal-compositor.input-mode.ts — see {@link InputMode.repaintPicker}.
    *
    * No-op when no picker is active (defence-in-depth — a late repaint
    * from a cancelled picker won't double-render the input row).
    */
   repaintPicker(): void {
-    if (!this.pickerController) return;
-    this.repaint();
+    InputMode.repaintPicker(this);
   }
 
   /**
-   * Invariant: in the `→ 'idle'` flush path with `queued && onSubmit`, fire
-   * `onSubmit(buffer)` BEFORE clearing `queued` and the buffer (teardown-
-   * before-setup; otherwise a reentrant onSubmit observes stale state).
-   *
    * Transition input mode. Default is `'streaming'`; the persistent
    * InputSurface flips to `'idle'` between turns and back to
-   * `'streaming'` at turn start.
-   *
-   * ## Ordered operation
-   *
-   * External constraint: `→ 'idle'` with `queued && onSubmit` MUST
-   * fire `onSubmit(buffer)` BEFORE clearing `queued` and the buffer.
-   * Otherwise a reentrant `onSubmit` handler (e.g. one that
-   * synchronously calls `setInputMode('streaming')` again) would
-   * observe stale state. Mirror of the teardown-before-setup
-   * invariant on TUI lifecycle ops.
-   *
-   * ## Flush semantics (mode → idle)
-   *
-   * Fires on ANY transition to idle while queued + handler are both
-   * set, not just `streaming → idle`. The `idle → idle` case covers
-   * a race where the user types-and-Enters in the brief window
-   * between a previous `readLine` resolving and the next one
-   * installing a handler: the Enter falls through to the streaming-
-   * queue branch (sets `queued=true`), and the next `readLine`'s
-   * `setInputMode('idle')` is what fires the synthesized submission.
-   * Without this widening, the queued buffer would be stranded until
-   * the user pressed Enter a second time.
+   * `'streaming'` at turn start. Body extracted to
+   * terminal-compositor.input-mode.ts — see {@link InputMode.setInputMode}
+   * for the full ordered-operation and flush-semantics invariants.
    */
   setInputMode(mode: CompositorInputMode): void {
-    const prev = this.inputMode;
-    this.inputMode = mode;
-    // idle → streaming: clear the once-only canceled/backgrounded/softStopped
-    // guards so the new turn can be interrupted (ESC/Ctrl+C) and/or
-    // backgrounded (Ctrl+B). Without this reset, a Ctrl+C or ESC between two
-    // turns would arm the once-only flag in the second turn, breaking
-    // ESC/Ctrl+C mid-stream forever after.
-    if (prev === 'idle' && mode === 'streaming') {
-      this.canceled = false;
-      this.backgrounded = false;
-      this.softStopped = false;
-      // Reset autocomplete at the idle→streaming transition so any
-      // open dropdown rows are not rendered into the first streaming
-      // frame. Mirrors the reset in the idle Enter handler above.
-      // Both sites are needed: the Enter handler fires when onSubmit is
-      // installed (persistent InputSurface path); this branch fires when
-      // the caller drives mode directly (e.g. slash-command dispatcher
-      // calling setInputMode('streaming') from outside readLine).
-      this.autocompleteState?.reset();
-      this.repaint();
-      return;
-    }
-    // Invariant: a buffer queued during or after an ESC soft-stop MUST NOT
-    // auto-flush as a phantom next turn, AND `softStopped` MUST be cleared at
-    // this first →idle transition (NOT left to persist until the next arm).
-    // `softStopped` is set only by ESC, and its ONLY function is the once-only
-    // ESC guard during streaming (handleEscape ~line 1937); in idle, ESC
-    // returns early (line ~1920) before that guard, so a lingering value has
-    // no legitimate effect. We clear the queued FLAG here (buffer text +
-    // attachments preserved) so the post-ESC draft stays visible + editable in
-    // the idle input row and waits for an explicit Enter instead of
-    // auto-submitting — a stream interruption should preserve in-progress
-    // input, not fling it as a turn the user never confirmed. This fires at
-    // the dispose→idle transition (streaming→idle).
-    //
-    // Why clear softStopped HERE (the fix): if it persists into the idle
-    // period, it poisons the user's NEXT message. After an EMPTY-buffer ESC
-    // (the common "just stop the agent" case) `queued` stays false, so the old
-    // `&& this.queued` guard never fired and softStopped survived the dispose.
-    // The user then types a new message in the brief inter-readLine window
-    // (onSubmit not yet installed → Enter queues it); the following
-    // readLine→idle would re-enter this guard (softStopped && queued both
-    // true) and SILENTLY DE-QUEUE the message — it "looks like it sends" but
-    // no turn starts, and the user must send again (a per-stop off-by-one that
-    // reads as session-wide lag). Dropping the `&& this.queued` condition and
-    // resetting softStopped here bounds its lifetime to the stopped turn, so
-    // idle-window submissions flush normally via the branch below.
-    //
-    // Without this guard at all: session.interrupt() is deferred to the next
-    // stream event (turn-handler.ts:236 / run-skill-dispatch-turn.ts:143), so
-    // the compositor stays in streaming mode for a network-latency window. An
-    // Enter pressed in that window queues the buffer; the widened any→idle
-    // flush below then auto-fires it as an unconfirmed turn, and every message
-    // the user types during THAT turn queues in turn — a perpetual
-    // input-lag-of-one (each message submits one turn late) for the rest of
-    // the session. See terminal-compositor.test.ts soft-stop drain tests.
-    //
-    // ESC-only: Ctrl+C intentionally uses the legacy path — handleInterrupt
-    // (~line 1937) queues the buffer and fires onCancel; the widened any→idle
-    // flush below auto-submits it as the next turn. ESC preserves the draft
-    // for explicit (manual) submission; Ctrl+C auto-submits it. (see handleInterrupt ~line 1937-1957)
-    if (mode === 'idle' && this.softStopped) {
-      this.queued = false;
-      this.softStopped = false;
-      // Always repaint: the `[queued]` glyph must clear even on an
-      // idle→idle transition (the flush branch below repaints
-      // unconditionally for the same reason).
-      this.repaint();
-      return;
-    }
-    // → idle with queued buffer + handler: flush. Widened from
-    // streaming→idle to any→idle to cover the inter-readLine race
-    // (see jsdoc above). Buffer-empty + attachment-empty queues are
-    // ignored — Enter on a fully-empty input is suppressed at the
-    // keypress level (compositor.ts:1148) so this branch only fires
-    // when there's something meaningful to submit.
-    if (mode === 'idle' && this.queued && this.onSubmit) {
-      // displayText keeps the placeholder representation (for the
-      // scrollback echo); text is the expanded form (for the model).
-      // When no truncation happened the two are byte-equal and
-      // displayText is omitted from the payload to keep existing
-      // call-sites that deep-match on { text, attachments } happy.
-      const displayText = this.input.buffer;
-      const expandedText = Paste.expandPastePlaceholders(this, displayText);
-      const attachments = [...this.attachments];
-      const handler = this.onSubmit;
-      // Clear local state BEFORE invoking the handler so a reentrant
-      // call back into this compositor (e.g. handler triggers another
-      // setInputMode) does not double-fire on the same buffer.
-      this.queued = false;
-      this.input = InputCore.seed('');
-      this.attachments = [];
-      this.pasteRegistry.clear();
-      this.repaint();
-      handler(
-        expandedText === displayText
-          ? { text: expandedText, attachments }
-          : { text: expandedText, displayText, attachments },
-      );
-      return;
-    }
-    // Other transitions (idle→idle without queue, streaming→streaming,
-    // → idle without handler) just record the new mode. A → idle with
-    // queued but no handler is a no-op — the buffer stays queued
-    // (matches the legacy contract where the parent reads via
-    // getBuffer()).
-    if (prev !== mode) this.repaint();
+    InputMode.setInputMode(this, mode);
   }
 
   /**
    * Current input mode. Surfaced for tests + the InputSurface idle
-   * check; not consumed by any production code path inside the
-   * compositor outside of {@link setInputMode}.
+   * check. Body extracted to terminal-compositor.input-mode.ts —
+   * see {@link InputMode.getInputMode}.
    */
   getInputMode(): CompositorInputMode {
-    return this.inputMode;
+    return InputMode.getInputMode(this);
   }
 
+  /**
+   * Acquire raw mode + keypress listener + resize subscribers and render
+   * the first frame. Body extracted to terminal-compositor.lifecycle.ts —
+   * see {@link Lifecycle.arm} for the full arm-ordering invariant and
+   * SIGWINCH ghost-erase rationale.
+   */
   async arm(): Promise<void> {
-    if (this.armed) throw new Error('TerminalCompositor: arm() called while already armed');
-
-    if (!this.stdout.isTTY || !this.stdin.isTTY) {
-      // Non-TTY: compositor stays inert. Callers should skip creation in
-      // this case; we degrade gracefully anyway.
-      return;
-    }
-
-    // Restore the working anchor from the caller-declared snapshot. On
-    // a fresh construction these match; on a rearm after eviction, the
-    // working anchor has shifted (e.g. 15 → 11) and resetState() cleared
-    // it, so we re-seed from the declared intent. The caller is the only
-    // party that knows the actual viewport state — if it differs from the
-    // declared value, they must call setAnchorRow() before/after the
-    // rearm. See declaredAnchorRow field comment.
-    this.anchorRow = this.declaredAnchorRow;
-
-    if (!this.logUpdate) {
-      this.logUpdate = new CupFrameRenderer(this.stdout) as unknown as LogUpdateFn;
-    }
-
-    this.wasRaw = this.stdin.isRaw ?? false;
-    try {
-      this.stdin.setRawMode(true);
-    } catch {
-      this.logUpdate = null;
-      this.wasRaw = false;
-      return;
-    }
-    // Enable bracketed-paste mode so the terminal wraps clipboard content
-    // in `\x1b[200~ ... \x1b[201~`. Without this, multi-line pastes arrive
-    // as a stream of raw keypresses including `\r`, and the Enter handler
-    // cannot distinguish pasted line breaks from user-submission Enter —
-    // the first `\r` prematurely submits in idle mode (the regression this
-    // restores). The dispatchKey() Enter branch checks `this.pasting` to
-    // detect "inside a paste window" and insert a literal `\n` instead.
-    // Disabled in disarm() so a non-bracketed-paste-aware caller picking
-    // up the TTY after us doesn't see literal `~`-bracketed sequences.
-    try {
-      this.stdout.write('\x1b[?2004h');
-    } catch {
-      /* best-effort — terminals that don't support DEC private modes
-         silently drop unknown set/reset sequences, so a thrown write
-         likely means stdout was closed mid-arm. */
-    }
-    this.stdin.resume();
-    // Lone ESC must register on the first press — it is the soft-stop
-    // affordance. emitKeypressEventsImmediateEscape sets a small sub-perception
-    // escapeCodeTimeout (Node's default 500ms keyseq-timeout is the "ESC needs
-    // two presses" bug; see emit-keypress.ts for why nonzero). The decoder is
-    // idempotent per stream, so the first surface to attach it (this,
-    // reader.ts, elicitation-repl.ts) locks the timeout in; all of them call
-    // the helper with the same value, so it wins regardless of order.
-    emitKeypressEventsImmediateEscape(this.stdin);
-
-    // Acquire the process-wide stdin claim immediately before attaching the
-    // keypress listener so the invariant is upheld: only one stdin consumer
-    // may be live at a time. Released in disarm().
-    this.stdinClaim = acquireStdinClaim('TerminalCompositor.arm');
-
-    this.handleKeypress = (char, key) => this.dispatchKey(char, key);
-    this.stdin.on('keypress', this.handleKeypress);
-
-    // Invariant (arm ordering): set `armed = true` BEFORE registering the
-    // ResizeBus subscribers below. The immediate channel fires synchronously
-    // inside stdout's 'resize' event — if a SIGWINCH arrives between
-    // `subscribeImmediate()` and `armed = true`, the handler's armed guard
-    // would silently skip `resetGeometry()` and re-introduce the ghost-rows
-    // bug this path exists to prevent (the debounced handler would still
-    // call repaint() 150ms later, but against stale geometry). At this point
-    // logUpdate, raw mode, bracketed-paste, and the keypress listener are
-    // all wired — armed=true is consistent.
-    this.armed = true;
-    this.canceled = false;
-
-    // External constraint (terminal resize semantics): SIGWINCH changes
-    // `stdout.rows`, which changes the `targetBottomRow` passed to
-    // CupFrameRenderer.render(). On the next repaint() the renderer reads the
-    // current `stdout.rows` and positions the frame correctly — no separate
-    // anchor step is needed (unlike log-update, which required an explicit
-    // CUP before its first frame). The ResizeBus subscriber only needs to
-    // trigger a repaint so the renderer recomputes the new bottom row.
-    this.resizeUnsub = ResizeBus.subscribe(() => {
-      // Defense-in-depth: skip if disarmed between SIGWINCH and the
-      // 150ms-later debounced fire. `armed = true` is set above before
-      // subscribe, so the arm-window race is closed; this guard only
-      // protects the disarm-window race.
-      if (!this.armed) return;
-      this.repaint();
-    });
-    // Invariant (SIGWINCH ordering): the debounced subscriber above fires
-    // 150ms after the resize. During that window, spinner ticks (80ms) and
-    // streaming events (50–80Hz) can call repaint() — which reads the NEW
-    // stdout.rows for targetBottomRow but the CupFrameRenderer still holds
-    // OLD previousTopRow/previousLineCount, producing the ghost-rows /
-    // blank-stripe artifact (see CupFrameRenderer.resetGeometry docs).
-    // The immediate channel fires synchronously inside the 'resize' event
-    // BEFORE any such mid-window repaint can execute, so the next render()
-    // skips its stale-erase pass and paints fresh at the new geometry.
-    this.resizeImmediateUnsub = ResizeBus.subscribeImmediate(() => {
-      if (!this.armed) return;
-      // Invariant (SIGWINCH ghost-erase, expand-only): on EXPAND the terminal
-      // keeps existing content anchored at the top and opens blank rows at the
-      // new bottom, so the old live-frame AND committed-band rows freeze at
-      // their pre-resize absolute positions while the next render paints a fresh
-      // frame at the new (lower) bottom — orphaning the old rows as on-screen
-      // ghosts (resetGeometry() below makes the render's erase pass a no-op, and
-      // the band is no longer cleared here). Snapshot that footprint so the next
-      // repaint() can physically erase it. This is side-effect-only (no I/O),
-      // honoring the subscribeImmediate "no I/O, no rendering" contract
-      // (terminal-size.ts) — the actual erase happens in repaint().
-      //
-      // On SHRINK the terminal scrolls content up, so those absolute rows now
-      // hold reflowed content and must NOT be erased; skip the snapshot and let
-      // the fresh repaint + band re-pin settle the new geometry. A SHRINK must
-      // also DROP any snapshot armed by an earlier EXPAND in the same
-      // pre-repaint window (a drag that overshoots larger then settles smaller
-      // than it started): lastKnownRows only advances on repaint(), so a stale
-      // snapshot would otherwise survive and flushResizeGhostErase would clamp
-      // its old `bottom` into the new viewport and wipe live rows — including
-      // the reserved status-line region — that the next frame repaint never
-      // restores. See terminal-compositor.resize-ghost.test.ts ("EXPAND then
-      // SHRINK before a repaint").
-      const newRows = this.stdout.rows ?? 24;
-      if (this.lastKnownRows > 0 && newRows > this.lastKnownRows) {
-        const extraRows = this.scrollRegion?.getExtraRows() ?? 0;
-        const frameTop = this.logUpdate?.topRow ?? 0;
-        const bandTop = this.committedBand.length > 0 ? this.committedBandTopRow : 0;
-        const tops = [frameTop, bandTop].filter((r) => r > 0);
-        const top = tops.length > 0 ? Math.min(...tops) : 0;
-        // The frame is always bottom-anchored at the OLD targetBottomRow.
-        const bottom = Math.max(1, this.lastKnownRows - 1 - extraRows);
-        if (top > 0 && top <= bottom) {
-          this.pendingResizeErase = { top, bottom };
-        }
-      } else {
-        // Net SHRINK or net-zero resize: any snapshot armed by a prior EXPAND
-        // in this same pre-repaint window is now stale (see above) — drop it so
-        // the clamped flush cannot wipe post-shrink reflowed/status rows.
-        this.pendingResizeErase = null;
-      }
-      this.logUpdate?.resetGeometry?.();
-      // NOTE: the committed band is intentionally NOT cleared here. Preserving
-      // its content lets repositionCommittedBand() re-pin it directly above the
-      // frame at the NEW geometry on the next repaint (it recomputes the band's
-      // rows from the new frame top; the stale committedBandTopRow is only read
-      // for a redundant vacated-gap erase, never a stale paint). The old
-      // on-screen band copy is cleared via pendingResizeErase above on EXPAND,
-      // or scrolled by the terminal on SHRINK.
-    });
-
-    // Intentionally NOT calling `updateAutocomplete()` here. The compositor's
-    // own `this.input` is always `InputCore.seed('')` at arm time (constructor
-    // init + `resetState()` on disarm both reset it), so there is nothing to
-    // rehydrate from. Calling `updateAutocomplete()` would clobber any
-    // caller-supplied `autocompleteState` that legitimately carries an open
-    // dropdown across an arm/disarm cycle — which is the contract tested in
-    // `src/cli/input/autocomplete-state.test.ts` ("↑/↓ navigates dropdown,
-    // not history"). The first real keystroke during the agent turn will
-    // refresh the state via `applyEdit()` → `updateAutocomplete()`.
-
-    this.repaint();
+    return Lifecycle.arm(this);
   }
 
+  /**
+   * Release raw mode + keypress listener + resize subscribers, finalize
+   * the frame, and reset state. Body extracted to
+   * terminal-compositor.lifecycle.ts — see {@link Lifecycle.disarm} for
+   * the drain-ordering and suggest-engine-dispose invariants.
+   */
   disarm(): void {
-    this.spinnerController.dispose();
-
-    if (!this.armed) {
-      // Still safe to clear state — no-op for listener/raw-mode.
-      this.resetState();
-      return;
-    }
-
-    if (this.handleKeypress) {
-      this.stdin.removeListener('keypress', this.handleKeypress);
-      this.handleKeypress = null;
-    }
-    if (this.resizeUnsub) {
-      this.resizeUnsub();
-      this.resizeUnsub = null;
-    }
-    if (this.resizeImmediateUnsub) {
-      this.resizeImmediateUnsub();
-      this.resizeImmediateUnsub = null;
-    }
-
-    if (this.logUpdate) {
-      try {
-        this.logUpdate.clear(this.scrollRegion?.getExtraRows() ?? 0);
-        // log-update hides the cursor on every render() when showCursor is
-        // false (the default). Only done() calls cliCursor.show(); clear()
-        // alone leaves the cursor hidden, leaking that state for the rest
-        // of the session. Call done() after clear() to restore the cursor
-        // before relinquishing control back to readline.
-        this.logUpdate.done();
-      } catch {
-        /* noop */
-      }
-    }
-
-    if (this.stdout.isTTY && this.stdin.isTTY) {
-      // External constraint (drain ordering): disable bracketed-paste BEFORE
-      // restoring raw mode. On rapid disarm/process-exit, the two writes
-      // can race against the kernel TTY flush — restoring raw mode first
-      // can cause the disable sequence to be dropped, leaving the terminal
-      // in bracketed-paste mode after the process exits (subsequent shell
-      // commands see literal `\x1b[200~`/`\x1b[201~` around clipboard
-      // pastes). Mirrors the single-drain ordering in raw-mode.ts.
-      try {
-        this.stdout.write('\x1b[?2004l');
-      } catch {
-        /* stdout may have been closed */
-      }
-      try {
-        this.stdin.setRawMode(this.wasRaw);
-      } catch {
-        /* noop */
-      }
-    }
-
-    // Release the stdin claim before marking as unarmed so a subscriber
-    // that checks isArmed() inside an acquire call sees the correct state.
-    if (this.stdinClaim) {
-      this.stdinClaim.release();
-      this.stdinClaim = null;
-    }
-
-    this.armed = false;
-    this.resetState();
-    // Dispose the suggest engine AFTER resetState so no pending promise
-    // resolves try to call repaint() on a disarmed compositor. The engine's
-    // dispose() signals all in-flight promises to resolve null — the
-    // buffer-identity guard in updateGhost's resolve handler will then
-    // silently drop any result that arrives after this point.
-    this.ghostEngine?.dispose();
+    Lifecycle.disarm(this);
   }
 
   setOverlay(text: string): void {
@@ -1110,7 +728,8 @@ export class TerminalCompositor {
     Frame.repaint(this);
   }
 
-  private resetState(): void {
+  /** @internal Relaxed from `private` for the lifecycle module (LifecycleHost). */
+  resetState(): void {
     this.overlay = '';
     this.input = InputCore.seed('');
     this.queued = false;
@@ -1221,15 +840,4 @@ export class TerminalCompositor {
     return Autocomplete.applyGhostAccept(this);
   }
 
-  /**
-   * Per-keystroke dispatch entry point — the ordered guard-chain. Body
-   * extracted to terminal-compositor.input-dispatch.ts; see
-   * {@link InputDispatch.dispatchKey} for the strict handler ORDER (which IS
-   * the input contract) and each handler's inline ordering rationale. The
-   * keypress listener installed in {@link arm} calls this delegator; the
-   * input-dispatch module owns the 12 ordered leaf handlers.
-   */
-  private dispatchKey(char: string | undefined, key: KeyInfo): void {
-    InputDispatch.dispatchKey(this, char, key);
-  }
 }
