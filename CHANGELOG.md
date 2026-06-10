@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.93.0] - 2026-06-10
+
+### Added
+- add /config and /doctor slash commands (port afk-workshop#702) (#77) (907dc5f)
+
 ## [3.92.4] - 2026-06-10
 
 ### Fixed
