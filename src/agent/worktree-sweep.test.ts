@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSweep } from './worktree-sweep.js';
 import type { ExecFileFn } from './worktree-sweep.js';
+import type { PresenceRecord } from './awareness/presence.js';
 
 type ExecResult = { stdout: string; stderr: string };
 type ExecCall = { file: string; args: string[]; opts?: { cwd?: string } };
@@ -81,9 +82,12 @@ let repoRoot: string;
 let afkWorktreesDir: string;
 let telemetryFile: string;
 let lockFile: string;
+let prevAfkHome: string | undefined;
 
 beforeEach(async () => {
   repoRoot = realpathSync(mkdtempSync(join(tmpdir(), 'afk-sweep-test-')));
+  prevAfkHome = process.env['AFK_HOME'];
+  process.env['AFK_HOME'] = repoRoot;
   afkWorktreesDir = join(repoRoot, '.afk-worktrees');
   await fs.mkdir(afkWorktreesDir, { recursive: true });
   telemetryFile = join(repoRoot, 'fake-telemetry.jsonl');
@@ -102,6 +106,8 @@ afterEach(() => {
   try {
     rmSync(repoRoot, { recursive: true, force: true });
   } catch { /* ignore */ }
+  if (prevAfkHome === undefined) delete process.env['AFK_HOME'];
+  else process.env['AFK_HOME'] = prevAfkHome;
   vi.restoreAllMocks();
 });
 
@@ -1147,5 +1153,181 @@ describe('dead-owner', () => {
     expect(result.removed).not.toContain(worktreePath);
     const activeCandidates = result.candidates.filter((c) => c.verdict === 'active');
     expect(activeCandidates).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 12. dead-owner — live-session protection
+// ---------------------------------------------------------------------------
+
+describe('dead-owner — live-session protection', () => {
+  /**
+   * Helper to find a PID that is guaranteed not to exist.
+   */
+  function findDeadPid(): number {
+    for (let pid = 999_999; pid > 90_000; pid -= 1_117) {
+      try {
+        process.kill(pid, 0);
+        // Process exists — not safe to use as "dead"
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'ESRCH') return pid;
+      }
+    }
+    throw new Error('Could not find a dead PID for test setup');
+  }
+
+  it('does NOT reap a dead-owner worktree while a live session occupies it', async () => {
+    const deadPid = findDeadPid();
+    const worktreePath = join(afkWorktreesDir, 'afk-live-session-wt');
+    await fs.mkdir(worktreePath, { recursive: true });
+
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        pid: deadPid,
+        createdAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+        baseSha: 'base123',
+        baseBranch: 'main',
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot, head: 'base123' });
+    const wtBlock = worktreeBlock({
+      path: worktreePath,
+      head: 'base123',
+      branch: 'refs/heads/afk/live-session-wt',
+    });
+    const porcelainOut = `${mainBlock}\n\n${wtBlock}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' }; // clean
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        return { stdout: '0\n', stderr: '' }; // no commits ahead
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+      readPresence: async () => [{ pid: process.pid, cwd: worktreePath } as unknown as PresenceRecord],
+    });
+
+    const deadOwnerCandidates = result.candidates.filter((c) => c.verdict === 'dead-owner');
+    expect(deadOwnerCandidates).toHaveLength(0);
+    expect(result.removed).not.toContain(worktreePath);
+  });
+
+  it('still reaps when the presence file is stale (its pid is dead)', async () => {
+    const deadPid = findDeadPid();
+    const stalePid = findDeadPid();
+    const worktreePath = join(afkWorktreesDir, 'afk-stale-presence-wt');
+    await fs.mkdir(worktreePath, { recursive: true });
+
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        pid: deadPid,
+        createdAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+        baseSha: 'base123',
+        baseBranch: 'main',
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot, head: 'base123' });
+    const wtBlock = worktreeBlock({
+      path: worktreePath,
+      head: 'base123',
+      branch: 'refs/heads/afk/stale-presence-wt',
+    });
+    const porcelainOut = `${mainBlock}\n\n${wtBlock}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' }; // clean
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        return { stdout: '0\n', stderr: '' }; // no commits ahead
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+      readPresence: async () => [{ pid: stalePid, cwd: worktreePath } as unknown as PresenceRecord],
+    });
+
+    const deadOwnerCandidates = result.candidates.filter((c) => c.verdict === 'dead-owner');
+    expect(deadOwnerCandidates).toHaveLength(1);
+    expect(result.removed).toContain(worktreePath);
+  });
+
+  it('still reaps when the live session cwd is outside the worktree', async () => {
+    const deadPid = findDeadPid();
+    const worktreePath = join(afkWorktreesDir, 'afk-outside-cwd-wt');
+    await fs.mkdir(worktreePath, { recursive: true });
+
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        pid: deadPid,
+        createdAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+        baseSha: 'base123',
+        baseBranch: 'main',
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot, head: 'base123' });
+    const wtBlock = worktreeBlock({
+      path: worktreePath,
+      head: 'base123',
+      branch: 'refs/heads/afk/outside-cwd-wt',
+    });
+    const porcelainOut = `${mainBlock}\n\n${wtBlock}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' }; // clean
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        return { stdout: '0\n', stderr: '' }; // no commits ahead
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+      readPresence: async () => [{ pid: process.pid, cwd: join(repoRoot, 'somewhere-else') } as unknown as PresenceRecord],
+    });
+
+    const deadOwnerCandidates = result.candidates.filter((c) => c.verdict === 'dead-owner');
+    expect(deadOwnerCandidates).toHaveLength(1);
+    expect(result.removed).toContain(worktreePath);
   });
 });
