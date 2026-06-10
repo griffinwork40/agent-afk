@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.92.2] - 2026-06-10
+
+### Fixed
+- force-checkout managed cache to survive dirty mirror (#49) (22e8277)
+
+### Changed
+- Port afk-workshop#756: add fix:pins hash-pin regen + check (#69) (c38a12c)
+- shadow-verify: confidence-trigger, three-way verdict, bounded retry (#52) (e6f65b2)
+
 ## [3.92.1] - 2026-06-09
 
 ### Fixed
