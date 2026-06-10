@@ -1157,12 +1157,13 @@ describe('TerminalCompositor', () => {
       // banner rows either.
       //
       // With anchorRow=10, a 1-line commit, and rows=24 (idle 1-line frame):
-      //   fitsAboveFrame = true → Phase 1 scroll-only at row 24
+      //   fitsAboveFrame = true, empty band, 13 rows of above-frame room →
+      //     bandOverflow = max(0, 0 + 1 - 13) = 0 → Phase 1 emits NO scroll
       //   Phase 2 repaint → topRow=23
       //   Phase 3 textStartRow = max(10, 23-1) = 22 → text at row 22
       //
-      // The bottom-margin scroll (Phase 1) fires, and text appears at row 22
-      // (inside the frame zone, NOT in the banner zone rows 1..9).
+      // The committed line appears at row 22 (inside the frame zone, NOT the
+      // banner zone rows 1..9) and is NOT written into the banner.
       stdout.rows = 24;
       const c = new TerminalCompositor({
         stdout, stdin, onCancel: vi.fn(), promptText: '> ',
@@ -1181,9 +1182,13 @@ describe('TerminalCompositor', () => {
       expect(out).not.toContain(`\x1b[1;1H${paddedEcho}`);
       // Phase 3 writes the single copy above the live frame (row 22).
       expect(out).toContain(`\x1b[22;1H\x1b[2K${paddedEcho}`);
-      // The bottom-margin scroll still fires — Phase 1's scrollback push
-      // is preserved via LF-only scrolls.
-      expect(out).toContain('\x1b[24;1H\n');
+      // The FIRST commit into an empty band with ample above-frame room is
+      // scroll-free (bandOverflow=0) — identical to the no-anchor single-copy
+      // path. The banner no longer forces a spurious lineCount scroll on every
+      // commit; that quirk left the floor stale and orphaned committed content
+      // in the vacated banner rows — see terminal-compositor.banner-commit-gap.test.ts.
+      // The single copy enters scrollback later via evict-on-growth / the next commit.
+      expect(out).not.toMatch(/\x1b\[24;1H\n/);
     });
 
     it('commitAbove Phase 3 always lands at row newTopRow-1 regardless of anchorRow (single-copy path)', async () => {

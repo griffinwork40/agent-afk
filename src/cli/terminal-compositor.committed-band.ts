@@ -158,6 +158,10 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   // that is already ending; the next commit re-arms it. No try/finally needed.
   self.commitInFlight = true;
   self.committing = true;
+  // Rows Phase 1 scrolls into scrollback this commit (set inside the guard).
+  // The whole screen — banner included — scrolls up by this many rows, so the
+  // anchor floor must drop to match (see the decrement after the finally).
+  let scrolledRows = 0;
   try {
     self.logUpdate.clear(extraRows);
     writeWithGuard(() => {
@@ -221,7 +225,7 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
       // behavior), which scrolls the old band rows into scrollback before
       // Phase 3 paints over them. Also safe when committedBand is empty
       // (nothing to lose) regardless of anchorRow.
-      const canUseMergePath = fitsAboveFrame && (self.anchorRow ?? 1) <= 1;
+      const canUseMergePath = fitsAboveFrame;
       const effectiveFrameTop =
         canUseMergePath && self.committedBand.length > 0 && self.committedBandBottomRow > 0
           ? Math.max(frameTop, self.committedBandBottomRow + 1)
@@ -232,6 +236,11 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
       const bandOverflow = canUseMergePath
         ? Math.max(0, self.committedBand.length + lineCount - aboveFrameRoom)
         : lineCount;
+      // Record the rows the fitsAboveFrame path scrolls so the anchor floor can
+      // follow (see the decrement after the finally). Scoped to fitsAboveFrame:
+      // the overflow path archives the whole block to scrollback and floors
+      // Phase 3 at the unchanged anchorFloor to avoid clobbering the banner.
+      scrolledRows = fitsAboveFrame ? bandOverflow : 0;
       self.debugLog('commitAbove:phase1', { lineCount, fitsAboveFrame, bandOverflow });
       if (fitsAboveFrame) {
         if (bandOverflow > 0) {
@@ -253,6 +262,17 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   } finally {
     self.committing = false;
     self.debugLog('commitAbove:finally');
+  }
+  // Invariant (floor follows the scroll): Phase 1 scrolled `scrolledRows` rows
+  // off the top of the screen. The banner occupying rows [1, anchorRow-1]
+  // scrolled up with everything else, so the protected ceiling shrinks by the
+  // same amount — exactly as the evict path in preserveRowsBeforeFrameRender
+  // does (anchorRow -= deficit). Without this the floor goes stale, the
+  // above-frame room never grows, committed content orphans in the vacated
+  // banner rows, and a later overlay collapse loses it. Clamp at 1; once the
+  // banner is fully in scrollback the path matches the no-banner case.
+  if (scrolledRows > 0 && self.anchorRow !== undefined && self.anchorRow > 1) {
+    self.anchorRow = Math.max(1, self.anchorRow - scrolledRows);
   }
   // Mark that a commit has happened this arm cycle so growthDeficit in
   // repaint() knows there is transcript content above the frame to protect.
@@ -308,7 +328,12 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
     // ceiling evict could have shifted the tracked bottom). Otherwise (frame
     // resized between commits, anchor-ceiling evict, or the overflow
     // !fitsAboveFrame path) fall back to single-block tracking.
-    const maxRun = Math.max(0, newTopRow - anchorFloor);
+    // Measure room against the POST-scroll floor: the anchorRow decrement above
+    // lowered the ceiling by `scrolledRows`, so the newly-vacated banner rows
+    // are now legitimately available to the band. Using the stale pre-scroll
+    // anchorFloor would keep maxRun pinned and re-trigger the cap-to-one-row bug.
+    const postScrollFloor = Math.max(self.anchorRow ?? 1, 1);
+    const maxRun = Math.max(0, newTopRow - postScrollFloor);
     const newPainted = Math.min(textLines.length, maxRun);
     if (newPainted > 0) {
       // Tail-slice (not head): when the block is taller than the above-frame
@@ -318,10 +343,19 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
       // bottom left boxes rendered un-closed. In the fits path newPainted ===
       // lineCount, so this is the whole array (no behavior change there).
       const newLines = textLines.slice(textLines.length - newPainted);
+      // "Whole block painted" = newPainted === textLines.length (no lines
+      // dropped to overflow). Compare against textLines.length, NOT lineCount:
+      // lineCount is the WRAP-AWARE physical row count (measure()), which
+      // diverges from the logical-line array length whenever a block has a
+      // trailing blank line (`\n\n` → split yields a trailing "") or a wrapped
+      // line. Using lineCount here wrongly failed the contiguity check on every
+      // `\n\n`-terminated commit, suppressing the merge and stranding the prior
+      // band as a single overwritten block (lost commits) — the splice
+      // regression. newPainted is itself derived from textLines.length.
+      const wholeBlockPainted = newPainted === textLines.length;
       const contiguousPriorBand =
         fitsAboveFrame &&
-        newPainted === lineCount &&
-        (self.anchorRow ?? 1) <= 1 &&
+        wholeBlockPainted &&
         self.committedBand.length > 0 &&
         self.committedBandBottomRow === newTopRow - 1;
       const run = contiguousPriorBand ? [...self.committedBand, ...newLines] : newLines;
