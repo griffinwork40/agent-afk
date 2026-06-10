@@ -170,13 +170,14 @@ function toolPairWithError(toolUseId: string, name: string): string[] {
 describe('runAllDetectors', () => {
   it('default mode skips enabledByDefault:false detectors', () => {
     const session = makeAllPatternSession('s1');
-    // No enabledNames, no includeDisabled → only repeated-tool-use should fire.
+    // No enabledNames, no includeDisabled → repeated-tool-use AND tool-failure-density
+    // fire (both enabled-by-default); closure-anomaly + subagent-block stay opt-in.
     const results = runAllDetectors([session], {});
     const patterns = new Set(results.map((r) => r.pattern));
-    expect(patterns).toEqual(new Set(['repeated-tool-use']));
+    expect(patterns).toEqual(new Set(['repeated-tool-use', 'tool-failure-density']));
     expect(patterns.has('closure-anomaly')).toBe(false);
     expect(patterns.has('subagent-block')).toBe(false);
-    expect(patterns.has('tool-failure-density')).toBe(false);
+    expect(patterns.has('tool-failure-density')).toBe(true);
   });
 
   it('includeDisabled:true runs every detector', () => {
@@ -266,16 +267,17 @@ describe('runAllDetectors', () => {
 // ---------------------------------------------------------------------------
 
 describe('defaultEnabledDetectorNames', () => {
-  it('returns only repeated-tool-use', () => {
-    expect(defaultEnabledDetectorNames()).toEqual(['repeated-tool-use']);
+  it('returns repeated-tool-use and tool-failure-density (registry order)', () => {
+    expect(defaultEnabledDetectorNames()).toEqual([
+      'repeated-tool-use',
+      'tool-failure-density',
+    ]);
   });
 });
 
 describe('disabledByDefaultDetectorNames', () => {
-  it('contains closure-anomaly, subagent-block, tool-failure-density (in any order)', () => {
+  it('contains closure-anomaly, subagent-block (in any order)', () => {
     const names = new Set(disabledByDefaultDetectorNames());
-    expect(names).toEqual(
-      new Set(['closure-anomaly', 'subagent-block', 'tool-failure-density']),
-    );
+    expect(names).toEqual(new Set(['closure-anomaly', 'subagent-block']));
   });
 });
