@@ -195,6 +195,66 @@ describe('browser_screenshot handler — happy path', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Dimension guard (Anthropic 8000px vision limit)
+// ---------------------------------------------------------------------------
+
+describe('browser_screenshot handler — dimension guard', () => {
+  it('drops the image (text-only) when height exceeds 8000px, without erroring', async () => {
+    // A tall full_page screenshot: well under the 5 MiB byte cap, but its
+    // pixel height blows past Anthropic's 8000px limit — attaching it would
+    // 400 the request and poison message history.
+    const result = makeScreenshotResult({ width: 1280, height: 20000, dataBase64: 'QUJDREVG' });
+    const provider = makeProvider({ screenshot: vi.fn().mockResolvedValue(result) });
+    const handler = createBrowserScreenshotHandler({ getBrowserProvider: vi.fn().mockResolvedValue(provider) });
+
+    const r = await handler({ full_page: true }, makeSignal());
+
+    // Graceful text-only degradation — NOT an error.
+    expect(r.isError).toBeUndefined();
+    expect(r.image).toBeUndefined();
+    // The model still gets dimensions + a legible reason, and never the base64.
+    const parsed = JSON.parse(r.content as string) as { width: number; height: number; imageOmitted?: string };
+    expect(parsed.width).toBe(1280);
+    expect(parsed.height).toBe(20000);
+    expect(parsed.imageOmitted).toMatch(/8000px model-vision limit/);
+    expect(r.content).not.toContain('QUJDREVG');
+  });
+
+  it('drops the image when width exceeds 8000px', async () => {
+    const result = makeScreenshotResult({ width: 9000, height: 800 });
+    const provider = makeProvider({ screenshot: vi.fn().mockResolvedValue(result) });
+    const handler = createBrowserScreenshotHandler({ getBrowserProvider: vi.fn().mockResolvedValue(provider) });
+
+    const r = await handler({}, makeSignal());
+
+    expect(r.isError).toBeUndefined();
+    expect(r.image).toBeUndefined();
+  });
+
+  it('attaches the image at exactly 8000x8000 (boundary is inclusive)', async () => {
+    const result = makeScreenshotResult({ width: 8000, height: 8000, dataBase64: 'QUJDREVG' });
+    const provider = makeProvider({ screenshot: vi.fn().mockResolvedValue(result) });
+    const handler = createBrowserScreenshotHandler({ getBrowserProvider: vi.fn().mockResolvedValue(provider) });
+
+    const r = await handler({ full_page: true }, makeSignal());
+
+    expect(r.isError).toBeUndefined();
+    expect(r.image).toEqual({ mediaType: 'image/png', data: 'QUJDREVG' });
+  });
+
+  it('drops the image one pixel over the limit (8001px)', async () => {
+    const result = makeScreenshotResult({ width: 8001, height: 800 });
+    const provider = makeProvider({ screenshot: vi.fn().mockResolvedValue(result) });
+    const handler = createBrowserScreenshotHandler({ getBrowserProvider: vi.fn().mockResolvedValue(provider) });
+
+    const r = await handler({ full_page: true }, makeSignal());
+
+    expect(r.isError).toBeUndefined();
+    expect(r.image).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Provider errors
 // ---------------------------------------------------------------------------
 

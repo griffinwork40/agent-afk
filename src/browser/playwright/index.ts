@@ -430,9 +430,12 @@ export class PlaywrightProvider implements BrowserProvider {
       bytes,
       width,
       height,
-      // Raw PNG bytes for the model to read visually. The 5 MiB sidecar cap
-      // in writeScreenshotSidecar() (called above) already bounded `buf`, so
-      // the encoded payload stays within reason for the Messages API.
+      // Raw PNG bytes for the model to read visually. The 5 MiB sidecar cap in
+      // writeScreenshotSidecar() (called above) already bounded `buf` — under
+      // the direct Messages API's 10 MB base64 ceiling (note: Bedrock/Vertex
+      // cap tighter at 5 MB base64). The orthogonal 8000px pixel limit is
+      // enforced in the browser_screenshot handler, which falls back to
+      // text-only when width/height exceed it: bytes bounded here, pixels there.
       dataBase64: buf.toString('base64'),
       mediaType: 'image/png',
     };
