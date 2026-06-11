@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.98.1] - 2026-06-11
+
+### Fixed
+- stop local-model subagent dispatch from hanging (#87) (2d458dc)
+
 ## [3.98.0] - 2026-06-11
 
 ### Added
