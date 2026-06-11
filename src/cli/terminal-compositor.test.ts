@@ -164,6 +164,27 @@ describe('TerminalCompositor', () => {
         handle.release();
       }
     });
+
+    it('arm() rejecting on a stdin-claim conflict does not leak raw mode or bracketed-paste', async () => {
+      // Regression: arm() enabled raw mode + bracketed-paste BEFORE acquiring the
+      // stdin claim, then threw on conflict with armed=false — so disarm()'s
+      // restore path never ran and the terminal leaked raw mode for the process
+      // lifetime. After a failed arm(): raw mode must be off, and bracketed-paste
+      // must not be left enabled (either never enabled, or re-disabled).
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      const { acquireStdinClaim } = await import('./input/stdin-claim.js');
+      const handle = acquireStdinClaim('test-interloper');
+      const chunks: string[] = [];
+      stdout.on('data', (ch: unknown) => chunks.push(String(ch)));
+      try {
+        await expect(c.arm()).rejects.toThrow('stdin claim conflict');
+        expect(stdin.isRaw).toBe(false);
+        const out = chunks.join('');
+        if (out.includes('\x1b[?2004h')) expect(out).toContain('\x1b[?2004l');
+      } finally {
+        handle.release();
+      }
+    });
   });
 
   describe('resize handling', () => {
@@ -1559,6 +1580,19 @@ describe('TerminalCompositor', () => {
       stdin.emit('keypress', 'h', { name: 'h', sequence: 'h' });
       stdin.emit('keypress', 'i', { name: 'i', sequence: 'i' });
       expect(c.getBuffer().text).toBe('hi');
+    });
+
+    it('printable emoji (multi-UTF-16-unit graphemes) are inserted, not dropped', async () => {
+      // Regression: the printable filter used `char.length === 1`, a UTF-16
+      // code-UNIT count — it silently dropped surrogate-pair emoji
+      // ('😀'.length === 2) and variation-selector / skin-tone emoji
+      // ('❤️', '👍🏽'). Each is a single printable grapheme and must insert.
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      stdin.emit('keypress', '😀', { sequence: '😀' });
+      stdin.emit('keypress', '❤️', { sequence: '❤️' });
+      expect(c.getBuffer().text).toBe('😀❤️');
+      c.disarm();
     });
 
     it('backspace shrinks buffer', async () => {
