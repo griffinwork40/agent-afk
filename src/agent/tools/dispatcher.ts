@@ -450,6 +450,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
         `in a row with byte-identical input. The result will not change. Stop repeating this ` +
         `call — reuse the previous result, change the input, try a different tool, or end the turn.`,
       isError: true,
+      circuitBreaker: true,
     };
   }
 

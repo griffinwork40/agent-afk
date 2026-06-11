@@ -984,6 +984,7 @@ describe('SessionToolDispatcher — repeat-loop circuit breaker', () => {
     expect(tripped.isError).toBe(true);
     expect(tripped.content).toContain('Loop circuit breaker');
     expect(tripped.content).toContain('echo');
+    expect(tripped.circuitBreaker).toBe(true);
   });
 
   it('does not run the handler on the tripped call', async () => {

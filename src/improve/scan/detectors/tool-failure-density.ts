@@ -119,6 +119,8 @@ export function detectToolFailureDensity(
       const ev = item.event;
       if (ev.kind !== 'tool_call') continue;
       if (ev.payload.phase !== 'completed') continue;
+      // Skip synthetic circuit-breaker blocks — not real tool outcomes.
+      if (ev.payload.circuitBreaker === true) continue;
       const stats = getOrInit(byTool, ev.payload.name);
       stats.totalCalls += 1;
       if (ev.payload.isError) {
