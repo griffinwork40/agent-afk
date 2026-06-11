@@ -15,6 +15,11 @@ auto-release workflow to deduplicate commits across successive runs.
 - `improve scan` now runs the `tool-failure-density` detector by default (`enabledByDefault: true`), surfacing tools with high error rates without requiring explicit opt-in (#80)
 - Repeat-loop circuit breaker: a tool called 8× consecutively with byte-identical input is short-circuited with a synthetic `isError` result; its synthetic events carry `circuitBreaker: true` and are excluded from `tool-failure-density` accounting so breaker trips do not inflate tool failure rates (#80)
 
+## [3.93.0] - 2026-06-10
+
+### Added
+- add /config and /doctor slash commands (port afk-workshop#702) (#77) (907dc5f)
+
 ## [3.92.4] - 2026-06-10
 
 ### Fixed
