@@ -19,7 +19,7 @@
 import type { Command } from 'commander';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { dirname } from 'path';
-import { createInterface } from 'readline/promises';
+import { createInterface } from 'node:readline/promises';
 import { palette } from '../palette.js';
 import { getJsonConfigPath } from '../../paths.js';
 import {
