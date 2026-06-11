@@ -67,6 +67,7 @@ import { registerScheduleCommand } from './commands/schedule.js';
 import { registerBgCommand } from './commands/bg.js';
 import { registerTraceCommand } from './commands/trace.js';
 import { registerServiceCommand } from './commands/service.js';
+import { registerBrowserCommand } from './commands/browser.js';
 import { registerImproveCommand } from './commands/improve.js';
 import { registerShellInitCommand } from './commands/shell-init.js';
 import { setInteractiveUpdateNotices } from './commands/interactive.js';
@@ -117,6 +118,7 @@ registerScheduleCommand(program);
 registerBgCommand(program);
 registerTraceCommand(program);
 registerServiceCommand(program);
+registerBrowserCommand(program);
 registerImproveCommand(program);
 registerShellInitCommand(program);
 
