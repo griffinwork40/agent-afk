@@ -10,6 +10,8 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import {
   detectSources,
+  importFromConfigPaths,
+  loadImportFromConfig,
   parseImportFromConfig,
   readMcpServers,
   resolveImportedRoots,
@@ -195,5 +197,38 @@ describe('readMcpServers', () => {
     const p = join(home, 'bad.json');
     writeFileSync(p, '{ not json');
     expect(readMcpServers(p, 'json')).toEqual([]);
+  });
+});
+
+describe('loadImportFromConfig', () => {
+  it('reads a valid importFrom from an allowed (user-global) config path', () => {
+    const p = join(home, 'afk.config.json');
+    writeFileSync(p, JSON.stringify({ importFrom: { 'claude-code': true } }));
+    expect(loadImportFromConfig([p])).toEqual({
+      'claude-code': { plugins: true, skills: true, mcp: true },
+    });
+  });
+
+  it('first existing config WITH a valid importFrom wins; files lacking one are skipped', () => {
+    const a = join(home, 'a.json'); // exists, no importFrom
+    const b = join(home, 'b.json'); // exists, has importFrom
+    writeFileSync(a, JSON.stringify({ model: 'sonnet' }));
+    writeFileSync(b, JSON.stringify({ importFrom: { codex: { plugins: true } } }));
+    expect(loadImportFromConfig([a, b])).toEqual({
+      codex: { plugins: true, skills: false, mcp: false },
+    });
+  });
+
+  it('returns undefined when no provided config has a valid importFrom', () => {
+    const p = join(home, 'afk.config.json');
+    writeFileSync(p, JSON.stringify({ model: 'sonnet' }));
+    expect(loadImportFromConfig([p])).toBeUndefined();
+    expect(loadImportFromConfig([join(home, 'missing.json')])).toBeUndefined();
+  });
+
+  it('SECURITY: the default config-path list excludes the project-local cwd config', () => {
+    // importFrom must never be honored from <cwd>/afk.config.json — a cloned
+    // repo could otherwise silently enable foreign-asset / MCP-server import.
+    expect(importFromConfigPaths()).not.toContain(join(process.cwd(), 'afk.config.json'));
   });
 });

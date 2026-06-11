@@ -131,15 +131,33 @@ export function parseImportFromConfig(raw: unknown): ImportFromConfig | undefine
 }
 
 /**
- * Read + normalize the `importFrom` block directly from the first existing
- * afk.config.json (cwd → ~/.afk/config → legacy), without the full
- * `loadConfig()` machinery. This lets the agent-layer scanners self-serve the
- * import config without importing the cli layer. Returns `undefined` when no
- * config file has a valid `importFrom`.
+ * The config files `importFrom` is honored from: the user-global afk.config.json
+ * (`$AFK_HOME/config/afk.config.json`) then the legacy `~/.afk.config.json`.
+ * Deliberately EXCLUDES `<cwd>/afk.config.json` — see {@link loadImportFromConfig}.
  */
-export function loadImportFromConfig(): ImportFromConfig | undefined {
-  const paths = [join(process.cwd(), 'afk.config.json'), getJsonConfigPath(), getLegacyJsonConfigPath()];
-  for (const p of paths) {
+export function importFromConfigPaths(): string[] {
+  return [getJsonConfigPath(), getLegacyJsonConfigPath()];
+}
+
+/**
+ * Read + normalize the `importFrom` block from the user-global config, without
+ * the full `loadConfig()` machinery — lets agent-layer scanners self-serve the
+ * import config without importing the cli layer.
+ *
+ * Security invariant: `importFrom` authorizes AFK to live-read/execute another
+ * tool's plugins+skills and auto-run its MCP servers, so it is honored ONLY
+ * from the user-global config (written by the user via `afk migrate`), NEVER
+ * from a project-local `<cwd>/afk.config.json` — a cloned repo must not be able
+ * to silently enable foreign-asset import. Imported assets live in the user's
+ * home dir and are cwd-independent, so per-repo scoping adds risk, not value.
+ *
+ * `configPaths` is injectable for tests. Returns `undefined` when none has a
+ * valid `importFrom`.
+ */
+export function loadImportFromConfig(
+  configPaths: readonly string[] = importFromConfigPaths(),
+): ImportFromConfig | undefined {
+  for (const p of configPaths) {
     if (!existsSync(p)) continue;
     try {
       const json = JSON.parse(readFileSync(p, 'utf-8')) as { importFrom?: unknown };

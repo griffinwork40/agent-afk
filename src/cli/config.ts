@@ -695,9 +695,15 @@ function loadJsonConfig(): {
           config.enableShellHooks = json.enableShellHooks;
         }
 
-        const importFrom = parseImportFromConfig(json.importFrom);
-        if (importFrom !== undefined) {
-          config.importFrom = importFrom;
+        // Security: `importFrom` is a user-global-only trust grant — it lets AFK
+        // live-read/execute another tool's assets (see loadImportFromConfig). A
+        // project-local afk.config.json must NOT be able to set it, so honor it
+        // only from the user-global / legacy config, never `<cwd>/afk.config.json`.
+        if (configPath !== join(process.cwd(), 'afk.config.json')) {
+          const importFrom = parseImportFromConfig(json.importFrom);
+          if (importFrom !== undefined) {
+            config.importFrom = importFrom;
+          }
         }
 
         if (json.interactive && typeof json.interactive === 'object') {
