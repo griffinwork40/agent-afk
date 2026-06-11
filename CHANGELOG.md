@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.93.1] - 2026-06-11
+
+### Changed
+- split terminal-compositor + bug-hunt pass (#78) (b9d49e5)
+
 ## [3.93.0] - 2026-06-10
 
 ### Added
