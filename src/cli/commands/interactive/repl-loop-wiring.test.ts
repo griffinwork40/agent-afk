@@ -298,6 +298,43 @@ describe('runReplLoop — skill-dispatch handles wired onto slashCtx', () => {
     expect(captured.transcriptIsHandle).toBe(true);
   });
 
+  it('setSoftStopHandler publishes the soft-stop closure to turnState.requestSoftStop (and clears it)', async () => {
+    // Ctrl+C-once == ESC: the SIGINT handler (interactive.ts) fires the SAME
+    // soft-stop closure ESC does. That closure must be published to turnState
+    // so handleSigint can reach it mid-turn — and cleared between turns so a
+    // between-turn Ctrl+C falls back to a plain interrupt rather than firing a
+    // stale closure.
+    const backgroundRegistry = new BackgroundAgentRegistry({});
+    const ctx = makeMinimalCtx(backgroundRegistry);
+    const transcript = makeTranscript();
+
+    const turnState: TurnState = {
+      turnInFlight: false,
+      lastSigintAt: 0,
+      activeCompositor: null,
+    } as TurnState;
+
+    const handler = (): void => {};
+    const captured = {
+      afterInstall: undefined as unknown,
+      afterClear: undefined as unknown,
+    };
+
+    const slashMod = await import('../../slash/registry.js');
+    vi.mocked(slashMod.dispatch).mockImplementationOnce(async () => {
+      ctx.slashCtx.setSoftStopHandler?.(handler);
+      captured.afterInstall = turnState.requestSoftStop;
+      ctx.slashCtx.setSoftStopHandler?.(null);
+      captured.afterClear = turnState.requestSoftStop;
+      return { handled: true, result: 'exit' as const };
+    });
+
+    await runReplLoop(ctx, transcript as never, turnState, vi.fn());
+
+    expect(captured.afterInstall).toBe(handler);
+    expect(captured.afterClear).toBeNull();
+  });
+
   it('slashCtx.onContextProgress refreshes the sampler and repaints the status line', async () => {
     const backgroundRegistry = new BackgroundAgentRegistry({});
     const ctx = makeMinimalCtx(backgroundRegistry);

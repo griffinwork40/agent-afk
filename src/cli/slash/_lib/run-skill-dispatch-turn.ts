@@ -129,7 +129,16 @@ export async function runSkillDispatchTurn(
     // /skill turn is silently dropped at the compositor's onSoftStop →
     // InputSurface.softStopHandler?.() no-op (the gap PR #546 called
     // out as a deferred follow-up). Cleared in finally.
-    ctx.setSoftStopHandler?.(() => { softStopRequested = true; });
+    ctx.setSoftStopHandler?.(() => {
+      softStopRequested = true;
+      // Fire interrupt() synchronously on ESC rather than deferring to the
+      // for-await loop's `softStopRequested` check — during a long tool call
+      // the loop is blocked awaiting the next stream event, so a deferred
+      // interrupt leaves ESC unresponsive until another token arrives.
+      // interrupt() is idempotent, so the loop's break-path interrupt is a
+      // safe no-op.
+      ctx.session.current.interrupt().catch(() => { /* best effort */ });
+    });
 
     // Preflight runs inside the armed renderer so the spinner is visible
     // during any I/O. Failure isolation matches `runPreflight`'s own
@@ -161,14 +170,16 @@ export async function runSkillDispatchTurn(
     await runWithSink(renderer.sink, async () => {
       for await (const event of ctx.session.current.sendMessageStream(message)) {
         // Invariant: soft-stop halt MUST fire before the event is sinked
-        // into the renderer. Mirrors turn-handler.ts ~line 225 — the
-        // event-loop boundary between the HTTP stream pump and the
-        // renderer state writer is what makes this ordering load-bearing.
-        // session.interrupt() terminates the stream's async iterator
-        // naturally (no throw); the break exits the for-await cleanly
-        // and the finally block disposes the renderer.
+        // into the renderer. Mirrors turn-handler.ts — the event-loop
+        // boundary between the HTTP stream pump and the renderer state
+        // writer is what makes this ordering load-bearing. The soft-stop
+        // handler (installed above) calls interrupt() synchronously on ESC,
+        // so the pump is already halting before this break; deferring it to
+        // this loop would leave ESC unresponsive while a long tool call
+        // blocks the await. Here we only break: interrupt() was already
+        // initiated, the stream's async iterator terminates naturally (no
+        // throw), and the finally block disposes the renderer.
         if (softStopRequested) {
-          ctx.session.current.interrupt().catch(() => { /* best effort */ });
           break;
         }
         // Capture the latest assistant message text BEFORE sinking — read-only,

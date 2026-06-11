@@ -230,59 +230,73 @@ function handleEscape(self: KeyDispatchHost, key: KeyInfo): boolean {
   const ac = self.autocompleteState;
   // ESC: close dropdown if open. In streaming mode, fire soft-stop
   // (once-only per turn via `softStopped` guard) — ESC is the
-  // user-recoverable stop that preserves already-completed work,
-  // distinct from Ctrl+C (hard-abort via `canceled` flag below).
-  // In idle mode, ESC is reserved for UI dismissal only.
+  // user-recoverable stop that preserves already-completed work. In
+  // idle mode, ESC is reserved for UI dismissal only.
   //
-  // Invariant: soft-stop is NOT the `onCancel` path. `onCancel`
-  // sets `canceled = true` and is consumed by the Ctrl+C branch. ESC
-  // routes to `onSoftStop` without touching `canceled`, so the turn
-  // ends cleanly (no "canceled" state on the compositor) and the
-  // queued-buffer flush at the next idle transition operates normally
-  // on the next turn. This distinction is externally governed by the
-  // caller contract in InputSurface.armCompositor — the `onCancel`
-  // handler there calls `session.interrupt()` which kills the stream;
-  // `onSoftStop` calls the same underlying interrupt but the compositor
-  // never marks the turn as hard-aborted (no `canceled = true`).
+  // ESC vs Ctrl+C: both now stop a turn gracefully (Ctrl+C routes to
+  // onCancel → handleSigint, whose in-turn branch triggers the SAME
+  // soft-stop as ESC), but they reach it by different paths and Ctrl+C
+  // additionally arms the "press again to exit" window so a second
+  // Ctrl+C quits. ESC routes straight to `onSoftStop`; it does NOT arm
+  // the exit window and does NOT touch `canceled`, so a lone ESC never
+  // edges the REPL toward quitting. The `canceled` flag is only the
+  // compositor's once-only guard for the Ctrl+C branch below; it is not
+  // read by the turn handler (soft-stop vs completed-turn is decided by
+  // the turn handler's `softStopRequested`, which BOTH paths now set).
   if (ac?.dropdownOpen) {
     // Dismiss dropdown and record the suppression signature so it
-    // stays closed until the buffer changes.
+    // stays closed until the buffer changes. Do NOT `return` here:
+    // ghost-text autocomplete repopulates `dropdownOpen` on nearly every
+    // keystroke, so while the agent streams the dropdown is almost always
+    // open at the moment the user hits ESC to stop it. Returning early
+    // swallowed that ESC and forced a second press to reach the soft-stop
+    // path below — the "double-press to cancel" bug. Falling through lets a
+    // single ESC both dismiss the dropdown AND fire soft-stop in streaming
+    // mode; the idle-mode guard on the next line still keeps ESC a pure
+    // UI-dismissal when not streaming, and the `softStopped` once-only guard
+    // still prevents a second ESC from re-firing onSoftStop.
     ac.suppressedSignature = `${self.input.cursor}:${self.input.buffer}`;
     ac.dropdownOpen = false;
     ac.candidates = [];
     self.repaint();
-    return true;
   }
   if (self.inputMode === 'idle') return true;
   // Soft-stop: once-only per turn. Second ESC while streaming is
   // a no-op — the stream is already halting.
   if (self.softStopped) return true;
-  // Preserve a typed-but-not-yet-submitted buffer as queued so the
-  // soft-stop auto-submits it on the next turn — parity with the
-  // pre-soft-stop ESC path (which queued the buffer before firing
-  // onCancel) and with the Ctrl+C branch below. External constraint:
-  // the idle-transition flush (setInputMode → idle) requires
-  // `queued === true` to fire onSubmit; without this, a message typed
-  // while the agent was streaming is silently dropped on ESC. An
-  // already-[queued] buffer (user pressed Enter) is left untouched —
-  // the `!self.queued` guard makes this idempotent.
-  if (self.input.buffer.length > 0 && !self.queued) {
-    self.queued = true;
-    self.repaint();
-  }
+  // Contract: ESC soft-stop does NOT touch the buffer's queued state.
+  // Enter is the ONLY queue trigger. So:
+  //   - queued === true  (user pressed Enter): left untouched. It
+  //     auto-submits as the next turn via the idle-transition flush
+  //     (setInputMode → idle), since that branch fires on `queued`.
+  //   - queued === false (user only TYPED, no Enter): stays an editable
+  //     draft. The text is NOT dropped — setInputMode no longer
+  //     de-queues and never clears the buffer, so the typed characters
+  //     persist into the idle input row and simply wait for an explicit
+  //     Enter. This is the "ESC with nothing queued leaves what I typed
+  //     in the input field" behavior.
+  // We deliberately do NOT auto-queue a typed-but-unconfirmed buffer
+  // here: queuing it would fling it as a turn the user never submitted.
+  // (Ctrl+C keeps the legacy auto-queue in handleInterrupt below —
+  // hard-abort has intentionally different semantics.)
   self.softStopped = true;
   if (self.onSoftStop) self.onSoftStop();
   return true;
 }
 
 function handleInterrupt(self: KeyDispatchHost, key: KeyInfo): boolean {
-  // Ctrl+C → cancel/sigint, always (regardless of dropdown state).
-  //   - Idle mode: pure sigint trigger — no buffer queue, no
-  //     once-only guard. The surface installs handleSigint here so
-  //     repeated Ctrl+C presses follow the "interrupt → press again
-  //     to quit" affordance.
-  //   - Streaming mode: legacy — set canceled (once-only) + queue
-  //     buffer + fire onCancel (which interrupts the session).
+  // Ctrl+C → onCancel (= the REPL's handleSigint), in any mode. The
+  // first/second-press dispatch lives in handleSigint:
+  //   - 1st Ctrl+C during a turn = ESC soft-stop (stop cleanly, keep
+  //     work, preserve the draft); 2nd within the exit window quits.
+  //   - In idle, 1st arms the exit window, 2nd quits.
+  // We deliberately do NOT auto-queue the buffer here (parity with ESC
+  // soft-stop, handleEscape): a graceful stop must leave a typed-but-
+  // unconfirmed buffer as an editable draft (queued stays as-is), not
+  // fling it as a turn the user never submitted. `canceled` stays a
+  // once-only guard so a flurry of presses inside ONE streaming turn
+  // fires onCancel once; the second quit-press arrives in idle (the
+  // turn ends on interrupt) where the guard does not apply.
   if (key?.ctrl && key?.name === 'c') {
     if (self.inputMode === 'idle') {
       if (self.onCancel) self.onCancel();
@@ -290,10 +304,6 @@ function handleInterrupt(self: KeyDispatchHost, key: KeyInfo): boolean {
     }
     if (self.canceled) return true;
     self.canceled = true;
-    if (self.input.buffer.length > 0 && !self.queued) {
-      self.queued = true;
-      self.repaint();
-    }
     if (self.onCancel) self.onCancel();
     return true;
   }

@@ -199,7 +199,22 @@ export async function runTurn(
     // guard. By wiring the handler first, any ESC that arrives during or
     // after arm() correctly sets softStopRequested=true.
     if (h.setSoftStopHandler) {
-      h.setSoftStopHandler(() => { softStopRequested = true; });
+      h.setSoftStopHandler(() => {
+        softStopRequested = true;
+        // Fire interrupt() synchronously on ESC instead of waiting for the
+        // for-await loop below to observe `softStopRequested`. During a long
+        // tool call the loop is blocked awaiting the stream's next event, so a
+        // deferred interrupt would not fire until another token arrived —
+        // making ESC look dead for seconds (the "ESC does nothing" symptom).
+        // interrupt() is idempotent (AgentSession returns early once state
+        // leaves streaming/processing), so the loop's break-path interrupt
+        // below remains a safe no-op.
+        session.interrupt().catch((err) => {
+          if (isDebugEnabled()) {
+            console.error('  ' + palette.error('soft-stop session.interrupt() failed:'), err);
+          }
+        });
+      });
     }
 
     await armAndWire();
@@ -244,24 +259,22 @@ export async function runTurn(
         // tool-call flush into session state. Reverse order (flush
         // then halt) risks writing partial state to disk — the stream
         // may still be delivering tool_result chunks, so tool events
-        // accumulated so far would be incomplete. By halting first
-        // (session.interrupt() stops the pump), the event loop drains
-        // to quiescence before the post-stream block records completed
-        // tool events via recordTurn. This ordering is externally
-        // governed by the event-loop boundary between the HTTP stream
-        // pump and the state writer in turn-handler.ts.
+        // accumulated so far would be incomplete. The soft-stop handler
+        // (installed above) calls session.interrupt() synchronously on
+        // ESC, so the pump is already halting before this loop breaks and
+        // before the post-stream recordTurn runs. This ordering is
+        // externally governed by the event-loop boundary between the HTTP
+        // stream pump and the state writer in turn-handler.ts.
         //
-        // Implementation: interrupt is called here (inside the stream
-        // loop) so it fires as early as possible on the next iteration
-        // after softStopRequested is set. The stream's async iterator
-        // then terminates naturally (no throw), and the post-stream
-        // block below detects doneFired===false to render the notice.
+        // Implementation: interrupt fires in the handler, NOT here — if it
+        // were deferred to this for-await, a long-running tool call (during
+        // which this loop is blocked awaiting the next event) would not halt
+        // until the next token arrived, making ESC look dead for seconds
+        // (the "ESC does nothing" bug). Here we only break: interrupt() was
+        // already initiated in the handler, the stream's async iterator
+        // terminates naturally (no throw), and the post-stream block detects
+        // softStopRequested to render the notice and suppress recordTurn.
         if (softStopRequested) {
-          session.interrupt().catch((err) => {
-            if (isDebugEnabled()) {
-              console.error('  ' + palette.error('soft-stop session.interrupt() failed:'), err);
-            }
-          });
           break;
         }
 
