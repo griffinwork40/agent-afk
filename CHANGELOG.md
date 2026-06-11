@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.96.0] - 2026-06-11
+
+### Added
+- add eval-run, the first deterministic eval-case validation stage (#84) (86ae118)
+
 ## [3.95.0] - 2026-06-11
 
 ### Added
