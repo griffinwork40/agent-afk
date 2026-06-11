@@ -90,6 +90,27 @@ describe('runSubagentDAG', () => {
     expect(handles[0]!.teardown).toHaveBeenCalled();
   });
 
+  it('forks nodes with parent session identity only, so compose/DAG cannot inject context', async () => {
+    pushHandle('hello');
+    const manager = managerFromQueue();
+
+    await runSubagentDAG({
+      manager,
+      parentSession: makeParent(),
+      nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p' }],
+      edges: [],
+    });
+
+    const fork = manager.forkSubagent as unknown as ReturnType<typeof vi.fn>;
+    const forkOptions = fork.mock.calls[0]![0];
+
+    // Current contract: compose/DAG nodes intentionally receive no parent input
+    // stream ref. Their final output returns through DAG outputs/tool results;
+    // SubagentStop.injectContext cannot enqueue hidden parent turns here.
+    expect(forkOptions.parent).toEqual({ sessionId: 'test-parent' });
+    expect(forkOptions.parent.getInputStreamRef).toBeUndefined();
+  });
+
   it('two-node chain: output of first feeds promptBuilder of second', async () => {
     pushHandle('first-output');
     pushHandle('second-output');
