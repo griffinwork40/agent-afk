@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.94.0] - 2026-06-11
+
+### Added
+- act on telemetry — loop guard, skill-depth hint, enable tool-failure-density (#80) (5255350)
+
 ## [3.93.1] - 2026-06-11
 
 ### Changed
