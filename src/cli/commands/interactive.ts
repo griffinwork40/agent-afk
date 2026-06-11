@@ -506,19 +506,32 @@ export function registerInteractiveCommand(program: Command): void {
           return;
         }
         if (turnState.turnInFlight) {
-          ctx.session.current.interrupt().catch(() => { /* swallow during teardown */ });
+          // First Ctrl+C during a turn = ESC soft-stop: stop cleanly, keep
+          // completed work, and preserve the typed draft (the compositor no
+          // longer auto-queues it on Ctrl+C). requestSoftStop sets
+          // softStopRequested + interrupts, so the turn handler renders the
+          // "⏸ Stopped — work so far kept" notice and skips recordTurn exactly
+          // as ESC does. Falls back to a bare interrupt when no soft-stop
+          // handler is published (non-REPL turn, or a gap between turns).
+          if (turnState.requestSoftStop) {
+            turnState.requestSoftStop();
+          } else {
+            ctx.session.current.interrupt().catch(() => { /* swallow during teardown */ });
+          }
           turnState.lastSigintAt = now;
           // Surface a live "interrupting…" affordance in the overlay. The
           // renderer owns the OverlayComposer; this notifier was published by
           // the turn handler at arm time (null between turns → no-op).
           turnState.notifyInterrupting?.(true);
-          // Route the interrupt notice through the active compositor's
-          // commitAbove when available — that path clears the live overlay,
-          // writes the line into scrollback, and repaints the overlay
-          // below, so the notice survives subsequent log-update clears.
-          // A bare console.log races the still-armed compositor's
-          // spinner-tick repaints and can be erased before the user sees it.
-          const msg = '\n' + palette.warning('⚠ Interrupted. Press Ctrl+C again to exit.');
+          // The "⏸ Stopped — work so far kept" notice prints from the turn
+          // handler (the soft-stop path). Here we add ONLY the exit affordance:
+          // a second Ctrl+C within SIGINT_EXIT_WINDOW_MS quits. Route it
+          // through the active compositor's commitAbove when available — that
+          // path clears the live overlay, writes the line into scrollback, and
+          // repaints the overlay below, so the notice survives subsequent
+          // log-update clears. A bare console.log races the still-armed
+          // compositor's spinner-tick repaints and can be erased first.
+          const msg = '\n' + palette.info('ℹ ') + 'Press Ctrl+C again to exit.';
           const c = turnState.activeCompositor;
           if (c && c.isArmed()) {
             try { c.commitAbove(msg); } catch { console.log(msg); }

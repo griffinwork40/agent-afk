@@ -88,6 +88,16 @@ export interface TurnState {
    * handler calls it on Ctrl+C mid-turn. Null between turns.
    */
   notifyInterrupting?: ((active: boolean) => void) | null;
+  /**
+   * In-turn soft-stop trigger — the SAME closure ESC fires
+   * (sets the turn's `softStopRequested` + interrupts the session). The
+   * SIGINT handler calls it on the FIRST Ctrl+C during a turn so Ctrl+C
+   * stops as gracefully as ESC (keeps completed work, preserves the draft)
+   * rather than a bare interrupt. Published whenever a soft-stop handler is
+   * installed (normal turn or /skill dispatch) and cleared (null) between
+   * turns. Null → the SIGINT handler falls back to a plain interrupt.
+   */
+  requestSoftStop?: (() => void) | null;
 }
 
 async function runFirstTurnHookIfNeeded(ctx: InteractiveCtx, text: string): Promise<void> {
@@ -433,12 +443,22 @@ export async function runReplLoop(
     ctx.completionWriter.fn = writeIdle;
     ctx.completionWriter.idleFn = writeIdle;
   }
-  // Expose the surface's setSoftStopHandler so `runSkillDispatchTurn`
-  // can install its per-dispatch closure (same wiring as TurnHandles.
-  // setSoftStopHandler line ~583). Without this, ESC during a /skill
-  // turn is silently dropped at the compositor's onSoftStop because
-  // the surface's softStopHandler ref stays null.
-  ctx.slashCtx.setSoftStopHandler = (handler) => surface.setSoftStopHandler(handler);
+  // Install a per-turn soft-stop handler on the surface (so ESC works) AND
+  // publish it to turnState so the SIGINT handler can fire the SAME soft-stop
+  // on the first Ctrl+C of a turn (Ctrl+C-once == ESC). Both the normal-turn
+  // host hook and the /skill dispatch path route through here, so a single
+  // helper keeps the surface ref and the turnState ref in lockstep — including
+  // the teardown call (handler === null) that clears both between turns.
+  const installSoftStop = (handler: (() => void) | null): void => {
+    surface.setSoftStopHandler(handler);
+    turnState.requestSoftStop = handler;
+  };
+  // Expose setSoftStopHandler so `runSkillDispatchTurn` can install its
+  // per-dispatch closure (same wiring as TurnHandles.setSoftStopHandler
+  // below). Without this, ESC during a /skill turn is silently dropped at
+  // the compositor's onSoftStop because the surface's softStopHandler ref
+  // stays null.
+  ctx.slashCtx.setSoftStopHandler = installSoftStop;
   // Mirror the TurnHandles.onStageChange / onContextProgress wiring (see the
   // runTurn handles object below) onto SlashContext so skill-dispatch turns
   // (`/review`, `/mint`, plugin skills) drive the SAME footer rails as normal
@@ -975,7 +995,7 @@ export async function runReplLoop(
         // set*Handler calls are benign mutations of null refs).
         getCompositor: () => surface.getCompositor(),
         setBackgroundHandler: (handler) => surface.setBackgroundHandler(handler),
-        setSoftStopHandler: (handler) => surface.setSoftStopHandler(handler),
+        setSoftStopHandler: installSoftStop,
         async onContextProgress() {
           await ctx.contextSampler.refresh();
           ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler));

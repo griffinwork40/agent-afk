@@ -1419,6 +1419,36 @@ describe('TerminalCompositor', () => {
       expect(onCancel).toHaveBeenCalledTimes(1);
     });
 
+    it('Ctrl+C does NOT auto-queue a typed-but-unconfirmed buffer (preserved as a draft, parity with ESC)', async () => {
+      // Ctrl+C is now a graceful soft-stop (the REPL handleSigint fires the
+      // same soft-stop ESC does). Like ESC, it must NOT auto-queue a buffer
+      // the user only typed (never Entered): the text stays an editable draft
+      // (queued=false) instead of being flung as a turn the user never
+      // submitted. onCancel still fires (handleSigint owns stop/exit dispatch).
+      const onCancel = vi.fn();
+      const c = new TerminalCompositor({ stdout, stdin, onCancel });
+      await c.arm();
+      for (const ch of 'wait') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      expect(c.getBuffer()).toEqual({ text: 'wait', queued: false });
+      stdin.emit('keypress', undefined, { name: 'c', ctrl: true });
+      expect(onCancel).toHaveBeenCalledTimes(1);
+      // Draft preserved, NOT auto-queued.
+      expect(c.getBuffer()).toEqual({ text: 'wait', queued: false });
+    });
+
+    it('a second Ctrl+C within one streaming turn is swallowed by the once-only guard', async () => {
+      // The compositor fires onCancel once per streaming turn; the SECOND
+      // quit-press lands in idle (the turn ends on the soft-stop interrupt),
+      // where handleSigint's exit-window check quits. This guard only stops a
+      // burst of presses INSIDE one turn from firing onCancel repeatedly.
+      const onCancel = vi.fn();
+      const c = new TerminalCompositor({ stdout, stdin, onCancel });
+      await c.arm();
+      stdin.emit('keypress', undefined, { name: 'c', ctrl: true });
+      stdin.emit('keypress', undefined, { name: 'c', ctrl: true });
+      expect(onCancel).toHaveBeenCalledTimes(1);
+    });
+
     // ── Soft-stop drain (regression: ESC → perpetual input-lag-of-one) ──────
     //
     // Reported bug: after ESC (soft-stop), the user's next typed+Enter'd
