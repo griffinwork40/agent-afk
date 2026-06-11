@@ -217,7 +217,19 @@ export function finalizedToolCalls(state: StreamState): AccumulatedToolCall[] {
  */
 export function isToolCallStop(state: StreamState): boolean {
   if (state.finishReason === 'tool_calls' || state.finishReason === 'function_call') return true;
-  // Defensive: some providers emit no finish_reason but include tool_calls.
-  // If we accumulated any tool calls, treat as tool stop.
-  return state.toolCallsByIndex.size > 0;
+  // An explicit non-tool finish_reason ('stop', 'length', 'content_filter', …)
+  // is authoritative: the model ended the turn for THAT reason, not to call a
+  // tool. Some local MLX/llama.cpp shims wrongly send finish_reason:'stop'
+  // while also streaming partial tool_calls; honoring the size>0 fallback there
+  // dispatches a half-built (often empty-id) call, which poisons history with
+  // an empty tool_call_id and gets the next request rejected with HTTP 400.
+  if (state.finishReason !== null) return false;
+  // Defensive fallback ONLY when the provider sent no finish_reason at all
+  // (some OpenAI-compatible endpoints omit it): treat as a tool stop only if
+  // every accumulated call is complete enough to round-trip — non-empty id AND
+  // name. A partial or empty call is not a real tool stop.
+  if (state.toolCallsByIndex.size === 0) return false;
+  return [...state.toolCallsByIndex.values()].every(
+    (c) => c.id.length > 0 && c.name.length > 0,
+  );
 }

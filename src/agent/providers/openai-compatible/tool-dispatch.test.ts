@@ -243,6 +243,63 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
     }
   });
 
+  it('mints a synthetic id for an empty-id tool call and keeps assistant/tool-result ids matched', async () => {
+    // Regression: local MLX/llama.cpp shims sometimes stream tool_calls with no
+    // id. The provider must mint ONE synthetic id and use it on BOTH the
+    // assistant turn's tool_calls[].id and the tool-result tool_call_id —
+    // generating it independently in each builder would desync the pair and
+    // produce a request OpenAI/strict shims reject with HTTP 400.
+    const fixture = makeDispatcher();
+    scriptedTurns = [
+      {
+        chunks: [
+          {
+            // NOTE: no `id` field on the tool call — the empty-id case.
+            choices: [
+              { delta: { tool_calls: [{ index: 0, type: 'function', function: { name: 'echo', arguments: '{"msg":"hi"}' } }] } },
+            ],
+          },
+          { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+        ],
+      },
+      {
+        chunks: [
+          { choices: [{ delta: { content: 'done' } }] },
+          { choices: [{ delta: {}, finish_reason: 'stop' }] },
+        ],
+      },
+    ];
+
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'config', last4: 'test' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid-empty-id',
+      promptStream: singleInput('please echo hi'),
+      config: baseConfig(),
+      toolDispatcher: fixture.dispatcher,
+    });
+
+    await collect(q);
+
+    // The call was dispatched (not dropped) despite the empty id.
+    expect(fixture.handlerCalls).toEqual([{ name: 'echo', input: { msg: 'hi' } }]);
+
+    // The SECOND request must carry a well-formed assistant tool_calls turn and
+    // a matching tool-result message: same id, non-empty.
+    expect(createCalls.length).toBe(2);
+    const secondMessages = createCalls[1]!.args.messages as Array<Record<string, unknown>>;
+    const assistantToolTurn = secondMessages.find(
+      (m) => m['role'] === 'assistant' && Array.isArray(m['tool_calls']),
+    );
+    const toolResult = secondMessages.find((m) => m['role'] === 'tool');
+    expect(assistantToolTurn).toBeDefined();
+    expect(toolResult).toBeDefined();
+    const assistantId = (assistantToolTurn!['tool_calls'] as Array<{ id: string }>)[0]!.id;
+    const resultId = toolResult!['tool_call_id'] as string;
+    expect(assistantId.length).toBeGreaterThan(0);
+    expect(resultId).toBe(assistantId);
+  });
+
   // Cross-provider parity: the openai-compatible `summarizeToolInput` is a
   // separate copy of the anthropic-direct helper (they must render identically
   // — see the docstring on each). This guards the skill-label behavior against
