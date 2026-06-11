@@ -16,7 +16,7 @@
 import { emitKeypressEventsImmediateEscape } from './emit-keypress.js';
 import * as ansiEscapes from 'ansi-escapes';
 import stringWidth from 'string-width';
-import { list as listSlashCommands } from '../slash/registry.js';
+import { list as listSlashCommands, aliasEntries } from '../slash/registry.js';
 import { stripAnsi } from '../display.js';
 import { acquireStdinClaim } from './stdin-claim.js';
 import { InputCore, type InputCoreState } from '../input-core.js';
@@ -787,7 +787,34 @@ export async function readWithAutocompleteTty(
         }
 
         if (key?.name === 'tab') {
-          if (ac.dropdownOpen) applySelection();
+          if (ac.dropdownOpen) {
+            applySelection();
+          } else {
+            // Ghost-accept for mid-sentence skill token (non-compositor path).
+            // Mirrors the source (c) logic in getDeterministicGhost (suggest.ts).
+            // The compositor path handles its own ghost-accept via applyGhostAccept();
+            // this branch covers reader.ts-only surfaces (non-TTY fallback).
+            const upToCursor = input.buffer.slice(0, input.cursor);
+            const ghostMatch = /\s+\/([A-Za-z][A-Za-z0-9_:-]*)$/.exec(upToCursor);
+            if (ghostMatch) {
+              const partial = ghostMatch[1]!;
+              const slashPartial = '/' + partial;
+              const allNames = [
+                ...listSlashCommands().map(c => c.name),
+                ...aliasEntries().map(e => e.alias),
+              ];
+              const bestMatch = allNames
+                .filter(n => n.startsWith(slashPartial))
+                .sort((a, b) => a.localeCompare(b))[0];
+              if (bestMatch) {
+                const afterCursor = input.buffer.slice(input.cursor);
+                const start = input.cursor - slashPartial.length;
+                const replacement = bestMatch + (afterCursor.startsWith(' ') ? '' : ' ');
+                input = InputCore.replaceRange(input, { start, end: input.cursor }, replacement);
+                repaint();
+              }
+            }
+          }
           return;
         }
 

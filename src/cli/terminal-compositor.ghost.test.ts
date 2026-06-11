@@ -502,6 +502,48 @@ describe('TerminalCompositor ghost text', () => {
     expect(engine.disposeCalled).toBe(true);
   });
 
+  // ── Mid-sentence skill ghost (source c wiring) ───────────────────────────────
+
+  it('mid-sentence skill ghost: dim suffix renders for /partial token', async () => {
+    // Engine returns 'use /forge' for any buffer — simulates source (c) matching
+    // 'use /fo' and returning the full buffer with the completed skill name.
+    const engine = makeEngine({ tier1Result: 'use /forge' });
+    const c = new TerminalCompositor({
+      stdout, stdin,
+      suggest: { engine, getContext: makeCtx },
+    });
+    await c.arm();
+    writes.clear();
+
+    for (const ch of 'use /fo') {
+      stdin.emit('keypress', ch, { name: ch, sequence: ch });
+    }
+
+    const out = writes.all();
+    // Ghost suffix 'rge' must appear in the render output.
+    expect(out).toContain('rge');
+    c.disarm();
+  });
+
+  it('Tab accepts mid-sentence skill ghost: buffer becomes full skill name', async () => {
+    // Engine returns 'use /forge' as the tier1 ghost for any buffer.
+    const engine = makeEngine({ tier1Result: 'use /forge' });
+    const c = new TerminalCompositor({
+      stdout, stdin,
+      suggest: { engine, getContext: makeCtx },
+    });
+    await c.arm();
+
+    for (const ch of 'use /fo') {
+      stdin.emit('keypress', ch, { name: ch, sequence: ch });
+    }
+    expect(c.getBuffer().text).toBe('use /fo');
+
+    stdin.emit('keypress', undefined, { name: 'tab' });
+    expect(c.getBuffer().text).toBe('use /forge');
+    c.disarm();
+  });
+
   it('engine.dispose() is NOT called when compositor is disarmed without being armed (no-op path)', () => {
     // When disarm() is called on an unarmed compositor, the early-return path
     // calls resetState() but does NOT dispose the engine — the engine was never
