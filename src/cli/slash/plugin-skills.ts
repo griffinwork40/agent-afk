@@ -376,7 +376,7 @@ export function makeForwardHandler(skill: DiscoveredSkill, flags?: readonly stri
 }
 
 /** Where a listing row's skill came from. Drives the friendly source label. */
-type SkillSource = 'builtin' | 'user' | 'project' | 'plugin';
+type SkillSource = 'builtin' | 'user' | 'project' | 'plugin' | 'imported';
 
 /** A row in the unified `/skills` listing. */
 interface ListingRow {
@@ -398,6 +398,10 @@ interface ListingGroup {
 function registryOriginToSource(origin: SkillMetadata['origin']): SkillSource {
   if (origin === 'user') return 'user';
   if (origin === 'project') return 'project';
+  // `imported:<binary>` skills are live-read from a trusted source binary
+  // (Claude Code, Codex) via `importFrom`. Surface that provenance instead of
+  // mislabelling them as built-in (mirrors collectSkillEntries in skill-bridge).
+  if (origin?.startsWith('imported:')) return 'imported';
   return 'builtin';
 }
 
@@ -468,6 +472,8 @@ function friendlySource(source: SkillSource): string {
       return 'project';
     case 'plugin':
       return 'plugin';
+    case 'imported':
+      return 'imported';
   }
 }
 
