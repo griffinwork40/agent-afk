@@ -97,4 +97,9 @@ describe('readMcpConfigFile / writeMcpConfigFileAtomic', () => {
     writeFileSync(path, '[]', 'utf-8');
     expect(() => readMcpConfigFile(path)).toThrow(/must be a JSON object/);
   });
+
+  it('throws when mcpServers is an array (never silently drops the entry)', () => {
+    writeFileSync(path, JSON.stringify({ mcpServers: [] }), 'utf-8');
+    expect(() => readMcpConfigFile(path)).toThrow(/must be a JSON object, not an array/);
+  });
 });

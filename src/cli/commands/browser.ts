@@ -82,6 +82,13 @@ export function readMcpConfigFile(path: string): McpConfigFile {
   }
 
   const cfg = parsed as McpConfigFile;
+  // An array passes `typeof === 'object'`, so guard it explicitly: a string-keyed
+  // assignment onto an array is silently dropped by JSON.stringify, which would make
+  // `connect` report success while persisting nothing. Refuse rather than clobber a
+  // hand-edited file (mirrors the top-level array check above).
+  if (Array.isArray(cfg.mcpServers)) {
+    throw new Error(`MCP config at ${path} has an invalid "mcpServers" (must be a JSON object, not an array).`);
+  }
   if (cfg.mcpServers === undefined || typeof cfg.mcpServers !== 'object' || cfg.mcpServers === null) {
     cfg.mcpServers = {};
   }
