@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.96.1] - 2026-06-11
+
+### Fixed
+- stop user-card echo ghosting by reserving the terminal last column (#85) (23200c2)
+
 ## [3.96.0] - 2026-06-11
 
 ### Added
