@@ -434,6 +434,11 @@ describe('classifyBashCommand', () => {
       ['tar -xzf pkg.tar.gz', 'tar -xzf'],
       ['tar -xzf pkg.tar.gz -C /dst', 'tar -xzf -C'],
       ['tar xvzf file.tgz', 'tar xvzf'],
+      // create / append / update modes also write to disk
+      ['tar czf out.tar src/', 'tar czf (create)'],
+      ['tar cf a.tar f', 'tar cf (create, bare)'],
+      ['tar rf a.tar f', 'tar rf (append)'],
+      ['tar uf a.tar f', 'tar uf (update)'],
       ['unzip package.zip', 'unzip'],
       ['unzip -d /dst pkg.zip', 'unzip -d'],
       ['source ./setup.sh', 'source script'],
@@ -450,7 +455,9 @@ describe('classifyBashCommand', () => {
     const allowed: string[] = [
       'tar tf archive.tar',         // list only
       'tar -tzf pkg.tar.gz',        // list with gzip
+      'tar tvf a.tar',              // list verbose — still read-only
       'grep -rn "tar xzf" .',       // quoted search term
+      'grep "tar czf" notes.txt',   // quoted create term — not a real tar call
       'cat readme.txt',             // .txt not a source invocation
       'ls *.zip',                   // listing zips, not extracting
     ];

@@ -22,6 +22,7 @@
 
 import { extractReadableMarkdown, THIN_CONTENT_CHARS } from './extract.js';
 import type { ExtractedContent, FetchFn, RenderFn, RenderedPage } from './types.js';
+import { debugLog } from '../utils/debug.js';
 
 /** Content-types we treat as HTML (run the extraction pipeline). */
 const HTMLISH_RE = /(text\/html|application\/xhtml\+xml)/i;
@@ -67,7 +68,8 @@ export interface ScrapeResult {
 function safeExtract(html: string, url: string): ExtractedContent {
   try {
     return extractReadableMarkdown(html, url);
-  } catch {
+  } catch (err) {
+    debugLog('[web/scrape] extraction failed', { url, err });
     return { title: '', markdown: '', textLength: 0, usedFallback: true };
   }
 }
