@@ -121,6 +121,26 @@ describe('renderUserCard height cap', () => {
     }
   });
 
+  it('keeps the bar inside cols-1 at narrow widths (cols ≥ 3), not the floored last column', () => {
+    // Regression for the prior `Math.max(3, cols - 1)` floor: it pushed rightEdge
+    // UP to 3 on a 1–3 column terminal, landing the bar back in the physical last
+    // column — the exact DECAWM ghost this guard prevents. `cols - 1` (no floor)
+    // keeps the final column empty for every cols ≥ 3. (Below 3 the ' │' suffix
+    // structurally cannot fit; that degenerate range is intentionally untested.)
+    const hugeToken = 'x'.repeat(200);
+    for (const cols of [3, 4, 5, 8, 12, 40]) {
+      Object.defineProperty(process.stdout, 'columns', { value: cols, configurable: true });
+      const rows = strip(card({ kind: 'user', body: hugeToken })).split('\n');
+      for (const row of rows) {
+        expect(row.endsWith(' │')).toBe(true);
+        expect(
+          row.length,
+          `cols=${cols}: row width ${row.length} must be ≤ cols-1: ${JSON.stringify(row)}`,
+        ).toBeLessThanOrEqual(cols - 1);
+      }
+    }
+  });
+
   it('AFK_USER_CARD_MAX_ROWS is registered in ENV_REGISTRY with correct metadata', () => {
     // Verifies the env var is registered so scan:env:check passes and the
     // override mechanism is wired correctly (even though the module-scope

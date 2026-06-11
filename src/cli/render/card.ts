@@ -136,7 +136,15 @@ function renderUserCard(bodyLines: string[]): string {
   // already reserves this column for the same reason (terminal-compositor.render.ts:
   // `cols - … - 1`). xterm handles the boundary cleanly, so this never surfaces
   // in the @xterm/headless test harness — only on real terminals.
-  const rightEdge = Math.max(3, cols - 1);
+  //
+  // Use `cols - 1` directly — NOT `Math.max(3, cols - 1)`: a floor would push
+  // rightEdge UP to 3 on a 1–3 column terminal, landing the bar back in the
+  // physical last column (the very bug above). For cols ≥ 3 the bar sits at
+  // cols-1 with the final column empty; below 3 the ' │' suffix cannot fit at
+  // all, so truncateDisplayWidth clamps content to '' (maxWidth ≤ 0) and the row
+  // degrades to a bare bar without throwing instead of chasing an impossible
+  // width.
+  const rightEdge = cols - 1;
   return displayRows
     .map((line) => {
       // Defensive clamp: an unbreakable token wider than innerW survives
