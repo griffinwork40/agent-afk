@@ -178,53 +178,37 @@ export function setInputMode(self: InputModeHost, mode: CompositorInputMode): vo
     self.repaint();
     return;
   }
-  // Invariant: a buffer queued during or after an ESC soft-stop MUST NOT
-  // auto-flush as a phantom next turn, AND `softStopped` MUST be cleared at
-  // this first →idle transition (NOT left to persist until the next arm).
-  // `softStopped` is set only by ESC, and its ONLY function is the once-only
-  // ESC guard during streaming (handleEscape ~line 1937); in idle, ESC
-  // returns early (line ~1920) before that guard, so a lingering value has
-  // no legitimate effect. We clear the queued FLAG here (buffer text +
-  // attachments preserved) so the post-ESC draft stays visible + editable in
-  // the idle input row and waits for an explicit Enter instead of
-  // auto-submitting — a stream interruption should preserve in-progress
-  // input, not fling it as a turn the user never confirmed. This fires at
-  // the dispose→idle transition (streaming→idle).
+  // ESC soft-stop, → idle: clear the once-only `softStopped` guard (bounding
+  // its lifetime to the stopped turn) and FALL THROUGH to the queued-flush
+  // branch below. We deliberately do NOT de-queue.
   //
-  // Why clear softStopped HERE (the fix): if it persists into the idle
-  // period, it poisons the user's NEXT message. After an EMPTY-buffer ESC
-  // (the common "just stop the agent" case) `queued` stays false, so the old
-  // `&& this.queued` guard never fired and softStopped survived the dispose.
-  // The user then types a new message in the brief inter-readLine window
-  // (onSubmit not yet installed → Enter queues it); the following
-  // readLine→idle would re-enter this guard (softStopped && queued both
-  // true) and SILENTLY DE-QUEUE the message — it "looks like it sends" but
-  // no turn starts, and the user must send again (a per-stop off-by-one that
-  // reads as session-wide lag). Dropping the `&& this.queued` condition and
-  // resetting softStopped here bounds its lifetime to the stopped turn, so
-  // idle-window submissions flush normally via the branch below.
+  // Behavior (Bug B fix): a message the user typed + Entered during the ESC
+  // interrupt window AUTO-SUBMITS as the next turn — identical to normal
+  // mid-turn type-ahead — matching the user's intent ("I stopped the agent,
+  // typed a message, hit Enter: send it"). The prior design de-queued the
+  // buffer to an editable draft that required a SECOND explicit Enter, which
+  // read as "looks like it sends but no turn starts, and I have to send again."
   //
-  // Without this guard at all: session.interrupt() is deferred to the next
-  // stream event (turn-handler.ts:236 / run-skill-dispatch-turn.ts:143), so
-  // the compositor stays in streaming mode for a network-latency window. An
-  // Enter pressed in that window queues the buffer; the widened any→idle
-  // flush below then auto-fires it as an unconfirmed turn, and every message
-  // the user types during THAT turn queues in turn — a perpetual
-  // input-lag-of-one (each message submits one turn late) for the rest of
-  // the session. See terminal-compositor.test.ts soft-stop drain tests.
+  // Why this is safe now: the soft-stop handler fires session.interrupt()
+  // SYNCHRONOUSLY on ESC (turn-handler.ts / run-skill-dispatch-turn.ts), so
+  // the stream halts promptly. The "perpetual input-lag-of-one" this branch
+  // previously guarded against came from the OLD deferred-interrupt window —
+  // the compositor lingered in streaming mode for a network round-trip, so
+  // every Enter queued instead of submitting and each message landed one turn
+  // late. With the synchronous interrupt that window is gone, so auto-flushing
+  // the queued buffer is just normal sequential-turn submission, not a phantom
+  // unconfirmed turn.
   //
-  // ESC-only: Ctrl+C intentionally uses the legacy path — handleInterrupt
-  // (~line 1937) queues the buffer and fires onCancel; the widened any→idle
-  // flush below auto-submits it as the next turn. ESC preserves the draft
-  // for explicit (manual) submission; Ctrl+C auto-submits it. (see handleInterrupt ~line 1937-1957)
+  // `softStopped` is set only by ESC; its remaining roles are the second-ESC
+  // no-op (handleEscape) and the idle→streaming reset above. Clearing it here
+  // keeps an EMPTY-buffer ESC from leaving it armed into the idle period.
   if (mode === 'idle' && self.softStopped) {
-    self.queued = false;
     self.softStopped = false;
-    // Always repaint: the `[queued]` glyph must clear even on an
-    // idle→idle transition (the flush branch below repaints
-    // unconditionally for the same reason).
-    self.repaint();
-    return;
+    // No early return: fall through so a queued buffer flushes via the branch
+    // below when onSubmit is installed (readLine→idle), or — at the
+    // dispose→idle transition where onSubmit is still null — stays queued for
+    // the next readLine→idle to flush. The streaming→idle repaint at the
+    // bottom of this function clears/refreshes the frame either way.
   }
   // → idle with queued buffer + handler: flush. Widened from
   // streaming→idle to any→idle to cover the inter-readLine race

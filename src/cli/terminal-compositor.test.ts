@@ -1300,11 +1300,10 @@ describe('TerminalCompositor', () => {
       for (const ch of 'wait') stdin.emit('keypress', ch, { name: ch, sequence: ch });
       expect(c.getBuffer()).toEqual({ text: 'wait', queued: false });
       // ESC soft-stop must mark the typed buffer queued so it survives the
-      // turn boundary (text is not dropped). Note: this is the state IMMEDIATELY
-      // after ESC; the queued flag is later cleared at the dispose→idle
-      // transition by the soft-stop drain guard (setInputMode) so the draft is
-      // preserved for EXPLICIT submission rather than auto-fired as a phantom
-      // turn — see the 'soft-stop drain' describe block below.
+      // turn boundary (text is not dropped). The queued flag is PRESERVED
+      // across the dispose→idle transition (Bug B fix: no de-queue) so the
+      // message auto-submits as the next turn at the following readLine→idle
+      // flush — see the 'soft-stop drain' describe block below.
       stdin.emit('keypress', undefined, { name: 'escape' });
       expect(onSoftStop).toHaveBeenCalledTimes(1);
       expect(c.getBuffer()).toEqual({ text: 'wait', queued: true });
@@ -1409,9 +1408,9 @@ describe('TerminalCompositor', () => {
     // ── Soft-stop drain (regression: ESC → perpetual input-lag-of-one) ──────
     //
     // Reported bug: after ESC (soft-stop), the user's next typed+Enter'd
-    // message appears to do nothing; the SUBSEQUENT message then submits the
-    // FIRST one, and every following Enter submits the PREVIOUS buffer — a
-    // perpetual off-by-one for the rest of the session.
+    // message appeared to do nothing — "it looks like it sends but no turn
+    // starts; I have to send a follow-up for it to respond to the first one,"
+    // then lag for the rest of the session.
     //
     // Root cause (two layers, both now fixed):
     //   1. session.interrupt() USED to be deferred to the next stream event,
@@ -1420,18 +1419,19 @@ describe('TerminalCompositor', () => {
     //      SYNCHRONOUSLY on ESC (turn-handler.ts / run-skill-dispatch-turn.ts),
     //      so the turn settles immediately and that window is closed at the
     //      source rather than merely survived.
-    //   2. Even within any residual window, an Enter hit the streaming queue
-    //      branch (queued=true, not fired); dispose() flipped to idle with
-    //      onSubmit still null → no flush → the buffer survived queued, and the
-    //      next readLine's widened any→idle flush auto-fired it as a phantom
-    //      turn the user never confirmed → perpetual off-by-one.
+    //   2. setInputMode's soft-stop guard USED to DE-QUEUE a buffer queued
+    //      during/after ESC — clearing the queued flag and holding the text as
+    //      an editable draft that needed a SECOND explicit Enter. That IS the
+    //      "looks like it sends but no turn starts" symptom: the user pressed
+    //      Enter, saw the echo, but no turn began.
     //
-    // Fix (defense-in-depth): setInputMode's soft-stop drain guard clears the
-    // queued FLAG (text preserved) on the first →idle transition while
-    // `softStopped` is true, so the buffer is held as an editable idle draft
-    // requiring an explicit Enter instead of auto-firing. With the synchronous
-    // interrupt above, this guard is now belt-and-suspenders rather than the
-    // sole defense.
+    // Fix (Bug B): the soft-stop guard NO LONGER de-queues. It clears the
+    // once-only `softStopped` flag (bounding its lifetime) and falls through,
+    // so a queued buffer — whether Entered during the interrupt window or
+    // preserved by handleEscape — AUTO-SUBMITS as the next turn via the widened
+    // any→idle flush, exactly like normal mid-turn type-ahead. Safe because the
+    // synchronous interrupt (layer 1) closes the window that would otherwise
+    // pile queued buffers into a perpetual off-by-one.
     //
     // Each test mirrors the production turn boundary using only the public
     // compositor API:
@@ -1440,7 +1440,7 @@ describe('TerminalCompositor', () => {
     //   readLine       → setOnSubmit(h) then setInputMode('idle')  [input-surface.ts:438,448]
     //   next turn arm  → setInputMode('streaming')         [stream-renderer.ts:352]
     describe('soft-stop drain', () => {
-      it('does NOT auto-flush a buffer typed during the interrupt window (no phantom turn)', async () => {
+      it('auto-flushes a buffer typed+Entered during the interrupt window as the next turn', async () => {
         const onSoftStop = vi.fn();
         const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop });
         await c.arm();
@@ -1458,23 +1458,18 @@ describe('TerminalCompositor', () => {
         stdin.emit('keypress', undefined, { name: 'return' });
         expect(c.getBuffer()).toEqual({ text: 'redirect', queued: true });
 
-        // dispose() flips to idle. The drain guard clears the queued flag but
-        // KEEPS the draft text — no flush (onSubmit is null here anyway).
+        // dispose() flips to idle. The soft-stop guard clears softStopped but
+        // PRESERVES the queued buffer (Bug B: no de-queue). onSubmit is null
+        // here, so no flush yet — the buffer stays queued for the next readLine.
         c.setInputMode('idle');
-        expect(c.getBuffer()).toEqual({ text: 'redirect', queued: false });
+        expect(c.getBuffer()).toEqual({ text: 'redirect', queued: true });
 
-        // readLine: install handler + setInputMode('idle'). The buffer must
-        // NOT auto-fire — softStopped is still true so the drain guard short-
-        // circuits the widened flush. The draft waits for an explicit Enter.
+        // readLine: install handler + setInputMode('idle'). softStopped was
+        // cleared at dispose, so the widened any→idle flush AUTO-SUBMITS the
+        // queued message as the next turn — no second Enter, no phantom lag.
         const onSubmit = vi.fn();
         c.setOnSubmit(onSubmit);
         c.setInputMode('idle');
-        expect(onSubmit).not.toHaveBeenCalled();
-        expect(c.getBuffer()).toEqual({ text: 'redirect', queued: false });
-
-        // Explicit Enter (idle + handler) submits the preserved draft exactly
-        // once, with its clean text.
-        stdin.emit('keypress', undefined, { name: 'return' });
         expect(onSubmit).toHaveBeenCalledTimes(1);
         expect(onSubmit).toHaveBeenCalledWith({ text: 'redirect', attachments: [] });
         expect(c.getBuffer()).toEqual({ text: '', queued: false });
@@ -1488,30 +1483,28 @@ describe('TerminalCompositor', () => {
         const submitTurn = (label: string): ReturnType<typeof vi.fn> => {
           // Turn arm.
           c.setInputMode('streaming');
-          // ESC mid-stream, then type a message + Enter during the drain.
+          // ESC mid-stream, then type a message + Enter during the interrupt window.
           stdin.emit('keypress', undefined, { name: 'escape' });
           for (const ch of label) stdin.emit('keypress', ch, { name: ch, sequence: ch });
           stdin.emit('keypress', undefined, { name: 'return' });
-          // dispose → idle (drain guard clears queued, preserves text).
-          c.setInputMode('idle');
-          // No stale text from a prior turn must remain: the buffer holds ONLY
+          // dispose → idle: softStopped cleared, queued buffer PRESERVED (no
+          // de-queue). No stale text from a prior turn: the buffer holds ONLY
           // this turn's message (regression: 'alphabeta' contamination).
-          expect(c.getBuffer()).toEqual({ text: label, queued: false });
-          // readLine: must NOT auto-fire.
+          c.setInputMode('idle');
+          expect(c.getBuffer()).toEqual({ text: label, queued: true });
+          // readLine: installing the handler + setInputMode('idle') AUTO-SUBMITS
+          // this turn's message exactly once — no second Enter, no off-by-one.
           const onSubmit = vi.fn();
           c.setOnSubmit(onSubmit);
           c.setInputMode('idle');
-          expect(onSubmit).not.toHaveBeenCalled();
-          // Explicit Enter fires exactly this message, exactly once.
-          stdin.emit('keypress', undefined, { name: 'return' });
           expect(onSubmit).toHaveBeenCalledTimes(1);
           expect(onSubmit).toHaveBeenCalledWith({ text: label, attachments: [] });
           c.setOnSubmit(null);
           return onSubmit;
         };
 
-        // Three sequential ESC-interrupted turns: each submits its OWN message
-        // on its OWN explicit Enter — no off-by-one, no accumulated stale text.
+        // Three sequential ESC-interrupted turns: each auto-submits its OWN
+        // message exactly once — no off-by-one, no accumulated stale text.
         submitTurn('alpha');
         submitTurn('beta');
         submitTurn('gamma');
@@ -1542,20 +1535,20 @@ describe('TerminalCompositor', () => {
         expect(onSubmit).toHaveBeenCalledWith({ text: 'ahead', attachments: [] });
       });
 
-      it('keeps the preserved draft editable in idle before explicit submission', async () => {
-        // Closes a coverage gap: after the drain guard preserves a draft, the
-        // user can keep editing it in idle mode; the eventual submission is the
-        // EDITED text, and editing leaves queued=false (no stale auto-flush).
+      it('keeps a typed-but-unconfirmed (no Enter) interrupt-window buffer editable in idle', async () => {
+        // A buffer typed during the interrupt window but NOT Entered stays
+        // queued=false, so it is preserved as an editable idle draft; the user
+        // can keep editing and the eventual submission is the EDITED text. Only
+        // a typed+Entered (or ESC-preserved) buffer auto-submits — see above.
         const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
         await c.arm();
         c.setInputMode('idle');
         c.setInputMode('streaming');
 
-        // ESC, then a partial message + Enter during the interrupt window.
+        // ESC (empty buffer), then a partial message WITHOUT Enter.
         stdin.emit('keypress', undefined, { name: 'escape' });
         for (const ch of 'redirec') stdin.emit('keypress', ch, { name: ch, sequence: ch });
-        stdin.emit('keypress', undefined, { name: 'return' });
-        c.setInputMode('idle'); // dispose → drain guard clears queued, keeps 'redirec'
+        c.setInputMode('idle'); // dispose → softStopped cleared; queued stays false
         expect(c.getBuffer()).toEqual({ text: 'redirec', queued: false });
 
         // readLine: handler installed, no auto-fire.
@@ -1574,30 +1567,32 @@ describe('TerminalCompositor', () => {
         expect(onSubmit).toHaveBeenCalledWith({ text: 'redirect more', attachments: [] });
       });
 
-      it('preserves a pre-ESC typed draft for explicit submission (not auto-fired)', async () => {
+      it('auto-submits a pre-ESC typed draft as the next turn (ESC-preserved buffer)', async () => {
         const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
         await c.arm();
         c.setInputMode('idle');
         c.setInputMode('streaming');
 
-        // Type a draft WITHOUT Enter, then ESC — the ESC handler marks it
-        // queued so the text survives the turn boundary.
+        // Type a draft WITHOUT Enter, then ESC — handleEscape marks it queued
+        // so the text survives the turn boundary AND auto-submits next turn
+        // (matches handleEscape's documented intent: "auto-submits it on the
+        // next turn — parity with the Ctrl+C branch").
         for (const ch of 'wait') stdin.emit('keypress', ch, { name: ch, sequence: ch });
         stdin.emit('keypress', undefined, { name: 'escape' });
         expect(c.getBuffer()).toEqual({ text: 'wait', queued: true });
 
-        // dispose → idle: drain guard clears the queued flag, keeps the draft.
+        // dispose → idle: softStopped cleared, queued buffer PRESERVED (no de-queue).
         c.setInputMode('idle');
-        expect(c.getBuffer()).toEqual({ text: 'wait', queued: false });
+        expect(c.getBuffer()).toEqual({ text: 'wait', queued: true });
 
-        // readLine: no auto-fire; the draft waits for an explicit Enter.
+        // readLine: the widened any→idle flush AUTO-SUBMITS the ESC-preserved
+        // buffer as the next turn — no explicit Enter needed.
         const onSubmit = vi.fn();
         c.setOnSubmit(onSubmit);
         c.setInputMode('idle');
-        expect(onSubmit).not.toHaveBeenCalled();
-        stdin.emit('keypress', undefined, { name: 'return' });
         expect(onSubmit).toHaveBeenCalledTimes(1);
         expect(onSubmit).toHaveBeenCalledWith({ text: 'wait', attachments: [] });
+        expect(c.getBuffer()).toEqual({ text: '', queued: false });
       });
 
       it('flushes a message typed in the idle window AFTER an empty-buffer ESC (no dropped message)', async () => {
