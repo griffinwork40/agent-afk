@@ -38,6 +38,8 @@ export const ToolCallCompletedPayloadSchema = z.object({
   isError: z.boolean(),
   truncated: z.boolean(),
   durationMs: z.number().nonnegative(),
+  /** Set when the event was produced by the repeat-loop circuit breaker. */
+  circuitBreaker: z.boolean().optional(),
   subagentId: z.string().optional(),
 });
 
@@ -249,6 +251,7 @@ export const CompactionPayloadPersistedSchema = z.object({
 
 export const ClosureReasonSchema = z.enum([
   'model_end_turn',
+  'truncated',
   'iteration_cap',
   'abort',
   'timeout',

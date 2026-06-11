@@ -18,16 +18,22 @@ import {
   resolveOpenAIAuth,
   formatAuthDiagnostic,
   type OpenAIAuthSource,
+  type AuthResolverDeps,
 } from '../../agent/providers/openai-compatible/auth.js';
 
 /**
  * Build the human-readable result of `afk provider auth diagnose`. Pure
  * function so it's trivially testable. Caller writes to stdout.
+ *
+ * @param explicitConfigKey - `AgentConfig.apiKey` override, if any.
+ * @param deps - Optional env + fs injection point (tests pass a hermetic stub
+ *   to avoid reading real host credentials from `~/.codex/auth.json`).
  */
 export function buildProviderAuthDiagnose(
   explicitConfigKey: string | undefined,
+  deps?: AuthResolverDeps,
 ): { source: OpenAIAuthSource; message: string; exitCode: number; last4?: string } {
-  const resolution = resolveOpenAIAuth(explicitConfigKey);
+  const resolution = resolveOpenAIAuth(explicitConfigKey, deps);
   const message = formatAuthDiagnostic(resolution);
   // Exit nonzero when there's no usable auth so this can drive shell
   // scripts ("ensure OpenAI is configured before running").

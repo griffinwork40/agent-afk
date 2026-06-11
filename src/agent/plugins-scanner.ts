@@ -1,7 +1,7 @@
 /**
  * Local plugin discovery for AFK sessions.
  *
- * Marketplace-based install paths (`/plugin marketplace add …`) still hardcode
+ * Marketplace-based install paths (`/marketplace install …`) still hardcode
  * to `~/.claude/plugins/` upstream (anthropics/claude-code#15071), so AFK
  * cannot rely on Claude Code to populate its own plugin home. Instead, AFK
  * scans `~/.afk/plugins/` at session construction and passes every discovered

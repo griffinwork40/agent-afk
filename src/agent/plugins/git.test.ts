@@ -91,6 +91,27 @@ describe('git wrapper', () => {
     expect(calls[0]!.cwd).toBe('/tmp/repo');
   });
 
+  it('checkout adds --force before the ref when opts.force is set', async () => {
+    const { runner, calls } = makeRunner(() => ({}));
+    await checkout('/tmp/repo', 'refs/remotes/origin/main', { runner, force: true });
+    expect(calls).toHaveLength(1);
+    expect(gitVerbArgs(calls[0]!.args)).toEqual([
+      'checkout',
+      '--detach',
+      '--force',
+      'refs/remotes/origin/main',
+    ]);
+    // The ref MUST stay the final positional arg — the update paths assert
+    // `checkout[checkout.length - 1]` to read the checked-out ref.
+    expect(calls[0]!.args[calls[0]!.args.length - 1]).toBe('refs/remotes/origin/main');
+  });
+
+  it('checkout omits --force by default', async () => {
+    const { runner, calls } = makeRunner(() => ({}));
+    await checkout('/tmp/repo', 'v1.2.3', { runner });
+    expect(gitVerbArgs(calls[0]!.args)).not.toContain('--force');
+  });
+
   it('getCommitSha returns trimmed stdout', async () => {
     const { runner } = makeRunner(() => ({ stdout: 'abc123\n' }));
     expect(await getCommitSha('/tmp/repo', { runner })).toBe('abc123');

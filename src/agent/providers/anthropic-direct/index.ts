@@ -130,6 +130,15 @@ export interface AnthropicDirectProviderOptions {
    */
   readOnlyMemory?: boolean;
   /**
+   * When true, the per-query {@link SessionToolDispatcher} blocks mutating
+   * `bash` commands (read-only recon — git status/log/diff, ls, cat, find,
+   * grep — is allowed). Set by `createChildProviderFactory` /
+   * `buildReadOnlyReconProvider` for a read-only skill's forked child, paired
+   * with `permissions.allowedTools = RECON_ALLOWED_TOOLS` (which strips
+   * `write_file`/`edit_file`). Defaults to false.
+   */
+  readOnlyBash?: boolean;
+  /**
    * Optional MCP manager. When provided, every tool exposed by a
    * `connected` MCP server is merged into the provider's tool schema list
    * and the per-query dispatcher's handler map. Pre/PostToolUse hooks
@@ -162,6 +171,8 @@ export class AnthropicDirectProvider implements ModelProvider {
   private readonly composeExecutor: import('../../tools/compose-executor.js').ComposeExecutor | undefined;
   private readonly surface: string;
   private readonly readOnlyMemory: boolean;
+  /** When true, the per-query dispatcher blocks mutating bash (read-only skill child). */
+  private readonly readOnlyBash: boolean;
   /** When set, MCP tools are merged into `schemas` + dispatcher handlers per query. */
   private readonly mcpManager: import('../../mcp/index.js').McpManager | undefined;
   /**
@@ -241,6 +252,7 @@ export class AnthropicDirectProvider implements ModelProvider {
     this.composeExecutor = opts.composeExecutor;
     this.surface = opts.surface ?? 'cli';
     this.readOnlyMemory = opts.readOnlyMemory === true;
+    this.readOnlyBash = opts.readOnlyBash === true;
     this.mcpManager = opts.mcpManager;
     if (opts.mcpManager) {
       // Subscribe to the refresh hook to invalidate the MCP tool/handler caches.
@@ -342,6 +354,10 @@ export class AnthropicDirectProvider implements ModelProvider {
       sessionId: opts?.sessionId,
       parentSessionId: opts?.parentSessionId,
       ...(opts?.traceWriter ? { traceWriter: opts.traceWriter } : {}),
+      // Read-only-skill bash gate: forwarded from the provider's stored flag
+      // (set by createChildProviderFactory / buildReadOnlyReconProvider) so a
+      // read-only skill's forked child can't run mutating shell commands.
+      readOnlyBash: this.readOnlyBash,
     });
   }
 
@@ -902,12 +918,54 @@ function resolveAutoCompactThreshold(
   return t;
 }
 
-function resolveMaxTokens(config: AgentConfig, model: string): number {
+/**
+ * Module-scope dedupe for budget-clamp warnings, keyed so a single
+ * misconfiguration warns once per process rather than once per turn.
+ */
+const warnedTokenClamps = new Set<string>();
+
+/**
+ * Fraction of `max_tokens` reserved for the visible reply when thinking is
+ * explicitly enabled. Thinking tokens share the output budget on the Messages
+ * API, so without a reserve the thinking budget can consume nearly all of
+ * `max_tokens` and starve the final answer (a budget of `maxTokens - 1` leaves
+ * one token for the reply). 0.25 keeps at least a quarter of the budget for the
+ * reply while leaving the bulk for reasoning.
+ */
+const THINKING_OUTPUT_RESERVE_FRACTION = 0.25;
+
+/**
+ * Resolve the effective Messages-API `max_tokens`, clamped to the model's
+ * documented output ceiling (`maxOutputTokensFor`).
+ *
+ * - A finite, positive `config.maxOutputTokens` is used as-is when it fits the
+ *   ceiling and clamped down (with a one-time warning) when it exceeds it.
+ *   Without the clamp an over-large value reaches the wire verbatim and the
+ *   API rejects the request with HTTP 400.
+ * - Any non-finite or non-positive value — including the
+ *   `Number.POSITIVE_INFINITY` "model max" sentinel that `parseMaxOutputTokens`
+ *   emits for `--max-output-tokens max` — falls back to the model ceiling.
+ *
+ * Exported for unit testing; the production caller is the query builder above.
+ */
+export function resolveMaxTokens(config: AgentConfig, model: string): number {
+  const ceiling = maxOutputTokensFor(model);
   const v = config.maxOutputTokens;
   if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
-    return Math.floor(v);
+    const requested = Math.floor(v);
+    if (requested > ceiling) {
+      const key = `max:${model}:${requested}`;
+      if (!warnedTokenClamps.has(key)) {
+        warnedTokenClamps.add(key);
+        console.warn(
+          `[afk] maxOutputTokens ${requested} exceeds the ${model} output ceiling (${ceiling}); clamping to ${ceiling}.`,
+        );
+      }
+      return ceiling;
+    }
+    return requested;
   }
-  return maxOutputTokensFor(model);
+  return ceiling;
 }
 
 function resumeHistoryToMessages(history: ResumeHistoryTurn[] | undefined): MessageParam[] | undefined {
@@ -939,7 +997,7 @@ function resumeHistoryToMessages(history: ResumeHistoryTurn[] | undefined): Mess
  *    *required* to surface visible reasoning.  On earlier models it is
  *    harmless — the server already defaults to visible delivery.
  */
-function resolveThinkingParam(
+export function resolveThinkingParam(
   tc: ThinkingConfig,
   maxTokens: number,
   model?: string,
@@ -959,12 +1017,32 @@ function resolveThinkingParam(
         // Opus 4.7 does not accept {type:'enabled'}; silently promote to adaptive.
         return { type: 'adaptive', display: 'summarized' } as ThinkingConfigParam;
       }
-      const budget = tc.budgetTokens !== undefined && Number.isFinite(tc.budgetTokens)
-        ? Math.min(tc.budgetTokens, maxTokens - 1)
-        : maxTokens - 1;
+      // Thinking tokens share the `max_tokens` budget, so reserve a slice for
+      // the visible reply and cap the thinking budget to fit. The cap applies
+      // to caller-supplied budgets too — an oversized explicit budget is
+      // clamped (with a one-time warning) rather than honoured blindly.
+      // `budget_tokens` must satisfy 1024 <= budget < max_tokens; when the
+      // reserve cannot be honoured (very small max_tokens) the upper bound
+      // wins so the request still clears the `< max_tokens` constraint.
+      const reserve = Math.floor(maxTokens * THINKING_OUTPUT_RESERVE_FRACTION);
+      const maxBudget = Math.max(1024, maxTokens - 1 - reserve);
+      const explicit =
+        tc.budgetTokens !== undefined && Number.isFinite(tc.budgetTokens)
+          ? Math.floor(tc.budgetTokens)
+          : undefined;
+      const budget = Math.min(Math.max(explicit ?? maxBudget, 1024), maxBudget);
+      if (explicit !== undefined && explicit > maxBudget) {
+        const key = `think:${model ?? 'default'}:${explicit}:${maxTokens}`;
+        if (!warnedTokenClamps.has(key)) {
+          warnedTokenClamps.add(key);
+          console.warn(
+            `[afk] thinking budgetTokens ${explicit} leaves too little of max_tokens ${maxTokens} for the reply; clamping to ${maxBudget}.`,
+          );
+        }
+      }
       return {
         type: 'enabled',
-        budget_tokens: Math.max(budget, 1024),
+        budget_tokens: budget,
         display: 'summarized',
       } as ThinkingConfigParam;
     }

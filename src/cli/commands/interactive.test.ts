@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { StreamingMarkdownRenderer } from '../markdown-stream.js';
 import { renderMarkdownToTerminal } from '../formatter.js';
 import { palette } from '../palette.js';
-import { formatToolResultLine, isAutonameEnabled, formatAutonameSkipReason } from './interactive.js';
+import { formatToolResultLine, isAutonameEnabled, formatAutonameSkipReason, startupHintLine } from './interactive.js';
 import type { ToolResultChunk } from '../../agent/types/message-types.js';
 import type { CliOptions } from './interactive/shared.js';
 import type { CliConfig } from '../config.js';
@@ -544,6 +544,25 @@ describe('interactive command - streaming logic', () => {
 
     it('renders unknown gracefully', () => {
       expect(formatAutonameSkipReason('unknown', undefined)).toBe('unknown reason');
+    });
+  });
+
+  describe('startupHintLine — first-session welcome hint', () => {
+    it('keeps the essential first-session controls', () => {
+      const hint = startupHintLine();
+      expect(hint).toContain('/help');
+      expect(hint).toContain('/model');
+      expect(hint).toContain('Esc to interrupt');
+      expect(hint).toContain('/exit to quit');
+    });
+
+    it('omits /resume — useless to a new user, redundant when resuming', () => {
+      expect(startupHintLine()).not.toContain('/resume');
+    });
+
+    it('stays compact (≤ 4 dot-separated items) so the busiest startup line is scannable', () => {
+      const items = startupHintLine().split(' · ');
+      expect(items.length).toBeLessThanOrEqual(4);
     });
   });
 

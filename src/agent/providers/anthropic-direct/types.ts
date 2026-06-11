@@ -92,6 +92,9 @@ export interface ToolResult {
    * caller code).
    */
   truncated?: boolean;
+  /** True when this result is a synthetic repeat-loop circuit-breaker block,
+   *  not a real tool outcome — lets trace consumers exclude it from failure stats. */
+  circuitBreaker?: boolean;
   render?: RenderHints;
   /**
    * Structured test-runner result parsed from bash output by

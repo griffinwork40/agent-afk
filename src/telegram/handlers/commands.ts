@@ -20,6 +20,7 @@ import {
   formatSystemError,
 } from '../formatter.js';
 import { providerForModel } from '../../agent/providers/index.js';
+import { slotForInput } from '../../agent/session/model-slots.js';
 import type { AgentModelInput } from '../../agent/types.js';
 import { slugifySessionName } from '../../cli/session-name.js';
 import { formatResumeCommand } from '../../cli/resume-command.js';
@@ -27,7 +28,7 @@ import { formatResumeCommand } from '../../cli/resume-command.js';
 type LogFn = (...args: unknown[]) => void;
 
 /** Canonical short aliases accepted by /model and the inline keyboard. */
-export const MODEL_ALIASES_HINT = ['opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku'] as const;
+export const MODEL_ALIASES_HINT = ['small', 'medium', 'large', 'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable'] as const;
 
 /**
  * Handle /clear command (SDK /clear - clear conversation history)
@@ -127,15 +128,16 @@ export async function handleModelSwitch(
 
   const modelArg = args[0];
   if (!modelArg) {
-    await ctx.reply(formatError('Please specify a model: opus, opus_1m, sonnet, sonnet_1m, haiku, or an org/model id'));
+    await ctx.reply(formatError('Please specify a model: small, medium, large, opus, sonnet, haiku, or an org/model id'));
     return;
   }
 
   const model = modelArg.toLowerCase() as AgentModelInput;
   const isKnownAlias = MODEL_ALIASES_HINT.includes(model as (typeof MODEL_ALIASES_HINT)[number]);
+  const isSlotName = slotForInput(model) !== undefined;
   const isHFStyleId = providerForModel(model) === 'openai-compatible';
 
-  if (!isKnownAlias && !isHFStyleId) {
+  if (!isKnownAlias && !isSlotName && !isHFStyleId) {
     await ctx.reply(
       formatError(`Invalid model: ${modelArg}\nAliases: ${MODEL_ALIASES_HINT.join(', ')}, or org/model HF id`)
     );

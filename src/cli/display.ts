@@ -96,6 +96,14 @@ export function padDisplay(
   return padDisplayRight(text, width);
 }
 
+// OSC 8 hyperlink tokens: `ESC ] 8 ; params ; URI (BEL|ST)`. An OPEN has a
+// non-empty URI; a CLOSE has an empty one (`ESC ]8;;ST`). Truncation must
+// track open/close state — see truncateDisplayWidth below.
+const OSC8_TOKEN_RE = /^\x1b\]8;[^;\x07\x1b]*;(.*?)(?:\x07|\x1b\\)$/s;
+
+/** OSC 8 close sequence (ST-terminated) — ends the current hyperlink span. */
+const OSC8_CLOSE = '\x1b]8;;\x1b\\';
+
 export function truncateDisplayWidth(
   text: string,
   maxWidth: number,
@@ -109,11 +117,20 @@ export function truncateDisplayWidth(
   let width = 0;
   let out = '';
   let sawAnsi = false;
+  let openHyperlink = false;
 
   for (const token of tokenizeAnsi(text)) {
     if (token.type === 'ansi') {
       out += token.value;
       sawAnsi = true;
+      // Track OSC 8 open/close state: if the truncation cut lands between a
+      // hyperlink's open and close sequences, the dropped close would leave
+      // the link span unterminated and everything rendered AFTER this string
+      // (padding, the next lane row, …) would become part of the link
+      // ("link bleed"). The trailing `\x1b[0m` SGR reset does NOT close an
+      // OSC 8 span — only `ESC ]8;;ST` does — so we re-close explicitly.
+      const osc8 = OSC8_TOKEN_RE.exec(token.value);
+      if (osc8) openHyperlink = (osc8[1] ?? '').length > 0;
       continue;
     }
     const nextWidth = width + displayWidth(token.value);
@@ -122,7 +139,9 @@ export function truncateDisplayWidth(
     width = nextWidth;
   }
 
-  return out + ellipsis + (sawAnsi ? '\x1b[0m' : '');
+  // Ellipsis goes INSIDE a still-open link span so the truncated remnant
+  // stays clickable end-to-end, then the span is closed before the reset.
+  return out + ellipsis + (openHyperlink ? OSC8_CLOSE : '') + (sawAnsi ? '\x1b[0m' : '');
 }
 
 function clampIndex(index: number, length: number): number {

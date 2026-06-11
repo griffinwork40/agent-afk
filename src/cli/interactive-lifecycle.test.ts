@@ -55,6 +55,7 @@ describe('interactive bootstrap status line hooks', () => {
       findClaudeExecutable: vi.fn(() => '/usr/bin/claude'),
       loadSystemPrompt: vi.fn(() => undefined),
       loadConfigSystemPrompt: vi.fn(() => undefined),
+      resolveBaseSystemPrompt: vi.fn(() => ({ prompt: undefined, source: 'none' })),
     }));
     vi.doMock('./status-line.js', () => ({
       StatusLine: vi.fn(() => statusLine),
@@ -203,6 +204,7 @@ describe('interactive bootstrap — P1: suggestBaseUrl mirrors openaiBaseUrl', (
       findClaudeExecutable: vi.fn(() => '/usr/bin/claude'),
       loadSystemPrompt: vi.fn(() => undefined),
       loadConfigSystemPrompt: vi.fn(() => undefined),
+      resolveBaseSystemPrompt: vi.fn(() => ({ prompt: undefined, source: 'none' })),
     }));
     vi.doMock('./status-line.js', () => ({
       StatusLine: vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), repaint: vi.fn() })),

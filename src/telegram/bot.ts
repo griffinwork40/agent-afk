@@ -17,6 +17,8 @@ import { FARM_CALLBACK_PREFIX } from './farm-callback-data.js';
 import { ELICITATION_CALLBACK_PREFIX } from './elicitation-callback-data.js';
 import { makeTelegramElicitationHandler } from './elicitation-handler.js';
 import { elicitationRouter } from '../agent/elicitation-router.js';
+import { SessionWatchManager, resolveWatchTarget, listWatchableSessions } from './watch.js';
+import { splitLongMessage } from './formatter.js';
 
 /**
  * Bot configuration options
@@ -46,6 +48,7 @@ export class TelegramBot {
   private running = false;
   private registeredCommandChats = new Set<number>();
   private messageHandler: MessageHandler;
+  private watchManager: SessionWatchManager;
 
   constructor(options: BotOptions) {
     this.options = options;
@@ -57,6 +60,7 @@ export class TelegramBot {
       this.registeredCommandChats,
       this.log.bind(this)
     );
+    this.watchManager = new SessionWatchManager(this.log.bind(this));
 
     this.setupHandlers();
   }
@@ -115,6 +119,51 @@ export class TelegramBot {
     this.bot.command('name', (ctx) =>
       handleName(ctx, this.sessionManager, this.log.bind(this))
     );
+    // /watch <session> — live-tail another surface's session ledger into
+    // this chat. /watch with no arg lists watchable sessions. The ledger is
+    // written by every top-level AgentSession (CLI REPL, daemon, one-shot),
+    // so this is the CLI→Telegram half of cross-surface continuity.
+    this.bot.command('watch', async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (!chatId) {
+        await ctx.reply(formatError('Could not identify chat'));
+        return;
+      }
+      const text = (ctx.message && 'text' in ctx.message ? ctx.message.text : '') ?? '';
+      const arg = text.split(/\s+/).slice(1).join(' ').trim();
+      try {
+        if (!arg) {
+          await ctx.reply(await listWatchableSessions());
+          return;
+        }
+        const sessionId = await resolveWatchTarget(arg);
+        if (!sessionId) {
+          await ctx.reply(
+            `No session ledger found for "${arg}". Use /watch with no argument to list watchable sessions.`,
+          );
+          return;
+        }
+        const send = async (msg: string): Promise<void> => {
+          for (const part of splitLongMessage(msg)) {
+            await ctx.telegram.sendMessage(chatId, part);
+          }
+        };
+        this.watchManager.start(chatId, sessionId, send);
+        await ctx.reply(`📡 Watching ${sessionId} — new activity will stream here. /unwatch to stop.`);
+      } catch (error) {
+        this.log('Watch error:', error);
+        await ctx.reply(formatError(error as Error));
+      }
+    });
+    this.bot.command('unwatch', async (ctx) => {
+      const chatId = ctx.chat?.id;
+      if (!chatId) {
+        await ctx.reply(formatError('Could not identify chat'));
+        return;
+      }
+      const stopped = this.watchManager.stop(chatId);
+      await ctx.reply(stopped ? `Stopped watching ${stopped}.` : 'Not watching anything.');
+    });
 
     this.bot.on('text', (ctx) => this.messageHandler.handle(ctx));
 
@@ -212,6 +261,8 @@ export class TelegramBot {
       { command: 'model', description: 'Switch Claude model (opus/sonnet/haiku)' },
       { command: 'cd', description: 'Show or change session working directory' },
       { command: 'name', description: 'Show or set the session name' },
+      { command: 'watch', description: 'Live-tail a CLI session from this chat' },
+      { command: 'unwatch', description: 'Stop watching a session' },
     ]);
 
     this.running = true;
@@ -241,6 +292,9 @@ export class TelegramBot {
 
     this.log('Uninstalling elicitation handler...');
     elicitationRouter.uninstall();
+
+    this.log('Stopping session watches...');
+    await this.watchManager.stopAll();
 
     this.log('Closing sessions...');
     await this.sessionManager.closeAll();

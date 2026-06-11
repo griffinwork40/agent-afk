@@ -34,28 +34,34 @@ interface KindStyle {
   affordance: string;
 }
 
+// Invariant: affordance strings must be ASCII-only (no em-dash `—`, en-dash,
+// `…`, `·`, or other East-Asian-Width "Ambiguous" glyphs). The affordance row
+// is padded to the full card width; `string-width` counts an ambiguous glyph
+// as 1 column, but terminals/fonts that render it as 2 push the row 1 column
+// past the right border, wrapping the trailing `│` and breaking the box. Use
+// ASCII `-` for dashes. (Chip glyphs ✓/⊘/?/⏸ are NOT ambiguous — verified.)
 const STYLES: Record<TerminalKind, KindStyle> = {
   done: {
     color: palette.success,
     chip: '✓ Done',
-    affordance: 'Objective satisfied — review evidence and close.',
+    affordance: 'Objective satisfied - review evidence and close.',
   },
   blocked: {
     color: palette.error,
     chip: '⊘ Blocked',
-    affordance: 'External dependency — unblock above to resume.',
+    affordance: 'External dependency - unblock above to resume.',
   },
   asking: {
     color: palette.warning,
     chip: '? Asking',
-    affordance: 'Waiting on you — answer above to continue.',
+    affordance: 'Waiting on you - answer above to continue.',
   },
   interrupted: {
     // Neutral terminal state — see verdict-ledger.ts for rationale. Meta
     // grey conveys "this happened, low salience," not "informational event."
     color: palette.meta,
     chip: '⏸ Interrupted',
-    affordance: 'Halted with state preserved — resume when ready.',
+    affordance: 'Halted with state preserved - resume when ready.',
   },
 };
 
@@ -160,7 +166,12 @@ function collectRows(state: TerminalState): Row[] {
     case 'done':
       push('done', state.whatWasDone);
       push('evidence', state.evidence);
-      push('deferred', state.deferred);
+      // Skip a deferred row that merely echoes the done field — models
+      // sometimes emit identical text for both, producing a confusing
+      // duplicate row in the card.
+      if (state.deferred?.trim() !== state.whatWasDone?.trim()) {
+        push('deferred', state.deferred);
+      }
       break;
     case 'blocked':
       push('blocks', state.whatBlocks);

@@ -20,7 +20,7 @@ import { renderDebugBanner } from '../../debug-banner.js';
 import { isDebugEnabled, debugLog } from '../../../utils/debug.js';
 import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
-import { togglePlanMode, flushPendingPlanExit } from '../../plan-mode-toggle.js';
+import { togglePlanMode } from '../../plan-mode-toggle.js';
 import {
   autoRegisterPluginPassthroughs,
   getPluginShadowingNoticeLines,
@@ -258,14 +258,10 @@ export async function runReplLoop(
     onShiftTab: () => {
       // Replicated from the user-turn onShiftTab handler below — the
       // persistent compositor uses ONE onShiftTab across both phases
-      // (plan-mode toggle is REPL-global, not turn-scoped).
-      const s = ctx.slashCtx;
-      if (s.stats.planMode && s.stats.pendingPlanExit) {
-        s.stats.pendingPlanExit = false;
-        togglePlanMode(s, false, { closureSummarySkipped: true }).catch(() => {});
-      } else {
-        togglePlanMode(s).catch(() => {});
-      }
+      // (plan-mode toggle is REPL-global, not turn-scoped). Shift+Tab is a
+      // raw flip with no seeded turn: the "exit plan mode without saving or
+      // implementing" escape hatch (cf. `/plan off`, which saves + implements).
+      togglePlanMode(ctx.slashCtx).catch(() => {});
       ctx.statusLine.rearm();
     },
     // StatusLine doubles as DECSTBM scroll-region guard so commitAbove
@@ -330,6 +326,7 @@ export async function runReplLoop(
   // Invariant: install the REPL elicitation handler AFTER armCompositor
   // resolves so it routes through the persistent compositor's onSubmit
   // path (single stdin consumer) rather than through `rl.question()`.
+  // (also enforced structurally by StdinClaim — see src/cli/input/stdin-claim.ts)
   //
   // External constraint (single-consumer stdin): when the TerminalCompositor
   // is armed, it owns a raw-mode `keypress` listener on process.stdin and
@@ -442,6 +439,22 @@ export async function runReplLoop(
   // turn is silently dropped at the compositor's onSoftStop because
   // the surface's softStopHandler ref stays null.
   ctx.slashCtx.setSoftStopHandler = (handler) => surface.setSoftStopHandler(handler);
+  // Mirror the TurnHandles.onStageChange / onContextProgress wiring (see the
+  // runTurn handles object below) onto SlashContext so skill-dispatch turns
+  // (`/review`, `/mint`, plugin skills) drive the SAME footer rails as normal
+  // turns. Without these, the LoopStageBar stays frozen at "observe" and the
+  // status line stays at 0%/$0.00 for the entire skill turn — the renderer
+  // built by createSkillRenderer had no callback to fire.
+  ctx.slashCtx.onStageChange = (stage) => loopStageBar?.repaint(stage);
+  ctx.slashCtx.onContextProgress = async () => {
+    await ctx.contextSampler.refresh();
+    ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler));
+  };
+  // Transcript parity for skill turns: runSkillDispatchTurn appends the
+  // completed `/skill args → assistant text` exchange through this handle,
+  // matching the normal-turn append at onTurnComplete below. Without it,
+  // skill-turn output is absent from the autosaved markdown transcript.
+  ctx.slashCtx.transcript = transcript;
 
   // Wire the armed surface into the elicitation handler's compositor ref so
   // ask_question suspend/resume can yield stdin raw-mode to rl.question.
@@ -700,22 +713,11 @@ export async function runReplLoop(
           promptFn: () => buildPrompt(ctx.stats.model, ctx.stats.planMode),
           onSigint: sigintHandler,
           onShiftTab: () => {
-            // Shift+Tab is the keyboard speed lane. When a closure exit
-            // is pending, route through force-exit so:
-            //   1. `pendingPlanExit` is cleared (otherwise the next
-            //      onAfterTurn would re-fire flushPendingPlanExit and
-            //      emit a second OFF line on an already-default mode).
-            //   2. The OFF copy distinguishes force-exit from a normal
-            //      exit so the user knows the closure summary was
-            //      skipped.
-            // Otherwise (no pending), this is a plain toggle.
-            const s = ctx.slashCtx;
-            if (s.stats.planMode && s.stats.pendingPlanExit) {
-              s.stats.pendingPlanExit = false;
-              togglePlanMode(s, false, { closureSummarySkipped: true }).catch(() => {});
-            } else {
-              togglePlanMode(s).catch(() => {});
-            }
+            // Shift+Tab is the keyboard speed lane: a raw plan-mode flip with
+            // no seeded turn. It exits plan mode WITHOUT saving or implementing
+            // the plan — the manual-takeover escape hatch. (`/plan off`, by
+            // contrast, flips and then seeds a save-and-implement turn.)
+            togglePlanMode(ctx.slashCtx).catch(() => {});
             ctx.statusLine.rearm();
           },
         });
@@ -938,9 +940,6 @@ export async function runReplLoop(
         },
         async onAfterTurn() {
           await ctx.contextSampler.onTurn(ctx.stats.totalTurns);
-          // Closure-ritual completion: if `/plan off` deferred the flip,
-          // the closure response has now landed — flush the pending exit.
-          await flushPendingPlanExit(ctx.slashCtx);
           ctx.statusLine.rearm();
           // Reset the loop-stage bar to 'observing' so the footer rail shows
           // a clean "waiting" state between turns rather than the last active

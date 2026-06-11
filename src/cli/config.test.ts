@@ -7,6 +7,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { join } from 'path';
 import { loadConfig, isValidModel, getModelId, _resetConfigCache } from './config.js';
+import {
+  DEFAULT_SLOT_BINDINGS,
+  getSlotBindings,
+  resetSlotBindings,
+  resolveModelInput,
+} from '../agent/session/model-slots.js';
 import { resolveSuggestGhost } from './commands/interactive/repl-loop.js';
 
 // Mock dotenv to prevent .env from polluting test env. The repo's .env
@@ -72,6 +78,7 @@ describe('Config Loader', () => {
       expect(isValidModel('sonnet')).toBe(true);
       expect(isValidModel('sonnet_1m')).toBe(true);
       expect(isValidModel('haiku')).toBe(true);
+      expect(isValidModel('fable')).toBe(true);
     });
 
     it('should reject invalid model names', () => {
@@ -88,6 +95,7 @@ describe('Config Loader', () => {
       expect(getModelId('sonnet')).toBe('claude-sonnet-4-6');
       expect(getModelId('sonnet_1m')).toBe('claude-sonnet-4-6');
       expect(getModelId('haiku')).toBe('claude-haiku-4-5-20251001');
+      expect(getModelId('fable')).toBe('claude-fable-5');
     });
   });
 
@@ -480,6 +488,72 @@ describe('Config Loader', () => {
       const config = loadConfig();
       expect(config.systemPrompt).toBeUndefined();
       expect(config.systemPromptSource).toBeUndefined();
+    });
+  });
+
+  describe('model slots (afk.config.json models block)', () => {
+    const mockedExistsSync = () => vi.mocked(fs.existsSync);
+    const mockedReadFileSync = () => vi.mocked(fs.readFileSync);
+    const cwdConfigJson = join(process.cwd(), 'afk.config.json');
+
+    const ENV = ['AFK_MODEL', 'CLAUDE_MODEL', 'AFK_MODEL_SMALL', 'AFK_MODEL_MEDIUM', 'AFK_MODEL_LARGE'];
+
+    function mockConfig(json: unknown): void {
+      mockedExistsSync().mockImplementation((p) => {
+        const s = String(p);
+        if (s === cwdConfigJson) return true;
+        if (s.endsWith('AFK.md') || s.endsWith('afk.config.json')) return false;
+        return realFsModule.__realExistsSync(p as fs.PathLike);
+      });
+      mockedReadFileSync().mockImplementation((p, ...args) => {
+        if (String(p) === cwdConfigJson) return JSON.stringify(json);
+        return (realFsModule.__realReadFileSync as Function)(p, ...args);
+      });
+    }
+
+    beforeEach(() => {
+      _resetConfigCache();
+      resetSlotBindings();
+      for (const k of ENV) delete process.env[k];
+    });
+
+    afterEach(() => {
+      _resetConfigCache();
+      resetSlotBindings();
+      for (const k of ENV) delete process.env[k];
+      mockedExistsSync().mockImplementation(realFsModule.__realExistsSync);
+      mockedReadFileSync().mockImplementation(realFsModule.__realReadFileSync);
+    });
+
+    it('defaults to the built-in tier bindings when no models block is present', () => {
+      mockConfig({});
+      const config = loadConfig();
+      expect(config.models).toEqual(DEFAULT_SLOT_BINDINGS);
+      expect(getSlotBindings()).toEqual(DEFAULT_SLOT_BINDINGS);
+    });
+
+    it('parses bare-string and object bindings and installs them globally', () => {
+      mockConfig({
+        models: {
+          small: 'gpt-4o-mini',
+          medium: { id: 'claude-sonnet-4-6', name: 'balanced' },
+        },
+      });
+      const config = loadConfig();
+      expect(config.models?.small).toEqual({ id: 'gpt-4o-mini' });
+      expect(config.models?.medium).toEqual({ id: 'claude-sonnet-4-6', name: 'balanced' });
+      expect(config.models?.large).toEqual(DEFAULT_SLOT_BINDINGS.large);
+      // Installed process-globally → the resolver sees the rebinding + custom name.
+      expect(resolveModelInput('small')).toBe('gpt-4o-mini');
+      expect(resolveModelInput('balanced')).toBe('claude-sonnet-4-6');
+    });
+
+    it('lets AFK_MODEL_* env override the file binding', () => {
+      process.env.AFK_MODEL_SMALL = 'o4-mini';
+      mockConfig({ models: { small: { id: 'gpt-4o-mini', name: 'fast' } } });
+      const config = loadConfig();
+      expect(config.models?.small).toEqual({ id: 'o4-mini', name: 'fast' });
+      expect(resolveModelInput('fast')).toBe('o4-mini');
     });
   });
 });

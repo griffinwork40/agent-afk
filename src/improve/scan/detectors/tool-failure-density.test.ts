@@ -42,7 +42,13 @@ function resetSeq(): void {
 function toolPair(
   toolUseId: string,
   name: string,
-  opts: { isError?: boolean; truncated?: boolean; durationMs?: number; resultBytes?: number } = {},
+  opts: {
+    isError?: boolean;
+    truncated?: boolean;
+    durationMs?: number;
+    resultBytes?: number;
+    circuitBreaker?: boolean;
+  } = {},
 ): string[] {
   const started = JSON.stringify({
     ts: new Date(1_700_000_000_000 + seqCounter * 1000).toISOString(),
@@ -50,19 +56,21 @@ function toolPair(
     kind: 'tool_call',
     payload: { phase: 'started', toolUseId, name, inputBytes: 100 },
   });
+  const completedPayload: Record<string, unknown> = {
+    phase: 'completed',
+    toolUseId,
+    name,
+    resultBytes: opts.resultBytes ?? 200,
+    isError: opts.isError ?? false,
+    truncated: opts.truncated ?? false,
+    durationMs: opts.durationMs ?? 50,
+  };
+  if (opts.circuitBreaker === true) completedPayload['circuitBreaker'] = true;
   const completed = JSON.stringify({
     ts: new Date(1_700_000_000_000 + seqCounter * 1000).toISOString(),
     seq: seqCounter++,
     kind: 'tool_call',
-    payload: {
-      phase: 'completed',
-      toolUseId,
-      name,
-      resultBytes: opts.resultBytes ?? 200,
-      isError: opts.isError ?? false,
-      truncated: opts.truncated ?? false,
-      durationMs: opts.durationMs ?? 50,
-    },
+    payload: completedPayload,
   });
   return [started, completed];
 }
@@ -375,5 +383,47 @@ describe('detectToolFailureDensity — defaults', () => {
 
   it('default minFailureRate is 0.25', () => {
     expect(DEFAULT_TOOL_FAILURE_MIN_RATE).toBe(0.25);
+  });
+});
+
+describe('detectToolFailureDensity — circuit-breaker exclusion', () => {
+  it('does NOT produce a card when all isError events carry circuitBreaker: true', () => {
+    resetSeq();
+    // 8 circuit-breaker trips on Bash — all have isError: true but circuitBreaker: true.
+    // Should produce zero cards because they are not real tool outcomes.
+    const lines: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      lines.push(...toolPair(`cb-${i}`, 'Bash', { isError: true, circuitBreaker: true }));
+    }
+    expect(detectToolFailureDensity([makeSession('s1', lines)])).toEqual([]);
+  });
+
+  it('DOES produce a card for the same events WITHOUT circuitBreaker flag (control)', () => {
+    resetSeq();
+    // Same shape — 8 isError events, no circuitBreaker flag — should fire.
+    const lines: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      lines.push(...toolPair(`real-${i}`, 'Bash', { isError: true }));
+    }
+    const results = detectToolFailureDensity([makeSession('s1', lines)]);
+    expect(results).toHaveLength(1);
+    expect(results[0]?.detail['toolName']).toBe('Bash');
+  });
+
+  it('excludes circuit-breaker events from BOTH failure count and total-call denominator', () => {
+    resetSeq();
+    // 3 real failures + 5 circuit-breaker trips + 2 successes on Bash.
+    // Real denominator: 3 + 2 = 5; real failure rate: 3/5 = 60% → fires.
+    // If breaker events bled into denominator it would be 10 total, rate 30% → still fires but count differs.
+    const lines: string[] = [];
+    for (let i = 0; i < 3; i++) lines.push(...toolPair(`f-${i}`, 'Bash', { isError: true }));
+    for (let i = 0; i < 5; i++) {
+      lines.push(...toolPair(`cb-${i}`, 'Bash', { isError: true, circuitBreaker: true }));
+    }
+    for (let i = 0; i < 2; i++) lines.push(...toolPair(`ok-${i}`, 'Bash'));
+    const results = detectToolFailureDensity([makeSession('s1', lines)]);
+    expect(results).toHaveLength(1);
+    expect(results[0]?.detail['totalCalls']).toBe(5);
+    expect(results[0]?.detail['failureCount']).toBe(3);
   });
 });

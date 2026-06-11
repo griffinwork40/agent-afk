@@ -72,20 +72,6 @@ export interface SessionStats {
   model: AgentModelInput;
   /** Plan-mode toggle — when true, session uses 'plan' PermissionMode. */
   planMode: boolean;
-  /**
-   * Closure-ritual flag. Set by `/plan off` when the user first asks to
-   * exit plan mode: the runtime keeps `planMode` true, seeds a closure
-   * prompt for the model to respond to, and flips to default in
-   * `onAfterTurn` once the closure response lands. A second `/plan off`
-   * while this flag is true performs a force-exit and clears the flag
-   * without launching a turn.
-   *
-   * Shift+Tab is the keyboard escape hatch and never sets this flag —
-   * it always performs an immediate flip via the raw `togglePlanMode`
-   * helper. `/plan on` while this flag is true clears it (user changed
-   * their mind about exiting).
-   */
-  pendingPlanExit?: boolean;
   /** SDK session ID once initialized. Populated from ResponseMetadata. */
   sessionId?: string;
   /**
@@ -187,6 +173,41 @@ export interface SlashContext {
    * persistent compositor (Telegram, daemon's slash dispatcher).
    */
   setSoftStopHandler?: (handler: (() => void) | null) => void;
+  /**
+   * Fired whenever the loop stage transitions (Observe → Model → Choose →
+   * Act → Update) during a skill-dispatch turn. Carries the new stage name.
+   *
+   * Symmetry: mirrors the `TurnHandles.onStageChange` field consumed by
+   * `runTurn` — same shape, same wiring (REPL → `LoopStageBar.repaint`).
+   * Threaded into the skill renderer by `createSkillRenderer` so the
+   * footer stage rail advances during `/skill` turns exactly as it does
+   * during normal turns. Absent (`undefined`) on non-TTY surfaces
+   * (Telegram, daemon) — the renderer treats this as a no-op.
+   */
+  onStageChange?: (stage: import('../commands/interactive/loop-stage.js').LoopStage) => void;
+  /**
+   * Fired mid-turn on tool_result events during a skill-dispatch turn so
+   * the REPL can refresh the context sampler and repaint the status line
+   * with live context usage.
+   *
+   * Symmetry: mirrors the `TurnHandles.onContextProgress` field consumed
+   * by `runTurn` — same shape, same throttle expectation (the dispatcher
+   * throttles internally; callers need not debounce). Best-effort: errors
+   * are swallowed by the caller. Absent on non-interactive surfaces.
+   */
+  onContextProgress?: () => void | Promise<void>;
+  /**
+   * Session transcript sink. `runSkillDispatchTurn` appends the completed
+   * skill exchange (`/<skill> <args>` → final assistant text) so skill
+   * turns survive into the autosaved markdown transcript exactly like
+   * normal turns (which append via `repl-loop.ts`'s `onTurnComplete`).
+   *
+   * Structural subset of `TranscriptHandle` (commands/interactive/
+   * transcript.ts) — declared inline to keep this neutral slash-layer
+   * module free of an upward import. Absent on surfaces without a
+   * transcript (Telegram, daemon, tests).
+   */
+  transcript?: { appendTurn(userInput: string, assistantText: string): Promise<void> };
 }
 
 /** The handler's return value — controls the REPL's next action. */

@@ -20,6 +20,31 @@ import type { SlashContext, SessionStats } from '../types.js';
 import type { OutputEvent } from '../../../agent/types.js';
 import { runSkillDispatchTurn } from './run-skill-dispatch-turn.js';
 
+function fakeDone(metadata?: Record<string, unknown>): OutputEvent {
+  return { type: 'done', ...(metadata ? { metadata } : {}) } as OutputEvent;
+}
+
+function fakeAssistantMessage(text: string): OutputEvent {
+  return {
+    type: 'message',
+    message: { role: 'assistant', content: text },
+  } as OutputEvent;
+}
+
+function fakeToolUse(id: string, name = 'bash'): OutputEvent {
+  return {
+    type: 'chunk',
+    chunk: { type: 'tool_use_detail', toolUseId: id, toolName: name, toolInput: 'x' },
+  } as OutputEvent;
+}
+
+function fakeToolResult(id: string): OutputEvent {
+  return {
+    type: 'chunk',
+    chunk: { type: 'tool_result', toolUseId: id, content: 'ok', isError: false },
+  } as OutputEvent;
+}
+
 function makeStats(): SessionStats {
   return {
     totalTurns: 0,
@@ -343,6 +368,28 @@ describe('runSkillDispatchTurn — ESC soft-stop', () => {
     expect(session.interrupt).not.toHaveBeenCalled();
   });
 
+  it('does not record the turn when soft-stop interrupted the stream', async () => {
+    const events: OutputEvent[] = [
+      fakeContent('partial'),
+      fakeAssistantMessage('partial answer'),
+      fakeDone({ totalCostUsd: 0.5 }),
+    ];
+    const { ctx } = makeSoftStopCtx(events, /*fireAfterIndex*/ 0);
+    const appendTurn = vi.fn(async () => {});
+    ctx.transcript = { appendTurn };
+
+    await runSkillDispatchTurn(ctx, {
+      skillName: 'mint',
+      skillMeta: makeSkill('mint'),
+      args: '',
+    });
+
+    // The break fired before 'done' was consumed → no stats, no transcript.
+    expect(ctx.stats.totalTurns).toBe(0);
+    expect(ctx.stats.totalCostUsd).toBe(0);
+    expect(appendTurn).not.toHaveBeenCalled();
+  });
+
   it('clears handler even when the stream throws', async () => {
     // Regression: finally MUST clear the handler even on stream errors,
     // otherwise the next /skill dispatch inherits a stale closure that
@@ -367,5 +414,185 @@ describe('runSkillDispatchTurn — ESC soft-stop', () => {
     const calls = setSoftStopHandler.mock.calls;
     expect(calls.length).toBeGreaterThanOrEqual(1);
     expect(calls[calls.length - 1]?.[0]).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Turn accounting + transcript parity — the skill-dispatch path bypasses
+// turn-handler.ts entirely, so it must do its own recordTurn / transcript /
+// stage-rail bookkeeping. Regression suite for the "skill turns invisible in
+// stats, status line, and transcript" bug (and the frozen loop-stage rail).
+// ---------------------------------------------------------------------------
+
+describe('runSkillDispatchTurn — completed-turn accounting', () => {
+  it('folds the done metadata into ctx.stats via recordTurn', async () => {
+    const session = fakeSession([
+      fakeAssistantMessage('the answer'),
+      fakeDone({
+        totalCostUsd: 0.42,
+        durationMs: 1000,
+        usage: { input_tokens: 100, output_tokens: 50 },
+      }),
+    ]);
+    const { ctx } = makeCtx(session);
+
+    await runSkillDispatchTurn(ctx, {
+      skillName: 'review',
+      skillMeta: makeSkill('review'),
+      args: '65',
+    });
+
+    expect(ctx.stats.totalTurns).toBe(1);
+    expect(ctx.stats.totalCostUsd).toBeCloseTo(0.42);
+    expect(ctx.stats.totalTokens).toBe(150);
+    // TurnRecord lands in /history with the slash invocation as user input.
+    expect(ctx.stats.turns[0]?.user).toBe('/review 65');
+    expect(ctx.stats.turns[0]?.assistant).toBe('the answer');
+  });
+
+  it('records tool events from the orchestrator stream into the TurnRecord', async () => {
+    const session = fakeSession([
+      fakeToolUse('tu-1', 'bash'),
+      fakeToolResult('tu-1'),
+      fakeAssistantMessage('done'),
+      fakeDone(),
+    ]);
+    const { ctx } = makeCtx(session);
+
+    await runSkillDispatchTurn(ctx, {
+      skillName: 'mint',
+      skillMeta: makeSkill('mint'),
+      args: '',
+    });
+
+    const tools = ctx.stats.turns[0]?.toolEvents;
+    expect(tools).toHaveLength(1);
+    expect(tools?.[0]).toMatchObject({ toolName: 'bash', toolUseId: 'tu-1', result: 'ok' });
+  });
+
+  it('appends the completed exchange to ctx.transcript', async () => {
+    const session = fakeSession([
+      fakeAssistantMessage('review findings here'),
+      fakeDone(),
+    ]);
+    const { ctx } = makeCtx(session);
+    const appendTurn = vi.fn(async () => {});
+    ctx.transcript = { appendTurn };
+
+    await runSkillDispatchTurn(ctx, {
+      skillName: 'review',
+      skillMeta: makeSkill('review'),
+      args: '65',
+    });
+
+    expect(appendTurn).toHaveBeenCalledTimes(1);
+    expect(appendTurn).toHaveBeenCalledWith('/review 65', 'review findings here');
+  });
+
+  it('repaints the status line after recording the turn', async () => {
+    const session = fakeSession([fakeAssistantMessage('hi'), fakeDone()]);
+    const { ctx } = makeCtx(session);
+
+    await runSkillDispatchTurn(ctx, {
+      skillName: 'mint',
+      skillMeta: makeSkill('mint'),
+      args: '',
+    });
+
+    expect(ctx.ui.repaintStatusLine).toHaveBeenCalled();
+  });
+
+  it('does NOT record stats or transcript when the stream never emits done', async () => {
+    const session = fakeSession([fakeAssistantMessage('partial')]);
+    const { ctx } = makeCtx(session);
+    const appendTurn = vi.fn(async () => {});
+    ctx.transcript = { appendTurn };
+
+    await runSkillDispatchTurn(ctx, {
+      skillName: 'mint',
+      skillMeta: makeSkill('mint'),
+      args: '',
+    });
+
+    expect(ctx.stats.totalTurns).toBe(0);
+    expect(appendTurn).not.toHaveBeenCalled();
+  });
+
+  it('swallows transcript append failures (best-effort contract)', async () => {
+    const session = fakeSession([fakeAssistantMessage('text'), fakeDone()]);
+    const { ctx } = makeCtx(session);
+    ctx.transcript = { appendTurn: vi.fn(async () => { throw new Error('disk full'); }) };
+
+    await expect(
+      runSkillDispatchTurn(ctx, {
+        skillName: 'mint',
+        skillMeta: makeSkill('mint'),
+        args: '',
+      }),
+    ).resolves.toBe('text');
+  });
+});
+
+describe('runSkillDispatchTurn — loop-stage rail wiring', () => {
+  it('fires throttled onContextProgress on tool_result events', async () => {
+    const session = fakeSession([
+      fakeToolUse('tu-1'),
+      fakeToolResult('tu-1'),
+      fakeDone(),
+    ]);
+    const { ctx } = makeCtx(session);
+    const onContextProgress = vi.fn(async () => {});
+    ctx.onContextProgress = onContextProgress;
+
+    await runSkillDispatchTurn(ctx, {
+      skillName: 'mint',
+      skillMeta: makeSkill('mint'),
+      args: '',
+    });
+
+    // First tool_result fires immediately (lastContextProgressMs starts 0).
+    expect(onContextProgress).toHaveBeenCalledTimes(1);
+  });
+
+  it('throttles back-to-back tool_result refreshes within the min interval', async () => {
+    const session = fakeSession([
+      fakeToolUse('tu-1'),
+      fakeToolResult('tu-1'),
+      fakeToolUse('tu-2'),
+      fakeToolResult('tu-2'),
+      fakeDone(),
+    ]);
+    const { ctx } = makeCtx(session);
+    const onContextProgress = vi.fn(async () => {});
+    ctx.onContextProgress = onContextProgress;
+
+    await runSkillDispatchTurn(ctx, {
+      skillName: 'mint',
+      skillMeta: makeSkill('mint'),
+      args: '',
+    });
+
+    // Both results land within ms of each other — only the first fires.
+    expect(onContextProgress).toHaveBeenCalledTimes(1);
+  });
+
+  it('resets the stage rail to observing after dispose (even on stream error)', async () => {
+    const session = fakeSession();
+    session.sendMessageStream.mockImplementation(async function* () {
+      throw new Error('boom');
+    });
+    const { ctx } = makeCtx(session);
+    const onStageChange = vi.fn();
+    ctx.onStageChange = onStageChange;
+
+    await expect(
+      runSkillDispatchTurn(ctx, {
+        skillName: 'mint',
+        skillMeta: makeSkill('mint'),
+        args: '',
+      }),
+    ).rejects.toThrow('boom');
+
+    expect(onStageChange).toHaveBeenLastCalledWith('observing');
   });
 });

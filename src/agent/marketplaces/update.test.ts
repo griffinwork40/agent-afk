@@ -147,6 +147,8 @@ describe('updateMarketplace — branch-tracked installs (no semver tags)', () =>
     // Must detach at the fetched remote ref, not the stale local branch name.
     const checkout = calls.find((c) => c.includes('checkout'));
     expect(checkout?.[checkout.length - 1]).toBe('refs/remotes/origin/main');
+    // --force so a dirty cache (drifted tracked file) can't wedge the update.
+    expect(checkout).toContain('--force');
   });
 
   it('reports up-to-date when the branch tip already matches local HEAD', async () => {

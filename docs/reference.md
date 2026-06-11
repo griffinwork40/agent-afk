@@ -48,7 +48,7 @@ All commands support `--format json` where machine-readable output makes sense (
 ### Per-session overrides
 
 ```
---model <name>            # opus | sonnet | haiku | codex
+--model <name>            # opus | sonnet | haiku | fable | codex
 --thinking <on|off|N>     # extended thinking budget
 --max-output-tokens <n>
 --temperature <n>
@@ -111,7 +111,8 @@ Implementation: `src/cli/slash/index.ts` (`registerAll()`), individual command m
 `agent-afk` speaks to two providers through a single abstraction (`src/agent/providers/`):
 
 **Anthropic (direct)** — default. Selects from:
-- **opus** — most capable, for complex tasks
+- **fable** — most capable (Claude Fable 5, Mythos-class) — hardest reasoning + long-horizon agentic work; 1M context
+- **opus** — most capable Opus-tier, for complex tasks
 - **sonnet** — balanced performance and speed (default)
 - **haiku** — fastest, best for simple tasks
 
@@ -152,7 +153,7 @@ Plugin state (telemetry, ledger, briefs) writes to `~/.afk/agent-framework/` in 
 ### Marketplaces
 
 ```bash
-afk marketplace add <url>
+afk marketplace install <url>
 afk marketplace list
 afk marketplace remove <name>
 ```
@@ -178,7 +179,7 @@ The setup wizard prompts for the token and the chat IDs allowed to interact with
 **Bot commands:**
 - `/start` — welcome
 - `/reset` — clear conversation
-- `/model opus|sonnet|haiku` — switch model
+- `/model opus|sonnet|haiku|fable` — switch model
 
 Send any other message to chat. The bot has full tool access via bypass mode.
 

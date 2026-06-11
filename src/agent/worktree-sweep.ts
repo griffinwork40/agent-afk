@@ -7,10 +7,11 @@
  * @module agent/worktree-sweep
  */
 
-import { promises as fs, existsSync, createReadStream } from 'node:fs';
-import { join } from 'node:path';
+import { promises as fs, existsSync, createReadStream, realpathSync } from 'node:fs';
+import { join, relative, isAbsolute } from 'node:path';
 import { createInterface } from 'node:readline';
 import { getWorktreeSweepLockPath, getTelemetryPath } from '../paths.js';
+import { readPresenceFiles, type PresenceRecord } from './awareness/presence.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -116,6 +117,14 @@ export interface SweepOptions {
    * point of running on boot at all.
    */
   bypassSoftLaunch?: boolean;
+  /**
+   * Override the presence reader. Defaults to the real {@link readPresenceFiles}
+   * (scans ~/.afk/state/presence/). Injected by tests for hermeticity and to
+   * assert against a controlled set of live sessions. A worktree hosting a live
+   * session (a presence record whose pid is alive, whose cwd is within the
+   * worktree) is never reaped — even if the creator pid in meta is dead.
+   */
+  readPresence?: () => Promise<PresenceRecord[]>;
 }
 
 export interface SweepCandidateSummary {
@@ -178,6 +187,30 @@ function isProcessAlive(pid: number): boolean {
     if (code === 'EPERM') return true;
     return false;
   }
+}
+
+/**
+ * Resolve a path through symlinks, falling back to the raw path when it can't
+ * be resolved. macOS aliases /var → /private/var, so both the worktree path
+ * and a session cwd must be normalized before any containment check or the
+ * comparison silently fails.
+ */
+function realpathSafe(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+/**
+ * True when `child` is the same path as, or nested inside, `parent`. Both are
+ * realpath-normalized first. Used to decide whether a live session's cwd sits
+ * inside a candidate worktree.
+ */
+function isPathWithin(child: string, parent: string): boolean {
+  const rel = relative(realpathSafe(parent), realpathSafe(child));
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
 // ---------------------------------------------------------------------------
@@ -439,6 +472,28 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
       }
     }
 
+    // Invariant: a worktree hosting a LIVE top-level session must never be
+    // reaped, even when the creator pid in .afk-worktree-meta.json is dead —
+    // the creating process and the session actively working inside are
+    // frequently different (a resumed session, or a hand-recreated worktree).
+    // meta.pid alone misses this and the dead-owner verdict would reap an
+    // in-use worktree. Presence files are the authoritative "someone is working
+    // here now" signal: each live top-level session writes one with its own pid
+    // + cwd. We trust a record only when its pid is actually alive, so a crashed
+    // session's stale file cannot protect a worktree forever.
+    const presenceReader = options.readPresence ?? readPresenceFiles;
+    let liveSessionCwds: string[] = [];
+    try {
+      const presenceRecords = await presenceReader();
+      liveSessionCwds = presenceRecords
+        .filter((r) => typeof r.pid === 'number' && r.pid > 0 && isProcessAlive(r.pid))
+        .map((r) => r.cwd)
+        .filter((cwd): cwd is string => typeof cwd === 'string' && cwd.length > 0);
+    } catch {
+      // Presence is advisory + best-effort: on any read failure, fall back to
+      // the meta.pid liveness check alone (prior behavior).
+    }
+
     // Process registered worktrees (skip main/bare)
     let hasOrphanedRegistrations = false;
     const mainPath = parsed[0]?.path;
@@ -516,6 +571,15 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
         ageMs <= MAX_TRUSTED_PID_AGE_MS
       ) {
         ownerLiveness = isProcessAlive(meta.pid) ? 'alive' : 'dead';
+      }
+
+      // A live session working inside this worktree overrides a dead creator
+      // pid — never reap an actively-used worktree.
+      if (
+        ownerLiveness !== 'alive' &&
+        liveSessionCwds.some((cwd) => isPathWithin(cwd, entry.path))
+      ) {
+        ownerLiveness = 'alive';
       }
 
       const candidate: WorktreeCandidate = {

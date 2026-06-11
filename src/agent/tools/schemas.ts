@@ -213,8 +213,10 @@ export const sendTelegramTool: AnthropicToolDef = {
     'Send a Telegram message to the operator. ' +
     'Use to surface terminal-state notifications, blocking questions, or important status ' +
     'updates when the user is away from keyboard (AFK). The message is delivered through the ' +
-    'same Telegram bot the operator uses to drive this session, to every chat ID in ' +
-    '`AFK_TELEGRAM_ALLOWED_CHAT_IDS` (typically just the operator).\n\n' +
+    'same Telegram bot the operator uses to drive this session. By default the message goes to ' +
+    'your primary chat (the first private chat in `AFK_TELEGRAM_ALLOWED_CHAT_IDS`, or ' +
+    '`AFK_TELEGRAM_PRIMARY_CHAT_ID` if set); set `telegram.notify` in afk.config.json to ' +
+    'broadcast to all allowed chats or target a custom set.\n\n' +
     'Plain text only — Telegram\'s 4096-character limit per message is enforced. ' +
     'Returns an error if Telegram is not configured (missing `TELEGRAM_BOT_TOKEN` or empty ' +
     'allowlist) so the tool is safe to attempt unconditionally.\n\n' +
@@ -486,7 +488,8 @@ export const createScheduleTool: AnthropicToolDef = {
   description:
     'Create a new scheduled task that the daemon will run on a cron expression. ' +
     'The task is saved to ~/.afk/config/schedules.json and live-synced to the running daemon if available. ' +
-    'Returns the new task ID (slug) on success.',
+    'Returns the new task ID (slug) on success, plus daemonSynced/syncDetail — when daemonSynced is false, ' +
+    'no running daemon picked up the change and it applies on the next daemon (re)start.',
   input_schema: {
     type: 'object',
     properties: {
@@ -565,7 +568,9 @@ export const cancelScheduleTool: AnthropicToolDef = {
   description:
     'Disable or permanently remove a scheduled task. ' +
     'If permanent is false (default), sets enabled: false so the task can be re-enabled later. ' +
-    'If permanent is true, removes the task from the store entirely.',
+    'If permanent is true, removes the task from the store entirely. ' +
+    'The result includes daemonSynced/syncDetail — when daemonSynced is false, a running daemon ' +
+    'still has the task registered until it restarts.',
   input_schema: {
     type: 'object',
     properties: {

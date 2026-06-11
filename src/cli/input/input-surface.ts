@@ -460,9 +460,19 @@ export class InputSurface {
         //      invariant — any → idle with queued + handler — fires
         //      the synthesized submission immediately so the queued
         //      payload auto-submits as the next turn (option (b)).
-        //   2. If we're already in idle with no queue, this is a
-        //      no-op aside from the repaint and we wait for an Enter.
+        //   2. If we're already in idle with no queue it records the
+        //      mode but does NOT repaint (the prev!==mode guard at
+        //      terminal-compositor.ts suppresses idle→idle repaints).
         compositor.setInputMode('idle');
+        // Invariant: the prompt must be on-screen before we block for
+        // input. setInputMode('idle') above does not repaint on an
+        // idle→idle transition (see (2)), and footer subsystems
+        // (loop-stage bar, bg bar) bump extraRows AFTER armCompositor's
+        // initial paint — overwriting the prompt row. Repaint here so a
+        // fresh interactive session shows the prompt immediately rather
+        // than only after the first keypress. Idle repaint is one cheap
+        // frame; redundant if the prompt was already correctly drawn.
+        compositor.repaint();
       });
     }
     // Non-TTY fallback: delegate to the existing reader.

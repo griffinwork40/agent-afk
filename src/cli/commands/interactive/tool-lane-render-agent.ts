@@ -10,7 +10,7 @@ import {
   shortenPaths,
 } from './tool-lane-format.js';
 import type { ToolEntry, Entry } from './tool-lane-render.js';
-import { getGlyphs } from './tool-lane-render.js';
+import { getGlyphs, clampLineToTerminal } from './tool-lane-render.js';
 import { renderFlushChildren } from './tool-lane-render-children.js';
 
 /**
@@ -199,6 +199,11 @@ function renderGroupedRootTools(
   homeDir?: string,
 ): string[] {
   const lines: string[] = [];
+  // Read once per call: diff body lines below are clamped to this width so
+  // long file content never soft-wraps to column 0 in scrollback (orphaning
+  // its continuation past the indent). Mirrors the clamp on every other
+  // diff-emission path; see tool-lane-render-children.ts.
+  const cols = getTerminalWidth();
   for (const toolName of groupOrder) {
     const entries = groups.get(toolName)!;
     if (entries.length === 1) {
@@ -210,7 +215,7 @@ function renderGroupedRootTools(
           // the outcome line (2 for the row indent, 2 more to clear the
           // tool-name column visually).
           for (const line of formatDiffBlock(e.diff, 'flush', '    ')) {
-            lines.push(line);
+            lines.push(clampLineToTerminal(line, cols));
           }
         }
       } else {
@@ -238,11 +243,18 @@ function renderGroupedRootTools(
       const needSeparators = entriesWithDiffs.length > 1;
       for (const e of entriesWithDiffs) {
         if (needSeparators) {
-          const label = sanitizeLabel(shortenPaths(e.toolInput).trim() || e.toolInput.trim());
+          // Order is load-bearing: sanitizeLabel BEFORE shortenPaths.
+          // shortenPaths emits OSC 8 hyperlink escapes (the one sanctioned
+          // escape producer in the lane); sanitizeLabel strips ALL ANSI, so
+          // running it after would kill the link. Sanitizing first is
+          // equally safe — toolInput is the injection surface, and it is
+          // fully scrubbed before linkification adds our own escapes.
+          const sanitized = sanitizeLabel(e.toolInput);
+          const label = shortenPaths(sanitized).trim() || sanitized.trim();
           lines.push('    ' + palette.dim(`── ${label} ──`));
         }
         for (const line of formatDiffBlock(e.diff!, 'flush', '    ')) {
-          lines.push(line);
+          lines.push(clampLineToTerminal(line, cols));
         }
       }
     }
@@ -256,7 +268,10 @@ function formatGroupedToolResults(
   homeDir?: string,
 ): string {
   const { color, glyph } = styleForToolName(toolName);
-  const targets = entries.map((e) => sanitizeLabel(shortenPaths(e.toolInput).trim()));
+  // sanitizeLabel before shortenPaths — same ordering rationale as the
+  // diff-separator labels above (shortenPaths emits OSC 8 hyperlinks that
+  // sanitizeLabel would strip).
+  const targets = entries.map((e) => shortenPaths(sanitizeLabel(e.toolInput)).trim());
   const header =
     color(glyph + ' ') +
     color.bold(toolName) +

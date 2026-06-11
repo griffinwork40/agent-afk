@@ -46,8 +46,14 @@ const PINNED_HASHES = {
   gather: '26ef18dde7db7c313655b0fe3097f14966763298ff5a2fe643ccf18d0f6b29c0',
   'ground-claim':
     '1fe26f35fe858932ba1a42e5c2d4927e3b404a7b7995680b37b3e84a63912b72',
+  // ground-state carries TWO bundled-only frontmatter lines after the merge of
+  // the read-only-skill feature (PR #5) and the 2026-06 load-by-default flip
+  // (PR #7): `read-only: true` (forked child gets the RECON tool allowlist +
+  // mutating-bash guard) AND `context: fork` (pins it to forking so the recon
+  // wave keeps dispatching). Both lines are allowlisted in
+  // INTENTIONAL_DIFFS['ground-state'] below so the normalized-drift test passes.
   'ground-state':
-    '92c40063ac3492d49b7cc2fdaaf3090552cde3f949de53a0fe5820e08b7d75b5',
+    'f8b23fdeb98994b69ec9620bc3a73991a6767e830b5a8d5c8e2d9a53a1f16013',
   // intent-lock is bundled-only (no upstream counterpart).
   // Hash bumps need no parallel PR — document the change in the
   // commit message instead.
@@ -60,10 +66,31 @@ const PINNED_HASHES = {
   // copy of the user-scope /refactor at ~/.afk/skills/.
   refactor: '9cb84710ddf2cf63e1a648460a64656d3f4a9aae8e21753b031556070740c51e',
   research: '10692d77e392cedce928f66cb5dec27dbc2066f48cfc33047820f56506da762a',
-  review: '581a1068ea9e47b4309b3fbf2701ad8ec1de1fb7b5b171bb8b607395fe290033',
+  review: '31a17d8c3bace684b7fce22588d54ce3e95462acdf397fc1673f3590192e0944',
+  // Hash bumped 2026-06-09 (PR #52): records the confidence-trigger enhancement
+  // landed in this branch's commit 1e35850 — adds high-confidence language
+  // ("confident", "certain", "clearly", ≥80%) as a verification trigger in its
+  // own right, a three-way CONFIRMED/REFUTED/UNVERIFIABLE verdict with
+  // [was: …]/[needs-human-review] annotations, and a bounded 3-round retry loop.
+  // The behavior change is intentional; this records the new content.
+  // Hash re-bumped during PR #52 review: the frontmatter description used YAML
+  // escape sequences that parseSkillMetadata (tool-injector.ts) renders
+  // literally — replaced with a literal ≥ and unquoted terms so the
+  // model-facing description is clean.
+  // BACK-PORT GAP: the same enhancement should land in the upstream example-plugin
+  // shadow-verify skill (drift test is skipped here — example-plugin not co-located).
   'shadow-verify':
-    '9b1ea7db65485f849ae6dfb9a6f69a102d7ccc6e5230b561dc76ef8c666475f8',
-  ship: '95f6410600af55fa9fa0312a48d3eebb37ef18ca98dd73ccba840b7136f83b69',
+    '07aeb4724877001351de868012d796841fb3b9596e0086cd4b302a17c183c977',
+  // Hash bumped 2026-06: Phase 4 (commit) + Phase 8 (PR) switched from the
+  // `--body "$(cat <<'EOF' … EOF)"` heredoc-in-command-substitution antipattern
+  // to the file-based form (`git commit -F` / `gh pr create --body-file`). The
+  // heredoc tripped whenever a commit/PR body contained backticks, `$(`, or
+  // quotes (markdown bodies almost always do) — the shell parsed them before
+  // git/gh ran, failing the call or recording a mangled/truncated body. The
+  // file-based form matches the safe convention already used in src/agent/gh.ts.
+  // BACK-PORT GAP: the same fix should land in the upstream example-plugin /ship
+  // skill (drift test is skipped here — example-plugin not co-located).
+  ship: 'e778f20e30cb24edd04e2fa25b939c21db2b49b95ad0e0076be0e49dae8a34a3',
   // simplify is bundled-only (no upstream example-plugin counterpart).
   simplify:
     'f9c9e93b1263ed782b5703b6f30fd981908b0af1fa219d0124405a318ff2756e',
@@ -266,12 +293,30 @@ const INTENTIONAL_DIFFS: Partial<Record<SkillName, RegExp[]>> = {
     // (Already carried `context: fork` before the flip; allowlisted here for
     // the co-located drift comparison.) See devils-advocate note.
     /^context: fork$/,
+    // argument-hint divergence — bundled-only `--post {github,telegram}` flag.
+    // `/review --post` is an agent-afk dispatch-layer publishing feature (PR #35,
+    // 7830a0f) handled in src/cli/slash/plugin-skills.ts; the upstream
+    // example-plugin review skill has NO --post publisher, so its argument-hint
+    // omits the flag. Anchored on the stable line prefix so it removes the
+    // argument-hint line from BOTH sides (bundled w/ --post, upstream w/o),
+    // leaving the rest of the line guarded. No upstream back-port applies —
+    // the feature does not exist there. (bundled.test.ts workflow option 4.)
+    /^argument-hint: "\[diff\|pr-url\|pr-number/,
   ],
 
-  // ground-state, spec: bundled-only `context: fork` pins added in the 2026-06
-  // load-by-default flip so these orchestration skills keep forking. No other
-  // divergence from upstream. See devils-advocate note.
-  'ground-state': [/^context: fork$/],
+  // ground-state — TWO bundled-only frontmatter lines, both allowlisted:
+  //   1. `read-only: true` (read-only-skill feature): the marker the agent-afk
+  //      runtime keys on to give ground-state's forked reconnaissance subagent a
+  //      restricted RECON tool allowlist (no write_file/edit_file) plus a
+  //      mutating-bash guard — enforcing the "never edits files" constraint that
+  //      was previously prose-only (the subagent had FULL write tools and was
+  //      observed making 22 edit_file + 27 bash calls in one session).
+  //   2. `context: fork` (2026-06 load-by-default flip): pins ground-state to
+  //      forking so its recon wave keeps dispatching.
+  //   The upstream ground-state SKILL.md has neither layer yet, so both lines are
+  //   bundled-only. When upstream adopts either, mirror the frontmatter there and
+  //   drop the matching pattern. Flagged for cross-repo reconciliation.
+  'ground-state': [/^read-only: true$/, /^context: fork$/],
   spec: [/^context: fork$/],
 
   // ground-claim: bundled-only `context: load` field. Unlike the fork-pinned

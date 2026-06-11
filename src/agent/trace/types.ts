@@ -60,6 +60,9 @@ export interface ToolCallCompletedPayload {
   truncated: boolean;
   /** Wall-clock duration from `started` → `completed`, in milliseconds. */
   durationMs: number;
+  /** True when this completed event was produced by the repeat-loop circuit breaker,
+   *  not by a real tool dispatch — lets detectors exclude it from failure stats. */
+  circuitBreaker?: boolean;
   subagentId?: string;
 }
 
@@ -304,6 +307,9 @@ export interface CompactionPayloadPersisted {
 
 export type ClosureReason =
   | 'model_end_turn'
+  // Model's final turn was cut off by the output-token ceiling
+  // (Anthropic `max_tokens` / OpenAI `length`), not a clean completion.
+  | 'truncated'
   | 'iteration_cap'
   | 'abort'
   | 'timeout'

@@ -18,6 +18,7 @@ import type { HookRegistry } from '../hooks.js';
 import type { ModelProvider } from '../provider.js';
 import type { TraceWriter } from '../trace/index.js';
 import type { AgentModelInput } from './model-types.js';
+import type { ModelSlots } from '../session/model-slots.js';
 import type { CanUseTool, PermissionBubbler } from './permission-types.js';
 
 /** Tool permissions configuration */
@@ -44,6 +45,17 @@ export interface AgentConfig {
    * Unknown strings pass through to the SDK untouched — see `resolveModelId`.
    */
   model: AgentModelInput;
+
+  /**
+   * User-configurable model-slot bindings (Stage 1). Rebinds the three
+   * capability tiers (`small`/`medium`/`large`) to concrete model ids. When
+   * present, installed process-globally so every routing call site resolves
+   * tier aliases correctly. Normally populated by `loadConfig()` from the
+   * `models` block in afk.config.json + `AFK_MODEL_{SMALL,MEDIUM,LARGE}` env;
+   * passing it directly here is supported for library/test use. Stage 2 will
+   * add per-slot provider/baseUrl/apiKey. See `agent/session/model-slots.ts`.
+   */
+  models?: ModelSlots;
 
   /** Anthropic API key. Optional when using system claude binary with OAuth. */
   apiKey?: string;
@@ -264,6 +276,36 @@ export interface AgentConfig {
    */
   provider?: ModelProvider;
 
+  /**
+   * Fully-wired provider factory for mid-session cross-family model switching.
+   *
+   * When set (and `provider` is unset), `AgentSession` installs a `ProviderRouter`
+   * that calls this factory to resolve the active provider for the current model
+   * — once at session initialization and again on each cross-family `/model`
+   * switch (the router reuses the active inner across turns of the same family,
+   * so the factory is NOT called every turn). The factory receives the model
+   * string and must return a fully-wired `ModelProvider` — one with
+   * `subagentExecutor`, `skillExecutor`, `composeExecutor`, `memoryStore`,
+   * `mcpManager`, and permission lists already configured. This is the mechanism
+   * that allows the REPL's `/model` command to switch across provider families
+   * (e.g. Claude → GPT) without dropping the `agent`/`skill`/`compose` tools or
+   * MCP bridges.
+   *
+   * Implementations that hold per-instance state (e.g. `/allow-dir` grant roots)
+   * should memoize by family so repeated calls for the same family return the
+   * same instance — see `createMemoizedProviderFactory` in the REPL bootstrap.
+   *
+   * Ignored when `provider` is explicitly set (injected-provider path, used by
+   * Telegram and the daemon, takes precedence). When both are unset, `AgentSession`
+   * falls back to the bare `resolveProvider` function which builds providers
+   * without executor/MCP wiring — suitable for one-shot and non-interactive paths.
+   *
+   * @param model - The resolved model string for the upcoming turn, or
+   *   `undefined` when no model has been selected yet. Matches the value that
+   *   would be passed to `providerForModel()`.
+   */
+  providerFactory?: (model: string | undefined) => ModelProvider;
+
   // --- SDK adoption wave (Wave 0 shared surface) ---
   // Each field is a thin passthrough into the provider's underlying
   // request options. Guarded by buildQueryOptions so omitting them
@@ -288,11 +330,14 @@ export interface AgentConfig {
   taskBudget?: number;
 
   /**
-   * Hard per-response output-token cap. Propagated to the SDK subprocess as
-   * `CLAUDE_CODE_MAX_OUTPUT_TOKENS` — the SDK has no programmatic equivalent
-   * on its `Options` type as of 0.2.114. Accepts `Number.POSITIVE_INFINITY`
-   * as a "model max" sentinel; `buildQueryOptions` resolves it using the
-   * resolved model id.
+   * Hard per-response output-token cap (the Messages-API `max_tokens`).
+   * Resolved by `resolveMaxTokens` in the anthropic-direct provider and
+   * clamped to the model's output ceiling (`maxOutputTokensFor`): an
+   * over-ceiling value is reduced to the ceiling rather than sent verbatim
+   * (which the API would reject with HTTP 400). Any non-finite or non-positive
+   * value — including the `Number.POSITIVE_INFINITY` "model max" sentinel that
+   * `parseMaxOutputTokens` emits for `--max-output-tokens max` — falls back to
+   * the model ceiling.
    */
   maxOutputTokens?: number;
 

@@ -12,11 +12,12 @@ import { formatCost, formatTokens } from '../../format-utils.js';
 import { contextLimitFor, MODEL_CONTEXT_LIMITS } from '../../model-limits.js';
 import { renderDebugBanner } from '../../debug-banner.js';
 import { providerForModel } from '../../../agent/providers/index.js';
+import { slotForInput } from '../../../agent/session/model-slots.js';
 import type { SlashCommand } from '../types.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 
 /** Display hint only — not used for validation. Full model IDs (org/model) are also accepted. */
-const MODEL_ALIASES_HINT = ['opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku'] as const;
+const MODEL_ALIASES_HINT = ['small', 'medium', 'large', 'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable'] as const;
 
 const costCmd: SlashCommand = {
   name: '/cost',
@@ -217,9 +218,9 @@ const resetCmd: SlashCommand = {
 
 const modelCmd: SlashCommand = {
   name: '/model',
-  usage: '/model <opus|opus_1m|sonnet|sonnet_1m|haiku|org/model>',
+  usage: '/model <small|medium|large|opus|sonnet|haiku|fable|org/model>',
   summary: 'Switch the active model mid-session',
-  hint: 'When you want to upgrade to opus for a hard problem or downshift to haiku for cheap iteration — context carries over. Also accepts full HuggingFace-style IDs (e.g. mlx-community/Qwen3-30B-A3B-4bit).',
+  hint: 'Switch the capability tier (small/medium/large — or your configured names) or pass a full model id. Upgrade to large for a hard problem, downshift to small for cheap iteration — context carries over. Also accepts HuggingFace-style ids (e.g. mlx-community/Qwen3-30B-A3B-4bit).',
   async handler(ctx, args) {
     const target = args.trim().toLowerCase();
     if (!target) {
@@ -227,12 +228,14 @@ const modelCmd: SlashCommand = {
       ctx.out.line(palette.dim(`  Aliases: ${MODEL_ALIASES_HINT.join(', ')}  (or any org/model HF id)`));
       return 'continue';
     }
-    // Accept known Claude aliases OR full HF-style org/model ids (routed openai-compatible).
-    // Bare unknown strings (e.g. typos) are rejected — they'd silently fall through to
+    // Accept slot tier names / configured custom names, known Claude aliases,
+    // OR full HF-style org/model ids (routed openai-compatible). Bare unknown
+    // strings (e.g. typos) are rejected — they'd silently fall through to
     // anthropic-direct and produce an unhelpful API error at turn time.
     const isKnownAlias = MODEL_ALIASES_HINT.includes(target as (typeof MODEL_ALIASES_HINT)[number]);
+    const isSlotName = slotForInput(target) !== undefined;
     const isHFStyleId = providerForModel(target) === 'openai-compatible';
-    if (!isKnownAlias && !isHFStyleId) {
+    if (!isKnownAlias && !isSlotName && !isHFStyleId) {
       ctx.out.warn(`Unknown model: ${target}. Aliases: ${MODEL_ALIASES_HINT.join(', ')}  (or org/model for local/OpenAI-compatible)`);
       return 'continue';
     }

@@ -106,13 +106,25 @@ export function parseSkillMd(content: string): ParsedSkillMd {
 }
 
 /**
- * One-shot helper: harvest flags from a SKILL.md document. Frontmatter wins;
- * falls back to body extraction. Empty array if neither produced anything.
+ * One-shot helper: harvest flags from a SKILL.md document.
+ *
+ * Precedence (highest first):
+ *   1. An explicit frontmatter `flags:` list — the unambiguous, author-declared
+ *      set. Wins outright when present.
+ *   2. Otherwise, the union of flags scanned from the `argument-hint` frontmatter
+ *      field AND the body. `argument-hint` is a standard Claude Code /
+ *      agentskills.io-compatible field that declares the CLI surface, so flags
+ *      written there (e.g. `[--post github|telegram]`) complete in the REPL
+ *      dropdown without a proprietary `flags:` field. The body is still scanned
+ *      as a legacy fallback for skills that mention flags only in prose.
+ *
+ * Empty array if none produced anything.
  */
 export function harvestFlagsFromSkillMd(content: string): string[] {
   const parsed = parseSkillMd(content);
   if (parsed.frontmatterFlags && parsed.frontmatterFlags.length > 0) {
     return parsed.frontmatterFlags;
   }
-  return extractFlagsFromBody(parsed.body);
+  const argHint = parsed.frontmatter?.['argument-hint'] ?? '';
+  return extractFlagsFromBody(`${argHint}\n${parsed.body}`);
 }

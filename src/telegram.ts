@@ -44,7 +44,7 @@ import { loadConfig, loadCredential } from './cli/config.js';
 import { getEnvConfigPath } from './paths.js';
 import { assembleSystemPrompt } from './agent/routing-directive.js';
 import { resolveModelId } from './agent/session/model-resolution.js';
-import { getDefaultSubagentModel, getMaxOutputTokens, getApiKeyForModel } from './cli/shared-helpers.js';
+import { getDefaultSubagentModel, getMaxOutputTokens, getApiKeyForModel, loadSystemPrompt, composeSystemPrompt } from './cli/shared-helpers.js';
 import type { AgentConfig, AgentModelInput } from './agent/types.js';
 import { SubagentManager } from './agent/subagent.js';
 import { SubagentExecutor } from './agent/tools/subagent-executor.js';
@@ -75,6 +75,11 @@ async function main() {
     console.error('❌ Configuration error:', (error as Error).message);
     process.exit(1);
   }
+
+  // Framework base prompt (`prompts/system-prompt.md`, inlined at publish-build).
+  // Resolved once here and layered under the operator overlay per session below,
+  // so Telegram sessions carry the same unconditional base as chat / REPL.
+  const frameworkBase = loadSystemPrompt();
 
   const providerName = providerForModel(config.model as string);
 
@@ -211,6 +216,18 @@ async function main() {
         sessionProviderName === 'openai-compatible' || sessionProviderName === 'openai-codex';
       const maxOutputTokens = isCodex ? undefined : getMaxOutputTokens();
 
+      // System-prompt layering (mirrors chat.ts / bootstrap.ts): the framework
+      // base is unconditional; the operator overlay (per-chat sessionConfig
+      // override → afk.config.json / AFK.md / env via loadConfig) is appended
+      // on top, never substituted for the base. Shared by both the Anthropic
+      // and Codex branches below, and inherited by forked subagent / compose
+      // children so they carry the same base.
+      const overlayPrompt = sessionConfig.systemPrompt ?? config.systemPrompt;
+      const layeredBasePrompt = composeSystemPrompt(
+        frameworkBase,
+        typeof overlayPrompt === 'string' ? overlayPrompt : undefined,
+      );
+
       let directProvider;
       if (!isCodex) {
         let boundSession: AgentSession | undefined;
@@ -262,7 +279,7 @@ async function main() {
           parentSession: deferredParent,
           defaultConfig: {
             apiKey: telegramApiKey,
-            systemPrompt: sessionConfig.systemPrompt ?? config.systemPrompt,
+            systemPrompt: layeredBasePrompt,
             ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
           },
           defaultSubagentModel: getDefaultSubagentModel(sessionConfig.model),
@@ -286,18 +303,19 @@ async function main() {
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
         });
 
-        // Pass the raw base prompt (pre-assembly) so compose subagents do not
-        // inherit ROUTING_DIRECTIVE or TOOL_SYSTEM_PROMPT — keeping them as
-        // task workers that cannot spawn nested DAGs or recurse into skills.
-        // Mirrors the SubagentExecutor defaultConfig.systemPrompt convention.
-        const rawBasePrompt = sessionConfig.systemPrompt ?? config.systemPrompt;
+        // Compose subagents inherit the framework base + operator overlay
+        // (layeredBasePrompt) but NOT ROUTING_DIRECTIVE / TOOL_SYSTEM_PROMPT /
+        // end-of-turn — those are appended only by assembleSystemPrompt for the
+        // parent session. Keeps DAG workers from recursing into skills / nested DAGs.
         const composeExecutor = new ComposeExecutor({
           parentSession: deferredParent,
           defaultModel: sessionConfig.model,
           defaultSubagentModel: getDefaultSubagentModel(sessionConfig.model),
           apiKey: telegramApiKey,
+          // Per-model credential resolver — mirrors #640 for the compose fork-path.
+          resolveApiKeyForModel: getApiKeyForModel,
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
-          systemPrompt: typeof rawBasePrompt === 'string' ? rawBasePrompt : '',
+          systemPrompt: layeredBasePrompt ?? '',
         });
 
         const allowedTools = [...BUILTIN_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'agent', 'skill', 'compose'];
@@ -309,7 +327,7 @@ async function main() {
         });
 
         // Bind after session creation so deferred parent proxy resolves.
-        const rawPromptInner = sessionConfig.systemPrompt ?? config.systemPrompt;
+        const rawPromptInner = layeredBasePrompt;
         const telegramAutoRoutingInner = config.autoRouting?.telegram ?? false;
         const systemPromptInner = typeof rawPromptInner === 'string'
           ? assembleSystemPrompt(rawPromptInner, telegramAutoRoutingInner, 'telegram')
@@ -342,7 +360,7 @@ async function main() {
         return session;
       }
 
-      const rawPrompt = sessionConfig.systemPrompt ?? config.systemPrompt;
+      const rawPrompt = layeredBasePrompt;
       const telegramAutoRouting = config.autoRouting?.telegram ?? false;
       const systemPrompt = typeof rawPrompt === 'string'
         ? assembleSystemPrompt(rawPrompt, telegramAutoRouting, 'telegram')

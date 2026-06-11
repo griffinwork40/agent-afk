@@ -37,9 +37,40 @@ vi.mock('dotenv', () => ({
 import { loadCredential } from './config.js';
 import { runAuthWizard } from './auth-wizard.js';
 import { providerForModel } from '../agent/providers/index.js';
-import { runFirstRunDetector } from './index.js';
+import { runFirstRunDetector, needsCredentialGate } from './index.js';
+
+// Argv helper — tests pass explicit argv so vitest's own process.argv (test
+// file paths) can't be misread as a subcommand.
+const argvFor = (...args: string[]) => ['node', 'afk', ...args];
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
+
+describe('needsCredentialGate', () => {
+  it('never gates --version / -V / --help / -h', () => {
+    expect(needsCredentialGate(argvFor('--version'))).toBe(false);
+    expect(needsCredentialGate(argvFor('-V'))).toBe(false);
+    expect(needsCredentialGate(argvFor('--help'))).toBe(false);
+    expect(needsCredentialGate(argvFor('-h'))).toBe(false);
+    expect(needsCredentialGate(argvFor('chat', '--help'))).toBe(false);
+  });
+
+  it('does not gate pre-auth commands (login, doctor, config, status, …)', () => {
+    for (const cmd of ['login', 'doctor', 'config', 'status', 'plugin', 'completion', 'update']) {
+      expect(needsCredentialGate(argvFor(cmd))).toBe(false);
+    }
+  });
+
+  it('gates commands that need a credential', () => {
+    for (const cmd of ['chat', 'c', 'interactive', 'i', 'daemon', 'farm']) {
+      expect(needsCredentialGate(argvFor(cmd))).toBe(true);
+    }
+  });
+
+  it('gates bare invocation and program-flag-only invocation (REPL start)', () => {
+    expect(needsCredentialGate(argvFor())).toBe(true);
+    expect(needsCredentialGate(argvFor('--model', 'opus'))).toBe(true);
+  });
+});
 
 describe('runFirstRunDetector', () => {
   let stderrSpy: ReturnType<typeof vi.spyOn>;
@@ -67,7 +98,7 @@ describe('runFirstRunDetector', () => {
     vi.mocked(loadCredential).mockReturnValue('sk-ant-api03-existing-key');
     vi.mocked(providerForModel).mockReturnValue('anthropic-direct');
 
-    await runFirstRunDetector();
+    await runFirstRunDetector(argvFor());
 
     expect(runAuthWizard).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
@@ -78,7 +109,7 @@ describe('runFirstRunDetector', () => {
     vi.mocked(loadCredential).mockReturnValue(undefined);
     vi.mocked(providerForModel).mockReturnValue('openai-compatible');
 
-    await runFirstRunDetector();
+    await runFirstRunDetector(argvFor());
 
     expect(runAuthWizard).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
@@ -96,7 +127,7 @@ describe('runFirstRunDetector', () => {
       writable: true,
     });
 
-    await runFirstRunDetector();
+    await runFirstRunDetector(argvFor());
 
     expect(stderrSpy).toHaveBeenCalledWith(
       expect.stringContaining('No Anthropic credential found'),
@@ -117,7 +148,7 @@ describe('runFirstRunDetector', () => {
       writable: true,
     });
 
-    await runFirstRunDetector();
+    await runFirstRunDetector(argvFor());
 
     expect(runAuthWizard).toHaveBeenCalledOnce();
     expect(exitSpy).not.toHaveBeenCalled();

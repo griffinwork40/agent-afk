@@ -21,6 +21,7 @@ import chalk from 'chalk';
 import { upsertEnvVar } from '../utils/envFile.js';
 import { getEnvConfigPath } from '../paths.js';
 import { env } from '../config/env.js';
+import { withStdinClaim } from '../cli/input/stdin-claim.js';
 
 const TELEGRAM_API = 'https://api.telegram.org';
 
@@ -216,12 +217,14 @@ export async function pollForChats(
 /** Prompt for stdin input. */
 function prompt(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => {
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
+  return withStdinClaim('telegram.setup-wizard', () =>
+    new Promise<string>((resolve) => {
+      rl.question(question, (answer) => {
+        rl.close();
+        resolve(answer.trim());
+      });
+    }),
+  );
 }
 
 /**

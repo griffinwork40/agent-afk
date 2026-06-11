@@ -75,10 +75,20 @@ const RAW_PASSTHROUGH_TYPES = new Set([
  * are returned as raw text — card bodies are single-line summaries.
  */
 export function renderCardLine(text: string): string {
-  const tokens = Lexer.lex(text);
-  // Types that cannot be meaningfully projected to a single line — return raw input unchanged.
+  // Safety net: drop an orphaned leading bold marker (`** value`) that marked
+  // would otherwise print literally — `** ` (with a trailing space) is not a
+  // valid CommonMark opener. The whitespace guard spares globs (`**/*.ts`) and
+  // identifiers (`__init__`), which have no space after the marker.
+  const normalized = text.replace(/^(?:\*\*|__)\s/, '');
+  const tokens = Lexer.lex(normalized);
+  // Types that cannot be meaningfully projected to a single line — return the
+  // raw input unchanged. Return `normalized` (not `text`) so the orphaned-marker
+  // strip above still applies on this path: a body like `** > quote` lexes to a
+  // blockquote and would otherwise leak the literal `**`. `normalized` differs
+  // from `text` only by that stripped leading marker, so non-orphan lines are
+  // byte-identical here.
   const hasRawPassthrough = tokens.some((t) => RAW_PASSTHROUGH_TYPES.has(t.type));
-  if (hasRawPassthrough) return text;
+  if (hasRawPassthrough) return normalized;
   return tokens.map((t) => {
     switch (t.type) {
       case 'heading': {

@@ -19,6 +19,16 @@ describe('model-limits', () => {
     expect(contextLimitFor('sonnet_1m')).toBe(1_000_000);
   });
 
+  it('declares the 1M context window for Claude Fable 5 (alias + wire id)', () => {
+    // Fable 5 ships 1M natively (no `_1m` opt-in). Both the `fable` alias and
+    // the `claude-fable-5` wire id must report the full window, not the 200k
+    // Anthropic fallback.
+    expect(MODEL_CONTEXT_LIMITS['fable']).toBe(1_000_000);
+    expect(MODEL_CONTEXT_LIMITS['claude-fable-5']).toBe(1_000_000);
+    expect(contextLimitFor('fable')).toBe(1_000_000);
+    expect(contextLimitFor('claude-fable-5')).toBe(1_000_000);
+  });
+
   it('contextLimitFor falls back to 200k for unknown Anthropic-style models', () => {
     expect(contextLimitFor('claude-xyz' as unknown as 'opus')).toBe(200_000);
     expect(contextLimitFor('')).toBe(200_000);

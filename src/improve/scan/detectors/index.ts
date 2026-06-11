@@ -126,7 +126,11 @@ export const DETECTOR_REGISTRY: readonly DetectorEntry[] = Object.freeze([
   {
     name: 'tool-failure-density',
     description: `Tool with ≥N failures (isError: true) AND failure rate ≥R (defaults: ${DEFAULT_TOOL_FAILURE_MIN_FAILURES} failures, ${DEFAULT_TOOL_FAILURE_MIN_RATE} rate)`,
-    enabledByDefault: false,
+    // Flipped on by default after a two-week noise-floor evaluation (Jun 2026):
+    // dual count+rate thresholds produced the highest-signal cards (skill 37.6%,
+    // browser_open 77.8%) with zero false positives. closure-anomaly and
+    // subagent-block stay opt-in (abort≈Ctrl+C ambiguity / fire during active bug fixing).
+    enabledByDefault: true,
     run: (sessions, opts): DetectorResult[] =>
       detectToolFailureDensity(sessions, {
         minFailures: opts.toolFailureMinFailures ?? DEFAULT_TOOL_FAILURE_MIN_FAILURES,

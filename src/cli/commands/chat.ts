@@ -10,7 +10,7 @@ import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
 import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import { formatDuration, formatCost, formatTokens } from '../format-utils.js';
-import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getDefaultSubagentModel, loadSystemPrompt, loadConfigSystemPrompt } from '../shared-helpers.js';
+import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getDefaultSubagentModel, resolveBaseSystemPrompt } from '../shared-helpers.js';
 import { loadConfig } from '../config.js';
 import { assembleSystemPrompt } from '../../agent/routing-directive.js';
 import { renderMarkdownToTerminal } from '../formatter.js';
@@ -300,15 +300,13 @@ export function registerChatCommand(program: Command): void {
         }
 
         const apiKey = getApiKey();
-        // Dual-path system-prompt resolution: `basePrompt` is sourced via
-        // `loadConfigSystemPrompt`/`loadSystemPrompt` (string-only path), while
-        // `systemPromptSource` provenance comes from `loadConfig()`. Both walk the
-        // same 3-tier precedence (env → afk.config.json → AFK.md) in the same order,
-        // so in production they agree. Any future caller that invokes one without
-        // the other risks an orphaned source tag — keep them paired.
-        const basePrompt = loadConfigSystemPrompt() ?? loadSystemPrompt();
+        // System-prompt layering: the framework base (`prompts/system-prompt.md`)
+        // is unconditional; the operator overlay (env → afk.config.json → AFK.md)
+        // is appended on top via resolveBaseSystemPrompt(), never substituted for
+        // the base. `source` is the layered provenance string surfaced by
+        // --dump-prompt (`framework`, `framework+afk-md:/path`, …).
+        const { prompt: basePrompt, source: systemPromptSource } = resolveBaseSystemPrompt();
         const cliConfig = loadConfig();
-        const systemPromptSource = cliConfig.systemPromptSource;
         const autoRouting = cliConfig.autoRouting?.chat ?? false;
         const systemPrompt = assembleSystemPrompt(basePrompt, autoRouting, 'one-shot');
 
@@ -497,6 +495,8 @@ export function registerChatCommand(program: Command): void {
           defaultModel: options.model,
           defaultSubagentModel: getDefaultSubagentModel(options.model),
           apiKey,
+          // Per-model credential resolver — mirrors #640 for the compose fork-path.
+          resolveApiKeyForModel: getApiKeyForModel,
           ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
           systemPrompt: basePrompt ?? '',
         });
@@ -522,7 +522,15 @@ export function registerChatCommand(program: Command): void {
         // the AgentSession.
         session = new AgentSession(injectHotMemory({
           model: sessionModel,
-          apiKey,
+          // Resolve the credential for the ACTUAL session model, not the
+          // env-derived default (`getApiKey()` keys off AFK_MODEL/CLAUDE_MODEL).
+          // Without this, `--model gpt-5.5` while CLAUDE_MODEL is a Claude id
+          // injects the Anthropic OAuth token into the OpenAI provider, which
+          // (a) leaks sk-ant-… to api.openai.com and (b) shadows Codex ChatGPT
+          // OAuth (resolveOpenAIAuth treats a non-empty config key as Tier 1).
+          // getApiKeyForModel routes via providerForModel → correct family
+          // (anti-leak invariant, credential-resolver.ts).
+          apiKey: getApiKeyForModel(sessionModel),
           maxTurns: parseInt(options.maxTurns, 10),
           hookRegistry: createDefaultHookRegistry((info) => {
             console.log(formatSubagentCompletion(info));

@@ -16,10 +16,14 @@ import { debugLog } from '../../utils/debug.js';
 import { AbortError, BudgetExceededError, TimeoutError } from '../../utils/errors.js';
 import { emitClosure, emitSessionPhase } from '../trace/emit.js';
 import type { HookRegistry } from '../hooks.js';
-import { resolveProvider } from '../providers/index.js';
+import { resolveProvider, providerForModel } from '../providers/index.js';
+import { ProviderRouter } from '../providers/router/provider-router.js';
+import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import type { ProviderCompactResult, ProviderEvent, ProviderQuery } from '../provider.js';
 import { DEFAULT_SESSION_TIMEOUT_MS, RESET_DRAIN_TIMEOUT_MS, withTimeout } from '../timeout.js';
 import { dispatchSessionEnd, dispatchSessionStart } from './hooks-dispatch.js';
+import { HookBlockedError } from '../../utils/errors.js';
+import { classifyClosureReason } from './closure-reason.js';
 import type {
   AccountInfo,
   AgentConfig,
@@ -42,7 +46,11 @@ import type {
   SlashCommand,
 } from '../types.js';
 import { QueryInputStream } from './input-iterable.js';
+import { SessionLedgerWriter } from '../session-ledger.js';
+import { env } from '../../config/env.js';
 import { resolveModelId } from './model-resolution.js';
+import { setSlotBindings } from './model-slots.js';
+import { applySlotCredentials } from './slot-credentials.js';
 import {
   buildInitialState,
   wireAbortSignal,
@@ -87,6 +95,12 @@ export class AgentSession implements IAgentSession {
    *  completed in this session. */
   private lastStopReason: string | undefined;
   /**
+   * Terminal-cause flags set at their origin sites so `deriveClosureReason`
+   * reports the specific reason instead of a generic abort. Reset by `reset()`.
+   */
+  private maxTurnsHit = false;
+  private hookBlocked = false;
+  /**
    * Wall-clock timestamp captured at construction — used to compute the
    * `session_init_done` phase duration and the `session_init_start` emit.
    */
@@ -102,6 +116,16 @@ export class AgentSession implements IAgentSession {
   } = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
   /** Cumulative USD cost rolled up from completed subagents. */
   private subagentRunningCostUsd = 0;
+  /**
+   * Durable per-session event ledger (`~/.afk/state/sessions/<id>/events.jsonl`).
+   * Created lazily on the first turn once the provider has issued a session id.
+   * Top-level sessions only — subagents are observable via the bg-job log and
+   * witness traces; mirroring them here would multiply files per session.
+   * Null when disabled (env opt-out), gated off (subagent), or after close.
+   */
+  private ledger: SessionLedgerWriter | null = null;
+  /** Set true once ledger creation has been attempted (success or not). */
+  private ledgerInitAttempted = false;
 
   constructor(config: AgentConfig) {
     this.config = config;
@@ -130,18 +154,58 @@ export class AgentSession implements IAgentSession {
    * SessionStart/SessionEnd hooks fire on each cycle.
    */
   private initSdkLifecycle(): void {
+    // Safety net for direct construction (library/test) that bypasses
+    // `loadConfig()`: install any caller-provided slot bindings process-globally
+    // so `resolveModelId`/`resolveProvider` below resolve tier aliases. The CLI
+    // path already installed them in `loadConfig`; this is idempotent.
+    if (this.config.models) setSlotBindings(this.config.models);
+
+    // Stage 2: apply the resolved model's per-slot provider credentials
+    // (provider/baseUrl/apiKey) onto this session's config so the active
+    // provider reads them at query time. No-op unless the model resolves to a
+    // slot carrying explicit credentials.
+    applySlotCredentials(this.config);
+
     const resolvedModel = resolveModelId(this.config.model) ?? (this.config.model as string);
     const { sessionIdentity, metadata } = buildInitialState(this.config, resolvedModel);
 
     this.stateManager = new SessionStateManager(sessionIdentity, metadata);
     this.inputStream = new QueryInputStream(() => this.sessionId);
 
-    const provider = this.config.provider ?? resolveProvider(resolvedModel);
-    debugLog(`🟢 AgentSession: Creating query session via provider=${provider.name}`);
-    this.providerQuery = provider.query({
-      prompt: this.inputStream.createIterable(),
-      config: this.config,
-    });
+    // Provider selection.
+    //   - Caller-injected provider (`config.provider`): use it directly,
+    //     unchanged. Telegram/daemon inject a configured provider this way.
+    //   - Otherwise: install a ProviderRouter that routes EACH turn to the
+    //     provider for the currently-selected model, so `/model` can cross
+    //     provider families in one session without a global AFK_PROVIDER. The
+    //     swap happens below this session, so the accumulators and
+    //     SessionStart/SessionEnd hooks reset here are untouched by a model
+    //     switch. Routing still honors AFK_PROVIDER when set (it resolves to a
+    //     single family, so the router never swaps) — it is now an optional
+    //     escape hatch, not a requirement.
+    const promptIterable = this.inputStream.createIterable();
+    if (this.config.provider) {
+      debugLog(`🟢 AgentSession: Creating query session via injected provider=${this.config.provider.name}`);
+      this.providerQuery = this.config.provider.query({ prompt: promptIterable, config: this.config });
+    } else {
+      debugLog(`🟢 AgentSession: Creating query session via ProviderRouter`);
+      // When config.providerFactory is set, use it as resolveProvider so every
+      // provider built during a cross-family /model swap is fully wired (with
+      // subagentExecutor, skillExecutor, composeExecutor, memoryStore, mcpManager,
+      // and permission lists). When absent, fall back to the bare resolveProvider
+      // which is suitable for one-shot and test paths that need no executors.
+      const resolveProviderFn = this.config.providerFactory
+        ? this.config.providerFactory
+        : (m: string | undefined) => resolveProvider(m);
+      this.providerQuery = new ProviderRouter(
+        { prompt: promptIterable, config: this.config },
+        {
+          resolveProvider: resolveProviderFn,
+          providerNameForModel: (m) => providerForModel(m),
+          resolveApiKey: (m) => resolveCredentialForModel(m),
+        },
+      );
+    }
 
     this.conversationHistory = [];
     this.turnCount = 0;
@@ -149,6 +213,8 @@ export class AgentSession implements IAgentSession {
     this.sessionRunningCostUsd = 0;
     this.sessionRunningTokens = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
     this.lastStopReason = undefined;
+    this.maxTurnsHit = false;
+    this.hookBlocked = false;
     this.sessionEndDispatched = false;
     this.currentState = 'idle';
     this.subagentCompletedCount = 0;
@@ -206,6 +272,11 @@ export class AgentSession implements IAgentSession {
       }
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
+      // Origin signal for `hook_blocked`: a SessionStart hook that blocks
+      // throws HookBlockedError up through pullInitialization() to here.
+      if (error instanceof HookBlockedError) {
+        this.hookBlocked = true;
+      }
       if (!this.stateManager.isInitializationSettled()) {
         this.stateManager.rejectInitializationOnce(error);
       }
@@ -400,6 +471,12 @@ export class AgentSession implements IAgentSession {
     this.conversationHistory.push(userMessage);
     this.inputStream.pushUserMessage(content);
 
+    // Durable ledger: initialization is deferred to here (not the
+    // constructor) because the provider-issued session id only exists after
+    // `session.init` — which `initPromise` above has just drained.
+    this.ensureLedger();
+    this.ledger?.recordUser(historySummary);
+
     const deps = this.buildTransformDeps();
 
     try {
@@ -411,6 +488,7 @@ export class AgentSession implements IAgentSession {
 
         if (output) {
           if (output.type === 'done') this.turnCount++;
+          this.ledger?.recordEvent(output);
           yield output;
           if (output.type === 'done' || output.type === 'error') break;
         }
@@ -418,6 +496,51 @@ export class AgentSession implements IAgentSession {
     } finally {
       if (this.currentState === 'streaming') this.currentState = 'idle';
     }
+  }
+
+  /**
+   * Create the session ledger writer on first use.
+   *
+   * Gates (all must pass):
+   *   - top-level session (subagents: `depth`/`parentSessionId` set at fork);
+   *   - `AFK_SESSION_LEDGER_DISABLED` is not `'1'`;
+   *   - the provider has issued a session id.
+   *
+   * One attempt per lifecycle: if the id is unavailable or unsafe the first
+   * time, the session simply runs unledgered — never throws, never retries
+   * per-event (the `ledgerInitAttempted` latch keeps the hot path cheap).
+   */
+  private ensureLedger(): void {
+    if (this.ledgerInitAttempted) return;
+    this.ledgerInitAttempted = true;
+    if (this.config.depth !== undefined || this.config.parentSessionId !== undefined) return;
+    if (env.AFK_SESSION_LEDGER_DISABLED === '1') return;
+    const id = this.sessionId;
+    if (!id) return;
+    const writer = new SessionLedgerWriter(id);
+    if (!writer.active) return;
+    this.ledger = writer;
+    const meta = this.getSessionMetadata();
+    writer.record({
+      kind: 'meta',
+      sessionId: id,
+      model: meta.model ?? String(this.config.model),
+      ...(meta.cwd !== undefined ? { cwd: meta.cwd } : {}),
+    });
+  }
+
+  /**
+   * Seal the ledger with a terminal record and flush. Idempotent.
+   * `close()`/`reset()` await the returned promise so tailers see the
+   * terminal record before teardown completes; the abort path
+   * fire-and-forgets it (abort handlers cannot block on disk I/O).
+   */
+  private sealLedger(reason: string): Promise<void> {
+    const ledger = this.ledger;
+    if (!ledger) return Promise.resolve();
+    this.ledger = null;
+    this.ledgerInitAttempted = false;
+    return ledger.close(reason);
   }
 
   private summarizeContentBlocks(blocks: ContentBlockParam[]): string {
@@ -488,6 +611,7 @@ export class AgentSession implements IAgentSession {
     }
 
     await this.dispatchSessionEndOnce('reset');
+    await this.sealLedger('reset');
 
     try {
       await this.providerQuery.close();
@@ -538,6 +662,7 @@ export class AgentSession implements IAgentSession {
   }
 
   private async onAbort(): Promise<void> {
+    void this.sealLedger('abort');
     try {
       await this.providerQuery.interrupt();
     } catch {
@@ -718,6 +843,7 @@ export class AgentSession implements IAgentSession {
   async close(): Promise<void> {
     if (this.currentState === 'closed') return;
     this.currentState = 'closed';
+    await this.sealLedger('close');
     if (!this.abortController.signal.aborted) {
       this.abortController.abort('closed');
     }
@@ -778,21 +904,16 @@ export class AgentSession implements IAgentSession {
 
   /**
    * Emit the `closure` trace event with the session's terminal
-   * classification. Maps the `dispatchSessionEndOnce` reason plus the
-   * abort signal's reason value into the {@link ClosureReason} enum.
+   * classification. Delegates the precedence rules to the pure
+   * {@link classifyClosureReason} (`./closure-reason.ts`), which maps the
+   * `dispatchSessionEndOnce` reason, the terminal-cause flags (`maxTurnsHit`,
+   * `hookBlocked`), the pre-classified abort reason, and the last provider
+   * stop reason into a {@link ClosureReason}.
    *
-   * Classification rules:
-   *  - `dispatchReason === 'error'` → `'abort'` (init-time error, treated
-   *    as a generic abort termination)
-   *  - aborted signal with `BudgetExceededError` reason → `'budget_exceeded'`
-   *  - aborted signal with a `TimeoutError` reason → `'timeout'`
-   *  - aborted signal otherwise (and `signal.reason !== 'closed'`)
-   *    → `'abort'`
-   *  - non-aborted normal close/reset → `'model_end_turn'`
-   *
-   * The other ClosureReason values (`iteration_cap`, `hook_blocked`,
-   * `max_turns_exceeded`) require explicit signaling from their origin
-   * sites and are deferred to a later commit.
+   * Wired reasons: `model_end_turn`, `truncated`, `abort`, `timeout`,
+   * `budget_exceeded`, `hook_blocked`, `max_turns_exceeded`. `iteration_cap`
+   * remains deferred — it is wired alongside the tool-use loop cap that
+   * produces it.
    */
   private async emitClosure(dispatchReason: string): Promise<void> {
     const writer = this.config.traceWriter;
@@ -820,23 +941,29 @@ export class AgentSession implements IAgentSession {
   }
 
   private deriveClosureReason(dispatchReason: string): import('../trace/index.js').ClosureReason {
-    if (dispatchReason === 'error') return 'abort';
+    // Pre-classify the abort-signal reason here (needs the concrete error
+    // classes); the precedence decision tree lives in the pure
+    // classifyClosureReason so it is unit-testable without a live session.
+    let abort: 'budget_exceeded' | 'timeout' | 'abort' | null = null;
     const signal = this.abortController.signal;
     if (signal.aborted && signal.reason !== 'closed') {
       const r = signal.reason;
-      if (r instanceof BudgetExceededError) return 'budget_exceeded';
-      if (r instanceof TimeoutError) return 'timeout';
-      // Some abort paths pass the error's message string rather than
-      // the error instance — match the well-known prefixes as a fallback
-      // so the classification stays accurate when the abort reason has
-      // been stringified upstream.
-      if (typeof r === 'string') {
-        if (r.startsWith('Budget ')) return 'budget_exceeded';
-        if (r.includes('timed out')) return 'timeout';
-      }
-      return 'abort';
+      if (r instanceof BudgetExceededError) abort = 'budget_exceeded';
+      else if (r instanceof TimeoutError) abort = 'timeout';
+      // Some abort paths pass the error's message string rather than the
+      // error instance — match the well-known prefixes as a fallback so the
+      // classification stays accurate when the abort reason was stringified.
+      else if (typeof r === 'string' && r.startsWith('Budget ')) abort = 'budget_exceeded';
+      else if (typeof r === 'string' && r.includes('timed out')) abort = 'timeout';
+      else abort = 'abort';
     }
-    return 'model_end_turn';
+    return classifyClosureReason({
+      dispatchReason,
+      maxTurnsHit: this.maxTurnsHit,
+      hookBlocked: this.hookBlocked,
+      abort,
+      lastStopReason: this.lastStopReason,
+    });
   }
 
   /**
@@ -948,6 +1075,9 @@ export class AgentSession implements IAgentSession {
       throw new Error('Cannot send message: session is busy');
     }
     if (this.config.maxTurns && this.turnCount >= this.config.maxTurns) {
+      // Origin signal for `max_turns_exceeded`: the throw below surfaces as a
+      // generic dispatch error, so flag the specific cause for the closure.
+      this.maxTurnsHit = true;
       throw new Error(`Maximum turns (${this.config.maxTurns}) exceeded`);
     }
   }

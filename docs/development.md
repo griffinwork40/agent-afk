@@ -4,7 +4,7 @@ Internal reference for working on `agent-afk` itself — building, testing, rele
 
 ## Prerequisites
 
-- **Node.js ≥ 20.0.0** (enforced by `package.json#engines`).
+- **Node.js ≥ 22.0.0** (enforced by `package.json#engines`). Node 20 is EOL and `better-sqlite3` ≥ 12.10 ships no prebuilt binaries for it — installs on Node 20 fall back to a node-gyp source build, which fails on machines without Python/build tools.
 - **pnpm** — the lockfile is pnpm-specific. `npm install` will desync it.
   - Fast path: `corepack enable` (bundled with Node ≥ 16.9), then use `pnpm` directly.
   - Or globally: `npm install -g pnpm@latest`.
@@ -86,7 +86,7 @@ Vendored agents under `src/skills/_agents/` must stay byte-equal to upstream —
 ## Conventions
 
 - **`tsconfig.json` is maximally strict**: `noUnusedLocals`, `noUnusedParameters`, `noUncheckedIndexedAccess`, `noPropertyAccessFromIndexSignature`. All code must pass `tsc --noEmit`.
-- The agent-afk system prompt is a raw string from config or file. No SDK preset is loaded.
+- The agent-afk system prompt is the framework base (`prompts/system-prompt.md`) with the operator overlay (env/config/AFK.md) appended via `resolveBaseSystemPrompt()`, sent as a raw string. No SDK preset is loaded.
 - `AgentSession` constructor is **synchronous**; SDK lifecycle runs async via `initSdkLifecycle()` and surfaces through the provider event stream.
 - DAG executor (`src/agent/dag.ts`) is a Phase 2 stub — types exported but `runDAG` throws.
 - **SDK dependency tracking**: every import from `@anthropic-ai/sdk` is in `.sdk-dependency.lock.json`. CI fails on unlocked new symbols. After adding an SDK import, run `pnpm audit:sdk:update-lock` and edit the new entry's `reason` field before commit.

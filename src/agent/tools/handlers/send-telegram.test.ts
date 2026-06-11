@@ -2,25 +2,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSendTelegramHandler } from './send-telegram.js';
 import type { PushOptions, PushResult } from '../../../telegram/push.js';
 
+// loadTelegramConfig reads afk.config.json; mock it so target resolution is
+// driven purely by the env vars the harness sets (hermetic). The pure resolver
+// is exhaustively covered in src/telegram/notify-routing.test.ts.
+vi.mock('../../../cli/config.js', () => ({ loadTelegramConfig: vi.fn(() => ({})) }));
+
 type PushFn = (options: PushOptions) => Promise<PushResult>;
 
 const OK_RESULT: PushResult = { ok: true, status: 200 };
 
+function setOrDelete(key: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
+
 function makeHarness(opts: {
   token?: string;
   allowed?: string;
+  /** Sets AFK_TELEGRAM_NOTIFY_MODE — `broadcast` restores the legacy fan-out. */
+  mode?: string;
   pushFn?: PushFn;
 } = {}) {
-  if (opts.token === undefined) {
-    delete process.env['TELEGRAM_BOT_TOKEN'];
-  } else {
-    process.env['TELEGRAM_BOT_TOKEN'] = opts.token;
-  }
-  if (opts.allowed === undefined) {
-    delete process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'];
-  } else {
-    process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'] = opts.allowed;
-  }
+  setOrDelete('TELEGRAM_BOT_TOKEN', opts.token);
+  setOrDelete('AFK_TELEGRAM_ALLOWED_CHAT_IDS', opts.allowed);
+  setOrDelete('AFK_TELEGRAM_NOTIFY_MODE', opts.mode);
 
   const pushFn = vi.fn<PushFn>(opts.pushFn ?? (async () => OK_RESULT));
   const handler = createSendTelegramHandler(pushFn);
@@ -28,19 +33,23 @@ function makeHarness(opts: {
 }
 
 describe('send_telegram handler', () => {
-  const origToken = process.env['TELEGRAM_BOT_TOKEN'];
-  const origAllow = process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'];
+  const ENV_KEYS = [
+    'TELEGRAM_BOT_TOKEN',
+    'AFK_TELEGRAM_ALLOWED_CHAT_IDS',
+    'AFK_TELEGRAM_NOTIFY_MODE',
+    'AFK_TELEGRAM_PRIMARY_CHAT_ID',
+  ] as const;
+  const orig: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    delete process.env['TELEGRAM_BOT_TOKEN'];
-    delete process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'];
+    for (const k of ENV_KEYS) {
+      orig[k] = process.env[k];
+      delete process.env[k];
+    }
   });
 
   afterEach(() => {
-    if (origToken === undefined) delete process.env['TELEGRAM_BOT_TOKEN'];
-    else process.env['TELEGRAM_BOT_TOKEN'] = origToken;
-    if (origAllow === undefined) delete process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'];
-    else process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'] = origAllow;
+    for (const k of ENV_KEYS) setOrDelete(k, orig[k]);
   });
 
   const signal = new AbortController().signal;
@@ -126,8 +135,17 @@ describe('send_telegram handler', () => {
       expect(r.content).toMatch(/Sent Telegram message to chat 12345/);
     });
 
-    it('sends to multiple chat IDs', async () => {
+    it('defaults to the primary (DM) chat for a multi-chat allowlist — no fan-out', async () => {
       const { handler, pushFn } = makeHarness({ token: 't', allowed: '111, 222 ,333' });
+      const r = await handler({ message: 'ping' }, signal);
+      expect(r.isError).toBeUndefined();
+      expect(pushFn).toHaveBeenCalledOnce();
+      expect(pushFn).toHaveBeenCalledWith({ token: 't', chatId: 111, text: 'ping' });
+      expect(r.content).toMatch(/Sent Telegram message to chat 111/);
+    });
+
+    it('fans out to multiple chat IDs in broadcast mode', async () => {
+      const { handler, pushFn } = makeHarness({ token: 't', allowed: '111, 222 ,333', mode: 'broadcast' });
       const r = await handler({ message: 'ping' }, signal);
       expect(r.isError).toBeUndefined();
       expect(pushFn).toHaveBeenCalledTimes(3);
@@ -164,6 +182,7 @@ describe('send_telegram handler', () => {
       const { handler } = makeHarness({
         token: 't',
         allowed: '111,222',
+        mode: 'broadcast',
         pushFn: async (opts) => {
           calls.push(opts.chatId as number);
           if (opts.chatId === 222) return { ok: false, status: 403, errorMessage: 'blocked' };
@@ -181,6 +200,7 @@ describe('send_telegram handler', () => {
       const { handler } = makeHarness({
         token: 't',
         allowed: '111,222',
+        mode: 'broadcast',
         pushFn: async () => ({ ok: false, status: 0, errorMessage: 'network down' }),
       });
       const r = await handler({ message: 'hi' }, signal);

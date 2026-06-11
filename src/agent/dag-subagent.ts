@@ -54,6 +54,13 @@ export interface SubagentDAGNode {
    * Corresponds to `AgentConfig.writeRoots`.
    */
   writeRoots?: string[];
+  /**
+   * Per-node API key. When set, forwarded directly into the node's fork
+   * config so the node's subagent authenticates with its own credential
+   * rather than the manager's `parentApiKey` fallback. Corresponds to
+   * `AgentConfig.apiKey`.
+   */
+  apiKey?: string;
 }
 
 export interface SubagentDAGOptions {
@@ -88,6 +95,7 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
           ...(spec.cwd !== undefined ? { cwd: spec.cwd } : {}),
           ...(spec.readRoots !== undefined ? { readRoots: spec.readRoots } : {}),
           ...(spec.writeRoots !== undefined ? { writeRoots: spec.writeRoots } : {}),
+          ...(spec.apiKey !== undefined ? { apiKey: spec.apiKey } : {}),
         },
         idPrefix: spec.idPrefix ?? `dag-${spec.id}`,
         ...(spec.outputSchema !== undefined ? { outputSchema: spec.outputSchema } : {}),

@@ -289,14 +289,6 @@ export interface ScreenshotResult {
   height: number;
 }
 
-export interface ScreenshotResult {
-  /** Absolute path under ~/.afk/state/witness/<sid>/browser/screenshots/. */
-  path: string;
-  bytes: number;
-  width: number;
-  height: number;
-}
-
 export interface ExtractResult {
   /** Conforms to the input `schema`. */
   data: unknown;

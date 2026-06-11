@@ -98,6 +98,21 @@ export function getProjectPluginsDir(): string {
   return join(getProjectAfkDir(), 'plugins');
 }
 
+/**
+ * Project-scoped plans directory: `<cwd>/.afk/plans/`.
+ *
+ * Home for the plan artifact the model writes when the user exits plan mode
+ * (`/plan off`). Takes an explicit `cwd` because the REPL tracks the session's
+ * effective working directory (`stats.cwd`, stamped at REPL bootstrap)
+ * separately from the Node host's `process.cwd()` — the two diverge under
+ * `afk i --worktree`, and the plan must land in the session's worktree, not
+ * the host's launch dir. The default keeps parity with the param-less sibling
+ * `getProject*Dir` helpers for non-REPL callers.
+ */
+export function getProjectPlansDir(cwd: string = process.cwd()): string {
+  return join(cwd, '.afk', 'plans');
+}
+
 export function getPluginsIndexPath(): string {
   return join(getPluginsDir(), '.index.json');
 }
@@ -397,6 +412,50 @@ export function getBgJobLog(jobId: string): string {
  */
 export function getBgJobMeta(jobId: string): string {
   return join(getBgJobDir(jobId), 'meta.json');
+}
+
+// ---------------------------------------------------------------------------
+// Session event-ledger paths
+// ---------------------------------------------------------------------------
+
+/**
+ * Session ids flow into ledger paths from provider-issued identifiers AND
+ * from caller-supplied CLI/Telegram arguments (`afk attach <id>`, `/watch
+ * <id>`), so the same traversal defense as bg job ids applies. UUIDs and
+ * slugified names both fit the charset.
+ */
+const LEDGER_SESSION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+const LEDGER_SESSION_ID_MAX_LEN = 128;
+
+/** Non-throwing safety check for session ids used in ledger paths. */
+export function isSafeLedgerSessionId(sessionId: string): boolean {
+  return (
+    typeof sessionId === 'string' &&
+    sessionId.length > 0 &&
+    sessionId.length <= LEDGER_SESSION_ID_MAX_LEN &&
+    LEDGER_SESSION_ID_PATTERN.test(sessionId)
+  );
+}
+
+/**
+ * Per-session ledger directory: `~/.afk/state/sessions/<sessionId>/`.
+ * Shares the sessions dir with sidecar `<id>.json` files and mint-state
+ * subdirs — the ledger adds `events.jsonl` inside the per-id subdir.
+ * @throws if `sessionId` fails {@link isSafeLedgerSessionId}.
+ */
+export function getSessionLedgerDir(sessionId: string): string {
+  if (!isSafeLedgerSessionId(sessionId)) {
+    throw new Error(`Invalid session id for ledger path: ${JSON.stringify(sessionId)}`);
+  }
+  return join(getSessionsDir(), sessionId);
+}
+
+/**
+ * Append-only JSONL event ledger for a session.
+ * @throws if `sessionId` fails {@link isSafeLedgerSessionId}.
+ */
+export function getSessionLedgerPath(sessionId: string): string {
+  return join(getSessionLedgerDir(sessionId), 'events.jsonl');
 }
 
 /**

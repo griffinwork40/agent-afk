@@ -11,6 +11,232 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.95.0] - 2026-06-11
+
+### Added
+- drive the user's real Chrome via chrome-devtools-mcp (afk browser connect) (#83) (ee76c5f)
+
+## [3.94.1] - 2026-06-11
+
+### Fixed
+- align REPL slash verbs with CLI (install / install-plugin) (port afk-workshop#701) (#79) (9899a6f)
+
+## [3.94.0] - 2026-06-11
+
+### Added
+- act on telemetry — loop guard, skill-depth hint, enable tool-failure-density (#80) (5255350)
+
+## [3.93.1] - 2026-06-11
+
+### Changed
+- split terminal-compositor + bug-hunt pass (#78) (b9d49e5)
+
+## [3.93.0] - 2026-06-10
+
+### Added
+- add /config and /doctor slash commands (port afk-workshop#702) (#77) (907dc5f)
+
+## [3.92.4] - 2026-06-10
+
+### Fixed
+- schedule live-sync no longer fails silently: `create_schedule`/`cancel_schedule` results now include `daemonSynced` + `syncDetail` (and a `syncNote` when the change will only apply on the next daemon start); transient `afk daemon --once` runs no longer overwrite-then-delete the service daemon's port-discovery file (new `writePortFile` option + content-guarded unlink); daemon `POST /tasks` accepts `cronExpression` as an alias for `cron`; creating a disabled schedule no longer live-registers it into the running daemon; `afk schedule` CLI subcommands (add/remove/enable/disable) now surface live-sync status via the shared http-client instead of failing silently; creating a disabled schedule now sends an idempotent DELETE to unregister any stale live daemon registration; `afk schedule add --disabled` now matches the tool handler (idempotent DELETE instead of an unconditional POST) so a disabled task is never live-registered into — and fired by — a running daemon; the CLI `add`/`enable` live-sync now forwards `notifyOn` so a (re)registered task keeps its notification setting until the daemon reloads from disk
+
+### Fixed
+- stop schedule live-sync from failing silently; guard the shared port file (#76) (3c44511)
+
+## [3.92.3] - 2026-06-10
+
+### Fixed
+- commit content to scrollback in banner sessions — eliminates blank-gap, duplication, and lost-commit regressions when the REPL prints a banner before arming (#74) (2411b88)
+- never reap a worktree hosting a live session (#73) (6f82cb8)
+
+## [3.92.2] - 2026-06-10
+
+### Fixed
+- force-checkout managed cache to survive dirty mirror (#49) (22e8277)
+
+### Changed
+- Port afk-workshop#756: add fix:pins hash-pin regen + check (#69) (c38a12c)
+- shadow-verify: confidence-trigger, three-way verdict, bounded retry (#52) (e6f65b2)
+
+## [3.92.1] - 2026-06-09
+
+### Fixed
+- repair skill-dispatch turn rendering and accounting regressions (#68) (61d377c)
+
+## [3.92.0] - 2026-06-09
+
+### Added
+- OSC 8 hyperlinks on tool-lane file paths — clickable without layout change (#67) (155d415)
+- durable per-session event ledger + Telegram /watch live-tail (#66) (fb5a593)
+
+## [3.91.0] - 2026-06-09
+
+### Changed
+- `/plan off` now exits plan mode, saves the plan you developed to a markdown file under `<cwd>/.afk/plans/`, and implements it — replacing the closure-summary ritual (which only emitted a 3-section recap to the transcript). The mode flips to `default` *before* the seeded turn so writes are permitted for the save + implementation. Shift+Tab still exits plan mode without saving or implementing (the manual-takeover escape hatch). The deferred-flip `pendingPlanExit` machinery is removed.
+
+### Added
+- /plan off saves the plan to a file then implements it (#55) (266249d)
+
+## [3.90.2] - 2026-06-09
+
+### Added
+- telegram: configurable outbound notification routing via `telegram.notify` in afk.config.json (`mode`, `primaryChatId`, `targets`) plus `AFK_TELEGRAM_NOTIFY_MODE` / `AFK_TELEGRAM_PRIMARY_CHAT_ID` env overrides. New pure resolver `src/telegram/notify-routing.ts`.
+
+### Changed
+- telegram: outbound notifications (daemon alerts, `send_telegram`, OAuth prompts, `/review`, digests) now default to a single **primary** chat — the first private/DM chat in `AFK_TELEGRAM_ALLOWED_CHAT_IDS` — instead of broadcasting to every allowed chat. Separates the inbound allowlist (who may command the bot) from outbound delivery. Single-chat setups are unaffected; multi-chat setups can restore fan-out with `mode: "broadcast"` (or `AFK_TELEGRAM_NOTIFY_MODE=broadcast`).
+
+### Added
+- route outbound notifications to a primary chat, not all allowed chats (#54) (e542bb2)
+
+### Fixed
+- strip orphaned bold markers in verdict cards; dedupe deferred row (#65) (917ac66)
+
+## [3.90.1] - 2026-06-09
+
+### Fixed
+- route subagent overlay refreshes through OverlayComposer (#63) (baf325d)
+
+## [3.90.0] - 2026-06-09
+
+### Added
+- add Claude Fable 5 (claude-fable-5) (#64) (cdbc3f1)
+
+### Fixed
+- recompute git workspace state per read instead of freezing at session start (#62) (05b5174)
+
+### Changed
+- extract compositor frame composition to frame.ts (#61) (9f5c54e)
+- awa-bundled/shadow-verify: skip adversarial re-derivation on text-terminal sessions (#57) (fad6885)
+
+## [3.89.11] - 2026-06-09
+
+### Fixed
+- surface the skill name in the tool lane (#59) (a8728f1)
+
+## [3.89.10] - 2026-06-09
+
+### Fixed
+- emit honest closure reasons (truncated, hook_blocked, max_turns_exceeded) (#60) (19206fe)
+
+## [3.89.9] - 2026-06-09
+
+### Fixed
+- clamp max_tokens to model ceiling and guard thinking budget (#58) (7d02d4b)
+
+## [3.89.8] - 2026-06-08
+
+### Fixed
+- ship uses --body-file/-F instead of heredoc-in-$() (#53) (a89b9db)
+
+### Changed
+- isolate no-auth tests from host credentials via AuthResolverDeps injection (#56) (5be979f)
+
+## [3.89.7] - 2026-06-08
+
+### Fixed
+- unblock native browser tools in the bundled ESM binary (#51) (fa29619)
+
+## [3.89.6] - 2026-06-08
+
+### Fixed
+- re-pin committed band on overlay collapse to kill the blank-space gap (#50) (5c76889)
+
+## [3.89.5] - 2026-06-08
+
+### Fixed
+- wire ProviderRouter into the REPL so /model crosses provider families (#47) (eca4ed2)
+
+### Changed
+- Port afk-workshop#643: resolve compose node credentials by node model (#46) (f5fde53)
+
+## [3.89.4] - 2026-06-08
+
+### Fixed
+- resolve session credential by session model, not env default (#42) (0959c40)
+- harvest argument-hint flags so /review --post completes (#48) (9d43b98)
+
+## [3.89.3] - 2026-06-08
+
+### Changed
+- reorder + dedup framework system prompt (Stage 1) (#45) (0de370b)
+
+## [3.89.2] - 2026-06-08
+
+### Fixed
+- enforce read-only tool gating for recon skills (ground-state) (#5) (6aeeaaa)
+
+## [3.89.1] - 2026-06-08
+
+### Fixed
+- make TerminalCompositor wrap-aware so soft-wrapped frame lines don't clobber committed text (#39) (a7ace49)
+
+## [3.89.0] - 2026-06-08
+
+### Added
+- per-model ProviderRouter — switch models across providers in one session, no AFK_PROVIDER (#38) (ab87afc)
+
+### Fixed
+- stop streaming markdown tables leaving ghost rows in the live overlay (#40) (a632844)
+
+## [3.88.0] - 2026-06-08
+
+### Added
+- Responses API + ChatGPT-subscription OAuth + user-configurable model slots (#33) (fe0ba5d)
+
+## [3.87.1] - 2026-06-07
+
+### Fixed
+- keep verdict card's closing border visible in tight frames; ASCII-safe affordances (#32) (9e08de4)
+
+### Changed
+- control-plane reframe — README hero + package metadata (#37) (caf39da)
+- Port afk-workshop#734: feat(cli): add `afk trace show` — human-readable witness trace reader (#36) (71b0f35)
+- Port afk-workshop#733: feat(cli): add /review --post {github,telegram} publishers (#35) (7830a0f)
+
+## [3.87.0] - 2026-06-07
+
+### Added
+- layer operator config over an unconditional framework base (#34) (ff03920)
+
+## [3.86.0] - 2026-06-07
+
+### Added
+- push full redacted task response to Telegram (#31) (dd73b2e)
+
+## [3.85.0] - 2026-06-07
+
+### Added
+- trim /resume from startup welcome hint (#18) (a64aa7b)
+
+### Fixed
+- make auto-release push atomic to prevent orphaned tags (#30) (4bd20e8)
+- sanitize Brave error body before embedding (#26) (d9df988)
+- collapse orchestrator progress map to at-most-one entry (#27) (0e79887)
+- repaint REPL prompt on fresh interactive session (#15) (108a383)
+
+### Changed
+- Port afk-workshop#689: feat(cli): process-wide stdin-claim guard (phantom-turn root-cause fix) (#28) (39ce1c7)
+- Port afk-workshop#727: fix(service): launchd daemon crash-loops (exit 127) — bake PATH into plist; + correct --trigger help (#25) (b675e78)
+
+## [3.84.1] - 2026-06-06
+
+### Fixed
+- unblock pre-auth CLI commands; require Node >= 22 (#16) (10ddd77)
+
+### Changed
+- Remove codex reference from README (5394b09)
+
+## [3.84.0] - 2026-06-06
+
+### Added
+- redesign /skills listing + detail UX (phase 1) (#14) (cf5e6f0)
+
+## [3.83.1] - 2026-06-06
+
+### Fixed
+- clamp diff body lines to terminal width in nested tool-lane paths (#9) (a3b38b5)
+
 ## [3.83.0] - 2026-06-06
 
 ### Added

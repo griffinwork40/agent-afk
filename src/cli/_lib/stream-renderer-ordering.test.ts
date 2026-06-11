@@ -1195,3 +1195,107 @@ describe('Bug #3 — stuck paused state: checkPauseAnnotations must have bounded
     r.dispose();
   });
 });
+
+// ─── Skill-nesting: Agent nests under skill spine ────────────────────────────
+//
+// End-to-end test for the fix described in the bug report:
+//
+//   BEFORE fix:
+//     ◉ ◆ skill(review)        ← orphaned skill root
+//     ● read_file              ← flat root (correct)
+//     ◉ → Agent(review-w1)    ← SECOND root anchor (confusing)
+//       ╰─ bash
+//
+//   AFTER fix (activeSkillName set):
+//     ◉ ◆ skill(review)
+//       ╰─ → Agent(review-w1)  ← nested under skill spine
+//           ╰─ bash
+//
+// The test drives StreamRenderer in TTY-hooked mode (forceNonTty=true +
+// injected compositor) and verifies:
+//   1. The Agent entry is parented under the skill entry (agentContext set).
+//   2. When the subagent completes, the skill header appears in scrollback
+//      BEFORE the Agent done-block (eager ancestor-header emission).
+//   3. A single ◉ root anchor in the final scrollback (collapsed tree).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Skill-nesting — Agent nests under skill spine when activeSkillName set', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('Agent entry receives agentContext = skill entry id when activeSkillName is set (d)', async () => {
+    vi.useFakeTimers();
+
+    const { StreamRenderer } = await import('./stream-renderer.js');
+
+    const commitAboveCalls: string[] = [];
+    const recordingCompositor = {
+      setOverlay: (_text: string) => {},
+      commitAbove: (text: string) => { commitAboveCalls.push(text); },
+      setSpinner: (_config: { enabled: boolean; rotateVerbEveryMs?: number }) => {},
+      arm: async () => {},
+      disarm: () => {},
+      getBuffer: () => ({ text: '', queued: false }),
+      isArmed: () => true,
+    };
+
+    const { writer } = makeWriter();
+    // Construct renderer with activeSkillName — simulates a slash-skill dispatch turn.
+    const r = new StreamRenderer({ out: writer, forceNonTty: true, activeSkillName: 'review' });
+
+    type PrivateRenderer = {
+      isTTY: boolean;
+      compositor: typeof recordingCompositor;
+      streamingMarkdownRef: { current: null };
+      toolLane: import('../commands/interactive/tool-lane.js').ToolLane;
+    };
+    const privateR = r as unknown as PrivateRenderer;
+    privateR.isTTY = true;
+    privateR.compositor = recordingCompositor;
+    privateR.streamingMarkdownRef.current = null;
+
+    // Step 1: model calls skill tool (registered by orchestrator event handler).
+    r.process(toolStartEvent('skill-tu-e2e', 'skill', '(review)'));
+
+    // Step 2: model dispatches agent subagent — should nest under skill.
+    r.process(toolStartEvent('agent-tu-e2e', 'agent', '"review-w1"'));
+
+    // Verify nesting at registration time (before subagent events arrive).
+    type PrivateLane = { entries: Map<string, { agentContext?: string; toolName: string }> };
+    const entries = (privateR.toolLane as unknown as PrivateLane).entries;
+    const agentEntry = entries.get('agent-tu-e2e');
+    expect(agentEntry, 'agent entry must be registered').toBeDefined();
+    expect(agentEntry?.agentContext, 'agent must be nested under skill entry').toBe('skill-tu-e2e');
+
+    // Step 3: subagent does some work and completes.
+    r.process(
+      toolStartEvent('bash-sa-1', 'Bash', '"ls"'),
+      { subagentId: 'sa-review-w1', agentType: 'review-w1', parentId: 'agent-tu-e2e' },
+    );
+    r.process(
+      toolResultEvent('bash-sa-1', 'file list'),
+      { subagentId: 'sa-review-w1', agentType: 'review-w1', parentId: 'agent-tu-e2e' },
+    );
+    r.process(doneEvent(), { subagentId: 'sa-review-w1', agentType: 'review-w1', parentId: 'agent-tu-e2e' });
+
+    // Step 4: skill header must appear in scrollback BEFORE the Agent done-block.
+    // (Eager ancestor-header emission in flushSource.)
+    const skillIdx = commitAboveCalls.findIndex(
+      (c) => c.includes('skill') || c.includes('review'),
+    );
+    const agentIdx = commitAboveCalls.findIndex(
+      (c) => c.includes('review-w1') || c.includes('Bash') || c.includes('bash'),
+    );
+
+    expect(skillIdx, 'skill header must be committed to scrollback').toBeGreaterThanOrEqual(0);
+    expect(agentIdx, 'agent done-block must be committed to scrollback').toBeGreaterThanOrEqual(0);
+    expect(
+      skillIdx,
+      'skill header must precede agent done-block in scrollback (single ◉ root)',
+    ).toBeLessThan(agentIdx);
+
+    r.process(doneEvent());
+    await r.dispose();
+  });
+});

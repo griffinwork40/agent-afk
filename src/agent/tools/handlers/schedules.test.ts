@@ -15,6 +15,7 @@ import {
   getScheduleHistoryHandler,
   cancelScheduleHandler,
 } from './schedules.js';
+import { startDaemon } from '../../daemon.js';
 
 vi.mock('../../../utils/debug.js', () => ({ debugLog: vi.fn() }));
 
@@ -262,5 +263,133 @@ describe('get_schedule_history handler', () => {
   it('missing taskId → isError: true', async () => {
     const result = await getScheduleHistoryHandler({}, fakeSignal);
     expect(result.isError).toBe(true);
+  });
+});
+
+describe('live-sync surface (daemonSynced)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedules-sync-'));
+    vi.stubEnv('AFK_HOME', tmpDir);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  interface SyncShape {
+    id?: string;
+    enabled?: boolean;
+    ok?: boolean;
+    daemonSynced: boolean;
+    syncDetail: string;
+    syncNote?: string;
+  }
+
+  it('reports daemonSynced: false (with note) when no daemon is running', async () => {
+    const result = await createScheduleHandler(
+      { name: 'Lonely Task', command: '/x', cron: '0 8 * * *' },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content as string) as SyncShape;
+    expect(parsed.daemonSynced).toBe(false);
+    expect(parsed.syncDetail).toMatch(/daemon-not-detected/);
+    expect(parsed.syncNote).toMatch(/next daemon/i);
+  });
+
+  it('live daemon: create registers the task and reports synced', async () => {
+    const handle = await startDaemon({ port: 0 });
+    try {
+      const result = await createScheduleHandler(
+        { name: 'Live Task', command: '/x', cron: '59 23 31 12 *' },
+        fakeSignal,
+      );
+      const parsed = JSON.parse(result.content as string) as SyncShape;
+      expect(parsed.daemonSynced).toBe(true);
+      expect(parsed.syncDetail).toBe('synced');
+      const tasks = (await (await fetch(`http://localhost:${handle.port}/tasks`)).json()) as Array<{
+        taskId: string;
+      }>;
+      expect(tasks.some((t) => t.taskId === 'live-task')).toBe(true);
+    } finally {
+      await handle.stop();
+    }
+  });
+
+  it('already-registered in daemon counts as synced (409 → end-state match)', async () => {
+    const handle = await startDaemon({
+      port: 0,
+      tasks: [
+        { taskId: 'dup-task', command: '/x', trigger: 'cron', cronExpression: '59 23 31 12 *' },
+      ],
+    });
+    try {
+      const result = await createScheduleHandler(
+        { name: 'Dup Task', command: '/x', cron: '59 23 31 12 *' },
+        fakeSignal,
+      );
+      const parsed = JSON.parse(result.content as string) as SyncShape;
+      expect(parsed.daemonSynced).toBe(true);
+      expect(parsed.syncDetail).toBe('already-registered');
+    } finally {
+      await handle.stop();
+    }
+  });
+
+  it('disabled task is NOT live-registered into the daemon', async () => {
+    const handle = await startDaemon({ port: 0 });
+    try {
+      const result = await createScheduleHandler(
+        { name: 'Sleepy Task', command: '/x', cron: '59 23 31 12 *', enabled: false },
+        fakeSignal,
+      );
+      const parsed = JSON.parse(result.content as string) as SyncShape;
+      expect(parsed.daemonSynced).toBe(true);
+      // The disabled-create path DELETEs an unregistered id → daemon 404 →
+      // 'not-registered'. Assert exactly that; a 'synced' (HTTP 200) here would
+      // mean the task was registered first, which is the bug this guards.
+      expect(parsed.syncDetail).toBe('not-registered');
+      const tasks = (await (await fetch(`http://localhost:${handle.port}/tasks`)).json()) as Array<{
+        taskId: string;
+      }>;
+      expect(tasks.some((t) => t.taskId === 'sleepy-task')).toBe(false);
+    } finally {
+      await handle.stop();
+    }
+  });
+
+  it('cancel against a live daemon unregisters and reports synced', async () => {
+    const handle = await startDaemon({ port: 0 });
+    try {
+      await createScheduleHandler(
+        { name: 'Cancel Me', command: '/x', cron: '59 23 31 12 *' },
+        fakeSignal,
+      );
+      const cancel = await cancelScheduleHandler(
+        { taskId: 'cancel-me', permanent: true },
+        fakeSignal,
+      );
+      const parsed = JSON.parse(cancel.content as string) as SyncShape;
+      expect(parsed.ok).toBe(true);
+      expect(parsed.daemonSynced).toBe(true);
+      const tasks = (await (await fetch(`http://localhost:${handle.port}/tasks`)).json()) as Array<{
+        taskId: string;
+      }>;
+      expect(tasks.some((t) => t.taskId === 'cancel-me')).toBe(false);
+    } finally {
+      await handle.stop();
+    }
+  });
+
+  it('cancel with no daemon reports daemonSynced: false', async () => {
+    await createScheduleHandler({ name: 'Ghost', command: '/x', cron: '0 8 * * *' }, fakeSignal);
+    const cancel = await cancelScheduleHandler({ taskId: 'ghost' }, fakeSignal);
+    const parsed = JSON.parse(cancel.content as string) as SyncShape;
+    expect(parsed.ok).toBe(true);
+    expect(parsed.daemonSynced).toBe(false);
+    expect(parsed.syncNote).toMatch(/next daemon/i);
   });
 });

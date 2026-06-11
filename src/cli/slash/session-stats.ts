@@ -51,10 +51,7 @@ export function resetStats(stats: SessionStats): void {
   // make the NEXT conversation's first turn persist a fresh sidecar under the
   // PREVIOUS conversation's name — a user-visible misattribution.
   delete stats.name;
-  // Closure ritual is per-conversation — the new conversation has nothing
-  // to close out. Preserve `planMode` (user-controlled), drop the pending
-  // flag.
-  delete stats.pendingPlanExit;
+  // Preserve `planMode` (user-controlled state — the gate reads it live).
 }
 
 /**

@@ -340,6 +340,54 @@ only on the live viewport, never on scrollback).
   survivors belong at `[targetBottom - fit + 1, targetBottom]`, always above the
   frame top).
 
+### Banner case: the floor must follow the commit scroll
+
+The full-contiguous-run tracking + merge path above was originally gated on
+`anchorRow <= 1`, so it was **inert for every banner session** — i.e. every
+real interactive REPL, which prints the ASCII banner before arming and so runs
+with `anchorRow > 1`. Two things were wrong:
+
+1. **Stale gate.** The merge soundness check is the equality
+   `committedBandBottomRow === newTopRow - 1`, which is banner-agnostic (the
+   anchor-ceiling evict shifts `committedBandBottomRow` in lockstep with the
+   frame). The extra `anchorRow <= 1` term forced single-block tracking on
+   every banner commit, so a tall overlay collapsing after several commits
+   stranded the older blocks (blank gap), re-pinned only the last block
+   (duplication), and dropped untracked lines (lost commits).
+
+2. **Stale floor.** `commitAbove` Phase 1 scrolls the whole screen up — banner
+   included — but never lowered `anchorRow`. The above-frame room
+   (`frameTop - anchorRow`) therefore never grew, the band could only ever
+   track that fixed number of rows, and committed content piled up orphaned in
+   the now-vacated banner rows where the collapse erase later destroyed it.
+
+3. **Wrap-blind contiguity check.** Once the gate was lifted, the merge's
+   "whole block painted?" test (`newPainted === lineCount`) misfired: `lineCount`
+   is the WRAP-AWARE physical row count (`logUpdate.measure()`), while
+   `newPainted` is derived from the logical-line array `textLines.length`. The
+   two diverge whenever a block has a trailing blank line (`\n\n` → `split`
+   yields a trailing `""`) or a wrapped line — so the check failed on every
+   `\n\n`-terminated commit, re-suppressing the merge and stranding the prior
+   band as a single overwritten block (lost commits). The intent is "no lines
+   dropped to overflow", i.e. `newPainted === textLines.length`.
+
+**The fix** (`terminal-compositor.committed-band.ts`): (a) drop the `anchorRow
+<= 1` gate from both `canUseMergePath` and `contiguousPriorBand`; (b) decrement
+`anchorRow` by the rows Phase 1 scrolled — exactly as the evict path already
+does (`preserveRowsBeforeFrameRender`, `anchorRow -= deficit`), scoped to the
+`fitsAboveFrame` path (the overflow path still floors at the unchanged
+`anchorFloor` to avoid CUP-writing into the still-protected banner zone); and
+(c) compare the contiguity check against `textLines.length`, not the wrap-aware
+`lineCount`. As the banner scrolls into scrollback the floor drops to 1 and the
+path converges to the no-banner case. Phase 3 measures `maxRun` against the
+**post-scroll** floor.
+
+**Regression test.** `src/cli/terminal-compositor.banner-commit-gap.test.ts`
+drives 8–12 commits under a tall overlay with a banner (`anchorRow > 1`) across
+two terminal geometries, then collapses the overlay, and asserts every committed
+line appears in the `@xterm/headless` buffer exactly once and the viewport run is
+contiguous and hugging the frame.
+
 **Regression test.** `src/cli/terminal-compositor.scrollback-gap.test.ts` drives
 7 thought/tool commit pairs under a tall overlay at `extraRows=2`, replays
 through `@xterm/headless`, and asserts every committed line survives exactly once

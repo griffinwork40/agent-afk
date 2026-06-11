@@ -45,7 +45,7 @@ export const PLAN_MODE_ADDENDUM_TEXT = [
   '  - `devils-advocate` — generate alternatives and rank them before committing',
   '  - `shadow-verify` — independently re-derive load-bearing claims',
   '',
-  'Do not declare readiness silently. When the plan is ready, state: chosen approach, risks named, and alternatives considered. The user will exit plan mode (`/plan off`) when satisfied.',
+  'Do not declare readiness silently. When the plan is ready, state: chosen approach, risks named, and alternatives considered. The user will then exit plan mode with `/plan off`, which has you save this plan to a file and implement it (Shift+Tab exits without implementing) — so keep the plan concrete and complete enough to act on directly.',
 ].join('\n');
 
 /**

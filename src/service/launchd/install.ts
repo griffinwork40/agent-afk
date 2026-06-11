@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, wr
 import { homedir } from 'os';
 import { dirname } from 'path';
 import { guiDomain, LAUNCHCTL_TIMEOUT_MS, labelFor, launchAgentsDir, plistPath, serviceLogPath, type ServiceName } from './paths.js';
-import { type PlistOptions, renderPlist, resolveWatchPaths, resolveProgramArguments } from './plist.js';
+import { type PlistOptions, renderPlist, resolveServicePath, resolveWatchPaths, resolveProgramArguments } from './plist.js';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Install / uninstall I/O
@@ -78,6 +78,16 @@ export function installService(name: ServiceName, opts: InstallOptions = {}): In
   mkdirSync(launchAgentsDir(), { recursive: true });
   mkdirSync(dirname(logFile), { recursive: true });
 
+  // launchd's minimal bootstrap PATH excludes Homebrew and version-manager
+  // node installs, which crash-loops any service whose entrypoint resolves
+  // node via `#!/usr/bin/env node` (see resolveServicePath). Always inject an
+  // explicit PATH led by the installer's own node dir; caller-supplied env
+  // wins so an explicit `PATH` in opts.environment still overrides.
+  const environmentVariables: Record<string, string> = {
+    PATH: resolveServicePath(),
+    ...(opts.environment ?? {}),
+  };
+
   const plistOpts: PlistOptions = {
     label: labelFor(name),
     programArguments: args,
@@ -85,7 +95,7 @@ export function installService(name: ServiceName, opts: InstallOptions = {}): In
     standardOutPath: logFile,
     standardErrorPath: logFile,
     ...(watchPaths ? { watchPaths } : {}),
-    ...(opts.environment ? { environmentVariables: opts.environment } : {}),
+    environmentVariables,
   };
   const xml = renderPlist(plistOpts);
 

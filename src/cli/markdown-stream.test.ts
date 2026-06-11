@@ -637,6 +637,65 @@ describe('StreamingMarkdownRenderer', () => {
 
       expect(writes.join('')).toContain('legacy');
     });
+
+    it('streams a table as a compact overlay placeholder, then commits it exactly once', async () => {
+      // Regression (the "ghost table rows" bug): a streaming markdown table has
+      // no internal blank line, so the whole growing table accumulated in the
+      // pending buffer and was painted into the live overlay every chunk. Once
+      // taller than the viewport, rows scrolled into scrollback where the
+      // overlay's absolute-cursor erase could not reclaim them — leaving ghost
+      // tail rows beside the final committed table. The fix paints a
+      // fixed-height placeholder for an in-progress table, so the overlay never
+      // grows past the viewport. The full table still commits once.
+      const prevCols = process.stdout.columns;
+      Object.defineProperty(process.stdout, 'columns', { value: 200, configurable: true });
+      vi.useFakeTimers();
+      try {
+        const { stub, overlayCalls, commitAboveCalls } = makeStubCompositor();
+        const ttyStream = new PassThrough();
+        (ttyStream as any).isTTY = true;
+
+        renderer = new StreamingMarkdownRenderer({
+          out: ttyStream,
+          throttleMs: 10,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          compositor: stub as any,
+        });
+
+        // Stream a table (header + delimiter + many rows) with NO trailing
+        // blank line, so it stays in the pending buffer the whole time.
+        renderer.push('| Col A | Col B |\n');
+        renderer.push('|-------|-------|\n');
+        for (let i = 0; i < 12; i++) {
+          renderer.push(`| ROW_${i} | value ${i} |\n`);
+          vi.advanceTimersByTime(20);
+          await vi.runAllTimersAsync();
+        }
+
+        // The live overlay only ever shows the compact placeholder…
+        expect(overlayCalls.length).toBeGreaterThan(0);
+        expect(overlayCalls.some((s) => s.includes('streaming table'))).toBe(true);
+        // …never the growing table rows (the un-clearable ghost source).
+        expect(overlayCalls.some((s) => s.includes('ROW_11'))).toBe(false);
+        for (const call of overlayCalls) {
+          const nonEmpty = call.split('\n').filter((l) => l.trim().length > 0);
+          expect(nonEmpty.length).toBeLessThanOrEqual(2);
+        }
+
+        // Close the block → the full table commits to scrollback exactly once.
+        vi.useRealTimers();
+        renderer.push('\n\n');
+        await renderer.flush();
+
+        const committed = commitAboveCalls.join('\n');
+        expect(committed).toContain('ROW_0');
+        expect(committed).toContain('ROW_11');
+        expect((committed.match(/ROW_11\b/g) ?? []).length).toBe(1);
+      } finally {
+        vi.useRealTimers();
+        Object.defineProperty(process.stdout, 'columns', { value: prevCols, configurable: true });
+      }
+    });
   });
 
   describe('resize handling', () => {
