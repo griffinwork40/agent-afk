@@ -267,6 +267,29 @@ describe('dispatchSubagentStop — return value', () => {
     });
   });
 
+  it('keeps the last injectContext when multiple stop hooks return one', async () => {
+    const registry = createHookRegistry();
+
+    registry.register('SubagentStop', async () => ({
+      injectContext: 'first framework note',
+    }));
+    registry.register('SubagentStop', async () => ({
+      injectContext: 'second framework note',
+    }));
+
+    const decision = await dispatchSubagentStop(registry, {
+      event: 'SubagentStop',
+      subagentId: 'sub-1',
+      status: 'succeeded',
+    });
+
+    // Current contract: hook decisions are not merged. The last non-blocking
+    // SubagentStop decision is the only one the parent injection path sees.
+    expect(decision).toEqual({
+      injectContext: 'second framework note',
+    });
+  });
+
   it('returns empty object when no handlers registered', async () => {
     const registry = createHookRegistry();
 
