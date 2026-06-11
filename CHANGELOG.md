@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.100.1] - 2026-06-11
+
+### Fixed
+- reserve final column in echo path to fix prompt tripling (#94) (755987b)
+- web_scrape failure logging (#24) + tar create/append gating (#6) (#89) (eec4b92)
+
+### Changed
+- document subagent context injection contract (#93) (4755b92)
+
 ## [3.100.0] - 2026-06-11
 
 ### Added
