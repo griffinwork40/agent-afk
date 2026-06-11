@@ -490,7 +490,7 @@ describe('formatSubmittedEcho', () => {
     );
     // No prompt prefix; the buffer ends at the terminal edge.
     expect(out.endsWith(buffer)).toBe(true);
-    expect(out).toBe(' '.repeat(terminalWidth - buffer.length) + buffer);
+    expect(out).toBe('▶ ' + ' '.repeat(terminalWidth - buffer.length - 2) + buffer);
   });
 
   it('renders a right-edge bar card for multi-line buffers', () => {
@@ -507,8 +507,10 @@ describe('formatSubmittedEcho', () => {
     expect(out).toContain('line two');
     expect(out).not.toContain('╭');
     expect(out).not.toContain('╰');
-    // Each line ends with the right-edge bar.
-    for (const line of out.split('\n')) {
+    // Separator row is first (contains ─); content rows end with the right-edge bar.
+    const multiLines = out.split('\n');
+    const [, ...multiContentLines] = multiLines;
+    for (const line of multiContentLines) {
       expect(line.endsWith(' │')).toBe(true);
     }
   });
@@ -525,7 +527,10 @@ describe('formatSubmittedEcho', () => {
     );
     expect(out).toContain('│');
     expect(out).toContain(long.slice(0, 40));
-    for (const line of out.split('\n')) {
+    // Separator row is first (contains ─); content rows end with the right-edge bar.
+    const longLines = out.split('\n');
+    const [, ...longContentLines] = longLines;
+    for (const line of longContentLines) {
       expect(line.endsWith(' │')).toBe(true);
     }
   });

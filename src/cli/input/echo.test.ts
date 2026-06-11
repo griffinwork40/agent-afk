@@ -43,10 +43,10 @@ describe('formatSubmittedEcho', () => {
     // No prompt prefix in the echo; pad + buffer should equal terminalWidth wide.
     expect(result.endsWith(buffer)).toBe(true);
     expect(stringWidth(result)).toBe(terminalWidth);
-    expect(result).toBe(' '.repeat(terminalWidth - stringWidth(buffer)) + buffer);
+    expect(result).toBe('▶ ' + ' '.repeat(terminalWidth - stringWidth(buffer) - 2) + buffer);
   });
 
-  it('card path: every line ends flush right with the cyan bar', async () => {
+  it('card path: every content line ends flush right with the cyan bar', async () => {
     const fn = await importEcho();
     // Read the actual terminal width the card renderer will see — it pulls
     // `getTerminalWidth()` directly, not the explicit override. (The override
@@ -61,11 +61,14 @@ describe('formatSubmittedEcho', () => {
       fn({ buffer, promptText: 'afk › ', isTTY: true, terminalWidth: cols }),
     );
     const lines = result.split('\n');
-    expect(lines.length).toBeGreaterThan(0);
-    // All wrapped lines must share the same width so the right edge is uniform.
-    const widths = lines.map((l) => stringWidth(l));
+    expect(lines.length).toBeGreaterThan(1);
+    // First line is the separator row (contains ─); remaining are content rows.
+    const [sepRow, ...contentRows] = lines;
+    expect(sepRow).toContain('─');
+    // All content rows must share the same width so the right edge is uniform.
+    const widths = contentRows.map((l) => stringWidth(l));
     for (const w of widths) expect(w).toBe(widths[0]);
-    for (const line of lines) {
+    for (const line of contentRows) {
       expect(line.endsWith(' │')).toBe(true);
       expect(stringWidth(line)).toBeLessThanOrEqual(cols);
     }
@@ -80,8 +83,10 @@ describe('formatSubmittedEcho', () => {
     // Content is present
     expect(result).toContain('line one');
     expect(result).toContain('line two');
-    // Every line ends with the right-edge bar
-    for (const line of result.split('\n')) {
+    // Separator row is first; content rows end with the right-edge bar.
+    const lines = result.split('\n');
+    const [, ...contentLines] = lines; // skip separator row
+    for (const line of contentLines) {
       expect(line.endsWith(' │')).toBe(true);
     }
   });
@@ -158,9 +163,12 @@ describe('formatSubmittedEcho', () => {
       const lastLine = lines[lines.length - 1]!;
       expect(lastLine.endsWith(summary)).toBe(true);
       expect(stringWidth(lastLine)).toBe(terminalWidth);
-      // The card's right-edge bar is still present on the card rows above.
+      // The card's right-edge bar is still present on the content rows.
+      // cardLines = all lines except the trailing summary line.
       const cardLines = lines.slice(0, -1);
-      for (const line of cardLines) {
+      // First card line is the separator row (ends with ─, not │); skip it.
+      const [, ...cardContentLines] = cardLines;
+      for (const line of cardContentLines) {
         expect(line.endsWith(' │')).toBe(true);
       }
     });

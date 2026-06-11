@@ -425,8 +425,10 @@ describe('card', () => {
     expect(out).not.toContain('╭');
     expect(out).not.toContain('╰');
     expect(out).toContain('hello world');
-    // Right-aligned: every line ends with ' │' (content flush right against bar)
-    for (const line of out.split('\n')) {
+    // First row is separator (─); content rows end with ' │'.
+    const rows = out.split('\n');
+    expect(rows[0]).toContain('─');
+    for (const line of rows.slice(1)) {
       expect(line.endsWith(' │')).toBe(true);
     }
   });
@@ -471,7 +473,8 @@ describe('card', () => {
     const out = strip(card({ kind: 'user', body: 'word '.repeat(15).trim() }));
     const rows = out.split('\n');
     expect(rows.length).toBeGreaterThan(1);
-    for (const row of rows) {
+    // First row is separator (─); content rows end with ' │'.
+    for (const row of rows.slice(1)) {
       expect(row.endsWith(' │')).toBe(true);
     }
     Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
@@ -504,12 +507,14 @@ describe('card', () => {
 
   // ── right-alignment tests (user-echo card layout) ──────────────────────────
 
-  it('user kind: every line ends with " │" at the right edge', () => {
+  it('user kind: every content line ends with " │" at the right edge', () => {
     Object.defineProperty(process.stdout, 'columns', { value: 40, configurable: true });
     const out = strip(card({ kind: 'user', body: 'hello' }));
     const lines = out.split('\n');
-    expect(lines.length).toBeGreaterThan(0);
-    for (const line of lines) {
+    expect(lines.length).toBeGreaterThan(1);
+    // First line is separator (─); remaining content lines match the bar pattern.
+    expect(lines[0]).toContain('─');
+    for (const line of lines.slice(1)) {
       // Right-aligned: leading spaces, then content, then ' │' at the far right.
       expect(line).toMatch(/^ +hello \u2502$/);
     }
@@ -531,7 +536,11 @@ describe('card', () => {
     const out = strip(card({ kind: 'user', body }));
     const lines = out.split('\n');
     expect(lines.length).toBeGreaterThan(1);
-    for (const line of lines) {
+    // First line is separator (─); content lines end with ' │' and fit within 40 cols.
+    const [sepLine, ...contentLines] = lines;
+    expect(sepLine).toContain('─');
+    expect((sepLine ?? '').length).toBeLessThanOrEqual(40);
+    for (const line of contentLines) {
       expect(line.endsWith(' \u2502')).toBe(true);
       // Total width must not exceed the terminal width (40).
       expect(line.length).toBeLessThanOrEqual(40);

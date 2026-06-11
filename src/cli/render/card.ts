@@ -125,7 +125,7 @@ function renderUserCard(bodyLines: string[]): string {
     ];
   }
 
-  const bar = palette.user('│');
+  const bar = palette.user.bold('│');
   // Invariant (last-column safety): the bar lands at most at column `cols - 1`,
   // never the terminal's final column. A printable glyph in the last column
   // leaves many emulators (iTerm2/Ghostty/Kitty/WezTerm) in the DECAWM
@@ -145,7 +145,15 @@ function renderUserCard(bodyLines: string[]): string {
   // degrades to a bare bar without throwing instead of chasing an impossible
   // width.
   const rightEdge = cols - 1;
-  return displayRows
+
+  // Separator row is built after capping — does not count against MAX_USER_CARD_ROWS.
+  // Spans up to 30 visible columns right-aligned to rightEdge, matching the
+  // existing divider glyph vocabulary. Width formula guarantees row ≤ cols-1.
+  const sepW = Math.min(30, Math.max(1, rightEdge));
+  const sepPad = Math.max(0, rightEdge - sepW);
+  const separatorRow = ' '.repeat(sepPad) + palette.dim('─'.repeat(sepW));
+
+  const contentRows = displayRows
     .map((line) => {
       // Defensive clamp: an unbreakable token wider than innerW survives
       // wrapToWidth(hard:false) intact, so a row could otherwise exceed
@@ -161,6 +169,7 @@ function renderUserCard(bodyLines: string[]): string {
       return ' '.repeat(leadingSpace) + content + ' ' + bar;
     })
     .join('\n');
+  return separatorRow + '\n' + contentRows;
 }
 
 function renderBorderedCard(
