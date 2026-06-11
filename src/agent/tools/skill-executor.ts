@@ -225,7 +225,7 @@ export class SkillExecutor {
         requested_name: requestedName,
       }).catch(() => {});
       return {
-        content: `Skill tool not available at nesting depth ${depth} (max ${maxDepth})`,
+        content: `Skill tool not available at nesting depth ${depth} (max ${maxDepth}). You are too deeply nested to delegate further — perform the work inline with your own tools instead of calling skill/agent/compose.`,
         isError: true,
       };
     }

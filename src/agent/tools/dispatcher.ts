@@ -13,6 +13,7 @@
 import path from 'path';
 import { appendFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
+import { createHash } from 'node:crypto';
 import { HookBlockedError } from '../../utils/errors.js';
 import type { HookRegistry, PreToolUseContext, PostToolUseContext } from '../hooks.js';
 import type { AnthropicToolDef } from '../providers/anthropic-direct/types.js';
@@ -55,6 +56,46 @@ const SAFE_TOOLS: ReadonlySet<string> = new Set(
 
 export function defaultConcurrencyClassifier(toolName: string): boolean {
   return SAFE_TOOLS.has(toolName);
+}
+
+/**
+ * Repeat-loop circuit breaker threshold.
+ *
+ * `improve` telemetry caught sessions where a tool (e.g. get_runtime_state)
+ * was invoked 49–69 times CONSECUTIVELY with byte-identical input — a model
+ * stuck in a no-progress loop, burning tokens on a result that never changes.
+ * The breaker trips when the same (toolName, input) fingerprint is seen this
+ * many times in a row on one dispatcher (i.e. within a single turn), returning
+ * a synthetic isError nudge instead of re-running the tool.
+ *
+ * Set above any plausible legitimate consecutive-identical pattern: the first
+ * 7 identical calls still execute; the 8th onward is short-circuited.
+ */
+export const REPEAT_CIRCUIT_BREAKER_THRESHOLD = 8;
+
+/**
+ * Tools exempt from the repeat circuit breaker, for cases where repeated
+ * byte-identical calls are legitimately intentional (e.g. genuine polling).
+ * Empty by default: at {@link REPEAT_CIRCUIT_BREAKER_THRESHOLD}=8, eight
+ * consecutive byte-identical calls is itself a runaway signal for every
+ * current tool. Add a name here only if a real false-trip surfaces.
+ */
+const REPEAT_BREAKER_EXEMPT_TOOLS: ReadonlySet<string> = new Set<string>();
+
+/**
+ * Stable fingerprint of a tool call for repeat detection: sha256 over
+ * `name \0 JSON(input)`. Hashing bounds retained state to 64 hex chars
+ * regardless of input size. Identical tool_use blocks from the model
+ * serialize identically, so byte-identical calls collide as intended.
+ */
+function repeatCallFingerprint(call: ToolCall): string {
+  let input: string;
+  try {
+    input = JSON.stringify(call.input) ?? 'null';
+  } catch {
+    input = String(call.input);
+  }
+  return createHash('sha256').update(call.name).update('\u0000').update(input).digest('hex');
 }
 
 interface Batch {
@@ -167,6 +208,13 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly traceWriter: TraceWriter | undefined;
   /** When true, mutating `bash` commands are blocked (read-only skill child). */
   private readonly readOnlyBash: boolean;
+  /**
+   * Repeat-loop circuit breaker state. The dispatcher is built per `query()`,
+   * so this naturally tracks CONSECUTIVE byte-identical calls within a single
+   * turn (across the loop's tool rounds) and resets between turns via
+   * dispatcher reconstruction. See {@link checkRepeatCircuitBreaker}.
+   */
+  private repeatBreaker: { fingerprint: string; count: number } | null = null;
 
   constructor(opts: SessionToolDispatcherOptions) {
     this.handlers = opts.handlers;
@@ -374,6 +422,38 @@ export class SessionToolDispatcher implements ToolDispatcher {
     };
   }
 
+  /**
+   * Repeat-loop circuit breaker. Increments a per-dispatcher consecutive-call
+   * counter keyed on the (toolName, input) fingerprint; when the same call is
+   * seen {@link REPEAT_CIRCUIT_BREAKER_THRESHOLD} times in a row, returns a
+   * synthetic isError nudge so the model breaks the loop instead of receiving
+   * the (unchanging) tool result. Returns null otherwise.
+   *
+   * Invariant: must be called exactly once per tool call, on the sequential
+   * pre-execution path (execute() and executeBatch phase 1) so the count
+   * reflects call order. Mirrors checkReadOnlyBash's gate placement — it runs
+   * after the permission/abort gates, so denied or aborted calls (which never
+   * execute) do not advance the counter.
+   */
+  private checkRepeatCircuitBreaker(call: ToolCall): ToolResult | null {
+    if (REPEAT_BREAKER_EXEMPT_TOOLS.has(call.name)) return null;
+    const fingerprint = repeatCallFingerprint(call);
+    if (this.repeatBreaker !== null && this.repeatBreaker.fingerprint === fingerprint) {
+      this.repeatBreaker.count += 1;
+    } else {
+      this.repeatBreaker = { fingerprint, count: 1 };
+    }
+    if (this.repeatBreaker.count < REPEAT_CIRCUIT_BREAKER_THRESHOLD) return null;
+    return {
+      content:
+        `Loop circuit breaker: "${call.name}" has been called ${this.repeatBreaker.count} times ` +
+        `in a row with byte-identical input. The result will not change. Stop repeating this ` +
+        `call — reuse the previous result, change the input, try a different tool, or end the turn.`,
+      isError: true,
+      circuitBreaker: true,
+    };
+  }
+
   async execute(call: ToolCall): Promise<ToolResult> {
     if (call.signal.aborted) {
       return { content: 'Tool call aborted', isError: true };
@@ -420,6 +500,11 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // letting read-only recon through.
     const bashBlock = this.checkReadOnlyBash(call);
     if (bashBlock) return bashBlock;
+
+    // 2c. Repeat-loop circuit breaker. Short-circuits no-progress loops where
+    // the model calls the same tool with byte-identical input N times in a row.
+    const repeatBlock = this.checkRepeatCircuitBreaker(call);
+    if (repeatBlock) return repeatBlock;
 
     // 3. Agent tool — provider-level dispatch
     if (call.name === 'agent') {
@@ -567,6 +652,16 @@ export class SessionToolDispatcher implements ToolDispatcher {
       const bashBlock = this.checkReadOnlyBash(call);
       if (bashBlock) {
         results[i] = bashBlock;
+        blocked.add(i);
+        continue;
+      }
+
+      // Repeat-loop circuit breaker — same block-and-record shape as the bash
+      // gate. Counting here (in the sequential phase-1 loop) keeps the
+      // consecutive-call count correct even for parallel-safe batches.
+      const repeatBlock = this.checkRepeatCircuitBreaker(call);
+      if (repeatBlock) {
+        results[i] = repeatBlock;
         blocked.add(i);
         continue;
       }

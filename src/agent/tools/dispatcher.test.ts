@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { SessionToolDispatcher, defaultConcurrencyClassifier } from './dispatcher.js';
+import {
+  SessionToolDispatcher,
+  defaultConcurrencyClassifier,
+  REPEAT_CIRCUIT_BREAKER_THRESHOLD,
+} from './dispatcher.js';
 import { builtinToolSchemas } from './schemas.js';
 import type { ToolCall } from './types.js';
 import type { ToolHandler } from './types.js';
@@ -965,5 +969,86 @@ describe('SessionToolDispatcher.setResolveBase', () => {
     // /allow-dir block attempt against the old cwd: no-op (not in grants).
     d.revokeRoot('/old/worktree', 'slash');
     expect(d.getGrants().readRoots).not.toContain('/old/worktree');
+  });
+});
+
+describe('SessionToolDispatcher — repeat-loop circuit breaker', () => {
+  it('lets the first THRESHOLD-1 byte-identical calls through, then trips', async () => {
+    const dispatcher = makeDispatcher();
+    for (let i = 0; i < REPEAT_CIRCUIT_BREAKER_THRESHOLD - 1; i++) {
+      const r = await dispatcher.execute(makeCall());
+      expect(r.isError).toBeUndefined();
+      expect(r.content).toBe('hello');
+    }
+    const tripped = await dispatcher.execute(makeCall());
+    expect(tripped.isError).toBe(true);
+    expect(tripped.content).toContain('Loop circuit breaker');
+    expect(tripped.content).toContain('echo');
+    expect(tripped.circuitBreaker).toBe(true);
+  });
+
+  it('does not run the handler on the tripped call', async () => {
+    const handler = vi.fn(async () => ({ content: 'ran' }));
+    const dispatcher = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', handler]]),
+    });
+    for (let i = 0; i < REPEAT_CIRCUIT_BREAKER_THRESHOLD; i++) {
+      await dispatcher.execute(makeCall());
+    }
+    // The first THRESHOLD-1 calls ran the handler; the tripped call skipped it.
+    expect(handler).toHaveBeenCalledTimes(REPEAT_CIRCUIT_BREAKER_THRESHOLD - 1);
+  });
+
+  it('resets the counter when input changes (counts CONSECUTIVE only)', async () => {
+    const dispatcher = makeDispatcher();
+    for (let i = 0; i < REPEAT_CIRCUIT_BREAKER_THRESHOLD - 1; i++) {
+      expect((await dispatcher.execute(makeCall())).isError).toBeUndefined();
+    }
+    // A different input resets the run...
+    const other = await dispatcher.execute(makeCall({ input: { message: 'different' } }));
+    expect(other.isError).toBeUndefined();
+    // ...so returning to the original input starts fresh — 7 more pass without tripping.
+    for (let i = 0; i < REPEAT_CIRCUIT_BREAKER_THRESHOLD - 1; i++) {
+      expect((await dispatcher.execute(makeCall())).isError).toBeUndefined();
+    }
+  });
+
+  it('does not trip when two tools are interleaved (never THRESHOLD consecutive)', async () => {
+    const dispatcher = makeDispatcher({
+      handlers: new Map([
+        ['echo', echoHandler()],
+        ['echo2', echoHandler()],
+      ]),
+      permissions: { allowedTools: ['echo', 'echo2'] },
+    });
+    for (let i = 0; i < REPEAT_CIRCUIT_BREAKER_THRESHOLD * 3; i++) {
+      const name = i % 2 === 0 ? 'echo' : 'echo2';
+      const r = await dispatcher.execute(makeCall({ name }));
+      expect(r.isError).toBeUndefined();
+    }
+  });
+
+  it('trips on the batch path too', async () => {
+    const dispatcher = makeDispatcher();
+    const calls = Array.from({ length: REPEAT_CIRCUIT_BREAKER_THRESHOLD }, () => makeCall());
+    const results = await dispatcher.executeBatch(calls);
+    for (let i = 0; i < REPEAT_CIRCUIT_BREAKER_THRESHOLD - 1; i++) {
+      expect(results[i]?.isError).toBeUndefined();
+    }
+    const last = results[REPEAT_CIRCUIT_BREAKER_THRESHOLD - 1];
+    expect(last?.isError).toBe(true);
+    expect(last?.content).toContain('Loop circuit breaker');
+  });
+
+  it('a fresh dispatcher (next turn) starts with a clean counter', async () => {
+    const d1 = makeDispatcher();
+    for (let i = 0; i < REPEAT_CIRCUIT_BREAKER_THRESHOLD; i++) {
+      await d1.execute(makeCall());
+    }
+    // New dispatcher == new query/turn: state resets, so the next call passes.
+    const d2 = makeDispatcher();
+    const r = await d2.execute(makeCall());
+    expect(r.isError).toBeUndefined();
+    expect(r.content).toBe('hello');
   });
 });
