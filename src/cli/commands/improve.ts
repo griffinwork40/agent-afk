@@ -47,11 +47,20 @@
  *   afk improve eval-cases show <id> [--json]
  *       Print one eval-case (markdown view by default).
  *
- * Sprint 3 scope explicitly EXCLUDES: LLM-mode proposals, plan, apply,
- * validate, eval-run (the runner), eval-link (the proposal back-fill),
- * branch creation, git operations, and PR publishing. Those are reserved
- * for later sprints behind explicit flags with hard-coded forbidden-path
- * guardrails.
+ *   afk improve eval-run <evalCaseIdOrCardSlug> [--id <override>] [--json]
+ *                                               [--no-write]
+ *       Run the smallest deterministic validation contract for an eval-case's
+ *       pattern against the live codebase, and persist an EvalRun result under
+ *       `eval-runs/<id>.{json,md}`. Re-verifies the eval-case's committed
+ *       fixture checksum. NO LLM calls; NO patch/apply; NO fixture replay
+ *       through the detector (that broader runner is reserved for a later
+ *       sprint — see EvalRunSchema). The arg may be an eval-case id OR a card
+ *       slug (the most recent eval-case for that card is run).
+ *
+ * Scope explicitly EXCLUDES: LLM-mode proposals, plan, apply, patch, fixture
+ * replay through the detector, eval-link (the proposal back-fill), branch
+ * creation, git operations, and PR publishing. Those are reserved for later
+ * sprints behind explicit flags with hard-coded forbidden-path guardrails.
  *
  * @module cli/commands/improve
  */
@@ -89,11 +98,19 @@ import {
   buildEvalCase,
   generateEvalCaseId,
   getEvalCase,
+  getEvalCasesForCard,
   listEvalCases,
   renderEvalCaseMarkdown,
   writeEvalCase,
 } from '../../improve/eval-gen/writer.js';
-import type { EvalCaseStatus, FailurePattern } from '../../improve/schemas.js';
+import {
+  generateEvalRunId,
+  renderEvalRunMarkdown,
+  runEvalCase,
+  writeEvalRun,
+} from '../../improve/eval-run/runner.js';
+import { knownContractIds } from '../../improve/eval-run/contracts.js';
+import type { EvalCase, EvalCaseStatus, EvalRun, FailurePattern } from '../../improve/schemas.js';
 
 const VALID_STATUSES: readonly CardStatus[] = ['open', 'deferred', 'resolved'];
 const VALID_EVAL_STATUSES: readonly EvalCaseStatus[] = [
@@ -119,6 +136,7 @@ export function registerImproveCommand(program: Command): void {
   registerProposalsSubcommand(improve);
   registerEvalGenSubcommand(improve);
   registerEvalCasesSubcommand(improve);
+  registerEvalRunSubcommand(improve);
 }
 
 // ---------------------------------------------------------------------------
@@ -796,6 +814,114 @@ function registerEvalCasesSubcommand(improve: Command): void {
         handleCommandError(err);
       }
     });
+}
+
+// ---------------------------------------------------------------------------
+// eval-run (deterministic guardrail validation)
+// ---------------------------------------------------------------------------
+
+function registerEvalRunSubcommand(improve: Command): void {
+  improve
+    .command('eval-run <evalCaseIdOrCardSlug>')
+    .description(
+      'Run the smallest deterministic validation contract for an eval-case\'s pattern.\n' +
+        `  Validates guardrails (no LLM, no patch/apply). Known contracts: ${knownContractIds().join(', ')}.`,
+    )
+    .option('--id <override>', 'Override the auto-generated eval-run id')
+    .option('--json', 'Emit the eval-run JSON to stdout (still writes to disk)', false)
+    .option('--no-write', 'Run and render without persisting to disk (preview mode)')
+    .action(
+      async (
+        arg: string,
+        opts: { id?: string; json: boolean; write: boolean },
+      ) => {
+        try {
+          // 1. Resolve the eval-case: try an exact eval-case id first, then
+          //    fall back to treating the arg as a card slug (most recent
+          //    eval-case for that card wins — listEvalCases sorts newest first).
+          let evalCase: EvalCase | undefined = getEvalCase(arg);
+          if (!evalCase) {
+            const forCard = getEvalCasesForCard(arg);
+            evalCase = forCard[0];
+          }
+          if (!evalCase) {
+            console.error(
+              `No eval-case found for '${arg}'. Pass an eval-case id ` +
+                `(see 'afk improve eval-cases list') or a card slug with at least ` +
+                `one generated eval-case ('afk improve eval-gen <slug>').`,
+            );
+            process.exit(1);
+          }
+
+          // 2. Run the contract.
+          const evalRunId = opts.id ?? generateEvalRunId(evalCase.cardSlug);
+          const evalRun = await runEvalCase(evalCase, { evalRunId });
+
+          // 3. Preview branch: render without persisting.
+          if (opts.write === false) {
+            if (opts.json) {
+              console.log(JSON.stringify(evalRun, null, 2));
+            } else {
+              console.log('(preview — not persisted; remove --no-write to save)');
+              console.log('');
+              console.log(renderEvalRunMarkdown(evalRun));
+            }
+            applyEvalRunExit(evalRun.status);
+            return;
+          }
+
+          // 4. Persist.
+          const outcome = writeEvalRun(evalRun);
+
+          if (opts.json) {
+            console.log(JSON.stringify({ ...evalRun, _paths: outcome }, null, 2));
+            applyEvalRunExit(evalRun.status);
+            return;
+          }
+
+          printEvalRunSummary(evalRun, outcome.jsonPath, outcome.markdownPath);
+          applyEvalRunExit(evalRun.status);
+        } catch (err) {
+          handleCommandError(err);
+        }
+      },
+    );
+}
+
+function printEvalRunSummary(evalRun: EvalRun, jsonPath: string, markdownPath: string): void {
+  const passed = evalRun.checks.filter((c) => c.status === 'pass').length;
+  const failed = evalRun.checks.filter((c) => c.status === 'fail').length;
+  const skipped = evalRun.checks.filter((c) => c.status === 'skipped').length;
+
+  console.log(`Ran eval-run: ${evalRun.evalRunId}  [${evalRun.status.toUpperCase()}]`);
+  console.log(`  json: ${jsonPath}`);
+  console.log(`  md:   ${markdownPath}`);
+  console.log(
+    `  eval-case: ${evalRun.evalCaseId} · card: ${evalRun.cardSlug} · ` +
+      `pattern: ${evalRun.patternId} · contract: ${evalRun.contract ?? '(none)'}`,
+  );
+  console.log(
+    `  checks: ${passed} passed${failed ? `, ${failed} failed` : ''}${skipped ? `, ${skipped} skipped` : ''} (${evalRun.checks.length} total)`,
+  );
+  for (const c of evalRun.checks) {
+    const glyph = c.status === 'pass' ? '✓' : c.status === 'fail' ? '✗' : '–';
+    console.log(`    ${glyph} ${c.name}`);
+  }
+  for (const n of evalRun.notes) {
+    console.log(`  note: ${n.text}`);
+  }
+}
+
+/**
+ * Set a non-zero exit code when the run found a regression, so the command is
+ * usable as a CI / scripting gate (`afk improve eval-run X && …`). `pass` and
+ * `unsupported` exit 0 (no regression detected); `fail`/`error` exit 1. Uses
+ * `process.exitCode` rather than `process.exit()` so buffered stdout flushes.
+ */
+function applyEvalRunExit(status: EvalRun['status']): void {
+  if (status === 'fail' || status === 'error') {
+    process.exitCode = 1;
+  }
 }
 
 // ---------------------------------------------------------------------------
