@@ -3134,6 +3134,32 @@ describe('ToolLane.getOverlay — childless NESTING head anchors the spine', () 
 // Both paths are fixed by reading the headerEmitted flag and suppressing the
 // header line accordingly.
 describe('ToolLane.getOverlay — suppresses ancestors already in scrollback', () => {
+  it('flush breadcrumb omits empty child.toolInput but keeps non-empty labels', () => {
+    const lane = new ToolLane();
+    lane.addStartWithAgentContext('root', 'skill', '(root)', undefined);
+
+    lane.addStartWithAgentContext('empty-agent', 'Agent', '', 'root');
+    lane.addStartWithAgentContext('empty-completed-child', 'Agent', '(done)', 'empty-agent');
+    lane.addResult('empty-completed-child', makeResult('done'));
+    lane.flushSource('empty-completed-child');
+    lane.addStartWithAgentContext('empty-live-child', 'Read', '("empty.ts")', 'empty-agent');
+    lane.addResult('empty-live-child', makeResult('1 line'));
+
+    lane.addStartWithAgentContext('labeled-agent', 'Agent', '(review)', 'root');
+    lane.addStartWithAgentContext('labeled-completed-child', 'Agent', '(done)', 'labeled-agent');
+    lane.addResult('labeled-completed-child', makeResult('done'));
+    lane.flushSource('labeled-completed-child');
+    lane.addStartWithAgentContext('labeled-live-child', 'Read', '("labeled.ts")', 'labeled-agent');
+    lane.addResult('labeled-live-child', makeResult('1 line'));
+
+    lane.addResult('root', makeResult('done'));
+    const output = stripAnsi(lane.flush().join('\n'));
+
+    expect(output).toContain('↳ Agent\n');
+    expect(output).not.toContain('↳ Agent \n');
+    expect(output).toContain('↳ Agent (review)');
+  });
+
   it('after flushSource eagerly commits an ancestor header, getOverlay must not re-render it', () => {
     // Topology: skill → devils-advocate → [paranoid (completes), architect (still running)]
     const lane = new ToolLane();
