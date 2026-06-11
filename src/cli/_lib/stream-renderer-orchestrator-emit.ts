@@ -103,8 +103,9 @@ export function commitThinkingPhase(source: SourceState, ctx: OrchestratorCtx): 
  * Finalize the orchestrator turn: schedule tool-lane commits and thinking
  * summary via the CommitCoordinator (when present), or emit directly as a
  * backward-compatible fallback. Subagent Agent entries (and their children)
- * are NOT flushed here — they live in the ToolLane until their own subagents
- * emit `done`, or until the renderer disposes.
+ * are NOT flushed here — the lane flush uses {@link ToolLane.flushCompletedRoots}
+ * (selective), so in-flight roots live in the ToolLane until their own
+ * subagents emit `done`, or until the renderer disposes.
  *
  * **Synchronous** — no I/O, no awaits. When `ctx.coordinator` is present
  * (production path), all I/O is deferred to `CommitCoordinator.flushAll()`
@@ -177,33 +178,51 @@ export function finalizeOrchestrator(
     // paragraph, prior tool flush, pre-arm separator) already owns its
     // own trailing blank, so a leading here would double-up. See
     // docs/tui-rhythm.md for the full contract.
+    //
+    // History: this used the NUCLEAR ToolLane.flush(), which deleted
+    // in-flight subagent roots at every orchestrator message_stop. A
+    // subagent still running at that boundary was captured with a STALE
+    // tool count, removed from the lane, and orphaned — its done-path
+    // hasEntry() check (stream-renderer.ts:604) then failed, so the
+    // final block (correct counts + Done line) was never scheduled and
+    // the stale capture committed at dispose-time flushAll, out of
+    // causal order, with a multi-row blank gap in scrollback. Fixed by
+    // flushCompletedRoots(), honoring this function's contract that
+    // subagent entries are NOT flushed here. Pinned by
+    // subagent-block-gap.repro.test.ts.
     if (ctx.toolLane.hasPending()) {
-      const lines = ctx.toolLane.flush();
-      // Capture ctx references used in the closure — avoids closing over the
-      // mutable ctx object (defense against future mutations before flushAll).
-      const compositor = ctx.compositor;
-      const overlayComposer = ctx.overlayComposer;
-      const isTTY = ctx.isTTY;
-      const out = ctx.out;
-      ctx.coordinator.schedule({
-        anchor: 'before-content',
-        commits: [() => {
-          if (isTTY && compositor) {
-            for (const line of lines) compositor.commitAbove(line);
-            compositor.commitAbove('');
-            // Route the overlay clear through the composer if available.
-            if (overlayComposer) {
-              overlayComposer.invalidate();
-              overlayComposer.flush();
+      const lines = ctx.toolLane.flushCompletedRoots();
+      if (lines.length > 0) {
+        // Capture ctx references used in the closure — avoids closing over the
+        // mutable ctx object (defense against future mutations before flushAll).
+        const compositor = ctx.compositor;
+        const overlayComposer = ctx.overlayComposer;
+        const toolLane = ctx.toolLane;
+        const isTTY = ctx.isTTY;
+        const out = ctx.out;
+        ctx.coordinator.schedule({
+          anchor: 'before-content',
+          commits: [() => {
+            if (isTTY && compositor) {
+              for (const line of lines) compositor.commitAbove(line);
+              compositor.commitAbove('');
+              // Refresh the overlay from CURRENT lane state — in-flight
+              // subagent rows that survived the selective flush must keep
+              // rendering. Clearing to '' here (the pre-fix behavior) would
+              // erase a still-running subagent's live rows.
+              if (overlayComposer) {
+                overlayComposer.markDirty('tool-lane');
+                overlayComposer.flush();
+              } else {
+                compositor.setOverlay(toolLane.getOverlay());
+              }
             } else {
-              compositor.setOverlay('');
+              for (const line of lines) out.line(line);
+              out.line('');
             }
-          } else {
-            for (const line of lines) out.line(line);
-            out.line('');
-          }
-        }],
-      });
+          }],
+        });
+      }
     }
 
     // TTY trailing thinking phase (thinking that ended the turn with no
