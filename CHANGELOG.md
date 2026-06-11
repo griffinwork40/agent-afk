@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.101.1] - 2026-06-11
+
+### Fixed
+- stop finalizeOrchestrator nuclear-flushing in-flight subagent blocks (#95) (bab6bb2)
+
 ## [3.101.0] - 2026-06-11
 
 ### Added
