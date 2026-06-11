@@ -18,6 +18,7 @@ import {
   getLogsDir,
   getJsonConfigPath,
 } from '../../paths.js';
+import { detectSources, loadImportFromConfig } from '../../config/import-sources.js';
 
 export interface Check {
   name: string;
@@ -169,6 +170,38 @@ export async function checkTelegram(): Promise<Check | null> {
   }
 }
 
+/**
+ * Surface importable assets from other agent CLIs (Claude Code, Codex) that
+ * are present on disk but not yet trusted via `importFrom`. Returns `null`
+ * when nothing new is available (so the check stays silent for the common
+ * case), otherwise a `warn` nudging the user toward `afk migrate`.
+ */
+export async function checkImportAvailable(): Promise<Check | null> {
+  let detected;
+  try {
+    detected = detectSources();
+  } catch {
+    return null;
+  }
+  const trusted = loadImportFromConfig() ?? {};
+  const untrusted = detected.filter(
+    (s) =>
+      s.present &&
+      (s.plugins.length > 0 || s.skills.length > 0) &&
+      trusted[s.binary] === undefined,
+  );
+  if (untrusted.length === 0) return null;
+  const summary = untrusted
+    .map((s) => `${s.label} (${s.plugins.length} plugins, ${s.skills.length} skills)`)
+    .join('; ');
+  return {
+    name: 'Cross-tool import available',
+    state: 'warn',
+    detail: summary,
+    fix: 'Run `afk migrate` to import them',
+  };
+}
+
 /** Run all checks and return the full list (nulls filtered out). */
 export async function runDoctorChecks(): Promise<Check[]> {
   const results: Check[] = [];
@@ -186,6 +219,9 @@ export async function runDoctorChecks(): Promise<Check[]> {
 
   const telegramCheck = await checkTelegram();
   if (telegramCheck !== null) results.push(telegramCheck);
+
+  const importCheck = await checkImportAvailable();
+  if (importCheck !== null) results.push(importCheck);
 
   return results;
 }

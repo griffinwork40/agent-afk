@@ -23,6 +23,13 @@ import { loadAnthropicCredential } from '../agent/auth/credential-resolver.js';
 import { validateBranchPrefix, validateBaseRef } from './commands/interactive/worktree.js';
 import { env } from '../config/env.js';
 import type { RawHooksConfig } from '../agent/hooks/config-loader.js';
+import {
+  parseImportFromConfig,
+  type ImportFromConfig,
+  type ImportSourceBinary,
+} from '../config/import-sources.js';
+
+export type { ImportFromConfig, ImportSourceBinary };
 
 export { getModelId, isValidModel };
 
@@ -208,6 +215,14 @@ export interface CliConfig {
    * are globally enabled. See `src/agent/hooks/config-loader.ts`.
    */
   enableShellHooks?: boolean;
+  /**
+   * Cross-tool asset import. Maps each trusted source binary to the asset
+   * types AFK should live-read from that binary's install location. Populated
+   * by `afk migrate`; resolved to concrete scan roots by
+   * `resolveImportedRoots()` in `src/cli/commands/migrate/sources.ts`.
+   * `undefined` / absent = nothing imported (strict opt-in).
+   */
+  importFrom?: ImportFromConfig;
 }
 
 /** One per-tier model binding in afk.config.json's `models` block. */
@@ -279,6 +294,14 @@ interface ConfigFileSchema {
   maxSummaryCallsPerSession?: number;
   hooks?: RawHooksConfig;
   enableShellHooks?: boolean;
+  /**
+   * Cross-tool asset import. Each known source binary maps to either a bare
+   * `true` (shorthand: import all asset types) or an object with per-asset
+   * toggles. Normalized by `parseImportFromConfig`.
+   */
+  importFrom?: Partial<
+    Record<ImportSourceBinary, boolean | { plugins?: boolean; skills?: boolean; mcp?: boolean }>
+  >;
 }
 
 const DEFAULT_CONFIG: Omit<CliConfig, 'apiKey'> = {
@@ -672,6 +695,11 @@ function loadJsonConfig(): {
           config.enableShellHooks = json.enableShellHooks;
         }
 
+        const importFrom = parseImportFromConfig(json.importFrom);
+        if (importFrom !== undefined) {
+          config.importFrom = importFrom;
+        }
+
         if (json.interactive && typeof json.interactive === 'object') {
           const interactive: NonNullable<CliConfig['interactive']> = {};
           if (typeof json.interactive.worktreeAutoname === 'boolean') {
@@ -834,6 +862,7 @@ export function loadConfig(overrides?: Partial<CliConfig>): CliConfig {
     ...(merged.interactive !== undefined ? { interactive: merged.interactive } : {}),
     ...(merged.hooks !== undefined ? { hooks: merged.hooks } : {}),
     ...(merged.enableShellHooks !== undefined ? { enableShellHooks: merged.enableShellHooks } : {}),
+    ...(merged.importFrom !== undefined ? { importFrom: merged.importFrom } : {}),
   };
 
   // Resolve + install the process-global model-slot bindings (Stage 1).

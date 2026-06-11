@@ -103,8 +103,8 @@ export interface SkillMetadata {
    * because load mode runs in the current agent (no subagent env injection).
    */
   loadBody?: string;
-  /** Where the skill came from. Absent or 'builtin' = vendored TS skill; 'user' = scanned from ~/.afk/skills/; 'project' = scanned from <cwd>/.afk/skills/. Plugin skills don't enter this registry. */
-  origin?: 'builtin' | 'user' | 'project';
+  /** Where the skill came from. Absent or 'builtin' = vendored TS skill; 'user' = scanned from ~/.afk/skills/; 'project' = scanned from <cwd>/.afk/skills/; `imported:<binary>` = live-read from a trusted source binary's skills dir (e.g. `imported:claude-code`) via `importFrom`. Plugin skills don't enter this registry. */
+  origin?: 'builtin' | 'user' | 'project' | `imported:${string}`;
   /** Long-form CLI flags this skill accepts (e.g. ['--auto', '--ship']). Surfaces in tab completion and `/help`. */
   flags?: readonly string[];
   /**

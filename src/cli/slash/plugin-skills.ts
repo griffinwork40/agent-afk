@@ -869,6 +869,7 @@ export function buildSourceBreakdown(entries: SkillManifestEntry[]): string {
     plugin: 0,
     user: 0,
     project: 0,
+    imported: 0,
   };
   for (const e of entries) counts[e.source]++;
   const labels: Array<[SkillManifestEntry['source'], string]> = [
@@ -876,6 +877,7 @@ export function buildSourceBreakdown(entries: SkillManifestEntry[]): string {
     ['plugin', 'plugin'],
     ['user', 'user'],
     ['project', 'project'],
+    ['imported', 'imported'],
   ];
   return labels
     .filter(([k]) => counts[k] > 0)

@@ -21,11 +21,23 @@ import { extractPluginSkills } from '../plugins/tool-injector.js';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
 import { getBundledPluginsDir, getProjectPluginsDir, getProjectSkillsDir, getSkillsDir } from '../../paths.js';
 import { env } from '../../config/env.js';
+import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
+
+/**
+ * Plugin SdkPluginConfigs for the roots imported from trusted source binaries
+ * (`importFrom`). Scanned with `trustAll` because the user opted into the whole
+ * binary and AFK has no index entry for foreign cache-layout plugins. Centralized
+ * so the two scan chokepoints below stay in lockstep.
+ */
+function importedPluginConfigs(): SdkPluginConfig[] {
+  const roots = resolveImportedRoots(loadImportFromConfig()).pluginRoots;
+  return roots.flatMap((root) => scanLocalPlugins(root, { trustAll: true }));
+}
 
 export interface SkillManifestEntry {
   name: string;
   description: string;
-  source: 'builtin' | 'user' | 'project' | 'plugin';
+  source: 'builtin' | 'user' | 'project' | 'plugin' | 'imported';
   argumentHint?: string;
   whenToUse?: string;
 }
@@ -95,6 +107,13 @@ export function collectSkillEntries(
   //    builtin (origin undefined) via the resolveSkillKey collision logic.
   scanSkillsFromDir(getSkillsDir(), 'user');
   scanSkillsFromDir(getProjectSkillsDir(), 'project');
+  // Imported skills from trusted source binaries (Claude Code, Codex) opted
+  // into via `importFrom`. Scanned AFTER native scopes so a native skill keeps
+  // the bare name on collision; an imported same-name skill falls back to
+  // `imported:<binary>:<name>` via resolveSkillKey.
+  for (const { dir, origin } of resolveImportedRoots(loadImportFromConfig()).skillRoots) {
+    scanSkillsFromDir(dir, origin);
+  }
 
   // 2. Registry skills (built-in + user + project). The barrel import at the
   //    top of this file self-registers built-in skills; the two scan calls
@@ -105,7 +124,14 @@ export function collectSkillEntries(
     entries.push({
       name,
       description: skill.description,
-      source: skill.origin === 'user' ? 'user' : skill.origin === 'project' ? 'project' : 'builtin',
+      source:
+        skill.origin === 'user'
+          ? 'user'
+          : skill.origin === 'project'
+            ? 'project'
+            : skill.origin?.startsWith('imported:')
+              ? 'imported'
+              : 'builtin',
       argumentHint: skill.argumentHint,
       whenToUse: skill.whenToUse,
     });
@@ -121,6 +147,7 @@ export function collectSkillEntries(
     ...scanLocalPlugins(getProjectPluginsDir()),
     ...scanLocalPlugins(),
     ...scanLocalPlugins(getBundledPluginsDir()),
+    ...importedPluginConfigs(),
   ];
   for (const plugin of plugins) {
     if (plugin.type !== 'local') continue;
@@ -187,6 +214,7 @@ export function discoverPluginSkillBodies(
     ...scanLocalPlugins(getProjectPluginsDir()),
     ...scanLocalPlugins(),
     ...scanLocalPlugins(getBundledPluginsDir()),
+    ...importedPluginConfigs(),
   ];
 
   for (const plugin of plugins) {
