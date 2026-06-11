@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.94.1] - 2026-06-11
+
+### Fixed
+- align REPL slash verbs with CLI (install / install-plugin) (port afk-workshop#701) (#79) (9899a6f)
+
 ## [3.94.0] - 2026-06-11
 
 ### Added
