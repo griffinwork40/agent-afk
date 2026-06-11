@@ -153,7 +153,7 @@ Plugin state (telemetry, ledger, briefs) writes to `~/.afk/agent-framework/` in 
 ### Marketplaces
 
 ```bash
-afk marketplace add <url>
+afk marketplace install <url>
 afk marketplace list
 afk marketplace remove <name>
 ```
