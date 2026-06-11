@@ -18,7 +18,12 @@ import {
   getLogsDir,
   getJsonConfigPath,
 } from '../../paths.js';
-import { detectSources, loadImportFromConfig } from '../../config/import-sources.js';
+import {
+  detectSources,
+  loadImportFromConfig,
+  type DetectedSource,
+  type ImportFromConfig,
+} from '../../config/import-sources.js';
 
 export interface Check {
   name: string;
@@ -176,14 +181,20 @@ export async function checkTelegram(): Promise<Check | null> {
  * when nothing new is available (so the check stays silent for the common
  * case), otherwise a `warn` nudging the user toward `afk migrate`.
  */
-export async function checkImportAvailable(): Promise<Check | null> {
-  let detected;
-  try {
-    detected = detectSources();
-  } catch {
-    return null;
+export async function checkImportAvailable(
+  deps: { detected?: DetectedSource[]; trusted?: ImportFromConfig } = {},
+): Promise<Check | null> {
+  let detected: DetectedSource[];
+  if (deps.detected !== undefined) {
+    detected = deps.detected;
+  } else {
+    try {
+      detected = detectSources();
+    } catch {
+      return null;
+    }
   }
-  const trusted = loadImportFromConfig() ?? {};
+  const trusted: ImportFromConfig = deps.trusted ?? (loadImportFromConfig() ?? {});
   const untrusted = detected.filter(
     (s) =>
       s.present &&

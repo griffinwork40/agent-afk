@@ -17,7 +17,7 @@
  */
 
 import type { SdkPluginConfig } from './types/sdk-types.js';
-import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { getPluginsDir, getPluginsIndexPath } from '../paths.js';
 import { readIndex } from './plugins/index-store.js';
@@ -108,8 +108,17 @@ function walk(
   trustAll: boolean,
 ): void {
   if (depth > MAX_SCAN_DEPTH) return;
-  if (seen.has(dir)) return;
-  seen.add(dir);
+  // Key `seen` on the realpath so two string-distinct symlinks to the same
+  // physical directory are only walked once. Fall back to the raw string on
+  // broken symlinks (realpathSync throws for dangling links).
+  let seenKey: string;
+  try {
+    seenKey = realpathSync(dir);
+  } catch {
+    seenKey = dir;
+  }
+  if (seen.has(seenKey)) return;
+  seen.add(seenKey);
 
   if (existsSync(join(dir, '.claude-plugin', 'plugin.json'))) {
     const key = indexKeyForPath(root, dir);

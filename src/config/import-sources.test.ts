@@ -167,13 +167,15 @@ describe('detectSources', () => {
       [
         'model = "gpt-5"',
         '',
-        '[[mcp_servers]]',
-        'name = "fs"',
+        '[mcp_servers.fs]',
         'command = "mcp-fs"',
         '',
-        '[[mcp_servers]]',
-        'name = "web"',
+        '[mcp_servers.web]',
         'url = "https://web.example/mcp"',
+        '',
+        '[mcp_servers.gh]',
+        'command = "npx"',
+        'args = ["-y", "pkg"]',
         '',
         '[other]',
         'key = "value"',
@@ -184,6 +186,7 @@ describe('detectSources', () => {
     expect(codex.mcpServers).toEqual([
       { name: 'fs', command: 'mcp-fs' },
       { name: 'web', command: 'https://web.example/mcp' },
+      { name: 'gh', command: 'npx -y pkg' },
     ]);
   });
 });

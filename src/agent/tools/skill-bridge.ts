@@ -23,16 +23,6 @@ import { getBundledPluginsDir, getProjectPluginsDir, getProjectSkillsDir, getSki
 import { env } from '../../config/env.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
 
-/**
- * Plugin SdkPluginConfigs for the roots imported from trusted source binaries
- * (`importFrom`). Scanned with `trustAll` because the user opted into the whole
- * binary and AFK has no index entry for foreign cache-layout plugins. Centralized
- * so the two scan chokepoints below stay in lockstep.
- */
-function importedPluginConfigs(): SdkPluginConfig[] {
-  const roots = resolveImportedRoots(loadImportFromConfig()).pluginRoots;
-  return roots.flatMap((root) => scanLocalPlugins(root, { trustAll: true }));
-}
 
 export interface SkillManifestEntry {
   name: string;
@@ -93,6 +83,11 @@ export function collectSkillEntries(
   // users can't invoke directly — a worse failure mode than a clean split.
   const internalUnlocked = env.AFK_INTERNAL === '1';
 
+  // Resolve imported roots once — reused for both the skill-root scan loop
+  // (step 1) and the plugin-config expansion (step 3). Avoids duplicate
+  // loadImportFromConfig() + existsSync passes per manifest build.
+  const importedRoots = resolveImportedRoots(loadImportFromConfig());
+
   // 1. Populate the registry with user + project disk skills so the manifest
   //    is complete on every surface (daemon, Telegram, one-shot, subagent)
   //    regardless of whether the CLI slash-command path ran first.
@@ -111,7 +106,7 @@ export function collectSkillEntries(
   // into via `importFrom`. Scanned AFTER native scopes so a native skill keeps
   // the bare name on collision; an imported same-name skill falls back to
   // `imported:<binary>:<name>` via resolveSkillKey.
-  for (const { dir, origin } of resolveImportedRoots(loadImportFromConfig()).skillRoots) {
+  for (const { dir, origin } of importedRoots.skillRoots) {
     scanSkillsFromDir(dir, origin);
   }
 
@@ -147,7 +142,7 @@ export function collectSkillEntries(
     ...scanLocalPlugins(getProjectPluginsDir()),
     ...scanLocalPlugins(),
     ...scanLocalPlugins(getBundledPluginsDir()),
-    ...importedPluginConfigs(),
+    ...importedRoots.pluginRoots.flatMap((root) => scanLocalPlugins(root, { trustAll: true })),
   ];
   for (const plugin of plugins) {
     if (plugin.type !== 'local') continue;
@@ -210,11 +205,16 @@ export function discoverPluginSkillBodies(
   // Invariant: no audience filter — dispatch is always available; only surfacing is gated.
   // Do NOT add isSkillVisible() here; see this comment before 'fixing' it.
   const bodies = new Map<string, PluginSkillBody>();
+  // Imported plugin roots are resolved inline in the fallback so the
+  // loadImportFromConfig() + existsSync work only runs when no pluginConfigs
+  // were supplied (a caller passing pluginConfigs skips it entirely).
   const plugins = pluginConfigs ?? [
     ...scanLocalPlugins(getProjectPluginsDir()),
     ...scanLocalPlugins(),
     ...scanLocalPlugins(getBundledPluginsDir()),
-    ...importedPluginConfigs(),
+    ...resolveImportedRoots(loadImportFromConfig()).pluginRoots.flatMap((root) =>
+      scanLocalPlugins(root, { trustAll: true }),
+    ),
   ];
 
   for (const plugin of plugins) {

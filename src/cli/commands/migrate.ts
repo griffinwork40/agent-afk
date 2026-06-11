@@ -25,6 +25,7 @@ import { getJsonConfigPath } from '../../paths.js';
 import {
   detectSources,
   KNOWN_IMPORT_BINARIES,
+  parseImportFromConfig,
   type DetectedSource,
   type ImportSourceBinary,
 } from '../../config/import-sources.js';
@@ -132,7 +133,7 @@ export function registerMigrateCommand(program: Command): void {
     });
 }
 
-function normalizeBinary(value: string | undefined): ImportSourceBinary | null {
+export function normalizeBinary(value: string | undefined): ImportSourceBinary | null {
   if (value === undefined) return null;
   const v = value.trim().toLowerCase();
   return (KNOWN_IMPORT_BINARIES as readonly string[]).includes(v) ? (v as ImportSourceBinary) : null;
@@ -175,7 +176,7 @@ function printSourceSummary(src: DetectedSource, includeMcp: boolean): void {
  * present; mcp is imported only when `--mcp` is passed AND the binary's MCP
  * config is in a loadable format (JSON — Codex's TOML is detection-only today).
  */
-function buildImportBlock(
+export function buildImportBlock(
   targets: DetectedSource[],
   includeMcp: boolean,
 ): Record<ImportSourceBinary, { plugins: boolean; skills: boolean; mcp: boolean }> {
@@ -194,7 +195,7 @@ function buildImportBlock(
  * Merge the `importFrom` block into the user-global afk.config.json, preserving
  * all other fields. Atomic (temp-file + rename), matching the codebase pattern.
  */
-function writeImportFrom(
+export function writeImportFrom(
   configPath: string,
   importBlock: Record<string, { plugins: boolean; skills: boolean; mcp: boolean }>,
 ): void {
@@ -210,13 +211,35 @@ function writeImportFrom(
       throw new Error('existing config is not valid JSON; fix it before running migrate');
     }
   }
-  const prior =
+
+  // Invariant: re-runs are additive — a prior opt-in is never silently cleared.
+  // New values may turn a toggle ON but must never turn a previously-enabled
+  // toggle OFF. We normalize the prior entry first (expanding a bare `true`
+  // shorthand to {plugins,skills,mcp}) so spread-merging cannot lose implied
+  // trues, then OR-merge per toggle for each binary present in importBlock.
+  // Binaries not mentioned in importBlock are preserved verbatim (raw).
+  const rawPrior =
     existing['importFrom'] !== null &&
     typeof existing['importFrom'] === 'object' &&
     !Array.isArray(existing['importFrom'])
       ? (existing['importFrom'] as Record<string, unknown>)
       : {};
-  existing['importFrom'] = { ...prior, ...importBlock };
+  const normalizedPrior = parseImportFromConfig(rawPrior) ?? {};
+
+  const merged: Record<string, unknown> = { ...rawPrior };
+  for (const [binary, newToggles] of Object.entries(importBlock)) {
+    const priorToggles = normalizedPrior[binary as ImportSourceBinary] ?? {
+      plugins: false,
+      skills: false,
+      mcp: false,
+    };
+    merged[binary] = {
+      plugins: priorToggles.plugins || newToggles.plugins,
+      skills: priorToggles.skills || newToggles.skills,
+      mcp: priorToggles.mcp || newToggles.mcp,
+    };
+  }
+  existing['importFrom'] = merged;
 
   mkdirSync(dirname(configPath), { recursive: true });
   const tmp = `${configPath}.${process.pid}.tmp`;

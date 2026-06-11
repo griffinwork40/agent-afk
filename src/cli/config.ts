@@ -699,6 +699,13 @@ function loadJsonConfig(): {
         // live-read/execute another tool's assets (see loadImportFromConfig). A
         // project-local afk.config.json must NOT be able to set it, so honor it
         // only from the user-global / legacy config, never `<cwd>/afk.config.json`.
+        //
+        // Note: `config.importFrom` is exposed on `CliConfig` for completeness and
+        // inspection (e.g. `--dump-prompt` tooling), but runtime asset scanners
+        // deliberately call `loadImportFromConfig()` directly — the agent layer
+        // cannot import from `src/cli/` without a circular-dependency violation.
+        // The project-local exclusion guard below is intentional defense-in-depth
+        // that mirrors `loadImportFromConfig`'s own user-global-only path restriction.
         if (configPath !== join(process.cwd(), 'afk.config.json')) {
           const importFrom = parseImportFromConfig(json.importFrom);
           if (importFrom !== undefined) {

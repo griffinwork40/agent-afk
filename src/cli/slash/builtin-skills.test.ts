@@ -515,4 +515,24 @@ describe('T02 — originToSource via runPreflight source field', () => {
     const inv = (vi.mocked(runPreflight).mock.calls[0] as unknown[])[0] as { source: string };
     expect(inv.source).toBe('project');
   });
+
+  it('imported:claude-code origin skill → runPreflight called with source: "imported"', async () => {
+    vi.mocked(runPreflight).mockResolvedValueOnce(null);
+
+    const session = fakeSession([fakeContent('ok\n')]);
+    const { ctx } = makeCtx(session);
+
+    const skill: SkillMetadata = {
+      name: 'imported-skill',
+      description: 'imported skill',
+      handler: async () => undefined,
+      origin: 'imported:claude-code',
+    };
+
+    const cmd = makeImmediateHandler(skill);
+    await cmd.handler(ctx, '');
+
+    const inv = (vi.mocked(runPreflight).mock.calls[0] as unknown[])[0] as { source: string };
+    expect(inv.source).toBe('imported');
+  });
 });

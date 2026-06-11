@@ -32,10 +32,13 @@ function originToSource(origin: SkillMetadata['origin']): SkillInvocation['sourc
   if (resolved === 'builtin' || resolved === 'user' || resolved === 'project') {
     return resolved;
   }
-  // `imported:<binary>` origins are skills live-read from a trusted source
-  // binary (Claude Code, Codex) via `importFrom`. For preflight purposes they
-  // behave like user-scope skills. (The open-ended template-literal member
-  // means a `never` exhaustiveness assertion is no longer viable here.)
+  if (resolved.startsWith('imported:')) {
+    return 'imported';
+  }
+  // Static exhaustiveness via `assertNever` is not enforceable here because
+  // `origin` includes the open-ended `imported:${string}` template-literal
+  // member, which never narrows to `never` — the branch above covers it at
+  // runtime, but tsc cannot prove the union is exhausted statically.
   return 'user';
 }
 

@@ -18,7 +18,7 @@
  * @module config/import-sources
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { getJsonConfigPath, getLegacyJsonConfigPath } from '../paths.js';
@@ -164,7 +164,11 @@ export function loadImportFromConfig(
       const parsed = parseImportFromConfig(json.importFrom);
       if (parsed !== undefined) return parsed;
     } catch {
-      // Unreadable / malformed config — skip; loadConfig() surfaces the warning.
+      // Unreadable / malformed config — silently skipped here (best-effort,
+      // defensive). The CLI bootstrap's separate loadConfig() call surfaces a
+      // warning on CLI surfaces, but agent-layer callers (skill-bridge,
+      // builtin-skills) never invoke loadConfig(), so on those paths a malformed
+      // user-global config is silently skipped with no signal.
     }
   }
   return undefined;
@@ -301,8 +305,14 @@ function findPluginDirs(root: string): DetectedAsset[] {
 }
 
 function walkPlugins(dir: string, depth: number, out: DetectedAsset[], seen: Set<string>): void {
-  if (depth > MAX_PLUGIN_SCAN_DEPTH || seen.has(dir)) return;
-  seen.add(dir);
+  let canonical: string;
+  try {
+    canonical = realpathSync(dir);
+  } catch {
+    canonical = dir;
+  }
+  if (depth > MAX_PLUGIN_SCAN_DEPTH || seen.has(canonical)) return;
+  seen.add(canonical);
   if (existsSync(join(dir, '.claude-plugin', 'plugin.json'))) {
     const name = manifestName(dir) ?? dir.split('/').filter(Boolean).pop() ?? dir;
     out.push({ name, path: dir });
@@ -344,8 +354,9 @@ function findSkillDirs(root: string): DetectedAsset[] {
 
 /**
  * Read MCP server names + command summaries from a config file. Supports the
- * JSON `mcpServers` object (Claude Code) and a narrow TOML `[[mcp_servers]]`
- * subset (Codex). Best-effort: a parse failure returns [].
+ * JSON `mcpServers` object (Claude Code) and the TOML `[mcp_servers.<id>]`
+ * table format (Codex), where the server name is the table key. Best-effort:
+ * a parse failure returns [].
  */
 export function readMcpServers(path: string, format: McpConfigFormat): DetectedMcpServer[] {
   let content: string;
@@ -375,9 +386,11 @@ function readMcpServersJson(content: string): DetectedMcpServer[] {
 }
 
 /**
- * Parse the `[[mcp_servers]]` array-of-tables from a Codex `config.toml`.
- * Deliberately narrow — handles `name`, `command`, `url` string fields within
- * `[[mcp_servers]]` blocks, ignoring everything else. Avoids a TOML dependency.
+ * Parse the `[mcp_servers.<id>]` table format from a Codex `config.toml`.
+ * The server name is the table key (e.g. `[mcp_servers.github]` → name "github").
+ * Fields read per block: `command` (string), `args` (inline array of strings),
+ * `url` (string). Command summary precedence: url → command+args joined → '(no command)'.
+ * Deliberately narrow and dependency-free — ignores everything outside mcp_servers tables.
  */
 function readMcpServersToml(content: string): DetectedMcpServer[] {
   const out: DetectedMcpServer[] = [];
@@ -386,17 +399,37 @@ function readMcpServersToml(content: string): DetectedMcpServer[] {
   let name: string | null = null;
   let command: string | null = null;
   let url: string | null = null;
+  let args: string[] = [];
+
   const flush = (): void => {
-    if (inBlock && name) out.push({ name, command: url ?? command ?? '(no command)' });
+    if (inBlock && name) {
+      let summary: string;
+      if (url !== null) {
+        summary = url;
+      } else if (command !== null) {
+        summary = args.length > 0 ? [command, ...args].join(' ') : command;
+      } else {
+        summary = '(no command)';
+      }
+      out.push({ name, command: summary });
+    }
     name = null;
     command = null;
     url = null;
+    args = [];
   };
+
+  const MCP_SERVER_HEADER = /^\[mcp_servers\.([^\]]+)\]\s*$/;
+
   for (const rawLine of lines) {
     const line = rawLine.trim();
-    if (line.replace(/\s/g, '') === '[[mcp_servers]]') {
+    if (line === '' || line.startsWith('#')) continue;
+
+    const headerMatch = MCP_SERVER_HEADER.exec(line);
+    if (headerMatch) {
       flush();
       inBlock = true;
+      name = headerMatch[1] ?? null;
       continue;
     }
     if (line.startsWith('[')) {
@@ -405,21 +438,59 @@ function readMcpServersToml(content: string): DetectedMcpServer[] {
       continue;
     }
     if (!inBlock) continue;
+
     const eq = line.indexOf('=');
     if (eq === -1) continue;
     const key = line.slice(0, eq).trim();
-    const value = line.slice(eq + 1).trim();
-    if (key === 'name') name = stripTomlString(value);
-    else if (key === 'command') command = stripTomlString(value);
-    else if (key === 'url') url = stripTomlString(value);
+    const rawValue = line.slice(eq + 1).trim();
+
+    if (key === 'command') {
+      command = stripTomlString(stripInlineComment(rawValue));
+    } else if (key === 'url') {
+      url = stripTomlString(stripInlineComment(rawValue));
+    } else if (key === 'args') {
+      args = parseTomlInlineStringArray(rawValue);
+    }
   }
   flush();
   return out;
 }
 
+/** Strip a trailing inline TOML comment (`# ...`) from a scalar value line.
+ *  Only strips when the value does not start with a quote (quoted strings may
+ *  contain # legitimately). Best-effort heuristic for narrow use. */
+function stripInlineComment(value: string): string {
+  if (value.startsWith('"') || value.startsWith("'")) return value;
+  const idx = value.indexOf(' #');
+  return idx === -1 ? value : value.slice(0, idx).trimEnd();
+}
+
+/** Parse a TOML inline string array: `["-y", "pkg"]` → `['-y', 'pkg']`.
+ *  Best-effort: strips surrounding `[ ]`, splits on commas, stripTomlString each.
+ *  Returns [] on any parse failure. */
+function parseTomlInlineStringArray(value: string): string[] {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('[')) return [];
+  const inner = trimmed.slice(1, trimmed.lastIndexOf(']'));
+  if (!inner.trim()) return [];
+  try {
+    return inner
+      .split(',')
+      .map((s) => stripTomlString(s.trim()))
+      .filter((s) => s.length > 0);
+  } catch {
+    return [];
+  }
+}
+
 function stripTomlString(value: string): string {
+  // Matched pair: strip surrounding quotes.
   const m = value.match(/^"([^"]*)"$/) ?? value.match(/^'([^']*)'$/);
-  return m && m[1] !== undefined ? m[1] : value;
+  if (m && m[1] !== undefined) return m[1];
+  // Unmatched leading/trailing quote (e.g. truncated value) — strip it.
+  if (value.startsWith('"') || value.startsWith("'")) return value.slice(1);
+  if (value.endsWith('"') || value.endsWith("'")) return value.slice(0, -1);
+  return value;
 }
 
 function summarizeServerCommand(raw: unknown): string {
