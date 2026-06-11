@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.99.0] - 2026-06-11
+
+### Added
+- distinctive user message display in scrollback (#88) (10eacfd)
+
 ## [3.98.1] - 2026-06-11
 
 ### Fixed
