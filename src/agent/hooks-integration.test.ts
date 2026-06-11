@@ -261,7 +261,7 @@ describe('SubagentManager — hook integration', () => {
 
     const messages = parentSession.getMockInputStreamMessages();
     expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatch(/^shadow-verify nudge:/);
+    expect(messages[0]).toMatch(/^\[framework-generated context: shadow-verify nudge\]/);
     expect(messages[0]).toContain('/shadow-verify');
   });
 
@@ -309,7 +309,7 @@ describe('SubagentManager — hook integration', () => {
 
     const messages = parentSession.getMockInputStreamMessages();
     expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatch(/^shadow-verify nudge:/);
+    expect(messages[0]).toMatch(/^\[framework-generated context: shadow-verify nudge\]/);
   });
 
   it('stays silent when neither config, manager, nor parent supplies a registry', async () => {

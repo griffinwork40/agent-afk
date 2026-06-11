@@ -18,7 +18,7 @@ Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/s
 
 ## Cross-cutting subsystems
 
-- **Hooks** (`src/agent/hooks.ts`, `hook-registry.ts`) — SessionStart/End, SubagentStart/Stop, PreToolUse/PostToolUse. Sequential; `decision: 'block'` short-circuits. SubagentStop supports `injectContext` for parent-session context injection.
+- **Hooks** (`src/agent/hooks.ts`, `hook-registry.ts`) — SessionStart/End, SubagentStart/Stop, PreToolUse/PostToolUse. Sequential; `decision: 'block'` short-circuits. Foreground subagent final output returns through the normal `agent` tool result. Separately, `SubagentStop` supports `injectContext`: a hook-generated framework note (not human-authored user text) queued into the parent input stream for the next parent turn. Injection is skipped when the parent is aborting, is not guaranteed on DAG/compose or background paths, and multiple injected contexts currently do not merge (last non-blocking hook decision wins).
 - **SubagentManager** (`src/agent/subagent.ts`) — Forks child `AgentSession`s with permission bubbling, transitive abort via `AbortGraph`, optional Zod output schemas.
 - **AbortGraph** (`src/agent/abort-graph.ts`) — Tree of `AbortController`s. Parent abort cascades down; child abort notifies up (never auto-aborts parent). Abort beats hook decisions.
 - **Elicitation Router** (`src/agent/elicitation-router.ts`) — Module-scope handler bridging SDK elicitations to REPL/Telegram/iMessage surfaces.

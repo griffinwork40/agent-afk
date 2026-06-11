@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.100.0] - 2026-06-11
+
+### Added
+- inline ghost-text tab autocomplete for mid-sentence skill names (#90) (81abc62)
+
+## [3.99.1] - 2026-06-11
+
+### Fixed
+- ESC soft-stop cancels on first press, no post-cancel lag (#81) (6b0e586)
+
 ## [3.99.0] - 2026-06-11
 
 ### Added

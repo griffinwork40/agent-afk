@@ -8,6 +8,7 @@
  *     prefix of a known entry. Sources in priority order:
  *       (a) the top dropdown candidate exposed by `ctx.getDropdownTopCandidate`
  *       (b) the most-recent history entry that starts with `buffer`
+ *       (c) mid-sentence skill name prefix-match against the slash registry
  *     Returns the FULL candidate string; the caller renders the suffix as ghost
  *     text. Never returns a string equal to buffer.
  *
@@ -26,6 +27,7 @@
 import { providerForModel, resolveProvider, type ProviderRouteHints } from '../../agent/providers/index.js';
 import type { ModelProvider } from '../../agent/provider.js';
 import { env } from '../../config/env.js';
+import { list as listSlashCommands, aliasEntries } from '../slash/registry.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -269,6 +271,18 @@ export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEng
     cache.set(key, value);
   }
 
+  /**
+   * Tier 1 deterministic ghost resolver.
+   *
+   * Sources in priority order:
+   *   (a) the top dropdown candidate exposed by `ctx.getDropdownTopCandidate`
+   *   (b) the most-recent history entry that starts with `buffer`
+   *   (c) mid-sentence skill name prefix-match against the slash registry —
+   *       fires only when a `/partial` token is preceded by whitespace (i.e.,
+   *       it is NOT the first token in the buffer).
+   *
+   * Returns the FULL candidate string or null when no source matches.
+   */
   function getDeterministicGhost(buffer: string, ctx: SuggestContext): string | null {
     if (buffer.length === 0) return null;
 
@@ -287,6 +301,27 @@ export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEng
     for (const entry of history) {
       if (entry.startsWith(buffer) && entry.length > buffer.length) {
         return entry;
+      }
+    }
+
+    // (c) Mid-sentence skill name prefix-match
+    // Fires only when the /partial token is preceded by at least one whitespace
+    // character — i.e., NOT the first token in the buffer. The \s+ guard is the
+    // sole first-token filter: "/fo" does not match; "run /fo" does.
+    const midSentenceMatch = /\s+\/([A-Za-z][A-Za-z0-9_:-]*)$/.exec(buffer);
+    if (midSentenceMatch) {
+      const partial = midSentenceMatch[1]!; // e.g. "fo" from "can you run /fo"
+      const slashPartial = '/' + partial;   // e.g. "/fo"
+      const canonicalNames = listSlashCommands().map(cmd => cmd.name);
+      const aliasNames = aliasEntries().map(e => e.alias);
+      const allNames = [...canonicalNames, ...aliasNames];
+      const match = allNames
+        .filter(name => name.startsWith(slashPartial))
+        .sort((a, b) => a.localeCompare(b))[0];
+      if (match) {
+        // Return the full buffer with the partial /token replaced by the full skill name.
+        const prefixEnd = buffer.length - slashPartial.length;
+        return buffer.slice(0, prefixEnd) + match;
       }
     }
 

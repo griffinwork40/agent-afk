@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createSuggestEngine, pickModel, stripGhostControlChars } from './suggest.js';
 import type { SuggestContext } from './suggest.js';
 import type { ModelProvider } from '../../agent/provider.js';
+import { register as registerSlashCommand, resetRegistry as resetSlashRegistry } from '../slash/registry.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -91,6 +92,72 @@ describe('getDeterministicGhost', () => {
     });
     const ghost = engine.getDeterministicGhost('/compact', ctx);
     expect(ghost).toBeNull();
+  });
+
+  describe('source (c): mid-sentence skill name prefix-match', () => {
+    beforeEach(() => { resetSlashRegistry(); });
+    afterEach(() => { resetSlashRegistry(); });
+
+    it('T1: ghost fires mid-sentence for a registered canonical command', () => {
+      registerSlashCommand({ name: '/forge', summary: 'test', handler: async () => 'continue' });
+      const engine = createSuggestEngine();
+      const ctx = makeCtx({ getDropdownTopCandidate: () => null, getHistory: () => [] });
+      expect(engine.getDeterministicGhost('can you run /fo', ctx)).toBe('can you run /forge');
+    });
+
+    it('T2: first-token /partial does NOT fire (no preceding whitespace)', () => {
+      registerSlashCommand({ name: '/forge', summary: 'test', handler: async () => 'continue' });
+      const engine = createSuggestEngine();
+      const ctx = makeCtx({ getDropdownTopCandidate: () => null, getHistory: () => [] });
+      // "/fo" at the start of the buffer — no preceding \s+ — must return null
+      expect(engine.getDeterministicGhost('/fo', ctx)).toBeNull();
+    });
+
+    it('T3: returns null when no registered command matches the partial', () => {
+      registerSlashCommand({ name: '/forge', summary: 'test', handler: async () => 'continue' });
+      const engine = createSuggestEngine();
+      const ctx = makeCtx({ getDropdownTopCandidate: () => null, getHistory: () => [] });
+      expect(engine.getDeterministicGhost('please use /zzz', ctx)).toBeNull();
+    });
+
+    it('T4: multiple prefix matches → lexicographically first wins', () => {
+      registerSlashCommand({ name: '/forge', summary: 'test', handler: async () => 'continue' });
+      registerSlashCommand({ name: '/fork', summary: 'test', handler: async () => 'continue' });
+      const engine = createSuggestEngine();
+      const ctx = makeCtx({ getDropdownTopCandidate: () => null, getHistory: () => [] });
+      // '/forge' < '/fork' lexicographically
+      expect(engine.getDeterministicGhost('use /for', ctx)).toBe('use /forge');
+    });
+
+    it('T5: aliases are prefix-match candidates', () => {
+      registerSlashCommand({ name: '/exit', summary: 'test', aliases: ['/quit'], handler: async () => 'continue' });
+      const engine = createSuggestEngine();
+      const ctx = makeCtx({ getDropdownTopCandidate: () => null, getHistory: () => [] });
+      expect(engine.getDeterministicGhost('try /qu', ctx)).toBe('try /quit');
+    });
+
+    it('T6: source (c) fires after source (a) falls through (candidate does not prefix-match buffer)', () => {
+      registerSlashCommand({ name: '/forge', summary: 'test', handler: async () => 'continue' });
+      const engine = createSuggestEngine();
+      // Dropdown returns '/forge' only for the exact buffer 'use /fo' — source (a)
+      // checks dropdownCandidate.startsWith(buffer). '/forge' does NOT startsWith
+      // 'use /fo', so source (a) misses and source (c) fires: returns 'use /forge'.
+      const ctx = makeCtx({
+        getDropdownTopCandidate: (buf) => buf === 'use /fo' ? '/forge' : null,
+        getHistory: () => [],
+      });
+      const result = engine.getDeterministicGhost('use /fo', ctx);
+      // Source (a) misses (candidate '/forge' doesn't startsWith 'use /fo').
+      // Source (c) fires and returns 'use /forge'.
+      expect(result).toBe('use /forge');
+    });
+
+    it('T7: partial with colons and underscores matches registered command', () => {
+      registerSlashCommand({ name: '/my:skill', summary: 'test', handler: async () => 'continue' });
+      const engine = createSuggestEngine();
+      const ctx = makeCtx({ getDropdownTopCandidate: () => null, getHistory: () => [] });
+      expect(engine.getDeterministicGhost('invoke /my:sk', ctx)).toBe('invoke /my:skill');
+    });
   });
 });
 
