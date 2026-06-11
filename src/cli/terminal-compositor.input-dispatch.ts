@@ -265,19 +265,21 @@ function handleEscape(self: KeyDispatchHost, key: KeyInfo): boolean {
   // Soft-stop: once-only per turn. Second ESC while streaming is
   // a no-op — the stream is already halting.
   if (self.softStopped) return true;
-  // Preserve a typed-but-not-yet-submitted buffer as queued so the
-  // soft-stop auto-submits it on the next turn — parity with the
-  // pre-soft-stop ESC path (which queued the buffer before firing
-  // onCancel) and with the Ctrl+C branch below. External constraint:
-  // the idle-transition flush (setInputMode → idle) requires
-  // `queued === true` to fire onSubmit; without this, a message typed
-  // while the agent was streaming is silently dropped on ESC. An
-  // already-[queued] buffer (user pressed Enter) is left untouched —
-  // the `!self.queued` guard makes this idempotent.
-  if (self.input.buffer.length > 0 && !self.queued) {
-    self.queued = true;
-    self.repaint();
-  }
+  // Contract: ESC soft-stop does NOT touch the buffer's queued state.
+  // Enter is the ONLY queue trigger. So:
+  //   - queued === true  (user pressed Enter): left untouched. It
+  //     auto-submits as the next turn via the idle-transition flush
+  //     (setInputMode → idle), since that branch fires on `queued`.
+  //   - queued === false (user only TYPED, no Enter): stays an editable
+  //     draft. The text is NOT dropped — setInputMode no longer
+  //     de-queues and never clears the buffer, so the typed characters
+  //     persist into the idle input row and simply wait for an explicit
+  //     Enter. This is the "ESC with nothing queued leaves what I typed
+  //     in the input field" behavior.
+  // We deliberately do NOT auto-queue a typed-but-unconfirmed buffer
+  // here: queuing it would fling it as a turn the user never submitted.
+  // (Ctrl+C keeps the legacy auto-queue in handleInterrupt below —
+  // hard-abort has intentionally different semantics.)
   self.softStopped = true;
   if (self.onSoftStop) self.onSoftStop();
   return true;
