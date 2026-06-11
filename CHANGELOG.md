@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.98.0] - 2026-06-11
+
+### Added
+- add closure-anomaly guardrail + eval-run contract (abort subtype) (#86) (03cfc86)
+
 ## [3.97.0] - 2026-06-11
 
 ### Added
