@@ -140,7 +140,16 @@ export function createBrowserScreenshotHandler(opts: BrowserHandlerOptions = {})
         target: parsed.target,
         fullPage: parsed.fullPage,
       });
-      return { content: JSON.stringify(screenshotResult, null, 2) };
+      // Keep the base64 image bytes OUT of the text content — `dataBase64` is
+      // megabytes of base64 the model must never see as text. The pixels ride
+      // on the `image` field, which the anthropic-direct provider emits as an
+      // image content block; the text carries only the metadata so providers
+      // that can't render tool-result images still get the path/dimensions.
+      const { dataBase64, mediaType, ...meta } = screenshotResult;
+      return {
+        content: JSON.stringify(meta, null, 2),
+        image: { mediaType, data: dataBase64 },
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { content: `browser_screenshot failed: ${msg}`, isError: true };

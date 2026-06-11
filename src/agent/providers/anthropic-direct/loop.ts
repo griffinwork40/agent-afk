@@ -643,12 +643,33 @@ export async function* runTurn(
       // Destructure only the model-facing fields so `result.render` is
       // structurally unreachable at this call site — not merely excluded by
       // convention. This makes the isolation load-bearing rather than
-      // documentation-only.
-      const { content: resultContent, isError: resultIsError } = result;
+      // documentation-only. `image` is the ONE structured field that IS
+      // model-facing: when set it becomes an `image` content block alongside
+      // the text. `render` remains excluded.
+      const { content: resultContent, isError: resultIsError, image: resultImage } = result;
+      // When a tool returns an image (e.g. browser_screenshot), emit it as an
+      // image block followed by the text summary. The handler keeps the text
+      // non-empty so providers that drop the image still see useful context.
+      const toolResultContent: ToolResultBlockParam['content'] =
+        resultImage !== undefined
+          ? [
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: resultImage.mediaType,
+                  data: resultImage.data,
+                },
+              },
+              ...(resultContent.length > 0
+                ? [{ type: 'text' as const, text: resultContent }]
+                : []),
+            ]
+          : resultContent;
       toolResultBlocks.push({
         type: 'tool_result',
         tool_use_id: call.id,
-        content: resultContent,
+        content: toolResultContent,
         ...(resultIsError === true ? { is_error: true } : {}),
       });
     }

@@ -415,6 +415,67 @@ describe('loop.ts runTurn', () => {
     }
   });
 
+  // A ToolResult carrying `image` (e.g. browser_screenshot) must be emitted as
+  // an image content block + text block in the model-facing tool_result.
+  it('emits a tool image as an image content block in the tool_result', async () => {
+    let callIdx = 0;
+    const client = makeClient(() => {
+      callIdx += 1;
+      if (callIdx === 1) {
+        return fromArray(makeToolUseStream('toolu_shot', 'browser_screenshot', '{}'));
+      }
+      return fromArray(makeTextStream('done'));
+    });
+
+    const dispatcher = makeDispatcher(async () => ({
+      content: '{"path":"/x.png","width":1280,"height":800}',
+      image: { mediaType: 'image/png' as const, data: 'QUJDREVG' },
+    }));
+
+    const messages: MessageParam[] = [{ role: 'user', content: 'shot' }];
+    const abortController = new AbortController();
+
+    await collect(
+      runTurn({
+        client,
+        messages,
+        system: null,
+        tools: [{ name: 'browser_screenshot', input_schema: { type: 'object' } }],
+        toolDispatcher: dispatcher,
+        model: 'claude-test',
+        maxTokens: 1024,
+        headers: {},
+        signal: abortController.signal,
+        ctx,
+      }),
+    );
+
+    // Locate the user turn carrying tool_result blocks (runTurn appends it).
+    const toolResultTurn = messages.find(
+      (m) =>
+        m.role === 'user' &&
+        Array.isArray(m.content) &&
+        m.content.some(
+          (b) => typeof b === 'object' && b !== null && (b as { type?: string }).type === 'tool_result',
+        ),
+    );
+    expect(toolResultTurn).toBeDefined();
+
+    const blocks = toolResultTurn!.content as Array<{ type: string; content: unknown }>;
+    const trBlock = blocks.find((b) => b.type === 'tool_result')!;
+    // content is an array: [image block, text block] — not a bare string.
+    expect(Array.isArray(trBlock.content)).toBe(true);
+    const parts = trBlock.content as Array<Record<string, unknown>>;
+    expect(parts[0]).toMatchObject({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: 'QUJDREVG' },
+    });
+    expect(parts[1]).toMatchObject({
+      type: 'text',
+      text: '{"path":"/x.png","width":1280,"height":800}',
+    });
+  });
+
   // covers lines 255-263: batch dispatch with executeBatch
   it('uses executeBatch when provided on the dispatcher', async () => {
     let callIdx = 0;

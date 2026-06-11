@@ -425,7 +425,17 @@ export class PlaywrightProvider implements BrowserProvider {
       height = vp?.height ?? 0;
     }
 
-    return { path, bytes, width, height };
+    return {
+      path,
+      bytes,
+      width,
+      height,
+      // Raw PNG bytes for the model to read visually. The 5 MiB sidecar cap
+      // in writeScreenshotSidecar() (called above) already bounded `buf`, so
+      // the encoded payload stays within reason for the Messages API.
+      dataBase64: buf.toString('base64'),
+      mediaType: 'image/png',
+    };
   }
 
   // -------------------------------------------------------------------------
