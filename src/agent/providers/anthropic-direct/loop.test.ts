@@ -1312,9 +1312,11 @@ describe('loop.ts runTurn — witness-layer tool_call emission', () => {
     );
     // Single text-stream turn => exactly one model API call => one TTFB.
     expect(ttfb).toHaveLength(1);
-    const payload = ttfb[0]!.payload as { durationMs?: number };
+    const payload = ttfb[0]!.payload as { durationMs?: number; resolvedModel?: string };
     expect(payload.durationMs).toBeTypeOf('number');
     expect(payload.durationMs).toBeGreaterThanOrEqual(0);
+    // model_ttfb carries the resolved wire id for THIS call (input.model).
+    expect(payload.resolvedModel).toBe('claude-test');
   });
 
   it('records isError=true and truncated=true based on tool result content', async () => {
