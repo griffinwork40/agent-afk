@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.97.0] - 2026-06-11
+
+### Added
+- return browser_screenshot as a model-visible image (#82) (e9a51b0)
+
 ## [3.96.1] - 2026-06-11
 
 ### Fixed
