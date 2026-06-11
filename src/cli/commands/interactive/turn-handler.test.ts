@@ -1006,8 +1006,12 @@ describe('runTurn — ESC soft-stop', () => {
 
     // Post-fix (Bug 2 fixed): softStopRequested=true → notice IS shown,
     // doneFired && !softStopRequested is false → onTurnComplete NOT called.
-    // session.interrupt() was not called (ESC fired after stream ended, no break).
-    expect(session.interrupt).not.toHaveBeenCalled();
+    // Immediate-interrupt fix: the soft-stop handler now calls
+    // session.interrupt() synchronously on ESC, so it fires exactly once
+    // even when ESC lands after the stream ended — a harmless idempotent
+    // no-op in production (AgentSession.interrupt() returns early once the
+    // session state has left streaming/processing).
+    expect(session.interrupt).toHaveBeenCalledTimes(1);
     expect(onTurnComplete).not.toHaveBeenCalled();
   });
 
@@ -1071,8 +1075,10 @@ describe('runTurn — ESC soft-stop', () => {
     expect(writerCalls.some((line) => line.includes('Stopped'))).toBe(true);
     // Turn is NOT recorded.
     expect(onTurnComplete).not.toHaveBeenCalled();
-    // interrupt() not called (ESC after stream, no in-flight events to break on).
-    expect(session.interrupt).not.toHaveBeenCalled();
+    // Immediate-interrupt fix: the soft-stop handler calls interrupt()
+    // synchronously on ESC, so it fires exactly once even after the stream
+    // ended — a harmless idempotent no-op in production.
+    expect(session.interrupt).toHaveBeenCalledTimes(1);
   });
 
   // ---------------------------------------------------------------------------

@@ -1332,6 +1332,72 @@ describe('TerminalCompositor', () => {
       expect(c.getBuffer()).toEqual({ text: '', queued: false });
     });
 
+    // ── h1 regression: ESC with an open autocomplete dropdown ──────────────
+    //
+    // Bug: while the agent streamed, ghost-text / slash autocomplete frequently
+    // left `dropdownOpen === true`. handleEscape's dropdown-dismiss branch
+    // returned EARLY, so the first ESC closed the dropdown but never reached
+    // the soft-stop path — the user had to press ESC TWICE to stop the agent
+    // ("double-press to cancel"). Fix (input-dispatch.ts): the dropdown-dismiss
+    // branch no longer returns; it falls through so a single ESC both closes
+    // the dropdown AND fires onSoftStop in streaming mode, while the idle-mode
+    // guard on the next line keeps ESC a pure UI-dismissal between turns.
+    it('single ESC fires onSoftStop AND dismisses an open dropdown mid-stream (h1)', async () => {
+      resetSlashRegistry();
+      registerSlashCommand({
+        name: '/render-test',
+        summary: 'Stub to open the slash dropdown',
+        handler: async () => ({ kind: 'noop' as const }),
+      });
+      try {
+        const ac = createAutocompleteState();
+        const onSoftStop = vi.fn();
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop, autocompleteState: ac });
+        await c.arm();
+        c.setInputMode('streaming'); // a turn is live
+
+        // Type '/' → updateAutocomplete opens the slash dropdown (earned via a
+        // real keystroke, not mutation) — mirrors ghost-text open mid-stream.
+        stdin.emit('keypress', '/', { name: '/', sequence: '/' });
+        expect(ac.dropdownOpen).toBe(true);
+
+        // A SINGLE ESC must both dismiss the dropdown AND fire soft-stop —
+        // pre-fix this required two presses.
+        stdin.emit('keypress', undefined, { name: 'escape' });
+        expect(ac.dropdownOpen).toBe(false);
+        expect(onSoftStop).toHaveBeenCalledTimes(1);
+      } finally {
+        resetSlashRegistry();
+      }
+    });
+
+    it('ESC with an open dropdown stays a pure UI-dismissal in idle mode — no soft-stop (h1)', async () => {
+      resetSlashRegistry();
+      registerSlashCommand({
+        name: '/render-test',
+        summary: 'Stub to open the slash dropdown',
+        handler: async () => ({ kind: 'noop' as const }),
+      });
+      try {
+        const ac = createAutocompleteState();
+        const onSoftStop = vi.fn();
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop, autocompleteState: ac });
+        await c.arm();
+        c.setInputMode('idle'); // between turns — NOT streaming
+
+        stdin.emit('keypress', '/', { name: '/', sequence: '/' });
+        expect(ac.dropdownOpen).toBe(true);
+
+        // ESC dismisses the dropdown, but the idle-mode guard suppresses
+        // soft-stop (no live turn to stop). The fall-through must not change this.
+        stdin.emit('keypress', undefined, { name: 'escape' });
+        expect(ac.dropdownOpen).toBe(false);
+        expect(onSoftStop).not.toHaveBeenCalled();
+      } finally {
+        resetSlashRegistry();
+      }
+    });
+
     it('Ctrl+C triggers onCancel', async () => {
       const onCancel = vi.fn();
       const c = new TerminalCompositor({ stdout, stdin, onCancel });
@@ -1347,19 +1413,25 @@ describe('TerminalCompositor', () => {
     // FIRST one, and every following Enter submits the PREVIOUS buffer — a
     // perpetual off-by-one for the rest of the session.
     //
-    // Root cause: session.interrupt() is deferred to the next stream event
-    // (turn-handler.ts:236), so the compositor stays in streaming mode for a
-    // network-latency window after ESC. An Enter pressed in that window hits
-    // the streaming queue branch (queued=true, not fired). dispose() flips to
-    // idle with onSubmit still null → no flush → the buffer survives queued.
-    // The next readLine's widened any→idle flush then auto-fires it as a
-    // phantom turn the user never confirmed; messages typed during that turn
-    // queue in turn → perpetual lag.
+    // Root cause (two layers, both now fixed):
+    //   1. session.interrupt() USED to be deferred to the next stream event,
+    //      so the compositor lingered in streaming mode for a network-latency
+    //      window after ESC. The soft-stop handler now calls interrupt()
+    //      SYNCHRONOUSLY on ESC (turn-handler.ts / run-skill-dispatch-turn.ts),
+    //      so the turn settles immediately and that window is closed at the
+    //      source rather than merely survived.
+    //   2. Even within any residual window, an Enter hit the streaming queue
+    //      branch (queued=true, not fired); dispose() flipped to idle with
+    //      onSubmit still null → no flush → the buffer survived queued, and the
+    //      next readLine's widened any→idle flush auto-fired it as a phantom
+    //      turn the user never confirmed → perpetual off-by-one.
     //
-    // Fix: setInputMode's soft-stop drain guard clears the queued FLAG (text
-    // preserved) on the first →idle transition while `softStopped` is true, so
-    // the buffer is held as an editable idle draft requiring an explicit Enter
-    // instead of auto-firing.
+    // Fix (defense-in-depth): setInputMode's soft-stop drain guard clears the
+    // queued FLAG (text preserved) on the first →idle transition while
+    // `softStopped` is true, so the buffer is held as an editable idle draft
+    // requiring an explicit Enter instead of auto-firing. With the synchronous
+    // interrupt above, this guard is now belt-and-suspenders rather than the
+    // sole defense.
     //
     // Each test mirrors the production turn boundary using only the public
     // compositor API:

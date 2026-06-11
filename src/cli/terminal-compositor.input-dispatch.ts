@@ -246,12 +246,20 @@ function handleEscape(self: KeyDispatchHost, key: KeyInfo): boolean {
   // never marks the turn as hard-aborted (no `canceled = true`).
   if (ac?.dropdownOpen) {
     // Dismiss dropdown and record the suppression signature so it
-    // stays closed until the buffer changes.
+    // stays closed until the buffer changes. Do NOT `return` here:
+    // ghost-text autocomplete repopulates `dropdownOpen` on nearly every
+    // keystroke, so while the agent streams the dropdown is almost always
+    // open at the moment the user hits ESC to stop it. Returning early
+    // swallowed that ESC and forced a second press to reach the soft-stop
+    // path below — the "double-press to cancel" bug. Falling through lets a
+    // single ESC both dismiss the dropdown AND fire soft-stop in streaming
+    // mode; the idle-mode guard on the next line still keeps ESC a pure
+    // UI-dismissal when not streaming, and the `softStopped` once-only guard
+    // still prevents a second ESC from re-firing onSoftStop.
     ac.suppressedSignature = `${self.input.cursor}:${self.input.buffer}`;
     ac.dropdownOpen = false;
     ac.candidates = [];
     self.repaint();
-    return true;
   }
   if (self.inputMode === 'idle') return true;
   // Soft-stop: once-only per turn. Second ESC while streaming is
