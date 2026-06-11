@@ -11,9 +11,10 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
-### Added
-- `improve scan` now runs the `tool-failure-density` detector by default (`enabledByDefault: true`), surfacing tools with high error rates without requiring explicit opt-in (#80)
-- Repeat-loop circuit breaker: a tool called 8× consecutively with byte-identical input is short-circuited with a synthetic `isError` result; its synthetic events carry `circuitBreaker: true` and are excluded from `tool-failure-density` accounting so breaker trips do not inflate tool failure rates (#80)
+## [3.93.1] - 2026-06-11
+
+### Changed
+- split terminal-compositor + bug-hunt pass (#78) (b9d49e5)
 
 ## [3.93.0] - 2026-06-10
 
