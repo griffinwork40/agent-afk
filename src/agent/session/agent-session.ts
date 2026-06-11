@@ -138,8 +138,17 @@ export class AgentSession implements IAgentSession {
     });
 
     // Witness layer: mark the start of provider/SDK initialization so
-    // downstream tooling can compute the session_init phase duration.
-    void emitSessionPhase(config.traceWriter, { phase: 'session_init_start' });
+    // downstream tooling can compute the session_init phase duration. This is
+    // ALSO the root session's model-provenance anchor: emitted unconditionally
+    // here in the constructor (earliest event, provider-agnostic) so every
+    // trace names its root model even with zero subagents and zero completed
+    // API calls. `model` = operator-typed alias; `resolvedModel` = wire id.
+    const configuredModel = String(config.model);
+    void emitSessionPhase(config.traceWriter, {
+      phase: 'session_init_start',
+      model: configuredModel,
+      resolvedModel: resolveModelId(config.model) ?? configuredModel,
+    });
 
     this.initSdkLifecycle();
   }

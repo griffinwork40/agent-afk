@@ -318,6 +318,11 @@ export async function* runTurn(
           void emitSessionPhase(input.traceWriter, {
             phase: 'model_ttfb',
             durationMs: Date.now() - requestStartedAt,
+            // Resolved wire id for THIS call — captures mid-session model
+            // overrides/switches that differ from the session default recorded
+            // on session_init_start. `input.model` is already the resolved id
+            // passed to the Messages API (see params.model above).
+            resolvedModel: input.model,
           });
         }
         if (env.AFK_TELEGRAM_TRACE) console.log('[loop] translate yielded:', out.kind, out.kind === 'event' ? out.event.type : '');

@@ -139,4 +139,51 @@ describe('AgentSession + witness-layer wiring', () => {
       angry.seal = origSeal;
     });
   });
+
+  describe('session_init_start — root model provenance', () => {
+    it('records the configured alias + resolved wire id', async () => {
+      const session = new AgentSession(config); // model: 'sonnet'
+      await session.waitForInitialization();
+      await session.close();
+
+      const initStarts = writer.events.filter(
+        (e) => e.kind === 'session_phase' && e.payload.phase === 'session_init_start',
+      );
+      expect(initStarts).toHaveLength(1);
+      const ev = initStarts[0];
+      if (ev?.kind !== 'session_phase') throw new Error('unreachable');
+      expect(ev.payload.model).toBe('sonnet');
+      // Alias 'sonnet' expands to a non-empty full wire id (not the alias).
+      expect(typeof ev.payload.resolvedModel).toBe('string');
+      expect(ev.payload.resolvedModel!.length).toBeGreaterThan(0);
+      expect(ev.payload.resolvedModel).not.toBe('sonnet');
+    });
+
+    it('is the FIRST event in the trace (earliest, provider-agnostic anchor)', async () => {
+      const session = new AgentSession(config);
+      await session.waitForInitialization();
+      await session.close();
+
+      const first = writer.events[0];
+      expect(first?.kind).toBe('session_phase');
+      if (first?.kind !== 'session_phase') throw new Error('unreachable');
+      expect(first.seq).toBe(0);
+      expect(first.payload.phase).toBe('session_init_start');
+      expect(first.payload.model).toBe('sonnet');
+    });
+
+    it('passes a raw (non-alias) model through unchanged: model === resolvedModel', async () => {
+      const rawConfig = { ...config, model: 'gpt-4o' };
+      const session = new AgentSession(rawConfig);
+      await session.waitForInitialization();
+      await session.close();
+
+      const initStart = writer.events.find(
+        (e) => e.kind === 'session_phase' && e.payload.phase === 'session_init_start',
+      );
+      if (initStart?.kind !== 'session_phase') throw new Error('unreachable');
+      expect(initStart.payload.model).toBe('gpt-4o');
+      expect(initStart.payload.resolvedModel).toBe('gpt-4o');
+    });
+  });
 });
