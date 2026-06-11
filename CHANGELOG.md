@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.101.0] - 2026-06-11
+
+### Added
+- record root-session model in witness traces (#91) (e8ce193)
+
 ## [3.100.1] - 2026-06-11
 
 ### Fixed
