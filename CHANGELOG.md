@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.95.0] - 2026-06-11
+
+### Added
+- drive the user's real Chrome via chrome-devtools-mcp (afk browser connect) (#83) (ee76c5f)
+
 ## [3.94.1] - 2026-06-11
 
 ### Fixed
