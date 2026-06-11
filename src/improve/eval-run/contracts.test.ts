@@ -17,20 +17,24 @@ import {
 } from './contracts.js';
 import { REPEAT_CIRCUIT_BREAKER_THRESHOLD } from '../../agent/tools/dispatcher.js';
 import { SKILL_MAX_DEPTH_RECOVERY_HINT } from '../../agent/tools/skill-depth-message.js';
+import type { FailurePattern } from '../schemas.js';
 
 // ---------------------------------------------------------------------------
 // Registry resolution
 // ---------------------------------------------------------------------------
 
 describe('resolveContract', () => {
-  it('maps each PR-80 pattern to its contract', () => {
+  it('maps each registered pattern to its contract', () => {
     expect(resolveContract('repeated-tool-use')?.id).toBe('repeat-loop-circuit-breaker');
     expect(resolveContract('subagent-block')?.id).toBe('skill-max-depth-recovery-hint');
     expect(resolveContract('tool-failure-density')?.id).toBe('tool-failure-density-enabled');
+    expect(resolveContract('closure-anomaly')?.id).toBe('closure-abort-recovery-hint');
   });
 
-  it('returns undefined for a pattern with no deterministic contract', () => {
-    expect(resolveContract('closure-anomaly')).toBeUndefined();
+  it('returns undefined for an unregistered (future) pattern', () => {
+    // Every current FailurePattern now has a contract; a future pattern with
+    // none resolves to undefined → the runner records an `unsupported` result.
+    expect(resolveContract('abort-cascade' as FailurePattern)).toBeUndefined();
   });
 
   it('supportedContractPatterns / knownContractIds enumerate the registry', () => {
@@ -38,11 +42,13 @@ describe('resolveContract', () => {
       'repeated-tool-use',
       'subagent-block',
       'tool-failure-density',
+      'closure-anomaly',
     ]);
     expect(knownContractIds()).toEqual([
       'repeat-loop-circuit-breaker',
       'skill-max-depth-recovery-hint',
       'tool-failure-density-enabled',
+      'closure-abort-recovery-hint',
     ]);
   });
 });
@@ -142,5 +148,31 @@ describe('tool-failure-density-enabled contract', () => {
     }
     const evidence = result.evidence.find((e) => e.ref.includes('enabledByDefault'));
     expect(evidence?.detail).toBe('true');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contract: closure-anomaly abort recovery hint
+// ---------------------------------------------------------------------------
+
+describe('closure-abort-recovery-hint contract', () => {
+  it('all checks pass against the live closure guardrail', async () => {
+    const result = await resolveContract('closure-anomaly')!.run();
+    expect(result.checks.map((c) => c.name)).toEqual([
+      'abort-closure-has-guidance',
+      'guidance-names-a-recovery-action',
+      'guidance-is-the-canonical-constant',
+      'benign-closure-has-no-guidance',
+    ]);
+    for (const c of result.checks) {
+      expect(c.status, `${c.name}: ${c.actual}`).toBe('pass');
+    }
+  });
+
+  it('evidence references the real guardrail builder', async () => {
+    const result = await resolveContract('closure-anomaly')!.run();
+    const builderEvidence = result.evidence.find((e) => e.ref.includes('buildClosureGuidance'));
+    expect(builderEvidence).toBeDefined();
+    expect(builderEvidence!.detail).toContain('afk --resume');
   });
 });

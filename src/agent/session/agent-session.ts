@@ -24,6 +24,7 @@ import { DEFAULT_SESSION_TIMEOUT_MS, RESET_DRAIN_TIMEOUT_MS, withTimeout } from 
 import { dispatchSessionEnd, dispatchSessionStart } from './hooks-dispatch.js';
 import { HookBlockedError } from '../../utils/errors.js';
 import { classifyClosureReason } from './closure-reason.js';
+import { buildClosureGuidance } from './closure-guidance.js';
 import type {
   AccountInfo,
   AgentConfig,
@@ -931,12 +932,18 @@ export class AgentSession implements IAgentSession {
     if (this.sessionRunningTokens.cacheCreation > 0)
       finalTokens.cacheCreation = this.sessionRunningTokens.cacheCreation;
 
+    // closure-anomaly guardrail: attach an actionable recovery hint for an
+    // anomalous reason so the closure event names not just WHY it ended but
+    // what to do next. Null (benign / not-yet-covered reasons) → field omitted.
+    const guidance = buildClosureGuidance(reasonValue);
+
     await emitClosure(writer, {
       reason: reasonValue,
       finalTurnCount: this.turnCount,
       finalCostUsd: this.sessionRunningCostUsd,
       finalTokens,
       ...(this.lastStopReason !== undefined ? { lastStopReason: this.lastStopReason } : {}),
+      ...(guidance !== null ? { guidance } : {}),
     });
   }
 

@@ -181,7 +181,16 @@ export async function runEvalCase(evalCase: EvalCase, ctx: RunEvalCaseContext): 
   return evalRun;
 }
 
-function decideStatus(args: {
+/**
+ * Aggregate a top-line {@link EvalRunStatus} from the run signals. Pure and
+ * exported for direct precedence testing: once every registered
+ * {@link FailurePattern} has a contract, `unsupported` is unreachable through
+ * {@link runEvalCase} (the eval-case/eval-run schemas reject unregistered
+ * patterns), so the `hasContract: false` branch is exercised here instead.
+ *
+ * Precedence (highest wins): `error` > `fail` > `unsupported` > `pass`.
+ */
+export function decideStatus(args: {
   hasContract: boolean;
   contractThrew: boolean;
   checks: EvalCheck[];

@@ -329,6 +329,12 @@ export interface ClosurePayload {
   };
   /** Raw `stop_reason` from the provider, when available. */
   lastStopReason?: string;
+  /**
+   * Actionable recovery hint for an anomalous closure, attached by
+   * `emitClosure` via the `closure-anomaly` guardrail (`closure-guidance.ts`).
+   * Absent for benign closes and anomalous reasons not yet covered.
+   */
+  guidance?: string;
 }
 
 // ---------------------------------------------------------------------------
