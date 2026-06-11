@@ -103,6 +103,23 @@ export interface ToolResult {
    * Never forwarded to the model — render-only metadata.
    */
   testResult?: import('../../tools/handlers/test-runner-detector.js').TestResult;
+  /**
+   * Optional image to surface to the model as part of the `tool_result`.
+   *
+   * Unlike `render` (deliberately kept OUT of the model-facing block), `image`
+   * IS model-facing: the anthropic-direct loop emits it as an `image` content
+   * block alongside the `content` text. Set by tools that produce pixels the
+   * model should read visually (e.g. browser_screenshot).
+   *
+   * `data` is base64-encoded raw bytes (no `data:` URI prefix). Providers that
+   * cannot represent images in a tool result (OpenAI `role:'tool'`) ignore
+   * this field and degrade to text-only — so `content` must still carry a
+   * useful textual summary (path, dimensions) on its own.
+   */
+  image?: {
+    mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+    data: string;
+  };
 }
 
 /**

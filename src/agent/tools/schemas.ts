@@ -901,11 +901,15 @@ export const browserScreenshotTool: AnthropicToolDef = {
   category: 'browser',
   concurrencySafe: true,
   description:
-    'Capture a PNG screenshot of the current page (or a specific element). Returns ' +
-    '`{ path, bytes, width, height }` as JSON. The PNG is written as a sidecar under ' +
-    '`~/.afk/state/witness/<sessionId>/browser/screenshots/` and referenced from the ' +
-    'corresponding witness trace event. Use after a `browser_act` to visually ' +
-    'confirm the result, or to inspect an element that\'s hard to describe in text.',
+    'Capture a PNG screenshot of the current page (or a specific element) and return ' +
+    'it as a viewable image attached to the tool result — you can read it directly. ' +
+    'Call this whenever you need to SEE the page (visual layout, rendering, charts, ' +
+    'or anything hard to read from DOM text). The text portion of the result is ' +
+    '`{ path, bytes, width, height }` as JSON; the same PNG is also written as a sidecar ' +
+    'under `~/.afk/state/witness/<sessionId>/browser/screenshots/` and referenced from ' +
+    'the witness trace event. Use after a `browser_act` to visually confirm the result, ' +
+    'or to inspect an element that\'s hard to describe in text. (Image return works on ' +
+    'Anthropic models; OpenAI-compatible providers receive the text metadata only.)',
   input_schema: {
     type: 'object',
     properties: {
