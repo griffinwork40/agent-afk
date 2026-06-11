@@ -77,8 +77,12 @@ export function formatSubmittedEcho(opts: {
   let primary: string;
   if (!isMultiLine && !isLong) {
     // Right-pad with leading spaces so the buffer ends at the terminal edge.
-    const pad = Math.max(0, cols - bufferW);
-    primary = ' '.repeat(pad) + buffer;
+    // Prepend a ▶ glyph (2 visible columns) so the user's own message has a
+    // distinctive left shoulder in scrollback — replaces the two leading spaces.
+    const GLYPH = palette.user('▶') + ' '; // 2 visible columns: glyph + space
+    const GLYPH_W = 2;
+    const pad = Math.max(0, cols - bufferW - GLYPH_W);
+    primary = GLYPH + ' '.repeat(pad) + buffer;
   } else {
     primary = card({ kind: 'user', body: buffer });
   }

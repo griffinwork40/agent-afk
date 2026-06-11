@@ -34,10 +34,11 @@ describe('renderUserCard height cap', () => {
     Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
   });
 
-  it('clamps 30-line body to ≤ 24 (MAX_USER_CARD_ROWS) output lines', () => {
+  it('clamps 30-line body to ≤ 25 (MAX_USER_CARD_ROWS + 1 separator) output lines', () => {
     const out = strip(card({ kind: 'user', body: lines(30).join('\n') }));
     const rows = out.split('\n');
-    expect(rows.length).toBeLessThanOrEqual(24);
+    // Separator row (always 1) + content rows (≤ MAX_USER_CARD_ROWS=24) = ≤ 25.
+    expect(rows.length).toBeLessThanOrEqual(25);
   });
 
   it('last output line contains "lines collapsed" when body exceeds cap', () => {
@@ -54,17 +55,20 @@ describe('renderUserCard height cap', () => {
     expect(lastRow.endsWith(' │')).toBe(true);
   });
 
-  it('every output line ends with " │" after strip (│ discipline preserved)', () => {
+  it('every content row ends with " │" after strip (│ discipline preserved)', () => {
     const out = strip(card({ kind: 'user', body: lines(30).join('\n') }));
-    for (const row of out.split('\n')) {
+    const rows = out.split('\n');
+    // Skip the first row (separator line containing ─ characters — does not end with │).
+    for (const row of rows.slice(1)) {
       expect(row.endsWith(' │')).toBe(true);
     }
   });
 
-  it('body with 10 lines (under default cap) produces exactly 10 output lines — no summary', () => {
+  it('body with 10 lines (under default cap) produces exactly 11 output lines — 1 separator + 10 content', () => {
     const out = strip(card({ kind: 'user', body: lines(10).join('\n') }));
     const rows = out.split('\n');
-    expect(rows.length).toBe(10);
+    // 1 separator row + 10 content rows = 11 total.
+    expect(rows.length).toBe(11);
     // No "lines collapsed" summary should appear.
     expect(out).not.toContain('lines collapsed');
   });
@@ -79,6 +83,12 @@ describe('renderUserCard height cap', () => {
   it('summary row uses "…(N lines collapsed)" format', () => {
     const out = strip(card({ kind: 'user', body: lines(30).join('\n') }));
     expect(out).toMatch(/…\(\d+ lines collapsed\)/);
+  });
+
+  it('first row of user card output is the dim separator (contains ─)', () => {
+    const out = strip(card({ kind: 'user', body: lines(10).join('\n') }));
+    const rows = out.split('\n');
+    expect(rows[0]).toContain('─');
   });
 
   // ─── Last-column safety (DECAWM deferred-wrap ghost guard) ──────────────────
@@ -98,7 +108,15 @@ describe('renderUserCard height cap', () => {
       Object.defineProperty(process.stdout, 'columns', { value: cols, configurable: true });
       const rows = strip(card({ kind: 'user', body: longSingleLine })).split('\n');
       expect(rows.length).toBeGreaterThan(1);
-      for (const row of rows) {
+      const [sepRow, ...contentRows] = rows;
+      // Separator row: contains ─, satisfies width ≤ cols-1.
+      expect(sepRow).toContain('─');
+      expect(
+        (sepRow ?? '').length,
+        `separator width ${(sepRow ?? '').length} must be ≤ cols-1 ${cols - 1}`,
+      ).toBeLessThanOrEqual(cols - 1);
+      // Content rows: end with ' │' and satisfy width ≤ cols-1.
+      for (const row of contentRows) {
         expect(row.endsWith(' │')).toBe(true);
         expect(
           row.length,
@@ -115,7 +133,11 @@ describe('renderUserCard height cap', () => {
     // overflow / hit the last column.
     const hugeToken = 'x'.repeat(200);
     const rows = strip(card({ kind: 'user', body: hugeToken })).split('\n');
-    for (const row of rows) {
+    const [sepRow, ...contentRows] = rows;
+    // Separator row: contains ─, satisfies width ≤ cols-1=79.
+    expect(sepRow).toContain('─');
+    expect((sepRow ?? '').length).toBeLessThanOrEqual(79);
+    for (const row of contentRows) {
       expect(row.endsWith(' │')).toBe(true);
       expect(row.length).toBeLessThanOrEqual(79);
     }
@@ -131,7 +153,14 @@ describe('renderUserCard height cap', () => {
     for (const cols of [3, 4, 5, 8, 12, 40]) {
       Object.defineProperty(process.stdout, 'columns', { value: cols, configurable: true });
       const rows = strip(card({ kind: 'user', body: hugeToken })).split('\n');
-      for (const row of rows) {
+      const [sepRow, ...contentRows] = rows;
+      // Separator row: contains ─, satisfies width ≤ cols-1.
+      expect(sepRow).toContain('─');
+      expect(
+        (sepRow ?? '').length,
+        `cols=${cols}: separator width ${(sepRow ?? '').length} must be ≤ cols-1: ${JSON.stringify(sepRow)}`,
+      ).toBeLessThanOrEqual(cols - 1);
+      for (const row of contentRows) {
         expect(row.endsWith(' │')).toBe(true);
         expect(
           row.length,
