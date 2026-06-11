@@ -195,6 +195,40 @@ describe('translateChunk — tool calls', () => {
     ]);
     expect(isToolCallStop(state)).toBe(false);
   });
+
+  it('isToolCallStop is false when finish_reason="stop" even with accumulated tool calls (MLX shim quirk)', () => {
+    // Regression: local MLX/llama.cpp shims sometimes stream partial tool_calls
+    // AND then send finish_reason:'stop'. The explicit stop is authoritative —
+    // honoring the size>0 fallback would dispatch a half-built call and poison
+    // history with a bad tool_call_id (→ HTTP 400 on the next request).
+    const { state } = collect([
+      {
+        choices: [
+          { delta: { tool_calls: [{ index: 0, id: 'call_x', function: { name: 'bash' } }] } },
+        ],
+      },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ]);
+    expect(state.toolCallsByIndex.size).toBe(1);
+    expect(state.finishReason).toBe('stop');
+    expect(isToolCallStop(state)).toBe(false);
+  });
+
+  it('isToolCallStop is false when finish_reason missing and an accumulated call has an empty id', () => {
+    // An empty/absent id means the call cannot round-trip (the assistant
+    // tool_calls[].id ↔ tool-result tool_call_id linkage would break), so it is
+    // not a real tool stop in the no-finish_reason fallback path.
+    const { state } = collect([
+      {
+        choices: [
+          { delta: { tool_calls: [{ index: 0, function: { name: 'bash', arguments: '{}' } }] } },
+        ],
+      },
+    ]);
+    expect(state.toolCallsByIndex.size).toBe(1);
+    expect(state.finishReason).toBeNull();
+    expect(isToolCallStop(state)).toBe(false);
+  });
 });
 
 describe('translateChunk — robustness', () => {
