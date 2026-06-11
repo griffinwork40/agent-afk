@@ -271,6 +271,10 @@ export const ClosurePayloadSchema = z.object({
     cacheCreation: z.number().int().nonnegative().optional(),
   }),
   lastStopReason: z.string().optional(),
+  // Actionable recovery hint for an anomalous closure (closure-anomaly
+  // guardrail, `session/closure-guidance.ts`). Optional + back-compat: older
+  // traces and benign closes simply omit it.
+  guidance: z.string().optional(),
 });
 
 // ---------------------------------------------------------------------------

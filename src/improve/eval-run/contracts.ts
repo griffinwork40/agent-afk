@@ -17,9 +17,11 @@
  *   - `repeated-tool-use`    → the repeat-loop circuit breaker (PR #80).
  *   - `subagent-block`       → the skill max-depth recovery hint (PR #80).
  *   - `tool-failure-density` → that detector being enabled by default (PR #80).
+ *   - `closure-anomaly`      → the abort-closure recovery hint
+ *                              (`session/closure-guidance.ts`; abort subtype).
  *
- * Patterns with no registered contract (e.g. `closure-anomaly`) resolve to
- * `undefined`; the runner records an `unsupported` result rather than failing.
+ * Patterns with no registered contract resolve to `undefined`; the runner
+ * records an `unsupported` result rather than failing.
  *
  * ## Adding a contract
  *
@@ -40,6 +42,10 @@ import {
   SKILL_MAX_DEPTH_RECOVERY_HINT,
   buildSkillMaxDepthRefusal,
 } from '../../agent/tools/skill-depth-message.js';
+import {
+  CLOSURE_ABORT_RECOVERY_HINT,
+  buildClosureGuidance,
+} from '../../agent/session/closure-guidance.js';
 import {
   defaultEnabledDetectorNames,
   disabledByDefaultDetectorNames,
@@ -295,6 +301,72 @@ async function runToolFailureDensityEnabled(): Promise<ContractProbeResult> {
 }
 
 // ---------------------------------------------------------------------------
+// Contract: closure-anomaly → actionable recovery hint on abort closures
+// ---------------------------------------------------------------------------
+
+/**
+ * Assert the `closure-anomaly` guardrail maps an `abort` closure to an
+ * actionable recovery hint, and does NOT fabricate guidance for a benign
+ * close. Validates the same {@link buildClosureGuidance} the session's
+ * `emitClosure` wires onto the `closure` trace event — a regression that
+ * drops the hint (or starts emitting one on clean closes) is caught here.
+ *
+ * Scoped to the `abort` subtype: the only closure reason the guardrail covers
+ * today (see `closure-guidance.ts`). The contract validates the GUARDRAIL the
+ * pattern maps to, not a fixture replay — matching the other contracts.
+ */
+async function runClosureAnomalyRecoveryHint(): Promise<ContractProbeResult> {
+  const abortGuidance = buildClosureGuidance('abort');
+  const benignGuidance = buildClosureGuidance('model_end_turn');
+
+  const checks: EvalCheck[] = [
+    makeCheck({
+      name: 'abort-closure-has-guidance',
+      description: 'An abort closure maps to a non-empty recovery hint',
+      pass: typeof abortGuidance === 'string' && abortGuidance.trim().length > 0,
+      expected: 'non-empty guidance string for reason=abort',
+      actual: abortGuidance === null ? 'null (no guidance)' : snapshot(abortGuidance),
+    }),
+    makeCheck({
+      name: 'guidance-names-a-recovery-action',
+      description: 'The abort hint names a concrete next action (resume / re-run)',
+      pass: abortGuidance !== null && /\b(resume|re-run|rerun|retry)\b/i.test(abortGuidance),
+      expected: 'hint mentions resume / re-run',
+      actual: abortGuidance === null ? 'null' : snapshot(abortGuidance),
+    }),
+    makeCheck({
+      name: 'guidance-is-the-canonical-constant',
+      description: 'The wired hint is the exported CLOSURE_ABORT_RECOVERY_HINT (no drift)',
+      pass: abortGuidance === CLOSURE_ABORT_RECOVERY_HINT,
+      expected: 'buildClosureGuidance("abort") === CLOSURE_ABORT_RECOVERY_HINT',
+      actual: abortGuidance === null ? 'null' : snapshot(abortGuidance),
+    }),
+    makeCheck({
+      name: 'benign-closure-has-no-guidance',
+      description: 'A clean model_end_turn close carries no false-positive guidance',
+      pass: benignGuidance === null,
+      expected: 'null for reason=model_end_turn',
+      actual: benignGuidance === null ? 'null' : snapshot(benignGuidance),
+    }),
+  ];
+
+  const evidence: EvalRunEvidenceRef[] = [
+    {
+      kind: 'source-symbol',
+      ref: 'src/agent/session/closure-guidance.ts#buildClosureGuidance',
+      detail: abortGuidance === null ? 'null' : snapshot(abortGuidance),
+    },
+    {
+      kind: 'source-symbol',
+      ref: 'src/agent/session/agent-session.ts (emitClosure: attaches guidance to closure event)',
+      detail: 'buildClosureGuidance(reason) → closure payload .guidance',
+    },
+  ];
+
+  return { checks, evidence };
+}
+
+// ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
@@ -316,6 +388,12 @@ const CONTRACTS: readonly EvalContract[] = Object.freeze([
     patternId: 'tool-failure-density',
     title: 'tool-failure-density detector is enabled by default',
     run: runToolFailureDensityEnabled,
+  },
+  {
+    id: 'closure-abort-recovery-hint',
+    patternId: 'closure-anomaly',
+    title: 'Anomalous abort closure carries an actionable recovery hint',
+    run: runClosureAnomalyRecoveryHint,
   },
 ] satisfies EvalContract[]);
 

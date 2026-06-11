@@ -328,7 +328,8 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
 
     case 'closure': {
       const p = event.payload;
-      return line('closure', `${p.reason}  turns=${p.finalTurnCount}  ${fmtUsd(p.finalCostUsd)}`);
+      const guidance = p.guidance ? `  — ${truncate(p.guidance, 100)}` : '';
+      return line('closure', `${p.reason}  turns=${p.finalTurnCount}  ${fmtUsd(p.finalCostUsd)}${guidance}`);
     }
 
     case 'claim': {

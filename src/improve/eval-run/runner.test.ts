@@ -16,6 +16,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import {
+  decideStatus,
   EVAL_RUN_RUNNER_VERSION,
   generateEvalRunId,
   getEvalRun,
@@ -24,6 +25,7 @@ import {
   runEvalCase,
   writeEvalRun,
 } from './runner.js';
+import { makeCheck } from './contracts.js';
 import { sha256Bytes } from '../eval-gen/replay-fixture.js';
 import { EvalCaseSchema, type EvalCase, type FailurePattern } from '../schemas.js';
 import {
@@ -141,6 +143,31 @@ describe('generateEvalRunId', () => {
 });
 
 // ---------------------------------------------------------------------------
+// decideStatus — status precedence (error > fail > unsupported > pass)
+// ---------------------------------------------------------------------------
+
+describe('decideStatus precedence', () => {
+  const passCheck = makeCheck({ name: 'p', description: 'd', pass: true, expected: '', actual: '' });
+  const failCheck = makeCheck({ name: 'f', description: 'd', pass: false, expected: '', actual: '' });
+
+  it('error beats fail (a contract threw)', () => {
+    expect(decideStatus({ hasContract: true, contractThrew: true, checks: [failCheck] })).toBe('error');
+  });
+
+  it('fail beats unsupported and pass (a failed check)', () => {
+    expect(decideStatus({ hasContract: false, contractThrew: false, checks: [failCheck] })).toBe('fail');
+  });
+
+  it('unsupported when no contract is registered and every check passes', () => {
+    expect(decideStatus({ hasContract: false, contractThrew: false, checks: [passCheck] })).toBe('unsupported');
+  });
+
+  it('pass when a contract ran and every check passed', () => {
+    expect(decideStatus({ hasContract: true, contractThrew: false, checks: [passCheck] })).toBe('pass');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // runEvalCase
 // ---------------------------------------------------------------------------
 
@@ -193,20 +220,21 @@ describe('runEvalCase', () => {
     expect(fixtureCheck?.actual).toContain('not found');
   });
 
-  it('reports unsupported for a pattern with no registered contract', async () => {
+  it('validates the closure-anomaly (abort recovery hint) contract end to end', async () => {
     const run = await runEvalCase(makeEvalCase({ pattern: 'closure-anomaly' }), { ...baseCtx, clockMs: stubClock([1, 2]) });
-    expect(run.status).toBe('unsupported');
-    expect(run.contract).toBeNull();
-    // Only the fixture check ran (it passed); no contract checks.
-    expect(run.checks).toHaveLength(1);
-    expect(run.checks[0]?.name).toBe('fixture-integrity');
-    expect(run.notes.some((n) => /No deterministic validation contract/.test(n.text))).toBe(true);
+    expect(run.status).toBe('pass');
+    expect(run.contract).toBe('closure-abort-recovery-hint');
+    expect(run.checks.some((c) => c.name === 'abort-closure-has-guidance' && c.status === 'pass')).toBe(true);
   });
 
-  it('a failed check beats unsupported (corrupt fixture on an unsupported pattern)', async () => {
+  it('a failed check beats a passing contract (corrupt fixture forces fail)', async () => {
+    // closure-anomaly now has a contract whose checks pass; a missing fixture
+    // must still force `fail` (fixture-integrity beats the passing contract).
     const evalCase = makeEvalCase({ pattern: 'closure-anomaly', writeFixture: false });
     const run = await runEvalCase(evalCase, { ...baseCtx, clockMs: stubClock([1, 2]) });
     expect(run.status).toBe('fail');
+    expect(run.checks.find((c) => c.name === 'fixture-integrity')?.status).toBe('fail');
+    expect(run.checks.filter((c) => c.name !== 'fixture-integrity').every((c) => c.status === 'pass')).toBe(true);
   });
 
   it('validates the subagent-block (skill depth hint) contract end to end', async () => {

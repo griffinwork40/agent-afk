@@ -25,6 +25,7 @@ import type { AgentConfig, OutputEvent } from '../types.js';
 import { createMockProvider, type MockProviderHandle } from '../__fixtures__/mock-provider.js';
 import { InMemoryTraceWriter } from './writer.js';
 import { BudgetExceededError, TimeoutError } from '../../utils/errors.js';
+import { CLOSURE_ABORT_RECOVERY_HINT } from '../session/closure-guidance.js';
 
 vi.mock('../../utils/debug.js', () => ({
   debugLog: vi.fn(),
@@ -87,6 +88,31 @@ describe('AgentSession + closure trace event', () => {
     const ev = writer.events.find((e) => e.kind === 'closure');
     if (ev?.kind !== 'closure') throw new Error('expected closure');
     expect(ev.payload.reason).toBe('abort');
+  });
+
+  // closure-anomaly guardrail wiring: emitClosure attaches the abort recovery
+  // hint to an abort closure, and omits guidance on a clean close.
+  it('attaches the abort recovery hint to an abort closure', async () => {
+    const session = new AgentSession(config);
+    await session.waitForInitialization();
+    session.abort('sigint');
+    await session.close();
+
+    const ev = writer.events.find((e) => e.kind === 'closure');
+    if (ev?.kind !== 'closure') throw new Error('expected closure');
+    expect(ev.payload.reason).toBe('abort');
+    expect(ev.payload.guidance).toBe(CLOSURE_ABORT_RECOVERY_HINT);
+  });
+
+  it('omits guidance on a clean model_end_turn closure', async () => {
+    const session = new AgentSession(config);
+    await session.waitForInitialization();
+    await session.close();
+
+    const ev = writer.events.find((e) => e.kind === 'closure');
+    if (ev?.kind !== 'closure') throw new Error('expected closure');
+    expect(ev.payload.reason).toBe('model_end_turn');
+    expect(ev.payload.guidance).toBeUndefined();
   });
 
   it('reason=budget_exceeded when signal carries a BudgetExceededError', async () => {
