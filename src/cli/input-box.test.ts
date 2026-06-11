@@ -488,9 +488,11 @@ describe('formatSubmittedEcho', () => {
         terminalWidth,
       }),
     );
-    // No prompt prefix; the buffer ends at the terminal edge.
+    // No prompt prefix; the buffer ends one column short of the terminal's
+    // final column (last-column safety — a glyph in the physical last column
+    // triggers DECAWM deferred-wrap ghosting/tripling on real terminals).
     expect(out.endsWith(buffer)).toBe(true);
-    expect(out).toBe('▶ ' + ' '.repeat(terminalWidth - buffer.length - 2) + buffer);
+    expect(out).toBe('▶ ' + ' '.repeat(terminalWidth - 1 - buffer.length - 2) + buffer);
   });
 
   it('renders a right-edge bar card for multi-line buffers', () => {

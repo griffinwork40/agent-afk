@@ -33,17 +33,20 @@ describe('formatSubmittedEcho', () => {
     expect(result).toBe('afk › hello');
   });
 
-  it('short single-line buffer right-pads with leading spaces so content ends at right edge', async () => {
+  it('short single-line buffer right-pads so content ends at cols-1 (last-column safety)', async () => {
     const fn = await importEcho();
     const buffer = 'hi';
     const terminalWidth = 80;
     const result = strip(
       fn({ buffer, promptText: 'afk › ', isTTY: true, terminalWidth }),
     );
-    // No prompt prefix in the echo; pad + buffer should equal terminalWidth wide.
+    // No prompt prefix in the echo; content ends ONE column short of the
+    // terminal's final column. A printable glyph in the physical last column
+    // triggers DECAWM deferred-wrap ghosting/tripling on real terminals — see
+    // the last-column-safety invariant in echo.ts (mirrors render/card.ts).
     expect(result.endsWith(buffer)).toBe(true);
-    expect(stringWidth(result)).toBe(terminalWidth);
-    expect(result).toBe('▶ ' + ' '.repeat(terminalWidth - stringWidth(buffer) - 2) + buffer);
+    expect(stringWidth(result)).toBe(terminalWidth - 1);
+    expect(result).toBe('▶ ' + ' '.repeat(terminalWidth - 1 - stringWidth(buffer) - 2) + buffer);
   });
 
   it('card path: every content line ends flush right with the cyan bar', async () => {
@@ -142,8 +145,9 @@ describe('formatSubmittedEcho', () => {
       expect(lines).toHaveLength(2);
       expect(lines[0]!.endsWith('hi')).toBe(true);
       expect(lines[1]!.endsWith(summary)).toBe(true);
-      // Summary is flush-right against the terminal edge.
-      expect(stringWidth(lines[1]!)).toBe(terminalWidth);
+      // Summary is right-aligned, ending at cols-1 (last-column safety — a
+      // glyph in the physical final column triggers DECAWM wrap ghosting).
+      expect(stringWidth(lines[1]!)).toBe(terminalWidth - 1);
     });
 
     it('TTY card path: summary appears below the card, right-aligned', async () => {
@@ -159,10 +163,10 @@ describe('formatSubmittedEcho', () => {
       });
       const stripped = strip(result);
       const lines = stripped.split('\n');
-      // Last line is the summary, flush-right.
+      // Last line is the summary, right-aligned to cols-1 (last-column safety).
       const lastLine = lines[lines.length - 1]!;
       expect(lastLine.endsWith(summary)).toBe(true);
-      expect(stringWidth(lastLine)).toBe(terminalWidth);
+      expect(stringWidth(lastLine)).toBe(terminalWidth - 1);
       // The card's right-edge bar is still present on the content rows.
       // cardLines = all lines except the trailing summary line.
       const cardLines = lines.slice(0, -1);
