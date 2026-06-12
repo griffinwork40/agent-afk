@@ -11,6 +11,46 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.104.2] - 2026-06-12
+
+### Fixed
+- defer version-drift exit while a session is mid-turn (c8846cc)
+
+### Changed
+- Merge pull request #106 from griffinwork40/afk/telegram-msg-continuation-fix (95358c6)
+
+## [3.104.1] - 2026-06-12
+
+### Fixed
+- bind control HTTP surface to loopback by default (55a93d7)
+
+### Changed
+- Merge pull request #105 from griffinwork40/fix/daemon-loopback-bind (783a1ed)
+
+## [3.104.0] - 2026-06-12
+
+### Added
+- add --post/--post-pr headless publishing to afk chat (port afk-workshop#769) (c439b72)
+
+### Changed
+- Merge pull request #101 from griffinwork40/afk-port/pr-769 (6869a58)
+
+## [3.103.0] - 2026-06-12
+
+### Added
+- promote ground-state Wave 4 + ground-claim runtime-wiring mode (067b65e)
+
+### Changed
+- Merge pull request #100 from griffinwork40/feat/promote-ground-skills-to-bundle (7283f38)
+
+## [3.102.1] - 2026-06-12
+
+### Fixed
+- correct soft-stop notice — "Send a message to continue" (d1c1427)
+
+### Changed
+- Merge pull request #99 from griffinwork40/afk/fix-ghost-text-resume (034f5ca)
+
 ## [3.102.0] - 2026-06-12
 
 ### Added

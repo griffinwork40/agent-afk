@@ -45,7 +45,7 @@ const PINNED_HASHES = {
   // divergence (allowlisted in INTENTIONAL_DIFFS below). See docs/skill-load-mode.md.
   gather: '26ef18dde7db7c313655b0fe3097f14966763298ff5a2fe643ccf18d0f6b29c0',
   'ground-claim':
-    '1fe26f35fe858932ba1a42e5c2d4927e3b404a7b7995680b37b3e84a63912b72',
+    'e3ceabc8d6b9b19526eb30441c17e763b56cb779d7549f54b45835b06a90fb8b',
   // ground-state carries TWO bundled-only frontmatter lines after the merge of
   // the read-only-skill feature (PR #5) and the 2026-06 load-by-default flip
   // (PR #7): `read-only: true` (forked child gets the RECON tool allowlist +
@@ -53,7 +53,7 @@ const PINNED_HASHES = {
   // wave keeps dispatching). Both lines are allowlisted in
   // INTENTIONAL_DIFFS['ground-state'] below so the normalized-drift test passes.
   'ground-state':
-    'f8b23fdeb98994b69ec9620bc3a73991a6767e830b5a8d5c8e2d9a53a1f16013',
+    'a9d6da1956a60dd4362eecb26321998b0e512db40d571671e9b4427bfb8e5d6e',
   // intent-lock is bundled-only (no upstream counterpart).
   // Hash bumps need no parallel PR — document the change in the
   // commit message instead.

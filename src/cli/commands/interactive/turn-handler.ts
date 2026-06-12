@@ -464,8 +464,13 @@ export async function runTurn(
     // commit the turn as completed — visible-success-with-silent-stop,
     // exactly the failure mode the soft-stop UX exists to prevent.
     // The SDK's server-side session store preserves the response even
-    // when we skip local recordTurn; the user can resume with /resume
-    // or --resume <id>.
+    // when we skip local recordTurn; the REPL session stays live, so the
+    // user continues simply by sending the next message — no resume needed.
+    // (/resume and --resume operate on *other* /saved sessions, not the
+    // live one that was just soft-stopped, so they must NOT be advertised
+    // here; doing so sent users down a dead-end. See the onSoftStop doc in
+    // terminal-compositor.types.ts: "next Enter starts a new turn in the
+    // same session.")
     if (softStopRequested) {
       const write = completionWriter ? completionWriter.fn : console.log;
       // Invariant (TUI rhythm contract): the soft-stop notice owns ONE
@@ -473,7 +478,7 @@ export async function runTurn(
       // or tool block) already emitted its own trailing blank, so a
       // leading blank here would double-up. See docs/tui-rhythm.md.
       write(palette.warning('⏸ Stopped — work so far kept.') +
-        palette.dim('  Use /resume or --resume to continue.'));
+        palette.dim('  Send a message to continue.'));
       write('');
     }
 

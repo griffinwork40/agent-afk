@@ -22,6 +22,18 @@ import { getDaemonStateDir } from '../paths.js';
 export interface DaemonOptions {
   /** Port for the HTTP control surface. Defaults to 7777. */
   port?: number;
+  /**
+   * Host/interface the HTTP control surface binds to. Defaults to
+   * '127.0.0.1' (loopback only).
+   *
+   * Invariant: the control surface is UNAUTHENTICATED and `POST /tasks`
+   * registers commands the daemon will execute via an agent session (which
+   * has shell access). Binding a non-loopback address therefore exposes
+   * arbitrary-command scheduling to anyone who can reach the port — so the
+   * default refuses off-host connections. Override only on a trusted or
+   * firewalled network.
+   */
+  host?: string;
   /** Tasks to register at startup. */
   tasks?: ScheduledTask[];
   /** Per-tick session config; flows through to `CronScheduler`. */
@@ -61,6 +73,8 @@ export interface DaemonOptions {
 
 export interface DaemonHandle {
   readonly port: number;
+  /** The address the control surface actually bound to (e.g. '127.0.0.1'). */
+  readonly host: string;
   readonly scheduler: CronScheduler;
   registerTask(task: ScheduledTask): void;
   unregisterTask(taskId: string): void;
@@ -75,6 +89,10 @@ export interface DaemonHandle {
 }
 
 const DEFAULT_PORT = 7777;
+// Invariant: loopback-only by default. The control surface is unauthenticated
+// (see DaemonOptions.host) — binding all interfaces would expose command
+// scheduling to the local network. Callers opt into a wider bind explicitly.
+const DEFAULT_HOST = '127.0.0.1';
 
 export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHandle> {
   const scheduler = new CronScheduler({
@@ -104,7 +122,11 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
   const portFilePath = join(getDaemonStateDir('default'), 'port');
 
   const server = createServer((req, res) => handleRequest(req, res, scheduler));
-  const port = await listen(server, options.port ?? DEFAULT_PORT);
+  const { port, address: host } = await listen(
+    server,
+    options.port ?? DEFAULT_PORT,
+    options.host ?? DEFAULT_HOST,
+  );
 
   // Write the port file so tool handlers can find the running daemon.
   if (writePortFile) {
@@ -118,6 +140,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
 
   return {
     port,
+    host,
     scheduler,
     registerTask(task) {
       scheduler.register(task);
@@ -280,14 +303,24 @@ async function handleRequestAsync(
   res.end(JSON.stringify({ error: 'not found' }));
 }
 
-function listen(server: Server, requestedPort: number): Promise<number> {
+function listen(
+  server: Server,
+  requestedPort: number,
+  host: string,
+): Promise<{ port: number; address: string }> {
   return new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(requestedPort, () => {
+    // Contract: passing `host` restricts the bind to that interface. Omitting
+    // it (the prior behaviour) made Node bind the unspecified address (all
+    // interfaces) — the vulnerability this argument closes.
+    server.listen(requestedPort, host, () => {
       server.removeListener('error', reject);
       const address = server.address();
-      if (typeof address === 'object' && address) resolve(address.port);
-      else resolve(requestedPort);
+      if (typeof address === 'object' && address) {
+        resolve({ port: address.port, address: address.address });
+      } else {
+        resolve({ port: requestedPort, address: host });
+      }
     });
   });
 }

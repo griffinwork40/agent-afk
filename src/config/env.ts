@@ -573,6 +573,13 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'daemon',
   },
   {
+    name: 'AFK_DAEMON_HOST',
+    description: 'Bind address for the daemon control HTTP surface. Defaults to 127.0.0.1 (loopback only). The control surface is unauthenticated, so bind a non-loopback address such as 0.0.0.0 only on a trusted or firewalled network. Overridden by the --host flag.',
+    type: 'string',
+    required: false,
+    category: 'daemon',
+  },
+  {
     name: 'AFK_SESSIONSTART_COOLDOWN_MS',
     description: 'Cooldown in milliseconds between SessionStart trigger fires in the daemon. Prevents thundering-herd on rapid restarts.',
     type: 'number',
@@ -1080,6 +1087,7 @@ export const env = {
   get AFK_DAEMON_CWD(): string | undefined { return process.env['AFK_DAEMON_CWD']; },
   get AFK_DAEMON_TASK(): string | undefined { return process.env['AFK_DAEMON_TASK']; },
   get AFK_DAEMON_TASK_ID(): string | undefined { return process.env['AFK_DAEMON_TASK_ID']; },
+  get AFK_DAEMON_HOST(): string | undefined { return process.env['AFK_DAEMON_HOST']; },
   get AFK_SESSIONSTART_COOLDOWN_MS(): string | undefined { return process.env['AFK_SESSIONSTART_COOLDOWN_MS']; },
 
   // Worktree

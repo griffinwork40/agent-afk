@@ -29,6 +29,8 @@ import { setupWorktree } from './interactive/worktree.js';
 import { resolveResumeTarget, resumeConfigFor } from '../resume-session.js';
 import { saveSession, findSession } from '../session-store.js';
 import { createSessionStats, recordTurn } from '../slash/session-stats.js';
+import { runReviewPostPublish, parsePostFlag, type PostTarget } from '../slash/_lib/review-post.js';
+import type { Writer } from '../slash/types.js';
 
 /** Loose UUID format check: 8-4-4-4-12 hex groups separated by dashes. */
 function isUuidShaped(s: string): boolean {
@@ -146,6 +148,8 @@ export function registerChatCommand(program: Command): void {
     .option('--resume <id>', 'Resume a persisted session by id')
     .option('--continue', 'Continue the most recent persisted session in cwd')
     .option('--session-id <uuid>', 'Assign a specific UUID to this session (creates new; errors if already exists)')
+    .option('--post <targets>', 'Headless publish of the final assistant message: github, telegram, or github,telegram')
+    .option('--post-pr <ref>', 'PR number, URL, or branch for --post github (defaults to the current-branch PR)')
     .action(async (rawMessage: string | undefined, options: {
       model: AgentModelInput;
       stream: boolean;
@@ -163,6 +167,8 @@ export function registerChatCommand(program: Command): void {
       resume?: string;
       continue?: boolean;
       sessionId?: string;
+      post?: string;
+      postPr?: string;
     }) => {
       // -----------------------------------------------------------------------
       // Mutual-exclusion checks for session flags (before spinner so errors
@@ -189,6 +195,24 @@ export function registerChatCommand(program: Command): void {
           process.stderr.write(`Error: session already exists: ${options.sessionId} — use --resume to continue it\n`);
           process.exitCode = 1;
           return;
+        }
+      }
+
+      // -----------------------------------------------------------------------
+      // Parse --post targets up front so an unknown target warns before any
+      // agent/network work. Reuses the REPL's parsePostFlag (which is string-in)
+      // by reconstructing the flag string from the Commander value; the actual
+      // publish runs after the turn completes (see maybePublish below). An
+      // all-unknown value yields zero targets → a no-op, not a hard error.
+      // -----------------------------------------------------------------------
+      const postTargets: PostTarget[] = [];
+      if (options.post !== undefined) {
+        const parsedPost = parsePostFlag(`--post ${options.post}`);
+        postTargets.push(...parsedPost.targets);
+        for (const unknownTarget of parsedPost.unknown) {
+          process.stderr.write(
+            `Warning: unknown --post target ignored: ${unknownTarget} (expected github or telegram)\n`,
+          );
         }
       }
 
@@ -560,6 +584,37 @@ export function registerChatCommand(program: Command): void {
         spinner.text = 'Sending message...';
 
         // ---------------------------------------------------------------------------
+        // Optional --post publish. Reuses the REPL's runReviewPostPublish so the
+        // GitHub/Telegram posting logic (markers, chunking, gh/Telegram auth) is
+        // never duplicated. Fail-soft by contract AND by an extra inner try/catch:
+        // a publish failure writes to stderr and is swallowed so it can never flip
+        // the command's exit code or corrupt stdout (NDJSON stays clean — the
+        // Writer is stderr-backed). No-op when no targets were requested.
+        // ---------------------------------------------------------------------------
+        const maybePublish = async (reviewText: string, errored: boolean): Promise<void> => {
+          if (postTargets.length === 0 || errored) return;
+          const out: Writer = {
+            line: (t?: string) => { process.stderr.write(`${t ?? ''}\n`); },
+            raw: (t: string) => { process.stderr.write(t); },
+            success: (t: string) => { process.stderr.write(`✔ ${t}\n`); },
+            info: (t: string) => { process.stderr.write(`ℹ ${t}\n`); },
+            warn: (t: string) => { process.stderr.write(`⚠ ${t}\n`); },
+            error: (t: string) => { process.stderr.write(`✖ ${t}\n`); },
+          };
+          try {
+            await runReviewPostPublish(out, {
+              targets: postTargets,
+              reviewText,
+              prRefFromArgs: options.postPr ?? null,
+            });
+          } catch (err) {
+            process.stderr.write(
+              `[--post] publish failed: ${err instanceof Error ? err.message : String(err)}\n`,
+            );
+          }
+        };
+
+        // ---------------------------------------------------------------------------
         // stream-json path — emits raw OutputEvent NDJSON on stdout for headless
         // consumers. The spinner is stopped before entering the loop so its escape
         // sequences do not corrupt the NDJSON stream on stdout.
@@ -578,6 +633,7 @@ export function registerChatCommand(program: Command): void {
           spinner.stop();
 
           let streamAssistantText = '';
+          let streamErrored = false;
           const stream = session.sendMessageStream(message);
           for await (const event of stream) {
             await writeAndDrain(process.stdout, JSON.stringify(event, dateReplacer) + '\n');
@@ -594,10 +650,12 @@ export function registerChatCommand(program: Command): void {
             }
             if (event.type === 'error') {
               process.exitCode = 1;
+              streamErrored = true;
               break;
             }
           }
 
+          await maybePublish(streamAssistantText, streamErrored);
           return;
         }
 
@@ -653,6 +711,8 @@ export function registerChatCommand(program: Command): void {
           }
           console.log('');
         }
+
+        await maybePublish(response.content, false);
 
       } catch (error) {
         encounteredError = true;

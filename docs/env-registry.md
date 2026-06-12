@@ -81,6 +81,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | Name | Type | Required | Default | Example | Description |
 |------|------|----------|---------|---------|-------------|
 | `AFK_DAEMON_CWD` | string |  |  |  | Working directory used by the daemon process for spawned agent sessions. |
+| `AFK_DAEMON_HOST` | string |  |  |  | Bind address for the daemon control HTTP surface. Defaults to 127.0.0.1 (loopback only). The control surface is unauthenticated, so bind a non-loopback address such as 0.0.0.0 only on a trusted or firewalled network. Overridden by the --host flag. |
 | `AFK_DAEMON_TASK` | string |  |  |  | Default task description for the daemon. Falls back to afk.config.json daemon.task. |
 | `AFK_DAEMON_TASK_ID` | string |  |  |  | Task identifier the daemon uses to scope its state directory and telemetry. |
 | `AFK_SESSIONSTART_COOLDOWN_MS` | number |  |  |  | Cooldown in milliseconds between SessionStart trigger fires in the daemon. Prevents thundering-herd on rapid restarts. |

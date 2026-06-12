@@ -31,6 +31,7 @@ vi.mock('../config.js', () => ({
 vi.mock('../../agent/daemon.js', () => ({
   startDaemon: vi.fn(async () => ({
     port: 7777,
+    host: '127.0.0.1',
     scheduler: {},
     registerTask: vi.fn(),
     unregisterTask: vi.fn(),
