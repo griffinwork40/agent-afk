@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.104.6] - 2026-06-12
+
+### Changed
+- Merge pull request #115 from griffinwork40/refactor/parse-post-targets (8c94fb8)
+- parse chat --post value directly via parsePostTargets (f6ac2cd)
+
 ## [3.104.5] - 2026-06-12
 
 ### Fixed
