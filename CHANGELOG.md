@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.108.0] - 2026-06-12
+
+### Added
+- add allow_custom for free-form entry in choice/multi_choice (6ae1f65)
+
+### Fixed
+- route multi_choice custom-entry on sentinel presence, not exclusivity (6afd36b)
+
+### Changed
+- Merge pull request #116 from griffinwork40/afk/20260612-152001-f038ae (85a5032)
+
 ## [3.107.0] - 2026-06-12
 
 ### Added
