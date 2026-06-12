@@ -418,8 +418,20 @@ async function main() {
         const diskVersion = pkg.version ?? 'unknown';
         const result = checkVersionDrift(DAEMON_VERSION, diskVersion);
         if (result.drift) {
-          console.log(`⚠️ ${result.message}`);
-          process.exit(0);
+          // Invariant: never exit mid-turn. The drift-exit hands the chat off to
+          // a freshly-installed binary via launchd KeepAlive, but exiting while a
+          // session is streaming severs the in-flight turn (plus its queued
+          // messages and sub-agent dispatch). The relaunched process starts cold
+          // and cannot resume it — the user sees "An unexpected error occurred"
+          // and the conversation does not continue. Defer the upgrade until every
+          // session is idle; the next stats tick (≤5 min) re-checks and exits then.
+          const busy = bot.getBusySessionCount();
+          if (busy > 0) {
+            console.log(`⚠️ ${result.message} — deferred: ${busy} active session(s) mid-turn.`);
+          } else {
+            console.log(`⚠️ ${result.message}`);
+            process.exit(0);
+          }
         }
       } catch {
         console.warn('⚠️ [daemon] Could not re-read package.json for version drift check — skipping.');

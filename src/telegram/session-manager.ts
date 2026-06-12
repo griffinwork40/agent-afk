@@ -613,4 +613,24 @@ export class SessionManager {
   getChatCount(): number {
     return this.sessionData.size;
   }
+
+  /**
+   * Count sessions that are mid-turn (not idle and not closed).
+   *
+   * Used by the version-drift watchdog to defer the upgrade-exit while a
+   * conversation is in flight. A session in 'processing' / 'streaming' /
+   * 'compacting' is actively producing output (or rewriting history); exiting
+   * the process under it kills the turn, its queued messages, and any
+   * sub-agent dispatch — none of which the relaunched binary can resume.
+   *
+   * Fail-safe: any non-idle, non-closed state counts as busy, so a future
+   * SessionState variant defaults to "defer the exit" rather than "kill it".
+   */
+  getBusySessionCount(): number {
+    let busy = 0;
+    for (const session of this.sessions.values()) {
+      if (session.state !== 'idle' && session.state !== 'closed') busy++;
+    }
+    return busy;
+  }
 }
