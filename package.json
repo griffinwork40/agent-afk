@@ -1,6 +1,6 @@
 {
   "name": "agent-afk",
-  "version": "3.104.4",
+  "version": "3.104.5",
   "description": "Local-first control plane for long-running AI agent work — delegation, traces, resumable sessions, verification, and notifications.",
   "main": "dist/index.mjs",
   "type": "module",

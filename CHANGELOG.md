@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.104.5] - 2026-06-12
+
+### Fixed
+- force version-drift upgrade after N mid-turn deferrals (975fdcc)
+
+### Changed
+- Merge pull request #112 from griffinwork40/afk/add-forced-upgrade-guard (4492f5b)
+- Merge pull request #113 from griffinwork40/afk/add-system-prompt-docs (0c18471)
+- handle confused follow-ups in Failure handling (dad10d6)
+
 ## [3.104.4] - 2026-06-12
 
 ### Fixed
