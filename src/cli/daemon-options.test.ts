@@ -5,6 +5,9 @@ import {
   resolveTriggerMode,
   resolveDefaultTask,
   resolveDefaultTaskId,
+  resolveDaemonHost,
+  isLoopbackHost,
+  DEFAULT_DAEMON_HOST,
   COMPILED_DEFAULT_TASK,
   COMPILED_DEFAULT_TASK_ID,
 } from './daemon-options.js';
@@ -201,5 +204,48 @@ describe('resolveDefaultTaskId', () => {
 
   it('frozen-default guard: COMPILED_DEFAULT_TASK_ID is "default"', () => {
     expect(COMPILED_DEFAULT_TASK_ID).toBe('default');
+  });
+});
+
+describe('resolveDaemonHost', () => {
+  it('defaults to loopback (127.0.0.1) when neither flag nor env is set', () => {
+    expect(resolveDaemonHost(undefined, undefined)).toBe('127.0.0.1');
+  });
+
+  it('security guard: DEFAULT_DAEMON_HOST is loopback', () => {
+    expect(DEFAULT_DAEMON_HOST).toBe('127.0.0.1');
+    expect(resolveDaemonHost(undefined, undefined)).toBe(DEFAULT_DAEMON_HOST);
+  });
+
+  it('treats empty / whitespace-only inputs as absent', () => {
+    expect(resolveDaemonHost('', '')).toBe('127.0.0.1');
+    expect(resolveDaemonHost('   ', undefined)).toBe('127.0.0.1');
+    expect(resolveDaemonHost(undefined, '   ')).toBe('127.0.0.1');
+  });
+
+  it('uses the env var when the flag is unset', () => {
+    expect(resolveDaemonHost(undefined, '0.0.0.0')).toBe('0.0.0.0');
+  });
+
+  it('flag takes precedence over env var', () => {
+    expect(resolveDaemonHost('192.168.1.10', '0.0.0.0')).toBe('192.168.1.10');
+  });
+
+  it('falls through to env when flag is whitespace-only', () => {
+    expect(resolveDaemonHost('  ', '0.0.0.0')).toBe('0.0.0.0');
+  });
+});
+
+describe('isLoopbackHost', () => {
+  it('recognises loopback literals (case / whitespace insensitive)', () => {
+    for (const h of ['127.0.0.1', 'localhost', '::1', 'LOCALHOST', '  127.0.0.1  ']) {
+      expect(isLoopbackHost(h)).toBe(true);
+    }
+  });
+
+  it('treats all-interfaces wildcards and LAN/hostnames as non-loopback', () => {
+    for (const h of ['0.0.0.0', '::', '192.168.1.10', '10.0.0.5', '0:0:0:0:0:0:0:0', 'example.com']) {
+      expect(isLoopbackHost(h)).toBe(false);
+    }
   });
 });

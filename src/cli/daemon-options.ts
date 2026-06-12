@@ -154,3 +154,44 @@ export function resolveDefaultTaskId(
     COMPILED_DEFAULT_TASK_ID
   );
 }
+
+/**
+ * Compiled-in default daemon control-surface bind host. Loopback only.
+ *
+ * The HTTP control surface is unauthenticated and POST /tasks schedules
+ * commands the daemon executes, so the safe default is to refuse off-host
+ * connections. Override via --host / AFK_DAEMON_HOST only when remote control
+ * is genuinely needed (and the port is firewalled).
+ */
+export const DEFAULT_DAEMON_HOST = '127.0.0.1';
+
+/**
+ * Resolve the daemon control-surface bind host from (in precedence order):
+ *   1. `--host` flag value
+ *   2. `AFK_DAEMON_HOST` env var value
+ *   3. {@link DEFAULT_DAEMON_HOST} ('127.0.0.1') fallback
+ *
+ * Empty / whitespace-only inputs are treated as absent.
+ */
+export function resolveDaemonHost(
+  flagValue: string | undefined,
+  envValue: string | undefined,
+): string {
+  return (
+    presentOrUndefined(flagValue) ??
+    presentOrUndefined(envValue) ??
+    DEFAULT_DAEMON_HOST
+  );
+}
+
+/**
+ * True when `host` binds only the local machine (loopback). Used to decide
+ * whether to warn that the unauthenticated control surface is reachable from
+ * the network. Anything that is not a recognised loopback literal — including
+ * the all-interfaces wildcards '0.0.0.0' and '::' and any LAN IP/hostname — is
+ * treated as non-loopback (warn).
+ */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.trim().toLowerCase();
+  return h === '127.0.0.1' || h === 'localhost' || h === '::1';
+}

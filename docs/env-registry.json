@@ -97,6 +97,13 @@
       "category": "daemon"
     },
     {
+      "name": "AFK_DAEMON_HOST",
+      "description": "Bind address for the daemon control HTTP surface. Defaults to 127.0.0.1 (loopback only). The control surface is unauthenticated, so bind a non-loopback address such as 0.0.0.0 only on a trusted or firewalled network. Overridden by the --host flag.",
+      "type": "string",
+      "required": false,
+      "category": "daemon"
+    },
+    {
       "name": "AFK_DAEMON_TASK",
       "description": "Default task description for the daemon. Falls back to afk.config.json daemon.task.",
       "type": "string",
