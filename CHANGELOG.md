@@ -11,6 +11,18 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.105.0] - 2026-06-12
+
+### Added
+- persist the user message to the transcript at submission time (da0b955)
+
+### Fixed
+- merge the committed band across banner-eviction gaps (920b722)
+- measure first-commit geometry in the commit placement regime (c5993d5)
+
+### Changed
+- Merge pull request #114 from griffinwork40/afk/i-need-more-context (f6911ad)
+
 ## [3.104.6] - 2026-06-12
 
 ### Changed
