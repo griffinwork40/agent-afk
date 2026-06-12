@@ -641,6 +641,22 @@ export const askQuestionTool: AnthropicToolDef = {
     'materially different work, a decision with significant or irreversible consequences, or context that exists ' +
     "only in the operator's head (a preference, a secret, an external constraint). " +
     '\n\n' +
+    'ANSWERABILITY — a question only helps if a human will answer it:\n' +
+    '`surface` (from `get_runtime_state`, view "self") is a partial signal, not a guarantee:\n' +
+    '- `daemon`, or any session started by a scheduler, cron, or another agent: no human is\n' +
+    '  watching — never block on a question here.\n' +
+    '- `cli` is AMBIGUOUS: the interactive REPL and Telegram bot reach a human, but one-shot `chat`\n' +
+    '  runs and sub-agent forks report the same `cli` with no elicitation handler — there the call\n' +
+    "  returns `{ action: 'decline' }` instantly.\n" +
+    '- Even when a handler exists, the operator is usually away, so a blocking question may stall\n' +
+    '  until the turn aborts.\n' +
+    'Treat this tool as best-effort: a `decline` or `cancel` result means "no answer is coming," not\n' +
+    'a failure to abort the task on. When you cannot be sure a human will answer, instead of asking:\n' +
+    '1. Proceed on a stated assumption — pick the most reasonable interpretation, act, and record the\n' +
+    '   assumption in your Done/Blocked terminal state for async review.\n' +
+    '2. Emit a Blocked artifact — if no safe assumption exists and proceeding is irreversible, end\n' +
+    '   with a **Blocked** terminal state naming exactly what the operator must supply.\n' +
+    '\n' +
     'Question types:\n' +
     '- `text` (default): free-form text answer. Use for open-ended questions.\n' +
     '- `confirm`: yes/no question. Returns `{ action: "accept", value: true|false }`.\n' +
