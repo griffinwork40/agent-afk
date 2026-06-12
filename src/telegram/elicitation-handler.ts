@@ -27,6 +27,9 @@ import {
   buildElicitationCallback,
   parseElicitationCallback,
   ELICITATION_CALLBACK_PREFIX,
+  buildCustomElicitationCallback,
+  parseCustomElicitationCallback,
+  ELICITATION_CUSTOM_CALLBACK_PREFIX,
 } from './elicitation-callback-data.js';
 import { randomBytes } from 'node:crypto';
 import { escapeHtml } from './formatter.js';
@@ -39,6 +42,9 @@ function nextElicitationId(): string {
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+/** Sentinel returned by the custom-entry wildcard handler to the dispatch table. */
+const CUSTOM_ENTRY_SENTINEL_INDEX = -1;
 
 /**
  * Truncate a button label to Telegram's ~64-byte UTF-8 limit.
@@ -100,6 +106,20 @@ export function makeTelegramElicitationHandler(
     if (resolver) resolver(parsed.choiceIndex);
   });
 
+  const customWildcardRe = new RegExp(`^${escapeRegExp(ELICITATION_CUSTOM_CALLBACK_PREFIX)}.+$`);
+  bot.action(customWildcardRe, async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    if (ctx.chat?.id !== chatId) return;
+    const callbackData =
+      typeof ctx.callbackQuery === 'object' && 'data' in ctx.callbackQuery
+        ? (ctx.callbackQuery as { data: string }).data
+        : undefined;
+    const id = parseCustomElicitationCallback(callbackData);
+    if (!id) return;
+    const resolver = pendingChoiceElicitations.get(id);
+    if (resolver) resolver(CUSTOM_ENTRY_SENTINEL_INDEX);
+  });
+
   return async (
     request: ElicitationRequest,
     options: { signal: AbortSignal },
@@ -134,10 +154,19 @@ export function makeTelegramElicitationHandler(
         buttons = choices.map((choice, i) => [
           Markup.button.callback(truncateLabel(choice), buildElicitationCallback(elicitId, i)),
         ]);
+        if (request.allowCustom) {
+          buttons.push([
+            Markup.button.callback('✍️ Type a custom answer', buildCustomElicitationCallback(elicitId)),
+          ]);
+        }
       }
 
       return new Promise<ElicitationResult>((resolve) => {
         let resolved = false;
+        // Set once the custom-entry flow installs a chatId-keyed text intercept.
+        // The choice dispatch table is keyed by elicitId; the text intercept by
+        // chatId — abort must clear BOTH or a stale handler lingers.
+        let inCustomTextWait = false;
 
         const onAbort = () => {
           if (resolved) return;
@@ -145,6 +174,9 @@ export function makeTelegramElicitationHandler(
           // H3: clean up the dispatch table entry so the wildcard handler
           // can't fire after the promise is settled.
           pendingChoiceElicitations.delete(elicitId);
+          // Custom-entry abort: also drop the chatId-keyed text intercept so a
+          // stale handler can't swallow the user's next message.
+          if (inCustomTextWait) messageHandler.pendingElicitations.delete(chatId);
           resolve({ action: 'decline' });
         };
         options.signal.addEventListener('abort', onAbort, { once: true });
@@ -155,6 +187,25 @@ export function makeTelegramElicitationHandler(
           resolved = true;
           pendingChoiceElicitations.delete(elicitId);
           options.signal.removeEventListener('abort', onAbort);
+
+          // Custom-entry path: transition to text-intercept mode
+          if (choiceIndex === CUSTOM_ENTRY_SENTINEL_INDEX) {
+            resolved = false; // re-arm for the text intercept
+            inCustomTextWait = true;
+            bot.telegram.sendMessage(chatId, '✍️ Please type your custom answer:').catch(() => {});
+            if (options.signal.aborted) { resolve({ action: 'decline' }); return; }
+            messageHandler.pendingElicitations.set(chatId, (text: string) => {
+              if (resolved) return;
+              resolved = true;
+              options.signal.removeEventListener('abort', onAbort);
+              const trimmed = text.trim();
+              if (trimmed === ':cancel') { resolve({ action: 'cancel' }); return; }
+              resolve({ action: 'accept', content: { value: null, custom_value: trimmed } });
+            });
+            // H1: re-attach abort listener so abort during text wait resolves correctly
+            options.signal.addEventListener('abort', onAbort, { once: true });
+            return;
+          }
 
           if (qType === 'confirm') {
             // index 1 = Yes, index 0 = No
@@ -279,6 +330,18 @@ export function makeTelegramElicitationHandler(
 
         if (qType === 'multi_choice') {
           const choices = request.choices ?? [];
+
+          // allow_custom: non-numeric, non-empty, non-cancel text on multi_choice is a custom answer
+          if (request.allowCustom) {
+            const firstPart = trimmed.split(',')[0]?.trim() ?? '';
+            const parsedFirst = parseInt(firstPart, 10);
+            const looksNumeric = Number.isInteger(parsedFirst) && String(parsedFirst) === firstPart && parsedFirst >= 1 && parsedFirst <= choices.length;
+            if (!looksNumeric && trimmed !== '' && trimmed !== ':cancel') {
+              resolve({ action: 'accept', content: { value: null, custom_value: trimmed } });
+              return;
+            }
+          }
+
           const parts = trimmed.split(',').map((s) => s.trim());
           const selected: string[] = [];
           for (const part of parts) {
@@ -327,6 +390,9 @@ export function makeTelegramElicitationHandler(
         const choices = request.choices ?? [];
         const choiceList = choices.map((c, i) => `${i + 1}. ${escapeHtml(c)}`).join('\n');
         promptText += `\n\n${choiceList}\n\nEnter comma-separated numbers (e.g. 1,3)`;
+        if (request.allowCustom) {
+          promptText += '\n\n<i>Or type any free-form text as a custom answer.</i>';
+        }
       } else if (qType === 'number') {
         const boundsHint =
           request.min !== undefined && request.max !== undefined

@@ -90,3 +90,56 @@ describe('buildElicitationCallback', () => {
     expect(() => buildElicitationCallback('a'.repeat(49), 0)).toThrow(/invalid id/);
   });
 });
+
+import {
+  buildCustomElicitationCallback,
+  parseCustomElicitationCallback,
+  ELICITATION_CUSTOM_CALLBACK_PREFIX,
+} from './elicitation-callback-data.js';
+
+describe('buildCustomElicitationCallback / parseCustomElicitationCallback', () => {
+  it('round-trips: build → parse', () => {
+    const id = 'elic-abc12345';
+    const data = buildCustomElicitationCallback(id);
+    expect(parseCustomElicitationCallback(data)).toBe(id);
+  });
+
+  it('custom prefix is distinct from regular prefix', () => {
+    expect(ELICITATION_CUSTOM_CALLBACK_PREFIX).not.toBe(ELICITATION_CALLBACK_PREFIX);
+  });
+
+  it('parseCustomElicitationCallback returns null for regular afk:e: callback', () => {
+    const regular = buildElicitationCallback('elic-abc12345', 0);
+    expect(parseCustomElicitationCallback(regular)).toBeNull();
+  });
+
+  it('parseCustomElicitationCallback returns null on null/empty input', () => {
+    expect(parseCustomElicitationCallback(null)).toBeNull();
+    expect(parseCustomElicitationCallback(undefined)).toBeNull();
+    expect(parseCustomElicitationCallback('')).toBeNull();
+  });
+
+  it('stays under 64-byte limit for max-length id (48 chars)', () => {
+    const maxId = 'a'.repeat(48);
+    const data = buildCustomElicitationCallback(maxId);
+    expect(Buffer.byteLength(data, 'utf8')).toBeLessThanOrEqual(TELEGRAM_CALLBACK_DATA_MAX_BYTES);
+  });
+
+  it('buildCustomElicitationCallback throws on invalid id', () => {
+    expect(() => buildCustomElicitationCallback('')).toThrow(/invalid id/);
+    expect(() => buildCustomElicitationCallback('../escape')).toThrow(/invalid id/);
+  });
+
+  it('parseCustomElicitationCallback returns null when id fails grammar', () => {
+    const badData = `${ELICITATION_CUSTOM_CALLBACK_PREFIX}my/id`;
+    expect(parseCustomElicitationCallback(badData)).toBeNull();
+  });
+
+  it('parseCustomElicitationCallback does NOT match afk:e: regular prefix accidentally', () => {
+    // afk:ec: starts with afk:e: — verify parseElicitationCallback returns null for custom callbacks
+    // (the existing parser will proceed with rest='c:<id>', colonIdx=1, indexStr='c' → NaN → null)
+    const customData = buildCustomElicitationCallback('elic-abc12345');
+    // Regular parser returns null for custom callback data
+    expect(parseElicitationCallback(customData)).toBeNull();
+  });
+});

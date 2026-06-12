@@ -1398,3 +1398,373 @@ describe('agent-question mode — picker path', () => {
     expect(stripped.some((s) => s.includes('alpha, gamma'))).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// allow_custom — overlay path (choice/multi_choice via pickFromList)
+// ---------------------------------------------------------------------------
+
+import { CUSTOM_ANSWER_SENTINEL, renderMultiSelector } from './input/selectors.js';
+
+describe('allow_custom — overlay path (choice)', () => {
+  it('sentinel selected → readTextOverlay called → returns { value: null, custom_value }', async () => {
+    const lines: string[] = [];
+    const readTextOverlay = vi.fn().mockResolvedValueOnce('typed text');
+    const pickFromList = vi.fn().mockResolvedValueOnce([CUSTOM_ANSWER_SENTINEL]);
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: (t = '') => lines.push(t) },
+      pendingCount: () => 0,
+      pickFromList,
+      readTextOverlay,
+    });
+    const result = await handler(
+      agentRequest({ type: 'choice', choices: ['alpha', 'beta'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('accept');
+    expect(result.content?.['value']).toBeNull();
+    expect(result.content?.['custom_value']).toBe('typed text');
+    expect(readTextOverlay).toHaveBeenCalledTimes(1);
+    // Result echo written via writer.line
+    expect(lines.some((l) => l.includes('typed text'))).toBe(true);
+  });
+
+  it('sentinel selected + readTextOverlay returns null (Esc) → cancel', async () => {
+    const readTextOverlay = vi.fn().mockResolvedValueOnce(null);
+    const pickFromList = vi.fn().mockResolvedValueOnce([CUSTOM_ANSWER_SENTINEL]);
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      pickFromList,
+      readTextOverlay,
+    });
+    const result = await handler(
+      agentRequest({ type: 'choice', choices: ['alpha', 'beta'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('cancel');
+  });
+
+  it('without allowCustom, sentinel is NOT appended to the options', async () => {
+    const pickFromList = vi.fn().mockResolvedValueOnce(['alpha']);
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      pickFromList,
+    });
+    await handler(
+      agentRequest({ type: 'choice', choices: ['alpha', 'beta'] }),
+      { signal: NO_SIGNAL },
+    );
+    const call = pickFromList.mock.calls[0]?.[0];
+    expect(call?.options).toEqual(['alpha', 'beta']);
+    expect(call?.options).not.toContain(CUSTOM_ANSWER_SENTINEL);
+  });
+
+  it('with allowCustom, sentinel IS appended to the options passed to pickFromList', async () => {
+    const pickFromList = vi.fn().mockResolvedValueOnce(['alpha']);
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      pickFromList,
+    });
+    await handler(
+      agentRequest({ type: 'choice', choices: ['alpha', 'beta'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    const call = pickFromList.mock.calls[0]?.[0];
+    expect(call?.options).toContain(CUSTOM_ANSWER_SENTINEL);
+    expect(call?.options[2]).toBe(CUSTOM_ANSWER_SENTINEL);
+  });
+
+  it('sentinel selected but readTextOverlay absent → cancel (graceful degrade)', async () => {
+    const pickFromList = vi.fn().mockResolvedValueOnce([CUSTOM_ANSWER_SENTINEL]);
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      pickFromList,
+      // readTextOverlay not provided
+    });
+    const result = await handler(
+      agentRequest({ type: 'choice', choices: ['alpha', 'beta'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('cancel');
+  });
+});
+
+describe('allow_custom — overlay path (multi_choice)', () => {
+  it('sentinel selected → readTextOverlay called → returns { value: null, custom_value }', async () => {
+    const readTextOverlay = vi.fn().mockResolvedValueOnce('free text answer');
+    const pickFromList = vi.fn().mockResolvedValueOnce([CUSTOM_ANSWER_SENTINEL]);
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      pickFromList,
+      readTextOverlay,
+    });
+    const result = await handler(
+      agentRequest({ type: 'multi_choice', choices: ['alpha', 'beta'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('accept');
+    expect(result.content?.['value']).toBeNull();
+    expect(result.content?.['custom_value']).toBe('free text answer');
+  });
+
+  it('sentinel selected + readTextOverlay returns null → cancel', async () => {
+    const readTextOverlay = vi.fn().mockResolvedValueOnce(null);
+    const pickFromList = vi.fn().mockResolvedValueOnce([CUSTOM_ANSWER_SENTINEL]);
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      pickFromList,
+      readTextOverlay,
+    });
+    const result = await handler(
+      agentRequest({ type: 'multi_choice', choices: ['alpha', 'beta'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('cancel');
+  });
+
+  it('without allowCustom, sentinel not appended', async () => {
+    const pickFromList = vi.fn().mockResolvedValueOnce(['alpha']);
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      pickFromList,
+    });
+    await handler(
+      agentRequest({ type: 'multi_choice', choices: ['alpha', 'beta'] }),
+      { signal: NO_SIGNAL },
+    );
+    const call = pickFromList.mock.calls[0]?.[0];
+    expect(call?.options).not.toContain(CUSTOM_ANSWER_SENTINEL);
+  });
+
+  it('mixed selection (real option + sentinel) routes to custom entry — sentinel never leaks into value', async () => {
+    // Regression: the sentinel guard previously required exactly one selection,
+    // so picking a real option together with the sentinel leaked the sentinel
+    // label into value[]. Presence of the sentinel must route to free-form entry.
+    const readTextOverlay = vi.fn().mockResolvedValueOnce('typed override');
+    const pickFromList = vi.fn().mockResolvedValueOnce(['alpha', CUSTOM_ANSWER_SENTINEL]);
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      pickFromList,
+      readTextOverlay,
+    });
+    const result = await handler(
+      agentRequest({ type: 'multi_choice', choices: ['alpha', 'beta'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('accept');
+    expect(result.content?.['value']).toBeNull();
+    expect(result.content?.['custom_value']).toBe('typed override');
+    expect(readTextOverlay).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// allow_custom — non-TTY numbered-list fallback (choice)
+// ---------------------------------------------------------------------------
+
+describe('allow_custom — non-TTY numbered-list fallback (choice)', () => {
+  it('entering N+1 triggers readLine custom text prompt → returns { value: null, custom_value }', async () => {
+    const lines: string[] = [];
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn()
+        .mockResolvedValueOnce('3')        // select sentinel (index 3 = choice 3 of 2 + 1)
+        .mockResolvedValueOnce('my custom answer'),
+      writer: { line: (t = '') => lines.push(t) },
+      pendingCount: () => 0,
+      // no pickFromList → falls through to numbered list
+    });
+    const result = await handler(
+      agentRequest({ type: 'choice', choices: ['alpha', 'beta'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('accept');
+    expect(result.content?.['value']).toBeNull();
+    expect(result.content?.['custom_value']).toBe('my custom answer');
+    // Sentinel item rendered in numbered list
+    expect(lines.some((l) => l.includes(CUSTOM_ANSWER_SENTINEL))).toBe(true);
+  });
+
+  it('entering :cancel from custom text prompt → cancel', async () => {
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn()
+        .mockResolvedValueOnce('3')
+        .mockResolvedValueOnce(':cancel'),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+    });
+    const result = await handler(
+      agentRequest({ type: 'choice', choices: ['alpha', 'beta'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('cancel');
+  });
+
+  it('without allowCustom, no N+1 item listed', async () => {
+    const lines: string[] = [];
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn().mockResolvedValueOnce(':cancel'),
+      writer: { line: (t = '') => lines.push(t) },
+      pendingCount: () => 0,
+    });
+    await handler(
+      agentRequest({ type: 'choice', choices: ['alpha', 'beta'] }),
+      { signal: NO_SIGNAL },
+    );
+    expect(lines.some((l) => l.includes(CUSTOM_ANSWER_SENTINEL))).toBe(false);
+  });
+
+  it('normal choice selection still works when allowCustom is true', async () => {
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn().mockResolvedValueOnce('1'),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+    });
+    const result = await handler(
+      agentRequest({ type: 'choice', choices: ['alpha', 'beta'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('accept');
+    expect(result.content?.['value']).toBe('alpha');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// allow_custom — non-TTY numbered-list fallback (multi_choice)
+// ---------------------------------------------------------------------------
+
+describe('allow_custom — non-TTY numbered-list fallback (multi_choice)', () => {
+  it('entering N+1 triggers readLine custom text prompt → returns { value: null, custom_value }', async () => {
+    const lines: string[] = [];
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn()
+        .mockResolvedValueOnce('3')        // sentinel = index 3 for 2 choices
+        .mockResolvedValueOnce('custom multi answer'),
+      writer: { line: (t = '') => lines.push(t) },
+      pendingCount: () => 0,
+    });
+    const result = await handler(
+      agentRequest({ type: 'multi_choice', choices: ['alpha', 'beta'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('accept');
+    expect(result.content?.['value']).toBeNull();
+    expect(result.content?.['custom_value']).toBe('custom multi answer');
+    expect(lines.some((l) => l.includes(CUSTOM_ANSWER_SENTINEL))).toBe(true);
+  });
+
+  it('entering :cancel from custom text prompt (multi) → cancel', async () => {
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn()
+        .mockResolvedValueOnce('3')
+        .mockResolvedValueOnce(':cancel'),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+    });
+    const result = await handler(
+      agentRequest({ type: 'multi_choice', choices: ['alpha', 'beta'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('cancel');
+  });
+
+  it('without allowCustom, sentinel not rendered', async () => {
+    const lines: string[] = [];
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn().mockResolvedValueOnce(':cancel'),
+      writer: { line: (t = '') => lines.push(t) },
+      pendingCount: () => 0,
+    });
+    await handler(
+      agentRequest({ type: 'multi_choice', choices: ['alpha', 'beta'] }),
+      { signal: NO_SIGNAL },
+    );
+    expect(lines.some((l) => l.includes(CUSTOM_ANSWER_SENTINEL))).toBe(false);
+  });
+
+  it('normal multi_choice selection still works when allowCustom is true', async () => {
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn().mockResolvedValueOnce('1,2'),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+    });
+    const result = await handler(
+      agentRequest({ type: 'multi_choice', choices: ['alpha', 'beta'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('accept');
+    expect(result.content?.['value']).toEqual(['alpha', 'beta']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// allow_custom — TTY arrow-key multi-selector path (renderMultiSelector)
+//
+// The TTY selector returns null in the non-TTY test env, so the existing tests
+// only reach the overlay (pickFromList) and numbered-list paths. We mock the
+// selector module to return indices and exercise the real TTY branch — including
+// the mixed real-option + sentinel selection that previously indexed choices[]
+// out of range (undefined → thrown TypeError in sanitizeSchemaString).
+//
+// The mock defaults to the REAL implementation (null in non-TTY), so every
+// other test in this file is unaffected.
+// ---------------------------------------------------------------------------
+
+vi.mock('./input/selectors.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./input/selectors.js')>();
+  return {
+    ...actual,
+    renderSelector: vi.fn(actual.renderSelector),
+    renderMultiSelector: vi.fn(actual.renderMultiSelector),
+  };
+});
+
+describe('allow_custom — TTY multi-selector path (renderMultiSelector)', () => {
+  it('real option + sentinel together routes to custom entry (no undefined / no throw)', async () => {
+    // selectorResult = [0, 2]: index 0 = "alpha", index 2 = sentinel (choices.length).
+    vi.mocked(renderMultiSelector).mockResolvedValueOnce([0, 2]);
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn().mockResolvedValueOnce('tty custom answer'),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      // no pickFromList → falls through to the renderMultiSelector TTY path
+    });
+    const result = await handler(
+      agentRequest({ type: 'multi_choice', choices: ['alpha', 'beta'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('accept');
+    expect(result.content?.['value']).toBeNull();
+    expect(result.content?.['custom_value']).toBe('tty custom answer');
+  });
+
+  it('real options only still returns selected values when allowCustom is on', async () => {
+    vi.mocked(renderMultiSelector).mockResolvedValueOnce([0, 1]);
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+    });
+    const result = await handler(
+      agentRequest({ type: 'multi_choice', choices: ['alpha', 'beta'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('accept');
+    expect(result.content?.['value']).toEqual(['alpha', 'beta']);
+  });
+});

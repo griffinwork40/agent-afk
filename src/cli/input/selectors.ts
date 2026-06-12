@@ -2,6 +2,12 @@ import { sanitizeSchemaString } from '../_lib/sanitize.js';
 import { emitKeypressEventsImmediateEscape } from './emit-keypress.js';
 import { palette } from '../palette.js';
 
+/**
+ * Sentinel string appended to choices arrays when `allowCustom` is true.
+ * Identified by position (choices.length index), not string content.
+ */
+export const CUSTOM_ANSWER_SENTINEL = '\u270E Type your own answer';
+
 // ---------------------------------------------------------------------------
 // Interactive terminal selectors
 //

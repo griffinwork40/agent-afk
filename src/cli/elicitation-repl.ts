@@ -23,7 +23,7 @@
  */
 
 import type { ElicitationRequest, ElicitationResult } from '../agent/types/sdk-types.js';
-import { renderMultiSelector, renderSelector } from './input/selectors.js';
+import { renderMultiSelector, renderSelector, CUSTOM_ANSWER_SENTINEL } from './input/selectors.js';
 import { ringBellIfEnabled } from './_lib/capture-mode.js';
 import { sanitizeSchemaString } from './_lib/sanitize.js';
 import { palette } from './palette.js';
@@ -521,6 +521,7 @@ async function renderAgentQuestion(
   // absent (non-TTY: daemon, pipes, tests that don't exercise picker UX).
   if ((qType === 'choice' || qType === 'multi_choice') && pickFromList && (request.choices?.length ?? 0) > 0) {
     const sanitizedOptions = (request.choices ?? []).map((c) => sanitizeSchemaString(c, 128));
+    if (request.allowCustom) sanitizedOptions.push(CUSTOM_ANSWER_SENTINEL);
     let selected: readonly string[] | null;
     try {
       selected = await pickFromList({
@@ -534,6 +535,24 @@ async function renderAgentQuestion(
     }
     if (signal.aborted) return CANCEL;
     if (selected === null) return CANCEL;
+
+    // Custom-answer path — sentinel present. In a multi-select the sentinel can
+    // be checked alongside real options; treat its presence (not exclusivity) as
+    // the signal to switch to free-form entry, so the sentinel label never leaks
+    // into `value` and we never index choices[] out of range below.
+    if (request.allowCustom && selected.includes(CUSTOM_ANSWER_SENTINEL)) {
+      if (!readTextOverlay) return CANCEL;
+      const customText = await readTextOverlay({
+        header: buildOverlayHeader(request),
+        help: 'Type your custom answer (Esc to cancel)',
+        validate: (v) => v.trim() === '' ? 'Please enter a non-empty answer' : null,
+        signal,
+      });
+      if (customText === null) return CANCEL;
+      writer.line(palette.dim('  \u270E ') + palette.brand(sanitizeSchemaString(customText, 256)));
+      return { action: 'accept', content: { value: null, custom_value: customText } };
+    }
+
     if (selected.length === 0) {
       if (request.allowSkip) return SKIP;
       // Confirmed multi-select with no items selected. Treat as cancel
@@ -649,10 +668,18 @@ async function renderAgentQuestion(
     // Interactive arrow-key selector (TTY path). suspendInput has already
     // released the compositor's raw-mode; the selector re-enters raw mode
     // for its own keypress handling and exits it before returning.
-    const selectorResult = await renderSelector(choices, signal);
+    const choicesForSelector = request.allowCustom ? [...choices, CUSTOM_ANSWER_SENTINEL] : choices;
+    const selectorResult = await renderSelector(choicesForSelector, signal);
     if (selectorResult !== null) {
       // TTY path — selector handled it
       if (selectorResult === ':cancel') return CANCEL;
+      // Sentinel index = original choices.length
+      if (request.allowCustom && selectorResult === choices.length) {
+        let input: string;
+        try { input = (await readLine(palette.dim('  Type your answer: '))).trim(); } catch { return CANCEL; }
+        if (input === ':cancel' || signal.aborted) return CANCEL;
+        return { action: 'accept', content: { value: null, custom_value: input } };
+      }
       const chosen = choices[selectorResult];
       if (chosen !== undefined) {
         writer.line(palette.dim(`  Selected: ${sanitizeSchemaString(chosen, 128)}`));
@@ -665,6 +692,9 @@ async function renderAgentQuestion(
     choices.forEach((c, i) => {
       writer.line(`  ${i + 1}. ${sanitizeSchemaString(c, 128)}`);
     });
+    if (request.allowCustom) {
+      writer.line(`  ${choices.length + 1}. ${CUSTOM_ANSWER_SENTINEL}`);
+    }
     while (true) {
       if (signal.aborted) return CANCEL;
       let input: string;
@@ -675,10 +705,16 @@ async function renderAgentQuestion(
       }
       if (signal.aborted) return CANCEL;
       if (input === ':cancel') return CANCEL;
+      if (request.allowCustom && input === String(choices.length + 1)) {
+        let custom: string;
+        try { custom = (await readLine(palette.dim('  Type your answer: '))).trim(); } catch { return CANCEL; }
+        if (custom === ':cancel') return CANCEL;
+        return { action: 'accept', content: { value: null, custom_value: custom } };
+      }
       if (input === '' && request.allowSkip) return SKIP;
       const idx = parseInt(input, 10);
       if (!isFinite(idx) || String(idx) !== input || idx < 1 || idx > choices.length) {
-        writer.line(palette.warning(`  Please enter a number between 1 and ${choices.length}.`));
+        writer.line(palette.warning(`  Please enter a number between 1 and ${choices.length + (request.allowCustom ? 1 : 0)}.`));
         continue;
       }
       return { action: 'accept', content: { value: choices[idx - 1] } };
@@ -689,9 +725,19 @@ async function renderAgentQuestion(
     const choices = request.choices ?? [];
 
     // Interactive arrow-key multi-selector (TTY path)
-    const selectorResult = await renderMultiSelector(choices, signal);
+    const choicesForMultiSelector = request.allowCustom ? [...choices, CUSTOM_ANSWER_SENTINEL] : choices;
+    const selectorResult = await renderMultiSelector(choicesForMultiSelector, signal);
     if (selectorResult !== null) {
       if (selectorResult === ':cancel') return CANCEL;
+      // Sentinel index = original choices.length. Presence (even alongside real
+      // picks) routes to free-form entry — otherwise choices[choices.length] is
+      // undefined and leaks into `values` / throws in sanitizeSchemaString.
+      if (request.allowCustom && selectorResult.includes(choices.length)) {
+        let input: string;
+        try { input = (await readLine(palette.dim('  Type your answer: '))).trim(); } catch { return CANCEL; }
+        if (input === ':cancel' || signal.aborted) return CANCEL;
+        return { action: 'accept', content: { value: null, custom_value: input } };
+      }
       if (selectorResult.length === 0 && request.allowSkip) return SKIP;
       if (selectorResult.length > 0) {
         const values = selectorResult.map((i) => choices[i]!);
@@ -705,6 +751,9 @@ async function renderAgentQuestion(
     choices.forEach((c, i) => {
       writer.line(`  ${i + 1}. ${sanitizeSchemaString(c, 128)}`);
     });
+    if (request.allowCustom) {
+      writer.line(`  ${choices.length + 1}. ${CUSTOM_ANSWER_SENTINEL}`);
+    }
     while (true) {
       if (signal.aborted) return CANCEL;
       let input: string;
@@ -715,6 +764,12 @@ async function renderAgentQuestion(
       }
       if (signal.aborted) return CANCEL;
       if (input === ':cancel') return CANCEL;
+      if (request.allowCustom && input === String(choices.length + 1)) {
+        let custom: string;
+        try { custom = (await readLine(palette.dim('  Type your answer: '))).trim(); } catch { return CANCEL; }
+        if (custom === ':cancel') return CANCEL;
+        return { action: 'accept', content: { value: null, custom_value: custom } };
+      }
       if (input === '' && request.allowSkip) return SKIP;
       if (input === '') {
         writer.line(palette.warning('  Please enter at least one selection.'));
