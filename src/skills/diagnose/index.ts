@@ -19,6 +19,7 @@ import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { env } from '../../config/env.js';
 import { loadSkillPrompts } from '../_lib/prompt-loader.js';
 import { shouldAutoVerify } from '../_lib/confidence-gate.js';
 import { registerSkill, type SkillExecutionContext, type SkillMetadata } from '../index.js';
@@ -213,7 +214,7 @@ export async function runReproducerBaseline(
   const TRUNCATE_LEN = 4000;
 
   // Kill switch: opt out of baseline execution.
-  if (process.env['AFK_DIAGNOSE_BASELINE'] === '0') {
+  if (env.AFK_DIAGNOSE_BASELINE === '0') {
     return {
       skipped: true,
       reason: 'disabled via AFK_DIAGNOSE_BASELINE=0',

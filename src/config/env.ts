@@ -122,6 +122,15 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_DIAGNOSE_BASELINE',
+    description: 'Kill switch for /diagnose reproducer baseline execution. When set to \'0\', the /diagnose skill skips executing the detected reproducer command for a ground-truth baseline; default enabled (runs). Set to \'0\' to disable.',
+    type: 'boolean',
+    required: false,
+    default: '1',
+    example: '0',
+    category: 'debug',
+  },
+  {
     name: 'AFK_DISABLE_PROMPT_CACHE',
     description: 'Disable Anthropic prompt caching when set to 1/true/yes/on. Unset = caching enabled.',
     type: 'boolean',
@@ -1005,6 +1014,7 @@ export const env = {
   get AFK_COMPACT_KEEP_LAST_TURNS(): string | undefined { return process.env['AFK_COMPACT_KEEP_LAST_TURNS']; },
   get AFK_COMPACT_MODEL(): string | undefined { return process.env['AFK_COMPACT_MODEL']; },
   get AFK_DEFAULT_SUBAGENT_MODEL(): string | undefined { return process.env['AFK_DEFAULT_SUBAGENT_MODEL']; },
+  get AFK_DIAGNOSE_BASELINE(): string | undefined { return process.env['AFK_DIAGNOSE_BASELINE']; },
   get AFK_DISABLE_PROMPT_CACHE(): string | undefined { return process.env['AFK_DISABLE_PROMPT_CACHE']; },
   get AFK_EFFORT(): string | undefined { return process.env['AFK_EFFORT']; },
   get AFK_MAX_BUDGET_USD(): string | undefined { return process.env['AFK_MAX_BUDGET_USD']; },
