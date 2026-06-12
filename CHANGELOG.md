@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.104.2] - 2026-06-12
+
+### Fixed
+- defer version-drift exit while a session is mid-turn (c8846cc)
+
+### Changed
+- Merge pull request #106 from griffinwork40/afk/telegram-msg-continuation-fix (95358c6)
+
 ## [3.104.1] - 2026-06-12
 
 ### Fixed
