@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.104.0] - 2026-06-12
+
+### Added
+- add --post/--post-pr headless publishing to afk chat (port afk-workshop#769) (c439b72)
+
+### Changed
+- Merge pull request #101 from griffinwork40/afk-port/pr-769 (6869a58)
+
 ## [3.103.0] - 2026-06-12
 
 ### Added
