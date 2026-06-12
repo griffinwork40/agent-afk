@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.103.0] - 2026-06-12
+
+### Added
+- promote ground-state Wave 4 + ground-claim runtime-wiring mode (067b65e)
+
+### Changed
+- Merge pull request #100 from griffinwork40/feat/promote-ground-skills-to-bundle (7283f38)
+
 ## [3.102.1] - 2026-06-12
 
 ### Fixed
