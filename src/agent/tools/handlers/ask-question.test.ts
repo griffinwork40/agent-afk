@@ -207,3 +207,88 @@ describe('ask_question handler — handler installed', () => {
     expect(captured?.allowSkip).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// allow_custom validation
+// ---------------------------------------------------------------------------
+
+describe('allow_custom validation', () => {
+  it('allow_custom: true on type "text" → isError', async () => {
+    const result = await askQuestionHandler(
+      { question: 'q?', type: 'text', allow_custom: true },
+      NO_SIGNAL,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/allow_custom/i);
+  });
+
+  it('allow_custom: true on type "confirm" → isError', async () => {
+    const result = await askQuestionHandler(
+      { question: 'q?', type: 'confirm', allow_custom: true },
+      NO_SIGNAL,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/allow_custom/i);
+  });
+
+  it('allow_custom: true on type "number" → isError', async () => {
+    const result = await askQuestionHandler(
+      { question: 'q?', type: 'number', allow_custom: true },
+      NO_SIGNAL,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/allow_custom/i);
+  });
+
+  it('allow_custom: true on type "choice" → valid, allowCustom: true passed to router', async () => {
+    let capturedRequest: ElicitationRequest | undefined;
+    elicitationRouter.install(async (req) => {
+      capturedRequest = req;
+      return { action: 'decline' };
+    });
+    await askQuestionHandler(
+      { question: 'q?', type: 'choice', choices: ['a', 'b'], allow_custom: true },
+      NO_SIGNAL,
+    );
+    expect(capturedRequest?.allowCustom).toBe(true);
+  });
+
+  it('allow_custom: true on type "multi_choice" → valid, allowCustom: true passed to router', async () => {
+    let capturedRequest: ElicitationRequest | undefined;
+    elicitationRouter.install(async (req) => {
+      capturedRequest = req;
+      return { action: 'decline' };
+    });
+    await askQuestionHandler(
+      { question: 'q?', type: 'multi_choice', choices: ['a', 'b'], allow_custom: true },
+      NO_SIGNAL,
+    );
+    expect(capturedRequest?.allowCustom).toBe(true);
+  });
+
+  it('allow_custom: false on type "choice" → valid, allowCustom: false passed', async () => {
+    let capturedRequest: ElicitationRequest | undefined;
+    elicitationRouter.install(async (req) => {
+      capturedRequest = req;
+      return { action: 'decline' };
+    });
+    await askQuestionHandler(
+      { question: 'q?', type: 'choice', choices: ['a'], allow_custom: false },
+      NO_SIGNAL,
+    );
+    expect(capturedRequest?.allowCustom).toBe(false);
+  });
+
+  it('allow_custom omitted on "choice" → allowCustom not set in request', async () => {
+    let capturedRequest: ElicitationRequest | undefined;
+    elicitationRouter.install(async (req) => {
+      capturedRequest = req;
+      return { action: 'decline' };
+    });
+    await askQuestionHandler(
+      { question: 'q?', type: 'choice', choices: ['a'] },
+      NO_SIGNAL,
+    );
+    expect(capturedRequest?.allowCustom).toBeUndefined();
+  });
+});

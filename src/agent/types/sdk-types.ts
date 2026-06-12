@@ -209,6 +209,7 @@ export type ElicitationRequest = {
   min?: number;
   max?: number;
   allowSkip?: boolean;
+  allowCustom?: boolean;   // opt-in free-form entry for choice/multi_choice; see ask_question tool
   context?: string;
 };
 

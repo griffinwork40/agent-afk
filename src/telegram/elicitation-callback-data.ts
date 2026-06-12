@@ -79,3 +79,36 @@ export function parseElicitationCallback(data: string | undefined | null): Parse
 
   return { id, choiceIndex };
 }
+
+/** Prefix for the "type your own answer" custom-entry button. */
+export const ELICITATION_CUSTOM_CALLBACK_PREFIX = 'afk:ec:';
+
+/**
+ * Build a callback_data string for a custom-entry button.
+ * Format: `afk:ec:<id>` — no choiceIndex needed.
+ * Byte budget: 7 + 48 = 55 bytes (well under 64).
+ */
+export function buildCustomElicitationCallback(id: string): string {
+  if (!ELICITATION_ID_RE.test(id)) {
+    throw new Error(`buildCustomElicitationCallback: invalid id ${JSON.stringify(id)}`);
+  }
+  const data = `${ELICITATION_CUSTOM_CALLBACK_PREFIX}${id}`;
+  const bytes = Buffer.byteLength(data, 'utf8');
+  if (bytes > TELEGRAM_CALLBACK_DATA_MAX_BYTES) {
+    throw new Error(`buildCustomElicitationCallback: ${bytes} bytes exceeds ${TELEGRAM_CALLBACK_DATA_MAX_BYTES}-byte limit`);
+  }
+  return data;
+}
+
+/**
+ * Parse a custom-entry callback_data string.
+ * Returns the elicitation id, or null if not a custom-entry callback.
+ */
+export function parseCustomElicitationCallback(data: string | undefined | null): string | null {
+  if (!data) return null;
+  if (!data.startsWith(ELICITATION_CUSTOM_CALLBACK_PREFIX)) return null;
+  if (Buffer.byteLength(data, 'utf8') > TELEGRAM_CALLBACK_DATA_MAX_BYTES) return null;
+  const id = data.slice(ELICITATION_CUSTOM_CALLBACK_PREFIX.length);
+  if (!ELICITATION_ID_RE.test(id)) return null;
+  return id;
+}

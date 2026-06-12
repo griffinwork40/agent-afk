@@ -95,6 +95,13 @@ export const askQuestionHandler: ToolHandler = async (input, signal) => {
     };
   }
 
+  if (obj['allow_custom'] !== undefined && qType !== 'choice' && qType !== 'multi_choice') {
+    return {
+      content: `Invalid input: allow_custom is only valid for type "choice" or "multi_choice", got "${qType}"`,
+      isError: true,
+    };
+  }
+
   // Build the ElicitationRequest with origin: 'agent'
   const request: ElicitationRequest = {
     serverName: 'agent',
@@ -113,6 +120,7 @@ export const askQuestionHandler: ToolHandler = async (input, signal) => {
     ...(min !== undefined && { min: min as number }),
     ...(max !== undefined && { max: max as number }),
     ...(obj['allow_skip'] !== undefined && { allowSkip: Boolean(obj['allow_skip']) }),
+    ...(obj['allow_custom'] !== undefined && { allowCustom: Boolean(obj['allow_custom']) }),
   };
 
   const result = await elicitationRouter.route(request, { signal });

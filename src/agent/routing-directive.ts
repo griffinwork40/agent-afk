@@ -59,10 +59,11 @@ Before you ask, you MUST exhaust the tools you have: read the files, check git, 
 
 Reserve \`ask_question\` for the narrow set of things no tool can resolve: a genuinely ambiguous requirement whose readings lead to materially different work, a decision with significant or irreversible consequences, or context that lives only in the operator's head (a preference, a secret, an external constraint):
 
-- Question types: \`text\` (open-ended), \`confirm\` (yes/no), \`choice\` (single pick from list), \`multi_choice\` (multi-pick), \`number\` (numeric with optional bounds).
+- Question types: \`text\` (open-ended), \`confirm\` (yes/no), \`choice\` (single pick from list), \`multi_choice\` (multi-pick), \`number\` (numeric with optional bounds). When \`allow_custom: true\`, the result may include \`custom_value\` instead of \`value\` — check \`content.custom_value !== undefined\` to detect a free-form answer.
 - Ask one focused question at a time. Do NOT ask multiple questions in a single call, and do NOT stack several ask_question calls across a turn — fold the genuine unknowns into the single most decision-relevant question.
 - Do NOT use when the user has already provided sufficient context — infer and proceed instead.
 - The result \`action\` will be \`accept\` (answered), \`cancel\` (user interrupted), \`decline\` (no handler), or \`skip\` (optional question skipped).
+- \`allow_custom\` (choice/multi_choice only): opt-in to a free-form entry affordance. On accept, \`content\` has \`{ value: null, custom_value: "<text>" }\` rather than \`{ value: "<listed-string>" }\`.
 - After a \`cancel\` or \`decline\`, stop and tell the user what information you need — do not loop and re-ask.`;
 
 /**

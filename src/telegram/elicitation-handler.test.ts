@@ -14,16 +14,24 @@
 
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import type { ElicitationRequest, ElicitationResult } from '../agent/types/sdk-types.js';
-import { ELICITATION_CALLBACK_PREFIX } from './elicitation-callback-data.js';
+import {
+  ELICITATION_CALLBACK_PREFIX,
+  ELICITATION_CUSTOM_CALLBACK_PREFIX,
+  buildCustomElicitationCallback,
+} from './elicitation-callback-data.js';
 
 // ---------------------------------------------------------------------------
 // Module mocks — declared before any import of the module under test.
 // ---------------------------------------------------------------------------
 
-/** Captures the single wildcard action handler registered by the factory. */
+/** Captures the first wildcard action handler (regular elicitation callbacks). */
 let capturedActionHandler: ((ctx: MockCallbackCtx) => Promise<void>) | null = null;
-/** Captures the regex passed to bot.action() so tests can inspect it. */
+/** Captures the regex passed to first bot.action() so tests can inspect it. */
 let capturedActionRegex: RegExp | null = null;
+/** Captures the second wildcard action handler (custom-entry callbacks). */
+let capturedCustomActionHandler: ((ctx: MockCallbackCtx) => Promise<void>) | null = null;
+/** Captures the regex passed to second bot.action() (custom-entry wildcard). */
+let capturedCustomActionRegex: RegExp | null = null;
 
 vi.mock('telegraf', () => {
   const Markup = {
@@ -40,8 +48,13 @@ vi.mock('telegraf', () => {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
     };
     action(regex: RegExp, handler: (ctx: MockCallbackCtx) => Promise<void>) {
-      capturedActionRegex = regex;
-      capturedActionHandler = handler;
+      if (capturedActionHandler === null) {
+        capturedActionRegex = regex;
+        capturedActionHandler = handler;
+      } else {
+        capturedCustomActionRegex = regex;
+        capturedCustomActionHandler = handler;
+      }
     }
   }
 
@@ -163,6 +176,21 @@ async function fireCallbackFromChat(fromChatId: number, callbackData: string) {
 }
 
 /**
+ * Fire the custom-entry wildcard handler as if Telegram called back with a
+ * custom-entry callback_data string.
+ */
+async function fireCustomCallbackFromChat(fromChatId: number, callbackData: string) {
+  if (!capturedCustomActionHandler) throw new Error('No custom action handler was registered');
+  const ctx: MockCallbackCtx = {
+    chat: { id: fromChatId },
+    callbackQuery: { data: callbackData },
+    answerCbQuery: vi.fn().mockResolvedValue(undefined),
+  };
+  await capturedCustomActionHandler(ctx);
+  return ctx;
+}
+
+/**
  * Build a valid elicitation callback data string using the real prefix format.
  * Format: `afk:e:<choiceIndex>:<id>`
  */
@@ -193,6 +221,8 @@ function simulateTextReply(
 beforeEach(() => {
   capturedActionHandler = null;
   capturedActionRegex = null;
+  capturedCustomActionHandler = null;
+  capturedCustomActionRegex = null;
   vi.clearAllMocks();
 });
 
@@ -205,14 +235,18 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('makeTelegramElicitationHandler — factory setup', () => {
-  it('registers exactly one wildcard bot.action on construction', () => {
+  it('registers two wildcard bot.action handlers on construction (regular + custom-entry)', () => {
     const messageHandler = makeMockMessageHandler();
     const { bot } = makeMockBot();
 
     makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
 
+    // First handler: regular elicitation callbacks
     expect(capturedActionRegex).toBeInstanceOf(RegExp);
     expect(capturedActionHandler).toBeTypeOf('function');
+    // Second handler: custom-entry callbacks
+    expect(capturedCustomActionRegex).toBeInstanceOf(RegExp);
+    expect(capturedCustomActionHandler).toBeTypeOf('function');
   });
 
   it('the wildcard regex matches the elicitation callback prefix format', () => {
@@ -1317,5 +1351,238 @@ describe('first-prompt-only :cancel hint', () => {
 
     ac.abort();
     await resultPromise.catch(() => {});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// allow_custom — choice type
+// ---------------------------------------------------------------------------
+
+describe('allow_custom — choice type', () => {
+  it('keyboard includes ✍️ custom button when allowCustom is true', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    const ac = makeAbort();
+    const resultPromise = handler(
+      choiceRequest(['alpha', 'beta'], { allowCustom: true }),
+      { signal: ac.signal },
+    );
+    await Promise.resolve();
+
+    const callArgs = sendMessage.mock.calls[0] as [number, string, { reply_markup: { inline_keyboard: { text: string; callback_data: string }[][] } }];
+    const keyboard = callArgs[2].reply_markup.inline_keyboard;
+    // 2 choice buttons + 1 custom button
+    expect(keyboard).toHaveLength(3);
+    expect(keyboard[2]?.[0]?.text).toContain('custom');
+    expect(keyboard[2]?.[0]?.callback_data).toMatch(new RegExp(`^${ELICITATION_CUSTOM_CALLBACK_PREFIX.replace(':', '\\:')}`));
+
+    ac.abort();
+    await resultPromise;
+  });
+
+  it('without allowCustom, no custom button appears in choice keyboard', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    const ac = makeAbort();
+    const resultPromise = handler(
+      choiceRequest(['alpha', 'beta']),
+      { signal: ac.signal },
+    );
+    await Promise.resolve();
+
+    const callArgs = sendMessage.mock.calls[0] as [number, string, { reply_markup: { inline_keyboard: { text: string; callback_data: string }[][] } }];
+    const keyboard = callArgs[2].reply_markup.inline_keyboard;
+    // Only 2 choice buttons, no custom button
+    expect(keyboard).toHaveLength(2);
+    expect(keyboard.flat().map(b => b.text)).not.toContain(expect.stringContaining('custom'));
+
+    ac.abort();
+    await resultPromise;
+  });
+
+  it('custom button press → sends prompt → text reply → { value: null, custom_value }', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    const ac = makeAbort();
+    const resultPromise = handler(
+      choiceRequest(['alpha', 'beta'], { allowCustom: true }),
+      { signal: ac.signal },
+    );
+    await Promise.resolve();
+
+    // Extract custom button callback_data
+    const callArgs = sendMessage.mock.calls[0] as [number, string, { reply_markup: { inline_keyboard: { text: string; callback_data: string }[][] } }];
+    const customButton = callArgs[2].reply_markup.inline_keyboard[2]?.[0];
+    expect(customButton).toBeDefined();
+
+    // Fire the custom button
+    await fireCustomCallbackFromChat(CHAT_ID, customButton!.callback_data);
+    await Promise.resolve();
+
+    // Second sendMessage should prompt for custom text
+    expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(sendMessage.mock.calls[1]?.[1]).toMatch(/custom answer/i);
+
+    // Simulate text reply
+    simulateTextReply(messageHandler, CHAT_ID, 'my free text');
+
+    const result = await resultPromise;
+    expect(result).toEqual({ action: 'accept', content: { value: null, custom_value: 'my free text' } });
+  });
+
+  it('custom button press + :cancel typed → { action: "cancel" }', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    const ac = makeAbort();
+    const resultPromise = handler(
+      choiceRequest(['alpha', 'beta'], { allowCustom: true }),
+      { signal: ac.signal },
+    );
+    await Promise.resolve();
+
+    const callArgs = (bot.telegram.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0] as [number, string, { reply_markup: { inline_keyboard: { text: string; callback_data: string }[][] } }];
+    const customButton = callArgs[2].reply_markup.inline_keyboard[2]?.[0];
+
+    await fireCustomCallbackFromChat(CHAT_ID, customButton!.callback_data);
+    await Promise.resolve();
+
+    simulateTextReply(messageHandler, CHAT_ID, ':cancel');
+
+    const result = await resultPromise;
+    expect(result.action).toBe('cancel');
+  });
+
+  it('custom button press + abort → { action: "decline" }', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    const ac = makeAbort();
+    const resultPromise = handler(
+      choiceRequest(['alpha', 'beta'], { allowCustom: true }),
+      { signal: ac.signal },
+    );
+    await Promise.resolve();
+
+    const callArgs = (bot.telegram.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0] as [number, string, { reply_markup: { inline_keyboard: { text: string; callback_data: string }[][] } }];
+    const customButton = callArgs[2].reply_markup.inline_keyboard[2]?.[0];
+
+    // Press custom button
+    await fireCustomCallbackFromChat(CHAT_ID, customButton!.callback_data);
+    await Promise.resolve();
+
+    // Abort while waiting for text
+    ac.abort();
+
+    const result = await resultPromise;
+    expect(result.action).toBe('decline');
+  });
+
+  it('custom wildcard regex matches afk:ec: prefix but not afk:e: prefix', () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot } = makeMockBot();
+    makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    expect(capturedCustomActionRegex).toBeInstanceOf(RegExp);
+    // Must match custom prefix
+    expect(capturedCustomActionRegex!.test(`${ELICITATION_CUSTOM_CALLBACK_PREFIX}elic-abc12345`)).toBe(true);
+    // Must NOT match regular prefix (afk:e:0:id)
+    expect(capturedCustomActionRegex!.test(`${ELICITATION_CALLBACK_PREFIX}0:elic-abc12345`)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// allow_custom — multi_choice type
+// ---------------------------------------------------------------------------
+
+describe('allow_custom — multi_choice type', () => {
+  it('non-numeric text reply with allowCustom → { value: null, custom_value }', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    const ac = makeAbort();
+    const resultPromise = handler(
+      multiChoiceRequest(['alpha', 'beta'], { allowCustom: true }),
+      { signal: ac.signal },
+    );
+    await Promise.resolve();
+
+    simulateTextReply(messageHandler, CHAT_ID, 'some free-form text');
+
+    const result = await resultPromise;
+    expect(result.action).toBe('accept');
+    expect(result.content?.['value']).toBeNull();
+    expect(result.content?.['custom_value']).toBe('some free-form text');
+  });
+
+  it('without allowCustom, non-numeric text → re-prompt (existing behavior)', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    const ac = makeAbort();
+    const resultPromise = handler(
+      multiChoiceRequest(['alpha', 'beta']),
+      { signal: ac.signal },
+    );
+    await Promise.resolve();
+
+    // Send invalid input — should re-prompt
+    simulateTextReply(messageHandler, CHAT_ID, 'not-numeric');
+    await Promise.resolve();
+
+    // Should have sent error re-prompt message
+    expect(sendMessage.mock.calls.length).toBe(2);
+    // Still waiting for valid input — abort to resolve
+    ac.abort();
+    const result = await resultPromise;
+    expect(result.action).toBe('decline');
+  });
+
+  it('prompt text includes free-form hint when allowCustom', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot, sendMessage } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    const ac = makeAbort();
+    const resultPromise = handler(
+      multiChoiceRequest(['alpha', 'beta'], { allowCustom: true }),
+      { signal: ac.signal },
+    );
+    await Promise.resolve();
+
+    const promptText = sendMessage.mock.calls[0]?.[1] as string;
+    expect(promptText).toMatch(/free-form|custom answer/i);
+
+    ac.abort();
+    await resultPromise;
+  });
+
+  it('numeric reply still works normally with allowCustom', async () => {
+    const messageHandler = makeMockMessageHandler();
+    const { bot } = makeMockBot();
+    const handler = makeTelegramElicitationHandler(messageHandler as never, bot, CHAT_ID);
+
+    const ac = makeAbort();
+    const resultPromise = handler(
+      multiChoiceRequest(['alpha', 'beta'], { allowCustom: true }),
+      { signal: ac.signal },
+    );
+    await Promise.resolve();
+
+    simulateTextReply(messageHandler, CHAT_ID, '1,2');
+
+    const result = await resultPromise;
+    expect(result.action).toBe('accept');
+    expect(result.content?.['value']).toEqual(['alpha', 'beta']);
   });
 });

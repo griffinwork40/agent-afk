@@ -654,7 +654,8 @@ export const askQuestionTool: AnthropicToolDef = {
     '- Do NOT use when the user has already provided enough context — infer and proceed.\n' +
     '- Prefer a stated assumption over a question whenever the choice is low-stakes or reversible.\n' +
     '- The result `action` will be one of: `accept` (answered), `cancel` (user interrupted), ' +
-    '`decline` (no handler available), or `skip` (user skipped an optional question).',
+    '`decline` (no handler available), or `skip` (user skipped an optional question).\n' +
+    '- `allow_custom`: for `choice`/`multi_choice` only — lets the operator type a free-form answer instead of picking from the list. On accept, `content.custom_value` holds the typed text and `content.value` is `null`.',
   input_schema: {
     type: 'object',
     properties: {
@@ -699,6 +700,15 @@ export const askQuestionTool: AnthropicToolDef = {
       allow_skip: {
         type: 'boolean',
         description: 'Whether the user may skip this question (submit empty). Defaults to false.',
+      },
+      allow_custom: {
+        type: 'boolean',
+        description:
+          'For `choice` and `multi_choice` types only: if true, the operator is offered ' +
+          'a "type your own answer" option in addition to the provided choices. ' +
+          'When the operator enters a custom answer, the result is ' +
+          '`{ action: "accept", content: { value: null, custom_value: "<typed-text>" } }`. ' +
+          'Check `content.custom_value !== undefined` to detect a free-form answer.',
       },
     },
     required: ['question'],
