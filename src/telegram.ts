@@ -29,7 +29,7 @@ import { existsSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { env } from './config/env.js';
-import { checkVersionDrift } from './telegram/version-check.js';
+import { checkVersionDrift, decideVersionDriftAction } from './telegram/version-check.js';
 import { TelegramBot } from './telegram/bot.js';
 import { parseAllowedChatIds } from './telegram/allowlist.js';
 import { validateBotToken } from './telegram/setup-wizard.js';
@@ -406,6 +406,11 @@ async function main() {
     console.log('\n💬 Send any message to chat with the agent.');
     console.log('\n⏹️  Press Ctrl+C to stop the bot.');
 
+    // Consecutive version-drift deferrals across stats ticks. Held here (not in
+    // the watchdog function, which is pure) so it survives between ticks; reset
+    // to 0 by decideVersionDriftAction() whenever drift clears or we exit.
+    let driftDeferrals = 0;
+
     const statsInterval = setInterval(() => {
       const stats = bot.getStats();
       console.log(`\n📊 Stats: ${stats.activeSessions} active sessions, ${stats.totalChats} total chats`);
@@ -417,21 +422,33 @@ async function main() {
         const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: string };
         const diskVersion = pkg.version ?? 'unknown';
         const result = checkVersionDrift(DAEMON_VERSION, diskVersion);
-        if (result.drift) {
-          // Invariant: never exit mid-turn. The drift-exit hands the chat off to
-          // a freshly-installed binary via launchd KeepAlive, but exiting while a
-          // session is streaming severs the in-flight turn (plus its queued
-          // messages and sub-agent dispatch). The relaunched process starts cold
-          // and cannot resume it — the user sees "An unexpected error occurred"
-          // and the conversation does not continue. Defer the upgrade until every
-          // session is idle; the next stats tick (≤5 min) re-checks and exits then.
-          const busy = bot.getBusySessionCount();
-          if (busy > 0) {
-            console.log(`⚠️ ${result.message} — deferred: ${busy} active session(s) mid-turn.`);
-          } else {
-            console.log(`⚠️ ${result.message}`);
+
+        // Invariant: never exit mid-turn — but never defer forever either.
+        // The drift-exit hands the chat off to a freshly-installed binary via
+        // launchd KeepAlive; exiting while a session is streaming severs the
+        // in-flight turn (plus its queued messages and sub-agent dispatch), and
+        // the cold relaunch cannot resume it ("An unexpected error occurred").
+        // So defer while any session is mid-turn (PR #106). The bounded escape
+        // hatch: a session wedged in processing/streaming would otherwise defer
+        // the upgrade forever (stuck-busy livelock), so after MAX_DRIFT_DEFERRALS
+        // deferrals (~1h at this 5-min tick) force the exit anyway.
+        const busy = result.drift ? bot.getBusySessionCount() : 0;
+        const decision = decideVersionDriftAction({
+          drift: result,
+          busyCount: busy,
+          deferrals: driftDeferrals,
+        });
+        driftDeferrals = decision.deferrals;
+        switch (decision.action) {
+          case 'none':
+            break;
+          case 'defer':
+            if (decision.message !== undefined) console.log(`⚠️ ${decision.message}`);
+            break;
+          case 'exit':
+          case 'force-exit':
+            if (decision.message !== undefined) console.log(`⚠️ ${decision.message}`);
             process.exit(0);
-          }
         }
       } catch {
         console.warn('⚠️ [daemon] Could not re-read package.json for version drift check — skipping.');
