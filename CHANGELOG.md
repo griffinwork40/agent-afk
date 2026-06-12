@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.104.4] - 2026-06-12
+
+### Fixed
+- prevent table cut-off from row-count off-by-one and width overshoot (d86f2a2)
+
+### Changed
+- Merge pull request #111 from griffinwork40/afk/diagnose-table-cutoff (08cf729)
+
 ## [3.104.3] - 2026-06-12
 
 ### Changed
