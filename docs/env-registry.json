@@ -156,6 +156,15 @@
       "category": "misc"
     },
     {
+      "name": "AFK_DIAGNOSE_BASELINE",
+      "description": "Kill switch for /diagnose reproducer baseline execution. When set to '0', the /diagnose skill skips executing the detected reproducer command for a ground-truth baseline; default enabled (runs). Set to '0' to disable.",
+      "type": "boolean",
+      "required": false,
+      "default": "1",
+      "example": "0",
+      "category": "debug"
+    },
+    {
       "name": "AFK_DIFF_LINES",
       "description": "Maximum number of diff lines shown in the inline diff render during write_file tool calls. Set to 0 for no cap. Non-integer values are silently ignored and the default applies.",
       "type": "number",
