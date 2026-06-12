@@ -137,6 +137,39 @@ describe('renderMarkdownToTerminal', () => {
     });
 
     /**
+     * Width-budget hard ceiling (the "clipped table + blank gap" regression).
+     *
+     * Per-column Math.round in the proportional shrink can under-reduce —
+     * round-down error accumulates across columns — leaving every rendered
+     * row 1+ col WIDER than maxWidth. formatBlockForCommit then re-wraps the
+     * committed block at contentWidth with word-wrap, splitting each
+     * over-wide row at its last space into a fragment + orphan '│' line.
+     * The inflated physical line count desyncs the compositor's row
+     * accounting, which clips the table's tail rows and emits a blank gap.
+     *
+     * 5 equal columns at maxWidth 25 is a concrete rounding-overshoot case:
+     * pre-fix it rendered 26-wide rows and the re-wrap inflated 6 lines → 8.
+     */
+    it('never renders a table line wider than maxWidth (rounding overshoot)', () => {
+      const sample = [
+        '| AAAA | BBBB | CCCC | DDDD | EEEE |',
+        '|------|------|------|------|------|',
+        '| aaaa | bbbb | cccc | dddd | eeee |',
+        '',
+      ].join('\n');
+      const maxWidth = 25;
+      const out = renderMarkdownToTerminal(sample, { maxWidth });
+      const lines = stripAnsi(out).split('\n').filter((l) => l.length > 0);
+      for (const line of lines) {
+        expect(stringWidth(line)).toBeLessThanOrEqual(maxWidth);
+      }
+      // The commit-time second wrap pass must be a no-op for table content —
+      // no orphan '│' fragments, no physical line-count inflation.
+      const rewrapped = wrapToWidth(out, maxWidth);
+      expect(rewrapped.split('\n').length).toBe(out.split('\n').length);
+    });
+
+    /**
      * Inter-row separator contract.
      *
      * A thin `├─┼─┤` line is inserted between every pair of data rows
