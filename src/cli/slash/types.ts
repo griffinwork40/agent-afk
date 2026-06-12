@@ -207,7 +207,16 @@ export interface SlashContext {
    * module free of an upward import. Absent on surfaces without a
    * transcript (Telegram, daemon, tests).
    */
-  transcript?: { appendTurn(userInput: string, assistantText: string): Promise<void> };
+  transcript?: {
+    appendTurn(userInput: string, assistantText: string): Promise<void>;
+    /**
+     * Optional immediate user-message write (TranscriptHandle.appendUser).
+     * When present, `runSkillDispatchTurn` persists `/<skill> <args>` at
+     * dispatch start so an interrupted skill turn still leaves the user's
+     * invocation in the transcript.
+     */
+    appendUser?(userInput: string): Promise<void>;
+  };
 }
 
 /** The handler's return value — controls the REPL's next action. */
