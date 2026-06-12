@@ -70,15 +70,7 @@ export function parsePostFlag(args: string): ParsedPostFlag {
   const unknown: string[] = [];
 
   for (const m of args.matchAll(POST_FLAG_RE)) {
-    const raw = m[1] ?? '';
-    for (const part of raw.split(',').map((s) => s.trim()).filter(Boolean)) {
-      if (VALID_TARGETS.has(part)) {
-        const t = part as PostTarget;
-        if (!targets.includes(t)) targets.push(t);
-      } else {
-        unknown.push(part);
-      }
-    }
+    classifyPostTargets(m[1] ?? '', targets, unknown);
   }
 
   const cleanedArgs = args
@@ -89,6 +81,39 @@ export function parsePostFlag(args: string): ParsedPostFlag {
     .trim();
 
   return { targets, cleanedArgs, unknown };
+}
+
+/**
+ * Classify one raw comma-separated target list (e.g. `github,telegram`) into
+ * recognized `targets` (deduped, in encounter order) and `unknown` tokens,
+ * accumulating into the caller-provided arrays. Shared by `parsePostFlag`
+ * (which may see several `--post` tokens in one arg string) and
+ * `parsePostTargets` (which receives a single already-parsed value).
+ */
+function classifyPostTargets(raw: string, targets: PostTarget[], unknown: string[]): void {
+  for (const part of raw.split(',').map((s) => s.trim()).filter(Boolean)) {
+    if (VALID_TARGETS.has(part)) {
+      const t = part as PostTarget;
+      if (!targets.includes(t)) targets.push(t);
+    } else {
+      unknown.push(part);
+    }
+  }
+}
+
+/**
+ * Classify an already-parsed `--post` value — the raw string Commander hands
+ * back for `chat --post <value>` (e.g. `github` or `github,telegram`). Unlike
+ * `parsePostFlag`, this takes the bare value directly, so the CLI path no longer
+ * reconstructs a synthetic `--post …` flag string just to re-parse it. The REPL
+ * keeps using `parsePostFlag` because it must also strip the token out of a
+ * larger review-args string.
+ */
+export function parsePostTargets(value: string): { targets: PostTarget[]; unknown: string[] } {
+  const targets: PostTarget[] = [];
+  const unknown: string[] = [];
+  classifyPostTargets(value, targets, unknown);
+  return { targets, unknown };
 }
 
 /**
