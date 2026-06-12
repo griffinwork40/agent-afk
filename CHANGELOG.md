@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.107.0] - 2026-06-12
+
+### Added
+- classify tool failures; exclude "system said no" from failure-density (4e8c6aa)
+
+### Changed
+- Merge pull request #117 from griffinwork40/feat/tool-failure-classification (71b75e0)
+
 ## [3.106.0] - 2026-06-12
 
 ### Added
