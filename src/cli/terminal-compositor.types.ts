@@ -77,14 +77,23 @@ export function formatElapsed(startedAt: number): string {
 /**
  * Format a loading tip into the dim 💡 row that sits beneath the spinner.
  *
+ * The literal `Tip:` label is load-bearing, not decoration: most tips are
+ * harvested skill hints shaped like `/agentify — Use when …`, and without
+ * the label a tip rendered mid-turn reads as the agent announcing it is
+ * routing to that skill (e.g. the user types `/automate` and immediately
+ * sees `💡 /agentify — Use when…`). `Tip:` marks the row as ambient
+ * guidance, decoupled from the in-flight turn. The {@link LoadingTip}
+ * contract has always promised this prefix; the implementation drifted.
+ *
  * `cols` is the terminal width — we truncate to fit on one visual line so
  * the tip never wraps and steals a viewport row that log-update can't
- * cleanly reclaim on the next paint. The 4-col prefix budget is "  💡 "
- * (two leading spaces, the bulb, one trailing space); 2 more cols are
- * reserved for the trailing "…" when truncation kicks in.
+ * cleanly reclaim on the next paint. The prefix budget is "  💡 Tip: "
+ * (10 cols — `prefix.length` happens to equal its display width since the
+ * bulb is width-2 and length-2); 1 more col is reserved for the trailing
+ * "…" when truncation kicks in.
  */
 export function formatTipRow(text: string, cols: number): string {
-  const prefix = '  💡 ';
+  const prefix = '  💡 Tip: ';
   // Reserve 4 cols of prefix chrome and 1 col for the truncation marker so
   // the rendered line always fits in `cols` regardless of body length.
   const bodyBudget = Math.max(8, cols - prefix.length - 1);

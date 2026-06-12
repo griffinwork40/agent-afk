@@ -22,6 +22,7 @@ import {
   _resetSeenTipsForTesting,
   type LoadingTip,
 } from './loading-tips.js';
+import { formatTipRow } from './terminal-compositor.types.js';
 
 // Harvest stubs — vi.mock has to be hoisted, so use the standard pattern.
 vi.mock('./slash/registry.js', () => ({
@@ -301,5 +302,23 @@ describe('selectTip', () => {
   it('respects the custom warmupMs override', () => {
     expect(selectTip(pool, { startedAt: 0, now: 2_000, warmupMs: 5_000 })).toBeNull();
     expect(selectTip(pool, { startedAt: 0, now: 6_000, warmupMs: 5_000 })).not.toBeNull();
+  });
+});
+
+describe('formatTipRow', () => {
+  const strip = (s: string): string => s.replace(/\x1B\[[0-9;]*m/g, '');
+
+  it('labels the row with "Tip:" so skill hints are not misread as routing', () => {
+    // A harvested skill tip looks like `/agentify — Use when…`. Without the
+    // label, rendering it under the spinner right after the user typed a
+    // DIFFERENT slash command reads as "the agent rerouted my command".
+    const row = strip(formatTipRow('/agentify — Use when the user wants to delegate', 120));
+    expect(row.startsWith('  💡 Tip: /agentify')).toBe(true);
+  });
+
+  it('truncates to one visual line with a trailing ellipsis', () => {
+    const row = strip(formatTipRow('x'.repeat(500), 40));
+    expect(row.endsWith('…')).toBe(true);
+    expect(row.length).toBeLessThanOrEqual(40);
   });
 });

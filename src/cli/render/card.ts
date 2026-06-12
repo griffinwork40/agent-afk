@@ -28,8 +28,9 @@ const MAX_USER_CARD_ROWS = (() => {
  * - `status`      — blue.    A status or state report.
  * - `checkpoint`  — green.   A successful step / phase rollup.
  * - `diagnosis`   — yellow.  A diagnosis, problem, or warning.
- * - `user`        — cyan.    A user message echo (left-bar variant; no
- *                            top/bottom border or title chip).
+ * - `user`        — cyan.    A user message echo (right-positioned chat
+ *                            bubble: dim top rule + cyan right bar; no
+ *                            full border or title chip).
  */
 export type CardKind = 'plan' | 'status' | 'checkpoint' | 'diagnosis' | 'user';
 
@@ -78,11 +79,11 @@ const CARD_DEFAULT_TITLE: Record<Exclude<CardKind, 'user'>, string> = {
  * same shape vocabulary as {@link errorBox}: a colored border with a bold
  * title chip in the top bar and 2-space inner padding.
  *
- * The `user` kind is a thin, right-aligned variant — content is flushed to
- * the right edge of the terminal with a single cyan bar (`│`) on the far
- * right, no top/bottom border. Used for echoing user input in the REPL,
- * mirroring the chat-bubble convention where the speaker's own messages
- * sit on the right.
+ * The `user` kind is a thin chat-bubble variant — a width-capped block of
+ * left-aligned text positioned against the right edge of the terminal,
+ * closed by a single cyan bar (`│`) on the far right and a dim top rule.
+ * Used for echoing user input in the REPL, mirroring the chat-bubble
+ * convention where the speaker's own messages sit on the right.
  *
  * @param spec - Card specification.
  * @returns Multi-line string ready to write to stdout.
@@ -99,13 +100,19 @@ export function card(spec: CardSpec): string {
 }
 
 function renderUserCard(bodyLines: string[]): string {
-  // Right-aligned chat-bubble layout: each body line is wrapped to fit within
-  // the available width, then padded on the LEFT so the content + ' │' suffix
-  // sits flush against the right edge of the terminal. `cols - 4` leaves 2
-  // cols of breathing room on the left and reserves 2 cols on the right for
-  // the ' │' suffix.
+  // Chat-bubble layout: the bubble BLOCK is positioned against the right
+  // edge of the terminal, but the text INSIDE it stays left-aligned —
+  // mirroring how iMessage/WhatsApp render the speaker's own messages.
+  // Two width rules make it read as a bubble instead of misaligned text:
+  //
+  //   1. Bubble width is capped at 75% of the terminal (and at 100, the
+  //      bordered-card ceiling) so a left gutter always remains. A bubble
+  //      spanning the whole row is indistinguishable from plain output.
+  //   2. Every row is padded to the width of the WIDEST row, giving the
+  //      bubble a straight left edge. Per-row right-alignment (the prior
+  //      layout) produced a ragged left edge that read as broken wrapping.
   const cols = getTerminalWidth();
-  const innerW = Math.max(20, cols - 4);
+  const innerW = Math.max(20, Math.min(cols - 4, Math.floor(cols * 0.75), 100));
   const wrapped: string[] = [];
   for (const line of bodyLines) {
     wrapped.push(...wrapToWidth(renderCardLine(line), innerW).split('\n'));
@@ -146,27 +153,37 @@ function renderUserCard(bodyLines: string[]): string {
   // width.
   const rightEdge = cols - 1;
 
-  // Separator row is built after capping — does not count against MAX_USER_CARD_ROWS.
-  // Spans up to 30 visible columns right-aligned to rightEdge, matching the
-  // existing divider glyph vocabulary. Width formula guarantees row ≤ cols-1.
-  const sepW = Math.min(30, Math.max(1, rightEdge));
+  // Bubble block width: the widest visible row, clamped so content + ' │'
+  // still honors the last-column-safety ceiling. Rows wider than the clamp
+  // (unbreakable tokens that survive wrapToWidth(hard:false)) are truncated
+  // below, landing exactly at blockW.
+  const blockW = Math.min(
+    Math.max(0, ...displayRows.map((l) => displayWidth(l))),
+    Math.max(0, rightEdge - 2),
+  );
+
+  // Separator row is built after capping — does not count against
+  // MAX_USER_CARD_ROWS. It doubles as the bubble's top edge: spans the
+  // bubble's footprint (content + ' │' = blockW + 2) starting at the
+  // bubble's left edge. Floor of 12 keeps it legible for one-word bubbles;
+  // the rightEdge clamp preserves the last-column-safety invariant.
+  const sepW = Math.min(Math.max(1, rightEdge), Math.max(12, blockW + 2));
   const sepPad = Math.max(0, rightEdge - sepW);
   const separatorRow = ' '.repeat(sepPad) + palette.dim('─'.repeat(sepW));
 
+  // Common left edge for every row; the bar lands at rightEdge on every row.
+  const leadingSpace = Math.max(0, rightEdge - blockW - 2);
   const contentRows = displayRows
     .map((line) => {
       // Defensive clamp: an unbreakable token wider than innerW survives
       // wrapToWidth(hard:false) intact, so a row could otherwise exceed
-      // rightEdge. Truncate (ANSI/hyperlink-aware) so content + ' │' ≤ rightEdge.
+      // blockW. Truncate (ANSI/hyperlink-aware) so content fits the block.
       const content =
-        displayWidth(line) + 2 > rightEdge
-          ? truncateDisplayWidth(line, Math.max(0, rightEdge - 2))
-          : line;
-      const lineW = displayWidth(content);
-      // `rightEdge - lineW - 2` reserves 2 cols for the trailing ' │'. Clamp to
-      // 0 so a line at the width ceiling still renders without negative pad.
-      const leadingSpace = Math.max(0, rightEdge - lineW - 2);
-      return ' '.repeat(leadingSpace) + content + ' ' + bar;
+        displayWidth(line) > blockW ? truncateDisplayWidth(line, blockW) : line;
+      // Interior pad fills the gap between this row's text and the bar
+      // column, keeping the text left-aligned within the bubble.
+      const interiorPad = Math.max(0, blockW - displayWidth(content));
+      return ' '.repeat(leadingSpace) + content + ' '.repeat(interiorPad) + ' ' + bar;
     })
     .join('\n');
   return separatorRow + '\n' + contentRows;
