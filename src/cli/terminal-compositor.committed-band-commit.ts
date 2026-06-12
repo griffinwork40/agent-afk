@@ -122,14 +122,39 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
     : logicalLineCount;
   const textLines = stripped.split('\n');
 
+  const extraRows = self.scrollRegion?.getExtraRows() ?? 0;
+  // Invariant (one geometry per commit): the room/scroll/band math below must
+  // measure the frame at the position Phase 2's repaint will ACTUALLY use.
+  // Frame placement runs in two regimes (terminal-compositor.frame.ts ~236):
+  // banner-following while `hasBanner && !commitInFlight` (idle frame sits
+  // just below the banner / band), bottom-anchored during a commit. With a
+  // banner and an EMPTY band the idle frame banner-follows at ~anchorRow, so
+  // capturing prevTopRow from that regime reports zero above-frame room and
+  // misroutes the commit into the overflow path — Phase 1 then "archives" the
+  // block ON SCREEN at anchorFloor (an untracked orphan, not scrollback),
+  // Phase 3 paints a second copy at anchorFloor while recording the band at
+  // the bottom-anchored rows, and the next commit's merge repaints a third —
+  // the first-turn "echo first line duplicated + card body lost" bug. Flip
+  // into the commit regime FIRST (clear the banner-followed frame, repaint at
+  // the bottom-anchored position) so every phase sees one geometry. Band
+  // non-empty ⇒ contentFloor = committedBandBottomRow keeps idle placement
+  // bottom-consistent already ⇒ skip (no extra clear/repaint flicker on the
+  // steady-state per-commit path). repositionCommittedBand is suppressed
+  // under commitInFlight (committed-band-repin.ts:72) and the band is empty
+  // here anyway; commitInFlight is re-set below and reset at Phase 3's end.
+  if (self.anchorRow !== undefined && self.anchorRow > 1 && self.committedBand.length === 0) {
+    self.commitInFlight = true;
+    self.logUpdate.clear(extraRows);
+    self.repaint();
+  }
   // Decide where the committed text is written so it lands in scrollback
   // EXACTLY ONCE. Capture the live frame's top row BEFORE clear() resets it:
   // every frame mutation (setOverlay, setSpinner, keypress) repaints
-  // synchronously, so `topRow` already reflects the frame Phase 2's repaint
+  // synchronously — and the regime-sync above re-ran placement for the
+  // banner-followed case — so `topRow` reflects the frame Phase 2's repaint
   // will reproduce. `capacity` is the number of rows available to DISPLAY
   // committed text above the frame, between the pre-arm content ceiling
   // (anchorRow) and the frame top.
-  const extraRows = self.scrollRegion?.getExtraRows() ?? 0;
   const prevTopRow = self.logUpdate.topRow ?? 0;
   const frameTop = prevTopRow > 1 ? prevTopRow : Math.max(1, rows - 1 - extraRows);
   const anchorFloor = Math.max(self.anchorRow ?? 1, 1);
