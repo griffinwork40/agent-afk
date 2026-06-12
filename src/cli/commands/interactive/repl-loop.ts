@@ -925,6 +925,11 @@ export async function runReplLoop(
 
       await runTurn({ text: runText, attachments }, ctx.session.current, ctx.stats, {
         setInFlight(v: boolean) { turnState.turnInFlight = v; },
+        async onUserMessage(userInput) {
+          // Write the user's message to the transcript immediately — the
+          // appendTurn below then closes the turn with the assistant block.
+          await transcript.appendUser(userInput);
+        },
         async onTurnComplete(userInput, assistantText) {
           await transcript.appendTurn(userInput, assistantText);
           // Per-turn session autosave → ~/.afk/state/sessions/<sessionId>.json.

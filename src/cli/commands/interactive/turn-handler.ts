@@ -51,6 +51,14 @@ export async function runTurn(
 ): Promise<void> {
   const historyText = describeForHistory(input.text, input.attachments);
 
+  // Persist the user's message before the stream starts. onTurnComplete
+  // only fires on doneFired && !softStopRequested, so without this hook a
+  // crash, ESC soft-stop, or backgrounded turn loses the user's message.
+  if (h.onUserMessage) {
+    await Promise.resolve(h.onUserMessage(historyText))
+      .catch(() => { /* best-effort */ });
+  }
+
   h.setInFlight(true);
 
   let responseText = '';

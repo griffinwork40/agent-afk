@@ -427,6 +427,16 @@ export interface CompletionWriter {
 export interface TurnHandles {
   setInFlight(v: boolean): void;
   /**
+   * Fired once at turn start, immediately after the user's submission is
+   * normalized (describeForHistory) and before the model stream begins.
+   * Used by the REPL to persist the user's message to the autosaved
+   * transcript right away — a crash, ESC soft-stop, or backgrounded turn
+   * must not lose it (onTurnComplete only fires on completed turns).
+   * Receives the exact string onTurnComplete later receives as
+   * `userInput`. Best-effort — errors are swallowed by the caller.
+   */
+  onUserMessage?(userInput: string): Promise<void> | void;
+  /**
    * Fired once per completed turn after the assistant's final text is
    * in hand. Used by the REPL to append a human-readable row to the
    * autosaved markdown transcript. Best-effort — errors are swallowed

@@ -108,6 +108,12 @@ export async function runSkillDispatchTurn(
   });
 
   let softStopRequested = false;
+  // The transcript-facing user line for this turn. Written immediately
+  // (appendUser, when the surface provides it) so an interrupted skill
+  // turn still leaves the invocation on disk; the completed-turn
+  // appendTurn below then closes the open turn via its matching path.
+  const userInput = `/${params.skillName}${params.args ? ' ' + params.args : ''}`;
+  await ctx.transcript?.appendUser?.(userInput).catch(() => { /* best-effort */ });
   // Captured for post-dispatch consumers (e.g. `/review --post`). The last
   // assistant message on the stream is the skill's terminal output — for
   // review that's the post-shadow-verify merge recommendation + findings.
@@ -239,7 +245,6 @@ export async function runSkillDispatchTurn(
   // matching turn-handler.ts's recordTurn guard: an interrupted skill turn
   // must not be folded into totals as if it completed.
   if (doneFired && !softStopRequested) {
-    const userInput = `/${params.skillName}${params.args ? ' ' + params.args : ''}`;
     recordTurn(ctx.stats, userInput, finalAssistantText, doneMeta, toolEvents);
     // Push the freshly-recorded totals to the status line now — the REPL's
     // post-dispatch `statusLine.rearm()` only re-flushes the PREVIOUS fields.
