@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.104.1] - 2026-06-12
+
+### Fixed
+- bind control HTTP surface to loopback by default (55a93d7)
+
+### Changed
+- Merge pull request #105 from griffinwork40/fix/daemon-loopback-bind (783a1ed)
+
 ## [3.104.0] - 2026-06-12
 
 ### Added
