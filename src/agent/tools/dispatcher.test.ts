@@ -80,6 +80,7 @@ describe('SessionToolDispatcher', () => {
     const result = await dispatcher.execute(makeCall({ signal: controller.signal }));
     expect(result.isError).toBe(true);
     expect(result.content).toContain('aborted');
+    expect(result.failureClass).toBe('abort');
   });
 
   it('exposes toolDefs from schemas', () => {
@@ -95,6 +96,7 @@ describe('SessionToolDispatcher', () => {
       const result = await dispatcher.execute(makeCall());
       expect(result.isError).toBe(true);
       expect(result.content).toContain('not in the configured allowlist');
+      expect(result.failureClass).toBe('permission-denied');
     });
 
     it('allows tool in allowlist', async () => {
@@ -127,6 +129,7 @@ describe('SessionToolDispatcher', () => {
       const result = await dispatcher.execute(makeCall());
       expect(result.isError).toBe(true);
       expect(result.content).toContain('blocked by PreToolUse hook');
+      expect(result.failureClass).toBe('hook-block');
     });
 
     it('PreToolUse approve allows execution', async () => {
@@ -194,6 +197,7 @@ describe('SessionToolDispatcher', () => {
       const result = await dispatcher.execute(bashCall('git commit -m x'));
       expect(result.isError).toBe(true);
       expect(result.content).toContain('read-only skill may not run mutating commands');
+      expect(result.failureClass).toBe('permission-denied');
     });
 
     it('lets a read-only bash command through the gate when readOnlyBash is true', async () => {

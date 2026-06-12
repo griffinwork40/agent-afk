@@ -419,6 +419,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
         `(${verdict.reason ?? 'mutation detected'}). Allowed: read-only recon ` +
         `(git status/log/diff, ls, cat, find, grep).`,
       isError: true,
+      failureClass: 'permission-denied',
     };
   }
 
@@ -456,7 +457,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
 
   async execute(call: ToolCall): Promise<ToolResult> {
     if (call.signal.aborted) {
-      return { content: 'Tool call aborted', isError: true };
+      return { content: 'Tool call aborted', isError: true, failureClass: 'abort' };
     }
 
     // 1. PreToolUse hook — can block. Routed through dispatchPreToolUse
@@ -480,6 +481,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
           return {
             content: `Tool "${call.name}" blocked by PreToolUse hook: ${err.message}`,
             isError: true,
+            failureClass: 'hook-block',
           };
         }
         throw err;
@@ -492,6 +494,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       return {
         content: permResult.reason ?? `Tool "${call.name}" is not permitted`,
         isError: true,
+        failureClass: 'permission-denied',
       };
     }
 
@@ -604,7 +607,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       const call = calls[i]!;
 
       if (call.signal.aborted) {
-        results[i] = { content: 'Tool call aborted', isError: true };
+        results[i] = { content: 'Tool call aborted', isError: true, failureClass: 'abort' };
         blocked.add(i);
         continue;
       }
@@ -628,6 +631,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
             results[i] = {
               content: `Tool "${call.name}" blocked by PreToolUse hook: ${err.message}`,
               isError: true,
+              failureClass: 'hook-block',
             };
             blocked.add(i);
             continue;
@@ -641,6 +645,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
         results[i] = {
           content: permResult.reason ?? `Tool "${call.name}" is not permitted`,
           isError: true,
+          failureClass: 'permission-denied',
         };
         blocked.add(i);
         continue;
@@ -694,7 +699,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
             const { call, originalIndex } = executableCalls[batchIdx]!;
             if (call.signal.aborted) {
               return {
-                result: { content: 'Tool call aborted', isError: true } as ToolResult,
+                result: { content: 'Tool call aborted', isError: true, failureClass: 'abort' } as ToolResult,
                 originalIndex,
               };
             }
@@ -721,7 +726,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
         for (const batchIdx of batch.indices) {
           const { call, originalIndex } = executableCalls[batchIdx]!;
           if (call.signal.aborted) {
-            results[originalIndex] = { content: 'Tool call aborted', isError: true };
+            results[originalIndex] = { content: 'Tool call aborted', isError: true, failureClass: 'abort' };
             continue;
           }
           results[originalIndex] = await this.executeCore(call);

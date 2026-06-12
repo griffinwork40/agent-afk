@@ -49,6 +49,38 @@ describe('tool_call payload', () => {
     ).not.toThrow();
   });
 
+  it('accepts completed phase with a valid failureClass', () => {
+    for (const failureClass of ['policy-refusal', 'timeout', 'permission-denied', 'hook-block', 'abort']) {
+      expect(() =>
+        ToolCallPayloadSchema.parse({
+          phase: 'completed',
+          toolUseId: 't1',
+          name: 'browser_open',
+          resultBytes: 64,
+          isError: true,
+          truncated: false,
+          durationMs: 5,
+          failureClass,
+        }),
+      ).not.toThrow();
+    }
+  });
+
+  it('rejects an unknown failureClass', () => {
+    expect(() =>
+      ToolCallPayloadSchema.parse({
+        phase: 'completed',
+        toolUseId: 't1',
+        name: 'bash',
+        resultBytes: 0,
+        isError: true,
+        truncated: false,
+        durationMs: 1,
+        failureClass: 'made-up-class',
+      }),
+    ).toThrow();
+  });
+
   it('rejects unknown phase', () => {
     expect(() =>
       ToolCallPayloadSchema.parse({

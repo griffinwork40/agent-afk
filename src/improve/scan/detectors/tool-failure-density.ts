@@ -37,22 +37,51 @@
  *
  * ## Caveats
  *
- *   - "Failure" means `isError: true` returned by the dispatcher. This
- *     conflates several distinct root causes — hook block, permission
- *     denied, handler throw, unknown tool — which the trace payload does
- *     NOT distinguish. The card surfaces the raw bytes count and duration
- *     so a reviewer can disambiguate from evidence excerpts; future
- *     versions may key on a richer failure-class field if the dispatcher
- *     starts emitting one.
- *   - Tools that return `isError: true` as a *signal* to the LLM (e.g.
- *     intentional "no results" responses) will inflate the rate. Reviewers
- *     can suppress via card status: 'deferred'.
+ *   - "Failure" means `isError: true` returned by the dispatcher. The trace
+ *     payload now carries a coarse `failureClass` (set at the dispatcher gates
+ *     and browser handlers — see {@link ToolFailureClass}). This detector uses
+ *     it to EXCLUDE "the system correctly said no" results (policy refusal,
+ *     permission denial, hook block, abort) from both the failure count and the
+ *     call total — see {@link EXCLUDED_FAILURE_CLASSES}. Failures with no class
+ *     (older traces, handler throws, malformed input) still count, preserving
+ *     back-compat. The per-class `failureClassBreakdown` and `excludedByClass`
+ *     are surfaced in the card detail so a reviewer can see the mix.
+ *   - `timeout` is classified but NOT excluded — a high timeout rate can be a
+ *     real signal — so it still counts toward the rate, just visibly.
+ *   - Tools that return `isError: true` as an unclassified *signal* to the LLM
+ *     (e.g. intentional "no results" responses) will still inflate the rate.
+ *     Reviewers can suppress via card status: 'deferred'.
  *
  * @module improve/scan/detectors/tool-failure-density
  */
 
 import type { DetectorResult, FailureEvidence, Severity } from '../../schemas.js';
 import type { SessionRead } from '../reader.js';
+import type { ToolFailureClass } from '../../../agent/trace/types.js';
+
+/**
+ * Failure classes that mean "the system correctly said no", not "the tool
+ * failed". A domain-policy refusal, a permission denial, a PreToolUse hook
+ * block, or an aborted call all return `isError: true` so the model sees the
+ * refusal — but counting them as tool failures inflated the signal and
+ * manufactured false-positive cards (e.g. `browser_open` looking 50% broken
+ * when half its calls were policy refusals working exactly as designed).
+ *
+ * Results in this set are excluded from BOTH the failure count and the call
+ * total. `timeout` is deliberately NOT excluded — a high timeout rate can be a
+ * real problem (too-tight a deadline, a systematically slow target) — but it IS
+ * surfaced in the per-class breakdown so a reviewer can judge.
+ *
+ * Back-compat: traces written before the `failureClass` field existed carry no
+ * class, so historical failures are never excluded — they count exactly as they
+ * did before. Only post-upgrade traces benefit.
+ */
+const EXCLUDED_FAILURE_CLASSES: ReadonlySet<ToolFailureClass> = new Set([
+  'policy-refusal',
+  'permission-denied',
+  'hook-block',
+  'abort',
+]);
 
 /** Minimum absolute failure count for a tool before a card fires. */
 export const DEFAULT_TOOL_FAILURE_MIN_FAILURES = 3;
@@ -81,6 +110,8 @@ interface FailureSighting {
   resultBytes: number;
   durationMs: number;
   truncated: boolean;
+  /** Coarse failure class from the trace event, when present. */
+  failureClass?: ToolFailureClass;
 }
 
 /** Aggregated stats per tool name across all sessions. */
@@ -92,6 +123,9 @@ interface ToolStats {
   affectedSessions: Set<string>;
   /** How many failures were also truncated (often signals a separate bug). */
   truncatedFailureCount: number;
+  /** Count of results excluded as "system said no" (see EXCLUDED_FAILURE_CLASSES),
+   *  keyed by class. Surfaced in the card detail for transparency. */
+  excludedByClass: Map<ToolFailureClass, number>;
 }
 
 /**
@@ -121,7 +155,18 @@ export function detectToolFailureDensity(
       if (ev.payload.phase !== 'completed') continue;
       // Skip synthetic circuit-breaker blocks — not real tool outcomes.
       if (ev.payload.circuitBreaker === true) continue;
+
       const stats = getOrInit(byTool, ev.payload.name);
+      const failureClass = ev.payload.failureClass;
+
+      // "System said no" — exclude from BOTH numerator and denominator so a
+      // policy/permission/hook/abort refusal can never manufacture a card.
+      // Recorded separately for reviewer transparency.
+      if (failureClass !== undefined && EXCLUDED_FAILURE_CLASSES.has(failureClass)) {
+        stats.excludedByClass.set(failureClass, (stats.excludedByClass.get(failureClass) ?? 0) + 1);
+        continue;
+      }
+
       stats.totalCalls += 1;
       if (ev.payload.isError) {
         stats.failures.push({
@@ -132,6 +177,7 @@ export function detectToolFailureDensity(
           resultBytes: ev.payload.resultBytes,
           durationMs: ev.payload.durationMs,
           truncated: ev.payload.truncated,
+          ...(failureClass !== undefined ? { failureClass } : {}),
         });
         stats.affectedSessions.add(session.sessionId);
         if (ev.payload.truncated) stats.truncatedFailureCount += 1;
@@ -160,6 +206,7 @@ function getOrInit(map: Map<string, ToolStats>, toolName: string): ToolStats {
       failures: [],
       affectedSessions: new Set<string>(),
       truncatedFailureCount: 0,
+      excludedByClass: new Map<ToolFailureClass, number>(),
     };
     map.set(toolName, stats);
   }
@@ -176,11 +223,22 @@ function buildResult(stats: ToolStats, rate: number): DetectorResult {
     tracePath: f.relativeTracePath,
     eventIndices: [f.seq],
     excerpt: clampExcerpt(f.rawLine),
-    annotation: `isError=true · resultBytes=${f.resultBytes} · durationMs=${f.durationMs}${f.truncated ? ' · truncated' : ''}`,
+    annotation: `isError=true${f.failureClass ? ` · class=${f.failureClass}` : ''} · resultBytes=${f.resultBytes} · durationMs=${f.durationMs}${f.truncated ? ' · truncated' : ''}`,
   }));
 
   const totalDuration = stats.failures.reduce((acc, f) => acc + f.durationMs, 0);
   const avgFailureDurationMs = totalDuration / stats.failures.length;
+
+  // Per-class breakdown of the COUNTED failures (unclassified = no failureClass,
+  // e.g. a handler throw or malformed input — the pre-classification default).
+  const failureClassBreakdown: Record<string, number> = {};
+  for (const f of stats.failures) {
+    const key = f.failureClass ?? 'unclassified';
+    failureClassBreakdown[key] = (failureClassBreakdown[key] ?? 0) + 1;
+  }
+  // Refusals excluded from the stats entirely, for reviewer transparency.
+  const excludedByClass: Record<string, number> = {};
+  for (const [cls, n] of stats.excludedByClass) excludedByClass[cls] = n;
 
   return {
     slug,
@@ -190,7 +248,7 @@ function buildResult(stats: ToolStats, rate: number): DetectorResult {
     observedAt,
     evidence,
     detail: {
-      detector: 'tool-failure-density@v1',
+      detector: 'tool-failure-density@v2',
       toolName: stats.toolName,
       totalCalls: stats.totalCalls,
       failureCount: stats.failures.length,
@@ -198,6 +256,8 @@ function buildResult(stats: ToolStats, rate: number): DetectorResult {
       affectedSessionCount: stats.affectedSessions.size,
       truncatedFailureCount: stats.truncatedFailureCount,
       avgFailureDurationMs: round2(avgFailureDurationMs),
+      failureClassBreakdown,
+      excludedByClass,
       sessionIds: Array.from(stats.affectedSessions),
       seqs: stats.failures.map((f) => f.seq),
     },

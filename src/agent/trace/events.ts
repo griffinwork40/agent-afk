@@ -17,6 +17,7 @@
  */
 
 import { z } from 'zod';
+import { TOOL_FAILURE_CLASSES } from './types.js';
 
 // ---------------------------------------------------------------------------
 // tool_call
@@ -30,6 +31,11 @@ export const ToolCallStartedPayloadSchema = z.object({
   subagentId: z.string().optional(),
 });
 
+/** Mirrors {@link import('./types.js').ToolFailureClass}. The literal tuple is
+ *  imported from `types.ts` (the canonical source) so the validator and the TS
+ *  type cannot drift. */
+export const ToolFailureClassSchema = z.enum(TOOL_FAILURE_CLASSES);
+
 export const ToolCallCompletedPayloadSchema = z.object({
   phase: z.literal('completed'),
   toolUseId: z.string(),
@@ -40,6 +46,8 @@ export const ToolCallCompletedPayloadSchema = z.object({
   durationMs: z.number().nonnegative(),
   /** Set when the event was produced by the repeat-loop circuit breaker. */
   circuitBreaker: z.boolean().optional(),
+  /** Coarse failure classification when `isError` is true. Absent otherwise. */
+  failureClass: ToolFailureClassSchema.optional(),
   subagentId: z.string().optional(),
 });
 

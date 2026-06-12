@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   PLAYWRIGHT_MISSING_HINTS,
+  browserTimeoutFailureClass,
   isPlaywrightMissing,
   playwrightMissingHint,
 } from './playwright-hints.js';
@@ -40,5 +41,27 @@ describe('playwrightMissingHint', () => {
     expect(hint).toMatch(/pnpm exec playwright install chromium/);
     // Must NOT mis-direct the user to reinstall a package that is already present.
     expect(hint).not.toMatch(/pnpm add playwright/);
+  });
+});
+
+describe('browserTimeoutFailureClass', () => {
+  it("classifies a Playwright TimeoutError (by name) as 'timeout'", () => {
+    const err = new Error('page.goto: Timeout 30000ms exceeded.');
+    err.name = 'TimeoutError';
+    expect(browserTimeoutFailureClass(err)).toBe('timeout');
+  });
+
+  it("classifies the timeout message shape as 'timeout' even without the name", () => {
+    expect(browserTimeoutFailureClass(new Error('Timeout 30000ms exceeded.'))).toBe('timeout');
+    expect(browserTimeoutFailureClass(new Error('locator.click: Timeout 5000 ms exceeded'))).toBe(
+      'timeout',
+    );
+  });
+
+  it('returns undefined for non-timeout errors (left unclassified → still a real failure)', () => {
+    expect(browserTimeoutFailureClass(new Error('net::ERR_NAME_NOT_RESOLVED'))).toBeUndefined();
+    expect(browserTimeoutFailureClass(new Error('boom'))).toBeUndefined();
+    expect(browserTimeoutFailureClass('a plain string')).toBeUndefined();
+    expect(browserTimeoutFailureClass(undefined)).toBeUndefined();
   });
 });

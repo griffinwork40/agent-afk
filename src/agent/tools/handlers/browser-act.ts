@@ -29,7 +29,11 @@ import { env } from '../../../config/env.js';
 // helpers (truncateTargetText, hashSelector) are imported and called so the
 // logic is in place for when browser_event emission is wired.
 
-import { isPlaywrightMissing, playwrightMissingHint } from './playwright-hints.js';
+import {
+  browserTimeoutFailureClass,
+  isPlaywrightMissing,
+  playwrightMissingHint,
+} from './playwright-hints.js';
 
 const VALID_ACTIONS: readonly ActAction[] = [
   'click', 'fill', 'press', 'select', 'hover', 'scroll_to', 'wait_for',
@@ -170,7 +174,7 @@ export function createBrowserActHandler(opts: BrowserHandlerOptions = {}): ToolH
     if (signal.aborted) {
       const reason = signal.reason;
       const msg = reason instanceof Error ? reason.message : String(reason ?? 'aborted');
-      return { content: `browser_act aborted: ${msg}`, isError: true };
+      return { content: `browser_act aborted: ${msg}`, isError: true, failureClass: 'abort' };
     }
 
     const parsed = parseInput(input);
@@ -227,6 +231,7 @@ export function createBrowserActHandler(opts: BrowserHandlerOptions = {}): ToolH
           return {
             content: `browser_act blocked: ${result.reason}`,
             isError: true,
+            failureClass: 'policy-refusal',
           };
         }
       }
@@ -235,7 +240,12 @@ export function createBrowserActHandler(opts: BrowserHandlerOptions = {}): ToolH
       return { content: JSON.stringify(result, null, 2) };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return { content: `browser_act failed: ${msg}`, isError: true };
+      const failureClass = browserTimeoutFailureClass(err);
+      return {
+        content: `browser_act failed: ${msg}`,
+        isError: true,
+        ...(failureClass ? { failureClass } : {}),
+      };
     }
   };
 }

@@ -50,6 +50,38 @@ export interface ToolCallStartedPayload {
   subagentId?: string;
 }
 
+// Invariant: this is the canonical source of truth for the failure-class
+// vocabulary. `src/agent/trace/events.ts` imports this exact tuple to build
+// the Zod `z.enum`, so the runtime validator and the TS type can never drift.
+// Order is not load-bearing. Every value is set at a specific dispatcher or
+// handler site (see ToolFailureClass JSDoc) and consumed by
+// `src/improve/scan/detectors/tool-failure-density.ts`.
+export const TOOL_FAILURE_CLASSES = [
+  'policy-refusal',
+  'timeout',
+  'permission-denied',
+  'hook-block',
+  'abort',
+] as const;
+
+/**
+ * Coarse classification of WHY a tool returned `isError: true`. Optional and
+ * additive: a result with no `failureClass` is an unclassified failure (the
+ * pre-classification default — a handler bug, malformed input, etc.).
+ *
+ * Set at the site that produced the error:
+ *   - `policy-refusal`    — browser handler refused nav (domain allowlist). NOT a bug.
+ *   - `timeout`           — browser navigation/action exceeded its deadline.
+ *   - `permission-denied` — permission gate or read-only-skill bash gate denied the call.
+ *   - `hook-block`        — a PreToolUse hook returned `decision: 'block'`.
+ *   - `abort`             — the call's AbortSignal was already fired.
+ *
+ * The `tool-failure-density` detector treats `policy-refusal`, `permission-denied`,
+ * `hook-block`, and `abort` as "the system correctly said no" — excluded from
+ * failure stats entirely — while `timeout` and unclassified failures still count.
+ */
+export type ToolFailureClass = (typeof TOOL_FAILURE_CLASSES)[number];
+
 export interface ToolCallCompletedPayload {
   phase: 'completed';
   toolUseId: string;
@@ -63,6 +95,9 @@ export interface ToolCallCompletedPayload {
   /** True when this completed event was produced by the repeat-loop circuit breaker,
    *  not by a real tool dispatch — lets detectors exclude it from failure stats. */
   circuitBreaker?: boolean;
+  /** Coarse failure classification when `isError` is true. Absent on success
+   *  and on unclassified failures. See {@link ToolFailureClass}. */
+  failureClass?: ToolFailureClass;
   subagentId?: string;
 }
 

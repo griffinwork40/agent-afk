@@ -28,7 +28,11 @@ import { env } from '../../../config/env.js';
 // semantic layer. Until then, browser_event emission lives in the dispatcher
 // tier, not in these handlers. See design doc: design-native-browser-control.
 
-import { isPlaywrightMissing, playwrightMissingHint } from './playwright-hints.js';
+import {
+  browserTimeoutFailureClass,
+  isPlaywrightMissing,
+  playwrightMissingHint,
+} from './playwright-hints.js';
 
 type WaitForOption = 'load' | 'domcontentloaded' | 'networkidle';
 
@@ -104,7 +108,7 @@ export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): Tool
     if (signal.aborted) {
       const reason = signal.reason;
       const msg = reason instanceof Error ? reason.message : String(reason ?? 'aborted');
-      return { content: `browser_open aborted: ${msg}`, isError: true };
+      return { content: `browser_open aborted: ${msg}`, isError: true, failureClass: 'abort' };
     }
 
     const parsed = parseInput(input);
@@ -149,6 +153,7 @@ export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): Tool
         return {
           content: `browser_open blocked: ${result.reason}`,
           isError: true,
+          failureClass: 'policy-refusal',
         };
       }
 
@@ -156,7 +161,12 @@ export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): Tool
       return { content: JSON.stringify(result, null, 2) };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return { content: `browser_open failed: ${msg}`, isError: true };
+      const failureClass = browserTimeoutFailureClass(err);
+      return {
+        content: `browser_open failed: ${msg}`,
+        isError: true,
+        ...(failureClass ? { failureClass } : {}),
+      };
     }
   };
 }

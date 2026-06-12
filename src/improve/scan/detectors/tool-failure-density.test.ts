@@ -48,6 +48,7 @@ function toolPair(
     durationMs?: number;
     resultBytes?: number;
     circuitBreaker?: boolean;
+    failureClass?: string;
   } = {},
 ): string[] {
   const started = JSON.stringify({
@@ -66,6 +67,7 @@ function toolPair(
     durationMs: opts.durationMs ?? 50,
   };
   if (opts.circuitBreaker === true) completedPayload['circuitBreaker'] = true;
+  if (opts.failureClass !== undefined) completedPayload['failureClass'] = opts.failureClass;
   const completed = JSON.stringify({
     ts: new Date(1_700_000_000_000 + seqCounter * 1000).toISOString(),
     seq: seqCounter++,
@@ -425,5 +427,103 @@ describe('detectToolFailureDensity — circuit-breaker exclusion', () => {
     expect(results).toHaveLength(1);
     expect(results[0]?.detail['totalCalls']).toBe(5);
     expect(results[0]?.detail['failureCount']).toBe(3);
+  });
+});
+
+describe('detectToolFailureDensity — failureClass exclusion', () => {
+  for (const cls of ['policy-refusal', 'permission-denied', 'hook-block', 'abort']) {
+    it(`does NOT produce a card when all failures are class '${cls}'`, () => {
+      resetSeq();
+      // 8 isError failures, all "system said no" — must produce zero cards.
+      const lines: string[] = [];
+      for (let i = 0; i < 8; i++) {
+        lines.push(...toolPair(`x-${i}`, 'browser_open', { isError: true, failureClass: cls }));
+      }
+      expect(detectToolFailureDensity([makeSession('s1', lines)])).toEqual([]);
+    });
+  }
+
+  it('regression: browser_open policy refusals do not manufacture a card (the reported bug)', () => {
+    resetSeq();
+    // The real-world shape: 10 policy refusals + 4 successes + 0 real faults.
+    // Pre-fix this read as 10/14 = 71% "failure" → high-severity card.
+    // Post-fix the 10 refusals are excluded from BOTH numerator and denominator,
+    // leaving 0 failures / 4 calls → no card.
+    const lines: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      lines.push(...toolPair(`p-${i}`, 'browser_open', { isError: true, failureClass: 'policy-refusal' }));
+    }
+    for (let i = 0; i < 4; i++) lines.push(...toolPair(`ok-${i}`, 'browser_open'));
+    expect(detectToolFailureDensity([makeSession('s1', lines)])).toEqual([]);
+  });
+
+  it('excludes refusals from BOTH numerator and denominator but still fires on real faults', () => {
+    resetSeq();
+    // 3 real (unclassified) failures + 6 policy refusals + 2 successes.
+    // Real denominator = 3 + 2 = 5; rate = 3/5 = 60% → fires with count 3, total 5.
+    const lines: string[] = [];
+    for (let i = 0; i < 3; i++) lines.push(...toolPair(`f-${i}`, 'browser_open', { isError: true }));
+    for (let i = 0; i < 6; i++) {
+      lines.push(...toolPair(`p-${i}`, 'browser_open', { isError: true, failureClass: 'policy-refusal' }));
+    }
+    for (let i = 0; i < 2; i++) lines.push(...toolPair(`ok-${i}`, 'browser_open'));
+    const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
+    expect(r.detail['totalCalls']).toBe(5);
+    expect(r.detail['failureCount']).toBe(3);
+    expect(r.detail['excludedByClass']).toEqual({ 'policy-refusal': 6 });
+  });
+
+  it("counts 'timeout' as a real failure (not excluded) and surfaces it in the breakdown", () => {
+    resetSeq();
+    // 4 timeouts out of 4 calls → 100% → fires. timeout is NOT excluded.
+    const lines: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      lines.push(...toolPair(`t-${i}`, 'browser_open', { isError: true, failureClass: 'timeout' }));
+    }
+    const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
+    expect(r.detail['failureCount']).toBe(4);
+    expect(r.detail['totalCalls']).toBe(4);
+    expect(r.detail['failureClassBreakdown']).toEqual({ timeout: 4 });
+  });
+
+  it('reports a mixed failureClassBreakdown including unclassified failures', () => {
+    resetSeq();
+    // 2 timeout + 3 unclassified faults = 5 failures / 5 calls.
+    const lines: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      lines.push(...toolPair(`t-${i}`, 'web_scrape', { isError: true, failureClass: 'timeout' }));
+    }
+    for (let i = 0; i < 3; i++) lines.push(...toolPair(`u-${i}`, 'web_scrape', { isError: true }));
+    const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
+    expect(r.detail['failureClassBreakdown']).toEqual({ timeout: 2, unclassified: 3 });
+  });
+
+  it('back-compat: failures with NO failureClass count exactly as before', () => {
+    resetSeq();
+    // Mirrors the pre-failureClass world: 3 unclassified failures / 6 → fires.
+    const lines = [
+      ...toolPair('a', 'Bash', { isError: true }),
+      ...toolPair('b', 'Bash', { isError: true }),
+      ...toolPair('c', 'Bash', { isError: true }),
+      ...toolPair('d', 'Bash'),
+      ...toolPair('e', 'Bash'),
+      ...toolPair('f', 'Bash'),
+    ];
+    const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
+    expect(r.detail['totalCalls']).toBe(6);
+    expect(r.detail['failureCount']).toBe(3);
+    expect(r.detail['failureClassBreakdown']).toEqual({ unclassified: 3 });
+    expect(r.detail['excludedByClass']).toEqual({});
+  });
+
+  it('annotates evidence rows with the failure class', () => {
+    resetSeq();
+    const lines = [
+      ...toolPair('t1', 'browser_open', { isError: true, failureClass: 'timeout' }),
+      ...toolPair('t2', 'browser_open', { isError: true, failureClass: 'timeout' }),
+      ...toolPair('t3', 'browser_open', { isError: true, failureClass: 'timeout' }),
+    ];
+    const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
+    expect(r.evidence[0]?.annotation).toContain('class=timeout');
   });
 });

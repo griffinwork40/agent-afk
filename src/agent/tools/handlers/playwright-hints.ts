@@ -18,6 +18,24 @@
  * @module agent/tools/handlers/playwright-hints
  */
 
+import type { ToolFailureClass } from '../../trace/types.js';
+
+/**
+ * Classify a thrown browser error as a navigation/action timeout, for the
+ * `failureClass` field on the tool result. Playwright raises a `TimeoutError`
+ * (`name === 'TimeoutError'`) from `page.goto` and locator waits; the message
+ * regex is a defensive fallback for errors that lost their prototype across a
+ * boundary. Returns `'timeout'` for timeouts, `undefined` otherwise — an
+ * unclassified browser failure still counts as a real failure downstream, so
+ * this only ever DEMOTES a timeout out of the "real fault" bucket, never
+ * promotes a genuine error into a benign class.
+ */
+export function browserTimeoutFailureClass(err: unknown): ToolFailureClass | undefined {
+  if (err instanceof Error && err.name === 'TimeoutError') return 'timeout';
+  const msg = err instanceof Error ? err.message : String(err);
+  return /Timeout\s+\d+\s*ms exceeded/i.test(msg) ? 'timeout' : undefined;
+}
+
 // Substrings in a thrown error message that indicate the optional Playwright
 // peer dependency — or its chromium browser binary — is unavailable.
 export const PLAYWRIGHT_MISSING_HINTS = [

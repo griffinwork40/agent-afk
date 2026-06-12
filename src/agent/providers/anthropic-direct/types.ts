@@ -17,6 +17,7 @@ import type {
   Usage,
 } from '@anthropic-ai/sdk/resources';
 import type { ProviderEvent, ProviderUsage } from '../../provider.js';
+import type { ToolFailureClass } from '../../trace/types.js';
 
 /**
  * Auth mode is selected by token shape. OAuth-mode tokens (`sk-ant-oat01-*`)
@@ -95,6 +96,15 @@ export interface ToolResult {
   /** True when this result is a synthetic repeat-loop circuit-breaker block,
    *  not a real tool outcome — lets trace consumers exclude it from failure stats. */
   circuitBreaker?: boolean;
+  /**
+   * Coarse classification of WHY this result is an error, set by the site that
+   * produced it (dispatcher gate or tool handler). Carried through to the
+   * `tool_call` completed trace event so failure-density detection can
+   * distinguish "the system correctly said no" (policy/permission/hook/abort)
+   * from a real tool fault. Absent on success and unclassified failures.
+   * See {@link import('../../trace/types.js').ToolFailureClass}.
+   */
+  failureClass?: ToolFailureClass;
   render?: RenderHints;
   /**
    * Structured test-runner result parsed from bash output by
