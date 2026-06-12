@@ -11,6 +11,23 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.106.0] - 2026-06-12
+
+### Added
+- inject measured reproducer baseline into the read-only verifier (#10) (c6e7206)
+
+### Fixed
+- register AFK_DIAGNOSE_BASELINE in env registry (a90c0da)
+- align verifier prompt with its read-only tool gate (841a15c)
+
+### Changed
+- Merge pull request #8 from griffinwork40/fix/diagnose-verifier-honest-labeling (214e439)
+- regenerate env-registry docs after main merge (7a65799)
+- Merge remote-tracking branch 'origin/main' into fix/diagnose-verifier-honest-labeling (f33ec8b)
+- Merge branch 'main' into fix/diagnose-verifier-honest-labeling (110a6ce)
+- Merge branch 'main' into fix/diagnose-verifier-honest-labeling (cd2f482)
+- Merge branch 'main' into fix/diagnose-verifier-honest-labeling (f661252)
+
 ## [3.105.0] - 2026-06-12
 
 ### Added
