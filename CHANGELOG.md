@@ -11,6 +11,23 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.102.0] - 2026-06-12
+
+### Added
+- per-binary cross-tool asset import from Claude Code / Codex (e875772)
+
+### Fixed
+- use node: specifier for readline/promises so esbuild bundles it (a619144)
+- resolve PR #92 review findings (13898a4)
+- resolve importFrom only from user-global config (security) (563cd92)
+- surface imported skill provenance in /skills listing (d3110b1)
+
+### Changed
+- Merge pull request #92 from griffinwork40/feat/cross-tool-import (6a53b2e)
+- Merge pull request #96 from LIghtJUNction/test-pin-empty-toolinput-breadcrumb (ccfac80)
+- pin empty tool input breadcrumb rendering (4bc3b56)
+- Merge branch 'main' into feat/cross-tool-import (24bed64)
+
 ## [3.101.1] - 2026-06-11
 
 ### Fixed
