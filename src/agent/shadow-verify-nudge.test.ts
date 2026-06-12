@@ -105,7 +105,7 @@ describe('shadowVerifyNudge', () => {
       'lorem ipsum '.repeat(60);
     const result = shadowVerifyNudge(stopCtx(output));
     expect(result.injectContext).toBeDefined();
-    expect(result.injectContext).toMatch(/^shadow-verify nudge:/);
+    expect(result.injectContext).toMatch(/^\[framework-generated context: shadow-verify nudge\]/);
     expect(result.injectContext).toContain('/shadow-verify');
   });
 

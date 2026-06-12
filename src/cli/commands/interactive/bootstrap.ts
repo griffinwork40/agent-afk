@@ -49,6 +49,7 @@ import { createMemoizedProviderFactory } from './provider-factory.js';
 import { BUILTIN_TOOL_NAMES } from '../../../agent/tools/schemas.js';
 import { AWARENESS_TOOL_NAMES } from '../../../agent/awareness/index.js';
 import { McpManager, loadMcpConfig, getMcpConfigPath } from '../../../agent/mcp/index.js';
+import { loadImportFromConfig, resolveImportedRoots } from '../../../config/import-sources.js';
 import { resolveResumeTarget } from '../../resume-session.js';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
 import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
@@ -363,8 +364,17 @@ export async function bootstrapSession(
     // worktree can carry its own MCP config (matching how the worktree
     // already isolates everything else under `worktreeCwd`).
     const projectCwd = extras?.cwd ?? process.cwd();
+    // Imported MCP servers from trusted source binaries (`importFrom`). Only
+    // JSON-format configs (Claude Code) are loadable today; they enter as the
+    // lowest-priority layer so AFK's own config always wins. MCP import is
+    // off by default even for a trusted binary (it auto-runs commands on
+    // connect) — this only fires when the user set `mcp: true` for a binary.
+    const importedMcpConfigs = resolveImportedRoots(loadImportFromConfig())
+      .mcpConfigs.filter((c) => c.format === 'json')
+      .map((c) => c.source);
     const loaded = loadMcpConfig({
       cwd: projectCwd,
+      ...(importedMcpConfigs.length > 0 ? { importedMcpConfigs } : {}),
       ...(options.mcpConfig !== undefined ? { cliOverride: options.mcpConfig } : {}),
     });
     const enabledCount = Object.values(loaded.mcpServers).filter((s) => !s.disabled).length;

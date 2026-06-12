@@ -11,6 +11,82 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.102.0] - 2026-06-12
+
+### Added
+- per-binary cross-tool asset import from Claude Code / Codex (e875772)
+
+### Fixed
+- use node: specifier for readline/promises so esbuild bundles it (a619144)
+- resolve PR #92 review findings (13898a4)
+- resolve importFrom only from user-global config (security) (563cd92)
+- surface imported skill provenance in /skills listing (d3110b1)
+
+### Changed
+- Merge pull request #92 from griffinwork40/feat/cross-tool-import (6a53b2e)
+- Merge pull request #96 from LIghtJUNction/test-pin-empty-toolinput-breadcrumb (ccfac80)
+- pin empty tool input breadcrumb rendering (4bc3b56)
+- Merge branch 'main' into feat/cross-tool-import (24bed64)
+
+## [3.101.1] - 2026-06-11
+
+### Fixed
+- stop finalizeOrchestrator nuclear-flushing in-flight subagent blocks (#95) (bab6bb2)
+
+## [3.101.0] - 2026-06-11
+
+### Added
+- record root-session model in witness traces (#91) (e8ce193)
+
+## [3.100.1] - 2026-06-11
+
+### Fixed
+- reserve final column in echo path to fix prompt tripling (#94) (755987b)
+- web_scrape failure logging (#24) + tar create/append gating (#6) (#89) (eec4b92)
+
+### Changed
+- document subagent context injection contract (#93) (4755b92)
+
+## [3.100.0] - 2026-06-11
+
+### Added
+- inline ghost-text tab autocomplete for mid-sentence skill names (#90) (81abc62)
+
+## [3.99.1] - 2026-06-11
+
+### Fixed
+- ESC soft-stop cancels on first press, no post-cancel lag (#81) (6b0e586)
+
+## [3.99.0] - 2026-06-11
+
+### Added
+- distinctive user message display in scrollback (#88) (10eacfd)
+
+## [3.98.1] - 2026-06-11
+
+### Fixed
+- stop local-model subagent dispatch from hanging (#87) (2d458dc)
+
+## [3.98.0] - 2026-06-11
+
+### Added
+- add closure-anomaly guardrail + eval-run contract (abort subtype) (#86) (03cfc86)
+
+## [3.97.0] - 2026-06-11
+
+### Added
+- return browser_screenshot as a model-visible image (#82) (e9a51b0)
+
+## [3.96.1] - 2026-06-11
+
+### Fixed
+- stop user-card echo ghosting by reserving the terminal last column (#85) (23200c2)
+
+## [3.96.0] - 2026-06-11
+
+### Added
+- add eval-run, the first deterministic eval-case validation stage (#84) (86ae118)
+
 ## [3.95.0] - 2026-06-11
 
 ### Added

@@ -147,6 +147,11 @@ export interface OpenAIToolResultMessage {
 export function toolResultsToMessages(
   results: readonly { call: ToolCall; result: ToolResult }[],
 ): OpenAIToolResultMessage[] {
+  // NOTE: `result.image` (set by e.g. browser_screenshot) is intentionally
+  // dropped here. The OpenAI Chat Completions `role:'tool'` message cannot
+  // carry image content — images must ride a separate `role:'user'` message.
+  // We degrade to text-only; `content` still carries the path/dimensions
+  // summary. Proper vision support for tool-result images is a future follow-up.
   return results.map(({ call, result }) => ({
     role: 'tool',
     tool_call_id: call.id,

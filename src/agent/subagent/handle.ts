@@ -458,11 +458,15 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       this.traceWriter ? { traceWriter: this.traceWriter } : {},
     );
 
-    // Inject context into parent if handler provided it and parent ref exists.
-    // Abort precedence: if the parent's abortSignal was provided AND is set,
-    // skip injection — the parent's query loop will unwind before it can
-    // consume the message. Matches the abort-graph invariant that abort is
-    // terminal for side effects. Injection failures are logged, not propagated.
+    // Invariant: SubagentStop.injectContext is a framework-generated next-turn
+    // note, not the foreground subagent result and not human-authored text. The
+    // final subagent answer has already returned through the `agent` tool result;
+    // this side-channel queues only supplemental hook context for the parent's
+    // next input-stream read. Abort precedence: if the parent's abortSignal was
+    // provided AND is set, skip injection — the parent's query loop will unwind
+    // before it can consume the message. Matches the abort-graph invariant that
+    // abort is terminal for side effects. Injection failures are logged, not
+    // propagated.
     if (decision.injectContext && this.parentInputStreamRef) {
       if (this.parentAbortSignal?.aborted) {
         debugLog(

@@ -30,6 +30,7 @@ import {
   type ChildProviderFactoryArgs,
 } from './nesting.js';
 import { SubagentExecutor } from './subagent-executor.js';
+import { buildSkillMaxDepthRefusal } from './skill-depth-message.js';
 import { applyParentCredentialFallback } from './child-credential.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import { getCurrentSink } from '../_lib/skill-sink-channel.js';
@@ -225,7 +226,7 @@ export class SkillExecutor {
         requested_name: requestedName,
       }).catch(() => {});
       return {
-        content: `Skill tool not available at nesting depth ${depth} (max ${maxDepth}). You are too deeply nested to delegate further — perform the work inline with your own tools instead of calling skill/agent/compose.`,
+        content: buildSkillMaxDepthRefusal(depth, maxDepth),
         isError: true,
       };
     }

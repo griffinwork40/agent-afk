@@ -1408,6 +1408,11 @@ describe('finalizeOrchestrator — thinking summary routing', () => {
     thinkingLane.push('reasoning before tool call');
     const toolLane = new ToolLane();
     toolLane.addStartWithAgentContext('tu_1', 'Read', '{"path":"/tmp/x"}', undefined);
+    // Complete the tool — finalizeOrchestrator flushes via flushCompletedRoots
+    // (selective), so an in-flight root would (correctly) be skipped and no
+    // tools batch scheduled. This test pins the tools-before-trailing-thinking
+    // ORDER for completed entries.
+    toolLane.addResult('tu_1', { type: 'tool_result', toolUseId: 'tu_1', content: 'ok', isError: false });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ctx: any = {
       out: writer,

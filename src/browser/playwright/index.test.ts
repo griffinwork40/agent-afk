@@ -607,6 +607,21 @@ describe('describe()', () => {
 // extract() tests
 // ---------------------------------------------------------------------------
 
+describe('screenshot()', () => {
+  it('returns metadata plus base64-encoded PNG bytes for the model', async () => {
+    const provider = makeProvider();
+    const result = await provider.screenshot({ sessionId: 'sess1' });
+
+    expect(result.path).toBe('/fake/screenshot.png');
+    expect(result.bytes).toBe(100);
+    expect(result.width).toBe(1280);
+    expect(result.height).toBe(800);
+    // dataBase64 is the base64 encoding of the raw PNG buffer the page returned.
+    expect(result.dataBase64).toBe(Buffer.from('PNG').toString('base64'));
+    expect(result.mediaType).toBe('image/png');
+  });
+});
+
 describe('extract()', () => {
   it('throws Error with Phase 1 not-implemented message', async () => {
     const provider = makeProvider();

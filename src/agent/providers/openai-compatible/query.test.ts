@@ -566,6 +566,40 @@ describe('OpenAICompatibleQuery — lifecycle', () => {
     expect(remaining.length).toBeLessThan(100);
   });
 
+  it('emits a terminal turn.completed when interrupted mid-stream (no hang)', async () => {
+    // Regression: an abort during the stream made runIteration return null and
+    // runTurn return WITHOUT a terminal event. The persistent stream consumer
+    // (agent-session.ts:sendMessageStreamInternal) breaks its providerIterator
+    // loop only on a terminal output ('done' from turn.completed, or 'error'),
+    // so a missing turn.completed strands it on a next() that never resolves —
+    // the "esc to interrupt" hang. The abort path must now yield turn.completed.
+    pendingChunks = Array.from({ length: 100 }, (_, i) => ({
+      choices: [{ delta: { content: `chunk${i}` } }],
+    }));
+    const controlled = makeControlledPromptStream();
+    const q = buildQueryFromConfig(baseConfig(), controlled.stream);
+    const iter = q[Symbol.asyncIterator]();
+    controlled.send('long task');
+
+    const initEv = await iter.next();
+    expect(initEv.value).toMatchObject({ type: 'session.init' });
+    await iter.next(); // delta 0
+    await iter.next(); // delta 1
+
+    await q.interrupt();
+    controlled.end();
+
+    const remaining: ProviderEvent[] = [];
+    let ev: IteratorResult<ProviderEvent>;
+    do {
+      ev = await iter.next();
+      if (!ev.done) remaining.push(ev.value);
+    } while (!ev.done);
+
+    // The terminal event must be present so the consumer unblocks.
+    expect(remaining.some((e) => e.type === 'turn.completed')).toBe(true);
+  });
+
   it('close() stops the loop cleanly even with no input pending', async () => {
     const controlled = makeControlledPromptStream();
     const q = buildQueryFromConfig(baseConfig(), controlled.stream);

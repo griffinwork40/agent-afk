@@ -1,5 +1,5 @@
 import type { ChalkInstance } from 'chalk';
-import { displayWidth } from '../display.js';
+import { displayWidth, truncateDisplayWidth } from '../display.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import { wrapToWidth } from '../wrap.js';
 import { palette } from '../palette.js';
@@ -125,17 +125,51 @@ function renderUserCard(bodyLines: string[]): string {
     ];
   }
 
-  const bar = palette.user('│');
-  return displayRows
+  const bar = palette.user.bold('│');
+  // Invariant (last-column safety): the bar lands at most at column `cols - 1`,
+  // never the terminal's final column. A printable glyph in the last column
+  // leaves many emulators (iTerm2/Ghostty/Kitty/WezTerm) in the DECAWM
+  // deferred-wrap state; when the compositor later scrolls or CUP-repositions
+  // for the committed-band repaint, those terminals flush the pending wrap
+  // inconsistently and a full-width committed row ghosts/duplicates in
+  // scrollback (the "user prompt echoed 3×" report). The live input line
+  // already reserves this column for the same reason (terminal-compositor.render.ts:
+  // `cols - … - 1`). xterm handles the boundary cleanly, so this never surfaces
+  // in the @xterm/headless test harness — only on real terminals.
+  //
+  // Use `cols - 1` directly — NOT `Math.max(3, cols - 1)`: a floor would push
+  // rightEdge UP to 3 on a 1–3 column terminal, landing the bar back in the
+  // physical last column (the very bug above). For cols ≥ 3 the bar sits at
+  // cols-1 with the final column empty; below 3 the ' │' suffix cannot fit at
+  // all, so truncateDisplayWidth clamps content to '' (maxWidth ≤ 0) and the row
+  // degrades to a bare bar without throwing instead of chasing an impossible
+  // width.
+  const rightEdge = cols - 1;
+
+  // Separator row is built after capping — does not count against MAX_USER_CARD_ROWS.
+  // Spans up to 30 visible columns right-aligned to rightEdge, matching the
+  // existing divider glyph vocabulary. Width formula guarantees row ≤ cols-1.
+  const sepW = Math.min(30, Math.max(1, rightEdge));
+  const sepPad = Math.max(0, rightEdge - sepW);
+  const separatorRow = ' '.repeat(sepPad) + palette.dim('─'.repeat(sepW));
+
+  const contentRows = displayRows
     .map((line) => {
-      const lineW = displayWidth(line);
-      // `cols - lineW - 2` reserves 2 cols for the trailing ' │'. Clamp to 0
-      // so a line wider than the terminal (shouldn't happen post-wrap) still
-      // renders without negative pad.
-      const leadingSpace = Math.max(0, cols - lineW - 2);
-      return ' '.repeat(leadingSpace) + line + ' ' + bar;
+      // Defensive clamp: an unbreakable token wider than innerW survives
+      // wrapToWidth(hard:false) intact, so a row could otherwise exceed
+      // rightEdge. Truncate (ANSI/hyperlink-aware) so content + ' │' ≤ rightEdge.
+      const content =
+        displayWidth(line) + 2 > rightEdge
+          ? truncateDisplayWidth(line, Math.max(0, rightEdge - 2))
+          : line;
+      const lineW = displayWidth(content);
+      // `rightEdge - lineW - 2` reserves 2 cols for the trailing ' │'. Clamp to
+      // 0 so a line at the width ceiling still renders without negative pad.
+      const leadingSpace = Math.max(0, rightEdge - lineW - 2);
+      return ' '.repeat(leadingSpace) + content + ' ' + bar;
     })
     .join('\n');
+  return separatorRow + '\n' + contentRows;
 }
 
 function renderBorderedCard(
