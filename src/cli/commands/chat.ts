@@ -29,7 +29,7 @@ import { setupWorktree } from './interactive/worktree.js';
 import { resolveResumeTarget, resumeConfigFor } from '../resume-session.js';
 import { saveSession, findSession } from '../session-store.js';
 import { createSessionStats, recordTurn } from '../slash/session-stats.js';
-import { runReviewPostPublish, parsePostFlag, type PostTarget } from '../slash/_lib/review-post.js';
+import { runReviewPostPublish, parsePostTargets, type PostTarget } from '../slash/_lib/review-post.js';
 import type { Writer } from '../slash/types.js';
 
 /** Loose UUID format check: 8-4-4-4-12 hex groups separated by dashes. */
@@ -200,14 +200,14 @@ export function registerChatCommand(program: Command): void {
 
       // -----------------------------------------------------------------------
       // Parse --post targets up front so an unknown target warns before any
-      // agent/network work. Reuses the REPL's parsePostFlag (which is string-in)
-      // by reconstructing the flag string from the Commander value; the actual
-      // publish runs after the turn completes (see maybePublish below). An
+      // agent/network work. parsePostTargets classifies the bare Commander value
+      // directly — no synthetic "--post …" flag string to reconstruct and re-parse;
+      // the actual publish runs after the turn completes (see maybePublish below). An
       // all-unknown value yields zero targets → a no-op, not a hard error.
       // -----------------------------------------------------------------------
       const postTargets: PostTarget[] = [];
       if (options.post !== undefined) {
-        const parsedPost = parsePostFlag(`--post ${options.post}`);
+        const parsedPost = parsePostTargets(options.post);
         postTargets.push(...parsedPost.targets);
         for (const unknownTarget of parsedPost.unknown) {
           process.stderr.write(

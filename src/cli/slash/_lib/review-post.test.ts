@@ -10,6 +10,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { Writer } from '../types.js';
 import {
   parsePostFlag,
+  parsePostTargets,
   chunkText,
   buildGithubBody,
   summarizeForTelegram,
@@ -111,6 +112,41 @@ describe('parsePostFlag', () => {
   it('preserves a PR URL as the review target', () => {
     const r = parsePostFlag('https://github.com/o/r/pull/12 --post github');
     expect(r.cleanedArgs).toBe('https://github.com/o/r/pull/12');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parsePostTargets — bare-value classifier (CLI `chat --post` path)
+// ---------------------------------------------------------------------------
+
+describe('parsePostTargets', () => {
+  it('classifies a single target', () => {
+    expect(parsePostTargets('github')).toEqual({ targets: ['github'], unknown: [] });
+  });
+
+  it('classifies a comma list and dedupes', () => {
+    expect(parsePostTargets('github,telegram,github')).toEqual({
+      targets: ['github', 'telegram'],
+      unknown: [],
+    });
+  });
+
+  it('collects unknown targets without throwing', () => {
+    expect(parsePostTargets('github,slack')).toEqual({
+      targets: ['github'],
+      unknown: ['slack'],
+    });
+  });
+
+  it('trims whitespace and ignores empty members', () => {
+    expect(parsePostTargets(' github , , telegram ')).toEqual({
+      targets: ['github', 'telegram'],
+      unknown: [],
+    });
+  });
+
+  it('returns empty arrays for an empty value', () => {
+    expect(parsePostTargets('')).toEqual({ targets: [], unknown: [] });
   });
 });
 
