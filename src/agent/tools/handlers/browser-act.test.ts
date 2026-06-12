@@ -262,6 +262,7 @@ describe('browser_act handler — blocked_by_policy', () => {
     expect(r.isError).toBe(true);
     expect(r.content).toMatch(/blocked/);
     expect(r.content).toMatch(/navigation refused/);
+    expect(r.failureClass).toBe('policy-refusal');
   });
 });
 
@@ -277,6 +278,18 @@ describe('browser_act handler — provider errors', () => {
     const r = await handler({ action: 'click', target: { kind: 'semantic', text: 'Btn' } }, makeSignal());
     expect(r.isError).toBe(true);
     expect(r.content).toMatch(/element not found/);
+    expect(r.failureClass).toBeUndefined();
+  });
+
+  it("tags an action timeout as failureClass 'timeout'", async () => {
+    const timeoutErr = new Error('locator.click: Timeout 10000ms exceeded.');
+    timeoutErr.name = 'TimeoutError';
+    const provider = makeProvider({ act: vi.fn().mockRejectedValue(timeoutErr) });
+    const handler = createBrowserActHandler({ getBrowserProvider: vi.fn().mockResolvedValue(provider) });
+
+    const r = await handler({ action: 'click', target: { kind: 'semantic', text: 'Btn' } }, makeSignal());
+    expect(r.isError).toBe(true);
+    expect(r.failureClass).toBe('timeout');
   });
 
   it('returns playwright install hint when error contains Cannot find package', async () => {
@@ -304,6 +317,7 @@ describe('browser_act handler — abort signal', () => {
     );
     expect(r.isError).toBe(true);
     expect(r.content).toMatch(/aborted/);
+    expect(r.failureClass).toBe('abort');
     expect(getBrowserProvider).not.toHaveBeenCalled();
   });
 });

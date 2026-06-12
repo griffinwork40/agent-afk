@@ -202,6 +202,8 @@ describe('browser_open handler — blocked_by_policy', () => {
     expect(r.isError).toBe(true);
     expect(r.content).toMatch(/blocked/);
     expect(r.content).toMatch(/domain not allowed/);
+    // Tagged so the failure-density detector excludes it as a refusal, not a fault.
+    expect(r.failureClass).toBe('policy-refusal');
   });
 });
 
@@ -218,6 +220,20 @@ describe('browser_open handler — provider errors', () => {
     const r = await handler({ url: 'https://example.com' }, makeSignal());
     expect(r.isError).toBe(true);
     expect(r.content).toMatch(/browser crashed/);
+    // A generic crash is left unclassified → still counts as a real failure.
+    expect(r.failureClass).toBeUndefined();
+  });
+
+  it("tags a navigation timeout as failureClass 'timeout'", async () => {
+    const timeoutErr = new Error('page.goto: Timeout 30000ms exceeded.');
+    timeoutErr.name = 'TimeoutError';
+    const provider = makeProvider({ open: vi.fn().mockRejectedValue(timeoutErr) });
+    const getBrowserProvider = vi.fn().mockResolvedValue(provider);
+    const handler = createBrowserOpenHandler({ getBrowserProvider });
+
+    const r = await handler({ url: 'https://slow.example.com' }, makeSignal());
+    expect(r.isError).toBe(true);
+    expect(r.failureClass).toBe('timeout');
   });
 
   it('returns isError when getBrowserProvider throws', async () => {
@@ -260,6 +276,7 @@ describe('browser_open handler — abort signal', () => {
     const r = await handler({ url: 'https://example.com' }, makeSignal(true));
     expect(r.isError).toBe(true);
     expect(r.content).toMatch(/aborted/);
+    expect(r.failureClass).toBe('abort');
     // Provider was never called
     expect(getBrowserProvider).not.toHaveBeenCalled();
   });

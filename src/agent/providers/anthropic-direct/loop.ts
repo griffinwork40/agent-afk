@@ -618,6 +618,7 @@ export async function* runTurn(
         truncated,
         durationMs,
         ...(result.circuitBreaker === true ? { circuitBreaker: true } : {}),
+        ...(result.failureClass ? { failureClass: result.failureClass } : {}),
       });
 
       yield {
