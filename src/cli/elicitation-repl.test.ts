@@ -1403,7 +1403,7 @@ describe('agent-question mode — picker path', () => {
 // allow_custom — overlay path (choice/multi_choice via pickFromList)
 // ---------------------------------------------------------------------------
 
-import { CUSTOM_ANSWER_SENTINEL } from './input/selectors.js';
+import { CUSTOM_ANSWER_SENTINEL, renderMultiSelector } from './input/selectors.js';
 
 describe('allow_custom — overlay path (choice)', () => {
   it('sentinel selected → readTextOverlay called → returns { value: null, custom_value }', async () => {
@@ -1549,6 +1549,29 @@ describe('allow_custom — overlay path (multi_choice)', () => {
     const call = pickFromList.mock.calls[0]?.[0];
     expect(call?.options).not.toContain(CUSTOM_ANSWER_SENTINEL);
   });
+
+  it('mixed selection (real option + sentinel) routes to custom entry — sentinel never leaks into value', async () => {
+    // Regression: the sentinel guard previously required exactly one selection,
+    // so picking a real option together with the sentinel leaked the sentinel
+    // label into value[]. Presence of the sentinel must route to free-form entry.
+    const readTextOverlay = vi.fn().mockResolvedValueOnce('typed override');
+    const pickFromList = vi.fn().mockResolvedValueOnce(['alpha', CUSTOM_ANSWER_SENTINEL]);
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      pickFromList,
+      readTextOverlay,
+    });
+    const result = await handler(
+      agentRequest({ type: 'multi_choice', choices: ['alpha', 'beta'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('accept');
+    expect(result.content?.['value']).toBeNull();
+    expect(result.content?.['custom_value']).toBe('typed override');
+    expect(readTextOverlay).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1677,6 +1700,63 @@ describe('allow_custom — non-TTY numbered-list fallback (multi_choice)', () =>
   it('normal multi_choice selection still works when allowCustom is true', async () => {
     const handler = makeReplElicitationHandler({
       readLine: vi.fn().mockResolvedValueOnce('1,2'),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+    });
+    const result = await handler(
+      agentRequest({ type: 'multi_choice', choices: ['alpha', 'beta'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('accept');
+    expect(result.content?.['value']).toEqual(['alpha', 'beta']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// allow_custom — TTY arrow-key multi-selector path (renderMultiSelector)
+//
+// The TTY selector returns null in the non-TTY test env, so the existing tests
+// only reach the overlay (pickFromList) and numbered-list paths. We mock the
+// selector module to return indices and exercise the real TTY branch — including
+// the mixed real-option + sentinel selection that previously indexed choices[]
+// out of range (undefined → thrown TypeError in sanitizeSchemaString).
+//
+// The mock defaults to the REAL implementation (null in non-TTY), so every
+// other test in this file is unaffected.
+// ---------------------------------------------------------------------------
+
+vi.mock('./input/selectors.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./input/selectors.js')>();
+  return {
+    ...actual,
+    renderSelector: vi.fn(actual.renderSelector),
+    renderMultiSelector: vi.fn(actual.renderMultiSelector),
+  };
+});
+
+describe('allow_custom — TTY multi-selector path (renderMultiSelector)', () => {
+  it('real option + sentinel together routes to custom entry (no undefined / no throw)', async () => {
+    // selectorResult = [0, 2]: index 0 = "alpha", index 2 = sentinel (choices.length).
+    vi.mocked(renderMultiSelector).mockResolvedValueOnce([0, 2]);
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn().mockResolvedValueOnce('tty custom answer'),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      // no pickFromList → falls through to the renderMultiSelector TTY path
+    });
+    const result = await handler(
+      agentRequest({ type: 'multi_choice', choices: ['alpha', 'beta'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('accept');
+    expect(result.content?.['value']).toBeNull();
+    expect(result.content?.['custom_value']).toBe('tty custom answer');
+  });
+
+  it('real options only still returns selected values when allowCustom is on', async () => {
+    vi.mocked(renderMultiSelector).mockResolvedValueOnce([0, 1]);
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
       writer: { line: vi.fn() },
       pendingCount: () => 0,
     });

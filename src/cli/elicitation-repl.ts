@@ -536,8 +536,11 @@ async function renderAgentQuestion(
     if (signal.aborted) return CANCEL;
     if (selected === null) return CANCEL;
 
-    // Custom-answer path — sentinel selected
-    if (request.allowCustom && selected.length === 1 && selected[0] === CUSTOM_ANSWER_SENTINEL) {
+    // Custom-answer path — sentinel present. In a multi-select the sentinel can
+    // be checked alongside real options; treat its presence (not exclusivity) as
+    // the signal to switch to free-form entry, so the sentinel label never leaks
+    // into `value` and we never index choices[] out of range below.
+    if (request.allowCustom && selected.includes(CUSTOM_ANSWER_SENTINEL)) {
       if (!readTextOverlay) return CANCEL;
       const customText = await readTextOverlay({
         header: buildOverlayHeader(request),
@@ -726,8 +729,10 @@ async function renderAgentQuestion(
     const selectorResult = await renderMultiSelector(choicesForMultiSelector, signal);
     if (selectorResult !== null) {
       if (selectorResult === ':cancel') return CANCEL;
-      // Sentinel index = original choices.length
-      if (request.allowCustom && selectorResult.length === 1 && selectorResult[0] === choices.length) {
+      // Sentinel index = original choices.length. Presence (even alongside real
+      // picks) routes to free-form entry — otherwise choices[choices.length] is
+      // undefined and leaks into `values` / throws in sanitizeSchemaString.
+      if (request.allowCustom && selectorResult.includes(choices.length)) {
         let input: string;
         try { input = (await readLine(palette.dim('  Type your answer: '))).trim(); } catch { return CANCEL; }
         if (input === ':cancel' || signal.aborted) return CANCEL;

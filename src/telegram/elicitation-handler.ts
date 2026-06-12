@@ -163,6 +163,10 @@ export function makeTelegramElicitationHandler(
 
       return new Promise<ElicitationResult>((resolve) => {
         let resolved = false;
+        // Set once the custom-entry flow installs a chatId-keyed text intercept.
+        // The choice dispatch table is keyed by elicitId; the text intercept by
+        // chatId — abort must clear BOTH or a stale handler lingers.
+        let inCustomTextWait = false;
 
         const onAbort = () => {
           if (resolved) return;
@@ -170,6 +174,9 @@ export function makeTelegramElicitationHandler(
           // H3: clean up the dispatch table entry so the wildcard handler
           // can't fire after the promise is settled.
           pendingChoiceElicitations.delete(elicitId);
+          // Custom-entry abort: also drop the chatId-keyed text intercept so a
+          // stale handler can't swallow the user's next message.
+          if (inCustomTextWait) messageHandler.pendingElicitations.delete(chatId);
           resolve({ action: 'decline' });
         };
         options.signal.addEventListener('abort', onAbort, { once: true });
@@ -184,6 +191,7 @@ export function makeTelegramElicitationHandler(
           // Custom-entry path: transition to text-intercept mode
           if (choiceIndex === CUSTOM_ENTRY_SENTINEL_INDEX) {
             resolved = false; // re-arm for the text intercept
+            inCustomTextWait = true;
             bot.telegram.sendMessage(chatId, '✍️ Please type your custom answer:').catch(() => {});
             if (options.signal.aborted) { resolve({ action: 'decline' }); return; }
             messageHandler.pendingElicitations.set(chatId, (text: string) => {
