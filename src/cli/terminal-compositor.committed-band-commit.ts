@@ -121,6 +121,21 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
     ? Math.max(1, self.logUpdate.measure(stripped, rows).lineCount)
     : logicalLineCount;
   const textLines = stripped.split('\n');
+  // Mirror the trailing-blank removal wrapToPhysicalLines applies inside measure():
+  // commitBlock passes `trimmed + '\n\n'`; after stripping one '\n' the stripped
+  // string still ends with '\n', making split('\n') produce a trailing '' that
+  // makes textLines.length > lineCount by 1. In the exact-fit scenario (block
+  // height === aboveFrameRoom), this off-by-one makes newPainted=lineCount
+  // (capped by maxRun=lineCount) but textLines.length=lineCount+1, so the
+  // tail-slice slice(textLines.length - newPainted) starts at index 1 — DROPPING
+  // the table's top border — and paints the trailing '' into the bottom screen
+  // slot instead. Removing trailing '' here aligns textLines.length with lineCount.
+  //
+  // Guard: keep at least one element so commitAbove('') still paints a blank
+  // separator row (the stream-renderer subagent-done path relies on this). This
+  // mirrors measure()'s Math.max(1, wrapToPhysicalLines(...).length) clamp — an
+  // empty content still counts as 1 physical line for row accounting.
+  while (textLines.length > 1 && textLines[textLines.length - 1] === '') textLines.pop();
 
   // Decide where the committed text is written so it lands in scrollback
   // EXACTLY ONCE. Capture the live frame's top row BEFORE clear() resets it:
@@ -345,13 +360,13 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
       const newLines = textLines.slice(textLines.length - newPainted);
       // "Whole block painted" = newPainted === textLines.length (no lines
       // dropped to overflow). Compare against textLines.length, NOT lineCount:
-      // lineCount is the WRAP-AWARE physical row count (measure()), which
-      // diverges from the logical-line array length whenever a block has a
-      // trailing blank line (`\n\n` → split yields a trailing "") or a wrapped
-      // line. Using lineCount here wrongly failed the contiguity check on every
-      // `\n\n`-terminated commit, suppressing the merge and stranding the prior
-      // band as a single overwritten block (lost commits) — the splice
-      // regression. newPainted is itself derived from textLines.length.
+      // lineCount is the WRAP-AWARE physical row count (measure()), which can
+      // diverge from the logical-line array length when a line is wider than
+      // the terminal and wraps to >1 physical row. newPainted is itself derived
+      // from textLines.length, so comparing back to textLines.length keeps the
+      // check self-consistent regardless of wrap-induced divergence.
+      // Note: the prior `\n\n`-trailing-blank divergence (textLines.length =
+      // lineCount+1) is eliminated by the trailing-'' pop above.
       const wholeBlockPainted = newPainted === textLines.length;
       const contiguousPriorBand =
         fitsAboveFrame &&

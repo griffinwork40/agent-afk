@@ -307,6 +307,29 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
                 const reducible = Math.max(0, constrained[i]! - minColWidth);
                 constrained[i] = Math.max(minColWidth, constrained[i]! - Math.round(reducible * ratio));
               }
+              // Invariant: sum(constrained) must not exceed availableContentWidth.
+              // Per-column Math.round above can under-reduce (round-down error
+              // accumulates across columns), leaving rows 1+ col wider than
+              // maxWidth. Downstream, formatBlockForCommit re-wraps committed
+              // output at contentWidth with word-wrap: a row even 1 col over
+              // splits at its last space into a fragment + orphan '│' line,
+              // inflating the physical line count and corrupting the
+              // compositor's row accounting (clipped table tails + blank gaps
+              // in the REPL). Trim the widest reducible column until the total
+              // fits so rendered rows never exceed the budget.
+              let constrainedTotal = constrained.reduce((sum, w) => sum + w, 0);
+              while (constrainedTotal > availableContentWidth) {
+                let widest = -1;
+                for (let i = 0; i < constrained.length; i++) {
+                  if (constrained[i]! > minColWidth &&
+                      (widest === -1 || constrained[i]! > constrained[widest]!)) {
+                    widest = i;
+                  }
+                }
+                if (widest === -1) break; // nothing left above minColWidth
+                constrained[widest] = constrained[widest]! - 1;
+                constrainedTotal -= 1;
+              }
             }
             for (let i = 0; i < constrained.length; i++) {
               widths[i] = constrained[i] ?? widths[i] ?? 0;

@@ -854,6 +854,52 @@ describe('TerminalCompositor', () => {
       expect(outWith).toMatch(/\x1b\[22;1H\x1b\[2KB/);
     });
 
+    it('double-newline-terminated commit paints ALL rows including the top border (no trailing-empty slot waste)', async () => {
+      // Regression (table-cutoff): commitBlock always passes `trimmed + '\n\n'`
+      // to commitAbove. After stripping one trailing '\n', `stripped` ends with
+      // '\n', so `stripped.split('\n')` produces a trailing '' — making
+      // textLines.length = lineCount+1 (measure() via wrapToPhysicalLines pops
+      // trailing '' before counting). In the exact-fit scenario (block height
+      // === aboveFrameRoom), the tail-slice `textLines.slice(textLines.length -
+      // newPainted)` starts at index 1 (not 0), silently dropping the FIRST row
+      // (e.g. a table's top border) and painting the trailing '' into the last
+      // screen slot instead. Fix: pop trailing '' from textLines before Phase 3,
+      // mirroring the wrapToPhysicalLines normalization, with a length>1 guard so
+      // commitAbove('') still paints a blank separator row.
+      //
+      // Scenario: 22-row frame is used (rows=24, idle frame=1 row, newTopRow=23,
+      // maxRun=22). We commit a block with exactly 22 real content lines plus the
+      // mandatory commitBlock '\n\n' terminator → `'\n\n'`-terminated, 22 content
+      // lines + trailing '' in textLines (before fix). With fix the top-border
+      // row (LINE_00) is painted at the topmost slot (row 1).
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      writes.clear();
+      // Build 22-line block. commitBlock calls commitAbove(trimmed + '\n\n');
+      // we simulate that by appending '\n\n' ourselves. After the single-'\n'
+      // strip in commitAbove: stripped = 'LINE_00\n…\nLINE_21\n' → split produces
+      // ['LINE_00',…,'LINE_21',''] (23 elements, 22 real).
+      const lines = Array.from({ length: 22 }, (_, i) => `LINE_${String(i).padStart(2, '0')}`);
+      c.commitAbove(lines.join('\n') + '\n\n');
+      const out = writes.all();
+      // All 22 lines must appear in Phase 3 CUP writes (rows 1–22).
+      // The critical invariant: LINE_00 (top border / first row) must be present.
+      expect(out).toContain('LINE_00');
+      // LINE_21 (last row) must land immediately above the frame (row 22).
+      expect(out).toMatch(/\x1b\[22;1H\x1b\[2KLINE_21/);
+      // LINE_00 (first row) must land at row 1 (the topmost available slot).
+      expect(out).toMatch(/\x1b\[1;1H\x1b\[2KLINE_00/);
+      // The blank trailing '' must NOT appear as a CUP-painted row occupying
+      // one of the 22 above-frame slots (it would displace LINE_00 in the
+      // unfixed code). Verify each LINE_NN is at the expected row (1..22).
+      for (let i = 0; i < 22; i++) {
+        const row = i + 1;
+        const label = `LINE_${String(i).padStart(2, '0')}`;
+        const rowPattern = new RegExp(`\\x1b\\[${row};1H\\x1b\\[2K${label}`);
+        expect(out, `${label} must be at row ${row}`).toMatch(rowPattern);
+      }
+    });
+
     it('empty commit (compositor.commitAbove("")) places a blank row above the frame', async () => {
       // Used by the stream-renderer subagent-done path to insert a blank
       // separator line above the live frame. Phase 3 CUP-writes a blank
