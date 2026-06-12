@@ -207,6 +207,30 @@ describe('plugins-scanner', () => {
     expect(scanLocalPlugins(tmpHome)).toEqual([]);
   });
 
+  it('loads a cache-layout plugin WITHOUT an index entry when trustAll is set', () => {
+    // Imported-root case: a foreign tool's plugin home (e.g. ~/.claude/plugins)
+    // has no AFK index, and the user opted into the whole binary via importFrom.
+    // trustAll bypasses the cache-layout index gate.
+    const pluginDir = join(tmpHome, 'cache', 'some-market', 'some-plugin');
+    writePluginManifest(pluginDir);
+
+    expect(scanLocalPlugins(tmpHome)).toEqual([]); // gated without trustAll
+    _resetPluginScanCache();
+    expect(scanLocalPlugins(tmpHome, { trustAll: true })).toEqual([
+      { type: 'local', path: pluginDir },
+    ]);
+  });
+
+  it('trustAll uses a distinct cache key so trusted/untrusted scans do not alias', () => {
+    const pluginDir = join(tmpHome, 'cache', 'mp', 'p');
+    writePluginManifest(pluginDir);
+    // Untrusted scan first (memoizes []), then trusted scan must still see it.
+    expect(scanLocalPlugins(tmpHome)).toEqual([]);
+    expect(scanLocalPlugins(tmpHome, { trustAll: true })).toEqual([
+      { type: 'local', path: pluginDir },
+    ]);
+  });
+
   it('skips a cache plugin whose index entry is enabled:false', () => {
     const pluginDir = join(tmpHome, 'cache', 'some-market', 'some-plugin');
     writePluginManifest(pluginDir);

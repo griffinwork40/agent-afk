@@ -33,8 +33,9 @@ export interface SkillInvocation {
    * - `user`: scanned from `~/.afk/skills/`
    * - `project`: scanned from `<cwd>/.afk/skills/`
    * - `plugin`: discovered via session.supportedCommands() (forward path)
+   * - `imported`: live-read from a trusted source binary via `importFrom`
    */
-  source: 'builtin' | 'user' | 'project' | 'plugin';
+  source: 'builtin' | 'user' | 'project' | 'plugin' | 'imported';
   /** Capabilities the model can rely on. Constant today; here for future flexibility. */
   capabilities: {
     /** `compose` DAG tool available. */
