@@ -28,6 +28,12 @@ import { isPlaywrightMissing, playwrightMissingHint } from './playwright-hints.j
 
 const VALID_TARGET_KINDS = ['semantic', 'element_id', 'selector'] as const;
 
+// Invariant: Anthropic's vision API hard-rejects any image whose width OR
+// height exceeds 8000px (docs: "Build with Claude › Vision › General limits").
+// This is a pixel ceiling independent of byte size — enforced here, not in the
+// provider, because the provider is model-agnostic and this is a model limit.
+const MAX_IMAGE_DIMENSION = 8000;
+
 interface ParsedScreenshotInput {
   target?: Target;
   fullPage?: boolean;
@@ -140,7 +146,34 @@ export function createBrowserScreenshotHandler(opts: BrowserHandlerOptions = {})
         target: parsed.target,
         fullPage: parsed.fullPage,
       });
-      return { content: JSON.stringify(screenshotResult, null, 2) };
+      // Keep the base64 image bytes OUT of the text content — `dataBase64` is
+      // megabytes of base64 the model must never see as text. The pixels ride
+      // on the `image` field, which the anthropic-direct provider emits as an
+      // image content block; the text carries only the metadata so providers
+      // that can't render tool-result images still get the path/dimensions.
+      const { dataBase64, mediaType, ...meta } = screenshotResult;
+      // Dimension guard. A full_page screenshot of a tall page can stay under
+      // the 5 MiB sidecar byte cap yet exceed Anthropic's 8000px pixel limit.
+      // Attaching it would 400 the request AND leave a poison image block in
+      // message history that re-fails every subsequent turn. So degrade to
+      // text-only (omit `image`) — NOT an error: the model still gets the path,
+      // byte size, dimensions, and a reason, mirroring the byte-cap fallback.
+      if (meta.width > MAX_IMAGE_DIMENSION || meta.height > MAX_IMAGE_DIMENSION) {
+        return {
+          content: JSON.stringify(
+            {
+              ...meta,
+              imageOmitted: `dimensions ${meta.width}x${meta.height}px exceed the ${MAX_IMAGE_DIMENSION}px model-vision limit; the PNG was saved to the sidecar path but not attached. Use full_page:false (viewport) or target a specific element for a model-visible image.`,
+            },
+            null,
+            2,
+          ),
+        };
+      }
+      return {
+        content: JSON.stringify(meta, null, 2),
+        image: { mediaType, data: dataBase64 },
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { content: `browser_screenshot failed: ${msg}`, isError: true };

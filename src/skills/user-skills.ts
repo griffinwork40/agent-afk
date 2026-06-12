@@ -202,7 +202,7 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
  * (e.g. once per manifest/schema build after the CLI slash-command path
  * already ran a scan at startup).
  */
-function resolveSkillKey(name: string, origin: 'user' | 'project'): string {
+function resolveSkillKey(name: string, origin: SkillScanOrigin): string {
   try {
     const existing = getSkill(name);
     // Only escalate to a namespaced key when the bare slot is held by a
@@ -225,9 +225,18 @@ function resolveSkillKey(name: string, origin: 'user' | 'project'): string {
  * registry entry shares the same origin, so repeated calls do not
  * produce duplicate namespaced aliases (e.g. both `foo` and `user:foo`).
  */
+/**
+ * Origin tag for a disk skill scan. `'user'` / `'project'` are the native
+ * scopes; `imported:<binary>` marks skills live-read from a trusted source
+ * binary (Claude Code, Codex) opted into via `importFrom`. Native scopes are
+ * scanned first so they win bare-name collisions; an imported skill of the
+ * same name falls back to `imported:<binary>:<name>`.
+ */
+export type SkillScanOrigin = 'user' | 'project' | `imported:${string}`;
+
 export function scanSkillsFromDir(
   dir: string,
-  origin: 'user' | 'project',
+  origin: SkillScanOrigin,
 ): number {
   let entries;
   try {

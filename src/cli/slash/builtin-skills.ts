@@ -16,6 +16,7 @@
 import { listSkills, getSkill, isSkillVisible, type SkillMetadata } from '../../skills/index.js';
 // Barrel import triggers self-registration side-effects for built-in skills.
 import { scanAndRegisterUserSkills, scanSkillsFromDir } from '../../skills/all.js';
+import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
 import { getProjectSkillsDir } from '../../paths.js';
 import { registerOrReplace } from './registry.js';
 import { runSkillDispatchTurn } from './_lib/run-skill-dispatch-turn.js';
@@ -26,22 +27,19 @@ import { env } from '../../config/env.js';
 
 /** Map a SkillMetadata origin → SkillInvocation source. */
 function originToSource(origin: SkillMetadata['origin']): SkillInvocation['source'] {
-  // Normalise undefined (absent = vendored builtin) before the switch so the
-  // compiler can enforce exhaustiveness over the 3-string union.
+  // Normalise undefined (absent = vendored builtin) before the switch.
   const resolved = origin ?? 'builtin';
-  switch (resolved) {
-    case 'builtin':  return 'builtin';
-    case 'user':     return 'user';
-    case 'project':  return 'project';
-    default: {
-      // C04: Type-level exhaustiveness check — compile error if a new origin
-      // value is added to SkillMetadata without a corresponding case here.
-      // Throw at runtime so an unhandled origin is never silently returned as
-      // `never` (which would produce `undefined` instead of failing loudly).
-      const _exhaustive: never = resolved;
-      throw new Error(`[afk builtin-skills] Unhandled origin: ${String(_exhaustive)}`);
-    }
+  if (resolved === 'builtin' || resolved === 'user' || resolved === 'project') {
+    return resolved;
   }
+  if (resolved.startsWith('imported:')) {
+    return 'imported';
+  }
+  // Static exhaustiveness via `assertNever` is not enforceable here because
+  // `origin` includes the open-ended `imported:${string}` template-literal
+  // member, which never narrows to `never` — the branch above covers it at
+  // runtime, but tsc cannot prove the union is exhausted statically.
+  return 'user';
 }
 
 export function makeImmediateHandler(skill: SkillMetadata): SlashCommand {
@@ -128,6 +126,11 @@ export function registerBuiltinSkillCommands(): void {
   // Scan user-space then project-space skills before reading the registry.
   scanAndRegisterUserSkills();
   scanSkillsFromDir(getProjectSkillsDir(), 'project');
+  // Imported skills from trusted source binaries (Claude Code, Codex) via
+  // `importFrom`. Scanned after native scopes so native wins bare-name slots.
+  for (const { dir, origin } of resolveImportedRoots(loadImportFromConfig()).skillRoots) {
+    scanSkillsFromDir(dir, origin);
+  }
 
   // Tier gate: skills tagged `audience: 'internal'` (forge, audit-fit, etc.)
   // are filtered from the slash-command surface unless `AFK_INTERNAL=1`

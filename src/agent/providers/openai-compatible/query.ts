@@ -331,13 +331,23 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
       if (controller.signal.aborted) {
         if (this.abortController === controller) this.abortController = null;
+        yield* this.finishTurn(accumulatedUsage, turnStartTime);
         return;
       }
 
       const result = yield* this.runIteration(controller);
       if (result === null) {
-        // Stream errored or aborted — events were already yielded; bail.
+        // runIteration bailed: either an abort/close (no event was yielded) or
+        // a real stream error (an `error` event was already yielded). Mirror
+        // anthropic-direct/loop.ts:410-432 — on abort/close emit a terminal
+        // `turn.completed` so the persistent stream consumer
+        // (agent-session.ts:sendMessageStreamInternal) unblocks its turn loop;
+        // on a real stream error the already-yielded `error` event is itself
+        // terminal, so skip turn.completed to avoid double-advancing turn state.
         if (this.abortController === controller) this.abortController = null;
+        if (controller.signal.aborted || this.closed) {
+          yield* this.finishTurn(accumulatedUsage, turnStartTime);
+        }
         return;
       }
 
@@ -384,6 +394,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
 
       if (controller.signal.aborted) {
         if (this.abortController === controller) this.abortController = null;
+        yield* this.finishTurn(accumulatedUsage, turnStartTime);
         return;
       }
     }
@@ -401,17 +412,36 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       this.priorTurns.push(assistantTurn);
     }
 
-    // Capture for getContextUsage() before yielding turn.completed — matches
-    // the timing in anthropic-direct/query.ts:292 where lastUsage is set on
-    // the turn.completed handler. Doing it here (vs. in [Symbol.asyncIterator])
-    // means the field is correct even if the outer consumer breaks early.
-    this.lastUsage = accumulatedUsage;
-
     yield {
       type: 'assistant.message',
       text: finalAssistantText,
       sessionId: this.initSessionId,
     };
+    yield* this.finishTurn(accumulatedUsage, turnStartTime);
+  }
+
+  /**
+   * Invariant: `runTurn` MUST funnel every non-error exit through here so a
+   * single terminal `turn.completed` is emitted for the turn. The persistent
+   * stream consumer (agent-session.ts:sendMessageStreamInternal) breaks its
+   * `providerIterator.next()` loop only on a terminal output (`turn.completed`
+   * → 'done', or `error`). Because the provider's top-level generator loops
+   * back to await the next prompt after a turn rather than returning, a
+   * `runTurn` exit with no terminal event strands the consumer on a `next()`
+   * that never resolves — the permanent "esc to interrupt" hang observed on
+   * local OpenAI-shim models that stall or get interrupted mid-stream. Real
+   * stream errors are the one exception: their already-yielded `error` event
+   * is itself terminal (mirrors anthropic-direct/loop.ts:410-423).
+   *
+   * `lastUsage` is set here (before the yield) so getContextUsage() reads the
+   * correct value even if the outer consumer breaks early — matching the timing
+   * in anthropic-direct/query.ts where lastUsage is set on turn.completed.
+   */
+  private *finishTurn(
+    accumulatedUsage: ProviderUsage,
+    turnStartTime: number,
+  ): Generator<ProviderEvent> {
+    this.lastUsage = accumulatedUsage;
     yield {
       type: 'turn.completed',
       usage: { ...accumulatedUsage, durationMs: Date.now() - turnStartTime },
@@ -609,6 +639,20 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     }
 
     const accumulated = finalizedToolCalls(state);
+    // Invariant: every dispatched tool call MUST carry a non-empty id, and the
+    // SAME id must appear on BOTH the assistant turn's `tool_calls[]` and each
+    // matching tool-result message's `tool_call_id` — OpenAI rejects a
+    // tool_call_id with no corresponding assistant tool_calls[] entry (HTTP
+    // 400). Local OpenAI-shim runners (MLX, llama.cpp) sometimes stream
+    // tool_calls with an empty or absent id. Mint one synthetic id HERE, once,
+    // so both downstream builders observe the same value:
+    // accumulatedToolCallsToToolCalls (→ tool-result tool_call_id) and
+    // assistantMessageWithToolCalls (→ assistant tool_calls[].id) below.
+    // Generating it independently in each builder would desync the pair and
+    // reintroduce the 400.
+    for (const c of accumulated) {
+      if (c.id.length === 0) c.id = randomUUID();
+    }
     const { calls, parseErrors } = accumulatedToolCallsToToolCalls(accumulated, signal);
 
     // Emit tool.use.start BEFORE dispatching, matching anthropic-direct.

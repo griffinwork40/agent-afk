@@ -328,7 +328,8 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
 
     case 'closure': {
       const p = event.payload;
-      return line('closure', `${p.reason}  turns=${p.finalTurnCount}  ${fmtUsd(p.finalCostUsd)}`);
+      const guidance = p.guidance ? `  — ${truncate(p.guidance, 100)}` : '';
+      return line('closure', `${p.reason}  turns=${p.finalTurnCount}  ${fmtUsd(p.finalCostUsd)}${guidance}`);
     }
 
     case 'claim': {
@@ -355,7 +356,11 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
       if (!ctx.showAll) return null; // latency waterfall — low signal by default
       const p = event.payload;
       const dur = p.durationMs !== undefined ? `  ${fmtDuration(p.durationMs)}` : '';
-      return line('phase', `${p.phase}${dur}`);
+      // Prefer the operator alias (session_init_start); fall back to the
+      // resolved wire id (model_ttfb carries only that).
+      const modelStr = p.model ?? p.resolvedModel;
+      const modelBit = modelStr !== undefined ? `  ${modelStr}` : '';
+      return line('phase', `${p.phase}${dur}${modelBit}`);
     }
 
     case 'session_sealed': {
@@ -388,6 +393,10 @@ interface TraceSummary {
   blocks: number;
   sealStatus: string | null;
   finalCostUsd: number | null;
+  /** Operator-typed model for the root session (from session_init_start). */
+  model: string | null;
+  /** Resolved wire id for the root session, when it differs from `model`. */
+  resolvedModel: string | null;
 }
 
 function summarize(events: TraceEvent[]): TraceSummary {
@@ -398,6 +407,8 @@ function summarize(events: TraceEvent[]): TraceSummary {
   let blocks = 0;
   let sealStatus: string | null = null;
   let finalCostUsd: number | null = null;
+  let model: string | null = null;
+  let resolvedModel: string | null = null;
 
   for (const e of events) {
     switch (e.kind) {
@@ -405,6 +416,16 @@ function summarize(events: TraceEvent[]): TraceSummary {
         if (e.payload.phase === 'completed') {
           toolCalls++;
           if (e.payload.isError) toolErrors++;
+        }
+        break;
+      case 'session_phase':
+        // Root-session model provenance lives on session_init_start (the
+        // earliest, always-emitted phase). First occurrence wins.
+        if (e.payload.phase === 'session_init_start') {
+          if (model === null && e.payload.model !== undefined) model = e.payload.model;
+          if (resolvedModel === null && e.payload.resolvedModel !== undefined) {
+            resolvedModel = e.payload.resolvedModel;
+          }
         }
         break;
       case 'subagent_lifecycle':
@@ -437,6 +458,8 @@ function summarize(events: TraceEvent[]): TraceSummary {
     blocks,
     sealStatus,
     finalCostUsd,
+    model,
+    resolvedModel,
   };
 }
 
@@ -480,6 +503,13 @@ export function formatTrace(
   const out: string[] = [];
   out.push(`Trace  ${sessionId}`);
   out.push(`File   ${tracePath}`);
+  if (summary.model !== null) {
+    const resolvedBit =
+      summary.resolvedModel !== null && summary.resolvedModel !== summary.model
+        ? ` → ${summary.resolvedModel}`
+        : '';
+    out.push(`Model  ${summary.model}${resolvedBit}`);
+  }
   out.push(
     `       ${status} · ${summary.total} events · ${summary.toolCalls} tool calls` +
       ` (${summary.toolErrors} err) · ${summary.subagents} subagents · ${summary.claims} claims` +

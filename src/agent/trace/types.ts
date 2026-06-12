@@ -329,6 +329,12 @@ export interface ClosurePayload {
   };
   /** Raw `stop_reason` from the provider, when available. */
   lastStopReason?: string;
+  /**
+   * Actionable recovery hint for an anomalous closure, attached by
+   * `emitClosure` via the `closure-anomaly` guardrail (`closure-guidance.ts`).
+   * Absent for benign closes and anomalous reasons not yet covered.
+   */
+  guidance?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -447,12 +453,21 @@ export interface BrowserEventPayload {
 }
 
 // ---------------------------------------------------------------------------
-// session_phase — per-session latency waterfall markers.
+// Invariant: session_phase — per-session latency waterfall markers AND the
+// root session's model-provenance anchor.
 //
 // Most phases emit a `*_start`/`*_done` pair bracketing the phase; together
 // they form a latency waterfall without changing operational behavior.
 // `model_ttfb` is the exception: a single event per model API call carrying
 // time-to-first-byte in `durationMs`.
+//
+// Model provenance: `session_init_start` carries the session's `model` (the
+// operator-typed alias) and `resolvedModel` (the wire id). It is emitted in
+// the AgentSession constructor — provider-agnostic and the earliest event —
+// so EVERY trace is self-identifying about its root model even with no
+// subagents and no completed API call. `model_ttfb` additionally carries the
+// `resolvedModel` for THAT call, capturing mid-session overrides/switches.
+// (Child forks already record their model on `subagent_lifecycle.started`.)
 //
 // Chronological: bootstrap → session_init → mcp_connect → mcp_server (per
 // server) → loop (per turn); model_ttfb fires per model call inside a turn.
@@ -486,6 +501,21 @@ export interface SessionPhasePayload {
   durationMs?: number;
   /** Phase-specific diagnostic context (e.g. MCP server count on connect). */
   metadata?: Record<string, string | number | boolean>;
+  /**
+   * Operator-typed model identifier as configured for the session (e.g.
+   * `"sonnet"`, `"gpt-4o"`, `"mlx-community/…"`). Set on `session_init_start`
+   * — the always-emitted, provider-agnostic attribution anchor — so a trace
+   * names its root model even with zero subagents and zero completed calls.
+   */
+  model?: string;
+  /**
+   * Resolved wire model id the provider actually calls (e.g.
+   * `"claude-sonnet-4-…"`). Set on `session_init_start` (the session default,
+   * via `resolveModelId`) and on each `model_ttfb` (the id for THAT call —
+   * captures mid-session model overrides/switches). Equals `model` when no
+   * alias expansion applies (most non-Claude / raw ids).
+   */
+  resolvedModel?: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -18,10 +18,16 @@
  * with the original error attached as `cause`. This prevents a bug in one
  * handler from silently skipping policy enforcement.
  *
- * **Context injection (SubagentStop only):** When a `SubagentStop` handler
- * returns `injectContext`, the dispatch result is propagated to the caller,
- * which queues the context string to the parent session's input stream. If
- * the parent is aborting, the injection is skipped. Other hook events ignore
+ * **Context injection (SubagentStop only):** Foreground subagents hand their
+ * final assistant output to the parent through the normal `agent` tool result;
+ * `injectContext` is a separate hook-generated framework note, not text typed
+ * by the human user. When a `SubagentStop` handler returns `injectContext`, the
+ * dispatch result is propagated to the caller, which queues the context string
+ * to the parent session's input stream for the parent's next turn. If the
+ * parent is aborting, the injection is skipped. DAG/compose and background
+ * paths are not guaranteed to inject (some intentionally leave this channel
+ * dark), and multiple `injectContext` values do not merge today: hook dispatch
+ * returns the last non-blocking decision. Other hook events ignore
  * `injectContext` entirely.
  *
  * @module agent/hooks
@@ -46,9 +52,12 @@ export interface HookDecision {
   /** Human-readable rationale for blocking or approving. */
   reason?: string;
   /**
-   * (SubagentStop only) Context to inject into the parent session's next turn.
-   * Queued to parent's input stream after dispatch completes. Dropped if parent is aborting.
-   * Ignored for all other hook events.
+   * (SubagentStop only) Framework-generated context to inject into the parent
+   * session's next turn. This is not human-authored user text. Queued to the
+   * parent's input stream after dispatch completes; dropped if the parent is
+   * aborting. DAG/compose and background paths may intentionally not inject.
+   * Multiple injected contexts currently do not merge — the last non-blocking
+   * hook decision wins. Ignored for all other hook events.
    */
   injectContext?: string;
 }

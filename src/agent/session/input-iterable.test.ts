@@ -54,6 +54,22 @@ describe('QueryInputStream', () => {
       expect(result.value.sessionId).toBeUndefined();
     });
 
+    it('preserves ordering between queued parent input and injected framework context', async () => {
+      const stream = new QueryInputStream(() => 'parent-session');
+      const iter = stream.createIterable()[Symbol.asyncIterator]();
+
+      stream.pushUserMessage('human-authored parent message');
+      stream.pushUserMessage('[framework-generated context: injected note]');
+
+      const first = await iter.next();
+      const second = await iter.next();
+
+      expect(first.value.content).toBe('human-authored parent message');
+      expect(second.value.content).toBe('[framework-generated context: injected note]');
+      expect(first.value.sessionId).toBe('parent-session');
+      expect(second.value.sessionId).toBe('parent-session');
+    });
+
     it('sets sessionId when getter returns a value', async () => {
       const stream = new QueryInputStream(() => 'my-session');
       stream.pushUserMessage('msg');

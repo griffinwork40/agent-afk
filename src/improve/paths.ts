@@ -13,16 +13,19 @@
  *       .index.jsonl                  append-only event log
  *       <proposal-id>.json            ImprovementProposal artifact
  *       <proposal-id>.md              human-friendly rendered view
- *     eval-cases/                     [Sprint 3 — this commit]
+ *     eval-cases/                     [Sprint 3]
  *       .index.jsonl                  append-only event log
  *       <eval-case-id>.json           EvalCase artifact (the contract)
  *       <eval-case-id>.fixture.jsonl  byte-identical slice of the source trace
  *       <eval-case-id>.md             human-friendly rendered view
+ *     eval-runs/                      [this commit — the eval-run validator]
+ *       .index.jsonl                  append-only event log
+ *       <eval-run-id>.json            EvalRun result artifact
+ *       <eval-run-id>.md              human-friendly rendered view
  *
- * Future phases will add improve-runs/, reports/, and improve-telemetry.jsonl
- * under the same root. Those are intentionally absent — this module only
- * resolves what is read or written by `scan`, `cards`, `propose`, and
- * `eval-gen`.
+ * Future phases will add reports/ and improve-telemetry.jsonl under the same
+ * root. Those are intentionally absent — this module only resolves what is
+ * read or written by `scan`, `cards`, `propose`, `eval-gen`, and `eval-run`.
  *
  * The trace source is read-only from `$AFK_HOME/state/witness/<id>/trace.jsonl`
  * (see {@link getTraceDir} in src/paths.ts). The improve pipeline never
@@ -124,4 +127,28 @@ export function getEvalCaseFixturePath(evalCaseId: string): string {
 /** Resolve `<eval-case-id>.md`. No I/O. */
 export function getEvalCaseMarkdownPath(evalCaseId: string): string {
   return join(getEvalCasesDir(), `${evalCaseId}.md`);
+}
+
+// ---------------------------------------------------------------------------
+// Eval runs (the eval-run validator)
+// ---------------------------------------------------------------------------
+
+/** Directory holding `<eval-run-id>.json` + `<eval-run-id>.md` run results. */
+export function getEvalRunsDir(): string {
+  return join(getImproveRoot(), 'eval-runs');
+}
+
+/** Append-only event log for the eval-runs directory. */
+export function getEvalRunsIndexPath(): string {
+  return join(getEvalRunsDir(), '.index.jsonl');
+}
+
+/** Resolve `<eval-run-id>.json`. No I/O. */
+export function getEvalRunJsonPath(evalRunId: string): string {
+  return join(getEvalRunsDir(), `${evalRunId}.json`);
+}
+
+/** Resolve `<eval-run-id>.md`. No I/O. */
+export function getEvalRunMarkdownPath(evalRunId: string): string {
+  return join(getEvalRunsDir(), `${evalRunId}.md`);
 }

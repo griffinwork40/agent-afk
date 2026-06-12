@@ -47,6 +47,26 @@ describe('session_phase payload schema — acceptance', () => {
     ).not.toThrow();
   });
 
+  it('accepts model + resolvedModel on session_init_start (provenance anchor)', () => {
+    expect(() =>
+      SessionPhasePayloadSchema.parse({
+        phase: 'session_init_start',
+        model: 'sonnet',
+        resolvedModel: 'claude-sonnet-4-5-20250929',
+      }),
+    ).not.toThrow();
+  });
+
+  it('accepts resolvedModel alone on model_ttfb', () => {
+    expect(() =>
+      SessionPhasePayloadSchema.parse({
+        phase: 'model_ttfb',
+        durationMs: 640,
+        resolvedModel: 'claude-test',
+      }),
+    ).not.toThrow();
+  });
+
   it('accepts all phase names', () => {
     const phases: Array<string> = [
       'session_init_start',

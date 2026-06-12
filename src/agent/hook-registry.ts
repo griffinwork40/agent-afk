@@ -185,8 +185,11 @@ class HookRegistryImpl implements HookRegistry {
         );
       }
 
-      // Accumulate non-blocking decisions so the caller can inspect them
-      // (e.g., SubagentStop handlers that return injectContext).
+      // Accumulate non-blocking decisions so the caller can inspect them.
+      // Current contract: decisions are not merged. If multiple SubagentStop
+      // handlers return injectContext, the last handler's value wins and earlier
+      // values are dropped. This documents the existing behavior until a typed
+      // result envelope or explicit merge policy replaces it.
       lastDecision = decision;
     }
 

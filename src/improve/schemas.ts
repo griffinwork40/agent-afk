@@ -507,6 +507,123 @@ export const EvalCaseIndexEventSchema = z.object({
 export type EvalCaseIndexEvent = z.infer<typeof EvalCaseIndexEventSchema>;
 
 // ---------------------------------------------------------------------------
+// EvalRun — the eval-run validator's result artifact
+// ---------------------------------------------------------------------------
+
+/**
+ * **An eval-run is the RESULT of validating an eval-case's pattern against the
+ * live codebase — not a fixture replay.**
+ *
+ * `afk improve eval-run <evalCaseId|cardSlug>` loads an existing eval-case,
+ * looks up the smallest deterministic validation contract registered for its
+ * `assertion.patternId`, executes it in-process (no LLM, no patch/apply, no
+ * git), and writes one of these to `eval-runs/<evalRunId>.json` with a sibling
+ * `<evalRunId>.md`.
+ *
+ * **Scope boundary.** This narrow runner does NOT replay the committed fixture
+ * through the detector and assert {@link EvalAssertionSchema} (`pattern-absent`)
+ * holds — that broader capability is reserved for a later sprint. It instead
+ * exercises the guardrail the pattern maps to (e.g. the repeat-loop circuit
+ * breaker for `repeated-tool-use`) and re-verifies the eval-case's own fixture
+ * checksum. The two are complementary: a passing eval-run is evidence the fix
+ * that makes the pattern absent is present and behaving; the eval-case's
+ * `pattern-absent` assertion remains the full contract.
+ *
+ * **Never merged.** Each `eval-run` call writes a fresh `evalRunId`.
+ */
+
+/** One deterministic assertion executed by a validation contract. */
+export const EvalCheckStatusSchema = z.enum(['pass', 'fail', 'skipped']);
+export type EvalCheckStatus = z.infer<typeof EvalCheckStatusSchema>;
+
+/**
+ * A single check the runner asserted. `expected`/`actual` are human-readable
+ * snapshots (not machine values) so a reviewer reading the JSON or markdown
+ * can see WHY a check passed or failed without re-running anything.
+ */
+export const EvalCheckSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().min(1),
+  status: EvalCheckStatusSchema,
+  expected: z.string(),
+  actual: z.string(),
+});
+export type EvalCheck = z.infer<typeof EvalCheckSchema>;
+
+/**
+ * A pointer a human can follow to confirm a check independently:
+ *   - `config-value`      — a constant / registry flag (e.g. a threshold).
+ *   - `observed-behavior` — a result the runner produced by exercising code.
+ *   - `source-symbol`     — a function / symbol the contract validated.
+ *   - `fixture`           — the eval-case's committed replay fixture.
+ */
+export const EvalRunEvidenceKindSchema = z.enum([
+  'config-value',
+  'observed-behavior',
+  'source-symbol',
+  'fixture',
+]);
+export type EvalRunEvidenceKind = z.infer<typeof EvalRunEvidenceKindSchema>;
+
+export const EvalRunEvidenceRefSchema = z.object({
+  kind: EvalRunEvidenceKindSchema,
+  /** A symbol path, file ref, or registry key — stable enough to grep for. */
+  ref: z.string().min(1),
+  detail: z.string(),
+});
+export type EvalRunEvidenceRef = z.infer<typeof EvalRunEvidenceRefSchema>;
+
+/**
+ * Top-line run outcome:
+ *   - `pass`        — a contract ran and every check passed.
+ *   - `fail`        — a contract ran and at least one check failed.
+ *   - `unsupported` — no deterministic contract is registered for the pattern.
+ *   - `error`       — the contract threw unexpectedly mid-run.
+ */
+export const EvalRunStatusSchema = z.enum(['pass', 'fail', 'unsupported', 'error']);
+export type EvalRunStatus = z.infer<typeof EvalRunStatusSchema>;
+
+export const EvalRunSchema = z.object({
+  schemaVersion: z.literal(1),
+  evalRunId: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]*$/, 'evalRunId must be lowercase alphanumeric with hyphens'),
+  /** The eval-case this run validated. */
+  evalCaseId: z.string().min(1),
+  /** Denormalized from the eval-case for at-a-glance filtering. */
+  cardSlug: z.string().min(1),
+  /** The pattern whose guardrail was validated (from the eval-case assertion). */
+  patternId: FailurePatternSchema,
+  /** Id of the contract that ran; `null` when the pattern is `unsupported`. */
+  contract: z.string().min(1).nullable(),
+  status: EvalRunStatusSchema,
+  createdAt: z.string().datetime(),
+  /** Wall-clock runtime of the run in milliseconds. */
+  durationMs: z.number().int().nonnegative(),
+  checks: z.array(EvalCheckSchema),
+  evidence: z.array(EvalRunEvidenceRefSchema),
+  runner: z.object({
+    version: z.string().min(1),
+    mode: z.literal('deterministic'),
+  }),
+  notes: z.array(TriageNoteSchema).default([]),
+});
+export type EvalRun = z.infer<typeof EvalRunSchema>;
+
+/** Append-only event log entry for the eval-runs directory. */
+export const EvalRunIndexEventSchema = z.object({
+  timestamp: z.string().datetime(),
+  event: z.literal('created'),
+  evalRunId: z.string(),
+  evalCaseId: z.string(),
+  cardSlug: z.string(),
+  patternId: FailurePatternSchema,
+  contract: z.string().nullable(),
+  status: EvalRunStatusSchema,
+});
+export type EvalRunIndexEvent = z.infer<typeof EvalRunIndexEventSchema>;
+
+// ---------------------------------------------------------------------------
 // Canonical forbidden-path globs (Sprint 2)
 // ---------------------------------------------------------------------------
 

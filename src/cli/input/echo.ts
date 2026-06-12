@@ -76,9 +76,26 @@ export function formatSubmittedEcho(opts: {
 
   let primary: string;
   if (!isMultiLine && !isLong) {
-    // Right-pad with leading spaces so the buffer ends at the terminal edge.
-    const pad = Math.max(0, cols - bufferW);
-    primary = ' '.repeat(pad) + buffer;
+    // Right-pad with leading spaces so the buffer ends near the terminal edge.
+    // Prepend a ▶ glyph (2 visible columns) so the user's own message has a
+    // distinctive left shoulder in scrollback — replaces the two leading spaces.
+    const GLYPH = palette.user('▶') + ' '; // 2 visible columns: glyph + space
+    const GLYPH_W = 2;
+    // Invariant (last-column safety): the echoed content ends at column
+    // `cols - 1` at most — never the terminal's final column. A printable
+    // glyph in the last column leaves many emulators (iTerm2/Ghostty/Kitty/
+    // WezTerm) in the DECAWM deferred-wrap state; when the compositor later
+    // CUP-repositions for the committed-band repaint — and skill/slash turns
+    // fire extra repaints (arm→streaming, dispose→idle) — those terminals
+    // flush the pending wrap inconsistently and the committed row drops or
+    // triples in scrollback (the "user prompt echoed 3×" report). xterm
+    // handles the boundary cleanly, so this never surfaces in the
+    // @xterm/headless harness — only on real terminals. The card path
+    // (render/card.ts `rightEdge = cols - 1`) reserves this column the same
+    // way; this inline path is its sibling and must match or the bug returns.
+    const rightEdge = cols - 1;
+    const pad = Math.max(0, rightEdge - bufferW - GLYPH_W);
+    primary = GLYPH + ' '.repeat(pad) + buffer;
   } else {
     primary = card({ kind: 'user', body: buffer });
   }
@@ -89,8 +106,11 @@ export function formatSubmittedEcho(opts: {
 
   // Right-align the dim summary line. `palette.dim` wraps in ANSI escapes
   // (zero-width); pad based on the visible width of the raw summary string.
+  // Reserve the final column for the same last-column-safety reason as the
+  // primary echo above — a glyph in the last column triggers the DECAWM
+  // deferred-wrap tripling/drop on real terminals.
   const summaryW = stringWidth(summary);
-  const summaryPad = Math.max(0, cols - summaryW);
+  const summaryPad = Math.max(0, cols - 1 - summaryW);
   const summaryLine = ' '.repeat(summaryPad) + palette.dim(summary);
   return primary + '\n' + summaryLine;
 }

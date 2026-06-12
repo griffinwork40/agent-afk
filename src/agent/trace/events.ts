@@ -271,6 +271,10 @@ export const ClosurePayloadSchema = z.object({
     cacheCreation: z.number().int().nonnegative().optional(),
   }),
   lastStopReason: z.string().optional(),
+  // Actionable recovery hint for an anomalous closure (closure-anomaly
+  // guardrail, `session/closure-guidance.ts`). Optional + back-compat: older
+  // traces and benign closes simply omit it.
+  guidance: z.string().optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -358,6 +362,11 @@ export const SessionPhasePayloadSchema = z.object({
   phase: SessionPhaseNameSchema,
   durationMs: z.number().nonnegative().optional(),
   metadata: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+  // Model provenance — see SessionPhasePayload JSDoc in types.ts. `model` is
+  // the operator-typed alias, `resolvedModel` the wire id. Both optional:
+  // present on session_init_start; resolvedModel also on model_ttfb.
+  model: z.string().optional(),
+  resolvedModel: z.string().optional(),
 });
 
 // ---------------------------------------------------------------------------

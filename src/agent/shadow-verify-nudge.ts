@@ -59,7 +59,7 @@ const VERIFIER_SIGNATURES: RegExp[] = [
 ];
 
 const CONTEXT_MESSAGE =
-  'shadow-verify nudge:\n\n' +
+  '[framework-generated context: shadow-verify nudge]\n\n' +
   'The sub-agent that just finished returned output that reads like ' +
   '**decision-driving findings** (verdicts, recommendations, audit ' +
   'conclusions, or claim-style results that could drive file edits, ' +

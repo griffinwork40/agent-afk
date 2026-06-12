@@ -287,6 +287,18 @@ export interface ScreenshotResult {
   bytes: number;
   width: number;
   height: number;
+  /**
+   * Base64-encoded raw image bytes (no `data:` URI prefix). Carried
+   * separately from the witness sidecar so the tool handler can hand the
+   * pixels to the model as an image content block.
+   *
+   * Invariant: NEVER embed this in any text/JSON the model sees — it is
+   * megabytes of base64. The `browser_screenshot` handler maps it onto
+   * `ToolResult.image` and keeps it out of `content`.
+   */
+  dataBase64: string;
+  /** Media type of `dataBase64`. Playwright captures PNG. */
+  mediaType: 'image/png';
 }
 
 export interface ExtractResult {

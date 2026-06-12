@@ -24,6 +24,7 @@ import { DEFAULT_SESSION_TIMEOUT_MS, RESET_DRAIN_TIMEOUT_MS, withTimeout } from 
 import { dispatchSessionEnd, dispatchSessionStart } from './hooks-dispatch.js';
 import { HookBlockedError } from '../../utils/errors.js';
 import { classifyClosureReason } from './closure-reason.js';
+import { buildClosureGuidance } from './closure-guidance.js';
 import type {
   AccountInfo,
   AgentConfig,
@@ -137,8 +138,17 @@ export class AgentSession implements IAgentSession {
     });
 
     // Witness layer: mark the start of provider/SDK initialization so
-    // downstream tooling can compute the session_init phase duration.
-    void emitSessionPhase(config.traceWriter, { phase: 'session_init_start' });
+    // downstream tooling can compute the session_init phase duration. This is
+    // ALSO the root session's model-provenance anchor: emitted unconditionally
+    // here in the constructor (earliest event, provider-agnostic) so every
+    // trace names its root model even with zero subagents and zero completed
+    // API calls. `model` = operator-typed alias; `resolvedModel` = wire id.
+    const configuredModel = String(config.model);
+    void emitSessionPhase(config.traceWriter, {
+      phase: 'session_init_start',
+      model: configuredModel,
+      resolvedModel: resolveModelId(config.model) ?? configuredModel,
+    });
 
     this.initSdkLifecycle();
   }
@@ -931,12 +941,18 @@ export class AgentSession implements IAgentSession {
     if (this.sessionRunningTokens.cacheCreation > 0)
       finalTokens.cacheCreation = this.sessionRunningTokens.cacheCreation;
 
+    // closure-anomaly guardrail: attach an actionable recovery hint for an
+    // anomalous reason so the closure event names not just WHY it ended but
+    // what to do next. Null (benign / not-yet-covered reasons) → field omitted.
+    const guidance = buildClosureGuidance(reasonValue);
+
     await emitClosure(writer, {
       reason: reasonValue,
       finalTurnCount: this.turnCount,
       finalCostUsd: this.sessionRunningCostUsd,
       finalTokens,
       ...(this.lastStopReason !== undefined ? { lastStopReason: this.lastStopReason } : {}),
+      ...(guidance !== null ? { guidance } : {}),
     });
   }
 
