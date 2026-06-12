@@ -175,6 +175,16 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   // overflow path archives the block to scrollback at anchorFloor instead
   // (recoverable). No existing test hits prevTopRow <= 1.
   const fitsAboveFrame = prevTopRow > 1 && lineCount <= frameTop - anchorFloor;
+  // Shrink-pad-corrected effective frame top (shared between Phase 1 and Phase 3):
+  // when the prior band is positioned, the real above-frame room starts at
+  // committedBandBottomRow + 1 (not at the raw frameTop which may be artificially
+  // low due to CupFrameRenderer shrink-padding). Computed here so it is in scope
+  // for Phase 3's extended contiguity check without being re-derived inside the
+  // writeWithGuard closure. Value matches Phase 1's `effectiveFrameTop` exactly.
+  const phase1EffectiveFrameTop =
+    fitsAboveFrame && self.committedBand.length > 0 && self.committedBandBottomRow > 0
+      ? Math.max(frameTop, self.committedBandBottomRow + 1)
+      : frameTop;
 
   // Suppress the shrink re-pin for the whole commit; Phase 3 sets the band.
   // Re-armed at the top of every commitAbove, so a throw on a dying TTY (the
@@ -378,17 +388,44 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
       // band as a single overwritten block (lost commits) — the splice
       // regression. newPainted is itself derived from textLines.length.
       const wholeBlockPainted = newPainted === textLines.length;
+      // Invariant (contiguity across banner-path eviction gaps): the prior band
+      // is mergeable when it was adjacent to the frame BEFORE Phase 2 snapped the
+      // frame to bottom-anchored (commitInFlight). Banner-path evictions in
+      // preserveRowsBeforeFrameRender shift committedBandBottomRow downward (lower
+      // row number) by scrolling the viewport upward, but the frame stays where it
+      // is for the next render — so by the time the response commitAbove fires, the
+      // band's tracked bottom may be several rows below newTopRow-1. The classic
+      // check (`committedBandBottomRow === newTopRow - 1`) requires exact adjacency
+      // to the POST-Phase-2 frame top and fails on this gap, dropping the whole
+      // prior band from the model. The extended check adds `effectiveFrameTop - 1`
+      // (the band's tracked bottom is adjacent to the PRE-Phase-2 frame top,
+      // corrected for shrink-pad) — that relationship is unambiguously contiguous
+      // even though Phase 2 stretched the gap by snapping to absoluteBottom.
+      // Safety: `fitsAboveFrame` is already required, so this extended arm only
+      // fires when the merged run is guaranteed to fit in the above-frame region;
+      // `anchorRow <= 1` is NOT required here because the merge path is gated on
+      // `fitsAboveFrame`, not on `anchorRow <= 1`.
       const contiguousPriorBand =
         fitsAboveFrame &&
         wholeBlockPainted &&
         self.committedBand.length > 0 &&
-        self.committedBandBottomRow === newTopRow - 1;
+        (self.committedBandBottomRow === newTopRow - 1 ||
+          self.committedBandBottomRow === phase1EffectiveFrameTop - 1);
       const run = contiguousPriorBand ? [...self.committedBand, ...newLines] : newLines;
       // Cap at the room between the anchor floor and the frame top. maxRun >=
       // newPainted always (the new lines fit by construction), so they are
       // never dropped; only prior-band lines that scroll above the floor are.
       const capped = run.length > maxRun ? run.slice(run.length - maxRun) : run;
       const bandTop = newTopRow - capped.length;
+      // Stale band rows above bandTop: when the extended contiguity arm fires, the
+      // old band's tracked top (self.committedBandTopRow) may be ABOVE the new
+      // bandTop — those rows hold echo content that was physically scrolled there
+      // by earlier evictions and was never overwritten (they were above the
+      // streaming frame top). Phase 3's paint loop covers only rows bandTop..newTopRow-1;
+      // rows committedBandTopRow..bandTop-1 are orphaned: they still show stale echo
+      // content whose row position no longer matches the merged band model. Erase
+      // them before painting so screen == model after Phase 3.
+      const oldBandTop = self.committedBandTopRow;
       let out = '';
       if (fitsAboveFrame) {
         // History: repaint the ENTIRE visible band, not just the new block.
@@ -406,6 +443,21 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
         // lines that scroll off. Single-copy still holds: these rows live only
         // in the viewport until a later scroll moves them (once) into
         // scrollback. Full root-cause + design: docs/scrollback.md.
+        //
+        // Invariant (orphan erase): erase rows that the old band occupied above
+        // the new bandTop BEFORE painting the merged run. Without this, an old
+        // echo row that was physically scrolled above the new bandTop (by banner-
+        // path evictions) remains visible on screen while the model no longer
+        // tracks it — a ghost that the next collapse repaint's stale-tall erase
+        // may or may not cover, producing intermittent duplicate or orphaned rows.
+        // This erase is safe for the non-extended arm too (bandTop >= oldBandTop
+        // in the classic adjacent case, so the loop emits zero iterations).
+        if (oldBandTop > 0 && oldBandTop < bandTop) {
+          const eraseFloor = Math.max(postScrollFloor, oldBandTop);
+          for (let r = eraseFloor; r < bandTop; r++) {
+            out += `\x1b[${r};1H\x1b[2K`;
+          }
+        }
         for (let i = 0; i < capped.length; i++) {
           const row = bandTop + i;
           if (row >= newTopRow) break; // Never overwrite the live frame.
