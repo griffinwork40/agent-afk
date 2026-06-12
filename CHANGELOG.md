@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.104.3] - 2026-06-12
+
+### Changed
+- Merge pull request #107 from griffinwork40/afk/issue-102-verify-ship (065b5b8)
+- extract reusable terminal selectors (e9efc40)
+
 ## [3.104.2] - 2026-06-12
 
 ### Fixed
