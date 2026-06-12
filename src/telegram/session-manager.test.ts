@@ -473,6 +473,29 @@ describe('SessionManager', () => {
       await manager.getSession(67890);
       expect(manager.getChatCount()).toBe(2);
     });
+
+    test('getBusySessionCount counts only non-idle, non-closed sessions', async () => {
+      // Idle sessions do not count as busy.
+      const s1 = (await manager.getSession(12345)) as MockAgentSession;
+      const s2 = (await manager.getSession(67890)) as MockAgentSession;
+      expect(manager.getSessionCount()).toBe(2);
+      expect(manager.getBusySessionCount()).toBe(0);
+
+      // A streaming session counts as busy; the idle one does not.
+      s1.state = 'streaming';
+      expect(manager.getBusySessionCount()).toBe(1);
+
+      // Other mid-turn states count too.
+      s2.state = 'processing';
+      expect(manager.getBusySessionCount()).toBe(2);
+      s2.state = 'compacting';
+      expect(manager.getBusySessionCount()).toBe(2);
+
+      // Returning to idle / closed drops them from the busy count.
+      s1.state = 'idle';
+      s2.state = 'closed';
+      expect(manager.getBusySessionCount()).toBe(0);
+    });
   });
 
   describe('closeAll', () => {

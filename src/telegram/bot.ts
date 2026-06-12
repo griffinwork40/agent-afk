@@ -322,6 +322,15 @@ export class TelegramBot {
   }
 
   /**
+   * Number of sessions currently mid-turn (streaming / processing / compacting).
+   * The version-drift watchdog consults this to avoid exiting under an active
+   * conversation — see startBot() in src/telegram.ts.
+   */
+  getBusySessionCount(): number {
+    return this.sessionManager.getBusySessionCount();
+  }
+
+  /**
    * Test-facing handler methods (delegates to handlers module)
    * These are used by tests to invoke handlers directly without starting the bot
    */
