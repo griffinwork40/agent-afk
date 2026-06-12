@@ -230,6 +230,34 @@ describe('loadMcpConfig (layered)', () => {
     expect(result.warnings.some((w) => w.includes('overridden'))).toBe(true);
   });
 
+  it('imported MCP configs sit below plugins — user-global wins on conflict', () => {
+    const importedPath = writeJson('imported-mcp.json', {
+      mcpServers: { shared: { type: 'stdio', command: 'imported' } },
+    });
+    writeUserGlobal({ mcpServers: { shared: { type: 'stdio', command: 'user' } } });
+    const result = loadMcpConfig({
+      cwd: projectCwd,
+      pluginsRoot,
+      importedMcpConfigs: [importedPath],
+    });
+    // User-global (higher layer) wins the name; the imported entry is displaced.
+    expect(result.mcpServers.shared?.command).toBe('user');
+    expect(result.warnings.some((w) => w.includes('overridden'))).toBe(true);
+  });
+
+  it('imported MCP configs contribute non-conflicting servers', () => {
+    const importedPath = writeJson('imported-mcp.json', {
+      mcpServers: { fromImport: { type: 'stdio', command: 'i' } },
+    });
+    writeUserGlobal({ mcpServers: { fromUser: { type: 'stdio', command: 'u' } } });
+    const result = loadMcpConfig({
+      cwd: projectCwd,
+      pluginsRoot,
+      importedMcpConfigs: [importedPath],
+    });
+    expect(Object.keys(result.mcpServers).sort()).toEqual(['fromImport', 'fromUser']);
+  });
+
   it('non-conflicting servers from every layer all merge into the result', () => {
     writePluginContrib('p1', {
       mcpServers: { fromPlugin: { type: 'stdio', command: 'p' } },

@@ -276,6 +276,14 @@ export interface LoadMcpConfigOptions {
    * When true, suppress the project-local layer. Defaults to false.
    */
   skipProjectLocal?: boolean;
+  /**
+   * JSON MCP config file paths imported from trusted source binaries (Claude
+   * Code, etc.) via `importFrom`. Loaded as the LOWEST-priority layers (below
+   * plugins), so AFK's own config always wins on per-server-name conflict.
+   * Resolved by the caller (bootstrap) from `resolveImportedRoots()`; only
+   * JSON-format configs are passed here — TOML sources are handled separately.
+   */
+  importedMcpConfigs?: string[];
 }
 
 /**
@@ -299,6 +307,15 @@ export function loadMcpConfig(opts: LoadMcpConfigOptions = {}): LoadedMcpConfig 
   const layers: { path: string; loaded: LoadedMcpConfig }[] = [];
   // Pre-warnings emitted during layer assembly (before allWarnings is declared).
   const preWarnings: string[] = [];
+
+  // Layer -1 — imported from trusted source binaries (lowest priority of all).
+  // Pushed before the plugin layer so AFK's own plugins/user/project/CLI
+  // configs all win on per-server-name conflict.
+  if (opts.importedMcpConfigs && opts.importedMcpConfigs.length > 0) {
+    for (const p of opts.importedMcpConfigs) {
+      layers.push({ path: p, loaded: loadMcpConfigFile(p) });
+    }
+  }
 
   // Layer 0 — plugin-contributed (lowest priority).
   if (opts.pluginsRoot !== null) {

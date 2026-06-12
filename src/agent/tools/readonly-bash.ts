@@ -148,11 +148,16 @@ const INSTALL_CMD = new RegExp(CMD_START + String.raw`install\b`, 'i');
 // isn't matched.
 const SOURCE_CMD = new RegExp(CMD_START + String.raw`(?:source\b|\.\s+\S)`, 'i');
 
-// ── archive extraction ─────────────────────────────────────────────────────
-// Archive extraction writes files to disk.  These run in STRIPPED_RULES so a
-// quoted grep search term like `grep "tar xzf"` isn't misread as a real invocation.
-// `tar … x …` — any tar flag set that includes `x` (extract mode).
-const TAR_EXTRACT = /\btar\b[^|;&]*\s-?[a-zA-Z]*x[a-zA-Z]*\b/i;
+// ── archive extraction / creation / append / update ───────────────────────
+// Archive creation (c), extraction (x), append (r), update (u), and
+// concatenate-archives (A) all write files or modify an archive on disk.
+// List mode (t) is read-only and intentionally not matched.
+// These run in STRIPPED_RULES so a quoted grep search term like
+// `grep "tar czf"` isn't misread as a real invocation.
+// The regex anchors to the first token immediately after `tar` — no skip-ahead —
+// to avoid false-positives on archive filenames that contain mode-flag letters
+// (e.g. `tar tf a.tar` would match `a` via the skip-ahead form with /i).
+const TAR_WRITE = /\btar\s+-?[a-zA-Z]*[cxruA][a-zA-Z]*\b/i;
 // `unzip` in command position.
 const UNZIP_CMD = new RegExp(CMD_START + String.raw`unzip\b`, 'i');
 // `cpio -i` (copy-in / extract) writes files; `cpio -o`/`-p` (copy-out / pass)
@@ -252,7 +257,7 @@ const STRIPPED_RULES: readonly MutationRule[] = [
   { re: PATCH_CMD, reason: 'patch (applies a diff to files)' },
   { re: INSTALL_CMD, reason: 'install (writes files)' },
   { re: SOURCE_CMD, reason: 'source/dot-source executes a script' },
-  { re: TAR_EXTRACT, reason: 'tar extract (writes files)' },
+  { re: TAR_WRITE, reason: 'tar create/extract/append/update (writes files/archive)' },
   { re: UNZIP_CMD, reason: 'unzip (writes files)' },
   { re: CPIO_EXTRACT, reason: 'cpio extract (-i mode writes files)' },
 ];

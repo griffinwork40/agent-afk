@@ -11,6 +11,30 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.101.1] - 2026-06-11
+
+### Fixed
+- stop finalizeOrchestrator nuclear-flushing in-flight subagent blocks (#95) (bab6bb2)
+
+## [3.101.0] - 2026-06-11
+
+### Added
+- record root-session model in witness traces (#91) (e8ce193)
+
+## [3.100.1] - 2026-06-11
+
+### Fixed
+- reserve final column in echo path to fix prompt tripling (#94) (755987b)
+- web_scrape failure logging (#24) + tar create/append gating (#6) (#89) (eec4b92)
+
+### Changed
+- document subagent context injection contract (#93) (4755b92)
+
+## [3.100.0] - 2026-06-11
+
+### Added
+- inline ghost-text tab autocomplete for mid-sentence skill names (#90) (81abc62)
+
 ## [3.99.1] - 2026-06-11
 
 ### Fixed

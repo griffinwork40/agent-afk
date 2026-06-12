@@ -130,6 +130,52 @@ describe('formatTrace — default human view', () => {
   });
 });
 
+describe('formatTrace — root model provenance header', () => {
+  const initStart = (model: string, resolvedModel: string): EventObj => ({
+    ts: '2026-06-05T12:30:00.000Z',
+    seq: 0,
+    kind: 'session_phase',
+    payload: { phase: 'session_init_start', model, resolvedModel },
+  });
+  const seal: EventObj = {
+    ts: '2026-06-05T12:35:00.500Z',
+    seq: 1,
+    kind: 'session_sealed',
+    payload: { status: 'succeeded', finalCostUsd: 0, finalTurnCount: 0, closedAt: '2026-06-05T12:35:00.500Z' },
+  };
+
+  it('renders a Model line with alias → resolved when they differ', () => {
+    const out = formatTrace(
+      's',
+      '/p',
+      parseTrace(toJsonl([initStart('sonnet', 'claude-sonnet-4-5-20250929'), seal])),
+    );
+    expect(out).toContain('Model  sonnet → claude-sonnet-4-5-20250929');
+  });
+
+  it('renders the model once (no arrow) when alias === resolved (raw passthrough)', () => {
+    const out = formatTrace('s', '/p', parseTrace(toJsonl([initStart('gpt-4o', 'gpt-4o'), seal])));
+    expect(out).toContain('Model  gpt-4o');
+    expect(out).not.toContain('gpt-4o → gpt-4o');
+  });
+
+  it('omits the Model line when no session_init_start carries a model', () => {
+    // sampleEvents() has no session_init_start → no provenance to show.
+    const out = formatTrace('s', '/p', parseTrace(toJsonl(sampleEvents())));
+    expect(out).not.toContain('Model  ');
+  });
+
+  it('--all surfaces the model on the session_init_start phase line', () => {
+    const out = formatTrace(
+      's',
+      '/p',
+      parseTrace(toJsonl([initStart('sonnet', 'claude-sonnet-4-5-20250929'), seal])),
+      { showAll: true },
+    );
+    expect(out).toMatch(/session_init_start.*sonnet/);
+  });
+});
+
 describe('formatTrace — flags and edge cases', () => {
   it('--all surfaces latency phases and paired tool starts', () => {
     const out = formatTrace('s', '/p', parseTrace(toJsonl(sampleEvents())), { showAll: true });

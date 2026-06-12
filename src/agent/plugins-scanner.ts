@@ -17,7 +17,7 @@
  */
 
 import type { SdkPluginConfig } from './types/sdk-types.js';
-import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { getPluginsDir, getPluginsIndexPath } from '../paths.js';
 import { readIndex } from './plugins/index-store.js';
@@ -64,10 +64,22 @@ export function _resetPluginScanCache(): void {
  *     and we only want the user-activated ones loaded by AFK.
  *
  * Memoized per-directory — see `scanCache` above for invalidation rules.
+ *
+ * `opts.trustAll` flips the cache-layout gate: when true, cache-layout plugins
+ * load even without an AFK index entry. This is for *imported* roots belonging
+ * to another tool (e.g. `~/.claude/plugins/`), where the user has already
+ * opted into the whole binary via `importFrom` and AFK has no index to consult.
+ * The cache key folds `trustAll` so trusted and untrusted scans of the same
+ * directory never alias.
  */
-export function scanLocalPlugins(dir: string = getPluginsDir()): SdkPluginConfig[] {
+export function scanLocalPlugins(
+  dir: string = getPluginsDir(),
+  opts: { trustAll?: boolean } = {},
+): SdkPluginConfig[] {
+  const trustAll = opts.trustAll === true;
+  const cacheKey = trustAll ? `${dir}\u0000trustAll` : dir;
   if (!scanCache) scanCache = new Map();
-  const cached = scanCache.get(dir);
+  const cached = scanCache.get(cacheKey);
   if (cached) {
     // Return a fresh array so callers that mutate (e.g. `.push`) don't
     // corrupt the cached result. The SdkPluginConfig entries themselves
@@ -75,14 +87,14 @@ export function scanLocalPlugins(dir: string = getPluginsDir()): SdkPluginConfig
     return [...cached];
   }
   if (!existsSync(dir)) {
-    scanCache.set(dir, []);
+    scanCache.set(cacheKey, []);
     return [];
   }
   const indexPath = dir === getPluginsDir() ? getPluginsIndexPath() : join(dir, '.index.json');
   const index = readIndex(indexPath);
   const plugins: SdkPluginConfig[] = [];
-  walk(dir, dir, 0, plugins, new Set<string>(), index.plugins);
-  scanCache.set(dir, plugins);
+  walk(dir, dir, 0, plugins, new Set<string>(), index.plugins, trustAll);
+  scanCache.set(cacheKey, plugins);
   return [...plugins];
 }
 
@@ -93,10 +105,20 @@ function walk(
   out: SdkPluginConfig[],
   seen: Set<string>,
   indexPlugins: Record<string, { enabled: boolean }>,
+  trustAll: boolean,
 ): void {
   if (depth > MAX_SCAN_DEPTH) return;
-  if (seen.has(dir)) return;
-  seen.add(dir);
+  // Key `seen` on the realpath so two string-distinct symlinks to the same
+  // physical directory are only walked once. Fall back to the raw string on
+  // broken symlinks (realpathSync throws for dangling links).
+  let seenKey: string;
+  try {
+    seenKey = realpathSync(dir);
+  } catch {
+    seenKey = dir;
+  }
+  if (seen.has(seenKey)) return;
+  seen.add(seenKey);
 
   if (existsSync(join(dir, '.claude-plugin', 'plugin.json'))) {
     const key = indexKeyForPath(root, dir);
@@ -107,9 +129,13 @@ function walk(
       return;
     }
     if (key.layout === 'cache') {
-      // Cache-layout plugins must be explicitly installed.
-      const entry = indexPlugins[key.key];
-      if (!entry || entry.enabled === false) return;
+      // Cache-layout plugins must be explicitly installed — UNLESS this is a
+      // trusted imported root, where the whole binary was opted into and there
+      // is no AFK index to consult.
+      if (!trustAll) {
+        const entry = indexPlugins[key.key];
+        if (!entry || entry.enabled === false) return;
+      }
       out.push({ type: 'local', path: dir });
       return;
     }
@@ -136,7 +162,7 @@ function walk(
     } catch {
       continue;
     }
-    if (stat.isDirectory()) walk(root, full, depth + 1, out, seen, indexPlugins);
+    if (stat.isDirectory()) walk(root, full, depth + 1, out, seen, indexPlugins, trustAll);
   }
 }
 
