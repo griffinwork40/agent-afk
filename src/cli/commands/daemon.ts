@@ -11,11 +11,13 @@ import type { TaskCompletionDetails, TelemetryRecord } from '../../agent/daemon/
 import {
   COMPILED_DEFAULT_TASK,
   COMPILED_DEFAULT_TASK_ID,
+  resolveDaemonHost,
   resolveDaemonTimeoutMs,
   resolveDefaultTask,
   resolveDefaultTaskId,
   resolveSessionStartCooldownMs,
   resolveTriggerMode,
+  isLoopbackHost,
 } from '../daemon-options.js';
 import { loadConfig } from '../config.js';
 import type { AgentConfig, ThinkingConfig, EffortLevel, AgentModelInput } from '../../agent/types.js';
@@ -206,6 +208,10 @@ export function registerDaemonCommand(program: Command): void {
     .command('daemon')
     .description('Run agent-afk as a daemon that fires scheduled tasks (e.g. /forge-friction --auto)')
     .option('-p, --port <number>', 'Control HTTP port', '7777')
+    .option(
+      '--host <address>',
+      'Bind address for the control HTTP surface. Overrides AFK_DAEMON_HOST. Defaults to 127.0.0.1 (loopback only). The control surface is UNAUTHENTICATED — bind a non-loopback address (e.g. 0.0.0.0) only on a trusted or firewalled network.',
+    )
     .option('-t, --task <command>', `Command to fire on each tick (default: ${COMPILED_DEFAULT_TASK})`)
     .option('-c, --cron <expression>', 'Cron expression (e.g. "0 */6 * * *"). Required when --trigger includes cron.')
     .option('-i, --task-id <id>', `Task identifier (default: ${COMPILED_DEFAULT_TASK_ID})`)
@@ -229,7 +235,7 @@ export function registerDaemonCommand(program: Command): void {
       'Override directory scanned for pending briefs (defaults to ~/.afk/agent-framework/briefs).',
     )
     .option('--dump-prompt [path]', 'Dump resolved SDK prompt+options+provenance to file (default: ~/.afk/logs/prompt-dump-<ISO>.json) or "stderr"')
-    .action(async (options: { port: string; task?: string; cron?: string; taskId?: string; once: boolean; timeoutMs?: string; thinking?: string; effort?: string; trigger?: string; sessionstartCooldownMs?: string; briefsDir?: string; dumpPrompt?: string | boolean | undefined }) => {
+    .action(async (options: { port: string; host?: string; task?: string; cron?: string; taskId?: string; once: boolean; timeoutMs?: string; thinking?: string; effort?: string; trigger?: string; sessionstartCooldownMs?: string; briefsDir?: string; dumpPrompt?: string | boolean | undefined }) => {
       const port = parseInt(options.port, 10);
       if (Number.isNaN(port) || port <= 0) {
         handleCommandError(new Error(`Invalid port: ${options.port}`));
@@ -246,6 +252,7 @@ export function registerDaemonCommand(program: Command): void {
         env.AFK_DAEMON_TASK_ID,
         config.daemon?.taskId,
       );
+      const host = resolveDaemonHost(options.host, env.AFK_DAEMON_HOST);
 
       let timeoutMs: number | undefined;
       let cooldownMs: number | undefined;
@@ -367,6 +374,7 @@ export function registerDaemonCommand(program: Command): void {
       try {
         const handle = await startDaemon({
           port,
+          host,
           // Transient one-tick runs must not claim (and on exit delete) the
           // shared port-discovery file the service daemon's live-sync needs.
           ...(options.once ? { writePortFile: false } : {}),
@@ -406,7 +414,16 @@ export function registerDaemonCommand(program: Command): void {
           }
         }
 
-        console.log(palette.success(`✔ Daemon listening on http://localhost:${handle.port}`));
+        console.log(palette.success(`✔ Daemon listening on http://${handle.host}:${handle.port}`));
+        if (!isLoopbackHost(handle.host)) {
+          console.log(
+            palette.warning(
+              `⚠ Control surface bound to ${handle.host} (non-loopback) and is UNAUTHENTICATED — ` +
+                `anyone who can reach this port can schedule commands the daemon will run. ` +
+                `Ensure the port is firewalled / on a trusted network.`,
+            ),
+          );
+        }
         if (trigger === 'pull') {
           console.log(palette.success(`✔ Daemon in pull mode`));
           console.log(palette.dim(`  polling queue: ${getQueueDir()} every 30s`));

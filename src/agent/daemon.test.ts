@@ -905,6 +905,24 @@ describe('port file lifecycle', () => {
     expect(readFileSync(portFilePath(), 'utf-8')).toBe('65501');
   });
 
+  it('binds the control surface to loopback (127.0.0.1) by default', async () => {
+    const h = await startDaemon({ port: 0, writePortFile: false });
+    // Regression guard: the prior code omitted the host argument, so Node bound
+    // the unspecified address (all interfaces) — exposing the unauthenticated
+    // control surface to the local network. Loopback-by-default closes that.
+    // This assertion fails on the old behaviour (address would be '::'/'0.0.0.0').
+    expect(h.host).toBe('127.0.0.1');
+    await h.stop();
+  });
+
+  it('honors an explicit bind host option', async () => {
+    // Exercises the `options.host`-defined branch (the default test above
+    // covers the fallback branch). Loopback only — no external interface bind.
+    const h = await startDaemon({ port: 0, host: '127.0.0.1', writePortFile: false });
+    expect(h.host).toBe('127.0.0.1');
+    await h.stop();
+  });
+
   it('POST /tasks accepts cronExpression as an alias for cron', async () => {
     const h = await startDaemon({ port: 0, writePortFile: false });
     try {
