@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.102.1] - 2026-06-12
+
+### Fixed
+- correct soft-stop notice — "Send a message to continue" (d1c1427)
+
+### Changed
+- Merge pull request #99 from griffinwork40/afk/fix-ghost-text-resume (034f5ca)
+
 ## [3.102.0] - 2026-06-12
 
 ### Added
