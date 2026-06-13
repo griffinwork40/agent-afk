@@ -101,7 +101,7 @@ Aliases: `afk c` → `chat`, `afk i` → `interactive`, `afk s` → `status`.
 
 ## A note on permissions
 
-`afk` runs with **bypass permissions** by default: no per-tool prompts. Claude can run bash, read and write files, fetch URLs, and call MCP servers without asking each time. This is intentional — `afk` is built for unattended work, where a permission prompt with no human in front of it is just a wedged session.
+`afk` runs with **full permissions** by default: no per-tool prompts. Claude can run bash, read and write files, fetch URLs, and call MCP servers without asking each time. This is intentional — `afk` is built for unattended work, where a permission prompt with no human in front of it is just a wedged session.
 
 Use `afk` on a machine and account you trust. Override per-session with `--permission-mode` if you want stricter behavior.
 
