@@ -28,6 +28,8 @@ export interface ToolEvent {
   toolName: string;
   toolUseId: string;
   input: string;
+  /** Raw JSON-serialized tool input object — populated for facet derivation (exact field extraction). */
+  inputRaw?: string;
   result?: string;
   isError?: boolean;
 }

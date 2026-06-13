@@ -46,6 +46,7 @@ import { sumProviderUsage } from '../../usage.js';
 import { contextLimitFor } from '../../model-limits.js';
 import { resolveModelId } from '../../session/model-resolution.js';
 import { collectSkillEntries } from '../../tools/skill-bridge.js';
+import { extractRawToolInput } from '../../facets/raw-input.js';
 import { debugLog } from '../../../utils/debug.js';
 import {
   resolveOpenAIAuth,
@@ -662,6 +663,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         toolUseId: call.id,
         toolName: call.name,
         toolInput: summarizeToolInput(call.name, call.input),
+        toolInputRaw: extractRawToolInput(call.input),
         sessionId: this.initSessionId,
       };
     }
