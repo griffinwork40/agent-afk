@@ -186,6 +186,14 @@ export interface PluginSkillBody {
    * Absent → historical full-write fork.
    */
   readOnly?: boolean;
+  /**
+   * Enumerated tool allowlist parsed from SKILL.md `tools:` frontmatter.
+   * Forwarded from {@link PluginSkillMetadata.allowedTools} by
+   * {@link discoverPluginSkillBodies}. When set and the skill has
+   * `context: fork`, the forked child's provider receives exactly this
+   * tool surface. Absent → full {@link CHILD_ALLOWED_TOOLS} (backward-compat).
+   */
+  allowedTools?: string[];
 }
 
 /**
@@ -227,6 +235,7 @@ export function discoverPluginSkillBodies(
           pluginPath: plugin.path,
           ...(skill.context !== undefined ? { context: skill.context } : {}),
           ...(skill.readOnly === true ? { readOnly: true } : {}),
+          ...(skill.allowedTools !== undefined ? { allowedTools: skill.allowedTools } : {}),
         });
       }
     }

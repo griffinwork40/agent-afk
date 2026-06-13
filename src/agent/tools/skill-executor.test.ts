@@ -1761,6 +1761,178 @@ describe('SkillExecutor', () => {
     });
   });
 
+  describe('tools: frontmatter allowlist enforcement', () => {
+    function captureForkConfig(): { mockForkSubagent: ReturnType<typeof vi.fn> } {
+      const mockForkSubagent = vi.fn().mockResolvedValue({
+        runToResult: vi.fn().mockResolvedValue({
+          status: 'succeeded',
+          message: { content: 'ok' },
+        }),
+        teardown: vi.fn().mockResolvedValue(undefined),
+      });
+      vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockImplementation(mockForkSubagent);
+      vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
+      return { mockForkSubagent };
+    }
+
+    it('passes custom allowedTools to the factory for a plugin skill with tools: field', async () => {
+      const { mockForkSubagent } = captureForkConfig();
+      const childProviderFactory = vi.fn().mockReturnValue({ name: 'sentinel' });
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        pluginConfigs: undefined,
+        childProviderFactory: childProviderFactory as never,
+      });
+
+      // Stub a plugin skill body with a custom tools: allowlist.
+      const body: PluginSkillBody = {
+        body: 'fake plugin body',
+        pluginPath: '/fake/plugin',
+        context: 'fork',
+        allowedTools: ['read_file', 'grep', 'glob'],
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (executor as any).pluginBodies = new Map([['tools-skill', body]]);
+
+      await executor.execute(makeCall({ name: 'tools-skill', arguments: 'go' }));
+
+      expect(mockForkSubagent).toHaveBeenCalledOnce();
+      const factoryArgs = childProviderFactory.mock.calls[0]?.[0];
+      expect(factoryArgs?.allowedTools).toEqual(['read_file', 'grep', 'glob']);
+      // Not a read-only skill — no bash gate.
+      expect(factoryArgs?.readOnlyBash).toBeUndefined();
+    });
+
+    it('does NOT set allowedTools when tools: is absent', async () => {
+      captureForkConfig();
+      const childProviderFactory = vi.fn().mockReturnValue({ name: 'sentinel' });
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        pluginConfigs: undefined,
+        childProviderFactory: childProviderFactory as never,
+      });
+
+      const body: PluginSkillBody = {
+        body: 'fake plugin body',
+        pluginPath: '/fake/plugin',
+        context: 'fork',
+        // allowedTools intentionally absent
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (executor as any).pluginBodies = new Map([['no-tools-field', body]]);
+
+      await executor.execute(makeCall({ name: 'no-tools-field' }));
+
+      const factoryArgs = childProviderFactory.mock.calls[0]?.[0];
+      // No custom allowlist — factory falls back to CHILD_ALLOWED_TOOLS (full write surface).
+      expect(factoryArgs?.allowedTools).toBeUndefined();
+    });
+
+    it('read-only: true takes precedence over tools:', async () => {
+      captureForkConfig();
+      const childProviderFactory = vi.fn().mockReturnValue({ name: 'sentinel' });
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        pluginConfigs: undefined,
+        childProviderFactory: childProviderFactory as never,
+      });
+
+      // Skill has BOTH readOnly: true and allowedTools: [...]; readOnly wins.
+      const body: PluginSkillBody = {
+        body: 'fake plugin body',
+        pluginPath: '/fake/plugin',
+        context: 'fork',
+        readOnly: true,
+        allowedTools: ['read_file'],
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (executor as any).pluginBodies = new Map([['readonly-wins', body]]);
+
+      await executor.execute(makeCall({ name: 'readonly-wins' }));
+
+      const factoryArgs = childProviderFactory.mock.calls[0]?.[0];
+      // read-only takes precedence: factory receives RECON allowlist, not the custom one.
+      expect(factoryArgs?.allowedTools).toEqual([...RECON_ALLOWED_TOOLS]);
+      expect(factoryArgs?.readOnlyBash).toBe(true);
+    });
+
+    it('depth-cap fallback: custom allowedTools applied when no factory', async () => {
+      const { mockForkSubagent } = captureForkConfig();
+      // No childProviderFactory — depth-cap fallback path.
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        // childProviderFactory intentionally omitted.
+      });
+
+      const body: PluginSkillBody = {
+        body: 'fake plugin body',
+        pluginPath: '/fake/plugin',
+        context: 'fork',
+        allowedTools: ['read_file', 'grep'],
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (executor as any).pluginBodies = new Map([['custom-fallback', body]]);
+
+      await executor.execute(makeCall({ name: 'custom-fallback' }));
+
+      const forkCall = mockForkSubagent.mock.calls[0]?.[0];
+      // A provider IS set (the custom allowlist fallback).
+      expect(forkCall?.config?.provider).toBeDefined();
+      const provider = forkCall?.config?.provider;
+      const allowedTools: string[] | undefined = (provider as any)?.permissions?.allowedTools;
+      expect(allowedTools, 'provider must have an allowedTools list').toBeDefined();
+      expect(allowedTools).toEqual(['read_file', 'grep']);
+      // Not a read-only skill — no bash gate (provider stores false, not true).
+      expect((provider as any)?.readOnlyBash).not.toBe(true);
+    });
+
+    it('depth-cap fallback: normal skill (no tools:) gets no provider', async () => {
+      const { mockForkSubagent } = captureForkConfig();
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        // childProviderFactory intentionally omitted.
+      });
+
+      const body: PluginSkillBody = {
+        body: 'fake plugin body',
+        pluginPath: '/fake/plugin',
+        context: 'fork',
+        // No readOnly, no allowedTools.
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (executor as any).pluginBodies = new Map([['normal-fallback', body]]);
+
+      await executor.execute(makeCall({ name: 'normal-fallback' }));
+
+      const forkCall = mockForkSubagent.mock.calls[0]?.[0];
+      // Proves the `else if` guard works: no tools: and no readOnly → no provider.
+      expect(forkCall?.config?.provider).toBeUndefined();
+    });
+  });
+
   describe('ctx.dispatchSkill', () => {
     // dispatchSkill is the in-handler callback that re-enters SkillExecutor.execute
     // so built-in TS handlers can reach plugin-only skills (e.g. shadow-verify).

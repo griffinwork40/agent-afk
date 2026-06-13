@@ -221,6 +221,25 @@ export function buildReadOnlyReconProvider(model: AgentModelInput | undefined): 
 }
 
 /**
+ * Build a minimal provider with a custom tool allowlist for the depth-cap
+ * fallback path. Mirrors {@link buildReadOnlyReconProvider} but omits the
+ * `readOnlyBash` and `readOnlyMemory` flags — only tool-surface restriction.
+ * Used when a skill declares `tools:` (without `read-only: true`) and the
+ * provider factory is unavailable (depth cap or no factory configured).
+ */
+export function buildCustomAllowlistProvider(
+  model: AgentModelInput | undefined,
+  allowedTools: string[],
+): ModelProvider {
+  const permissions = { allowedTools: [...allowedTools] };
+  const route = providerForModel(typeof model === 'string' ? model : undefined);
+  if (route === 'openai-compatible') {
+    return new OpenAICompatibleProvider({ permissions });
+  }
+  return new AnthropicDirectProvider({ permissions });
+}
+
+/**
  * Build a depth-aware factory that produces a {@link SkillExecutor} for a
  * grandchild session at the given `depth`.
  *

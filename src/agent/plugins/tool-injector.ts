@@ -13,6 +13,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import type { AnthropicToolDef } from '../providers/anthropic-direct/types.js';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
+import { BUILTIN_TOOL_NAMES } from '../tools/schemas.js';
+import { debugLog } from '../../utils/debug.js';
 
 /**
  * Metadata extracted from a skill's SKILL.md frontmatter, plus the body.
@@ -37,6 +39,14 @@ export interface PluginSkillMetadata {
    * dispatcher's `readOnlyBash` gate.
    */
   readOnly?: boolean;
+  /**
+   * Enumerated tool allowlist from the `tools:` frontmatter field. When set,
+   * the forked subagent receives exactly this tool surface. Validated against
+   * BUILTIN_TOOL_NAMES at parse time; unknown names are silently dropped.
+   * Takes no effect when `readOnly: true` (RECON_ALLOWED_TOOLS takes precedence).
+   * Only applies to `context: fork` skills — loaded skills run in the caller's context.
+   */
+  allowedTools?: string[];
   /** Markdown content after the frontmatter closing `---`. */
   body?: string;
   /**
@@ -162,6 +172,27 @@ function parseSkillMetadata(skillPath: string): PluginSkillMetadata {
         // child's write tools.
         const raw = value.replace(/^["']|["']$/g, '').trim();
         if (raw === 'true') metadata.readOnly = true;
+      } else if (key === 'tools') {
+        // Parse both inline-string (`tools: read_file, grep`) and
+        // inline YAML sequence (`tools: [read_file, grep]`) forms.
+        // Block-form (`- read_file\n- grep`) is out of scope — the scanner
+        // does not support multi-line values.
+        const raw = value.replace(/^["']|["']$/g, '');
+        const stripped = raw.replace(/^\[|\]$/g, ''); // strip bracket-array wrapper
+        const tokens = stripped.split(',').map((t) => t.trim()).filter(Boolean);
+        const validSet = new Set(BUILTIN_TOOL_NAMES);
+        const filtered: string[] = [];
+        for (const token of tokens) {
+          if (validSet.has(token)) {
+            filtered.push(token);
+          } else {
+            debugLog(`[tool-injector] parseSkillMetadata: unknown tool name in tools: "${token}" — dropped`);
+          }
+        }
+        const deduped = [...new Set(filtered)];
+        if (deduped.length > 0) {
+          metadata.allowedTools = deduped;
+        }
       }
     }
 

@@ -395,4 +395,72 @@ description: No body
       expect(extractPluginName('/some/random/path/plugin-name')).toBe('plugin-name');
     });
   });
+
+  describe('tools: frontmatter allowlist parsing', () => {
+    function writeSkillFile(dir: string, frontmatter: string): void {
+      const fs = require('fs');
+      fs.mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, 'SKILL.md'),
+        `---\nname: allowlist-test\ndescription: A test skill\n${frontmatter}---\nContent`,
+      );
+    }
+
+    it('parses comma-separated tools: field', () => {
+      const skillDir = join(tmpDir, 'skills', 'comma-sep');
+      writeSkillFile(skillDir, 'tools: read_file, grep, glob\n');
+      const skills = extractPluginSkills(tmpDir);
+      expect(skills[0]!.allowedTools).toEqual(['read_file', 'grep', 'glob']);
+    });
+
+    it('parses bracket-array tools: field', () => {
+      const skillDir = join(tmpDir, 'skills', 'bracket-arr');
+      writeSkillFile(skillDir, 'tools: [read_file, grep]\n');
+      const skills = extractPluginSkills(tmpDir);
+      expect(skills[0]!.allowedTools).toEqual(['read_file', 'grep']);
+    });
+
+    it('silently drops unknown tool names', () => {
+      const skillDir = join(tmpDir, 'skills', 'unknown-tools');
+      writeSkillFile(skillDir, 'tools: read_file, not_a_tool, grep\n');
+      const skills = extractPluginSkills(tmpDir);
+      expect(skills[0]!.allowedTools).toEqual(['read_file', 'grep']);
+    });
+
+    it('deduplicates repeated tool names', () => {
+      const skillDir = join(tmpDir, 'skills', 'dedup-tools');
+      writeSkillFile(skillDir, 'tools: read_file, read_file, grep\n');
+      const skills = extractPluginSkills(tmpDir);
+      expect(skills[0]!.allowedTools).toEqual(['read_file', 'grep']);
+    });
+
+    it('omits allowedTools when all names are unknown', () => {
+      const skillDir = join(tmpDir, 'skills', 'all-unknown');
+      writeSkillFile(skillDir, 'tools: not_a_tool\n');
+      const skills = extractPluginSkills(tmpDir);
+      expect(skills[0]!.allowedTools).toBeUndefined();
+    });
+
+    it('omits allowedTools when tools: field is absent', () => {
+      const skillDir = join(tmpDir, 'skills', 'no-tools-field');
+      writeSkillFile(skillDir, '');
+      const skills = extractPluginSkills(tmpDir);
+      expect(skills[0]!.allowedTools).toBeUndefined();
+    });
+
+    it('tools: and read-only: true coexist; both are parsed into metadata', () => {
+      const skillDir = join(tmpDir, 'skills', 'coexist');
+      writeSkillFile(skillDir, 'tools: read_file\nread-only: true\n');
+      const skills = extractPluginSkills(tmpDir);
+      expect(skills[0]!.allowedTools).toEqual(['read_file']);
+      expect(skills[0]!.readOnly).toBe(true);
+    });
+
+    it('handles quoted values', () => {
+      const skillDir = join(tmpDir, 'skills', 'quoted');
+      writeSkillFile(skillDir, 'tools: "read_file, grep"\n');
+      const skills = extractPluginSkills(tmpDir);
+      expect(skills[0]!.allowedTools).toEqual(['read_file', 'grep']);
+    });
+  });
 });

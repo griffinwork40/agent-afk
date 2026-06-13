@@ -461,12 +461,12 @@ describe('discoverPluginSkillBodies', () => {
     }
   });
 
-  function writeSkill(pluginPath: string, skillName: string, body: string): void {
+  function writeSkill(pluginPath: string, skillName: string, body: string, extraFrontmatter = ''): void {
     const dir = join(pluginPath, 'skills', skillName);
     mkdirSync(dir, { recursive: true });
     writeFileSync(
       join(dir, 'SKILL.md'),
-      `---\nname: ${skillName}\ndescription: A test skill\n---\n${body}\n`,
+      `---\nname: ${skillName}\ndescription: A test skill\n${extraFrontmatter}---\n${body}\n`,
     );
   }
 
@@ -510,6 +510,30 @@ describe('discoverPluginSkillBodies', () => {
   it('returns empty map when no plugins yield skills', () => {
     const bodies = discoverPluginSkillBodies([]);
     expect(bodies.size).toBe(0);
+  });
+
+  it('propagates allowedTools from PluginSkillMetadata when tools: is set', () => {
+    const pluginA = join(tmpDir, 'plugin-tools');
+    mkdirSync(pluginA, { recursive: true });
+    writeSkill(pluginA, 'tools-skill', '# Body', 'tools: read_file, grep\n');
+
+    const bodies = discoverPluginSkillBodies([{ type: 'local', path: pluginA }]);
+
+    const entry = bodies.get('tools-skill');
+    expect(entry).toBeDefined();
+    expect(entry?.allowedTools).toEqual(['read_file', 'grep']);
+  });
+
+  it('leaves allowedTools undefined when tools: is absent', () => {
+    const pluginA = join(tmpDir, 'plugin-no-tools');
+    mkdirSync(pluginA, { recursive: true });
+    writeSkill(pluginA, 'no-tools-skill', '# Body');
+
+    const bodies = discoverPluginSkillBodies([{ type: 'local', path: pluginA }]);
+
+    const entry = bodies.get('no-tools-skill');
+    expect(entry).toBeDefined();
+    expect(entry?.allowedTools).toBeUndefined();
   });
 });
 

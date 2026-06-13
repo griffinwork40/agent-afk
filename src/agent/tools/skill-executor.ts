@@ -26,6 +26,7 @@ import {
   DEFAULT_READ_ONLY_SKILLS,
   RECON_ALLOWED_TOOLS,
   buildReadOnlyReconProvider,
+  buildCustomAllowlistProvider,
   createStubParentSession,
   type ChildProviderFactoryArgs,
 } from './nesting.js';
@@ -275,6 +276,7 @@ export class SkillExecutor {
           parsed.arguments,
           call,
           readOnly,
+          pluginSkill.allowedTools,
         );
       }
       // Default: in-context LOAD (2026-06 load-by-default flip). No readOnly —
@@ -453,6 +455,10 @@ export class SkillExecutor {
     // RECON tool allowlist (no write_file/edit_file) and the mutating-bash
     // gate — on BOTH the factory path and the depth-cap/no-factory fallback.
     readOnly = false,
+    // Enumerated tool allowlist from the `tools:` frontmatter field. When set
+    // and readOnly is false, the forked child receives exactly this tool surface.
+    // Ignored when readOnly is true (RECON_ALLOWED_TOOLS takes precedence).
+    customAllowedTools?: string[],
   ): { childConfig: AgentConfig; childManager: SubagentManager | undefined } {
     const depth = this.ctx.depth ?? 0;
     const maxDepth = this.ctx.maxDepth ?? DEFAULT_MAX_NESTING_DEPTH;
@@ -466,6 +472,8 @@ export class SkillExecutor {
       // is possible at the cap anyway, so the missing executors are harmless).
       if (readOnly) {
         childConfig.provider = buildReadOnlyReconProvider(childConfig.model);
+      } else if (customAllowedTools !== undefined && customAllowedTools.length > 0) {
+        childConfig.provider = buildCustomAllowlistProvider(childConfig.model, customAllowedTools);
       }
       return { childConfig, childManager: undefined };
     }
@@ -536,6 +544,9 @@ export class SkillExecutor {
       // keeps `agent`/`skill` (so surveyor fan-out still works) and read-only
       // bash (git status/log/diff for dirty-tree detection).
       ...(readOnly ? { allowedTools: [...RECON_ALLOWED_TOOLS], readOnlyBash: true } : {}),
+      // Custom tools: allowlist from `tools:` frontmatter. Only applied when
+      // not read-only (read-only takes precedence via the RECON allowlist above).
+      ...(!readOnly && customAllowedTools !== undefined ? { allowedTools: customAllowedTools } : {}),
     });
 
     return { childConfig, childManager };
@@ -857,6 +868,9 @@ export class SkillExecutor {
     // Read-only enforcement flag, computed at the call site from the plugin
     // body's `readOnly` frontmatter OR DEFAULT_READ_ONLY_SKILLS membership.
     readOnly = false,
+    // Enumerated tool allowlist from the `tools:` frontmatter field. When set
+    // and readOnly is false, the forked child receives exactly this tool surface.
+    customAllowedTools?: string[],
   ): Promise<ToolResult> {
     if (call.signal.aborted) {
       return { content: 'Skill call aborted', isError: true };
@@ -909,6 +923,7 @@ export class SkillExecutor {
       } as AgentConfig,
       call.signal,
       readOnly,
+      customAllowedTools,
     );
 
     // Invariant: same trace-sealing rule as executeForkedRegistrySkill above.
