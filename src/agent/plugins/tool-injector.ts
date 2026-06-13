@@ -13,6 +13,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import type { AnthropicToolDef } from '../providers/anthropic-direct/types.js';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
+import { BUILTIN_TOOL_NAMES } from '../tools/schemas.js';
+import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
 
 /**
  * Metadata extracted from a skill's SKILL.md frontmatter, plus the body.
@@ -21,6 +23,16 @@ export interface PluginSkillMetadata {
   name?: string;
   description?: string;
   argumentHint?: string;
+  /**
+   * Resolved tool allowlist parsed from the `tools:` frontmatter field.
+   *
+   * When present, only the listed tools are permitted for subagents dispatched
+   * by this skill. Names are normalized to AFK canonical form (e.g. `Read` →
+   * `read_file`, `Edit` → `edit_file`). Unknown tokens are dropped with a
+   * stderr warning. When absent, the default `CHILD_ALLOWED_TOOLS` surface
+   * applies unchanged (backward-compatible).
+   */
+  allowedTools?: string[];
   /**
    * Execution mode from the `context:` frontmatter field. The skill forks a
    * subagent ONLY when this is `'fork'`; absent/`'load'`/other values load the
@@ -50,13 +62,138 @@ export interface PluginSkillMetadata {
 }
 
 /**
+ * Canonical mapping from legacy Claude Code tool aliases (case-insensitive)
+ * to AFK tool names.
+ *
+ * Invariant: all values must be members of `BUILTIN_TOOL_NAMES` or the
+ * orchestration tools (`agent`, `skill`). Entries map both the raw form and
+ * a lowercase form so the lookup can be done on `.toLowerCase()` input.
+ */
+const LEGACY_TOOL_ALIASES: Record<string, string> = {
+  read: 'read_file',
+  edit: 'edit_file',
+  write: 'write_file',
+  bash: 'bash',
+  grep: 'grep',
+  glob: 'glob',
+  ls: 'list_directory',
+  list: 'list_directory',
+  webfetch: 'web_scrape',
+  websearch: 'web_scrape',
+  webbrowse: 'web_scrape',
+};
+
+/**
+ * Normalize a raw frontmatter tool token to its canonical AFK name.
+ *
+ * 1. Strips surrounding whitespace.
+ * 2. Tries the token as-is (already lowercase AFK names like `read_file` pass through).
+ * 3. Falls back to the legacy alias map (case-insensitive).
+ * 4. Returns `undefined` when the token is unrecognised — callers drop it and
+ *    emit a warning rather than rejecting the whole skill.
+ *
+ * @param token  Raw tool token from frontmatter (e.g. `"Read"`, `"edit_file"`)
+ * @param knownToolNames  Set of all valid tool names at normalisation time
+ */
+export function normalizeToolToken(
+  token: string,
+  knownToolNames: ReadonlySet<string>,
+): string | undefined {
+  const trimmed = token.trim();
+  if (trimmed.length === 0) return undefined;
+
+  // Direct match (AFK canonical names are already lowercase with underscores)
+  if (knownToolNames.has(trimmed)) return trimmed;
+
+  // Legacy alias lookup (case-insensitive)
+  const alias = LEGACY_TOOL_ALIASES[trimmed.toLowerCase()];
+  if (alias !== undefined && knownToolNames.has(alias)) return alias;
+
+  return undefined;
+}
+
+/**
+ * Parse a `tools:` frontmatter value into a list of raw tokens.
+ *
+ * Accepts two formats:
+ * - Inline comma-separated string: `tools: Read, Grep, Glob`
+ * - YAML sequence (one item per line, each prefixed with `- `):
+ *   ```yaml
+ *   tools:
+ *     - Read
+ *     - Grep
+ *   ```
+ *
+ * Returns an empty array when the value is blank.
+ *
+ * @param inlineValue  The text after `tools:` on the same line (may be empty)
+ * @param remainingLines  Lines following the `tools:` key in the frontmatter
+ * @returns  Raw token strings (not yet normalised or validated)
+ */
+/**
+ * Strip surrounding single or double quotes from a token.
+ * Handles `"Read"` → `Read` and `'Read'` → `Read`.
+ */
+function stripQuotes(token: string): string {
+  const t = token.trim();
+  if (
+    (t.startsWith('"') && t.endsWith('"')) ||
+    (t.startsWith("'") && t.endsWith("'"))
+  ) {
+    return t.slice(1, -1).trim();
+  }
+  return t;
+}
+
+export function parseToolsField(
+  inlineValue: string,
+  remainingLines: string[],
+): string[] {
+  const trimmedInline = inlineValue.trim();
+
+  if (trimmedInline.length > 0) {
+    // YAML flow-sequence form: `tools: [Read, Grep, Glob]`
+    if (trimmedInline.startsWith('[') && trimmedInline.endsWith(']')) {
+      const inner = trimmedInline.slice(1, -1);
+      return inner
+        .split(',')
+        .map((t) => stripQuotes(t))
+        .filter((t) => t.length > 0);
+    }
+    // Comma-separated inline form: `tools: Read, Grep, Glob`
+    // Also handles quoted-string form: `tools: "Read, Grep"`
+    const unquoted = stripQuotes(trimmedInline);
+    return unquoted.split(',').map((t) => stripQuotes(t)).filter((t) => t.length > 0);
+  }
+
+  // YAML sequence form — consume leading lines that start with `- `
+  const tokens: string[] = [];
+  for (const line of remainingLines) {
+    const stripped = line.trim();
+    if (stripped.startsWith('- ')) {
+      tokens.push(stripQuotes(stripped.slice(2)));
+    } else {
+      // First non-list-item line ends the sequence
+      break;
+    }
+  }
+  return tokens;
+}
+
+/**
  * Discover all SKILL.md files in a plugin directory and extract their metadata.
  * Recursively searches the plugin tree for SKILL.md files that have YAML frontmatter.
  *
  * @param pluginPath - Absolute path to the plugin directory
+ * @param knownToolNames - Optional set of valid tool names for `tools:` normalisation.
+ *   When omitted the full built-in + orchestration set is used by default (lazy-loaded
+ *   to avoid a hard circular-import cycle at module-load time).
  * @returns Array of discovered skill metadata
  */
-export function extractPluginSkills(pluginPath: string): PluginSkillMetadata[] {
+export function extractPluginSkills(
+  pluginPath: string,
+  knownToolNames?: ReadonlySet<string>,
+): PluginSkillMetadata[] {
   const skills: PluginSkillMetadata[] = [];
 
   function walkDirectory(dir: string, depth: number = 0): void {
@@ -82,7 +219,7 @@ export function extractPluginSkills(pluginPath: string): PluginSkillMetadata[] {
       }
 
       if (stat.isFile() && name === 'SKILL.md') {
-        const metadata = parseSkillMetadata(fullPath);
+        const metadata = parseSkillMetadata(fullPath, knownToolNames);
         if (metadata.name) {
           skills.push(metadata);
         }
@@ -105,13 +242,26 @@ export function extractPluginSkills(pluginPath: string): PluginSkillMetadata[] {
  * name: skill-name
  * description: Brief description of the skill
  * argumentHint: "[optional arguments]"
+ * tools: Read, Grep, Glob
  * ---
  * ```
  *
+ * The `tools:` field may alternatively use YAML list syntax:
+ * ```yaml
+ * tools:
+ *   - Read
+ *   - Grep
+ * ```
+ *
  * @param skillPath - Absolute path to the SKILL.md file
+ * @param knownToolNames - Set of valid AFK tool names used for normalisation.
+ *   When omitted, `resolveKnownToolNames()` is called lazily.
  * @returns Extracted metadata (returns `{ name: undefined }` if parsing fails)
  */
-function parseSkillMetadata(skillPath: string): PluginSkillMetadata {
+function parseSkillMetadata(
+  skillPath: string,
+  knownToolNames?: ReadonlySet<string>,
+): PluginSkillMetadata {
   try {
     const content = readFileSync(skillPath, 'utf-8');
 
@@ -130,7 +280,8 @@ function parseSkillMetadata(skillPath: string): PluginSkillMetadata {
     const metadata: PluginSkillMetadata = {};
 
     const lines = frontmatterText.split('\n');
-    for (const line of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       if (!line) continue;
 
       const colonIdx = line.indexOf(':');
@@ -145,6 +296,36 @@ function parseSkillMetadata(skillPath: string): PluginSkillMetadata {
         metadata.description = value.replace(/^["']|["']$/g, '');
       } else if (key === 'argumentHint') {
         metadata.argumentHint = value.replace(/^["']|["']$/g, '');
+      } else if (key === 'tools') {
+        // Collect the lines after this one to handle YAML list form
+        const remainingLines = lines.slice(i + 1);
+        const rawTokens = parseToolsField(value, remainingLines);
+        // Invariant: when `tools:` is PRESENT, we ALWAYS assign allowedTools — even
+        // if the result is an empty array. This is the fail-closed contract: a
+        // present-but-unparseable `tools:` MUST NOT silently fall through to the
+        // full CHILD_ALLOWED_TOOLS surface. allowedTools = [] blocks all tools.
+        // Absent `tools:` (branch never entered) → allowedTools stays undefined →
+        // full CHILD_ALLOWED_TOOLS applies (backward compat unchanged).
+        const resolved = resolveKnownToolNames(knownToolNames);
+        const normalized: string[] = [];
+        for (const token of rawTokens) {
+          const canonical = normalizeToolToken(token, resolved);
+          if (canonical !== undefined) {
+            if (!normalized.includes(canonical)) {
+              normalized.push(canonical);
+            }
+          } else {
+            process.stderr.write(
+              `[afk] plugin skill at ${skillPath}: unknown tool "${token}" in \`tools:\` frontmatter — ignored\n`,
+            );
+          }
+        }
+        if (normalized.length === 0 && rawTokens.length > 0) {
+          process.stderr.write(
+            `[afk] plugin skill at ${skillPath}: \`tools:\` declared but no valid tools resolved — subagent will be blocked from all tools\n`,
+          );
+        }
+        metadata.allowedTools = normalized;
       } else if (key === 'audience') {
         // Only accept the two well-known values — anything else is dropped
         // (and the skill defaults to public) so a typo can't accidentally
@@ -173,6 +354,26 @@ function parseSkillMetadata(skillPath: string): PluginSkillMetadata {
   } catch {
     return {};
   }
+}
+
+/**
+ * Return the effective set of known tool names for `tools:` token normalisation.
+ *
+ * When the caller provides an explicit set (tests, custom surfaces) it is used
+ * as-is. Otherwise `BUILTIN_TOOL_NAMES` (statically imported from schemas.ts)
+ * plus the orchestration tool names are used as the default.
+ */
+function resolveKnownToolNames(
+  provided?: ReadonlySet<string>,
+): ReadonlySet<string> {
+  if (provided !== undefined) return provided;
+  // 'memory_search' and 'get_runtime_state' (via AWARENESS_TOOL_NAMES) are in
+  // CHILD_ALLOWED_TOOLS but NOT in BUILTIN_TOOL_NAMES — skills that list them
+  // must be able to resolve them. 'memory_update' and 'procedure_write' are
+  // intentionally excluded (blast-radius too large for unsupervised writes).
+  // 'compose' is excluded from CHILD_ALLOWED_TOOLS (unbounded fan-out) and is
+  // not grantable to child sessions — accepting it produces a phantom allowlist entry.
+  return new Set([...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', 'agent', 'skill']);
 }
 
 /**

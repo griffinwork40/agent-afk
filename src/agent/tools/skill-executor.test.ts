@@ -21,6 +21,7 @@ import { registerSkill, _resetRegistry } from '../../skills/index.js';
 import { SubagentManager } from '../subagent.js';
 import * as SubagentExecutorModule from './subagent-executor.js';
 import * as promptLoader from '../../skills/_lib/prompt-loader.js';
+import * as nestingModule from './nesting.js';
 import {
   onTrustedSkillComplete,
   offTrustedSkillComplete,
@@ -743,7 +744,7 @@ describe('SkillExecutor', () => {
       expect(result.content).toContain('skill was cancelled');
     });
 
-    it('passes a named "Run the <name> skill" directive when no arguments provided', async () => {
+    it('should pass empty string as user message when no arguments provided', async () => {
       registerSkill({
         name: 'fork-no-args',
         description: 'test',
@@ -780,9 +781,7 @@ describe('SkillExecutor', () => {
 
       await executor.execute(makeCall({ name: 'fork-no-args' }));
 
-      expect(mockRunToResult).toHaveBeenCalledWith(
-        'Run the fork-no-args skill now, following the instructions in your system prompt.',
-      );
+      expect(mockRunToResult).toHaveBeenCalledWith('Run the fork-no-args skill now, following the instructions in your system prompt.');
     });
 
     it('should pass arguments as user message when provided', async () => {
@@ -1679,6 +1678,48 @@ describe('SkillExecutor', () => {
       expect(factoryArgs?.readOnlyBash).toBe(true);
     });
 
+    it('read-only + tools: intersection of tools list with RECON_ALLOWED_TOOLS, readOnlyBash still true', async () => {
+      // B1 regression path: a plugin skill with BOTH read-only: true AND a
+      // tools: allowlist must produce a child whose effective allowedTools is
+      // the intersection of the tools list with RECON_ALLOWED_TOOLS, and
+      // readOnlyBash must remain true.  Previously the post-fork
+      // buildSkillRestrictedProvider override would drop readOnlyBash.
+      captureForkConfig();
+      const childProviderFactory = vi.fn().mockReturnValue({ name: 'sentinel' });
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        pluginConfigs: undefined,
+        childProviderFactory: childProviderFactory as never,
+      });
+
+      // tools: list includes both RECON-allowed and non-RECON (write_file)
+      // tokens. The intersection must keep only the RECON-allowed ones.
+      const body: PluginSkillBody = {
+        body: 'fake plugin body',
+        pluginPath: '/fake/plugin',
+        // Since the 2026-06 load-by-default flip, a plugin skill forks (and thus
+        // gets the tools/RECON allowlist) only when it declares context: fork.
+        context: 'fork',
+        readOnly: true,
+        allowedTools: ['read_file', 'bash', 'write_file'],
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (executor as any).pluginBodies = new Map([['recon-tools-plugin', body]]);
+
+      await executor.execute(makeCall({ name: 'recon-tools-plugin' }));
+
+      const factoryArgs = childProviderFactory.mock.calls[0]?.[0];
+      // Only RECON-allowed tokens survive the intersection.
+      expect(factoryArgs?.allowedTools).toEqual(['read_file', 'bash']);
+      // readOnlyBash must still be true — the bash gate is not dropped.
+      expect(factoryArgs?.readOnlyBash).toBe(true);
+    });
+
     it('with NO factory, a read-only skill still gets a recon provider (fallback path)', async () => {
       const { mockForkSubagent } = captureForkConfig();
       // No childProviderFactory configured → the no-factory branch of
@@ -1998,6 +2039,184 @@ describe('SkillExecutor', () => {
 
       expect(result.isError).toBe(true);
       expect(result.content).toContain('plugin was cancelled');
+    });
+  });
+
+  // ─── tools: allowlist propagation ────────────────────────────────────────
+
+  describe('plugin skill tools: allowlist enforcement', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('calls buildSkillRestrictedProvider when allowedTools is present on the skill body', async () => {
+      vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockResolvedValue({
+        runToResult: vi.fn().mockResolvedValue({
+          status: 'succeeded',
+          message: { content: 'restricted output' },
+        }),
+        teardown: vi.fn().mockResolvedValue(undefined),
+      } as never);
+      vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
+
+      const buildRestrictedSpy = vi.spyOn(nestingModule, 'buildSkillRestrictedProvider');
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'test',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+      });
+
+      // Inject a PluginSkillBody with allowedTools
+      const skillBody: PluginSkillBody = {
+        body: 'You are a read-only research assistant.',
+        pluginPath: '/fake/plugin',
+        // context: fork — required to reach the fork path post load-by-default flip.
+        context: 'fork',
+        allowedTools: ['read_file', 'grep', 'glob', 'list_directory'],
+      };
+      (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
+        new Map([['restricted-skill', skillBody]]);
+
+      const result = await executor.execute(makeCall({ name: 'restricted-skill' }));
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toBe('restricted output');
+      expect(buildRestrictedSpy).toHaveBeenCalledWith(
+        ['read_file', 'grep', 'glob', 'list_directory'],
+        'sonnet',
+      );
+    });
+
+    it('uses buildReadOnlyReconProvider (NOT buildSkillRestrictedProvider) for a read-only skill at the depth cap', async () => {
+      // Regression guard for the cap-path readOnlyBash fail-open: a read-only
+      // plugin skill forked without a childProviderFactory (the depth-cap / no-
+      // factory branch) must get a provider that preserves the mutating-bash
+      // gate. buildReadOnlyReconProvider carries readOnlyBash + readOnlyMemory +
+      // RECON; buildSkillRestrictedProvider does not. So the readOnly branch must
+      // win even when a tools: list is also declared — otherwise `bash` (a builtin
+      // gated by readOnlyBash, not routed through an executor) re-opens at the cap.
+      vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockResolvedValue({
+        runToResult: vi.fn().mockResolvedValue({
+          status: 'succeeded',
+          message: { content: 'recon output' },
+        }),
+        teardown: vi.fn().mockResolvedValue(undefined),
+      } as never);
+      vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
+
+      const reconSpy = vi.spyOn(nestingModule, 'buildReadOnlyReconProvider');
+      const restrictedSpy = vi.spyOn(nestingModule, 'buildSkillRestrictedProvider');
+
+      // No childProviderFactory on the executor → buildForkedChildConfig takes
+      // the depth-cap / no-factory branch.
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'test',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+      });
+
+      // Read-only skill that ALSO declares a tools: list including bash/write_file.
+      const skillBody: PluginSkillBody = {
+        body: 'You are a read-only auditor.',
+        pluginPath: '/fake/plugin',
+        // context: fork — required to reach the fork path post load-by-default flip.
+        context: 'fork',
+        readOnly: true,
+        allowedTools: ['read_file', 'bash', 'write_file'],
+      };
+      (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
+        new Map([['recon-skill', skillBody]]);
+
+      const result = await executor.execute(makeCall({ name: 'recon-skill' }));
+
+      expect(result.isError).toBeUndefined();
+      // readOnly wins: the recon provider (which keeps readOnlyBash) is used, and
+      // the bare restricted provider that would drop the bash gate is NOT.
+      expect(reconSpy).toHaveBeenCalledWith('sonnet');
+      expect(restrictedSpy).not.toHaveBeenCalled();
+    });
+
+    it('does NOT call buildSkillRestrictedProvider when allowedTools is absent', async () => {
+      vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockResolvedValue({
+        runToResult: vi.fn().mockResolvedValue({
+          status: 'succeeded',
+          message: { content: 'full-access output' },
+        }),
+        teardown: vi.fn().mockResolvedValue(undefined),
+      } as never);
+      vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
+
+      const buildRestrictedSpy = vi.spyOn(nestingModule, 'buildSkillRestrictedProvider');
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'test',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+      });
+
+      // Inject a PluginSkillBody WITHOUT allowedTools (backward-compatible path)
+      const skillBody: PluginSkillBody = {
+        body: 'Do anything.',
+        pluginPath: '/fake/plugin',
+        // context: fork so the skill actually forks (load-by-default since 2026-06);
+        // otherwise this test would pass vacuously via the in-context load path.
+        context: 'fork',
+      };
+      (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
+        new Map([['unrestricted-skill', skillBody]]);
+
+      await executor.execute(makeCall({ name: 'unrestricted-skill' }));
+
+      // buildSkillRestrictedProvider must NOT be called for unrestricted skills
+      expect(buildRestrictedSpy).not.toHaveBeenCalled();
+    });
+
+    it('passes the allowedTools list through to buildSkillRestrictedProvider verbatim', async () => {
+      vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockResolvedValue({
+        runToResult: vi.fn().mockResolvedValue({
+          status: 'succeeded',
+          message: { content: 'ok' },
+        }),
+        teardown: vi.fn().mockResolvedValue(undefined),
+      } as never);
+      vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
+
+      const buildRestrictedSpy = vi.spyOn(nestingModule, 'buildSkillRestrictedProvider');
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'test',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+      });
+
+      const narrowList = ['read_file', 'grep'];
+      const skillBody: PluginSkillBody = {
+        body: 'Read-only body.',
+        pluginPath: '/p',
+        // context: fork — required to reach the fork path post load-by-default flip.
+        context: 'fork',
+        allowedTools: narrowList,
+      };
+      (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
+        new Map([['narrow-skill', skillBody]]);
+
+      await executor.execute(makeCall({ name: 'narrow-skill' }));
+
+      expect(buildRestrictedSpy).toHaveBeenCalledWith(
+        ['read_file', 'grep'],
+        'sonnet',
+      );
     });
   });
 

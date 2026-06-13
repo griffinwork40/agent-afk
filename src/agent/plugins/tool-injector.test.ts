@@ -7,9 +7,11 @@
  *  - Convert skills to tool definitions
  *  - Handle missing or malformed SKILL.md files
  *  - Extract plugin name from path
+ *  - tools: frontmatter parsing (comma-separated + YAML list)
+ *  - Legacy alias normalisation (Read→read_file, Edit→edit_file, etc.)
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, rmdirSync } from 'fs';
 import { join } from 'path';
 import {
@@ -17,6 +19,8 @@ import {
   extractPluginTools,
   extractAllPluginTools,
   extractPluginName,
+  normalizeToolToken,
+  parseToolsField,
 } from './tool-injector.js';
 
 describe('plugin tool injector', () => {
@@ -393,6 +397,204 @@ description: No body
 
     it('should use last component when no cache in path', () => {
       expect(extractPluginName('/some/random/path/plugin-name')).toBe('plugin-name');
+    });
+  });
+
+  // ─── tools: frontmatter parsing ─────────────────────────────────────────
+
+  describe('normalizeToolToken', () => {
+    const knownTools = new Set([
+      'bash', 'read_file', 'write_file', 'edit_file', 'glob', 'grep',
+      'list_directory', 'web_scrape', 'agent', 'skill',
+    ]);
+
+    it('passes through AFK canonical names unchanged', () => {
+      expect(normalizeToolToken('read_file', knownTools)).toBe('read_file');
+      expect(normalizeToolToken('edit_file', knownTools)).toBe('edit_file');
+      expect(normalizeToolToken('bash', knownTools)).toBe('bash');
+    });
+
+    it('maps legacy Claude Code aliases case-insensitively', () => {
+      expect(normalizeToolToken('Read', knownTools)).toBe('read_file');
+      expect(normalizeToolToken('Edit', knownTools)).toBe('edit_file');
+      expect(normalizeToolToken('Write', knownTools)).toBe('write_file');
+      expect(normalizeToolToken('Bash', knownTools)).toBe('bash');
+      expect(normalizeToolToken('Grep', knownTools)).toBe('grep');
+      expect(normalizeToolToken('Glob', knownTools)).toBe('glob');
+    });
+
+    it('maps WebFetch and WebSearch to web_scrape', () => {
+      expect(normalizeToolToken('WebFetch', knownTools)).toBe('web_scrape');
+      expect(normalizeToolToken('WebSearch', knownTools)).toBe('web_scrape');
+      expect(normalizeToolToken('webfetch', knownTools)).toBe('web_scrape');
+    });
+
+    it('returns undefined for unknown tokens', () => {
+      expect(normalizeToolToken('NonExistentTool', knownTools)).toBeUndefined();
+      expect(normalizeToolToken('', knownTools)).toBeUndefined();
+    });
+
+    it('is case-insensitive for legacy aliases', () => {
+      expect(normalizeToolToken('READ', knownTools)).toBe('read_file');
+      expect(normalizeToolToken('EDIT', knownTools)).toBe('edit_file');
+      expect(normalizeToolToken('grep', knownTools)).toBe('grep');
+    });
+  });
+
+  describe('parseToolsField', () => {
+    it('parses comma-separated inline form', () => {
+      expect(parseToolsField('Read, Grep, Glob', [])).toEqual(['Read', 'Grep', 'Glob']);
+    });
+
+    it('parses comma-separated without spaces', () => {
+      expect(parseToolsField('Read,Grep,Glob', [])).toEqual(['Read', 'Grep', 'Glob']);
+    });
+
+    it('parses single-item inline form', () => {
+      expect(parseToolsField('read_file', [])).toEqual(['read_file']);
+    });
+
+    it('returns empty array for blank inline value with no YAML list', () => {
+      expect(parseToolsField('', [])).toEqual([]);
+    });
+
+    it('parses YAML list form when inline value is blank', () => {
+      const remainingLines = ['  - Read', '  - Grep', '  - Glob'];
+      expect(parseToolsField('', remainingLines)).toEqual(['Read', 'Grep', 'Glob']);
+    });
+
+    it('stops consuming YAML list at first non-list line', () => {
+      const remainingLines = ['  - Read', '  - Grep', 'description: something'];
+      expect(parseToolsField('', remainingLines)).toEqual(['Read', 'Grep']);
+    });
+  });
+
+  describe('extractPluginSkills — tools: frontmatter', () => {
+    const knownTools = new Set([
+      'bash', 'read_file', 'write_file', 'edit_file', 'glob', 'grep',
+      'list_directory', 'web_scrape', 'agent', 'skill',
+    ]);
+
+    it('parses comma-separated tools: field into allowedTools', () => {
+      const skillDir = join(tmpDir, 'skills');
+      const fs = require('fs');
+      fs.mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, 'SKILL.md'), [
+        '---',
+        'name: research-agent',
+        'description: Read-only research skill',
+        'tools: Read, Grep, Glob',
+        '---',
+        'Research the codebase.',
+      ].join('\n'));
+
+      const skills = extractPluginSkills(tmpDir, knownTools);
+      expect(skills).toHaveLength(1);
+      expect(skills[0]!.allowedTools).toEqual(['read_file', 'grep', 'glob']);
+    });
+
+    it('parses YAML list tools: field into allowedTools', () => {
+      const skillDir = join(tmpDir, 'skills');
+      const fs = require('fs');
+      fs.mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, 'SKILL.md'), [
+        '---',
+        'name: list-skill',
+        'description: Uses YAML list syntax',
+        'tools:',
+        '  - read_file',
+        '  - grep',
+        '  - glob',
+        '  - list_directory',
+        '---',
+        'Run the skill.',
+      ].join('\n'));
+
+      const skills = extractPluginSkills(tmpDir, knownTools);
+      expect(skills).toHaveLength(1);
+      expect(skills[0]!.allowedTools).toEqual(['read_file', 'grep', 'glob', 'list_directory']);
+    });
+
+    it('leaves allowedTools undefined when tools: is absent', () => {
+      const skillDir = join(tmpDir, 'skills');
+      const fs = require('fs');
+      fs.mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, 'SKILL.md'), [
+        '---',
+        'name: no-tools-field',
+        'description: No tools restriction',
+        '---',
+        'Do things.',
+      ].join('\n'));
+
+      const skills = extractPluginSkills(tmpDir, knownTools);
+      expect(skills).toHaveLength(1);
+      expect(skills[0]!.allowedTools).toBeUndefined();
+    });
+
+    it('drops unknown tokens and warns to stderr', () => {
+      const skillDir = join(tmpDir, 'skills');
+      const fs = require('fs');
+      fs.mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, 'SKILL.md'), [
+        '---',
+        'name: partial-tools',
+        'description: Some unknown tokens',
+        'tools: Read, UnknownTool, grep',
+        '---',
+        'Body.',
+      ].join('\n'));
+
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      const skills = extractPluginSkills(tmpDir, knownTools);
+      stderrSpy.mockRestore();
+
+      expect(skills).toHaveLength(1);
+      // read_file and grep should be kept; UnknownTool dropped
+      expect(skills[0]!.allowedTools).toEqual(['read_file', 'grep']);
+    });
+
+    it('deduplicates repeated tools (e.g. WebFetch + WebSearch both → web_scrape)', () => {
+      const skillDir = join(tmpDir, 'skills');
+      const fs = require('fs');
+      fs.mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, 'SKILL.md'), [
+        '---',
+        'name: dedup-skill',
+        'description: Dedup test',
+        'tools: WebFetch, WebSearch, web_scrape',
+        '---',
+        'Body.',
+      ].join('\n'));
+
+      const skills = extractPluginSkills(tmpDir, knownTools);
+      expect(skills).toHaveLength(1);
+      // All three map to web_scrape — should appear exactly once
+      expect(skills[0]!.allowedTools).toEqual(['web_scrape']);
+    });
+
+    it('sets allowedTools to [] (fail-closed) when all tokens are unknown', () => {
+      const skillDir = join(tmpDir, 'skills');
+      const fs = require('fs');
+      fs.mkdirSync(skillDir, { recursive: true });
+      writeFileSync(join(skillDir, 'SKILL.md'), [
+        '---',
+        'name: all-unknown',
+        'description: All unknown tokens',
+        'tools: Foo, Bar, Baz',
+        '---',
+        'Body.',
+      ].join('\n'));
+
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      const skills = extractPluginSkills(tmpDir, knownTools);
+      stderrSpy.mockRestore();
+
+      expect(skills).toHaveLength(1);
+      // Fail-closed invariant: when `tools:` is PRESENT but all tokens are unknown,
+      // allowedTools is [] (not undefined). This blocks all tools rather than
+      // silently falling through to the full CHILD_ALLOWED_TOOLS surface.
+      expect(skills[0]!.allowedTools).toEqual([]);
     });
   });
 });

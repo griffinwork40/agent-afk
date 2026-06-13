@@ -511,6 +511,51 @@ describe('discoverPluginSkillBodies', () => {
     const bodies = discoverPluginSkillBodies([]);
     expect(bodies.size).toBe(0);
   });
+
+  it('propagates allowedTools from tools: frontmatter field', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    mkdirSync(pluginA, { recursive: true });
+    const dir = join(pluginA, 'skills', 'read-skill');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      [
+        '---',
+        'name: read-skill',
+        'description: Read-only research skill',
+        'tools: read_file, grep, glob',
+        '---',
+        'Research the codebase.',
+      ].join('\n'),
+    );
+
+    const bodies = discoverPluginSkillBodies([{ type: 'local', path: pluginA }]);
+    const entry = bodies.get('read-skill');
+    expect(entry).toBeDefined();
+    expect(entry?.allowedTools).toEqual(['read_file', 'grep', 'glob']);
+  });
+
+  it('leaves allowedTools undefined when tools: is absent', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    mkdirSync(pluginA, { recursive: true });
+    const dir = join(pluginA, 'skills', 'full-skill');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      [
+        '---',
+        'name: full-skill',
+        'description: Full-access skill',
+        '---',
+        'Do anything.',
+      ].join('\n'),
+    );
+
+    const bodies = discoverPluginSkillBodies([{ type: 'local', path: pluginA }]);
+    const entry = bodies.get('full-skill');
+    expect(entry).toBeDefined();
+    expect(entry?.allowedTools).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -298,6 +298,31 @@ export function createChildSkillExecutorFactory(
 export type PhaseRole = 'read-only' | 'read-write';
 
 /**
+ * Build a provider whose `permissions.allowedTools` is restricted to the
+ * explicit `allowedTools` list parsed from a plugin SKILL.md `tools:` field.
+ *
+ * Invariant: this is the ONLY path that connects a SKILL.md `tools:` frontmatter
+ * list to the dispatcher's permission gate. Setting `AgentConfig.tools.allowedTools`
+ * directly is NOT equivalent — that field is read only by `emitSubagentLifecycle`
+ * for telemetry and does not reach the dispatcher.
+ *
+ * @see {@link buildPhaseRestrictedProvider} for the analogous read-only-phase path.
+ * @see `SkillExecutor.executePluginSkill` for the caller wiring.
+ */
+export function buildSkillRestrictedProvider(
+  allowedTools: string[],
+  model: AgentModelInput | undefined,
+): ModelProvider {
+  // Materialise once per fork so runtime array mutations don't bleed across siblings.
+  const permissions = { allowedTools: [...allowedTools] };
+  const route = providerForModel(typeof model === 'string' ? model : undefined);
+  if (route === 'openai-compatible') {
+    return new OpenAICompatibleProvider({ permissions });
+  }
+  return new AnthropicDirectProvider({ permissions });
+}
+
+/**
  * Build a provider whose `permissions.allowedTools` is restricted to
  * `READ_ONLY_PHASE_TOOLS`. Routed by model: OpenAI-compatible models get an
  * `OpenAICompatibleProvider`; everything else falls back to
