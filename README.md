@@ -1,8 +1,8 @@
 # Agent AFK
 
-> Delegate the work. Keep the judgment.
+> Run coding agents while you’re AFK.
 >
-> **Agent AFK** is a local-first control plane for long-running AI agent work. Hand off multi-session, headless tasks to parallel agents — then stay in control with traces you can read (`afk trace show`), resumable sessions, verification passes before anything ships, and a phone ping the moment work lands in a terminal state. Bring your own model.
+> Start a run in your terminal, walk away, and get pinged when Agent AFK finishes or needs you. Every step is saved as a readable trace, so you stay in control before anything ships.
 
 [![npm version](https://img.shields.io/npm/v/agent-afk.svg)](https://www.npmjs.com/package/agent-afk)
 [![Node](https://img.shields.io/node/v/agent-afk.svg)](https://nodejs.org/)
