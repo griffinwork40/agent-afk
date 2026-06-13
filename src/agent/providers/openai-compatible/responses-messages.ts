@@ -20,11 +20,31 @@
  */
 
 import type { OpenAIFunctionTool } from './loop.js';
+import type { OpenAIContentPart } from './messages.js';
 
-/** A simple role+text input item (`EasyInputMessage` subset). */
+/**
+ * A Responses-API content part. `input_text` / `input_image` mirror the SDK's
+ * `ResponseInputText` / `ResponseInputImage`. Note `image_url` is a bare
+ * data-URI string here (unlike Chat Completions' `{ url }` object), and
+ * `detail` is a required field.
+ */
+export interface ResponsesInputText {
+  type: 'input_text';
+  text: string;
+}
+export interface ResponsesInputImage {
+  type: 'input_image';
+  image_url: string;
+  detail: 'auto' | 'low' | 'high';
+}
+export type ResponsesContentPart = ResponsesInputText | ResponsesInputImage;
+
+/** A role + content input item (`EasyInputMessage` subset). Content is a plain
+ * string, or a `ResponsesContentPart[]` when a vision-capable user turn carries
+ * images. */
 export interface ResponsesInputMessage {
   role: 'user' | 'assistant' | 'system' | 'developer';
-  content: string;
+  content: string | ResponsesContentPart[];
 }
 
 /** A model-issued function call, replayed into history as an input item. */
@@ -62,7 +82,7 @@ export interface ResponsesFunctionTool {
  */
 export interface BuildableMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
+  content: string | OpenAIContentPart[] | null;
   tool_call_id?: string;
   tool_calls?: Array<{ id: string; type?: string; function: { name: string; arguments: string } }>;
 }
@@ -95,11 +115,13 @@ export function buildResponsesRequest(
     }
 
     if (msg.role === 'tool') {
-      // Tool result → function_call_output linked by call_id.
+      // Tool result → function_call_output linked by call_id. Tool messages
+      // only ever carry string content (images ride a follow-up user message),
+      // but coerce defensively to satisfy the widened content type.
       input.push({
         type: 'function_call_output',
         call_id: msg.tool_call_id ?? '',
-        output: msg.content ?? '',
+        output: typeof msg.content === 'string' ? msg.content : '',
       });
       continue;
     }
@@ -123,8 +145,8 @@ export function buildResponsesRequest(
       continue;
     }
 
-    // user
-    input.push({ role: 'user', content: msg.content ?? '' });
+    // user (may carry multimodal parts on vision-capable models)
+    input.push({ role: 'user', content: toResponsesContent(msg.content) });
   }
 
   const request: ResponsesRequest = { input };
@@ -132,6 +154,30 @@ export function buildResponsesRequest(
   const tools = responsesToolsFromOpenAITools(openAITools);
   if (tools.length > 0) request.tools = tools;
   return request;
+}
+
+/**
+ * Convert a Chat-Completions-shaped user `content` (string | parts) into the
+ * Responses-API content shape. Text parts → `input_text`; image parts →
+ * `input_image` (the Chat `image_url.url` data-URI becomes the bare
+ * `image_url` string the Responses API expects). History reaching here is
+ * already vision-sanitized upstream by `buildMessages`, so a non-vision turn
+ * arrives as a plain string and passes through untouched.
+ */
+function toResponsesContent(
+  content: string | OpenAIContentPart[] | null,
+): string | ResponsesContentPart[] {
+  if (content === null) return '';
+  if (typeof content === 'string') return content;
+  const parts: ResponsesContentPart[] = [];
+  for (const part of content) {
+    if (part.type === 'text') {
+      parts.push({ type: 'input_text', text: part.text });
+    } else {
+      parts.push({ type: 'input_image', image_url: part.image_url.url, detail: 'auto' });
+    }
+  }
+  return parts;
 }
 
 /**

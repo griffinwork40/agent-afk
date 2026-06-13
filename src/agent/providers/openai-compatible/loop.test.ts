@@ -6,6 +6,7 @@ import {
   accumulatedToolCallsToToolCalls,
   assistantMessageWithToolCalls,
   toolResultsToMessages,
+  toolImageFollowupMessage,
   summarizeToolCalls,
 } from './loop.js';
 
@@ -202,6 +203,85 @@ describe('toolResultsToMessages', () => {
       },
     ]);
     expect(out[0]!.content).toBe('[error] permission denied');
+  });
+
+  it('never carries the image payload on the role:tool message (OpenAI limit)', () => {
+    const signal = new AbortController().signal;
+    const out = toolResultsToMessages([
+      {
+        call: { id: 'a', name: 'browser_screenshot', input: {}, signal },
+        result: { content: 'shot saved 800x600', image: { mediaType: 'image/png', data: 'AAAA' } },
+      },
+    ]);
+    // Text summary rides the tool message; no image content.
+    expect(out).toEqual([{ role: 'tool', tool_call_id: 'a', content: 'shot saved 800x600' }]);
+  });
+});
+
+describe('toolImageFollowupMessage', () => {
+  const signal = new AbortController().signal;
+
+  it('returns undefined when the model lacks vision', () => {
+    const out = toolImageFollowupMessage(
+      [
+        {
+          call: { id: 'a', name: 'browser_screenshot', input: {}, signal },
+          result: { content: 'shot', image: { mediaType: 'image/png', data: 'AAAA' } },
+        },
+      ],
+      { vision: false },
+    );
+    expect(out).toBeUndefined();
+  });
+
+  it('returns undefined when no result carried an image', () => {
+    const out = toolImageFollowupMessage(
+      [{ call: { id: 'a', name: 'bash', input: {}, signal }, result: { content: 'ok' } }],
+      { vision: true },
+    );
+    expect(out).toBeUndefined();
+  });
+
+  it('builds a role:user message with image_url parts for a vision model', () => {
+    const out = toolImageFollowupMessage(
+      [
+        {
+          call: { id: 'a', name: 'browser_screenshot', input: {}, signal },
+          result: { content: 'shot', image: { mediaType: 'image/png', data: 'AAAA' } },
+        },
+      ],
+      { vision: true },
+    );
+    expect(out?.role).toBe('user');
+    const content = out!.content as Array<Record<string, unknown>>;
+    expect(content[0]).toMatchObject({ type: 'text' });
+    expect(content[0]!['text']).toContain('browser_screenshot');
+    expect(content[1]).toEqual({
+      type: 'image_url',
+      image_url: { url: 'data:image/png;base64,AAAA' },
+    });
+  });
+
+  it('aggregates images from multiple tool calls', () => {
+    const out = toolImageFollowupMessage(
+      [
+        {
+          call: { id: 'a', name: 'browser_screenshot', input: {}, signal },
+          result: { content: 's1', image: { mediaType: 'image/png', data: 'AAAA' } },
+        },
+        { call: { id: 'b', name: 'bash', input: {}, signal }, result: { content: 'no image' } },
+        {
+          call: { id: 'c', name: 'chart_tool', input: {}, signal },
+          result: { content: 's2', image: { mediaType: 'image/jpeg', data: 'BBBB' } },
+        },
+      ],
+      { vision: true },
+    );
+    const content = out!.content as Array<Record<string, unknown>>;
+    // 1 text label + 2 image parts (the no-image bash result is skipped).
+    expect(content).toHaveLength(3);
+    expect(content[1]).toMatchObject({ type: 'image_url' });
+    expect(content[2]).toMatchObject({ type: 'image_url' });
   });
 });
 

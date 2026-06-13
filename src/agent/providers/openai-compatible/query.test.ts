@@ -1350,3 +1350,57 @@ describe('OpenAICompatibleProvider — skill-dispatch terminal_font_size suppres
     expect(toolNames).toContain('read_file');
   });
 });
+
+describe('image (vision) input — issue #127', () => {
+  /** A prompt stream that yields one user turn carrying mixed text + image content. */
+  async function* imageInput(): AsyncIterable<ProviderUserTurn> {
+    yield {
+      content: [
+        { type: 'text', text: 'what is in this picture?' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+      ] as ProviderUserTurn['content'],
+    };
+  }
+
+  function stubOneTextTurn(): void {
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ];
+  }
+
+  it('forwards images as multimodal image_url parts on a vision-capable model', async () => {
+    stubOneTextTurn();
+    const q = buildQueryFromConfig(baseConfig({ model: 'gpt-4o' }), imageInput());
+    await collect(q);
+    const args = createCalls[0]!.args as {
+      messages: Array<{ role: string; content: unknown }>;
+    };
+    const userMsg = args.messages.find((m) => m.role === 'user');
+    expect(Array.isArray(userMsg!.content)).toBe(true);
+    const parts = userMsg!.content as Array<Record<string, unknown>>;
+    expect(parts[0]).toEqual({ type: 'text', text: 'what is in this picture?' });
+    expect(parts[1]).toEqual({
+      type: 'image_url',
+      image_url: { url: 'data:image/png;base64,AAAA' },
+    });
+  });
+
+  it('degrades to a text notice on a non-vision model (no silent drop, no image_url)', async () => {
+    stubOneTextTurn();
+    const q = buildQueryFromConfig(baseConfig({ model: 'gpt-3.5-turbo' }), imageInput());
+    await collect(q);
+    const args = createCalls[0]!.args as {
+      messages: Array<{ role: string; content: unknown }>;
+    };
+    const userMsg = args.messages.find((m) => m.role === 'user');
+    expect(typeof userMsg!.content).toBe('string');
+    const text = userMsg!.content as string;
+    expect(text).toContain('what is in this picture?');
+    expect(text).toMatch(/cannot view images/i);
+    // The data must never reach the wire as an image part.
+    expect(JSON.stringify(args.messages)).not.toContain('image_url');
+  });
+});

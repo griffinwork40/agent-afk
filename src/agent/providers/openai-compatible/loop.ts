@@ -21,6 +21,7 @@
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import type { ToolCall, ToolResult } from '../anthropic-direct/types.js';
 import type { AccumulatedToolCall } from './translate.js';
+import type { OpenAIContentPart, OpenAIMessage } from './messages.js';
 
 /**
  * OpenAI function-tool shape. We keep this structurally typed (not pulled
@@ -147,11 +148,12 @@ export interface OpenAIToolResultMessage {
 export function toolResultsToMessages(
   results: readonly { call: ToolCall; result: ToolResult }[],
 ): OpenAIToolResultMessage[] {
-  // NOTE: `result.image` (set by e.g. browser_screenshot) is intentionally
-  // dropped here. The OpenAI Chat Completions `role:'tool'` message cannot
-  // carry image content — images must ride a separate `role:'user'` message.
-  // We degrade to text-only; `content` still carries the path/dimensions
-  // summary. Proper vision support for tool-result images is a future follow-up.
+  // Invariant: an OpenAI Chat Completions `role:'tool'` message can only carry
+  // a string `content` — never image parts. So `result.image` (set by e.g.
+  // browser_screenshot) is NOT emitted here; the text summary (path/dimensions)
+  // rides the tool message, and on vision-capable models the actual pixels ride
+  // a separate follow-up `role:'user'` message built by
+  // `toolImageFollowupMessage`. See query.ts:dispatchAndAppend.
   return results.map(({ call, result }) => ({
     role: 'tool',
     tool_call_id: call.id,
@@ -161,6 +163,42 @@ export function toolResultsToMessages(
     // isError so the model can spot failures in its context.
     content: result.isError ? `[error] ${result.content}` : result.content,
   }));
+}
+
+/**
+ * Build the follow-up `role:'user'` message that carries any tool-result images
+ * for the NEXT model call (issue #127). OpenAI tool messages can't hold images
+ * (see `toolResultsToMessages`), so an image-producing tool (e.g.
+ * browser_screenshot) surfaces its pixels here instead — as `image_url` parts
+ * prefixed by a short text label linking them to the originating tool call(s).
+ *
+ * Returns `undefined` when the model lacks vision (the text summary already
+ * rode the tool message) or no result carried an image — so the caller appends
+ * nothing in the common case. Must be pushed AFTER the `role:'tool'` messages
+ * so the sequence stays assistant(tool_calls) → tool(result)… → user(images).
+ */
+export function toolImageFollowupMessage(
+  results: readonly { call: ToolCall; result: ToolResult }[],
+  opts: { vision: boolean },
+): OpenAIMessage | undefined {
+  if (!opts.vision) return undefined;
+  const imageParts: OpenAIContentPart[] = [];
+  const toolNames: string[] = [];
+  for (const { call, result } of results) {
+    if (result.image) {
+      imageParts.push({
+        type: 'image_url',
+        image_url: { url: `data:${result.image.mediaType};base64,${result.image.data}` },
+      });
+      toolNames.push(call.name);
+    }
+  }
+  if (imageParts.length === 0) return undefined;
+  const label =
+    toolNames.length === 1
+      ? `Image output from the \`${toolNames[0]}\` tool call (referenced above):`
+      : `Image output from ${toolNames.length} tool calls (${toolNames.join(', ')}):`;
+  return { role: 'user', content: [{ type: 'text', text: label }, ...imageParts] };
 }
 
 /** Render a short human-friendly summary of a batch of tool calls. */
