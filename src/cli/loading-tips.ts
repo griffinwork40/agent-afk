@@ -25,7 +25,7 @@
  *      reproducible.
  *
  * Tips are plain text — no ANSI inside the body, no second sentence. The
- * compositor wraps them with the dim 💡 prefix.
+ * compositor wraps them with the dim `💡 Tip:` prefix.
  */
 
 import { list as listSlashCommands } from './slash/registry.js';

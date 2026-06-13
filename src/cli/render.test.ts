@@ -468,7 +468,7 @@ describe('card', () => {
     Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
   });
 
-  it('user kind wraps long lines and right-aligns each row against the bar', () => {
+  it('user kind wraps long lines and terminates every row at the bar', () => {
     Object.defineProperty(process.stdout, 'columns', { value: 30, configurable: true });
     const out = strip(card({ kind: 'user', body: 'word '.repeat(15).trim() }));
     const rows = out.split('\n');
@@ -531,7 +531,7 @@ describe('card', () => {
 
   it('user kind wrapped lines all end flush right at the bar', () => {
     Object.defineProperty(process.stdout, 'columns', { value: 40, configurable: true });
-    // Body long enough to wrap. innerW = max(20, 40 - 4) = 36.
+    // Body long enough to wrap. innerW = max(20, min(36, floor(40*0.75), 100)) = 30.
     const body = 'word '.repeat(10).trim(); // 49 visible chars → wraps
     const out = strip(card({ kind: 'user', body }));
     const lines = out.split('\n');
@@ -546,6 +546,48 @@ describe('card', () => {
       expect(line.length).toBeLessThanOrEqual(40);
     }
     Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
+  });
+
+  // ── chat-bubble block tests (straight left edge, capped width) ─────────────
+
+  it('user kind: wrapped rows share a straight left edge (block, not per-row right-align)', () => {
+    Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
+    // Rows wrap at differing natural widths; per-row right-alignment would
+    // produce ragged indents. The bubble pads every row to the widest one.
+    const body = 'word '.repeat(30).trim();
+    const out = strip(card({ kind: 'user', body }));
+    const [, ...contentLines] = out.split('\n');
+    expect(contentLines.length).toBeGreaterThan(1);
+    const indents = contentLines.map((l) => l.length - l.trimStart().length);
+    expect(new Set(indents).size).toBe(1);
+    // A left gutter remains — the bubble must not span the full row.
+    expect(indents[0]).toBeGreaterThan(0);
+  });
+
+  it('user kind: bubble width is capped at 75% of the terminal', () => {
+    Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
+    const body = 'word '.repeat(40).trim();
+    const out = strip(card({ kind: 'user', body }));
+    const [, ...contentLines] = out.split('\n');
+    // innerW = floor(80 * 0.75) = 60 → content + ' │' ≤ 62; rows are pinned
+    // at rightEdge = 79, so the left gutter is at least 79 - 62 = 17 cols.
+    for (const line of contentLines) {
+      expect(line.length - line.trimStart().length).toBeGreaterThanOrEqual(17);
+    }
+  });
+
+  it('user kind: separator spans the bubble and shares its left edge', () => {
+    Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
+    const body = 'word '.repeat(30).trim();
+    const out = strip(card({ kind: 'user', body }));
+    const [sep, ...contentLines] = out.split('\n');
+    const sepIndent = sep!.length - sep!.trimStart().length;
+    const rowIndent = contentLines[0]!.length - contentLines[0]!.trimStart().length;
+    // Top rule starts exactly above the bubble's left edge and reaches the
+    // bar column — it reads as the bubble's top border.
+    expect(sepIndent).toBe(rowIndent);
+    expect(sep!.trimEnd().endsWith('─')).toBe(true);
+    expect(sep!.trimEnd().length).toBe(contentLines[0]!.length);
   });
 });
 

@@ -16,12 +16,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import stringWidth from 'string-width';
 import {
   buildTipPool,
   selectTip,
   _resetSeenTipsForTesting,
   type LoadingTip,
 } from './loading-tips.js';
+import { formatTipRow } from './terminal-compositor.types.js';
 
 // Harvest stubs — vi.mock has to be hoisted, so use the standard pattern.
 vi.mock('./slash/registry.js', () => ({
@@ -301,5 +303,35 @@ describe('selectTip', () => {
   it('respects the custom warmupMs override', () => {
     expect(selectTip(pool, { startedAt: 0, now: 2_000, warmupMs: 5_000 })).toBeNull();
     expect(selectTip(pool, { startedAt: 0, now: 6_000, warmupMs: 5_000 })).not.toBeNull();
+  });
+});
+
+describe('formatTipRow', () => {
+  const strip = (s: string): string => s.replace(/\x1B\[[0-9;]*m/g, '');
+
+  it('labels the row with "Tip:" so skill hints are not misread as routing', () => {
+    // A harvested skill tip looks like `/agentify — Use when…`. Without the
+    // label, rendering it under the spinner right after the user typed a
+    // DIFFERENT slash command reads as "the agent rerouted my command".
+    const row = strip(formatTipRow('/agentify — Use when the user wants to delegate', 120));
+    expect(row.startsWith('  💡 Tip: /agentify')).toBe(true);
+  });
+
+  it('truncates to one visual line with a single trailing ellipsis', () => {
+    const row = strip(formatTipRow('x'.repeat(500), 40));
+    expect(row.endsWith('…')).toBe(true);
+    // Exactly one trailing ellipsis — guards the '……' regression where
+    // truncateDisplayWidth's own ellipsis was compounded by a manual '…' append.
+    expect(row.match(/…+$/)?.[0]).toBe('…');
+    expect(row.length).toBeLessThanOrEqual(40);
+  });
+
+  it('truncates by display width, not char count (wide CJK glyphs)', () => {
+    // 30 CJK chars = 60 display columns but only 30 JS chars. Char-count
+    // truncation would keep ~29 of them (≈58 cols) and overflow a 40-col
+    // terminal; display-width truncation must keep the row ≤ cols.
+    const row = strip(formatTipRow('漢'.repeat(30), 40));
+    expect(row.endsWith('…')).toBe(true);
+    expect(stringWidth(row)).toBeLessThanOrEqual(40);
   });
 });
