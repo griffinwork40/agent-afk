@@ -2924,6 +2924,53 @@ describe('ToolLane.flushSource — nesting-aware indent', () => {
     expect(lane.hasEntry('outer-agent')).toBe(true);
   });
 
+  it('issue #20: extraDepth≥2 (outer-skill → inner-skill → agent → child-tool) emits 2-unit head + 3-unit child rows', () => {
+    // Coverage for the tool-lane-render flush-path formatters
+    // (formatAgentHeader / formatAgentChildren, which prepend `extraDepth`
+    // spine units) at extraDepth ≥ 2. The rest of the suite only exercised
+    // extraDepth 0 and 1; a miscount at depth ≥2 would otherwise slip past CI.
+    //
+    // Topology is the issue's exact shape — an outer skill spawns an inner
+    // skill, which spawns an Agent, which runs a leaf tool. flushSource is the
+    // live REPL's settle-subtree-to-scrollback path; with both skill ancestors
+    // still open, each LIVE ancestor prepends one spine unit, so the agent head
+    // lands at two units (`│ │ ◉ `) and its children at three (`│ │ │ …`).
+    const lane = new ToolLane();
+    lane.addStartWithAgentContext('outer-skill', 'skill', '(devils-advocate)', undefined);
+    lane.addStartWithAgentContext('inner-skill', 'skill', '(compete)', 'outer-skill');
+    lane.addStartWithAgentContext('agent', 'Agent', '(critic-pragmatist)', 'inner-skill');
+    lane.addStartWithAgentContext('child-tool', 'Read', '("x.ts")', 'agent');
+    lane.addResult('child-tool', makeResult('1 line'));
+    lane.setAgentResultSummary('agent', 'Done (1 tools)');
+    lane.addResult('agent', makeResult('done'));
+
+    // Two live ancestors → eager ancestor headers + agent block:
+    //   [0] outer-skill header (depth 0 → ◉ at col 0)
+    //   [1] inner-skill header (depth 1 → │ ◉)
+    //   [2] agent block (depth 2 → │ │ ◉ head, │ │ │ … children)
+    const flushed = lane.flushSource('agent');
+    expect(flushed).toHaveLength(3);
+
+    const block = stripAnsi(flushed[2]!);
+    const rows = block.split('\n');
+    const headRow = rows[0]!;
+    const childRow = rows.find((r) => r.includes('Read'));
+
+    // ask #3: agent head row = two leading spine units + agent glyph.
+    expect(headRow.startsWith('│ │ ◉ '), `head row: ${JSON.stringify(headRow)}`).toBe(true);
+
+    // ask #4: child-tool row = three leading spine units + branch connector.
+    expect(childRow, `child row missing in block:\n${block}`).toBeDefined();
+    expect(
+      /^│ │ │ [├╰]─/.test(childRow!),
+      `child row: ${JSON.stringify(childRow)}`,
+    ).toBe(true);
+
+    // Both skill ancestors survive the flush (only the agent subtree settled).
+    expect(lane.hasEntry('outer-skill')).toBe(true);
+    expect(lane.hasEntry('inner-skill')).toBe(true);
+  });
+
   it('dangling agentContext (parent already gone from lane) renders at root', () => {
     const lane = new ToolLane();
     // Subagent claims agentContext pointing at an id that does NOT exist
