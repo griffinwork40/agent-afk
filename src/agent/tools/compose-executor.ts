@@ -547,6 +547,8 @@ export class ComposeExecutor {
         );
         const nodeIsOpenAI = nodeProvider === 'openai-compatible';
         const preserveParentApiKey = this.ctx.apiKey !== undefined && nodeProvider === parentProvider;
+        // preserveParentApiKey is dead for OpenAI-routed nodes — the `nodeIsOpenAI ? undefined`
+        // branch short-circuits before it is ever read.
         // Resolve per-node credential by the node's own model when a resolver
         // is injected (fixes: Anthropic node starves under OpenAI-keyed parent).
         // Same-provider nodes keep an explicit parent/session apiKey so
