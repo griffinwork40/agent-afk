@@ -69,6 +69,27 @@ An AFK.md already exists at \`${afkMdPath}\`. Read it first — then update it w
 A CLAUDE.md exists at \`${claudeMdPath}\`. Read it and incorporate relevant context (commands, conventions, architecture) into the AFK.md. Don't duplicate — adapt.`;
     }
 
+    // Other agent-instruction sources — detect programmatically and incorporate,
+    // mirroring the CLAUDE.md branch. Covers the tools a migrating user typically
+    // arrives from. `.cursor/rules` is a directory of *.mdc files in modern
+    // Cursor; `.cursorrules` is the legacy single-file form. `.clinerules` may be
+    // a file or a directory. Previously AGENTS.md was only a hint in the static
+    // prompt (no existsSync gate) and Cursor/Cline rules weren't handled at all.
+    const otherAgentSources: ReadonlyArray<{ rel: string; label: string }> = [
+      { rel: 'AGENTS.md', label: 'AGENTS.md (Codex / OpenAI)' },
+      { rel: '.cursor/rules', label: 'Cursor rules directory' },
+      { rel: '.cursorrules', label: 'Cursor rules (legacy single file)' },
+      { rel: '.clinerules', label: 'Cline rules' },
+    ];
+    const detectedOther = otherAgentSources.filter((s) =>
+      existsSync(resolve(process.cwd(), s.rel)),
+    );
+    if (detectedOther.length > 0) {
+      const list = detectedOther.map((s) => `\`${s.rel}\` (${s.label})`).join(', ');
+      instruction += `\n\n## Other agent instructions detected
+These existing agent-instruction sources were found: ${list}. Read each and incorporate relevant context (commands, conventions, architecture, do's and don'ts) into the AFK.md. Adapt — don't duplicate. If a source is a directory, read the files inside it.`;
+    }
+
     if (args.trim()) {
       const cleaned = args.replace('--force', '').trim();
       if (cleaned) {
