@@ -40,6 +40,17 @@ const DEFAULT_MAX_BODY_LINES = 5;
  * mangling them into single-letter slivers.
  */
 const MIN_BODY_WIDTH = 16;
+/**
+ * Burn-in factor for the input tail-slice. The renderer only ever shows
+ * `maxLines × bodyWidth` codepoints, but greedy word-wrap breaks depend on
+ * where the text starts — so the first few wrapped lines of a tail-slice can
+ * be out of phase with the full-buffer wrap. Slicing a tail ~4× larger than
+ * the visible region drops ~3×maxLines leading lines, giving the breaks room
+ * to re-synchronize before the surviving `maxLines`. For natural prose they
+ * re-sync within a line or two; uniform tokens tuned to `bodyWidth` are the
+ * pathological exception, where the footer count becomes approximate.
+ */
+const TAIL_MULTIPLIER = 4;
 
 export interface ThinkingParagraphOptions {
   /** Terminal width in columns. */
@@ -65,22 +76,43 @@ export interface ThinkingParagraphOptions {
  *
  * Tail-scroll semantics: the most recent `maxLines` wrapped lines survive;
  * older lines drop off the top. The footer reports how many characters of
- * wrapped body content were dropped, NOT a line count, because users care
- * about how much reasoning they didn't see.
+ * earlier content were dropped, NOT a line count, because users care about
+ * how much reasoning they didn't see. That total spans both the lines wrapped
+ * here and dropped, and the buffer head sliced off before wrapping (see the
+ * TAIL_MULTIPLIER bound) — for single-spaced prose the two agree exactly with
+ * the un-truncated count; whitespace-heavy CoT makes it an approximation.
  */
 export function formatThinkingParagraph(
   buffer: string,
   opts: ThinkingParagraphOptions,
 ): string {
+  const maxLines = opts.maxLines ?? DEFAULT_MAX_BODY_LINES;
+  const bodyWidth = Math.max(MIN_BODY_WIDTH, opts.cols - INDENT.length);
+
+  // Bound the per-repaint work *before* the O(N) normalize + wrap. This runs
+  // on every thinking-chunk (~50 Hz) and the wrapped output is then sliced to
+  // the last `maxLines` lines — so wrapping the full multi-KB CoT only to throw
+  // almost all of it away is pure waste that scales with turn length. Cap the
+  // input to a generous tail (see TAIL_MULTIPLIER); cost becomes
+  // O(maxLines · bodyWidth), independent of total CoT length. The chars sliced
+  // off the head — plus any whitespace the tail now leads with, which the
+  // normalize() below would silently trim — are folded into `droppedChars` so
+  // the `⋯ +N chars earlier` footer still totals the full pre-visible content.
+  const tailBudget = maxLines * bodyWidth * TAIL_MULTIPLIER;
+  let tail = buffer;
+  let preSliceDropped = 0;
+  if (buffer.length > tailBudget) {
+    tail = buffer.slice(-tailBudget);
+    const leadingTailWs = tail.length - tail.replace(/^\s+/, '').length;
+    preSliceDropped = buffer.length - tail.length + leadingTailWs;
+  }
+
   // Collapse all internal whitespace (including newlines) to single spaces.
   // CoT often has paragraph breaks the model used as natural pauses; in a
   // 5-line overlay those breaks don't add information and they shorten the
   // effective visible body. wrap-ansi will reflow at the body width below.
-  const normalized = buffer.replace(/\s+/g, ' ').trim();
+  const normalized = tail.replace(/\s+/g, ' ').trim();
   if (!normalized) return '';
-
-  const maxLines = opts.maxLines ?? DEFAULT_MAX_BODY_LINES;
-  const bodyWidth = Math.max(MIN_BODY_WIDTH, opts.cols - INDENT.length);
 
   // Wrap with `trim: true` (not the project-default `wrapToWidth`, which
   // uses `trim: false`). The default leaves whitespace at line breaks
@@ -96,12 +128,13 @@ export function formatThinkingParagraph(
   const allLines = wrapped.split('\n');
 
   let visible = allLines;
-  let droppedChars = 0;
+  let droppedChars = preSliceDropped;
   if (allLines.length > maxLines) {
     const dropped = allLines.slice(0, allLines.length - maxLines);
     // Sum the wrapped-line lengths, plus 1 per join to account for the
-    // spaces that would have separated them in the underlying prose.
-    droppedChars = dropped.reduce((sum, l, i) => sum + l.length + (i > 0 ? 1 : 0), 0);
+    // spaces that would have separated them in the underlying prose. Added
+    // to `preSliceDropped` (the head we never wrapped) for the full total.
+    droppedChars += dropped.reduce((sum, l, i) => sum + l.length + (i > 0 ? 1 : 0), 0);
     visible = allLines.slice(-maxLines);
   }
 
