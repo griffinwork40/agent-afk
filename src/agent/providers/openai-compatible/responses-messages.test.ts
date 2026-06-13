@@ -75,6 +75,28 @@ describe('buildResponsesRequest', () => {
       { type: 'function_call_output', call_id: 'c', output: 'ok' },
     ]);
   });
+
+  it('converts multimodal user parts to input_text / input_image items', () => {
+    const messages: BuildableMessage[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'what is this?' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+        ],
+      },
+    ];
+    const req = buildResponsesRequest(messages);
+    expect(req.input).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'input_text', text: 'what is this?' },
+          { type: 'input_image', image_url: 'data:image/png;base64,AAAA', detail: 'auto' },
+        ],
+      },
+    ]);
+  });
 });
 
 describe('responsesToolsFromOpenAITools', () => {
