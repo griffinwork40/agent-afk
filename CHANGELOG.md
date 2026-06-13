@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.109.0] - 2026-06-13
+
+### Added
+- surface-answerability clause + BLOCKED-artifact convention (port afk-workshop#777) (684a304)
+
+### Changed
+- Merge pull request #118 from griffinwork40/afk-port/pr-777 (9e2d768)
+
 ## [3.108.0] - 2026-06-12
 
 ### Added
