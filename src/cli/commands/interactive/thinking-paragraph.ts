@@ -40,6 +40,13 @@ const DEFAULT_MAX_BODY_LINES = 5;
  * mangling them into single-letter slivers.
  */
 const MIN_BODY_WIDTH = 16;
+/**
+ * Multiplier for the pre-normalize tail-slice bound. ×4 accounts for
+ * whitespace collapse + multi-byte chars + word-break slack — ensuring
+ * that even a burst of whitespace before real content does not cause the
+ * slice to discard visible prose.
+ */
+const TAIL_MULTIPLIER = 4;
 
 export interface ThinkingParagraphOptions {
   /** Terminal width in columns. */
@@ -72,15 +79,24 @@ export function formatThinkingParagraph(
   buffer: string,
   opts: ThinkingParagraphOptions,
 ): string {
+  const maxLines = opts.maxLines ?? DEFAULT_MAX_BODY_LINES;
+  const bodyWidth = Math.max(MIN_BODY_WIDTH, opts.cols - INDENT.length);
+
+  // Bound the work: the most we can ever render is maxLines × bodyWidth
+  // codepoints of body. Slice a generous tail (×TAIL_MULTIPLIER accounts for
+  // whitespace collapse + multi-byte chars + word-break slack) before running
+  // the O(N) regex + wrap — keeping cost O(maxLines · bodyWidth) regardless
+  // of accumulated CoT length.
+  const tailBound = maxLines * bodyWidth * TAIL_MULTIPLIER;
+  const tail = buffer.length > tailBound ? buffer.slice(-tailBound) : buffer;
+  const preTailDropped = buffer.length - tail.length;
+
   // Collapse all internal whitespace (including newlines) to single spaces.
   // CoT often has paragraph breaks the model used as natural pauses; in a
   // 5-line overlay those breaks don't add information and they shorten the
   // effective visible body. wrap-ansi will reflow at the body width below.
-  const normalized = buffer.replace(/\s+/g, ' ').trim();
+  const normalized = tail.replace(/\s+/g, ' ').trim();
   if (!normalized) return '';
-
-  const maxLines = opts.maxLines ?? DEFAULT_MAX_BODY_LINES;
-  const bodyWidth = Math.max(MIN_BODY_WIDTH, opts.cols - INDENT.length);
 
   // Wrap with `trim: true` (not the project-default `wrapToWidth`, which
   // uses `trim: false`). The default leaves whitespace at line breaks
@@ -96,12 +112,16 @@ export function formatThinkingParagraph(
   const allLines = wrapped.split('\n');
 
   let visible = allLines;
-  let droppedChars = 0;
+  // Invariant: droppedChars accounts for both pre-tail-slice raw chars
+  // (preTailDropped) and any wrapped lines scrolled off the top of the
+  // visible window — the footer is therefore a lower bound on total CoT
+  // chars the user did not see, not an exact character count.
+  let droppedChars = preTailDropped;
   if (allLines.length > maxLines) {
     const dropped = allLines.slice(0, allLines.length - maxLines);
     // Sum the wrapped-line lengths, plus 1 per join to account for the
     // spaces that would have separated them in the underlying prose.
-    droppedChars = dropped.reduce((sum, l, i) => sum + l.length + (i > 0 ? 1 : 0), 0);
+    droppedChars += dropped.reduce((sum, l, i) => sum + l.length + (i > 0 ? 1 : 0), 0);
     visible = allLines.slice(-maxLines);
   }
 

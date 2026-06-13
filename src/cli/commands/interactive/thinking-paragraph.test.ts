@@ -110,4 +110,53 @@ describe('formatThinkingParagraph', () => {
     const plain = stripAnsi(out);
     expect(plain.split('\n')[0]).toContain('◆ thinking');
   });
+
+  it('(h) 100 KB buffer: visible body is O(maxLines×bodyWidth); footer accounts for pre-slice drop', () => {
+    // bodyWidth = max(16, 80 - 2) = 78; tailBound = 5 * 78 * 4 = 1560.
+    // 100 tail words (~689 chars) are shorter than tailBound so they always
+    // appear verbatim in the tail region; the 100 KB prefix is sliced away.
+    const tailWords = Array.from({ length: 100 }, (_, i) => `tail${i}`).join(' ');
+    const prefix = 'x '.repeat(50_000); // ~100 KB, >> tailBound
+    const bigBuffer = prefix + tailWords;
+
+    const out = formatThinkingParagraph(bigBuffer, { cols: 80, maxLines: 5 });
+    const plain = stripAnsi(out);
+    const lines = plain.split('\n');
+
+    // header + 5 body lines + truncation footer = 7 lines.
+    expect(lines).toHaveLength(7);
+    expect(lines[0]).toBe('  ◆ thinking');
+
+    // The last 5 wrapped lines come from the tail words region — every
+    // visible body line must contain at least one `tailN` token.
+    for (const line of lines.slice(1, 6)) {
+      expect(line).toMatch(/tail\d+/);
+    }
+
+    // Footer must reflect the pre-tail-slice drop (>>50 K raw chars).
+    expect(lines[6]).toMatch(/^ {2}⋯ \+\d+ chars earlier$/);
+    const match = lines[6]!.match(/\+(\d+) chars earlier/);
+    expect(Number(match?.[1])).toBeGreaterThan(50_000);
+  });
+
+  it('(i) pathological whitespace burst: ×4 multiplier preserves real content after collapse', () => {
+    // A 1 KB newline burst collapses to a single space after normalize.
+    // Verify the content that follows the burst is still visible and the
+    // footer correctly reports the pre-tail-slice drop.
+    const realContent = Array.from({ length: 50 }, (_, i) => `real${i}`).join(' ');
+    const newlineBurst = '\n'.repeat(1024);
+    // Prefix >> tailBound so the tail-slice fires and preTailDropped > 0.
+    const prefix = 'x '.repeat(10_000); // ~20 KB
+    const buffer = prefix + newlineBurst + realContent;
+
+    const out = formatThinkingParagraph(buffer, { cols: 80, maxLines: 5 });
+    const plain = stripAnsi(out);
+
+    // Real content (after the burst) must appear in the visible body.
+    expect(plain).toMatch(/real\d+/);
+    // Footer must appear — preTailDropped accounts for the dropped prefix.
+    expect(plain).toContain('chars earlier');
+    const match = plain.match(/\+(\d+) chars earlier/);
+    expect(Number(match?.[1])).toBeGreaterThan(10_000);
+  });
 });
