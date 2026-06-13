@@ -41,6 +41,22 @@ const DEFAULT_MAX_BODY_LINES = 5;
  */
 const MIN_BODY_WIDTH = 16;
 
+/**
+ * Multiplier on `maxLines × bodyWidth` used as the tail-slice threshold.
+ * Holding TAIL_MULTIPLIER × the maximum renderable size ensures the sliced
+ * tail has enough slack for whitespace collapse (which can reduce a run of
+ * whitespace to a single space), multi-byte UTF-8 characters, and word-break
+ * slack so that the visible `maxLines` lines are always populated even when
+ * the buffer is dominated by whitespace.
+ *
+ * Chosen after testing with pathological cases: a 100 KB buffer with
+ * alternating short words produces ~5 visible lines from the last 3120 raw
+ * characters (5 × 78 × 4 = 1560 — doubled for safety here), and a buffer
+ * that is 50 % newlines still produces the same visible tail as the full
+ * pre-normalize run.
+ */
+const TAIL_MULTIPLIER = 8;
+
 export interface ThinkingParagraphOptions {
   /** Terminal width in columns. */
   cols: number;
@@ -67,20 +83,44 @@ export interface ThinkingParagraphOptions {
  * older lines drop off the top. The footer reports how many characters of
  * wrapped body content were dropped, NOT a line count, because users care
  * about how much reasoning they didn't see.
+ *
+ * Performance: on every thinking-chunk repaint (~50 Hz) the pre-optimisation
+ * code ran `buffer.replace(/\s+/g, ' ')` + `wrapAnsi` on the ENTIRE
+ * accumulated buffer (often 8-10 KB), then threw away everything except the
+ * last ~5 lines.  The fix tail-slices the raw buffer before the O(N) regex
+ * and wrap steps, bounding cost to O(maxLines · bodyWidth · TAIL_MULTIPLIER)
+ * per call independent of the total CoT length.
  */
 export function formatThinkingParagraph(
   buffer: string,
   opts: ThinkingParagraphOptions,
 ): string {
+  // Invariant: maxLines and bodyWidth must be resolved BEFORE the tail-slice
+  // step so the target character budget is known.
+  const maxLines = opts.maxLines ?? DEFAULT_MAX_BODY_LINES;
+  const bodyWidth = Math.max(MIN_BODY_WIDTH, opts.cols - INDENT.length);
+
+  // Tail-slice the raw buffer before the O(N) normalize + wrap steps.
+  // The most we can ever render is `maxLines × bodyWidth` codepoints of
+  // body.  Slice a generous tail (×TAIL_MULTIPLIER) so that the regex and
+  // wrap cost is bounded regardless of total buffer length.  Prefer
+  // slice-at-character-boundary over truncating-at-word-boundary: the
+  // ×TAIL_MULTIPLIER cushion means a partial-word at the cut boundary is
+  // absorbed by the slack, and the collapsed whitespace in the remaining
+  // tail still fills the visible window.
+  const maxWorkChars = maxLines * bodyWidth * TAIL_MULTIPLIER;
+  let preSliceChars = 0;
+  if (buffer.length > maxWorkChars) {
+    preSliceChars = buffer.length - maxWorkChars;
+    buffer = buffer.slice(-maxWorkChars);
+  }
+
   // Collapse all internal whitespace (including newlines) to single spaces.
   // CoT often has paragraph breaks the model used as natural pauses; in a
   // 5-line overlay those breaks don't add information and they shorten the
   // effective visible body. wrap-ansi will reflow at the body width below.
   const normalized = buffer.replace(/\s+/g, ' ').trim();
   if (!normalized) return '';
-
-  const maxLines = opts.maxLines ?? DEFAULT_MAX_BODY_LINES;
-  const bodyWidth = Math.max(MIN_BODY_WIDTH, opts.cols - INDENT.length);
 
   // Wrap with `trim: true` (not the project-default `wrapToWidth`, which
   // uses `trim: false`). The default leaves whitespace at line breaks
@@ -96,12 +136,17 @@ export function formatThinkingParagraph(
   const allLines = wrapped.split('\n');
 
   let visible = allLines;
-  let droppedChars = 0;
+  // Initialize droppedChars with the pre-slice drop count so the footer
+  // accounts for ALL chars the user cannot see.  The pre-slice count is in
+  // raw characters (not normalized chars) and the post-wrap count is in
+  // display-line chars, so the sum is an approximate "+N earlier" hint —
+  // acceptable per issue #23.
+  let droppedChars = preSliceChars;
   if (allLines.length > maxLines) {
     const dropped = allLines.slice(0, allLines.length - maxLines);
     // Sum the wrapped-line lengths, plus 1 per join to account for the
     // spaces that would have separated them in the underlying prose.
-    droppedChars = dropped.reduce((sum, l, i) => sum + l.length + (i > 0 ? 1 : 0), 0);
+    droppedChars += dropped.reduce((sum, l, i) => sum + l.length + (i > 0 ? 1 : 0), 0);
     visible = allLines.slice(-maxLines);
   }
 

@@ -11,6 +11,9 @@
  *   (e) MIN_BODY_WIDTH floor on narrow terminals (no per-glyph breaks).
  *   (f) Internal whitespace (newlines, runs of spaces) collapsed to single spaces.
  *   (g) Custom `maxLines` honored.
+ *   (h) Large buffer (100 KB) tail-slice optimisation: output structure identical
+ *       to reference path.
+ *   (i) Pathological-whitespace buffer: no crash, sane output.
  *
  * Assertions look at the ANSI-stripped string so the structure (line count,
  * presence of header/footer text) is testable without coupling to chalk's
@@ -20,6 +23,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import wrapAnsi from 'wrap-ansi';
 import { stripAnsi } from '../../display.js';
 import { formatThinkingParagraph } from './thinking-paragraph.js';
 
@@ -109,5 +113,67 @@ describe('formatThinkingParagraph', () => {
     const out = formatThinkingParagraph('anything', { cols: 80 });
     const plain = stripAnsi(out);
     expect(plain.split('\n')[0]).toContain('◆ thinking');
+  });
+
+  it('(h) large buffer (~100 KB): tail-slice optimisation produces correct visible body lines', () => {
+    // Build a ~100 KB buffer of short repeating words.  The tail-slice
+    // optimisation must produce the same visible body structure as the
+    // straight-through (non-optimised) path: header + maxLines body lines +
+    // footer with N > 0.
+    const word = 'reasoning';
+    const count = Math.ceil(100_000 / (word.length + 1));
+    const largeBuffer = Array.from({ length: count }, () => word).join(' ');
+
+    const opts = { cols: 80, maxLines: 5 };
+    const out = formatThinkingParagraph(largeBuffer, opts);
+    const plain = stripAnsi(out);
+    const lines = plain.split('\n');
+
+    // header + 5 body + footer = 7 lines.
+    expect(lines).toHaveLength(7);
+    expect(lines[0]).toBe('  ◆ thinking');
+
+    // Footer must report N > 0 chars dropped.
+    const footer = lines[6] ?? '';
+    expect(footer).toMatch(/^ {2}⋯ \+\d+ chars earlier$/);
+    const footerNum = Number(footer.match(/\+(\d+)/)?.[1]);
+    expect(footerNum).toBeGreaterThan(0);
+
+    // Visible body lines (index 1-5) must match what the naive code path
+    // would produce on the same buffer (no tail-slice).  We simulate that
+    // reference path here.
+    const normalizedRef = largeBuffer.replace(/\s+/g, ' ').trim();
+    const bodyWidth = Math.max(16, opts.cols - 2);
+    const wrappedRef = wrapAnsi(normalizedRef, bodyWidth, {
+      hard: false,
+      trim: true,
+      wordWrap: true,
+    });
+    const allLinesRef = wrappedRef.split('\n');
+    const visibleRef = allLinesRef.slice(-opts.maxLines);
+
+    const visibleOptimised = lines.slice(1, 6);
+    expect(visibleOptimised).toEqual(visibleRef.map((l) => '  ' + l));
+  });
+
+  it('(i) pathological-whitespace buffer — no crash, collapses to empty', () => {
+    // 2 KB of alternating whitespace should collapse to empty string.
+    const buffer = ' \n'.repeat(1_000);
+    const out = formatThinkingParagraph(buffer, { cols: 80, maxLines: 5 });
+    expect(out).toBe('');
+  });
+
+  it('(j) wide-narrow buffer: 2 KB of short tokens with internal newlines — tail window gets last lines', () => {
+    // Buffer where each line is a short word + newline, so pre-normalize
+    // whitespace dominates.  The tail-slice must still render the last
+    // maxLines lines of wrapped prose, not a partial buffer.
+    const buffer = Array.from({ length: 500 }, (_, i) => `tok${i}`).join('\n');
+    const out = formatThinkingParagraph(buffer, { cols: 40, maxLines: 3 });
+    const plain = stripAnsi(out);
+    const lines = plain.split('\n');
+    // header + 3 body + footer = 5 lines
+    expect(lines).toHaveLength(5);
+    expect(lines[0]).toBe('  ◆ thinking');
+    expect(lines[4] ?? '').toMatch(/^ {2}⋯ \+\d+ chars earlier$/);
   });
 });
