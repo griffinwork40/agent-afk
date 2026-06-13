@@ -84,7 +84,7 @@ afk chat "refactor this" --model codex
 | `fable` | Most capable — Claude Fable 5 (Mythos-class), hardest reasoning + long-horizon agentic work (1M context) |
 | `opus` | Complex reasoning, multi-step planning, long contexts |
 | `sonnet` | Day-to-day default — balanced speed and capability |
-| `haiku` | Fast, cheap, one-shots |
+| `haiku` | Fast, cheap, meh... |
 
 ## Useful commands
 
