@@ -27,6 +27,7 @@ import {
   RECON_ALLOWED_TOOLS,
   buildReadOnlyReconProvider,
   createStubParentSession,
+  buildSkillRestrictedProvider,
   type ChildProviderFactoryArgs,
 } from './nesting.js';
 import { SubagentExecutor } from './subagent-executor.js';
@@ -275,6 +276,7 @@ export class SkillExecutor {
           parsed.arguments,
           call,
           readOnly,
+          pluginSkill.allowedTools,
         );
       }
       // Default: in-context LOAD (2026-06 load-by-default flip). No readOnly —
@@ -453,19 +455,50 @@ export class SkillExecutor {
     // RECON tool allowlist (no write_file/edit_file) and the mutating-bash
     // gate — on BOTH the factory path and the depth-cap/no-factory fallback.
     readOnly = false,
+    // Plugin SKILL.md `tools:` allowlist. When set, restricts the child to this
+    // exact tool set (single source of truth — no post-fork provider override).
+    // Undefined for the registry path (executeForkedRegistrySkill), which must
+    // stay unchanged.
+    allowedTools?: string[],
   ): { childConfig: AgentConfig; childManager: SubagentManager | undefined } {
     const depth = this.ctx.depth ?? 0;
     const maxDepth = this.ctx.maxDepth ?? DEFAULT_MAX_NESTING_DEPTH;
     const childConfig: AgentConfig = { ...baseConfig };
 
+    // Invariant (single source of truth for effective allowlist):
+    //   readOnly && allowedTools  → intersection(allowedTools, RECON_ALLOWED_TOOLS) + readOnlyBash
+    //   readOnly && !allowedTools → RECON_ALLOWED_TOOLS + readOnlyBash  (unchanged)
+    //   !readOnly && allowedTools → allowedTools, no readOnlyBash
+    //   !readOnly && !allowedTools → no override (factory default CHILD_ALLOWED_TOOLS)
+    // This keeps subagentExecutor/skillExecutor/readOnlyMemory/readOnlyBash intact
+    // through the factory — the previous post-fork buildSkillRestrictedProvider
+    // override is gone from executePluginSkill.
+    const effectiveAllowed: string[] | undefined =
+      readOnly && allowedTools !== undefined
+        ? allowedTools.filter((t) => (RECON_ALLOWED_TOOLS as readonly string[]).includes(t))
+        : readOnly
+          ? [...RECON_ALLOWED_TOOLS]
+          : allowedTools;
+    const effectiveReadOnlyBash = readOnly;
+
     if (!this.ctx.childProviderFactory || depth >= maxDepth) {
-      // Depth-cap / no-factory fallback. The child would otherwise inherit the
-      // bare provider singleton with the full write surface and no bash gate,
-      // silently defeating read-only enforcement. Build an explicit read-only
-      // recon provider so the constraint holds even here (no agent/skill fan-out
-      // is possible at the cap anyway, so the missing executors are harmless).
+      // Depth-cap / no-factory fallback. At the cap no executors are possible,
+      // so missing subagentExecutor/skillExecutor is harmless — but readOnlyBash
+      // and readOnlyMemory still matter: `bash` is a builtin gated by the
+      // dispatcher's readOnlyBash classifier, NOT routed through an executor, so
+      // dropping that gate here would re-open mutating bash even at the cap.
       if (readOnly) {
+        // readOnly (with OR without a tools: list): buildReadOnlyReconProvider
+        // carries readOnlyBash + readOnlyMemory + RECON_ALLOWED_TOOLS. The
+        // tools: intersection (effectiveAllowed) is a subset of RECON, so RECON
+        // is a safe read-only superset and — crucially — the mutating-bash gate
+        // is preserved. This closes the cap-path readOnlyBash fail-open for a
+        // `read-only: true` + `tools: bash` skill forked at the depth cap.
         childConfig.provider = buildReadOnlyReconProvider(childConfig.model);
+      } else if (effectiveAllowed !== undefined) {
+        // Non-readOnly tools: allowlist at the cap. Restrict to the declared
+        // tools (no readOnlyBash — the skill did not declare read-only).
+        childConfig.provider = buildSkillRestrictedProvider(effectiveAllowed, childConfig.model);
       }
       return { childConfig, childManager: undefined };
     }
@@ -512,12 +545,12 @@ export class SkillExecutor {
       ...(this.ctx.backgroundRegistry !== undefined
         ? { backgroundRegistry: this.ctx.backgroundRegistry }
         : {}),
-      // Propagate read-only constraints into the SubagentExecutor that will
-      // handle `agent` tool calls from this skill-forked child. Without this,
-      // a depth-2 fan-out (`ground-state → agent → depth-2`) loses the
-      // allowlist — the grandchild SubagentExecutor's `childProviderFactory`
-      // call omits allowedTools/readOnlyBash and falls back to CHILD_ALLOWED_TOOLS.
-      ...(readOnly ? { allowedTools: [...RECON_ALLOWED_TOOLS], readOnlyBash: true as const } : {}),
+      // Propagate effective allowlist into the grandchild SubagentExecutor so
+      // depth-2 fan-out (skill → agent → depth-2) inherits the same constraints.
+      // Without this, the grandchild's childProviderFactory call omits
+      // allowedTools/readOnlyBash and falls back to CHILD_ALLOWED_TOOLS.
+      ...(effectiveAllowed !== undefined ? { allowedTools: effectiveAllowed } : {}),
+      ...(effectiveReadOnlyBash ? { readOnlyBash: true as const } : {}),
     });
     const childSkillExecutor = this.ctx.childSkillExecutorFactory
       ? this.ctx.childSkillExecutorFactory(depth + 1, maxDepth, signal)
@@ -527,15 +560,17 @@ export class SkillExecutor {
     // skill-forked child inherits the legacy hardcoded
     // AnthropicDirectProvider — meaning an OpenAI-routed parent silently
     // dispatches every skill subagent to api.anthropic.com.
+    //
+    // Invariant: effective allowlist and readOnlyBash are passed through the
+    // factory — keeping subagentExecutor, skillExecutor, readOnlyMemory, and
+    // readOnlyBash intact in the resulting provider. No post-fork provider
+    // override; this is the single source of truth for the child's permissions.
     childConfig.provider = this.ctx.childProviderFactory({
       childExecutor,
       ...(childSkillExecutor !== undefined ? { childSkillExecutor } : {}),
       ...(childConfig.model !== undefined ? { model: childConfig.model } : {}),
-      // Read-only enforcement: hand the factory the RECON allowlist (strips
-      // write_file/edit_file) and turn on the mutating-bash gate. The child
-      // keeps `agent`/`skill` (so surveyor fan-out still works) and read-only
-      // bash (git status/log/diff for dirty-tree detection).
-      ...(readOnly ? { allowedTools: [...RECON_ALLOWED_TOOLS], readOnlyBash: true } : {}),
+      ...(effectiveAllowed !== undefined ? { allowedTools: effectiveAllowed } : {}),
+      ...(effectiveReadOnlyBash ? { readOnlyBash: true } : {}),
     });
 
     return { childConfig, childManager };
@@ -857,6 +892,7 @@ export class SkillExecutor {
     // Read-only enforcement flag, computed at the call site from the plugin
     // body's `readOnly` frontmatter OR DEFAULT_READ_ONLY_SKILLS membership.
     readOnly = false,
+    allowedTools?: string[],
   ): Promise<ToolResult> {
     if (call.signal.aborted) {
       return { content: 'Skill call aborted', isError: true };
@@ -894,21 +930,32 @@ export class SkillExecutor {
     // traceWriter on childConfig is what makes the fork visible in the
     // witness trace — SubagentManager.forkSubagent reads it off
     // options.config, not off the manager. Mirror in executeForkedRegistrySkill.
+    const baseAgentConfig: AgentConfig = {
+      model: pluginChildModel,
+      // Invariant: $ARGUMENT/$ARGUMENTS placeholders in the SKILL.md body are
+      // substituted with the caller-supplied args before the fork is configured,
+      // matching slash-command semantics SKILL.md authors expect.
+      systemPrompt: this.substituteSkillArgs(body, args),
+      env: { PLUGIN_ROOT: pluginPath },
+      // Invariant: skill-dispatch sub-agents must not inherit the
+      // SLASH_COMMAND_ROUTING_PROMPT paragraph. They receive a "Run the <name>
+      // skill" directive with no <command-name> tag, so the routing instruction
+      // (which keys off that tag) would push them to ask "which skill?" instead
+      // of engaging with their SKILL.md body.
+      isSkillDispatch: true,
+      ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
+    } as AgentConfig;
+
+    // Invariant (single source of truth): allowedTools is threaded into
+    // buildForkedChildConfig so the factory-built provider keeps
+    // subagentExecutor / skillExecutor / readOnlyMemory / readOnlyBash intact
+    // while applying the correct effective allowlist. No post-fork provider
+    // override — buildForkedChildConfig is the only place permissions are set.
     const { childConfig, childManager } = this.buildForkedChildConfig(
-      {
-        model: pluginChildModel,
-        systemPrompt: this.substituteSkillArgs(body, args),
-        env: { PLUGIN_ROOT: pluginPath },
-        // Invariant: skill-dispatch sub-agents must not inherit the
-        // SLASH_COMMAND_ROUTING_PROMPT paragraph. They receive a "Run the
-        // <name> skill" directive with no <command-name> tag, so the routing
-        // instruction (which keys off that tag) would push them to ask
-        // "which skill?" instead of engaging with their SKILL.md body.
-        isSkillDispatch: true,
-        ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
-      } as AgentConfig,
+      baseAgentConfig,
       call.signal,
       readOnly,
+      allowedTools,
     );
 
     // Invariant: same trace-sealing rule as executeForkedRegistrySkill above.

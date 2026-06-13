@@ -168,10 +168,17 @@ export function collectSkillEntries(
  * `pluginPath` is used by `executePluginSkill` to inject `PLUGIN_ROOT`
  * into the forked subagent's tool-handler context, so shell commands in
  * the body that reference `${PLUGIN_ROOT}/...` resolve correctly.
+ *
+ * `allowedTools` is the resolved tool allowlist from the SKILL.md `tools:`
+ * frontmatter field. When present, `executePluginSkill` must restrict the
+ * forked subagent's provider to this set only. When absent, the default
+ * `CHILD_ALLOWED_TOOLS` surface applies (backward-compatible).
  */
 export interface PluginSkillBody {
   body: string;
   pluginPath: string;
+  /** Resolved AFK-canonical tool names from the `tools:` frontmatter field, or undefined. */
+  allowedTools?: string[];
   /**
    * Execution mode from SKILL.md frontmatter `context:`. The executor forks a
    * subagent ONLY when this is `'fork'`; undefined/`'load'`/other values load
@@ -225,6 +232,7 @@ export function discoverPluginSkillBodies(
         bodies.set(skill.name, {
           body: skill.body,
           pluginPath: plugin.path,
+          ...(skill.allowedTools !== undefined ? { allowedTools: skill.allowedTools } : {}),
           ...(skill.context !== undefined ? { context: skill.context } : {}),
           ...(skill.readOnly === true ? { readOnly: true } : {}),
         });
