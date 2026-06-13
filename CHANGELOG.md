@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.110.1] - 2026-06-13
+
+### Changed
+- Merge pull request #129 from griffinwork40/afk/fix-issue-104-verify (cbb7aad)
+- Merge pull request #132 from griffinwork40/afk/tackle-issue-23 (6a87c44)
+- tail-slice thinking buffer before normalize + wrap (closes #23) (ac2f57e)
+- decompose runReplLoop into phase modules (closes #104) (4c5727d)
+
 ## [3.110.0] - 2026-06-13
 
 ### Added
