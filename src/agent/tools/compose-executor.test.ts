@@ -1431,16 +1431,22 @@ describe('ComposeExecutor', () => {
       expect(dagOpts.nodes[0].apiKey).toBe('session-anthropic-token');
     });
 
-    it('falls back to ctx.apiKey when no resolver is injected (backward compat)', async () => {
-      // Pre-fix behavior: no resolver → node inherits ctx.apiKey verbatim.
+    it('falls back to ctx.apiKey when no resolver is injected and providers differ (cross-provider no-resolver else arm, backward compat only — production always injects a resolver)', async () => {
+      // Exercises the genuine else arm: cross-provider (OpenAI parent, Anthropic
+      // node) with no resolver. nodeIsOpenAI=false, preserveParentApiKey=false
+      // (different providers) → falls to `else` → no resolver → ctx.apiKey.
+      // Note: without a resolver, production would forward the wrong credential
+      // (OpenAI key to an Anthropic node). This path exists for backward compat
+      // only; callers should always inject resolveApiKeyForModel.
       mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
       const executor = new ComposeExecutor(makeContext({
+        defaultModel: 'gpt-4o',
         apiKey: 'legacy-key',
         // no resolveApiKeyForModel
       }));
 
       await executor.execute(makeCall({
-        nodes: [{ id: 'a', prompt: 'task a' }],
+        nodes: [{ id: 'a', prompt: 'task a', model: 'sonnet' }],
       }));
 
       const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
@@ -1494,6 +1500,26 @@ describe('ComposeExecutor', () => {
 
       expect(result.isError).toBeFalsy();
       expect(mockRunSubagentDAG).toHaveBeenCalledOnce();
+      const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
+      expect(dagOpts.nodes[0].apiKey).toBe('anthropic-key-from-env');
+    });
+
+    it('injects no node apiKey when the resolver returns undefined for a cross-provider node (forkSubagent applies the parentApiKey fallback)', async () => {
+      // OpenAI-routed parent, Anthropic node, but the resolver finds NO Anthropic
+      // credential. The executor forwards no per-node apiKey; SubagentManager.forkSubagent
+      // then applies `config.apiKey || parentApiKey` — the same fallback the agent/skill
+      // paths use (verified parity; exercised in subagent.test.ts, out of scope here).
+      const resolveApiKeyForModel = vi.fn(() => undefined);
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext({
+        defaultModel: 'gpt-4o',
+        apiKey: 'openai-key',
+        resolveApiKeyForModel,
+      }));
+      await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'task a', model: 'sonnet' }] }));
+      expect(resolveApiKeyForModel).toHaveBeenCalledWith('sonnet');
+      const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
+      expect(dagOpts.nodes[0].apiKey).toBeUndefined();
     });
   });
 });
