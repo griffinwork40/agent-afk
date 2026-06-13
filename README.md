@@ -74,9 +74,9 @@ AFK_MAX_BUDGET_USD=5.00
 Default is `sonnet`. Override per-call with `--model`:
 
 ```bash
-afk chat "explain this stack trace" --model opus
-afk i --model haiku
-afk chat "refactor this" --model codex
+afk chat "explain this stack trace" --model opus_1m
+afk --model sonnet_1m
+afk chat "refactor this" --model gpt-5.5
 ```
 
 | Model | Best for |
