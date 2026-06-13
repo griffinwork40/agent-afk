@@ -16,6 +16,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import stringWidth from 'string-width';
 import {
   buildTipPool,
   selectTip,
@@ -320,5 +321,14 @@ describe('formatTipRow', () => {
     const row = strip(formatTipRow('x'.repeat(500), 40));
     expect(row.endsWith('…')).toBe(true);
     expect(row.length).toBeLessThanOrEqual(40);
+  });
+
+  it('truncates by display width, not char count (wide CJK glyphs)', () => {
+    // 30 CJK chars = 60 display columns but only 30 JS chars. Char-count
+    // truncation would keep ~29 of them (≈58 cols) and overflow a 40-col
+    // terminal; display-width truncation must keep the row ≤ cols.
+    const row = strip(formatTipRow('漢'.repeat(30), 40));
+    expect(row.endsWith('…')).toBe(true);
+    expect(stringWidth(row)).toBeLessThanOrEqual(40);
   });
 });

@@ -8,6 +8,7 @@
  */
 
 import { palette } from './palette.js';
+import { displayWidth, truncateDisplayWidth } from './display.js';
 import type { LoadingTip } from './loading-tips.js';
 import type { ImageAttachment } from './input/attachments.js';
 import type { AutocompleteState } from './input/autocomplete-state.js';
@@ -88,16 +89,20 @@ export function formatElapsed(startedAt: number): string {
  * `cols` is the terminal width — we truncate to fit on one visual line so
  * the tip never wraps and steals a viewport row that log-update can't
  * cleanly reclaim on the next paint. The prefix budget is "  💡 Tip: "
- * (10 cols — `prefix.length` happens to equal its display width since the
- * bulb is width-2 and length-2); 1 more col is reserved for the trailing
- * "…" when truncation kicks in.
+ * (10 visible cols); 1 more col is reserved for the trailing "…" when
+ * truncation kicks in. Budget and truncation are measured in DISPLAY
+ * columns (not JS chars) so wide glyphs (CJK, emoji) in a tip body cannot
+ * overflow the row — char-count truncation would under-truncate them 2:1.
  */
 export function formatTipRow(text: string, cols: number): string {
   const prefix = '  💡 Tip: ';
-  // Reserve 4 cols of prefix chrome and 1 col for the truncation marker so
-  // the rendered line always fits in `cols` regardless of body length.
-  const bodyBudget = Math.max(8, cols - prefix.length - 1);
-  const body = text.length > bodyBudget ? text.slice(0, bodyBudget - 1) + '…' : text;
+  // Reserve the prefix chrome and 1 col for the truncation marker so the
+  // rendered line always fits in `cols` regardless of body length.
+  const bodyBudget = Math.max(8, cols - displayWidth(prefix) - 1);
+  const body =
+    displayWidth(text) > bodyBudget
+      ? truncateDisplayWidth(text, Math.max(0, bodyBudget - 1)) + '…'
+      : text;
   return palette.dim(prefix + body);
 }
 
