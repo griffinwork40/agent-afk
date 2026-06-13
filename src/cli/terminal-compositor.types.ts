@@ -101,7 +101,7 @@ export function formatTipRow(text: string, cols: number): string {
   const bodyBudget = Math.max(8, cols - displayWidth(prefix) - 1);
   const body =
     displayWidth(text) > bodyBudget
-      ? truncateDisplayWidth(text, Math.max(0, bodyBudget - 1)) + '…'
+      ? truncateDisplayWidth(text, Math.max(0, bodyBudget - 1), '') + '…'
       : text;
   return palette.dim(prefix + body);
 }

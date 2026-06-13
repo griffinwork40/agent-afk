@@ -317,9 +317,12 @@ describe('formatTipRow', () => {
     expect(row.startsWith('  💡 Tip: /agentify')).toBe(true);
   });
 
-  it('truncates to one visual line with a trailing ellipsis', () => {
+  it('truncates to one visual line with a single trailing ellipsis', () => {
     const row = strip(formatTipRow('x'.repeat(500), 40));
     expect(row.endsWith('…')).toBe(true);
+    // Exactly one trailing ellipsis — guards the '……' regression where
+    // truncateDisplayWidth's own ellipsis was compounded by a manual '…' append.
+    expect(row.match(/…+$/)?.[0]).toBe('…');
     expect(row.length).toBeLessThanOrEqual(40);
   });
 
