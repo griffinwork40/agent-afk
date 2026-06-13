@@ -26,7 +26,7 @@ afk chat "hello"
 
 ## What you can do with it
 
-- **Chat from your terminal** — `afk chat "..."` for one-shot, `afk i` for a REPL with full tool access (Bash, file ops, web fetch, grep/glob, subagents).
+- **Chat from your terminal** — `afk chat "..."` for one-shot, `afk` for a REPL with full tool access (Bash, file ops, web fetch, grep/glob, subagents).
 - **Hand long work off to a daemon** — `afk daemon` runs headless. Pair it with `send_telegram` and you get pings on your phone when work lands in a terminal state.
 - **Read the trace** — every run writes an append-only record of what the agent did. `afk trace show` prints it back as a human-readable receipt — tool calls, gate decisions, subagent lifecycles, cost — so you can audit a run without reaching for `jq`.
 - **Message Claude from Telegram** — `afk telegram setup` walks you through bot token + allowlist. After that you have a private chat surface backed by the same session manager as the REPL.
@@ -41,7 +41,7 @@ afk chat "hello"
 | Command | Surface |
 |---|---|
 | `afk chat "..."` | One-shot turn — pipe-friendly, scripts well |
-| `afk i` (alias of `afk interactive`) | REPL with slash commands, streaming, plan mode, image paste |
+| `afk` (alias of `afk interactive`) | REPL with slash commands, streaming, plan mode, image paste |
 | `afk daemon` | Long-running headless agent, cron-friendly |
 | `afk telegram start` | Telegram bot — same tools, same memory, on your phone |
 
@@ -50,12 +50,6 @@ afk chat "hello"
 `agent-afk` keeps all of its state under **`~/.afk/`** — sessions, plugins, memory, logs, settings. Nothing is shared with `~/.claude/`. You can delete `~/.claude` entirely and `afk` still runs.
 
 **Local-first, no phone-home.** There is no analytics or remote telemetry — Agent AFK never sends your prompts, code, or usage anywhere except directly to the model provider you configure. What telemetry exists is local JSONL under `~/.afk/` that you can read or delete.
-
-Minimum viable config is one env var:
-
-```bash
-ANTHROPIC_API_KEY=sk-ant-...
-```
 
 Optional, in order of usefulness:
 
