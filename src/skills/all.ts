@@ -8,6 +8,7 @@
 
 import './audit-fit/index.js';
 import './diagnose/index.js';
+import './get-started/index.js';
 import './mint/index.js';
 import './service-setup/index.js';
 import './telegram-setup/index.js';
