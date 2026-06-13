@@ -520,12 +520,22 @@ export class SkillExecutor {
       ...(this.ctx.backgroundRegistry !== undefined
         ? { backgroundRegistry: this.ctx.backgroundRegistry }
         : {}),
-      // Propagate read-only constraints into the SubagentExecutor that will
+      // Propagate tool-surface constraints into the SubagentExecutor that will
       // handle `agent` tool calls from this skill-forked child. Without this,
       // a depth-2 fan-out (`ground-state → agent → depth-2`) loses the
       // allowlist — the grandchild SubagentExecutor's `childProviderFactory`
       // call omits allowedTools/readOnlyBash and falls back to CHILD_ALLOWED_TOOLS.
       ...(readOnly ? { allowedTools: [...RECON_ALLOWED_TOOLS], readOnlyBash: true as const } : {}),
+      // Custom `tools:` allowlist (non-read-only): forward the enumerated
+      // surface so a depth-2 `agent` fan-out from a tools:-restricted skill
+      // child keeps the same allowlist instead of silently widening back to
+      // CHILD_ALLOWED_TOOLS at the grandchild. No bash gate — custom tools:
+      // does not gate bash (only read-only does). Mutually exclusive with the
+      // read-only spread above. A fresh copy is materialized so sibling
+      // grandchild executors never alias the skill body's array.
+      ...(!readOnly && customAllowedTools !== undefined
+        ? { allowedTools: [...customAllowedTools] }
+        : {}),
     });
     const childSkillExecutor = this.ctx.childSkillExecutorFactory
       ? this.ctx.childSkillExecutorFactory(depth + 1, maxDepth, signal)
@@ -545,8 +555,13 @@ export class SkillExecutor {
       // bash (git status/log/diff for dirty-tree detection).
       ...(readOnly ? { allowedTools: [...RECON_ALLOWED_TOOLS], readOnlyBash: true } : {}),
       // Custom tools: allowlist from `tools:` frontmatter. Only applied when
-      // not read-only (read-only takes precedence via the RECON allowlist above).
-      ...(!readOnly && customAllowedTools !== undefined ? { allowedTools: customAllowedTools } : {}),
+      // not read-only (read-only takes precedence via the RECON allowlist
+      // above). Materialize a fresh copy (mirrors buildReadOnlyReconProvider /
+      // buildCustomAllowlistProvider) so the provider never aliases the skill
+      // body's array — runtime/test mutation can't bleed across sibling forks.
+      ...(!readOnly && customAllowedTools !== undefined
+        ? { allowedTools: [...customAllowedTools] }
+        : {}),
     });
 
     return { childConfig, childManager };

@@ -1804,6 +1804,9 @@ describe('SkillExecutor', () => {
       expect(mockForkSubagent).toHaveBeenCalledOnce();
       const factoryArgs = childProviderFactory.mock.calls[0]?.[0];
       expect(factoryArgs?.allowedTools).toEqual(['read_file', 'grep', 'glob']);
+      // Materialized copy, NOT the skill body's array — guards against a
+      // shared-reference alias bleeding across sibling forks.
+      expect(factoryArgs?.allowedTools).not.toBe(body.allowedTools);
       // Not a read-only skill — no bash gate.
       expect(factoryArgs?.readOnlyBash).toBeUndefined();
     });
@@ -1930,6 +1933,95 @@ describe('SkillExecutor', () => {
       const forkCall = mockForkSubagent.mock.calls[0]?.[0];
       // Proves the `else if` guard works: no tools: and no readOnly → no provider.
       expect(forkCall?.config?.provider).toBeUndefined();
+    });
+
+    it('propagates the custom allowlist into the SubagentExecutor for depth-2 agent fan-out', async () => {
+      // Regression: a tools:-restricted skill that includes `agent` could fan
+      // out to a grandchild that silently received the full CHILD_ALLOWED_TOOLS
+      // surface — buildForkedChildConfig forwarded allowedTools into the child
+      // SubagentExecutor only on the read-only path. The custom tools: path must
+      // forward its allowlist too so the grandchild stays gated.
+      captureForkConfig();
+
+      const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
+      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
+        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+          capturedCtorArgs.push(args);
+          return new OriginalSubagentExecutor(...args);
+        },
+      );
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        childProviderFactory: vi.fn().mockReturnValue({ name: 'sentinel' }) as never,
+      });
+
+      const body: PluginSkillBody = {
+        body: 'fake plugin body',
+        pluginPath: '/fake/plugin',
+        context: 'fork',
+        allowedTools: ['read_file', 'grep', 'agent'],
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (executor as any).pluginBodies = new Map([['fanout-skill', body]]);
+
+      await executor.execute(makeCall({ name: 'fanout-skill', arguments: 'go' }));
+
+      expect(capturedCtorArgs.length).toBeGreaterThan(0);
+      const ctorOpts = capturedCtorArgs[0]?.[0];
+      // The child SubagentExecutor must carry the custom allowlist so a depth-2
+      // `agent` dispatch keeps the enumerated surface instead of widening.
+      expect(ctorOpts?.allowedTools).toEqual(['read_file', 'grep', 'agent']);
+      // Fresh copy — not the skill body's array (no shared-reference alias).
+      expect(ctorOpts?.allowedTools).not.toBe(body.allowedTools);
+      // Custom tools: does not gate bash (only read-only does).
+      expect(ctorOpts?.readOnlyBash).toBeUndefined();
+    });
+
+    it('does NOT propagate an allowlist into the SubagentExecutor for a normal skill', async () => {
+      // Back-compat guard: a skill with no tools: and no read-only must leave
+      // the child SubagentExecutor's allowedTools unset so grandchild fan-out
+      // keeps the full default surface.
+      captureForkConfig();
+
+      const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
+      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
+        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+          capturedCtorArgs.push(args);
+          return new OriginalSubagentExecutor(...args);
+        },
+      );
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        childProviderFactory: vi.fn().mockReturnValue({ name: 'sentinel' }) as never,
+      });
+
+      const body: PluginSkillBody = {
+        body: 'fake plugin body',
+        pluginPath: '/fake/plugin',
+        context: 'fork',
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (executor as any).pluginBodies = new Map([['normal-fanout', body]]);
+
+      await executor.execute(makeCall({ name: 'normal-fanout' }));
+
+      expect(capturedCtorArgs.length).toBeGreaterThan(0);
+      const ctorOpts = capturedCtorArgs[0]?.[0];
+      expect(ctorOpts?.allowedTools).toBeUndefined();
     });
   });
 
