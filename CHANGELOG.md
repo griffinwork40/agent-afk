@@ -11,6 +11,18 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.110.0] - 2026-06-13
+
+### Added
+- honor `tools:` frontmatter as enforced allowlist (port afk-workshop#571) (b1aaf8a)
+
+### Changed
+- Merge pull request #124 from griffinwork40/afk-port/pr-571 (288bd7a)
+- Merge pull request #122 from griffinwork40/afk/20260613-082858-f888c0 (30e6ddd)
+- cover extraDepth>=2 spine rendering (closes #20) (110966a)
+- Merge pull request #121 from griffinwork40/afk-port/pr-643 (2552478)
+- strengthen per-node credential resolution coverage (port afk-workshop#643) (d2f37c4)
+
 ## [3.109.1] - 2026-06-13
 
 ### Fixed
