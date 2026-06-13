@@ -40,7 +40,7 @@ afk chat "hello"
 
 | Command | Surface |
 |---|---|
-| `afk chat "..."` | One-shot turn — pipe-friendly, scripts well |
+| `afk chat "..."` | One-shot (fire & forget) turn — pipe-friendly, scripts well |
 | `afk` (alias of `afk interactive`) | REPL with slash commands, streaming, plan mode, image paste |
 | `afk daemon` | Long-running headless agent, cron-friendly |
 | `afk telegram start` | Telegram bot — same tools, same memory, on your phone |
