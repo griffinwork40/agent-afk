@@ -11,6 +11,18 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.109.1] - 2026-06-13
+
+### Fixed
+- emit a single ellipsis when truncating spinner tips (d1da5c8)
+- truncate spinner tip row by display width (2b34060)
+- render user echo as a true chat bubble; label spinner tips (b430cef)
+
+### Changed
+- Merge pull request #120 from griffinwork40/afk/tackle-issue-110-private (f0c7659)
+- Merge pull request #119 from griffinwork40/afk/20260612-194653-ac9eb6 (e75d067)
+- lock that subagent transitions can't drop the thinking paragraph (#110) (9de83c0)
+
 ## [3.109.0] - 2026-06-13
 
 ### Added
