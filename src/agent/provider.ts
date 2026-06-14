@@ -120,6 +120,8 @@ export type ProviderEvent =
       toolUseId: string;
       toolName: string;
       toolInput: string;
+      /** Raw JSON-serialized tool input object — used by facet derivation for exact field extraction. */
+      toolInputRaw?: string;
       sessionId?: string;
     }
   | {

@@ -74,6 +74,18 @@ export function getBriefsDir(): string {
   return join(getAgentFrameworkDir(), 'briefs');
 }
 
+/**
+ * Directory for cached SessionFacet JSON sidecars (one per session id).
+ *
+ * Facets are a lazily-derived, consumer-facing projection of a persisted
+ * session (see src/agent/facets/). They live under the agent-framework
+ * telemetry tier in $AFK_HOME — NOT under a Claude-Code-style `usage-data/`
+ * path, which has no precedent here.
+ */
+export function getFacetCacheDir(): string {
+  return join(getAgentFrameworkDir(), 'facets');
+}
+
 export function getSkillsDir(): string {
   return join(getAfkHome(), 'skills');
 }

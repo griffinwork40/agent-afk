@@ -49,6 +49,7 @@ import {
 } from './cache-policy.js';
 import { translateMessageStream } from './translate.js';
 import { emitToolCall, emitSessionPhase } from '../../trace/emit.js';
+import { extractRawToolInput } from '../../facets/raw-input.js';
 import { env } from '../../../config/env.js';
 
 /**
@@ -545,6 +546,7 @@ export async function* runTurn(
         toolUseId: block.id,
         toolName: block.name,
         toolInput: summarizeToolInput(block.name, block.input),
+        toolInputRaw: extractRawToolInput(block.input),
         sessionId: input.ctx.sessionId,
       };
     }
