@@ -3,98 +3,57 @@ title: "Introduction"
 description: "Agent AFK is a local-first control plane for long-running AI agent work — terminal, daemon, and Telegram, all sharing one session manager."
 ---
 
-# Agent AFK
+Built on the Anthropic SDK, Agent AFK runs outside Claude Code as its own process — a full agentic runtime you own completely. Hand it long or multi-step work and check in asynchronously: it delegates the work and leaves the judgment to you.
 
-> Delegate the work. Keep the judgment.
+```bash
+npm install -g agent-afk
+```
 
-**Agent AFK** is a standalone TypeScript CLI, daemon, and Telegram bot built on the Anthropic SDK.
-It runs outside Claude Code as its own process — `npm install -g agent-afk`, set an API key, and
-you have a full agentic runtime that you own completely.
+<Cards>
+  <Card title="Get started →" href="/docs/quickstart" description="Install, set your API key, and run your first command in under two minutes." />
+</Cards>
 
 ## Who it's for
 
-- Developers who want to hand long or multi-step tasks to an AI agent and check in on progress
-  asynchronously, rather than babysitting a terminal.
-- Engineers running headless CI-adjacent workflows that need model reasoning, bash access, and
-  subagent orchestration without a human in the loop.
-- Anyone who wants Telegram supervision — a phone ping the moment work lands in a terminal state —
-  without standing up a server.
+- **Developers** who want to hand long or multi-step tasks to an AI agent and check in asynchronously, rather than babysitting a terminal.
+- **Engineers** running headless, CI-adjacent workflows that need model reasoning, bash access, and subagent orchestration without a human in the loop.
+- **Anyone** who wants Telegram supervision — a phone ping the moment work lands in a terminal (finished) state — without standing up a server.
 
 ## Four surfaces, one session manager
 
-Every surface shares the same underlying session harness, memory store, and tool set.
+Every surface shares the same session harness — the shared context, memory store, and tool set — so work started in one can be picked up in another.
 
-| Command | Surface |
-|---|---|
-| `afk chat "..."` | One-shot turn — pipe-friendly, scripts well |
-| `afk i` | Interactive REPL with slash commands, plan mode, streaming output |
-| `afk daemon` | Long-running headless agent, cron-friendly |
-| `afk telegram start` | Telegram bot — same tools, same memory, on your phone |
+<Cards>
+  <Card title="One-Shot Chat" href="/docs/surfaces/chat" description="afk chat — a single pipe-friendly turn that scripts well." />
+  <Card title="Interactive REPL" href="/docs/surfaces/repl" description="afk i — slash commands, plan mode, and streaming output." />
+  <Card title="Daemon" href="/docs/surfaces/daemon" description="afk daemon — a long-running, cron-friendly headless agent." />
+  <Card title="Telegram Bot" href="/docs/surfaces/telegram" description="afk telegram start — the same tools and memory, on your phone." />
+</Cards>
 
 ## Key capabilities
 
-### Subagent orchestration
+<Cards>
+  <Card title="Subagent orchestration" href="/docs/guides/subagents" description="Dispatch parallel waves of independent subagents; a DAG executor runs independent nodes in parallel while dependent nodes wait." />
+  <Card title="Slash skills" href="/docs/skills/overview" description="A registry of built-in slash commands plus auto-discovered SKILL.md plugins, with typo-tolerant matching." />
+  <Card title="Verification workflows" href="/docs/guides/verification" description="Skills like /review and /diagnose fan parallel checks across a change before surfacing a recommendation." />
+  <Card title="Local traces" href="/docs/guides/headless" description="Every run appends an inspectable trace — tool calls, gate decisions, cost — readable with afk trace show." />
+  <Card title="Telegram supervision" href="/docs/surfaces/telegram" description="Get a phone ping when a scheduled task lands, then reply to drive the session from anywhere." />
+  <Card title="Unattended guardrails" href="/docs/guides/unattended-runs" description="Cost ceilings, turn limits, and worktree isolation keep long autonomous runs in a safe blast radius." />
+</Cards>
 
-Agent AFK dispatches parallel waves of independent subagents to tackle complex tasks. Built-in
-skills like `/mint` (spec → build → verify → ship), `/diagnose` (parallel root-cause hypotheses),
-and `/review` (multi-dimension PR analysis) fan work out across subagent nodes and synthesize
-results back to you. A DAG executor runs independent nodes in parallel; dependent nodes wait.
-Every dispatch is logged to `~/.afk/agent-framework/routing-decisions.jsonl`.
+## Safety & verification controls
 
-### Slash skills
+Agent AFK ships blast-radius controls — the guardrails that keep unattended runs safe — out of the box:
 
-The REPL and Telegram surface expose a slash-command registry. Built-in skills like `/mint`,
-`/diagnose`, `/spec`, `/research`, and `/ship` are registered by default. Plugin-discovered
-skills — `SKILL.md` files under `~/.afk/plugins/` or `~/.afk/skills/` — appear automatically
-at session start. Levenshtein-hint matching catches typos.
-
-### Local traces under `~/.afk/`
-
-Agent AFK keeps all state under `~/.afk/` — sessions, memory, plugins, logs, daemon state —
-and never sends it anywhere except directly to the model provider you configure. Every run
-appends an append-only trace of what the agent did: tool calls, gate decisions, subagent
-lifecycles, cost. Run `afk trace show` to read it back as a human-readable receipt.
-
-```
-~/.afk/
-  config/           afk.env, afk.config.json, mcp.json
-  state/            sessions/, todos/, daemon/
-  plugins/          user-installed plugins
-  logs/
-  agent-framework/  telemetry, briefs, memory
-```
-
-### Telegram supervision
-
-Configure a Telegram bot token and allowlist (`AFK_TELEGRAM_ALLOWED_CHAT_IDS`) and the daemon
-pushes a notification to your phone whenever a scheduled task completes — success, failure, or
-skip. The same Telegram surface also accepts incoming messages, giving you a full chat interface
-backed by the session manager.
-
-### Verification workflows
-
-Agent AFK ships blast-radius controls out of the box. Skills like `/review` dispatch parallel
-dimension agents (security, correctness, API compat, test coverage, performance) before surfacing
-a merge recommendation. `/diagnose` forks independent hypothesis agents and validates each before
-reporting. The `/mint` pipeline runs a verify pass before the ship step.
-
-### Blast-radius controls
-
-- **Cost guardrails** — `AFK_MAX_BUDGET_USD` (or `--max-budget-usd` on `afk chat`) aborts a turn
-  that would breach the cost ceiling.
-- **Turn limits** — `--max-turns` caps total turns (`afk chat` defaults to 10, `afk i` to 100),
-  preventing runaway sessions.
-- **Bypass permissions** — by default tool calls run without per-tool approval prompts, which is
-  intentional for unattended work.
-- **Worktree isolation** — `--worktree` creates a git worktree for the session; on clean exit it
-  is removed automatically.
+- **Cost guardrails** — `AFK_MAX_BUDGET_USD` (or `--max-budget-usd` on `afk chat`) aborts a turn that would breach the cost ceiling.
+- **Turn limits** — `--max-turns` caps total turns (`afk chat` defaults to 10, `afk i` to 100), preventing runaway sessions.
+- **Bypass permissions** — by default tool calls run without per-tool approval prompts, which is intentional for unattended work.
+- **Worktree isolation** — `--worktree` creates a git worktree for the session; on clean exit it is removed automatically.
 
 ## Local-first, no phone-home
 
-There is no analytics or remote telemetry. Agent AFK never sends your prompts, code, or usage
-anywhere except directly to the model provider you configure. What telemetry exists is local JSONL
-under `~/.afk/` that you can read or delete.
+Agent AFK keeps all state under `~/.afk/` — sessions, memory, plugins, logs, daemon state. There is no analytics or remote telemetry: it never sends your prompts, code, or usage anywhere except directly to the model provider you configure. What telemetry exists is local JSONL you can read or delete.
 
 ---
 
-Ready to get started? Head to the [Quickstart](/docs/quickstart) to install and run your first command.
+Ready to go deeper? Start with the [Quickstart](/docs/quickstart), then see [How It Works](/docs/how-it-works).
