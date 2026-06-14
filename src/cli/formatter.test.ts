@@ -639,5 +639,13 @@ describe('renderMarkdownToTerminal', () => {
       const out = renderMarkdownToTerminal('Above.\n\n\n\nBelow.\n');
       expect(maxBlankRun(out)).toBeLessThanOrEqual(1);
     });
+
+    it('an empty code block does not double-space the following blank line', () => {
+      // The empty-fence loud-fail placeholder is a block token too: it must own
+      // exactly one trailing '\n' like every other block. Guards the formatter
+      // empty-code branch against re-introducing '\n\n'.
+      const out = renderMarkdownToTerminal('Intro.\n\n```bash\n```\n\nOutro.\n');
+      expect(maxBlankRun(out)).toBeLessThanOrEqual(1);
+    });
   });
 });

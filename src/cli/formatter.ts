@@ -172,7 +172,13 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           // command instead of assuming it rendered fine.
           if (code.text.trim() === '') {
             const label = code.lang ? `(empty ${code.lang} block)` : '(empty code block)';
-            return palette.dim(`│ ${label}`) + '\n\n';
+            // One trailing '\n' (line terminator), not '\n\n' — the same block
+            // rhythm invariant as the non-empty branch below and the heading /
+            // paragraph cases above (docs/tui-rhythm.md): every block token owns
+            // exactly one trailing newline; the inter-block blank comes solely
+            // from marked's `space` token. Emitting '\n\n' here double-spaced the
+            // gap after an empty fence in the non-streamed render paths.
+            return palette.dim(`│ ${label}`) + '\n';
           }
           const highlighted = highlightCode(code.text, lang);
           const bodyLines = highlighted.split('\n');
