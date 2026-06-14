@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.112.3] - 2026-06-14
+
+### Fixed
+- inherit default subagent model (630d6ff)
+
+### Changed
+- Merge pull request #139 from griffinwork40/afk/fix-subagent-model-hardcoding (52db82c)
+
 ## [3.112.2] - 2026-06-14
 
 ### Fixed
