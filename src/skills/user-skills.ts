@@ -144,6 +144,8 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
     parentSession?: IAgentSession,
     ctx?: SkillExecutionContext,
   ) => {
+    const subagentModel = ctx?.defaultSubagentModel ?? ctx?.defaultModel ?? 'sonnet';
+
     // Invariant: name the skill explicitly — a bare "Run the skill." is
     // ambiguous and lets the sub-agent ask the operator "which skill?" instead
     // of executing its own SKILL.md body. Mirrors skill-executor.ts.
@@ -172,7 +174,7 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
         abortSignal: parentSession?.abortSignal,
       },
       config: {
-        model: 'sonnet',
+        model: subagentModel,
         systemPrompt: parsed.body,
         env: { SKILL_ROOT: parsed.dir },
         // Invariant: like the plugin/registry dispatch paths in

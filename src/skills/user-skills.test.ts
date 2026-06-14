@@ -494,6 +494,37 @@ You process PDF files. Scripts are in \${SKILL_ROOT}/scripts/.
     expect(callArgs?.config?.env?.['SKILL_ROOT']).toBe(dir);
   });
 
+  it('uses SkillExecutionContext.defaultSubagentModel for forked user skills', async () => {
+    const skillName = 'model-aware';
+    const dir = join(skillsDir, skillName);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      `---
+name: ${skillName}
+description: Uses the inherited subagent model
+context: fork
+---
+
+You run on the configured child model.
+`,
+    );
+
+    scanAndRegisterUserSkills();
+    const skill = getSkill(skillName);
+
+    await skill.handler('run', undefined, {
+      defaultModel: 'opus',
+      defaultSubagentModel: 'haiku',
+    });
+
+    expect(mockForkSubagent).toHaveBeenCalledOnce();
+    const callArgs = mockForkSubagent.mock.calls[0]?.[0] as {
+      config?: { model?: string };
+    };
+    expect(callArgs?.config?.model).toBe('haiku');
+  });
+
   it('SKILL_ROOT resolves to the correct absolute directory path', async () => {
     const skillName = 'data-analysis';
     const dir = join(skillsDir, skillName);

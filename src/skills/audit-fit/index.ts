@@ -294,6 +294,7 @@ async function handler(
   // not because dispatch would break. The tier gate is surfacing-only by
   // design; dispatch via getSkill()/the skill tool stays available.
   const apiKey = ctx?.apiKey;
+  const subagentModel = ctx?.defaultSubagentModel ?? ctx?.defaultModel ?? 'sonnet';
   // Tool-use ID of the `skill` ToolCall that invoked this handler. Forwarded
   // as `parentId` to every forkSubagent call so the parallel inspector
   // `Agent(...)` rows nest under THIS skill's tool-lane entry both in the
@@ -385,7 +386,7 @@ async function handler(
         manager.forkSubagent({
           parent: { sessionId },
           config: {
-            model: 'sonnet',
+            model: subagentModel,
             systemPrompt: `${researchAgent.systemPrompt}\n\n${cfg.prompt}`,
             canUseTool: createCanUseTool(),
           },
