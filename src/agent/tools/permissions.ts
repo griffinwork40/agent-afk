@@ -34,3 +34,41 @@ export function checkToolPermission(
   }
   return { allowed: true };
 }
+
+/**
+ * Union live MCP tool wire-names into a base permission allowlist.
+ *
+ * Invariant: the base allowlist is snapshotted ONCE at provider construction
+ * (see `cli/shared-helpers.ts:allowedToolsFor`). OAuth-backed MCP servers
+ * discover their tools asynchronously — the handshake completes AFTER that
+ * snapshot — so freshly-bridged tools land in the dispatcher's `schemas` and
+ * `handlers` (read live each query) but are absent from the frozen allowlist.
+ * The permission gate then rejects them with "not in the configured allowlist"
+ * even though the model can see them. Re-unioning the live wire-names at
+ * dispatcher-build time (every query) keeps the gate in lockstep with the
+ * registry without mutating the shared base config.
+ *
+ * Only the top-level provider receives an `mcpManager`; restricted sub-agent
+ * providers (recon / read-only / skill-scoped, built in `tools/nesting.ts`) do
+ * not, so this never widens a sub-agent's allowlist — no privilege escalation.
+ *
+ * Returns `base` unchanged (same reference) when there is no allowlist
+ * (`undefined` → all tools allowed), when `mcpToolWireNames` is empty, or when
+ * every wire-name is already present — avoiding needless allocation per query.
+ * Otherwise returns a NEW config; `base.allowedTools` is never mutated.
+ */
+export function withMcpToolsAllowed(
+  base: ToolPermissionConfig | undefined,
+  mcpToolWireNames: readonly string[],
+): ToolPermissionConfig | undefined {
+  if (!base?.allowedTools || mcpToolWireNames.length === 0) return base;
+  const merged = new Set(base.allowedTools);
+  let changed = false;
+  for (const name of mcpToolWireNames) {
+    if (!merged.has(name)) {
+      merged.add(name);
+      changed = true;
+    }
+  }
+  return changed ? { ...base, allowedTools: [...merged] } : base;
+}
