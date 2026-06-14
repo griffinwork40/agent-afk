@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.112.2] - 2026-06-14
+
+### Fixed
+- empty code-block placeholder emits one trailing newline (7435930)
+- stop double-spacing markdown blocks in REPL/chat output (61f960e)
+
+### Changed
+- Merge pull request #138 from griffinwork40/fix/tui-markdown-block-spacing (c8c05ec)
+
 ## [3.112.1] - 2026-06-14
 
 ### Fixed
