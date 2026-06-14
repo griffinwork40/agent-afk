@@ -1,0 +1,136 @@
+/* Agent AFK — Fumadocs dark-mode brand override
+   Maps fumadocs-ui CSS variables to the site's design tokens so /docs
+   inherits the same dark terminal aesthetic with the orange accent.
+
+   fumadocs-ui/style.css (pre-built) sets default (light) values on :root
+   and dark values on .dark — we override both so the palette is always
+   anchored to the brand tokens, regardless of theme toggle state.
+
+   Variable reference: fumadocs-ui dist/style.css lines 35–55 (:root)
+                       and lines 55–75 (.dark) */
+
+/* --- Dark palette (primary — matches site tokens) ----------------------- */
+:root,
+.dark {
+  /* Backgrounds — map to site surface tokens */
+  --color-fd-background:         #07070b;   /* == --color-bg */
+  --color-fd-card:               #11111a;   /* == --color-surface */
+  --color-fd-popover:            #11111a;   /* == --color-surface */
+  --color-fd-muted:              #11111a;   /* == --color-surface */
+
+  /* Foregrounds */
+  --color-fd-foreground:         #e9e9f0;   /* == --color-text */
+  --color-fd-card-foreground:    #e9e9f0;
+  --color-fd-popover-foreground: #e9e9f0;
+  --color-fd-muted-foreground:   #9b9bae;   /* == --color-text-muted */
+
+  /* Borders */
+  --color-fd-border:             #1f1f2e;   /* == --color-border */
+  --color-fd-ring:               #1f1f2e;
+
+  /* Primary — controls links, active states, highlights */
+  --color-fd-primary:            #f9854b;   /* == --color-accent */
+  --color-fd-primary-foreground: #07070b;   /* dark bg for contrast on accent */
+
+  /* Secondary — subtler interactive surfaces */
+  --color-fd-secondary:          #161621;   /* == --color-surface-2 */
+  --color-fd-secondary-foreground: #e9e9f0;
+
+  /* Accent — hover overlays, selection highlights */
+  --color-fd-accent:             rgba(249, 133, 75, 0.12); /* --color-accent-glow approx */
+  --color-fd-accent-foreground:  #ffa07a;   /* == --color-accent-soft */
+}
+
+/* --- Light palette (fallback — kept readable but rarely used) ----------- */
+/* The site ships as dark-only; these provide a graceful fallback if the
+   user forces light mode via next-themes. We don't invert to pure white —
+   instead use a slightly lighter dark that still reads as "on brand". */
+:root:not(.dark) {
+  --color-fd-background:         #0d0d14;
+  --color-fd-card:               #11111a;
+  --color-fd-popover:            #11111a;
+  --color-fd-muted:              #11111a;
+  --color-fd-foreground:         #e9e9f0;
+  --color-fd-card-foreground:    #e9e9f0;
+  --color-fd-popover-foreground: #e9e9f0;
+  --color-fd-muted-foreground:   #9b9bae;
+  --color-fd-border:             #1f1f2e;
+  --color-fd-ring:               #1f1f2e;
+  --color-fd-primary:            #f9854b;
+  --color-fd-primary-foreground: #07070b;
+  --color-fd-secondary:          #161621;
+  --color-fd-secondary-foreground: #e9e9f0;
+  --color-fd-accent:             rgba(249, 133, 75, 0.10);
+  --color-fd-accent-foreground:  #ffa07a;
+}
+
+/* --- Sidebar / docs background ------------------------------------------ */
+/* fumadocs-ui uses --color-fd-background for the page and sidebar.
+   Ensure the sidebar rail matches the deep dark bg. */
+#nd-docs-layout {
+  background-color: var(--color-fd-background);
+}
+
+/* --- Typography: inherit the site's mono font for code blocks ----------- */
+/* The root layout injects --font-jbm via next/font; forward it to Fumadocs */
+:root {
+  --fd-mono: var(--font-jbm, 'JetBrains Mono', 'SF Mono', ui-monospace, monospace);
+}
+
+/* === Isolate /docs from landing-site global element styles ===============
+ * globals.css (loaded by the root layout) defines UNSCOPED, UNLAYERED element
+ * rules. Because Tailwind v4 / fumadocs-ui prose styles live in @layer, these
+ * unlayered globals win regardless of specificity:
+ *   - code { background; border; padding; border-radius }      (globals.css:220)
+ *       -> stacks a 2nd box on the <code> inside every <pre>  (box-in-a-box)
+ *   - h1..h4, p, ul, ol, figure, pre { margin: 0 }             (globals.css:105)
+ *   - ul, ol { padding: 0; list-style: none }                  (globals.css:106)
+ *       -> collapses prose rhythm + removes list markers
+ * Re-assert docs-appropriate values, scoped to #nd-docs-layout so the
+ * marketing pages are untouched.
+ *
+ * NOTE: In website/ these rules are largely redundant since globals.css has
+ * no element-level resets. They are kept verbatim and remain harmless. */
+
+/* Code blocks: the inner <code> is a plain glyph layer; the <pre> is the box.
+   (Kills the box-in-a-box from the global code chip.) */
+#nd-docs-layout pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* Inline code: a single subtle chip on fumadocs tokens (not the site's). */
+#nd-docs-layout .prose :not(pre) > code {
+  background: var(--color-fd-muted);
+  border: 1px solid var(--color-fd-border);
+  border-radius: 4px;
+  padding: 0.08em 0.36em;
+  font-size: 0.88em;
+}
+
+/* Restore prose vertical rhythm (global margin:0 collapsed it). */
+#nd-docs-layout .prose p,
+#nd-docs-layout .prose ul,
+#nd-docs-layout .prose ol,
+#nd-docs-layout .prose blockquote,
+#nd-docs-layout .prose table { margin: 1em 0; }
+#nd-docs-layout .prose h2 { margin: 2em 0 0.75em; }
+#nd-docs-layout .prose h3 { margin: 1.6em 0 0.5em; }
+#nd-docs-layout .prose h4 { margin: 1.3em 0 0.4em; }
+#nd-docs-layout .prose li { margin: 0.35em 0; }
+#nd-docs-layout .prose figure,
+#nd-docs-layout .prose pre { margin: 1.15em 0; }
+#nd-docs-layout .prose > :first-child { margin-top: 0; }
+
+/* Restore list markers + indent (global list-style:none / padding:0). */
+#nd-docs-layout .prose ul,
+#nd-docs-layout .prose ol { padding-inline-start: 1.5em; }
+#nd-docs-layout .prose ul { list-style: disc; }
+#nd-docs-layout .prose ol { list-style: decimal; }
+
+/* Relax prose line-height vs the site's body 1.6. */
+#nd-docs-layout .prose { line-height: 1.7; }

@@ -1,0 +1,100 @@
+---
+title: "Introduction"
+description: "Agent AFK is a local-first control plane for long-running AI agent work — terminal, daemon, and Telegram, all sharing one session manager."
+---
+
+# Agent AFK
+
+> Delegate the work. Keep the judgment.
+
+**Agent AFK** is a standalone TypeScript CLI, daemon, and Telegram bot built on the Anthropic SDK.
+It runs outside Claude Code as its own process — `npm install -g agent-afk`, set an API key, and
+you have a full agentic runtime that you own completely.
+
+## Who it's for
+
+- Developers who want to hand long or multi-step tasks to an AI agent and check in on progress
+  asynchronously, rather than babysitting a terminal.
+- Engineers running headless CI-adjacent workflows that need model reasoning, bash access, and
+  subagent orchestration without a human in the loop.
+- Anyone who wants Telegram supervision — a phone ping the moment work lands in a terminal state —
+  without standing up a server.
+
+## Four surfaces, one session manager
+
+Every surface shares the same underlying session harness, memory store, and tool set.
+
+| Command | Surface |
+|---|---|
+| `afk chat "..."` | One-shot turn — pipe-friendly, scripts well |
+| `afk i` | Interactive REPL with slash commands, plan mode, streaming output |
+| `afk daemon` | Long-running headless agent, cron-friendly |
+| `afk telegram start` | Telegram bot — same tools, same memory, on your phone |
+
+## Key capabilities
+
+### Subagent orchestration
+
+Agent AFK dispatches parallel waves of independent subagents to tackle complex tasks. Built-in
+skills like `/mint` (spec → build → verify → ship), `/diagnose` (parallel root-cause hypotheses),
+and `/review` (multi-dimension PR analysis) fan work out across subagent nodes and synthesize
+results back to you. A DAG executor runs independent nodes in parallel; dependent nodes wait.
+Every dispatch is logged to `~/.afk/agent-framework/routing-decisions.jsonl`.
+
+### Slash skills
+
+The REPL and Telegram surface expose a slash-command registry. Built-in skills like `/mint`,
+`/diagnose`, `/spec`, `/research`, and `/ship` are registered by default. Plugin-discovered
+skills — `SKILL.md` files under `~/.afk/plugins/` or `~/.afk/skills/` — appear automatically
+at session start. Levenshtein-hint matching catches typos.
+
+### Local traces under `~/.afk/`
+
+Agent AFK keeps all state under `~/.afk/` — sessions, memory, plugins, logs, daemon state —
+and never sends it anywhere except directly to the model provider you configure. Every run
+appends an append-only trace of what the agent did: tool calls, gate decisions, subagent
+lifecycles, cost. Run `afk trace show` to read it back as a human-readable receipt.
+
+```
+~/.afk/
+  config/           afk.env, afk.config.json, mcp.json
+  state/            sessions/, todos/, daemon/
+  plugins/          user-installed plugins
+  logs/
+  agent-framework/  telemetry, briefs, memory
+```
+
+### Telegram supervision
+
+Configure a Telegram bot token and allowlist (`AFK_TELEGRAM_ALLOWED_CHAT_IDS`) and the daemon
+pushes a notification to your phone whenever a scheduled task completes — success, failure, or
+skip. The same Telegram surface also accepts incoming messages, giving you a full chat interface
+backed by the session manager.
+
+### Verification workflows
+
+Agent AFK ships blast-radius controls out of the box. Skills like `/review` dispatch parallel
+dimension agents (security, correctness, API compat, test coverage, performance) before surfacing
+a merge recommendation. `/diagnose` forks independent hypothesis agents and validates each before
+reporting. The `/mint` pipeline runs a verify pass before the ship step.
+
+### Blast-radius controls
+
+- **Cost guardrails** — `AFK_MAX_BUDGET_USD` (or `--max-budget-usd` on `afk chat`) aborts a turn
+  that would breach the cost ceiling.
+- **Turn limits** — `--max-turns` caps total turns (`afk chat` defaults to 10, `afk i` to 100),
+  preventing runaway sessions.
+- **Bypass permissions** — by default tool calls run without per-tool approval prompts, which is
+  intentional for unattended work.
+- **Worktree isolation** — `--worktree` creates a git worktree for the session; on clean exit it
+  is removed automatically.
+
+## Local-first, no phone-home
+
+There is no analytics or remote telemetry. Agent AFK never sends your prompts, code, or usage
+anywhere except directly to the model provider you configure. What telemetry exists is local JSONL
+under `~/.afk/` that you can read or delete.
+
+---
+
+Ready to get started? Head to the [Quickstart](/docs/quickstart) to install and run your first command.

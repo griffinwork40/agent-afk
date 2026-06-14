@@ -1,0 +1,9 @@
+.next/
+node_modules/
+.source/
+out/
+
+# Standalone npm app: the repo-root .gitignore ignores package-lock.json
+# (pnpm convention), but this app needs its npm lockfile tracked for
+# reproducible installs/deploys (esp. the pinned fumadocs-mdx version).
+!package-lock.json

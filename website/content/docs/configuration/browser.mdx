@@ -1,0 +1,149 @@
+---
+title: "Browser Control"
+description: "Drive a real Chromium browser from the agent using five native tools. Covers setup, the tool surface, domain policies, and configuration."
+---
+
+`agent-afk` ships five native tools for driving a real Chromium browser. They
+share one Playwright backend per AFK process, with one isolated `BrowserContext`
+per `AgentSession`. Subagents inherit the parent's context by reference.
+
+## Prerequisites
+
+The Playwright Node package ships as a regular dependency and is installed with
+`pnpm install`. The ~300 MB Chromium binaries are not bundled — install them
+once before using a browser tool:
+
+```bash
+pnpm exec playwright install chromium
+```
+
+## Quick start
+
+```bash
+# Install Chromium binaries (one-time)
+pnpm exec playwright install chromium
+
+# Start the REPL and ask the agent to browse
+afk
+> Open github.com and tell me what's on the homepage.
+```
+
+The agent issues `browser_open` → `browser_observe` → additional actions under
+the hood. In REPL mode, Chromium opens headed by default so you can watch the
+agent work.
+
+## The five tools
+
+| Tool | Purpose |
+|------|---------|
+| `browser_open` | Navigate to a URL and return a page observation |
+| `browser_observe` | Re-snapshot the current page without navigating |
+| `browser_act` | Click, fill, press, select, hover, scroll, or wait |
+| `browser_screenshot` | Capture a PNG of the viewport or a specific element |
+| `browser_close` | Tear down the current session's browser context |
+
+All five appear in `afk --help` once the package is built, alongside `bash`,
+`read_file`, and other tools.
+
+### Targeting elements in `browser_act`
+
+`browser_act` accepts three target shapes:
+
+```jsonc
+// Preferred — by visible label and ARIA role.
+{ "kind": "semantic", "text": "Sign in", "role": "button" }
+
+// For unambiguous follow-up on an element from a recent observation.
+{ "kind": "element_id", "element_id": "el_a1b2c3" }
+
+// Escape hatch when the page has no accessible labels.
+{ "kind": "selector", "selector": "button.primary[type=submit]" }
+```
+
+When a semantic target matches two or more elements, the tool returns an error
+with a disambiguation list of three to five candidates. The agent retries using
+`element_id`. Nothing silently picks among ambiguous matches.
+
+Element IDs are stable **within one observation** only. Re-observe after any
+DOM mutation to get fresh IDs.
+
+## Configuration
+
+All browser environment variables are optional.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AFK_BROWSER_HEADLESS` | surface-aware | `1` forces headless; `0` forces headed. Default is headed for REPL, headless for daemon/subagent/telegram. |
+| `AFK_BROWSER_ALLOWED_DOMAINS` | (empty — permissive) | Comma-separated host globs. Non-matching navigation is blocked. |
+| `AFK_BROWSER_BLOCKED_DOMAINS` | (empty) | Comma-separated host globs. Matching navigation is blocked regardless of the allowlist. |
+| `AFK_BROWSER_DOM_SNAPSHOTS` | off | `1` writes a gzipped DOM snapshot per `browser_act` to `~/.afk/state/witness/<sid>/browser/dom-snapshots/`. |
+| `AFK_BROWSER_BACKEND` | `playwright` | Reserved for future backends. Only `playwright` is supported. |
+| `AFK_BROWSER_CONFIG` | (none) | Absolute path to a JSON config file that overrides env-derived settings. |
+| `AFK_SESSION_ID` | `default` | Override the per-session BrowserContext key. Set when running multiple concurrent AFK processes that need isolated browser contexts. |
+
+### Domain policy
+
+```bash
+export AFK_BROWSER_ALLOWED_DOMAINS="github.com,*.atlassian.net"
+export AFK_BROWSER_BLOCKED_DOMAINS="*.ads.example.com"
+```
+
+**Block wins over allow.** The match uses simple `*` glob against the URL host —
+not a regex, not a path matcher. When the allowlist is non-empty, any host not
+on the list is refused. When the allowlist is empty (default), only the
+blocklist applies.
+
+A refused navigation surfaces as `isError: true` with `reason: blocked_by_policy`
+in the tool result — the agent can adapt and try a different URL.
+
+### JSON config file
+
+For per-project overrides, create `~/.afk/config/browser.json` (or point
+`AFK_BROWSER_CONFIG` at any absolute path):
+
+```json
+{
+  "headless": true,
+  "allowedDomains": ["my-internal-tool.example.com"],
+  "blockedDomains": [],
+  "domSnapshots": false,
+  "backend": "playwright"
+}
+```
+
+File values override env-derived values. Arrays replace rather than append.
+
+## Trace and screenshots
+
+Every browser tool emits records to
+`~/.afk/state/witness/<sessionId>/trace.jsonl`:
+
+- `tool_call` — the generic dispatcher record for every tool.
+- `browser_event` — browser-domain semantics: URL transitions, action outcomes,
+  screenshot paths, ambiguity verdicts, policy refusals.
+
+Screenshots are written as sidecar files under
+`~/.afk/state/witness/<sessionId>/browser/screenshots/` and referenced by path
+in the trace — never embedded in the JSONL line.
+
+The witness layer redacts known credential formats (AWS keys, OpenAI bearer
+tokens, GitHub PATs, Slack tokens, JWTs, `password=` form values) before
+persisting. The page receives the real value; only the trace file is redacted.
+
+## Troubleshooting
+
+**`browserType.launch: Executable doesn't exist`** — run
+`pnpm exec playwright install chromium`.
+
+**`Cannot find module 'playwright'`** — run `pnpm install`.
+
+**Navigation blocked by policy** — the agent tried to reach a host outside
+`AFK_BROWSER_ALLOWED_DOMAINS`. Adjust the allowlist or unset it for permissive
+mode.
+
+**Zombie Chromium after a crash** — SIGINT/SIGTERM/exit handlers normally close
+the browser provider. After an ungraceful kill:
+
+```bash
+ps aux | grep chromium | awk '{print $2}' | xargs kill
+```

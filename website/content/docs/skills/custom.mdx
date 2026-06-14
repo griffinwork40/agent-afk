@@ -1,0 +1,98 @@
+---
+title: "Custom Skills"
+description: "Author your own skills using SKILL.md, and understand how user-scope and plugin skills are discovered."
+---
+
+You can extend AFK with your own skills without touching the core codebase. A custom skill is a directory containing a `SKILL.md` file. Drop it in the right place and it auto-registers as a slash command the next time you start a session.
+
+## Directory layout
+
+```
+~/.afk/skills/
+  my-skill/
+    SKILL.md          ← required
+    prompts/          ← optional; for multi-prompt TS skills only
+      system.md
+```
+
+The directory name **must match** the `name` field in `SKILL.md`. Both must follow the agentskills.io v1 spec: 1–64 characters, lowercase `a-z`, `0-9`, and hyphens only, no leading/trailing/consecutive hyphens.
+
+## The `SKILL.md` file
+
+`SKILL.md` is a Markdown file with a YAML frontmatter block followed by the skill's instruction body.
+
+```markdown
+---
+name: my-skill
+description: One-sentence description of what this skill does (max 1024 chars).
+argument-hint: "<required-arg> [--optional-flag]"
+---
+
+Your skill instructions go here. This body becomes the system prompt for the
+sub-agent that executes the skill. Write it as a set of instructions for the
+model to follow.
+
+Use $ARGUMENTS to reference the caller's input anywhere in the body.
+```
+
+**Required frontmatter fields:**
+
+| Field | Notes |
+|---|---|
+| `name` | Must match the parent directory name |
+| `description` | Shown in `/help` and tab-complete (max 1,024 chars) |
+
+**Optional frontmatter fields:**
+
+| Field | Notes |
+|---|---|
+| `argument-hint` | Short usage hint shown next to the skill name |
+| `context` | `fork` (default for SKILL.md skills) or `load` — see below |
+
+### Execution mode: `fork` vs `load`
+
+By default, a `SKILL.md` skill is executed in `fork` mode: AFK forks a child `AgentSession` with the SKILL.md body as its system prompt and the caller's input as the first user message. The child runs independently with its own context window.
+
+Set `context: load` in frontmatter to use load mode instead: the body is returned as the `skill` tool result and the **current** agent executes it in-context with the tools it already has. Load mode is cheaper (no fork overhead) but consumes current-context tokens, so it suits small leaf procedures rather than multi-step orchestrators. See `docs/skill-load-mode.md` for the full trade-off table.
+
+## Where skills are discovered
+
+AFK scans two directories at session start (`src/skills/user-skills.ts`):
+
+| Location | Origin tag | Notes |
+|---|---|---|
+| `~/.afk/skills/` | `user` | Global across all projects |
+| `<cwd>/.afk/skills/` | `project` | Per-project; discovered from the working directory |
+
+Both scans are lazy (run once per session start, not at module load) to avoid blocking the CLI with filesystem I/O.
+
+### Name collision
+
+If your skill's name is already taken by a built-in or an earlier-scanned skill of a **different** origin, it registers under the namespaced fallback `<origin>:<name>` (e.g. `user:mint`). The earlier registrant keeps the bare name. A same-origin re-scan is idempotent.
+
+## Plugin packaging
+
+If you want to distribute a skill as part of a plugin, place it at:
+
+```
+~/.afk/plugins/<plugin-name>/skills/<skill-name>/SKILL.md
+```
+
+Plugin skills are discovered by the plugin scanner at session construction and route through the plugin skill path in `SkillExecutor` — they do not enter the TypeScript registry. This means they don't appear in `listSkills()` output, but they do appear in slash-command listings and `/help` when the plugin is installed.
+
+The `SKILL_ROOT` environment variable is injected into the sub-agent's environment for both user skills and plugin skills. You can reference it in shell commands inside your SKILL.md body:
+
+```markdown
+Run the following command: bash "${SKILL_ROOT}/scripts/process.sh" $ARGUMENTS
+```
+
+## Authoring tips
+
+- **Be explicit about the task.** The body is an instruction set, not reference documentation. Write it as directives: "Read the file at…", "Output a JSON object with…".
+- **Keep load-mode skills small.** A large SKILL.md body in `load` mode spends your current-context token budget. Prefer `fork` for anything that reads multiple files or loops.
+- **Use `$ARGUMENTS` for caller input.** The placeholder is substituted before the body is delivered to the sub-agent. You can use it anywhere in the body.
+- **Name fields must be exact.** A mismatched name (frontmatter `name` ≠ directory name) causes the skill to be skipped silently with a warning on stderr: `[afk] skipping skill <dir>: name field "..." does not match parent directory name "..."`.
+
+## Example template
+
+AFK ships an internal reference template at `src/skills/example-template/` that demonstrates the multi-prompt loader pattern used by built-in TS skills. For user-authored skills, the single-file `SKILL.md` approach above is the recommended pattern.

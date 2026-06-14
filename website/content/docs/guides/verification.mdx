@@ -1,0 +1,115 @@
+---
+title: "Verification Workflows"
+description: "How to verify agent work before it ships: /review, /shadow-verify, /ship --verify, and the failure-geometry pattern."
+---
+
+# Verification Workflows
+
+Agent AFK has several built-in verification passes that run before changes reach production. This guide covers the tools available and the underlying pattern they share.
+
+## Failure Geometry
+
+All of Agent AFK's verification tools are built around a single pattern called **Failure Geometry**.
+
+The core insight: good workflows do not eliminate failure. They make failure **earlier, smaller, louder, cheaper, more local, more informative, or more recoverable**.
+
+The pattern has four steps:
+
+1. **Name the default failure.** What does the workflow do when it breaks without intervention? (e.g., silently approve malformed output, narrate instead of act, declare done while blockers remain)
+2. **Choose the preferred failure.** What should breaking look like instead? (e.g., reject by default, pause in a named state, surface uncertainty)
+3. **Add structure that transforms one into the other.** A gate, a parser fallback, a rubric dimension, a contract field, an abort cascade rule.
+4. **Verify the signal.** Confirm the new failure mode is observable — if it fires and no one sees it, the geometry didn't change.
+
+Source: `docs/failure-geometry.md`.
+
+### Examples in the codebase
+
+| Default failure | Preferred failure | Mechanism |
+|---|---|---|
+| Trust all subagent output | Re-verify when uncertain | confidence gate (`src/skills/_lib/confidence-gate.ts`) |
+| Fail silently at iteration cap | Pause in named state with next-step | `heal-failed` exit path (`src/skills/mint/index.ts`) |
+| Child abort kills parent | Child notifies parent without auto-abort | `AbortGraph` cascade rule (`src/agent/abort-graph.ts`) |
+
+Understanding this pattern helps you reason about why verification tools are structured the way they are — and how to add the same structure to your own skills.
+
+## `/review` — pre-merge diff review
+
+`/review` dispatches parallel dimension agents across a diff, PR, commit SHA, branch, staged changes, or patch file. Each agent focuses on one concern:
+
+- Security
+- Correctness
+- API compatibility
+- Test coverage
+- Performance and observability
+
+The agents run in parallel and their findings are synthesized by severity. The output is a merge recommendation with specific, citable findings — not a general summary.
+
+```
+/review                        # staged changes in the current repo
+/review https://github.com/...  # PR URL
+/review 3a1b2c4                 # commit SHA
+/review main..feature           # branch range
+```
+
+`/review` is **read-only**: it analyzes and reports only. It never edits files, commits, pushes, comments on a PR, or modifies a PR description.
+
+## `/shadow-verify` — adversarial claim verification
+
+After any high-stakes subagent investigation — code reviews, audits, findings reports, large refactors — use `/shadow-verify` to independently re-derive key claims.
+
+Shadow verifiers are parallel adversarial agents that each re-derive 2–3 claims from scratch using tool calls only. They return a verdict per claim:
+
+| Verdict | Meaning |
+|---|---|
+| `CONFIRMED` | The claim was independently verified against source files |
+| `REFUTED` | The claim contradicts what the verifier found in the files |
+| `UNVERIFIABLE` | The claim could not be checked with available tools |
+
+Any disagreement is flagged before you act on the result. The skill fires automatically when a subagent uses high-confidence language ("confident", "certain", "clearly", ≥80%) — confidence is a trigger, not a verdict.
+
+**When to reach for it explicitly:**
+- After a security audit run from memory rather than file reads
+- After a subagent reports a complex refactor is safe
+- Before acting on any finding that would drive file changes, commits, or external side-effects
+
+Source: `AGENTS.md` (shadow-verify skill description).
+
+## `/ship --verify`
+
+`/ship` handles the release pipeline for already-done local work: it dispatches a pre-flight check, runs the test suite, drafts a commit message, pushes, and opens a PR.
+
+Passing `--verify` triggers an adversarial verifier wave on the diff **before a human reads the PR**:
+
+```bash
+/ship --verify
+```
+
+The verifier applies the same parallel-dimension analysis as `/review` to the outgoing diff and gates the PR open on the result. If the verifier finds a severity-critical issue, the PR is not opened until it's resolved.
+
+Use `--verify` whenever changes are non-trivial, touch security-sensitive code, or change public API surfaces.
+
+## The confidence gate
+
+Internally, AFK uses a confidence gate (`src/skills/_lib/confidence-gate.ts:9-13`) to decide when subagent output needs re-verification. The gate uses a threshold, gap detection, and boundary classification — when any condition fires, the output goes to verification before being acted on.
+
+This is the Failure Geometry pattern applied to subagent trust: the default failure mode would be to pass all output through unchecked. The preferred failure is to surface uncertainty loudly. The structure that transforms one into the other is the confidence gate.
+
+## Checklist for new skills
+
+When you write a new skill, answer these before shipping:
+
+- What is the default failure mode if the skill breaks with no hardening?
+- What is the preferred failure mode — what should breaking look like?
+- What structure transforms one into the other? (A gate, fallback, contract field, exit state, or rubric check — not a comment.)
+- Is the preferred failure observable without reading source? (Logged, surfaced in output, or gated.)
+
+Source: `docs/failure-geometry.md` (Checklist section).
+
+## Choosing the right tool
+
+| Situation | Tool |
+|---|---|
+| Reviewing a PR or diff before merging | `/review` |
+| Verifying a subagent's findings before acting | `/shadow-verify` |
+| Pushing local work with pre-ship verification | `/ship --verify` |
+| Writing a new skill and hardening its failure modes | Failure Geometry checklist |

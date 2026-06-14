@@ -1,0 +1,154 @@
+---
+title: "API Keys"
+description: "How to authenticate agent-afk with Anthropic and OpenAI providers: API keys, OAuth login, and where credentials are stored."
+---
+
+`agent-afk` needs at least one credential to reach a model provider. The
+minimum setup is a single environment variable.
+
+## Anthropic (default provider)
+
+### API key
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-api03-...
+```
+
+This is the primary credential for Claude models. `afk doctor` validates it and
+tests connectivity.
+
+### OAuth login
+
+```bash
+afk login
+```
+
+The login wizard prompts for an Anthropic API key or OAuth token, detects the
+token type by prefix, and saves it to `~/.afk/config/afk.env`:
+
+- Tokens starting with `sk-ant-oat` are saved as `CLAUDE_CODE_OAUTH_TOKEN`
+  (Bearer auth).
+- All other tokens are saved as `ANTHROPIC_API_KEY` (x-api-key header).
+
+When saving one type, any stale entry of the other type is removed to prevent
+conflicts. You do not need to restart your shell — restart any running daemon to
+pick up the new token.
+
+`afk login` is Anthropic-only. When the active model resolves to an
+OpenAI-backed provider, `afk login` prints guidance for `OPENAI_API_KEY`
+instead of prompting for a token.
+
+### Credential resolution order (Anthropic)
+
+`loadAnthropicCredential()` in `src/agent/auth/credential-resolver.ts` walks:
+
+1. `ANTHROPIC_API_KEY` (explicit API key, highest priority)
+2. `CLAUDE_CODE_OAUTH_TOKEN` (Bearer auth)
+3. Keychain OAuth state (fallback)
+
+### Where keys are stored
+
+After `afk login`, the key lives in `~/.afk/config/afk.env`. That file is
+loaded at startup via dotenv (before shell environment vars, which take
+precedence). You can also set keys in `~/.afk/config/afk.env` by hand — one
+`KEY=value` per line.
+
+## OpenAI-compatible provider
+
+For any model that routes to the OpenAI-compatible provider (`gpt-*`, `o1*`,
+`o3*`, `o4*`, `codex-*`, or local shims via `AFK_OPENAI_BASE_URL`):
+
+```bash
+export OPENAI_API_KEY=sk-proj-...
+```
+
+`OPENAI_API_KEY` is the preferred credential. `CODEX_API_KEY` is a **deprecated**
+legacy name from the removed `@openai/codex-sdk` integration — it is still read
+as a fallback after `OPENAI_API_KEY` but will be removed in a future major release.
+Prefer `OPENAI_API_KEY` for all new setups.
+Source: `docs/env-registry.md` (Auth section).
+
+### ChatGPT-subscription OAuth (opt-in)
+
+If you have a ChatGPT Plus/Pro subscription and the `codex` CLI installed, you
+can bill model usage against your subscription:
+
+```bash
+codex login                        # writes ~/.codex/auth.json (chatgpt mode)
+export AFK_OPENAI_CHATGPT_OAUTH=1  # opt in (off by default)
+afk chat -m gpt-5 "hello"
+```
+
+AFK reads the access token from `~/.codex/auth.json` but **never refreshes
+it** — refresh tokens are single-use and the `codex` binary owns the refresh
+lifecycle. When the token expires, re-run `codex` and restart `afk`.
+
+An explicit `OPENAI_API_KEY` or `CODEX_API_KEY` always wins over the OAuth
+path, even with `AFK_OPENAI_CHATGPT_OAUTH=1`.
+
+## Per-slot API keys
+
+Each model-capability tier (small / medium / large) can carry its own API key,
+separate from the global credential:
+
+```bash
+AFK_MODEL_LARGE_API_KEY=sk-ant-...   # key used only for large-tier calls
+AFK_MODEL_MEDIUM_API_KEY=sk-proj-...  # key used only for medium-tier calls
+```
+
+Per-slot keys can also be set in the `models` block of `afk.config.json`. See
+[Model Slots](/docs/configuration/model-slots) for details.
+
+## Local servers (no key required)
+
+When running a local OpenAI-compatible shim (MLX, ollama, vLLM, llama.cpp),
+set `AFK_OPENAI_BASE_URL` to the shim's endpoint and use a placeholder key:
+
+```bash
+export AFK_OPENAI_BASE_URL=http://127.0.0.1:8080/v1
+export OPENAI_API_KEY=local           # placeholder accepted by most shims
+```
+
+For Anthropic-compatible local servers, `AFK_LOCAL_BASE_URL` redirects the
+Anthropic provider, and `AFK_LOCAL_API_KEY` (default `local`) is used as the
+placeholder key so real Anthropic credentials never reach a local server.
+`AFK_LOCAL_API_KEY` only applies when `AFK_LOCAL_BASE_URL` is set.
+Source: `docs/env-registry.md` (Auth section).
+
+## Telegram bot
+
+To run the Telegram bot surface, provide a bot token from
+[@BotFather](https://t.me/BotFather):
+
+```bash
+export TELEGRAM_BOT_TOKEN=123456:ABC-...
+```
+
+`AFK_TELEGRAM_BOT_TOKEN` is accepted as an alternate name by the setup wizard.
+The allowlist of chat IDs that may interact with the bot is configured
+separately via `AFK_TELEGRAM_ALLOWED_CHAT_IDS` (comma-separated). Run
+`afk telegram setup` for guided first-time onboarding.
+Source: `docs/env-registry.md` (Telegram section).
+
+## Brave Search (optional)
+
+The `web_scrape` tool's search mode requires a Brave Search API key:
+
+```bash
+export BRAVE_SEARCH_API_KEY=...
+```
+
+Free tier available at [brave.com/search/api](https://brave.com/search/api/).
+When unset, search mode returns an actionable error; markdown and raw fetch
+modes work without it.
+
+## Diagnosing auth issues
+
+```bash
+afk doctor                    # checks all key paths and provider connectivity
+afk config --format json      # shows which source (ANTHROPIC_API_KEY vs CLAUDE_CODE_OAUTH_TOKEN vs OPENAI_API_KEY) is active
+afk provider auth diagnose    # targeted provider auth check
+```
+
+**`invalid x-api-key` / `ANTHROPIC_API_KEY not found`** — run `afk doctor`
+and confirm the key is set in your shell or in `~/.afk/config/afk.env`.

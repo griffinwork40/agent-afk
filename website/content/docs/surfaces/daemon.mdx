@@ -1,0 +1,149 @@
+---
+title: "Daemon"
+description: "afk daemon runs Agent AFK as a long-running headless process that fires scheduled tasks on cron expressions or session-start triggers."
+---
+
+# Daemon
+
+`afk daemon` runs Agent AFK as a long-running headless process. It fires scheduled tasks on
+cron expressions, on session start, or from a pull queue — and optionally pushes completion
+notifications via Telegram.
+
+```bash
+afk daemon --cron "0 */6 * * *" --task "/forge-friction --auto"
+```
+
+## Trigger modes
+
+The daemon supports four trigger modes set with `--trigger`:
+
+| Mode | Description |
+|---|---|
+| `cron` | Fire on a cron expression (requires `--cron`) |
+| `sessionstart` | Fire once when the daemon starts |
+| `both` | Fire on sessionstart and then on the cron schedule |
+| `pull` | Dequeue tasks from a file-based queue (no cron expression needed) |
+
+## Common options
+
+```bash
+afk daemon \
+  --cron "0 9 * * 1-5" \     # every weekday at 9am
+  --task "/review --auto" \  # command to run
+  --task-id nightly-review \ # human-readable task ID
+  --trigger cron             # default when --cron is set
+```
+
+| Flag | Description |
+|---|---|
+| `--cron <expr>` | 5-field cron expression. Required when trigger includes `cron`. |
+| `--task <command>` | Command to fire on each tick |
+| `--task-id <id>` | Task identifier (used in telemetry and notifications) |
+| `--trigger <mode>` | `cron` \| `sessionstart` \| `both` \| `pull` |
+| `--once` | Fire one tick and exit (useful for testing) |
+| `--timeout-ms <ms>` | Per-tick session timeout. Overrides `AFK_TIMEOUT_MS`. |
+| `--thinking <mode>` | Extended thinking: `adaptive` \| `disabled` \| `enabled:<N>` |
+| `--effort <level>` | Effort level: `low` \| `medium` \| `high` \| `xhigh` \| `max` |
+| `--sessionstart-cooldown-ms <ms>` | Cooldown between sessionstart fires |
+| `--port <n>` | Control HTTP port (default `7777`) |
+
+## Testing a single tick
+
+Use `--once` to fire one tick and exit. Useful to verify a command works before committing to
+a long-running process:
+
+```bash
+afk daemon --cron "* * * * *" --task "/diagnose --auto" --once
+```
+
+The daemon prints the telemetry record as JSON and exits with `0` on success or `1` on failure.
+
+## Telegram notifications
+
+When `TELEGRAM_BOT_TOKEN` and `AFK_TELEGRAM_ALLOWED_CHAT_IDS` are configured, the daemon pushes
+a notification to your Telegram chat on every task completion. The message includes the task ID,
+status (✅ success / ⏭️ skipped / ❌ failed), duration, and a response excerpt.
+
+```bash
+export TELEGRAM_BOT_TOKEN=1234567890:ABC...
+export AFK_TELEGRAM_ALLOWED_CHAT_IDS=12345678
+afk daemon --cron "0 2 * * *" --task "/mint run-nightly"
+```
+
+## Scheduled tasks with `afk schedule`
+
+`afk schedule` manages a persisted schedule stored in `~/.afk/config/schedules.json`. Tasks
+registered here are automatically loaded every time the daemon starts — no need to pass them
+as flags each time.
+
+### Add a task
+
+```bash
+afk schedule add \
+  --name "Daily review" \
+  --command "/review --auto" \
+  --cron "0 9 * * 1-5" \
+  --trigger cron \
+  --notify failure
+```
+
+| Flag | Required | Description |
+|---|---|---|
+| `--name <label>` | Yes | Human-readable label |
+| `--command <cmd>` | Yes | Command to run on each tick |
+| `--cron <expr>` | Yes | 5-field cron expression |
+| `--trigger <mode>` | No | `cron` \| `sessionstart` \| `both` (default: `cron`) |
+| `--notify <when>` | No | `failure` \| `always` \| `never` (default: `failure`) |
+| `--disabled` | No | Add in disabled state |
+
+### List tasks
+
+```bash
+afk schedule list
+```
+
+Prints a table of all scheduled tasks with their ID, name, cron, and enabled state.
+
+### Manage task lifecycle
+
+```bash
+afk schedule enable <id>    # re-enable a disabled task
+afk schedule disable <id>   # disable without deleting
+afk schedule remove <id>    # permanently delete
+```
+
+### View execution history
+
+```bash
+afk schedule logs <id>            # last 10 runs (default)
+afk schedule logs <id> -n 25      # last 25 runs
+```
+
+Returns JSON telemetry records in chronological order.
+
+### Live sync
+
+Write operations (`add`, `enable`, `disable`, `remove`) attempt to live-sync the change to a
+running daemon via its control port. If the daemon isn't running, the change is saved to disk
+and will take effect on next start.
+
+## Environment variables
+
+| Variable | Description |
+|---|---|
+| `AFK_DAEMON_TASK` | Default task command (overridden by `--task`) |
+| `AFK_DAEMON_TASK_ID` | Default task ID (overridden by `--task-id`) |
+| `AFK_TIMEOUT_MS` | Per-tick session timeout in milliseconds |
+| `AFK_DAEMON_CWD` | Working directory for daemon-spawned sessions |
+| `AFK_SESSIONSTART_COOLDOWN_MS` | Cooldown between sessionstart fires |
+
+## State and logs
+
+The daemon writes state to `~/.afk/state/daemon/` and logs to `~/.afk/logs/`. Telemetry records
+(task ID, status, duration, cost, response excerpt) are appended to
+`~/.afk/agent-framework/telemetry.jsonl`.
+
+## Crash notifications
+
+Uncaught exceptions and unhandled rejections push a crash notification to Telegram (rate-limited
+to once per 60 seconds to prevent crash-loop self-DOS). The daemon then exits with code `1`.

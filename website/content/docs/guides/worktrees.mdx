@@ -1,0 +1,128 @@
+---
+title: "Git Worktrees"
+description: "Isolate agent work in Git worktrees: afk worktree list/prune, afk farm, branch naming, and age-based auto-pruning."
+---
+
+# Git Worktrees
+
+Agent AFK can run agent sessions in isolated Git worktrees — separate working directories that share the same repository history but have independent checkouts. This lets parallel agents work on separate branches without interfering with each other or your main checkout.
+
+## How worktrees are created
+
+When you run a session with `--worktree`, AFK creates a new worktree based on the remote's default branch (e.g. `origin/main`), fetched fresh. Override the base ref:
+
+```bash
+# Pin to a different base
+AFK_WORKTREE_BASE=origin/develop afk i --worktree
+
+# Base on the local HEAD
+AFK_WORKTREE_BASE=HEAD afk i --worktree
+```
+
+Or override per-session with `--worktree-base`.
+
+### Branch naming
+
+Worktree branches are prefixed with `afk/` by default. Override with `AFK_WORKTREE_BRANCH_PREFIX`:
+
+```bash
+# Use a different prefix
+AFK_WORKTREE_BRANCH_PREFIX=wt/ afk i --worktree
+
+# Drop the prefix entirely
+AFK_WORKTREE_BRANCH_PREFIX= afk i --worktree
+```
+
+In interactive mode, AFK can auto-rename the worktree branch based on the first user message — `AFK_WORKTREE_AUTONAME=1` (the default). Set `AFK_WORKTREE_AUTONAME=0` to disable.
+
+Source: `docs/env-registry.md` (Worktree category), `src/cli/commands/worktree.ts`.
+
+## `afk worktree list`
+
+Inspect all AFK-managed worktrees:
+
+```bash
+afk worktree list
+```
+
+Outputs a table with columns: `PATH`, `OWNER`, `AGE`, `STATUS`, and `PRUNE?`.
+
+The `STATUS` column shows the prune verdict for each worktree:
+
+| Status | Meaning | Would prune? |
+|---|---|---|
+| `empty` | No commits beyond base | Yes |
+| `stale-clean` | Older than `maxAgeDaysClean`, no uncommitted changes | Yes |
+| `orphaned-dir` | Directory exists but no git registration | Yes |
+| `orphaned-registration` | Registered but directory missing | Yes |
+| `dead-owner` | Owner process no longer running | Yes |
+| `stale-dirty` | Older than `maxAgeDaysDirty`, has uncommitted changes | Warn |
+| (other) | Active or within age thresholds | No |
+
+Source: `src/cli/commands/worktree.ts` (`verdictWouldPrune()`).
+
+## `afk worktree prune`
+
+Remove stale worktrees. By default this is a dry run — pass `--apply` to actually delete:
+
+```bash
+# Dry run (show what would be pruned)
+afk worktree prune
+
+# Apply the prune
+afk worktree prune --apply
+```
+
+The command exits with code 1 if any `[ERROR]` warnings are present (e.g. a dirty worktree that would be forcibly removed).
+
+### Age thresholds
+
+Prune decisions use configurable age thresholds:
+
+| Variable | Default | What it controls |
+|---|---|---|
+| `AFK_WORKTREE_MAX_AGE_CLEAN` | `14` days | Max age before a clean worktree is pruned |
+| `AFK_WORKTREE_MAX_AGE_DIRTY` | `30` days | Max age before a dirty worktree is pruned |
+
+These can also be set in `afk.config.json` or passed as CLI flags. Resolution order: CLI flag → `afk.config.json` → env var → default.
+
+Source: `src/cli/commands/worktree.ts` (`afk worktree prune` handler).
+
+### Boot-time pruning
+
+Set `AFK_WORKTREE_BOOT_PRUNE=1` to have the daemon prune stale worktrees at startup in addition to the cron-driven sweep.
+
+## `afk farm` — speculative branch farm
+
+`afk farm` runs the same task across multiple isolated worktrees in parallel, then picks the best result:
+
+```bash
+afk farm --task "refactor the auth module" --branches 3
+```
+
+Each branch runs in a separate worktree. At completion, `afk farm` scores the branches, prints a summary table, writes a memory fact about the winner, and optionally sends a Telegram digest.
+
+The farm is useful when you want to compare multiple independent approaches to the same task before committing to one.
+
+Source: `src/cli/commands/farm.ts`.
+
+## Sweep configuration
+
+The worktree prune sweep uses a configurable root directory:
+
+```bash
+AFK_WORKTREE_SWEEP_ROOT=/path/to/worktrees afk worktree prune
+```
+
+Disable the sweep entirely (useful for long-running tests):
+
+```bash
+AFK_WORKTREE_PRUNE_DISABLE=1 afk daemon
+```
+
+## Tips
+
+- `afk worktree list` is always safe — it's a read-only dry run.
+- Run `git worktree list` directly to see the full git-level view including worktrees AFK didn't create.
+- Dirty worktrees (`stale-dirty`) generate a warning rather than an immediate prune. Review them before running `prune --apply` if you have uncommitted work.
+- Worktree branches starting with `afk/` are AFK-managed. Other branches are left alone.
