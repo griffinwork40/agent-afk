@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.112.1] - 2026-06-14
+
+### Fixed
+- allow late-discovered (OAuth) MCP tools past the permission gate (066b836)
+- emit OAuth state param so Mintlify-style servers connect (ee38171)
+
+### Changed
+- Merge pull request #137 from griffinwork40/fix/mcp-oauth-state-param (954e570)
+- Merge pull request #136 from griffinwork40/afk-port/pr-781 (ce9cd49)
+- lead positioning with authorship; drop control-plane framing (port afk-workshop#781) (89af10c)
+
 ## [3.112.0] - 2026-06-14
 
 ### Added
