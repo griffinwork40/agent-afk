@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.112.0] - 2026-06-14
+
+### Added
+- add /get-started skill + harden /init detection (3ca03ae)
+
+### Changed
+- Merge pull request #133 from griffinwork40/afk/implement-get-started-skill (c3ba3c7)
+
 ## [3.111.0] - 2026-06-14
 
 ### Added
