@@ -1,7 +1,7 @@
 {
   "name": "agent-afk",
   "version": "3.112.0",
-  "description": "Local-first control plane for long-running AI agent work — delegation, traces, resumable sessions, verification, and notifications.",
+  "description": "Open-source coding-agent harness you can actually change — own the loop (prompts, gates, routing, skills, terminal states), use any model, run long tasks while you're away.",
   "main": "dist/index.mjs",
   "type": "module",
   "bin": {
