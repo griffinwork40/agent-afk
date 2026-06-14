@@ -66,6 +66,23 @@ for (const line of lines) compositor.commitAbove(line);
 compositor.commitAbove('');  // ← trailing blank
 ```
 
+## How the markdown renderer participates
+
+`renderMarkdownToTerminal` (`formatter.ts`) is the source of assistant
+prose. To keep it contract-clean for both the streaming REPL path and the
+non-streamed paths (`afk chat`, `/transcript`, `/attach`):
+
+- **Every block token emits exactly one trailing `\n`** (a line terminator,
+  not a blank line) and **no leading blank**. The one blank line between
+  blocks comes solely from marked's `space` token (one source blank line →
+  one `\n`). Emitting `\n\n` from a block token *and* relying on the `space`
+  token double-spaced every boundary in non-streamed rendering; a leading
+  `\n` on headings produced a double blank before every heading in the REPL.
+- `formatBlockForCommit` (`markdown-stream-format.ts`) strips **both** leading
+  and trailing blank lines before `commitBlock` re-adds the single trailing
+  blank — so a model emitting 3+ newlines between sections can't smuggle a
+  leading blank into scrollback.
+
 ## Tests
 
 `src/cli/_lib/rhythm-contract.test.ts` exercises the major emission

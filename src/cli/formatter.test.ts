@@ -592,4 +592,60 @@ describe('renderMarkdownToTerminal', () => {
       expect(stripped).toMatch(/amplifies\n/);
     });
   });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Block-spacing rhythm — see docs/tui-rhythm.md. Every block token emits a
+  // single trailing '\n' and no leading blank; marked's `space` token supplies
+  // the one blank line between blocks. Regression guard for the
+  // "double blank between paragraphs / leading blank before headings" bug.
+  // ──────────────────────────────────────────────────────────────────────────
+  describe('block spacing rhythm', () => {
+    // Longest run of consecutive blank lines in the rendered output.
+    const maxBlankRun = (s: string): number => {
+      let max = 0;
+      let run = 0;
+      for (const line of stripAnsi(s).split('\n')) {
+        if (line.trim() === '') {
+          run++;
+          max = Math.max(max, run);
+        } else {
+          run = 0;
+        }
+      }
+      return max;
+    };
+
+    it('separates consecutive paragraphs by exactly one blank line (no double blanks)', () => {
+      const out = renderMarkdownToTerminal('First paragraph.\n\nSecond paragraph.\n\nThird paragraph.\n');
+      expect(maxBlankRun(out)).toBeLessThanOrEqual(1);
+      expect(stripAnsi(out)).toMatch(/First paragraph\.\n\nSecond paragraph\.\n\nThird paragraph\./);
+    });
+
+    it('a heading does not emit a leading blank line', () => {
+      const out = renderMarkdownToTerminal('# Title\n\nBody.\n');
+      expect(out).not.toMatch(/^\n/);
+      expect(stripAnsi(out).split('\n')[0]).toContain('Title');
+    });
+
+    it('mixed blocks (paragraph, list, code, heading) never stack blank lines', () => {
+      const md = [
+        'Lead in.', '', '## Section', '', '- one', '- two', '',
+        '```sh', 'afk login', '```', '', 'Closing line.', '',
+      ].join('\n');
+      expect(maxBlankRun(renderMarkdownToTerminal(md))).toBeLessThanOrEqual(1);
+    });
+
+    it('collapses 3+ source newlines between paragraphs to a single blank line', () => {
+      const out = renderMarkdownToTerminal('Above.\n\n\n\nBelow.\n');
+      expect(maxBlankRun(out)).toBeLessThanOrEqual(1);
+    });
+
+    it('an empty code block does not double-space the following blank line', () => {
+      // The empty-fence loud-fail placeholder is a block token too: it must own
+      // exactly one trailing '\n' like every other block. Guards the formatter
+      // empty-code branch against re-introducing '\n\n'.
+      const out = renderMarkdownToTerminal('Intro.\n\n```bash\n```\n\nOutro.\n');
+      expect(maxBlankRun(out)).toBeLessThanOrEqual(1);
+    });
+  });
 });
