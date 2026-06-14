@@ -27,7 +27,7 @@ import { SubagentManager } from '../../agent/subagent.js';
 import type { SubagentHandle } from '../../agent/subagent/handle.js';
 import { runWave } from '../../agent/subagent/wave.js';
 import { describeFailure } from '../../agent/subagent/result.js';
-import type { IAgentSession } from '../../agent/types.js';
+import type { AgentModelInput, IAgentSession } from '../../agent/types.js';
 import type { CanUseTool } from '../../agent/types/sdk-types.js';
 import { researchAgent } from '../_agents/research-agent.js';
 import { gitInvestigator } from '../_agents/git-investigator.js';
@@ -575,6 +575,7 @@ async function handler(
   ctx?: SkillExecutionContext,
 ): Promise<DiagnosisResult> {
   const apiKey = ctx?.apiKey;
+  const subagentModel = ctx?.defaultSubagentModel ?? ctx?.defaultModel ?? 'sonnet';
   // Parse input — accept both structured object and plain string (from slash commands)
   const parsedInput = (() => {
     if (typeof input === 'string') {
@@ -677,7 +678,7 @@ async function handler(
   const codebaseHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },
     config: {
-      model: 'sonnet',
+      model: subagentModel,
       systemPrompt: codebaseResearchPrompt,
       canUseTool: createReadOnlyCanUseTool(),
     },
@@ -692,10 +693,15 @@ async function handler(
   const gitHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },
     config: {
-      model: 'sonnet',
+      model: subagentModel,
       systemPrompt: gitResearchPrompt,
       cwd: parsedInput.repoPath,
-      agents: { 'git-investigator': toAgentDefinition(gitInvestigator) },
+      agents: {
+        'git-investigator': {
+          ...toAgentDefinition(gitInvestigator),
+          model: subagentModel,
+        },
+      },
       canUseTool: createGitOrchestratorCanUseTool(),
     },
     idPrefix: 'diagnose-git-research',
@@ -729,7 +735,7 @@ async function handler(
   const hypothesisHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },
     config: {
-      model: 'sonnet',
+      model: subagentModel,
       systemPrompt: `${systemPrompt}\n\n${hypothesisPrompt}`,
       canUseTool: createReadOnlyCanUseTool(),
     },
@@ -873,6 +879,7 @@ async function handler(
       manager,
       skillCallId,
       baseline,
+      subagentModel,
     ),
   );
 
@@ -1125,6 +1132,7 @@ async function testHypothesisInWorktree(
   // (raw session UUID → render-at-root) behavior.
   skillCallId?: string,
   baseline?: BaselineResult,
+  subagentModel: AgentModelInput = 'sonnet',
 ): Promise<VerificationResult> {
   const worktreePath = join(tmpdir(), `diagnose-hyp-${hypothesis.id}-${Date.now()}`);
   let verifierHandle: SubagentHandle<VerificationResult> | undefined;
@@ -1159,7 +1167,7 @@ async function testHypothesisInWorktree(
     verifierHandle = await manager.forkSubagent({
       parent: { sessionId: parentSessionId },
       config: {
-        model: 'sonnet',
+        model: subagentModel,
         systemPrompt: `${verifyPrompt}\n\nYou are testing in an isolated worktree at: ${worktreePath}`,
         canUseTool: createVerifierCanUseTool(),
       },

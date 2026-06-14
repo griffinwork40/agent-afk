@@ -5,7 +5,7 @@
  */
 
 import { getSkill } from '../../index.js';
-import type { IAgentSession } from '../../../agent/types.js';
+import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
 import { SubagentManager } from '../../../agent/subagent.js';
 import { describeFailure } from '../../../agent/subagent/result.js';
 import { getApiKey } from '../../../cli/shared-helpers.js';
@@ -24,6 +24,7 @@ export async function runHealPhase(
   // verify subagents under the mint skill's tool-lane entry. See
   // skills/index.ts SkillExecutionContext.callId.
   skillCallId?: string,
+  defaultSubagentModel: AgentModelInput = 'sonnet',
 ): Promise<{
   healed: boolean;
   newHealIterations: number;
@@ -100,7 +101,7 @@ export async function runHealPhase(
     const healHandle = await manager.forkSubagent({
       parent: { sessionId: parentSession.sessionId },
       config: {
-        model: 'sonnet',
+        model: defaultSubagentModel,
         systemPrompt: healPrompt,
         apiKey: getApiKey(),
       },
@@ -149,6 +150,7 @@ export async function runHealPhase(
       parentSession.sessionId,
       parentSession.cwd,
       skillCallId,
+      defaultSubagentModel,
     );
 
     return {

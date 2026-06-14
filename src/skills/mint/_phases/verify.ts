@@ -10,6 +10,7 @@ import { getApiKey } from '../../../cli/shared-helpers.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
 import { emitCard } from '../../_lib/emit-card.js';
 import type { BuildResult } from './build.js';
+import type { AgentModelInput } from '../../../agent/types.js';
 
 const VerifyModeOutputSchema = z.object({
   status: z.enum(['PASS', 'FAIL']),
@@ -35,6 +36,7 @@ async function forkVerifyMode(
   // Mint skill's ToolCall id — anchors the parallel verify-mode subagent
   // under the mint skill's tool-lane entry. See skills/index.ts SkillExecutionContext.callId.
   skillCallId?: string,
+  defaultSubagentModel: AgentModelInput = 'sonnet',
 ): Promise<{ passed: boolean; issues?: string[] }> {
   // Propagate parent worktree — verify subagents run tests/lint/grep in
   // the right working tree.
@@ -44,7 +46,7 @@ async function forkVerifyMode(
   const verifyHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },
     config: {
-      model: 'sonnet',
+      model: defaultSubagentModel,
       systemPrompt: verifyPrompt,
       apiKey: getApiKey(),
     },
@@ -93,6 +95,7 @@ export async function runVerifyPhase(
   // Mint skill's ToolCall id — anchors every parallel verify-mode subagent
   // under the mint skill's tool-lane entry. See skills/index.ts SkillExecutionContext.callId.
   skillCallId?: string,
+  defaultSubagentModel: AgentModelInput = 'sonnet',
 ): Promise<VerifyResult> {
   const prompts = loadSkillPrompts('mint');
   const verifyPrompt = prompts['verify.md'];
@@ -103,9 +106,9 @@ export async function runVerifyPhase(
 
   // Run test, lint, and design-review in parallel
   const [testResult, lintResult, designResult] = await Promise.all([
-    forkVerifyMode('test', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId),
-    forkVerifyMode('lint', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId),
-    forkVerifyMode('design-review', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId),
+    forkVerifyMode('test', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel),
+    forkVerifyMode('lint', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel),
+    forkVerifyMode('design-review', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel),
   ]);
 
   const allIssues: string[] = [];
