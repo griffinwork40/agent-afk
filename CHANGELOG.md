@@ -11,6 +11,20 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [3.111.0] - 2026-06-14
+
+### Added
+- AFK-native SessionFacet substrate (port afk-workshop#779) (7ae9c1a)
+
+### Changed
+- Merge pull request #135 from griffinwork40/afk-port/pr-779 (a8772af)
+- Update model names in README examples (0959fd0)
+- Update description of 'haiku' agent (0d795e7)
+- Clarify description of 'afk chat' command (c0227a8)
+- Update permissions description for afk command (7fafa72)
+- Fix command alias for interactive mode in README (ff00dfc)
+- Revise README for clarity on Agent AFK features (02ffa5e)
+
 ## [3.110.1] - 2026-06-13
 
 ### Changed
