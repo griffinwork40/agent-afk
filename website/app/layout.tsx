@@ -26,7 +26,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={jetbrainsMono.variable}>
+    <html lang="en" className={jetbrainsMono.variable} suppressHydrationWarning>
       <body>{children}</body>
     </html>
   );

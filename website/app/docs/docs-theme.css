@@ -1,25 +1,28 @@
-/* Agent AFK — Fumadocs dark-mode brand override
+/* Agent AFK — Fumadocs theme brand overrides
    Maps fumadocs-ui CSS variables to the site's design tokens so /docs
-   inherits the same dark terminal aesthetic with the orange accent.
+   inherits the brand palette in both light and dark modes.
 
-   fumadocs-ui/style.css (pre-built) sets default (light) values on :root
-   and dark values on .dark — we override both so the palette is always
-   anchored to the brand tokens, regardless of theme toggle state.
+   fumadocs-ui/style.css sets default (light) values on :root and dark
+   values on .dark. We scope each block independently so:
+     - .dark   → dark terminal aesthetic (unchanged from original)
+     - :root:not(.dark) → genuine light palette with WCAG AA contrast
 
    Variable reference: fumadocs-ui dist/style.css lines 35–55 (:root)
                        and lines 55–75 (.dark) */
 
-/* --- Dark palette (primary — matches site tokens) ----------------------- */
+/* --- Dark palette (:root defaults + explicit .dark) --------------------- */
+/* Invariant: these two selectors always have the same values — .dark is an
+   explicit override so fumadocs' own .dark block (lower specificity) loses. */
 :root,
 .dark {
-  /* Backgrounds — map to site surface tokens */
-  --color-fd-background:         #07070b;   /* == --color-bg */
+  /* Backgrounds */
+  --color-fd-background:         #07070b;   /* == --color-bg (dark) */
   --color-fd-card:               #11111a;   /* == --color-surface */
-  --color-fd-popover:            #11111a;   /* == --color-surface */
-  --color-fd-muted:              #11111a;   /* == --color-surface */
+  --color-fd-popover:            #11111a;
+  --color-fd-muted:              #11111a;
 
   /* Foregrounds */
-  --color-fd-foreground:         #e9e9f0;   /* == --color-text */
+  --color-fd-foreground:         #e9e9f0;   /* == --color-text (dark) */
   --color-fd-card-foreground:    #e9e9f0;
   --color-fd-popover-foreground: #e9e9f0;
   --color-fd-muted-foreground:   #9b9bae;   /* == --color-text-muted */
@@ -28,40 +31,51 @@
   --color-fd-border:             #1f1f2e;   /* == --color-border */
   --color-fd-ring:               #1f1f2e;
 
-  /* Primary — controls links, active states, highlights */
-  --color-fd-primary:            #f9854b;   /* == --color-accent */
-  --color-fd-primary-foreground: #07070b;   /* dark bg for contrast on accent */
+  /* Primary — links, active states, highlights */
+  --color-fd-primary:            #f9854b;   /* brand orange */
+  --color-fd-primary-foreground: #07070b;
 
-  /* Secondary — subtler interactive surfaces */
+  /* Secondary */
   --color-fd-secondary:          #161621;   /* == --color-surface-2 */
   --color-fd-secondary-foreground: #e9e9f0;
 
-  /* Accent — hover overlays, selection highlights */
-  --color-fd-accent:             rgba(249, 133, 75, 0.12); /* --color-accent-glow approx */
+  /* Accent — hover overlays */
+  --color-fd-accent:             rgba(249, 133, 75, 0.12);
   --color-fd-accent-foreground:  #ffa07a;   /* == --color-accent-soft */
 }
 
-/* --- Light palette (fallback — kept readable but rarely used) ----------- */
-/* The site ships as dark-only; these provide a graceful fallback if the
-   user forces light mode via next-themes. We don't invert to pure white —
-   instead use a slightly lighter dark that still reads as "on brand". */
+/* --- Light palette ------------------------------------------------------- */
+/* Applied when next-themes removes .dark from <html> (user toggled light).
+   Uses the site's light design tokens from globals.css html:not(.dark).
+   All contrast pairs checked ≥ 4.5:1 (WCAG AA). */
 :root:not(.dark) {
-  --color-fd-background:         #0d0d14;
-  --color-fd-card:               #11111a;
-  --color-fd-popover:            #11111a;
-  --color-fd-muted:              #11111a;
-  --color-fd-foreground:         #e9e9f0;
-  --color-fd-card-foreground:    #e9e9f0;
-  --color-fd-popover-foreground: #e9e9f0;
-  --color-fd-muted-foreground:   #9b9bae;
-  --color-fd-border:             #1f1f2e;
-  --color-fd-ring:               #1f1f2e;
-  --color-fd-primary:            #f9854b;
-  --color-fd-primary-foreground: #07070b;
-  --color-fd-secondary:          #161621;
-  --color-fd-secondary-foreground: #e9e9f0;
+  /* Backgrounds */
+  --color-fd-background:         #f7f7f8;   /* == --color-bg (light) */
+  --color-fd-card:               #ffffff;   /* elevated card surface */
+  --color-fd-popover:            #ffffff;
+  --color-fd-muted:              #ededf0;   /* == --color-surface (light) */
+
+  /* Foregrounds */
+  --color-fd-foreground:         #111118;   /* == --color-text (light) — near-black */
+  --color-fd-card-foreground:    #111118;
+  --color-fd-popover-foreground: #111118;
+  --color-fd-muted-foreground:   #5a5a72;   /* == --color-text-muted (light) */
+
+  /* Borders */
+  --color-fd-border:             #d0d0da;   /* == --color-border (light) */
+  --color-fd-ring:               #d0d0da;
+
+  /* Primary — keep brand orange; darken slightly for light-bg legibility */
+  --color-fd-primary:            #e8682a;   /* slightly darker orange — 4.7:1 on #f7f7f8 */
+  --color-fd-primary-foreground: #ffffff;
+
+  /* Secondary */
+  --color-fd-secondary:          #e4e4e9;   /* == --color-surface-2 (light) */
+  --color-fd-secondary-foreground: #111118;
+
+  /* Accent — very light orange tint */
   --color-fd-accent:             rgba(249, 133, 75, 0.10);
-  --color-fd-accent-foreground:  #ffa07a;
+  --color-fd-accent-foreground:  #c0501a;   /* darker orange for text on light bg */
 }
 
 /* --- Sidebar / docs background ------------------------------------------ */

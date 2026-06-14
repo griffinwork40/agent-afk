@@ -5,9 +5,12 @@
    no code chip styles). Those are handled inside app/docs/docs-theme.css.
    ========================================================================== */
 
-/* --- Design tokens -------------------------------------------------------- */
+/* --- Design tokens: dark (default) --------------------------------------- */
+/* Invariant: :root holds dark-mode values; html:not(.dark) overrides to
+   light. next-themes toggles .dark on <html>; both branches must be present
+   so that removing .dark actually changes the palette. */
 :root {
-  /* Color */
+  /* Color — dark palette */
   --color-bg:           #07070b;
   --color-bg-elev:      #0d0d14;
   --color-surface:      #11111a;
@@ -41,12 +44,30 @@
   --t-med:    240ms;
 }
 
+/* --- Design tokens: light override --------------------------------------- */
+/* Applied when next-themes removes .dark from <html>.
+   Accent (#f9854b) and geometry/motion tokens are theme-invariant. */
+html:not(.dark) {
+  --color-bg:           #f7f7f8;
+  --color-bg-elev:      #ffffff;
+  --color-surface:      #ededf0;
+  --color-surface-2:    #e4e4e9;
+  --color-border:       #d0d0da;
+  --color-border-soft:  #e0e0e8;
+  --color-text:         #111118;
+  --color-text-muted:   #5a5a72;
+  --color-text-faint:   #8888a0;
+  --color-success:      #16a34a;
+  --color-amber:        #d97706;
+  /* accent and glow stay orange — same brand in both themes */
+}
+
 /* --- Minimal base --------------------------------------------------------- */
 *, *::before, *::after { box-sizing: border-box; }
 
 html, body {
   margin: 0;
-  background: #07070b;
-  color: #e9e9f0;
+  background: var(--color-bg);
+  color: var(--color-text);
   font-family: var(--font-sans);
 }
