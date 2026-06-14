@@ -91,7 +91,15 @@ export function formatBlockForCommit(
   // like table borders mid-row.
   const wrapped = wrapToWidth(rendered, contentWidth);
   const indented = applyIndent(wrapped, indentStr);
-  const trimmed = indented.replace(/\n+$/, '');
+  // Strip BOTH leading and trailing blank lines. The caller (`commitBlock`)
+  // re-adds exactly one trailing blank via `commitAbove(trimmed + '\n\n')`, so
+  // a committed block must own neither — that is the TUI rhythm contract
+  // (docs/tui-rhythm.md: "every block owns one trailing blank, no emitter owns
+  // leading blanks"). Leading blanks reach here when a model emits 3+ newlines
+  // between sections: the streamer splits on the first '\n\n', leaving the
+  // surplus newline at the START of the next block. Without this strip it
+  // survives as a double blank in scrollback.
+  const trimmed = indented.replace(/^\n+/, '').replace(/\n+$/, '');
 
   return trimmed;
 }
