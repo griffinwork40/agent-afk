@@ -7,6 +7,7 @@ import { SubagentManager } from '../../../agent/subagent.js';
 import { describeFailure } from '../../../agent/subagent/result.js';
 import { getApiKey } from '../../../cli/shared-helpers.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
+import type { AgentModelInput } from '../../../agent/types.js';
 
 export async function runSpecPhase(
   idea: string,
@@ -15,6 +16,7 @@ export async function runSpecPhase(
   // Mint skill's ToolCall id. When present, anchors the forked subagent
   // under the mint skill's tool-lane entry — see runResearchPhase / skills/index.ts.
   skillCallId?: string,
+  defaultSubagentModel: AgentModelInput = 'sonnet',
 ): Promise<string> {
   const prompts = loadSkillPrompts('mint');
   const specPrompt = prompts['spec.md'];
@@ -33,7 +35,7 @@ export async function runSpecPhase(
   const specHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },
     config: {
-      model: 'sonnet',
+      model: defaultSubagentModel,
       systemPrompt: specPrompt,
       apiKey: getApiKey(),
     },
