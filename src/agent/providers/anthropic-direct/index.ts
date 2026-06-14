@@ -45,7 +45,7 @@ import { SessionToolDispatcher } from '../../tools/dispatcher.js';
 import { createBuiltinHandlers } from '../../tools/handlers/index.js';
 import { builtinToolSchemas, agentTool, skillTool, composeTool } from '../../tools/schemas.js';
 import { TOOL_SYSTEM_PROMPT_BASE, SLASH_COMMAND_ROUTING_PROMPT, BASH_PASSTHROUGH_PROMPT, MEMORY_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT_READONLY } from '../../tools/system-prompt.js';
-import type { ToolPermissionConfig } from '../../tools/permissions.js';
+import { withMcpToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
 import type { HookRegistry } from '../../hooks.js';
 import type { SubagentExecutor } from '../../tools/subagent-executor.js';
 import { maxOutputTokensFor } from '../../model-limits.js';
@@ -343,7 +343,13 @@ export class AnthropicDirectProvider implements ModelProvider {
       // so builtin tool names always take precedence in any overlap.
       schemas: [...this.schemas, ...mcpSchemas],
       hookRegistry: this.hookRegistry,
-      permissions: this.permissions,
+      // Union live MCP wire-names into the (statically-snapshotted) allowlist so
+      // OAuth servers whose tools were discovered after construction are not
+      // rejected by the gate while present in `schemas`/`handlers`. No-op when
+      // no mcpManager (e.g. restricted sub-agents) or no allowlist configured.
+      permissions: this.mcpManager
+        ? withMcpToolsAllowed(this.permissions, this.mcpManager.getMcpToolWireNames())
+        : this.permissions,
       subagentExecutor: this.subagentExecutor,
       skillExecutor: this.skillExecutor,
       composeExecutor: this.composeExecutor,

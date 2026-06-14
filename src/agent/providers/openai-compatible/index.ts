@@ -26,7 +26,7 @@ import type { HookRegistry } from '../../hooks.js';
 import type { SubagentExecutor } from '../../tools/subagent-executor.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import type { ComposeExecutor } from '../../tools/compose-executor.js';
-import type { ToolPermissionConfig } from '../../tools/permissions.js';
+import { withMcpToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
 import { createBuiltinHandlers } from '../../tools/handlers/index.js';
@@ -335,8 +335,18 @@ export class OpenAICompatibleProvider implements ModelProvider {
     };
     if (this.providerOpts.hookRegistry !== undefined)
       dispatcherOpts.hookRegistry = this.providerOpts.hookRegistry;
-    if (this.providerOpts.permissions !== undefined)
-      dispatcherOpts.permissions = this.providerOpts.permissions;
+    // Union live MCP wire-names into the (statically-snapshotted) allowlist so
+    // OAuth servers whose tools were discovered after construction are not
+    // rejected by the gate while present in `schemas`/`handlers`. No-op when no
+    // mcpManager (e.g. restricted sub-agents) or no allowlist configured.
+    const effectivePermissions = this.providerOpts.mcpManager
+      ? withMcpToolsAllowed(
+          this.providerOpts.permissions,
+          this.providerOpts.mcpManager.getMcpToolWireNames(),
+        )
+      : this.providerOpts.permissions;
+    if (effectivePermissions !== undefined)
+      dispatcherOpts.permissions = effectivePermissions;
     if (this.providerOpts.subagentExecutor !== undefined)
       dispatcherOpts.subagentExecutor = this.providerOpts.subagentExecutor;
     if (this.providerOpts.skillExecutor !== undefined)
