@@ -153,6 +153,53 @@ describe('KeychainOAuthProvider — discovery state', () => {
 });
 
 // ---------------------------------------------------------------------------
+// state (OAuth state parameter)
+// ---------------------------------------------------------------------------
+
+describe('KeychainOAuthProvider — state', () => {
+  it('returns a non-empty string', () => {
+    const provider = new KeychainOAuthProvider('srv', makeMemoryBackend());
+    const s = provider.state();
+    expect(typeof s).toBe('string');
+    expect(s.length).toBeGreaterThan(0);
+  });
+
+  it('is stable across repeated calls (persisted)', () => {
+    const provider = new KeychainOAuthProvider('srv', makeMemoryBackend());
+    expect(provider.state()).toBe(provider.state());
+  });
+
+  it('persists across provider instances sharing one backend', () => {
+    const store = { blob: undefined as string | undefined };
+    const first = new KeychainOAuthProvider('srv', makeMemoryBackend(store));
+    const generated = first.state();
+    const second = new KeychainOAuthProvider('srv', makeMemoryBackend(store));
+    expect(second.state()).toBe(generated);
+  });
+
+  it('scopes state per server name', () => {
+    const store = { blob: undefined as string | undefined };
+    const provA = new KeychainOAuthProvider('server-a', makeMemoryBackend(store));
+    const provB = new KeychainOAuthProvider('server-b', makeMemoryBackend(store));
+    expect(provA.state()).not.toBe(provB.state());
+  });
+
+  it('regenerates after invalidateCredentials("verifier")', () => {
+    const provider = new KeychainOAuthProvider('srv', makeMemoryBackend());
+    const before = provider.state();
+    provider.invalidateCredentials('verifier');
+    expect(provider.state()).not.toBe(before);
+  });
+
+  it('regenerates after invalidateCredentials("all")', () => {
+    const provider = new KeychainOAuthProvider('srv', makeMemoryBackend());
+    const before = provider.state();
+    provider.invalidateCredentials('all');
+    expect(provider.state()).not.toBe(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // invalidateCredentials
 // ---------------------------------------------------------------------------
 
