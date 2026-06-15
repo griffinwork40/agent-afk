@@ -11,6 +11,18 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.6.0] - 2026-06-15
+
+### Added
+- extend contour-shift rhythm through the mid-page sections (8d6c7f5)
+
+### Fixed
+- remove agentafk.com link from docs sidebar nav (2126d4e)
+
+### Changed
+- Merge pull request #156 from griffinwork40/website/visual-signature-3 (0f8dc2f)
+- add reusable signal->depth->rise visual signature (db5cb67)
+
 ## [4.5.0] - 2026-06-15
 
 ### Added

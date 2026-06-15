@@ -1,0 +1,496 @@
+/* ==========================================================================
+   Agent AFK Docs — Visual Signature System
+   --------------------------------------------------------------------------
+   A small reusable layer that encodes one worldview into the docs shell:
+
+     signal -> depth -> compression -> rise -> embodiment
+
+   It is NOT decoration. Every token below maps to a stage of that motion and
+   reuses the brand mark's own DNA — the "Handoff Arc" glyph already travels
+   from a cool grey node, through a green routed arc, to a warm orange ping.
+   This file expands that single glyph's logic into the page's composition.
+
+   Design constraints honoured here:
+     - Additive only. Scoped under #nd-docs-layout / dedicated .afk-* classes,
+       so fumadocs prose, nav, search, TOC and the brand mark are untouched.
+     - Targets only versioned fumadocs hooks (#nd-docs-layout) + our own
+       classes — never structural selectors fumadocs may change.
+     - Reuses existing brand tokens (globals.css / docs-theme.css). No recolor.
+     - All motion is gated behind prefers-reduced-motion. Text contrast and
+       responsive behaviour are preserved; the field sits behind content at
+       low opacity and recomposes (not collapses) on small screens.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Signature tokens
+   --------------------------------------------------------------------------
+   Named after the motion so the system reads like its own worldview. Cool
+   tones bias toward DEPTH (discovery, inward); the warm brand orange biases
+   toward EMBODIMENT (action, outward). Derived from existing brand tokens —
+   nothing is recoloured, only positioned along the signal->rise axis.        */
+:root {
+  /* Depth — cool, dense, submerged. The hidden structure beneath the signal. */
+  --afk-depth-1:        #0a0a12;          /* deepest basin                     */
+  --afk-depth-2:        #0c1018;          /* cool shadow, faint blue cast      */
+  --afk-depth-line:     rgba(120, 188, 144, 0.10);  /* contour ink (arc-green) */
+  --afk-depth-line-2:   rgba(124, 124, 148, 0.07);  /* faint structural grey   */
+
+  /* Signal — the small bright node + its ripple. Brand orange, ping-derived. */
+  --afk-signal:         rgba(249, 133, 75, 0.55);    /* node core             */
+  --afk-signal-ring:    rgba(249, 133, 75, 0.18);    /* expanding ripple      */
+  --afk-signal-glow:    rgba(249, 133, 75, 0.10);    /* ambient haze          */
+
+  /* Route — the earned path. The arc gradient: grey -> green -> orange.       */
+  --afk-route-cool:     #6e7a86;          /* origin (the grey endpoint node)   */
+  --afk-route-mid:      #5cb87f;           /* the green arc                     */
+  --afk-route-warm:     #f9854b;           /* arrival (the warm ping)           */
+
+  /* Measure — the one ruthless line. Crisp, neutral, high-legibility.         */
+  --afk-rule:           rgba(155, 155, 174, 0.30);   /* axis / scope line     */
+  --afk-rule-tick:      rgba(155, 155, 174, 0.55);   /* threshold ticks       */
+  --afk-rule-mark:      var(--color-accent);          /* the active marker     */
+
+  /* Embodiment — warm, open, elevated. The arrival surface.                   */
+  --afk-warm-wash:      rgba(249, 133, 75, 0.06);    /* faint warm light      */
+  --afk-warm-edge:      rgba(249, 133, 75, 0.30);    /* lit threshold edge    */
+
+  /* Motion timing — slow, geological. Discovery is patient.                   */
+  --afk-rise:           cubic-bezier(0.16, 0.84, 0.30, 1);
+  --afk-t-ripple:       7s;
+  --afk-t-drift:        24s;
+}
+
+/* Light theme: depth basins lighten so the field reads as paper relief rather
+   than a dark void, while the route + warm tokens keep the same brand hue.    */
+:root:not(.dark) {
+  --afk-depth-1:        #eef0f2;
+  --afk-depth-2:        #e7eaee;
+  --afk-depth-line:     rgba(92, 184, 127, 0.16);
+  --afk-depth-line-2:   rgba(90, 90, 114, 0.10);
+  --afk-signal:         rgba(232, 104, 42, 0.55);
+  --afk-signal-ring:    rgba(232, 104, 42, 0.16);
+  --afk-signal-glow:    rgba(232, 104, 42, 0.08);
+  --afk-rule:           rgba(90, 90, 114, 0.30);
+  --afk-rule-tick:      rgba(90, 90, 114, 0.55);
+  --afk-warm-wash:      rgba(232, 104, 42, 0.05);
+  --afk-warm-edge:      rgba(232, 104, 42, 0.28);
+}
+
+/* --------------------------------------------------------------------------
+   2. deep-field — the page-wide submerged backdrop
+   --------------------------------------------------------------------------
+   A fixed, behind-everything topographic field. It implies a vast structure
+   beneath the docs: cool basins gathered in the lower-left (where descent
+   begins) resolving toward a warmer, lighter, more open upper-right (where
+   embodiment lives). This is the compositional law from the brief —
+   "dense lower-left -> resolved upper-right" — expressed as light, not layout.
+
+   It is purely ambient: pointer-events:none, very low opacity, sits at z -1
+   behind the fumadocs grid so prose contrast is never affected.              */
+#nd-docs-layout {
+  position: relative;
+  isolation: isolate;            /* keep the field's stacking local           */
+}
+
+.afk-deep-field {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  /* Composite three intentions:
+     (a) a cool, dense basin anchored lower-left  — descent
+     (b) a faint warm rise toward upper-right     — embodiment
+     (c) a near-black vignette floor              — the depth below depth     */
+  background:
+    radial-gradient(
+      120% 90% at 8% 100%,
+      var(--afk-depth-2) 0%,
+      transparent 55%
+    ),
+    radial-gradient(
+      90% 80% at 100% 0%,
+      var(--afk-warm-wash) 0%,
+      transparent 45%
+    ),
+    radial-gradient(
+      140% 120% at 50% 120%,
+      var(--afk-depth-1) 0%,
+      transparent 60%
+    );
+  opacity: 0.9;
+}
+
+/* contour-layer — faint topographic rings carved into the depth. An inline
+   SVG (set via background-image data URI on the element) draws concentric
+   contour pockets, so the field reads as *terrain with structure* rather than
+   a flat gradient. Drifts almost imperceptibly. The SVG itself lives on the
+   element's style (see SignatureField.tsx) so the stroke colour can inherit
+   theme tokens; here we own only its placement + motion.                     */
+.afk-contour-layer {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-repeat: no-repeat;
+  background-position: -6% 110%;     /* anchored lower-left, like the basin   */
+  background-size: 75vmax 75vmax;
+  opacity: 0.5;
+  will-change: transform;
+  animation: afk-contour-drift var(--afk-t-drift) ease-in-out infinite alternate;
+}
+
+@keyframes afk-contour-drift {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(2.2%, -1.6%, 0) scale(1.04); }
+}
+
+/* --------------------------------------------------------------------------
+   3. signal-field — the hero's small-signal-over-vast-depth opening
+   --------------------------------------------------------------------------
+   Wraps the top of a page (the intro / hero). A single bright NODE sits at the
+   origin of the route; concentric RIPPLES expand from it (the visible signal)
+   while the surrounding darkened field implies the submerged system. The node
+   is small; the implied structure is large. This is the clearest statement of
+   law #1.                                                                     */
+.afk-signal-field {
+  position: relative;
+  isolation: isolate;
+}
+
+/* The ripple stack: two expanding rings + an ambient glow, painted behind the
+   hero content. Positioned to the lower-left of the heading so the eye starts
+   deep and is drawn up-and-right along the route toward the CTA.             */
+.afk-signal-field::before {
+  content: "";
+  position: absolute;
+  /* anchor near the lower-left of the hero block                            */
+  left: -2.2rem;
+  top: 1.2rem;
+  width: 16rem;
+  height: 16rem;
+  pointer-events: none;
+  z-index: -1;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at center, var(--afk-signal-glow) 0%, transparent 62%);
+  /* concentric signal rings drawn as hard-stop radial bands                  */
+  -webkit-mask: radial-gradient(circle, #000 99%, transparent 100%);
+          mask: radial-gradient(circle, #000 99%, transparent 100%);
+  background-image:
+    radial-gradient(circle at center, transparent 0 24%, var(--afk-signal-ring) 24% 25%, transparent 25%),
+    radial-gradient(circle at center, transparent 0 44%, var(--afk-signal-ring) 44% 45%, transparent 45%),
+    radial-gradient(circle at center, transparent 0 66%, var(--afk-signal-ring) 66% 67%, transparent 67%),
+    radial-gradient(circle at center, var(--afk-signal-glow) 0%, transparent 62%);
+  animation: afk-ripple var(--afk-t-ripple) var(--afk-rise) infinite;
+}
+
+/* The node itself — the small bright point the rings emanate from. */
+.afk-signal-field::after {
+  content: "";
+  position: absolute;
+  left: calc(-2.2rem + 8rem - 4px);   /* centre of the ripple field          */
+  top: calc(1.2rem + 8rem - 4px);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: -1;
+  background: var(--afk-signal);
+  box-shadow: 0 0 12px 2px var(--afk-signal-ring);
+  animation: afk-node-pulse var(--afk-t-ripple) var(--afk-rise) infinite;
+}
+
+@keyframes afk-ripple {
+  0%   { transform: scale(0.82); opacity: 0.35; }
+  50%  { opacity: 0.85; }
+  100% { transform: scale(1.06); opacity: 0; }
+}
+
+@keyframes afk-node-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 1;    transform: scale(1.18); }
+}
+
+/* --------------------------------------------------------------------------
+   4. earned-path + scope-rule — the route and the one ruthless measure
+   --------------------------------------------------------------------------
+   A thin vertical device pinned to the left of the hero. It pairs:
+     - earned-path : a braided trace of repeated lines converging into one
+                     confident route (iteration -> compression -> a path).
+     - scope-rule  : a crisp measured axis with threshold ticks and an active
+                     marker — the clean judgment crossing the organic field.
+   Together they read as "a route the system had to discover," measured.      */
+.afk-route {
+  position: absolute;
+  left: -1.75rem;
+  top: 0.25rem;
+  bottom: -0.5rem;
+  width: 1.25rem;
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* The scope-rule: a hairline axis with evenly measured ticks. The single warm
+   marker sits near the TOP (arrival), echoing the route resolving upward.    */
+.afk-scope-rule {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    var(--afk-rule) 12%,
+    var(--afk-rule) 88%,
+    transparent 100%
+  );
+}
+/* Measured ticks: a repeating gradient of short horizontal marks. */
+.afk-scope-rule::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6%;
+  bottom: 6%;
+  width: 6px;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    var(--afk-rule-tick) 0 1px,
+    transparent 1px 1.05rem
+  );
+}
+/* The active threshold marker — the moment the route breaks the surface. */
+.afk-scope-rule::after {
+  content: "";
+  position: absolute;
+  left: -2px;
+  top: 9%;
+  width: 9px;
+  height: 1px;
+  background: var(--afk-rule-mark);
+  box-shadow: 0 0 6px var(--afk-signal);
+}
+
+/* As a standalone reusable utility, the scope-rule can also annotate any block
+   (e.g. a section heading) when used directly on an element edge.            */
+.afk-scope-rule--inline {
+  position: relative;
+  padding-left: 1rem;
+}
+.afk-scope-rule--inline::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.15em;
+  bottom: 0.15em;
+  width: 2px;
+  border-radius: 2px;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    var(--afk-route-cool) 0%,
+    var(--afk-route-mid) 55%,
+    var(--afk-route-warm) 100%
+  );
+}
+
+/* --------------------------------------------------------------------------
+   5. elevated-field — the warm arrival surface (embodiment)
+   --------------------------------------------------------------------------
+   Applied to the CTA / "Get started" zone: the most embodied part of the page.
+   Warmer light, a lit threshold edge along the top (the surface broken into),
+   and the least visual friction. This is where cold depth has fully risen
+   into warm use. Reusable on any card or block meant to feel like arrival.   */
+.afk-elevated-field {
+  position: relative;
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(120% 140% at 100% 0%, var(--afk-warm-wash) 0%, transparent 55%),
+    linear-gradient(180deg, var(--afk-warm-wash) 0%, transparent 40%);
+  isolation: isolate;
+}
+/* The lit threshold edge: a warm top hairline that brightens toward the right
+   (outward, the action side).                                                */
+.afk-elevated-field::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--afk-route-mid) 20%,
+    var(--afk-warm-edge) 100%
+  );
+  pointer-events: none;
+}
+
+/* Give the embodiment card's contents a touch more breathing room so it reads
+   as "open" relative to the denser sections above. Scoped to our wrapper so it
+   only affects the arrival zone, not all cards.                              */
+.afk-elevated-field [data-card] {
+  background:
+    linear-gradient(180deg, rgba(249, 133, 75, 0.04) 0%, transparent 60%),
+    var(--color-fd-card);
+  border-color: color-mix(in srgb, var(--color-fd-border) 70%, var(--afk-route-warm) 30%);
+  transition: border-color var(--t-base, 180ms) var(--afk-rise),
+              box-shadow var(--t-base, 180ms) var(--afk-rise),
+              transform var(--t-base, 180ms) var(--afk-rise);
+}
+.afk-elevated-field [data-card]:hover {
+  border-color: var(--afk-warm-edge);
+  box-shadow: 0 0 0 1px var(--afk-warm-wash), 0 8px 30px -12px var(--afk-signal-ring);
+}
+
+/* --------------------------------------------------------------------------
+   6. afk-extract — feature cards as artifacts pulled from the field
+   --------------------------------------------------------------------------
+   The brief warns against "a pile of disconnected cards." We don't restructure
+   fumadocs Cards (that would risk a11y/content); instead we give them a quiet
+   shared treatment so each reads like a resolved form extracted from the same
+   deeper system: a faint cool inner-shadow recess + a warm left-edge that
+   lights on hover, echoing the route. Applied via a wrapper class so it only
+   touches cards we opt in, and degrades to plain cards if unstyled.          */
+.afk-extract-field [data-card] {
+  position: relative;
+  overflow: hidden;
+  transition: border-color var(--t-base, 180ms) var(--afk-rise),
+              transform var(--t-base, 180ms) var(--afk-rise),
+              box-shadow var(--t-base, 180ms) var(--afk-rise);
+}
+/* The carved recess: a faint cool gradient pooling in the lower-left of each
+   card — the artifact still carries the depth it came from.                  */
+.afk-extract-field [data-card]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    90% 90% at 0% 100%,
+    var(--afk-depth-line-2) 0%,
+    transparent 55%
+  );
+  opacity: 0.9;
+}
+/* The route edge: a thin left band that lights from cool to warm on hover —
+   the signal travelling the path. */
+.afk-extract-field [data-card]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    var(--afk-route-cool) 0%,
+    var(--afk-route-mid) 100%
+  );
+  opacity: 0.45;
+  transition: opacity var(--t-base, 180ms) var(--afk-rise),
+              background var(--t-base, 180ms) var(--afk-rise);
+}
+.afk-extract-field [data-card]:hover {
+  transform: translateY(-2px);
+}
+.afk-extract-field [data-card]:hover::before {
+  opacity: 1;
+  background: linear-gradient(
+    to bottom,
+    var(--afk-route-mid) 0%,
+    var(--afk-route-warm) 100%
+  );
+}
+/* keep card text above the recess */
+.afk-extract-field [data-card] > * { position: relative; z-index: 1; }
+
+/* --------------------------------------------------------------------------
+   7. afk-threshold — a section transition that is a contour shift, not a rule
+   --------------------------------------------------------------------------
+   A reusable replacement for a generic <hr>. Reads as a measured threshold
+   crossing the field: a hairline that migrates cool -> warm left-to-right with
+   a single tick at the crossing point. Use sparingly between major zones.    */
+.afk-threshold {
+  position: relative;
+  height: 1px;
+  margin: 2.5rem 0;
+  border: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--afk-route-cool) 18%,
+    var(--afk-route-mid) 52%,
+    var(--afk-warm-edge) 86%,
+    transparent 100%
+  );
+  opacity: 0.6;
+}
+.afk-threshold::before {
+  content: "";
+  position: absolute;
+  left: 52%;
+  top: -3px;
+  width: 1px;
+  height: 7px;
+  pointer-events: none;
+  background: var(--afk-rule-mark);
+  box-shadow: 0 0 6px var(--afk-signal);
+}
+
+/* --------------------------------------------------------------------------
+   8. Reduced motion — discovery still holds its shape, it just stops moving
+   --------------------------------------------------------------------------
+   The field is meaningful at rest: the node, rings, route and warm rise are
+   all static compositions. Under reduced-motion we freeze every animation but
+   keep the full visual system intact (no layout shift, no disappearance).    */
+@media (prefers-reduced-motion: reduce) {
+  .afk-contour-layer,
+  .afk-signal-field::before,
+  .afk-signal-field::after {
+    animation: none !important;
+  }
+  /* settle the ripple to a calm, legible mid-state rather than mid-transition */
+  .afk-signal-field::before { transform: scale(0.96); opacity: 0.6; }
+  .afk-signal-field::after  { opacity: 0.7; transform: none; }
+}
+
+/* --------------------------------------------------------------------------
+   9. Responsive recomposition — recompose, don't collapse
+   --------------------------------------------------------------------------
+   On narrow screens the left-margin route/scope devices have no gutter to live
+   in, so they recompose into the flow rather than overflowing: the route hugs
+   the content's left edge and the signal field shrinks and tucks behind the
+   heading. The deep-field + contour stay (they're ambient and full-bleed).   */
+@media (max-width: 768px) {
+  .afk-route {
+    left: -0.85rem;
+    width: 0.85rem;
+  }
+  .afk-signal-field::before {
+    left: -1rem;
+    top: 0.5rem;
+    width: 11rem;
+    height: 11rem;
+  }
+  .afk-signal-field::after {
+    left: calc(-1rem + 5.5rem - 4px);
+    top: calc(0.5rem + 5.5rem - 4px);
+  }
+  .afk-contour-layer {
+    background-size: 110vmax 110vmax;
+    opacity: 0.4;
+  }
+}
+
+/* Very small screens: drop the absolute route entirely (no gutter at all) and
+   let the inline scope-rule carry the measure motif instead.                 */
+@media (max-width: 480px) {
+  .afk-route { display: none; }
+}
