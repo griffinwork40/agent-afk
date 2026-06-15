@@ -43,6 +43,7 @@ import {
   findCompactionBoundary,
 } from '../compact.js';
 import { emitCompaction } from '../../../trace/emit.js';
+import { resolveModelId } from '../../../session/model-resolution.js';
 import type { AnthropicClientLike } from '../types.js';
 import type { SessionState } from './session-state.js';
 import type { AbortCoordinator } from './abort-coordinator.js';
@@ -228,7 +229,14 @@ function readKeepLastN(): number {
 
 function readCompactModel(): string {
   const raw = env.AFK_COMPACT_MODEL;
-  if (raw !== undefined && raw.length > 0) return raw;
+  // Invariant: the Anthropic Messages API rejects short aliases like `'haiku'`
+  // (404 `model: <alias> not_found` under OAuth — see the note in oneshot.ts).
+  // Every other API path resolves the alias to a full model id via
+  // resolveModelId before messages.create (query.ts, oneshot.ts, index.ts);
+  // the compact summarizer must do the same, or a configured AFK_COMPACT_MODEL
+  // alias reaches the API raw and 404s mid-compaction. resolveModelId returns
+  // the full id for known aliases and passes anything else through unchanged.
+  if (raw !== undefined && raw.length > 0) return resolveModelId(raw) ?? raw;
   return DEFAULT_COMPACT_MODEL;
 }
 
