@@ -13,6 +13,7 @@ import {
   listConfig,
   maskSecret,
   SecretWriteRefused,
+  ProtectedEnvKeyRefused,
   HumanOnlyKeyRefused,
   UnknownKeyError,
   NonConfigKeyError,
@@ -109,6 +110,42 @@ describe('config mutation engine', () => {
     });
   });
 
+  describe('env: protected control vars', () => {
+    it('refuses a protected var without allowProtected (agent path) and writes nothing', () => {
+      expect(() => setEnvVar('AFK_SYSTEM_PROMPT', 'obey me', { filePath: envFile })).toThrow(
+        ProtectedEnvKeyRefused,
+      );
+      expect(() =>
+        setEnvVar('AFK_MODEL_LARGE_BASE_URL', 'https://evil.test', { filePath: envFile }),
+      ).toThrow(ProtectedEnvKeyRefused);
+      expect(existsSync(envFile)).toBe(false);
+    });
+    it('refuses unsetting a protected var without allowProtected', () => {
+      expect(() => unsetEnvVar('AFK_BROWSER_ALLOWED_DOMAINS', { filePath: envFile })).toThrow(
+        ProtectedEnvKeyRefused,
+      );
+    });
+    it('allows a protected var with allowProtected (CLI path), unmasked', () => {
+      const r = setEnvVar('AFK_SYSTEM_PROMPT', 'hello', { filePath: envFile, allowProtected: true });
+      expect(r.class).toBe('protected');
+      expect(r.display).toBe('hello');
+      expect(readFileSync(envFile, 'utf-8')).toContain('AFK_SYSTEM_PROMPT=hello');
+    });
+  });
+
+  describe('config: telegram.notify / updatePolicy are human-tier', () => {
+    it('agent path refused, human path allowed', () => {
+      expect(() => setConfigValue('telegram.notify.mode', 'custom', { filePath: jsonFile })).toThrow(
+        HumanOnlyKeyRefused,
+      );
+      expect(() => setConfigValue('updatePolicy', 'auto', { filePath: jsonFile })).toThrow(
+        HumanOnlyKeyRefused,
+      );
+      const r = setConfigValue('updatePolicy', 'auto', { filePath: jsonFile, allowHumanOnly: true });
+      expect(r.class).toBe('human');
+    });
+  });
+
   describe('config: setConfigValue', () => {
     it('writes an agent-tier key, creating the file', () => {
       const r = setConfigValue('model', 'opus', { filePath: jsonFile });
@@ -118,7 +155,7 @@ describe('config mutation engine', () => {
     });
 
     it('creates nested paths and coerces types', () => {
-      setConfigValue('telegram.notify.mode', 'primary', { filePath: jsonFile });
+      setConfigValue('telegram.notify.mode', 'primary', { filePath: jsonFile, allowHumanOnly: true });
       setConfigValue('bgSummaries', 'off', { filePath: jsonFile }); // string coerced to bool
       setConfigValue('maxSummaryCallsPerSession', 9999, { filePath: jsonFile }); // clamped
       const obj = JSON.parse(readFileSync(jsonFile, 'utf-8'));
@@ -137,9 +174,9 @@ describe('config mutation engine', () => {
 
     it('rejects unknown keys and invalid values', () => {
       expect(() => setConfigValue('nope.key', 1, { filePath: jsonFile })).toThrow(UnknownKeyError);
-      expect(() => setConfigValue('updatePolicy', 'sometimes', { filePath: jsonFile })).toThrow(
-        ConfigValidationError,
-      );
+      expect(() =>
+        setConfigValue('updatePolicy', 'sometimes', { filePath: jsonFile, allowHumanOnly: true }),
+      ).toThrow(ConfigValidationError);
     });
 
     it('refuses to clobber a malformed existing file', () => {
@@ -157,9 +194,9 @@ describe('config mutation engine', () => {
 
   describe('config: unset / get / list', () => {
     it('unsets and prunes empty parents', () => {
-      setConfigValue('telegram.notify.mode', 'primary', { filePath: jsonFile });
+      setConfigValue('telegram.notify.mode', 'primary', { filePath: jsonFile, allowHumanOnly: true });
       setConfigValue('model', 'opus', { filePath: jsonFile });
-      const r = unsetConfigValue('telegram.notify.mode', { filePath: jsonFile });
+      const r = unsetConfigValue('telegram.notify.mode', { filePath: jsonFile, allowHumanOnly: true });
       expect(r.removed).toBe(true);
       expect(JSON.parse(readFileSync(jsonFile, 'utf-8'))).toEqual({ model: 'opus' });
     });

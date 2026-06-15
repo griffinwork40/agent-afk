@@ -15,6 +15,37 @@ describe('classifyEnvKey', () => {
   it('marks non-secret afk knobs settable', () => {
     expect(classifyEnvKey('AFK_MODEL')).toBe('settable');
     expect(classifyEnvKey('AFK_EFFORT')).toBe('settable');
+    expect(classifyEnvKey('AFK_TEMPERATURE')).toBe('settable');
+  });
+  it('marks non-secret control vars protected (agent refused, human-gated)', () => {
+    for (const k of [
+      'AFK_SYSTEM_PROMPT',
+      'AFK_MODEL_LARGE_BASE_URL',
+      'AFK_MODEL_SMALL_BASE_URL',
+      'AFK_OPENAI_BASE_URL',
+      'AFK_LOCAL_BASE_URL',
+      'AFK_DAEMON_TASK',
+      'AFK_DAEMON_TASK_ID',
+      'AFK_DAEMON_CWD',
+      'AFK_DAEMON_HOST',
+      'AFK_BROWSER_ALLOWED_DOMAINS',
+      'AFK_BROWSER_BLOCKED_DOMAINS',
+      'AFK_BROWSER_CONFIG',
+      'AFK_ALLOW_PROJECT_MCP',
+      'AFK_INTERNAL',
+      'AFK_WORKTREE_BASE',
+      'AFK_WORKTREE_BRANCH_PREFIX',
+      'AFK_TELEGRAM_ALLOWED_CHAT_IDS',
+      'AFK_TELEGRAM_NOTIFY_MODE',
+      'AFK_TELEGRAM_PRIMARY_CHAT_ID',
+      'AFK_HOME',
+      'AFK_STATE_DIR',
+      'AFK_FRAMEWORK_DIR',
+      'TELEGRAM_DATA_DIR',
+      'AFK_TELEGRAM_CWD',
+    ]) {
+      expect(classifyEnvKey(k)).toBe('protected');
+    }
   });
   it('marks credential vars as secret', () => {
     expect(classifyEnvKey('ANTHROPIC_API_KEY')).toBe('secret');
@@ -55,7 +86,9 @@ describe('classifyConfigKey / specs', () => {
   it('classifies agent vs human vs unknown', () => {
     expect(classifyConfigKey('model')).toBe('agent');
     expect(classifyConfigKey('temperature')).toBe('agent');
-    expect(classifyConfigKey('telegram.notify.mode')).toBe('agent');
+    expect(classifyConfigKey('telegram.notify.mode')).toBe('human'); // notification-redirect vector
+    expect(classifyConfigKey('telegram.notify.targets')).toBe('human');
+    expect(classifyConfigKey('updatePolicy')).toBe('human'); // auto self-update is scope-widening
     expect(classifyConfigKey('systemPrompt')).toBe('human');
     expect(classifyConfigKey('enableShellHooks')).toBe('human'); // trust gate — agent must not flip it
     expect(classifyConfigKey('hooks')).toBe('unknown'); // hooks intentionally not listed (no safe per-key validator)

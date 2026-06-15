@@ -65,6 +65,14 @@ export class SecretWriteRefused extends Error {
     this.name = 'SecretWriteRefused';
   }
 }
+export class ProtectedEnvKeyRefused extends Error {
+  constructor(key: string) {
+    super(
+      `${key} controls identity, safety, capability, autonomous runs, request routing, or where AFK's own state lives; the agent cannot set it. A human must run \`afk config env set ${key}\`.`,
+    );
+    this.name = 'ProtectedEnvKeyRefused';
+  }
+}
 export class HumanOnlyKeyRefused extends Error {
   constructor(key: string) {
     super(`${key} is human-gated (prompt/hooks/identity); the agent cannot set it. A human must run \`afk config set ${key}\`.`);
@@ -98,6 +106,8 @@ export function maskSecret(value: string | undefined): string {
 export interface EnvOptions {
   /** Permit writing/removing secret-flagged vars (CLI only; never the agent). */
   allowSecret?: boolean;
+  /** Permit writing/removing protected control vars (CLI only; never the agent). */
+  allowProtected?: boolean;
   /** Override the target file (tests). Defaults to ~/.afk/config/afk.env. */
   filePath?: string;
 }
@@ -116,11 +126,16 @@ function envPath(opts?: EnvOptions): string {
 }
 
 /** Throw unless `key` may be written by this caller. Returns the key class. */
-function assertEnvWritable(key: string, allowSecret: boolean | undefined): EnvKeyClass {
+function assertEnvWritable(
+  key: string,
+  allowSecret: boolean | undefined,
+  allowProtected: boolean | undefined,
+): EnvKeyClass {
   const cls = classifyEnvKey(key);
   if (cls === 'unknown') throw new UnknownKeyError(key);
   if (cls === 'non-config') throw new NonConfigKeyError(key);
   if (cls === 'secret' && !allowSecret) throw new SecretWriteRefused(key);
+  if (cls === 'protected' && !allowProtected) throw new ProtectedEnvKeyRefused(key);
   return cls;
 }
 
@@ -133,7 +148,7 @@ export interface EnvWriteResult {
 }
 
 export function setEnvVar(key: string, rawValue: string, opts?: EnvOptions): EnvWriteResult {
-  const cls = assertEnvWritable(key, opts?.allowSecret);
+  const cls = assertEnvWritable(key, opts?.allowSecret, opts?.allowProtected);
   const meta = getEnvVarMeta(key)!; // non-undefined: assertEnvWritable rejected unknown
   const coerced = coerceEnvValue(meta, rawValue);
   if (!coerced.ok) throw new ConfigValidationError(coerced.error);
@@ -155,7 +170,7 @@ export interface EnvRemoveResult {
 }
 
 export function unsetEnvVar(key: string, opts?: EnvOptions): EnvRemoveResult {
-  const cls = assertEnvWritable(key, opts?.allowSecret);
+  const cls = assertEnvWritable(key, opts?.allowSecret, opts?.allowProtected);
   const file = envPath(opts);
   const removed = removeEnvVar(file, key);
   return { key, class: cls, removed, persistedTo: file };
