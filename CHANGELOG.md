@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.4.1] - 2026-06-15
+
+### Fixed
+- render the docs nav arc glyph via a standalone SVG file (af8c741)
+
+### Changed
+- Merge pull request #151 from griffinwork40/docs/website-favicon-and-nav-links (ccc69b0)
+- keep the matched wordmark legible in the docs light theme (d8c4b62)
+- match the docs nav brand lockup to agentafk.com (5db9a5a)
+- use main-site favicon and link out to landing page + GitHub (2e523aa)
+
 ## [4.4.0] - 2026-06-15
 
 ### Added
