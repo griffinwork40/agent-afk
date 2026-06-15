@@ -126,15 +126,15 @@ separately via `AFK_TELEGRAM_ALLOWED_CHAT_IDS` (comma-separated). Run
 `afk telegram setup` for guided first-time onboarding.
 Source: `docs/env-registry.md` (Telegram section).
 
-## Brave Search (optional)
+## Exa Search (optional)
 
-The `web_scrape` tool's search mode requires a Brave Search API key:
+The `web_scrape` tool's search mode requires an Exa (exa.ai) API key:
 
 ```bash
-export BRAVE_SEARCH_API_KEY=...
+export EXA_API_KEY=...
 ```
 
-Free tier available at [brave.com/search/api](https://brave.com/search/api/).
+Free tier (20k requests/month) available at [exa.ai](https://exa.ai).
 When unset, search mode returns an actionable error; markdown and raw fetch
 modes work without it.
 

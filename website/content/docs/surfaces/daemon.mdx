@@ -44,6 +44,8 @@ afk daemon \
 | `--effort <level>` | Effort level: `low` \| `medium` \| `high` \| `xhigh` \| `max` |
 | `--sessionstart-cooldown-ms <ms>` | Cooldown between sessionstart fires |
 | `--port <n>` | HTTP port for live schedule sync (default `7777`) |
+| `--host <address>` | Bind address for the control HTTP surface (default `127.0.0.1`, loopback only). Overrides `AFK_DAEMON_HOST`. **The control surface is unauthenticated** — bind a non-loopback address (e.g. `0.0.0.0`) only on a trusted or firewalled network. |
+| `--briefs-dir <path>` | Override the directory scanned for pending briefs (default `~/.afk/agent-framework/briefs`). |
 
 ## Testing a single tick
 
@@ -133,6 +135,7 @@ and will take effect on next start.
 | `AFK_DAEMON_TASK_ID` | Default task ID (overridden by `--task-id`) |
 | `AFK_TIMEOUT_MS` | Per-tick session timeout in milliseconds |
 | `AFK_DAEMON_CWD` | Working directory for daemon-spawned sessions |
+| `AFK_DAEMON_HOST` | Bind address for the control HTTP surface (default `127.0.0.1`, loopback only). Overridden by `--host`. |
 | `AFK_SESSIONSTART_COOLDOWN_MS` | Cooldown between sessionstart fires |
 
 ## State and logs
