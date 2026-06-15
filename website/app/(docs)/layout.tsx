@@ -4,6 +4,7 @@ import { RootProvider } from 'fumadocs-ui/provider/next';
 import { source } from '@/lib/source';
 import 'fumadocs-ui/style.css';
 import './docs-theme.css';
+import './signature.css';
 
 export default function Layout({ children }: { children: ReactNode }) {
   return (
