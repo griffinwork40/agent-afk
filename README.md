@@ -46,7 +46,7 @@ afk chat "hello"
 - **Built-in orchestrators** — `/mint`, `/diagnose`, `/spec`, `/research`, `/ship`, `/review` dispatch subagent waves. `/mint` takes a feature idea and runs spec → research → plan → parallelize → build → verify → ship. `/diagnose` forks parallel root-cause hypotheses for failing tests and bugs.
 
 > **Agent AFK Pro:** Autonomous skill-generation (`/forge`) and the calibrated skill-qualification rubric (`/qualify`) are reserved for Agent AFK Pro and are not part of the open-source build.
-- **Cross-session memory** — Claude remembers preferences, decisions, and procedures across runs. Backed by SQLite at `~/.afk/agent-framework/memory/` plus a `HOT.md` that injects into every future session's system prompt.
+- **Cross-session memory** — Claude remembers preferences, decisions, and procedures across runs. See [Memory](#memory) below.
 - **Background subagent jobs** — dispatch a subagent with `mode:'background'`; `/bgsub` lists running and completed jobs, `/bgsub:join <id>` retrieves the result.
 
 ## Four surfaces, one session manager
@@ -81,6 +81,34 @@ AFK_MAX_BUDGET_USD=5.00
 **Project-scoped system prompt.** Drop an `AFK.md` at your project root and `afk` appends it to its built-in framework prompt whenever you run from that directory — your instructions layer on top of the base, they don't replace it. No frontmatter needed.
 
 **Check what resolved.** `afk config` dumps the live configuration. `afk doctor` validates keys, paths, and provider connectivity.
+
+## Memory
+
+Claude remembers things across sessions — preferences, decisions, conventions, and reusable procedures — without any manual setup. Memory is local-only and stored under `~/.afk/state/memory/`.
+
+**Two storage tiers:**
+
+- **Hot memory** (`~/.afk/state/memory/HOT.md`) — a small markdown file (≤ ~1,500 tokens) injected into every future session's system prompt automatically. Use it for the facts you want Claude to always carry: your name, working style, standing instructions. Capped at 5,250 characters; overflow is truncated with a sentinel comment.
+- **Fact archive** (`~/.afk/state/memory/memory.db`) — an unbounded SQLite store, full-text-searchable via FTS5. Facts are queried on demand with the `memory_search` tool; they don't bloat every prompt.
+
+**Fact categories** (set when writing to the archive):
+
+| Category | What to put here |
+|---|---|
+| `preference` | Working style, formatting, tool choices |
+| `convention` | Naming rules, file layout, team norms |
+| `decision` | Architecture choices and the reasoning behind them |
+| `learning` | Bugs found, lessons from past runs |
+
+**Tools available inside a session:**
+
+- `memory_search` — full-text search across facts and procedures (supports FTS5: `AND`, `OR`, `NOT`, `"exact phrase"`, `prefix*`).
+- `memory_update` — write or supersede a fact in the archive (`target: "fact"`) or overwrite hot memory (`target: "hot"`).
+- `procedure_write` — save a reusable step-by-step workflow as a named markdown file under `~/.afk/state/memory/procedures/`. Procedures are searchable via `memory_search`.
+
+Hot memory is injected at session start; `memory_search` is called explicitly during a run. The session-end hook logs each completed top-level session to the archive automatically — subagent sessions are excluded.
+
+All four surfaces (REPL, chat, daemon, Telegram) share the same store — memory written in one surface is available everywhere.
 
 ## Models
 
