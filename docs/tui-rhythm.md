@@ -70,7 +70,7 @@ compositor.commitAbove('');  // ← trailing blank
 
 `renderMarkdownToTerminal` (`formatter.ts`) is the source of assistant
 prose. To keep it contract-clean for both the streaming REPL path and the
-non-streamed paths (`afk chat`, `/transcript`, `/attach`):
+non-streamed paths (`afk chat`, `/transcript`):
 
 - **Every block token emits exactly one trailing `\n`** (a line terminator,
   not a blank line) and **no leading blank**. The one blank line between

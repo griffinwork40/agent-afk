@@ -118,20 +118,6 @@ export async function runReplLoop(
       history,
     );
   } finally {
-    // Drain BackgroundTaskManager: bgManager is local to runReplLoop and is
-    // never attached to ctx, so the session teardown's registerCleanup
-    // handler in interactive.ts (which calls ctx.backgroundRegistry.cancelAll())
-    // operates on a different registry object. Any Ctrl+B tasks still
-    // 'running' at REPL exit would otherwise stay that way permanently in the
-    // manager's Map — a data-integrity violation that the planned unified
-    // ActiveWorkRegistry would inherit. cancel() is synchronous and
-    // idempotent; drain before bgStatusBar.stop() so the bar's 'complete'
-    // listener is still active when the final state transitions fire.
-    if (footer !== undefined) {
-      for (const t of footer.bgManager.running()) {
-        footer.bgManager.cancel(t.id);
-      }
-    }
     // Drain ShellPassthrough — kills every `!&cmd` background shell that
     // is still running. Same lifecycle rationale as bgManager above: the
     // shell jobs are owned by this loop, must not outlive it. Clear the

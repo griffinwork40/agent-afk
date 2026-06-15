@@ -4,6 +4,7 @@ import type { MemoryStore } from '../../../agent/memory/index.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 import type { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import type { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
+import type { SubagentControl } from '../../../agent/tools/subagent-executor.js';
 import type { SlashContext, SessionStats, ResumeSwapResult } from '../../slash/types.js';
 import type { StoredSession } from '../../session-store.js';
 import type { StatusLine } from '../../status-line.js';
@@ -301,6 +302,16 @@ export interface InteractiveCtx {
    */
   backgroundRegistry: BackgroundAgentRegistry;
   /**
+   * Narrow control seam over the root `SubagentExecutor` for user-triggered
+   * promotion of a running foreground subagent to a detached background job
+   * (Ctrl+B). The turn handler reads this off the handles bag to make Ctrl+B
+   * context-sensitive: promote the in-flight subagent if one is running, else
+   * fall back to backgrounding the whole turn. Injected by bootstrap (the
+   * composition root); the keyboard layer depends only on the `SubagentControl`
+   * interface, never on `SubagentExecutor` internals or `SubagentHandle`.
+   */
+  subagentControl?: SubagentControl;
+  /**
    * Optional background summarizer. Constructed only when `bgSummaries: true`
    * in afk.config.json. The teardown path calls `stop()` before
    * `backgroundRegistry.cancelAll()` so in-flight Haiku calls are aborted
@@ -527,6 +538,16 @@ export interface TurnHandles {
    * handler treats this as a no-op when undefined.
    */
   setBackgroundHandler?(handler: (() => void) | null): void;
+  /**
+   * Narrow control seam for promoting a running foreground subagent to a
+   * detached background job (Ctrl+B). When present and
+   * `hasPromotableForeground()` is true at keypress time, the turn handler
+   * promotes the in-flight subagent(s) and the main turn keeps streaming.
+   * When no subagent is promotable, Ctrl+B is a no-op — there is no whole-turn
+   * detach. Forwarded from `InteractiveCtx.subagentControl` at the `runTurn`
+   * call site. Absent on non-REPL callers, where Ctrl+B does nothing.
+   */
+  subagentControl?: SubagentControl;
   /**
    * Install/clear a per-turn ESC soft-stop handler on the surface's
    * persistent compositor. Used by the turn handler to flip

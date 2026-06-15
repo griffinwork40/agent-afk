@@ -142,6 +142,43 @@ export interface SubagentExecutorContext {
 
 export type AgentExecutionMode = 'foreground' | 'background';
 
+/** Identity of a subagent that was promoted from foreground to background. */
+export interface PromotedSubagentInfo {
+  jobId: string;
+  label: string;
+}
+
+/**
+ * Narrow control seam exposed to the keyboard / REPL layer for user-triggered
+ * promotion of a running foreground subagent to a detached background job
+ * (Ctrl+B). Deliberately minimal — one query + one command — so the keyboard
+ * never reaches into `SubagentHandle`, the manager's active map, or abort
+ * internals. The composition root (bootstrap) injects the executor as a
+ * `SubagentControl` into the turn handler's handles bag; the keyboard layer
+ * depends only on this interface.
+ *
+ * Invariant: the only sanctioned cross-layer dependency from `src/cli/**`
+ * onto subagent control is this interface. See the architectural boundary
+ * test that forbids `src/cli/**` from importing `SubagentHandleImpl`, reading
+ * `.active`, or calling `.promote(`.
+ */
+export interface SubagentControl {
+  /**
+   * True iff at least one foreground subagent dispatched by this executor is
+   * currently running AND can be promoted (a `BackgroundAgentRegistry` is
+   * wired). The keyboard uses this to decide whether Ctrl+B promotes the
+   * in-flight subagent(s) or falls back to whole-turn backgrounding.
+   */
+  hasPromotableForeground(): boolean;
+  /**
+   * Promote every in-flight foreground subagent to a detached background job.
+   * Resolves once each promotion has been handed to the registry. Entries that
+   * could not be promoted (the subagent completed in the same tick, or the
+   * background-job cap was hit) are omitted from the returned array.
+   */
+  promoteActiveForeground(): Promise<PromotedSubagentInfo[]>;
+}
+
 interface AgentInput {
   prompt: string;
   model?: string;
@@ -367,8 +404,39 @@ function buildFailurePayload(args: {
   return payload;
 }
 
-export class SubagentExecutor {
+export class SubagentExecutor implements SubagentControl {
   constructor(private readonly ctx: SubagentExecutorContext) {}
+
+  /**
+   * In-flight foreground subagents that can be promoted to background, keyed
+   * by `handle.id`. Each entry is registered by the foreground branch of
+   * {@link execute} immediately before its run-vs-promotion race and removed
+   * in that branch's `finally`. `fire()` resolves the executor's promotion
+   * signal (winning the race); `ready` resolves with the created job once the
+   * handoff completes, or `null` if promotion could not happen.
+   *
+   * Multiple concurrent `agent` calls in one tool batch each add an entry, so
+   * `promoteActiveForeground()` promotes the whole in-flight set ("promote
+   * all"), which is what unblocks a parent parked in `executeBatch` awaiting
+   * several subagents at once.
+   */
+  private readonly promotionTriggers = new Map<
+    string,
+    { fire: () => void; ready: Promise<PromotedSubagentInfo | null> }
+  >();
+
+  hasPromotableForeground(): boolean {
+    return this.ctx.backgroundRegistry !== undefined && this.promotionTriggers.size > 0;
+  }
+
+  async promoteActiveForeground(): Promise<PromotedSubagentInfo[]> {
+    // Snapshot first: firing a trigger may settle and remove its entry from
+    // the map (via execute()'s finally) while we iterate.
+    const triggers = [...this.promotionTriggers.values()];
+    triggers.forEach((t) => t.fire());
+    const settled = await Promise.all(triggers.map((t) => t.ready));
+    return settled.filter((j): j is PromotedSubagentInfo => j !== null);
+  }
 
   /**
    * Read-only snapshot of active subagents + background jobs for the
@@ -680,9 +748,100 @@ export class SubagentExecutor {
 
     const startedAt = Date.now();
     const parentSessionId = this.ctx.parentSession.sessionId;
+
+    // ------------------------------------------------------------------
+    // Promotion plumbing (user-triggered backgrounding of a running
+    // foreground subagent — Ctrl+B).
+    //
+    // External constraint: the parent model is suspended at the single
+    // `runToResult` await below for this subagent's entire lifetime, and
+    // its progress reaches the UI through a side-channel progress sink —
+    // NOT via events on the parent stream. So a keyboard flag polled in the
+    // turn loop cannot interrupt this await. Instead we expose a promotion
+    // trigger through the narrow SubagentControl seam: when fired, it wins a
+    // race against the run; we hand the still-running handle to the
+    // BackgroundAgentRegistry and return the same synthetic "running"
+    // pointer the mode:'background' branch returns — unblocking the parent
+    // turn while the subagent keeps running detached.
+    //
+    // `promoted` gates the finally so a promoted (detached) handle and its
+    // child manager are NOT torn down here: the registry now owns the
+    // handle's lifetime, bounded by parent-session abort exactly like a
+    // natively-backgrounded job.
+    // ------------------------------------------------------------------
+    let promoted = false;
+    let firePromotion!: () => void;
+    const promotionSignal = new Promise<void>((resolve) => {
+      firePromotion = resolve;
+    });
+    let resolveJob!: (info: PromotedSubagentInfo | null) => void;
+    const jobReady = new Promise<PromotedSubagentInfo | null>((resolve) => {
+      resolveJob = resolve;
+    });
+    this.promotionTriggers.set(handle.id, { fire: firePromotion, ready: jobReady });
+
+    // Start the run but don't await it directly — race it against the
+    // promotion signal. The same `runPromise` is handed to the registry on
+    // promotion (it must NOT be re-run via runInBackground; see adoptRunning).
+    const runPromise = handle.runToResult(parsed.prompt);
     try {
-      // Run the subagent to completion
-      const result = await handle.runToResult(parsed.prompt);
+      const outcome = await Promise.race<
+        | { kind: 'result'; result: Awaited<typeof runPromise> }
+        | { kind: 'promote' }
+      >([
+        runPromise.then((result) => ({ kind: 'result' as const, result })),
+        promotionSignal.then(() => ({ kind: 'promote' as const })),
+      ]);
+
+      // Promotion path: hand the in-flight handle to the background registry
+      // and return the synthetic running pointer (mirrors mode:'background').
+      // Falls through to await the run normally when no registry is wired or
+      // the background-job cap is hit — the subagent is never dropped.
+      if (outcome.kind === 'promote') {
+        const registry = this.ctx.backgroundRegistry;
+        if (registry) {
+          try {
+            const job = registry.adoptRunning({
+              handle,
+              runPromise,
+              prompt: parsed.prompt,
+              model: childConfig.model ?? 'sonnet',
+              parentSessionId,
+            });
+            promoted = true;
+            // Detach the end-of-turn abort bridge — the promoted job must
+            // outlive the turn that spawned it, exactly like mode:'background'.
+            call.signal.removeEventListener('abort', abortListener);
+            resolveJob({ jobId: job.jobId, label: job.label });
+            return {
+              content: JSON.stringify({
+                status: 'running' as const,
+                jobId: job.jobId,
+                subagentId: job.subagentId,
+                label: job.label,
+                message:
+                  `Subagent backgrounded by user (jobId=${job.jobId}). ` +
+                  `It keeps running detached and its result will NOT auto-inject ` +
+                  `into this context. Retrieve it via /bgsub:join ${job.jobId}.`,
+              }),
+            };
+          } catch (e) {
+            // Cap hit (or registry refusal): stay foreground. Mark the trigger
+            // "not promoted" and await the run normally below.
+            debugLog(
+              'subagent-executor: promotion failed, staying foreground: ' +
+                (e instanceof Error ? e.message : String(e)),
+            );
+            resolveJob(null);
+          }
+        } else {
+          resolveJob(null);
+        }
+      }
+
+      // Normal completion: result already in hand from the race, or promotion
+      // fell through and we await the still-running run.
+      const result = outcome.kind === 'result' ? outcome.result : await runPromise;
 
       // Extract success or failure
       if (result.status === 'succeeded' && result.message) {
@@ -766,9 +925,17 @@ export class SubagentExecutor {
       });
       throw err;
     } finally {
-      call.signal.removeEventListener('abort', abortListener);
-      await childManager?.teardownAll();
-      await handle.teardown();
+      this.promotionTriggers.delete(handle.id);
+      // Safety net: if the run won the race (or threw) before a fired
+      // promotion could be honored, resolve the trigger so a concurrent
+      // promoteActiveForeground() await never hangs. Idempotent — a no-op
+      // once resolveJob has already settled on the promotion path.
+      resolveJob(null);
+      if (!promoted) {
+        call.signal.removeEventListener('abort', abortListener);
+        await childManager?.teardownAll();
+        await handle.teardown();
+      }
     }
   }
 }

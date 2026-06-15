@@ -572,62 +572,88 @@ describe('runTurn — borrowed-compositor regression (PR 424 / Stage 3e)', () =>
     expect(writerCalls).toContain('');
   });
 
-  it('routes backgrounded note through completionWriter.fn (not console.log) when compositor armed', async () => {
-    // Simulate Ctrl+B pressed before first event: setBackgroundHandler
-    // immediately invokes the registered callback so backgroundRequested
-    // is true on the first for-await iteration.
-    const { stub } = makeStubCompositor();
+  it('Ctrl+B promotes a running foreground subagent (no whole-turn detach)', async () => {
     const writerCalls: string[] = [];
     const completionWriter = { fn: (line: string) => { writerCalls.push(line); } };
-    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
-    const { h } = makeHandles();
+    const promoteActiveForeground = vi.fn().mockResolvedValue([
+      { jobId: 'bg-7', label: 'deep dive' },
+    ]);
+    const subagentControl = {
+      hasPromotableForeground: () => true,
+      promoteActiveForeground,
+    };
+
+    const { h, onTurnComplete } = makeHandles();
     const handles: TurnHandles = {
       ...h,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      getCompositor: () => stub as any,
-      // Immediately fire the handler — mimics Ctrl+B pressed before
-      // the first event arrives, so backgroundRequested is true on
-      // the first for-await check at line 182 of turn-handler.ts.
+      subagentControl,
+      // Fire Ctrl+B immediately at install time (mimics a keypress while a
+      // foreground subagent is running).
       setBackgroundHandler: (handler) => { handler?.(); },
     };
 
-    // Minimal stub BackgroundTaskManager: register is called immediately;
-    // fail/cancel/updateStats are stubs for the detachStreamToBackground
-    // fire-and-forget path that runs after runTurn returns.
-    const bgManager = {
-      register: (label: string) => ({ id: 'bg-1', label, startedAt: Date.now(), status: 'running' as const, stats: { tokens: 0, toolUses: 0, durationMs: 0 } }),
-      fail: vi.fn(),
-      cancel: vi.fn(),
-      updateStats: vi.fn(),
-      complete: vi.fn(),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any;
-
-    // One event is enough — the background check fires before processing it.
+    // The turn runs to normal completion — promotion must not detach it.
     const events: OutputEvent[] = [
-      { type: 'done', metadata: { durationMs: 1 } },
+      { type: 'chunk', chunk: { type: 'content', content: 'working' } },
+      { type: 'done', metadata: { durationMs: 5 } },
     ];
     const session = streamFrom(events);
-    const stats = makeStats();
 
     await runTurn(
-      { text: 'hi', attachments: [] },
+      { text: 'q', attachments: [] },
       session,
-      stats,
+      makeStats(),
       handles,
       'summary',
       completionWriter,
-      bgManager,
+    );
+    await new Promise((r) => setImmediate(r)); // flush the async promotion note
+
+    // The running subagent was promoted and the turn completed in the
+    // foreground — it was NOT detached wholesale.
+    expect(promoteActiveForeground).toHaveBeenCalledTimes(1);
+    expect(onTurnComplete).toHaveBeenCalled();
+    // Confirmation line routed through completionWriter.
+    expect(writerCalls.some((l) => l.includes('backgrounded as bg-7'))).toBe(true);
+  });
+
+  it('Ctrl+B is a no-op when no subagent is promotable (no whole-turn detach)', async () => {
+    const writerCalls: string[] = [];
+    const completionWriter = { fn: (line: string) => { writerCalls.push(line); } };
+
+    const promoteActiveForeground = vi.fn();
+    const subagentControl = {
+      hasPromotableForeground: () => false, // nothing running to background
+      promoteActiveForeground,
+    };
+
+    const { h, onTurnComplete } = makeHandles();
+    const handles: TurnHandles = {
+      ...h,
+      subagentControl,
+      setBackgroundHandler: (handler) => { handler?.(); },
+    };
+
+    const events: OutputEvent[] = [
+      { type: 'chunk', chunk: { type: 'content', content: 'hi' } },
+      { type: 'done', metadata: { durationMs: 1 } },
+    ];
+    const session = streamFrom(events);
+
+    await runTurn(
+      { text: 'q', attachments: [] },
+      session,
+      makeStats(),
+      handles,
+      'summary',
+      completionWriter,
     );
 
-    // The "→ backgrounded as …" note must arrive via completionWriter.fn,
-    // not raw console.log — console must stay clean while compositor is armed.
-    expect(writerCalls.length).toBeGreaterThanOrEqual(1);
-    expect(writerCalls.some(line => line.includes('backgrounded as bg-1'))).toBe(true);
-    expect(consoleSpy).not.toHaveBeenCalledWith(expect.stringContaining('backgrounded'));
-
-    consoleSpy.mockRestore();
+    // Ctrl+B did nothing: no promotion, no detach, the turn ran to completion.
+    expect(promoteActiveForeground).not.toHaveBeenCalled();
+    expect(onTurnComplete).toHaveBeenCalled();
+    expect(writerCalls.some((l) => l.includes('backgrounded'))).toBe(false);
   });
 
   it('routes paused usage-limit box through completionWriter.fn (not console.log) when compositor armed', async () => {

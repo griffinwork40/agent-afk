@@ -666,6 +666,10 @@ export async function bootstrapSession(
     ...(resumeTarget !== undefined ? { resumeTarget } : {}),
     teardownTrustedSkillEvents: undefined,  // wired below
     backgroundRegistry,
+    // Expose the root executor's narrow promotion seam so the turn handler can
+    // make Ctrl+B background a running foreground subagent. The executor
+    // implements `SubagentControl`; the keyboard layer sees only that interface.
+    subagentControl: subagentExecutor,
     ...(bgSummarizer !== undefined ? { bgSummarizer } : {}),
     requestResume,
     // Default to false so any code path that reads getInFlight before

@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { BackgroundStatusBar } from './background-status-bar.js';
-import { BackgroundTaskManager } from './commands/interactive/background.js';
 import type {
   BackgroundAgentRegistry,
   BackgroundJob,
@@ -59,92 +58,17 @@ function makeMockStream(): NodeJS.WriteStream {
 }
 
 describe('BackgroundStatusBar', () => {
-  let manager: BackgroundTaskManager;
-
   beforeEach(() => {
-    manager = new BackgroundTaskManager();
+    // Nothing to set up globally — manager removed.
   });
 
   // -------------------------------------------------------------------------
-  // Existing tests preserved — opts now passed as 3rd argument
+  // 1. Count reflects subagent jobs only (registry-only)
   // -------------------------------------------------------------------------
-
-  it('formats a task line with stats', () => {
-    const bar = new BackgroundStatusBar(manager, undefined, {
-      stream: { columns: 100, rows: 24, isTTY: true } as NodeJS.WriteStream,
-    });
-    const task = manager.register('diagnose');
-    manager.updateStats(task.id, { tokens: 5000, toolUses: 3 }, 'testing hypothesis 2/4');
-    const line = bar.formatTaskLine(task);
-    expect(line).toContain('diagnose');
-    expect(line).toContain('testing hypothesis 2/4');
-    expect(line).toContain('3 tools');
-    expect(line).toContain('tok');
-  });
-
-  it('formats a task line without progress description', () => {
-    const bar = new BackgroundStatusBar(manager, undefined, {
-      stream: { columns: 80, rows: 24, isTTY: true } as NodeJS.WriteStream,
-    });
-    const task = manager.register('mint');
-    const line = bar.formatTaskLine(task);
-    expect(line).toContain('mint');
-    expect(line).toContain('bg-1');
-  });
-
-  it('calls row count change handler when tasks change (turn-tasks only)', () => {
-    const mockStream = makeMockStream();
-    const bar = new BackgroundStatusBar(manager, undefined, {
-      stream: mockStream,
-      throttleMs: 0,
-    });
-    const rowHandler = vi.fn();
-    bar.setRowCountChangeHandler(rowHandler);
-    bar.start();
-
-    manager.register('test');
-    expect(rowHandler).toHaveBeenCalledWith(1);
-
-    bar.stop();
-  });
-
-  it('stops cleanly (no registry)', () => {
-    const bar = new BackgroundStatusBar(manager);
-    bar.start();
-    bar.stop();
-    // Should not throw on double stop
-    bar.stop();
-  });
-
-  // -------------------------------------------------------------------------
-  // 1. Count reflects turn-tasks only when registry is undefined (backward compat)
-  // -------------------------------------------------------------------------
-  it('count reflects turn-tasks only when registry is undefined', () => {
-    const mockStream = makeMockStream();
-    const bar = new BackgroundStatusBar(manager, undefined, {
-      stream: mockStream,
-      throttleMs: 0,
-    });
-    const rowHandler = vi.fn();
-    bar.setRowCountChangeHandler(rowHandler);
-    bar.start();
-
-    manager.register('task-a');
-    manager.register('task-b');
-
-    // Should have been called with 1 then 2
-    expect(rowHandler).toHaveBeenLastCalledWith(2);
-
-    bar.stop();
-  });
-
-  // -------------------------------------------------------------------------
-  // 2. Count reflects subagent jobs only when bgManager is empty (registry-only)
-  // -------------------------------------------------------------------------
-  it('count reflects subagent jobs only when bgManager is empty', () => {
+  it('count reflects subagent jobs when registry is wired', () => {
     const mockStream = makeMockStream();
     const registry = new FakeRegistry();
-    const bar = new BackgroundStatusBar(manager, registry as unknown as BackgroundAgentRegistry, {
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
       stream: mockStream,
       throttleMs: 0,
     });
@@ -161,21 +85,18 @@ describe('BackgroundStatusBar', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 3. Mixed: 2 turns running + 3 subagent jobs running → count of 5
+  // 2. Count reflects multiple subagent jobs running
   // -------------------------------------------------------------------------
-  it('mixed: 2 turn tasks + 3 subagent jobs → row count of 5', () => {
+  it('count reflects 3 subagent jobs running', () => {
     const mockStream = makeMockStream();
     const registry = new FakeRegistry();
-    const bar = new BackgroundStatusBar(manager, registry as unknown as BackgroundAgentRegistry, {
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
       stream: mockStream,
       throttleMs: 0,
     });
     const rowHandler = vi.fn();
     bar.setRowCountChangeHandler(rowHandler);
     bar.start();
-
-    manager.register('task-a');
-    manager.register('task-b');
 
     const j1 = makeJob('j1');
     const j2 = makeJob('j2');
@@ -184,27 +105,24 @@ describe('BackgroundStatusBar', () => {
     registry.fireStarted(j2);
     registry.fireStarted(j3);
 
-    expect(rowHandler).toHaveBeenLastCalledWith(5);
+    expect(rowHandler).toHaveBeenLastCalledWith(3);
 
     bar.stop();
   });
 
   // -------------------------------------------------------------------------
-  // 4. Decrement on subagent `settled` event
+  // 3. Decrement on subagent `settled` event
   // -------------------------------------------------------------------------
   it('decrements count on subagent settled event', () => {
     const mockStream = makeMockStream();
     const registry = new FakeRegistry();
-    const bar = new BackgroundStatusBar(manager, registry as unknown as BackgroundAgentRegistry, {
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
       stream: mockStream,
       throttleMs: 0,
     });
     const rowHandler = vi.fn();
     bar.setRowCountChangeHandler(rowHandler);
     bar.start();
-
-    manager.register('task-a');
-    manager.register('task-b');
 
     const j1 = makeJob('j1');
     const j2 = makeJob('j2');
@@ -213,49 +131,26 @@ describe('BackgroundStatusBar', () => {
     registry.fireStarted(j2);
     registry.fireStarted(j3);
 
-    // 2 turns + 3 subagents = 5
-    expect(rowHandler).toHaveBeenLastCalledWith(5);
+    // 3 subagents
+    expect(rowHandler).toHaveBeenLastCalledWith(3);
 
     // One subagent settles
     const settledJob = { ...j1, status: 'completed' as const };
     registry.fireSettled(settledJob);
 
-    // 2 turns + 2 subagents = 4
-    expect(rowHandler).toHaveBeenLastCalledWith(4);
-
-    bar.stop();
-  });
-
-  // -------------------------------------------------------------------------
-  // 5. Decrement on turn `complete` event: existing behavior preserved
-  // -------------------------------------------------------------------------
-  it('decrements count when a turn task completes', () => {
-    const mockStream = makeMockStream();
-    const bar = new BackgroundStatusBar(manager, undefined, {
-      stream: mockStream,
-      throttleMs: 0,
-    });
-    const rowHandler = vi.fn();
-    bar.setRowCountChangeHandler(rowHandler);
-    bar.start();
-
-    const task1 = manager.register('task-a');
-    manager.register('task-b');
+    // 2 subagents remaining
     expect(rowHandler).toHaveBeenLastCalledWith(2);
 
-    manager.complete(task1.id, 'done', undefined);
-    expect(rowHandler).toHaveBeenLastCalledWith(1);
-
     bar.stop();
   });
 
   // -------------------------------------------------------------------------
-  // 6. stop() unsubscribes — emitting started after stop() does NOT change count
+  // 4. stop() unsubscribes — emitting started after stop() does NOT change count
   // -------------------------------------------------------------------------
   it('stop() unsubscribes registry — started after stop does not change count', () => {
     const mockStream = makeMockStream();
     const registry = new FakeRegistry();
-    const bar = new BackgroundStatusBar(manager, registry as unknown as BackgroundAgentRegistry, {
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
       stream: mockStream,
       throttleMs: 0,
     });
@@ -277,13 +172,24 @@ describe('BackgroundStatusBar', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 7. 200ms throttle fires at most once per 200ms window
+  // 5. stops cleanly (no registry)
+  // -------------------------------------------------------------------------
+  it('stops cleanly (no registry)', () => {
+    const bar = new BackgroundStatusBar();
+    bar.start();
+    bar.stop();
+    // Should not throw on double stop
+    bar.stop();
+  });
+
+  // -------------------------------------------------------------------------
+  // 6. 200ms throttle fires at most once per 200ms window
   // -------------------------------------------------------------------------
   it('throttle: scheduleRepaint skips if within throttle window', () => {
     vi.useFakeTimers();
     const mockStream = makeMockStream();
     const registry = new FakeRegistry();
-    const bar = new BackgroundStatusBar(manager, registry as unknown as BackgroundAgentRegistry, {
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
       stream: mockStream,
       throttleMs: 200,
     });
@@ -306,12 +212,12 @@ describe('BackgroundStatusBar', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 8. A registered subagent job shows up as its own row (per-row rendering)
+  // 7. A registered subagent job shows up as its own row (per-row rendering)
   // -------------------------------------------------------------------------
   it('a registered subagent job renders as its own row', () => {
     const mockStream = makeMockStream();
     const registry = new FakeRegistry();
-    const bar = new BackgroundStatusBar(manager, registry as unknown as BackgroundAgentRegistry, {
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
       stream: mockStream,
       throttleMs: 0,
     });
@@ -330,35 +236,12 @@ describe('BackgroundStatusBar', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 9. 1 turn-task + 1 subagent job → 2 write rows
-  // -------------------------------------------------------------------------
-  it('1 turn-task + 1 subagent job → 2 rows written', () => {
-    const mockStream = makeMockStream();
-    const registry = new FakeRegistry();
-    const bar = new BackgroundStatusBar(manager, registry as unknown as BackgroundAgentRegistry, {
-      stream: mockStream,
-      throttleMs: 0,
-    });
-    const rowHandler = vi.fn();
-    bar.setRowCountChangeHandler(rowHandler);
-    bar.start();
-
-    manager.register('my-turn');
-    const job = makeJob('j1');
-    registry.fireStarted(job);
-
-    expect(rowHandler).toHaveBeenLastCalledWith(2);
-
-    bar.stop();
-  });
-
-  // -------------------------------------------------------------------------
-  // 10. A settled subagent job no longer renders (row count drops)
+  // 8. A settled subagent job no longer renders (row count drops)
   // -------------------------------------------------------------------------
   it('a settled subagent job no longer renders', () => {
     const mockStream = makeMockStream();
     const registry = new FakeRegistry();
-    const bar = new BackgroundStatusBar(manager, registry as unknown as BackgroundAgentRegistry, {
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
       stream: mockStream,
       throttleMs: 0,
     });
@@ -378,10 +261,10 @@ describe('BackgroundStatusBar', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 11. formatJobLine shows elapsed time — metadata only, never result text
+  // 9. formatJobLine shows elapsed time — metadata only, never result text
   // -------------------------------------------------------------------------
   it('formatJobLine shows label and elapsed time, no result text', () => {
-    const bar = new BackgroundStatusBar(manager, undefined, {
+    const bar = new BackgroundStatusBar(undefined, {
       stream: { columns: 80, rows: 24, isTTY: true } as NodeJS.WriteStream,
     });
     const job: BackgroundJob = {
@@ -405,7 +288,7 @@ describe('BackgroundStatusBar', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 12. Negative-row guard: job count ≥ terminal rows must not produce row ≤ 0
+  // 10. Negative-row guard: job count ≥ terminal rows must not produce row ≤ 0
   //     Regression for: startRow = totalRows - newRowCount going ≤ 0.
   // -------------------------------------------------------------------------
   it('negative-row guard: row addresses stay ≥ 1 when job count ≥ terminal rows', () => {
@@ -418,7 +301,7 @@ describe('BackgroundStatusBar', () => {
     } as unknown as NodeJS.WriteStream;
 
     const registry = new FakeRegistry();
-    const bar = new BackgroundStatusBar(manager, registry as unknown as BackgroundAgentRegistry, {
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
       stream: mockStream,
       throttleMs: 0,
     });
@@ -447,7 +330,7 @@ describe('BackgroundStatusBar', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 13. H-C1 regression: rowHandler reflects the CLAMPED visible row count,
+  // 11. H-C1 regression: rowHandler reflects the CLAMPED visible row count,
   //     not the raw item count. Without clamping at the source, setExtraRows
   //     over-reserves rows that can't be painted, and the equality guard in
   //     repaint() fails to trip on SIGWINCH-driven geometry changes (item
@@ -464,7 +347,7 @@ describe('BackgroundStatusBar', () => {
     } as unknown as NodeJS.WriteStream;
 
     const registry = new FakeRegistry();
-    const bar = new BackgroundStatusBar(manager, registry as unknown as BackgroundAgentRegistry, {
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
       stream: mockStream,
       throttleMs: 0,
     });
@@ -478,15 +361,13 @@ describe('BackgroundStatusBar', () => {
     }
 
     // rowHandler must reflect what's actually painted (2), not raw items.length (5).
-    // Previously (unclamped): would have been called with 5 — telling
-    // setExtraRows to reserve 5 rows in a 3-row terminal.
     expect(rowHandler).toHaveBeenLastCalledWith(2);
 
     bar.stop();
   });
 
   // -------------------------------------------------------------------------
-  // 14. H-C1 regression: equality guard correctly trips when terminal resize
+  // 12. H-C1 regression: equality guard correctly trips when terminal resize
   //     changes the clamp without changing items.length. Pre-fix, rowCount
   //     stored the raw item count, so resize-induced clamp changes were
   //     skipped, leaving rowHandler stale and the previous paint orphaned.
@@ -501,7 +382,7 @@ describe('BackgroundStatusBar', () => {
     } as unknown as NodeJS.WriteStream;
 
     const registry = new FakeRegistry();
-    const bar = new BackgroundStatusBar(manager, registry as unknown as BackgroundAgentRegistry, {
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
       stream: mockStream,
       throttleMs: 0,
     });
@@ -547,14 +428,15 @@ describe('BackgroundStatusBar', () => {
     } as unknown as NodeJS.WriteStream;
 
     const adjacentRows = vi.fn(() => 1);
-    const bar = new BackgroundStatusBar(manager, undefined, {
+    const registry = new FakeRegistry();
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
       stream: mockStream,
       throttleMs: 0,
       getAdjacentRows: adjacentRows,
     });
     bar.start();
 
-    manager.register('task-a');
+    registry.fireStarted(makeJob('task-a'));
 
     const writes = (mockStream.write as ReturnType<typeof vi.fn>).mock.calls
       .map((c: unknown[]) => String(c[0]))
@@ -578,7 +460,7 @@ describe('BackgroundStatusBar', () => {
     } as unknown as NodeJS.WriteStream;
 
     const registry = new FakeRegistry();
-    const bar = new BackgroundStatusBar(manager, registry as unknown as BackgroundAgentRegistry, {
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
       stream: mockStream,
       throttleMs: 0,
       getAdjacentRows: () => 1,
@@ -598,7 +480,8 @@ describe('BackgroundStatusBar', () => {
 
   it('getAdjacentRows=0 (default): behaviour unchanged from pre-adjacent baseline', () => {
     const mockStream = makeMockStream(); // rows=24
-    const bar = new BackgroundStatusBar(manager, undefined, {
+    const registry = new FakeRegistry();
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
       stream: mockStream,
       throttleMs: 0,
       getAdjacentRows: () => 0,
@@ -607,15 +490,15 @@ describe('BackgroundStatusBar', () => {
     bar.setRowCountChangeHandler(rowHandler);
     bar.start();
 
-    manager.register('task-a');
-    manager.register('task-b');
+    registry.fireStarted(makeJob('task-a'));
+    registry.fireStarted(makeJob('task-b'));
     expect(rowHandler).toHaveBeenLastCalledWith(2);
 
     bar.stop();
   });
 
   // -------------------------------------------------------------------------
-  // 15. H-C1 bonus: totalRows ≤ 1 yields newRowCount = 0 → early-return
+  // 13. H-C1 bonus: totalRows ≤ 1 yields newRowCount = 0 → early-return
   //     prevents the \x1b[s / \x1b[u escape pair from leaking when no rows
   //     are paintable.
   // -------------------------------------------------------------------------
@@ -628,7 +511,7 @@ describe('BackgroundStatusBar', () => {
     } as unknown as NodeJS.WriteStream;
 
     const registry = new FakeRegistry();
-    const bar = new BackgroundStatusBar(manager, registry as unknown as BackgroundAgentRegistry, {
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
       stream: mockStream,
       throttleMs: 0,
     });

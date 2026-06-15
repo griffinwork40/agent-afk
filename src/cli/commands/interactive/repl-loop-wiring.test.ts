@@ -1,18 +1,12 @@
 /**
- * C-1 regression test — setTasksRegistry wired in REPL bootstrap.
+ * runReplLoop wiring regression tests.
  *
- * Before this fix, `repl-loop.ts` called `setTasksManager()` and
- * `setAttachManager()` during bootstrap but never called `setTasksRegistry()`.
- * Subagent job rows in `/tasks` were therefore always empty in a live REPL —
- * they only appeared in tests that called `setTasksRegistry` directly.
- *
- * This test exercises the real `runReplLoop` bootstrap path with enough
- * mocking to let the function reach the wiring block, then asserts that
- * `setTasksRegistry` was called with the same `BackgroundAgentRegistry`
- * instance that lives in `ctx.backgroundRegistry`.
- *
- * It would have caught C-1: under the broken code, `setTasksRegistry` is not
- * imported by repl-loop.ts → the spy is never called → the assertion fails.
+ * Exercises the real `runReplLoop` bootstrap path with enough mocking to reach
+ * the wiring block, asserting the load-bearing wiring that is easy to silently
+ * drop: skill-dispatch UI handles on `ctx.slashCtx` (onStageChange /
+ * onContextProgress / transcript / setSoftStopHandler), the completionWriter ↔
+ * persistent-compositor routing, and the `AFK_SUGGEST_ENABLED` / `AFK_SUGGEST_GHOST`
+ * boolean-parse closures.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -38,22 +32,13 @@ vi.mock('../../slash/plugin-skills.js', () => ({
   autoRegisterPluginPassthroughs: vi.fn(async () => {}),
   getPluginShadowingNoticeLines: vi.fn(() => []),
 }));
-vi.mock('./background.js', async () => {
-  const { EventEmitter } = await import('node:events');
-  // runReplLoop's finally block drains bgManager.running() with .cancel(id)
-  // (Phase 1.5 zombie-state hardening). The fake needs both methods so the
-  // teardown path doesn't throw in wiring tests that don't exercise tasks.
-  class FakeBackgroundTaskManager extends EventEmitter {
-    running(): unknown[] { return []; }
-    cancel(_id: string): void {}
-  }
-  return { BackgroundTaskManager: FakeBackgroundTaskManager };
-});
+
 vi.mock('../../background-status-bar.js', () => ({
   BackgroundStatusBar: class {
     setRowCountChangeHandler() {}
     start() {}
     stop() {}
+    redraw() {}
   },
 }));
 vi.mock('./context-pane.js', () => ({
@@ -74,14 +59,6 @@ vi.mock('./verdict-ledger.js', () => ({
     repaint: () => {},
   })),
 }));
-vi.mock('../../slash/commands/bg.js', () => ({ setBgManager: vi.fn() }));
-// C-1 subject: use vi.fn() inside the factory so hoisting works.
-// We retrieve the spy via the module import below.
-vi.mock('../../slash/commands/tasks.js', () => ({
-  setTasksManager: vi.fn(),
-  setTasksRegistry: vi.fn(),
-}));
-vi.mock('../../slash/commands/attach.js', () => ({ setAttachManager: vi.fn() }));
 vi.mock('../../debug-banner.js', () => ({ renderDebugBanner: () => '' }));
 vi.mock('../../../utils/debug.js', () => ({ isDebugEnabled: () => false }));
 vi.mock('../../plan-mode-toggle.js', () => ({
@@ -127,15 +104,13 @@ vi.mock('../../input/input-surface.js', () => {
 import { runReplLoop, type TurnState } from './repl-loop.js';
 import type { InteractiveCtx } from './shared.js';
 import { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
-// Import the mocked module so we can inspect the spy.
-import * as tasksMod from '../../slash/commands/tasks.js';
 import { readWithAutocomplete } from '../../input-box.js';
 
 const readMock = readWithAutocomplete as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
-  vi.mocked(tasksMod.setTasksRegistry).mockClear();
   fakeCompositorState.lastArmOpts = undefined;
+
   // Default: return '/exit' text so the slash dispatch mock's 'exit' result
   // triggers `ctx.rl.close(); return` in the first loop iteration.
   readMock.mockResolvedValue({ text: '/exit', attachments: [] });
@@ -187,69 +162,6 @@ function makeTranscript() {
     appendEnded: vi.fn(async () => {}),
   };
 }
-
-describe('runReplLoop — C-1 regression: setTasksRegistry wired in bootstrap', () => {
-  it('calls setTasksRegistry with ctx.backgroundRegistry during REPL bootstrap', async () => {
-    const backgroundRegistry = new BackgroundAgentRegistry({});
-    const ctx = makeMinimalCtx(backgroundRegistry);
-
-    const turnState: TurnState = {
-      turnInFlight: false,
-      lastSigintAt: 0,
-      activeCompositor: null,
-    } as TurnState;
-
-    // The slash dispatch mock returns 'exit' immediately so the loop exits
-    // before any readWithAutocomplete call. The bootstrap wiring block runs
-    // unconditionally before the while(true) loop begins.
-    await runReplLoop(ctx, makeTranscript() as never, turnState, vi.fn());
-
-    // C-1 assertion: setTasksRegistry MUST have been called with the exact
-    // registry instance from ctx.backgroundRegistry.
-    // Under the broken code (setTasksRegistry not imported), this spy is
-    // never called → expect fails → regression would have been caught.
-    expect(vi.mocked(tasksMod.setTasksRegistry)).toHaveBeenCalledOnce();
-    expect(vi.mocked(tasksMod.setTasksRegistry)).toHaveBeenCalledWith(backgroundRegistry);
-  });
-
-  it('the registry wired into setTasksRegistry contains pre-registered jobs', async () => {
-    // Verify that the registry passed to setTasksRegistry is the live
-    // instance — if a job is registered before the REPL starts, it remains
-    // observable via the wired registry after bootstrap.
-    const backgroundRegistry = new BackgroundAgentRegistry({});
-
-    const stubHandle = {
-      id: 'sub-c1',
-      status: 'idle',
-      runInBackground: vi.fn(),
-      cancel: vi.fn().mockResolvedValue(undefined),
-      teardown: vi.fn().mockResolvedValue(undefined),
-      run: vi.fn(),
-      runToResult: vi.fn(),
-    };
-    const job = backgroundRegistry.register({
-      handle: stubHandle as never,
-      prompt: 'investigate the stash',
-      model: 'sonnet',
-    });
-
-    const ctx = makeMinimalCtx(backgroundRegistry);
-
-    const turnState: TurnState = {
-      turnInFlight: false,
-      lastSigintAt: 0,
-      activeCompositor: null,
-    } as TurnState;
-
-    await runReplLoop(ctx, makeTranscript() as never, turnState, vi.fn());
-
-    // The registry wired by the REPL bootstrap must be the exact same instance
-    // that holds the pre-registered job.
-    const wiredRegistry = vi.mocked(tasksMod.setTasksRegistry).mock.calls[0]?.[0] as BackgroundAgentRegistry;
-    expect(wiredRegistry).toBe(backgroundRegistry);
-    expect(wiredRegistry.get(job.jobId)?.label).toBe('investigate the stash');
-  });
-});
 
 /**
  * Regression test — skill-dispatch UI handles wired onto SlashContext.

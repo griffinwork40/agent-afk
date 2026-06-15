@@ -24,11 +24,6 @@ import { ringBellIfEnabled } from '../../_lib/capture-mode.js';
 import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import { parseTerminalState, type TerminalState } from './terminal-state.js';
 import { renderVerdictCard } from './verdict-card.js';
-import {
-  createBackgroundSink,
-  detachStreamToBackground,
-  type BackgroundTaskManager,
-} from './background.js';
 import { buildUserPayload } from '../../slash/_lib/user-payload.js';
 import { expandAtFileTokens } from './at-file-inject.js';
 
@@ -46,7 +41,6 @@ export async function runTurn(
   h: TurnHandles,
   thinkingUi: ThinkingUiMode = 'summary',
   completionWriter?: CompletionWriter,
-  bgManager?: BackgroundTaskManager,
   inputSurface?: InputSurfaceRefs,
 ): Promise<void> {
   const historyText = describeForHistory(input.text, input.attachments);
@@ -75,7 +69,6 @@ export async function runTurn(
   let rendererDisposed = false;
   let doneFired = false;
   let doneMeta: ResponseMetadata | undefined;
-  let backgroundRequested = false;
   let softStopRequested = false;
   let lastContextProgressMs = 0;
   const CONTEXT_PROGRESS_MIN_INTERVAL_MS = 15_000;
@@ -85,6 +78,29 @@ export async function runTurn(
   const activeSkillName = input.text.startsWith('/')
     ? input.text.split(/[\s:]/)[0]?.slice(1)
     : undefined;
+
+  // Ctrl+B handler. Backgrounds the running foreground subagent and nothing
+  // else: if a subagent dispatched by THIS turn is running and promotable, it
+  // is detached into a /bgsub job and the main turn keeps streaming in the
+  // foreground. When no subagent is promotable, Ctrl+B is a deliberate no-op —
+  // there is intentionally NO whole-turn detach (the prior behavior was removed
+  // per operator decision; the main agent run is never backgrounded wholesale).
+  // Promotion is async; we fire-and-forget and commit a confirmation line above
+  // the live overlay via completionWriter when each job is adopted.
+  const handleBackgroundKey = (): void => {
+    const control = h.subagentControl;
+    if (!control?.hasPromotableForeground()) return;
+    void control
+      .promoteActiveForeground()
+      .then((jobs) => {
+        for (const job of jobs) {
+          (completionWriter ?? { fn: console.log }).fn(
+            palette.dim(`  → subagent backgrounded as ${job.jobId}: ${job.label}`),
+          );
+        }
+      })
+      .catch(() => { /* best-effort UI note; promotion itself already happened */ });
+  };
 
   // Stage 3e: borrow the REPL's persistent compositor when available.
   // The renderer's borrow path skips constructing/disarming its own
@@ -122,8 +138,8 @@ export async function runTurn(
         }
       });
     },
-    ...(bgManager ? {
-      onBackground: () => { backgroundRequested = true; },
+    ...(h.subagentControl ? {
+      onBackground: handleBackgroundKey,
     } : {}),
     ...(inputSurface?.history ? { history: inputSurface.history } : {}),
     ...(inputSurface?.autocompleteState ? { autocompleteState: inputSurface.autocompleteState } : {}),
@@ -230,11 +246,12 @@ export async function runTurn(
     // Install the per-turn Ctrl+B handler on the surface's persistent
     // compositor (Stage 3e). The surface's armCompositor closure
     // dereferences this ref on every Ctrl+B press, so this takes effect
-    // immediately. Cleared in finally so Ctrl+B between turns is a
-    // no-op (matches the legacy renderer-own-compositor behavior where
-    // onBackground was only installed for the turn's duration).
-    if (bgManager && h.setBackgroundHandler) {
-      h.setBackgroundHandler(() => { backgroundRequested = true; });
+    // immediately. Cleared in finally so Ctrl+B between turns is a no-op.
+    // Installed only when the promotion seam is available (`subagentControl`):
+    // Ctrl+B exclusively backgrounds a running foreground subagent — there is
+    // no whole-turn detach path anymore.
+    if (h.setBackgroundHandler && h.subagentControl) {
+      h.setBackgroundHandler(handleBackgroundKey);
     }
 
     // Expand `@<path>` tokens in the user's text into file-content blocks
@@ -284,28 +301,6 @@ export async function runTurn(
         // softStopRequested to render the notice and suppress recordTurn.
         if (softStopRequested) {
           break;
-        }
-
-        if (backgroundRequested && bgManager) {
-          const label = activeSkillName ?? input.text.slice(0, 40);
-          const task = bgManager.register(label);
-          const bgSink = createBackgroundSink(task, bgManager);
-          detachStreamToBackground(
-            stream,
-            responseText,
-            historyText,
-            task,
-            bgManager,
-            bgSink,
-            stats,
-            h.onTurnComplete,
-            session.abortSignal,
-          );
-          await disposeRendererOnce();
-          (completionWriter ?? { fn: console.log }).fn(palette.dim(`  → backgrounded as ${task.id}: ${task.label}`));
-          h.setInFlight(false);
-          h.rearmStatus?.();
-          return;
         }
 
         if (event.type === 'chunk' && event.chunk.type === 'content') {
@@ -403,11 +398,6 @@ export async function runTurn(
           doneFired = false;
           doneMeta = undefined;
           streamErrorRendered = false;
-          // Invariant: also reset backgroundRequested. If the user pressed
-          // Ctrl+B during the pause window, the flag would otherwise be
-          // observed true on the first iteration after resume and silently
-          // background the replay turn against the freshly-armed renderer.
-          backgroundRequested = false;
 
           // Build + arm a fresh renderer for the replayed turn. armAndWire
           // re-points completionWriter.fn at the NEW compositor's
