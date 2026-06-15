@@ -23,8 +23,21 @@ export default function Layout({ children }: { children: ReactNode }) {
               <span style={{ color: 'var(--color-accent, #f9854b)' }}>afk</span>
             </span>
           ),
-          url: '/',
+          // Brand wordmark links out to the landing page (agentafk.com), not
+          // the docs home — clicking the logo returns to the main site.
+          url: 'https://agentafk.com',
         }}
+        // Nav links: the landing page (agentafk.com) and the GitHub repo.
+        // These docs are served at the docs.agentafk.com subdomain, so link
+        // back out to the main site; githubUrl renders Fumadocs' built-in
+        // GitHub icon button (no extra icon import needed).
+        links={[
+          {
+            text: 'agentafk.com',
+            url: 'https://agentafk.com',
+          },
+        ]}
+        githubUrl="https://github.com/griffinwork40/agent-afk"
         sidebar={{
           defaultOpenLevel: 1,
         }}

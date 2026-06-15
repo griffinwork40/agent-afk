@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Agent AFK — favicon variant (Handoff Arc)
+
+  Differences from mark.svg:
+    - Dark rounded tile background so the mark sits well on light browser
+      chrome too (Safari tabs, light-mode taskbars).
+    - Endpoint nodes dropped — at 16px they'd merge into the arc's rounded
+      caps and just look like blobs. The arc + ping carry the identity alone.
+    - Specular highlight dropped from the ping for the same reason.
+    - Arc stroke thickened proportionally so it survives sub-pixel rendering.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Agent AFK">
+  <defs>
+    <linearGradient id="g" x1="14" y1="48" x2="50" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#8a8aa0"/>
+      <stop offset="50%"  stop-color="#74bc90"/>
+      <stop offset="100%" stop-color="#5cb87f"/>
+    </linearGradient>
+    <radialGradient id="ping" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#ffc2a1"/>
+      <stop offset="55%"  stop-color="#f97316"/>
+      <stop offset="100%" stop-color="#d65a0e"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Dark rounded tile, so the mark reads on any background -->
+  <rect width="64" height="64" rx="14" ry="14" fill="#07070b"/>
+
+  <!-- Arc: same geometry as mark.svg, scaled to 64-viewBox.
+       Endpoints (14,48) → (50,48), r=24, large-arc, clockwise → 90° gap at bottom. -->
+  <path d="M 14 48 A 24 24 0 1 1 50 48"
+        fill="none"
+        stroke="url(#g)"
+        stroke-width="7"
+        stroke-linecap="round"/>
+
+  <!-- Ping in the gap, on the imagined completed circle (y = 48 + sqrt(24² - 18²) ≈ 63.8) -->
+  <circle cx="32" cy="56" r="5" fill="url(#ping)"/>
+</svg>
