@@ -441,6 +441,13 @@ export class CronScheduler {
       // break scheduled tasks that depend on tool execution.
       permissionMode: 'bypassPermissions',
       hookRegistry: registry,
+      // Scheduler/cron sessions are headless (no human at the keyboard): strip
+      // ask_question so a scheduled task never stalls on an unanswerable prompt.
+      // The daemon session factory also forces this after its own config spread;
+      // set it here as the base for the no-factory fallback (standalone
+      // scheduler / tests). Placed before the sessionConfig spread so an
+      // operator escape-hatch could still override it, mirroring permissionMode.
+      isNonInteractive: true,
       // Trace writer placed before sessionConfig so an operator-supplied
       // sessionConfig.traceWriter still wins (escape-hatch parity with
       // permissionMode).

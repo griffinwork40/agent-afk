@@ -412,6 +412,31 @@ export interface AgentConfig {
   isSkillDispatch?: boolean;
 
   /**
+   * When true, the session runs on a non-interactive surface where no human is
+   * available to answer an `ask_question` elicitation — the daemon, a
+   * scheduler/cron-launched task, or a one-shot `afk chat` invocation. On these
+   * surfaces no elicitation handler is installed (see `elicitation-router.ts`),
+   * so an `ask_question` call can only auto-decline; offering the tool merely
+   * lets the model burn a turn calling something that structurally cannot
+   * succeed. Providers therefore strip `ask_question` from the assembled
+   * toolset, forcing the model to proceed on a stated assumption or emit a
+   * Blocked terminal state instead.
+   *
+   * Parallels the structural `ask_question` strip already applied for
+   * skill-dispatch sub-agents (`isSkillDispatch`), but is intentionally
+   * narrower: ONLY `ask_question` is removed — `terminal_font_size` is retained
+   * (its skill-dispatch-specific numeric-arg lure does not apply here).
+   *
+   * Interactive surfaces (REPL, Telegram) leave this unset so a human can still
+   * be asked even when away-from-keyboard. Foreground/background sub-agent
+   * elicitation policy is governed separately by `denyElicitations` in
+   * `subagent.ts` and is deliberately NOT changed by this flag.
+   *
+   * Default: `false`.
+   */
+  isNonInteractive?: boolean;
+
+  /**
    * Opt-in automatic compaction. When the context window fills past the
    * configured threshold, `compact()` fires automatically at the next idle
    * turn boundary (no tool call in flight, not already compacting).

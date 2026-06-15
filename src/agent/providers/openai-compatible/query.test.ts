@@ -1284,6 +1284,57 @@ describe('OpenAICompatibleProvider — skill-dispatch ask_question suppression',
 });
 
 // --------------------------------------------------------------------------
+// OpenAICompatibleProvider — ask_question stripped on non-interactive surfaces
+// --------------------------------------------------------------------------
+// Parity with AnthropicDirectProvider: daemon / scheduler / one-shot chat
+// install no elicitation handler, so ask_question can only auto-decline.
+// buildDispatcher strips it when config.isNonInteractive is true. Narrower than
+// the skill-dispatch strip — terminal_font_size is RETAINED here.
+
+describe('OpenAICompatibleProvider — non-interactive surface ask_question suppression', () => {
+  /** Collect tool names from an OpenAI-format `tools[]` request payload. */
+  function openAIToolNames(toolsArg: unknown): string[] {
+    if (!Array.isArray(toolsArg)) return [];
+    return (toolsArg as Array<{ function?: { name?: unknown } }>)
+      .map((t) => (typeof t.function?.name === 'string' ? t.function.name : ''))
+      .filter((n): n is string => n.length > 0);
+  }
+
+  // A single clean text turn so the query terminates after one create() call.
+  function stubOneTextTurn(): void {
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ];
+  }
+
+  it('non-interactive session (isNonInteractive=true): ask_question is STRIPPED', async () => {
+    stubOneTextTurn();
+    const provider = new OpenAICompatibleProvider();
+    const q = provider.query({
+      prompt: singleInput('Summarize the open PRs and proceed.'),
+      config: {
+        model: 'gpt-4o-mini',
+        apiKey: 'sk-test-key',
+        isNonInteractive: true,
+      } as AgentConfig,
+    });
+    await collect(q);
+
+    expect(createCalls).toHaveLength(1);
+    const toolNames = openAIToolNames((createCalls[0]!.args as { tools?: unknown }).tools);
+    // No human can answer on a headless surface, so the escape hatch is gone…
+    expect(toolNames).not.toContain('ask_question');
+    // …but this strip is NARROWER than skill-dispatch: terminal_font_size stays.
+    expect(toolNames).toContain('terminal_font_size');
+    expect(toolNames).toContain('read_file');
+    expect(toolNames).toContain('bash');
+  });
+});
+
+// --------------------------------------------------------------------------
 // OpenAICompatibleProvider — terminal_font_size stripped for skill-dispatch sub-agents
 // --------------------------------------------------------------------------
 // Parity with AnthropicDirectProvider: a bare numeric skill arg (e.g. /review 621)

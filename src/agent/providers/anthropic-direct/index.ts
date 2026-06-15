@@ -651,11 +651,18 @@ export class AnthropicDirectProvider implements ModelProvider {
     // confused model into calling terminal_font_size(<n>) instead of running the
     // skill). Gated on isSkillDispatch; pairs with the SLASH_COMMAND_ROUTING_PROMPT
     // omission below. Verified safe: no bundled/registry/user skill calls either tool.
+    // Non-interactive surfaces (daemon, scheduler/cron, one-shot `afk chat`)
+    // install no elicitation handler, so `ask_question` can only auto-decline
+    // (elicitation-router.ts). Strip it so the model proceeds on an assumption
+    // or emits Blocked rather than burning a turn on an unanswerable prompt.
+    // Narrower than the skill-dispatch strip: `terminal_font_size` is retained.
     const toolDefs = config.isSkillDispatch
       ? baseToolDefs.filter(
           (t) => t.name !== 'ask_question' && t.name !== 'terminal_font_size',
         )
-      : baseToolDefs;
+      : config.isNonInteractive
+        ? baseToolDefs.filter((t) => t.name !== 'ask_question')
+        : baseToolDefs;
 
     // Build skill manifest for system prompt injection. The manifest lists
     // available skills so the model knows what the `skill` tool can invoke.

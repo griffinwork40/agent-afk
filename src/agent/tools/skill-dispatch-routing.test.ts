@@ -308,6 +308,47 @@ describe('AnthropicDirectProvider — skill-dispatch ask_question suppression', 
 });
 
 // --------------------------------------------------------------------------
+// AnthropicDirectProvider — ask_question stripped on non-interactive surfaces
+// --------------------------------------------------------------------------
+// Daemon, scheduler/cron, and one-shot `afk chat` install no elicitation
+// handler, so ask_question can only auto-decline. Stripping it pre-emptively
+// stops the model burning a turn on an unanswerable prompt. Narrower than the
+// skill-dispatch strip: terminal_font_size is RETAINED here.
+
+describe('AnthropicDirectProvider — non-interactive surface ask_question suppression', () => {
+  beforeEach(() => {
+    messagesCreateMock.mockReset();
+    __setAnthropicClientFactory(null);
+    installFactory();
+    messagesCreateMock.mockImplementation(() => fromArray(makeTextStream('ok')));
+  });
+
+  it('non-interactive session (isNonInteractive=true): ask_question is STRIPPED', async () => {
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('Summarize the open PRs and proceed.'),
+      config: {
+        model: 'claude-haiku-4-5',
+        apiKey: 'sk-ant-oat01-test',
+        isNonInteractive: true,
+      },
+    });
+
+    await drainQuery(query);
+
+    const firstCall = messagesCreateMock.mock.calls[0]!;
+    const toolNames = extractToolNames((firstCall[0] as { tools?: unknown }).tools);
+    // No human can answer on a headless surface, so the escape hatch is gone…
+    expect(toolNames).not.toContain('ask_question');
+    // …but this strip is NARROWER than skill-dispatch: terminal_font_size stays,
+    // and the rest of the toolset is intact (precise filtering, not blanket).
+    expect(toolNames).toContain('terminal_font_size');
+    expect(toolNames).toContain('read_file');
+    expect(toolNames).toContain('bash');
+  });
+});
+
+// --------------------------------------------------------------------------
 // AnthropicDirectProvider — terminal_font_size stripped for skill-dispatch sub-agents
 // --------------------------------------------------------------------------
 // A bare numeric skill arg (e.g. /review 621) can lure a confused model into
