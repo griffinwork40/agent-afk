@@ -1615,4 +1615,132 @@ describe('SubagentExecutor', () => {
       expect((entry['error_message'] as string).length).toBeLessThanOrEqual(241);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Promotion: Ctrl+B backgrounds a *running foreground* subagent.
+  //
+  // The foreground await is raced against a promotion signal exposed through
+  // the narrow SubagentControl seam. When fired, the in-flight handle is
+  // handed to the registry via adoptRunning() (NOT register/runInBackground,
+  // which would re-enter run() and throw "already running"), the parent turn
+  // is unblocked with a synthetic "running" pointer, and the handle is NOT
+  // torn down — the registry now owns its lifetime.
+  // -------------------------------------------------------------------------
+  describe('promotion (foreground → background via SubagentControl)', () => {
+    let BackgroundAgentRegistry: typeof import('../background-registry.js').BackgroundAgentRegistry;
+
+    beforeEach(async () => {
+      ({ BackgroundAgentRegistry } = await import('../background-registry.js'));
+    });
+
+    const tick = () => new Promise((r) => setImmediate(r));
+
+    function promotableExecutor(
+      registry: InstanceType<typeof BackgroundAgentRegistry>,
+    ): SubagentExecutor {
+      return new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        backgroundRegistry: registry,
+        depth: 0,
+      });
+    }
+
+    it('hasPromotableForeground is false with no registry wired', () => {
+      // `executor` (default ctx) has no backgroundRegistry.
+      expect(executor.hasPromotableForeground()).toBe(false);
+    });
+
+    it('hasPromotableForeground is false when nothing is in flight', () => {
+      const registry = new BackgroundAgentRegistry({});
+      expect(promotableExecutor(registry).hasPromotableForeground()).toBe(false);
+    });
+
+    it('promotes a running foreground subagent: running pointer, no teardown, job observable', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const { handle, resolveRun } = hangingHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+      const exec = promotableExecutor(registry);
+
+      // Start the foreground run but do NOT await — it hangs until resolveRun.
+      const execPromise = exec.execute(makeCall({ input: { prompt: 'deep investigation' } }));
+      await tick(); // let execute() fork + register its promotion trigger
+
+      expect(exec.hasPromotableForeground()).toBe(true);
+
+      const promoted = await exec.promoteActiveForeground();
+      expect(promoted).toHaveLength(1);
+      expect(promoted[0]!.jobId).toMatch(/^bg-/);
+      expect(promoted[0]!.label).toBe('deep investigation');
+
+      // The parent turn is unblocked with the synthetic running pointer.
+      const result = await execPromise;
+      expect(result.isError).toBeUndefined();
+      const payload = JSON.parse(result.content as string);
+      expect(payload.status).toBe('running');
+      expect(payload.jobId).toBe(promoted[0]!.jobId);
+      expect(payload.message).toMatch(/backgrounded by user/i);
+
+      // The promoted handle was NOT torn down or cancelled — the registry owns it.
+      expect(handle.teardown).not.toHaveBeenCalled();
+      expect(handle.cancel).not.toHaveBeenCalled();
+
+      // Observable as a running registry job; the trigger is cleared.
+      expect(registry.get(payload.jobId)?.status).toBe('running');
+      expect(exec.hasPromotableForeground()).toBe(false);
+
+      // Resolving the in-flight run drives the adopted job to terminal.
+      resolveRun({
+        id: 'test-handle',
+        status: 'succeeded' as SubagentResult['status'],
+        message: { role: 'assistant', content: 'done', timestamp: new Date() } as any,
+      });
+      await tick();
+      expect(registry.get(payload.jobId)?.status).toBe('completed');
+    });
+
+    it('promote-all: two concurrent in-flight subagents are both promoted', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const a = hangingHandle();
+      const b = hangingHandle();
+      (a.handle as any).id = 'sub-a';
+      (b.handle as any).id = 'sub-b';
+      const forks = [a.handle, b.handle];
+      let i = 0;
+      mockSubagentMgr.forkSubagent = vi.fn().mockImplementation(() => Promise.resolve(forks[i++]));
+      const exec = promotableExecutor(registry);
+
+      const p1 = exec.execute(makeCall({ id: 'call-a', input: { prompt: 'first' } }));
+      const p2 = exec.execute(makeCall({ id: 'call-b', input: { prompt: 'second' } }));
+      await tick();
+
+      expect(exec.hasPromotableForeground()).toBe(true);
+      const promoted = await exec.promoteActiveForeground();
+      expect(promoted).toHaveLength(2);
+
+      const r1 = JSON.parse((await p1).content as string);
+      const r2 = JSON.parse((await p2).content as string);
+      expect(r1.status).toBe('running');
+      expect(r2.status).toBe('running');
+      expect(new Set([r1.subagentId, r2.subagentId])).toEqual(new Set(['sub-a', 'sub-b']));
+    });
+
+    it('race: run completes before promotion — normal result, nothing promoted, torn down', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      // Non-hanging handle: runToResult resolves immediately with output.
+      const handle = mockHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+      const exec = promotableExecutor(registry);
+
+      const result = await exec.execute(makeCall({ input: { prompt: 'quick' } }));
+      expect(result.content).toBe('test output');
+      expect(result.isError).toBeUndefined();
+
+      // Nothing left to promote, and the (non-promoted) handle was torn down.
+      expect(exec.hasPromotableForeground()).toBe(false);
+      expect(await exec.promoteActiveForeground()).toEqual([]);
+      expect(handle.teardown).toHaveBeenCalledTimes(1);
+    });
+  });
 });

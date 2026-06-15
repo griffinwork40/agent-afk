@@ -9,14 +9,12 @@
  * REPL.
  *
  * Distinct from:
- *   - `BackgroundTaskManager` (src/cli/commands/interactive/background.ts)
- *     — tracks BACKGROUNDED MODEL TURNS (Ctrl+B / `/bg <prompt>`).
  *   - `BackgroundAgentRegistry` (src/agent/background-registry.ts) — tracks
  *     BACKGROUNDED SUBAGENT DISPATCHES (`agent` tool's `mode: 'background'`).
  *
- * These three names sit at different layers (shell process, model turn,
- * subagent fork) and are intentionally separate. Sharing the `BackgroundX`
- * prefix between any of them would invite incorrect cross-wiring.
+ * These names sit at different layers (shell process, subagent fork) and are
+ * intentionally separate. Sharing the `BackgroundX` prefix between any of
+ * them would invite incorrect cross-wiring.
  *
  * @module agent/shell-jobs/registry
  */

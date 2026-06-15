@@ -23,7 +23,6 @@ import { formatStatusFields } from './shared.js';
 import type { TranscriptHandle } from './transcript.js';
 import { runTurn } from './turn-handler.js';
 import { saveSession } from '../../session-store.js';
-import { card } from '../../render.js';
 import type { InputSurface } from '../../input/input-surface.js';
 import type { ReplHistory } from '../../input/history.js';
 import { buildPrompt, type TurnState } from './repl-loop-shared.js';
@@ -80,7 +79,7 @@ export async function runInputLoop(
   footer: FooterSubsystems,
   history: ReplHistory,
 ): Promise<void> {
-  const { contextPane, bgManager, loopStageBar, verdictLedger, shellPassthrough, pendingBgNotifications } =
+  const { contextPane, loopStageBar, verdictLedger, shellPassthrough } =
     footer;
 
   // Init metadata (tools/MCP/SDK version) only resolves once the SDK
@@ -142,28 +141,6 @@ export async function runInputLoop(
         for (const line of pendingShadowingNotices) ctx.replRenderer.writeLine(line);
         ctx.replRenderer.writeLine('');
         pendingShadowingNotices = [];
-      }
-      while (pendingBgNotifications.length > 0) {
-        const task = pendingBgNotifications.shift()!;
-        const glyph = task.status === 'succeeded' ? '✓' : '✗';
-        const body: string[] = [];
-        if (task.resultText) {
-          const preview = task.resultText.trim().split('\n')[0]?.slice(0, 80) ?? '';
-          if (preview) body.push(preview);
-        }
-        if (task.error) body.push(task.error.message);
-        const statLine = [
-          task.stats.toolUses > 0 ? `${task.stats.toolUses} tools` : '',
-          task.stats.tokens > 0 ? `${Math.round(task.stats.tokens / 1000)}k tok` : '',
-          task.stats.durationMs > 0 ? `${Math.round(task.stats.durationMs / 1000)}s` : '',
-        ].filter(Boolean).join(' · ');
-        if (statLine) body.push(statLine);
-        ctx.replRenderer.writeLine(card({
-          kind: task.status === 'succeeded' ? 'checkpoint' : 'diagnosis',
-          title: `${glyph} ${task.id} ${task.label}`,
-          body,
-        }));
-        ctx.replRenderer.writeLine('');
       }
       // Shell-passthrough completion notifications — one-line summary per
       // backgrounded `!&cmd` that finished since the last prompt. Kept
@@ -419,6 +396,9 @@ export async function runInputLoop(
 
       await runTurn({ text: runText, attachments }, ctx.session.current, ctx.stats, {
         setInFlight(v: boolean) { turnState.turnInFlight = v; },
+        // Forward the promotion seam so Ctrl+B can background a running
+        // foreground subagent (else fall back to whole-turn backgrounding).
+        ...(ctx.subagentControl ? { subagentControl: ctx.subagentControl } : {}),
         async onUserMessage(userInput) {
           // Write the user's message to the transcript immediately — the
           // appendTurn below then closes the turn with the assistant block.
@@ -503,7 +483,7 @@ export async function runInputLoop(
         // transitions.  The bar is a per-session singleton; the callback is
         // safe to call on non-TTY (LoopStageBar.repaint() TTY-gates itself).
         ...(loopStageBar ? { onStageChange: (stage) => loopStageBar!.repaint(stage) } : {}),
-      }, ctx.options.thinkingUi, ctx.completionWriter, bgManager,
+      }, ctx.options.thinkingUi, ctx.completionWriter,
         // Surface refs threaded into the per-turn StreamRenderer for the
         // legacy non-borrow path (non-TTY, when surface.getCompositor()
         // is null and the renderer constructs its own compositor). In

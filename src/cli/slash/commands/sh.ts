@@ -11,10 +11,10 @@
  * The `<id>` form is `sh-N` (zero leading prefix accepted for muscle memory:
  * `/sh show 3` and `/sh show sh-3` are equivalent).
  *
- * Distinct from `/bg` (model-turn backgrounding) and `/bgsub` (subagent
- * backgrounding). This command operates only on shell processes spawned
- * via the REPL's `!`-prefix dispatch path; the model-side bash tool has
- * its own (non-backgrounded, v1) result delivery and is not surfaced here.
+ * Distinct from `/bgsub` (subagent backgrounding). This command operates
+ * only on shell processes spawned via the REPL's `!`-prefix dispatch path;
+ * the model-side bash tool has its own (non-backgrounded, v1) result
+ * delivery and is not surfaced here.
  *
  * @module cli/slash/commands/sh
  */
@@ -28,9 +28,9 @@ let passthroughRef: ShellPassthrough | undefined;
 
 /**
  * Wired from `runReplLoop` after the ShellPassthrough is constructed.
- * Mirrors the `setBgManager` / `setTasksManager` injection seam used by
- * the existing `/bg` / `/tasks` commands. Absent on Telegram/daemon
- * surfaces — those handlers short-circuit with an "unavailable" notice.
+ * Mirrors the `setBgsubRegistry` injection seam used by the `/bgsub`
+ * commands. Absent on Telegram/daemon surfaces — those handlers
+ * short-circuit with an "unavailable" notice.
  */
 export function setShellPassthrough(pt: ShellPassthrough): void {
   passthroughRef = pt;

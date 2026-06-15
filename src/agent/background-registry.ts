@@ -6,9 +6,6 @@
  *
  *   - `SubagentHandle.runInBackground(prompt, onResult)` — detaches the
  *     child's promise and invokes a callback on terminal state.
- *   - `BackgroundTaskManager` (under `src/cli/commands/interactive/`) — a
- *     separate, older facility that detaches a *main-session turn* (Ctrl+B
- *     and `/bg <prompt>`). Distinct concept; left alone here.
  *
  * The registry owns one entry per dispatched background job. It exposes:
  *
@@ -51,6 +48,8 @@ import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { SubagentHandle, SubagentResult, SubagentStatus } from './subagent.js';
+import { buildResultFromError, createEmptyTrace } from './subagent/result.js';
+import { debugLog } from '../utils/debug.js';
 import { emitBackgroundAgent } from './trace/emit.js';
 import type { TraceWriter } from './trace/index.js';
 import { BgJobLogWriter } from './bg-job-log.js';
@@ -217,6 +216,90 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
    *   or above `maxConcurrentJobs`. The caller must tear down the handle.
    */
   register(args: RegisterArgs): BackgroundJob {
+    const { job, jobId, writer, metaRecord } = this.createJobEntry(args);
+
+    // Start detached execution. `runInBackground` swallows the promise; the
+    // callback is our terminal-state hook. The onProgress callback pipes every
+    // OutputEvent to the writer and also feeds text content to appendTranscript.
+    args.handle.runInBackground(
+      args.prompt,
+      (result) => {
+        this.markTerminal(jobId, result, writer, metaRecord);
+      },
+      (event) => {
+        writer.write(event);
+        // Feed text content to the Haiku summarizer's transcript ring buffer.
+        if (event.type === 'chunk' && event.chunk.type === 'content') {
+          this.appendTranscript(jobId, event.chunk.content);
+        }
+      },
+    );
+
+    return this.snapshot(job);
+  }
+
+  /**
+   * Adopt an *already-running* subagent handle as a background job. This is
+   * the user-promotion path (Ctrl+B on a running foreground subagent): the
+   * handle's `runToResult()` is already in flight under a foreground
+   * `SubagentExecutor.execute()` await, so — unlike {@link register} — we must
+   * NOT call `runInBackground()`. That would re-enter `run()`, which throws
+   * "already running" when status is `'running'` (see handle.ts). Instead we
+   * attach the terminal-state callback to the caller-supplied in-flight
+   * `runPromise`.
+   *
+   * Limitation: progress events for the already-running portion are NOT teed
+   * to this job's log writer or transcript tail — the handle's progress sink
+   * was bound when the foreground run started and cannot be retroactively
+   * rewired. The final result is still captured and `join()`-able; only the
+   * rolling transcript (used by the optional Haiku summarizer) is empty for
+   * promoted jobs. New jobs that need full progress capture use
+   * {@link register}.
+   *
+   * @throws {BackgroundJobCapError} when the running-job cap is reached. The
+   *   caller (executor) should fall back to awaiting the foreground run rather
+   *   than dropping the subagent.
+   */
+  adoptRunning(args: RegisterArgs & { runPromise: Promise<SubagentResult> }): BackgroundJob {
+    const { job, jobId, writer, metaRecord } = this.createJobEntry(args);
+
+    // `runToResult` is designed not to reject — it catches internally and
+    // resolves a failure result (handle.ts) — so `.then` covers the normal
+    // path. `.catch` is defense-in-depth, mirroring `runInBackground`'s naked
+    // void-promise guard: if anything unexpected escapes, synthesize a failed
+    // terminal so the job never hangs in 'running'.
+    void args.runPromise
+      .then((result) => {
+        this.markTerminal(jobId, result, writer, metaRecord);
+      })
+      .catch((err: unknown) => {
+        debugLog('adoptRunning: unexpected rejection from in-flight runPromise', err);
+        this.markTerminal(
+          jobId,
+          buildResultFromError(args.handle.id, 'failed', err, createEmptyTrace()),
+          writer,
+          metaRecord,
+        );
+      });
+
+    return this.snapshot(job);
+  }
+
+  /**
+   * Allocate a registry entry for a new background job: cap-check, assign a
+   * `jobId`, register the in-memory job, emit the `started` witness, and open
+   * the persistent log writer. Shared by {@link register} (fresh handle, not
+   * yet started) and {@link adoptRunning} (handle already mid-flight). The two
+   * differ only in how the terminal-state callback is attached afterwards.
+   *
+   * @throws {BackgroundJobCapError} when the running-job cap is reached.
+   */
+  private createJobEntry(args: RegisterArgs): {
+    job: InternalJob;
+    jobId: string;
+    writer: BgJobLogWriter;
+    metaRecord: BgJobMeta;
+  } {
     const running = [...this.jobs.values()].filter((j) => j.status === 'running').length;
     if (running >= this.maxConcurrentJobs) {
       throw new BackgroundJobCapError(running, this.maxConcurrentJobs);
@@ -276,24 +359,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
     };
     void writer.writeMeta(metaRecord);
 
-    // Start detached execution. `runInBackground` swallows the promise; the
-    // callback is our terminal-state hook. The onProgress callback pipes every
-    // OutputEvent to the writer and also feeds text content to appendTranscript.
-    args.handle.runInBackground(
-      args.prompt,
-      (result) => {
-        this.markTerminal(jobId, result, writer, metaRecord);
-      },
-      (event) => {
-        writer.write(event);
-        // Feed text content to the Haiku summarizer's transcript ring buffer.
-        if (event.type === 'chunk' && event.chunk.type === 'content') {
-          this.appendTranscript(jobId, event.chunk.content);
-        }
-      },
-    );
-
-    return this.snapshot(job);
+    return { job, jobId, writer, metaRecord };
   }
 
   /** Read-only snapshot of one job. */

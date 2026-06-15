@@ -42,20 +42,14 @@ vi.mock('../../slash/plugin-skills.js', () => ({
   autoRegisterPluginPassthroughs: vi.fn(async () => {}),
   getPluginShadowingNoticeLines: vi.fn(() => []),
 }));
-vi.mock('./background.js', async () => {
-  const { EventEmitter } = await import('node:events');
-  class FakeBackgroundTaskManager extends EventEmitter {
-    running(): unknown[] { return []; }
-    cancel(_id: string): void {}
-  }
-  return { BackgroundTaskManager: FakeBackgroundTaskManager };
-});
+
 vi.mock('../../background-status-bar.js', () => ({
   BackgroundStatusBar: class {
     setRowCountChangeHandler() {}
     start() {}
     stop() {}
     redraw() {}
+    formatJobLine() { return ''; }
   },
 }));
 vi.mock('./context-pane.js', () => ({
@@ -73,12 +67,6 @@ vi.mock('./verdict-ledger.js', () => ({
     repaint: () => {},
   })),
 }));
-vi.mock('../../slash/commands/bg.js', () => ({ setBgManager: vi.fn() }));
-vi.mock('../../slash/commands/tasks.js', () => ({
-  setTasksManager: vi.fn(),
-  setTasksRegistry: vi.fn(),
-}));
-vi.mock('../../slash/commands/attach.js', () => ({ setAttachManager: vi.fn() }));
 vi.mock('../../slash/commands/sh.js', () => ({ setShellPassthrough: vi.fn() }));
 vi.mock('../../debug-banner.js', () => ({ renderDebugBanner: () => '' }));
 vi.mock('../../../utils/debug.js', () => ({ isDebugEnabled: () => false, debugLog: () => {} }));

@@ -47,7 +47,7 @@ afk chat "hello"
 
 > **Agent AFK Pro:** Autonomous skill-generation (`/forge`) and the calibrated skill-qualification rubric (`/qualify`) are reserved for Agent AFK Pro and are not part of the open-source build.
 - **Cross-session memory** — Claude remembers preferences, decisions, and procedures across runs. Backed by SQLite at `~/.afk/agent-framework/memory/` plus a `HOT.md` that injects into every future session's system prompt.
-- **Background tasks** — Ctrl+B in the REPL detaches the current turn into a tracked task; `/tasks` lists them, `/attach <id>` re-attaches.
+- **Background subagent jobs** — dispatch a subagent with `mode:'background'`; `/bgsub` lists running and completed jobs, `/bgsub:join <id>` retrieves the result.
 
 ## Four surfaces, one session manager
 

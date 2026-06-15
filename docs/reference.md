@@ -89,10 +89,8 @@ The interactive REPL registers slash commands directly in TypeScript (`src/cli/s
 - `/init` — scan the current project and write `AFK.md`
 - `/changelog` — render `CHANGELOG.md` paginated
 
-### Background tasks (Ctrl+B detaches the current turn)
-- `/bg` — list backgrounded tasks
-- `/tasks` — show running/queued tasks with status
-- `/attach <id>` — re-attach to a backgrounded task
+### Background subagent jobs
+- `/bgsub` — list background subagent jobs with status (dispatched via `mode:'background'`)
 
 ### Skills (built-in)
 - `/mint`, `/diagnose`, `/forge`, `/audit-fit`

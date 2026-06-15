@@ -15,14 +15,12 @@
  *      turn" semantics.
  *   3. **Background completion notification** — when a background job
  *      finishes, queue a one-line summary that the REPL drains and
- *      surfaces at the top of the next iteration alongside the existing
- *      `pendingBgNotifications` flow.
+ *      surfaces at the top of the next iteration.
  *
- * Distinct from `BackgroundTaskManager` (which detaches MODEL TURNS via
- * Ctrl+B / `/bg`) and `BackgroundAgentRegistry` (which tracks BACKGROUND
- * SUBAGENT DISPATCHES via the `agent` tool). These three layers
- * intentionally have separate registries because they own separate
- * resources (shell process / model turn / subagent fork).
+ * Distinct from `BackgroundAgentRegistry` (which tracks BACKGROUND
+ * SUBAGENT DISPATCHES via the `agent` tool). These two layers intentionally
+ * have separate registries because they own separate resources (shell process /
+ * subagent fork).
  *
  * @module cli/commands/interactive/shell-passthrough
  */

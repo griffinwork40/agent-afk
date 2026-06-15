@@ -3,20 +3,19 @@
  *
  * Uses DECSTBM scroll-region reservation (same technique as {@link StatusLine})
  * to pin one or more task-progress rows above the bottom status row. Repaints
- * on BackgroundTaskManager 'update' events and BackgroundAgentRegistry 'started'
- * / 'settled' events, throttled to avoid flicker.
+ * on BackgroundAgentRegistry 'started' / 'settled' events, throttled to avoid
+ * flicker.
  *
- * Lifecycle: construct → start() → repaint via manager events → stop() before exit.
+ * Lifecycle: construct → start() → repaint via registry events → stop() before exit.
  *
  * @module cli/background-status-bar
  */
 
-import type { BackgroundTask, BackgroundTaskManager } from './commands/interactive/background.js';
 import type { BackgroundAgentRegistry, BackgroundJob } from '../agent/background-registry.js';
 import type { BackgroundItem } from './background/types.js';
 import { truncateDisplayWidth } from './display.js';
 import { palette } from './palette.js';
-import { formatDuration, formatTokens } from './format-utils.js';
+import { formatDuration } from './format-utils.js';
 import { ResizeBus } from './terminal-size.js';
 
 const SPINNER_FRAMES = ['◐', '◑', '◒', '◓'] as const;
@@ -35,7 +34,6 @@ export interface BackgroundStatusBarOptions {
 
 export class BackgroundStatusBar {
   private readonly stream: NodeJS.WriteStream;
-  private readonly manager: BackgroundTaskManager;
   private readonly registry: BackgroundAgentRegistry | undefined;
   private readonly throttleMs: number;
 
@@ -44,7 +42,6 @@ export class BackgroundStatusBar {
   private spinnerIndex = 0;
   private spinnerInterval: ReturnType<typeof setInterval> | null = null;
   private resizeUnsub: (() => void) | null = null;
-  private updateHandler: (() => void) | null = null;
   private registryStartedHandler: ((job: BackgroundJob) => void) | null = null;
   private registrySettledHandler: ((job: BackgroundJob) => void) | null = null;
   private rowCount = 0;
@@ -52,11 +49,9 @@ export class BackgroundStatusBar {
   private readonly getAdjacentRows: () => number;
 
   constructor(
-    manager: BackgroundTaskManager,
     registry?: BackgroundAgentRegistry,
     opts: BackgroundStatusBarOptions = {},
   ) {
-    this.manager = manager;
     this.registry = registry;
     this.stream = opts.stream ?? process.stdout;
     this.throttleMs = opts.throttleMs ?? 200;
@@ -70,10 +65,6 @@ export class BackgroundStatusBar {
   start(): void {
     if (this.started) return;
     this.started = true;
-
-    this.updateHandler = () => this.scheduleRepaint();
-    this.manager.on('update', this.updateHandler);
-    this.manager.on('complete', this.updateHandler);
 
     if (this.registry) {
       this.registryStartedHandler = (_job: BackgroundJob) => {
@@ -98,11 +89,6 @@ export class BackgroundStatusBar {
     if (!this.started) return;
     this.started = false;
 
-    if (this.updateHandler) {
-      this.manager.removeListener('update', this.updateHandler);
-      this.manager.removeListener('complete', this.updateHandler);
-      this.updateHandler = null;
-    }
     if (this.registry) {
       if (this.registryStartedHandler) {
         this.registry.off('started', this.registryStartedHandler);
@@ -150,14 +136,10 @@ export class BackgroundStatusBar {
     if (!this.started || !this.stream.isTTY) return;
     this.lastRepaint = Date.now();
 
-    // Build a unified list of running items: turn-tasks first, then subagent jobs.
-    // Order within each group is insertion order (manager/registry preserve it).
-    const items: BackgroundItem[] = [
-      ...this.manager.running().map((task): BackgroundItem => ({ kind: 'turn', task })),
-      ...(this.registry?.list() ?? [])
-        .filter((job) => job.status === 'running')
-        .map((job): BackgroundItem => ({ kind: 'subagent', job })),
-    ];
+    // Build list of running subagent jobs.
+    const items: BackgroundItem[] = (this.registry?.list() ?? [])
+      .filter((job) => job.status === 'running')
+      .map((job): BackgroundItem => ({ kind: 'subagent', job }));
 
     const totalRows = this.stream.rows ?? 24;
     // adjacentRows = rows owned by painters between the bg bar and the status
@@ -214,38 +196,9 @@ export class BackgroundStatusBar {
     this.stream.write('\x1b[u');
   }
 
-  /** Format a unified BackgroundItem row. Switches on kind. */
+  /** Format a unified BackgroundItem row. */
   private formatItemLine(item: BackgroundItem): string {
-    if (item.kind === 'turn') return this.formatTaskLine(item.task);
     return this.formatJobLine(item.job);
-  }
-
-  formatTaskLine(task: BackgroundTask): string {
-    const maxW = Math.max(4, (this.stream.columns ?? 80) - 2);
-    const spinner = palette.brand(SPINNER_FRAMES[this.spinnerIndex]!);
-    const id = palette.dim(task.id);
-    const label = palette.bold(task.label);
-
-    const parts = [spinner, id, label];
-    if (task.progressDescription) {
-      parts.push(palette.dim(task.progressDescription));
-    }
-
-    const statParts: string[] = [];
-    if (task.stats.toolUses > 0) {
-      statParts.push(`${task.stats.toolUses} tool${task.stats.toolUses === 1 ? '' : 's'}`);
-    }
-    if (task.stats.tokens > 0) {
-      statParts.push(`${formatTokens(task.stats.tokens)} tok`);
-    }
-    const elapsed = Date.now() - task.startedAt;
-    statParts.push(formatDuration(elapsed));
-
-    if (statParts.length > 0) {
-      parts.push(palette.dim(statParts.join(' · ')));
-    }
-
-    return truncateDisplayWidth('  ' + parts.join(' '), maxW);
   }
 
   /** Format a single subagent job row. Shows metadata only — never result text. */

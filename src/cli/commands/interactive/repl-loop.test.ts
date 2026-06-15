@@ -34,7 +34,7 @@ import { formatSubmittedEcho } from '../../input/echo.js';
  * tests the try/catch path.
  *
  * Keeping it inline avoids importing the full REPL loop (which would pull
- * in readline, BackgroundTaskManager, terminal compositor, etc.) while still
+ * in readline, terminal compositor, etc.) while still
  * being structurally identical to the production code path under test.
  *
  * If the production code changes, update this shim and the test assertions.
@@ -162,7 +162,7 @@ describe('runReplLoop — first-turn hook dispatch', () => {
 /**
  * Inline shim that replays the seedBuffer auto-submit fast-path from
  * repl-loop.ts. Does NOT import runReplLoop (would pull in readline,
- * BackgroundTaskManager, compositor, etc.). Structurally identical to the
+ * compositor, etc.). Structurally identical to the
  * production branch in repl-loop.ts.
  *
  * Updated for the seedBuffer struct change: seedBuffer is now

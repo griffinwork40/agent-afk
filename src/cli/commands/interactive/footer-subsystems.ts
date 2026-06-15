@@ -1,49 +1,34 @@
 import type { InteractiveCtx } from './shared.js';
 import { createContextPane } from './context-pane.js';
 import { createVerdictLedger } from './verdict-ledger.js';
-import { BackgroundTaskManager, type BackgroundTask } from './background.js';
 import { BackgroundStatusBar } from '../../background-status-bar.js';
 import { LoopStageBar } from './loop-stage.js';
-import { setBgManager } from '../../slash/commands/bg.js';
-import { setTasksManager, setTasksRegistry } from '../../slash/commands/tasks.js';
-import { setAttachManager } from '../../slash/commands/attach.js';
 import { ShellPassthrough } from './shell-passthrough.js';
 import { setShellPassthrough } from '../../slash/commands/sh.js';
 import type { TurnState } from './repl-loop-shared.js';
 
 /**
  * The persistent footer subsystems owned by a single `runReplLoop`. Returned
- * by {@link setupFooterSubsystems} so the loop body can read them (drain
- * notifications, dispatch shell, repaint stage rail, push verdicts) and the
- * orchestrator's `finally` can tear them down in the inverse order they were
- * started.
+ * by {@link setupFooterSubsystems} so the loop body can read them (dispatch
+ * shell, repaint stage rail, push verdicts) and the orchestrator's `finally`
+ * can tear them down in the inverse order they were started.
  */
 export interface FooterSubsystems {
   contextPane: ReturnType<typeof createContextPane>;
-  bgManager: BackgroundTaskManager;
   bgStatusBar: BackgroundStatusBar;
   loopStageBar: LoopStageBar;
   verdictLedger: ReturnType<typeof createVerdictLedger>;
   shellPassthrough: ShellPassthrough;
-  /**
-   * Ring of completed background tasks awaiting a between-prompt notification
-   * render. The loop drains this at the top of each iteration; the
-   * `bgManager.on('complete')` listener pushes to it (capped at
-   * MAX_BG_NOTIFICATIONS).
-   */
-  pendingBgNotifications: BackgroundTask[];
 }
-
-const MAX_BG_NOTIFICATIONS = 50;
 
 /**
  * Phase 2 of the REPL loop — footer subsystems.
  *
- * Builds the context pane, verdict ledger, background task manager + status
- * bar, loop-stage bar, and shell-passthrough subsystem, wires their reserved
- * DECSTBM row accounting, and starts the painters.
+ * Builds the context pane, verdict ledger, background status bar (subagent
+ * jobs only), loop-stage bar, and shell-passthrough subsystem, wires their
+ * reserved DECSTBM row accounting, and starts the painters.
  *
- * Mutates `ctx` (clearVerdictLedger, slash-command manager singletons via the
+ * Mutates `ctx` (clearVerdictLedger, slash-command registry singletons via the
  * `set*` calls) and `turnState` (tryAbortShellForeground). Must run AFTER
  * {@link setupSurface} so the persistent compositor already owns stdout before
  * any reserved-row painter starts.
@@ -79,14 +64,6 @@ export function setupFooterSubsystems(
   // External constraint: the swap callback runs after the pointer flip, so
   // resetting here is safe (no in-flight turn writes to the ledger).
   ctx.clearVerdictLedger = () => verdictLedger.reset();
-
-  // Background task manager — tracks detached turns (Ctrl+B / /bg).
-  // Wire into slash commands so /bg, /tasks, /attach can access it.
-  const bgManager = new BackgroundTaskManager();
-  setBgManager(bgManager);
-  setTasksManager(bgManager);
-  setAttachManager(bgManager);
-  setTasksRegistry(ctx.backgroundRegistry);
 
   // Row-count accounting for the three reserved footer painters that stack
   // above the status line. Each painter reports its own row count; the status
@@ -134,7 +111,7 @@ export function setupFooterSubsystems(
     loopStageBar?.redraw();
   });
 
-  bgStatusBar = new BackgroundStatusBar(bgManager, ctx.backgroundRegistry, {
+  bgStatusBar = new BackgroundStatusBar(ctx.backgroundRegistry, {
     // Rows that sit between the bg bar and the status line — i.e. the verdict
     // rail. Keeps bg-bar rows from overwriting the verdict row. (LoopStageBar
     // is ABOVE the bg bar, so it is not counted here.)
@@ -176,7 +153,7 @@ export function setupFooterSubsystems(
   bgStatusBar.start();
   // LoopStageBar must start AFTER bgStatusBar so it reads a fully-initialized
   // extraRows from StatusLine and paints at the correct row.  The bg bar may
-  // start with 0 rows (no tasks yet), in which case the loop-stage bar sits
+  // start with 0 rows (no jobs yet), in which case the loop-stage bar sits
   // immediately above the status line.
   loopStageBar.start();
 
@@ -188,17 +165,8 @@ export function setupFooterSubsystems(
   // of the reserved band, never displaced by anything below it.
   verdictLedger.start({ stream: process.stdout });
 
-  const pendingBgNotifications: BackgroundTask[] = [];
-  bgManager.on('complete', (task) => {
-    if (pendingBgNotifications.length >= MAX_BG_NOTIFICATIONS) {
-      pendingBgNotifications.shift();
-    }
-    pendingBgNotifications.push(task);
-  });
-
   // Shell-passthrough subsystem — `!cmd` (foreground) and `!&cmd`
-  // (background). Distinct from the BackgroundTaskManager above (which
-  // detaches MODEL TURNS) and from the BackgroundAgentRegistry (which
+  // (background). Distinct from the BackgroundAgentRegistry (which
   // detaches SUBAGENT DISPATCHES). Naming-collision-safe by living in a
   // separate registry. Wired into the `/sh` slash command so list/show/
   // kill/tail share the same job table.
@@ -220,11 +188,9 @@ export function setupFooterSubsystems(
 
   return {
     contextPane,
-    bgManager,
     bgStatusBar,
     loopStageBar,
     verdictLedger,
     shellPassthrough,
-    pendingBgNotifications,
   };
 }
