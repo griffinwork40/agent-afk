@@ -48,7 +48,7 @@ All commands support `--format json` where machine-readable output makes sense (
 ### Per-session overrides
 
 ```
---model <name>            # opus | sonnet | haiku | fable | codex
+--model <name>            # local | small | medium | large | opus | sonnet | haiku | fable | codex
 --thinking <on|off|N>     # extended thinking budget
 --max-output-tokens <n>
 --temperature <n>
@@ -114,6 +114,8 @@ Implementation: `src/cli/slash/index.ts` (`registerAll()`), individual command m
 - **sonnet** — balanced performance and speed (default)
 - **haiku** — fastest, best for simple tasks
 
+**Model slots** — four rebindable capability tiers (cheapest → most capable): `local`, `small`, `medium`, `large`. Use `AFK_MODEL_LOCAL` + `AFK_MODEL_LOCAL_BASE_URL` to point the `local` slot at Ollama, LM Studio, or any OpenAI-compatible shim. See [`docs/model-slots.md`](model-slots.md) for full configuration.
+
 **OpenAI Codex** (`@openai/codex-sdk`) — set `AFK_MODEL=codex` (or pass `--model codex`). Implementation lives in `src/agent/providers/openai-codex.ts`. Tune reasoning effort via `AFK_EFFORT=low|medium|high`.
 
 ## Plugins & marketplaces
@@ -177,7 +179,7 @@ The setup wizard prompts for the token and the chat IDs allowed to interact with
 **Bot commands:**
 - `/start` — welcome
 - `/reset` — clear conversation
-- `/model opus|sonnet|haiku|fable` — switch model
+- `/model local|small|medium|large|opus|sonnet|haiku|fable` — switch model
 
 Send any other message to chat. The bot has full tool access via bypass mode.
 

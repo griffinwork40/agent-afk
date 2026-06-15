@@ -28,7 +28,7 @@ import { formatResumeCommand } from '../../cli/resume-command.js';
 type LogFn = (...args: unknown[]) => void;
 
 /** Canonical short aliases accepted by /model and the inline keyboard. */
-export const MODEL_ALIASES_HINT = ['small', 'medium', 'large', 'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable'] as const;
+export const MODEL_ALIASES_HINT = ['local', 'small', 'medium', 'large', 'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable'] as const;
 
 /**
  * Handle /clear command (SDK /clear - clear conversation history)
@@ -128,7 +128,7 @@ export async function handleModelSwitch(
 
   const modelArg = args[0];
   if (!modelArg) {
-    await ctx.reply(formatError('Please specify a model: small, medium, large, opus, sonnet, haiku, or an org/model id'));
+    await ctx.reply(formatError('Please specify a model: local, small, medium, large, opus, sonnet, haiku, or an org/model id'));
     return;
   }
 

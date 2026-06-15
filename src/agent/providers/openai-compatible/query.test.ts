@@ -464,6 +464,7 @@ describe('OpenAICompatibleQuery — model-slot resolution in request body', () =
     // from the agent tool's examples) must therefore reach the backend AS
     // gpt-5.5, not the literal string `sonnet`.
     setSlotBindings({
+      local: { id: '' },
       small: { id: 'gpt-5.5' },
       medium: { id: 'gpt-5.5' },
       large: { id: 'gpt-5.5' },
@@ -484,6 +485,7 @@ describe('OpenAICompatibleQuery — model-slot resolution in request body', () =
 
   it('passes a concrete model id through unchanged (idempotent)', async () => {
     setSlotBindings({
+      local: { id: '' },
       small: { id: 'gpt-5.5' },
       medium: { id: 'gpt-5.5' },
       large: { id: 'gpt-5.5' },

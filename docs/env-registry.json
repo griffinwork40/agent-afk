@@ -267,7 +267,7 @@
     },
     {
       "name": "AFK_MODEL",
-      "description": "Default model for agent turns. Accepts slot names (small, medium, large), legacy aliases (opus, sonnet, haiku), the fixed-id fable alias (Claude Fable 5), or full model IDs.",
+      "description": "Default model for agent turns. Accepts slot names (local, small, medium, large), legacy aliases (opus, sonnet, haiku), the fixed-id fable alias (Claude Fable 5), or full model IDs.",
       "type": "string",
       "required": false,
       "default": "sonnet",
@@ -296,6 +296,30 @@
       "type": "string",
       "required": false,
       "example": "http://localhost:8080/v1",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_LOCAL",
+      "description": "Bind the \"local\" capability tier (cheapest/fastest, user-configured) to a model id. Overrides afk.config.json models.local. Point at a local Ollama, LM Studio, or any OpenAI-compatible shim.",
+      "type": "string",
+      "required": false,
+      "example": "llama3.2:3b",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MODEL_LOCAL_API_KEY",
+      "description": "Per-slot API key for the \"local\" tier. Overrides global credentials for this tier only.",
+      "type": "string",
+      "required": false,
+      "category": "model",
+      "secret": true
+    },
+    {
+      "name": "AFK_MODEL_LOCAL_BASE_URL",
+      "description": "Per-slot endpoint base URL for the \"local\" tier. Anthropic Messages base or OpenAI-compatible base per the tier provider.",
+      "type": "string",
+      "required": false,
+      "example": "http://localhost:11434/v1",
       "category": "model"
     },
     {

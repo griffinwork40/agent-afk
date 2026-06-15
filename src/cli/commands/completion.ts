@@ -14,7 +14,7 @@ const SUBCOMMANDS = [
 
 const PLUGIN_SUBCOMMANDS = ['install', 'update', 'list', 'remove', 'enable', 'disable'] as const;
 
-const MODEL_VALUES = ['sonnet', 'opus', 'haiku', 'fable'] as const;
+const MODEL_VALUES = ['local', 'small', 'medium', 'large', 'sonnet', 'opus', 'haiku', 'fable'] as const;
 
 const FORMAT_VALUES = ['json', 'text'] as const;
 

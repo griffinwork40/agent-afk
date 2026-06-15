@@ -1,9 +1,9 @@
 # Model slots
 
-User-configurable model bindings. Three fixed **capability tiers** — `small`,
-`medium`, `large` — each bound to a concrete model the user chooses. The tier
-*positions* are the stable anchor the `agent` / `compose` / `skill` tools select
-among (cheapest → most capable); the *bindings* are what you configure.
+User-configurable model bindings. Four fixed **capability tiers** — `local`,
+`small`, `medium`, `large` — each bound to a concrete model the user chooses. The
+tier *positions* are the stable anchor the `agent` / `compose` / `skill` tools
+select among (cheapest → most capable); the *bindings* are what you configure.
 
 > **Status:** Stages 1–2. A tier can be rebound to any model id (Stage 1) and
 > carry its own `provider` / `baseUrl` / `apiKey` (Stage 2), so different tiers
@@ -51,11 +51,16 @@ credentials):
 
 | Var | Binds |
 | --- | --- |
-| `AFK_MODEL_{SMALL,MEDIUM,LARGE}` | the tier's model id |
-| `AFK_MODEL_{SMALL,MEDIUM,LARGE}_BASE_URL` | the tier's endpoint base URL |
-| `AFK_MODEL_{SMALL,MEDIUM,LARGE}_API_KEY` | the tier's API key (secret) |
+| `AFK_MODEL_{LOCAL,SMALL,MEDIUM,LARGE}` | the tier's model id |
+| `AFK_MODEL_{LOCAL,SMALL,MEDIUM,LARGE}_BASE_URL` | the tier's endpoint base URL |
+| `AFK_MODEL_{LOCAL,SMALL,MEDIUM,LARGE}_API_KEY` | the tier's API key (secret) |
 
 ```bash
+# Point the local tier at Ollama:
+AFK_MODEL_LOCAL='llama3.2:3b' \
+AFK_MODEL_LOCAL_BASE_URL='http://localhost:11434/v1' \
+AFK_MODEL_LOCAL_API_KEY='local' afk i
+
 # A local shim on the small tier, keys/endpoint out of any file:
 AFK_MODEL_SMALL='mlx-community/Qwen3-32B-4bit' \
 AFK_MODEL_SMALL_BASE_URL='http://localhost:8080/v1' \
@@ -71,6 +76,7 @@ An unconfigured install behaves exactly as before this feature:
 
 | Tier     | Default id                      | Legacy aliases            |
 | -------- | ------------------------------- | ------------------------- |
+| `local`  | `` (empty — user-configured)    | —                         |
 | `small`  | `claude-haiku-4-5-20251001`     | `haiku`                   |
 | `medium` | `claude-sonnet-4-6`             | `sonnet`, `sonnet_1m`     |
 | `large`  | `claude-opus-4-8`               | `opus`, `opus_1m`         |
@@ -79,9 +85,9 @@ An unconfigured install behaves exactly as before this feature:
 
 Anywhere a model is named — `AFK_MODEL` / `afk -m <…>`, the REPL/Telegram
 `/model` command, and the `agent`/`compose`/`skill` tools' `model` parameter —
-you may pass a **tier name** (`small`/`medium`/`large`), your **custom name**, a
-**legacy alias** (`haiku`/`sonnet`/`opus`), the `auto` sentinel, or a **raw
-model id**.
+you may pass a **tier name** (`local`/`small`/`medium`/`large`), your **custom
+name**, a **legacy alias** (`haiku`/`sonnet`/`opus`), the `auto` sentinel, or a
+**raw model id**.
 
 ## Resolution precedence
 
@@ -89,7 +95,7 @@ For any model input string (`slotForInput` / `resolveModelInput` in
 `src/agent/session/model-slots.ts`):
 
 1. **custom name** — a user-assigned `name` on a binding (case-insensitive)
-2. **neutral name** — `small` | `medium` | `large`
+2. **neutral name** — `local` | `small` | `medium` | `large`
 3. **legacy alias** — `haiku`→small, `sonnet`/`sonnet_1m`→medium, `opus`/`opus_1m`→large
 4. otherwise — a raw concrete id or the `auto` sentinel (passthrough, unchanged)
 
@@ -136,4 +142,4 @@ falls back to defaults + env when constructed without the CLI config loader.
 - `src/agent/session/model-slots.ts` — bindings, resolver, defaults, config parse.
 - `src/agent/session/slot-credentials.ts` — per-slot credential application.
 - `src/agent/providers/index.ts` — `providerForModel` resolution-before-routing.
-- `docs/env-registry.md` — `AFK_MODEL_{SMALL,MEDIUM,LARGE}{,_BASE_URL,_API_KEY}`.
+- `docs/env-registry.md` — `AFK_MODEL_{LOCAL,SMALL,MEDIUM,LARGE}{,_BASE_URL,_API_KEY}`.

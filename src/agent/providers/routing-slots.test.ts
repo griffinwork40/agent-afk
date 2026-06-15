@@ -28,6 +28,7 @@ const saved: Record<string, string | undefined> = {};
 
 function makeSlots(over: Partial<ModelSlots>): ModelSlots {
   return {
+    local: over.local ?? { id: DEFAULT_SLOT_BINDINGS.local.id },
     small: over.small ?? { id: DEFAULT_SLOT_BINDINGS.small.id },
     medium: over.medium ?? { id: DEFAULT_SLOT_BINDINGS.medium.id },
     large: over.large ?? { id: DEFAULT_SLOT_BINDINGS.large.id },

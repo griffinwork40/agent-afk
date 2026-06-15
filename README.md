@@ -127,6 +127,17 @@ afk chat "refactor this" --model gpt-5.5
 | `sonnet` | Day-to-day default — balanced speed and capability |
 | `haiku` | Fast, cheap, meh... |
 
+**Model slots** — rebind any capability tier to any model:
+
+| Slot | Default | Notes |
+|---|---|---|
+| `local` | *(empty — you configure)* | Point at Ollama, LM Studio, or any OpenAI-compatible shim via `AFK_MODEL_LOCAL` + `AFK_MODEL_LOCAL_BASE_URL` |
+| `small` | `claude-haiku-4-5-20251001` | Cheapest/fastest Anthropic tier; `haiku` alias |
+| `medium` | `claude-sonnet-4-6` | General-use default; `sonnet` alias |
+| `large` | `claude-opus-4-8` | Most capable; `opus` alias |
+
+See [`docs/model-slots.md`](docs/model-slots.md) for the full configuration reference.
+
 ## Useful commands
 
 ```bash
