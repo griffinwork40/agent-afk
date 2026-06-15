@@ -1,6 +1,18 @@
 import { describe, it, expect } from 'vitest';
-import { buildMessages, flattenUserContent, resolveSystemPrompt } from './messages.js';
+import {
+  buildMessages,
+  buildUserContent,
+  flattenUserContent,
+  imageOmittedNotice,
+  resolveSystemPrompt,
+  type OpenAIContentPart,
+} from './messages.js';
 import type { AgentConfig } from '../../types/config-types.js';
+
+/** Minimal valid Anthropic base64 image block — `as never` because the exact
+ * source-union shape doesn't matter for these conversions. */
+const imgBlock = (data: string, mediaType = 'image/png') =>
+  ({ type: 'image', source: { type: 'base64', media_type: mediaType, data } }) as never;
 
 const baseConfig = (overrides: Partial<AgentConfig> = {}): AgentConfig =>
   ({
@@ -47,14 +59,69 @@ describe('flattenUserContent', () => {
     ).toBe('line 1\nline 2');
   });
 
-  it('stubs image blocks to a placeholder', () => {
-    expect(
-      flattenUserContent([
-        { type: 'text', text: 'see this:' },
-        // Minimal valid image block shape — exact source shape doesn't matter for the flatten.
-        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'x' } } as never,
-      ]),
-    ).toBe('see this:\n[image omitted]');
+  it('replaces image blocks with a graceful notice instead of silently dropping them', () => {
+    const out = flattenUserContent(
+      [{ type: 'text', text: 'see this:' }, imgBlock('x')],
+      'gpt-3.5-turbo',
+    );
+    expect(out).toContain('see this:');
+    expect(out).toMatch(/cannot view images/i);
+    // Names the model so the user learns which model is the limitation.
+    expect(out).toContain('gpt-3.5-turbo');
+  });
+
+  it('consolidates multiple images into one pluralized notice and tolerates no leading text', () => {
+    const out = flattenUserContent([imgBlock('a'), imgBlock('b')]);
+    expect(out).toMatch(/2 images were attached/i);
+  });
+});
+
+describe('imageOmittedNotice', () => {
+  it('is singular for one image', () => {
+    expect(imageOmittedNotice('gpt-4', 1)).toMatch(/An image was attached/);
+  });
+
+  it('is plural for many and names the model', () => {
+    const n = imageOmittedNotice('local-model', 3);
+    expect(n).toMatch(/3 images were attached/);
+    expect(n).toContain('local-model');
+  });
+
+  it('instructs the model to tell the user (graceful-failure contract)', () => {
+    expect(imageOmittedNotice('gpt-4', 1).toLowerCase()).toContain('user');
+  });
+});
+
+describe('buildUserContent', () => {
+  it('passes string content through unchanged', () => {
+    expect(buildUserContent('hi', { vision: true, model: 'gpt-4o' })).toBe('hi');
+  });
+
+  it('builds multimodal parts (text + image_url data-URI) for a vision model', () => {
+    const out = buildUserContent([{ type: 'text', text: 'caption' }, imgBlock('AAAA', 'image/jpeg')], {
+      vision: true,
+      model: 'gpt-4o',
+    });
+    expect(out).toEqual([
+      { type: 'text', text: 'caption' },
+      { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,AAAA' } },
+    ]);
+  });
+
+  it('collapses to a bare string when only one text part remains', () => {
+    expect(buildUserContent([{ type: 'text', text: 'just text' }], { vision: true, model: 'gpt-4o' })).toBe(
+      'just text',
+    );
+  });
+
+  it('degrades to a string notice for a non-vision model', () => {
+    const out = buildUserContent([{ type: 'text', text: 'caption' }, imgBlock('AAAA')], {
+      vision: false,
+      model: 'gpt-3.5-turbo',
+    });
+    expect(typeof out).toBe('string');
+    expect(out).toContain('caption');
+    expect(out).toMatch(/cannot view images/i);
   });
 });
 
@@ -128,5 +195,34 @@ describe('buildMessages', () => {
       priorTurns: [{ role: 'tool', content: 'r', tool_call_id: 'x' }],
     });
     expect(m).toEqual([{ role: 'tool', content: 'r', tool_call_id: 'x' }]);
+  });
+
+  it('down-converts image parts in history to text when target model has no vision', () => {
+    const parts: OpenAIContentPart[] = [
+      { type: 'text', text: 'look' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,xx' } },
+    ];
+    const m = buildMessages({
+      config: baseConfig(),
+      priorTurns: [{ role: 'user', content: parts }],
+      vision: false,
+    });
+    expect(m).toHaveLength(1);
+    expect(typeof m[0]!.content).toBe('string');
+    expect(m[0]!.content).toContain('look');
+    expect(m[0]!.content).toMatch(/cannot view images/i);
+  });
+
+  it('passes image parts through untouched when vision is true', () => {
+    const parts: OpenAIContentPart[] = [
+      { type: 'text', text: 'look' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,xx' } },
+    ];
+    const m = buildMessages({
+      config: baseConfig(),
+      priorTurns: [{ role: 'user', content: parts }],
+      vision: true,
+    });
+    expect(m[0]!.content).toEqual(parts);
   });
 });

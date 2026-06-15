@@ -183,6 +183,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_VISION_MODELS',
+    description: 'Comma-separated override for image (vision) capability detection on the openai-compatible provider. Each token force-enables a model id by exact or substring match (e.g. "qwen2.5-vl" matches a local VL id); prefix a token with "!" to force-disable. Use to send images to a local vision-language model AFK does not recognise by name, or to blacklist a mis-detected id. Built-in detection already covers gpt-4o/4.1/5.x, o1/o3/o4-mini, Claude, and common VL families.',
+    type: 'string',
+    required: false,
+    example: 'qwen2.5-vl,!gpt-4o-mini',
+    category: 'model',
+  },
+  {
     name: 'AFK_MODEL_LARGE',
     description: 'Bind the "large" capability tier (most capable) to a model id/alias. Overrides afk.config.json models.large.',
     type: 'string',
@@ -1037,6 +1045,7 @@ export const env = {
   get AFK_MODEL_SMALL(): string | undefined { return process.env['AFK_MODEL_SMALL']; },
   get AFK_MODEL_SMALL_API_KEY(): string | undefined { return process.env['AFK_MODEL_SMALL_API_KEY']; },
   get AFK_MODEL_SMALL_BASE_URL(): string | undefined { return process.env['AFK_MODEL_SMALL_BASE_URL']; },
+  get AFK_VISION_MODELS(): string | undefined { return process.env['AFK_VISION_MODELS']; },
   get AFK_PROMPT_CACHE_TTL(): string | undefined { return process.env['AFK_PROMPT_CACHE_TTL']; },
   get AFK_SUGGEST_ENABLED(): string | undefined { return process.env['AFK_SUGGEST_ENABLED']; },
   get AFK_SUGGEST_GHOST(): string | undefined { return process.env['AFK_SUGGEST_GHOST']; },

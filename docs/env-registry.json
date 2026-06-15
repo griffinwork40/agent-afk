@@ -585,6 +585,14 @@
       "category": "misc"
     },
     {
+      "name": "AFK_VISION_MODELS",
+      "description": "Comma-separated override for image (vision) capability detection on the openai-compatible provider. Each token force-enables a model id by exact or substring match (e.g. \"qwen2.5-vl\" matches a local VL id); prefix a token with \"!\" to force-disable. Use to send images to a local vision-language model AFK does not recognise by name, or to blacklist a mis-detected id. Built-in detection already covers gpt-4o/4.1/5.x, o1/o3/o4-mini, Claude, and common VL families.",
+      "type": "string",
+      "required": false,
+      "example": "qwen2.5-vl,!gpt-4o-mini",
+      "category": "model"
+    },
+    {
       "name": "AFK_WORKTREE_AUTONAME",
       "description": "Auto-rename worktree branches based on the first user message in interactive mode. 1 = on (default), 0 = off.",
       "type": "boolean",

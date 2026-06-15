@@ -13,11 +13,30 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AgentConfig, ResumeHistoryTurn } from '../../types/config-types.js';
 import type { ProviderUserTurn } from '../../provider.js';
 
+/**
+ * A single OpenAI Chat Completions content part. The multimodal `content`
+ * array shape (text + images) vision-capable models accept. We type
+ * structurally so this module doesn't import the OpenAI SDK — these mirror
+ * `ChatCompletionContentPartText` / `ChatCompletionContentPartImage` from
+ * `openai@6`. `image_url.url` carries a `data:<mime>;base64,<data>` URI.
+ */
+export interface OpenAITextPart {
+  type: 'text';
+  text: string;
+}
+export interface OpenAIImagePart {
+  type: 'image_url';
+  image_url: { url: string };
+}
+export type OpenAIContentPart = OpenAITextPart | OpenAIImagePart;
+
 /** Minimal OpenAI Chat Completions message shape. We type structurally so this
- * module doesn't import the OpenAI SDK. */
+ * module doesn't import the OpenAI SDK. `content` is a plain string for
+ * text-only turns, or a `OpenAIContentPart[]` when a vision-capable user turn
+ * carries images. */
 export interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
+  content: string | OpenAIContentPart[];
   tool_call_id?: string;
   /**
    * Reasoning-trace echo. DeepSeek-R1 and other thinking-mode models on
@@ -36,23 +55,125 @@ export interface OpenAIMessage {
 }
 
 /**
- * Flatten an AFK `ProviderUserTurn` into the plain-text string OpenAI's
- * `content` field expects. Image blocks are stubbed to `[image omitted]`
- * for parity with the legacy openai-codex flatten at lines 496–506 of that
- * file — vision-capable Chat Completions takes a content-block array shape
- * that we'll add later when image paste matters for OpenAI.
+ * Synthetic notice substituted for image content when the active model cannot
+ * see images. Written as an instruction so the model both (a) understands an
+ * image arrived and (b) tells the user it can't view it — the graceful-failure
+ * contract for issue #127. `model` is folded in when known so the user learns
+ * which model is the limitation.
  */
-export function flattenUserContent(content: ProviderUserTurn['content']): string {
+export function imageOmittedNotice(model: string | undefined, count: number): string {
+  const subject = count === 1 ? 'An image was' : `${count} images were`;
+  const noun = count === 1 ? 'an image' : 'images';
+  const them = count === 1 ? 'it' : 'them';
+  const modelLabel =
+    model && model.trim().length > 0 ? `the current model ("${model.trim()}")` : 'the current model';
+  return (
+    `[${subject} attached to this message, but ${modelLabel} cannot view images. ` +
+    `Acknowledge to the user that you received ${noun} but are unable to see ${them}, ` +
+    `and suggest switching to a vision-capable model (e.g. gpt-4o or a Claude model).]`
+  );
+}
+
+/**
+ * Convert an Anthropic image `ContentBlockParam` into an OpenAI
+ * `image_url.url` data-URI (or pass through a remote URL source). Returns
+ * `null` for shapes we can't represent. AFK only ever emits base64 sources
+ * (Telegram, CLI paste, tool results), but we tolerate URL sources too.
+ */
+function imageBlockToUrl(block: Extract<ContentBlockParam, { type: 'image' }>): string | null {
+  const source = block.source;
+  if (source.type === 'base64') {
+    return `data:${source.media_type};base64,${source.data}`;
+  }
+  if (source.type === 'url') {
+    return source.url;
+  }
+  return null;
+}
+
+/**
+ * Flatten an AFK `ProviderUserTurn` into the plain-text string OpenAI's
+ * `content` field expects, for the NON-vision path. Text blocks are joined;
+ * any image blocks collapse into a single trailing {@link imageOmittedNotice}
+ * so the model is told an image arrived and to inform the user — rather than
+ * silently dropping the payload (issue #127).
+ */
+export function flattenUserContent(
+  content: ProviderUserTurn['content'],
+  model?: string,
+): string {
   if (typeof content === 'string') return content;
-  return content
-    .map((block: ContentBlockParam) => {
-      if (typeof block === 'object' && block && 'type' in block) {
-        if (block.type === 'text') return block.text;
-        if (block.type === 'image') return '[image omitted]';
+  const textSegments: string[] = [];
+  let imageCount = 0;
+  for (const block of content) {
+    if (typeof block === 'object' && block && 'type' in block) {
+      if (block.type === 'text') textSegments.push(block.text);
+      else if (block.type === 'image') imageCount += 1;
+    }
+  }
+  const text = textSegments.join('\n');
+  if (imageCount === 0) return text;
+  const notice = imageOmittedNotice(model, imageCount);
+  return text.length > 0 ? `${text}\n\n${notice}` : notice;
+}
+
+/**
+ * Build the OpenAI `content` for a user turn from AFK's `ProviderUserTurn`
+ * content, honoring vision capability (issue #127):
+ *   - string content passes through unchanged;
+ *   - vision-capable model + image blocks → a multimodal `OpenAIContentPart[]`
+ *     (text parts + `image_url` data-URIs);
+ *   - non-vision model → a flattened string with the graceful image notice.
+ */
+export function buildUserContent(
+  content: ProviderUserTurn['content'],
+  opts: { vision: boolean; model: string },
+): string | OpenAIContentPart[] {
+  if (typeof content === 'string') return content;
+  if (!opts.vision) return flattenUserContent(content, opts.model);
+
+  const parts: OpenAIContentPart[] = [];
+  let hasImage = false;
+  for (const block of content) {
+    if (typeof block === 'object' && block && 'type' in block) {
+      if (block.type === 'text') {
+        parts.push({ type: 'text', text: block.text });
+      } else if (block.type === 'image') {
+        const url = imageBlockToUrl(block);
+        if (url !== null) {
+          parts.push({ type: 'image_url', image_url: { url } });
+          hasImage = true;
+        }
       }
-      return '';
-    })
-    .join('\n');
+    }
+  }
+  // No representable image → keep the plain string wire shape (also covers the
+  // all-text multi-block and empty cases, and avoids an empty parts array that
+  // some endpoints reject). Only emit the multimodal array when an image rides
+  // along.
+  if (!hasImage) return flattenUserContent(content, opts.model);
+  return parts;
+}
+
+/**
+ * Flatten an already-built OpenAI content value to a string, replacing any
+ * image parts with a short placeholder. Used by {@link buildMessages} to
+ * defensively down-convert history when the active model has no vision (a
+ * mid-session `/model` switch can leave image parts in prior turns; sending
+ * them to a text-only endpoint risks a 400).
+ */
+function flattenOpenAIParts(content: string | OpenAIContentPart[]): string {
+  if (typeof content === 'string') return content;
+  const textSegments: string[] = [];
+  let imageCount = 0;
+  for (const part of content) {
+    if (part.type === 'text') textSegments.push(part.text);
+    else imageCount += 1;
+  }
+  const text = textSegments.join('\n');
+  if (imageCount === 0) return text;
+  const placeholder = '[image not shown — the current model cannot view images]';
+  return text.length > 0 ? `${text}\n\n${placeholder}` : placeholder;
 }
 
 /**
@@ -94,6 +215,13 @@ export function buildMessages(args: {
   resumeHistory?: ResumeHistoryTurn[];
   priorTurns?: OpenAIMessage[];
   currentUserText?: string;
+  /**
+   * Whether the target model accepts image input. When `false`, any image
+   * parts still present in `priorTurns` are down-converted to text so no image
+   * payload reaches a text-only endpoint (defends against a mid-session
+   * `/model` switch from a vision model). Defaults to `true` (pass-through).
+   */
+  vision?: boolean;
 }): OpenAIMessage[] {
   const messages: OpenAIMessage[] = [];
 
@@ -115,6 +243,12 @@ export function buildMessages(args: {
 
   if (args.currentUserText !== undefined) {
     messages.push({ role: 'user', content: args.currentUserText });
+  }
+
+  if (args.vision === false) {
+    return messages.map((m) =>
+      typeof m.content === 'string' ? m : { ...m, content: flattenOpenAIParts(m.content) },
+    );
   }
 
   return messages;

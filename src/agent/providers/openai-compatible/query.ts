@@ -54,7 +54,8 @@ import {
   type OpenAIAuthResolution,
   type AuthResolverDeps,
 } from './auth.js';
-import { buildMessages, flattenUserContent, type OpenAIMessage } from './messages.js';
+import { buildMessages, buildUserContent, type OpenAIMessage } from './messages.js';
+import { supportsVision } from '../../model-capabilities.js';
 import {
   createStreamState,
   translateChunk,
@@ -69,6 +70,7 @@ import {
   accumulatedToolCallsToToolCalls,
   assistantMessageWithToolCalls,
   toolResultsToMessages,
+  toolImageFollowupMessage,
   type OpenAIFunctionTool,
 } from './loop.js';
 import { translateResponsesEvent, type ResponsesStreamEvent } from './responses-translate.js';
@@ -261,8 +263,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         const turnResult = nextOrClose as IteratorResult<ProviderUserTurn>;
         if (turnResult.done) break;
 
-        const userText = flattenUserContent(turnResult.value.content);
-        yield* this.runTurn(userText);
+        yield* this.runTurn(turnResult.value.content);
       }
     } catch (iterErr) {
       const e = iterErr instanceof Error ? iterErr : new Error(String(iterErr));
@@ -290,7 +291,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
    * end with the aggregate (mirrors how anthropic-direct accumulates usage
    * across the tool-call loop into one final event).
    */
-  private async *runTurn(userText: string): AsyncGenerator<ProviderEvent> {
+  private async *runTurn(content: ProviderUserTurn['content']): AsyncGenerator<ProviderEvent> {
     const controller = new AbortController();
     this.abortController = controller;
     if (this.pendingAbortReason !== null && !controller.signal.aborted) {
@@ -307,7 +308,15 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     const turnStartTime = Date.now();
     const taskId = randomUUID();
 
-    this.priorTurns.push({ role: 'user', content: userText });
+    // Vision capability is fixed for the turn (the model can only change
+    // between turns via setModel). Computed once here and threaded into the
+    // iteration + tool-dispatch so the user turn, history sanitize, and
+    // tool-result image follow-up all agree. See issue #127 / model-capabilities.ts.
+    const vision = supportsVision(this.currentModel);
+    this.priorTurns.push({
+      role: 'user',
+      content: buildUserContent(content, { vision, model: this.currentModel }),
+    });
 
     // Aggregate usage across all tool-loop iterations for this turn via the
     // shared sumProviderUsage helper. Critical: cache fields (cachedInputTokens,
@@ -336,7 +345,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         return;
       }
 
-      const result = yield* this.runIteration(controller);
+      const result = yield* this.runIteration(controller, vision);
       if (result === null) {
         // runIteration bailed: either an abort/close (no event was yielded) or
         // a real stream error (an `error` event was already yielded). Mirror
@@ -374,7 +383,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       }
 
       // Tool-call path: dispatch, append history, loop.
-      yield* this.dispatchAndAppend(result.state, controller.signal);
+      yield* this.dispatchAndAppend(result.state, controller.signal, vision);
 
       {
         const lastToolName = finalizedToolCalls(result.state).at(-1)?.name;
@@ -491,6 +500,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
 
   private async *runIteration(
     controller: AbortController,
+    vision: boolean,
   ): AsyncGenerator<ProviderEvent, IterationResult | null> {
     const messages = buildMessages({
       config: this.opts.config,
@@ -498,6 +508,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         ? { resumeHistory: this.opts.config.resumeHistory }
         : {}),
       priorTurns: this.priorTurns,
+      vision,
     });
 
     // Inject plan-mode posture addendum so the model understands write refusals.
@@ -631,6 +642,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   private async *dispatchAndAppend(
     state: StreamState,
     signal: AbortSignal,
+    vision: boolean,
   ): AsyncGenerator<ProviderEvent> {
     if (!this.toolDispatcher) {
       // Shouldn't reach here — runIteration won't return needsToolDispatch=true
@@ -768,6 +780,13 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     for (const m of toolResultsToMessages(results)) {
       this.priorTurns.push(m as unknown as OpenAIMessage);
     }
+    // Tool-result images (e.g. browser_screenshot) can't ride the `role:'tool'`
+    // message (OpenAI carries only text there). On vision-capable models they
+    // surface as a follow-up `role:'user'` image message pushed AFTER the tool
+    // messages so the alternation stays valid. Undefined (no push) when the
+    // model lacks vision or no result carried an image. See issue #127.
+    const imageFollowup = toolImageFollowupMessage(results, { vision });
+    if (imageFollowup) this.priorTurns.push(imageFollowup);
   }
 
   // ---- ProviderQuery surface ------------------------------------------------
