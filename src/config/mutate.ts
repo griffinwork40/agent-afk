@@ -22,7 +22,7 @@
  * @module config/mutate
  */
 
-import { existsSync, readFileSync, copyFileSync } from 'fs';
+import { existsSync, readFileSync, copyFileSync, chmodSync } from 'fs';
 import { getEnvConfigPath, getJsonConfigPath } from '../paths.js';
 import { getEnvVarMeta, ENV_REGISTRY } from './env.js';
 import { atomicWriteFile, upsertEnvVar, removeEnvVar, readEnvVarFromFile, readEnvFile } from '../utils/envFile.js';
@@ -233,6 +233,9 @@ function writeConfigObject(file: string, obj: Record<string, unknown>): void {
   if (existsSync(file)) {
     try {
       copyFileSync(file, `${file}.bak`);
+      // copyFileSync inherits the source mode; force 0o600 so a pre-existing
+      // world-readable config can't leak through a world-readable backup.
+      chmodSync(`${file}.bak`, 0o600);
     } catch {
       /* non-fatal: a missing .bak just means no rollback copy this time */
     }

@@ -57,6 +57,7 @@ describe('classifyConfigKey / specs', () => {
     expect(classifyConfigKey('temperature')).toBe('agent');
     expect(classifyConfigKey('telegram.notify.mode')).toBe('agent');
     expect(classifyConfigKey('systemPrompt')).toBe('human');
+    expect(classifyConfigKey('enableShellHooks')).toBe('human'); // trust gate — agent must not flip it
     expect(classifyConfigKey('hooks')).toBe('unknown'); // hooks intentionally not listed (no safe per-key validator)
     expect(classifyConfigKey('interactive.worktreeBranchPrefix')).toBe('human');
     expect(classifyConfigKey('nonsense.key')).toBe('unknown');

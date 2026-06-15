@@ -153,10 +153,13 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'autoResumeOnUsageLimit', tier: 'agent', type: 'boolean', description: 'Auto-resume after a usage-limit pause.' },
   { path: 'bgSummaries', tier: 'agent', type: 'boolean', description: 'Background summarisation.' },
   { path: 'maxSummaryCallsPerSession', tier: 'agent', type: 'number', clamp: { min: 1, max: 500, integer: true }, description: 'Cap on summary calls per session.' },
-  { path: 'enableShellHooks', tier: 'agent', type: 'boolean', description: 'Enable shell hooks.' },
 
   // Human-only (CLI with --allow gate; agent tool refuses).
   { path: 'systemPrompt', tier: 'human', type: 'string', description: 'Operator system-prompt overlay.' },
+  // enableShellHooks is the TRUST GATE that activates shell hooks at load time
+  // (config-loader userGlobalEnabled). Even though the agent cannot define `hooks`,
+  // it must not be able to flip the activation gate on its own config — human-only.
+  { path: 'enableShellHooks', tier: 'human', type: 'boolean', description: 'Enable shell hooks (trust gate).' },
   { path: 'interactive.worktreeBranchPrefix', tier: 'human', type: 'string', description: 'Worktree branch prefix (git-flag sensitive).' },
   { path: 'interactive.worktreeBase', tier: 'human', type: 'string', description: 'Worktree base ref (git-flag sensitive).' },
   { path: 'daemon.task', tier: 'human', type: 'string', description: 'Daemon task prompt.' },
