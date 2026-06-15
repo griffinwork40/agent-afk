@@ -109,7 +109,7 @@ optional; unset fields fall through to env vars or built-in defaults.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `model` | `string` | `"sonnet"` | Default model for all surfaces. Accepts Claude short aliases (`sonnet`, `haiku`, `opus`) and full provider-native ids (`gpt-4o`, `mlx-community/Qwen3-30B-A3B-4bit`). Env override: `AFK_MODEL`. |
-| `maxTokens` | `number` | `4096` | Maximum output tokens per model call. Env override: `AFK_MAX_TOKENS`. |
+| `maxTokens` | `number` | `4096` | Maximum total tokens per turn (input + output). Env override: `AFK_MAX_TOKENS`. |
 | `temperature` | `number` | `1.0` | Sampling temperature. Env override: `AFK_TEMPERATURE`. |
 | `systemPrompt` | `string` | — | Operator overlay appended to the framework base prompt (tier 2). When set, `AFK.md` is not loaded. Env override: `AFK_SYSTEM_PROMPT` (tier 1, wins over this). |
 | `updatePolicy` | `"notify" \| "auto" \| "off"` | `"notify"` | Controls how AFK handles available CLI updates. `notify` prints a message; `auto` applies automatically; `off` disables checks. |
@@ -129,10 +129,10 @@ an object with optional provider credentials.
 ```json
 {
   "models": {
-    "small": "claude-haiku-4-5",
-    "medium": "claude-sonnet-4-5",
+    "small": "claude-haiku-4-5-20251001",
+    "medium": "claude-sonnet-4-6",
     "large": {
-      "id": "claude-opus-4-5",
+      "id": "claude-opus-4-8",
       "name": "big",
       "provider": "anthropic",
       "baseUrl": "http://localhost:8080",

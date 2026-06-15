@@ -2,6 +2,7 @@
 node_modules/
 .source/
 out/
+*.tsbuildinfo
 
 # Standalone npm app: the repo-root .gitignore ignores package-lock.json
 # (pnpm convention), but this app needs its npm lockfile tracked for

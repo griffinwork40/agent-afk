@@ -28,9 +28,10 @@ description: One-sentence description of what this skill does (max 1024 chars).
 argument-hint: "<required-arg> [--optional-flag]"
 ---
 
-Your skill instructions go here. This body becomes the system prompt for the
-sub-agent that executes the skill. Write it as a set of instructions for the
-model to follow.
+Your skill instructions go here. In the default `load` mode this body is returned
+to the current session as instructions for the running agent to follow; in `fork`
+mode it becomes the system prompt for a fresh sub-agent. Write it as a set of
+instructions for the model to follow.
 
 Use $ARGUMENTS to reference the caller's input anywhere in the body.
 ```
@@ -47,13 +48,13 @@ Use $ARGUMENTS to reference the caller's input anywhere in the body.
 | Field | Notes |
 |---|---|
 | `argument-hint` | Short usage hint shown next to the skill name |
-| `context` | `fork` (default for SKILL.md skills) or `load` — see below |
+| `context` | `load` (default for SKILL.md skills) or `fork` — see below |
 
 ### Execution mode: `fork` vs `load`
 
-By default, a `SKILL.md` skill runs in `fork` mode: AFK starts a child session with the SKILL.md body as its system prompt and the caller's input as the first user message. The child runs independently with its own context window.
+By default, a `SKILL.md` skill runs in `load` mode: AFK returns the SKILL.md body to the **current** session as instructions, and the agent already running carries them out with its existing tools and context window. It adds no fork latency and supports progressive disclosure — best for small, self-contained steps.
 
-`load` mode runs the skill inside the current session instead of forking a new one. It's faster and uses fewer tokens, but shares context with the caller — best for small, self-contained steps. Use `fork` (the default) for anything that reads multiple files or loops.
+Opt into `fork` mode with `context: fork` in the frontmatter. AFK then starts a child session with the SKILL.md body as its system prompt and the caller's input as the first user message; the child runs independently with its own context window. Prefer `fork` for anything that reads many files, loops, or would otherwise crowd the caller's context.
 
 ## Where skills are discovered
 
@@ -80,7 +81,7 @@ If you want to distribute a skill as part of a plugin, place it at:
 
 Plugin skills are discovered automatically at session start. They appear in slash-command listings and `/help` when the plugin is installed.
 
-The `SKILL_ROOT` environment variable is injected into the sub-agent's environment for both user skills and plugin skills. You can reference it in shell commands inside your SKILL.md body:
+`SKILL_ROOT` resolves to the skill's own directory so you can reference bundled files. In `fork` mode it's injected as an environment variable into the child session; in the default `load` mode, `${SKILL_ROOT}` is expanded in-place in the body text before it's delivered. Either way, reference it in shell commands inside your SKILL.md body:
 
 ```markdown
 Run the following command: bash "${SKILL_ROOT}/scripts/process.sh" $ARGUMENTS

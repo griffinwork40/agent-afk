@@ -50,7 +50,7 @@ Each session has a fixed set of built-in tools available to the model:
 - **`skill`** — dispatches a named skill (built-in or plugin-discovered)
 - **`compose`** — Structured multi-agent workflows — define which tasks depend on which; independent ones run in parallel, dependent ones wait. Up to 20 tasks per call; a failure cancels downstream work.
 - **`memory_search`, `memory_update`, `procedure_write`** — cross-session memory backed by SQLite
-  at `~/.afk/agent-framework/memory/`
+  at `~/.afk/state/memory/`
 - **`send_telegram`** — pushes a terminal-state notification to the operator; no-op if Telegram
   is unconfigured
 - **MCP tools** — bridged as `mcp__<server>__<tool>` from any configured MCP server
@@ -61,8 +61,8 @@ MCP servers are loaded from a layered config (plugin-contributed → `~/.afk/con
 
 ## Terminal states
 
-Every turn advances toward one of four terminal states. These are documented in `AGENTS.md` and
-enforced by the framework prompt:
+Every turn advances toward one of four terminal states. They are defined by the framework's
+end-of-turn protocol and enforced on every interactive turn:
 
 | State | Meaning |
 |---|---|
@@ -95,14 +95,14 @@ All AFK state lives under `~/.afk/` — independent of `~/.claude/`:
 ```
 ~/.afk/
   config/           afk.env, afk.config.json, mcp.json
-  state/            sessions/, todos/, daemon/
+  state/            sessions/, todos/, daemon/, memory/ (SQLite)
   plugins/          user-installed plugins (starts empty)
   agents/           user-defined subagents
   commands/         user-defined slash commands
   skills/           user-defined skills
   logs/
   cache/
-  agent-framework/  telemetry, briefs, memory (SQLite + JSONL)
+  agent-framework/  telemetry, briefs (JSONL)
 ```
 
 You can delete `~/.claude/` entirely and Agent AFK still runs.

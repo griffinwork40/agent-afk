@@ -71,7 +71,7 @@ Two environment variables set hard spending limits. The daemon aborts a turn if 
 
 | Variable | Type | Default | What it limits |
 |---|---|---|---|
-| `AFK_MAX_BUDGET_USD` | number | `5.00` | Per-turn USD spend ceiling |
+| `AFK_MAX_BUDGET_USD` | number | `5.00` | Cumulative USD spend ceiling for the session |
 | `AFK_TASK_BUDGET` | number | `100000` | Per-task cumulative token ceiling |
 
 Source: `docs/env-registry.md` (Model category).
@@ -87,7 +87,7 @@ export AFK_TASK_BUDGET=50000
 afk daemon --max-budget-usd 2.00 --task "..."
 ```
 
-If a turn hits the budget ceiling you'll see `Hit the budget cap` in the output. Raise `AFK_MAX_BUDGET_USD` or unset it for the session to remove the limit.
+When the session's cumulative spend crosses the ceiling, the turn aborts and you'll see `Hit the budget cap` in the output. Raise `AFK_MAX_BUDGET_USD` or unset it for the session to remove the limit.
 
 A per-output-token cap is also available if you need tighter control:
 
