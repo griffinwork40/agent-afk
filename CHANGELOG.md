@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.6.1] - 2026-06-15
+
+### Fixed
+- resolve model alias in compact summarizer (45474da)
+- restore inter-block blank separator in armed renderer (8a38d48)
+
+### Changed
+- Merge pull request #159 from griffinwork40/fix/compact-model-alias-resolution (6c607eb)
+- Merge pull request #158 from griffinwork40/fix/tui-markdown-block-separator (48ff55c)
+
 ## [4.6.0] - 2026-06-15
 
 ### Added
