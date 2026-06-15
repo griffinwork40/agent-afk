@@ -57,6 +57,7 @@ import { emitSessionPhase } from '../../../agent/trace/emit.js';
 import { palette } from '../../palette.js';
 import { performResumeSwap, resumeConfigFor } from './resume-swap.js';
 import { reseedStatsFromStored } from './shared.js';
+import { seedPersistedGrants } from '../../../agent/permissions-store.js';
 
 /**
  * Dependencies for constructing a fresh `AgentSession`. Captures everything
@@ -515,14 +516,17 @@ export async function bootstrapSession(
   // Stable hookRegistry shared across sessions (including swaps).
   // The hook callbacks close over `stats` and `completionWriter` which are
   // also stable, so the new session gets the same routing without re-wiring.
-  const hookRegistry = createDefaultHookRegistry(
+  const hookRegistryBundle = createDefaultHookRegistry(
     (info) => { completionWriter.fn(formatSubagentCompletion(info)); },
     'cli',
     sharedMemoryStore,
     () => (stats.planMode ? 'plan' : 'default'),
     loadHooksConfig({ cwd: extras?.cwd }),
     { cwd: extras?.cwd },
-  ).registry;
+    () => extras?.cwd ?? process.cwd(),
+  );
+  const hookRegistry = hookRegistryBundle.registry;
+  const pathApprovalGrantRef = hookRegistryBundle.pathApprovalGrantRef;
 
   // Capture deps needed by both the initial build and the swap closure.
   const sharedDeps: BuildAgentSessionDeps = {
@@ -748,6 +752,8 @@ export async function bootstrapSession(
   // implements the GrantManager interface; other providers are no-ops.
   if (startupProvider instanceof AnthropicDirectProvider) {
     setAllowDirDispatcher(startupProvider);
+    pathApprovalGrantRef.current = startupProvider;
+    seedPersistedGrants(startupProvider);
   }
 
   const rl = readline.createInterface({

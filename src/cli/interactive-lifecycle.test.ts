@@ -32,7 +32,14 @@ describe('interactive bootstrap status line hooks', () => {
       },
     }));
     vi.doMock('../agent/default-hook-registry.js', () => ({
-      createDefaultHookRegistry: vi.fn(() => ({ registry: {}, memoryStore: { close: vi.fn() } })),
+      createDefaultHookRegistry: vi.fn(() => ({
+        registry: {},
+        memoryStore: { close: vi.fn() },
+        // Real factory always returns this ref (default-hook-registry.ts:72,125);
+        // bootstrap.ts:601 writes `.current` once the provider exists, so the mock
+        // must include it or the assignment throws "Cannot set properties of undefined".
+        pathApprovalGrantRef: { current: undefined },
+      })),
     }));
     vi.doMock('../agent/memory/index.js', () => ({
       MemoryStore: vi.fn(() => ({ close: vi.fn() })),
@@ -181,7 +188,15 @@ describe('interactive bootstrap — P1: suggestBaseUrl mirrors openaiBaseUrl', (
       },
     }));
     vi.doMock('../agent/default-hook-registry.js', () => ({
-      createDefaultHookRegistry: vi.fn(() => ({ registry: {}, memoryStore: { close: vi.fn() } })),
+      createDefaultHookRegistry: vi.fn(() => ({
+        registry: {},
+        memoryStore: { close: vi.fn() },
+        // Real factory always returns this ref (default-hook-registry.ts);
+        // bootstrap.ts writes `.current` once the provider exists, so the mock
+        // must include it or the assignment throws "Cannot set properties of
+        // undefined". Mirrors the status-line test mock above.
+        pathApprovalGrantRef: { current: undefined },
+      })),
     }));
     vi.doMock('../agent/memory/index.js', () => ({
       MemoryStore: vi.fn(() => ({ close: vi.fn() })),

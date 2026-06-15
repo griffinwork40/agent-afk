@@ -173,6 +173,24 @@
       "category": "misc"
     },
     {
+      "name": "AFK_DISABLE_BASH_INTERPRETER_GUARD",
+      "description": "Skip ONLY the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) when set to 1, leaving the rest of path-approval intact. Use for headless flows (CI, daemon) whose automation legitimately runs interpreter one-liners but should still keep path-approval enabled. The restricted-root substring check is unaffected. Default: guard enabled. To disable all path-approval + bash restriction instead, use AFK_DISABLE_PATH_APPROVAL=1.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "process"
+    },
+    {
+      "name": "AFK_DISABLE_PATH_APPROVAL",
+      "description": "Skip the path-approval + bash-restriction hooks entirely when set to 1. Use for headless flows that need wide-open file access (CI scripts, batch jobs). Default: hooks enabled.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "process"
+    },
+    {
       "name": "AFK_DISABLE_PROMPT_CACHE",
       "description": "Disable Anthropic prompt caching when set to 1/true/yes/on. Unset = caching enabled.",
       "type": "boolean",

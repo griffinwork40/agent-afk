@@ -18,16 +18,10 @@
  * with the original error attached as `cause`. This prevents a bug in one
  * handler from silently skipping policy enforcement.
  *
- * **Context injection (SubagentStop only):** Foreground subagents hand their
- * final assistant output to the parent through the normal `agent` tool result;
- * `injectContext` is a separate hook-generated framework note, not text typed
- * by the human user. When a `SubagentStop` handler returns `injectContext`, the
- * dispatch result is propagated to the caller, which queues the context string
- * to the parent session's input stream for the parent's next turn. If the
- * parent is aborting, the injection is skipped. DAG/compose and background
- * paths are not guaranteed to inject (some intentionally leave this channel
- * dark), and multiple `injectContext` values do not merge today: hook dispatch
- * returns the last non-blocking decision. Other hook events ignore
+ * **Context injection (SubagentStop only):** When a `SubagentStop` handler
+ * returns `injectContext`, the dispatch result is propagated to the caller,
+ * which queues the context string to the parent session's input stream. If
+ * the parent is aborting, the injection is skipped. Other hook events ignore
  * `injectContext` entirely.
  *
  * @module agent/hooks
@@ -52,12 +46,9 @@ export interface HookDecision {
   /** Human-readable rationale for blocking or approving. */
   reason?: string;
   /**
-   * (SubagentStop only) Framework-generated context to inject into the parent
-   * session's next turn. This is not human-authored user text. Queued to the
-   * parent's input stream after dispatch completes; dropped if the parent is
-   * aborting. DAG/compose and background paths may intentionally not inject.
-   * Multiple injected contexts currently do not merge — the last non-blocking
-   * hook decision wins. Ignored for all other hook events.
+   * (SubagentStop only) Context to inject into the parent session's next turn.
+   * Queued to parent's input stream after dispatch completes. Dropped if parent is aborting.
+   * Ignored for all other hook events.
    */
   injectContext?: string;
 }
@@ -68,6 +59,14 @@ export type SubagentHookStatus = 'idle' | 'running' | 'succeeded' | 'failed' | '
 export interface SessionStartContext {
   event: 'SessionStart';
   sessionId?: string;
+  /**
+   * Parent session id when this SessionStart belongs to a forked subagent
+   * (set from {@link AgentConfig.parentSessionId}). Top-level sessions leave
+   * this undefined. Session-scoped SessionStart hooks (e.g. the pattern-card
+   * appearance writer) use it to skip subagents so per-session telemetry
+   * counts only top-level sessions.
+   */
+  parentSessionId?: string;
 }
 
 export interface SessionEndContext {
@@ -136,6 +135,13 @@ export interface PostToolUseContext {
   sessionId?: string;
   subagentId?: string;
   toolName: string;
+  /**
+   * Tool-call input passed through from {@link PreToolUseContext}. Carried
+   * verbatim so hooks that need to correlate Pre/PostToolUse for the same
+   * call (e.g. the path-approval hook's "Once" cleanup) can recompute the
+   * resolved path identically.
+   */
+  input?: unknown;
   output?: unknown;
 }
 
@@ -148,11 +154,36 @@ export type HookContext =
   | PreToolUseContext
   | PostToolUseContext;
 
-export type HookHandler = (context: HookContext) => HookDecision | Promise<HookDecision>;
+/**
+ * A hook handler. `signal` is the turn/dispatch {@link AbortSignal} forwarded
+ * by `dispatch()`; handlers that await human input (see `longRunning` below)
+ * MUST observe it so session/turn teardown can cancel the wait. Synchronous
+ * and short-lived handlers can ignore it.
+ */
+export type HookHandler = (
+  context: HookContext,
+  signal?: AbortSignal,
+) => HookDecision | Promise<HookDecision>;
+
+/**
+ * Per-handler registration options.
+ *
+ * `longRunning` opts the handler out of the per-handler timeout enforced by
+ * `dispatch()`. Use ONLY for handlers that legitimately need to await human
+ * input (e.g. the path-approval hook calling `elicitationRouter.route()`,
+ * which waits indefinitely for an operator who may be away from keyboard).
+ * The default 30s per-handler timeout exists to bound hung policy handlers —
+ * opting out of it means YOU own teardown: observe the turn `AbortSignal`
+ * (passed as the second handler argument) so session/turn abort can still
+ * cancel the wait. There is no time-based auto-decline.
+ */
+export interface RegisterOptions {
+  longRunning?: boolean;
+}
 
 export interface HookRegistry {
   /** Register a handler for an event. Returns an unsubscribe function. */
-  register(event: HarnessHookEvent, handler: HookHandler): () => void;
+  register(event: HarnessHookEvent, handler: HookHandler, options?: RegisterOptions): () => void;
   /**
    * Dispatch a context through the handlers registered for its event.
    * Throws {@link AbortError} if `signal` aborts before or during dispatch.

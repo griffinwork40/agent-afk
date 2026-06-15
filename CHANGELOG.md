@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Added
+- Path-approval elicitation: when a typed file tool (`read_file`, `write_file`, `edit_file`, `list_directory`, `glob`, `grep`) targets a path outside the session's granted roots, a `PreToolUse` hook prompts the user via the `ElicitationRouter` with a 4-choice form (once / session / persist / deny). Bash invocations that reference restricted paths or use interpreter eval flags (`python -c`, `node -e`, `sh -c`) are hard-blocked and the model is directed to the typed-file-tool surface instead.
+- `AFK_DISABLE_BASH_INTERPRETER_GUARD` env var — lifts only the bash interpreter-eval denylist while keeping the rest of path-approval enabled
+- `AFK_DISABLE_PATH_APPROVAL=1` env var — escape hatch to skip path-approval and bash-restriction hooks entirely for headless flows
+
+### Changed
+- path-approval: the bash interpreter-eval denylist (on by default on every surface including headless) can now be lifted with the granular `AFK_DISABLE_BASH_INTERPRETER_GUARD=1` instead of only the all-or-nothing `AFK_DISABLE_PATH_APPROVAL=1`
+
 ## [4.6.2] - 2026-06-15
 
 ### Changed

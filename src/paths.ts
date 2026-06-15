@@ -311,6 +311,17 @@ export function getSettingsPath(): string {
 }
 
 /**
+ * Persisted user-approved path-access grants written by the path-approval
+ * elicitation flow when the user selects [Always — persist]. See
+ * `src/agent/permissions-store.ts` for the schema. Lives under
+ * `~/.afk/config/` rather than `state/` because it's policy (dotfile-syncable)
+ * not runtime data.
+ */
+export function getPermissionsStorePath(): string {
+  return join(getAfkConfigDir(), 'permissions.json');
+}
+
+/**
  * Path to the project-local AFK settings file (`<cwd>/.afk/settings.json`).
  *
  * Accepts an explicit `cwd` so tests can inject a temp directory without

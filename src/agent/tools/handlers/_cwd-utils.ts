@@ -60,3 +60,53 @@ export function resolveAndContain(
   const noun = mode === 'read' ? 'read roots' : 'write roots';
   throw new Error(`Path \`${inputPath}\` is outside the allowed ${noun} [${rootList}].`);
 }
+
+/**
+ * Non-throwing variant of {@link resolveAndContain}: returns the resolution
+ * verdict instead of throwing on a containment failure. Used by the
+ * path-approval PreToolUse hook to decide whether to prompt the user BEFORE
+ * the handler's resolveAndContain throws.
+ *
+ * Contract:
+ * - `resolved` is always the absolute path that `resolveAndContain` would
+ *   produce. Callers can pass it straight to `addReadRoot/addWriteRoot` on
+ *   the grant manager after an approval prompt.
+ * - `restricted: false` means the path is contained within at least one
+ *   allowed root (or no `resolveBase` is set, which disables enforcement).
+ * - `restricted: true` means EVERY root rejected the path; the caller should
+ *   either elicit user approval or block.
+ *
+ * Mirrors `resolveAndContain`'s logic exactly — duplicating ~10 LOC is cheaper
+ * than restructuring the throwing variant around a result object, and the
+ * unit test suite pins both functions to the same containment semantics.
+ */
+export function wouldBeRestricted(
+  inputPath: string,
+  context: ToolHandlerContext | undefined,
+  mode: 'read' | 'write' = 'read',
+): { restricted: boolean; resolved: string; roots: string[] } {
+  const resolveBase = context?.resolveBase ?? context?.cwd;
+
+  const abs = path.isAbsolute(inputPath)
+    ? inputPath
+    : path.resolve(resolveBase ?? process.cwd(), inputPath);
+
+  if (resolveBase === undefined) {
+    // No containment enforcement — never restricted.
+    return { restricted: false, resolved: abs, roots: [] };
+  }
+
+  const roots: string[] =
+    mode === 'read'
+      ? (context?.readRoots ?? [resolveBase])
+      : (context?.writeRoots ?? [resolveBase]);
+
+  for (const root of roots) {
+    const rel = path.relative(root, abs);
+    if (!rel.startsWith('..')) {
+      return { restricted: false, resolved: abs, roots };
+    }
+  }
+
+  return { restricted: true, resolved: abs, roots };
+}

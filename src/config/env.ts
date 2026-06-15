@@ -131,6 +131,31 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'debug',
   },
   {
+    name: 'AFK_DISABLE_BASH_INTERPRETER_GUARD',
+    description:
+      'Skip ONLY the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) when set to 1, ' +
+      'leaving the rest of path-approval intact. Use for headless flows (CI, daemon) whose ' +
+      'automation legitimately runs interpreter one-liners but should still keep path-approval ' +
+      'enabled. The restricted-root substring check is unaffected. Default: guard enabled. To ' +
+      'disable all path-approval + bash restriction instead, use AFK_DISABLE_PATH_APPROVAL=1.',
+    type: 'boolean',
+    required: false,
+    default: '0',
+    example: '1',
+    category: 'process',
+  },
+  {
+    name: 'AFK_DISABLE_PATH_APPROVAL',
+    description:
+      'Skip the path-approval + bash-restriction hooks entirely when set to 1. Use for headless ' +
+      'flows that need wide-open file access (CI scripts, batch jobs). Default: hooks enabled.',
+    type: 'boolean',
+    required: false,
+    default: '0',
+    example: '1',
+    category: 'process',
+  },
+  {
     name: 'AFK_DISABLE_PROMPT_CACHE',
     description: 'Disable Anthropic prompt caching when set to 1/true/yes/on. Unset = caching enabled.',
     type: 'boolean',
@@ -1030,6 +1055,8 @@ export const env = {
   get AFK_COMPACT_MODEL(): string | undefined { return process.env['AFK_COMPACT_MODEL']; },
   get AFK_DEFAULT_SUBAGENT_MODEL(): string | undefined { return process.env['AFK_DEFAULT_SUBAGENT_MODEL']; },
   get AFK_DIAGNOSE_BASELINE(): string | undefined { return process.env['AFK_DIAGNOSE_BASELINE']; },
+  get AFK_DISABLE_BASH_INTERPRETER_GUARD(): string | undefined { return process.env['AFK_DISABLE_BASH_INTERPRETER_GUARD']; },
+  get AFK_DISABLE_PATH_APPROVAL(): string | undefined { return process.env['AFK_DISABLE_PATH_APPROVAL']; },
   get AFK_DISABLE_PROMPT_CACHE(): string | undefined { return process.env['AFK_DISABLE_PROMPT_CACHE']; },
   get AFK_EFFORT(): string | undefined { return process.env['AFK_EFFORT']; },
   get AFK_MAX_BUDGET_USD(): string | undefined { return process.env['AFK_MAX_BUDGET_USD']; },

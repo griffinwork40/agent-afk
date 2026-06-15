@@ -13,6 +13,8 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_COMPACT_KEEP_LAST_TURNS` | number |  |  | `6` | Number of recent turns the compactor keeps verbatim during /compact. Default tuned in compact-handler.ts. |
 | `AFK_COMPACT_MODEL` | string |  |  | `claude-haiku-4-5` | Override the model used by the /compact summarizer. Falls back to a cheap default (haiku-class). |
 | `AFK_DEFAULT_SUBAGENT_MODEL` | string |  |  | `sonnet` | Override the default model used when a subagent is dispatched without an explicit model. |
+| `AFK_DISABLE_BASH_INTERPRETER_GUARD` | boolean |  | `0` | `1` | Skip ONLY the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) when set to 1, leaving the rest of path-approval intact. |
+| `AFK_DISABLE_PATH_APPROVAL` | boolean |  | `0` | `1` | Skip the path-approval + bash-restriction hooks entirely when set to 1. Use for headless flows that need wide-open file access. |
 | `AFK_DISABLE_PROMPT_CACHE` | boolean |  | `0` | `1` | Disable Anthropic prompt caching when set to 1/true/yes/on. Unset = caching enabled. |
 | `AFK_EFFORT` | string |  |  | `medium` | Effort hint guiding adaptive-thinking depth, forwarded as Anthropic output_config.effort (model-gated; ignored where unsupported). Accepts low \| medium \| high \| xhigh \| max. |
 | `AFK_LOCAL_BASE_URL` | string |  |  | `http://127.0.0.1:8080` | Base URL for a self-hosted Anthropic-compatible server. When set, routes traffic away from api.anthropic.com. |

@@ -341,6 +341,7 @@ describe('createDefaultHookRegistry integration', () => {
   let afkHome: string;
   let projectCwd: string;
   let originalAfkHome: string | undefined;
+  let originalDisablePathApproval: string | undefined;
 
   beforeEach(() => {
     afkHome = join(tmp, 'afk-home');
@@ -349,11 +350,19 @@ describe('createDefaultHookRegistry integration', () => {
     mkdirSync(projectCwd, { recursive: true });
     originalAfkHome = process.env['AFK_HOME'];
     process.env['AFK_HOME'] = afkHome;
+    // Disable path-approval hooks during these tests so they don't inflate
+    // PreToolUse counts and conflate the config-bridge assertion logic with
+    // the unrelated path-approval feature.
+    originalDisablePathApproval = process.env['AFK_DISABLE_PATH_APPROVAL'];
+    process.env['AFK_DISABLE_PATH_APPROVAL'] = '1';
   });
 
   afterEach(() => {
     if (originalAfkHome === undefined) delete process.env['AFK_HOME'];
     else process.env['AFK_HOME'] = originalAfkHome;
+    if (originalDisablePathApproval === undefined)
+      delete process.env['AFK_DISABLE_PATH_APPROVAL'];
+    else process.env['AFK_DISABLE_PATH_APPROVAL'] = originalDisablePathApproval;
   });
 
   it('createDefaultHookRegistry without hookConfig → 0 config hooks registered', () => {
