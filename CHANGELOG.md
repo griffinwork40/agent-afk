@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.3.1] - 2026-06-15
+
+### Fixed
+- add protected env tier so the agent cannot self-grant via afk.env (84e7b91)
+
+### Changed
+- Merge pull request #150 from griffinwork40/fix/agent-config-protected-env-tier (d69c177)
+
 ## [4.3.0] - 2026-06-15
 
 ### Added
