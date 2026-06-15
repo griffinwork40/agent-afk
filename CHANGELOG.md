@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.5.0] - 2026-06-15
+
+### Added
+- Ctrl+B backgrounds the running subagent; remove whole-turn detach (a43dad6)
+
+### Changed
+- Merge pull request #152 from griffinwork40/feat/ctrl-b-background-subagent (9217aa3)
+
 ## [4.4.1] - 2026-06-15
 
 ### Fixed
