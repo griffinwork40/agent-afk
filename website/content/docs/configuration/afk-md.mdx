@@ -1,0 +1,90 @@
+---
+title: "AFK.md — Project Prompt Overlay"
+description: "Add project-specific instructions to every agent session by dropping an AFK.md at your project root or in your AFK home directory."
+---
+
+`AFK.md` is plain-markdown file that `agent-afk` appends to its built-in
+framework prompt whenever you run from a directory that contains one. It's the simplest way to give the agent project context — just a Markdown file, no env vars or JSON config needed.
+
+## What goes in AFK.md
+
+Anything you would tell a collaborator before they start working in your repo:
+
+- Project conventions (language, style, tooling)
+- Commands to run before editing (build, test, lint)
+- Directories to avoid or treat carefully
+- Key architectural facts the agent should know upfront
+- Links or summaries of internal documentation
+
+There is no required structure and no frontmatter. Plain Markdown is all that
+is parsed.
+
+## Resolution order
+
+`loadConfig()` searches for `AFK.md` in this order (first found wins):
+
+1. `<cwd>/AFK.md` — **project-scope**: loaded when you run `afk` from inside
+   the project directory.
+2. `$AFK_HOME/AFK.md` (default `~/.afk/AFK.md`) — **user-scope global**:
+   loaded when no project-level file is found.
+
+If neither file exists, the framework prompt runs alone with no overlay.
+An empty or whitespace-only `AFK.md` is treated as absent.
+
+## How it layers with the framework prompt
+
+The framework base prompt (`prompts/system-prompt.md`, baked in at publish
+time) is always present. `AFK.md` content is **appended** to it under an
+`# Operator configuration` header — it augments, never replaces, the base.
+Every overlay appends; there is no full-replace mechanism.
+
+The same append behavior applies to all three operator overlay tiers
+(`AFK_SYSTEM_PROMPT` env, `afk.config.json` systemPrompt, `AFK.md`). Only one
+tier is used per session (highest priority wins). If `AFK_SYSTEM_PROMPT` is
+set, or `afk.config.json` has a `systemPrompt` field, `AFK.md` is not loaded.
+
+
+
+## Per-project vs. global
+
+Use **`<cwd>/AFK.md`** when instructions are specific to one repo. Commit it
+alongside your code so every teammate gets the same context when they run `afk`.
+
+Use **`~/.afk/AFK.md`** for cross-project preferences — your coding style,
+default tool preferences, or a standing instruction you want in every session
+regardless of directory.
+
+## Generating an AFK.md with `/init`
+
+In the REPL, `/init` scans the current project and writes a starter `AFK.md`
+with discovered conventions, test commands, and directory layout. Edit it
+afterward to add or remove context.
+
+## Inspecting the resolved overlay
+
+```bash
+afk --dump-prompt /tmp/resolved-prompt.txt
+```
+
+The output file includes a `systemPromptSource` header showing which tier
+was active (e.g. `framework+afk-md:/path/to/AFK.md`) and the full composed
+prompt. Use this to verify that your `AFK.md` is being picked up correctly.
+
+## Example
+
+```markdown
+# My Project
+
+TypeScript monorepo. Always run `pnpm install` before editing.
+
+## Commands
+
+- `pnpm build` — compile + copy prompt files to dist/
+- `pnpm test` — vitest (Node 20+)
+- `pnpm lint` — tsc --noEmit (strict; no unused vars/params)
+
+## Conventions
+
+- All env vars are declared in `src/config/env.ts`. Direct `process.env.*` reads outside that file fail CI.
+- pnpm only — never npm or yarn.
+```

@@ -1,0 +1,128 @@
+---
+title: "Headless & Machine-Readable Output"
+description: "Stream JSON events from `afk chat` into scripts, CI pipelines, and shell tools."
+---
+
+`afk chat` supports a structured streaming output format for headless consumers — CI pipelines, shell scripts, or wrapper programs that need to process AFK's response programmatically rather than read a human-formatted terminal display.
+
+## `--format stream-json`
+
+```bash
+afk chat "<message>" --format stream-json
+```
+
+Writes the raw `OutputEvent` stream to **stdout** as [NDJSON](https://ndjson.org/) (newline-delimited JSON) — one event object per line. No spinner, no ANSI colour codes, no markdown rendering. Stdout contains only valid JSON lines.
+
+## OutputEvent schema
+
+Full event schema: `src/agent/types/session-types.ts`.
+
+- `OutputEvent` — top-level discriminated union
+- `MessageChunk` — discriminated union (payload of `chunk` events), defined in `src/agent/types/message-types.ts`
+
+| `type` | Additional fields | Notes |
+|---|---|---|
+| `chunk` | `chunk: MessageChunk` | Streaming text/tool fragment |
+| `message` | `message: { content: string; timestamp: string }` | Complete assistant message |
+| `done` | `metadata?: ResponseMetadata` | Always the final event in a successful turn |
+| `error` | `error: { message: string; ... }` | Fatal error; process exits with code 1 |
+| `progress` | `progress: { taskId, description, totalTokens, ... }` | Subagent progress (may be absent on simple turns) |
+| `suggestion` | `suggestion: string` | Prompt suggestion from the model |
+| `panel` | `spec: { kind, title?, body }` | Skill-emitted card/panel |
+| `paused` | `reason: 'usage-limit'; resetsAt?: string; accountId?` | OAuth usage-limit hit; `resetsAt` is ISO-8601 |
+| `resumed` | `hotSwapped: boolean; accountId?` | Resumed after pause |
+
+`Date` fields (e.g. `paused.resetsAt`) are serialized as ISO-8601 strings.
+
+Source: `docs/headless.md`.
+
+## Example NDJSON transcript
+
+A minimal single-turn exchange:
+
+```json
+{"type":"chunk","chunk":{"type":"content","content":"Hello"}}
+{"type":"chunk","chunk":{"type":"content","content":", world!"}}
+{"type":"message","message":{"content":"Hello, world!","timestamp":"2024-06-01T12:00:01.234Z"}}
+{"type":"done","metadata":{"durationMs":812,"usage":{"input_tokens":14,"output_tokens":5}}}
+```
+
+A turn that hits a usage-limit pause:
+
+```json
+{"type":"paused","reason":"usage-limit","resetsAt":"2024-06-01T13:00:00.000Z"}
+{"type":"resumed","hotSwapped":false}
+{"type":"chunk","chunk":{"type":"content","content":"Continuing after the pause."}}
+{"type":"done"}
+```
+
+## Consuming with `jq`
+
+```bash
+# Print only the text content of chunk events
+afk chat "summarise this repo" --format stream-json \
+  | jq -r 'select(.type == "chunk" and .chunk.type == "content") | .chunk.content'
+
+# Extract final token usage
+afk chat "count words" --format stream-json \
+  | jq 'select(.type == "done") | .metadata.usage'
+
+# Detect tool-use events in the stream
+afk chat "list files" --format stream-json \
+  | jq 'select(.type == "chunk" and .chunk.type == "tool_use")'
+
+# Exit-code-aware pipeline: stream-json exits 1 on error, 0 on done
+afk chat "build the project" --format stream-json | tee run.ndjson
+echo "exit: $?"
+```
+
+## Parsing in Node/TypeScript
+
+```typescript
+import { createInterface } from 'node:readline';
+import { spawn } from 'node:child_process';
+
+const proc = spawn('afk', ['chat', 'say hi', '--format', 'stream-json']);
+const rl = createInterface({ input: proc.stdout });
+
+for await (const line of rl) {
+  const event = JSON.parse(line); // type: OutputEvent
+  if (event.type === 'chunk' && event.chunk.type === 'content') {
+    process.stdout.write(event.chunk.content);
+  }
+  if (event.type === 'done') break;
+  if (event.type === 'error') {
+    console.error('AFK error:', event.error.message);
+    process.exit(1);
+  }
+}
+```
+
+## Session persistence and resume
+
+`--format stream-json` is compatible with session persistence. Pass `--resume`, `--continue`, or `--session-id` exactly as you would with text output:
+
+```bash
+# Start a session and record its ID
+afk chat "begin the task" --format stream-json | tee run1.ndjson
+
+# Resume later
+afk chat "continue" --format stream-json --session-id <id> | tee run2.ndjson
+```
+
+## Scope and limitations
+
+- **Output only** — `--format stream-json` affects output. The `<message>` argument is still a plain string.
+- **AFK-native format** — The event format is AFK-specific — it is not OpenAI's streaming (SSE) format.
+- **`afk chat` only** — the REPL (`afk i`) and daemon (`afk daemon`) do not support `--format stream-json`; they have their own output channels.
+- **Exit codes** — process exits `0` on `done`, `1` on `error`. Use this in pipelines to detect failures without parsing JSON.
+
+## Use cases
+
+**CI pipelines:** capture the full event stream to a file, then parse `done.metadata.usage` for cost reporting or assert on `message.content` for regression tests.
+
+**Shell wrappers:** filter for `chunk` events and stream the text content to another process — use AFK as a general-purpose LLM text processor in a pipeline.
+
+**Monitoring:** watch for `error` events to detect and alert on agent failures without reading logs.
+
+**Cost tracking:** collect `done.metadata.usage` across runs and aggregate with standard JSON tools (`jq`, `mlr`, `csvkit`).

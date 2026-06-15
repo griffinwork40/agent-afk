@@ -1,0 +1,75 @@
+---
+title: "Skills Overview"
+description: "What skills are, how they're scoped, and how to invoke them in agent-afk."
+---
+
+Skills are named capabilities that extend what AFK can do in a session. A skill bundles a prompt (or a TypeScript handler) with metadata — name, description, argument hint — and registers itself so the model can call it by name and the REPL can expose it as a slash command.
+
+## What a skill is
+
+When you type `/mint add dark mode`, AFK finds the `mint` skill and runs it. Skills behave the same whether you invoke them with `/` or the model calls one on its own.
+
+Skills have a few metadata fields that matter for invocation:
+
+| Field | Purpose |
+|---|---|
+| `name` | Registry key and slash command name |
+| `description` | Shown in `/help` and the skill manifest |
+| `argumentHint` | Short usage hint, e.g. `<idea> \| --continue [approved]` |
+| `whenToUse` | Routing hint surfaced to the model |
+| `flags` | Long-form CLI flags accepted (e.g. `['--continue']`) |
+
+## Scope: built-in, user, and project
+
+Skills come from three origins:
+
+**Built-in** — Skills shipped with AFK, registered at startup. These are the orchestrator skills (`mint`, `diagnose`, `service-setup`, `telegram-setup`).
+
+**User-scope** — `SKILL.md` files discovered under `~/.afk/skills/<skill-name>/`. Scanned at session start.
+
+**Project-scope** — `SKILL.md` files under `<cwd>/.afk/skills/<skill-name>/`. Scanned from the working directory at session start.
+
+**Plugin skills** — `SKILL.md` files inside installed plugins at `~/.afk/plugins/<plugin>/skills/<skill-name>/`. These are discovered automatically when the plugin is installed.
+
+When a user or project skill's name collides with an already-registered skill of a different origin, it registers under the namespaced fallback `<origin>:<name>` (e.g. `user:mint`). The earlier registrant keeps the bare name.
+
+## Audience: public vs. internal
+
+Skills can be tagged `audience: 'internal'`. Internal skills are hidden from slash-command listings, `/help`, tab-complete, and the system-prompt skill manifest unless `AFK_INTERNAL=1` is set. Most users will only encounter public skills.
+
+## The three execution modes
+
+Every skill has a `context` field that controls how it runs:
+
+| Mode | Mechanic | When to use |
+|---|---|---|
+| `'inline'` (default) | Calls the TypeScript handler in-process | Orchestrators that dispatch sub-agents programmatically (e.g. `mint`, `diagnose`) |
+| `'fork'` | Forks a child session with the skill's instructions as its system prompt | Heavy or risky work that benefits from an isolated context window (e.g. `service-setup`, `telegram-setup`) |
+| `'load'` | Returns the SKILL.md body as the tool result; the **current** session executes it in-context | Lightweight procedures that should run as the calling agent, with no fork latency |
+
+In `load` mode, AFK tells the model to act on the skill's instructions, not just read them.
+
+## How to invoke a skill
+
+**Slash command** — type `/skillname [args]` in the REPL or Telegram:
+
+```
+/mint add a dark mode toggle
+/diagnose TypeError: Cannot read properties of undefined
+/mint --continue approved
+```
+
+**`skill` tool** — the model can call the skill directly when it decides to:
+
+```json
+{
+  "name": "mint",
+  "arguments": "add dark mode toggle"
+}
+```
+
+Both paths run the same skill. The entry point doesn't change behavior — you get the same result whether you typed the slash command or the model called the skill on its own.
+
+## Invocation telemetry
+
+Every skill dispatch is logged to `~/.afk/agent-framework/routing-decisions.jsonl`. You can inspect this file to see which skills ran, when, and with what outcome.

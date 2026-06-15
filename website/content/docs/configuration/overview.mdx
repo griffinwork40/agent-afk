@@ -1,0 +1,335 @@
+---
+title: "Configuration Overview"
+description: "How agent-afk resolves configuration: the ~/.afk/ directory layout, config tiers, and the full afk.config.json schema."
+---
+
+`agent-afk` keeps all state under **`~/.afk/`** — completely independent of
+`~/.claude/`. You can delete `~/.claude/` entirely and `afk` still runs.
+
+## Directory layout
+
+```
+~/.afk/
+  config/
+    afk.env              # API keys and env overrides (written by `afk login`)
+    afk.config.json      # structured config: model, maxTokens, systemPrompt, models block, …
+    mcp.json             # MCP server registry
+  state/
+    sessions/            # session-store sidecars
+    todos/               # todo-panel data
+    daemon/              # per-instance daemon state
+  agent-framework/       # local telemetry and operational data
+  skills/                # user-authored or generated skills
+  plugins/               # installed plugins and marketplace caches
+  logs/
+  cache/
+```
+
+The root directory is controlled by `AFK_HOME` (default `~/.afk/`). Set it to
+an absolute path to relocate everything at once — useful on shared machines or
+when you want a project-isolated state tree.
+
+## Config resolution tiers
+
+Configuration is layered. Higher tiers win over lower ones.
+
+| Tier | Source | Wins over |
+|------|--------|-----------|
+| 1 (highest) | `AFK_SYSTEM_PROMPT` env var | everything |
+| 2 | `afk.config.json` — searched in order: `<cwd>/afk.config.json` → `~/.afk/config/afk.config.json` → legacy `~/.afk.config.json` | AFK.md |
+| 3 (lowest) | `AFK.md` — searched in order: `<cwd>/AFK.md` → `~/.afk/AFK.md` | nothing |
+
+The built-in prompt is always present. Any overlay you set is appended after it
+under an `# Operator configuration` header — it adds to the base, never overwrites it.
+
+Environment variables override matching fields in `afk.config.json`. For example, `AFK_MODEL` overrides `model`. See [Environment Variables](/configuration/environment-variables) for the full list.
+
+### `.env` file loading
+
+Before env vars are read, `loadEnvConfig()` loads dotenv files in this order
+(first occurrence wins, no override):
+
+1. `<cwd>/.env` — per-repo overrides
+2. `~/.afk/config/afk.env` — user-scope, the canonical place for API keys
+3. Legacy `~/.afk.env` — back-compat
+
+The `afk login` wizard writes keys to `~/.afk/config/afk.env`.
+
+## Inspecting active config
+
+```bash
+afk config           # human-readable dump of resolved model, provider, API key presence
+afk config --format json   # machine-readable JSON
+afk doctor           # validates keys, paths, and provider connectivity
+```
+
+`--dump-prompt <path>` on any command writes the fully-resolved system prompt
+(framework base + operator overlay) to a file, with provenance noted in a
+header (e.g. `framework+afk-md:/path/to/AFK.md`).
+
+## Overriding home
+
+```bash
+AFK_HOME=/opt/my-afk afk config
+```
+
+`AFK_HOME` must be an absolute path and must not be `/`. The runtime enforces
+this at startup.
+
+## What's not shared with Claude Code
+
+AFK's state directories (`~/.afk/`) are fully independent of Claude Code's
+`~/.claude/`. Plugin state for the plugin surface writes to
+`~/.claude/agent-framework/` independently — no shared state.
+
+---
+
+## `afk.config.json` schema
+
+`afk.config.json` is a JSON file (no JSONC comments in the runtime-parsed
+copy; the `.example` ships with comments for documentation only). All fields are
+optional; unset fields fall through to env vars or built-in defaults.
+
+### Top-level fields
+
+```json
+{
+  "model": "sonnet",
+  "maxTokens": 4096,
+  "temperature": 1.0,
+  "systemPrompt": "You are a helpful assistant.",
+  "updatePolicy": "notify",
+  "autoResumeOnUsageLimit": true,
+  "bgSummaries": false,
+  "maxSummaryCallsPerSession": 200,
+  "enableShellHooks": true
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `model` | `string` | `"sonnet"` | Default model for all surfaces. Accepts Claude short aliases (`sonnet`, `haiku`, `opus`) and full provider-native ids (`gpt-4o`, `mlx-community/Qwen3-30B-A3B-4bit`). Env override: `AFK_MODEL`. |
+| `maxTokens` | `number` | `4096` | Maximum total tokens per turn (input + output). Env override: `AFK_MAX_TOKENS`. |
+| `temperature` | `number` | `1.0` | Sampling temperature. Env override: `AFK_TEMPERATURE`. |
+| `systemPrompt` | `string` | — | Operator overlay appended to the framework base prompt (tier 2). When set, `AFK.md` is not loaded. Env override: `AFK_SYSTEM_PROMPT` (tier 1, wins over this). |
+| `updatePolicy` | `"notify" \| "auto" \| "off"` | `"notify"` | Controls how AFK handles available CLI updates. `notify` prints a message; `auto` applies automatically; `off` disables checks. |
+| `autoResumeOnUsageLimit` | `boolean` | `true` | When `true`, AFK pauses and retries automatically when your API subscription hits its hourly limit, instead of showing a 429 error. |
+| `bgSummaries` | `boolean` | `false` | When `true`, the REPL summarizes running background jobs and shows them in `/bgsub:list`. **Caution:** this sends transcript data to the Anthropic API — don't enable it in air-gapped or sensitive environments. |
+| `maxSummaryCallsPerSession` | `number` | `200` | Session-wide budget for background summarizer LLM calls. Clamped to `[1, 500]`. Has no effect unless `bgSummaries` is `true`. |
+| `enableShellHooks` | `boolean` | `false` | Master switch for shell-command hooks. **Must be set in a user-global file** (`~/.afk/config/afk.config.json`); project-local values are silently ignored to prevent cloned repos from auto-executing scripts. |
+
+---
+
+### `models` — per-tier model bindings
+
+Bind specific models to the `small`, `medium`, and `large` quality tiers used
+by skills and subagent dispatch. Each slot accepts a bare model id string or
+an object with optional provider credentials.
+
+```json
+{
+  "models": {
+    "small": "claude-haiku-4-5-20251001",
+    "medium": "claude-sonnet-4-6",
+    "large": {
+      "id": "claude-opus-4-8",
+      "name": "big",
+      "provider": "anthropic",
+      "baseUrl": "http://localhost:8080",
+      "apiKey": "sk-local"
+    }
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `small` | `string \| object` | Model for cheap/fast work (e.g. classification, summarization). Env override: `AFK_MODEL_SMALL`. |
+| `medium` | `string \| object` | Model for general tasks. Env override: `AFK_MODEL_MEDIUM`. |
+| `large` | `string \| object` | Model for heavy reasoning or long-context work. Env override: `AFK_MODEL_LARGE`. |
+
+When using the object form, each slot accepts:
+
+| Sub-field | Type | Description |
+|-----------|------|-------------|
+| `id` | `string` | Provider-native model id. |
+| `name` | `string` | Human-readable alias for this slot (cosmetic). |
+| `provider` | `string` | Provider name (e.g. `"anthropic"`, `"openai-compatible"`). |
+| `baseUrl` | `string` | Endpoint base URL for this slot (e.g. a local shim). |
+| `apiKey` | `string` | API key for this slot's endpoint. |
+
+---
+
+### `autoRouting` — per-surface auto-routing
+
+Controls whether each surface runs in "auto-routing" mode. When enabled for
+a surface, the agent automatically routes work without waiting for explicit
+confirmation. Accepts a boolean per surface key.
+
+```json
+{
+  "autoRouting": {
+    "interactive": false,
+    "chat": true,
+    "telegram": true,
+    "daemon": true
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `interactive` | `boolean` | Enable auto-routing in the REPL (`afk interactive`). |
+| `chat` | `boolean` | Enable auto-routing for one-shot `afk chat` calls. |
+| `telegram` | `boolean` | Enable auto-routing in the Telegram bot surface. |
+| `daemon` | `boolean` | Enable auto-routing in the headless daemon. |
+
+Env override: `AFK_AUTO_ROUTING=true` sets all four surfaces simultaneously.
+
+---
+
+### `daemon` — headless daemon defaults
+
+Configures default task and optional worktree pruning for `afk daemon`.
+
+```json
+{
+  "daemon": {
+    "task": "/forge-friction --auto",
+    "taskId": "default",
+    "worktreePrune": {
+      "enabled": true,
+      "cron": "0 4 * * *",
+      "maxAgeDaysClean": 14,
+      "maxAgeDaysDirty": 30,
+      "scope": "all"
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `task` | `string` | — | Slash command or prompt the daemon runs on each scheduled invocation. |
+| `taskId` | `string` | `"default"` | Identifier for this task instance; used in telemetry and daemon state files. |
+| `worktreePrune.enabled` | `boolean` | `true` | Whether the daemon prunes stale AFK-managed worktrees on its cron schedule. |
+| `worktreePrune.cron` | `string` | `"0 4 * * *"` | Cron expression controlling when pruning runs (5-field format). |
+| `worktreePrune.maxAgeDaysClean` | `number` | `14` | Worktrees with no uncommitted changes older than this many days are removed. |
+| `worktreePrune.maxAgeDaysDirty` | `number` | `30` | Worktrees with uncommitted changes older than this many days are removed. |
+| `worktreePrune.scope` | `string` | `"all"` | Which worktrees to consider. `"all"` prunes all AFK-managed trees; other values may scope to a subset. |
+
+---
+
+### `interactive` — REPL defaults
+
+Controls worktree and UX behavior for `afk interactive`.
+
+```json
+{
+  "interactive": {
+    "worktreeAutoname": true,
+    "worktreeBranchPrefix": "afk/",
+    "worktreeBase": "origin/main",
+    "suggestGhost": true
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `worktreeAutoname` | `boolean` | `true` | When `true`, the first non-slash user message in a session started with `afk i --worktree` triggers a cheap haiku call to derive a kebab-case slug; the worktree dir and branch are renamed in place. Set `false` to keep the timestamp-based name. Env override: `AFK_WORKTREE_AUTONAME`. |
+| `worktreeBranchPrefix` | `string` | `"afk/"` | Namespace prepended to AFK-managed worktree branch names (`<prefix><slug>`). Set to `""` to drop the prefix. Validated at config-read time to reject `--`-prefixed values and shell metacharacters. Env override: `AFK_WORKTREE_BRANCH_PREFIX`. |
+| `worktreeBase` | `string` | remote default | Base git ref for worktrees created with `--worktree`. Default is the remote's default branch (e.g. `origin/main`), fetched fresh. Set to `HEAD` to base on the local checkout. Env override: `AFK_WORKTREE_BASE`. CLI override: `--worktree-base`. |
+| `suggestGhost` | `boolean` | `true` | Master toggle for REPL ghost-text suggestions. Set `false` to disable all ghost-text. Env override: `AFK_SUGGEST_GHOST`. |
+
+---
+
+### `hooks` — shell-command lifecycle hooks
+
+The `hooks` block maps lifecycle event names to arrays of matcher groups.
+Each group runs one or more shell commands when the event fires and the
+optional tool-name matcher matches.
+
+**Prerequisites:** `enableShellHooks: true` must be set in a **user-global**
+config file (`~/.afk/config/afk.config.json`). To also admit hook definitions
+from project-local files, additionally set `allowProjectHooks: true` in a
+user-global file.
+
+```json
+{
+  "enableShellHooks": true,
+  "allowProjectHooks": false,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.afk/hooks/pre-bash-check.sh",
+            "timeout_ms": 5000
+          }
+        ]
+      },
+      {
+        "matcher": "/^write_/",
+        "hooks": [
+          { "type": "command", "command": "~/.afk/hooks/write-guard.sh" }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.afk/hooks/on-session-start.sh",
+            "timeout_ms": 3000
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### Event keys
+
+| Event | Fires when |
+|-------|-----------|
+| `PreToolUse` | Before a tool call is dispatched. The hook can block the call. |
+| `PostToolUse` | After a tool call completes. |
+| `SessionStart` | At the start of a session. |
+| `SessionEnd` | When a session finishes. |
+| `SubagentStart` | When a subagent session is forked. |
+| `SubagentStop` | When a subagent session finishes. `hookSpecificOutput.additionalContext` injects text into the parent session. |
+
+#### Matcher group fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `matcher` | `string` | Optional. Omit or `"*"` to match any tool name. Exact string for an exact match. `/regex/flags` for a regex match (e.g. `"/^write_/"` matches all write tools). Only relevant for `PreToolUse` and `PostToolUse`. |
+| `hooks` | `array` | One or more hook definitions to run when this group matches. |
+
+#### Hook definition fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"command"` | Must be `"command"`. |
+| `command` | `string` | Shell command to execute. Receives a JSON payload on stdin. |
+| `timeout_ms` | `number` | Optional timeout in milliseconds. |
+
+#### Exit-code protocol
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | Continue. Optional JSON stdout may carry `{ "decision": "block", "reason": "…" }` to block, or `{ "hookSpecificOutput": { "additionalContext": "…" } }` for `SubagentStop` context injection. |
+| `2` | Block the operation. `stderr` becomes the reason shown to users. |
+| other | Non-blocking error — logged, operation continues. |
+
+#### Trust gates
+
+| Field | Scope | Description |
+|-------|-------|-------------|
+| `enableShellHooks` | User-global only | Master switch. Without it, no shell hooks run regardless of what `hooks` defines. |
+| `allowProjectHooks` | User-global only | When `true`, hook definitions from project-local `afk.config.json` files are admitted. Defaults to `false` — without this, a cloned repo's hook definitions are silently dropped even when `enableShellHooks` is on. |

@@ -1,0 +1,157 @@
+---
+title: "One-Shot Chat"
+description: "afk chat sends a single message and exits — pipe-friendly, scriptable, or a streaming JSON event stream for scripts and CI."
+---
+
+`afk chat` sends a single message and exits. It's designed for scripting, CI pipelines, and
+any situation where you want a one-shot answer without opening an interactive session.
+
+```bash
+afk chat "explain this error"
+afk chat "summarise the last 10 git commits"
+```
+
+Alias: `afk c`
+
+## Piping input
+
+Pass `-` as the message to read from stdin, or omit the message entirely when stdin is a pipe:
+
+```bash
+cat error.log | afk chat "what caused this?"
+git diff HEAD~3 | afk chat "summarise these changes"
+afk chat - < prompt.txt
+```
+
+Stdin is capped at 10 MB.
+
+## Common options
+
+```bash
+afk chat "..." --model opus           # pick a model
+afk chat "..." --max-turns 20         # turn limit (default 10)
+afk chat "..." --format json          # machine-readable JSON response
+afk chat "..." --format stream-json   # NDJSON event stream for headless consumers
+afk chat "..." --max-budget-usd 2.00  # hard cost ceiling
+afk chat "..." -w                     # run in an isolated git worktree
+afk chat "..." --resume <id>          # continue a saved session
+afk chat "..." --continue             # continue the most recent session in cwd
+afk chat "..." --post telegram        # publish the final response to Telegram
+afk chat "..." --post github          # publish the final response as a PR comment
+```
+
+## Output formats
+
+### `--format text` (default)
+
+Renders markdown to the terminal with a cost/duration/token summary line beneath.
+
+### `--format json`
+
+Returns a single JSON object:
+
+```json
+{
+  "success": true,
+  "model": "claude-sonnet-...",
+  "message": "...",
+  "timestamp": "2024-06-01T12:00:01.234Z",
+  "costUsd": 0.003,
+  "durationMs": 812,
+  "inputTokens": 140,
+  "outputTokens": 52
+}
+```
+
+Cost, duration, and token fields appear only when the provider populates them.
+
+### `--format stream-json`
+
+Writes one JSON object per line to stdout ([newline-delimited JSON](https://ndjson.org/)) — no color codes, no spinner. Use this when a script or CI pipeline needs to parse AFK's output.
+
+```bash
+afk chat "summarise this repo" --format stream-json
+```
+
+#### Event types
+
+| `type` | Additional fields | Notes |
+|---|---|---|
+| `chunk` | `chunk: MessageChunk` | Streaming text or tool fragment |
+| `message` | `message: { content, timestamp }` | Complete assistant message |
+| `done` | `metadata?` | Always the final event on success |
+| `error` | `error: { message, name }` | Fatal error; process exits with code 1 |
+| `progress` | `progress: { taskId, description, ... }` | Subagent progress |
+| `suggestion` | `suggestion: string` | Prompt suggestion from the model |
+| `paused` | `reason: 'usage-limit'; resetsAt?` | OAuth usage-limit pause |
+| `resumed` | `hotSwapped: boolean` | Resumed after pause |
+
+#### Example transcript
+
+```json
+{"type":"chunk","chunk":{"type":"content","content":"Hello"}}
+{"type":"chunk","chunk":{"type":"content","content":", world!"}}
+{"type":"message","message":{"content":"Hello, world!","timestamp":"2024-06-01T12:00:01.234Z"}}
+{"type":"done","metadata":{"durationMs":812,"usage":{"input_tokens":14,"output_tokens":5}}}
+```
+
+#### Reading with `jq`
+
+```bash
+# Extract text content only
+afk chat "summarise this repo" --format stream-json \
+  | jq -r 'select(.type == "chunk" and .chunk.type == "content") | .chunk.content'
+
+# Get final token usage
+afk chat "count words" --format stream-json \
+  | jq 'select(.type == "done") | .metadata.usage'
+
+# Detect tool calls
+afk chat "list files" --format stream-json \
+  | jq 'select(.type == "chunk" and .chunk.type == "tool_use")'
+```
+
+#### Parsing in TypeScript
+
+```typescript
+import { createInterface } from 'node:readline';
+import { spawn } from 'node:child_process';
+
+const proc = spawn('afk', ['chat', 'say hi', '--format', 'stream-json']);
+const rl = createInterface({ input: proc.stdout });
+
+for await (const line of rl) {
+  const event = JSON.parse(line);
+  if (event.type === 'chunk' && event.chunk.type === 'content') {
+    process.stdout.write(event.chunk.content);
+  }
+  if (event.type === 'done') break;
+  if (event.type === 'error') {
+    console.error('AFK error:', event.error.message);
+    process.exit(1);
+  }
+}
+```
+
+`--format stream-json` exits with code `1` on error and `0` on `done`. Combine with `tee` to
+log the raw stream while still processing it:
+
+```bash
+afk chat "build the project" --format stream-json | tee run.ndjson
+```
+
+## Session persistence
+
+`--resume` and `--continue` work the same as in the REPL. When either flag is set, the session
+is persisted and a resume hint is printed to stderr on exit:
+
+```
+Continue with: afk chat <msg> --resume <id>
+```
+
+Assign a specific UUID to a new session with `--session-id <uuid>`.
+
+## Worktree isolation
+
+`-w` / `--worktree` creates a git worktree for the one-shot run. On a clean exit, the worktree
+is removed automatically. Mirrors the REPL's worktree behavior.
