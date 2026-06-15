@@ -51,7 +51,7 @@ All AFK state under `~/.afk/` (never `~/.claude/`):
 ```
 ~/.afk/
   config/    afk.env, afk.config.json
-  state/     sessions/  todos/  daemon/
+  state/     sessions/  todos/  transcripts/  daemon/   ($AFK_STATE_DIR overrides this tier)
   plugins/   logs/  cache/
   agents/    user-defined subagents (SDK)
   commands/  user-defined slash commands (SDK)

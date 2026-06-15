@@ -16,6 +16,7 @@ import {
   getLogsDir,
   getSessionsDir,
   getTodosDir,
+  getTranscriptsDir,
   getDaemonStateDir,
   getEnvConfigPath,
   getJsonConfigPath,
@@ -23,6 +24,7 @@ import {
   getLegacyJsonConfigPath,
   ensureSessionsMigrated,
   ensureTodosMigrated,
+  ensureTranscriptsMigrated,
   getSkillsDir,
   getAgentFrameworkDir,
   assertSafeJobId,
@@ -46,6 +48,9 @@ afterEach(() => {
   if (originalHome !== undefined) process.env['HOME'] = originalHome;
   else delete process.env['HOME'];
   delete process.env['AFK_HOME'];
+  // getAfkStateDir() now reads AFK_STATE_DIR — clear it so a case that sets
+  // it cannot leak into sibling cases that assume the $AFK_HOME/state default.
+  delete process.env['AFK_STATE_DIR'];
 });
 
 describe('paths — directory resolution', () => {
@@ -75,9 +80,26 @@ describe('paths — directory resolution', () => {
     expect(getLogsDir()).toBe(join(tmpHome, '.afk', 'logs'));
   });
 
-  it('sessions and todos live under state/', () => {
+  it('sessions, todos, and transcripts live under state/', () => {
     expect(getSessionsDir()).toBe(join(tmpHome, '.afk', 'state', 'sessions'));
     expect(getTodosDir()).toBe(join(tmpHome, '.afk', 'state', 'todos'));
+    expect(getTranscriptsDir()).toBe(join(tmpHome, '.afk', 'state', 'transcripts'));
+  });
+
+  it('getAfkStateDir honors AFK_STATE_DIR and cascades to derived state helpers', () => {
+    const customState = join(tmpHome, 'custom-state');
+    process.env['AFK_STATE_DIR'] = customState;
+    expect(getAfkStateDir()).toBe(customState);
+    // Derived helpers nest under the override, not under $AFK_HOME/state.
+    expect(getSessionsDir()).toBe(join(customState, 'sessions'));
+    expect(getTranscriptsDir()).toBe(join(customState, 'transcripts'));
+  });
+
+  it('getAfkStateDir rejects a relative or root AFK_STATE_DIR', () => {
+    process.env['AFK_STATE_DIR'] = 'relative/state';
+    expect(() => getAfkStateDir()).toThrow(/AFK_STATE_DIR must be an absolute path that is not \//);
+    process.env['AFK_STATE_DIR'] = '/';
+    expect(() => getAfkStateDir()).toThrow(/AFK_STATE_DIR must be an absolute path that is not \//);
   });
 
   it('daemon state dir defaults to agent-afk@default', () => {
@@ -147,6 +169,22 @@ describe('paths — legacy migration', () => {
 
     expect(existsSync(legacy)).toBe(false);
     expect(existsSync(join(getTodosDir(), 'session-1.json'))).toBe(true);
+  });
+
+  it('ensureTranscriptsMigrated moves ~/.afk/transcripts → ~/.afk/state/transcripts', () => {
+    const legacy = join(tmpHome, '.afk', 'transcripts');
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, '2026-01-01T00-00-00-000Z.md'), '# Session\n');
+
+    ensureTranscriptsMigrated();
+
+    expect(existsSync(legacy)).toBe(false);
+    expect(existsSync(join(getTranscriptsDir(), '2026-01-01T00-00-00-000Z.md'))).toBe(true);
+  });
+
+  it('ensureTranscriptsMigrated is a no-op when nothing to migrate', () => {
+    ensureTranscriptsMigrated();
+    expect(existsSync(getTranscriptsDir())).toBe(false);
   });
 });
 
