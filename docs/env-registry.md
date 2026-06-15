@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**108 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**110 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -13,8 +13,6 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_COMPACT_KEEP_LAST_TURNS` | number |  |  | `6` | Number of recent turns the compactor keeps verbatim during /compact. Default tuned in compact-handler.ts. |
 | `AFK_COMPACT_MODEL` | string |  |  | `claude-haiku-4-5` | Override the model used by the /compact summarizer. Falls back to a cheap default (haiku-class). |
 | `AFK_DEFAULT_SUBAGENT_MODEL` | string |  |  | `sonnet` | Override the default model used when a subagent is dispatched without an explicit model. |
-| `AFK_DISABLE_BASH_INTERPRETER_GUARD` | boolean |  | `0` | `1` | Skip ONLY the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) when set to 1, leaving the rest of path-approval intact. |
-| `AFK_DISABLE_PATH_APPROVAL` | boolean |  | `0` | `1` | Skip the path-approval + bash-restriction hooks entirely when set to 1. Use for headless flows that need wide-open file access. |
 | `AFK_DISABLE_PROMPT_CACHE` | boolean |  | `0` | `1` | Disable Anthropic prompt caching when set to 1/true/yes/on. Unset = caching enabled. |
 | `AFK_EFFORT` | string |  |  | `medium` | Effort hint guiding adaptive-thinking depth, forwarded as Anthropic output_config.effort (model-gated; ignored where unsupported). Accepts low \| medium \| high \| xhigh \| max. |
 | `AFK_LOCAL_BASE_URL` | string |  |  | `http://127.0.0.1:8080` | Base URL for a self-hosted Anthropic-compatible server. When set, routes traffic away from api.anthropic.com. |
@@ -147,6 +145,8 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 
 | Name | Type | Required | Default | Example | Description |
 |------|------|----------|---------|---------|-------------|
+| `AFK_DISABLE_BASH_INTERPRETER_GUARD` | boolean |  | `0` | `1` | Skip ONLY the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) when set to 1, leaving the rest of path-approval intact. Use for headless flows (CI, daemon) whose automation legitimately runs interpreter one-liners but should still keep path-approval enabled. The restricted-root substring check is unaffected. Default: guard enabled. To disable all path-approval + bash restriction instead, use AFK_DISABLE_PATH_APPROVAL=1. |
+| `AFK_DISABLE_PATH_APPROVAL` | boolean |  | `0` | `1` | Skip the path-approval + bash-restriction hooks entirely when set to 1. Use for headless flows that need wide-open file access (CI scripts, batch jobs). Default: hooks enabled. |
 | `AFK_SHELL_WRAPPER` | boolean |  |  | `1` | Set to 1 or true by the optional afk shell wrapper function (installed via `afk shell-init`). Signals that the parent shell has the wrapper active so the post-exit cd can fire. |
 | `AGENT_SURFACE` | string |  |  | `cli` | Internal surface marker propagated to subprocesses. Identifies which AFK surface (cli, telegram, daemon) spawned the process. |
 | `ASCIINEMA_REC` | boolean |  |  | `1` | Set to 1 by asciinema rec while a session is being recorded. Triggers capture-mode. |
