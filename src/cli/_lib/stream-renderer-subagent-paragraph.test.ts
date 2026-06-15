@@ -33,6 +33,7 @@ import {
   synthesizeAgentEntry,
   type SubagentCtx,
 } from './stream-renderer-subagent.js';
+import type { OrchestratorCtx } from './stream-renderer-orchestrator.js';
 import { freshSourceState, type SourceState } from './stream-renderer-source.js';
 import { OverlayComposer } from './overlay-composer.js';
 import { registerOverlaySlots } from './stream-renderer-lifecycle.js';
@@ -102,14 +103,29 @@ function setup() {
     getInterrupting: () => false,
   });
 
-  const ctx: SubagentCtx = {
+  // Build a minimal OrchestratorCtx so subagent handlers can call
+  // setComposedOverlay(ctx.orchestratorCtx) and route through the composer
+  // (issue #389: subagents no longer hold overlayComposer directly).
+  const orchestratorCtx: OrchestratorCtx = {
     isTTY: true,
     compositor,
     overlayComposer,
     toolLane,
+    thinkingLane,
+    thinkingMode: 'live',
+    out: noopWriter,
+    streamingMarkdown: { current: null },
+    lastProgressByTask: new Map(),
+  };
+
+  const ctx: SubagentCtx = {
+    isTTY: true,
+    compositor,
+    toolLane,
     out: noopWriter,
     streamingMarkdown: new Map<string, StreamingMarkdownRenderer>(),
     thinkingMode: 'summary',
+    orchestratorCtx,
   };
 
   return { overlayFrames, compositor, thinkingLane, toolLane, overlayComposer, ctx };

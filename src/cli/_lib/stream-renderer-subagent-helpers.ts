@@ -7,12 +7,9 @@
 
 import type { SourceState } from './stream-renderer-source.js';
 import type { SubagentCtx } from './stream-renderer-subagent.js';
-import type { CardSpec } from '../render.js';
-import { syntheticResult, formatDoneSummary } from './stream-renderer-source.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import { wrapToWidth } from '../wrap.js';
 import { palette } from '../palette.js';
-import { card } from '../render.js';
 
 /**
  * Pull the latest "clause" out of a thinking buffer for the live tail.
@@ -102,60 +99,6 @@ export function formatSubagentTextLines(text: string): string[] {
 }
 
 /**
- * Render a panel emitted from inside a subagent. Flushes any pending
- * subagent content (markdown buffer) before rendering the card, mirroring
- * the orchestrator's emitPanel pattern so the card never races streamed
- * content on non-TTY surfaces.
- *
- * The synthetic Agent entry stays alive in the parent tool lane (we don't
- * flush it — that would drop attribution mid-flight). The card itself is
- * committed straight to scrollback as a loud visual marker; its color and
- * shape make the source obvious without extra indent chrome.
- */
-export function emitSubagentPanel(
-  spec: CardSpec,
-  _sourceId: string,
-  source: SourceState,
-  ctx: SubagentCtx,
-): void {
-  // Drop buffered prose before rendering the card so the panel doesn't
-  // visually interleave with streaming content.
-  //
-  // TTY: subagent prose was already routed to the transient thinking tail
-  // (not scrollback) — clear that tail so the panel reads as the new state,
-  // and discard the prose buffer silently. The card itself is the deliberate
-  // visible artifact and is committed via the loop below.
-  // Non-TTY: flush the buffer through the gutter-prefixed scrollback path so
-  // logs retain the full prose context that preceded the card.
-  if (ctx.isTTY) {
-    const parentId = source.syntheticAgentToolUseId;
-    if (parentId) ctx.toolLane.setThinkingTail(parentId, undefined);
-    source.contentBuffer = '';
-  } else if (source.contentBuffer.trim()) {
-    emitSubagentTextLines(source.contentBuffer, ctx);
-    source.contentBuffer = '';
-  }
-
-  const rendered = card(spec);
-  for (const line of rendered.split('\n')) {
-    if (ctx.isTTY && ctx.compositor) {
-      ctx.compositor.commitAbove(line);
-    } else {
-      ctx.out.line(line);
-    }
-  }
-  // Invariant (TUI rhythm contract): subagent panel card owns ONE
-  // trailing blank line so the next block (more prose, the next tool,
-  // or another subagent) has breathing room. Mirrors background-task
-  // completion cards (repl-loop.ts:314). See docs/tui-rhythm.md.
-  if (ctx.isTTY && ctx.compositor) {
-    ctx.compositor.commitAbove('');
-  } else {
-    ctx.out.line('');
-  }
-}
-
-/**
  * Create the synthetic `Agent(<agentType>)` entry for a subagent source on
  * its first event. Idempotent — no-op if a synthetic entry already exists.
  */
@@ -200,86 +143,4 @@ export function synthesizeAgentEntry(
   const syntheticId = `__synth_agent_${sourceId}`;
   ctx.toolLane.addStartWithAgentContext(syntheticId, 'Agent', `(${label})`, agentContext, maxWidth);
   source.syntheticAgentToolUseId = syntheticId;
-}
-
-/**
- * Finalize a subagent source: flush any remaining partial line buffer and emit
- * a summary result under its synthetic agent. No-op if the subagent errored
- * (error summary already set in the error case).
- *
- * Caller must pass the throttle maps so cleanup can delete stale entries.
- */
-export function finalizeSubagent(
-  _sourceId: string,
-  source: SourceState,
-  ctx: SubagentCtx,
-  thinkingTailLastUpdate: Map<string, number>,
-  overlayLastUpdate: Map<string, number>,
-): void {
-  const parentId = source.syntheticAgentToolUseId;
-  if (!parentId || source.errored) return;
-
-  // Drain any remaining buffered prose.
-  //
-  // TTY: subagent prose is suppressed from scrollback by design (the leak
-  // fix). The buffer is discarded silently — the user already saw the live
-  // tail under the Agent row while the subagent was running, and the Done
-  // row below is the only artifact that lands in the parent transcript.
-  //
-  // Non-TTY: flush the trailing buffer through the gutter-prefixed
-  // scrollback path so logs/CI keep the final line of prose even when the
-  // subagent's last chunk lacked a trailing newline.
-  if (!ctx.isTTY && source.contentBuffer) {
-    emitSubagentTextLines(source.contentBuffer, ctx);
-  }
-  source.contentBuffer = '';
-
-  // Non-TTY: emit a standalone thinking summary line before the Done row,
-  // mirroring the orchestrator's pattern (stream-renderer-orchestrator.ts:236-250).
-  // On TTY the live thinking tail already provides visibility; this is for
-  // logs, CI, and headless surfaces where the tail is never rendered.
-  //
-  // Invariant (TUI rhythm contract): emit summary + ONE trailing blank.
-  // Without the trailing blank, the next block (the Done row, committed
-  // via addResult/syntheticResult below) butts directly against the
-  // summary. See docs/tui-rhythm.md.
-  if (!ctx.isTTY && source.thinkingLane?.hasBufferedContent()) {
-    const thinkingSummary = source.thinkingLane.collapse();
-    if (thinkingSummary) {
-      ctx.out.line(thinkingSummary);
-      ctx.out.line('');
-    }
-  }
-
-  // Clear the live thinking tail before the Done row is committed —
-  // `formatDoneSummary` reads `source.thinkingLane` to append the
-  // "thought Xs · N tok" post-mortem stat, which makes the live tail
-  // redundant and visually noisy alongside the result line.
-  ctx.toolLane.setThinkingTail(parentId, undefined);
-  // Item #6: Clean up the per-parentId throttle entry so the map doesn't
-  // grow unboundedly across many short-lived subagents in a long session.
-  // External constraint: delete AFTER setThinkingTail(undefined) so the
-  // clear is never throttled by a stale timestamp from the same run.
-  thinkingTailLastUpdate.delete(parentId);
-  // H2 fix: clean up the overlay throttle entry too.
-  overlayLastUpdate.delete(parentId);
-
-  const summary = formatDoneSummary(source);
-  ctx.toolLane.setAgentResultSummary(parentId, summary);
-  ctx.toolLane.addResult(
-    parentId,
-    syntheticResult(summary, false),
-  );
-  if (ctx.isTTY && ctx.compositor) {
-    // Route the final Done-row overlay through the composer when present so it
-    // recomposes all active slots in z-order instead of clobbering the overlay
-    // region with the tool-lane alone (overlay-composer.ts invariant: the
-    // composer is the sole writer of compositor.setOverlay during a turn).
-    if (ctx.overlayComposer) {
-      ctx.overlayComposer.markDirty('tool-lane');
-      ctx.overlayComposer.flush();
-    } else {
-      ctx.compositor.setOverlay(ctx.toolLane.getOverlay());
-    }
-  }
 }

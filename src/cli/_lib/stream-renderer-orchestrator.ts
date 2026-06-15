@@ -7,6 +7,12 @@
  */
 
 import type { OutputEvent, ProgressEvent } from '../../agent/types.js';
+// Design note (issue #389): `lastProgressByTask` is now a field of
+// OrchestratorCtx rather than a separate parameter to setComposedOverlay.
+// This lets any callsite (including subagent handlers via
+// SubagentCtx.orchestratorCtx) compose the full overlay without needing
+// an independent copy of the progress map. See the SubagentCtx comment in
+// stream-renderer-subagent.ts for the companion rationale.
 import type { SourceState } from './stream-renderer-source.js';
 import type { Writer } from '../slash/types.js';
 import type { TerminalCompositor } from '../terminal-compositor.js';
@@ -96,6 +102,14 @@ export interface OrchestratorCtx {
    * falls back to direct-emit behavior for backward compatibility.
    */
   coordinator?: CommitCoordinator;
+  /**
+   * Live progress map — mutated by `progress` events and read by
+   * `setComposedOverlay` to render the progress banner layer of the
+   * composed overlay. Hoisted from the old second parameter so every
+   * callsite (including subagent handlers via SubagentCtx.orchestratorCtx)
+   * can compose the full frame without carrying a separate copy.
+   */
+  lastProgressByTask: Map<string, ProgressEvent>;
 }
 
 /**
@@ -105,7 +119,6 @@ export function handleOrchestratorEvent(
   event: OutputEvent,
   source: SourceState,
   ctx: OrchestratorCtx,
-  lastProgressByTask: Map<string, ProgressEvent>,
 ): void {
   // Invariant: at most one setComposedOverlay call per event. The pre-switch
   // block updates tracker state only; per-case arms below fire the single
@@ -131,9 +144,9 @@ export function handleOrchestratorEvent(
       // unlike turn-handler.ts — never rebuilds on 'resumed') would otherwise
       // leave two distinct taskIds accumulated here, rendering two stacked
       // "Tool-use loop" banners. The live loop's next progress event wipes it.
-      lastProgressByTask.clear();
-      lastProgressByTask.set(event.progress.taskId, event.progress);
-      if (ctx.isTTY) setComposedOverlay(ctx, lastProgressByTask);
+      ctx.lastProgressByTask.clear();
+      ctx.lastProgressByTask.set(event.progress.taskId, event.progress);
+      if (ctx.isTTY) setComposedOverlay(ctx);
       return;
 
     case 'chunk': {
@@ -230,17 +243,17 @@ export function handleOrchestratorEvent(
         if (ctx.isTTY && ctx.compositor) {
           ctx.compositor.setSpinner({ enabled: true, rotateVerbEveryMs: 3500 });
         }
-        if (ctx.isTTY) setComposedOverlay(ctx, lastProgressByTask);
+        if (ctx.isTTY) setComposedOverlay(ctx);
       } else if (chunk.type === 'tool_result') {
         ctx.streamingMarkdown.current?.commitPending();
         ctx.toolLane.addResult(chunk.toolUseId, chunk);
-        if (ctx.isTTY) setComposedOverlay(ctx, lastProgressByTask);
+        if (ctx.isTTY) setComposedOverlay(ctx);
       } else if (chunk.type === 'tool_diff') {
         // Sidecar render-only diff. Late-attached to the matching tool
         // entry by `toolUseId`; if the entry no longer exists (lane
         // already flushed), `addDiff` is a no-op by design.
         ctx.toolLane.addDiff(chunk.toolUseId, chunk.diff);
-        if (ctx.isTTY) setComposedOverlay(ctx, lastProgressByTask);
+        if (ctx.isTTY) setComposedOverlay(ctx);
       } else if (chunk.type === 'content') {
         // Thinking→acting boundary: text is starting to stream. Cap the
         // thinking-duration window so a 30s think followed by 150s of text
@@ -299,12 +312,11 @@ export function handleOrchestratorEvent(
           source.thinkingPhaseStartedAt = Date.now();
         }
         ctx.thinkingLane.push(chunk.content);
-        // Repaint unconditionally (when TTY) so the stage rail advance to
-        // 'modeling' is visible in BOTH 'live' and 'summary' modes. The
-        // thinking paragraph itself is still gated on 'live' mode inside
-        // setComposedOverlay — summary-mode users see the rail update
-        // without the paragraph leaking out of its silent buffer.
-        if (ctx.isTTY) setComposedOverlay(ctx, lastProgressByTask);
+        // Only repaint the overlay in 'live' mode — summary mode buffers
+        // silently and has nothing overlay-visible to push (the stage rail
+        // moved to a footer bar and is repainted via onStageChange in
+        // stream-renderer.ts, not through setComposedOverlay).
+        if (ctx.isTTY && ctx.thinkingMode === 'live') setComposedOverlay(ctx);
       }
       return;
     }
@@ -346,15 +358,21 @@ export function handleOrchestratorEvent(
 }
 
 /**
- * Compose tool-lane overlay + progress banner into a single overlay string
- * and push it to the compositor. Both layers are optional — whichever is
- * active gets included. Prevents the old bug where progress events and
- * tool events would clobber each other's overlay.
+ * Compose stage-rail + thinking paragraph + tool-lane overlay + progress
+ * banner into a single overlay string and push it to the compositor
+ * atomically. All layers are optional — whichever is active gets included.
+ *
+ * This is the ONLY function that should call `compositor.setOverlay` with
+ * live content. All orchestrator and subagent code paths that mutate
+ * toolLane, thinkingLane, or the progress map must route their overlay
+ * repaints through here so every frame includes the full composed picture.
+ *
+ * The second `lastProgressByTask` parameter was removed in issue #389 — it
+ * is now read from `ctx.lastProgressByTask` so subagent handlers can call
+ * this function via `ctx.orchestratorCtx` without needing a separate
+ * reference to the progress map.
  */
-export function setComposedOverlay(
-  ctx: OrchestratorCtx,
-  lastProgressByTask?: Map<string, ProgressEvent>,
-): void {
+export function setComposedOverlay(ctx: OrchestratorCtx): void {
   if (!ctx.compositor) return;
 
   // When the overlay composer is available, use it to compose all slots.
@@ -365,32 +383,33 @@ export function setComposedOverlay(
     return;
   }
 
-  // Legacy path for tests and callers without a composer.
-  // This preserves the old setComposedOverlay behavior, minus the stage-rail
-  // which is now a reserved footer row managed by LoopStageBar (not part of
-  // the overlay in either the composer or legacy paths).
+  // Live thinking preview — rendered above the tool lane so the user sees
+  // the model's current reasoning while it streams. Only in 'live' mode;
+  // 'summary' mode buffers silently and emits a single line at turn-end.
+  //
+  // Rendered as a wrapped, soft-capped paragraph (`◆ thinking` header +
+  // indented body, ~5 visible lines, `⋯ +N chars earlier` footer when the
+  // buffer outruns the cap). See `formatThinkingParagraph` for the format
+  // and the design rationale — including why we cap (otherwise a 30-second
+  // chain of thought would push the tool lane and progress banner offscreen).
+  //
+  // Subagent thinking is deliberately NOT wired through this path — each
+  // subagent renders into its parent's ToolLane row via
+  // `setThinkingTail()` in stream-renderer-subagent.ts. See the comment
+  // block in that file for why parallel subagents stay on the single-line
+  // tail treatment instead of the paragraph format.
   const parts: string[] = [];
-  // Same gate as the thinking-live overlay slot (stream-renderer-lifecycle.ts):
-  // suppress the live preview once thinking is collapsed (isActive() === false),
-  // even though the buffer is retained for inlineSummary.
-  if (ctx.thinkingMode === 'live' && ctx.thinkingLane.isActive() && ctx.thinkingLane.hasBufferedContent()) {
-    // peekPhase() (not peek()): show only the CURRENT uncommitted phase so the
-    // preview clears once a phase is collapsed into an inline summary above,
-    // rather than re-showing reasoning already committed to scrollback.
-    const paragraph = formatThinkingParagraph(ctx.thinkingLane.peekPhase(), {
+  if (ctx.thinkingMode === 'live' && ctx.thinkingLane.hasBufferedContent()) {
+    const paragraph = formatThinkingParagraph(ctx.thinkingLane.peek(), {
       cols: getTerminalWidth(),
     });
     if (paragraph) parts.push(paragraph);
   }
   if (ctx.toolLane.hasPending()) parts.push(ctx.toolLane.getOverlay());
-  if (lastProgressByTask && lastProgressByTask.size > 0) {
-    const bannerLines: string[] = [];
-    for (const progress of lastProgressByTask.values()) {
-      bannerLines.push(...formatProgressBanner(progress));
-    }
-    if (bannerLines.length > 0) parts.push(bannerLines.join('\n'));
+  const bannerLines: string[] = [];
+  for (const progress of ctx.lastProgressByTask.values()) {
+    bannerLines.push(...formatProgressBanner(progress));
   }
-  if (parts.length > 0) {
-    ctx.compositor.setOverlay(parts.join('\n'));
-  }
+  if (bannerLines.length > 0) parts.push(bannerLines.join('\n'));
+  ctx.compositor.setOverlay(parts.join('\n'));
 }

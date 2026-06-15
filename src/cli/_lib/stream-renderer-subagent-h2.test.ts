@@ -9,7 +9,9 @@ import {
   type SubagentCtx,
 } from './stream-renderer-subagent.js';
 import { freshSourceState, type SourceState } from './stream-renderer-source.js';
+import type { OrchestratorCtx } from './stream-renderer-orchestrator.js';
 import { ToolLane } from '../commands/interactive/tool-lane.js';
+import { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import type { Writer } from '../slash/types.js';
 import type { StreamingMarkdownRenderer } from './stream-renderer.js';
 import type { TerminalCompositor } from '../terminal-compositor.js';
@@ -17,6 +19,18 @@ import type { OutputEvent } from '../../agent/types.js';
 
 function makeCtx(toolLane: ToolLane, compositor: TerminalCompositor, thinkingMode: 'live' | 'summary' | 'off' = 'live'): SubagentCtx {
   const writer: Writer = { line() {}, raw() {}, success() {}, info() {}, warn() {}, error() {} };
+  // Provide orchestratorCtx with the same compositor so setComposedOverlay
+  // (the post-issue-#389 overlay path) routes through to the spy correctly.
+  const orchCtx: OrchestratorCtx = {
+    out: writer,
+    isTTY: true,
+    compositor,
+    toolLane,
+    thinkingLane: new ThinkingLane(),
+    thinkingMode: 'off',
+    streamingMarkdown: { current: null },
+    lastProgressByTask: new Map(),
+  };
   return {
     isTTY: true,
     compositor,
@@ -24,6 +38,7 @@ function makeCtx(toolLane: ToolLane, compositor: TerminalCompositor, thinkingMod
     out: writer,
     streamingMarkdown: new Map<string, StreamingMarkdownRenderer>(),
     thinkingMode,
+    orchestratorCtx: orchCtx,
   };
 }
 

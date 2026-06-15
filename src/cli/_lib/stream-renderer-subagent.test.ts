@@ -19,17 +19,47 @@ import {
   type SubagentCtx,
 } from './stream-renderer-subagent.js';
 import { freshSourceState, type SourceState } from './stream-renderer-source.js';
+import type { OrchestratorCtx } from './stream-renderer-orchestrator.js';
 import { ToolLane } from '../commands/interactive/tool-lane.js';
+import { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import { stripAnsi } from '../display.js';
 import type { Writer } from '../slash/types.js';
 import type { StreamingMarkdownRenderer } from './stream-renderer.js';
 import type { TerminalCompositor } from '../terminal-compositor.js';
 import type { OutputEvent } from '../../agent/types.js';
 
+/**
+ * Build a minimal OrchestratorCtx that wraps the given compositor and
+ * toolLane. Used by TTY-path tests that now route through setComposedOverlay
+ * (issue #389 — all overlay repaints composed).
+ */
+function makeOrchestratorCtx(
+  toolLane: ToolLane,
+  compositor: TerminalCompositor | null,
+  writer: Writer,
+): OrchestratorCtx {
+  return {
+    out: writer,
+    isTTY: compositor !== null,
+    compositor,
+    toolLane,
+    thinkingLane: new ThinkingLane(),
+    thinkingMode: 'off',
+    streamingMarkdown: { current: null },
+    lastProgressByTask: new Map(),
+  };
+}
+
 interface MakeCtxOptions {
   isTTY?: boolean;
   compositor?: TerminalCompositor | null;
   out?: Writer;
+  /**
+   * Optional pre-built orchestratorCtx for TTY-path tests that need
+   * setComposedOverlay to fire. When omitted, orchestratorCtx is not set
+   * (non-TTY / non-overlay tests don't need it).
+   */
+  orchestratorCtx?: OrchestratorCtx;
 }
 
 function makeCtx(toolLane: ToolLane, opts: MakeCtxOptions = {}): SubagentCtx {
@@ -48,6 +78,7 @@ function makeCtx(toolLane: ToolLane, opts: MakeCtxOptions = {}): SubagentCtx {
     out: writer,
     streamingMarkdown: new Map<string, StreamingMarkdownRenderer>(),
     thinkingMode: 'summary',
+    ...(opts.orchestratorCtx !== undefined ? { orchestratorCtx: opts.orchestratorCtx } : {}),
   };
 }
 
@@ -225,7 +256,11 @@ describe('handleSubagentEvent — TTY path (M-6)', () => {
   it('calls compositor.setOverlay after a tool_use_detail chunk on TTY', () => {
     const lane = new ToolLane();
     const compositor = makeCompositor();
-    const ctx = makeCtx(lane, { isTTY: true, compositor });
+    // Provide orchestratorCtx so the subagent handler routes through
+    // setComposedOverlay (issue #389 — all overlay repaints composed).
+    const writer: Writer = { line() {}, raw() {}, success() {}, info() {}, warn() {}, error() {} };
+    const orchCtx = makeOrchestratorCtx(lane, compositor, writer);
+    const ctx = makeCtx(lane, { isTTY: true, compositor, orchestratorCtx: orchCtx });
 
     const source: SourceState = freshSourceState('sub-tty');
     source.agentType = 'verifier';
@@ -524,6 +559,190 @@ describe('handleSubagentEvent — thinking-tail throttle (Item #6)', () => {
       expect(afterReuse).toBeGreaterThan(afterFirst);
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+// ── Issue #389 regression: subagent state transitions preserve orchestrator
+//    thinking paragraph ──────────────────────────────────────────────────────
+//
+// Pre-fix: subagent handlers called compositor.setOverlay(toolLane.getOverlay())
+// directly, which produced a bare tool-lane-only frame and wiped the
+// orchestrator's live-thinking paragraph on every subagent state transition.
+// Post-fix: all repaints go through setComposedOverlay(ctx.orchestratorCtx),
+// which includes the thinking paragraph when it is buffered and visible.
+//
+// This test verifies the invariant: when the orchestrator has a live thinking
+// buffer AND a subagent fires tool_use_detail / tool_result / tool_diff /
+// error / finalizeSubagent events, every overlay frame produced by those
+// events contains the '◆ thinking' header (i.e. the paragraph was not dropped).
+describe('handleSubagentEvent — issue #389 regression: subagent events preserve orchestrator thinking paragraph', () => {
+  function makeCompositor() {
+    const overlayCalls: string[] = [];
+    const compositor = {
+      setOverlay: (text: string) => { overlayCalls.push(text); },
+      commitAbove: vi.fn(),
+    } as unknown as TerminalCompositor;
+    return { compositor, overlayCalls };
+  }
+
+  function makeWriter(): Writer {
+    return { line() {}, raw() {}, success() {}, info() {}, warn() {}, error() {} };
+  }
+
+  function strip(s: string): string {
+    // eslint-disable-next-line no-control-regex
+    return s.replace(/\x1b\[[0-9;]*m/g, '');
+  }
+
+  it('tool_use_detail does NOT drop the live-thinking paragraph from the composed overlay', () => {
+    const lane = new ToolLane();
+    const { compositor, overlayCalls } = makeCompositor();
+    const writer = makeWriter();
+
+    // Orchestrator ctx with a live thinking buffer.
+    const thinkingLane = new ThinkingLane();
+    thinkingLane.push('I am reasoning about the task carefully.');
+    const orchCtx: OrchestratorCtx = {
+      out: writer,
+      isTTY: true,
+      compositor,
+      toolLane: lane,
+      thinkingLane,
+      thinkingMode: 'live',
+      streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
+    };
+
+    // Subagent ctx wired to the same compositor + toolLane + orchestratorCtx.
+    const subCtx: SubagentCtx = {
+      isTTY: true,
+      compositor,
+      toolLane: lane,
+      out: writer,
+      streamingMarkdown: new Map(),
+      thinkingMode: 'summary',
+      orchestratorCtx: orchCtx,
+    };
+
+    const source: SourceState = freshSourceState('verifier');
+    source.agentType = 'verifier';
+    synthesizeAgentEntry('src-389', source, subCtx, undefined);
+
+    const toolStartEvent: OutputEvent = {
+      type: 'chunk',
+      chunk: { type: 'tool_use_detail', toolUseId: 'tu-389', toolName: 'Bash', toolInput: '"echo hi"' },
+    } as OutputEvent;
+
+    handleSubagentEvent(toolStartEvent, 'src-389', source, subCtx);
+
+    // At least one overlay was emitted (the repaint after tool_use_detail).
+    expect(overlayCalls.length).toBeGreaterThan(0);
+
+    // Every overlay frame emitted after tool_use_detail must preserve the
+    // thinking paragraph header — none should be a bare tool-lane-only frame.
+    for (const frame of overlayCalls) {
+      const plain = strip(frame);
+      expect(
+        plain,
+        `overlay frame dropped the thinking paragraph:\n${plain}`,
+      ).toContain('◆ thinking');
+    }
+  });
+
+  it('tool_result does NOT drop the live-thinking paragraph from the composed overlay', () => {
+    const lane = new ToolLane();
+    const { compositor, overlayCalls } = makeCompositor();
+    const writer = makeWriter();
+
+    const thinkingLane = new ThinkingLane();
+    thinkingLane.push('Still reasoning while tool runs.');
+    const orchCtx: OrchestratorCtx = {
+      out: writer,
+      isTTY: true,
+      compositor,
+      toolLane: lane,
+      thinkingLane,
+      thinkingMode: 'live',
+      streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
+    };
+    const subCtx: SubagentCtx = {
+      isTTY: true,
+      compositor,
+      toolLane: lane,
+      out: writer,
+      streamingMarkdown: new Map(),
+      thinkingMode: 'summary',
+      orchestratorCtx: orchCtx,
+    };
+
+    const source: SourceState = freshSourceState('verifier2');
+    source.agentType = 'verifier';
+    synthesizeAgentEntry('src-389b', source, subCtx, undefined);
+
+    // Register a tool use first so tool_result has something to attach to.
+    lane.addStartWithAgentContext('tu-389b', 'Read', '"file.ts"', source.syntheticAgentToolUseId);
+
+    const toolResultEvent: OutputEvent = {
+      type: 'chunk',
+      chunk: { type: 'tool_result', toolUseId: 'tu-389b', content: 'ok', isError: false },
+    } as OutputEvent;
+
+    handleSubagentEvent(toolResultEvent, 'src-389b', source, subCtx);
+
+    expect(overlayCalls.length).toBeGreaterThan(0);
+    for (const frame of overlayCalls) {
+      const plain = strip(frame);
+      expect(
+        plain,
+        `overlay frame dropped the thinking paragraph:\n${plain}`,
+      ).toContain('◆ thinking');
+    }
+  });
+
+  it('finalizeSubagent does NOT drop the live-thinking paragraph from the composed overlay', () => {
+    const lane = new ToolLane();
+    const { compositor, overlayCalls } = makeCompositor();
+    const writer = makeWriter();
+
+    const thinkingLane = new ThinkingLane();
+    thinkingLane.push('Synthesizing the final answer now.');
+    const orchCtx: OrchestratorCtx = {
+      out: writer,
+      isTTY: true,
+      compositor,
+      toolLane: lane,
+      thinkingLane,
+      thinkingMode: 'live',
+      streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
+    };
+    const subCtx: SubagentCtx = {
+      isTTY: true,
+      compositor,
+      toolLane: lane,
+      out: writer,
+      streamingMarkdown: new Map(),
+      thinkingMode: 'summary',
+      orchestratorCtx: orchCtx,
+    };
+
+    const source: SourceState = freshSourceState('verifier3');
+    source.agentType = 'verifier';
+    synthesizeAgentEntry('src-389c', source, subCtx, undefined);
+
+    // Drive a 'done' event which calls finalizeSubagent internally.
+    const doneEvent: OutputEvent = { type: 'done' } as OutputEvent;
+    handleSubagentEvent(doneEvent, 'src-389c', source, subCtx);
+
+    expect(overlayCalls.length).toBeGreaterThan(0);
+    for (const frame of overlayCalls) {
+      const plain = strip(frame);
+      expect(
+        plain,
+        `overlay frame dropped the thinking paragraph:\n${plain}`,
+      ).toContain('◆ thinking');
     }
   });
 });

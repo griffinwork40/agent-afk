@@ -77,6 +77,7 @@ function makeCtx(
     thinkingLane: new ThinkingLane(),
     thinkingMode: 'off',
     streamingMarkdown: { current: null },
+    lastProgressByTask: new Map(),
   };
 }
 
@@ -172,6 +173,7 @@ describe('TUI rhythm contract — flushToolLaneToScrollback', () => {
       thinkingLane: new ThinkingLane(),
       thinkingMode: 'off',
       streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
     };
 
     flushToolLaneToScrollback(ctx);
@@ -213,7 +215,7 @@ describe('TUI rhythm contract — done-time tool-lane flush', () => {
 
     // Drive the done event — this path takes the orchestrator branch
     // at lines 357-379 (tool-lane flush + before-content anchor).
-    handleOrchestratorEvent({ type: 'done', metadata: { durationMs: 1 } }, source, ctx, new Map());
+    handleOrchestratorEvent({ type: 'done', metadata: { durationMs: 1 } }, source, ctx);
 
     // The done-path schedules commits through coordinator OR runs the
     // fallback path. In the fallback (no coordinator on ctx), it calls
@@ -253,7 +255,6 @@ describe('TUI rhythm contract — orchestrator before-content path', () => {
       { type: 'chunk', chunk: { type: 'content', content: 'prose after tool' } },
       source,
       ctx,
-      new Map(),
     );
 
     // The tool flush must have produced at least tool content + a trailing blank.
