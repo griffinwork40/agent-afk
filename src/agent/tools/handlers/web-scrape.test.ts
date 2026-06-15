@@ -44,15 +44,15 @@ function richArticleHtml(marker = 'main article content'): string {
     `<footer>Copyright</footer></body></html>`;
 }
 
-/** A Brave Search JSON response object. */
-function braveResponse(results: Array<{ title?: string; url?: string; description?: string }>): Response {
+/** An Exa Search JSON response object. */
+function exaResponse(results: Array<{ title?: string | null; url?: string; highlights?: string[] }>): Response {
   return {
     ok: true,
     status: 200,
     statusText: 'OK',
     headers: new Headers({ 'content-type': 'application/json' }),
-    json: async (): Promise<unknown> => ({ web: { results } }),
-    text: async (): Promise<string> => JSON.stringify({ web: { results } }),
+    json: async (): Promise<unknown> => ({ results }),
+    text: async (): Promise<string> => JSON.stringify({ results }),
   } as unknown as Response;
 }
 
@@ -221,41 +221,43 @@ describe('web_scrape handler — raw mode', () => {
   });
 });
 
-describe('web_scrape handler — search mode (Brave)', () => {
-  it('queries Brave with the subscription token and formats ranked results', async () => {
+describe('web_scrape handler — search mode (Exa)', () => {
+  it('queries Exa with the api key and formats ranked results', async () => {
     let seenUrl = '';
-    let seenToken: string | null = null;
+    let seenKey: string | null = null;
+    let seenBody: { query?: string } = {};
     const fetchFn = vi.fn(async (input: Parameters<FetchFn>[0], init?: Parameters<FetchFn>[1]) => {
       seenUrl = String(input);
-      seenToken = new Headers(init?.headers).get('x-subscription-token');
-      return braveResponse([
-        { title: 'Result 1', description: 'desc 1', url: 'https://r1.example' },
-        { title: 'Result 2', description: 'desc 2', url: 'https://r2.example' },
+      seenKey = new Headers(init?.headers).get('x-api-key');
+      seenBody = JSON.parse(String(init?.body)) as { query?: string };
+      return exaResponse([
+        { title: 'Result 1', highlights: ['desc 1'], url: 'https://r1.example' },
+        { title: 'Result 2', highlights: ['desc 2'], url: 'https://r2.example' },
       ]);
     }) as unknown as FetchFn;
-    const handler = createWebScrapeHandler({ fetchFn, env: { BRAVE_SEARCH_API_KEY: 'brave-secret' } });
+    const handler = createWebScrapeHandler({ fetchFn, env: { EXA_API_KEY: 'exa-secret' } });
 
     const r = await handler({ mode: 'search', query: 'playwright scraping' }, signal());
     expect(r.isError).toBeUndefined();
-    expect(seenUrl).toContain('api.search.brave.com');
-    expect(seenUrl).toContain('q=playwright+scraping');
-    expect(seenToken).toBe('brave-secret');
+    expect(seenUrl).toContain('api.exa.ai/search');
+    expect(seenBody.query).toBe('playwright scraping');
+    expect(seenKey).toBe('exa-secret');
     expect(r.content).toMatch(/# Search results for "playwright scraping"/);
     expect(r.content).toMatch(/## 1\. Result 1/);
     expect(r.content).toMatch(/https:\/\/r1\.example/);
     expect(r.content).toMatch(/## 2\. Result 2/);
   });
 
-  it('returns a clear error (and makes no request) when BRAVE_SEARCH_API_KEY is unset', async () => {
+  it('returns a clear error (and makes no request) when EXA_API_KEY is unset', async () => {
     const fetchFn = vi.fn(async () => makeResponse({ body: '' })) as unknown as FetchFn;
     const handler = createWebScrapeHandler({ fetchFn, env: {} });
     const r = await handler({ mode: 'search', query: 'whatever' }, signal());
     expect(r.isError).toBe(true);
-    expect(r.content).toMatch(/BRAVE_SEARCH_API_KEY/);
+    expect(r.content).toMatch(/EXA_API_KEY/);
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  it('surfaces a Brave HTTP error', async () => {
+  it('surfaces an Exa HTTP error', async () => {
     const fetchFn = vi.fn(async () => ({
       ok: false,
       status: 422,
@@ -264,16 +266,16 @@ describe('web_scrape handler — search mode (Brave)', () => {
       text: async (): Promise<string> => 'quota exceeded',
       json: async (): Promise<unknown> => ({}),
     } as unknown as Response)) as unknown as FetchFn;
-    const handler = createWebScrapeHandler({ fetchFn, env: { BRAVE_SEARCH_API_KEY: 'k' } });
+    const handler = createWebScrapeHandler({ fetchFn, env: { EXA_API_KEY: 'k' } });
     const r = await handler({ mode: 'search', query: 'q' }, signal());
     expect(r.isError).toBe(true);
-    expect(r.content).toMatch(/search error \(brave\)/);
+    expect(r.content).toMatch(/search error \(exa\)/);
     expect(r.content).toMatch(/422/);
   });
 
   it('handles an empty result set without throwing', async () => {
-    const fetchFn = vi.fn(async () => braveResponse([])) as unknown as FetchFn;
-    const handler = createWebScrapeHandler({ fetchFn, env: { BRAVE_SEARCH_API_KEY: 'k' } });
+    const fetchFn = vi.fn(async () => exaResponse([])) as unknown as FetchFn;
+    const handler = createWebScrapeHandler({ fetchFn, env: { EXA_API_KEY: 'k' } });
     const r = await handler({ mode: 'search', query: 'no hits' }, signal());
     expect(r.isError).toBeUndefined();
     expect(r.content).toMatch(/no results/);

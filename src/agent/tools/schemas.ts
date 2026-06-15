@@ -256,7 +256,7 @@ export const webScrapeTool: AnthropicToolDef = {
     'No API key required.\n' +
     '- `search`: runs a web search and returns ranked markdown results. Use when ' +
     'you need to FIND a URL, not read one. Provide `query` instead of `url`. ' +
-    'Requires `BRAVE_SEARCH_API_KEY` (free tier at https://brave.com/search/api/); ' +
+    'Requires `EXA_API_KEY` (free tier at https://exa.ai); ' +
     'the handler returns a clear error if it is unset.\n\n' +
     'Outputs are capped at `max_bytes` UTF-8 bytes (default 1MB, ceiling 10MB) ' +
     'and the request is aborted after `timeout_ms` (default 30000, ceiling 120000).',

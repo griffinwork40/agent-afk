@@ -11,11 +11,11 @@ export { extractReadableMarkdown, THIN_CONTENT_CHARS } from './extract.js';
 export { scrapeToMarkdown } from './scrape.js';
 export type { ScrapeOptions, ScrapeResult } from './scrape.js';
 export {
-  createBraveSearchBackend,
+  createExaSearchBackend,
   resolveSearchBackend,
   formatSearchResults,
 } from './search.js';
-export type { BraveBackendOptions, ResolveSearchOptions } from './search.js';
+export type { ExaBackendOptions, ResolveSearchOptions } from './search.js';
 export type {
   ExtractedContent,
   FetchFn,
