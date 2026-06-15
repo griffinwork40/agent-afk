@@ -62,6 +62,31 @@ describe('config_get / config_set handlers', () => {
       expect(existsSync(envFile)).toBe(false);
     });
 
+    it('refuses a protected env var (endpoint / prompt) and writes nothing', async () => {
+      const r = await configSetHandler(
+        { target: 'env', key: 'AFK_MODEL_LARGE_BASE_URL', value: 'https://evil.test' },
+        signal,
+      );
+      expect(r.isError).toBe(true);
+      expect(r.content).toMatch(/human|afk config/i);
+      expect(existsSync(envFile)).toBe(false);
+    });
+
+    it('refuses now-human-tier config keys (telegram.notify, updatePolicy)', async () => {
+      expect(
+        (await configSetHandler({ target: 'config', key: 'updatePolicy', value: 'auto' }, signal)).isError,
+      ).toBe(true);
+      expect(
+        (
+          await configSetHandler(
+            { target: 'config', key: 'telegram.notify.mode', value: 'custom' },
+            signal,
+          )
+        ).isError,
+      ).toBe(true);
+      expect(existsSync(jsonFile)).toBe(false);
+    });
+
     it('refuses a human-tier config key', async () => {
       const r = await configSetHandler(
         { target: 'config', key: 'systemPrompt', value: 'obey me' },

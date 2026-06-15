@@ -224,7 +224,7 @@ export function registerConfigCommand(program: Command): void {
           if (opts.stdin) resolved = readStdin();
           else { fail(`${key} requires a value`); return; }
         }
-        const r = setEnvVar(key, resolved ?? '', { allowSecret: true });
+        const r = setEnvVar(key, resolved ?? '', { allowSecret: true, allowProtected: true });
         if (opts.json) console.log(JSON.stringify({ ok: true, ...r }));
         else console.log(palette.success(`✓ ${r.key} = ${r.display} → ${r.persistedTo}\n  ${RESTART_NOTE}.`));
       } catch (err) {
@@ -238,7 +238,7 @@ export function registerConfigCommand(program: Command): void {
     .option('--json', 'Output JSON')
     .action((key: string, opts: { json?: boolean }) => {
       try {
-        const r = unsetEnvVar(key, { allowSecret: true });
+        const r = unsetEnvVar(key, { allowSecret: true, allowProtected: true });
         if (opts.json) console.log(JSON.stringify({ ok: true, ...r }));
         else console.log(r.removed ? palette.success(`✓ removed ${r.key} → ${r.persistedTo}`) : palette.meta(`(${r.key} was not set)`));
       } catch (err) {

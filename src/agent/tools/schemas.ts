@@ -670,9 +670,11 @@ export const configSetTool: AnthropicToolDef = {
     'Edit your own AFK configuration in ~/.afk/config/ — persists for FUTURE sessions. ' +
     "Use target 'config' (afk.config.json) or 'env' (afk.env). action 'set' (default) writes `value`; " +
     "action 'unset' removes the key. You may set non-secret behavioural settings freely (e.g. model, " +
-    'temperature, AFK_EFFORT, telegram.notify.mode). You CANNOT set credentials (API keys, tokens) or ' +
-    'identity/safety keys (systemPrompt, hooks) — those are human-gated and will be refused with ' +
-    'instructions for the human to run the `afk config` CLI. IMPORTANT: changes take effect on the next ' +
+    'temperature, AFK_EFFORT, autoRouting.chat). You CANNOT set credentials (API keys, tokens) or ' +
+    'human-gated control keys: system prompt (systemPrompt / AFK_SYSTEM_PROMPT), hooks, daemon task, ' +
+    'API endpoints (*_BASE_URL), browser-domain policy, Telegram routing/allowlist, MCP/tier gates, ' +
+    'and state-dir paths — those are refused with instructions for the human to run the `afk config` ' +
+    'CLI. IMPORTANT: changes take effect on the next ' +
     'session/daemon restart; the CURRENT session is unchanged, so do not re-set a key expecting a live effect.',
   input_schema: {
     type: 'object',

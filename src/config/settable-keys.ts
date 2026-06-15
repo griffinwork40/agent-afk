@@ -47,20 +47,77 @@ export const INHERITED_ENV_KEYS: ReadonlySet<string> = new Set([
   'ASCIINEMA_REC',
 ]);
 
-export type EnvKeyClass = 'settable' | 'secret' | 'non-config' | 'unknown';
+/**
+ * Non-secret env vars that nonetheless control identity, safety, capability,
+ * autonomous-run behaviour, request routing, or where the agent's own state
+ * lives. They are NOT credentials (the `secret` tier doesn't cover them), but
+ * the agent must not set them on its own config: they are the env twins of the
+ * human-tier afk.config.json keys (`systemPrompt`, `daemon.*`,
+ * `telegram.notify.*`, `interactive.worktree*`) plus endpoint, state-location,
+ * and tier-gate controls. The `afk config` CLI (human surface) opts past this
+ * gate; the `config_set` agent tool never does. Mirrors the `human` config tier.
+ *
+ * Every `*_BASE_URL` is additionally protected by a suffix rule in
+ * `classifyEnvKey`: an endpoint redirect carries the paired (separately-secret)
+ * API key and the full conversation to wherever it points.
+ */
+export const PROTECTED_ENV_KEYS: ReadonlySet<string> = new Set([
+  // Endpoint redirection (also matched by the *_BASE_URL suffix rule).
+  'AFK_MODEL_SMALL_BASE_URL',
+  'AFK_MODEL_MEDIUM_BASE_URL',
+  'AFK_MODEL_LARGE_BASE_URL',
+  'AFK_LOCAL_BASE_URL',
+  'AFK_OPENAI_BASE_URL',
+  // Identity / system-prompt overlay (highest-priority; env twin of human-tier `systemPrompt`).
+  'AFK_SYSTEM_PROMPT',
+  // Autonomous-run control — env twins of human-tier `daemon.*` config keys.
+  'AFK_DAEMON_TASK',
+  'AFK_DAEMON_TASK_ID',
+  'AFK_DAEMON_CWD',
+  'AFK_DAEMON_HOST',
+  // Browser navigation guardrail + alternate-config path.
+  'AFK_BROWSER_ALLOWED_DOMAINS',
+  'AFK_BROWSER_BLOCKED_DOMAINS',
+  'AFK_BROWSER_CONFIG',
+  // Capability / tier gates the agent must not flip on itself.
+  'AFK_ALLOW_PROJECT_MCP',
+  'AFK_INTERNAL',
+  // Worktree git-ref fields — env twins of human-tier `interactive.worktree*` (git-flag sensitive).
+  'AFK_WORKTREE_BASE',
+  'AFK_WORKTREE_BRANCH_PREFIX',
+  // Telegram routing + allowlist — who may drive the bot, where notifications go
+  // (env twins of human-tier `telegram.notify.*`).
+  'AFK_TELEGRAM_ALLOWED_CHAT_IDS',
+  'AFK_TELEGRAM_NOTIFY_MODE',
+  'AFK_TELEGRAM_PRIMARY_CHAT_ID',
+  // State / credential-tree relocation — where AFK's own config, state, memory,
+  // or Telegram auth is read from and written to.
+  'AFK_HOME',
+  'AFK_STATE_DIR',
+  'AFK_FRAMEWORK_DIR',
+  'TELEGRAM_DATA_DIR',
+  'AFK_TELEGRAM_CWD',
+]);
+
+export type EnvKeyClass = 'settable' | 'secret' | 'protected' | 'non-config' | 'unknown';
 
 /**
  * Classify an env-var name for mutation purposes.
  *   - unknown    — not in ENV_REGISTRY (typo / not a real afk var)
  *   - non-config — inherited/process var (PATH, HOME, …)
  *   - secret     — credential-bearing (`secret: true`); human-gated
- *   - settable   — non-secret afk knob; agent may set
+ *   - protected  — non-secret control (prompt/daemon/browser/endpoint/state/
+ *                  tier gate); human-gated, agent refused (PROTECTED_ENV_KEYS)
+ *   - settable   — non-secret behavioural knob; agent may set
  */
 export function classifyEnvKey(name: string): EnvKeyClass {
   const meta = getEnvVarMeta(name);
   if (!meta) return 'unknown';
   if (INHERITED_ENV_KEYS.has(name)) return 'non-config';
   if (meta.secret) return 'secret';
+  // Endpoint redirects are categorically credential/data-exfiltration vectors,
+  // so every `*_BASE_URL` is protected even if a new one is added later.
+  if (PROTECTED_ENV_KEYS.has(name) || name.endsWith('_BASE_URL')) return 'protected';
   return 'settable';
 }
 
@@ -131,7 +188,9 @@ export interface ConfigKeySpec {
  * Deliberately NOT agent-settable (human tier): `systemPrompt` (the agent
  * rewriting its own prompt is recursive-risk), `hooks` (could disable safety
  * hooks), `importFrom` (a trust grant), `daemon.*` (controls autonomous runs),
- * and the worktree git-ref fields (CLI-flag-injection sensitive).
+ * the worktree git-ref fields (CLI-flag-injection sensitive), `telegram.notify.*`
+ * (redirecting outbound notifications is an exfiltration vector), and
+ * `updatePolicy` (auto self-update is autonomous-code scope-widening).
  */
 export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'model', tier: 'agent', type: 'string', description: 'Default model id / alias.' },
@@ -144,12 +203,12 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'autoRouting.chat', tier: 'agent', type: 'boolean', description: 'Auto-route model for chat.' },
   { path: 'autoRouting.telegram', tier: 'agent', type: 'boolean', description: 'Auto-route model for Telegram.' },
   { path: 'autoRouting.daemon', tier: 'agent', type: 'boolean', description: 'Auto-route model for the daemon.' },
-  { path: 'telegram.notify.mode', tier: 'agent', type: 'enum', enumValues: ['primary', 'broadcast', 'custom'], description: 'Telegram notify routing mode.' },
-  { path: 'telegram.notify.primaryChatId', tier: 'agent', type: 'number', clamp: { min: -1e15, max: 1e15, integer: true }, description: 'Primary Telegram chat id.' },
-  { path: 'telegram.notify.targets', tier: 'agent', type: 'number-array', description: 'Custom Telegram target chat ids.' },
+  { path: 'telegram.notify.mode', tier: 'human', type: 'enum', enumValues: ['primary', 'broadcast', 'custom'], description: 'Telegram notify routing mode (human-tier: notification-redirect vector).' },
+  { path: 'telegram.notify.primaryChatId', tier: 'human', type: 'number', clamp: { min: -1e15, max: 1e15, integer: true }, description: 'Primary Telegram chat id (human-tier: notification-redirect vector).' },
+  { path: 'telegram.notify.targets', tier: 'human', type: 'number-array', description: 'Custom Telegram target chat ids (human-tier: notification-redirect vector).' },
   { path: 'interactive.worktreeAutoname', tier: 'agent', type: 'boolean', description: 'Auto-name worktrees.' },
   { path: 'interactive.suggestGhost', tier: 'agent', type: 'boolean', description: 'Ghost-text suggestions in the REPL.' },
-  { path: 'updatePolicy', tier: 'agent', type: 'enum', enumValues: ['notify', 'auto', 'off'], description: 'Self-update policy.' },
+  { path: 'updatePolicy', tier: 'human', type: 'enum', enumValues: ['notify', 'auto', 'off'], description: 'Self-update policy (human-tier: auto self-update is scope-widening).' },
   { path: 'autoResumeOnUsageLimit', tier: 'agent', type: 'boolean', description: 'Auto-resume after a usage-limit pause.' },
   { path: 'bgSummaries', tier: 'agent', type: 'boolean', description: 'Background summarisation.' },
   { path: 'maxSummaryCallsPerSession', tier: 'agent', type: 'number', clamp: { min: 1, max: 500, integer: true }, description: 'Cap on summary calls per session.' },
