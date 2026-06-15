@@ -176,3 +176,17 @@
 #nd-docs-layout figure.shiki .line {
   line-height: 1.5;
 }
+
+/* --- Brand mark glow: match agentafk.com's navbar glyph --------------------
+   The nav "Handoff Arc" glyph (inline SVG in the DocsLayout title) carries a
+   soft orange glow at rest and a stronger glow on hover — the same treatment
+   as the main site's .Navbar_brandMark. The hover rule targets the glyph as a
+   direct child of Fumadocs' title link. */
+.afk-brand-mark {
+  filter: drop-shadow(0 0 12px rgba(249, 133, 75, 0.14));
+  transition: filter 0.2s ease, transform 0.2s ease;
+}
+a:hover > .afk-brand-mark {
+  filter: drop-shadow(0 0 16px rgba(249, 115, 22, 0.32))
+          drop-shadow(0 0 8px rgba(249, 115, 22, 0.22));
+}
