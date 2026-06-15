@@ -22,7 +22,7 @@ afk doctor -f json
 git rev-parse --is-inside-work-tree
 ```
 
-Also check whether `AFK.md` exists in the current directory. Build a short status list: model provider (API key) ✓/✗, git repo ✓/✗, AFK.md present ✓/✗, and from the doctor JSON: Telegram, importable Claude Code/Codex assets. Brave Search = is `BRAVE_SEARCH_API_KEY` set in the environment.
+Also check whether `AFK.md` exists in the current directory. Build a short status list: model provider (API key) ✓/✗, git repo ✓/✗, AFK.md present ✓/✗, and from the doctor JSON: Telegram, importable Claude Code/Codex assets. Exa Search = is `EXA_API_KEY` set in the environment.
 
 **Idempotency:** if AFK.md already exists AND a model provider is configured AND (Telegram is configured or the user clearly isn't new), say so in one line — "Looks like AFK is already set up here." — and skip straight to Step 6 (first job). Don't re-run the full flow.
 
@@ -39,7 +39,7 @@ Then give a 4–6 line intro, e.g.:
 **3a. Migrate existing tooling.** If the doctor preflight flagged importable Claude Code / Codex assets, run `afk migrate --dry-run` (read-only preview — safe, no prompt) and summarize what it found (plugins / skills / MCP servers). Then `ask_question` (type `confirm`): "Import these into AFK?" On yes, run `afk migrate -y` (add `--mcp` only if they explicitly want MCP servers, which auto-run commands on connect). If nothing is importable, skip this silently.
 
 **3b. Optional capabilities.** Offer only the ones not already configured:
-- **Brave Search** (web research/grounding): if `BRAVE_SEARCH_API_KEY` is unset, tell them to set it in `~/.afk/config/afk.env`; offer to explain how.
+- **Exa Search** (web research/grounding): if `EXA_API_KEY` is unset, tell them to set it in `~/.afk/config/afk.env`; offer to explain how.
 - **Telegram** (drive/monitor AFK from your phone): if unconfigured, dispatch the `skill` tool with `/telegram-setup`.
 - **Background service** (always-on bot/daemon): **macOS only** — first check the platform (e.g. `uname` → `Darwin`). If not macOS, skip and say service mode is macOS-only today. On macOS, if they want it, dispatch the `skill` tool with `/service-setup`.
 

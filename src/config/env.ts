@@ -431,8 +431,8 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
-    name: 'BRAVE_SEARCH_API_KEY',
-    description: 'Brave Search API subscription token, enabling web_scrape search mode. Free tier available at https://brave.com/search/api/. When unset, search mode returns an actionable error; markdown and raw modes are unaffected.',
+    name: 'EXA_API_KEY',
+    description: 'Exa (exa.ai) search API key, enabling web_scrape search mode. Free tier (20k requests/month) available at https://exa.ai. When unset, search mode returns an actionable error; markdown and raw modes are unaffected.',
     type: 'string',
     required: false,
     category: 'auth',
@@ -1062,7 +1062,7 @@ export const env = {
   get AFK_OPENAI_USE_RESPONSES(): string | undefined { return process.env['AFK_OPENAI_USE_RESPONSES']; },
   get AFK_OPENAI_CHATGPT_OAUTH(): string | undefined { return process.env['AFK_OPENAI_CHATGPT_OAUTH']; },
   get AFK_PROVIDER(): string | undefined { return process.env['AFK_PROVIDER']; },
-  get BRAVE_SEARCH_API_KEY(): string | undefined { return process.env['BRAVE_SEARCH_API_KEY']; },
+  get EXA_API_KEY(): string | undefined { return process.env['EXA_API_KEY']; },
 
   // Telegram
   get TELEGRAM_BOT_TOKEN(): string | undefined { return process.env['TELEGRAM_BOT_TOKEN']; },

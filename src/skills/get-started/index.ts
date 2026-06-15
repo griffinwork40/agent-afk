@@ -49,7 +49,7 @@ async function handler(): Promise<unknown> {
 export const getStartedSkill: SkillMetadata = {
   name: 'get-started',
   description:
-    'Guided first-run onboarding for AFK. Runs a preflight check (git repo, model provider, AFK.md, Brave/Telegram/service config), asks the user their name and gives a brief intro, detects importable Claude Code / Codex assets and offers `afk migrate`, walks optional capability setup (Brave Search, Telegram via /telegram-setup, background service via /service-setup), then recommends /init to generate project context and /clear to start fresh — ending by routing the user to their first task. Runs interactively in the current session.',
+    'Guided first-run onboarding for AFK. Runs a preflight check (git repo, model provider, AFK.md, Exa/Telegram/service config), asks the user their name and gives a brief intro, detects importable Claude Code / Codex assets and offers `afk migrate`, walks optional capability setup (Exa Search, Telegram via /telegram-setup, background service via /service-setup), then recommends /init to generate project context and /clear to start fresh — ending by routing the user to their first task. Runs interactively in the current session.',
   handler,
   context: 'load',
   audience: 'public',

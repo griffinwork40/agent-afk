@@ -1,0 +1,121 @@
+---
+title: "How It Works"
+description: "Session lifecycle, provider routing, tool dispatch, terminal states, and the ~/.afk/ state layout."
+---
+
+## Session lifecycle
+
+Every interaction — a chat, a REPL turn, a daemon tick, or a Telegram message — starts a session that bootstraps, sends your message, dispatches tools, and loops until it finishes.
+
+A session:
+
+1. **Bootstraps** — loads the system prompt (framework base + any operator overlay from `AFK.md`,
+   `afk.config.json`, or `AFK_SYSTEM_PROMPT`), connects MCP servers in parallel, scans plugins.
+2. **Sends a message** — the prompt and conversation history are sent to the configured model
+   provider.
+3. **Dispatches tools** — when the model requests a tool call, the dispatcher routes it. Pre/PostToolUse
+   hooks fire sequentially; `decision: 'block'` short-circuits execution.
+4. **Loops** — tool results are fed back to the model, which continues until it stops calling tools
+   or the turn limit is reached.
+5. **Reaches a terminal state** — the session emits a `done`, `error`, or interrupted signal.
+
+## Provider routing
+
+Agent AFK routes to one of two providers based on the model name:
+
+**Anthropic (direct)** — default for `claude-*`, `opus`, `sonnet`, `haiku`, `fable`. Wraps the
+`@anthropic-ai/sdk` Messages API. Supports extended thinking, prompt caching, and all Anthropic
+model features. Two `cache_control` breakpoints are stamped per request to reduce cost on
+long-running sessions.
+
+**OpenAI-compatible** — default for `gpt-*`, `o1*`, `o3*`, `o4*`, `codex-*`, and HuggingFace-style
+`org/model` IDs (e.g., `mlx-community/...`, `Qwen/...`). Talks directly to OpenAI's Chat
+Completions API, or any compatible local endpoint via `baseURL` (MLX, llama.cpp, vLLM, Ollama).
+
+Both providers are interchangeable — you can switch between them without changing anything else.
+
+Override provider selection per session:
+
+```bash
+afk chat "..." --provider anthropic-direct
+afk i --provider openai-compatible
+```
+
+## Tool dispatch
+
+Each session has a fixed set of built-in tools available to the model:
+
+- **Bash, Read, Write, Edit, Glob, Grep, LS, WebSearch, WebFetch** — standard agentic tools
+- **`agent`** — forks a child session that inherits permissions and stops when the parent stops
+- **`skill`** — dispatches a named skill (built-in or plugin-discovered)
+- **`compose`** — Structured multi-agent workflows — define which tasks depend on which; independent ones run in parallel, dependent ones wait. Up to 20 tasks per call; a failure cancels downstream work.
+- **`memory_search`, `memory_update`, `procedure_write`** — cross-session memory backed by SQLite
+  at `~/.afk/state/memory/`
+- **`send_telegram`** — pushes a terminal-state notification to the operator; no-op if Telegram
+  is unconfigured
+- **MCP tools** — bridged as `mcp__<server>__<tool>` from any configured MCP server
+
+MCP servers are loaded from a layered config (plugin-contributed → `~/.afk/config/mcp.json` →
+`<cwd>/.mcp.json` → `--mcp-config` flag). The tool list refreshes in-place when a server emits
+`notifications/tools/list_changed` — no restart needed.
+
+## Terminal states
+
+Every turn advances toward one of four terminal states. They are defined by the framework's
+end-of-turn protocol and enforced on every interactive turn:
+
+| State | Meaning |
+|---|---|
+| **Done** | Objective satisfied. Evidence is written to state the user can inspect. |
+| **Blocked** | An external dependency prevents progress. The exact unblock condition is documented. |
+| **Asking** | One precise question is required before the next action. |
+| **Interrupted** | The user halted work. State is preserved for resumption. |
+
+The agent is expected to reach one of these states per turn rather than trailing off. In the REPL, a card appears at the end of each turn showing the outcome.
+
+## System prompt layering
+
+The system prompt is always composed of two parts:
+
+1. **Framework base** — `prompts/system-prompt.md`, inlined at build time. Unconditional; always
+   present.
+2. **Operator overlay** — appended beneath an `# Operator configuration` header. Resolved in
+   priority order:
+   - `AFK_SYSTEM_PROMPT` env var (highest)
+   - `afk.config.json` (`systemPrompt` field)
+   - `AFK.md` at the project root (lowest)
+
+An absent overlay means the model gets the framework base alone. Overlays append — they never
+replace the base. Use `--dump-prompt` to inspect the fully composed prompt and provenance.
+
+## State under `~/.afk/`
+
+All AFK state lives under `~/.afk/` — independent of `~/.claude/`:
+
+```
+~/.afk/
+  config/           afk.env, afk.config.json, mcp.json
+  state/            sessions/, todos/, daemon/, memory/ (SQLite)
+  plugins/          user-installed plugins (starts empty)
+  agents/           user-defined subagents
+  commands/         user-defined slash commands
+  skills/           user-defined skills
+  logs/
+  cache/
+  agent-framework/  telemetry, briefs (JSONL)
+```
+
+You can delete `~/.claude/` entirely and Agent AFK still runs.
+
+## Bypass permissions
+
+By default, Agent AFK enables bypass permissions: no per-tool prompts. The model can run bash,
+read and write files, fetch URLs, and call MCP servers without asking each time. This is intentional
+— `afk` is built for unattended work, where a permission prompt with no human present wedges the
+session.
+
+Use `afk` on a machine and account you trust. To keep a session's changes contained, run it in an isolated git worktree — your main checkout stays untouched, and the worktree is removed automatically on a clean exit:
+
+```bash
+afk i --worktree
+```

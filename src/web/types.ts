@@ -71,13 +71,13 @@ export interface SearchResult {
 /**
  * A pluggable web-search backend.
  *
- * v1 ships exactly one implementation: Brave (`./search.ts`). The interface
- * exists so DuckDuckGo / SearXNG / Tavily / SerpAPI backends can be added
+ * Ships one implementation: Exa (`./search.ts`). The interface exists so
+ * Brave / DuckDuckGo / SearXNG / Tavily / SerpAPI backends can be added
  * later without touching the handler — it resolves a backend and calls
  * `search()`.
  */
 export interface SearchBackend {
-  /** Backend identifier, e.g. `'brave'`. Surfaced in error messages. */
+  /** Backend identifier, e.g. `'exa'`. Surfaced in error messages. */
   readonly name: string;
   /**
    * Run a query and return ranked results.
