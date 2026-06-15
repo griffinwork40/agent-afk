@@ -86,6 +86,32 @@ export function expandPastePlaceholders(self: PasteHost, buffer: string): string
 }
 
 /**
+ * Narrowest slice for {@link getBuffer}: the {@link PasteHost} fields
+ * `expandPastePlaceholders` reads, plus the `queued` flag.
+ */
+export interface BufferSnapshotHost extends PasteHost {
+  /** Whether the buffer is queued for submission on the next idle transition. */
+  readonly queued: boolean;
+}
+
+/**
+ * Snapshot the live buffer as submission-shaped text + the queued flag.
+ *
+ * Expands any `[Pasted text #N +M lines]` placeholders back to their original
+ * content so callers reading this snapshot see submission-shaped text (what the
+ * model will receive), not placeholder tokens. Primarily used by tests;
+ * production submit paths read `input.buffer` directly so expansion and registry
+ * clear happen in the same atomic operation.
+ *
+ * CAUTION: do not call after submit fires — pasteRegistry is cleared before the
+ * handler so placeholders would pass through unexpanded. For the raw buffer with
+ * placeholders intact, read `input.buffer` directly.
+ */
+export function getBuffer(self: BufferSnapshotHost): { text: string; queued: boolean } {
+  return { text: expandPastePlaceholders(self, self.input.buffer), queued: self.queued };
+}
+
+/**
  * After a bracketed paste ends, check whether the pasted span is
  * large enough to warrant collapsing into a `[Pasted text #N +M lines]`
  * placeholder. The original content is stashed in pasteRegistry and
