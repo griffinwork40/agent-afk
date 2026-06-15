@@ -72,8 +72,8 @@ export default function Layout({ children }: { children: ReactNode }) {
                   alignItems: 'baseline',
                 }}
               >
-                <span style={{ fontWeight: 500, color: '#e9e9f0' }}>agent</span>
-                <span style={{ fontWeight: 700, color: '#ffffff' }}>afk</span>
+                <span className="afk-wordmark-agent">agent</span>
+                <span className="afk-wordmark-afk">afk</span>
               </span>
             </>
           ),
