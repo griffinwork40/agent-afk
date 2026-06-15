@@ -11,6 +11,18 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-06-15
+
+### Fixed
+- move transcripts into the state/ tier and honor AFK_STATE_DIR (8f50059)
+
+### Changed
+- Merge pull request #143 from griffinwork40/afk/state-folder-transcripts (b92f8f9)
+- Merge pull request #148 from griffinwork40/docs/website-accuracy-fixes (a058f26)
+- propagate #143 (transcripts → state/, AFK_STATE_DIR governs whole tier) (5d22797)
+- fix Brave→Exa search key, document daemon --host, add /get-started (a39ef15)
+- Merge branch 'main' into afk/state-folder-transcripts (372032f)
+
 ## [4.1.0] - 2026-06-15
 
 ### Added
