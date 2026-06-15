@@ -95,7 +95,7 @@ All AFK state lives under `~/.afk/` — independent of `~/.claude/`:
 ```
 ~/.afk/
   config/           afk.env, afk.config.json, mcp.json
-  state/            sessions/, todos/, daemon/, memory/ (SQLite)
+  state/            sessions/, todos/, transcripts/, daemon/, memory/ (SQLite)  ($AFK_STATE_DIR overrides this tier)
   plugins/          user-installed plugins (starts empty)
   agents/           user-defined subagents
   commands/         user-defined slash commands
