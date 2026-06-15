@@ -4,6 +4,7 @@ import { RootProvider } from 'fumadocs-ui/provider/next';
 import { source } from '@/lib/source';
 import 'fumadocs-ui/style.css';
 import './docs-theme.css';
+import './signature.css';
 
 export default function Layout({ children }: { children: ReactNode }) {
   return (
@@ -57,16 +58,8 @@ export default function Layout({ children }: { children: ReactNode }) {
           // the docs home — clicking the logo returns to the main site.
           url: 'https://agentafk.com',
         }}
-        // Nav links: the landing page (agentafk.com) and the GitHub repo.
-        // These docs are served at the docs.agentafk.com subdomain, so link
-        // back out to the main site; githubUrl renders Fumadocs' built-in
-        // GitHub icon button (no extra icon import needed).
-        links={[
-          {
-            text: 'agentafk.com',
-            url: 'https://agentafk.com',
-          },
-        ]}
+        // Nav: GitHub repo button only (the external agentafk.com sidebar link
+        // was removed per request). githubUrl renders Fumadocs' GitHub icon button.
         githubUrl="https://github.com/griffinwork40/agent-afk"
         sidebar={{
           defaultOpenLevel: 1,

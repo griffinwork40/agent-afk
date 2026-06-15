@@ -3,15 +3,21 @@ title: "Introduction"
 description: "A local AI agent runner — terminal, daemon, and Telegram, sharing one session."
 ---
 
+<SignalField>
+
 Built on the Anthropic SDK, Agent AFK runs outside Claude Code as its own process — a full agentic runtime you own completely. Hand it long or multi-step work and check in asynchronously: it delegates the work and leaves the judgment to you.
 
 ```bash
 npm install -g agent-afk
 ```
 
+<ElevatedField>
 <Cards>
   <Card title="Get started →" href="/quickstart" description="Install, set your API key, and run your first command in under two minutes." />
 </Cards>
+</ElevatedField>
+
+</SignalField>
 
 ## Who it's for
 
@@ -19,19 +25,26 @@ npm install -g agent-afk
 - **Engineers** running headless, CI-adjacent workflows that need model reasoning, bash access, and subagent orchestration without a human in the loop.
 - **Anyone** who wants Telegram supervision — a phone ping the moment work lands in a terminal (finished) state — without standing up a server.
 
+<Threshold />
+
 ## Four surfaces, one session manager
 
 Every surface shares the same context, memory, and tools — so work started in one can be picked up in another.
 
+<ExtractField>
 <Cards>
   <Card title="One-Shot Chat" href="/surfaces/chat" description="afk chat — a single pipe-friendly turn that scripts well." />
   <Card title="Interactive REPL" href="/surfaces/repl" description="afk i — slash commands, plan mode, and streaming output." />
   <Card title="Daemon" href="/surfaces/daemon" description="afk daemon — a long-running, cron-friendly headless agent." />
   <Card title="Telegram Bot" href="/surfaces/telegram" description="afk telegram start — the same tools and memory, on your phone." />
 </Cards>
+</ExtractField>
+
+<Threshold />
 
 ## Key capabilities
 
+<ExtractField>
 <Cards>
   <Card title="Subagent orchestration" href="/guides/subagents" description="Run many subagents at once — independent tasks run in parallel, dependent ones wait their turn." />
   <Card title="Slash skills" href="/skills/overview" description="A registry of built-in slash commands plus auto-discovered SKILL.md plugins, with typo-tolerant command suggestions." />
@@ -40,6 +53,9 @@ Every surface shares the same context, memory, and tools — so work started in 
   <Card title="Telegram supervision" href="/surfaces/telegram" description="Get a phone ping when a scheduled task lands, then reply to drive the session from anywhere." />
   <Card title="Unattended guardrails" href="/guides/unattended-runs" description="Cost ceilings, turn limits, and worktree isolation keep long unattended runs in bounds." />
 </Cards>
+</ExtractField>
+
+<Threshold />
 
 ## Safety & verification controls
 
@@ -54,6 +70,6 @@ Agent AFK ships blast-radius controls — the guardrails that keep unattended ru
 
 Agent AFK keeps all state under `~/.afk/` — sessions, memory, plugins, logs, daemon state. There is no analytics or remote telemetry: it never sends your prompts, code, or usage anywhere except directly to the model provider you configure. What telemetry exists is local JSONL you can read or delete.
 
----
+<Threshold />
 
 Ready to go deeper? Start with the [Quickstart](/quickstart), then see [How It Works](/how-it-works).
