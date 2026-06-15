@@ -36,6 +36,12 @@ Alternatively, write it to Agent AFK's env config file so it's scoped to `afk` o
 echo "ANTHROPIC_API_KEY=sk-ant-..." >> ~/.afk/config/afk.env
 ```
 
+Or keep the key out of your shell history with a masked prompt:
+
+```bash
+afk config env set ANTHROPIC_API_KEY   # prompts without echoing the value
+```
+
 Or use the OAuth flow (no API key required — authenticates via `console.anthropic.com`):
 
 ```bash

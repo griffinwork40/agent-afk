@@ -83,6 +83,9 @@ Set them in your shell, in `~/.afk/config/afk.env`, or pass `--max-budget-usd` /
 export AFK_MAX_BUDGET_USD=2.00
 export AFK_TASK_BUDGET=50000
 
+# Persist to afk.env (these are non-secret, so `afk config env set` works directly)
+afk config env set AFK_MAX_BUDGET_USD 2.00
+
 # Or per-run
 afk daemon --max-budget-usd 2.00 --task "..."
 ```
