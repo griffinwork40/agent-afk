@@ -20,48 +20,24 @@ export default function Layout({ children }: { children: ReactNode }) {
           title: (
             // Brand lockup mirrors agentafk.com's navbar: the "Handoff Arc"
             // glyph + the sans wordmark "agent" (light grey, 500) / "afk"
-            // (white, 700). The glyph and wordmark are direct children of
-            // Fumadocs' title link so the hover-glow rule in docs-theme.css
-            // (a:hover > .afk-brand-mark) can target the glyph.
+            // (white, 700). The glyph is a standalone SVG file referenced via
+            // <img> (not inlined): Fumadocs renders the title in several nav
+            // slots, and an inline SVG would duplicate its gradient ids across
+            // those copies — the browser then resolves url(#arc)/url(#ping) to
+            // the first (hidden) copy and the arc/ping fills drop out. A file
+            // scopes the gradient ids to its own document, so every copy paints.
+            // The <img> and wordmark are direct children of Fumadocs' title
+            // link so docs-theme.css's `a:hover > .afk-brand-mark` glow applies.
             <>
-              <svg
+              {/* eslint-disable-next-line @next/next/no-img-element -- static 32px brand glyph; next/image adds no value */}
+              <img
                 className="afk-brand-mark"
-                viewBox="0 0 64 64"
+                src="/brand-mark.svg"
+                alt=""
+                aria-hidden="true"
                 width={32}
                 height={32}
-                role="img"
-                aria-label="Agent AFK"
-              >
-                <defs>
-                  <linearGradient
-                    id="afk-nav-arc"
-                    x1="14"
-                    y1="48"
-                    x2="50"
-                    y2="48"
-                    gradientUnits="userSpaceOnUse"
-                  >
-                    <stop offset="0%" stopColor="#8a8aa0" />
-                    <stop offset="50%" stopColor="#74bc90" />
-                    <stop offset="100%" stopColor="#5cb87f" />
-                  </linearGradient>
-                  <radialGradient id="afk-nav-ping" cx="50%" cy="50%" r="50%">
-                    <stop offset="0%" stopColor="#ffc2a1" />
-                    <stop offset="55%" stopColor="#f97316" />
-                    <stop offset="100%" stopColor="#d65a0e" />
-                  </radialGradient>
-                </defs>
-                <path
-                  d="M 14 48 A 24 24 0 1 1 50 48"
-                  fill="none"
-                  stroke="url(#afk-nav-arc)"
-                  strokeWidth="7"
-                  strokeLinecap="round"
-                />
-                <circle cx="14" cy="48" r="4.5" fill="#8a8aa0" />
-                <circle cx="50" cy="48" r="4.5" fill="#5cb87f" />
-                <circle cx="32" cy="56" r="5" fill="url(#afk-nav-ping)" />
-              </svg>
+              />
               <span
                 style={{
                   fontFamily:
