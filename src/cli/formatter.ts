@@ -141,13 +141,25 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           // H1 → brand (warm orange, bold) — top-level identity tone.
           // H2 → palette.heading (bold white) — strong but neutral.
           // H3+ → bold (terminal default weight, no hue).
-          if (heading.depth === 1) return palette.brand.bold('\n' + headingText + '\n');
-          if (heading.depth === 2) return palette.heading('\n' + headingText + '\n');
-          return palette.bold('\n' + headingText + '\n');
+          // Invariant (TUI rhythm contract, docs/tui-rhythm.md): every block
+          // token emits exactly ONE trailing '\n' (a line terminator, not a
+          // blank line) and NO leading blank. Blank-line separation between
+          // blocks comes solely from marked's `space` token (one source blank
+          // line → one '\n'). A leading '\n' here would stack with the
+          // predecessor block's separation into a double blank — and in the
+          // streaming commit path it survives `formatBlockForCommit` (which
+          // strips trailing newlines) as a leading blank before the heading.
+          if (heading.depth === 1) return palette.brand.bold(headingText) + '\n';
+          if (heading.depth === 2) return palette.heading(headingText) + '\n';
+          return palette.bold(headingText) + '\n';
         }
         case 'paragraph': {
+          // One trailing '\n' (line terminator), not '\n\n'. marked already
+          // emits a `space` token for the source blank line that follows a
+          // paragraph; adding a second '\n' here double-spaced every block
+          // boundary in non-streamed rendering. See the heading invariant above.
           const para = token as Tokens.Paragraph;
-          return renderInline(para.tokens as Tokens.Generic[]) + '\n\n';
+          return renderInline(para.tokens as Tokens.Generic[]) + '\n';
         }
         case 'code': {
           const code = token as Tokens.Code;
@@ -160,7 +172,13 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           // command instead of assuming it rendered fine.
           if (code.text.trim() === '') {
             const label = code.lang ? `(empty ${code.lang} block)` : '(empty code block)';
-            return palette.dim(`│ ${label}`) + '\n\n';
+            // One trailing '\n' (line terminator), not '\n\n' — the same block
+            // rhythm invariant as the non-empty branch below and the heading /
+            // paragraph cases above (docs/tui-rhythm.md): every block token owns
+            // exactly one trailing newline; the inter-block blank comes solely
+            // from marked's `space` token. Emitting '\n\n' here double-spaced the
+            // gap after an empty fence in the non-streamed render paths.
+            return palette.dim(`│ ${label}`) + '\n';
           }
           const highlighted = highlightCode(code.text, lang);
           const bodyLines = highlighted.split('\n');

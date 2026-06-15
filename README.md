@@ -1,11 +1,24 @@
 # Agent AFK
 
-> Run coding agents while you’re AFK.
->
-> Start a run in your terminal, walk away, and get pinged when Agent AFK finishes or needs you. Every step is saved as a readable trace, so you stay in control before anything ships.
+> **Claude Code decides how the agent behaves. Agent AFK lets you edit the rules.**
+
+**Agent AFK** is an open-source coding-agent harness you can actually change. Run long coding tasks while you're away, use any model, and edit the rules that decide what the agent can touch, when it stops, and how it proves the work.
+
+> Agent AFK isn't "smarter than Claude Code." It's *yours* in a way Claude Code can't be.
 
 [![npm version](https://img.shields.io/npm/v/agent-afk.svg)](https://www.npmjs.com/package/agent-afk)
 [![Node](https://img.shields.io/node/v/agent-afk.svg)](https://nodejs.org/)
+
+## Claude Code vs. Agent AFK
+
+| | Claude Code | Agent AFK |
+|---|---|---|
+| Harness | Closed binary | Apache-2.0, editable |
+| The loop | You configure *around* it | You edit *the loop* |
+| Behavior | Mostly fixed | Prompts, gates, routing, skills are code |
+| Result | A great default agent | An agent system you own |
+
+The model isn't the product — the loop is. Agent AFK hands you the loop as code: prompts, gates, routing, skills, traces, providers, terminal states. Edit any of them.
 
 ## Install
 
@@ -74,9 +87,9 @@ AFK_MAX_BUDGET_USD=5.00
 Default is `sonnet`. Override per-call with `--model`:
 
 ```bash
-afk chat "explain this stack trace" --model opus
-afk i --model haiku
-afk chat "refactor this" --model codex
+afk chat "explain this stack trace" --model opus_1m
+afk --model sonnet_1m
+afk chat "refactor this" --model gpt-5.5
 ```
 
 | Model | Best for |

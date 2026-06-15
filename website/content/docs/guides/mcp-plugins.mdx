@@ -1,0 +1,214 @@
+---
+title: "MCP Servers & Plugins"
+description: "Configure MCP servers with layered mcp.json, use mcp__<server>__<tool> naming, and manage plugins with afk plugin."
+---
+
+Agent AFK supports MCP for connecting external tools and data sources. Plugins add skills, commands, and agents.
+
+## MCP servers
+
+### Configuration layers
+
+MCP server configuration is loaded from four sources, merged in priority order (highest wins per server name):
+
+| Priority | Source | Notes |
+|---|---|---|
+| 4 (highest) | `--mcp-config <path>` flag | Per-run override |
+| 3 | `<cwd>/.mcp.json` | Project-local config — opt-in only (`AFK_ALLOW_PROJECT_MCP=1`) |
+| 2 | `~/.afk/config/mcp.json` | User-global config |
+| 1 (lowest) | Plugin-contributed `<plugin>/.claude-plugin/mcp.json` | Per-plugin servers |
+
+Source: `docs/architecture.md` (MCP client section).
+
+If two config files define a server with the same name, the higher-priority one wins. The other is logged as a warning — nothing is silently dropped.
+
+Project-local `.mcp.json` loading is disabled by default to mitigate config-injection risks. Set `AFK_ALLOW_PROJECT_MCP=1` to opt in.
+
+### `mcp.json` schema
+
+The schema matches Claude Code's `mcpServers` block for portability.
+
+#### Field reference
+
+Source: `src/agent/mcp/types.ts` (`McpServerConfig`).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | `"stdio"` \| `"streamable-http"` \| `"sse"` | Transport to use. **Inferred when omitted**: `command` present → `stdio`; `url` present → `streamable-http`. Set explicitly to override. |
+| `command` | string | Executable to spawn. Required for `stdio` servers. |
+| `args` | string[] | Arguments passed to the executable. |
+| `env` | object | Environment variables for the spawned process. Values may contain `${VAR}` placeholders expanded from the host environment at connect time (never via shell eval). Unset variables are passed as the empty string and logged as a warning. |
+| `url` | string | Endpoint URL. Required for `streamable-http` and `sse` servers. |
+| `headers` | object | Extra HTTP headers sent with every request. Values support the same `${VAR}` expansion as `env` — use for static bearer tokens: `{ "Authorization": "Bearer ${TOKEN}" }`. |
+| `oauth` | boolean | When `true`, runs the SDK's OAuth consent flow against the endpoint. The authorization URL is surfaced in the REPL or pushed via Telegram when running headless. Tokens are persisted in the macOS keychain. Run `/mcp auth` in the REPL to surface any pending consent URLs. |
+| `disabled` | boolean | Skip this server entirely without removing its config block. |
+| `alwaysLoad` | boolean | When `true`, a connect failure aborts session startup rather than being logged and skipped. |
+| `timeout` | number | Request timeout in milliseconds for `tools/list` and `tools/call` (default `30000`). |
+
+#### stdio example
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+#### HTTP/SSE example
+
+```json
+{
+  "mcpServers": {
+    "remote-tools": {
+      "type": "streamable-http",
+      "url": "https://mcp.example.com/sse",
+      "headers": {
+        "Authorization": "Bearer ${REMOTE_TOOLS_TOKEN}"
+      }
+    },
+    "oauth-server": {
+      "type": "streamable-http",
+      "url": "https://mcp.example.com/oauth",
+      "oauth": true
+    }
+  }
+}
+```
+
+`${VAR}` placeholders in `env` and `headers` are expanded from the host environment at connect time (not via shell eval). Run `/mcp auth` in the REPL to view and complete any pending OAuth consent flows.
+
+### Tool naming
+
+Every MCP tool is exposed to the agent as `mcp__<server>__<tool>`. For example, a server named `filesystem` with a `read_file` tool becomes:
+
+```
+mcp__filesystem__read_file
+```
+
+Tools are read fresh per query. When an MCP server sends a `notifications/tools/list_changed` notification, the tool list updates in-place — no session restart needed.
+
+### Viewing server status
+
+In the REPL:
+
+```
+/mcp          # list connected servers and tool counts
+/mcp auth     # surface pending OAuth URLs
+```
+
+`/mcp auth` reads pending OAuth consent URLs from `~/.afk/state/mcp/server-status.json`. When an MCP server requests OAuth consent (e.g., Supabase re-auth), the REPL prints the server name, message, and URL, then prompts `Continue? [y/N]`.
+
+### Server failures
+
+Non-fatal by default: a server that fails to connect is reported as a warning and skipped. Mark a server `alwaysLoad: true` in the config to make its failure abort session startup:
+
+```json
+{
+  "mcpServers": {
+    "critical-db": {
+      "command": "...",
+      "alwaysLoad": true
+    }
+  }
+}
+```
+
+Source: `docs/architecture.md` (MCP client section).
+
+## Plugins
+
+Plugins extend AFK with skills, user-defined subagents, and MCP server contributions. All plugin state lives under `~/.afk/plugins/` — separate from Claude Code's `~/.claude/plugins/`.
+
+### Installing plugins
+
+```bash
+# GitHub shorthand (expands to https://github.com/<owner>/<repo>.git)
+afk plugin install anthropics/claude-plugins-official
+
+# Explicit git URL
+afk plugin install https://github.com/example/my-plugin.git
+
+# Local checkout (symlinked)
+afk plugin install ~/Projects/my-plugin
+
+# Pin to a tag, branch, or SHA
+afk plugin install owner/repo --ref v1.2.3
+```
+
+By default, install picks the highest semver git tag, falling back to the default branch when no tags parse as semver.
+
+Source: `docs/reference.md` (Plugins section).
+
+### Managing plugins
+
+```bash
+afk plugin list                           # installed plugins with enabled state
+afk plugin update                         # update all plugins
+afk plugin update <name>                  # update one plugin
+afk plugin disable <name>                 # disable without removing
+afk plugin enable <name>                  # re-enable
+afk plugin remove <name>                  # uninstall
+```
+
+Plugin state is tracked in `~/.afk/plugins/.index.json`. Entries with `enabled: false` are skipped at session startup.
+
+### Plugin discovery
+
+The scanner walks `~/.afk/plugins/<name>/` at session construction, looking for `.claude-plugin/plugin.json` up to 5 directory levels deep. This means Claude Code's marketplace cache layout (`cache/<marketplace>/<plugin>/<version>/`) is also discovered automatically when dropped into `~/.afk/plugins/`.
+
+### What plugins can contribute
+
+A plugin directory can contain:
+
+| Path | What it provides |
+|---|---|
+| `skills/<skill>/SKILL.md` | Slash command skill |
+| `agents/<agent>/` | Subagent definition |
+| `commands/<cmd>/` | Slash command |
+| `.claude-plugin/mcp.json` | MCP server config (lowest priority layer) |
+
+Skills from plugins are auto-registered at session start and appear in `/skills` (alias `/builtin-skills`). Use `/reload-plugins` in the REPL to pick up changes after editing a plugin without restarting.
+
+### Marketplaces
+
+```bash
+afk marketplace install <url>    # add a marketplace source
+afk marketplace list              # installed marketplaces
+afk marketplace remove <name>     # remove a source
+```
+
+Marketplace state lives under `~/.afk/plugins/cache/`.
+
+### User-scope skills (no plugin required)
+
+Skills and subagents don't have to live in a plugin. Drop them directly:
+
+```
+~/.afk/skills/<name>/SKILL.md         # user-scope skill
+~/.afk/agents/<name>/                  # user-scope subagent
+~/.afk/commands/<name>/                # user-scope slash command
+```
+
+These are discovered alongside plugin contributions at session start.
+
+## Checking what's loaded
+
+```
+/skills       # all loaded skills (built-in + plugin + user-scope)
+/agents       # all loaded subagent definitions
+/mcp          # connected MCP servers
+/tools        # full tool list including mcp__*
+```
+
+The `afk config` command dumps the resolved configuration including which MCP config files were found.

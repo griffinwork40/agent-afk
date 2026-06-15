@@ -439,8 +439,8 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
-    name: 'BRAVE_SEARCH_API_KEY',
-    description: 'Brave Search API subscription token, enabling web_scrape search mode. Free tier available at https://brave.com/search/api/. When unset, search mode returns an actionable error; markdown and raw modes are unaffected.',
+    name: 'EXA_API_KEY',
+    description: 'Exa (exa.ai) search API key, enabling web_scrape search mode. Free tier (20k requests/month) available at https://exa.ai. When unset, search mode returns an actionable error; markdown and raw modes are unaffected.',
     type: 'string',
     required: false,
     category: 'auth',
@@ -531,7 +531,7 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'AFK_STATE_DIR',
-    description: 'Override the AFK state directory. Default: $AFK_HOME/state/.',
+    description: 'Override the entire AFK state tier (sessions/, todos/, transcripts/, memory/, daemon/, etc.), not just one subdirectory. Must be an absolute path (not /). Default: $AFK_HOME/state/.',
     type: 'string',
     required: false,
     category: 'paths',
@@ -1071,7 +1071,7 @@ export const env = {
   get AFK_OPENAI_USE_RESPONSES(): string | undefined { return process.env['AFK_OPENAI_USE_RESPONSES']; },
   get AFK_OPENAI_CHATGPT_OAUTH(): string | undefined { return process.env['AFK_OPENAI_CHATGPT_OAUTH']; },
   get AFK_PROVIDER(): string | undefined { return process.env['AFK_PROVIDER']; },
-  get BRAVE_SEARCH_API_KEY(): string | undefined { return process.env['BRAVE_SEARCH_API_KEY']; },
+  get EXA_API_KEY(): string | undefined { return process.env['EXA_API_KEY']; },
 
   // Telegram
   get TELEGRAM_BOT_TOKEN(): string | undefined { return process.env['TELEGRAM_BOT_TOKEN']; },
@@ -1237,4 +1237,17 @@ export function getMissingRequiredEnvVars(category?: EnvVarCategory): EnvVarMeta
     if (category !== undefined && e.category !== category) return false;
     return process.env[e.name] === undefined || process.env[e.name] === '';
   });
+}
+
+/**
+ * Whether an env var is currently set in this process's environment.
+ *
+ * The `env` object exposes a static getter per known var; this covers the
+ * DYNAMIC case — checking presence of a name only known at runtime (e.g. while
+ * iterating `ENV_REGISTRY`). Keeping the dynamic `process.env` read here, rather
+ * than at the call site, preserves the "all env access lives in env.ts"
+ * invariant enforced by `pnpm audit:env:check`.
+ */
+export function isEnvVarSet(name: string): boolean {
+  return process.env[name] !== undefined;
 }

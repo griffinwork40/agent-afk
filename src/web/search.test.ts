@@ -1,30 +1,31 @@
 /**
  * Unit tests for the search backends (src/web/search.ts).
  *
- * Strategy: inject `fetchFn` so no real Brave API call is made. Cover the
- * Brave request shape, result mapping/markup-stripping, HTTP error surfacing,
- * the no-key resolution error, and markdown formatting.
+ * Strategy: inject `fetchFn` so no real Exa API call is made. Cover the
+ * Exa request shape (POST + x-api-key + JSON body), result mapping (highlights
+ * → description), HTTP error surfacing, the no-key resolution error, and
+ * markdown formatting.
  */
 
 import { describe, it, expect, vi } from 'vitest';
 import {
-  createBraveSearchBackend,
+  createExaSearchBackend,
   resolveSearchBackend,
   formatSearchResults,
 } from './search.js';
 
-function braveOk(results: Array<{ title?: string; url?: string; description?: string }>): Response {
+function exaOk(results: Array<{ title?: string | null; url?: string; highlights?: string[] }>): Response {
   return {
     ok: true,
     status: 200,
     statusText: 'OK',
     headers: new Headers({ 'content-type': 'application/json' }),
-    json: async (): Promise<unknown> => ({ web: { results } }),
-    text: async (): Promise<string> => JSON.stringify({ web: { results } }),
+    json: async (): Promise<unknown> => ({ results }),
+    text: async (): Promise<string> => JSON.stringify({ results }),
   } as unknown as Response;
 }
 
-function braveErr(status: number, body = ''): Response {
+function exaErr(status: number, body = ''): Response {
   return {
     ok: false,
     status,
@@ -37,79 +38,92 @@ function braveErr(status: number, body = ''): Response {
 
 const signal = (): AbortSignal => new AbortController().signal;
 
-describe('createBraveSearchBackend — request shape', () => {
-  it('hits the Brave endpoint with the query, count, and subscription token', async () => {
+interface ExaRequestBody {
+  query?: string;
+  type?: string;
+  numResults?: number;
+  contents?: { highlights?: unknown };
+}
+
+describe('createExaSearchBackend — request shape', () => {
+  it('POSTs to the Exa endpoint with the api key, query, numResults, type, and highlights', async () => {
     let seenUrl = '';
-    let seenToken: string | null = null;
+    let seenMethod: string | undefined;
+    let seenKey: string | null = null;
+    let seenBody: ExaRequestBody = {};
     const fetchFn = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       seenUrl = String(input);
-      const headers = new Headers(init?.headers);
-      seenToken = headers.get('x-subscription-token');
-      return braveOk([{ title: 'T', url: 'https://e.com', description: 'D' }]);
+      seenMethod = init?.method;
+      seenKey = new Headers(init?.headers).get('x-api-key');
+      seenBody = JSON.parse(String(init?.body)) as ExaRequestBody;
+      return exaOk([{ title: 'T', url: 'https://e.com', highlights: ['D'] }]);
     });
 
-    const backend = createBraveSearchBackend({ apiKey: 'brave-secret', fetchFn: fetchFn as unknown as typeof fetch });
+    const backend = createExaSearchBackend({ apiKey: 'exa-secret', fetchFn: fetchFn as unknown as typeof fetch });
     await backend.search('hello world', { limit: 5, timeoutMs: 5000, signal: signal() });
 
-    expect(seenUrl).toContain('api.search.brave.com/res/v1/web/search');
-    expect(seenUrl).toContain('q=hello+world');
-    expect(seenUrl).toContain('count=5');
-    expect(seenToken).toBe('brave-secret');
-    expect(backend.name).toBe('brave');
+    expect(seenUrl).toBe('https://api.exa.ai/search');
+    expect(seenMethod).toBe('POST');
+    expect(seenKey).toBe('exa-secret');
+    expect(seenBody.query).toBe('hello world');
+    expect(seenBody.numResults).toBe(5);
+    expect(seenBody.type).toBe('auto');
+    expect(seenBody.contents?.highlights).toBeTruthy();
+    expect(backend.name).toBe('exa');
   });
 
-  it('clamps count to Brave max of 20', async () => {
-    let seenUrl = '';
-    const fetchFn = vi.fn(async (input: string | URL | Request) => {
-      seenUrl = String(input);
-      return braveOk([]);
+  it('clamps numResults to the Exa max of 10', async () => {
+    let seenBody: ExaRequestBody = {};
+    const fetchFn = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      seenBody = JSON.parse(String(init?.body)) as ExaRequestBody;
+      return exaOk([]);
     });
-    const backend = createBraveSearchBackend({ apiKey: 'k', fetchFn: fetchFn as unknown as typeof fetch });
+    const backend = createExaSearchBackend({ apiKey: 'k', fetchFn: fetchFn as unknown as typeof fetch });
     await backend.search('q', { limit: 100, timeoutMs: 5000, signal: signal() });
-    expect(seenUrl).toContain('count=20');
+    expect(seenBody.numResults).toBe(10);
   });
 });
 
-describe('createBraveSearchBackend — result mapping', () => {
-  it('maps results and strips highlight markup + entities from snippets', async () => {
+describe('createExaSearchBackend — result mapping', () => {
+  it('maps highlights[0] to description and falls back for a null title', async () => {
     const fetchFn = vi.fn(async () =>
-      braveOk([
-        { title: 'First <strong>hit</strong>', url: 'https://a.com', description: 'A &amp; B <strong>x</strong>' },
-        { title: 'Second', url: 'https://b.com', description: 'plain' },
+      exaOk([
+        { title: 'First hit', url: 'https://a.com', highlights: ['snippet A', 'snippet A2'] },
+        { title: null, url: 'https://b.com', highlights: [] },
       ]),
     );
-    const backend = createBraveSearchBackend({ apiKey: 'k', fetchFn: fetchFn as unknown as typeof fetch });
+    const backend = createExaSearchBackend({ apiKey: 'k', fetchFn: fetchFn as unknown as typeof fetch });
     const results = await backend.search('q', { limit: 10, timeoutMs: 5000, signal: signal() });
 
     expect(results).toHaveLength(2);
-    expect(results[0]).toEqual({ title: 'First hit', url: 'https://a.com', description: 'A & B x' });
-    expect(results[1]?.title).toBe('Second');
+    expect(results[0]).toEqual({ title: 'First hit', url: 'https://a.com', description: 'snippet A' });
+    expect(results[1]).toEqual({ title: '(untitled)', url: 'https://b.com', description: '' });
   });
 
   it('drops results with no URL and applies the limit', async () => {
     const fetchFn = vi.fn(async () =>
-      braveOk([
-        { title: 'has url', url: 'https://a.com', description: '' },
-        { title: 'no url', description: 'orphan' },
+      exaOk([
+        { title: 'has url', url: 'https://a.com', highlights: [] },
+        { title: 'no url', highlights: ['orphan'] },
       ]),
     );
-    const backend = createBraveSearchBackend({ apiKey: 'k', fetchFn: fetchFn as unknown as typeof fetch });
+    const backend = createExaSearchBackend({ apiKey: 'k', fetchFn: fetchFn as unknown as typeof fetch });
     const results = await backend.search('q', { limit: 10, timeoutMs: 5000, signal: signal() });
     expect(results).toHaveLength(1);
     expect(results[0]?.url).toBe('https://a.com');
   });
 
   it('surfaces an HTTP error with status and body snippet', async () => {
-    const fetchFn = vi.fn(async () => braveErr(422, 'quota exceeded'));
-    const backend = createBraveSearchBackend({ apiKey: 'k', fetchFn: fetchFn as unknown as typeof fetch });
+    const fetchFn = vi.fn(async () => exaErr(422, 'quota exceeded'));
+    const backend = createExaSearchBackend({ apiKey: 'k', fetchFn: fetchFn as unknown as typeof fetch });
     await expect(
       backend.search('q', { limit: 10, timeoutMs: 5000, signal: signal() }),
-    ).rejects.toThrow(/Brave Search HTTP 422.*quota exceeded/);
+    ).rejects.toThrow(/Exa Search HTTP 422.*quota exceeded/);
   });
 
   it('sanitizes control characters from HTTP error bodies before throwing', async () => {
-    const fetchFn = vi.fn(async () => braveErr(500, 'bad\x1b[31mred\x1b[0m\nbody\x07'));
-    const backend = createBraveSearchBackend({ apiKey: 'k', fetchFn: fetchFn as unknown as typeof fetch });
+    const fetchFn = vi.fn(async () => exaErr(500, 'bad\x1b[31mred\x1b[0m\nbody\x07'));
+    const backend = createExaSearchBackend({ apiKey: 'k', fetchFn: fetchFn as unknown as typeof fetch });
 
     let message = '';
     try {
@@ -118,7 +132,7 @@ describe('createBraveSearchBackend — result mapping', () => {
       message = err instanceof Error ? err.message : String(err);
     }
 
-    expect(message).toContain('Brave Search HTTP 500 Error: badred body');
+    expect(message).toContain('Exa Search HTTP 500 Error: badred body');
     expect(message).not.toContain('\x1b');
     expect(message).not.toContain('\n');
     expect(message).not.toContain('\x07');
@@ -126,20 +140,20 @@ describe('createBraveSearchBackend — result mapping', () => {
 });
 
 describe('resolveSearchBackend', () => {
-  it('returns a Brave backend when a key is present', () => {
-    const resolved = resolveSearchBackend({ braveApiKey: 'k' });
+  it('returns an Exa backend when a key is present', () => {
+    const resolved = resolveSearchBackend({ exaApiKey: 'k' });
     expect('error' in resolved).toBe(false);
-    expect((resolved as { name: string }).name).toBe('brave');
+    expect((resolved as { name: string }).name).toBe('exa');
   });
 
   it('returns an actionable error when no key is configured', () => {
-    const resolved = resolveSearchBackend({ braveApiKey: undefined });
+    const resolved = resolveSearchBackend({ exaApiKey: undefined });
     expect('error' in resolved).toBe(true);
-    expect((resolved as { error: string }).error).toMatch(/BRAVE_SEARCH_API_KEY/);
+    expect((resolved as { error: string }).error).toMatch(/EXA_API_KEY/);
   });
 
   it('treats a blank key as unconfigured', () => {
-    const resolved = resolveSearchBackend({ braveApiKey: '   ' });
+    const resolved = resolveSearchBackend({ exaApiKey: '   ' });
     expect('error' in resolved).toBe(true);
   });
 });

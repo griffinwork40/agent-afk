@@ -17,7 +17,7 @@
  */
 
 import { registerSkill, type SkillExecutionContext, type SkillMetadata } from '../index.js';
-import type { IAgentSession } from '../../agent/types.js';
+import type { AgentModelInput, IAgentSession } from '../../agent/types.js';
 import { runSpecPhase } from './_phases/spec.js';
 import { runResearchPhase } from './_phases/research.js';
 import { runPlanPhase } from './_phases/plan.js';
@@ -172,6 +172,7 @@ async function runPhasesAfterSpec(
   // a lane entry by the renderer's parentId resolver — see
   // stream-renderer.ts:262-280, and skills/index.ts SkillExecutionContext.callId).
   skillCallId?: string,
+  defaultSubagentModel: AgentModelInput = 'sonnet',
 ): Promise<MintResult> {
   if (!parentSession.sessionId) {
     throw new Error('runPhasesAfterSpec requires parentSession.sessionId');
@@ -184,11 +185,11 @@ async function runPhasesAfterSpec(
   const parentCwd = parentSession.cwd;
   try {
     state.currentPhase = 'research';
-    state.research = await runResearchPhase(state.spec!, parentSessionId, parentCwd, skillCallId);
+    state.research = await runResearchPhase(state.spec!, parentSessionId, parentCwd, skillCallId, defaultSubagentModel);
     appendHistory(state, 'research', state.research);
 
     state.currentPhase = 'plan';
-    state.plan = await runPlanPhase(state.spec!, state.research, parentSessionId, parentCwd, skillCallId);
+    state.plan = await runPlanPhase(state.spec!, state.research, parentSessionId, parentCwd, skillCallId, defaultSubagentModel);
     appendHistory(state, 'plan', state.plan);
 
     state.currentPhase = 'parallelize';
@@ -196,6 +197,7 @@ async function runPhasesAfterSpec(
       state.plan,
       parentSession,
       skillCallId,
+      defaultSubagentModel,
     );
     if (parallelizeResult.kind === 'plan') {
       state.waveOrchestrationPlan = parallelizeResult.plan;
@@ -242,6 +244,7 @@ async function runPhasesAfterSpec(
       parentSessionId,
       parentCwd,
       skillCallId,
+      defaultSubagentModel,
     );
     appendHistory(state, 'build', JSON.stringify(state.buildResults));
 
@@ -252,6 +255,7 @@ async function runPhasesAfterSpec(
       parentSessionId,
       parentCwd,
       skillCallId,
+      defaultSubagentModel,
     );
     appendHistory(state, 'verify', JSON.stringify(state.verifyResults));
 
@@ -270,6 +274,7 @@ async function runPhasesAfterSpec(
         state.healIterations,
         parentSession,
         skillCallId,
+        defaultSubagentModel,
       );
       state.healIterations = healResult.newHealIterations;
       state.verifyResults = healResult.newVerifyResults;
@@ -293,7 +298,7 @@ async function runPhasesAfterSpec(
     }
 
     state.currentPhase = 'ship';
-    const artifact = await runShipPhase(state, parentSessionId, parentCwd, skillCallId);
+    const artifact = await runShipPhase(state, parentSessionId, parentCwd, skillCallId, defaultSubagentModel);
     appendHistory(state, 'ship', artifact);
 
     return { completed: true, artifact, state };
@@ -330,6 +335,7 @@ async function handler(
   // tool-lane entry in both the live overlay and the committed scrollback
   // block. See skills/index.ts SkillExecutionContext.callId.
   const skillCallId = ctx?.callId;
+  const defaultSubagentModel = ctx?.defaultSubagentModel ?? ctx?.defaultModel ?? 'sonnet';
 
   // Resume path — caller-supplied resumeFrom wins; otherwise reload the last
   // paused state for this session from disk.
@@ -340,7 +346,7 @@ async function handler(
         'mint: no paused spec found for this session to continue. Run /mint <idea> first, then /mint --continue approved.',
       );
     }
-    const result = await runPhasesAfterSpec(resumeState, parentSession, skillCallId);
+    const result = await runPhasesAfterSpec(resumeState, parentSession, skillCallId, defaultSubagentModel);
     return finalizeAfterSpec(parentSessionId, result);
   }
 
@@ -361,7 +367,7 @@ async function handler(
   };
 
   try {
-    state.spec = await runSpecPhase(mintInput.idea, parentSessionId, parentSession.cwd, skillCallId);
+    state.spec = await runSpecPhase(mintInput.idea, parentSessionId, parentSession.cwd, skillCallId, defaultSubagentModel);
     appendHistory(state, 'spec', state.spec);
   } catch (err) {
     throw new Error(`mint failed at spec: ${err}`);
@@ -380,7 +386,7 @@ async function handler(
     return pausedResult;
   }
 
-  const result = await runPhasesAfterSpec(state, parentSession, skillCallId);
+  const result = await runPhasesAfterSpec(state, parentSession, skillCallId, defaultSubagentModel);
   return finalizeAfterSpec(parentSessionId, result);
 }
 

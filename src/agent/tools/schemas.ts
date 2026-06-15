@@ -256,7 +256,7 @@ export const webScrapeTool: AnthropicToolDef = {
     'No API key required.\n' +
     '- `search`: runs a web search and returns ranked markdown results. Use when ' +
     'you need to FIND a URL, not read one. Provide `query` instead of `url`. ' +
-    'Requires `BRAVE_SEARCH_API_KEY` (free tier at https://brave.com/search/api/); ' +
+    'Requires `EXA_API_KEY` (free tier at https://exa.ai); ' +
     'the handler returns a clear error if it is unset.\n\n' +
     'Outputs are capped at `max_bytes` UTF-8 bytes (default 1MB, ceiling 10MB) ' +
     'and the request is aborted after `timeout_ms` (default 30000, ceiling 120000).',
@@ -624,6 +624,81 @@ export const terminalFontSizeTool: AnthropicToolDef = {
       },
     },
     required: ['action'],
+  },
+};
+
+export const configGetTool: AnthropicToolDef = {
+  name: 'config_get',
+  category: 'read',
+  concurrencySafe: true,
+  description:
+    "Read your own AFK configuration from ~/.afk/config/. Use target 'config' for afk.config.json " +
+    "(behavioural settings: model, temperature, autoRouting, telegram.notify, …) or target 'env' for " +
+    'afk.env (environment variables). Omit `key` to list everything; pass a dotted `key` ' +
+    '(e.g. "telegram.notify.mode" for config, or "AFK_EFFORT" for env) to read one value. ' +
+    'Secret values (API keys, tokens) are ALWAYS masked — you will see "set (****1234)" or "<unset>", ' +
+    'never the raw credential. Read-only; safe in any phase.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      target: {
+        type: 'string',
+        enum: ['env', 'config'],
+        description: "'config' = afk.config.json settings; 'env' = afk.env environment variables.",
+      },
+      key: {
+        type: 'string',
+        description:
+          'Optional. A dotted config path (e.g. "models.large", "telegram.notify.mode") or an env var ' +
+          'name (e.g. "AFK_MODEL"). Omit to list all values for the target.',
+      },
+      all: {
+        type: 'boolean',
+        description:
+          'env only: when true, list every known env var (not just those currently set). Default false.',
+      },
+    },
+    required: ['target'],
+  },
+};
+
+export const configSetTool: AnthropicToolDef = {
+  name: 'config_set',
+  category: 'write',
+  concurrencySafe: false,
+  description:
+    'Edit your own AFK configuration in ~/.afk/config/ — persists for FUTURE sessions. ' +
+    "Use target 'config' (afk.config.json) or 'env' (afk.env). action 'set' (default) writes `value`; " +
+    "action 'unset' removes the key. You may set non-secret behavioural settings freely (e.g. model, " +
+    'temperature, AFK_EFFORT, telegram.notify.mode). You CANNOT set credentials (API keys, tokens) or ' +
+    'identity/safety keys (systemPrompt, hooks) — those are human-gated and will be refused with ' +
+    'instructions for the human to run the `afk config` CLI. IMPORTANT: changes take effect on the next ' +
+    'session/daemon restart; the CURRENT session is unchanged, so do not re-set a key expecting a live effect.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      target: {
+        type: 'string',
+        enum: ['env', 'config'],
+        description: "'config' = afk.config.json settings; 'env' = afk.env environment variables.",
+      },
+      action: {
+        type: 'string',
+        enum: ['set', 'unset'],
+        description: "'set' (default) writes `value`; 'unset' removes the key.",
+      },
+      key: {
+        type: 'string',
+        description:
+          'The dotted config path (e.g. "model", "telegram.notify.mode") or env var name (e.g. "AFK_EFFORT").',
+      },
+      value: {
+        description:
+          'Required for action "set". A string, number, or boolean (config keys also accept arrays where ' +
+          'the schema expects one, e.g. telegram.notify.targets). Coerced to the key\'s declared type.',
+      },
+    },
+    required: ['target', 'key'],
   },
 };
 
@@ -1012,6 +1087,8 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   getScheduleHistoryTool,
   cancelScheduleTool,
   terminalFontSizeTool,
+  configGetTool,
+  configSetTool,
   askQuestionTool,
   browserOpenTool,
   browserObserveTool,

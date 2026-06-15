@@ -326,7 +326,7 @@ export async function runTurn(
 
         if (event.type === 'chunk' && event.chunk.type === 'tool_use_detail') {
           const c = event.chunk;
-          const te: ToolEvent = { toolName: c.toolName, toolUseId: c.toolUseId, input: c.toolInput };
+          const te: ToolEvent = { toolName: c.toolName, toolUseId: c.toolUseId, input: c.toolInput, ...(c.toolInputRaw !== undefined && { inputRaw: c.toolInputRaw }) };
           pendingTools.set(c.toolUseId, te);
           toolEvents.push(te);
         } else if (event.type === 'chunk' && event.chunk.type === 'tool_result') {

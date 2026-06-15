@@ -7,6 +7,7 @@ import { SubagentManager } from '../../../agent/subagent.js';
 import { describeFailure } from '../../../agent/subagent/result.js';
 import { getApiKey } from '../../../cli/shared-helpers.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
+import type { AgentModelInput } from '../../../agent/types.js';
 import { emitCard } from '../../_lib/emit-card.js';
 import type { MintState } from '../index.js';
 
@@ -17,6 +18,7 @@ export async function runShipPhase(
   // Mint skill's ToolCall id — anchors the ship subagent under the mint
   // skill's tool-lane entry. See skills/index.ts SkillExecutionContext.callId.
   skillCallId?: string,
+  defaultSubagentModel: AgentModelInput = 'sonnet',
 ): Promise<string> {
   const prompts = loadSkillPrompts('mint');
   const shipPrompt = prompts['ship.md'];
@@ -33,7 +35,7 @@ export async function runShipPhase(
   const shipHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },
     config: {
-      model: 'sonnet',
+      model: defaultSubagentModel,
       systemPrompt: shipPrompt,
       apiKey: getApiKey(),
     },

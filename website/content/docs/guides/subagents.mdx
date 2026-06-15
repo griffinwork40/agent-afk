@@ -1,0 +1,145 @@
+---
+title: "Subagents & Delegation"
+description: "How to delegate work to subagents: the agent tool, background mode, /bgsub, the compose DAG, and when to delegate vs. stay inline."
+---
+
+Agent AFK can fork child sessions — subagents — that run isolated tasks in parallel or sequence. This guide covers the mechanics: the `agent` tool, background mode, the `compose` DAG, and the decision rules for when to delegate vs. stay inline.
+
+## How subagents work
+
+Subagents are child sessions that run independently. Each inherits permissions from the parent and runs the same tool surface. What it does not inherit is context — every subagent starts with zero prior conversation.
+
+**Always include in a subagent brief:**
+- Objective
+- Relevant file paths and constraints
+- Expected deliverable (format, length)
+- What **not** to do and when to stop
+
+A subagent brief with missing context produces unreliable output. Synthesize what the subagent needs; don't assume it can infer from the parent conversation.
+
+## The `agent` tool
+
+The primary dispatch mechanism is the built-in `agent` tool (also called `Task` in the tool list). Pass a `prompt` describing the work:
+
+```
+agent({
+  prompt: "Read src/auth/session.ts and summarise the session lifecycle in ≤200 words. Cite file:line for each claim.",
+  model: "haiku",          // optional — right-size the model
+  max_turns: 10            // optional — bound the budget
+})
+```
+
+The tool forks a child session, runs it to completion, and returns the compressed result to the parent. The parent's context window receives the final message only — not the child's internal reasoning or tool call log.
+
+### Model selection
+
+You can dispatch subagents on cheaper models when the task doesn't need full capability:
+
+| Model | Best for |
+|---|---|
+| `haiku` | Fast lookups, simple summarisation, file reads |
+| `sonnet` | General investigation, multi-file analysis |
+| `opus` | Complex reasoning, long-horizon planning |
+
+### Foreground vs. background
+
+By default `agent` is **foreground**: the parent waits for the child to finish before continuing.
+
+Pass `mode: "background"` to fire-and-forget. The tool returns a `jobId` immediately. The parent can keep working and join the result later:
+
+```
+// Dispatch background job
+agent({ prompt: "...", mode: "background" })
+// → returns { jobId: "abc123" }
+
+// Later, in the REPL:
+/bgsub:join abc123
+```
+
+Use background mode for long investigations where the result isn't needed in the current turn — for example, running a security audit while the main session continues implementing a feature.
+
+## `/bgsub` — background job management
+
+In the REPL, background subagent jobs are surfaced through the `/bgsub` namespace:
+
+```
+/bgsub:join <jobId>    # wait for and return the result
+```
+
+The status bar at the bottom of the REPL shows running background task counts. `/bg` and `/tasks` also list active background work.
+
+Source: `src/cli/background-status-bar.ts`, `src/cli/commands/interactive/background.js`.
+
+## The `compose` tool — DAG orchestration
+
+For structured multi-agent workflows, the `compose` tool dispatches up to 20 subagent nodes with explicit dependency edges. Independent nodes run in parallel; dependent nodes wait.
+
+```
+compose({
+  nodes: [
+    { id: "audit", prompt: "audit the auth module" },
+    { id: "tests", prompt: "read the test suite for auth" },
+    { id: "report", prompt: "write a combined report", dependsOn: ["audit", "tests"] }
+  ]
+})
+```
+
+`audit` and `tests` run in parallel. `report` starts only after both complete. If any node fails and fail-fast is enabled (the default), downstream nodes are cancelled rather than running with incomplete inputs.
+
+**Limits and failure behavior:**
+- Maximum 20 nodes per `compose` call
+- Cycles are rejected at dispatch time
+- Fail-fast cancels all downstream nodes on first failure — the parent sees which nodes ran and which were skipped
+
+Source: `src/agent/tools/compose-executor.ts`, `src/agent/dag.ts`.
+
+## How cancellation works
+
+When you cancel a session, all running subagents stop immediately. The rules:
+
+- **Parent abort cascades down** — aborting the parent cancels all running children.
+- **Child abort notifies up but does not auto-abort the parent** — a failed subagent surfaces an error to the parent; the parent decides whether to continue.
+- **Abort beats hook decisions** — if an abort signal fires while a hook is deciding, abort wins.
+
+This means you can cancel a daemon session or a REPL turn and all its child work stops immediately. A single broken subagent in a `compose` DAG does not bring down the orchestrator unless it's in a dependency chain.
+
+## When to delegate vs. stay inline
+
+**Delegate when the work would:**
+- Read or grep more than 3 files inline
+- Verify a claim independently from the chain that produced it
+- Investigate a failing test or unexplained behavior
+- Run two or more independent investigations that could happen in parallel
+- Consume more main-session context than the subagent's compressed answer would
+
+**Stay inline when:**
+- The task is a single-file edit or localized fix visible in fewer than 2 reads
+- The answer is conversational or requires no file access
+- The user explicitly asked for a direct tool call
+- Dispatch overhead exceeds the work itself
+
+Source: `AGENTS.md` (Delegation section).
+
+### Right-sizing the budget
+
+Subagents should have explicit budgets. Before dispatching:
+
+- Set `max_turns` on focused investigations (`max_turns: 5` for a quick lookup)
+- Choose the cheapest sufficient model (`haiku` for reads, `sonnet` for multi-file analysis)
+- For wide fan-outs, consider the `/right-size-delegation` skill before dispatching to prevent cascading timeouts
+
+## Subagent output
+
+Subagents return their final assistant message verbatim. Structure the brief to ask for compressed output:
+
+```
+"...Return: answer (1–2 sentences), evidence with file:line citations, confidence (high/medium/low), and any unresolved questions."
+```
+
+For typed output, the `SubagentManager` accepts optional Zod schemas — the subagent's output is validated before it reaches the parent. Malformed output surfaces as an error rather than silently passing through.
+
+## Verifying subagent output
+
+High-stakes subagent findings should not be trusted blindly. Use the `/shadow-verify` skill to dispatch parallel adversarial verifiers that re-derive 2–3 key claims from scratch using tool calls. Any disagreement is flagged before you act on the result.
+
+See the [Verification guide](/guides/verification) for the full workflow.

@@ -1,7 +1,6 @@
 import { promises as fs } from 'node:fs';
-import { env } from '../../../config/env.js';
-import * as os from 'node:os';
 import * as path from 'node:path';
+import { ensureTranscriptsMigrated, getTranscriptsDir } from '../../../paths.js';
 
 /**
  * Create a new transcript file under `dir` and write the markdown header.
@@ -53,10 +52,11 @@ export interface TranscriptHandle {
  * user may `/model …` mid-session).
  */
 export async function initTranscript(getModel: () => string): Promise<TranscriptHandle> {
-  const dir = path.join(
-    env.AFK_STATE_DIR ?? path.join(os.homedir(), '.afk'),
-    'transcripts',
-  );
+  // Relocate any pre-3.x flat ~/.afk/transcripts/ into the state tier before
+  // resolving the (now state-scoped) target dir, so a returning user's old
+  // transcripts and new ones live in one place.
+  ensureTranscriptsMigrated();
+  const dir = getTranscriptsDir();
   let current = await startTranscript(dir, getModel());
   // The user text of the turn currently "open" on disk: appendUser() wrote
   // its `## User` block but no `## Assistant` block has closed it yet.

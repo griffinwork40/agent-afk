@@ -1,0 +1,73 @@
+/* ==========================================================================
+   Agent AFK Docs — Global Styles (minimal)
+   Brings ONLY design tokens + minimal base. No element-level resets that
+   would bleed into Fumadocs prose (no margin:0 on h1..p, no list-style:none,
+   no code chip styles). Those are handled inside app/docs/docs-theme.css.
+   ========================================================================== */
+
+/* --- Design tokens: dark (default) --------------------------------------- */
+/* Invariant: :root holds dark-mode values; html:not(.dark) overrides to
+   light. next-themes toggles .dark on <html>; both branches must be present
+   so that removing .dark actually changes the palette. */
+:root {
+  /* Color — dark palette */
+  --color-bg:           #07070b;
+  --color-bg-elev:      #0d0d14;
+  --color-surface:      #11111a;
+  --color-surface-2:    #161621;
+  --color-border:       #1f1f2e;
+  --color-border-soft:  #15151f;
+  --color-accent:       #f9854b;
+  --color-accent-soft:  #ffa07a;
+  --color-accent-glow:  rgba(249, 133, 75, 0.14);
+  --color-text:         #e9e9f0;
+  --color-text-muted:   #9b9bae;
+  --color-text-faint:   #7c7c94;
+  --color-success:      #4ade80;
+  --color-amber:        #fbbf24;
+
+  /* Typography */
+  --font-sans:    -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-mono:    var(--font-jbm, "JetBrains Mono"), "SF Mono", "Fira Code", "Cascadia Code", ui-monospace, Menlo, Monaco, Consolas, monospace;
+  --font-display: var(--font-mono);
+
+  /* Geometry */
+  --radius-sm: 4px;
+  --radius:    8px;
+  --radius-lg: 12px;
+
+  /* Motion */
+  --ease:     cubic-bezier(0.2, 0.8, 0.2, 1);
+  --t-fast:   120ms;
+  --t-base:   180ms;
+  --t-slow:   320ms;
+  --t-med:    240ms;
+}
+
+/* --- Design tokens: light override --------------------------------------- */
+/* Applied when next-themes removes .dark from <html>.
+   Accent (#f9854b) and geometry/motion tokens are theme-invariant. */
+html:not(.dark) {
+  --color-bg:           #f7f7f8;
+  --color-bg-elev:      #ffffff;
+  --color-surface:      #ededf0;
+  --color-surface-2:    #e4e4e9;
+  --color-border:       #d0d0da;
+  --color-border-soft:  #e0e0e8;
+  --color-text:         #111118;
+  --color-text-muted:   #5a5a72;
+  --color-text-faint:   #8888a0;
+  --color-success:      #16a34a;
+  --color-amber:        #d97706;
+  /* accent and glow stay orange — same brand in both themes */
+}
+
+/* --- Minimal base --------------------------------------------------------- */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}

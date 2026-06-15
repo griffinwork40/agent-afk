@@ -1,0 +1,105 @@
+---
+title: "Quickstart"
+description: "Install Agent AFK, set your API key, and run your first command in under two minutes."
+---
+
+## Prerequisites
+
+- **Node.js ≥ 22** — check with `node --version`
+- An **Anthropic API key** (or run `afk login` for browser-based OAuth)
+
+## Install
+
+```bash
+npm install -g agent-afk
+```
+
+Confirm the binary is on your `PATH`:
+
+```bash
+afk --version
+```
+
+## Set your API key
+
+The simplest path is an environment variable:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Add that line to your shell profile (`~/.zshrc`, `~/.bashrc`, etc.) to make it permanent.
+
+Alternatively, write it to Agent AFK's env config file so it's scoped to `afk` only:
+
+```bash
+echo "ANTHROPIC_API_KEY=sk-ant-..." >> ~/.afk/config/afk.env
+```
+
+Or keep the key out of your shell history with a masked prompt:
+
+```bash
+afk config env set ANTHROPIC_API_KEY   # prompts without echoing the value
+```
+
+Or use the OAuth flow (no API key required — authenticates via `console.anthropic.com`):
+
+```bash
+afk login
+```
+
+## Smoke test
+
+Verify the installation and provider connectivity:
+
+```bash
+afk chat "hello"
+afk doctor       # environment self-check: Node version, API key, paths, config
+```
+
+`afk doctor` will flag any missing keys, path problems, or provider connectivity issues.
+
+## Your first session
+
+For a one-shot question:
+
+```bash
+afk chat "summarise the last 10 git commits in this repo"
+```
+
+For an interactive REPL with full tool access (bash, file ops, web fetch, subagents):
+
+```bash
+afk i
+```
+
+Inside the REPL, type a message and press Enter. Use `/help` to list slash commands.
+
+<Callout type="info">
+`afk i` is an alias for `afk interactive`. The REPL is the default command — running `afk`
+with no subcommand also starts the REPL.
+</Callout>
+
+## Choose a model
+
+The default model is `sonnet`. Override per-command:
+
+```bash
+afk chat "explain this stack trace" --model opus
+afk i --model haiku
+```
+
+| Alias | Description |
+|---|---|
+| `fable` | Most capable — hardest reasoning, 1M context |
+| `opus` | Complex reasoning, multi-step planning |
+| `sonnet` | Balanced speed and capability (default) |
+| `haiku` | Fast and cheap, good for simple tasks |
+
+## Next steps
+
+- **[How It Works](/how-it-works)** — session lifecycle, provider routing, terminal states
+- **[Interactive REPL](/surfaces/repl)** — slash commands, plan mode, background tasks
+- **[One-Shot Chat](/surfaces/chat)** — pipe-friendly, headless streaming
+- **[Daemon](/surfaces/daemon)** — cron scheduling, unattended runs
+- **[Telegram](/surfaces/telegram)** — bot setup and supervision

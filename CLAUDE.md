@@ -67,10 +67,11 @@ All AFK state lives under `~/.afk/` (never `~/.claude/`). AFK resolves user-scop
 ```
 ~/.afk/
   config/     afk.env, afk.config.json
-  state/
-    sessions/  session-store sidecars
-    todos/     todo-panel data
-    daemon/    per-instance daemon state
+  state/                ($AFK_STATE_DIR overrides this tier)
+    sessions/    session-store sidecars
+    todos/       todo-panel data
+    transcripts/ autosaved REPL session transcripts
+    daemon/      per-instance daemon state
   plugins/    local plugin installs
   logs/
   cache/

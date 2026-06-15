@@ -1,0 +1,99 @@
+---
+title: "Built-in Skills"
+description: "Curated overview of the skills shipped with agent-afk and when to reach for each one."
+---
+
+AFK includes a small set of skills out of the box. Each one works as a slash command (type `/skillname`) and as a tool the model can call on its own.
+
+## Public skills
+
+These skills are visible to all users.
+
+### `/get-started`
+
+```
+/get-started
+```
+
+**Purpose:** Guided first-run onboarding — preflight checks, optional capability setup, and a route to your first task.
+
+**What it does:** Runs a preflight check (git repo, model provider, `AFK.md`, Exa/Telegram/service config), asks your name and gives a brief intro, detects importable Claude Code / Codex assets and offers `afk migrate`, then walks optional capability setup (Exa Search, Telegram via `/telegram-setup`, background service via `/service-setup`). Ends by recommending `/init` to generate project context and `/clear` to start fresh, then routes you to your first task.
+
+**Execution mode:** `load` — runs interactively in the current session (not a fork), so it can drive setup alongside you.
+
+**When to use:** When you're setting up AFK for the first time or asking how to get going. Triggers on `/get-started`, "how do I start", "set me up", or "onboard me". Best run in the interactive REPL.
+
+---
+
+### `/mint`
+
+```
+/mint <idea>
+/mint --continue approved
+```
+
+**Purpose:** End-to-end feature and refactor delivery — from a one-sentence idea to a verified, ship-ready implementation.
+
+**What it does:** Runs an eight-phase pipeline: spec → research → plan → parallelize → build → verify → heal → ship. After the spec phase completes it pauses and surfaces the spec for your approval. Resume with `/mint --continue approved` (or `yes`, `lgtm`, `sure`) — the handler reloads state from disk and runs phases 2–8. If the verify phase fails, a heal loop retries up to two times before surfacing a structured failure report.
+
+**When to use:** When you want a feature or refactor delivered end-to-end without driving each phase manually. Works best on self-contained features with clear acceptance criteria.
+
+---
+
+### `/diagnose`
+
+```
+/diagnose <bug-or-failing-test>
+```
+
+**Purpose:** Parallel root-cause analysis for bugs and failing tests.
+
+**What it does:** Runs parallel agents to analyze your codebase and git history simultaneously. Synthesizes 2–4 hypotheses. Tests each in an isolated git worktree. Returns a validated root cause, a proposed fix, and a named outcome label (`clear_winner`, `multiple_plausible`, `dissent`, `all_inconclusive`, or `no_hypotheses`).
+
+**When to use:** When a test is failing, a bug is reported, or behaviour is unexplained and you need a root cause with evidence rather than a guess.
+
+---
+
+### `/service-setup`
+
+```
+/service-setup
+```
+
+**Purpose:** Install an AFK background process (Telegram bot or daemon) as a macOS LaunchAgent so it auto-starts on login and relaunches on crash.
+
+**What it does:** Runs pre-flight checks (e.g., refuses to install the Telegram service if the token is invalid or missing, which would otherwise cause an infinite KeepAlive crash loop), invokes `afk service install`, verifies the result with `afk service status`, and surfaces the management cheatsheet. macOS-only — gracefully refuses on other platforms.
+
+**Execution mode:** `fork` — runs as an isolated sub-agent with its own context window.
+
+**When to use:** When you want `afk telegram start` or `afk daemon` to survive reboot, crash, or OOM. Triggers on phrasings like "install as a service", "auto-start on login", "keep the bot running", or "launchd".
+
+---
+
+### `/telegram-setup`
+
+```
+/telegram-setup
+```
+
+**Purpose:** Guide you through first-time Telegram bot onboarding without ever putting the bearer token in the model's context.
+
+**What it does:** Instructs you to run `afk telegram setup` in a terminal (which handles token entry via stdin), then uses three sanctioned subcommands — `afk telegram check-token`, `afk telegram discover-chat`, `afk telegram set-allowed-chat <id>` — to validate and complete allowlist setup. The token never crosses the LLM provider boundary.
+
+**Execution mode:** `fork` — runs as an isolated sub-agent.
+
+**When to use:** When you want to set up Telegram push notifications for the first time, or when you need to debug a partially-configured install. Also triggers when AFK detects `TELEGRAM_BOT_TOKEN` is unset and you ask about notifications.
+
+---
+
+## Internal skills
+
+The following skills are registered but hidden from public surfaces unless `AFK_INTERNAL=1` is set. They are listed here for reference only.
+
+| Skill | Audience | Notes |
+|---|---|---|
+| `audit-fit` | `internal` | Audits `~/.afk` artifacts for correct type categorisation; writes migration briefs to `~/.afk/agent-framework/briefs/`. Runs fine without the internal tier — it's hidden for UX, not correctness. |
+
+## Skills registered at runtime by plugins
+
+Plugin skills (`~/.afk/plugins/<plugin>/skills/<skill>/SKILL.md`) are discovered automatically when the plugin is installed. They surface in `/help` and tab-complete. See [Custom Skills](/skills/custom) for how to author your own.

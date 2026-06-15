@@ -18,7 +18,7 @@ import { getSkill } from '../../index.js';
 import { discoverPluginSkillBodies } from '../../../agent/tools/skill-bridge.js';
 import { SubagentManager } from '../../../agent/subagent.js';
 import { getApiKey } from '../../../cli/shared-helpers.js';
-import type { IAgentSession } from '../../../agent/types.js';
+import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
 
 export type ParallelizeDispatchResult =
   | { kind: 'skipped'; reason: 'too-few-files' | 'skill-body-missing' }
@@ -56,6 +56,7 @@ export async function runParallelizeDispatch(
   // Mint skill's ToolCall id — anchors the parallelize subagent under the
   // mint skill's tool-lane entry. See skills/index.ts SkillExecutionContext.callId.
   skillCallId?: string,
+  defaultSubagentModel: AgentModelInput = 'sonnet',
 ): Promise<ParallelizeDispatchResult> {
   const fileCount = countFileReferences(plan);
 
@@ -117,7 +118,7 @@ export async function runParallelizeDispatch(
         // surfaces lifecycle to the user.
         parent: { sessionId: parentSession.sessionId },
         config: {
-          model: 'sonnet',
+          model: defaultSubagentModel,
           systemPrompt: skill.body,
           env: { PLUGIN_ROOT: skill.pluginPath },
         },

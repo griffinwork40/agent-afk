@@ -451,7 +451,7 @@
     },
     {
       "name": "AFK_STATE_DIR",
-      "description": "Override the AFK state directory. Default: $AFK_HOME/state/.",
+      "description": "Override the entire AFK state tier (sessions/, todos/, transcripts/, memory/, daemon/, etc.), not just one subdirectory. Must be an absolute path (not /). Default: $AFK_HOME/state/.",
       "type": "string",
       "required": false,
       "category": "paths"
@@ -703,14 +703,6 @@
       "category": "process"
     },
     {
-      "name": "BRAVE_SEARCH_API_KEY",
-      "description": "Brave Search API subscription token, enabling web_scrape search mode. Free tier available at https://brave.com/search/api/. When unset, search mode returns an actionable error; markdown and raw modes are unaffected.",
-      "type": "string",
-      "required": false,
-      "category": "auth",
-      "secret": true
-    },
-    {
       "name": "CI",
       "description": "Standard CI-detection convention. Auto-set by GitHub Actions, CircleCI, etc. Used to switch off TTY-only UX.",
       "type": "string",
@@ -748,6 +740,14 @@
       "type": "string",
       "required": false,
       "category": "debug"
+    },
+    {
+      "name": "EXA_API_KEY",
+      "description": "Exa (exa.ai) search API key, enabling web_scrape search mode. Free tier (20k requests/month) available at https://exa.ai. When unset, search mode returns an actionable error; markdown and raw modes are unaffected.",
+      "type": "string",
+      "required": false,
+      "category": "auth",
+      "secret": true
     },
     {
       "name": "FORCE_COLOR",

@@ -1,0 +1,126 @@
+---
+title: "Telegram Bot"
+description: "Run Agent AFK as a Telegram bot — same tools, same memory, on your phone. Set up takes under five minutes."
+---
+
+Agent AFK can run as a Telegram bot, giving you a private chat interface backed by the same
+session manager and full tool set as the REPL. You can also use Telegram as a notification
+channel — the daemon pushes a message whenever a scheduled task completes.
+
+## Setup
+
+### 1. Create a bot token
+
+Open Telegram and message `@BotFather`:
+
+1. Send `/newbot`
+2. Follow the prompts to name your bot
+3. Copy the token BotFather gives you (it looks like `1234567890:ABC...`)
+
+### 2. Run the setup wizard
+
+```bash
+afk telegram setup
+```
+
+The wizard validates your token against the Telegram API, then walks you through discovering
+your chat ID (send your bot a message and it polls for it automatically), and writes both to
+`~/.afk/config/afk.env`:
+
+```
+TELEGRAM_BOT_TOKEN=1234567890:ABC...
+AFK_TELEGRAM_ALLOWED_CHAT_IDS=12345678
+```
+
+### 3. Start the bot
+
+```bash
+afk telegram start
+```
+
+The bot starts as a background daemon and logs to `~/.afk/logs/telegram.log`.
+
+## Manual configuration
+
+Skip the wizard by setting the env vars directly in `~/.afk/config/afk.env` or your shell profile:
+
+```bash
+export TELEGRAM_BOT_TOKEN=1234567890:ABC...
+export AFK_TELEGRAM_ALLOWED_CHAT_IDS=12345678
+```
+
+`AFK_TELEGRAM_ALLOWED_CHAT_IDS` is a comma-separated list of chat IDs whose messages the bot
+will accept. Messages from any other chat are silently ignored. You must set at least one ID or
+the bot will start but never respond.
+
+To allow multiple users:
+
+```bash
+AFK_TELEGRAM_ALLOWED_CHAT_IDS=12345678,87654321
+```
+
+## Bot commands
+
+Inside Telegram, the bot recognizes:
+
+| Command | Description |
+|---|---|
+| `/start` | Welcome message |
+| `/reset` | Clear conversation history and start fresh |
+| `/model opus` | Switch the active model (`opus`, `sonnet`, `haiku`, `fable`) |
+
+Any other message is sent to the session as a regular turn. The bot has full tool access via
+bypass mode — same as the REPL.
+
+## Managing the bot process
+
+```bash
+afk telegram start       # start as a background daemon
+afk telegram stop        # SIGTERM (then SIGKILL after 5 seconds)
+afk telegram restart     # stop + start
+afk telegram status      # running state, PID, uptime, memory, recent log lines
+afk telegram logs        # print the last 50 log lines
+afk telegram logs -f     # follow the log (like tail -f)
+afk telegram logs -n 100 # show the last 100 lines
+```
+
+`afk telegram status` shows:
+- Running / stopped state with PID
+- Uptime (when running)
+- Memory usage in MB (when running)
+- Path to the PID file and log file
+- Recent log entries
+
+## Telegram as a notification channel
+
+Even without the interactive bot surface, you can use Telegram purely for push notifications.
+The daemon pushes a message to `AFK_TELEGRAM_ALLOWED_CHAT_IDS` on every task completion. The
+`send_telegram` tool is also available inside agent sessions — any agent session can push a notification to your phone when work finishes.
+
+The `send_telegram` tool is safe to attempt unconditionally: if Telegram is not configured,
+it returns an error instead of crashing.
+
+## Troubleshooting
+
+**Bot starts but never responds** — the most common cause is a missing or incorrect
+`AFK_TELEGRAM_ALLOWED_CHAT_IDS`. Run `afk telegram status` and check the log with
+`afk telegram logs`. Send your bot a message, then check the log for "message from unknown chat"
+or similar.
+
+**`afk telegram start` exits immediately** — the bot process crashed on startup. Check the logs:
+
+```bash
+afk telegram logs
+```
+
+Common causes: invalid `TELEGRAM_BOT_TOKEN`, network connectivity, or a port conflict.
+
+**Token not set** — `afk telegram setup` reads from and writes to `~/.afk/config/afk.env`.
+If you set the token in your shell profile, it may not be available to the bot daemon. Write
+it to `afk.env` instead — `afk config env set` prompts for the token with a masked input so it
+never lands in your shell history:
+
+```bash
+afk config env set TELEGRAM_BOT_TOKEN          # masked prompt (recommended)
+echo "TELEGRAM_BOT_TOKEN=<token>" >> ~/.afk/config/afk.env   # or append by hand
+```

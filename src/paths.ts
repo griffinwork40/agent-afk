@@ -10,9 +10,10 @@
  * User-scope shape:
  *   $AFK_HOME/                   (default: ~/.afk/)
  *     config/                    afk.env, afk.config.json
- *     state/
+ *     state/                     (override the whole tier with $AFK_STATE_DIR)
  *       sessions/                session-store sidecars
  *       todos/                   todo-panel data
+ *       transcripts/             autosaved REPL session transcripts
  *       daemon/agent-afk@<i>/    per-instance daemon state
  *     agent-framework/           AFK-surface telemetry and briefs
  *       forge-telemetry.jsonl
@@ -27,9 +28,10 @@
  *     skills/     project-level SKILL.md dirs
  *     plugins/    project-level plugin dirs
  *
- * Legacy flat paths (~/.afk/sessions, ~/.afk/todos, ~/.afk.env,
- * ~/.afk.config.json) still work: sessions/todos migrate once on first
- * access; env/json config files fall back in lookup order.
+ * Legacy flat paths (~/.afk/sessions, ~/.afk/todos, ~/.afk/transcripts,
+ * ~/.afk.env, ~/.afk.config.json) still work: sessions/todos/transcripts
+ * migrate once on first access; env/json config files fall back in lookup
+ * order.
  */
 
 import { existsSync, mkdirSync, renameSync, cpSync, rmSync } from 'fs';
@@ -72,6 +74,18 @@ export function getSdkSchemaViolationsPath(): string {
 
 export function getBriefsDir(): string {
   return join(getAgentFrameworkDir(), 'briefs');
+}
+
+/**
+ * Directory for cached SessionFacet JSON sidecars (one per session id).
+ *
+ * Facets are a lazily-derived, consumer-facing projection of a persisted
+ * session (see src/agent/facets/). They live under the agent-framework
+ * telemetry tier in $AFK_HOME — NOT under a Claude-Code-style `usage-data/`
+ * path, which has no precedent here.
+ */
+export function getFacetCacheDir(): string {
+  return join(getAgentFrameworkDir(), 'facets');
 }
 
 export function getSkillsDir(): string {
@@ -152,6 +166,20 @@ export function getAfkConfigDir(): string {
 }
 
 export function getAfkStateDir(): string {
+  const envVal = env.AFK_STATE_DIR;
+  if (envVal !== undefined && envVal !== '') {
+    // External constraint: AFK_STATE_DIR governs the ENTIRE state tier
+    // (sessions, grants, transcripts, daemon state). A relative path would
+    // scatter state relative to cwd; '/' would expose it to all users and
+    // risk corrupting system dirs. Mirror the getAfkHome() guard since this
+    // value is now just as load-bearing.
+    if (!isAbsolute(envVal) || envVal === '/') {
+      throw new Error(
+        `AFK_STATE_DIR must be an absolute path that is not /, got: ${envVal}`,
+      );
+    }
+    return envVal;
+  }
   return join(getAfkHome(), 'state');
 }
 
@@ -184,6 +212,18 @@ export function getPresenceDir(): string {
 
 export function getTodosDir(): string {
   return join(getAfkStateDir(), 'todos');
+}
+
+/**
+ * Directory for autosaved REPL session transcripts (one `<isoStamp>.md` per
+ * session, rotated on `/clear`). Lives under the state tier alongside
+ * sessions/ and todos/ — it is session state, not a top-level artifact.
+ *
+ * Pre-3.x builds wrote these to a flat `~/.afk/transcripts/`;
+ * {@link ensureTranscriptsMigrated} relocates that legacy dir on first access.
+ */
+export function getTranscriptsDir(): string {
+  return join(getAfkStateDir(), 'transcripts');
 }
 
 export function getMemoryDir(): string {
@@ -297,6 +337,10 @@ function getLegacyTodosDir(): string {
   return join(getAfkHome(), 'todos');
 }
 
+function getLegacyTranscriptsDir(): string {
+  return join(getAfkHome(), 'transcripts');
+}
+
 function migrateDirOnce(oldPath: string, newPath: string): void {
   if (oldPath === newPath) return;
   if (!existsSync(oldPath)) return;
@@ -333,6 +377,16 @@ export function ensureSessionsMigrated(): void {
 
 export function ensureTodosMigrated(): void {
   migrateDirOnce(getLegacyTodosDir(), getTodosDir());
+}
+
+/**
+ * Relocate the legacy flat transcripts dir (`~/.afk/transcripts/`) into the
+ * state tier (`<getAfkStateDir()>/transcripts/`). No-op when there is nothing
+ * to move, or when an $AFK_STATE_DIR override already places both at the same
+ * path (migrateDirOnce early-returns on oldPath === newPath).
+ */
+export function ensureTranscriptsMigrated(): void {
+  migrateDirOnce(getLegacyTranscriptsDir(), getTranscriptsDir());
 }
 
 /**

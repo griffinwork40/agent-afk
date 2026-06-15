@@ -51,9 +51,9 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 |------|------|----------|---------|---------|-------------|
 | `AFK_LOCAL_API_KEY` | string |  | `local` | `local` | Placeholder API key for local Anthropic-compatible servers (vllm-mlx, etc.). Set when AFK_LOCAL_BASE_URL is configured. |
 | `ANTHROPIC_API_KEY` | string |  |  |  | Anthropic API key. Tier-1 credential — overrides keychain OAuth and CLAUDE_CODE_OAUTH_TOKEN. |
-| `BRAVE_SEARCH_API_KEY` | string |  |  |  | Brave Search API subscription token, enabling web_scrape search mode. Free tier available at https://brave.com/search/api/. When unset, search mode returns an actionable error; markdown and raw modes are unaffected. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | string |  |  |  | Claude Code OAuth token. Tier-2 credential — used when ANTHROPIC_API_KEY is unset; falls back to keychain. |
 | `CODEX_API_KEY` | string |  |  |  | Fallback OpenAI API key for the openai-compatible provider, read after OPENAI_API_KEY. Legacy name from the removed @openai/codex-sdk integration — prefer OPENAI_API_KEY. |
+| `EXA_API_KEY` | string |  |  |  | Exa (exa.ai) search API key, enabling web_scrape search mode. Free tier (20k requests/month) available at https://exa.ai. When unset, search mode returns an actionable error; markdown and raw modes are unaffected. |
 | `OPENAI_API_KEY` | string |  |  |  | OpenAI API key for the openai-compatible provider (gpt-*, o1*, o3*, o4* models). |
 
 ## Telegram
@@ -75,7 +75,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 |------|------|----------|---------|---------|-------------|
 | `AFK_FRAMEWORK_DIR` | string |  |  |  | Override the AFK agent-framework directory used for telemetry and briefs. Default: $AFK_HOME/agent-framework/. |
 | `AFK_HOME` | string |  | `~/.afk` | `/opt/afk` | Override the AFK home directory. Default: ~/.afk/. |
-| `AFK_STATE_DIR` | string |  |  |  | Override the AFK state directory. Default: $AFK_HOME/state/. |
+| `AFK_STATE_DIR` | string |  |  |  | Override the entire AFK state tier (sessions/, todos/, transcripts/, memory/, daemon/, etc.), not just one subdirectory. Must be an absolute path (not /). Default: $AFK_HOME/state/. |
 
 ## Daemon
 

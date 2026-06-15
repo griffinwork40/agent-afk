@@ -24,6 +24,7 @@ import {
   cancelScheduleHandler,
 } from './schedules.js';
 import { createTerminalFontSizeHandler, terminalFontSizeHandler } from './terminal-font-size.js';
+import { configGetHandler, configSetHandler } from './config-ops.js';
 // below for trivial re-enable.
 import { askQuestionHandler } from './ask-question.js';
 // Browser-control handlers. The provider behind them lazy-loads Playwright on
@@ -75,6 +76,8 @@ export function createBuiltinHandlers(
     ['get_schedule_history', getScheduleHistoryHandler],
     ['cancel_schedule', cancelScheduleHandler],
     ['terminal_font_size', terminalFontSize],
+    ['config_get', configGetHandler],
+    ['config_set', configSetHandler],
     ['ask_question', askQuestionHandler],
     ['browser_open', browserOpenHandler],
     ['browser_observe', browserObserveHandler],
@@ -99,6 +102,8 @@ export {
   getScheduleHistoryHandler,
   cancelScheduleHandler,
   terminalFontSizeHandler,
+  configGetHandler,
+  configSetHandler,
   askQuestionHandler,
   browserOpenHandler,
   browserObserveHandler,

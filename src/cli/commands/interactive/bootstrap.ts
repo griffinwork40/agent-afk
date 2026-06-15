@@ -15,7 +15,7 @@ import {
   getMaxOutputTokens, getDefaultSubagentModel, resolveBaseSystemPrompt,
 } from '../../shared-helpers.js';
 import { loadConfig } from '../../config.js';
-import { assembleSystemPrompt } from '../../../agent/routing-directive.js';
+import { assembleSystemPrompt, pendingBriefContext } from '../../../agent/routing-directive.js';
 import { StatusLine } from '../../status-line.js';
 import { registerAll } from '../../slash/index.js';
 import { setAllowDirDispatcher } from '../../slash/commands/allow-dir.js';
@@ -156,7 +156,7 @@ export async function bootstrapSession(
   const { prompt: basePrompt, source: systemPromptSource } = resolveBaseSystemPrompt();
   const cliConfig = loadConfig();
   const autoRouting = cliConfig.autoRouting?.interactive ?? true;
-  const systemPrompt = assembleSystemPrompt(basePrompt, autoRouting, 'repl');
+  const systemPrompt = assembleSystemPrompt(basePrompt, autoRouting, 'repl', pendingBriefContext());
 
   // Wire Agent tool by creating SubagentExecutor first.
   // The executor needs the session's methods, so we use a deferred parent proxy

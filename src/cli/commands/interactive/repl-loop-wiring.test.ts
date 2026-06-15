@@ -501,8 +501,13 @@ describe('runReplLoop — completionWriter wired to persistent compositor.commit
 describe('runReplLoop — P2 regression: AFK_SUGGEST_ENABLED parsed as boolean', () => {
   async function captureLlmEnabled(value: string | undefined): Promise<boolean> {
     const prev = process.env.AFK_SUGGEST_ENABLED;
+    const prevGhost = process.env.AFK_SUGGEST_GHOST;
     if (value === undefined) delete process.env.AFK_SUGGEST_ENABLED;
     else process.env.AFK_SUGGEST_ENABLED = value;
+    // This test isolates the Tier-2 LLM gate. The ghost-text master toggle must
+    // stay enabled, regardless of the caller's shell environment, so the
+    // compositor wires the suggest block whose llmEnabled() closure we inspect.
+    delete process.env.AFK_SUGGEST_GHOST;
     try {
       const ctx = makeMinimalCtx(new BackgroundAgentRegistry({}));
       const turnState: TurnState = {
@@ -522,6 +527,8 @@ describe('runReplLoop — P2 regression: AFK_SUGGEST_ENABLED parsed as boolean',
     } finally {
       if (prev === undefined) delete process.env.AFK_SUGGEST_ENABLED;
       else process.env.AFK_SUGGEST_ENABLED = prev;
+      if (prevGhost === undefined) delete process.env.AFK_SUGGEST_GHOST;
+      else process.env.AFK_SUGGEST_GHOST = prevGhost;
     }
   }
 

@@ -327,6 +327,7 @@ export function transformProviderEvent(
           toolUseId: event.toolUseId,
           toolName: event.toolName,
           toolInput: event.toolInput,
+          toolInputRaw: event.toolInputRaw,
         },
       };
 

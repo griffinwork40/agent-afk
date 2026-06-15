@@ -1,0 +1,144 @@
+---
+title: "Interactive REPL"
+description: "afk i launches a full-featured interactive REPL with slash commands, plan mode, background tasks, and streaming output."
+---
+
+The interactive REPL is Agent AFK's primary surface. Launch it with:
+
+```bash
+afk i
+# or
+afk interactive
+# or just
+afk          # interactive is the default command
+```
+
+The REPL gives you a persistent session with full tool access — bash, file ops, web fetch,
+subagents, MCP servers, memory — plus slash commands for built-in and plugin skills.
+
+## Common options
+
+```bash
+afk i --model opus           # pick a model
+afk i --max-turns 200        # raise the turn limit (default 100)
+afk i --resume <id>          # resume a saved session
+afk i --continue             # continue the most recent session in cwd
+afk i -w                     # create a git worktree for isolation
+afk i -w my-feature          # worktree on a named branch
+afk i --mcp-config ./mcp.json  # load an additional MCP config
+```
+
+## Slash commands
+
+Type `/` in the REPL to see available commands. Typos are caught automatically — type `/mnt` and AFK suggests `/mint`.
+
+### Session control
+
+| Command | Description |
+|---|---|
+| `/help` | List all available slash commands |
+| `/exit`, `/quit` | Leave the REPL |
+| `/clear` | Clear the screen |
+| `/reset` | Start a fresh session, discarding history |
+| `/compact` | Manually compact conversation history |
+| `/save` | Snapshot session state to disk |
+| `/resume` | Resume a saved session |
+
+### Information
+
+| Command | Description |
+|---|---|
+| `/cost` | Running cost for the session |
+| `/tokens` | Context usage breakdown (total, categories, MCP tools, agents, skills) |
+| `/history` | Print prior turns |
+| `/model` | Show or switch the active model |
+| `/tools` | List registered tools |
+| `/mcp` | Show MCP server status |
+| `/limits` | Show rate-limit and budget state |
+| `/debug` | Toggle verbose debug output |
+
+### Planning and state
+
+| Command | Description |
+|---|---|
+| `/plan` | Open the plan editor |
+| `/todo` | Manage the persistent todo list |
+| `/init` | Scan the current project and generate an `AFK.md` |
+| `/changelog` | Render `CHANGELOG.md` paginated |
+
+### Background tasks
+
+Press **Ctrl+B** to detach the current turn into a tracked background task. The status bar at
+the bottom of the REPL shows running task counts.
+
+| Command | Description |
+|---|---|
+| `/bg` | List backgrounded tasks |
+| `/tasks` | Show running/queued tasks with status |
+| `/attach <id>` | Re-attach to a backgrounded task |
+
+### Built-in skills
+
+| Command | Description |
+|---|---|
+| `/mint <idea>` | End-to-end feature pipeline: spec → build → verify → ship |
+| `/diagnose <bug>` | Parallel root-cause analysis for bugs and failing tests |
+
+<Callout type="info">
+Maintainer-loop skills (`/forge`, `/audit-fit`) are hidden by default. Set `AFK_INTERNAL=1`
+to surface them.
+</Callout>
+
+### Plugins and discovery
+
+| Command | Description |
+|---|---|
+| `/skills` | Discover skills loaded from plugins and user scope |
+| `/agents` | List subagents loaded by the SDK |
+| `/reload-plugins` | Re-scan plugin and user directories after edits |
+
+## Plan mode
+
+`/plan` opens an in-REPL plan editor. You can write a multi-step plan, iterate on it, and
+then let the agent execute it. Plan state is saved to `~/.afk/state/` and survives session
+restarts.
+
+## Streaming output
+
+The REPL streams model output token-by-token with markdown rendering. Tool calls render as
+collapsible lane entries showing the tool name, arguments, and result. Extended thinking renders
+as a summary lane (or live, depending on `--thinking-ui`).
+
+## Worktree isolation
+
+`-w` / `--worktree` creates a git worktree for the session. Every bash command and file operation
+the agent runs lands in the isolated worktree, not your main working tree. On a clean exit
+(no uncommitted changes), the worktree and branch are removed automatically. On a dirty exit,
+the worktree is preserved so you can review or commit the changes.
+
+```bash
+afk i -w                     # auto-named worktree
+afk i -w my-feature          # named branch
+afk i -w --worktree-base HEAD  # base on local checkout instead of origin/main
+```
+
+## Shell passthrough
+
+Prefix a line with `!` to run it directly in your shell without sending it to the model:
+
+```
+> !ls -la
+> !git status
+```
+
+Disable with `--no-shell-passthrough` or `AFK_SHELL_PASSTHROUGH=0`.
+
+## Session persistence
+
+Sessions are saved to `~/.afk/state/sessions/`. Resume from the REPL with `/resume`, or at
+startup:
+
+```bash
+afk i --resume <session-id>
+afk i --continue              # most recent session in cwd
+```

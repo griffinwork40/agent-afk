@@ -19,7 +19,7 @@
  *     `compose`, `send_telegram`, `web_scrape`, `glob`, `grep`, `list_directory`,
  *     `memory_search`, `memory_update`, `procedure_write`,
  *     `create_schedule`, `list_schedules`, `get_schedule_history`, `cancel_schedule`,
- *     `terminal_font_size`.
+ *     `terminal_font_size`, `config_get`, `config_set`.
  * Both sets are enumerated explicitly to avoid silent fall-through to `other`.
  *
  * This file lives under `src/agent/` because tool-name classification is
@@ -46,6 +46,9 @@ const READ_TOOLS = new Set([
   'Read', 'Glob', 'Grep', 'NotebookRead', 'LS',
   // agent-afk built-in snake_case (src/agent/tools/schemas.ts)
   'read_file', 'glob', 'grep', 'list_directory',
+  // config_get reads ~/.afk/config (afk.env / afk.config.json); secrets are
+  // masked by the handler. Read-only by construction — no mutation surface.
+  'config_get',
   // memory-tools.ts — read-only query against the fact archive.
   // Also classed read-only in the dispatcher's SAFE_TOOLS concurrency set
   // (src/agent/tools/dispatcher.ts:31).
@@ -60,6 +63,10 @@ const WRITE_TOOLS = new Set([
   'memory_update', 'procedure_write',
   // Mutates VS Code / Cursor settings.json files on disk.
   'terminal_font_size',
+  // Mutates ~/.afk/config/{afk.env,afk.config.json}. WRITE classification is
+  // load-bearing: it makes config_set plan-mode-blocked (excluded from
+  // READ_ONLY_PHASE_TOOLS) and sequential (not concurrency-safe).
+  'config_set',
 ]);
 const SHELL_TOOLS = new Set([
   'Bash', 'BashOutput', 'KillBash',
@@ -102,7 +109,7 @@ const WEB_TOOLS = new Set([
   // send_telegram is an outbound HTTP call to a third-party API —
   // same conceptual shape as a web fetch, so it shares the web bucket.
   'send_telegram',
-  // agent-afk's native web tool (local Readability/Turndown scrape + Brave search, plus raw GET).
+  // agent-afk's native web tool (local Readability/Turndown scrape + Exa search, plus raw GET).
   'web_scrape',
 ]);
 const BROWSER_TOOLS = new Set([
@@ -172,6 +179,7 @@ function hasCI(set: Set<string>, name: string): boolean {
 //   - `memory_update`, `procedure_write` — persistent state mutation
 //   - `send_telegram`, `web_scrape` — outbound network (exfiltration surface)
 //   - `terminal_font_size` — settings.json mutation
+//   - `config_set` — mutates ~/.afk/config before approval (config_get IS allowed)
 //   - schedule tools — launchd job mutation
 //
 // Both PascalCase (Anthropic SDK subprocess path) and snake_case (AFK
@@ -191,6 +199,8 @@ export const READ_ONLY_PHASE_TOOLS: readonly string[] = [
   'glob',
   'grep',
   'list_directory',
+  // config_get — masked read of ~/.afk/config; no mutation surface.
+  'config_get',
   // Memory query — read-only by construction (no mutation surface).
   'memory_search',
   // Awareness introspection (get_runtime_state) — read-only, in-memory, zero

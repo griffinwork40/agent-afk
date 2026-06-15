@@ -96,6 +96,7 @@ export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAM
 // only behind the mutating-command guard.
 //
 // Excluded vs CHILD_ALLOWED_TOOLS: write_file, edit_file (file mutation),
+// config_set (mutates ~/.afk/config — config_get IS included for recon reads),
 // send_telegram (side-effecting notification), browser_* (stateful automation
 // that can submit forms / mutate remote state), terminal_font_size +
 // ask_question (environment / operator-prompt tools with no recon role), and
@@ -108,6 +109,9 @@ export const RECON_ALLOWED_TOOLS: readonly string[] = [
   'glob',
   'grep',
   'list_directory',
+  // config_get is a masked read of ~/.afk/config — recon may inspect config but
+  // config_set (write) is deliberately excluded, mirroring READ_ONLY_PHASE_TOOLS.
+  'config_get',
   'bash',
   'web_scrape',
   ...AWARENESS_TOOL_NAMES,

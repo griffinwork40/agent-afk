@@ -35,6 +35,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { homedir, userInfo } from 'node:os';
 import { join, dirname } from 'node:path';
 
@@ -63,6 +64,8 @@ interface McpOAuthSlot {
   clientInfo?: OAuthClientInformationMixed;
   codeVerifier?: string;
   discoveryState?: OAuthDiscoveryState;
+  /** OAuth `state` parameter — see `KeychainOAuthProvider.state()`. */
+  state?: string;
 }
 
 /** Shape of the `mcpOAuth` top-level key in the credentials JSON. */
@@ -327,6 +330,29 @@ export class KeychainOAuthProvider implements OAuthClientProvider {
     return v;
   }
 
+  /**
+   * OAuth `state` parameter.
+   *
+   * `state` is only RECOMMENDED by OAuth 2.1 (PKCE already defends the code
+   * exchange against CSRF), so the SDK omits it from the authorization URL
+   * unless the provider supplies one. Some authorization servers nonetheless
+   * REQUIRE `state` and reject the authorize request with `invalid_request`
+   * when it is absent — Mintlify's admin MCP (`https://mcp.mintlify.com`) is
+   * one such server.
+   *
+   * We generate a random value once per server and persist it so repeated
+   * `state()` calls within a flow return the same value. The SDK does not
+   * validate the echoed value on the token exchange, so this exists purely to
+   * satisfy servers that mandate the parameter's presence.
+   */
+  state(): string {
+    const existing = this._readSlot().state;
+    if (existing) return existing;
+    const generated = randomUUID();
+    this._updateSlot((slot) => ({ ...slot, state: generated }));
+    return generated;
+  }
+
   saveDiscoveryState(state: OAuthDiscoveryState): void {
     this._updateSlot((slot) => ({ ...slot, discoveryState: state }));
   }
@@ -341,7 +367,12 @@ export class KeychainOAuthProvider implements OAuthClientProvider {
       const updated = { ...slot };
       if (scope === 'client') delete updated.clientInfo;
       if (scope === 'tokens') delete updated.tokens;
-      if (scope === 'verifier') delete updated.codeVerifier;
+      if (scope === 'verifier') {
+        // `state` and the PKCE verifier are both per-authorization-attempt
+        // artifacts — drop them together so a re-auth starts a clean flow.
+        delete updated.codeVerifier;
+        delete updated.state;
+      }
       if (scope === 'discovery') delete updated.discoveryState;
       return updated;
     });

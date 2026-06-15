@@ -8,6 +8,7 @@ import { SubagentManager } from '../../../agent/subagent.js';
 import { describeFailure } from '../../../agent/subagent/result.js';
 import { getApiKey } from '../../../cli/shared-helpers.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
+import type { AgentModelInput } from '../../../agent/types.js';
 import { emitCard } from '../../_lib/emit-card.js';
 
 const BuildOutputSchema = z.object({
@@ -34,6 +35,7 @@ export async function runBuildPhase(
   // Mint skill's ToolCall id — anchors the forked subagent under the mint
   // skill's tool-lane entry. See skills/index.ts SkillExecutionContext.callId.
   skillCallId?: string,
+  defaultSubagentModel: AgentModelInput = 'sonnet',
 ): Promise<BuildResult> {
   const prompts = loadSkillPrompts('mint');
   const buildPrompt = prompts['build.md'];
@@ -51,7 +53,7 @@ export async function runBuildPhase(
   const buildHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },
     config: {
-      model: 'sonnet',
+      model: defaultSubagentModel,
       systemPrompt: buildPrompt,
       apiKey: getApiKey(),
     },

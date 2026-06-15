@@ -2,10 +2,11 @@
  * Characterization tests for the interactive-session transcript autosave.
  *
  * These pin the behavior of `startTranscript` — the module-level helper
- * that writes `<isoStamp>.md` into `${AFK_STATE_DIR ?? ~/.afk}/transcripts/`
- * — plus a smoke test for rotation (consecutive calls produce distinct
- * files) so the `/clear`-rotates-the-transcript flow is covered at the
- * helper level.
+ * that writes `<isoStamp>.md` into whatever directory it is given (the
+ * caller `initTranscript` resolves that dir to `getTranscriptsDir()`, i.e.
+ * `${AFK_STATE_DIR ?? $AFK_HOME/state}/transcripts/`) — plus a smoke test
+ * for rotation (consecutive calls produce distinct files) so the
+ * `/clear`-rotates-the-transcript flow is covered at the helper level.
  *
  * RED phase: commit 3.1 ships a `throw Error('not implemented')` stub, so
  * these tests fail at runtime. Commit 3.2 replaces the stub with the real

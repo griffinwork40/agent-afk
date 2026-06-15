@@ -3,7 +3,11 @@ import {
   isInOpenTable,
   isInOpenCodeFence,
   formatPendingBuffer,
+  formatBlockForCommit,
 } from './markdown-stream-format.js';
+
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+const stripAnsi = (s: string): string => s.replace(ANSI_RE, '');
 
 /**
  * Tests for the pure formatting helpers behind StreamingMarkdownRenderer.
@@ -105,5 +109,29 @@ describe('formatPendingBuffer', () => {
 describe('isInOpenCodeFence (precedence sanity)', () => {
   it('is true for an unclosed fence even when it contains table-like rows', () => {
     expect(isInOpenCodeFence('```\n|---|---|\n')).toBe(true);
+  });
+});
+
+// A committed block must own NEITHER a leading nor a trailing blank line: the
+// caller (commitBlock) re-adds exactly one trailing blank via
+// `commitAbove(trimmed + '\n\n')`. See docs/tui-rhythm.md.
+describe('formatBlockForCommit blank-line trimming', () => {
+  const WIDTH = 80;
+
+  it('strips leading blank lines (surplus newline from a 3+ newline section break)', () => {
+    const out = formatBlockForCommit('\n\nActual content.', '  ', WIDTH);
+    expect(stripAnsi(out).startsWith('\n')).toBe(false);
+    expect(stripAnsi(out)).toContain('Actual content.');
+  });
+
+  it('strips trailing blank lines', () => {
+    const out = formatBlockForCommit('Content.\n\n\n', '  ', WIDTH);
+    expect(out.endsWith('\n')).toBe(false);
+  });
+
+  it('a heading block carries no leading blank into scrollback', () => {
+    const out = formatBlockForCommit('## Done\n\n', '  ', WIDTH);
+    expect(stripAnsi(out).startsWith('\n')).toBe(false);
+    expect(stripAnsi(out)).toContain('Done');
   });
 });
