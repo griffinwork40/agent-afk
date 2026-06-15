@@ -50,6 +50,8 @@ export interface KeyDispatchHost {
   applyEdit(next: InputCoreState): boolean;
   /** Recompute autocomplete dropdown state for the current buffer. */
   updateAutocomplete(): void;
+  /** Refresh the active ghost suggestion for the current buffer (Tier-1 sync + Tier-2 async kick-off). */
+  updateGhost(): void;
   /** Apply the highlighted dropdown candidate; false when the dropdown is closed/empty. */
   applyDropdownSelection(): boolean;
   /** Accept the active ghost text; false when no ghost is showing. */
@@ -102,6 +104,32 @@ export interface KeyDispatchHost {
   readonly onBackground?: () => void;
   readonly onShiftTab?: () => void;
   readonly onSubmit?: (payload: SubmissionPayload) => void;
+}
+
+/**
+ * Apply a pure InputCore transition. If the state reference changed, clear the
+ * queued flag, refresh autocomplete + ghost, and repaint; otherwise it's a
+ * no-op (e.g. moveLeft at 0). Returns whether the state reference changed.
+ */
+export function applyEdit(self: KeyDispatchHost, next: InputCoreState): boolean {
+  if (next === self.input) return false;
+  self.input = next;
+  self.queued = false;
+  // During a bracketed-paste burst, suppress per-character work —
+  // a 10KB paste would otherwise trigger 10K log-update frames AND
+  // 10K detectTrigger scans. The paste end marker (`\x1b[201~`)
+  // runs maybeTruncatePaste + one final repaint, which also picks
+  // up any autocomplete state from the final buffer. Mirrors the
+  // `pasting` guard in reader.ts and keeps multi-KB pastes responsive.
+  if (self.pasting) return true;
+  self.updateAutocomplete();
+  // Ghost-text update: synchronous Tier-1 check + async Tier-2 kick-off.
+  // Paste bursts already returned early above (the `if (self.pasting)`
+  // guard), so this per-character ghost refresh never fires mid-paste —
+  // it would be stale by paste end anyway.
+  self.updateGhost();
+  self.repaint();
+  return true;
 }
 
 export function dispatchKey(self: KeyDispatchHost, char: string | undefined, key: KeyInfo): void {

@@ -40,7 +40,9 @@ import * as Render from './terminal-compositor.render.js';
 import * as CommittedBand from './terminal-compositor.committed-band.js';
 import * as Frame from './terminal-compositor.frame.js';
 import * as InputMode from './terminal-compositor.input-mode.js';
+import * as InputDispatch from './terminal-compositor.input-dispatch.js';
 import * as Lifecycle from './terminal-compositor.lifecycle.js';
+import * as Reset from './terminal-compositor.reset.js';
 
 // Re-export public types so existing importers of './terminal-compositor.js'
 // continue to work without any import-path changes.
@@ -646,21 +648,13 @@ export class TerminalCompositor {
     CommittedBand.repositionCommittedBand(this, desiredTopRow, preRenderFrameTop, targetBottomRow);
   }
 
+  /**
+   * Snapshot the current buffer as submission-shaped text + the queued flag.
+   * Body extracted to terminal-compositor.paste.ts — see {@link Paste.getBuffer}
+   * for the placeholder-expansion semantics and the post-submit caution.
+   */
   getBuffer(): { text: string; queued: boolean } {
-    // Expand any `[Pasted text #N +M lines]` placeholders back to
-    // their original content so callers reading this snapshot see
-    // submission-shaped text (what the model will receive), not
-    // placeholder tokens. Primarily used by tests; production submit
-    // paths read this.input.buffer directly so expansion and registry
-    // clear happen in the same atomic operation.
-    //
-    // CAUTION: do not call getBuffer() after submit fires — pasteRegistry
-    // is cleared before the handler so placeholders would pass through
-    // unexpanded. For the raw buffer with placeholders intact, read
-    // this.input.buffer directly.
-    //
-    // No-op fast path when no truncation happened in this compose window.
-    return { text: Paste.expandPastePlaceholders(this, this.input.buffer), queued: this.queued };
+    return Paste.getBuffer(this);
   }
 
   /**
@@ -695,8 +689,9 @@ export class TerminalCompositor {
    * Update the active ghost text for the current buffer state. Body extracted
    * to terminal-compositor.autocomplete.ts — see {@link Autocomplete.updateGhost}
    * for the keystroke-path and stale-async-guard invariants.
+   * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
    */
-  private updateGhost(): void {
+  updateGhost(): void {
     Autocomplete.updateGhost(this);
   }
 
@@ -728,94 +723,27 @@ export class TerminalCompositor {
     Frame.repaint(this);
   }
 
-  /** @internal Relaxed from `private` for the lifecycle module (LifecycleHost). */
+  /**
+   * Reset all per-cycle state back to its armed-cycle defaults (overlay, input,
+   * paste/attachment, committed-band, resize ghost-erase, picker). Body extracted
+   * to terminal-compositor.reset.ts — see {@link Reset.resetState} for the
+   * per-field disarm/rearm invariants (working-anchor clear, ghost-not-engine,
+   * and the clipboardInFlight + committed-band carve-outs).
+   * @internal Relaxed from `private` for the lifecycle module (LifecycleHost).
+   */
   resetState(): void {
-    this.overlay = '';
-    this.input = InputCore.seed('');
-    this.queued = false;
-    this.canceled = false;
-    this.backgrounded = false;
-    this.softStopped = false;
-    // Clear active ghost — stale suggestions must not survive a disarm/rearm
-    // cycle. The engine itself is NOT disposed here (only in disarm) since
-    // resetState() is called by both disarm() AND internal state-resets that
-    // keep the engine alive (e.g. idle→streaming transition after submit).
-    this.activeGhost = null;
-    // Clear the working anchor — `repaint()` may have shifted it up during
-    // eviction (e.g. declared 15 → working 11 after pushing 4 rows into
-    // scrollback). The shifted value is per-cycle state; leaving it set
-    // across disarm/rearm would silently under-protect the declared ceiling
-    // on the next arm. `arm()` re-seeds from `declaredAnchorRow`.
-    this.anchorRow = undefined;
-    // Reset commit-presence flag so growthDeficit in repaint() does not fire
-    // on the new arm cycle until a commit actually happens.
-    this.hasCommitted = false;
-    // Drop any retained above-frame committed block + the in-flight commit guard
-    // so a fresh arm cycle never re-pins stale transcript from the previous one.
-    this.clearCommittedBand();
-    this.commitInFlight = false;
-    // Drop resize ghost-erase state — a pending erase or stale row count from
-    // the previous arm cycle must not leak into the next one (the first repaint
-    // of a fresh arm re-seeds lastKnownRows before any resize can be detected).
-    this.pendingResizeErase = null;
-    this.lastKnownRows = 0;
-    // Drop any active picker — a disarm during a picker would leave
-    // the controller's resolve callback orphaned. The runPicker abort
-    // path normally exits the picker first; this is defence-in-depth
-    // for a hard disarm (process termination, swap path).
-    this.pickerController = null;
-    this.inputMode = 'streaming';
-    // Reset attachment + paste state — between full disarm/rearm cycles
-    // (skill dispatchers, tests) we must not carry stale clipboard
-    // artifacts into the next session.
-    this.attachments = [];
-    this.pasting = false;
-    this.pasteStartBufferLen = 0;
-    this.pasteStartCursor = 0;
-    this.pasteRegistry.clear();
-    this.clipboardFailureMsg = null;
-    // clipboardInFlight is NOT reset — an in-flight osascript probe is
-    // tied to a Promise that will resolve/reject independently. Setting
-    // the flag to false here would allow a new probe to spawn while the
-    // old one's `.finally` is pending, defeating the guard.
-    // Reset shared autocomplete state so stale dropdown chrome from this
-    // agent turn does not leak into the next user-turn read.
-    this.autocompleteState?.reset();
-    if (this.resizeUnsub) {
-      this.resizeUnsub();
-      this.resizeUnsub = null;
-    }
-    if (this.resizeImmediateUnsub) {
-      this.resizeImmediateUnsub();
-      this.resizeImmediateUnsub = null;
-    }
+    Reset.resetState(this);
   }
 
   /**
-   * Apply a pure InputCore transition. If the state reference changed, clear
-   * the queued flag, refresh the autocomplete state, and repaint; otherwise
-   * it's a no-op (e.g. moveLeft at 0).
+   * Apply a pure InputCore transition (clears queued, refreshes autocomplete +
+   * ghost, repaints; no-op when the state reference is unchanged). Body extracted
+   * to terminal-compositor.input-dispatch.ts — see {@link InputDispatch.applyEdit}
+   * for the bracketed-paste per-character suppression guard.
    * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
    */
   applyEdit(next: InputCoreState): boolean {
-    if (next === this.input) return false;
-    this.input = next;
-    this.queued = false;
-    // During a bracketed-paste burst, suppress per-character work —
-    // a 10KB paste would otherwise trigger 10K log-update frames AND
-    // 10K detectTrigger scans. The paste end marker (`\x1b[201~`)
-    // runs maybeTruncatePaste + one final repaint, which also picks
-    // up any autocomplete state from the final buffer. Mirrors the
-    // `pasting` guard in reader.ts and keeps multi-KB pastes responsive.
-    if (this.pasting) return true;
-    this.updateAutocomplete();
-    // Ghost-text update: synchronous Tier-1 check + async Tier-2 kick-off.
-    // Paste bursts already returned early above (the `if (this.pasting)`
-    // guard), so this per-character ghost refresh never fires mid-paste —
-    // it would be stale by paste end anyway.
-    this.updateGhost();
-    this.repaint();
-    return true;
+    return InputDispatch.applyEdit(this, next);
   }
 
   /**
