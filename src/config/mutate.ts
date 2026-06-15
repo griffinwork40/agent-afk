@@ -24,7 +24,7 @@
 
 import { existsSync, readFileSync, copyFileSync, chmodSync } from 'fs';
 import { getEnvConfigPath, getJsonConfigPath } from '../paths.js';
-import { getEnvVarMeta, ENV_REGISTRY } from './env.js';
+import { getEnvVarMeta, ENV_REGISTRY, isEnvVarSet } from './env.js';
 import { atomicWriteFile, upsertEnvVar, removeEnvVar, readEnvVarFromFile, readEnvFile } from '../utils/envFile.js';
 import {
   classifyEnvKey,
@@ -166,7 +166,7 @@ export function getEnvVar(key: string, opts?: EnvOptions): EnvVarView {
   if (cls === 'unknown') throw new UnknownKeyError(key);
   const file = envPath(opts);
   const rawPersisted = readEnvVarFromFile(file, key);
-  const activeInProcess = process.env[key] !== undefined;
+  const activeInProcess = isEnvVarSet(key);
   const persisted =
     cls === 'secret' ? (rawPersisted !== undefined ? maskSecret(rawPersisted) : undefined) : rawPersisted;
   return { key, class: cls, persisted, activeInProcess };
@@ -186,7 +186,7 @@ export function listEnv(opts?: EnvOptions & { all?: boolean }): EnvVarView[] {
     const name = entry.name;
     const cls = classifyEnvKey(name);
     const rawPersisted = fileVars[name];
-    const activeInProcess = process.env[name] !== undefined;
+    const activeInProcess = isEnvVarSet(name);
     if (!opts?.all && rawPersisted === undefined && !activeInProcess) continue;
     const persisted =
       cls === 'secret'

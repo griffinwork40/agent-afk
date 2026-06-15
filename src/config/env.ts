@@ -1229,3 +1229,16 @@ export function getMissingRequiredEnvVars(category?: EnvVarCategory): EnvVarMeta
     return process.env[e.name] === undefined || process.env[e.name] === '';
   });
 }
+
+/**
+ * Whether an env var is currently set in this process's environment.
+ *
+ * The `env` object exposes a static getter per known var; this covers the
+ * DYNAMIC case — checking presence of a name only known at runtime (e.g. while
+ * iterating `ENV_REGISTRY`). Keeping the dynamic `process.env` read here, rather
+ * than at the call site, preserves the "all env access lives in env.ts"
+ * invariant enforced by `pnpm audit:env:check`.
+ */
+export function isEnvVarSet(name: string): boolean {
+  return process.env[name] !== undefined;
+}
