@@ -919,6 +919,52 @@ describe('TerminalCompositor', () => {
       expect(out).not.toMatch(/\x1b\[24;1H\n/);
     });
 
+    it('consecutive "\\n\\n"-terminated commits paint a blank separator row between blocks (armed, with room)', async () => {
+      // Regression (paragraphs-touching): commitBlock commits prose as
+      // `trimmed + '\n\n'` so each block owns one trailing blank (the TUI rhythm
+      // contract). d86f2a2 popped that trailing '' to fix a table exact-fit
+      // cut-off, but as collateral it deleted the inter-block separator for
+      // EVERY block in the armed path — consecutive paragraphs rendered with no
+      // blank line between them. Fix: the separator is extracted, then re-painted
+      // as a blank row whenever there is above-frame room beyond the content.
+      //
+      // rows=24, 1-line idle frame → newTopRow=23. After 'A\n\n': band=['A','']
+      // (A@21, blank@22). After 'B\n\n': band=['A','','B',''] → A@19, blank@20,
+      // B@21, blank@22. The blank at row 20 is the separator between paragraphs.
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      c.commitAbove('A\n\n');
+      writes.clear();
+      c.commitAbove('B\n\n');
+      const out = writes.all();
+      // Block A sits two rows above block B — a blank separator occupies the row
+      // between them (the buggy code butt-joined them at A@21, B@22).
+      expect(out).toMatch(/\x1b\[19;1H\x1b\[2KA/);
+      expect(out).toMatch(/\x1b\[21;1H\x1b\[2KB/);
+      // The separator row (20) is CUP-painted blank: erase row 20 with empty
+      // content, immediately followed by the CUP for row 21 (block B).
+      expect(out).toContain('\x1b[20;1H\x1b[2K\x1b[21;1H');
+      // Block B must NOT land immediately below A (row 20) — the butt-join.
+      expect(out).not.toMatch(/\x1b\[20;1H\x1b\[2KB/);
+    });
+
+    it('single-block "\\n\\n"-terminated commit paints content + one trailing blank separator (armed, with room)', async () => {
+      // The single-commit view of the same fix: `commitAbove('PARA\n\n')` paints
+      // PARA immediately above a blank separator row, so the block owns its one
+      // trailing blank even on the very first commit. rows=24, 1-line idle frame
+      // → newTopRow=23; band=['PARA',''] → PARA@21, blank@22.
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      writes.clear();
+      c.commitAbove('PARA\n\n');
+      const out = writes.all();
+      // Content at row 21, separator blank painted at row 22 (against the frame).
+      expect(out).toMatch(/\x1b\[21;1H\x1b\[2KPARA/);
+      // Row 22 is CUP-erased with NO content (the blank separator), not PARA.
+      expect(out).not.toMatch(/\x1b\[22;1H\x1b\[2KPARA/);
+      expect(out).toMatch(/\x1b\[22;1H\x1b\[2K(\x1b|$)/);
+    });
+
     it('text persists in scrollback even if a subsequent grow repaint overwrites the visible above-frame copy', async () => {
       // Single-copy contract (post-dedup fix): Phase 1 emits LF scrolls only
       // (no text write) to displace the topmost viewport row into scrollback

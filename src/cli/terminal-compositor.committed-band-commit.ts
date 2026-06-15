@@ -105,37 +105,45 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   // trailing \n is the line terminator, not its own row).
   const rows = Math.max(1, self.stdout.rows ?? 24);
   const stripped = text.endsWith('\n') ? text.slice(0, -1) : text;
-  const newlineCount = (stripped.match(/\n/g)?.length ?? 0);
-  const logicalLineCount = Math.max(1, newlineCount + 1);
-  // Physical (wrap-aware) row count. A committed line wider than the terminal
-  // soft-wraps to >1 physical row, so the LOGICAL count (newlines+1) under-counts
-  // the rows the block actually occupies. That under-count made Phase 1 scroll too
-  // few rows (LF×lineCount) — stranding wrapped overflow rows on screen — and
-  // mis-sized fitsAboveFrame / bandOverflow. Mirror the frame side (a7ace49 / #39),
-  // which derives its geometry from CupFrameRenderer.measure()'s physical row count
-  // via the shared wrapToPhysicalLines helper; reuse the same measure() here so the
-  // band and frame can't drift. (a7ace49 flagged this site as the tracked follow-up:
-  // "commitAbove()'s lineCount is still logical — a separate wrap-blind site.")
-  // Logical fallback for stubs without measure().
-  const lineCount = self.logUpdate.measure
-    ? Math.max(1, self.logUpdate.measure(stripped, rows).lineCount)
-    : logicalLineCount;
-  const textLines = stripped.split('\n');
-  // Mirror the trailing-blank removal wrapToPhysicalLines applies inside measure():
-  // commitBlock passes `trimmed + '\n\n'`; after stripping one '\n' the stripped
-  // string still ends with '\n', making split('\n') produce a trailing '' that
-  // makes textLines.length > lineCount by 1. In the exact-fit scenario (block
-  // height === aboveFrameRoom), this off-by-one makes newPainted=lineCount
-  // (capped by maxRun=lineCount) but textLines.length=lineCount+1, so the
-  // tail-slice slice(textLines.length - newPainted) starts at index 1 — DROPPING
-  // the table's top border — and paints the trailing '' into the bottom screen
-  // slot instead. Removing trailing '' here aligns textLines.length with lineCount.
+
+  // Separate a block's CONTENT from its trailing blank SEPARATOR.
   //
-  // Guard: keep at least one element so commitAbove('') still paints a blank
-  // separator row (the stream-renderer subagent-done path relies on this). This
-  // mirrors measure()'s Math.max(1, wrapToPhysicalLines(...).length) clamp — an
-  // empty content still counts as 1 physical line for row accounting.
-  while (textLines.length > 1 && textLines[textLines.length - 1] === '') textLines.pop();
+  // commitBlock commits prose as `trimmed + '\n\n'` — the TUI rhythm contract:
+  // every block owns exactly one trailing blank (docs/tui-rhythm.md). After the
+  // single-'\n' strip above, a separator-terminated block's `stripped` still
+  // ends with '\n', so split('\n') yields a trailing '' — the separator row. A
+  // block with NO separator (`commitAbove('A\nB')`, or the single-terminator
+  // `commitAbove('A\nB\n')`) leaves no trailing '' (its lone '\n' was stripped).
+  //
+  // Pop the trailing '' so `contentLines` / `contentLineCount` describe ONLY
+  // real content: a phantom trailing '' previously made textLines.length =
+  // count+1, and in the exact-fit scenario (content height === above-frame
+  // room) the tail-slice dropped a table's top border and painted the '' into
+  // the bottom slot (d86f2a2). The separator is RE-ADDED as a painted blank row
+  // below — but only when there is room for it beyond the content (a block that
+  // exactly fills the room keeps all its content and drops the separator, so the
+  // newest content still sits against the frame). The length>1 guard keeps
+  // `commitAbove('')` painting its single blank row (the subagent-done path).
+  const contentLines = stripped.split('\n');
+  let hasTrailingSeparator = false;
+  while (contentLines.length > 1 && contentLines[contentLines.length - 1] === '') {
+    contentLines.pop();
+    hasTrailingSeparator = true;
+  }
+  // Physical (wrap-aware) CONTENT row count. A committed line wider than the
+  // terminal soft-wraps to >1 physical row, so the LOGICAL count under-counts the
+  // rows the block actually occupies. That under-count made Phase 1 scroll too
+  // few rows — stranding wrapped overflow rows on screen — and mis-sized
+  // fitsAboveFrame / bandOverflow. Mirror the frame side (a7ace49 / #39), which
+  // derives its geometry from CupFrameRenderer.measure()'s physical row count via
+  // the shared wrapToPhysicalLines helper; reuse the same measure() here so the
+  // band and frame can't drift. measure() drops the trailing-blank row (its
+  // wrapToPhysicalLines pops trailing ''), so it already counts CONTENT only —
+  // matching contentLines. Logical fallback (contentLines.length) for stubs
+  // without measure().
+  const contentLineCount = self.logUpdate.measure
+    ? Math.max(1, self.logUpdate.measure(stripped, rows).lineCount)
+    : Math.max(1, contentLines.length);
 
   const extraRows = self.scrollRegion?.getExtraRows() ?? 0;
   // Invariant (one geometry per commit): the room/scroll/band math below must
@@ -189,7 +197,7 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   // dropping the block from screen AND scrollback. Falling through to the
   // overflow path archives the block to scrollback at anchorFloor instead
   // (recoverable). No existing test hits prevTopRow <= 1.
-  const fitsAboveFrame = prevTopRow > 1 && lineCount <= frameTop - anchorFloor;
+  const fitsAboveFrame = prevTopRow > 1 && contentLineCount <= frameTop - anchorFloor;
   // Shrink-pad-corrected effective frame top (shared between Phase 1 and Phase 3):
   // when the prior band is positioned, the real above-frame room starts at
   // committedBandBottomRow + 1 (not at the raw frameTop which may be artificially
@@ -200,6 +208,26 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
     fitsAboveFrame && self.committedBand.length > 0 && self.committedBandBottomRow > 0
       ? Math.max(frameTop, self.committedBandBottomRow + 1)
       : frameTop;
+
+  // Re-add the trailing separator as a painted blank row — but only when the
+  // above-frame region has room for it BEYOND the content. A block whose content
+  // exactly fills the room keeps all its content and drops the separator (the
+  // table exact-fit case, d86f2a2); otherwise the separator lands at newTopRow-1
+  // (against the frame), so the NEXT block commits above it and consecutive
+  // blocks read with exactly one blank line between them (the rhythm contract).
+  // `textLines` (what Phase 3 paints) and `lineCount` (what Phase 1 scrolls and
+  // bandOverflow evicts) are kept COUPLED — both grow by exactly the painted
+  // separator — so the scroll and the cap evict the SAME rows; a mismatch would
+  // lose a committed row or push a blank into scrollback. In the overflow path
+  // paintSeparator is false (it requires fitsAboveFrame), so lineCount ===
+  // contentLineCount and textLines === contentLines there, preserving the legacy
+  // overflow geometry. Room is measured against phase1EffectiveFrameTop (the same
+  // shrink-pad-corrected top bandOverflow uses) so the decision stays consistent.
+  const aboveFrameRoomForSeparator = Math.max(0, phase1EffectiveFrameTop - anchorFloor);
+  const paintSeparator =
+    hasTrailingSeparator && fitsAboveFrame && contentLineCount < aboveFrameRoomForSeparator;
+  const textLines = paintSeparator ? [...contentLines, ''] : contentLines;
+  const lineCount = contentLineCount + (paintSeparator ? 1 : 0);
 
   // Suppress the shrink re-pin for the whole commit; Phase 3 sets the band.
   // Re-armed at the top of every commitAbove, so a throw on a dying TTY (the
@@ -400,8 +428,10 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
       // the terminal and wraps to >1 physical row. newPainted is itself derived
       // from textLines.length, so comparing back to textLines.length keeps the
       // check self-consistent regardless of wrap-induced divergence.
-      // Note: the prior `\n\n`-trailing-blank divergence (textLines.length =
-      // lineCount+1) is eliminated by the trailing-'' pop above.
+      // Note: textLines already includes the painted separator row (or none) and
+      // lineCount is coupled to it, so there is no `\n\n` trailing-blank
+      // divergence to correct here — the separator is extracted and conditionally
+      // re-added above, never left as a phantom array element.
       const wholeBlockPainted = newPainted === textLines.length;
       // Invariant (contiguity across banner-path eviction gaps): the prior band
       // is mergeable when it was adjacent to the frame BEFORE Phase 2 snapped the
