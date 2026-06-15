@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-06-15
+
+### Added
+- switch web_scrape search backend from Brave to Exa (882e707)
+
+### Changed
+- Merge pull request #141 from griffinwork40/switch-search-backend-brave-to-exa (9283e87)
+- point .env.example at EXA_API_KEY (5b0bcd9)
+
 ## [3.112.3] - 2026-06-14
 
 ### Fixed
