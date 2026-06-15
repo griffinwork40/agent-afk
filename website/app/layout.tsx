@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import localFont from 'next/font/local';
+import { Analytics } from '@vercel/analytics/next';
 import './globals.css';
 
 // JetBrains Mono (variable, latin subset) — vendored under app/fonts/ (OFL-1.1,
@@ -27,7 +28,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={jetbrainsMono.variable} suppressHydrationWarning>
-      <body>{children}</body>
+      <body>{children}<Analytics /></body>
     </html>
   );
 }
