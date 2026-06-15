@@ -11,9 +11,9 @@ All environment variables recognized by `agent-afk` are listed here, grouped by 
 | --- | --- | --- | --- |
 | `AFK_LOCAL_API_KEY` | string | Placeholder API key for local Anthropic-compatible servers (vllm-mlx, etc.). Set when AFK_LOCAL_BASE_URL is configured. | `local` |
 | `ANTHROPIC_API_KEY` | string | Anthropic API key. Tier-1 credential — overrides keychain OAuth and CLAUDE_CODE_OAUTH_TOKEN. | — |
-| `BRAVE_SEARCH_API_KEY` | string | Brave Search API subscription token, enabling web_scrape search mode. Free tier available at https://brave.com/search/api/. When unset, search mode returns an actionable error; markdown and raw modes are unaffected. | — |
 | `CLAUDE_CODE_OAUTH_TOKEN` | string | Claude Code OAuth token. Tier-2 credential — used when ANTHROPIC_API_KEY is unset; falls back to keychain. | — |
 | `CODEX_API_KEY` | string | Fallback OpenAI API key for the openai-compatible provider, read after OPENAI_API_KEY. Legacy name from the removed @openai/codex-sdk integration — prefer OPENAI_API_KEY. | — |
+| `EXA_API_KEY` | string | Exa (exa.ai) search API key, enabling web_scrape search mode. Free tier (20k requests/month) available at https://exa.ai. When unset, search mode returns an actionable error; markdown and raw modes are unaffected. | — |
 | `OPENAI_API_KEY` | string | OpenAI API key for the openai-compatible provider (gpt-*, o1*, o3*, o4* models). | — |
 
 
@@ -61,7 +61,7 @@ All environment variables recognized by `agent-afk` are listed here, grouped by 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
 | `AFK_AUTO_ROUTING` | boolean | Auto-route bare slash inputs to matching skills. Applies to interactive, chat, telegram, and daemon surfaces. | — |
-| `AFK_INTERNAL` | boolean | When set to exactly `1`, unlocks internal-audience skills (e.g. `/audit-fit`) in slash listings and `/help`. Gates surfacing only — it does not change what's accessible. | — |
+| `AFK_INTERNAL` | boolean | Tier gate. Unlocks only when set to the literal string `1` — other truthy values (`true`, `yes`) leave the tier locked. When unlocked, internal-audience skills (e.g. `/audit-fit`) become visible in slash listings, `/help`, and tab-complete. Gates surfacing only — not an access boundary; it does not change what's accessible. | — |
 
 
 ## Browser
@@ -129,7 +129,7 @@ All environment variables recognized by `agent-afk` are listed here, grouped by 
 | --- | --- | --- | --- |
 | `AFK_FRAMEWORK_DIR` | string | Override the AFK agent-framework directory used for telemetry and briefs. Default: $AFK_HOME/agent-framework/. | — |
 | `AFK_HOME` | string | Override the AFK home directory. Default: ~/.afk/. | `~/.afk` |
-| `AFK_STATE_DIR` | string | Override the AFK state directory. Default: $AFK_HOME/state/. | — |
+| `AFK_STATE_DIR` | string | Override the entire AFK state tier (sessions/, todos/, transcripts/, memory/, daemon/, etc.), not just one subdirectory. Must be an absolute path (not /). Default: $AFK_HOME/state/. | — |
 
 
 ## Process

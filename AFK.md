@@ -62,7 +62,7 @@ All AFK state under `~/.afk/` (never `~/.claude/`):
 ```
 ~/.afk/
   config/    afk.env, afk.config.json, mcp.json
-  state/     sessions/  todos/  daemon/
+  state/     sessions/  todos/  transcripts/  daemon/   ($AFK_STATE_DIR overrides this tier)
   plugins/   logs/  cache/
   agent-framework/   # AFK telemetry + briefs (via paths.ts)
 ```

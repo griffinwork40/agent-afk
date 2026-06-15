@@ -9,6 +9,22 @@ AFK includes a small set of skills out of the box. Each one works as a slash com
 
 These skills are visible to all users.
 
+### `/get-started`
+
+```
+/get-started
+```
+
+**Purpose:** Guided first-run onboarding — preflight checks, optional capability setup, and a route to your first task.
+
+**What it does:** Runs a preflight check (git repo, model provider, `AFK.md`, Exa/Telegram/service config), asks your name and gives a brief intro, detects importable Claude Code / Codex assets and offers `afk migrate`, then walks optional capability setup (Exa Search, Telegram via `/telegram-setup`, background service via `/service-setup`). Ends by recommending `/init` to generate project context and `/clear` to start fresh, then routes you to your first task.
+
+**Execution mode:** `load` — runs interactively in the current session (not a fork), so it can drive setup alongside you.
+
+**When to use:** When you're setting up AFK for the first time or asking how to get going. Triggers on `/get-started`, "how do I start", "set me up", or "onboard me". Best run in the interactive REPL.
+
+---
+
 ### `/mint`
 
 ```

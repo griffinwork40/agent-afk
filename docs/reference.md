@@ -200,7 +200,7 @@ afk telegram logs
 ```
 ~/.afk/
   config/              afk.env, afk.config.json
-  state/               sessions/, todos/, daemon/
+  state/               sessions/, todos/, transcripts/, daemon/  ($AFK_STATE_DIR overrides this tier)
   logs/
   cache/
   plugins/             user-installed Claude plugins (starts empty)

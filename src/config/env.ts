@@ -523,7 +523,7 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'AFK_STATE_DIR',
-    description: 'Override the AFK state directory. Default: $AFK_HOME/state/.',
+    description: 'Override the entire AFK state tier (sessions/, todos/, transcripts/, memory/, daemon/, etc.), not just one subdirectory. Must be an absolute path (not /). Default: $AFK_HOME/state/.',
     type: 'string',
     required: false,
     category: 'paths',

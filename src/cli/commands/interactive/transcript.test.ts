@@ -149,3 +149,38 @@ describe('transcript — immediate user-message write (appendUser)', () => {
     expect(body.indexOf('_(no response recorded)_')).toBeLessThan(body.indexOf('_ended:'));
   });
 });
+
+describe('transcript — default directory resolution (state-tier placement)', () => {
+  let tmpHome: string;
+  let savedHome: string | undefined;
+  let savedStateDir: string | undefined;
+  let savedAfkHome: string | undefined;
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env['HOME'];
+    else process.env['HOME'] = savedHome;
+    if (savedStateDir === undefined) delete process.env['AFK_STATE_DIR'];
+    else process.env['AFK_STATE_DIR'] = savedStateDir;
+    if (savedAfkHome === undefined) delete process.env['AFK_HOME'];
+    else process.env['AFK_HOME'] = savedAfkHome;
+    if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  it('with AFK_STATE_DIR unset, transcripts land in ~/.afk/state/transcripts (not the legacy ~/.afk/transcripts)', async () => {
+    tmpHome = mkdtempSync(join(tmpdir(), 'afk-transcript-home-'));
+    savedHome = process.env['HOME'];
+    savedStateDir = process.env['AFK_STATE_DIR'];
+    savedAfkHome = process.env['AFK_HOME'];
+    process.env['HOME'] = tmpHome;
+    delete process.env['AFK_STATE_DIR'];
+    delete process.env['AFK_HOME'];
+
+    const { initTranscript } = await import('./transcript.js');
+    const handle = await initTranscript(() => 'test-model');
+    const p = handle.path();
+
+    // Lands inside the state tier, NOT the legacy flat dir.
+    expect(p.startsWith(join(tmpHome, '.afk', 'state', 'transcripts') + '/')).toBe(true);
+    expect(p.startsWith(join(tmpHome, '.afk', 'transcripts') + '/')).toBe(false);
+  });
+});
