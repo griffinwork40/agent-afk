@@ -62,6 +62,62 @@ html:not(.dark) {
   /* accent and glow stay orange — same brand in both themes */
 }
 
+/* --- Signature system tokens --------------------------------------------- *
+   "signal → depth → compression → rise → embodiment."
+
+   A reusable visual law layered onto the existing brand (it does NOT recolor
+   it): the orange "ping" of the Handoff Arc is the *signal*; the grey→green
+   arc is the *earned route*. These tokens extend that logic into a field +
+   route + measure system shared by every page.
+
+   Colours are stored as bare "R, G, B" triplets so each can be composed with
+   an arbitrary alpha via rgb(var(--sig-x) / <a>). Alphas/origins are separate
+   knobs so the field can be retuned per theme without touching the gradients.
+
+   Stage → token:
+     signal      --sig-signal / --sig-ring   (the small visible mark, ripples)
+     depth       --sig-depth                  (cool submerged structure, lower-left)
+     route       --sig-route-cold/mid/warm    (cold start → green route → warm use)
+     measure     --sig-measure                (the one ruthless structural line)
+     embodiment  --sig-warm                   (warm resolve, upper-right / CTA)            */
+:root {
+  /* Route gradient — mirrors the Handoff Arc: grey start → green route → warm.
+     NB: triplets are SPACE-separated so rgb(var(--x) / <a>) is valid modern
+     syntax. (Comma triplets + slash alpha is invalid and silently dropped.) */
+  --sig-route-cold: 138 138 160;   /* #8a8aa0  cold depth / start node      */
+  --sig-route-mid:   92 184 127;   /* #5cb87f  the resolved green route      */
+  --sig-route-warm: 249 115 22;    /* #f97316  warm signal / embodiment      */
+
+  /* Field tints (dark). Cool indigo depth, cool-steel ripples, warm resolve. */
+  --sig-depth:   92 104 168;       /* cool submerged structure (lower-left)  */
+  --sig-ring:   150 168 192;       /* concentric signal ripples              */
+  --sig-warm:   249 115 22;        /* warm rise (upper-right)                */
+  --sig-signal: 249 133 75;        /* the ping — == --color-accent           */
+  --sig-measure: 156 166 192;      /* the crisp measuring rule / ticks       */
+
+  /* Field intensity (dark) — kept low so text contrast is never touched. */
+  --sig-depth-a: 0.13;
+  --sig-ring-a:  0.05;
+  --sig-warm-a:  0.05;
+  --sig-measure-a: 0.55;
+
+  /* Signal origin — the small node the ripples radiate from (upper-right). */
+  --sig-origin-x: 86%;
+  --sig-origin-y: -2%;
+}
+
+/* Field retune for light mode: lower-energy, darker cool tints so faint rings
+   read on a near-white ground and never muddy the prose. Route stays branded. */
+html:not(.dark) {
+  --sig-depth:    96 108 156;
+  --sig-ring:     96 110 150;
+  --sig-measure:  96 108 150;
+  --sig-depth-a:  0.07;
+  --sig-ring-a:   0.06;
+  --sig-warm-a:   0.05;
+  --sig-measure-a: 0.46;
+}
+
 /* --- Minimal base --------------------------------------------------------- */
 *, *::before, *::after { box-sizing: border-box; }
 

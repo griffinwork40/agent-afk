@@ -78,11 +78,36 @@
   --color-fd-accent-foreground:  #c0501a;   /* darker orange for text on light bg */
 }
 
-/* --- Sidebar / docs background ------------------------------------------ */
-/* fumadocs-ui uses --color-fd-background for the page and sidebar.
-   Ensure the sidebar rail matches the deep dark bg. */
+/* --- Sidebar / docs background + the signature field -------------------- */
+/* fumadocs-ui uses --color-fd-background for the page and sidebar. We keep
+   that solid base colour and paint the signature field ON it as background
+   layers (no extra DOM, no z-index gymnastics): content surfaces — cards,
+   code blocks — carry their own opaque bg and sit cleanly above the field.
+
+   deep-field  : a cool depth pocket biased to the lower-left (descent) that
+                 resolves into a faint warm node upper-right (rise). This is
+                 the quiet cold→warm migration that governs EVERY page.
+   signal-field: three faint concentric rings around that warm node — a small
+                 signal implying a far larger submerged structure.
+
+   background-attachment:fixed turns the field into a stable ground the content
+   scrolls over (cartographic, not a hero gradient). Switched to scroll on
+   touch/coarse pointers below, where fixed attachment is janky. */
 #nd-docs-layout {
   background-color: var(--color-fd-background);
+  background-image:
+    /* signal-field — concentric rings around the upper-right node */
+    radial-gradient(circle at var(--sig-origin-x) var(--sig-origin-y),
+      transparent 178px, rgb(var(--sig-ring) / calc(var(--sig-ring-a) * 0.55)) 179px 180px, transparent 181px),
+    radial-gradient(circle at var(--sig-origin-x) var(--sig-origin-y),
+      transparent 116px, rgb(var(--sig-ring) / calc(var(--sig-ring-a) * 0.8)) 117px 118px, transparent 119px),
+    radial-gradient(circle at var(--sig-origin-x) var(--sig-origin-y),
+      transparent 64px, rgb(var(--sig-ring) / var(--sig-ring-a)) 65px 66px, transparent 67px),
+    /* deep-field — warm rise (upper-right) over cool depth (lower-left) */
+    radial-gradient(120% 80% at 92% -8%, rgb(var(--sig-warm) / var(--sig-warm-a)), transparent 60%),
+    radial-gradient(125% 120% at 4% 108%, rgb(var(--sig-depth) / var(--sig-depth-a)), transparent 62%);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
 }
 
 /* --- Typography: inherit the site's mono font for code blocks ----------- */
@@ -208,4 +233,249 @@ a:hover > .afk-brand-mark {
 }
 :root:not(.dark) .afk-wordmark-afk {
   color: var(--color-fd-foreground);
+}
+
+/* ==========================================================================
+   SIGNATURE SYSTEM — earned-path, scope-rule, elevated-field
+   "signal → depth → compression → rise → embodiment."
+   All rules scoped to #nd-docs-layout so the system governs the docs chrome
+   and nothing leaks elsewhere. See globals.css for the --sig-* tokens.
+   ========================================================================== */
+
+/* --- earned-path: the hero Signature band ------------------------------- */
+/* The clearest single statement of the law. A slim, full-width band that sits
+   between the page lede and its content — the route opening into the page. */
+#nd-docs-layout .afk-signature {
+  margin: 0.25rem 0 2rem;
+  width: 100%;
+}
+#nd-docs-layout .afk-sig {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* The band reads as a thin horizon, not a hero billboard. */
+  max-height: 132px;
+  overflow: visible;
+}
+/* The band paints at ~0.5x its viewBox, which would shrink 1px hairlines into
+   sub-pixel invisibility. Pin every stroke to device pixels so the measure,
+   traces and rings stay crisp at any width (and on mobile). */
+.afk-sig line,
+.afk-sig path,
+.afk-sig circle { vector-effect: non-scaling-stroke; }
+
+/* Field strokes — every colour traces back to a --sig-* token. The traces and
+   rings read at rest (not just under motion) so "repeated passes compressed
+   into one route" never collapses into a lone swoosh. */
+.afk-sig__trace path {
+  fill: none;
+  stroke: rgb(var(--sig-route-cold) / 0.4);
+  stroke-width: 1.1;
+}
+.afk-sig__route {
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  opacity: 0.92;
+}
+.afk-sig__ring {
+  fill: none;
+  stroke: rgb(var(--sig-ring) / 0.62);
+  stroke-width: 1.1;
+}
+.afk-sig__signal .afk-sig__ring:nth-of-type(2) { stroke: rgb(var(--sig-ring) / 0.44); }
+.afk-sig__signal .afk-sig__ring:nth-of-type(3) { stroke: rgb(var(--sig-ring) / 0.28); }
+.afk-sig__ripple {
+  fill: none;
+  stroke: rgb(var(--sig-ring) / 0.45);
+  stroke-width: 1.1;
+  opacity: 0;            /* invisible at rest; only motion brings it to life */
+}
+.afk-sig__node--signal { fill: rgb(var(--sig-route-cold) / 0.9); }
+.afk-sig__node--warm   { fill: rgb(var(--sig-route-warm)); }
+.afk-sig__measure line { stroke: rgb(var(--sig-measure) / var(--sig-measure-a)); stroke-width: 1; }
+.afk-sig__threshold    { stroke: rgb(var(--sig-measure) / calc(var(--sig-measure-a) + 0.2)) !important; stroke-width: 1.4 !important; }
+.afk-sig__axis         { stroke: rgb(var(--sig-measure) / calc(var(--sig-measure-a) * 0.4)) !important; }
+.afk-sig__crosshair    { stroke: rgb(var(--sig-route-warm) / 0.6); stroke-width: 1; }
+
+/* --- earned-path: route dividers (hr) ----------------------------------- */
+/* A horizontal rule is reframed as a compressed band: a route that migrates
+   cold → green → warm left-to-right (rise), with one measure tick near the
+   resolved end. Replaces fumadocs' flat 1px border. */
+#nd-docs-layout .prose hr {
+  position: relative;
+  border: 0;
+  height: 1px;
+  margin: 2.75rem 0;
+  background-image: linear-gradient(
+    to right,
+    transparent 0%,
+    rgb(var(--sig-route-cold) / 0.45) 14%,
+    rgb(var(--sig-route-mid) / 0.5) 52%,
+    rgb(var(--sig-route-warm) / 0.55) 82%,
+    transparent 100%
+  );
+}
+#nd-docs-layout .prose hr::after {
+  /* measure tick — a threshold marker at the warm/resolve point */
+  content: "";
+  position: absolute;
+  top: -3px;
+  left: 82%;
+  width: 1px;
+  height: 7px;
+  background: rgb(var(--sig-route-warm) / 0.7);
+}
+
+/* --- scope-rule: cards as excavated artifacts --------------------------- */
+/* A feature card is reframed as an instrument pulled from the field: a
+   measured scope-rule down its leading edge, a faint excavated recess, and a
+   small coordinate tick in the corner. Discovery resolves (warms) on hover.
+
+   Invariant: scope to :not(.peer). Fumadocs reuses data-card on every heading
+   permalink anchor (<a data-card class="peer" href="#…">); .peer is unique to
+   those, so excluding it keeps the treatment on real feature cards only. */
+#nd-docs-layout [data-card]:not(.peer) {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  transition: transform var(--t-base, 180ms) var(--ease, ease),
+    border-color var(--t-base, 180ms) var(--ease, ease),
+    box-shadow var(--t-base, 180ms) var(--ease, ease);
+}
+/* scope-rule — the measured leading edge (the route passing through). */
+#nd-docs-layout [data-card]:not(.peer)::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 14%;
+  bottom: 14%;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to bottom,
+    rgb(var(--sig-route-cold) / 0.5),
+    rgb(var(--sig-route-mid) / 0.55)
+  );
+  transition: background var(--t-base, 180ms) var(--ease, ease),
+    top var(--t-base, 180ms) var(--ease, ease),
+    bottom var(--t-base, 180ms) var(--ease, ease);
+}
+/* excavated recess + corner coordinate tick — a faint cool depth wash from the
+   leading edge, and a 7px right-angle tick top-right (cartographic cue). */
+#nd-docs-layout [data-card]:not(.peer)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(135deg, rgb(var(--sig-depth) / 0.1), transparent 38%),
+    linear-gradient(to right, rgb(var(--sig-measure) / 0.5) 7px, transparent 7px) top right / 7px 1px no-repeat,
+    linear-gradient(to bottom, rgb(var(--sig-measure) / 0.5) 7px, transparent 7px) top right / 1px 7px no-repeat;
+}
+#nd-docs-layout [data-card]:not(.peer):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 28px -16px rgb(var(--sig-depth) / 0.55);
+}
+#nd-docs-layout [data-card]:not(.peer):hover::before {
+  top: 8%;
+  bottom: 8%;
+  background: linear-gradient(
+    to bottom,
+    rgb(var(--sig-route-mid) / 0.6),
+    rgb(var(--sig-route-warm) / 0.7)
+  );
+}
+
+/* --- elevated-field: the embodied CTA ----------------------------------- */
+/* The primary action sits in the warmest, most-arrived zone: warm border, a
+   soft warm lift, a faint warm wash, and a leading edge that fully resolves to
+   the signal colour. This is where the page rises into use. Applied via
+   <Card className="elevated-field" …>. */
+#nd-docs-layout [data-card].elevated-field {
+  border-color: rgb(var(--sig-route-warm) / 0.45);
+  background:
+    radial-gradient(120% 140% at 100% 0%, rgb(var(--sig-route-warm) / 0.1), transparent 55%),
+    var(--color-fd-card);
+  box-shadow: 0 0 0 1px rgb(var(--sig-route-warm) / 0.12),
+    0 14px 40px -22px rgb(var(--sig-route-warm) / 0.5);
+}
+#nd-docs-layout [data-card].elevated-field::before {
+  top: 10%;
+  bottom: 10%;
+  width: 2.5px;
+  background: linear-gradient(
+    to bottom,
+    rgb(var(--sig-route-mid) / 0.6),
+    rgb(var(--sig-route-warm) / 0.95)
+  );
+}
+#nd-docs-layout [data-card].elevated-field:hover {
+  border-color: rgb(var(--sig-route-warm) / 0.65);
+  transform: translateY(-2px);
+  box-shadow: 0 0 0 1px rgb(var(--sig-route-warm) / 0.22),
+    0 18px 46px -20px rgb(var(--sig-route-warm) / 0.6);
+}
+
+/* --- motion: slow, earned, optional ------------------------------------- *
+   Default (no preference): the route draws in once, the signal ripples
+   expand slowly, the warm node breathes faintly. Everything also reads fully
+   formed without motion — reduced-motion users lose nothing structural. */
+@media (prefers-reduced-motion: no-preference) {
+  .afk-sig__route {
+    stroke-dasharray: 1600;
+    stroke-dashoffset: 1600;
+    animation: afk-sig-draw 1.8s var(--ease, ease) 0.15s forwards;
+  }
+  .afk-sig__ripple {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: afk-sig-ripple 6.5s ease-out infinite;
+  }
+  .afk-sig__ripple--2 { animation-delay: 3.25s; }
+  .afk-sig__node--warm {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: afk-sig-breathe 4.5s ease-in-out 1.9s infinite;
+  }
+  .afk-sig__glow {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: afk-sig-breathe 4.5s ease-in-out 1.9s infinite;
+  }
+}
+@keyframes afk-sig-draw {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes afk-sig-ripple {
+  0%   { transform: scale(0.7); opacity: 0; }
+  18%  { opacity: 0.5; }
+  100% { transform: scale(3.4); opacity: 0; }
+}
+@keyframes afk-sig-breathe {
+  0%, 100% { transform: scale(1);    opacity: 1; }
+  50%      { transform: scale(1.14); opacity: 0.86; }
+}
+
+/* --- mobile: recompose, don't collapse ---------------------------------- */
+/* fixed background attachment is janky on touch — pin it to scroll and ease
+   the field's energy so it never competes with cramped mobile copy. */
+@media (hover: none), (pointer: coarse) {
+  #nd-docs-layout { background-attachment: scroll; }
+}
+@media (max-width: 640px) {
+  #nd-docs-layout {
+    /* drop the outermost signal ring and soften depth on small screens */
+    --sig-ring-a: 0.04;
+    --sig-depth-a: 0.1;
+  }
+  #nd-docs-layout .afk-signature { margin-bottom: 1.5rem; }
+  #nd-docs-layout .afk-sig { max-height: 96px; }
+  /* the band recomposes to its essential gesture: hide the finer measure
+     ticks and the long axis; keep the route, the signal, and the resolve. */
+  .afk-sig__measure line:not(:first-child),
+  .afk-sig__axis,
+  .afk-sig__crosshair { display: none; }
+  /* thinner scope-rule so it reads as accent, not bar, in narrow cards */
+  #nd-docs-layout [data-card]:not(.peer)::before { width: 1.5px; }
 }

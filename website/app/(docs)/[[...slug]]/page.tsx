@@ -4,6 +4,7 @@ import { DocsPage, DocsBody, DocsDescription, DocsTitle } from 'fumadocs-ui/page
 import defaultMdxComponents from 'fumadocs-ui/mdx';
 import { Card, Cards } from 'fumadocs-ui/components/card';
 import { source } from '@/lib/source';
+import { Signature } from '@/components/signature';
 
 interface Props {
   params: Promise<{ slug?: string[] }>;
@@ -22,7 +23,7 @@ export default async function Page({ params }: Props) {
       <DocsTitle>{page.data.title}</DocsTitle>
       <DocsDescription>{page.data.description}</DocsDescription>
       <DocsBody>
-        <MDX components={{ ...defaultMdxComponents, Card, Cards }} />
+        <MDX components={{ ...defaultMdxComponents, Card, Cards, Signature }} />
       </DocsBody>
     </DocsPage>
   );
