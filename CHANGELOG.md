@@ -11,6 +11,21 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-06-15
+
+### Added
+- self-service config/env editing for the agent (06483d7)
+
+### Fixed
+- route dynamic env presence-check through env.ts (78efe1a)
+- gate enableShellHooks behind human tier + harden .bak perms (02dcea1)
+
+### Changed
+- Merge pull request #146 from griffinwork40/afk/agent-config-editor (f2cd787)
+- document self-service config/env editing (be051d4)
+- Merge branch 'main' into afk/agent-config-editor (e0369a8)
+- Merge branch 'main' into afk/agent-config-editor (5add8e5)
+
 ## [4.1.1] - 2026-06-15
 
 ### Fixed
