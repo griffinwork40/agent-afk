@@ -117,8 +117,10 @@ Common causes: invalid `TELEGRAM_BOT_TOKEN`, network connectivity, or a port con
 
 **Token not set** — `afk telegram setup` reads from and writes to `~/.afk/config/afk.env`.
 If you set the token in your shell profile, it may not be available to the bot daemon. Write
-it to `afk.env` instead:
+it to `afk.env` instead — `afk config env set` prompts for the token with a masked input so it
+never lands in your shell history:
 
 ```bash
-echo "TELEGRAM_BOT_TOKEN=<token>" >> ~/.afk/config/afk.env
+afk config env set TELEGRAM_BOT_TOKEN          # masked prompt (recommended)
+echo "TELEGRAM_BOT_TOKEN=<token>" >> ~/.afk/config/afk.env   # or append by hand
 ```

@@ -50,8 +50,11 @@ AFK checks credentials in this order:
 
 After `afk login`, the key lives in `~/.afk/config/afk.env`. That file is
 loaded at startup via dotenv (before shell environment vars, which take
-precedence). You can also set keys in `~/.afk/config/afk.env` by hand — one
-`KEY=value` per line.
+precedence). You can also set a key with `afk config env set ANTHROPIC_API_KEY`,
+which prompts for the value without echoing it to the terminal (pipe via
+`--stdin` for scripts) — see [Editing Configuration](/configuration/editing-config).
+Raw `KEY=value` hand-edits to the file work too, but leave the credential in your
+editor's history.
 
 ## OpenAI-compatible provider
 

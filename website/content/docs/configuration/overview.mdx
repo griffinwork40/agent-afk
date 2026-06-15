@@ -11,8 +11,8 @@ description: "How agent-afk resolves configuration: the ~/.afk/ directory layout
 ```
 ~/.afk/
   config/
-    afk.env              # API keys and env overrides (written by `afk login`)
-    afk.config.json      # structured config: model, maxTokens, systemPrompt, models block, …
+    afk.env              # API keys and env overrides — written by `afk login` or `afk config env set`
+    afk.config.json      # structured config — edited with `afk config set` or by the agent
     mcp.json             # MCP server registry
   state/                 # $AFK_STATE_DIR overrides this tier
     sessions/            # session-store sidecars
@@ -56,13 +56,25 @@ Before env vars are read, `loadEnvConfig()` loads dotenv files in this order
 
 The `afk login` wizard writes keys to `~/.afk/config/afk.env`.
 
-## Inspecting active config
+## Inspecting and editing config
 
 ```bash
 afk config           # human-readable dump of resolved model, provider, API key presence
 afk config --format json   # machine-readable JSON
 afk doctor           # validates keys, paths, and provider connectivity
 ```
+
+Edit config without opening an editor:
+
+```bash
+afk config set model opus            # write afk.config.json
+afk config env set AFK_EFFORT high   # write afk.env
+afk config env set ANTHROPIC_API_KEY # secrets prompt for a masked value
+```
+
+See [Editing Configuration](/configuration/editing-config) for the full command
+reference, the agent-vs-human sensitivity tiers, and the `config_get`/`config_set`
+tools the agent uses to tune its own settings.
 
 `--dump-prompt <path>` on any command writes the fully-resolved system prompt
 (framework base + operator overlay) to a file, with provenance noted in a
@@ -117,7 +129,7 @@ optional; unset fields fall through to env vars or built-in defaults.
 | `autoResumeOnUsageLimit` | `boolean` | `true` | When `true`, AFK pauses and retries automatically when your API subscription hits its hourly limit, instead of showing a 429 error. |
 | `bgSummaries` | `boolean` | `false` | When `true`, the REPL summarizes running background jobs and shows them in `/bgsub:list`. **Caution:** this sends transcript data to the Anthropic API — don't enable it in air-gapped or sensitive environments. |
 | `maxSummaryCallsPerSession` | `number` | `200` | Session-wide budget for background summarizer LLM calls. Clamped to `[1, 500]`. Has no effect unless `bgSummaries` is `true`. |
-| `enableShellHooks` | `boolean` | `false` | Master switch for shell-command hooks. **Must be set in a user-global file** (`~/.afk/config/afk.config.json`); project-local values are silently ignored to prevent cloned repos from auto-executing scripts. |
+| `enableShellHooks` | `boolean` | `false` | Master switch for shell-command hooks. **Must be set in a user-global file** (`~/.afk/config/afk.config.json`); project-local values are silently ignored to prevent cloned repos from auto-executing scripts. Set it with `afk config set enableShellHooks true` — it is human-gated, so the agent's `config_set` tool cannot flip it. |
 
 ---
 

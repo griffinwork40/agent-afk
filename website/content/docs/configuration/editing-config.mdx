@@ -1,0 +1,127 @@
+---
+title: "Editing Configuration"
+description: "Read and edit ~/.afk config and env vars from the CLI or from the agent itself — with sensitivity tiers, masked secrets, and atomic writes."
+---
+
+There are three ways to change `agent-afk`'s configuration, all writing to the
+same files under `~/.afk/config/`:
+
+- **`afk login`** — the guided wizard for Anthropic credentials (see [API Keys](/configuration/api-keys)).
+- **`afk config …`** — CLI subcommands for any non-credential setting, plus masked entry for secrets.
+- **`config_get` / `config_set`** — built-in tools the **agent** can call to read and edit its own config.
+
+All writes are validated and atomic. The agent path is deliberately narrower
+than the human path: the agent can tune behaviour but cannot set credentials or
+safety-critical keys (see [Sensitivity tiers](#sensitivity-tiers)).
+
+<Callout type="warn">
+Config is read once at process start and cached. Edits take effect on the **next
+session / daemon restart** — the current process is unchanged. The CLI and the
+agent tool both say so on every successful write.
+</Callout>
+
+## CLI commands
+
+`afk config` with no arguments still prints the read-only summary (resolved
+model, provider, key presence). The editing subcommands are:
+
+| Command | Target | Description |
+|---------|--------|-------------|
+| `afk config get [key]` | `afk.config.json` | Print one dotted key, or the whole file when `key` is omitted. |
+| `afk config set <key> <value>` | `afk.config.json` | Set a key. Value is coerced to the key's type (e.g. `temperature` → number). |
+| `afk config unset <key>` | `afk.config.json` | Remove a key (empty parent objects are pruned). |
+| `afk config env get [key]` | `afk.env` | Print one var, or all set vars. Add `--all` to include every known var. Secrets are masked. |
+| `afk config env set <key> [value]` | `afk.env` | Set a var. Secret vars prompt for a **masked** value instead of taking it inline (see [Secret entry](#secret-entry)). |
+| `afk config env unset <key>` | `afk.env` | Remove a var. |
+
+```bash
+# afk.config.json
+afk config set model opus
+afk config set temperature 0.7
+afk config set telegram.notify.mode broadcast   # dotted paths supported
+afk config get model
+afk config unset bgSummaries
+
+# afk.env
+afk config env set AFK_EFFORT high
+afk config env get AFK_EFFORT
+afk config env unset AFK_EFFORT
+```
+
+Add `--json` to any subcommand for machine-readable output. Unknown keys,
+out-of-range values, and type mismatches are rejected with exit code `2`.
+
+## Sensitivity tiers
+
+Every key falls into one of three tiers. The tier decides who may write it — the
+agent tool refuses anything outside the **agent** tier and tells you the exact
+`afk config` command a human can run instead.
+
+| Tier | Who can set it | Keys |
+|------|----------------|------|
+| **Agent** | agent tool **and** CLI | Non-secret behavioural settings: `model`, `models.{small,medium,large}`, `maxTokens`, `temperature`, `autoRouting.*`, `telegram.notify.*`, `interactive.worktreeAutoname`, `interactive.suggestGhost`, `updatePolicy`, `autoResumeOnUsageLimit`, `bgSummaries`, `maxSummaryCallsPerSession`; and any non-secret `AFK_*` env var. |
+| **Human** | CLI only — agent refused | Credentials (all secret env vars: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `EXA_API_KEY`, …) and safety/identity config: `systemPrompt`, `enableShellHooks`, `interactive.worktreeBranchPrefix`, `interactive.worktreeBase`, `daemon.task`, `daemon.taskId`. |
+| **Never** | nobody (via these surfaces) | Inherited/process env (`PATH`, `HOME`, `SHELL`, `NODE_ENV`, …), unknown keys, `mcp.json`, and `~/.afk/state`. |
+
+Why credentials and `systemPrompt`/`enableShellHooks` are human-only: an agent
+that could rewrite its own prompt, flip the shell-hook trust gate, or overwrite
+its own API key would have an unbounded blast radius. These stay behind a human
+running the CLI. The pre-existing write-denylist on `~/.afk/config` (which blocks
+the generic `write_file`/`edit_file` tools) is left fully intact — `config_set`
+is a separate, validated path that writes only the two canonical config files.
+
+## Agent tools
+
+Two built-in tools expose the same engine to the model:
+
+### `config_get` (read-only)
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `target` | `"env" \| "config"` | Which store to read. Required. |
+| `key` | `string` | Optional. A dotted config path or env var name. Omit to list everything. |
+| `all` | `boolean` | `env` only — include every known var, not just those set. |
+
+Secret values are **always** masked — the tool returns `set (****1234)` or
+`<unset>`, never the raw credential. `config_get` is read-class and is allowed
+even in read-only phases (e.g. plan mode).
+
+### `config_set` (write)
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `target` | `"env" \| "config"` | Which store to write. Required. |
+| `key` | `string` | The dotted config path or env var name. Required. |
+| `value` | `string \| number \| boolean` | The value to set. Required for `action: "set"`. |
+| `action` | `"set" \| "unset"` | Defaults to `"set"`. |
+
+`config_set` is write-class, so it is **blocked in plan mode** and never runs
+concurrently with other writes. Attempting to set a human-tier or secret key
+returns an error naming the `afk config` command a human must run instead.
+
+## Secret entry
+
+Secret env vars (API keys, tokens) are never accepted as an inline value — that
+would leak them into shell history and process listings. Instead:
+
+```bash
+afk config env set ANTHROPIC_API_KEY     # prompts for a masked value (TTY only)
+echo "$KEY" | afk config env set OPENAI_API_KEY --stdin   # scripted entry
+```
+
+The masked prompt requires an interactive terminal and fails closed on non-TTY
+stdin. The agent tool cannot set secrets at all.
+
+## Atomic writes and backups
+
+Every write goes to a temporary sibling file and is `rename`d into place, so a
+crash can never leave a half-written `afk.env` or `afk.config.json`. Before each
+`afk.config.json` write the previous version is copied to a `0o600` `.bak`
+alongside it. If the existing `afk.config.json` is not valid JSON, the write is
+refused rather than clobbering your hand-edits — fix or remove the file first.
+
+## See also
+
+- [Configuration Overview](/configuration/overview) — the full `afk.config.json` schema.
+- [Environment Variables](/configuration/environment-variables) — every `AFK_*` var.
+- [API Keys](/configuration/api-keys) — credential setup and `afk login`.

@@ -53,6 +53,8 @@ Each session has a fixed set of built-in tools available to the model:
   at `~/.afk/state/memory/`
 - **`send_telegram`** — pushes a terminal-state notification to the operator; no-op if Telegram
   is unconfigured
+- **`config_get` / `config_set`** — read and edit AFK's own config (`~/.afk/config/`); secrets are
+  always masked and credential/safety keys are human-gated (see [Editing Configuration](/configuration/editing-config))
 - **MCP tools** — bridged as `mcp__<server>__<tool>` from any configured MCP server
 
 MCP servers are loaded from a layered config (plugin-contributed → `~/.afk/config/mcp.json` →
