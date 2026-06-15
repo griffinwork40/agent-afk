@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.4.0] - 2026-06-15
+
+### Added
+- accept image input on vision models (#127) (0578a95)
+
+### Changed
+- Merge pull request #134 from griffinwork40/afk/accept-images-gracefully (03852e2)
+- Merge branch 'main' into afk/accept-images-gracefully (d0ef994)
+- regenerate env registry docs (3123709)
+
 ## [4.3.1] - 2026-06-15
 
 ### Fixed
