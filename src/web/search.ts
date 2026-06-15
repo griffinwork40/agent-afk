@@ -1,14 +1,14 @@
 /**
  * Web-search backends for `web_scrape` search mode.
  *
- * v1 ships exactly one backend — Brave Search — behind a `SearchBackend`
- * interface so DuckDuckGo / SearXNG / Tavily / SerpAPI can be added later
+ * Ships one backend — Exa (exa.ai) — behind a `SearchBackend` interface so
+ * other engines (Brave / Tavily / SearXNG / SerpAPI) can be added later
  * without touching the handler. The handler calls `resolveSearchBackend()`
  * to pick a backend from available credentials; when none is configured it
  * receives a clear, actionable error instead of a failed request.
  *
- * Deliberate non-goal for v1: search-engine scraping (DuckDuckGo HTML, etc.).
- * It is brittle and bot-blocked; we require a real search API key instead.
+ * Deliberate non-goal: search-engine scraping (DuckDuckGo HTML, etc.). It is
+ * brittle and bot-blocked; we require a real search API key instead.
  *
  * @module web/search
  */
@@ -16,62 +16,56 @@
 import type { FetchFn, SearchBackend, SearchResult } from './types.js';
 import { sanitizeForDisplay } from '../utils/terminal-sanitize.js';
 
-const BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search';
-/** Brave caps `count` at 20 per request. */
-const BRAVE_MAX_COUNT = 20;
+const EXA_ENDPOINT = 'https://api.exa.ai/search';
+/** Exa's free/basic plans cap `numResults` at 10. */
+const EXA_MAX_RESULTS = 10;
 
-interface BraveWebResult {
-  title?: string;
+/** One result from Exa's `/search` response. `contents` fields are optional. */
+interface ExaSearchResult {
+  title?: string | null;
   url?: string;
-  description?: string;
+  /** Present when `contents.highlights` is requested — query-relevant snippets. */
+  highlights?: string[];
 }
 
-interface BraveResponse {
-  web?: { results?: BraveWebResult[] };
+interface ExaResponse {
+  results?: ExaSearchResult[];
 }
 
-/** Strip Brave's `<strong>`-highlighted snippet markup and collapse spaces. */
-function stripMarkup(s: string): string {
-  return s
-    .replace(/<[^>]*>/g, '')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-export interface BraveBackendOptions {
+export interface ExaBackendOptions {
   apiKey: string;
   /** Override for tests. Defaults to `globalThis.fetch`. */
   fetchFn?: FetchFn;
 }
 
 /**
- * Construct a Brave Search backend bound to an API key.
+ * Construct an Exa Search backend bound to an API key.
  *
- * Brave's REST API returns JSON directly (no browser needed), making search
+ * Exa's REST API returns JSON directly (no browser needed), making search
  * robust and deterministic — the opposite of scraping a search-results page.
+ * We request `contents.highlights` so each result carries a query-relevant
+ * snippet for the `description` field; Exa highlights are plain text, so no
+ * markup stripping is needed.
  */
-export function createBraveSearchBackend(opts: BraveBackendOptions): SearchBackend {
+export function createExaSearchBackend(opts: ExaBackendOptions): SearchBackend {
   const fetchFn = opts.fetchFn ?? globalThis.fetch;
   return {
-    name: 'brave',
+    name: 'exa',
     async search(query, { limit, signal }): Promise<SearchResult[]> {
-      const url = new URL(BRAVE_ENDPOINT);
-      url.searchParams.set('q', query);
-      url.searchParams.set('count', String(Math.min(Math.max(limit, 1), BRAVE_MAX_COUNT)));
-
-      const res = await fetchFn(url.toString(), {
-        method: 'GET',
+      const res = await fetchFn(EXA_ENDPOINT, {
+        method: 'POST',
         headers: {
+          'Content-Type': 'application/json',
           Accept: 'application/json',
-          'Accept-Encoding': 'gzip',
-          'X-Subscription-Token': opts.apiKey,
+          'x-api-key': opts.apiKey,
           'User-Agent': 'agent-afk/web_scrape',
         },
+        body: JSON.stringify({
+          query,
+          type: 'auto',
+          numResults: Math.min(Math.max(limit, 1), EXA_MAX_RESULTS),
+          contents: { highlights: { numSentences: 3, highlightsPerUrl: 1 } },
+        }),
         signal,
       });
 
@@ -85,25 +79,25 @@ export function createBraveSearchBackend(opts: BraveBackendOptions): SearchBacke
           // Ignore — proceed with status only.
         }
         const statusText = res.statusText ? ` ${res.statusText}` : '';
-        throw new Error(`Brave Search HTTP ${res.status}${statusText}${detail}`);
+        throw new Error(`Exa Search HTTP ${res.status}${statusText}${detail}`);
       }
 
-      let json: BraveResponse;
+      let json: ExaResponse;
       try {
-        json = (await res.json()) as BraveResponse;
+        json = (await res.json()) as ExaResponse;
       } catch (err) {
         throw new Error(
-          `Brave Search response was not JSON: ${err instanceof Error ? err.message : String(err)}`,
+          `Exa Search response was not JSON: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
 
-      const results = json.web?.results ?? [];
+      const results = json.results ?? [];
       return results
         .slice(0, limit)
         .map((r) => ({
-          title: stripMarkup(r.title ?? '') || '(untitled)',
+          title: (r.title ?? '').trim() || '(untitled)',
           url: r.url ?? '',
-          description: stripMarkup(r.description ?? ''),
+          description: (r.highlights?.[0] ?? '').trim(),
         }))
         .filter((r) => r.url.length > 0);
     },
@@ -111,8 +105,8 @@ export function createBraveSearchBackend(opts: BraveBackendOptions): SearchBacke
 }
 
 export interface ResolveSearchOptions {
-  /** Brave API key (from BRAVE_SEARCH_API_KEY), if present. */
-  braveApiKey?: string | undefined;
+  /** Exa API key (from EXA_API_KEY), if present. */
+  exaApiKey?: string | undefined;
   /** Override for tests. */
   fetchFn?: FetchFn;
 }
@@ -121,21 +115,21 @@ export interface ResolveSearchOptions {
  * Pick a search backend from available credentials.
  *
  * Resolution order (extend here as backends are added):
- *   1. Brave — when `braveApiKey` is set.
- *   …  (future: SearXNG instance URL, Tavily key, …)
+ *   1. Exa — when `exaApiKey` is set.
+ *   …  (future: Brave key, SearXNG instance URL, Tavily key, …)
  *
  * Returns `{ error }` with an actionable message when nothing is configured,
  * so the handler surfaces a `ToolResult { isError: true }` rather than making
  * a doomed request.
  */
 export function resolveSearchBackend(opts: ResolveSearchOptions): SearchBackend | { error: string } {
-  if (opts.braveApiKey !== undefined && opts.braveApiKey.trim() !== '') {
-    return createBraveSearchBackend({ apiKey: opts.braveApiKey, fetchFn: opts.fetchFn });
+  if (opts.exaApiKey !== undefined && opts.exaApiKey.trim() !== '') {
+    return createExaSearchBackend({ apiKey: opts.exaApiKey, fetchFn: opts.fetchFn });
   }
   return {
     error:
-      'web_scrape search mode requires a search backend. Set BRAVE_SEARCH_API_KEY ' +
-      '(free tier at https://brave.com/search/api/) to enable it. ' +
+      'web_scrape search mode requires a search backend. Set EXA_API_KEY ' +
+      '(free tier at https://exa.ai) to enable it. ' +
       'Use mode: "markdown" to read a known URL, or mode: "raw" for a direct fetch.',
   };
 }

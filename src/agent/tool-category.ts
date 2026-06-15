@@ -102,7 +102,7 @@ const WEB_TOOLS = new Set([
   // send_telegram is an outbound HTTP call to a third-party API —
   // same conceptual shape as a web fetch, so it shares the web bucket.
   'send_telegram',
-  // agent-afk's native web tool (local Readability/Turndown scrape + Brave search, plus raw GET).
+  // agent-afk's native web tool (local Readability/Turndown scrape + Exa search, plus raw GET).
   'web_scrape',
 ]);
 const BROWSER_TOOLS = new Set([

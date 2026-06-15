@@ -13,8 +13,8 @@
  *   - `raw`: GET <url> directly. No transformation — caller gets whatever the
  *     origin serves (HTML, JSON, plain text, …). No auth.
  *   - `search`: query a web-search backend and return ranked results as
- *     markdown. v1 supports Brave Search (`BRAVE_SEARCH_API_KEY`); the backend
- *     interface is pluggable (DuckDuckGo / SearXNG / Tavily can be added
+ *     markdown. Ships Exa Search (`EXA_API_KEY`); the backend interface is
+ *     pluggable (Brave / DuckDuckGo / SearXNG / Tavily can be added
  *     later). When no backend is configured the handler returns a clear,
  *     actionable error. See `src/web/search.ts`.
  *
@@ -263,9 +263,9 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
         }
       }
 
-      // ---- search mode: pluggable backend (Brave in v1) ---------------------
+      // ---- search mode: pluggable backend (Exa) -----------------------------
       const backend = resolveSearchBackend({
-        braveApiKey: env['BRAVE_SEARCH_API_KEY'],
+        exaApiKey: env['EXA_API_KEY'],
         fetchFn,
       });
       if ('error' in backend) {
