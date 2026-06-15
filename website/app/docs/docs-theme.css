@@ -140,6 +140,15 @@
 #nd-docs-layout .prose pre { margin: 1.15em 0; }
 #nd-docs-layout .prose > :first-child { margin-top: 0; }
 
+/* Card titles render as <h3>, so the prose h3 rule above stamps a 1.6em top
+   margin on them — leaving a dead gap above every Card title (worst on the
+   full-width "Get started" card). Cards bring their own compact spacing;
+   exclude their headings from the prose heading rhythm. */
+#nd-docs-layout .prose [data-card] h3 {
+  margin-top: 0;
+  margin-bottom: 0.25rem;
+}
+
 /* Restore list markers + indent (global list-style:none / padding:0). */
 #nd-docs-layout .prose ul,
 #nd-docs-layout .prose ol { padding-inline-start: 1.5em; }
