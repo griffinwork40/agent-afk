@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-06-15
+
+### Added
+- add Vercel Web Analytics (ab1ec1e)
+
+### Changed
+- Merge pull request #147 from griffinwork40/feat/website-vercel-analytics (efc66da)
+
 ## [4.0.1] - 2026-06-15
 
 ### Fixed
