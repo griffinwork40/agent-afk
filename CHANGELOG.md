@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-06-15
+
+### Added
+- surface pending briefs nudge on AFK interactive sessions (port afk-workshop#789) (487d7ff)
+
+### Changed
+- Merge pull request #149 from griffinwork40/afk-port/pr-789 (add2dc7)
+
 ## [4.2.0] - 2026-06-15
 
 ### Added
