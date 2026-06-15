@@ -176,3 +176,36 @@
 #nd-docs-layout figure.shiki .line {
   line-height: 1.5;
 }
+
+/* --- Brand mark glow: match agentafk.com's navbar glyph --------------------
+   The nav "Handoff Arc" glyph (inline SVG in the DocsLayout title) carries a
+   soft orange glow at rest and a stronger glow on hover — the same treatment
+   as the main site's .Navbar_brandMark. The hover rule targets the glyph as a
+   direct child of Fumadocs' title link. */
+.afk-brand-mark {
+  filter: drop-shadow(0 0 12px rgba(249, 133, 75, 0.14));
+  transition: filter 0.2s ease, transform 0.2s ease;
+}
+a:hover > .afk-brand-mark {
+  filter: drop-shadow(0 0 16px rgba(249, 115, 22, 0.32))
+          drop-shadow(0 0 8px rgba(249, 115, 22, 0.22));
+}
+
+/* Wordmark colours. Dark (the default, and agentafk.com's only mode) matches
+   the main site exactly: "agent" in light grey (500), "afk" in white (700).
+   The docs also expose an optional light theme — remap there so the wordmark
+   stays legible (white-on-light would vanish) while keeping "afk" emphasised. */
+.afk-wordmark-agent {
+  font-weight: 500;
+  color: #e9e9f0;
+}
+.afk-wordmark-afk {
+  font-weight: 700;
+  color: #ffffff;
+}
+:root:not(.dark) .afk-wordmark-agent {
+  color: var(--color-fd-muted-foreground);
+}
+:root:not(.dark) .afk-wordmark-afk {
+  color: var(--color-fd-foreground);
+}
