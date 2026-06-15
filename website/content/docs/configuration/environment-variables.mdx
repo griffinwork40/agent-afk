@@ -1,0 +1,185 @@
+---
+title: "Environment Variables"
+description: "Complete reference for all environment variables recognized by agent-afk, grouped by category."
+---
+
+All environment variables recognized by `agent-afk` are listed here, grouped by functional category. Most are optional; required variables are noted in the description. Variables can be set in your shell, a `.env` file, or `~/.afk/config/afk.env` — that last file is loaded at startup (shell env takes precedence).
+
+## Authentication
+
+| Variable | Type | Description | Default |
+| --- | --- | --- | --- |
+| `AFK_LOCAL_API_KEY` | string | Placeholder API key for local Anthropic-compatible servers (vllm-mlx, etc.). Set when AFK_LOCAL_BASE_URL is configured. | `local` |
+| `ANTHROPIC_API_KEY` | string | Anthropic API key. Tier-1 credential — overrides keychain OAuth and CLAUDE_CODE_OAUTH_TOKEN. | — |
+| `BRAVE_SEARCH_API_KEY` | string | Brave Search API subscription token, enabling web_scrape search mode. Free tier available at https://brave.com/search/api/. When unset, search mode returns an actionable error; markdown and raw modes are unaffected. | — |
+| `CLAUDE_CODE_OAUTH_TOKEN` | string | Claude Code OAuth token. Tier-2 credential — used when ANTHROPIC_API_KEY is unset; falls back to keychain. | — |
+| `CODEX_API_KEY` | string | Fallback OpenAI API key for the openai-compatible provider, read after OPENAI_API_KEY. Legacy name from the removed @openai/codex-sdk integration — prefer OPENAI_API_KEY. | — |
+| `OPENAI_API_KEY` | string | OpenAI API key for the openai-compatible provider (gpt-*, o1*, o3*, o4* models). | — |
+
+
+## Model
+
+| Variable | Type | Description | Default |
+| --- | --- | --- | --- |
+| `AFK_COMPACT_KEEP_LAST_TURNS` | number | Number of recent turns the compactor keeps verbatim during /compact. Default tuned in compact-handler.ts. | — |
+| `AFK_COMPACT_MODEL` | string | Override the model used by the /compact summarizer. Falls back to a cheap default (haiku-class). | — |
+| `AFK_DEFAULT_SUBAGENT_MODEL` | string | Override the default model used when a subagent is dispatched without an explicit model. | — |
+| `AFK_DISABLE_PROMPT_CACHE` | boolean | Disable Anthropic prompt caching when set to 1/true/yes/on. Unset = caching enabled. | `0` |
+| `AFK_EFFORT` | string | Effort hint guiding adaptive-thinking depth, forwarded as Anthropic output_config.effort (model-gated; ignored where unsupported). Accepts low \| medium \| high \| xhigh \| max. | — |
+| `AFK_LOCAL_BASE_URL` | string | Base URL for a self-hosted Anthropic-compatible server. When set, routes traffic away from api.anthropic.com. | — |
+| `AFK_MAX_BUDGET_USD` | number | Per-turn USD budget ceiling. Aborts the turn when projected spend would exceed this. | `5.00` |
+| `AFK_MAX_OUTPUT_TOKENS` | number | Cap on output tokens per turn. Falls back to provider default when unset. | — |
+| `AFK_MAX_TOKENS` | number | Cap on total tokens per turn (input + output). Default 4096. | `4096` |
+| `AFK_MODEL` | string | Default model for agent turns. Accepts slot names (small, medium, large), legacy aliases (opus, sonnet, haiku), the fixed-id fable alias (Claude Fable 5), or full model IDs. | `sonnet` |
+| `AFK_MODEL_LARGE` | string | Bind the "large" capability tier (most capable) to a model id/alias. Overrides afk.config.json models.large. | — |
+| `AFK_MODEL_LARGE_API_KEY` | string | Per-slot API key for the "large" tier (Stage 2). Overrides global credentials for this tier only. | — |
+| `AFK_MODEL_LARGE_BASE_URL` | string | Per-slot endpoint base URL for the "large" tier (Stage 2). Anthropic Messages base or OpenAI-compatible base per the tier provider. | — |
+| `AFK_MODEL_MEDIUM` | string | Bind the "medium" capability tier (general-use) to a model id/alias. Overrides afk.config.json models.medium. | — |
+| `AFK_MODEL_MEDIUM_API_KEY` | string | Per-slot API key for the "medium" tier (Stage 2). Overrides global credentials for this tier only. | — |
+| `AFK_MODEL_MEDIUM_BASE_URL` | string | Per-slot endpoint base URL for the "medium" tier (Stage 2). Anthropic Messages base or OpenAI-compatible base per the tier provider. | — |
+| `AFK_MODEL_SMALL` | string | Bind the "small" capability tier (cheap/fast) to a model id/alias. Overrides afk.config.json models.small. | — |
+| `AFK_MODEL_SMALL_API_KEY` | string | Per-slot API key for the "small" tier (Stage 2). Overrides global credentials for this tier only. | — |
+| `AFK_MODEL_SMALL_BASE_URL` | string | Per-slot endpoint base URL for the "small" tier (Stage 2). Anthropic Messages base or OpenAI-compatible base per the tier provider. | — |
+| `AFK_OPENAI_BASE_URL` | string | Base URL override for the OpenAI-compatible provider. Used for local shims (mlx_lm.server, Ollama, vLLM, LM Studio). The OpenAI SDK appends `/chat/completions` itself — a value ending in `/chat/completions` will be stripped at config-load time with a one-shot warning. | — |
+| `AFK_OPENAI_CHATGPT_OAUTH` | boolean | Opt into using ChatGPT-subscription OAuth credentials from ~/.codex/auth.json (auth_mode: chatgpt) as OpenAI provider auth. Off by default. READ-ONLY: AFK never refreshes these tokens — re-run `codex` when the access token expires. Routes requests over the Responses API to the private ChatGPT backend (chatgpt.com/backend-api). | — |
+| `AFK_OPENAI_USE_RESPONSES` | boolean | Opt the OpenAI-compatible provider into the OpenAI Responses API instead of Chat Completions for API-key sessions. Truthy values: 1, true, yes, on. The ChatGPT-subscription OAuth path uses Responses automatically regardless of this flag. | — |
+| `AFK_PROMPT_CACHE_TTL` | string | TTL for Anthropic prompt-cache blocks. Accepts 5m or 1h. | `1h` |
+| `AFK_PROVIDER` | string | Force provider selection (anthropic \| anthropic-direct \| openai \| openai-compatible \| openai-codex). Overrides the model-name heuristic. Same surface as the --provider CLI flag; CLI flag wins when both are set. | — |
+| `AFK_SUGGEST_ENABLED` | boolean | Enable the LLM-backed ghost-text suggestion tier in the interactive REPL. Set to 1/true/yes/on to activate. Off by default. | — |
+| `AFK_SUGGEST_GHOST` | boolean | Enable REPL ghost-text inline suggestions (Tier-1 history/dropdown + optional Tier-2 LLM). 1 = on (default), 0 = off. Set 0/false/off/no to disable all ghost text. Tier-2 LLM is separately gated by AFK_SUGGEST_ENABLED. | `1` |
+| `AFK_SUGGEST_MODEL` | string | Override the small model used for REPL ghost-text suggestions. Falls back to AFK_COMPACT_MODEL or haiku-class for anthropic, or the session model for other providers. | — |
+| `AFK_SYSTEM_PROMPT` | string | Raw operator-overlay prompt. Highest-priority overlay (over afk.config.json and AFK.md). Appended on top of the framework base (prompts/system-prompt.md) under an "# Operator configuration" header — it augments, never replaces, the base. | — |
+| `AFK_TASK_BUDGET` | number | Per-task token budget ceiling. Aborts when cumulative usage would exceed it. | `100000` |
+| `AFK_TEMPERATURE` | number | Numeric temperature override for model sampling. Provider default if unset. | — |
+| `AFK_THINKING` | string | Extended-thinking mode. Accepts adaptive \| disabled \| enabled:&lt;N&gt; \| enabled:max. Defaults to the model-appropriate mode when unset (adaptive on current models). | `adaptive` |
+| `AFK_TIMEOUT_MS` | number | Per-turn timeout in milliseconds. Provider/SDK default if unset. | — |
+| `CLAUDE_MODEL` | string | Legacy alias for AFK_MODEL — supported for back-compat with pre-AFK_* deployments. | — |
+
+
+## Routing
+
+| Variable | Type | Description | Default |
+| --- | --- | --- | --- |
+| `AFK_AUTO_ROUTING` | boolean | Auto-route bare slash inputs to matching skills. Applies to interactive, chat, telegram, and daemon surfaces. | — |
+| `AFK_INTERNAL` | boolean | When set to exactly `1`, unlocks internal-audience skills (e.g. `/audit-fit`) in slash listings and `/help`. Gates surfacing only — it does not change what's accessible. | — |
+
+
+## Browser
+
+| Variable | Type | Description | Default |
+| --- | --- | --- | --- |
+| `AFK_BROWSER_ALLOWED_DOMAINS` | string | Comma-separated allowlist of URL host globs. When set, browser_open and any navigation that targets a host outside the list returns status: blocked_by_policy. Unset means no allowlist (permissive). Patterns use simple `*` glob matching against the URL host. Combines with AFK_BROWSER_BLOCKED_DOMAINS — block wins. | — |
+| `AFK_BROWSER_BACKEND` | string | Select the browser provider backend. Phase 1 supports only `playwright`. Reserved for future `cdp` / `mcp` adapters. Unset defaults to `playwright`. | — |
+| `AFK_BROWSER_BLOCKED_DOMAINS` | string | Comma-separated blocklist of URL host globs. Browser navigation that matches any entry returns status: blocked_by_policy regardless of the allowlist. | — |
+| `AFK_BROWSER_CONFIG` | string | Absolute path to an alternate browser config file. Overrides the default ~/.afk/config/browser.json lookup. Useful for per-project overrides in CI. | — |
+| `AFK_BROWSER_DOM_SNAPSHOTS` | boolean | Phase 2 opt-in: when set to 1, every browser_act writes a gzipped DOM snapshot sidecar under ~/.afk/state/witness/&lt;sid&gt;/browser/dom-snapshots/. Off by default because snapshots are large; useful for post-mortem analysis of failed actions. | — |
+| `AFK_BROWSER_HEADLESS` | boolean | Override the default headless mode for native browser-control tools. `1`/`true` forces headless; `0`/`false` forces headed. When unset the default is headless for daemon and subagent surfaces and headed for repl/interactive — so an operator can watch the agent work in REPL mode. | — |
+| `AFK_SESSION_ID` | string | Override the browser session ID used by the native browser-control tools. Defaults to 'default' for single-session use. Subagents inherit the parent's session by default. Set this when running multiple concurrent AFK processes that should each manage an isolated browser context. | `default` |
+
+
+## MCP (Model Context Protocol)
+
+| Variable | Type | Description | Default |
+| --- | --- | --- | --- |
+| `AFK_ALLOW_PROJECT_MCP` | boolean | Allow loading MCP configuration from &lt;cwd&gt;/.mcp.json. Disabled by default — opt-in to mitigate config-injection risks. | — |
+
+
+## Daemon
+
+| Variable | Type | Description | Default |
+| --- | --- | --- | --- |
+| `AFK_DAEMON_CWD` | string | Working directory used by the daemon process for spawned agent sessions. | — |
+| `AFK_DAEMON_HOST` | string | Bind address for the daemon control HTTP surface. Defaults to 127.0.0.1 (loopback only). The control surface is unauthenticated, so bind a non-loopback address such as 0.0.0.0 only on a trusted or firewalled network. Overridden by the --host flag. | — |
+| `AFK_DAEMON_TASK` | string | Default task description for the daemon. Falls back to afk.config.json daemon.task. | — |
+| `AFK_DAEMON_TASK_ID` | string | Task identifier the daemon uses to scope its state directory and telemetry. | — |
+| `AFK_SESSIONSTART_COOLDOWN_MS` | number | Cooldown in milliseconds between SessionStart trigger fires in the daemon. Prevents thundering-herd on rapid restarts. | — |
+
+
+## Telegram
+
+| Variable | Type | Description | Default |
+| --- | --- | --- | --- |
+| `AFK_TELEGRAM_ALLOWED_CHAT_IDS` | string | Comma-separated list of Telegram chat IDs allowed to interact with the bot. Required when the bot is running. | — |
+| `AFK_TELEGRAM_BOT_TOKEN` | string | Alternative env var name for the Telegram bot token, accepted by the setup wizard. | — |
+| `AFK_TELEGRAM_CWD` | string | Override the working directory used by the Telegram bot when spawning agent sessions. | — |
+| `AFK_TELEGRAM_NOTIFY_MODE` | string | Outbound notification fan-out: primary (default — one chat), broadcast (every allowed chat), or custom (afk.config.json telegram.notify.targets). The afk.config.json telegram.notify.mode takes precedence. | — |
+| `AFK_TELEGRAM_PRIMARY_CHAT_ID` | string | Default chat ID for outbound notifications (primary-mode routing). When unset, notifications go to the first private/DM chat in AFK_TELEGRAM_ALLOWED_CHAT_IDS. The afk.config.json telegram.notify block takes precedence. | — |
+| `TELEGRAM_BOT_TOKEN` | string | Telegram bot token from @BotFather. Required to run the Telegram bot surface. | — |
+| `TELEGRAM_DATA_DIR` | string | Override the directory where Telegram bot state is stored. Defaults to ~/.afk/state/telegram/. | — |
+| `TELEGRAM_VERBOSE` | boolean | Set to 1 to log per-message details from the Telegram bot — chat IDs, message text, latency. | — |
+
+
+## Worktrees
+
+| Variable | Type | Description | Default |
+| --- | --- | --- | --- |
+| `AFK_WORKTREE_AUTONAME` | boolean | Auto-rename worktree branches based on the first user message in interactive mode. 1 = on (default), 0 = off. | `1` |
+| `AFK_WORKTREE_BASE` | string | Override the base git ref for worktrees created with --worktree. By default AFK bases worktrees on the remote's default branch (e.g. origin/main), fetched fresh. Set this to pin a different ref, or to HEAD to base on the local checkout. Overridden per-session by --worktree-base. | — |
+| `AFK_WORKTREE_BOOT_PRUNE` | boolean | When set, the daemon prunes stale worktrees at boot in addition to the cron-driven sweep. | — |
+| `AFK_WORKTREE_BRANCH_PREFIX` | string | Branch-name prefix for AFK-managed worktrees. Default afk/. Set to empty string to drop the prefix. | `afk/` |
+| `AFK_WORKTREE_MAX_AGE_CLEAN` | number | Maximum age (in days) before a clean worktree is auto-pruned. Default 14. | `14` |
+| `AFK_WORKTREE_MAX_AGE_DIRTY` | number | Maximum age (in days) before a dirty worktree is auto-pruned. Default 30. | `30` |
+| `AFK_WORKTREE_PRUNE_DISABLE` | boolean | Disable the worktree prune job entirely. Useful for long-running tests. | — |
+| `AFK_WORKTREE_SWEEP_ROOT` | string | Override the root directory under which AFK worktrees are tracked for pruning. | — |
+
+
+## Paths
+
+| Variable | Type | Description | Default |
+| --- | --- | --- | --- |
+| `AFK_FRAMEWORK_DIR` | string | Override the AFK agent-framework directory used for telemetry and briefs. Default: $AFK_HOME/agent-framework/. | — |
+| `AFK_HOME` | string | Override the AFK home directory. Default: ~/.afk/. | `~/.afk` |
+| `AFK_STATE_DIR` | string | Override the AFK state directory. Default: $AFK_HOME/state/. | — |
+
+
+## Process
+
+| Variable | Type | Description | Default |
+| --- | --- | --- | --- |
+| `AFK_SHELL_WRAPPER` | boolean | Set to 1 or true by the optional afk shell wrapper function (installed via `afk shell-init`). Signals that the parent shell has the wrapper active so the post-exit cd can fire. | — |
+| `AGENT_SURFACE` | string | Internal surface marker propagated to subprocesses. Identifies which AFK surface (cli, telegram, daemon) spawned the process. | — |
+| `ASCIINEMA_REC` | boolean | Set to 1 by asciinema rec while a session is being recorded. Triggers capture-mode. | — |
+| `CI` | string | Standard CI-detection convention. Auto-set by GitHub Actions, CircleCI, etc. Used to switch off TTY-only UX. | — |
+| `FORCE_COLOR` | string | Standard Node convention. Force-enable ANSI color output even when stdout is not a TTY. | — |
+| `HOME` | string | Standard Unix home directory. Used as the fallback when AFK_HOME is unset. | — |
+| `NO_COLOR` | string | Standard convention (https://no-color.org). When set to any non-empty value, disables ANSI color output. | — |
+| `NO_UPDATE_NOTIFIER` | boolean | Disable the update-available notifier on CLI startup. Standard convention shared with many Node CLIs. | — |
+| `NODE_ENV` | string | Standard Node environment marker. test \| development \| production. Used by routing-telemetry.ts to suppress test-time writes. | — |
+| `PAGER` | string | Standard POSIX env var naming the user's preferred pager (with optional flags). Used by /transcript to render the full session in a scrollable viewer; falls back to `less -R` when unset. | — |
+| `PATH` | string | System PATH. Read for executable resolution (git, gh, etc.) in tool handlers. | — |
+| `SCRIPT` | string | Set by script(1) on BSD/macOS/Linux to the typescript filename while a terminal session is being recorded. Presence of a non-empty value triggers capture-mode. | — |
+| `SHELL` | string | Standard POSIX env var pointing to the user's login shell binary. Used by shell-init and worktree commands to auto-detect the correct shell syntax for emitted wrapper code. | — |
+| `VITEST` | string | Set automatically by Vitest. Used at runtime to short-circuit code paths that should not fire in tests. | — |
+
+
+## Debug
+
+| Variable | Type | Description | Default |
+| --- | --- | --- | --- |
+| `AFK_DEBUG` | boolean | Enable verbose debug logging across the codebase. Accepts 1 to enable. | — |
+| `AFK_DEBUG_CLIPBOARD` | boolean | Debug bracketed-paste and image-paste handling in the interactive REPL. | — |
+| `AFK_DEBUG_COMPOSITOR` | boolean | Gate compositor phase-boundary traces to stderr; any truthy value enables. | — |
+| `AFK_DIAGNOSE_BASELINE` | boolean | Kill switch for /diagnose reproducer baseline execution. When set to '0', the /diagnose skill skips executing the detected reproducer command for a ground-truth baseline; default enabled (runs). Set to '0' to disable. | `1` |
+| `AFK_DUMP_PROMPT` | string | Write the resolved system prompt to a file at startup. Accepts a path or 1 for default location. | — |
+| `AFK_SESSION_LEDGER_DISABLED` | boolean | Disable the per-session durable event ledger (state/sessions/&lt;id&gt;/events.jsonl). Set to 1 to skip ledger writes; live cross-surface watching (e.g. the Telegram /watch command) will report no activity for sessions started while disabled. | — |
+| `AFK_SKILL_STREAM_VERBOSE` | boolean | Verbose streaming output when a skill is dispatched. Logs sub-agent setup, intermediate events, and final result. | — |
+| `AFK_TELEGRAM_TRACE` | boolean | Set to 1 to dump raw bridge traffic between the agent and the Telegram bot — debugging only. | — |
+| `AFK_TRACE_DISABLED` | boolean | Disable the agent trace subsystem entirely. Set to 1 to skip trace file writes. | — |
+| `AGENT_AFK_ASCII` | boolean | Force the interactive REPL tool-lane renderer to ASCII-only glyphs instead of the default Unicode box-drawing set. Accepts 1/true/yes (case-insensitive). Useful for terminals whose font lacks ┃├╰├ glyphs. | — |
+| `DEBUG` | string | Standard Node `debug`-package convention. When set to 1, enables verbose logging in several modules alongside AFK_DEBUG. | — |
+
+
+## Miscellaneous
+
+| Variable | Type | Description | Default |
+| --- | --- | --- | --- |
+| `AFK_BANNER_PLAIN` | boolean | Suppress the ANSI-colored banner at REPL startup. Useful for non-TTY captures and CI logs. | — |
+| `AFK_DEMO_CLEAN` | boolean | Explicit opt-in to capture-mode. When set to 1, suppresses high-frequency repaint drivers (spinner ticker, live thinking-preview) so recorded artifacts contain each state once instead of once per timer tick. | — |
+| `AFK_DIFF_LINES` | number | Maximum number of diff lines shown in the inline diff render during write_file tool calls. Set to 0 for no cap. Non-integer values are silently ignored and the default applies. | — |
+| `AFK_SHELL_PASSTHROUGH` | boolean | Enable the interactive REPL `!cmd` / `!&cmd` shell-passthrough feature. On by default. Set to 0, false, off, or no (case-insensitive) to disable, so inputs beginning with ! are sent to the model as literal text instead of being executed as shell commands. Equivalent to the --no-shell-passthrough flag. | `1` |
+| `AFK_SHOW_DIFFS` | boolean | Show inline diffs in the tool-lane output for edit/write tool calls. 1 = on, 0 = off. | — |
+| `AFK_SPINNER_TIPS` | boolean | Show rotating tips in the loading spinner during long calls. 1 = on, 0 = off. | — |
+| `AFK_USER_CARD_MAX_ROWS` | number | Maximum number of visual rows emitted by renderUserCard before collapsing the remainder into a dim "…(N lines collapsed)" summary row. Defaults to 24. Non-integer or non-positive values are silently ignored and the default applies. | — |
+| `AFK_WRITE_DENYLIST` | string | Comma-separated list of additional path globs that the write_file tool refuses to write to. | — |
+| `AFK_WRITE_DIFF` | boolean | Show a diff preview before each write_file tool call. Defaults provider-controlled when unset. | — |
+

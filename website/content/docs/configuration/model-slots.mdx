@@ -1,0 +1,130 @@
+---
+title: "Model Slots"
+description: "Bind capability tiers (small / medium / large) to specific models and providers, including per-slot API keys and endpoints for mixing Anthropic with local shims or hosted OpenAI."
+---
+
+Model slots let you assign specific models to three fixed **capability tiers**
+— `small`, `medium`, and `large`. The three tiers — small, medium, large — are fixed labels (cheapest → most capable). Bind any model to each one; skills and subagents pick the right tier automatically.
+
+This means you can mix providers per tier: Anthropic on one tier, a local
+OpenAI-compatible shim on another, and hosted OpenAI on a third — all in the
+same process.
+
+## Default bindings
+
+An unconfigured install uses these defaults:
+
+| Tier | Default model ID | Legacy aliases |
+|------|-----------------|----------------|
+| `small` | `claude-haiku-4-5-20251001` | `haiku` |
+| `medium` | `claude-sonnet-4-6` | `sonnet`, `sonnet_1m` |
+| `large` | `claude-opus-4-8` | `opus`, `opus_1m` |
+
+If you never touch slots, behavior is identical to before this feature existed.
+
+## Configuring slots in `afk.config.json`
+
+Each slot accepts a bare model ID string, or an object with optional per-slot
+provider credentials. The full object shape (`ModelSlotConfigEntry`, source:
+`src/cli/config.ts:201`) is:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Concrete model ID this tier resolves to (e.g. `claude-sonnet-4-6`, `gpt-4o-mini`). Required when using the object form. |
+| `name` | string | Optional user-defined alias. When set, you can select this tier by name (case-insensitive) anywhere a model is named — `AFK_MODEL`, `--model`, `/model`, or the `agent`/`skill` tools' `model` parameter. Custom names take priority over neutral tier names (`small`/`medium`/`large`) and legacy aliases. |
+| `provider` | `"anthropic"` \| `"openai"` | Explicit provider override. Inferred from the model ID when omitted. Use when a bare shim ID (no `gpt-`/`org/model` signal) must route to a specific provider. |
+| `baseUrl` | string | Per-slot endpoint. For Anthropic-routed tiers, the Messages API base; for OpenAI-routed tiers, the Chat Completions base. Wins over global `AFK_OPENAI_BASE_URL` / `AFK_LOCAL_BASE_URL` for this tier only. |
+| `apiKey` | string | Per-slot API key. Wins over global credentials for this tier only. |
+
+```jsonc
+{
+  "models": {
+    // Bare ID — provider inferred, global credentials used.
+    "small": "claude-haiku-4-5-20251001",
+
+    // Object — local OpenAI-compatible shim with its own endpoint.
+    "medium": {
+      "id": "mlx-community/Qwen3-32B-4bit",
+      "name": "local",
+      "provider": "openai",
+      "baseUrl": "http://localhost:8080/v1",
+      "apiKey": "local"
+    },
+
+    // Object — hosted OpenAI with its own key.
+    "large": { "id": "gpt-4.1", "provider": "openai", "apiKey": "sk-…" }
+  }
+}
+```
+
+`provider` is `anthropic` or `openai` (inferred from the ID when omitted).
+For an Anthropic-routed tier, `baseUrl` is the Messages API base; for an
+OpenAI-routed tier it is the Chat Completions base. A per-slot value wins over
+the corresponding global (`AFK_OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, etc.) for
+that tier only.
+
+The full field reference for `afk.config.json` is generated under **Reference**.
+
+## Configuring slots via environment variables
+
+Per-tier env vars override the `afk.config.json` `models` block. A
+file-provided `name` or `provider` is preserved when env overrides only the ID
+or credentials.
+
+| Variable | Binds |
+|----------|-------|
+| `AFK_MODEL_SMALL` | small tier model ID |
+| `AFK_MODEL_MEDIUM` | medium tier model ID |
+| `AFK_MODEL_LARGE` | large tier model ID |
+| `AFK_MODEL_SMALL_BASE_URL` | small tier endpoint base URL |
+| `AFK_MODEL_MEDIUM_BASE_URL` | medium tier endpoint base URL |
+| `AFK_MODEL_LARGE_BASE_URL` | large tier endpoint base URL |
+| `AFK_MODEL_SMALL_API_KEY` | small tier API key |
+| `AFK_MODEL_MEDIUM_API_KEY` | medium tier API key |
+| `AFK_MODEL_LARGE_API_KEY` | large tier API key |
+
+Example — run a local shim on the small tier from the command line:
+
+```bash
+AFK_MODEL_SMALL='mlx-community/Qwen3-32B-4bit' \
+AFK_MODEL_SMALL_BASE_URL='http://localhost:8080/v1' \
+AFK_MODEL_SMALL_API_KEY='local' \
+afk i
+```
+
+Note: `provider` is config-only. When a bare ID bound via env needs an
+explicit provider override, set `provider` in the `afk.config.json` slot
+object; env-bound IDs fall back to ID-inference.
+
+## Selecting a tier
+
+Anywhere a model is named — `AFK_MODEL`, `--model`, the REPL's `/model`
+command, and the `agent`/`compose`/`skill` tools' `model` parameter — you can
+pass:
+
+- A **tier name**: `small`, `medium`, `large`
+- A **custom name** you set in the binding's `name` field (case-insensitive)
+- A **legacy alias**: `haiku` → small, `sonnet`/`sonnet_1m` → medium,
+  `opus`/`opus_1m` → large
+- The `auto` sentinel (passthrough — picks the session model)
+- A raw concrete model ID
+
+Resolution order (first match wins):
+
+1. Custom name (user-assigned `name` on a binding)
+2. Neutral name (`small` | `medium` | `large`)
+3. Legacy alias
+4. Raw model ID or `auto` sentinel
+
+## How routing works
+
+Assign a non-Anthropic model to a tier (e.g. `small → gpt-4o-mini`) and that tier routes to the OpenAI-compatible provider automatically.
+
+Each tier's credentials are applied automatically — an Anthropic key can't leak into an OpenAI-routed tier.
+
+## What you can mix in the same process
+
+- All three tiers on Anthropic (unchanged default behavior).
+- Each tier on a different provider, endpoint, and key — e.g. Anthropic on
+  large, a local MLX shim on small, hosted OpenAI on medium.
+- Per-tier credentials via `afk.config.json` or `AFK_MODEL_*` env vars.

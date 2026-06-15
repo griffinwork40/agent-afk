@@ -1,0 +1,147 @@
+---
+title: "Models & Providers"
+description: "How agent-afk routes model names to providers, and how to use Anthropic, OpenAI, and local OpenAI-compatible shims."
+---
+
+`agent-afk` speaks to two provider families through a single abstraction in
+`src/agent/providers/`. The routing happens automatically based on the model
+name — no global `AFK_PROVIDER` needed in the common case.
+
+## Provider families
+
+### anthropic-direct (default)
+
+Wraps the `@anthropic-ai/sdk` Messages API. Selected automatically for:
+
+- `claude-*` model IDs
+- Legacy aliases: `opus`, `sonnet`, `haiku`, `fable`
+- `'anthropic'` (silent alias)
+
+### openai-compatible
+
+Talks directly to the OpenAI Chat Completions API (or any compatible
+endpoint via `AFK_OPENAI_BASE_URL`). Selected automatically for:
+
+- `gpt-*`, `o1*`, `o3*`, `o4*`, `codex-*`
+- `deepseek-*`, `mistral-*`, `mixtral-*`, `llama-*`, `qwen-*` — common
+  third-party shim families (OpenRouter, Together, Fireworks, DeepSeek, etc.)
+- HuggingFace-style `org/model` IDs (e.g. `mlx-community/Qwen3-32B-4bit`,
+  `Qwen/...`) served by local OpenAI-shim runners — any ID containing `/`
+- `'openai-codex'` — **deprecated** alias from before 2026-05-18; the
+  underlying `@openai/codex-sdk` harness has been removed and this now
+  resolves to the same `openai-compatible` provider. Still accepted for
+  back-compat; will be removed in a future major release.
+
+## Selecting a model
+
+Set the default for all sessions:
+
+```bash
+export AFK_MODEL=sonnet          # or: haiku, opus, fable, gpt-5, etc.
+```
+
+Override for a single call:
+
+```bash
+afk chat "explain this" --model opus
+afk i --model haiku
+afk chat "refactor" --model gpt-5
+```
+
+Switch mid-session in the REPL:
+
+```
+/model gpt-5.5       # next turn routes to openai-compatible
+/model sonnet        # next turn routes back to anthropic-direct
+```
+
+Mid-session model switches work transparently — cost totals and hooks carry over.
+
+**Cross-family history caveat:** Anthropic `thinking` blocks and tool-call ID
+schemas differ between providers. When you switch provider families mid-session,
+the new model sees prior turns as plain text, not structured tool calls. Same-family switches keep full
+fidelity.
+
+## Forcing a provider
+
+`AFK_PROVIDER` (and `--provider`) force a single provider for the whole
+session, bypassing the per-model heuristic:
+
+```bash
+export AFK_PROVIDER=openai-compatible   # all models routed to OpenAI compat
+```
+
+Accepted values: `anthropic`, `anthropic-direct`, `openai`, `openai-compatible`,
+`openai-codex`. The `--provider` CLI flag wins when both are set.
+
+`AFK_PROVIDER` is now an escape hatch, not a requirement. Omit it to let the
+router pick automatically per model.
+
+## Available models
+
+| Alias | Capability | Provider |
+|-------|-----------|----------|
+| `fable` | Most capable — Claude Fable 5 (Mythos-class), 1M context | anthropic-direct |
+| `opus` / `opus_1m` | Complex reasoning, multi-step planning, long contexts | anthropic-direct |
+| `sonnet` / `sonnet_1m` | Balanced — default | anthropic-direct |
+| `haiku` | Fast and cheap, best for simple tasks | anthropic-direct |
+
+`sonnet_1m` and `opus_1m` resolve to the same tier as their base alias
+(`medium` and `large` respectively). The 1M context window is handled by the
+model itself; passing the `_1m` suffix routes to the same bound model ID.
+Source: `src/agent/session/model-slots.ts` (`LEGACY_ALIAS_TO_SLOT`).
+
+You can also pass any raw model ID accepted by the provider (e.g.
+`claude-opus-4-8`, `gpt-5`, `claude-haiku-4-5-20251001`).
+
+## Local OpenAI-compatible shims (MLX, ollama, llama.cpp, vLLM)
+
+Point `AFK_OPENAI_BASE_URL` at your local server to use any model served
+over an OpenAI-compatible API:
+
+```bash
+# mlx_lm.server, ollama (openai mode), vLLM, LM Studio, llama.cpp
+export AFK_OPENAI_BASE_URL=http://127.0.0.1:8080/v1
+export OPENAI_API_KEY=local          # placeholder; most shims accept any value
+export AFK_MODEL=mlx-community/Qwen3-32B-4bit
+
+afk i
+```
+
+The OpenAI SDK appends `/chat/completions` itself, so do not include that path
+in `AFK_OPENAI_BASE_URL`. A value ending in `/chat/completions` is stripped at
+config-load time with a one-shot warning.
+
+For different endpoints per capability tier, use per-slot base URLs — see
+[Model Slots](/configuration/model-slots).
+
+## OpenAI Responses API
+
+The OpenAI-compatible provider uses Chat Completions by default. To opt into
+the OpenAI Responses API surface instead:
+
+```bash
+export AFK_OPENAI_USE_RESPONSES=1
+```
+
+The ChatGPT-subscription OAuth path uses Responses automatically regardless of
+this flag. See [API Keys](/configuration/api-keys) for OAuth details.
+
+## Extended thinking and effort
+
+```bash
+export AFK_THINKING=adaptive      # adaptive | disabled | enabled:<N> | enabled:max
+export AFK_EFFORT=medium          # low | medium | high | xhigh | max
+```
+
+`AFK_THINKING` controls Anthropic extended thinking. `AFK_EFFORT` is forwarded
+as an effort hint (model-gated; ignored where unsupported). Both can also be
+set per-call with `--thinking` and `--effort` flags.
+
+## Debug: what provider is active?
+
+```bash
+afk config              # shows resolved model and provider
+afk config --format json   # machine-readable, includes raw env vars
+afk provider auth diagnose  # targeted credential check per provider
+```
