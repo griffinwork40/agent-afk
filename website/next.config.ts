@@ -11,7 +11,13 @@ const nextConfig: NextConfig = {
     remotePatterns: [],
   },
   async redirects() {
-    return [{ source: '/', destination: '/docs', permanent: false }];
+    // Docs are served at the root of the dedicated docs subdomain
+    // (docs.agentafk.com). Redirect any legacy /docs/* links to the root
+    // equivalent so older references don't 404.
+    return [
+      { source: '/docs', destination: '/', permanent: true },
+      { source: '/docs/:path*', destination: '/:path*', permanent: true },
+    ];
   },
   async headers() {
     return [
