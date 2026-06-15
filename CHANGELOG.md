@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.6.2] - 2026-06-15
+
+### Changed
+- Merge pull request #160 from griffinwork40/refactor/tui-compositor-host-trim (2af6bfb)
+- Merge pull request #157 from griffinwork40/afk/update-readme-memory-docs (51dee67)
+- add cross-session memory guide page (df53b12)
+- extract getBuffer/resetState/applyEdit from compositor host (92e0b7b)
+- Merge branch 'main' into afk/update-readme-memory-docs (c8680ba)
+- add a dedicated Memory section (7c82000)
+
 ## [4.6.1] - 2026-06-15
 
 ### Fixed
