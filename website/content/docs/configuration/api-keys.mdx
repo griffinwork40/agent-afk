@@ -40,7 +40,7 @@ instead of prompting for a token.
 
 ### Credential resolution order (Anthropic)
 
-`loadAnthropicCredential()` in `src/agent/auth/credential-resolver.ts` walks:
+AFK checks credentials in this order:
 
 1. `ANTHROPIC_API_KEY` (explicit API key, highest priority)
 2. `CLAUDE_CODE_OAUTH_TOKEN` (Bearer auth)
@@ -62,11 +62,7 @@ For any model that routes to the OpenAI-compatible provider (`gpt-*`, `o1*`,
 export OPENAI_API_KEY=sk-proj-...
 ```
 
-`OPENAI_API_KEY` is the preferred credential. `CODEX_API_KEY` is a **deprecated**
-legacy name from the removed `@openai/codex-sdk` integration — it is still read
-as a fallback after `OPENAI_API_KEY` but will be removed in a future major release.
-Prefer `OPENAI_API_KEY` for all new setups.
-Source: `docs/env-registry.md` (Auth section).
+`OPENAI_API_KEY` is the preferred credential. `CODEX_API_KEY` is a deprecated alias for `OPENAI_API_KEY`. Use `OPENAI_API_KEY` for new setups.
 
 ### ChatGPT-subscription OAuth (opt-in)
 

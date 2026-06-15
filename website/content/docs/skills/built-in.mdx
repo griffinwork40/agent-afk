@@ -3,7 +3,7 @@ title: "Built-in Skills"
 description: "Curated overview of the skills shipped with agent-afk and when to reach for each one."
 ---
 
-AFK ships a small set of built-in skills registered at startup via `src/skills/all.ts`. Each is a TypeScript handler (or a `fork`-mode skill backed by `prompts/system.md`) that surfaces automatically as a slash command and as a model-callable `skill` tool entry.
+AFK includes a small set of skills out of the box. Each one works as a slash command (type `/skillname`) and as a tool the model can call on its own.
 
 ## Public skills
 
@@ -22,8 +22,6 @@ These skills are visible to all users.
 
 **When to use:** When you want a feature or refactor delivered end-to-end without driving each phase manually. Works best on self-contained features with clear acceptance criteria.
 
-*Source: `src/skills/mint/index.ts`*
-
 ---
 
 ### `/diagnose`
@@ -34,11 +32,9 @@ These skills are visible to all users.
 
 **Purpose:** Parallel root-cause analysis for bugs and failing tests.
 
-**What it does:** Forks parallel research sub-agents (codebase analysis + git history analysis), synthesises 2–4 hypotheses, and tests each hypothesis in an isolated git worktree. Returns a structured result with the validated root cause, a proposed fix, and a named outcome (`clear_winner`, `multiple_plausible`, `dissent`, `all_inconclusive`, or `no_hypotheses`). High-confidence hypotheses are optionally pre-screened by a shadow-verifier before worktree testing.
+**What it does:** Runs parallel agents to analyze your codebase and git history simultaneously. Synthesizes 2–4 hypotheses. Tests each in an isolated git worktree. Returns a validated root cause, a proposed fix, and a named outcome label (`clear_winner`, `multiple_plausible`, `dissent`, `all_inconclusive`, or `no_hypotheses`).
 
 **When to use:** When a test is failing, a bug is reported, or behaviour is unexplained and you need a root cause with evidence rather than a guess.
-
-*Source: `src/skills/diagnose/index.ts`*
 
 ---
 
@@ -56,8 +52,6 @@ These skills are visible to all users.
 
 **When to use:** When you want `afk telegram start` or `afk daemon` to survive reboot, crash, or OOM. Triggers on phrasings like "install as a service", "auto-start on login", "keep the bot running", or "launchd".
 
-*Source: `src/skills/service-setup/index.ts`*
-
 ---
 
 ### `/telegram-setup`
@@ -74,8 +68,6 @@ These skills are visible to all users.
 
 **When to use:** When you want to set up Telegram push notifications for the first time, or when you need to debug a partially-configured install. Also triggers when AFK detects `TELEGRAM_BOT_TOKEN` is unset and you ask about notifications.
 
-*Source: `src/skills/telegram-setup/index.ts`*
-
 ---
 
 ## Internal skills
@@ -84,8 +76,8 @@ The following skills are registered but hidden from public surfaces unless `AFK_
 
 | Skill | Audience | Notes |
 |---|---|---|
-| `audit-fit` | `internal` | Audits `~/.afk` artifacts for correct type categorisation; writes migration briefs to `~/.afk/agent-framework/briefs/`. Runs fine without internal tier — it's hidden for UX, not correctness. Source: `src/skills/audit-fit/index.ts`. |
+| `audit-fit` | `internal` | Audits `~/.afk` artifacts for correct type categorisation; writes migration briefs to `~/.afk/agent-framework/briefs/`. Runs fine without the internal tier — it's hidden for UX, not correctness. |
 
 ## Skills registered at runtime by plugins
 
-Plugin skills (`~/.afk/plugins/<plugin>/skills/<skill>/SKILL.md`) are not entered into the TypeScript registry and do not appear in the table above. They surface in `/help` and tab-complete when the plugin is installed. See [Custom Skills](/docs/skills/custom) for how to author your own.
+Plugin skills (`~/.afk/plugins/<plugin>/skills/<skill>/SKILL.md`) are discovered automatically when the plugin is installed. They surface in `/help` and tab-complete. See [Custom Skills](/docs/skills/custom) for how to author your own.

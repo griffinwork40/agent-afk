@@ -3,8 +3,6 @@ title: "Telegram Bot"
 description: "Run Agent AFK as a Telegram bot — same tools, same memory, on your phone. Set up takes under five minutes."
 ---
 
-# Telegram Bot
-
 Agent AFK can run as a Telegram bot, giving you a private chat interface backed by the same
 session manager and full tool set as the REPL. You can also use Telegram as a notification
 channel — the daemon pushes a message whenever a scheduled task completes.
@@ -97,8 +95,7 @@ afk telegram logs -n 100 # show the last 100 lines
 
 Even without the interactive bot surface, you can use Telegram purely for push notifications.
 The daemon pushes a message to `AFK_TELEGRAM_ALLOWED_CHAT_IDS` on every task completion. The
-`send_telegram` tool is also available inside agent sessions — agents can push terminal-state
-notifications directly.
+`send_telegram` tool is also available inside agent sessions — any agent session can push a notification to your phone when work finishes.
 
 The `send_telegram` tool is safe to attempt unconditionally: if Telegram is not configured,
 it returns an error instead of crashing.

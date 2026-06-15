@@ -1,6 +1,6 @@
 ---
 title: "Introduction"
-description: "Agent AFK is a local-first control plane for long-running AI agent work — terminal, daemon, and Telegram, all sharing one session manager."
+description: "A local AI agent runner — terminal, daemon, and Telegram, sharing one session."
 ---
 
 Built on the Anthropic SDK, Agent AFK runs outside Claude Code as its own process — a full agentic runtime you own completely. Hand it long or multi-step work and check in asynchronously: it delegates the work and leaves the judgment to you.
@@ -21,7 +21,7 @@ npm install -g agent-afk
 
 ## Four surfaces, one session manager
 
-Every surface shares the same session harness — the shared context, memory store, and tool set — so work started in one can be picked up in another.
+Every surface shares the same context, memory, and tools — so work started in one can be picked up in another.
 
 <Cards>
   <Card title="One-Shot Chat" href="/docs/surfaces/chat" description="afk chat — a single pipe-friendly turn that scripts well." />
@@ -33,12 +33,12 @@ Every surface shares the same session harness — the shared context, memory sto
 ## Key capabilities
 
 <Cards>
-  <Card title="Subagent orchestration" href="/docs/guides/subagents" description="Dispatch parallel waves of independent subagents; a DAG executor runs independent nodes in parallel while dependent nodes wait." />
+  <Card title="Subagent orchestration" href="/docs/guides/subagents" description="Run many subagents at once — independent tasks run in parallel, dependent ones wait their turn." />
   <Card title="Slash skills" href="/docs/skills/overview" description="A registry of built-in slash commands plus auto-discovered SKILL.md plugins, with typo-tolerant matching." />
   <Card title="Verification workflows" href="/docs/guides/verification" description="Skills like /review and /diagnose fan parallel checks across a change before surfacing a recommendation." />
   <Card title="Local traces" href="/docs/guides/headless" description="Every run appends an inspectable trace — tool calls, gate decisions, cost — readable with afk trace show." />
   <Card title="Telegram supervision" href="/docs/surfaces/telegram" description="Get a phone ping when a scheduled task lands, then reply to drive the session from anywhere." />
-  <Card title="Unattended guardrails" href="/docs/guides/unattended-runs" description="Cost ceilings, turn limits, and worktree isolation keep long autonomous runs in a safe blast radius." />
+  <Card title="Unattended guardrails" href="/docs/guides/unattended-runs" description="Cost ceilings, turn limits, and worktree isolation keep long unattended runs in bounds." />
 </Cards>
 
 ## Safety & verification controls

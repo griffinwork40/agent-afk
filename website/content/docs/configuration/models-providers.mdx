@@ -55,15 +55,11 @@ Switch mid-session in the REPL:
 /model sonnet        # next turn routes back to anthropic-direct
 ```
 
-The **ProviderRouter** (`src/agent/providers/router/provider-router.ts`)
-handles mid-session switches transparently. Cost/token accumulators and
-session lifecycle hooks are owned by the session layer, so a model switch
-does not reset budgets or re-fire hooks.
+Mid-session model switches work transparently — cost totals and hooks carry over.
 
 **Cross-family history caveat:** Anthropic `thinking` blocks and tool-call ID
 schemas differ between providers. When you switch provider families mid-session,
-the router carries a text-only shadow history forward — the new model sees prior
-turns as plain prose, not structured tool calls. Same-family switches keep full
+the new model sees prior turns as plain text, not structured tool calls. Same-family switches keep full
 fidelity.
 
 ## Forcing a provider

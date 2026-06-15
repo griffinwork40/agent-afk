@@ -3,8 +3,6 @@ title: "Daemon"
 description: "afk daemon runs Agent AFK as a long-running headless process that fires scheduled tasks on cron expressions or session-start triggers."
 ---
 
-# Daemon
-
 `afk daemon` runs Agent AFK as a long-running headless process. It fires scheduled tasks on
 cron expressions, on session start, or from a pull queue — and optionally pushes completion
 notifications via Telegram.
@@ -45,7 +43,7 @@ afk daemon \
 | `--thinking <mode>` | Extended thinking: `adaptive` \| `disabled` \| `enabled:<N>` |
 | `--effort <level>` | Effort level: `low` \| `medium` \| `high` \| `xhigh` \| `max` |
 | `--sessionstart-cooldown-ms <ms>` | Cooldown between sessionstart fires |
-| `--port <n>` | Control HTTP port (default `7777`) |
+| `--port <n>` | HTTP port for live schedule sync (default `7777`) |
 
 ## Testing a single tick
 

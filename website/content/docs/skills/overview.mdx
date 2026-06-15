@@ -7,9 +7,9 @@ Skills are named capabilities that extend what AFK can do in a session. A skill 
 
 ## What a skill is
 
-When you type `/mint add dark mode` in the REPL, the slash registry resolves `mint` to a skill, injects a dispatch instruction into the session, and the model calls the built-in `skill` tool. The `SkillExecutor` picks up the call, looks up the registered handler, and runs it. All of this happens through one surface: the `skill` tool.
+When you type `/mint add dark mode`, AFK finds the `mint` skill and runs it. Skills behave the same whether you invoke them with `/` or the model calls one on its own.
 
-Skills have three pieces of metadata that matter for invocation (defined in `src/skills/index.ts`):
+Skills have a few metadata fields that matter for invocation:
 
 | Field | Purpose |
 |---|---|
@@ -21,33 +21,33 @@ Skills have three pieces of metadata that matter for invocation (defined in `src
 
 ## Scope: built-in, user, and project
 
-Skills come from three origins (`SkillMetadata.origin`, `src/skills/index.ts`):
+Skills come from three origins:
 
-**Built-in** — TypeScript handlers shipped with AFK, registered at startup via `src/skills/all.ts`. These are the orchestrator skills (`mint`, `diagnose`, `service-setup`, `telegram-setup`). The `origin` field is absent or `'builtin'`.
+**Built-in** — Skills shipped with AFK, registered at startup. These are the orchestrator skills (`mint`, `diagnose`, `service-setup`, `telegram-setup`).
 
-**User-scope** — `SKILL.md` files discovered under `~/.afk/skills/<skill-name>/`. Scanned lazily at session start by `scanAndRegisterUserSkills()` (`src/skills/user-skills.ts`). The `origin` field is `'user'`.
+**User-scope** — `SKILL.md` files discovered under `~/.afk/skills/<skill-name>/`. Scanned at session start.
 
-**Project-scope** — `SKILL.md` files under `<cwd>/.afk/skills/<skill-name>/`. Scanned from the working directory at session start. The `origin` field is `'project'`.
+**Project-scope** — `SKILL.md` files under `<cwd>/.afk/skills/<skill-name>/`. Scanned from the working directory at session start.
 
-**Plugin skills** — `SKILL.md` files inside installed plugins at `~/.afk/plugins/<plugin>/skills/<skill-name>/`. These are not entered into the TypeScript registry; they route through the plugin skill path in `SkillExecutor`.
+**Plugin skills** — `SKILL.md` files inside installed plugins at `~/.afk/plugins/<plugin>/skills/<skill-name>/`. These are discovered automatically when the plugin is installed.
 
 When a user or project skill's name collides with an already-registered skill of a different origin, it registers under the namespaced fallback `<origin>:<name>` (e.g. `user:mint`). The earlier registrant keeps the bare name.
 
 ## Audience: public vs. internal
 
-Skills can be tagged `audience: 'internal'` (`src/skills/index.ts`). Internal skills are hidden from slash-command listings, `/help`, tab-complete, and the system-prompt skill manifest unless `AFK_INTERNAL=1` is set. They remain dispatchable via `getSkill()` from internal code paths. Most users will only encounter public skills.
+Skills can be tagged `audience: 'internal'`. Internal skills are hidden from slash-command listings, `/help`, tab-complete, and the system-prompt skill manifest unless `AFK_INTERNAL=1` is set. Most users will only encounter public skills.
 
 ## The three execution modes
 
-Every skill has a `context` field that controls how it runs (`src/skills/index.ts`, documented in `docs/skill-load-mode.md`):
+Every skill has a `context` field that controls how it runs:
 
 | Mode | Mechanic | When to use |
 |---|---|---|
-| `'inline'` (default) | Calls the TypeScript `handler` in-process | Orchestrators that dispatch sub-agents programmatically (e.g. `mint`, `diagnose`) |
-| `'fork'` | Forks a child `AgentSession` with `prompts/system.md` as its system prompt | Heavy or risky work that benefits from an isolated context window (e.g. `service-setup`, `telegram-setup`) |
-| `'load'` | Returns `prompts/system.md` / SKILL.md body as the tool result; the **current** agent executes it in-context | Lightweight procedures that should run as the calling agent, with no fork latency |
+| `'inline'` (default) | Calls the TypeScript handler in-process | Orchestrators that dispatch sub-agents programmatically (e.g. `mint`, `diagnose`) |
+| `'fork'` | Forks a child session with the skill's instructions as its system prompt | Heavy or risky work that benefits from an isolated context window (e.g. `service-setup`, `telegram-setup`) |
+| `'load'` | Returns the SKILL.md body as the tool result; the **current** session executes it in-context | Lightweight procedures that should run as the calling agent, with no fork latency |
 
-`load` mode injects an execute-now framing header around the body so the model acts on the instructions rather than summarising them. See `docs/skill-load-mode.md` for full details and authoring guidance.
+In `load` mode, AFK tells the model to act on the skill's instructions, not just read them.
 
 ## How to invoke a skill
 
@@ -68,8 +68,8 @@ Every skill has a `context` field that controls how it runs (`src/skills/index.t
 }
 ```
 
-Both paths route through the same `SkillExecutor`. Slash commands inject a dispatch instruction that causes the model to call the `skill` tool, so the Zod schema flow and structured output are preserved regardless of entry point.
+Both paths run the same skill. The entry point doesn't change behavior — you get the same result whether you typed the slash command or the model called the skill on its own.
 
 ## Invocation telemetry
 
-Every skill dispatch is logged to `~/.afk/agent-framework/routing-decisions.jsonl` (`docs/architecture.md`). You can inspect this file to see which skills ran, when, and with what outcome.
+Every skill dispatch is logged to `~/.afk/agent-framework/routing-decisions.jsonl`. You can inspect this file to see which skills ran, when, and with what outcome.

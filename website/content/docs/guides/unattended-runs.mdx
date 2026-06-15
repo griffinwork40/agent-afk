@@ -3,8 +3,6 @@ title: "Unattended Runs"
 description: "Run Agent AFK safely while you're away: daemon mode, Telegram supervision, budget caps, and scheduled tasks."
 ---
 
-# Unattended Runs
-
 Agent AFK is built for work that happens while you're away from the keyboard. This guide covers the four pieces that make long, headless runs safe: the daemon, Telegram supervision, spend limits, and scheduled tasks.
 
 ## The daemon
@@ -137,7 +135,7 @@ Pass `--trigger` to `schedule add` to control when the task fires:
 | `sessionstart` | Fires once when the daemon boots |
 | `both` | Fires at boot and on the cron expression |
 
-`--sessionstart-cooldown-ms` (`AFK_SESSIONSTART_COOLDOWN_MS`) prevents thundering-herd when the daemon restarts rapidly.
+`--sessionstart-cooldown-ms` (env: `AFK_SESSIONSTART_COOLDOWN_MS`) adds a delay between task fires so the daemon doesn't hammer on rapid restarts.
 
 ### Notification policy
 

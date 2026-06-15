@@ -39,15 +39,10 @@ Configuration is layered. Higher tiers win over lower ones.
 | 2 | `afk.config.json` — searched in order: `<cwd>/afk.config.json` → `~/.afk/config/afk.config.json` → legacy `~/.afk.config.json` | AFK.md |
 | 3 (lowest) | `AFK.md` — searched in order: `<cwd>/AFK.md` → `~/.afk/AFK.md` | nothing |
 
-The framework base prompt (`prompts/system-prompt.md`, baked in at publish time)
-is **always** present regardless of tier. Every operator overlay **appends** to
-it under an `# Operator configuration` header — it augments, never replaces.
+The built-in prompt is always present. Any overlay you set is appended after it
+under an `# Operator configuration` header — it adds to the base, never overwrites it.
 
-Environment variables — read through `src/config/env.ts` — form a parallel
-layer that overrides specific fields within the structured config. For example,
-`AFK_MODEL` overrides `model` in `afk.config.json`. The full env-var catalogue
-is in `docs/env-registry.md` (107 variables across 13 categories); the complete
-field reference for `afk.config.json` is generated under **Reference**.
+Environment variables override matching fields in `afk.config.json`. For example, `AFK_MODEL` overrides `model`. See [Environment Variables](/docs/configuration/environment-variables) for the full list.
 
 ### `.env` file loading
 
@@ -118,8 +113,8 @@ optional; unset fields fall through to env vars or built-in defaults.
 | `temperature` | `number` | `1.0` | Sampling temperature. Env override: `AFK_TEMPERATURE`. |
 | `systemPrompt` | `string` | — | Operator overlay appended to the framework base prompt (tier 2). When set, `AFK.md` is not loaded. Env override: `AFK_SYSTEM_PROMPT` (tier 1, wins over this). |
 | `updatePolicy` | `"notify" \| "auto" \| "off"` | `"notify"` | Controls how AFK handles available CLI updates. `notify` prints a message; `auto` applies automatically; `off` disables checks. |
-| `autoResumeOnUsageLimit` | `boolean` | `true` | When `true`, the CLI waits for the OAuth subscription reset and replays the failed turn instead of surfacing a raw 429 error. |
-| `bgSummaries` | `boolean` | `false` | When `true`, the REPL periodically asks `claude-haiku-4-5` to summarize each running background subagent job's transcript tail; summaries appear in `/bgsub:list`. Sends redacted transcript data to the Anthropic API — do not enable in air-gapped or secret-sensitive environments. |
+| `autoResumeOnUsageLimit` | `boolean` | `true` | When `true`, AFK pauses and retries automatically when your API subscription hits its hourly limit, instead of showing a 429 error. |
+| `bgSummaries` | `boolean` | `false` | When `true`, the REPL summarizes running background jobs and shows them in `/bgsub:list`. **Caution:** this sends transcript data to the Anthropic API — don't enable it in air-gapped or sensitive environments. |
 | `maxSummaryCallsPerSession` | `number` | `200` | Session-wide budget for background summarizer LLM calls. Clamped to `[1, 500]`. Has no effect unless `bgSummaries` is `true`. |
 | `enableShellHooks` | `boolean` | `false` | Master switch for shell-command hooks. **Must be set in a user-global file** (`~/.afk/config/afk.config.json`); project-local values are silently ignored to prevent cloned repos from auto-executing scripts. |
 

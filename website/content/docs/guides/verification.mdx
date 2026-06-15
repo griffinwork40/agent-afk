@@ -3,9 +3,7 @@ title: "Verification Workflows"
 description: "How to verify agent work before it ships: /review, /shadow-verify, /ship --verify, and the failure-geometry pattern."
 ---
 
-# Verification Workflows
-
-Agent AFK has several built-in verification passes that run before changes reach production. This guide covers the tools available and the underlying pattern they share.
+Agent AFK ships several verification tools.
 
 ## Failure Geometry
 
@@ -90,7 +88,7 @@ Use `--verify` whenever changes are non-trivial, touch security-sensitive code, 
 
 ## The confidence gate
 
-Internally, AFK uses a confidence gate (`src/skills/_lib/confidence-gate.ts:9-13`) to decide when subagent output needs re-verification. The gate uses a threshold, gap detection, and boundary classification — when any condition fires, the output goes to verification before being acted on.
+Internally, AFK checks each subagent result for uncertainty signals — a low confidence score, a detected gap, or a claim at the edge of what the subagent could verify. When any fires, the output goes to re-verification.
 
 This is the Failure Geometry pattern applied to subagent trust: the default failure mode would be to pass all output through unchecked. The preferred failure is to surface uncertainty loudly. The structure that transforms one into the other is the confidence gate.
 

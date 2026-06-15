@@ -3,9 +3,7 @@ title: "MCP Servers & Plugins"
 description: "Configure MCP servers with layered mcp.json, use mcp__<server>__<tool> naming, and manage plugins with afk plugin."
 ---
 
-# MCP Servers & Plugins
-
-Agent AFK supports the Model Context Protocol (MCP) for connecting external tools and data sources. Plugins extend AFK's capabilities with skills, commands, and agents. This guide covers both.
+Agent AFK supports MCP for connecting external tools and data sources. Plugins add skills, commands, and agents.
 
 ## MCP servers
 
@@ -22,7 +20,7 @@ MCP server configuration is loaded from four sources, merged in priority order (
 
 Source: `docs/architecture.md` (MCP client section).
 
-When two sources define a server with the same name, the higher-priority source wins and the displaced source is surfaced as a warning. Per-name conflicts do not silently drop servers.
+If two config files define a server with the same name, the higher-priority one wins. The other is logged as a warning — nothing is silently dropped.
 
 Project-local `.mcp.json` loading is disabled by default to mitigate config-injection risks. Set `AFK_ALLOW_PROJECT_MCP=1` to opt in.
 
@@ -190,7 +188,7 @@ afk marketplace list              # installed marketplaces
 afk marketplace remove <name>     # remove a source
 ```
 
-Marketplace state lives under `~/.afk/marketplaces/`.
+Marketplace state lives under `~/.afk/plugins/cache/`.
 
 ### User-scope skills (no plugin required)
 

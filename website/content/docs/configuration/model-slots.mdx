@@ -4,9 +4,7 @@ description: "Bind capability tiers (small / medium / large) to specific models 
 ---
 
 Model slots let you assign specific models to three fixed **capability tiers**
-— `small`, `medium`, and `large`. The tier positions are stable anchors that
-the `agent`, `compose`, and `skill` tools select among (cheapest → most
-capable); what you bind to each tier is your choice.
+— `small`, `medium`, and `large`. The three tiers — small, medium, large — are fixed labels (cheapest → most capable). Bind any model to each one; skills and subagents pick the right tier automatically.
 
 This means you can mix providers per tier: Anthropic on one tier, a local
 OpenAI-compatible shim on another, and hosted OpenAI on a third — all in the
@@ -120,15 +118,9 @@ Resolution order (first match wins):
 
 ## How routing works
 
-`providerForModel()` resolves a slot alias to its full binding **before** provider
-pattern-matching. This means a tier rebound to a non-Anthropic ID (e.g.
-`small → gpt-4o-mini`) automatically routes to `openai-compatible` without any
-per-call changes.
+Assign a non-Anthropic model to a tier (e.g. `small → gpt-4o-mini`) and that tier routes to the OpenAI-compatible provider automatically.
 
-Per-slot credentials are applied at session construction via `applySlotCredentials`
-in `src/agent/session/slot-credentials.ts`. This covers the main session and
-every child dispatch path (subagents, compose DAG nodes, skills) uniformly.
-An Anthropic OAuth token cannot leak into an OpenAI-routed tier.
+Each tier's credentials are applied automatically — an Anthropic key can't leak into an OpenAI-routed tier.
 
 ## What you can mix in the same process
 

@@ -3,8 +3,6 @@ title: "Interactive REPL"
 description: "afk i launches a full-featured interactive REPL with slash commands, plan mode, background tasks, and streaming output."
 ---
 
-# Interactive REPL
-
 The interactive REPL is Agent AFK's primary surface. Launch it with:
 
 ```bash
@@ -16,7 +14,7 @@ afk          # interactive is the default command
 ```
 
 The REPL gives you a persistent session with full tool access — bash, file ops, web fetch,
-subagents, MCP servers, memory — and a slash-command registry for built-in and plugin skills.
+subagents, MCP servers, memory — plus slash commands for built-in and plugin skills.
 
 ## Common options
 
@@ -32,8 +30,7 @@ afk i --mcp-config ./mcp.json  # load an additional MCP config
 
 ## Slash commands
 
-Type `/` in the REPL to see available commands. The dispatcher uses Levenshtein-hint matching
-to catch typos.
+Type `/` in the REPL to see available commands. Typos are caught automatically — type `/mnt` and AFK suggests `/mint`.
 
 ### Session control
 

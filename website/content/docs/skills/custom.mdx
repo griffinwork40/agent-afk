@@ -51,13 +51,13 @@ Use $ARGUMENTS to reference the caller's input anywhere in the body.
 
 ### Execution mode: `fork` vs `load`
 
-By default, a `SKILL.md` skill is executed in `fork` mode: AFK forks a child `AgentSession` with the SKILL.md body as its system prompt and the caller's input as the first user message. The child runs independently with its own context window.
+By default, a `SKILL.md` skill runs in `fork` mode: AFK starts a child session with the SKILL.md body as its system prompt and the caller's input as the first user message. The child runs independently with its own context window.
 
-Set `context: load` in frontmatter to use load mode instead: the body is returned as the `skill` tool result and the **current** agent executes it in-context with the tools it already has. Load mode is cheaper (no fork overhead) but consumes current-context tokens, so it suits small leaf procedures rather than multi-step orchestrators. See `docs/skill-load-mode.md` for the full trade-off table.
+`load` mode runs the skill inside the current session instead of forking a new one. It's faster and uses fewer tokens, but shares context with the caller — best for small, self-contained steps. Use `fork` (the default) for anything that reads multiple files or loops.
 
 ## Where skills are discovered
 
-AFK scans two directories at session start (`src/skills/user-skills.ts`):
+AFK scans two directories at session start:
 
 | Location | Origin tag | Notes |
 |---|---|---|
@@ -78,7 +78,7 @@ If you want to distribute a skill as part of a plugin, place it at:
 ~/.afk/plugins/<plugin-name>/skills/<skill-name>/SKILL.md
 ```
 
-Plugin skills are discovered by the plugin scanner at session construction and route through the plugin skill path in `SkillExecutor` — they do not enter the TypeScript registry. This means they don't appear in `listSkills()` output, but they do appear in slash-command listings and `/help` when the plugin is installed.
+Plugin skills are discovered automatically at session start. They appear in slash-command listings and `/help` when the plugin is installed.
 
 The `SKILL_ROOT` environment variable is injected into the sub-agent's environment for both user skills and plugin skills. You can reference it in shell commands inside your SKILL.md body:
 
@@ -95,4 +95,4 @@ Run the following command: bash "${SKILL_ROOT}/scripts/process.sh" $ARGUMENTS
 
 ## Example template
 
-AFK ships an internal reference template at `src/skills/example-template/` that demonstrates the multi-prompt loader pattern used by built-in TS skills. For user-authored skills, the single-file `SKILL.md` approach above is the recommended pattern.
+For user-authored skills, the single-file `SKILL.md` approach above is the recommended pattern.

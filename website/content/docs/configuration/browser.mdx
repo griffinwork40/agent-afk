@@ -3,9 +3,7 @@ title: "Browser Control"
 description: "Drive a real Chromium browser from the agent using five native tools. Covers setup, the tool surface, domain policies, and configuration."
 ---
 
-`agent-afk` ships five native tools for driving a real Chromium browser. They
-share one Playwright backend per AFK process, with one isolated `BrowserContext`
-per `AgentSession`. Subagents inherit the parent's context by reference.
+`agent-afk` ships five native tools for driving a real Chromium browser. Each session gets its own isolated browser context. Subagents share the parent session's context.
 
 ## Prerequisites
 
@@ -61,7 +59,7 @@ All five appear in `afk --help` once the package is built, alongside `bash`,
 ```
 
 When a semantic target matches two or more elements, the tool returns an error
-with a disambiguation list of three to five candidates. The agent retries using
+with a disambiguation list of up to five candidates. The agent retries using
 `element_id`. Nothing silently picks among ambiguous matches.
 
 Element IDs are stable **within one observation** only. Re-observe after any
@@ -93,8 +91,7 @@ not a regex, not a path matcher. When the allowlist is non-empty, any host not
 on the list is refused. When the allowlist is empty (default), only the
 blocklist applies.
 
-A refused navigation surfaces as `isError: true` with `reason: blocked_by_policy`
-in the tool result — the agent can adapt and try a different URL.
+A blocked navigation returns an error the agent can read and act on — it tries a different URL instead of crashing.
 
 ### JSON config file
 

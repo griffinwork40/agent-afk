@@ -148,3 +148,22 @@
 
 /* Relax prose line-height vs the site's body 1.6. */
 #nd-docs-layout .prose { line-height: 1.7; }
+
+/* --- Code blocks: compact, content-hugging sizing ----------------------- */
+/* Fumadocs' CodeBlock viewport ships py-3.5 (28px vertical padding) and the
+   code inherits the prose line-height (1.7 above). Together a single-line
+   snippet renders in a tall, half-empty box. Tighten both so copy-blocks hug
+   their content while keeping comfortable breathing room.
+   Targets stable fumadocs hooks: figure.shiki (the box) + .fd-scroll-container
+   (the padded viewport). */
+#nd-docs-layout figure.shiki .fd-scroll-container {
+  /* Override fumadocs' py-3.5 (which sets logical padding-block) with the SAME
+     logical property so the cascade is unambiguous. ~9px hugs single-line
+     snippets without cramping multi-line blocks. */
+  padding-block: 0.55rem;
+}
+#nd-docs-layout figure.shiki pre,
+#nd-docs-layout figure.shiki code,
+#nd-docs-layout figure.shiki .line {
+  line-height: 1.5;
+}

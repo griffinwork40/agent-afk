@@ -4,10 +4,7 @@ description: "Add project-specific instructions to every agent session by droppi
 ---
 
 `AFK.md` is plain-markdown file that `agent-afk` appends to its built-in
-framework prompt whenever you run from a directory that contains one. It is
-the lowest-priority operator overlay — a lightweight way to give the agent
-standing context about your project without touching environment variables or
-`afk.config.json`.
+framework prompt whenever you run from a directory that contains one. It's the simplest way to give the agent project context — just a Markdown file, no env vars or JSON config needed.
 
 ## What goes in AFK.md
 
@@ -46,12 +43,7 @@ The same append behavior applies to all three operator overlay tiers
 tier is used per session (highest priority wins). If `AFK_SYSTEM_PROMPT` is
 set, or `afk.config.json` has a `systemPrompt` field, `AFK.md` is not loaded.
 
-> **Tier precedence (confirmed against `src/cli/config.ts` `loadConfig()`):**
-> Tier 1 `AFK_SYSTEM_PROMPT` env var → Tier 2 `afk.config.json` `systemPrompt`
-> field → Tier 3 `AFK.md` (this file). `AFK.md` is the lowest-priority overlay.
-> The runtime checks env first, then the JSON config, and only falls through to
-> `AFK.md` when neither of the higher tiers provides a system prompt. An empty
-> or whitespace-only `AFK.md` is treated as absent.
+
 
 ## Per-project vs. global
 

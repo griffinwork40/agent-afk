@@ -3,23 +3,16 @@ title: "How It Works"
 description: "Session lifecycle, provider routing, tool dispatch, terminal states, and the ~/.afk/ state layout."
 ---
 
-# How It Works
-
-This page explains the conceptual model behind Agent AFK — how sessions are structured, how the
-model provider is selected, how tools are dispatched, and what terminal states mean.
-
 ## Session lifecycle
 
-Every interaction — chat, REPL turn, daemon tick, or Telegram message — goes through `AgentSession`,
-the single runtime entry point in `src/agent/`. The constructor is synchronous; the SDK lifecycle
-initializes asynchronously via `initSdkLifecycle()` and surfaces through a normalized event stream.
+Every interaction — a chat, a REPL turn, a daemon tick, or a Telegram message — starts a session that bootstraps, sends your message, dispatches tools, and loops until it finishes.
 
 A session:
 
 1. **Bootstraps** — loads the system prompt (framework base + any operator overlay from `AFK.md`,
    `afk.config.json`, or `AFK_SYSTEM_PROMPT`), connects MCP servers in parallel, scans plugins.
 2. **Sends a message** — the prompt and conversation history are sent to the configured model
-   provider. Both providers emit a normalized `ProviderEvent` stream consumed by the stream consumer.
+   provider.
 3. **Dispatches tools** — when the model requests a tool call, the dispatcher routes it. Pre/PostToolUse
    hooks fire sequentially; `decision: 'block'` short-circuits execution.
 4. **Loops** — tool results are fed back to the model, which continues until it stops calling tools
@@ -39,8 +32,7 @@ long-running sessions.
 `org/model` IDs (e.g., `mlx-community/...`, `Qwen/...`). Talks directly to OpenAI's Chat
 Completions API, or any compatible local endpoint via `baseURL` (MLX, llama.cpp, vLLM, Ollama).
 
-Both providers emit the same normalized event stream. Nothing outside `src/agent/providers/` imports
-from any model SDK directly.
+Both providers are interchangeable — you can switch between them without changing anything else.
 
 Override provider selection per session:
 
@@ -51,13 +43,12 @@ afk i --provider openai-compatible
 
 ## Tool dispatch
 
-The session harness exposes a fixed set of built-in tools to the model:
+Each session has a fixed set of built-in tools available to the model:
 
 - **Bash, Read, Write, Edit, Glob, Grep, LS, WebSearch, WebFetch** — standard agentic tools
-- **`agent`** — forks a child `AgentSession` with permission bubbling and transitive abort
+- **`agent`** — forks a child session that inherits permissions and stops when the parent stops
 - **`skill`** — dispatches a named skill (built-in or plugin-discovered)
-- **`compose`** — DAG-based orchestration: up to 20 subagent nodes with explicit dependency edges;
-  independent nodes run in parallel, dependent nodes wait, fail-fast cancels downstream
+- **`compose`** — Structured multi-agent workflows — define which tasks depend on which; independent ones run in parallel, dependent ones wait. Up to 20 tasks per call; a failure cancels downstream work.
 - **`memory_search`, `memory_update`, `procedure_write`** — cross-session memory backed by SQLite
   at `~/.afk/agent-framework/memory/`
 - **`send_telegram`** — pushes a terminal-state notification to the operator; no-op if Telegram
@@ -80,8 +71,7 @@ enforced by the framework prompt:
 | **Asking** | One precise question is required before the next action. |
 | **Interrupted** | The user halted work. State is preserved for resumption. |
 
-The agent is expected to reach one of these states per turn rather than trailing off. In the REPL,
-verdict cards render the terminal state at the end of each turn.
+The agent is expected to reach one of these states per turn rather than trailing off. In the REPL, a card appears at the end of each turn showing the outcome.
 
 ## System prompt layering
 
@@ -124,8 +114,8 @@ read and write files, fetch URLs, and call MCP servers without asking each time.
 — `afk` is built for unattended work, where a permission prompt with no human present wedges the
 session.
 
-Use `afk` on a machine and account you trust. Override per-session:
+Use `afk` on a machine and account you trust. To keep a session's changes contained, run it in an isolated git worktree — your main checkout stays untouched, and the worktree is removed automatically on a clean exit:
 
 ```bash
-afk i --permission-mode acceptEdits
+afk i --worktree
 ```

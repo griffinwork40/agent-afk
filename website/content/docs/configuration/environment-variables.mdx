@@ -61,7 +61,7 @@ All environment variables recognized by `agent-afk` are listed here, grouped by 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
 | `AFK_AUTO_ROUTING` | boolean | Auto-route bare slash inputs to matching skills. Applies to interactive, chat, telegram, and daemon surfaces. | — |
-| `AFK_INTERNAL` | boolean | Tier gate. Set to exactly `1` to unlock — only the literal string "1" unlocks (other truthy values like "true"/"yes" leave the tier locked). When unlocked, skills tagged `audience: 'internal'` (e.g. /audit-fit, harvest/distill plugins) become visible at end-user surfaces (slash-command list, --help, tab-complete, system-prompt skill manifest). Default unset = public tier — internal skills are hidden. Not an access-control boundary; it gates surfacing, not the underlying registry. | — |
+| `AFK_INTERNAL` | boolean | When set to exactly `1`, unlocks internal-audience skills (e.g. `/audit-fit`) in slash listings and `/help`. Gates surfacing only — it does not change what's accessible. | — |
 
 
 ## Browser

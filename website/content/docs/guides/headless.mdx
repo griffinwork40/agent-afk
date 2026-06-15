@@ -1,9 +1,7 @@
 ---
 title: "Headless & Machine-Readable Output"
-description: "Use --format stream-json to get NDJSON output from afk chat, pipe it into scripts, and parse OutputEvents in Node or shell."
+description: "Stream JSON events from `afk chat` into scripts, CI pipelines, and shell tools."
 ---
-
-# Headless & Machine-Readable Output
 
 `afk chat` supports a structured streaming output format for headless consumers — CI pipelines, shell scripts, or wrapper programs that need to process AFK's response programmatically rather than read a human-formatted terminal display.
 
@@ -17,10 +15,10 @@ Writes the raw `OutputEvent` stream to **stdout** as [NDJSON](https://ndjson.org
 
 ## OutputEvent schema
 
-The canonical type definition lives in:
+Full event schema: `src/agent/types/session-types.ts`.
 
-- `src/agent/types/session-types.ts:82` — `OutputEvent` discriminated union
-- `src/agent/types/message-types.ts:121` — `MessageChunk` discriminated union (payload of `chunk` events)
+- `OutputEvent` — top-level discriminated union
+- `MessageChunk` — discriminated union (payload of `chunk` events), defined in `src/agent/types/message-types.ts`
 
 | `type` | Additional fields | Notes |
 |---|---|---|
@@ -115,7 +113,7 @@ afk chat "continue" --format stream-json --session-id <id> | tee run2.ndjson
 ## Scope and limitations
 
 - **Output only** — `--format stream-json` affects output. The `<message>` argument is still a plain string.
-- **AFK-native format** — the NDJSON shape is not translated to any external streaming protocol (e.g. OpenAI's SSE format).
+- **AFK-native format** — The event format is AFK-specific — it is not OpenAI's streaming (SSE) format.
 - **`afk chat` only** — the REPL (`afk i`) and daemon (`afk daemon`) do not support `--format stream-json`; they have their own output channels.
 - **Exit codes** — process exits `0` on `done`, `1` on `error`. Use this in pipelines to detect failures without parsing JSON.
 

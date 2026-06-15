@@ -1,9 +1,7 @@
 ---
 title: "One-Shot Chat"
-description: "afk chat sends a single message and exits — pipe-friendly, scriptable, and optionally streaming NDJSON for headless consumers."
+description: "afk chat sends a single message and exits — pipe-friendly, scriptable, or a streaming JSON event stream for scripts and CI."
 ---
-
-# One-Shot Chat
 
 `afk chat` sends a single message and exits. It's designed for scripting, CI pipelines, and
 any situation where you want a one-shot answer without opening an interactive session.
@@ -69,9 +67,7 @@ Cost, duration, and token fields appear only when the provider populates them.
 
 ### `--format stream-json`
 
-Writes a raw `OutputEvent` stream to stdout as [NDJSON](https://ndjson.org/) — one event per
-line, no spinner, no ANSI codes. Designed for headless consumers that parse the stream rather
-than read human-formatted output.
+Writes one JSON object per line to stdout ([newline-delimited JSON](https://ndjson.org/)) — no color codes, no spinner. Use this when a script or CI pipeline needs to parse AFK's output.
 
 ```bash
 afk chat "summarise this repo" --format stream-json

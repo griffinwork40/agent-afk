@@ -3,13 +3,11 @@ title: "Subagents & Delegation"
 description: "How to delegate work to subagents: the agent tool, background mode, /bgsub, the compose DAG, and when to delegate vs. stay inline."
 ---
 
-# Subagents & Delegation
-
 Agent AFK can fork child sessions — subagents — that run isolated tasks in parallel or sequence. This guide covers the mechanics: the `agent` tool, background mode, the `compose` DAG, and the decision rules for when to delegate vs. stay inline.
 
 ## How subagents work
 
-Subagents are full child `AgentSession` instances created by `SubagentManager.forkSubagent()` (`src/agent/subagent.ts`). Each inherits permissions from the parent and runs the same tool surface. What it does not inherit is context — every subagent starts with zero prior conversation.
+Subagents are child sessions that run independently. Each inherits permissions from the parent and runs the same tool surface. What it does not inherit is context — every subagent starts with zero prior conversation.
 
 **Always include in a subagent brief:**
 - Objective
@@ -88,16 +86,16 @@ compose({
 
 `audit` and `tests` run in parallel. `report` starts only after both complete. If any node fails and fail-fast is enabled (the default), downstream nodes are cancelled rather than running with incomplete inputs.
 
-**DAG constraints:**
+**Limits and failure behavior:**
 - Maximum 20 nodes per `compose` call
 - Cycles are rejected at dispatch time
 - Fail-fast cancels all downstream nodes on first failure — the parent sees which nodes ran and which were skipped
 
 Source: `src/agent/tools/compose-executor.ts`, `src/agent/dag.ts`.
 
-## AbortGraph — abort propagation
+## How cancellation works
 
-Subagents form a tree of `AbortController`s managed by `AbortGraph` (`src/agent/abort-graph.ts`). The rules:
+When you cancel a session, all running subagents stop immediately. The rules:
 
 - **Parent abort cascades down** — aborting the parent cancels all running children.
 - **Child abort notifies up but does not auto-abort the parent** — a failed subagent surfaces an error to the parent; the parent decides whether to continue.
