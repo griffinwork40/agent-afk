@@ -3,15 +3,23 @@ title: "Introduction"
 description: "A local AI agent runner — terminal, daemon, and Telegram, sharing one session."
 ---
 
+<SignalField>
+
 Built on the Anthropic SDK, Agent AFK runs outside Claude Code as its own process — a full agentic runtime you own completely. Hand it long or multi-step work and check in asynchronously: it delegates the work and leaves the judgment to you.
 
 ```bash
 npm install -g agent-afk
 ```
 
+<div className="elevated-field">
 <Cards>
-  <Card title="Get started →" href="/quickstart" description="Install, set your API key, and run your first command in under two minutes." />
+<Card title="Get started →" href="/quickstart" description="Install, set your API key, and run your first command in under two minutes." />
 </Cards>
+</div>
+
+</SignalField>
+
+<EarnedPathDivider variant="converge" />
 
 ## Who it's for
 
@@ -29,6 +37,8 @@ Every surface shares the same context, memory, and tools — so work started in 
   <Card title="Daemon" href="/surfaces/daemon" description="afk daemon — a long-running, cron-friendly headless agent." />
   <Card title="Telegram Bot" href="/surfaces/telegram" description="afk telegram start — the same tools and memory, on your phone." />
 </Cards>
+
+<EarnedPathDivider variant="channel" />
 
 ## Key capabilities
 
@@ -54,6 +64,13 @@ Agent AFK ships blast-radius controls — the guardrails that keep unattended ru
 
 Agent AFK keeps all state under `~/.afk/` — sessions, memory, plugins, logs, daemon state. There is no analytics or remote telemetry: it never sends your prompts, code, or usage anywhere except directly to the model provider you configure. What telemetry exists is local JSONL you can read or delete.
 
----
+<EarnedPathDivider variant="rise" />
 
-Ready to go deeper? Start with the [Quickstart](/quickstart), then see [How It Works](/how-it-works).
+Ready to go deeper? You've seen the depth — here's the earned path out of it.
+
+<div className="elevated-field">
+<Cards>
+<Card title="Quickstart →" href="/quickstart" description="Install, set your API key, and run your first command in under two minutes." />
+<Card title="How It Works →" href="/how-it-works" description="Session lifecycle, provider routing, terminal states, and the ~/.afk/ layout." />
+</Cards>
+</div>

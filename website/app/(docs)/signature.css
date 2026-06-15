@@ -1,0 +1,368 @@
+/* ==========================================================================
+   Agent AFK Docs — Visual Signature ("signal → depth → compression → rise →
+   embodiment")
+
+   A small, reusable visual system layered ON TOP of the existing fumadocs
+   brand theme (docs-theme.css). It is ADDITIVE: every rule here decorates
+   behind content at low opacity, is pointer-events:none, and degrades to the
+   plain docs under prefers-reduced-motion. Nothing here changes the brand
+   palette, content, navigation, search, or layout grid.
+
+   The system encodes one worldview without ever stating it:
+     a small SIGNAL on the surface implies vast hidden DEPTH; you descend into
+     local complexity, find structure, COMPRESS repeated passes into an earned
+     path, then RISE into a warm, usable, EMBODIED zone (the CTA).
+
+   Three recurring motifs (deliberately not "all of them"):
+     1. signal-field / deep-field  — quiet contour depth with one bright signal
+     2. earned-path  + scope-rule  — a route worn into the field, crossed by
+                                      one ruthless line of measurement
+     3. elevated-field             — the warm, resolved arrival zone (CTA)
+
+   Compositional law (where it fits): dense lower-left → compressed center →
+   resolved upper-right. Discovery reads cooler/inward; embodiment reads
+   warmer/outward.
+
+   Only stable fumadocs hooks are targeted (#nd-docs-layout, #nd-page,
+   [data-card]); per fumadocs' own guidance we never presume nested DOM
+   structure that isn't id/data-attributed.
+   ========================================================================== */
+
+/* --- Signature tokens ----------------------------------------------------- */
+/* Derived from the existing brand palette in globals.css. We do not introduce
+   a new hue — only a cool "depth" channel (a desaturated indigo already latent
+   in the #07070b / #11111a backgrounds) and reuse the brand orange as the warm
+   "signal/embodiment" channel. */
+:root {
+  /* Cool depth channel — discovery / hidden structure (biased blue-violet). */
+  --sig-depth-0:    #0a0a12;          /* deepest basin */
+  --sig-depth-1:    #0e0e1b;          /* mid contour */
+  --sig-contour:    rgba(124, 124, 148, 0.10);   /* faint topographic line (text-faint @ low α) */
+  --sig-contour-2:  rgba(124, 124, 148, 0.055);  /* outer, fainter ring */
+  --sig-cool-glow:  rgba(96, 120, 180, 0.10);     /* cool basin glow */
+
+  /* Warm signal / embodiment channel — reuse brand orange. */
+  --sig-signal:     var(--color-accent, #f9854b);
+  --sig-signal-soft:var(--color-accent-soft, #ffa07a);
+  --sig-warm-glow:  rgba(249, 133, 75, 0.14);     /* == --color-accent-glow */
+  --sig-warm-wash:  rgba(249, 133, 75, 0.05);
+
+  /* The earned path + measurement line. */
+  --sig-path:       rgba(249, 133, 75, 0.55);     /* the one confident route */
+  --sig-path-faint: rgba(155, 155, 174, 0.22);    /* the repeated, pre-converged traces */
+  --sig-rule:       rgba(155, 155, 174, 0.40);    /* the ruthless measure line */
+  --sig-tick:       rgba(155, 155, 174, 0.55);    /* tick marks on the rule */
+
+  /* Motion timing — slow, geological, never ornamental. */
+  --sig-drift:      38s;   /* contour drift */
+  --sig-ripple:     7s;    /* signal ripple */
+}
+
+/* Light theme: depth channel lightens to a cool paper-grey; warm channel and
+   the rule darken just enough to stay legible on the light ground. Contrast
+   pairs in the content layer are untouched (decoration only). */
+html:not(.dark) {
+  --sig-depth-0:    #eeeef2;
+  --sig-depth-1:    #e6e6ee;
+  --sig-contour:    rgba(90, 90, 114, 0.10);
+  --sig-contour-2:  rgba(90, 90, 114, 0.06);
+  --sig-cool-glow:  rgba(96, 120, 180, 0.08);
+  --sig-warm-glow:  rgba(232, 104, 42, 0.10);
+  --sig-warm-wash:  rgba(232, 104, 42, 0.045);
+  --sig-path:       rgba(232, 104, 42, 0.60);
+  --sig-path-faint: rgba(90, 90, 114, 0.26);
+  --sig-rule:       rgba(90, 90, 114, 0.42);
+  --sig-tick:       rgba(90, 90, 114, 0.58);
+}
+
+/* ==========================================================================
+   1. DEEP FIELD — the global submerged backdrop
+   A whisper-quiet topographic wash on the docs surface, biased to the
+   lower-left (dense, deep) and resolving toward the upper-right (open, light).
+   It is the "vast system beneath the surface" the signal sits on. Fixed to the
+   viewport so the content scrolls THROUGH the field (subtle parallax) rather
+   than dragging it along.
+   ========================================================================== */
+#nd-docs-layout::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  /* Lower-left cool basin (depth) + faint upper-right warm rise (embodiment).
+     Two radial gradients only — no image, no blur filter (cheap to paint). */
+  background:
+    radial-gradient(120% 120% at 8% 100%,  var(--sig-cool-glow) 0%, transparent 42%),
+    radial-gradient(90% 90%   at 100% 0%,   var(--sig-warm-wash) 0%, transparent 40%);
+  opacity: 0.9;
+}
+/* Keep fumadocs' own surfaces above the field. The grid container paints the
+   field; the article, sidebar and toc sit on z-index:1+ so text never dims. */
+#nd-docs-layout > * { position: relative; z-index: 1; }
+
+/* ==========================================================================
+   2. SIGNAL FIELD — the hero motif (used in index.mdx via <SignalField/>)
+   A small bright signal node over concentric contour rings: the visible
+   symptom is tiny, the implied structure beneath it is enormous. The wrapper
+   below frames the opening copy; the SVG layers are supplied by the component.
+   ========================================================================== */
+.signal-field {
+  position: relative;
+  isolation: isolate;             /* contain the decorative z-stack */
+  margin: 0.25rem 0 0.5rem;
+  padding: 1.9rem 1.6rem 1.7rem;
+  border-radius: var(--radius-lg, 12px);
+  overflow: hidden;
+  /* Discovery ground: a cool, dense, inward basin that the signal rises out of.
+     Deepest at the lower-left, opening toward the upper-right. */
+  background:
+    radial-gradient(140% 130% at 12% 108%, var(--sig-depth-0) 0%, transparent 55%),
+    linear-gradient(150deg, var(--sig-depth-1) 0%, transparent 60%);
+  border: 1px solid var(--color-border, #1f1f2e);
+  /* A carved recess: inner top shadow reads as an excavated pocket, not a
+     raised card. "Discovered, excavated" — not decorated. */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.02),
+    inset 0 18px 40px -28px rgba(0, 0, 0, 0.7);
+}
+
+/* The contour layer (SVG of concentric rings) sits behind the copy. */
+.signal-field .contour-layer {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  color: var(--sig-contour);      /* SVG strokes inherit via currentColor */
+  /* Origin lower-left, opening up-right — the compositional default. */
+  mask-image: radial-gradient(130% 130% at 18% 100%, #000 30%, transparent 78%);
+  -webkit-mask-image: radial-gradient(130% 130% at 18% 100%, #000 30%, transparent 78%);
+}
+
+/* Slow contour drift — geological, behind content, motion-gated below. */
+.signal-field .contour-layer svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  animation: sig-contour-drift var(--sig-drift) linear infinite alternate;
+  transform-origin: 18% 100%;
+}
+
+/* The signal node: a small bright point with a slow concentric ripple — the
+   surface symptom of the vast field. Positioned upper-right (resolved). */
+.signal-field .signal-node {
+  position: absolute;
+  top: 18%;
+  right: 9%;
+  width: 10px;
+  height: 10px;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: 50%;
+  background: var(--sig-signal);
+  box-shadow: 0 0 14px 2px var(--sig-warm-glow);
+}
+.signal-field .signal-node::before,
+.signal-field .signal-node::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1px solid var(--sig-signal-soft);
+  opacity: 0;
+  animation: sig-ripple var(--sig-ripple) var(--ease, ease-out) infinite;
+}
+.signal-field .signal-node::after { animation-delay: calc(var(--sig-ripple) / 2); }
+
+/* Hero copy stacks above the field. */
+.signal-field > :where(p, h1, h2, ul, ol, div, a) { position: relative; z-index: 1; }
+.signal-field > :first-child { margin-top: 0; }
+.signal-field > :last-child  { margin-bottom: 0; }
+
+/* ==========================================================================
+   3. EARNED PATH + SCOPE RULE — the reusable section separator
+   Replaces the flat <hr> from MDX "---". Many faint traces (repeated passes)
+   converge into one confident route, crossed by a single crisp measure line
+   with ticks. "Organic depth + one ruthless line of measurement."
+   Rendered by <EarnedPathDivider/>; this styles its container + motion.
+   ========================================================================== */
+.earned-path {
+  position: relative;
+  width: 100%;
+  height: 40px;
+  margin: 2.6rem 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.earned-path svg { width: 100%; height: 100%; display: block; overflow: visible; }
+
+/* The pre-converged traces: faint, many, slightly offset. */
+.earned-path .trace { stroke: var(--sig-path-faint); fill: none; stroke-width: 1; }
+/* The earned route: one confident line that the traces resolve into. On first
+   reveal it draws itself left→right (compression into a single path). */
+.earned-path .route {
+  stroke: var(--sig-path);
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 5px var(--sig-warm-glow));
+}
+/* The scope rule: the ruthless measure. A thin baseline with tick marks. */
+.earned-path .rule  { stroke: var(--sig-rule); stroke-width: 1; }
+.earned-path .tick  { stroke: var(--sig-tick); stroke-width: 1; }
+.earned-path .scope-dot { fill: var(--sig-signal); }
+
+/* Path-reveal: the route draws itself once on mount (cheap, one-shot).
+   Contract: the route <path> carries the SVG attribute pathLength={1}, which
+   normalizes its geometric length to 1 user unit — so dasharray:1 + offset:1
+   = fully hidden, animating offset→0 = fully drawn, independent of the curve's
+   real length. (pathLength is an SVG presentation attribute, not a CSS
+   property, so it lives on the element, not here.) */
+.earned-path .route {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: sig-route-draw 1.4s var(--ease, ease-out) 0.1s forwards;
+}
+
+/* ==========================================================================
+   4. ELEVATED FIELD — the warm arrival / embodiment zone
+   Applied to the primary CTA region. Warmest light, least friction, strongest
+   sense of arrival. This is where the page has "risen" out of the depth.
+   Applied via class on a Cards wrapper (data-card lives inside).
+   ========================================================================== */
+.elevated-field {
+  position: relative;
+  border-radius: var(--radius-lg, 12px);
+  padding: 2px;                    /* room for the warm rim-light */
+  background:
+    radial-gradient(120% 160% at 88% 0%, var(--sig-warm-wash) 0%, transparent 60%);
+}
+/* Warm rim-light on the elevated card itself (the carved artifact, now lit). */
+.elevated-field [data-card] {
+  position: relative;
+  border-color: color-mix(in srgb, var(--color-accent, #f9854b) 32%, var(--color-fd-border));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-accent, #f9854b) 14%, transparent),
+    0 8px 30px -18px var(--sig-warm-glow);
+  transition: box-shadow var(--t-base, 180ms) var(--ease, ease),
+              transform var(--t-base, 180ms) var(--ease, ease),
+              border-color var(--t-base, 180ms) var(--ease, ease);
+}
+.elevated-field [data-card]:hover {
+  border-color: color-mix(in srgb, var(--color-accent, #f9854b) 52%, var(--color-fd-border));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-accent, #f9854b) 24%, transparent),
+    0 12px 40px -16px var(--sig-warm-glow);
+  transform: translateY(-1px);
+}
+
+/* ==========================================================================
+   5. CARDS AS EXTRACTED ARTIFACTS
+   The feature/surface cards already render via fumadocs [data-card]. Give them
+   a subtle carved-recess depth + a quiet warm rise on hover so they read as
+   artifacts pulled from the field — stages along the route — not floating
+   stock rectangles. Scoped to the docs so other surfaces are untouched.
+   ========================================================================== */
+#nd-page [data-card] {
+  position: relative;
+  transition: transform var(--t-base, 180ms) var(--ease, ease),
+              border-color var(--t-base, 180ms) var(--ease, ease),
+              box-shadow var(--t-base, 180ms) var(--ease, ease);
+}
+#nd-page [data-card]:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--color-accent, #f9854b) 28%, var(--color-fd-border));
+}
+/* A hair-thin warm threshold along the card's left edge — a coordinate cue
+   that ties every card to the same vertical "route" running down the page. */
+#nd-page [data-card]::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  border-radius: var(--radius-lg, 12px) 0 0 var(--radius-lg, 12px);
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    var(--sig-path-faint) 28%,
+    var(--sig-path-faint) 72%,
+    transparent 100%
+  );
+  opacity: 0;
+  transition: opacity var(--t-base, 180ms) var(--ease, ease);
+}
+#nd-page [data-card]:hover::before { opacity: 1; }
+
+/* ==========================================================================
+   6. CODE BLOCKS AS INSTRUMENTS
+   Frame snippets like instruments pulled from the field: a sharp left
+   threshold edge (the brand orange) marks them as extracted evidence. Pairs
+   the organic field with one precise structural edge. Targets fumadocs'
+   stable figure.shiki hook, scoped to the docs.
+   ========================================================================== */
+#nd-page figure.shiki {
+  position: relative;
+}
+#nd-page figure.shiki::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  border-radius: var(--radius, 8px) 0 0 var(--radius, 8px);
+  background: linear-gradient(
+    to bottom,
+    var(--sig-signal-soft) 0%,
+    var(--sig-signal) 55%,
+    color-mix(in srgb, var(--sig-signal) 30%, transparent) 100%
+  );
+  opacity: 0.45;
+}
+
+/* ==========================================================================
+   MOTION GATE — honor prefers-reduced-motion
+   Strip every animation; the static composition (contours, signal, route,
+   warm/cool migration) still carries the full signature. Nothing essential
+   depends on motion.
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  .signal-field .contour-layer svg,
+  .signal-field .signal-node::before,
+  .signal-field .signal-node::after,
+  .earned-path .route {
+    animation: none !important;
+  }
+  /* Show the earned route fully drawn (no dash-offset) when motion is off. */
+  .earned-path .route { stroke-dashoffset: 0; }
+}
+
+/* --- Keyframes ------------------------------------------------------------ */
+@keyframes sig-contour-drift {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(2.5%, -1.5%, 0) scale(1.04); }
+}
+@keyframes sig-ripple {
+  0%   { opacity: 0.55; transform: scale(1); }
+  70%  { opacity: 0;    transform: scale(4.2); }
+  100% { opacity: 0;    transform: scale(4.2); }
+}
+@keyframes sig-route-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+/* ==========================================================================
+   RESPONSIVE RECOMPOSITION
+   On small screens the signature recomposes intentionally — it does not
+   collapse into visual rubble. The hero field tightens, the signal node moves
+   inboard so it never clips, contour density drops, separators shorten.
+   ========================================================================== */
+@media (max-width: 640px) {
+  .signal-field {
+    padding: 1.4rem 1.15rem 1.3rem;
+    /* Pull the basin origin more central so the lower-left bias doesn't read
+       as a lopsided corner glow on a narrow column. */
+    background:
+      radial-gradient(150% 120% at 28% 106%, var(--sig-depth-0) 0%, transparent 58%),
+      linear-gradient(160deg, var(--sig-depth-1) 0%, transparent 64%);
+  }
+  .signal-field .signal-node { top: 14%; right: 12%; width: 8px; height: 8px; }
+  .earned-path { height: 30px; margin: 2rem 0; }
+}
