@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { builtinToolSchemas, BUILTIN_TOOL_NAMES, agentTool } from './schemas.js';
 
 describe('builtinToolSchemas', () => {
-  it('contains exactly 20 tools', () => {
-    expect(builtinToolSchemas).toHaveLength(20);
+  it('contains exactly 22 tools', () => {
+    expect(builtinToolSchemas).toHaveLength(22);
   });
 
   it('exports the expected tool names', () => {
@@ -22,6 +22,8 @@ describe('builtinToolSchemas', () => {
       'get_schedule_history',
       'cancel_schedule',
       'terminal_font_size',
+      'config_get',
+      'config_set',
       'ask_question',
       'browser_open',
       'browser_observe',

@@ -3,9 +3,9 @@ import { createBuiltinHandlers } from './index.js';
 import { BUILTIN_TOOL_NAMES } from '../schemas.js';
 
 describe('createBuiltinHandlers', () => {
-  it('returns a Map with all 20 built-in tools', () => {
+  it('returns a Map with all 22 built-in tools', () => {
     const handlers = createBuiltinHandlers();
-    expect(handlers.size).toBe(20);
+    expect(handlers.size).toBe(22);
   });
 
   it('has an entry for every tool in BUILTIN_TOOL_NAMES', () => {
@@ -27,7 +27,7 @@ describe('createBuiltinHandlers', () => {
     // when permissionMode is undefined but cwd is set. Ensure we get a
     // valid map back and bash is still callable.
     const handlers = createBuiltinHandlers(undefined, '/tmp');
-    expect(handlers.size).toBe(20);
+    expect(handlers.size).toBe(22);
     expect(typeof handlers.get('bash')).toBe('function');
     expect(typeof handlers.get('grep')).toBe('function');
     expect(typeof handlers.get('glob')).toBe('function');
@@ -35,7 +35,7 @@ describe('createBuiltinHandlers', () => {
 
   it('cwd parameter: builds handler set with both permissionMode and cwd', () => {
     const handlers = createBuiltinHandlers('default', '/tmp');
-    expect(handlers.size).toBe(20);
+    expect(handlers.size).toBe(22);
     expect(typeof handlers.get('bash')).toBe('function');
   });
 
