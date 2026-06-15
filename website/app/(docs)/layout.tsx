@@ -4,6 +4,10 @@ import { RootProvider } from 'fumadocs-ui/provider/next';
 import { source } from '@/lib/source';
 import 'fumadocs-ui/style.css';
 import './docs-theme.css';
+// Visual signature — a reusable, additive system layered on top of the brand
+// theme (signal -> depth -> compression -> rise -> embodiment). Imported AFTER
+// docs-theme.css so its scoped overrides sit last in the cascade.
+import './signature.css';
 
 export default function Layout({ children }: { children: ReactNode }) {
   return (

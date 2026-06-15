@@ -4,6 +4,8 @@ import { DocsPage, DocsBody, DocsDescription, DocsTitle } from 'fumadocs-ui/page
 import defaultMdxComponents from 'fumadocs-ui/mdx';
 import { Card, Cards } from 'fumadocs-ui/components/card';
 import { source } from '@/lib/source';
+import { SignalField } from '@/components/visual/signal-field';
+import { ContourDivider } from '@/components/visual/contour-divider';
 
 interface Props {
   params: Promise<{ slug?: string[] }>;
@@ -22,7 +24,21 @@ export default async function Page({ params }: Props) {
       <DocsTitle>{page.data.title}</DocsTitle>
       <DocsDescription>{page.data.description}</DocsDescription>
       <DocsBody>
-        <MDX components={{ ...defaultMdxComponents, Card, Cards }} />
+        <MDX
+          components={{
+            ...defaultMdxComponents,
+            Card,
+            Cards,
+            // Visual signature: the hero motif (signal -> depth -> compression
+            // -> rise -> embodiment), available to any page's MDX.
+            SignalField,
+            // Every thematic break (`---`) across the docs renders as a routed
+            // contour transition instead of a flat rule, so all pages inherit
+            // the same hand. ContourDivider is also usable explicitly in MDX.
+            hr: ContourDivider,
+            ContourDivider,
+          }}
+        />
       </DocsBody>
     </DocsPage>
   );

@@ -1,0 +1,413 @@
+/* ==========================================================================
+   Agent AFK Docs — Visual Signature
+   --------------------------------------------------------------------------
+   A small, reusable visual system layered ON TOP of the existing fumadocs
+   brand (see docs-theme.css). It is ADDITIVE: every rule is scoped to
+   #nd-docs-layout or to opt-in `.sig-*` classes / data-attributes, so it
+   never overrides content, sidebar, search, or the brand mark.
+
+   The worldview it encodes (never stated literally on the page):
+
+     A small SIGNAL on the surface reveals hidden DEPTH beneath it. You
+     descend into the real local complexity, find the structure that survives
+     contact with reality, COMPRESS repeated passes into an earned path, then
+     RISE into something usable enough to live, build on, and SHARE.
+
+     motion:  signal -> depth -> compression -> rise -> embodiment
+
+   Three recurring motifs carry it (repetition with variation, not collage):
+
+     1. SIGNAL FIELD  — a bright node over implied submerged structure
+                        (concentric rings + contour basin). See <SignalField>.
+     2. EARNED PATH   — braided traces converging into one confident route,
+                        crossed by ONE ruthless measuring line (scope rule).
+                        See <SignalField> (path + rule live in the same SVG).
+     3. FIELD MIGRATION — the page runs cool/dense at the lower-left and warms
+                        + lightens toward the upper-right. Section separators
+                        become routed contours; cards read as extracted
+                        artifacts; the closing CTA sits in the warmest light.
+
+   Palette continuity: the motifs reuse the brand-mark colours verbatim —
+   the orange "ping" (--sig-warm), the grey->green handoff arc
+   (--sig-cool / --sig-mid), the deep background (#07070b). Nothing is
+   recoloured; the signature is grown out of the mark that already exists.
+
+   Accessibility / performance:
+     - All decorative SVG is aria-hidden and pointer-events:none.
+     - Motion is opt-in and fully disabled under prefers-reduced-motion.
+     - No new dependencies; pure CSS + inline SVG.
+     - Backgrounds are low-opacity gradients behind content, so AA text
+       contrast (already met by docs-theme.css) is preserved.
+   ========================================================================== */
+
+/* --- Signature tokens ----------------------------------------------------- */
+/* Tied to the brand-mark gradients so depth/route/rise read as one family.
+   Defined on :root so the SVG components and the docs shell share them. */
+:root {
+  /* The signal: the brand "ping" orange — warmth, arrival, embodiment. */
+  --sig-warm:        #f97316;
+  --sig-warm-soft:   #ffc2a1;
+  --sig-warm-deep:   #d65a0e;
+
+  /* The route handoff: the brand arc grey -> green — descent into structure. */
+  --sig-cool:        #6f6f86;   /* cooler/greyer than text-faint: deep field */
+  --sig-mid:         #5cb87f;   /* arc green: structure found in the depth   */
+
+  /* Field opacities — kept low so nothing competes with copy. */
+  --sig-contour-op:  0.05;      /* contour line strength over deep bg        */
+  --sig-field-op:    0.07;      /* basin glow strength                        */
+
+  /* Motion (respects the site's existing easing vocabulary). */
+  --sig-ripple-dur:  7s;
+  --sig-drift-dur:   22s;
+}
+
+/* ==========================================================================
+   MOTIF 3 — FIELD MIGRATION (depth -> rise -> embodiment)
+   The docs shell carries a single, very subtle directional field: cooler and
+   denser toward the lower-left, warming + lightening toward the upper-right.
+   This is the "cold depth -> warm use" movement applied to the whole page,
+   not just the hero. Two stacked radial gradients (one cool basin anchored
+   lower-left, one warm rise anchored upper-right) are painted as a fixed,
+   non-scrolling backdrop BEHIND all docs content.
+   ========================================================================== */
+#nd-docs-layout {
+  position: relative;
+  isolation: isolate;
+}
+#nd-docs-layout::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    /* warm rise — upper-right, faint (embodiment) */
+    radial-gradient(
+      60% 55% at 88% 8%,
+      rgba(249, 115, 22, 0.06) 0%,
+      rgba(249, 115, 22, 0.018) 38%,
+      transparent 70%
+    ),
+    /* cool basin — lower-left, denser (descent / hidden depth) */
+    radial-gradient(
+      70% 65% at 6% 100%,
+      rgba(92, 184, 127, 0.055) 0%,
+      rgba(111, 111, 134, 0.05) 34%,
+      transparent 72%
+    );
+  /* Let the deep base bg show through; this only tints the corners. */
+}
+
+/* Light theme: the same migration, dialed down so it never muddies the
+   high-contrast light reading surface. */
+:root:not(.dark) #nd-docs-layout::before {
+  background:
+    radial-gradient(60% 55% at 88% 8%,
+      rgba(232, 104, 42, 0.05) 0%, rgba(232, 104, 42, 0.015) 38%, transparent 70%),
+    radial-gradient(70% 65% at 6% 100%,
+      rgba(92, 184, 127, 0.06) 0%, rgba(111, 111, 134, 0.045) 34%, transparent 72%);
+}
+
+/* ==========================================================================
+   CONTOUR DIVIDER — section transitions as routed contours, not flat rules.
+   Opt-in via <hr class="contour-divider" /> (or the MDX `---` rule when the
+   page sets data-sig-contours). A topographic line: a faint baseline with a
+   single channel dipping through it and a small node marking the crossing —
+   "a threshold in the field", echoing the signal-over-depth motif at small
+   scale. Drawn with an inline SVG data-URI mask so it needs no extra markup.
+   ========================================================================== */
+#nd-docs-layout .contour-divider,
+#nd-docs-layout hr.contour-divider {
+  position: relative;
+  height: 22px;
+  border: 0;
+  margin: 2.6em 0;
+  background: transparent;
+  overflow: visible;
+}
+#nd-docs-layout .contour-divider::before {
+  /* Three stacked contour traces of decreasing opacity = layered depth. */
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle at center, color-mix(in srgb, var(--sig-warm) 70%, transparent) 0 1.4px, transparent 1.8px),
+    repeating-linear-gradient(90deg, transparent 0 6px, transparent 6px);
+  background-repeat: no-repeat, repeat;
+  background-position: 18% center, 0 0;
+}
+/* The routed line itself: a thin gradient stroke that fades cool->warm,
+   left (deep) to right (resolved). The node above sits at the channel mouth. */
+#nd-docs-layout .contour-divider::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--sig-cool) 55%, transparent) 0%,
+    color-mix(in srgb, var(--sig-mid) 45%, transparent) 42%,
+    color-mix(in srgb, var(--sig-warm) 38%, transparent) 100%
+  );
+  /* A single channel dips through the line: mask a notch out of the middle. */
+  -webkit-mask: radial-gradient(8px 14px at 18% -6px, transparent 96%, #000 100%);
+          mask: radial-gradient(8px 14px at 18% -6px, transparent 96%, #000 100%);
+}
+
+/* ==========================================================================
+   ARTIFACT CARDS — fumadocs Cards read as extracted artifacts pulled from the
+   field, not floating rectangles. A carved recess (inset top shadow +
+   threshold top-edge highlight), and a warm RISE on hover (lifts toward the
+   embodiment register). Scoped to fumadocs' [data-card] so only docs cards
+   are touched; their existing layout/colour from docs-theme.css is preserved.
+   ========================================================================== */
+#nd-docs-layout [data-card] {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  transition:
+    transform var(--t-base, 180ms) var(--ease, ease),
+    border-color var(--t-base, 180ms) var(--ease, ease),
+    box-shadow var(--t-base, 180ms) var(--ease, ease);
+}
+/* Threshold marker: a precise top edge — the "one ruthless line of
+   measurement" repeated at card scale. Cool at rest. */
+#nd-docs-layout [data-card]::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--sig-mid) 55%, transparent) 22%,
+    color-mix(in srgb, var(--sig-warm) 60%, transparent) 100%
+  );
+  opacity: 0.5;
+  transition: opacity var(--t-base, 180ms) var(--ease, ease);
+  z-index: 1;
+}
+/* Carved recess: a faint contour glow seated in the lower-left corner of each
+   card — the artifact still carries a trace of the depth it came from. */
+#nd-docs-layout [data-card]::after {
+  content: '';
+  position: absolute;
+  left: -30%;
+  bottom: -40%;
+  width: 70%;
+  height: 80%;
+  background: radial-gradient(
+    circle at 30% 70%,
+    color-mix(in srgb, var(--sig-mid) 60%, transparent) 0%,
+    transparent 70%
+  );
+  opacity: 0.06;
+  transition: opacity var(--t-base, 180ms) var(--ease, ease);
+  z-index: -1;
+  pointer-events: none;
+}
+#nd-docs-layout [data-card]:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--sig-warm) 45%, var(--color-fd-border));
+  box-shadow:
+    0 6px 20px -10px rgba(0, 0, 0, 0.5),
+    0 0 0 1px color-mix(in srgb, var(--sig-warm) 12%, transparent);
+}
+#nd-docs-layout [data-card]:hover::before { opacity: 1; }
+#nd-docs-layout [data-card]:hover::after  { opacity: 0.13; }
+#nd-docs-layout [data-card]:focus-within {
+  border-color: color-mix(in srgb, var(--sig-warm) 45%, var(--color-fd-border));
+}
+
+/* The first <Cards> block on a page (the primary "Get started" call) sits in
+   warmer light — strongest sense of arrival. Opt-in via .sig-cta on a wrapper
+   or on the Card itself. */
+#nd-docs-layout .sig-cta[data-card],
+#nd-docs-layout .sig-cta [data-card] {
+  border-color: color-mix(in srgb, var(--sig-warm) 30%, var(--color-fd-border));
+}
+#nd-docs-layout .sig-cta[data-card]::before,
+#nd-docs-layout .sig-cta [data-card]::before {
+  opacity: 0.9;
+}
+#nd-docs-layout .sig-cta[data-card]::after,
+#nd-docs-layout .sig-cta [data-card]::after {
+  background: radial-gradient(circle at 30% 70%,
+    color-mix(in srgb, var(--sig-warm) 70%, transparent) 0%, transparent 70%);
+  opacity: 0.12;
+}
+
+/* ==========================================================================
+   ELEVATED FIELD — a reusable "embodiment zone" wrapper. The warmest, clearest
+   region: used for the closing CTA / arrival block. Opt-in via
+   <div class="elevated-field"> in MDX.
+   ========================================================================== */
+#nd-docs-layout .elevated-field {
+  position: relative;
+  border-radius: var(--radius-lg, 12px);
+  padding: 1.4rem 1.5rem;
+  margin: 2.2em 0 0.5em;
+  background:
+    radial-gradient(120% 140% at 100% 0%,
+      rgba(249, 115, 22, 0.07) 0%, transparent 55%),
+    var(--color-fd-card);
+  border: 1px solid color-mix(in srgb, var(--sig-warm) 22%, var(--color-fd-border));
+}
+#nd-docs-layout .elevated-field::before {
+  /* The measure crossing the warm field: a clean top rule with a tick. */
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 1.5rem;
+  right: 1.5rem;
+  height: 1px;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--sig-warm) 55%, transparent),
+    transparent 80%);
+  opacity: 0.7;
+}
+
+/* A reusable DEEP FIELD wrapper — the cool, dense, inward "discovery" register.
+   Opt-in; available for problem-framing / deep-dive callouts on any page. */
+#nd-docs-layout .deep-field {
+  position: relative;
+  border-radius: var(--radius-lg, 12px);
+  padding: 1.4rem 1.5rem;
+  margin: 2em 0;
+  background:
+    radial-gradient(120% 160% at 0% 100%,
+      rgba(92, 184, 127, 0.06) 0%,
+      rgba(111, 111, 134, 0.05) 38%,
+      transparent 70%),
+    var(--color-fd-card);
+  border: 1px solid var(--color-fd-border);
+}
+
+/* ==========================================================================
+   SIGNAL FIELD host — the wrapper the <SignalField> component renders into.
+   It is a zero-height, overflow-visible anchor placed at the top of the hero;
+   the SVG bleeds upward/outward behind the intro copy. Sized in the component;
+   here we own positioning + the reduced-motion + responsive contract so the
+   rules live with the rest of the system.
+   ========================================================================== */
+.signal-field {
+  position: relative;
+  display: block;
+  width: 100%;
+  /* The field reaches above its anchor (into the title region) and to the
+     right (toward the CTA), establishing the lower-left -> upper-right pull. */
+  height: 0;
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
+}
+.signal-field__svg {
+  position: absolute;
+  /* Bleed beyond the content column so the "submerged structure" extends past
+     the visible frame — the system is larger than what the page shows. */
+  left: -8%;
+  right: -8%;
+  bottom: -130px;
+  width: 116%;
+  height: 360px;
+  overflow: visible;
+}
+
+/* Animated primitives inside the SVG (classes applied to SVG elements). */
+.signal-field .sf-ripple {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: sf-ripple var(--sig-ripple-dur) var(--ease, ease-out) infinite;
+}
+.signal-field .sf-ripple--2 { animation-delay: calc(var(--sig-ripple-dur) / -3); }
+.signal-field .sf-ripple--3 { animation-delay: calc(var(--sig-ripple-dur) / -1.5); }
+
+.signal-field .sf-node {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: sf-pulse calc(var(--sig-ripple-dur) / 1.75) ease-in-out infinite;
+}
+
+/* The earned path draws itself once, then holds — iteration resolving into a
+   single confident route. dash length set in the component via pathLength. */
+.signal-field .sf-route {
+  stroke-dasharray: 1000;
+  stroke-dashoffset: 1000;
+  animation: sf-draw 2.6s var(--ease, ease) 0.2s forwards;
+}
+.signal-field .sf-route--ghost {
+  /* The faint prior passes: drawn, then settle to low opacity. */
+  opacity: 0;
+  animation: sf-ghost 2.6s var(--ease, ease) forwards;
+}
+
+@keyframes sf-ripple {
+  0%   { transform: scale(0.35); opacity: 0; }
+  18%  { opacity: var(--sig-field-op); }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+@keyframes sf-pulse {
+  0%, 100% { opacity: 0.85; transform: scale(1); }
+  50%      { opacity: 1;    transform: scale(1.12); }
+}
+@keyframes sf-draw {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes sf-ghost {
+  0%   { opacity: 0; stroke-dashoffset: 1000; }
+  60%  { opacity: 0.5; }
+  100% { opacity: 0.18; stroke-dashoffset: 0; }
+}
+
+/* Faint contour drift on the basin layer (background structure breathing). */
+.signal-field .sf-drift {
+  animation: sf-drift var(--sig-drift-dur) ease-in-out infinite alternate;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@keyframes sf-drift {
+  from { transform: translateX(-6px); }
+  to   { transform: translateX(6px); }
+}
+
+/* --- Responsive recomposition -------------------------------------------- */
+/* On small screens the field recomposes intentionally: it shrinks, pulls the
+   route to a vertical descent, and keeps the node/rings centred — never
+   collapsing into visual rubble or pushing copy around. */
+@media (max-width: 640px) {
+  .signal-field__svg {
+    left: -4%;
+    right: -4%;
+    width: 108%;
+    height: 230px;
+    bottom: -90px;
+  }
+}
+
+/* --- Reduced motion ------------------------------------------------------- */
+/* Honour the user's preference: freeze every animation in a resolved end
+   state (route fully drawn, node steady, ripples hidden). The composition
+   still reads — the signature is structural, not dependent on motion. */
+@media (prefers-reduced-motion: reduce) {
+  .signal-field .sf-ripple,
+  .signal-field .sf-node,
+  .signal-field .sf-drift {
+    animation: none;
+  }
+  .signal-field .sf-ripple { opacity: var(--sig-field-op); }
+  .signal-field .sf-route {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+  .signal-field .sf-route--ghost {
+    animation: none;
+    opacity: 0.18;
+    stroke-dashoffset: 0;
+  }
+}
