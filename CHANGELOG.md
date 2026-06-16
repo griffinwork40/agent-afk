@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.7.6] - 2026-06-16
+
+### Fixed
+- preserve fully-pending band-hold rows on disarm before collapse (5eb9db6)
+- keep multi-line blocks visible (band-hold) when committed under a tall overlay (port afk-workshop#649) (9e6089c)
+
+### Changed
+- Merge pull request #172 from griffinwork40/afk-port/pr-649 (ab58aa0)
+- Merge pull request #175 from griffinwork40/afk-port/pr-454 (3350480)
+- formalize TUI invariants discipline with regression tests (port afk-workshop#454) (4d55e2d)
+
 ## [4.7.5] - 2026-06-16
 
 ### Changed
