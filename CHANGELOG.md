@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.7.2] - 2026-06-16
+
+### Fixed
+- stop crashing on null-content tool-call turns (non-vision) (ac0233e)
+
+### Changed
+- Merge pull request #169 from griffinwork40/fix/openai-compat-null-content-crash (572b403)
+
 ## [4.7.1] - 2026-06-16
 
 ### Fixed
