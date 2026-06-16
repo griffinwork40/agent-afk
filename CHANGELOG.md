@@ -11,6 +11,21 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.7.0] - 2026-06-16
+
+### Added
+- add local capability tier (9bc1dc9)
+
+### Fixed
+- guard unconfigured tier selection + route per-slot baseUrl (afad68a)
+- strip ask_question on non-interactive surfaces (7dd7b91)
+- route all overlay repaints through setComposedOverlay (port afk-workshop#572) (25f340d)
+
+### Changed
+- Merge pull request #164 from griffinwork40/fix/strip-ask-question-noninteractive (1d8e53b)
+- Merge pull request #163 from griffinwork40/afk-port/pr-572 (10800ae)
+- Merge pull request #162 from griffinwork40/feat/local-model-slot (2c4f8cb)
+
 ## [4.6.2] - 2026-06-15
 
 ### Changed
