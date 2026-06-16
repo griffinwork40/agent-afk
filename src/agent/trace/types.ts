@@ -62,6 +62,7 @@ export const TOOL_FAILURE_CLASSES = [
   'permission-denied',
   'hook-block',
   'abort',
+  'elicitation-declined',
 ] as const;
 
 /**
@@ -70,15 +71,20 @@ export const TOOL_FAILURE_CLASSES = [
  * pre-classification default — a handler bug, malformed input, etc.).
  *
  * Set at the site that produced the error:
- *   - `policy-refusal`    — browser handler refused nav (domain allowlist). NOT a bug.
- *   - `timeout`           — browser navigation/action exceeded its deadline.
- *   - `permission-denied` — permission gate or read-only-skill bash gate denied the call.
- *   - `hook-block`        — a PreToolUse hook returned `decision: 'block'`.
- *   - `abort`             — the call's AbortSignal was already fired.
+ *   - `policy-refusal`       — browser handler refused nav (domain allowlist). NOT a bug.
+ *   - `timeout`              — browser navigation/action exceeded its deadline.
+ *   - `permission-denied`    — permission gate or read-only-skill bash gate denied the call.
+ *   - `hook-block`           — a PreToolUse hook returned `decision: 'block'`.
+ *   - `abort`                — the call's AbortSignal was already fired.
+ *   - `elicitation-declined` — `ask_question` returned `decline` (no handler / surface
+ *                              cannot reach a human) or `cancel` (operator dismissed the
+ *                              prompt). An unanswered question is an expected outcome on a
+ *                              non-interactive or AFK surface, NOT a tool fault.
  *
  * The `tool-failure-density` detector treats `policy-refusal`, `permission-denied`,
- * `hook-block`, and `abort` as "the system correctly said no" — excluded from
- * failure stats entirely — while `timeout` and unclassified failures still count.
+ * `hook-block`, `abort`, and `elicitation-declined` as "the system correctly said no" —
+ * excluded from failure stats entirely — while `timeout` and unclassified failures still
+ * count.
  */
 export type ToolFailureClass = (typeof TOOL_FAILURE_CLASSES)[number];
 

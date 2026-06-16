@@ -99,6 +99,9 @@ describe('ask_question handler — decline when no handler', () => {
     // M3: decline/cancel are hard stops — the agent must see isError: true so it
     // halts rather than treating the refusal as a valid answer.
     expect(result.isError).toBe(true);
+    // The decline is tagged so tool-failure-density excludes it: an unanswered
+    // question on a non-interactive/AFK surface is an expected outcome, not a fault.
+    expect(result.failureClass).toBe('elicitation-declined');
     const parsed = JSON.parse(result.content as string) as ElicitationResult;
     expect(parsed.action).toBe('decline');
   });
@@ -151,8 +154,35 @@ describe('ask_question handler — handler installed', () => {
 
     const result = await askQuestionHandler({ question: 'confirm?' }, NO_SIGNAL);
     expect(result.isError).toBeUndefined();
+    // A successful answer is never tagged as a failure.
+    expect(result.failureClass).toBeUndefined();
     const parsed = JSON.parse(result.content as string) as ElicitationResult;
     expect(parsed.action).toBe('accept');
+  });
+
+  it('tags cancel result with isError + failureClass: elicitation-declined', async () => {
+    elicitationRouter.install(vi.fn().mockResolvedValue({ action: 'cancel' } as ElicitationResult));
+
+    const result = await askQuestionHandler({ question: 'still there?' }, NO_SIGNAL);
+    // cancel (operator dismissed the prompt) is a hard stop like decline, and is
+    // excluded from tool-failure-density via the failureClass tag.
+    expect(result.isError).toBe(true);
+    expect(result.failureClass).toBe('elicitation-declined');
+    const parsed = JSON.parse(result.content as string) as ElicitationResult;
+    expect(parsed.action).toBe('cancel');
+  });
+
+  it('does NOT tag skip result as a failure (optional question skipped is a success)', async () => {
+    elicitationRouter.install(vi.fn().mockResolvedValue({ action: 'skip' } as ElicitationResult));
+
+    const result = await askQuestionHandler(
+      { question: 'optional?', allow_skip: true },
+      NO_SIGNAL,
+    );
+    expect(result.isError).toBeUndefined();
+    expect(result.failureClass).toBeUndefined();
+    const parsed = JSON.parse(result.content as string) as ElicitationResult;
+    expect(parsed.action).toBe('skip');
   });
 
   it('passes origin: "agent" in the routed request', async () => {
