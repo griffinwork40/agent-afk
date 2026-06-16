@@ -53,7 +53,10 @@ export class StatusLine {
   private lastRepaint = 0;
   private lastFields: StatusLineFields | null = null;
   private resizeUnsub: (() => void) | null = null;
+  private resizeImmediateUnsub: (() => void) | null = null;
   private lastPaintedRow: number | null = null;
+  /** Captures lastPaintedRow at SIGWINCH time for onResize() to use as the stale-row target. */
+  private preResizePaintedRow: number | null = null;
   private extraRows = 0;
   private afterScrollRestore: (() => void) | null = null;
 
@@ -82,16 +85,58 @@ export class StatusLine {
       this.resizeUnsub = ResizeBus.subscribe(() => {
         this.onResize();
       });
+      this.resizeImmediateUnsub = ResizeBus.subscribeImmediate(() => this.resetGeometry());
     }
+  }
+
+  private resetGeometry(): void {
+    // Invariant: capturing `lastPaintedRow` into `preResizePaintedRow` BEFORE
+    // nulling it is critical to preserve the stale-row-clear capability of
+    // onResize() while also preventing mid-window repaint() calls from
+    // corrupting the stale-row reference.
+    //
+    // The race this method prevents:
+    //   SIGWINCH fires → stream.rows changes to newRows.
+    //   A repaint(fields) call arrives in the 150ms debounce window (e.g. from a
+    //   streaming token event).  repaint() writes to paintRow(newRows) and sets
+    //   lastPaintedRow = paintRow(newRows).
+    //   When onResize() finally fires, it reads lastPaintedRow = paintRow(newRows)
+    //   and (correctly) sees that lastPaintedRow === paintRow(newRows), so it
+    //   emits NO clear for the old row.  The pre-SIGWINCH content at
+    //   paintRow(oldRows) is never erased — a visible stale-row artifact remains.
+    //
+    // By snapshotting lastPaintedRow → preResizePaintedRow here and nulling
+    // lastPaintedRow synchronously, we achieve two goals simultaneously:
+    //   1. onResize() reads preResizePaintedRow (the true pre-SIGWINCH row)
+    //      for the old-row clear, immune to any mid-window repaint() mutation
+    //      of lastPaintedRow.
+    //   2. Mid-window repaint() writes to the new paintRow and seeds
+    //      lastPaintedRow = paintRow(newRows).  Because lastPaintedRow was
+    //      nulled, the mid-window repaint runs unconditionally (throttle gate
+    //      open via lastRepaint=0) and does not attempt to clear a stale row
+    //      on its own — onResize() will handle that.
+    //
+    // This must execute on the IMMEDIATE channel (ResizeBus.subscribeImmediate)
+    // so the snapshot is taken synchronously inside the 'resize' event, before
+    // any macrotask (streaming event, spinner tick) can mutate lastPaintedRow.
+    this.preResizePaintedRow = this.lastPaintedRow;
+    this.lastPaintedRow = null;
+    this.lastRepaint = 0;
   }
 
   /** Re-anchor DECSTBM when the terminal height changes, then repaint. */
   private onResize(): void {
     if (!this.started || !this.enabled) return;
     const rows = this.currentRows();
+    // Use preResizePaintedRow (set by resetGeometry() on the immediate channel)
+    // as the authoritative old-row reference.  lastPaintedRow may have been
+    // updated by a mid-window repaint() call and therefore already reflects the
+    // new geometry — using it here would skip the necessary old-row clear.
+    const rowToErase = this.preResizePaintedRow ?? this.lastPaintedRow;
+    this.preResizePaintedRow = null;
     this.stream.write('\x1b[s');
-    if (this.lastPaintedRow !== null && this.lastPaintedRow !== this.paintRow(rows)) {
-      this.stream.write(`\x1b[${this.lastPaintedRow};1H`);
+    if (rowToErase !== null && rowToErase !== this.paintRow(rows)) {
+      this.stream.write(`\x1b[${rowToErase};1H`);
       this.stream.write('\x1b[2K');
     }
     this.writeScrollRegion(rows);
@@ -259,6 +304,10 @@ export class StatusLine {
       this.resizeUnsub();
       this.resizeUnsub = null;
     }
+    if (this.resizeImmediateUnsub !== null) {
+      this.resizeImmediateUnsub();
+      this.resizeImmediateUnsub = null;
+    }
     if (!this.started || !this.enabled) {
       this.started = false;
       return;
@@ -273,6 +322,7 @@ export class StatusLine {
     this.started = false;
     this.lastRepaint = 0;
     this.lastPaintedRow = null;
+    this.preResizePaintedRow = null;
   }
 
   private formatLine(f: StatusLineFields): string {

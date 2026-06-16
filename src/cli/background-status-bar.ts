@@ -42,6 +42,7 @@ export class BackgroundStatusBar {
   private spinnerIndex = 0;
   private spinnerInterval: ReturnType<typeof setInterval> | null = null;
   private resizeUnsub: (() => void) | null = null;
+  private resizeImmediateUnsub: (() => void) | null = null;
   private registryStartedHandler: ((job: BackgroundJob) => void) | null = null;
   private registrySettledHandler: ((job: BackgroundJob) => void) | null = null;
   private rowCount = 0;
@@ -78,8 +79,17 @@ export class BackgroundStatusBar {
     }
 
     this.resizeUnsub = ResizeBus.subscribe(() => this.repaint());
+    this.resizeImmediateUnsub = ResizeBus.subscribeImmediate(() => this.resetGeometry());
 
     this.spinnerInterval = setInterval(() => {
+      // Invariant: resetGeometry() zeroes this.rowCount synchronously inside
+      // the 'resize' event (via ResizeBus.subscribeImmediate), which fires
+      // BEFORE any macrotask (including this setInterval callback) can execute.
+      // Therefore, if a SIGWINCH fires between two spinner ticks, this.rowCount
+      // is guaranteed to be 0 by the time this callback runs — the `> 0` guard
+      // correctly suppresses the repaint until the debounced ResizeBus.subscribe
+      // channel fires repaint() and re-seizes the correct row count and
+      // start-row address against the new terminal geometry.
       this.spinnerIndex = (this.spinnerIndex + 1) % SPINNER_FRAMES.length;
       if (this.rowCount > 0) this.repaint();
     }, Math.max(this.throttleMs, 50));
@@ -103,6 +113,10 @@ export class BackgroundStatusBar {
       this.resizeUnsub();
       this.resizeUnsub = null;
     }
+    if (this.resizeImmediateUnsub) {
+      this.resizeImmediateUnsub();
+      this.resizeImmediateUnsub = null;
+    }
     if (this.spinnerInterval) {
       clearInterval(this.spinnerInterval);
       this.spinnerInterval = null;
@@ -113,6 +127,36 @@ export class BackgroundStatusBar {
       this.rowCount = 0;
       this.onRowCountChange?.(0);
     }
+  }
+
+  private resetGeometry(): void {
+    // Invariant: 'stale' means `this.rowCount` was computed against the
+    // pre-SIGWINCH terminal height and therefore encodes both (a) how many rows
+    // were physically written at the OLD start-row address and (b) the old
+    // equality baseline used by the `newRowCount !== this.rowCount` guard in
+    // repaint().  After SIGWINCH, `stream.rows` has already changed, but the
+    // 150ms-debounced ResizeBus.subscribe channel has NOT yet fired, so any
+    // repaint() call in that window (typically from the spinner at ≤150ms
+    // interval) evaluates newRowCount against the NEW terminal height and
+    // compares it with the OLD this.rowCount.  Two failure modes follow:
+    //   1. SHRINK: the equality guard may not trip, leaving the old rows
+    //      uncleaned; clearRows() would CUP to addresses now outside the
+    //      visible viewport, producing ghost rows in the scrollback.
+    //   2. EXPAND: repaint() computes a new startRow against the larger
+    //      terminal but skips clearRows() because newRowCount === this.rowCount,
+    //      so the old content sits at the old startRow while new content is
+    //      written at the new startRow — a visible stripe artifact.
+    // Zeroing rowCount here forces the equality guard to trip on the very next
+    // repaint() regardless of item-count, allowing clearRows() to run before
+    // any painting with the new geometry.  Zeroing lastRepaint ensures the
+    // throttle gate in scheduleRepaint() is open, so the immediate-next call
+    // (from the spinner or from a registry event) actually executes repaint()
+    // and re-seizes the correct coordinates.
+    // This must execute on the IMMEDIATE channel (ResizeBus.subscribeImmediate)
+    // so it lands synchronously inside the 'resize' event, before the 150ms
+    // debounce window opens and any spinner tick can observe stale state.
+    this.rowCount = 0;
+    this.lastRepaint = 0;
   }
 
   private scheduleRepaint(): void {

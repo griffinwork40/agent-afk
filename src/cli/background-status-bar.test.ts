@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { BackgroundStatusBar } from './background-status-bar.js';
 import type {
@@ -6,6 +6,7 @@ import type {
   BackgroundJob,
   BackgroundRegistryEvents,
 } from '../agent/background-registry.js';
+import { __flushResizeBusForTests } from './terminal-size.js';
 
 // ---------------------------------------------------------------------------
 // Minimal fake BackgroundAgentRegistry for testing — extends the same
@@ -529,5 +530,128 @@ describe('BackgroundStatusBar', () => {
     expect(writes).not.toMatch(/\x1b\[\d+;1H/);
 
     bar.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Resize-immediate channel tests
+// ---------------------------------------------------------------------------
+
+describe('BackgroundStatusBar resize-immediate channel', () => {
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  // -------------------------------------------------------------------------
+  // R1. resetGeometry() is called synchronously on resize — rowCount is 0
+  //     BEFORE the debounced channel fires.
+  // -------------------------------------------------------------------------
+  it('rowCount is 0 immediately after resize, before debounced channel fires', () => {
+    const mockStream = makeMockStream();
+    const registry = new FakeRegistry();
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
+      stream: mockStream,
+      throttleMs: 0,
+    });
+    const rowHandler = vi.fn();
+    bar.setRowCountChangeHandler(rowHandler);
+    bar.start();
+
+    // Seed two running jobs so rowCount is set to 2.
+    registry.fireStarted(makeJob('j1'));
+    registry.fireStarted(makeJob('j2'));
+    rowHandler.mockClear();
+
+    // Emit resize — the immediate channel fires resetGeometry() synchronously.
+    // The debounced channel (and thus repaint()) has NOT yet fired.
+    process.stdout.emit('resize');
+
+    // rowCount must now be 0 (invalidated by resetGeometry on immediate channel).
+    // We assert this indirectly: if the spinner were to tick NOW (before the
+    // debounce fires), it must see rowCount === 0 and skip repaint().
+    // Directly inspect by triggering scheduleRepaint via a registry event.
+    // At this point rowCount=0, so repaint() should recompute from scratch.
+    // First flush the debounced resize: row count re-seeds.
+    (mockStream.write as ReturnType<typeof vi.fn>).mockClear();
+    __flushResizeBusForTests();
+
+    // After the debounced channel fires repaint(), rowHandler should be called
+    // (newRowCount 2 !== 0 → equality guard trips, rowCountChange fires).
+    expect(rowHandler).toHaveBeenCalledWith(2);
+
+    bar.stop();
+  });
+
+  // -------------------------------------------------------------------------
+  // R2. Spinner tick BETWEEN SIGWINCH and debounced repaint sees rowCount === 0
+  //     and emits NO write() calls.
+  // -------------------------------------------------------------------------
+  it('spinner tick after SIGWINCH but before debounced repaint emits no writes', () => {
+    // Use a throttleMs that makes the spinner interval deterministic: 100ms.
+    const mockStream = makeMockStream();
+    const registry = new FakeRegistry();
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
+      stream: mockStream,
+      throttleMs: 100,
+    });
+    bar.start();
+
+    // Seed a running job so rowCount > 0.
+    registry.fireStarted(makeJob('j1'));
+
+    // Clear writes from initial paint.
+    (mockStream.write as ReturnType<typeof vi.fn>).mockClear();
+
+    // Emit resize — immediate channel resets rowCount to 0 synchronously.
+    process.stdout.emit('resize');
+
+    // Advance time by 100ms — spinner tick fires (interval = max(100, 50) = 100ms).
+    // The debounce timer (150ms) has NOT yet elapsed.
+    vi.advanceTimersByTime(100);
+
+    // The spinner tick must NOT have produced any writes: rowCount === 0.
+    const writesAfterSpinner = (mockStream.write as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(writesAfterSpinner).toBe(0);
+
+    // Now advance past the debounce (50ms more → 150ms total).
+    vi.advanceTimersByTime(50);
+
+    // After debounced repaint, writes should resume (rowCount re-seeded to 1).
+    const writesAfterDebounce = (mockStream.write as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(writesAfterDebounce).toBeGreaterThan(0);
+
+    bar.stop();
+  });
+
+  // -------------------------------------------------------------------------
+  // R3. stop() unsubscribes the immediate channel — no resetGeometry() after stop.
+  // -------------------------------------------------------------------------
+  it('stop() unsubscribes immediate channel — resize after stop does not affect rowCount', () => {
+    const mockStream = makeMockStream();
+    const registry = new FakeRegistry();
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
+      stream: mockStream,
+      throttleMs: 0,
+    });
+    const rowHandler = vi.fn();
+    bar.setRowCountChangeHandler(rowHandler);
+    bar.start();
+
+    registry.fireStarted(makeJob('j1'));
+    bar.stop();
+    rowHandler.mockClear();
+
+    // Emit resize after stop — should be a complete no-op.
+    process.stdout.emit('resize');
+    vi.advanceTimersByTime(150);
+
+    // rowHandler must not be called after stop.
+    expect(rowHandler).not.toHaveBeenCalled();
   });
 });
