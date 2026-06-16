@@ -56,19 +56,28 @@ credentials):
 | `AFK_MODEL_{LOCAL,SMALL,MEDIUM,LARGE}_API_KEY` | the tier's API key (secret) |
 
 ```bash
-# Point the local tier at Ollama:
+# Point the local tier at Ollama. The per-slot BASE_URL routes the tier to the
+# OpenAI-compatible path even though `llama3.2:3b` matches no provider prefix;
+# the API key is a throwaway many shims merely require to be non-empty.
 AFK_MODEL_LOCAL='llama3.2:3b' \
 AFK_MODEL_LOCAL_BASE_URL='http://localhost:11434/v1' \
-AFK_MODEL_LOCAL_API_KEY='local' afk i
+AFK_MODEL_LOCAL_API_KEY='ollama' afk i
 
-# A local shim on the small tier, keys/endpoint out of any file:
+# An MLX shim on the small tier (an `org/model` id routes to openai-compatible
+# on its own), keys/endpoint out of any file:
 AFK_MODEL_SMALL='mlx-community/Qwen3-32B-4bit' \
 AFK_MODEL_SMALL_BASE_URL='http://localhost:8080/v1' \
-AFK_MODEL_SMALL_API_KEY='local' afk i
+AFK_MODEL_SMALL_API_KEY='mlx' afk i
 ```
 
-(`provider` is config-only — set it in afk.config.json when a bare id needs an
-explicit provider; env-bound ids are inferred or paired with a config `provider`.)
+A per-slot `BASE_URL` routes the tier to the OpenAI-compatible path even for a
+bare id that matches no provider prefix (Ollama / LM Studio tags like
+`llama3.2:3b`). `provider` itself is config-only — set it in afk.config.json to
+force an **Anthropic**-compatible shim on a bare id, or use a `local-*` id, which
+routes to anthropic-direct. (Note: `AFK_MODEL_LOCAL_BASE_URL` is the per-slot
+endpoint for the `local` **tier**; the separate `AFK_LOCAL_BASE_URL` is the
+global endpoint for `local-*` **ids** on the Anthropic-shim path — different
+knobs.)
 
 ### Default bindings
 
@@ -106,8 +115,9 @@ a non-Anthropic id (e.g. `small → gpt-4o-mini`) routes to `openai-compatible`.
 ## How it works
 
 **Routing (Stage 1).** `providerForModel()` resolves the slot alias to its full
-binding **before** pattern matching, honoring an explicit per-slot `provider`
-then falling back to id inference. This single resolution-before-routing step
+binding **before** pattern matching, honoring an explicit per-slot `provider`,
+then id inference, then a per-slot `baseUrl` (a custom endpoint on a
+non-Anthropic id infers `openai-compatible`). This single resolution-before-routing step
 means every routing call site — subagent dispatch, the child `providerForModel`
 factory, and the CLI/Telegram surfaces — gets correct routing for free, without
 per-site changes. Idempotent: full ids and `auto` pass through untouched.

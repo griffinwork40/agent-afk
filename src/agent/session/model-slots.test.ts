@@ -17,6 +17,7 @@ import {
   setSlotBindings,
   slotForInput,
   SLOT_NAMES,
+  unconfiguredSlotError,
   type ModelSlots,
 } from './model-slots.js';
 import { contextLimitFor, maxOutputTokensFor } from '../model-limits.js';
@@ -183,6 +184,38 @@ describe('local slot', () => {
   it('resolveModelInput("local") returns empty string when unconfigured', () => {
     // local default id is '' — not undefined or a crash
     expect(resolveModelInput('local')).toBe('');
+  });
+
+  it('slotForInput does NOT match a raw id that merely contains "local"', () => {
+    // Exact-token match only — an Ollama/HF id like these must pass through as a
+    // raw id, never collide with the `local` slot alias.
+    expect(slotForInput('local-llama-3')).toBeUndefined();
+    expect(slotForInput('mlx-community/local-model')).toBeUndefined();
+    expect(resolveModelInput('local-llama-3')).toBe('local-llama-3');
+  });
+
+  it('unconfiguredSlotError flags an unconfigured local tier with an actionable message', () => {
+    const msg = unconfiguredSlotError('local');
+    expect(msg).toBeTruthy();
+    expect(msg).toContain('AFK_MODEL_LOCAL');
+    expect(msg).toContain('models.local');
+  });
+
+  it('unconfiguredSlotError matches the slot alias case-insensitively', () => {
+    expect(unconfiguredSlotError('LOCAL')).toBeTruthy();
+  });
+
+  it('unconfiguredSlotError returns undefined once local is configured', () => {
+    process.env['AFK_MODEL_LOCAL'] = 'llama3.2:3b';
+    expect(unconfiguredSlotError('local')).toBeUndefined();
+  });
+
+  it('unconfiguredSlotError returns undefined for configured tiers, raw ids, aliases, and undefined', () => {
+    expect(unconfiguredSlotError('small')).toBeUndefined();
+    expect(unconfiguredSlotError('sonnet')).toBeUndefined();
+    expect(unconfiguredSlotError('gpt-4o-mini')).toBeUndefined();
+    expect(unconfiguredSlotError('auto')).toBeUndefined();
+    expect(unconfiguredSlotError(undefined)).toBeUndefined();
   });
 });
 

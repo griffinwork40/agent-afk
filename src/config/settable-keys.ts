@@ -194,6 +194,7 @@ export interface ConfigKeySpec {
  */
 export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'model', tier: 'agent', type: 'string', description: 'Default model id / alias.' },
+  { path: 'models.local', tier: 'agent', type: 'string', description: 'Local-tier model id (OpenAI-compatible shim: Ollama, LM Studio, vLLM, MLX).' },
   { path: 'models.small', tier: 'agent', type: 'string', description: 'Small-tier model id.' },
   { path: 'models.medium', tier: 'agent', type: 'string', description: 'Medium-tier model id.' },
   { path: 'models.large', tier: 'agent', type: 'string', description: 'Large-tier model id.' },

@@ -18,7 +18,7 @@
  *      can't take them risks a hard 400; a text notice never does and always
  *      informs the user.
  *
- * Aliases (`small`/`medium`/`large`, `opus`/`sonnet`/`haiku`, `fable`) are
+ * Aliases (`local`/`small`/`medium`/`large`, `opus`/`sonnet`/`haiku`, `fable`) are
  * resolved to their bound concrete id first, so capability follows the resolved
  * model — a tier rebound to a text-only id degrades, as it should.
  *

@@ -2,6 +2,7 @@ import * as readline from 'node:readline';
 import { elicitationRouter } from '../../../agent/elicitation-router.js';
 import { makeReplElicitationHandler } from '../../elicitation-repl.js';
 import { AgentSession } from '../../../agent/session.js';
+import { unconfiguredSlotError } from '../../../agent/session/model-slots.js';
 import { createDefaultHookRegistry } from '../../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../../agent/hooks/config-loader.js';
 import { MemoryStore, injectHotMemory, MEMORY_TOOL_NAMES } from '../../../agent/memory/index.js';
@@ -140,6 +141,13 @@ export async function bootstrapSession(
   const resumeTarget = resolveResumeTarget(options);
   const resumeConfig = resumeConfigFor(resumeTarget);
   const sessionModel = resumeTarget?.stored?.model ?? options.model;
+  // Fail fast on an unconfigured capability tier (e.g. `afk i -m local` with no
+  // AFK_MODEL_LOCAL) before building the REPL session — an empty id would
+  // otherwise reach the provider as an opaque error or a silent cloud call.
+  const unconfiguredModel = unconfiguredSlotError(sessionModel);
+  if (unconfiguredModel) {
+    throw new Error(unconfiguredModel);
+  }
 
   let thinking: ThinkingConfig | undefined;
   let effort: EffortLevel | undefined;

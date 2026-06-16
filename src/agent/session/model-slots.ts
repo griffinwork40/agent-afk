@@ -277,6 +277,35 @@ export function resolveModelInput(
 }
 
 /**
+ * Guard for selecting a capability tier that has no configured model id (an
+ * unconfigured slot — by default only `local`, whose default binding is
+ * `{ id: '' }`). Returns a ready-to-print, actionable error message, or
+ * `undefined` when `input` is selectable: a configured slot, a raw id, a legacy
+ * alias, a custom name, the `auto` sentinel, or `undefined`.
+ *
+ * Centralizes the message so every selection surface — the REPL/Telegram
+ * `/model` command and CLI startup (`afk -m`, `AFK_MODEL`) — rejects the choice
+ * identically at the point of selection. Without this guard the empty id reaches
+ * a provider, where it surfaces as an opaque empty-model API error or silently
+ * falls back to the cloud default model — the latter defeating the entire point
+ * of a "local" tier. The guard lives here (not in `resolveBinding`) because that
+ * resolver is also called from read-only context-window / capability lookups
+ * (`model-limits.ts`, `model-capabilities.ts`) where a throw would be wrong.
+ */
+export function unconfiguredSlotError(
+  input: string | undefined,
+  bindings: ModelSlots = getSlotBindings(),
+): string | undefined {
+  if (input === undefined) return undefined;
+  const slot = slotForInput(input, bindings);
+  if (slot && bindings[slot].id.trim() === '') {
+    const upper = slot.toUpperCase();
+    return `The "${slot}" model tier is not configured (no model id). Set AFK_MODEL_${upper}=<id> (optionally AFK_MODEL_${upper}_BASE_URL / AFK_MODEL_${upper}_API_KEY) or "models.${slot}" in afk.config.json, then retry.`;
+  }
+  return undefined;
+}
+
+/**
  * Defensively parse the `models` block from afk.config.json. Each slot accepts
  * either a bare id string (`"small": "gpt-4o-mini"`) or an object
  * (`"small": { "id": "gpt-4o-mini", "name": "fast" }`). Malformed entries are

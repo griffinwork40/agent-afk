@@ -221,6 +221,18 @@ export function providerForModel(
     if (lowered.includes('/')) return 'openai-compatible';
   }
 
+  // Tier 3.5: a per-slot `baseUrl` on a tier whose id matched no Anthropic
+  // signal above (claude-* / local-* / short-aliases all return at Tier 2) is a
+  // strong signal the tier targets an OpenAI-compatible local shim (Ollama, LM
+  // Studio, vLLM, MLX). Without this, an env-configured `local` slot — e.g.
+  // AFK_MODEL_LOCAL=llama3.2:3b + AFK_MODEL_LOCAL_BASE_URL=http://localhost:11434/v1
+  // — whose id matches no Tier-3 prefix would misroute to anthropic-direct and
+  // POST the shim URL as an Anthropic Messages call. The env path cannot set the
+  // explicit `provider` field, so a per-slot baseUrl is the only routing signal
+  // available there. Anthropic-compatible shims are still reachable via a
+  // `local-*` id (Tier 2) or an explicit `provider: 'anthropic'` (handled above).
+  if (binding.baseUrl && binding.baseUrl.trim()) return 'openai-compatible';
+
   // Tier 4: env-hint fallback for unknown names. `AFK_OPENAI_BASE_URL` being
   // set is a strong signal the operator is targeting an OpenAI-compatible
   // endpoint — closes the "deepseek-v4-pro on opencode.ai/zen" footgun where
