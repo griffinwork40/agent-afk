@@ -1,7 +1,7 @@
 ---
 name: review
 description: "Dispatches parallel dimension agents across a diff, PR (URL or number), commit SHA, branch, staged changes, or patch file — covering security, correctness, api-compat, test-coverage, and perf-observability — synthesizes findings by severity, and emits a merge recommendation. Use when changes are ready for review before merge. Read-only: this skill analyzes and reports only — it never edits files, commits, pushes, comments on a PR, or modifies the PR description."
-argument-hint: "[diff|pr-url|pr-number|commit-sha|branch|--staged|--head] [--light] [--change-type hotfix|feature|refactor|dep-bump|new-service] [--post github|telegram]"
+argument-hint: "[diff|pr-url|pr-number|commit-sha|branch|--staged|--head] [--light] [--change-type hotfix|feature|refactor|dep-bump|new-service] [--post github|telegram] [--brief <text>|--spec <path>]"
 context: fork
 ---
 
@@ -33,13 +33,22 @@ The only shell permitted is **read-only inspection**: `git diff` / `git show` / 
 - arg is a path or `*.diff`/`*.patch` file → read file contents as the diff; reviewed ref = `unknown (patch file — no live ref available)`
 - otherwise → abort with `Asking` naming the ambiguous arg
 
+**Capture stated intent (inline).** A reviewer that sees *what changed* but not *what it was meant to accomplish* cannot judge whether the change does its job — it silently redefines "the spec" as whatever the diff or the repo's global constraints imply, and rubber-stamps. Capture the change's stated intent into a `stated-intent` field passed to every agent:
+- `--brief "<text>"` / `--spec <path>` supplied → use that text / file contents verbatim (highest priority).
+- PR URL or number → `gh pr view <ref> --json title,body -q '.title + "\n\n" + .body'` (or `glab mr view`); title + description are the intent.
+- commit SHA → the full commit message: `git show -s --format=%B <sha>`.
+- known ref / branch → the branch's PR body if one exists (`gh pr view <branch> --json body -q .body`), else the commit subjects: `git log --format=%s <merge-base>..<ref>`.
+- `--staged` / `--head` / working-tree / patch-file with no `--brief` → set `stated-intent = "(none supplied)"`.
+
+Never fabricate intent. When none is available the value is the literal `(none supplied)`; agents disclose its absence rather than guess.
+
 **Triage (inline).** From the resolved diff extract: change type (hotfix | feature | refactor | dep-bump | new-service), files changed, total lines changed, summary. Classify regime: `light` if ≤300 lines or change type is hotfix/dep-bump; `full` otherwise.
 
 **Wave 1 — Full review (regime=full, 2 parallel agents, `subagent_type: "research-agent"`).** Dispatch:
 - **security · api-compat** — contracts, auth, injection, breaking changes, secret exposure.
-- **correctness · test-coverage · perf-observability** — logic bugs, missing tests, regressions, hot-path perf, logging gaps.
+- **correctness · spec-compliance · test-coverage · perf-observability** — logic bugs, regressions, whether the change satisfies its **stated intent** (unmet requirement or unrequested scope creep), missing tests, hot-path perf, logging gaps.
 
-Each agent receives: full diff + file tree + triage header + **reviewed ref (SHA)**, the severity rubric, and the finding schema.
+Each agent receives: full diff + file tree + triage header + **reviewed ref (SHA)** + the **stated intent** (what the change is meant to accomplish, or `(none supplied)`), the severity rubric, and the finding schema.
 
 **Citation requirement (enforced per agent):** Before quoting any line in a `blocking` or `high/critical` finding, the agent MUST read that exact line from the branch HEAD using `git show <reviewed-ref>:<file>` (or `gh api /repos/{owner}/{repo}/contents/{path}?ref=<sha>` if outside a git context). The agent must:
 1. State the ref it read from in each finding: `ref: <sha>`.
@@ -47,6 +56,10 @@ Each agent receives: full diff + file tree + triage header + **reviewed ref (SHA
 3. If the line does not exist at that ref, omit the finding entirely — do not paraphrase or reconstruct from memory.
 
 Banned words: "ensure", "consider", "may", "could". No `file:line` citation → omit the finding.
+
+**Spec-compliance assessment (mandatory framing for the spec-compliance dimension).** Judge the diff against the `stated-intent` — not against the diff's own apparent goals, and not against the repo's global constraints:
+- `stated-intent` present → flag (a) **unmet intent**: a requirement named in the intent with no implementing change, and (b) **scope creep**: a substantive behavior change the intent does not call for. Cite the unmet clause for gaps; cite `file:line` for creep.
+- `stated-intent` is `(none supplied)` → do **not** assess spec-compliance and do **not** substitute the global constraints for the spec. Emit exactly one line: `unverified — spec-compliance not assessed: no stated intent supplied (pass --brief/--spec, or review a PR/commit)`. Silently treating the diff or the constraints as "the spec" is the precise failure this rule prevents.
 
 **api-compat reachability pre-check (mandatory before surfacing any breaking-change finding).**
 For every symbol flagged as a breaking change, grep production source files (exclude `*.test.*`, `*.spec.*`, `__tests__/`, `__mocks__/`, `/test/`, `/tests/`) for imports or usages of that symbol. Decision table:
@@ -62,7 +75,7 @@ If grep tooling is unavailable, tag the finding `[UNVERIFIED: reachability not c
 
 This is the agent's first-line self-check; **Wave 1.5 Check B** independently re-verifies any surviving absence claims against the reviewed ref as a backstop.
 
-**Wave 1 — Light review (regime=light, 1 agent, `subagent_type: "research-agent"`).** Single agent covers all dimensions. Same rubric, schema, and citation requirement.
+**Wave 1 — Light review (regime=light, 1 agent, `subagent_type: "research-agent"`).** Single agent covers all dimensions (including spec-compliance). Same `stated-intent` input, rubric, schema, and citation requirement.
 
 **Wave 1.5 — Citation + absence-claim verification (1 agent, `subagent_type: "research-agent"`).** Run after Wave 1 returns, before Wave 2 synthesis. This agent performs two independent checks.
 
@@ -101,5 +114,6 @@ Confidence `low` → auto-downgrade one tier + append `[low confidence — verif
 - Which ref(s) Wave 1 agents actually read from (list the SHA or `unknown` if patch-file input). Example: `Read against branch HEAD abc1234 — citations verified at that ref.`
 - If any citations could not be verified against a live ref (patch-file input): `Citation verification skipped — no live ref available; diff-context citations only.`
 - Any topical gaps (e.g. 'did not review Telegram surface', 'did not run tests').
+- Whether a **stated intent** was available and spec-compliance was assessed. Example: `Stated intent: PR #123 title+body — spec-compliance assessed.` or `Stated intent: (none supplied) — spec-compliance not assessed.`
 
 **Post-synthesis:** if any `critical` or `high` finding is present, invoke `/shadow-verify` on those findings before surfacing to the user. Shadow-verify independently re-derives each top-severity claim against source; fabricated or unsupportable findings drop here before they reach the merge decision. `medium` and below go straight through.

@@ -66,7 +66,7 @@ const PINNED_HASHES = {
   // copy of the user-scope /refactor at ~/.afk/skills/.
   refactor: '9cb84710ddf2cf63e1a648460a64656d3f4a9aae8e21753b031556070740c51e',
   research: '10692d77e392cedce928f66cb5dec27dbc2066f48cfc33047820f56506da762a',
-  review: '31a17d8c3bace684b7fce22588d54ce3e95462acdf397fc1673f3590192e0944',
+  review: '9b06e0743832df2fce20905b5de6ba424193ce6d683fc9c4f338940433569087',
   // Hash bumped 2026-06-09 (PR #52): records the confidence-trigger enhancement
   // landed in this branch's commit 1e35850 — adds high-confidence language
   // ("confident", "certain", "clearly", ≥80%) as a verification trigger in its
