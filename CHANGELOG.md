@@ -11,6 +11,13 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.7.5] - 2026-06-16
+
+### Changed
+- Merge pull request #173 from griffinwork40/fix/hookregistry-provider-contract (319aeff)
+- enforce SDK dependency lock via audit:sdk:check (3eb1278)
+- promote hookRegistry into the dispatcher contract (12b6907)
+
 ## [4.7.4] - 2026-06-16
 
 ### Fixed
