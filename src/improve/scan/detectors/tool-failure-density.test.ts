@@ -431,7 +431,13 @@ describe('detectToolFailureDensity — circuit-breaker exclusion', () => {
 });
 
 describe('detectToolFailureDensity — failureClass exclusion', () => {
-  for (const cls of ['policy-refusal', 'permission-denied', 'hook-block', 'abort']) {
+  for (const cls of [
+    'policy-refusal',
+    'permission-denied',
+    'hook-block',
+    'abort',
+    'elicitation-declined',
+  ]) {
     it(`does NOT produce a card when all failures are class '${cls}'`, () => {
       resetSeq();
       // 8 isError failures, all "system said no" — must produce zero cards.
@@ -471,6 +477,41 @@ describe('detectToolFailureDensity — failureClass exclusion', () => {
     expect(r.detail['totalCalls']).toBe(5);
     expect(r.detail['failureCount']).toBe(3);
     expect(r.detail['excludedByClass']).toEqual({ 'policy-refusal': 6 });
+  });
+
+  it('regression: ask_question AFK declines do not manufacture a card (the reported bug)', () => {
+    resetSeq();
+    // The real-world shape that produced the false-positive `tool-failure-ask-question`
+    // card: 12 elicitation declines/cancels (operator AFK on an interactive surface) out
+    // of 36 ask_question calls. Pre-fix this read as 12/36 = 33% "failure" → high card.
+    // Post-fix the 12 declines are excluded from BOTH numerator and denominator,
+    // leaving 0 real failures / 24 calls → no card.
+    const lines: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      lines.push(
+        ...toolPair(`d-${i}`, 'ask_question', { isError: true, failureClass: 'elicitation-declined' }),
+      );
+    }
+    for (let i = 0; i < 24; i++) lines.push(...toolPair(`ok-${i}`, 'ask_question'));
+    expect(detectToolFailureDensity([makeSession('s1', lines)])).toEqual([]);
+  });
+
+  it('excludes elicitation declines from BOTH numerator and denominator but still fires on real faults', () => {
+    resetSeq();
+    // 3 real (unclassified) failures + 5 elicitation declines + 1 success.
+    // Real denominator = 3 + 1 = 4; rate = 3/4 = 75% → fires with count 3, total 4.
+    const lines: string[] = [];
+    for (let i = 0; i < 3; i++) lines.push(...toolPair(`f-${i}`, 'ask_question', { isError: true }));
+    for (let i = 0; i < 5; i++) {
+      lines.push(
+        ...toolPair(`d-${i}`, 'ask_question', { isError: true, failureClass: 'elicitation-declined' }),
+      );
+    }
+    lines.push(...toolPair('ok-0', 'ask_question'));
+    const r = detectToolFailureDensity([makeSession('s1', lines)])[0]!;
+    expect(r.detail['totalCalls']).toBe(4);
+    expect(r.detail['failureCount']).toBe(3);
+    expect(r.detail['excludedByClass']).toEqual({ 'elicitation-declined': 5 });
   });
 
   it("counts 'timeout' as a real failure (not excluded) and surfaces it in the breakdown", () => {

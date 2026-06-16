@@ -133,6 +133,16 @@ export const askQuestionHandler: ToolHandler = async (input, signal) => {
   // documents this distinction: "skip (optional question skipped)" is a
   // listed action, while "After a `cancel` or `decline`, stop and tell the
   // user what information you need" only fires for the two error actions.
+  //
+  // The `isError: true` is preserved (the model must still stop on a decline),
+  // but it is tagged `failureClass: 'elicitation-declined'` so the
+  // tool-failure-density detector excludes it: an unanswered question on a
+  // non-interactive or AFK surface is an expected outcome, not a tool fault.
+  // Without the tag these land as `unclassified` failures and manufacture a
+  // false-positive `tool-failure-ask-question` card.
   const declined = result.action === 'decline' || result.action === 'cancel';
-  return { content: JSON.stringify(result), ...(declined && { isError: true }) };
+  return {
+    content: JSON.stringify(result),
+    ...(declined && { isError: true, failureClass: 'elicitation-declined' as const }),
+  };
 };

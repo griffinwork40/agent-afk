@@ -38,13 +38,15 @@
  * ## Caveats
  *
  *   - "Failure" means `isError: true` returned by the dispatcher. The trace
- *     payload now carries a coarse `failureClass` (set at the dispatcher gates
- *     and browser handlers — see {@link ToolFailureClass}). This detector uses
- *     it to EXCLUDE "the system correctly said no" results (policy refusal,
- *     permission denial, hook block, abort) from both the failure count and the
- *     call total — see {@link EXCLUDED_FAILURE_CLASSES}. Failures with no class
- *     (older traces, handler throws, malformed input) still count, preserving
- *     back-compat. The per-class `failureClassBreakdown` and `excludedByClass`
+ *     payload now carries a coarse `failureClass` (set at the dispatcher gates,
+ *     the browser handlers, and the ask_question handler — see
+ *     {@link ToolFailureClass}). This detector uses it to EXCLUDE "the system
+ *     correctly said no / the human did not answer" results (policy refusal,
+ *     permission denial, hook block, abort, elicitation decline) from both the
+ *     failure count and the call total — see {@link EXCLUDED_FAILURE_CLASSES}.
+ *     Failures with no class (older traces, handler throws, malformed input)
+ *     still count, preserving back-compat. The per-class
+ *     `failureClassBreakdown` and `excludedByClass`
  *     are surfaced in the card detail so a reviewer can see the mix.
  *   - `timeout` is classified but NOT excluded — a high timeout rate can be a
  *     real signal — so it still counts toward the rate, just visibly.
@@ -60,12 +62,15 @@ import type { SessionRead } from '../reader.js';
 import type { ToolFailureClass } from '../../../agent/trace/types.js';
 
 /**
- * Failure classes that mean "the system correctly said no", not "the tool
- * failed". A domain-policy refusal, a permission denial, a PreToolUse hook
- * block, or an aborted call all return `isError: true` so the model sees the
- * refusal — but counting them as tool failures inflated the signal and
- * manufactured false-positive cards (e.g. `browser_open` looking 50% broken
- * when half its calls were policy refusals working exactly as designed).
+ * Failure classes that mean "the system correctly said no" or "the human did
+ * not answer", not "the tool failed". A domain-policy refusal, a permission
+ * denial, a PreToolUse hook block, an aborted call, or an `ask_question`
+ * decline/cancel all return `isError: true` so the model sees the outcome —
+ * but counting them as tool failures inflated the signal and manufactured
+ * false-positive cards (e.g. `browser_open` looking 50% broken when half its
+ * calls were policy refusals working exactly as designed, or `ask_question`
+ * looking 33% broken when the operator was simply AFK on an interactive
+ * surface).
  *
  * Results in this set are excluded from BOTH the failure count and the call
  * total. `timeout` is deliberately NOT excluded — a high timeout rate can be a
@@ -81,6 +86,7 @@ const EXCLUDED_FAILURE_CLASSES: ReadonlySet<ToolFailureClass> = new Set([
   'permission-denied',
   'hook-block',
   'abort',
+  'elicitation-declined',
 ]);
 
 /** Minimum absolute failure count for a tool before a card fires. */
