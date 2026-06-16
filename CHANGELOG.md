@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.7.3] - 2026-06-16
+
+### Fixed
+- seal orphaned witness traces on abnormal process exit (de83b72)
+
+### Changed
+- Merge pull request #168 from griffinwork40/fix/seal-unsealed-traces-on-exit (b92676e)
+
 ## [4.7.2] - 2026-06-16
 
 ### Fixed
