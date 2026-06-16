@@ -386,6 +386,7 @@ export const SessionSealedPayloadSchema = z.object({
   finalCostUsd: z.number().nonnegative(),
   finalTurnCount: z.number().int().nonnegative(),
   closedAt: z.string().datetime(),
+  incomplete: z.boolean().optional(),
   subagentCount: z.number().int().nonnegative().optional(),
   subagentTokens: z
     .object({

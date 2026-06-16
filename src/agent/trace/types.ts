@@ -563,6 +563,18 @@ export interface SessionSealedPayload {
   finalTurnCount: number;
   /** ISO-8601. When known, mirrors the closure event's wall-clock. */
   closedAt: string;
+  /**
+   * True when this seal was written by the synchronous process-exit
+   * backstop ({@link NdjsonTraceWriter}) rather than by a normal
+   * `AgentSession.close()`. Signals that the process exited abnormally —
+   * crash, early-EOF before the REPL's close handler attached, or a
+   * `process.exit()` that bypassed cleanup — so the session never reached
+   * a clean terminal classification. `status` is `'failed'` and the
+   * `final*` counters are last-known-from-the-writer (0 when the session
+   * had no completed turns), NOT a reconstructed total. Omitted on every
+   * normal seal.
+   */
+  incomplete?: boolean;
   /** Number of subagent forks that reached `succeeded` status this session. */
   subagentCount?: number;
   /**

@@ -13,7 +13,7 @@
 
 import { mkdtemp, readdir, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -168,6 +168,101 @@ describe('NdjsonTraceWriter', () => {
     expect(events).toHaveLength(1);
     expect(events.some((e) => e.kind === 'session_sealed')).toBe(false);
   });
+
+  // ---------------------------------------------------------------------------
+  // Process-exit seal backstop: a trace that emitted events but never sealed
+  // (crash / early-EOF / process.exit bypassing close()) must not be orphaned.
+  // ---------------------------------------------------------------------------
+
+  it('sealOnProcessExit() seals an unsealed trace as failed + incomplete', async () => {
+    const writer = new NdjsonTraceWriter({ traceDir });
+    await writer.write({
+      kind: 'session_phase',
+      payload: { phase: 'session_init_done', durationMs: 10 },
+    });
+    // Simulate the synchronous exit-handler path (no close()/seal() ran).
+    writer.sealOnProcessExit();
+
+    const events = await readTrace(writer.getTracePath());
+    const seals = events.filter((e) => e.kind === 'session_sealed');
+    expect(seals).toHaveLength(1);
+    const seal = seals[0];
+    if (seal?.kind !== 'session_sealed') throw new Error('unreachable');
+    expect(seal.payload.status).toBe('failed');
+    expect(seal.payload.incomplete).toBe(true);
+    expect(seal.seq).toBe(1); // continues the monotonic seq after the phase event
+  });
+
+  it('sealOnProcessExit() is a no-op after a normal seal() (no double seal)', async () => {
+    const writer = new NdjsonTraceWriter({ traceDir });
+    await writer.write({
+      kind: 'session_phase',
+      payload: { phase: 'session_init_done', durationMs: 10 },
+    });
+    await writer.seal({
+      status: 'succeeded',
+      finalCostUsd: 0.01,
+      finalTurnCount: 1,
+      closedAt: new Date().toISOString(),
+    });
+    writer.sealOnProcessExit(); // must not append a second seal
+
+    const events = await readTrace(writer.getTracePath());
+    const seals = events.filter((e) => e.kind === 'session_sealed');
+    expect(seals).toHaveLength(1);
+    const seal = seals[0];
+    if (seal?.kind !== 'session_sealed') throw new Error('unreachable');
+    expect(seal.payload.status).toBe('succeeded');
+    expect(seal.payload.incomplete).toBeUndefined();
+  });
+
+  it('sealOnProcessExit() is a no-op when nothing was written (no orphan file)', async () => {
+    const writer = new NdjsonTraceWriter({ traceDir });
+    // Never opened the file — must neither throw nor create a trace.
+    expect(() => writer.sealOnProcessExit()).not.toThrow();
+    await expect(readFile(writer.getTracePath(), 'utf8')).rejects.toThrow();
+  });
+
+  it('process-exit backstop seals a real crashed subprocess (end-to-end wiring)', async () => {
+    const { spawnSync } = await import('node:child_process');
+    const { fileURLToPath } = await import('node:url');
+    const { writeFile: writeFileAsync } = await import('node:fs/promises');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const writerSrc = join(here, 'writer.ts');
+    const tsxBin = join(here, '..', '..', '..', 'node_modules', '.bin', 'tsx');
+
+    // Child: open a writer, write one event (flushed), then throw uncaught.
+    // The throw must escape with no handler so Node fires 'exit' and the
+    // module-level backstop seals the trace synchronously.
+    const childPath = join(traceDir, 'crash-child.mts');
+    await writeFileAsync(
+      childPath,
+      [
+        `import { NdjsonTraceWriter } from ${JSON.stringify(writerSrc)};`,
+        `const w = new NdjsonTraceWriter({ traceDir: process.env.CHILD_TRACE_DIR });`,
+        `await w.write({ kind: 'session_phase', payload: { phase: 'session_init_done', durationMs: 7 } });`,
+        `setTimeout(() => { throw new Error('simulated uncaught crash'); }, 5);`,
+      ].join('\n'),
+      'utf8',
+    );
+
+    const childTraceDir = join(traceDir, 'child-trace');
+    const res = spawnSync(tsxBin, [childPath], {
+      env: { ...process.env, CHILD_TRACE_DIR: childTraceDir },
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    expect(res.status).toBe(1); // crashed (uncaught exception)
+
+    const events = await readTrace(join(childTraceDir, 'trace.jsonl'));
+    // Phase event landed, then the backstop appended the terminal seal.
+    expect(events.some((e) => e.kind === 'session_phase')).toBe(true);
+    const seal = events.find((e) => e.kind === 'session_sealed');
+    expect(seal).toBeDefined();
+    if (seal?.kind !== 'session_sealed') throw new Error('expected session_sealed');
+    expect(seal.payload.status).toBe('failed');
+    expect(seal.payload.incomplete).toBe(true);
+  }, 35_000);
 
   it('compaction event writes a sidecar with sha256 + size and embeds the reference', async () => {
     const writer = new NdjsonTraceWriter({ traceDir });
