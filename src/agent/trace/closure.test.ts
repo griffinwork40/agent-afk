@@ -189,6 +189,61 @@ describe('AgentSession + closure trace event', () => {
     expect(ev.payload.lastStopReason).toBe('end_turn');
   });
 
+  // Regression: a provider `error` event (HTTP / auth / stream failure) that
+  // ends a turn must not be sealed as a silent success. Before the fix, a turn
+  // that errored — then a clean close() — produced closure.reason=model_end_turn
+  // and session_sealed.status=succeeded with 0 turns / 0 tokens / $0 (the exact
+  // signature of witness trace 78a71c64…: a ~36s mimo-v2.5 run sealed succeeded
+  // having produced nothing). See closure-reason.ts precedence rule 5.
+  it('seals failed + reason=abort when a turn ends in a provider error before a clean close', async () => {
+    const session = new AgentSession(config);
+    await session.waitForInitialization();
+
+    const collect = async (gen: AsyncIterable<OutputEvent>): Promise<OutputEvent[]> => {
+      const out: OutputEvent[] = [];
+      for await (const ev of gen) out.push(ev);
+      return out;
+    };
+    // The 'provider-error' marker makes the mock yield a terminal `error`
+    // event with no turn.completed — turnCount stays 0, no usage accrues.
+    const events = await collect(session.sendMessageStream('trigger provider-error'));
+    expect(events.some((e) => e.type === 'error')).toBe(true);
+
+    await session.close();
+
+    const closure = writer.events.find((e) => e.kind === 'closure');
+    if (closure?.kind !== 'closure') throw new Error('expected closure');
+    expect(closure.payload.reason).toBe('abort');
+    expect(closure.payload.finalTurnCount).toBe(0);
+
+    const seal = writer.events.find((e) => e.kind === 'session_sealed');
+    if (seal?.kind !== 'session_sealed') throw new Error('expected session_sealed');
+    expect(seal.payload.status).toBe('failed');
+  });
+
+  it('a successful turn after an errored turn clears the flag — seals succeeded', async () => {
+    const session = new AgentSession(config);
+    await session.waitForInitialization();
+
+    const drain = async (gen: AsyncIterable<OutputEvent>): Promise<void> => {
+      for await (const _ of gen) void _;
+    };
+    await drain(session.sendMessageStream('trigger provider-error'));
+    // A subsequent completed turn must clear the prior error so the seal
+    // reflects the FINAL turn's outcome, not a recovered-from failure.
+    await drain(session.sendMessageStream('recover'));
+
+    await session.close();
+
+    const closure = writer.events.find((e) => e.kind === 'closure');
+    if (closure?.kind !== 'closure') throw new Error('expected closure');
+    expect(closure.payload.reason).toBe('model_end_turn');
+
+    const seal = writer.events.find((e) => e.kind === 'session_sealed');
+    if (seal?.kind !== 'session_sealed') throw new Error('expected session_sealed');
+    expect(seal.payload.status).toBe('succeeded');
+  });
+
   it('is idempotent — repeated close() calls do not write multiple closure records', async () => {
     const session = new AgentSession(config);
     await session.waitForInitialization();

@@ -85,6 +85,21 @@ export function createMockProvider(opts: MockProviderOptions = {}): MockProvider
 
             if (abortController.signal.aborted) return;
 
+            // Test affordance (mirrors the 'slow' marker above): a turn whose
+            // content contains 'provider-error' yields a terminal `error`
+            // event — exactly what the real providers emit on an HTTP / auth /
+            // stream failure — instead of the normal assistant.message +
+            // turn.completed pair. No turn.completed is emitted, so turnCount
+            // stays put and no usage is accumulated.
+            if (userContent.includes('provider-error')) {
+              yield {
+                type: 'error',
+                error: new Error('mock provider stream failure'),
+              } satisfies ProviderEvent;
+              abortController = null;
+              continue;
+            }
+
             yield {
               type: 'assistant.message',
               text: `Echo: ${userContent}`,

@@ -18,10 +18,15 @@
  *     Preserves the prior behaviour where an init-time error outranks the
  *     abort-signal classification below.
  *  4. a classified abort signal → `budget_exceeded` | `timeout` | `abort`.
- *  5. a truncation stop reason (`max_tokens` / `length`) on an otherwise clean
+ *  5. `sawProviderError` → `abort` — the provider emitted a terminal `error`
+ *     event (HTTP / auth / stream failure) as the session's last turn outcome,
+ *     yet the surface then closed the session cleanly (`dispatchReason` is
+ *     `'close'`/`'reset'`, no abort signal). Without this a provider failure on
+ *     an otherwise-clean close is silently sealed as `model_end_turn`.
+ *  6. a truncation stop reason (`max_tokens` / `length`) on an otherwise clean
  *     close → `truncated` — the model's final turn was cut off by the
  *     output-token ceiling, previously indistinguishable from a clean end.
- *  6. otherwise → `model_end_turn`.
+ *  7. otherwise → `model_end_turn`.
  *
  * `iteration_cap` is intentionally NOT produced here: nothing sets a tool-use
  * loop cap in production yet (`DEFAULT_MAX_TOOL_USE_ITERATIONS = 0`), so it is
@@ -57,6 +62,16 @@ export interface ClosureReasonInputs {
   abort: 'budget_exceeded' | 'timeout' | 'abort' | null;
   /** The provider's last `stop_reason` / `finish_reason`, if any. */
   lastStopReason: string | undefined;
+  /**
+   * True when the provider emitted a terminal `error` event (an HTTP / auth /
+   * stream failure that ended a turn or init without a completed turn) as the
+   * session's most recent turn outcome. Set at the error-observation sites in
+   * `AgentSession` and cleared by a subsequent completed turn, so it reflects
+   * whether the LAST turn ended in an error — not whether any turn ever did.
+   * Surfaces as `abort` so a provider failure on an otherwise-clean close is
+   * not misclassified as `model_end_turn`.
+   */
+  sawProviderError: boolean;
 }
 
 /**
@@ -68,6 +83,7 @@ export function classifyClosureReason(i: ClosureReasonInputs): ClosureReason {
   if (i.hookBlocked) return 'hook_blocked';
   if (i.dispatchReason === 'error') return 'abort';
   if (i.abort !== null) return i.abort;
+  if (i.sawProviderError) return 'abort';
   if (isTruncationStopReason(i.lastStopReason)) return 'truncated';
   return 'model_end_turn';
 }

@@ -16,6 +16,7 @@ const base: ClosureReasonInputs = {
   hookBlocked: false,
   abort: null,
   lastStopReason: undefined,
+  sawProviderError: false,
 };
 
 describe('isTruncationStopReason', () => {
@@ -87,5 +88,28 @@ describe('classifyClosureReason', () => {
     expect(
       classifyClosureReason({ ...base, abort: 'timeout', lastStopReason: 'max_tokens' }),
     ).toBe('timeout');
+  });
+
+  it('maps a provider error event on an otherwise-clean close to abort', () => {
+    // The silent-success regression: a turn ended in a provider `error` event
+    // but the surface closed the session cleanly (dispatchReason='close',
+    // no abort signal). Must NOT fall through to model_end_turn.
+    expect(classifyClosureReason({ ...base, sawProviderError: true })).toBe('abort');
+  });
+
+  it('a classified abort signal outranks a provider error event', () => {
+    // A genuine budget/timeout abort also emits an error event; the more
+    // specific abort classification wins.
+    expect(
+      classifyClosureReason({ ...base, sawProviderError: true, abort: 'budget_exceeded' }),
+    ).toBe('budget_exceeded');
+  });
+
+  it('a provider error event outranks a truncation stop reason', () => {
+    // A later errored turn is the terminal cause even if an earlier turn was
+    // truncated (lastStopReason carries the truncated turn's stop reason).
+    expect(
+      classifyClosureReason({ ...base, sawProviderError: true, lastStopReason: 'max_tokens' }),
+    ).toBe('abort');
   });
 });
