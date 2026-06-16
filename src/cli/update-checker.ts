@@ -25,6 +25,13 @@ interface PendingUpdate {
 }
 
 const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+/**
+ * How long a pending-update marker is trusted to mean "an install is still in
+ * flight." Within this window `triggerAutoUpdate()` refuses to spawn a second
+ * `npm install`; past it the marker is treated as stale (the install crashed
+ * or was killed) and cleared so a fresh attempt can run.
+ */
+const PENDING_TTL_MS = 60 * 60 * 1000;
 const CACHE_FILE = 'update-check.json';
 const PENDING_FILE = 'pending-update.json';
 
@@ -44,8 +51,17 @@ function ensureCacheDir(): void {
 }
 
 function isNewerVersion(current: string, latest: string): boolean {
-  const c = current.split('.').map(Number);
-  const l = latest.split('.').map(Number);
+  // Compare only the numeric "core" (major.minor.patch). A prerelease
+  // (`-beta.1`) or build-metadata (`+sha`) suffix would otherwise produce
+  // NaN segments via Number(), and NaN comparisons are always false — so a
+  // running prerelease never saw its own final release as "newer".
+  const core = (v: string): string => v.split(/[-+]/, 1)[0] ?? v;
+  // Prerelease is denoted by a `-` suffix per semver; build metadata (`+`)
+  // does NOT lower precedence, so it must not count here.
+  const isPrerelease = (v: string): boolean => v.includes('-');
+
+  const c = core(current).split('.').map(Number);
+  const l = core(latest).split('.').map(Number);
   const len = Math.max(c.length, l.length);
   for (let i = 0; i < len; i++) {
     const cv = c[i] ?? 0;
@@ -53,7 +69,11 @@ function isNewerVersion(current: string, latest: string): boolean {
     if (lv > cv) return true;
     if (lv < cv) return false;
   }
-  return false;
+  // Equal numeric cores: a final release outranks its own prerelease
+  // (so the running 4.7.5-beta.1 treats 4.7.5 as an available update).
+  // Prerelease-to-prerelease ordering is intentionally not handled — npm's
+  // `latest` dist-tag does not serve prereleases.
+  return isPrerelease(current) && !isPrerelease(latest);
 }
 
 function readCache(): UpdateCache | null {
@@ -247,6 +267,12 @@ export function fetchLatestVersion(
 
 export function triggerAutoUpdate(latestVersion: string): void {
   if (!SEMVER_RE.test(latestVersion)) return;
+  // Debounce: a marker on disk means a prior install is still in flight (or
+  // finished but not yet announced). Spawning a second `npm install -g` over
+  // it races two installs against the same global package. checkPendingUpdate()
+  // owns clearing the marker — on success, or once it is older than
+  // PENDING_TTL_MS — at which point a fresh trigger is allowed through.
+  if (existsSync(pendingPath())) return;
   try {
     writePendingUpdateMarker(latestVersion);
     const child = spawn('npm', ['install', '-g', `agent-afk@${latestVersion}`], {
@@ -263,15 +289,26 @@ export function checkPendingUpdate(): void {
   try {
     const raw = readFileSync(pendingPath(), 'utf-8');
     const pending = JSON.parse(raw) as PendingUpdate;
-    if (typeof pending.targetVersion === 'string') {
-      const current = getVersion();
+    if (typeof pending.targetVersion !== 'string') return;
+
+    const current = getVersion();
+    if (current === pending.targetVersion) {
+      // Install landed: announce once, then clear the marker.
       unlinkSync(pendingPath());
-      if (current === pending.targetVersion) {
-        const green = '\x1b[32m';
-        const bold = '\x1b[1m';
-        const reset = '\x1b[0m';
-        process.stderr.write(`${green}${bold}Updated to agent-afk v${current}${reset}\n`);
-      }
+      const green = '\x1b[32m';
+      const bold = '\x1b[1m';
+      const reset = '\x1b[0m';
+      process.stderr.write(`${green}${bold}Updated to agent-afk v${current}${reset}\n`);
+      return;
+    }
+
+    // Version still doesn't match the target. Either the background install is
+    // genuinely in flight — keep the marker so triggerAutoUpdate() debounces —
+    // or it never completed and the marker is stale, in which case clear it so
+    // a fresh auto-update can be triggered.
+    const triggeredAt = typeof pending.triggeredAt === 'number' ? pending.triggeredAt : 0;
+    if (Date.now() - triggeredAt > PENDING_TTL_MS) {
+      unlinkSync(pendingPath());
     }
   } catch {
     // no pending update or corrupt file — ignore

@@ -80,6 +80,7 @@ function buildFakeHttp(
 
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'fs';
 import { spawn } from 'child_process';
+import { getVersion } from './version.js';
 import {
   checkForUpdates,
   printUpdateBanner,
@@ -94,7 +95,9 @@ const mockWriteFileSync = vi.mocked(writeFileSync);
 const mockExistsSync = vi.mocked(existsSync);
 const mockUnlinkSync = vi.mocked(unlinkSync);
 const mockSpawn = vi.mocked(spawn);
+const mockGetVersion = vi.mocked(getVersion);
 const pendingFile = join(FAKE_CACHE_DIR, 'pending-update.json');
+const ONE_HOUR_MS = 60 * 60 * 1000;
 
 describe('update-checker', () => {
   let stderrSpy: ReturnType<typeof vi.spyOn>;
@@ -103,6 +106,9 @@ describe('update-checker', () => {
     vi.clearAllMocks();
     stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     mockExistsSync.mockReturnValue(true);
+    // clearAllMocks() does not reset implementations set via mockReturnValue,
+    // so re-pin the default here to stop per-test prerelease overrides leaking.
+    mockGetVersion.mockReturnValue('1.10.1');
     delete process.env['NO_UPDATE_NOTIFIER'];
     delete process.env['CI'];
   });
@@ -179,6 +185,45 @@ describe('update-checker', () => {
       checkForUpdates('notify');
       expect(mockSpawn).not.toHaveBeenCalled();
     });
+
+    // --- prerelease ordering (exercises the private isNewerVersion) ---------
+    // Before the fix, Number() on a "-beta"/"-rc" suffix produced NaN segments
+    // whose comparisons are always false, so these two cases returned the wrong
+    // boolean (a running prerelease never saw its release; a release wrongly
+    // "updated" to a prerelease).
+
+    it('treats the final release as newer than a running prerelease', () => {
+      mockGetVersion.mockReturnValue('1.10.1-beta.1');
+      mockReadFileSync.mockReturnValue(
+        JSON.stringify({ latestVersion: '1.10.1', checkedAt: Date.now() }),
+      );
+
+      expect(checkForUpdates('notify')).toEqual({
+        currentVersion: '1.10.1-beta.1',
+        latestVersion: '1.10.1',
+      });
+    });
+
+    it('does not offer a prerelease as an update over the running release', () => {
+      mockGetVersion.mockReturnValue('1.10.1');
+      mockReadFileSync.mockReturnValue(
+        JSON.stringify({ latestVersion: '1.10.1-beta.5', checkedAt: Date.now() }),
+      );
+
+      expect(checkForUpdates('notify')).toBeNull();
+    });
+
+    it('compares numeric cores when a prerelease suffix is present', () => {
+      mockGetVersion.mockReturnValue('1.10.1-rc.1');
+      mockReadFileSync.mockReturnValue(
+        JSON.stringify({ latestVersion: '1.11.0', checkedAt: Date.now() }),
+      );
+
+      expect(checkForUpdates('notify')).toEqual({
+        currentVersion: '1.10.1-rc.1',
+        latestVersion: '1.11.0',
+      });
+    });
   });
 
   describe('printUpdateBanner', () => {
@@ -193,6 +238,7 @@ describe('update-checker', () => {
 
   describe('triggerAutoUpdate', () => {
     it('spawns npm install and writes pending marker', () => {
+      mockExistsSync.mockReturnValue(false); // no in-flight marker
       triggerAutoUpdate('1.11.0');
 
       expect(mockWriteFileSync).toHaveBeenCalledWith(
@@ -213,8 +259,16 @@ describe('update-checker', () => {
     });
 
     it('accepts pre-release versions', () => {
+      mockExistsSync.mockReturnValue(false); // no in-flight marker
       triggerAutoUpdate('2.0.0-beta.1');
       expect(mockSpawn).toHaveBeenCalled();
+    });
+
+    it('does not re-trigger when a pending marker already exists (install in flight)', () => {
+      mockExistsSync.mockReturnValue(true); // marker on disk → install in flight
+      triggerAutoUpdate('1.11.0');
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(mockWriteFileSync).not.toHaveBeenCalled();
     });
   });
 
@@ -254,14 +308,31 @@ describe('update-checker', () => {
       expect(output).toContain('Updated to agent-afk v1.10.1');
     });
 
-    it('clears marker without message when version does not match', () => {
+    it('keeps a fresh non-matching marker (install still in flight)', () => {
       mockReadFileSync.mockReturnValue(
         JSON.stringify({ targetVersion: '1.11.0', triggeredAt: Date.now() }),
       );
 
       checkPendingUpdate();
 
-      expect(mockUnlinkSync).toHaveBeenCalled();
+      // The install hasn't landed yet; the marker must survive so that
+      // triggerAutoUpdate() debounces and does not spawn a second install.
+      expect(mockUnlinkSync).not.toHaveBeenCalled();
+      const output = stderrSpy.mock.calls.map((c) => c[0]).join('');
+      expect(output).not.toContain('Updated');
+    });
+
+    it('clears a stale non-matching marker (install never completed)', () => {
+      mockReadFileSync.mockReturnValue(
+        JSON.stringify({
+          targetVersion: '1.11.0',
+          triggeredAt: Date.now() - ONE_HOUR_MS - 60_000, // older than PENDING_TTL_MS
+        }),
+      );
+
+      checkPendingUpdate();
+
+      expect(mockUnlinkSync).toHaveBeenCalledWith(pendingFile);
       const output = stderrSpy.mock.calls.map((c) => c[0]).join('');
       expect(output).not.toContain('Updated');
     });
