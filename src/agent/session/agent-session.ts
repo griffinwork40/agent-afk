@@ -102,6 +102,18 @@ export class AgentSession implements IAgentSession {
   private maxTurnsHit = false;
   private hookBlocked = false;
   /**
+   * True when the provider emitted a terminal `error` event (an HTTP / auth /
+   * stream failure) as the session's last turn outcome. Set at the two
+   * error-observation sites — `pullInitialization` (init-phase error) and
+   * `sendMessageStreamInternal` (per-turn error) — and cleared by a subsequent
+   * completed turn so it reflects the FINAL turn's result, not any error
+   * earlier in the session. Read by `deriveClosureReason` (→ `abort`) and
+   * `deriveSealStatus` (→ `failed`) so a provider failure on an otherwise-clean
+   * `close()` is not sealed as a silent `succeeded` / `model_end_turn`. Reset
+   * by `reset()`.
+   */
+  private sawProviderError = false;
+  /**
    * Wall-clock timestamp captured at construction — used to compute the
    * `session_init_done` phase duration and the `session_init_start` emit.
    */
@@ -225,6 +237,7 @@ export class AgentSession implements IAgentSession {
     this.lastStopReason = undefined;
     this.maxTurnsHit = false;
     this.hookBlocked = false;
+    this.sawProviderError = false;
     this.sessionEndDispatched = false;
     this.currentState = 'idle';
     this.subagentCompletedCount = 0;
@@ -277,6 +290,10 @@ export class AgentSession implements IAgentSession {
           return;
         }
         if (output && output.type === 'error') {
+          // Terminal-cause flag: an init-phase provider error must not seal as
+          // a clean close. The eventual close()/reset() reads this so the trace
+          // reports `abort`/`failed` rather than a silent `model_end_turn`.
+          this.sawProviderError = true;
           return;
         }
       }
@@ -497,7 +514,18 @@ export class AgentSession implements IAgentSession {
         const output = transformProviderEvent(event, deps);
 
         if (output) {
-          if (output.type === 'done') this.turnCount++;
+          if (output.type === 'done') {
+            this.turnCount++;
+            // A completed turn clears a prior turn's provider error so the seal
+            // status reflects the FINAL turn's outcome (e.g. a turn that errored
+            // and was then retried successfully is not sealed as `failed`).
+            this.sawProviderError = false;
+          } else if (output.type === 'error') {
+            // Terminal-cause flag: a per-turn provider error (HTTP / auth /
+            // stream failure) must flip the eventual clean close from a silent
+            // `succeeded` / `model_end_turn` to `failed` / `abort`.
+            this.sawProviderError = true;
+          }
           this.ledger?.recordEvent(output);
           yield output;
           if (output.type === 'done' || output.type === 'error') break;
@@ -979,6 +1007,7 @@ export class AgentSession implements IAgentSession {
       hookBlocked: this.hookBlocked,
       abort,
       lastStopReason: this.lastStopReason,
+      sawProviderError: this.sawProviderError,
     });
   }
 
@@ -1079,6 +1108,12 @@ export class AgentSession implements IAgentSession {
     // as cancelled.
     const signal = this.abortController.signal;
     if (signal.aborted && signal.reason !== 'closed') return 'cancelled';
+    // A provider error (HTTP / auth / stream failure) that ended the final
+    // turn is a failure even when the surface then closed the session cleanly.
+    // Checked AFTER the abort branch so a genuine cancel/budget/timeout (which
+    // also emits an error event) keeps its more-specific `cancelled` status.
+    // Without this, a 0-turn/0-token error run seals as a silent `succeeded`.
+    if (this.sawProviderError) return 'failed';
     return 'succeeded';
   }
 
