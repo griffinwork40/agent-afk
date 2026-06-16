@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { BackgroundStatusBar } from './background-status-bar.js';
 import type {
@@ -6,6 +6,7 @@ import type {
   BackgroundJob,
   BackgroundRegistryEvents,
 } from '../agent/background-registry.js';
+import { __flushResizeBusForTests } from './terminal-size.js';
 
 // ---------------------------------------------------------------------------
 // Minimal fake BackgroundAgentRegistry for testing — extends the same
@@ -527,6 +528,208 @@ describe('BackgroundStatusBar', () => {
     expect(writes).not.toContain('\x1b[s');
     expect(writes).not.toContain('\x1b[u');
     expect(writes).not.toMatch(/\x1b\[\d+;1H/);
+
+    bar.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Resize-immediate channel tests
+// ---------------------------------------------------------------------------
+
+describe('BackgroundStatusBar resize-immediate channel', () => {
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  // -------------------------------------------------------------------------
+  // R1. resetGeometry() is called synchronously on resize — rowCount is 0
+  //     BEFORE the debounced channel fires.
+  // -------------------------------------------------------------------------
+  it('rowCount is 0 immediately after resize, before debounced channel fires', () => {
+    const mockStream = makeMockStream();
+    const registry = new FakeRegistry();
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
+      stream: mockStream,
+      throttleMs: 0,
+    });
+    const rowHandler = vi.fn();
+    bar.setRowCountChangeHandler(rowHandler);
+    bar.start();
+
+    // Seed two running jobs so rowCount is set to 2.
+    registry.fireStarted(makeJob('j1'));
+    registry.fireStarted(makeJob('j2'));
+    rowHandler.mockClear();
+
+    // Emit resize — the immediate channel fires resetGeometry() synchronously.
+    // The debounced channel (and thus repaint()) has NOT yet fired.
+    process.stdout.emit('resize');
+
+    // rowCount must now be 0 (invalidated by resetGeometry on immediate channel).
+    // We assert this indirectly: if the spinner were to tick NOW (before the
+    // debounce fires), it must see rowCount === 0 and skip repaint().
+    // Directly inspect by triggering scheduleRepaint via a registry event.
+    // At this point rowCount=0, so repaint() should recompute from scratch.
+    // First flush the debounced resize: row count re-seeds.
+    (mockStream.write as ReturnType<typeof vi.fn>).mockClear();
+    __flushResizeBusForTests();
+
+    // After the debounced channel fires repaint(), rowHandler should be called
+    // (newRowCount 2 !== 0 → equality guard trips, rowCountChange fires).
+    expect(rowHandler).toHaveBeenCalledWith(2);
+
+    bar.stop();
+  });
+
+  // -------------------------------------------------------------------------
+  // R2. Spinner tick BETWEEN SIGWINCH and debounced repaint sees rowCount === 0
+  //     and emits NO write() calls.
+  // -------------------------------------------------------------------------
+  it('spinner tick after SIGWINCH but before debounced repaint emits no writes', () => {
+    // Use a throttleMs that makes the spinner interval deterministic: 100ms.
+    const mockStream = makeMockStream();
+    const registry = new FakeRegistry();
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
+      stream: mockStream,
+      throttleMs: 100,
+    });
+    bar.start();
+
+    // Seed a running job so rowCount > 0.
+    registry.fireStarted(makeJob('j1'));
+
+    // Clear writes from initial paint.
+    (mockStream.write as ReturnType<typeof vi.fn>).mockClear();
+
+    // Emit resize — immediate channel resets rowCount to 0 synchronously.
+    process.stdout.emit('resize');
+
+    // Advance time by 100ms — spinner tick fires (interval = max(100, 50) = 100ms).
+    // The debounce timer (150ms) has NOT yet elapsed.
+    vi.advanceTimersByTime(100);
+
+    // The spinner tick must NOT have produced any writes: rowCount === 0.
+    const writesAfterSpinner = (mockStream.write as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(writesAfterSpinner).toBe(0);
+
+    // Now advance past the debounce (50ms more → 150ms total).
+    vi.advanceTimersByTime(50);
+
+    // After debounced repaint, writes should resume (rowCount re-seeded to 1).
+    const writesAfterDebounce = (mockStream.write as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(writesAfterDebounce).toBeGreaterThan(0);
+
+    bar.stop();
+  });
+
+  // -------------------------------------------------------------------------
+  // R3. stop() unsubscribes the immediate channel — no resetGeometry() after stop.
+  // -------------------------------------------------------------------------
+  it('stop() unsubscribes immediate channel — resize after stop does not affect rowCount', () => {
+    const mockStream = makeMockStream();
+    const registry = new FakeRegistry();
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
+      stream: mockStream,
+      throttleMs: 0,
+    });
+    const rowHandler = vi.fn();
+    bar.setRowCountChangeHandler(rowHandler);
+    bar.start();
+
+    registry.fireStarted(makeJob('j1'));
+    bar.stop();
+    rowHandler.mockClear();
+
+    // Emit resize after stop — should be a complete no-op.
+    process.stdout.emit('resize');
+    vi.advanceTimersByTime(150);
+
+    // rowHandler must not be called after stop.
+    expect(rowHandler).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // R4. On terminal EXPAND, the rows painted at the OLD start-row address are
+  //     erased on the recovery repaint, so they do not strand as a ghost stripe
+  //     (PR #174 review finding 2). The old address is snapshotted from the
+  //     STORED lastPaintStartRow — not recomputed from the new stream.rows.
+  // -------------------------------------------------------------------------
+  it('erases pre-resize rows at their old address on terminal expand', () => {
+    const mockStream = makeMockStream();
+    const registry = new FakeRegistry();
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
+      stream: mockStream,
+      throttleMs: 0,
+    });
+    bar.start();
+
+    // Paint 1 running job at rows=24 → startRow = max(1, 24 - 1 - 0) = 23.
+    registry.fireStarted(makeJob('j1'));
+    (mockStream.write as ReturnType<typeof vi.fn>).mockClear();
+
+    // Expand the terminal to 30 rows, then fire SIGWINCH. The immediate channel
+    // snapshots the OLD painted address (startRow 23, rowCount 1).
+    Object.defineProperty(mockStream, 'rows', { value: 30, configurable: true });
+    process.stdout.emit('resize');
+
+    // Debounced repaint: new startRow = max(1, 30 - 1 - 0) = 29. The recovery
+    // repaint must erase the stranded old row 23 BEFORE painting the new row 29.
+    __flushResizeBusForTests();
+
+    const writes = (mockStream.write as ReturnType<typeof vi.fn>).mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .join('');
+
+    // Old row 23 was addressed for erase.
+    expect(writes).toContain('\x1b[23;1H');
+    // New content painted at row 29.
+    expect(writes).toContain('\x1b[29;1H');
+    // The old-row erase precedes the new-row paint.
+    expect(writes.indexOf('\x1b[23;1H')).toBeLessThan(writes.indexOf('\x1b[29;1H'));
+
+    bar.stop();
+  });
+
+  // -------------------------------------------------------------------------
+  // R5. On terminal SHRINK, the old rows are now below the viewport; addressing
+  //     them would clamp onto the status-line row, so they are skipped. The bar
+  //     must NOT emit a cursor-move to the (now off-screen) old start-row.
+  // -------------------------------------------------------------------------
+  it('does not erase off-screen old rows on terminal shrink', () => {
+    const mockStream = makeMockStream();
+    Object.defineProperty(mockStream, 'rows', { value: 30, configurable: true });
+    const registry = new FakeRegistry();
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
+      stream: mockStream,
+      throttleMs: 0,
+    });
+    bar.start();
+
+    // Paint 1 running job at rows=30 → startRow = max(1, 30 - 1 - 0) = 29.
+    registry.fireStarted(makeJob('j1'));
+    (mockStream.write as ReturnType<typeof vi.fn>).mockClear();
+
+    // Shrink to 24 rows, then fire SIGWINCH. Old address (29) is now below the
+    // 24-row viewport and must be skipped (not clamped onto the status line).
+    Object.defineProperty(mockStream, 'rows', { value: 24, configurable: true });
+    process.stdout.emit('resize');
+    __flushResizeBusForTests();
+
+    const writes = (mockStream.write as ReturnType<typeof vi.fn>).mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .join('');
+
+    // The off-screen old row 29 must NOT be addressed.
+    expect(writes).not.toContain('\x1b[29;1H');
+    // New content paints at the new startRow = max(1, 24 - 1 - 0) = 23.
+    expect(writes).toContain('\x1b[23;1H');
 
     bar.stop();
   });
