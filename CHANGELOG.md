@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.8.0] - 2026-06-16
+
+### Added
+- require durable, citation-backed evidence in terminal states (fdd2cea)
+
+### Changed
+- Merge pull request #176 from griffinwork40/salvage/audit-prompts-evidence (8ea3c80)
+
 ## [4.7.6] - 2026-06-16
 
 ### Fixed
