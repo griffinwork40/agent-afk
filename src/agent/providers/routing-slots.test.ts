@@ -28,6 +28,7 @@ const saved: Record<string, string | undefined> = {};
 
 function makeSlots(over: Partial<ModelSlots>): ModelSlots {
   return {
+    local: over.local ?? { id: DEFAULT_SLOT_BINDINGS.local.id },
     small: over.small ?? { id: DEFAULT_SLOT_BINDINGS.small.id },
     medium: over.medium ?? { id: DEFAULT_SLOT_BINDINGS.medium.id },
     large: over.large ?? { id: DEFAULT_SLOT_BINDINGS.large.id },
@@ -104,6 +105,31 @@ describe('providerForModel — explicit per-slot provider override (Stage 2)', (
   it('lets the global explicit provider beat the per-slot provider', () => {
     const slots = makeSlots({ small: { id: 'my-local-llama', provider: 'openai' } });
     expect(providerForModel('small', { slots, explicit: 'anthropic' })).toBe('anthropic-direct');
+  });
+});
+
+describe('providerForModel — per-slot baseUrl routing (Tier 3.5)', () => {
+  it('routes a bare id with a per-slot baseUrl to openai-compatible', () => {
+    // The documented env-only local shim: AFK_MODEL_LOCAL=llama3.2:3b +
+    // AFK_MODEL_LOCAL_BASE_URL. The id matches no provider prefix, so the
+    // per-slot baseUrl is the routing signal that reaches the shim.
+    const slots = makeSlots({ local: { id: 'llama3.2:3b', baseUrl: 'http://localhost:11434/v1' } });
+    expect(providerForModel('local', { slots })).toBe('openai-compatible');
+  });
+
+  it('routes a configured tier with a baseUrl + bare id to openai-compatible', () => {
+    const slots = makeSlots({ small: { id: 'my-shim-model', baseUrl: 'http://localhost:8080/v1' } });
+    expect(providerForModel('small', { slots })).toBe('openai-compatible');
+  });
+
+  it('keeps a local-* id on anthropic-direct even with a per-slot baseUrl (Anthropic-shim path)', () => {
+    const slots = makeSlots({ local: { id: 'local-claude-shim', baseUrl: 'http://localhost:9000' } });
+    expect(providerForModel('local', { slots })).toBe('anthropic-direct');
+  });
+
+  it('keeps a claude-* id on anthropic-direct even with a per-slot baseUrl', () => {
+    const slots = makeSlots({ medium: { id: 'claude-sonnet-4-6', baseUrl: 'http://proxy.internal' } });
+    expect(providerForModel('medium', { slots })).toBe('anthropic-direct');
   });
 });
 

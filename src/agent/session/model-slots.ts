@@ -32,11 +32,11 @@
 
 import { env } from '../../config/env.js';
 
-/** The three fixed capability-tier positions. */
-export type SlotName = 'small' | 'medium' | 'large';
+/** The four fixed capability-tier positions. */
+export type SlotName = 'local' | 'small' | 'medium' | 'large';
 
 /** Ordered list of the canonical slot names (cheapest → most capable). */
-export const SLOT_NAMES: readonly SlotName[] = ['small', 'medium', 'large'] as const;
+export const SLOT_NAMES: readonly SlotName[] = ['local', 'small', 'medium', 'large'] as const;
 
 /**
  * Per-slot provider family. Optional override for the id-inferred provider —
@@ -80,6 +80,7 @@ export type ModelSlots = Record<SlotName, ModelSlotBinding>;
  * the two from drifting.
  */
 export const DEFAULT_SLOT_BINDINGS: ModelSlots = {
+  local: { id: '' },
   small: { id: 'claude-haiku-4-5-20251001' },
   medium: { id: 'claude-sonnet-4-6' },
   large: { id: 'claude-opus-4-8' },
@@ -174,6 +175,7 @@ function readEnvSlot(
 
 function envOverrides(): Record<SlotName, EnvSlotOverride> {
   return {
+    local: readEnvSlot(env.AFK_MODEL_LOCAL, env.AFK_MODEL_LOCAL_BASE_URL, env.AFK_MODEL_LOCAL_API_KEY),
     small: readEnvSlot(env.AFK_MODEL_SMALL, env.AFK_MODEL_SMALL_BASE_URL, env.AFK_MODEL_SMALL_API_KEY),
     medium: readEnvSlot(env.AFK_MODEL_MEDIUM, env.AFK_MODEL_MEDIUM_BASE_URL, env.AFK_MODEL_MEDIUM_API_KEY),
     large: readEnvSlot(env.AFK_MODEL_LARGE, env.AFK_MODEL_LARGE_BASE_URL, env.AFK_MODEL_LARGE_API_KEY),
@@ -233,7 +235,7 @@ export function slotForInput(input: string, bindings: ModelSlots = getSlotBindin
     const name = bindings[slot].name;
     if (name && name.trim().toLowerCase() === lowered) return slot;
   }
-  if (lowered === 'small' || lowered === 'medium' || lowered === 'large') {
+  if (lowered === 'local' || lowered === 'small' || lowered === 'medium' || lowered === 'large') {
     return lowered;
   }
   const legacy = LEGACY_ALIAS_TO_SLOT[lowered];
@@ -272,6 +274,35 @@ export function resolveModelInput(
 ): string | undefined {
   if (input === undefined) return undefined;
   return resolveBinding(input, bindings).id;
+}
+
+/**
+ * Guard for selecting a capability tier that has no configured model id (an
+ * unconfigured slot — by default only `local`, whose default binding is
+ * `{ id: '' }`). Returns a ready-to-print, actionable error message, or
+ * `undefined` when `input` is selectable: a configured slot, a raw id, a legacy
+ * alias, a custom name, the `auto` sentinel, or `undefined`.
+ *
+ * Centralizes the message so every selection surface — the REPL/Telegram
+ * `/model` command and CLI startup (`afk -m`, `AFK_MODEL`) — rejects the choice
+ * identically at the point of selection. Without this guard the empty id reaches
+ * a provider, where it surfaces as an opaque empty-model API error or silently
+ * falls back to the cloud default model — the latter defeating the entire point
+ * of a "local" tier. The guard lives here (not in `resolveBinding`) because that
+ * resolver is also called from read-only context-window / capability lookups
+ * (`model-limits.ts`, `model-capabilities.ts`) where a throw would be wrong.
+ */
+export function unconfiguredSlotError(
+  input: string | undefined,
+  bindings: ModelSlots = getSlotBindings(),
+): string | undefined {
+  if (input === undefined) return undefined;
+  const slot = slotForInput(input, bindings);
+  if (slot && bindings[slot].id.trim() === '') {
+    const upper = slot.toUpperCase();
+    return `The "${slot}" model tier is not configured (no model id). Set AFK_MODEL_${upper}=<id> (optionally AFK_MODEL_${upper}_BASE_URL / AFK_MODEL_${upper}_API_KEY) or "models.${slot}" in afk.config.json, then retry.`;
+  }
+  return undefined;
 }
 
 /**

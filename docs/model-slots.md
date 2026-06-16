@@ -1,9 +1,9 @@
 # Model slots
 
-User-configurable model bindings. Three fixed **capability tiers** — `small`,
-`medium`, `large` — each bound to a concrete model the user chooses. The tier
-*positions* are the stable anchor the `agent` / `compose` / `skill` tools select
-among (cheapest → most capable); the *bindings* are what you configure.
+User-configurable model bindings. Four fixed **capability tiers** — `local`,
+`small`, `medium`, `large` — each bound to a concrete model the user chooses. The
+tier *positions* are the stable anchor the `agent` / `compose` / `skill` tools
+select among (cheapest → most capable); the *bindings* are what you configure.
 
 > **Status:** Stages 1–2. A tier can be rebound to any model id (Stage 1) and
 > carry its own `provider` / `baseUrl` / `apiKey` (Stage 2), so different tiers
@@ -51,19 +51,33 @@ credentials):
 
 | Var | Binds |
 | --- | --- |
-| `AFK_MODEL_{SMALL,MEDIUM,LARGE}` | the tier's model id |
-| `AFK_MODEL_{SMALL,MEDIUM,LARGE}_BASE_URL` | the tier's endpoint base URL |
-| `AFK_MODEL_{SMALL,MEDIUM,LARGE}_API_KEY` | the tier's API key (secret) |
+| `AFK_MODEL_{LOCAL,SMALL,MEDIUM,LARGE}` | the tier's model id |
+| `AFK_MODEL_{LOCAL,SMALL,MEDIUM,LARGE}_BASE_URL` | the tier's endpoint base URL |
+| `AFK_MODEL_{LOCAL,SMALL,MEDIUM,LARGE}_API_KEY` | the tier's API key (secret) |
 
 ```bash
-# A local shim on the small tier, keys/endpoint out of any file:
+# Point the local tier at Ollama. The per-slot BASE_URL routes the tier to the
+# OpenAI-compatible path even though `llama3.2:3b` matches no provider prefix;
+# the API key is a throwaway many shims merely require to be non-empty.
+AFK_MODEL_LOCAL='llama3.2:3b' \
+AFK_MODEL_LOCAL_BASE_URL='http://localhost:11434/v1' \
+AFK_MODEL_LOCAL_API_KEY='ollama' afk i
+
+# An MLX shim on the small tier (an `org/model` id routes to openai-compatible
+# on its own), keys/endpoint out of any file:
 AFK_MODEL_SMALL='mlx-community/Qwen3-32B-4bit' \
 AFK_MODEL_SMALL_BASE_URL='http://localhost:8080/v1' \
-AFK_MODEL_SMALL_API_KEY='local' afk i
+AFK_MODEL_SMALL_API_KEY='mlx' afk i
 ```
 
-(`provider` is config-only — set it in afk.config.json when a bare id needs an
-explicit provider; env-bound ids are inferred or paired with a config `provider`.)
+A per-slot `BASE_URL` routes the tier to the OpenAI-compatible path even for a
+bare id that matches no provider prefix (Ollama / LM Studio tags like
+`llama3.2:3b`). `provider` itself is config-only — set it in afk.config.json to
+force an **Anthropic**-compatible shim on a bare id, or use a `local-*` id, which
+routes to anthropic-direct. (Note: `AFK_MODEL_LOCAL_BASE_URL` is the per-slot
+endpoint for the `local` **tier**; the separate `AFK_LOCAL_BASE_URL` is the
+global endpoint for `local-*` **ids** on the Anthropic-shim path — different
+knobs.)
 
 ### Default bindings
 
@@ -71,6 +85,7 @@ An unconfigured install behaves exactly as before this feature:
 
 | Tier     | Default id                      | Legacy aliases            |
 | -------- | ------------------------------- | ------------------------- |
+| `local`  | `` (empty — user-configured)    | —                         |
 | `small`  | `claude-haiku-4-5-20251001`     | `haiku`                   |
 | `medium` | `claude-sonnet-4-6`             | `sonnet`, `sonnet_1m`     |
 | `large`  | `claude-opus-4-8`               | `opus`, `opus_1m`         |
@@ -79,9 +94,9 @@ An unconfigured install behaves exactly as before this feature:
 
 Anywhere a model is named — `AFK_MODEL` / `afk -m <…>`, the REPL/Telegram
 `/model` command, and the `agent`/`compose`/`skill` tools' `model` parameter —
-you may pass a **tier name** (`small`/`medium`/`large`), your **custom name**, a
-**legacy alias** (`haiku`/`sonnet`/`opus`), the `auto` sentinel, or a **raw
-model id**.
+you may pass a **tier name** (`local`/`small`/`medium`/`large`), your **custom
+name**, a **legacy alias** (`haiku`/`sonnet`/`opus`), the `auto` sentinel, or a
+**raw model id**.
 
 ## Resolution precedence
 
@@ -89,7 +104,7 @@ For any model input string (`slotForInput` / `resolveModelInput` in
 `src/agent/session/model-slots.ts`):
 
 1. **custom name** — a user-assigned `name` on a binding (case-insensitive)
-2. **neutral name** — `small` | `medium` | `large`
+2. **neutral name** — `local` | `small` | `medium` | `large`
 3. **legacy alias** — `haiku`→small, `sonnet`/`sonnet_1m`→medium, `opus`/`opus_1m`→large
 4. otherwise — a raw concrete id or the `auto` sentinel (passthrough, unchanged)
 
@@ -100,8 +115,9 @@ a non-Anthropic id (e.g. `small → gpt-4o-mini`) routes to `openai-compatible`.
 ## How it works
 
 **Routing (Stage 1).** `providerForModel()` resolves the slot alias to its full
-binding **before** pattern matching, honoring an explicit per-slot `provider`
-then falling back to id inference. This single resolution-before-routing step
+binding **before** pattern matching, honoring an explicit per-slot `provider`,
+then id inference, then a per-slot `baseUrl` (a custom endpoint on a
+non-Anthropic id infers `openai-compatible`). This single resolution-before-routing step
 means every routing call site — subagent dispatch, the child `providerForModel`
 factory, and the CLI/Telegram surfaces — gets correct routing for free, without
 per-site changes. Idempotent: full ids and `auto` pass through untouched.
@@ -136,4 +152,4 @@ falls back to defaults + env when constructed without the CLI config loader.
 - `src/agent/session/model-slots.ts` — bindings, resolver, defaults, config parse.
 - `src/agent/session/slot-credentials.ts` — per-slot credential application.
 - `src/agent/providers/index.ts` — `providerForModel` resolution-before-routing.
-- `docs/env-registry.md` — `AFK_MODEL_{SMALL,MEDIUM,LARGE}{,_BASE_URL,_API_KEY}`.
+- `docs/env-registry.md` — `AFK_MODEL_{LOCAL,SMALL,MEDIUM,LARGE}{,_BASE_URL,_API_KEY}`.

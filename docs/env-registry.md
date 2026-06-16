@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**108 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**111 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -19,10 +19,13 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_MAX_BUDGET_USD` | number |  | `5.00` | `10.00` | Per-turn USD budget ceiling. Aborts the turn when projected spend would exceed this. |
 | `AFK_MAX_OUTPUT_TOKENS` | number |  |  | `8192` | Cap on output tokens per turn. Falls back to provider default when unset. |
 | `AFK_MAX_TOKENS` | number |  | `4096` | `8192` | Cap on total tokens per turn (input + output). Default 4096. |
-| `AFK_MODEL` | string |  | `sonnet` | `claude-opus-4-5` | Default model for agent turns. Accepts slot names (small, medium, large), legacy aliases (opus, sonnet, haiku), the fixed-id fable alias (Claude Fable 5), or full model IDs. |
+| `AFK_MODEL` | string |  | `sonnet` | `claude-opus-4-5` | Default model for agent turns. Accepts slot names (local, small, medium, large), legacy aliases (opus, sonnet, haiku), the fixed-id fable alias (Claude Fable 5), or full model IDs. |
 | `AFK_MODEL_LARGE` | string |  |  | `claude-opus-4-8` | Bind the "large" capability tier (most capable) to a model id/alias. Overrides afk.config.json models.large. |
 | `AFK_MODEL_LARGE_API_KEY` | string |  |  |  | Per-slot API key for the "large" tier (Stage 2). Overrides global credentials for this tier only. |
 | `AFK_MODEL_LARGE_BASE_URL` | string |  |  | `http://localhost:8080/v1` | Per-slot endpoint base URL for the "large" tier (Stage 2). Anthropic Messages base or OpenAI-compatible base per the tier provider. |
+| `AFK_MODEL_LOCAL` | string |  |  | `llama3.2:3b` | Bind the "local" capability tier (cheapest/fastest, user-configured) to a model id. Overrides afk.config.json models.local. Point at a local Ollama, LM Studio, or any OpenAI-compatible shim. |
+| `AFK_MODEL_LOCAL_API_KEY` | string |  |  |  | Per-slot API key for the "local" tier. Overrides global credentials for this tier only. |
+| `AFK_MODEL_LOCAL_BASE_URL` | string |  |  | `http://localhost:11434/v1` | Per-slot endpoint base URL for the "local" tier. Anthropic Messages base or OpenAI-compatible base per the tier provider. |
 | `AFK_MODEL_MEDIUM` | string |  |  | `claude-sonnet-4-6` | Bind the "medium" capability tier (general-use) to a model id/alias. Overrides afk.config.json models.medium. |
 | `AFK_MODEL_MEDIUM_API_KEY` | string |  |  |  | Per-slot API key for the "medium" tier (Stage 2). Overrides global credentials for this tier only. |
 | `AFK_MODEL_MEDIUM_BASE_URL` | string |  |  | `http://localhost:8080/v1` | Per-slot endpoint base URL for the "medium" tier (Stage 2). Anthropic Messages base or OpenAI-compatible base per the tier provider. |

@@ -9,6 +9,7 @@ import { createDefaultHookRegistry } from '../../agent/default-hook-registry.js'
 import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
 import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/types.js';
+import { unconfiguredSlotError } from '../../agent/session/model-slots.js';
 import { formatDuration, formatCost, formatTokens } from '../format-utils.js';
 import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getDefaultSubagentModel, resolveBaseSystemPrompt } from '../shared-helpers.js';
 import { loadConfig } from '../config.js';
@@ -377,6 +378,13 @@ export function registerChatCommand(program: Command): void {
 
         // Resolve effective model (resume may carry a different model).
         const sessionModel = resumeTarget?.stored?.model ?? options.model;
+        // Fail fast on an unconfigured capability tier (e.g. `afk -m local` with
+        // no AFK_MODEL_LOCAL) before constructing the session — an empty id would
+        // otherwise reach the provider as an opaque error or a silent cloud call.
+        const unconfiguredModel = unconfiguredSlotError(sessionModel);
+        if (unconfiguredModel) {
+          throw new Error(unconfiguredModel);
+        }
         // Re-seed stats with the correct model and any stored history.
         // `stats` was pre-declared outside the try block to be accessible in
         // catch/finally; update it in place rather than re-assigning.

@@ -47,11 +47,11 @@ export interface AgentConfig {
   model: AgentModelInput;
 
   /**
-   * User-configurable model-slot bindings (Stage 1). Rebinds the three
-   * capability tiers (`small`/`medium`/`large`) to concrete model ids. When
-   * present, installed process-globally so every routing call site resolves
+   * User-configurable model-slot bindings (Stage 1). Rebinds the four
+   * capability tiers (`local`/`small`/`medium`/`large`) to concrete model ids.
+   * When present, installed process-globally so every routing call site resolves
    * tier aliases correctly. Normally populated by `loadConfig()` from the
-   * `models` block in afk.config.json + `AFK_MODEL_{SMALL,MEDIUM,LARGE}` env;
+   * `models` block in afk.config.json + `AFK_MODEL_{LOCAL,SMALL,MEDIUM,LARGE}` env;
    * passing it directly here is supported for library/test use. Stage 2 will
    * add per-slot provider/baseUrl/apiKey. See `agent/session/model-slots.ts`.
    */

@@ -16,11 +16,16 @@ import {
   resolveModelInput,
   setSlotBindings,
   slotForInput,
+  SLOT_NAMES,
+  unconfiguredSlotError,
   type ModelSlots,
 } from './model-slots.js';
 import { contextLimitFor, maxOutputTokensFor } from '../model-limits.js';
 
 const ENV_KEYS = [
+  'AFK_MODEL_LOCAL',
+  'AFK_MODEL_LOCAL_BASE_URL',
+  'AFK_MODEL_LOCAL_API_KEY',
   'AFK_MODEL_SMALL',
   'AFK_MODEL_MEDIUM',
   'AFK_MODEL_LARGE',
@@ -36,8 +41,9 @@ function clearEnv(): void {
   for (const k of ENV_KEYS) delete process.env[k];
 }
 
-function makeSlots(over: Partial<Record<'small' | 'medium' | 'large', string>>): ModelSlots {
+function makeSlots(over: Partial<Record<'local' | 'small' | 'medium' | 'large', string>>): ModelSlots {
   return {
+    local: { id: over.local ?? DEFAULT_SLOT_BINDINGS.local.id },
     small: { id: over.small ?? DEFAULT_SLOT_BINDINGS.small.id },
     medium: { id: over.medium ?? DEFAULT_SLOT_BINDINGS.medium.id },
     large: { id: over.large ?? DEFAULT_SLOT_BINDINGS.large.id },
@@ -49,8 +55,19 @@ afterEach(() => {
   clearEnv();
 });
 
+describe('SLOT_NAMES', () => {
+  it('has four entries with local first', () => {
+    expect(SLOT_NAMES).toHaveLength(4);
+    expect(SLOT_NAMES[0]).toBe('local');
+    expect(SLOT_NAMES).toEqual(['local', 'small', 'medium', 'large']);
+  });
+});
+
 describe('slotForInput', () => {
   it('resolves neutral tier names', () => {
+    expect(slotForInput('local')).toBe('local');
+    expect(slotForInput('LOCAL')).toBe('local');
+    expect(slotForInput('Local')).toBe('local');
     expect(slotForInput('small')).toBe('small');
     expect(slotForInput('MEDIUM')).toBe('medium');
     expect(slotForInput(' large ')).toBe('large');
@@ -130,6 +147,75 @@ describe('Claude Fable 5 fixed-id alias', () => {
     expect(contextLimitFor('claude-fable-5')).toBe(1_000_000);
     expect(maxOutputTokensFor('fable')).toBe(128_000);
     expect(maxOutputTokensFor('claude-fable-5')).toBe(128_000);
+  });
+});
+
+describe('local slot', () => {
+  it('DEFAULT_SLOT_BINDINGS has local with empty id', () => {
+    expect(DEFAULT_SLOT_BINDINGS.local).toEqual({ id: '' });
+  });
+
+  it('computeSlotBindings includes local key equal to DEFAULT_SLOT_BINDINGS.local when no env set', () => {
+    const out = computeSlotBindings();
+    expect(out.local).toEqual(DEFAULT_SLOT_BINDINGS.local);
+    expect(Object.keys(out)).toContain('local');
+  });
+
+  it('AFK_MODEL_LOCAL overrides local slot id', () => {
+    process.env['AFK_MODEL_LOCAL'] = 'test-model';
+    expect(computeSlotBindings().local.id).toBe('test-model');
+  });
+
+  it('AFK_MODEL_LOCAL_BASE_URL wires through to local.baseUrl', () => {
+    process.env['AFK_MODEL_LOCAL_BASE_URL'] = 'http://localhost:1234';
+    expect(computeSlotBindings().local.baseUrl).toBe('http://localhost:1234');
+  });
+
+  it('AFK_MODEL_LOCAL_API_KEY wires through to local.apiKey', () => {
+    process.env['AFK_MODEL_LOCAL_API_KEY'] = 'sk-local';
+    expect(computeSlotBindings().local.apiKey).toBe('sk-local');
+  });
+
+  it('parseModelsConfig supports local key', () => {
+    const out = parseModelsConfig({ local: 'lm-studio-model' });
+    expect(out.local).toEqual({ id: 'lm-studio-model' });
+  });
+
+  it('resolveModelInput("local") returns empty string when unconfigured', () => {
+    // local default id is '' — not undefined or a crash
+    expect(resolveModelInput('local')).toBe('');
+  });
+
+  it('slotForInput does NOT match a raw id that merely contains "local"', () => {
+    // Exact-token match only — an Ollama/HF id like these must pass through as a
+    // raw id, never collide with the `local` slot alias.
+    expect(slotForInput('local-llama-3')).toBeUndefined();
+    expect(slotForInput('mlx-community/local-model')).toBeUndefined();
+    expect(resolveModelInput('local-llama-3')).toBe('local-llama-3');
+  });
+
+  it('unconfiguredSlotError flags an unconfigured local tier with an actionable message', () => {
+    const msg = unconfiguredSlotError('local');
+    expect(msg).toBeTruthy();
+    expect(msg).toContain('AFK_MODEL_LOCAL');
+    expect(msg).toContain('models.local');
+  });
+
+  it('unconfiguredSlotError matches the slot alias case-insensitively', () => {
+    expect(unconfiguredSlotError('LOCAL')).toBeTruthy();
+  });
+
+  it('unconfiguredSlotError returns undefined once local is configured', () => {
+    process.env['AFK_MODEL_LOCAL'] = 'llama3.2:3b';
+    expect(unconfiguredSlotError('local')).toBeUndefined();
+  });
+
+  it('unconfiguredSlotError returns undefined for configured tiers, raw ids, aliases, and undefined', () => {
+    expect(unconfiguredSlotError('small')).toBeUndefined();
+    expect(unconfiguredSlotError('sonnet')).toBeUndefined();
+    expect(unconfiguredSlotError('gpt-4o-mini')).toBeUndefined();
+    expect(unconfiguredSlotError('auto')).toBeUndefined();
+    expect(unconfiguredSlotError(undefined)).toBeUndefined();
   });
 });
 

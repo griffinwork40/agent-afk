@@ -12,12 +12,12 @@ import { formatCost, formatTokens } from '../../format-utils.js';
 import { contextLimitFor, MODEL_CONTEXT_LIMITS } from '../../model-limits.js';
 import { renderDebugBanner } from '../../debug-banner.js';
 import { providerForModel } from '../../../agent/providers/index.js';
-import { slotForInput } from '../../../agent/session/model-slots.js';
+import { slotForInput, unconfiguredSlotError } from '../../../agent/session/model-slots.js';
 import type { SlashCommand } from '../types.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 
 /** Display hint only — not used for validation. Full model IDs (org/model) are also accepted. */
-const MODEL_ALIASES_HINT = ['small', 'medium', 'large', 'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable'] as const;
+const MODEL_ALIASES_HINT = ['local', 'small', 'medium', 'large', 'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable'] as const;
 
 const costCmd: SlashCommand = {
   name: '/cost',
@@ -218,9 +218,9 @@ const resetCmd: SlashCommand = {
 
 const modelCmd: SlashCommand = {
   name: '/model',
-  usage: '/model <small|medium|large|opus|sonnet|haiku|fable|org/model>',
+  usage: '/model <local|small|medium|large|opus|sonnet|haiku|fable|org/model>',
   summary: 'Switch the active model mid-session',
-  hint: 'Switch the capability tier (small/medium/large — or your configured names) or pass a full model id. Upgrade to large for a hard problem, downshift to small for cheap iteration — context carries over. Also accepts HuggingFace-style ids (e.g. mlx-community/Qwen3-30B-A3B-4bit).',
+  hint: 'Switch the capability tier (local/small/medium/large — or your configured names) or pass a full model id. Upgrade to large for a hard problem, downshift to small for cheap iteration — context carries over. Also accepts HuggingFace-style ids (e.g. mlx-community/Qwen3-30B-A3B-4bit).',
   async handler(ctx, args) {
     const target = args.trim().toLowerCase();
     if (!target) {
@@ -237,6 +237,14 @@ const modelCmd: SlashCommand = {
     const isHFStyleId = providerForModel(target) === 'openai-compatible';
     if (!isKnownAlias && !isSlotName && !isHFStyleId) {
       ctx.out.warn(`Unknown model: ${target}. Aliases: ${MODEL_ALIASES_HINT.join(', ')}  (or org/model for local/OpenAI-compatible)`);
+      return 'continue';
+    }
+    // Reject an unconfigured capability tier (e.g. an empty `local` slot) at the
+    // point of selection — otherwise the empty id reaches the provider as an
+    // opaque empty-model error or a silent cloud fallback.
+    const unconfigured = unconfiguredSlotError(target);
+    if (unconfigured) {
+      ctx.out.warn(unconfigured);
       return 'continue';
     }
     try {

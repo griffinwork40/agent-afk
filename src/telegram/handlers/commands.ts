@@ -20,7 +20,7 @@ import {
   formatSystemError,
 } from '../formatter.js';
 import { providerForModel } from '../../agent/providers/index.js';
-import { slotForInput } from '../../agent/session/model-slots.js';
+import { slotForInput, unconfiguredSlotError } from '../../agent/session/model-slots.js';
 import type { AgentModelInput } from '../../agent/types.js';
 import { slugifySessionName } from '../../cli/session-name.js';
 import { formatResumeCommand } from '../../cli/resume-command.js';
@@ -28,7 +28,7 @@ import { formatResumeCommand } from '../../cli/resume-command.js';
 type LogFn = (...args: unknown[]) => void;
 
 /** Canonical short aliases accepted by /model and the inline keyboard. */
-export const MODEL_ALIASES_HINT = ['small', 'medium', 'large', 'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable'] as const;
+export const MODEL_ALIASES_HINT = ['local', 'small', 'medium', 'large', 'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable'] as const;
 
 /**
  * Handle /clear command (SDK /clear - clear conversation history)
@@ -128,7 +128,7 @@ export async function handleModelSwitch(
 
   const modelArg = args[0];
   if (!modelArg) {
-    await ctx.reply(formatError('Please specify a model: small, medium, large, opus, sonnet, haiku, or an org/model id'));
+    await ctx.reply(formatError('Please specify a model: local, small, medium, large, opus, sonnet, haiku, or an org/model id'));
     return;
   }
 
@@ -141,6 +141,15 @@ export async function handleModelSwitch(
     await ctx.reply(
       formatError(`Invalid model: ${modelArg}\nAliases: ${MODEL_ALIASES_HINT.join(', ')}, or org/model HF id`)
     );
+    return;
+  }
+
+  // Reject an unconfigured capability tier (e.g. an empty `local` slot) before
+  // the close-and-recreate switch — an empty id would otherwise reach the
+  // provider as an opaque empty-model error or a silent cloud fallback.
+  const unconfigured = unconfiguredSlotError(model);
+  if (unconfigured) {
+    await ctx.reply(formatError(unconfigured));
     return;
   }
 

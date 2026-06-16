@@ -9,6 +9,7 @@ import { DEFAULT_SLOT_BINDINGS, type ModelSlots } from './model-slots.js';
 
 function slots(over: Partial<ModelSlots>): ModelSlots {
   return {
+    local: over.local ?? { id: DEFAULT_SLOT_BINDINGS.local.id },
     small: over.small ?? { id: DEFAULT_SLOT_BINDINGS.small.id },
     medium: over.medium ?? { id: DEFAULT_SLOT_BINDINGS.medium.id },
     large: over.large ?? { id: DEFAULT_SLOT_BINDINGS.large.id },
