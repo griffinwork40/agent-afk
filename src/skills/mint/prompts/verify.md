@@ -21,7 +21,14 @@ The orchestrator runs three modes in parallel: `test` and `lint` are **programma
 - Capture each lint/type error with file:line where possible.
 
 **If mode is `design-review`:**
-Evaluate the implementation diff across these dimensions and decide PASS/FAIL based on whether any dimension has a red (blocker):
+Evaluate the implementation diff on two axes — **spec compliance** (did it build what the plan specified?) and **code quality** (is the build any good?). A red on *either* axis is a FAIL.
+
+**Spec compliance — check this FIRST, against the Phase 3 plan's success criteria (in your input):**
+- **Completeness** — every success criterion / acceptance condition in the plan has a corresponding change in the diff. A criterion with no implementing change is a blocker.
+- **No scope creep** — nothing substantive was built beyond what the plan asked for. Unrequested features or behavior changes are a blocker (cite `file:line`).
+- If the plan carries **no explicit success criteria** to check against, do NOT silently treat the global constraints — or the diff's own apparent goals — as "the spec" and pass. Emit a blocker: `spec-compliance not assessable — plan lacks explicit success criteria`. A reviewer who invents the spec rubber-stamps everything.
+
+**Code quality — evaluate the implementation diff across these dimensions:**
 
 1. **Clean code** — no unnecessary duplication, no dead code, clear names, comments explain "why" not "what", no overbuilt abstractions.
 2. **Modularity** — single-responsibility files, clean module boundaries, clear public vs. private APIs.
@@ -31,7 +38,7 @@ Evaluate the implementation diff across these dimensions and decide PASS/FAIL ba
 6. **Intuitive design** — discoverable API, actionable error messages, consistent names.
 7. **Security hygiene** — no new secrets in code, safe input handling, no obvious vulnerabilities.
 
-A red on any dimension is a FAIL; yellows are nice-to-have and do not block.
+A red on the spec-compliance axis or any code-quality dimension is a FAIL; yellows are nice-to-have and do not block.
 
 ## Output
 
