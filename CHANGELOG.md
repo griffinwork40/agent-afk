@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.8.2] - 2026-06-16
+
+### Fixed
+- address PR #174 review — bg-bar self-clears old rows on resize (bc67d4e)
+- reset StatusLine + BackgroundStatusBar geometry on SIGWINCH to stop ghost rows (port afk-workshop#719) (44351ef)
+
+### Changed
+- Merge pull request #174 from griffinwork40/afk-port/pr-719 (4bd1dbb)
+
 ## [4.8.1] - 2026-06-16
 
 ### Fixed
