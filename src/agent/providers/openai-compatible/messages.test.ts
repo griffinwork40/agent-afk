@@ -225,4 +225,47 @@ describe('buildMessages', () => {
     });
     expect(m[0]!.content).toEqual(parts);
   });
+
+  // Regression: a tool-only assistant turn carries `content: null` (see
+  // loop.ts:assistantMessageWithToolCalls). On a non-vision model the
+  // down-convert map used to send that null into flattenOpenAIParts, whose
+  // `for…of` threw "X is not iterable" and crashed the second iteration of
+  // every tool-using turn. null/string content must pass through untouched;
+  // only array (multimodal) content is flattened.
+  it('does not crash on null content (tool-call assistant turn) under vision:false', () => {
+    // `content: null` is the real tool-call assistant shape; the type omits
+    // null (production casts via `as unknown as OpenAIMessage`), so cast here.
+    const toolCallTurn = {
+      role: 'assistant',
+      content: null,
+      tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'read_file', arguments: '{}' } }],
+    } as never;
+    const parts: OpenAIContentPart[] = [
+      { type: 'text', text: 'look' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,xx' } },
+    ];
+    let m!: ReturnType<typeof buildMessages>;
+    expect(() => {
+      m = buildMessages({
+        config: baseConfig(),
+        priorTurns: [
+          toolCallTurn,
+          { role: 'tool', content: 'file contents', tool_call_id: 'call_1' },
+          { role: 'assistant', content: parts }, // array → still flattened
+        ],
+        currentUserText: 'continue',
+        vision: false,
+      });
+    }).not.toThrow();
+    // null content preserved untouched (OpenAI requires null on tool-call turns).
+    expect(m[0]!.content).toBeNull();
+    expect((m[0] as { tool_calls?: unknown[] }).tool_calls).toHaveLength(1);
+    // tool-result string preserved.
+    expect(m[1]!.content).toBe('file contents');
+    // array (multimodal) content still down-converted to text.
+    expect(typeof m[2]!.content).toBe('string');
+    expect(m[2]!.content).toMatch(/cannot view images/i);
+    // current user turn intact.
+    expect(m[3]).toEqual({ role: 'user', content: 'continue' });
+  });
 });

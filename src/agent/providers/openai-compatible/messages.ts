@@ -246,8 +246,22 @@ export function buildMessages(args: {
   }
 
   if (args.vision === false) {
+    // Only ARRAY content (the multimodal vision shape: text + image_url parts)
+    // needs down-converting to text for a non-vision endpoint. String content
+    // is already text, and `null` content — which an assistant tool-call turn
+    // legitimately carries (see `assistantMessageWithToolCalls`, whose
+    // `content` is `null` on a tool-only turn) — must pass through untouched.
+    //
+    // Regression: the previous `typeof m.content === 'string' ? m : …` guard
+    // sent that `null` into `flattenOpenAIParts`, whose `for (const part of
+    // content)` threw `TypeError: <x> is not iterable` and crashed the SECOND
+    // iteration of every tool-using turn on a non-vision model (the model's
+    // tool-only assistant turn lands in `priorTurns` with `content: null`,
+    // then the next request rebuild hits this map). `OpenAIMessage.content`'s
+    // type omits `null`, so the `as unknown as OpenAIMessage` casts at the
+    // priorTurns push sites hid the gap from the compiler.
     return messages.map((m) =>
-      typeof m.content === 'string' ? m : { ...m, content: flattenOpenAIParts(m.content) },
+      Array.isArray(m.content) ? { ...m, content: flattenOpenAIParts(m.content) } : m,
     );
   }
 
