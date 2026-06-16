@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.7.4] - 2026-06-16
+
+### Fixed
+- enforce write-tool gate (config.hookRegistry was dropped by the dispatcher) (port afk-workshop#706) (c6892c6)
+
+### Changed
+- Merge pull request #170 from griffinwork40/afk-port/pr-706 (04dd653)
+
 ## [4.7.3] - 2026-06-16
 
 ### Fixed
