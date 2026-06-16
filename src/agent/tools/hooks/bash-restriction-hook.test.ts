@@ -79,6 +79,32 @@ describe('createBashRestrictionHook — interpreter denylist', () => {
     // `python3 script.py` is fine — not running code from the command line.
     expect(hook(ctx('python3 script.py')).decision).not.toBe('block');
   });
+
+  it('blocks version-qualified interpreters (python3.10 -c, python3.11 -c)', () => {
+    // Regression: `python3.10` previously slipped past the denylist because the
+    // pattern only listed `python`/`python3` with no version suffix.
+    expect(hook(ctx('python3.10 -c "import os"')).decision).toBe('block');
+    expect(hook(ctx('python3.11 -c "1+1"')).decision).toBe('block');
+  });
+
+  it('blocks combined eval-flag clusters (python -ec, bash -lc, perl -ne)', () => {
+    // Regression: combined short-flag clusters (`-ec`, `-lc`) previously evaded
+    // the `-[cCeE](\s|$)` pattern, which required the eval letter immediately
+    // after the dash.
+    expect(hook(ctx('python -ec "x"')).decision).toBe('block');
+    expect(hook(ctx('bash -lc "rm x"')).decision).toBe('block');
+    expect(hook(ctx('perl -ne "print"')).decision).toBe('block');
+  });
+
+  it('does NOT block common non-eval interpreter flags (no FP from flag widening)', () => {
+    // Widening the flag match to clusters must not catch version/module/warn
+    // flags that contain no eval letter at the cluster end.
+    expect(hook(ctx('python --version')).decision).not.toBe('block');
+    expect(hook(ctx('python -V')).decision).not.toBe('block');
+    expect(hook(ctx('python -m mymod')).decision).not.toBe('block');
+    expect(hook(ctx('python -W error script.py')).decision).not.toBe('block');
+    expect(hook(ctx('node -v')).decision).not.toBe('block');
+  });
 });
 
 describe('createBashRestrictionHook — interpreter guard opt-out (AFK_DISABLE_BASH_INTERPRETER_GUARD)', () => {
@@ -164,6 +190,21 @@ describe('createBashRestrictionHook — restricted-root substring', () => {
     // using $HOME or ~. Both get normalized and matched.
     expect(hook(ctx('cat $HOME/.ssh/id_rsa')).decision).toBe('block');
     expect(hook(ctx('cat ~/.ssh/id_rsa')).decision).toBe('block');
+  });
+
+  it('normalizes the ${HOME} brace form before checking', () => {
+    // Regression: `${HOME}` (brace form) previously slipped past the $HOME
+    // normalization (which only matched the bare `$HOME` form) and bypassed
+    // the restricted-path substring check. Single-quoted so JS does not
+    // interpolate — the hook receives the literal `${HOME}`.
+    const decision = hook(ctx('cat ${HOME}/.ssh/id_rsa'));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toMatch(/restricted path/);
+  });
+
+  it('does NOT mangle unrelated $HOME-prefixed vars ($HOMEDIR)', () => {
+    // `$HOME\b` boundary: `$HOMEDIR` must not be partially expanded.
+    expect(hook(ctx('echo $HOMEDIR')).decision).not.toBe('block');
   });
 });
 

@@ -274,10 +274,17 @@ export function seedPersistedGrants(
  * concurrent reads never see a half-written JSON document.
  */
 function writeAtomic(filePath: string, contents: PermissionsFile): void {
-  mkdirSync(dirname(filePath), { recursive: true });
+  // Owner-only dir + file. permissions.json enumerates the operator-approved
+  // path prefixes; on a shared host a world-readable file would leak the
+  // workspace layout to other local users. mode is best-effort (masked by the
+  // process umask), but 0o600/0o700 carry no group/other bits, so any
+  // reasonable umask preserves them. mkdirSync's mode only applies when the
+  // directory is created, so an existing ~/.afk/config is left untouched.
+  mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
   const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmp, JSON.stringify(contents, null, 2) + '\n', 'utf8');
+  writeFileSync(tmp, JSON.stringify(contents, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
   // fs.renameSync is atomic within a single filesystem on POSIX + NTFS;
-  // sufficient for our user-scope config file.
+  // sufficient for our user-scope config file. rename preserves the temp
+  // file's 0o600 mode.
   renameSync(tmp, filePath);
 }

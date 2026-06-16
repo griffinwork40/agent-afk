@@ -47,10 +47,19 @@ import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
 import type { HookContext, HookDecision } from '../../hooks.js';
 
 /**
- * Interpreter denylist regex. Matches `<interpreter> -<flag>` where flag is
- * the eval-from-string variant (`-c`/`-C`/`-e`/`-E`) common across shells
- * and scripting languages. Anchored with `\b` so a path containing the
- * literal `python3` (e.g. `/usr/local/bin/python3-config`) does not match.
+ * Interpreter denylist regex. Matches `<interpreter> -<flag>` where flag is a
+ * short-option cluster ending in the eval-from-string variant (`-c`/`-C`/`-e`/
+ * `-E`), INCLUDING combined clusters like `-ec` or `bash -lc`. The interpreter
+ * name allows a version suffix (`python[0-9.]*` → matches `python`, `python3`,
+ * `python3.10`) so version-qualified binaries are not a bypass. A mandatory
+ * whitespace between interpreter and flag means a path containing the literal
+ * `python3` (e.g. `/usr/local/bin/python3-config`) still does not match.
+ *
+ * Known residuals, accepted per the non-adversarial threat model (module
+ * header): an interpreter name inside a quoted argument (`echo "python -c"`)
+ * still matches (a tolerated false positive), and a SEPARATE intervening flag
+ * (`bash --login -c`, `python -B -c`) is not caught. Do NOT grow this into a
+ * shell parser to close those — escalate to OS-level sandboxing instead.
  *
  * Note: this is a hard-block — no elicitation — because:
  *   (a) the user cannot reasonably audit an arbitrary shell-script string
@@ -63,7 +72,7 @@ import type { HookContext, HookDecision } from '../../hooks.js';
  * not to evaluate code on the user's behalf.
  */
 const INTERPRETER_DENYLIST =
-  /\b(python|python3|node|ruby|perl|osascript|sh|bash|zsh|fish|tclsh|lua)\s+-[cCeE](\s|$)/;
+  /\b(python[0-9.]*|node|ruby|perl|osascript|sh|bash|zsh|fish|tclsh|lua)\s+-[A-Za-z]*[cCeE](\s|$)/;
 
 export interface BashRestrictionHookOptions {
   /**
@@ -140,12 +149,13 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     const restrictedSubstrings = deriveRestrictedSubstrings(grants);
     if (restrictedSubstrings.length === 0) return {};
 
-    // Normalize `~` and `$HOME` in the command to the real home dir for the
-    // substring match. This catches the obvious-shell-idiom case without
-    // pretending to be a real parser.
+    // Normalize `~`, `$HOME`, and `${HOME}` in the command to the real home
+    // dir for the substring match. This catches the obvious-shell-idiom cases
+    // without pretending to be a real parser. The `$HOME\b` boundary avoids
+    // mangling unrelated vars like `$HOMEDIR`; `${HOME}` covers the brace form.
     const home = homedir();
     const normalized = command
-      .replace(/\$HOME/g, home)
+      .replace(/\$\{HOME\}|\$HOME\b/g, home)
       .replace(/(^|[\s/=:])~(?=$|[/\s])/g, `$1${home}`);
 
     for (const sub of restrictedSubstrings) {

@@ -174,6 +174,29 @@ describe('createPathApprovalHook — outcome mapping', () => {
     });
   });
 
+  it('persist: second call to the same path does not re-prompt', async () => {
+    // C10 coverage gap: the persist path populates sessionApproved + adds the
+    // root, so a second call to the same path must NOT re-prompt — parity with
+    // the `session` test above (which had this assertion; persist did not).
+    vi.spyOn(permissionsStore, 'appendGrant').mockImplementation(((body: unknown) => {
+      return { ...(body as object), id: 'fake-ulid', grantedAt: 'now' };
+    }) as never);
+    const handler = vi.fn(async () => ({ action: 'accept', content: { choice: 'persist' } }));
+    elicitationRouter.install(handler);
+    const mgr = makeMockGrantManager();
+    const { preToolUse } = createPathApprovalHook({
+      getGrantManager: () => mgr,
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    await preToolUse(preCtx('write_file', { file_path: '/etc/hosts', content: 'x' }));
+    await preToolUse(preCtx('write_file', { file_path: '/etc/hosts', content: 'y' }));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(mgr._writeRoots).toContain('/etc/hosts');
+  });
+
   it('deny: returns block with descriptive reason', async () => {
     elicitationRouter.install(async () => ({ action: 'accept', content: { choice: 'deny' } }));
     const mgr = makeMockGrantManager();
@@ -214,6 +237,55 @@ describe('createPathApprovalHook — outcome mapping', () => {
     const decision = await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }));
     expect(decision.decision).toBe('block');
     expect(decision.reason).toContain('cancelled');
+  });
+});
+
+describe('createPathApprovalHook — list_directory / glob path extraction', () => {
+  it('prompts for list_directory targeting an outside-root path', async () => {
+    const handler = vi.fn(async () => ({ action: 'accept', content: { choice: 'once' } }));
+    elicitationRouter.install(handler);
+    const mgr = makeMockGrantManager();
+    const { preToolUse } = createPathApprovalHook({
+      getGrantManager: () => mgr,
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    const decision = await preToolUse(preCtx('list_directory', { path: '/etc' }));
+    expect(decision).toEqual({});
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(mgr._readRoots).toContain('/etc');
+  });
+
+  it('prompts for glob targeting an outside-root path', async () => {
+    const handler = vi.fn(async () => ({ action: 'accept', content: { choice: 'once' } }));
+    elicitationRouter.install(handler);
+    const mgr = makeMockGrantManager();
+    const { preToolUse } = createPathApprovalHook({
+      getGrantManager: () => mgr,
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    const decision = await preToolUse(preCtx('glob', { path: '/etc', pattern: '*.conf' }));
+    expect(decision).toEqual({});
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(mgr._readRoots).toContain('/etc');
+  });
+
+  it('does NOT prompt for glob without a path arg (defaults to trusted cwd)', async () => {
+    const handler = vi.fn(async () => ({ action: 'accept', content: { choice: 'once' } }));
+    elicitationRouter.install(handler);
+    const mgr = makeMockGrantManager();
+    const { preToolUse } = createPathApprovalHook({
+      getGrantManager: () => mgr,
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    const decision = await preToolUse(preCtx('glob', { pattern: '*.ts' }));
+    expect(decision).toEqual({});
+    expect(handler).not.toHaveBeenCalled();
   });
 });
 
@@ -331,5 +403,23 @@ describe('createPathApprovalHook — failsafe behavior', () => {
     // No grant manager → no pre-check; the handler's own resolveAndContain
     // will enforce containment as it does today.
     expect(decision).toEqual({});
+  });
+
+  it('fails CLOSED when a grant manager is wired but no elicitation handler is installed', async () => {
+    // Security-critical: beforeEach uninstalls the router and we do NOT
+    // reinstall. With a wired grant manager the pre-check runs and routes;
+    // the router auto-declines when no handler exists, which MUST map to block
+    // (never silently allow an outside-root path because the prompt surface is
+    // missing).
+    const mgr = makeMockGrantManager();
+    const { preToolUse } = createPathApprovalHook({
+      getGrantManager: () => mgr,
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    const decision = await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }));
+    expect(decision.decision).toBe('block');
+    expect(mgr._events).toHaveLength(0); // no grant mutation on a blocked path
   });
 });
