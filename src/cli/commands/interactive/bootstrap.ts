@@ -748,8 +748,15 @@ export async function bootstrapSession(
   //
   // We wire once here and do not rewire on /model swaps: directory grants are a
   // session-level concept (not per-model), and a Claude→GPT→Claude swap reuses
-  // the cached Claude instance with its grants intact. Only AnthropicDirectProvider
-  // implements the GrantManager interface; other providers are no-ops.
+  // the cached Claude instance with its grants intact.
+  //
+  // Scope (tracked in #166): path-approval is currently wired ONLY for
+  // AnthropicDirectProvider. OpenAICompatibleProvider ALSO implements the
+  // GrantManager interface, but is not wired here yet — so an OpenAI-compatible
+  // REPL session runs path-approval FAIL-OPEN: no restricted-path prompts (the
+  // typed-tool handler's own resolveAndContain still enforces containment, and
+  // the bash interpreter denylist still hard-blocks). Widening this gate to a
+  // GrantManager duck-type is #166.
   if (startupProvider instanceof AnthropicDirectProvider) {
     setAllowDirDispatcher(startupProvider);
     pathApprovalGrantRef.current = startupProvider;

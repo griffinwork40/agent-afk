@@ -79,9 +79,12 @@ export function createDefaultHookRegistry(
   // grep against the same restricted root within one turn).
   //
   // Invariant: only the REPL and Telegram bootstraps wire
-  // `pathApprovalGrantRef.current` (see bootstrap.ts / telegram bot.start).
-  // Headless surfaces (afk chat, daemon, threads) register these hooks but
-  // never wire the ref, so on those surfaces:
+  // `pathApprovalGrantRef.current` (see bootstrap.ts / telegram bot.start) — and
+  // today ONLY when the active provider is AnthropicDirectProvider. OpenAI-
+  // compatible providers implement GrantManager but are not yet wired, so an
+  // OpenAI/Codex REPL or Telegram session also runs path-approval fail-open
+  // (tracked in #166). Headless surfaces (afk chat, daemon, threads) register
+  // these hooks but never wire the ref, so on those surfaces:
   //   - path-approval PreToolUse: fails open (no prompt; the typed-tool
   //     handler's own resolveAndContain still enforces containment);
   //   - bash restricted-root substring check: fails open (no backstop);

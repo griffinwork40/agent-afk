@@ -387,6 +387,13 @@ async function main() {
         ...(codexSessionCwd !== undefined && codexSessionCwd.length > 0
           ? { cwd: codexSessionCwd }
           : {}),
+        // Scope (tracked in #166): unlike the Anthropic branch above, the
+        // Codex/OpenAI path does NOT wire `pathApprovalGrantRef.current` or call
+        // seedPersistedGrants — it has no explicit provider handle to wire (the
+        // session constructs the provider internally). So path-approval runs
+        // FAIL-OPEN for OpenAI-compatible Telegram sessions: no restricted-path
+        // prompts (the bash interpreter denylist still hard-blocks). This is a
+        // known, documented limitation — not an accidental `.registry` chain.
         hookRegistry: createDefaultHookRegistry(
           undefined,
           'telegram',

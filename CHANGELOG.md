@@ -12,7 +12,7 @@ auto-release workflow to deduplicate commits across successive runs.
 ## [Unreleased]
 
 ### Added
-- Path-approval elicitation: when a typed file tool (`read_file`, `write_file`, `edit_file`, `list_directory`, `glob`, `grep`) targets a path outside the session's granted roots, a `PreToolUse` hook prompts the user via the `ElicitationRouter` with a 4-choice form (once / session / persist / deny). Bash invocations that reference restricted paths or use interpreter eval flags (`python -c`, `node -e`, `sh -c`) are hard-blocked and the model is directed to the typed-file-tool surface instead.
+- Path-approval elicitation: when a typed file tool (`read_file`, `write_file`, `edit_file`, `list_directory`, `glob`, `grep`) targets a path outside the session's granted roots, a `PreToolUse` hook prompts the user via the `ElicitationRouter` with a 4-choice form (once / session / persist / deny). Bash invocations that reference restricted paths or use interpreter eval flags (`python -c`, `node -e`, `sh -c`) are hard-blocked and the model is directed to the typed-file-tool surface instead. **Scope:** restricted-path prompts are currently wired for **Anthropic providers only** — OpenAI-compatible (GPT/Codex) sessions run path-approval fail-open for now (the interpreter-eval denylist still applies on every surface); tracked in #166.
 - `AFK_DISABLE_BASH_INTERPRETER_GUARD` env var — lifts only the bash interpreter-eval denylist while keeping the rest of path-approval enabled
 - `AFK_DISABLE_PATH_APPROVAL=1` env var — escape hatch to skip path-approval and bash-restriction hooks entirely for headless flows
 
