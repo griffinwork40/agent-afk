@@ -72,23 +72,6 @@ export function repositionCommittedBand(
   if (self.commitInFlight || !self.logUpdate) return;
   const floor = Math.max(self.anchorRow ?? 1, 1);
   const targetBottom = desiredTopRow - 1;
-  // Promote covered content the moment the frame shrinks enough to show it. A
-  // full-viewport frame (newTopRow ≤ 1) parked the most-recent block in
-  // coveredBand (commitAbove) instead of dropping it; re-pin it now adjacent to
-  // the new frame top so the collapse shows it hugging the frame rather than a
-  // run of shrink-pad blank rows (the "massive blank gap"). While the frame
-  // still fills the viewport (targetBottom < floor) this is a no-op and the
-  // block stays parked. The block is already in scrollback (Phase 1 archive), so
-  // the only cost of the re-pin is an off-screen scrollback copy (no-gap default).
-  if (self.committedBand.length === 0 && self.coveredBand.length > 0 && targetBottom >= floor) {
-    self.committedBand = self.coveredBand;
-    self.coveredBand = [];
-    // Treat the promoted band as having occupied the just-erased covered frame
-    // footprint so renderErasedBand fires and it paints at the position the fit
-    // math computes below (committedBandTopRow = 1 also makes `moved` true).
-    self.committedBandTopRow = 1;
-    self.committedBandBottomRow = Math.max(1, preRenderFrameTop, targetBottom);
-  }
   if (self.committedBand.length === 0) return;
   // On upward growth (targetBottom < committedBandBottomRow) the band must be
   // re-pinned above the NEW frame top: preserveRowsBeforeFrameRender either

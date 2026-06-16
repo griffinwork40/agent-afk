@@ -207,14 +207,12 @@ describe('Golden rendering tests', () => {
     // Converted from it.fails: the single-copy commitAbove fix (WIP commit
     // e8b6d9f0) makes this assertion pass. Phase 1 now emits LF-only scrolls;
     // Phase 3 writes exactly one copy of the text above the live frame.
-    // A 150-char line with 80-col terminal → soft-wraps to 2 rows but the
-    // VirtualScreen sees exactly 150 'X' characters (1 copy), not 300 (2 copies
-    // from the old dual-write). Note: the compositor is wrap-blind (lineCount =
-    // newline-count = 1 for a single long line) — it opens only 1 scroll slot
-    // and writes the full 150-char string at row 22. The VirtualScreen counts
-    // all 'X' characters across scroll+viewport, so soft-wrapping at row 22-23
-    // still yields 150 total.
-    // TODO(review #592): compositor is wrap-blind — a soft-wrapping line opens 1 scroll slot but occupies 2 visual rows (potential 1-row drift). Track separately.
+    // A 150-char line with an 80-col terminal occupies 2 physical rows. The
+    // compositor is now WRAP-AWARE (PR #649 follow-up): hardWrapToWidth splits
+    // the logical line into its 2 visual rows up front, so lineCount == 2,
+    // Phase 1 scrolls the right count, and each row is painted once. The
+    // VirtualScreen sees exactly 150 'X' characters (1 copy), not 300 (the old
+    // dual-write) — and no longer carries the prior wrap-blind 1-row drift.
     it('long text wraps correctly and appears in scrollback', async () => {
       const stdout = makeMockStdout();
       const stdin = makeMockStdin();
@@ -235,12 +233,11 @@ describe('Golden rendering tests', () => {
       const allText = vscreen.screenText();
       const xCount = (allText.match(/X/g) ?? []).length;
 
-      // RED on current code: commitAbove is wrap-blind (lineCount = newline
-      // count = 1, ignoring the soft-wrap to 2 rows) AND its 3-phase dance
-      // paints the text twice (phase-1 scrolls it to scrollback, phase-3
-      // re-paints it above the live frame) → the VirtualScreen sees 300 X's.
-      // GREEN after Wave 2 Track B: wrap-aware ScrollbackCommitter + single
-      // paint → exactly 150.
+      // A historical dual-write bug painted the text twice (phase-1 to
+      // scrollback + phase-3 above the frame) → 300 X's; the single-copy commit
+      // fixed that. The later wrap-blindness (counting the 150-char line as 1
+      // row) is fixed too (PR #649 follow-up: wrap-aware lineCount), so the line
+      // is split into 2 correctly-counted rows and painted once → exactly 150.
       expect(xCount).toBe(150);
     });
   });
