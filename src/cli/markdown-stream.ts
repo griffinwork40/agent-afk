@@ -176,6 +176,31 @@ export class StreamingMarkdownRenderer {
   }
 
   /**
+   * Invariant (commit-time overlay sync): re-compose the live overlay from the
+   * CURRENT buffer BEFORE a `commitAbove()` runs, so the overlay no longer shows
+   * the block being committed. Callers MUST remove the committed block from
+   * `this.buffer` first (push() slices it out; commitPending() empties it).
+   *
+   * Without this, the overlay still renders the just-committed block while
+   * `commitAbove` repaints the frame. A multi-line block (e.g. a rendered
+   * table) leaves the overlay tall enough to pin the live frame to row 1
+   * (`prevTopRow == 1`), which routes the committed block down the legacy
+   * overflow path — where the band-hold gate is suppressed and the block can be
+   * dropped from screen AND scrollback. flush() already does this refresh before
+   * its tail commit (via the `flushing` flag, which makes renderPending() empty);
+   * push()/commitPending() need the explicit call because they commit while
+   * `flushing` is false. See terminal-compositor.ts commitAbove (band-hold path).
+   */
+  private syncPendingOverlay(): void {
+    if (this.overlayComposer) {
+      this.overlayComposer.markDirty('markdown-pending');
+      this.overlayComposer.flush();
+    } else if (this.compositor) {
+      this.compositor.setOverlay(this.renderPending());
+    }
+  }
+
+  /**
    * Execute a single repaint of pending content
    */
   private async repaint(): Promise<void> {
@@ -223,6 +248,11 @@ export class StreamingMarkdownRenderer {
       // triggered by compositor.commitAbove() sees only the remaining
       // content, not the block that was just committed.
       this.buffer = this.buffer.slice(boundary);
+      // Re-compose the overlay from the now-sliced buffer BEFORE committing, so
+      // commitAbove() does not fire while the overlay still shows this block
+      // (which would pin the frame to row 1 and risk dropping a multi-line
+      // block via the overflow path). See syncPendingOverlay().
+      this.syncPendingOverlay();
       this.commitBlock(blockText);
 
       boundary = findBlockBoundary(this.buffer);
@@ -313,14 +343,13 @@ export class StreamingMarkdownRenderer {
    */
   commitPending(): void {
     if (!this.buffer.trim()) return;
-    this.commitBlock(this.buffer);
+    const pending = this.buffer;
+    // Empty the buffer and re-compose the overlay (now empty) BEFORE committing,
+    // so commitAbove() does not fire while the overlay still shows this block.
+    // See syncPendingOverlay() / push() for the rationale (prevTopRow==1 drop).
     this.buffer = '';
-    if (this.overlayComposer) {
-      this.overlayComposer.markDirty('markdown-pending');
-      this.overlayComposer.flush();
-    } else if (this.compositor) {
-      this.compositor.setOverlay('');
-    }
+    this.syncPendingOverlay();
+    this.commitBlock(pending);
   }
 
   /**

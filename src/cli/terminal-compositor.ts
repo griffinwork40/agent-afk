@@ -284,18 +284,23 @@ export class TerminalCompositor {
   committedBandTopRow = 0;
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   committedBandBottomRow = 0;
-  // Content COVERED by a full-viewport frame (desiredTopRow ≤ 1) rather than
-  // displayed: when the overlay fills the screen there is no above-frame row to
-  // show the committed band, but the overlay is transient. Stashing the most-
-  // recent committed block here (instead of dropping it) lets
-  // repositionCommittedBand re-pin it adjacent to the frame the moment the
-  // overlay collapses — otherwise the band is empty on collapse and
-  // CupFrameRenderer shrink-pads blank rows that nothing refills (the "massive
-  // blank gap"). Invalidated whenever an on-screen band is (re-)established or
-  // the band is reset (clearCommittedBand). See repositionCommittedBand().
+  // Invariant: committedBandPaintedRows counts how many of committedBand's rows
+  // are MATERIALIZED on the terminal right now — always the BOTTOM
+  // committedBandPaintedRows rows (nearest the frame), since every paint site
+  // (commitAbove Phase 3, repositionCommittedBand, preserveRowsBeforeFrameRender)
+  // CUP-paints the band's suffix. The complementary PREFIX
+  // committedBand.slice(0, length - committedBandPaintedRows) is PENDING: held
+  // only in this in-memory model, never written to the terminal and never
+  // archived to scrollback. The band-hold storage branch in commitAbove (taken
+  // when a block is committed under a full-viewport overlay, newTopRow <= 1)
+  // sets this to 0 — the whole block is pending until repositionCommittedBand
+  // paints it on collapse. disarm() reads this to flush only the genuinely
+  // unpainted prefix into scrollback before tearing down (the painted suffix is
+  // already on screen, so re-emitting it would duplicate it). Always satisfies
+  // 0 <= committedBandPaintedRows <= committedBand.length; reset to 0 by
+  // clearCommittedBand() and (transitively) resetState().
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
-  coveredBand: string[] = [];
-
+  committedBandPaintedRows = 0;
   // Resize ghost-erase state. On SIGWINCH the immediate handler snapshots the
   // pre-resize on-screen footprint of the compositor (old live-frame rows +
   // committed-band rows) into `pendingResizeErase`; the next repaint physically

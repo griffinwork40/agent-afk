@@ -13,10 +13,14 @@
  * blind logical line count (a7ace49 / #39 follow-up) compounded it by under-
  * scrolling the wrapped block.
  *
- * Fix: commitAbove PARKS the block in `coveredBand` instead of dropping it;
- * repositionCommittedBand PROMOTES it back adjacent to the frame on collapse.
- * commitAbove's lineCount is now physical (wrap-aware) so the scroll/anchor math
- * matches the wrapped screen.
+ * Fix (band-hold, review #649): when the frame fills the viewport (newTopRow
+ * <= 1) and the run fits the collapsed screen, commitAbove no longer DROPS the
+ * block — the H1 band-hold branch HOLDS the full run in `committedBand` (fully
+ * pending, nothing painted yet) and repositionCommittedBand PAINTS it adjacent
+ * to the frame on the next collapse. commitAbove's lineCount is physical
+ * (wrap-aware) so the scroll/anchor math matches the wrapped screen. (An earlier
+ * fix parked the block in a separate `coveredBand` field; band-hold superseded
+ * that path and the field was removed.)
  *
  * HARD GATE: pre-fix the committed WRAPMARK line is ABSENT from the collapsed
  * viewport (dropped) and a tall blank gap sits above the frame. Post-fix the

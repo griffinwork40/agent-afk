@@ -14,6 +14,8 @@
  */
 
 import type { LogUpdateFn, CompositorScrollRegionGuard } from './terminal-compositor.types.js';
+import { hardWrapToWidth } from './wrap.js';
+import { capBandModel, decideCommitMode } from './commit-mode.js';
 
 /**
  * Narrowest TerminalCompositor state slice the committed-band functions touch.
@@ -30,9 +32,8 @@ export interface CommittedBandHost {
   committedBand: string[];
   committedBandTopRow: number;
   committedBandBottomRow: number;
-  /** Most-recent committed block covered by a full-viewport frame, awaiting
-   *  re-pin on the next collapse (see {@link repositionCommittedBand}). */
-  coveredBand: string[];
+  /** How many of committedBand's rows (its bottom suffix) are painted on screen. */
+  committedBandPaintedRows: number;
   /** Re-entrancy guard: suppresses a repaint during the clear→write window. */
   committing: boolean;
   /** Suppresses the shrink re-pin (repositionCommittedBand) for a commit. */
@@ -124,26 +125,20 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   // exactly fills the room keeps all its content and drops the separator, so the
   // newest content still sits against the frame). The length>1 guard keeps
   // `commitAbove('')` painting its single blank row (the subagent-done path).
-  const contentLines = stripped.split('\n');
+  const cols = Math.max(1, self.stdout.columns ?? 80);
+  const logicalLines = stripped.split('\n');
   let hasTrailingSeparator = false;
-  while (contentLines.length > 1 && contentLines[contentLines.length - 1] === '') {
-    contentLines.pop();
+  while (logicalLines.length > 1 && logicalLines[logicalLines.length - 1] === '') {
+    logicalLines.pop();
     hasTrailingSeparator = true;
   }
-  // Physical (wrap-aware) CONTENT row count. A committed line wider than the
-  // terminal soft-wraps to >1 physical row, so the LOGICAL count under-counts the
-  // rows the block actually occupies. That under-count made Phase 1 scroll too
-  // few rows — stranding wrapped overflow rows on screen — and mis-sized
-  // fitsAboveFrame / bandOverflow. Mirror the frame side (a7ace49 / #39), which
-  // derives its geometry from CupFrameRenderer.measure()'s physical row count via
-  // the shared wrapToPhysicalLines helper; reuse the same measure() here so the
-  // band and frame can't drift. measure() drops the trailing-blank row (its
-  // wrapToPhysicalLines pops trailing ''), so it already counts CONTENT only —
-  // matching contentLines. Logical fallback (contentLines.length) for stubs
-  // without measure().
-  const contentLineCount = self.logUpdate.measure
-    ? Math.max(1, self.logUpdate.measure(stripped, rows).lineCount)
-    : Math.max(1, contentLines.length);
+  // Wrap-aware physical CONTENT rows: a logical line wider than the terminal
+  // occupies >1 physical row. hardWrapToWidth (pure char wrap, ANSI-preserving,
+  // matches the terminal) makes commitAbove position/scroll/paint exactly one
+  // terminal row per array entry — so a wide line's wrapped tail is not "eaten"
+  // by the next commit's paint, and the band-hold row math is exact.
+  const contentLines = logicalLines.flatMap((l) => hardWrapToWidth(l, cols).split('\n'));
+  const contentLineCount = Math.max(1, contentLines.length);
 
   const extraRows = self.scrollRegion?.getExtraRows() ?? 0;
   // Invariant (one geometry per commit): the room/scroll/band math below must
@@ -228,6 +223,37 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
     hasTrailingSeparator && fitsAboveFrame && contentLineCount < aboveFrameRoomForSeparator;
   const textLines = paintSeparator ? [...contentLines, ''] : contentLines;
   const lineCount = contentLineCount + (paintSeparator ? 1 : 0);
+
+  // Band-hold routing (pure, tested in commit-mode.test.ts): keep a block that
+  // overflows the CURRENT tall frame but fits the COLLAPSED screen in the band
+  // model instead of archiving+truncating it. Additive: useBandHold is a new
+  // route checked before the existing fits/overflow branches; the existing
+  // fitsAboveFrame computed above still governs separator + Phase-1/3 fits math.
+  //
+  // Band-hold model uses the separator-inclusive block. The rhythm separator is
+  // always counted in the band model's row budget — even when paintSeparator is
+  // false — because the collapsed frame will display the separator between blocks.
+  // This also lets decideCommitMode see the correct effective lineCount (including
+  // the separator) so a 1-content-line block with trailing separator counts as 2
+  // model rows, correctly routing it to band-hold when room=1.
+  const bandTextLines = hasTrailingSeparator ? [...contentLines, ''] : contentLines;
+  const bandLineCount = bandTextLines.length;
+  const {
+    useBandHold,
+    overflowRun,
+    maxBandModel,
+  } = decideCommitMode({
+    prevTopRow,
+    frameTop,
+    anchorFloor,
+    anchorRow: self.anchorRow ?? 1,
+    lineCount: bandLineCount,
+    textLines: bandTextLines,
+    rows,
+    extraRows,
+    committedBand: self.committedBand,
+    committedBandBottomRow: self.committedBandBottomRow,
+  });
 
   // Suppress the shrink re-pin for the whole commit; Phase 3 sets the band.
   // Re-armed at the top of every commitAbove, so a throw on a dying TTY (the
@@ -320,7 +346,26 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
       // Phase 3 at the unchanged anchorFloor to avoid clobbering the banner.
       scrolledRows = fitsAboveFrame ? bandOverflow : 0;
       self.debugLog('commitAbove:phase1', { lineCount, fitsAboveFrame, bandOverflow });
-      if (fitsAboveFrame) {
+      if (useBandHold) {
+        // Band-hold Phase 1: scroll NOTHING for the rows the model keeps (they
+        // are "pending" — painted by repositionCommittedBand on collapse). Only
+        // the genuine overflow (oldest rows beyond maxBandModel) is archived to
+        // scrollback as REAL content, via the proven top-write-then-scroll
+        // mechanism, chunked by screen height so a run taller than the terminal
+        // still archives every row. The archived prefix is disjoint from the
+        // suffix Phase 3 keeps — no duplication.
+        const genuineOverflow = Math.max(0, overflowRun.length - maxBandModel);
+        if (genuineOverflow > 0) {
+          const chunkMax = Math.max(1, rows - anchorFloor + 1);
+          for (let start = 0; start < genuineOverflow; start += chunkMax) {
+            const chunk = overflowRun.slice(start, Math.min(start + chunkMax, genuineOverflow));
+            const topWrite = chunk
+              .map((l, i) => `\x1b[${anchorFloor + i};1H\x1b[2K${l ?? ''}`)
+              .join('');
+            self.stdout.write(`${topWrite}\x1b[${rows};1H${'\n'.repeat(chunk.length)}`);
+          }
+        }
+      } else if (fitsAboveFrame) {
         if (bandOverflow > 0) {
           self.stdout.write(`\x1b[${rows};1H${'\n'.repeat(bandOverflow)}`);
         }
@@ -412,6 +457,33 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
     // anchorFloor would keep maxRun pinned and re-trigger the cap-to-one-row bug.
     const postScrollFloor = Math.max(self.anchorRow ?? 1, 1);
     const maxRun = Math.max(0, newTopRow - postScrollFloor);
+    if (useBandHold) {
+      // Band-hold Phase 3: track the full committed run (capped at maxBandModel)
+      // as the band model, but paint only the bottom paintedCount rows that fit
+      // above the current frame. The rest are "pending" — in the model, not yet
+      // on screen, not in scrollback. repositionCommittedBand paints the whole
+      // model contiguously above the frame on the next shrink/collapse.
+      const model = capBandModel(overflowRun, maxBandModel);
+      const paintedCount = Math.min(model.length, maxRun);
+      const bandTop = newTopRow - paintedCount;
+      let out = '';
+      for (let i = 0; i < paintedCount; i++) {
+        const row = bandTop + i;
+        if (row >= newTopRow) break; // Never overwrite the live frame.
+        out += `\x1b[${row};1H\x1b[2K${model[model.length - paintedCount + i] ?? ''}`;
+      }
+      if (out.length > 0) {
+        writeWithGuard(() => {
+          self.stdout.write(out);
+        });
+      }
+      self.committedBand = model;
+      self.committedBandBottomRow = newTopRow - 1;
+      self.committedBandTopRow = bandTop;
+      // Only the bottom `paintedCount` rows reached the terminal; the rest of
+      // the model is pending (painted by repositionCommittedBand on collapse).
+      self.committedBandPaintedRows = paintedCount;
+    } else {
     const newPainted = Math.min(textLines.length, maxRun);
     if (newPainted > 0) {
       // Tail-slice (not head): when the block is taller than the above-frame
@@ -536,28 +608,33 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
       self.committedBand = capped;
       self.committedBandBottomRow = newTopRow - 1;
       self.committedBandTopRow = bandTop;
-      // An on-screen band is now authoritative — any previously covered block is
-      // stale (this commit supersedes it).
-      self.coveredBand = [];
+      // The whole `capped` run is materialized: the fits arm CUP-paints all of
+      // it above the frame; the overflow arm paints the tail that fits AND
+      // Phase 1 already archived the full block to scrollback. Either way no row
+      // of `capped` is unpainted-and-unarchived, so nothing is pending here.
+      self.committedBandPaintedRows = capped.length;
     } else {
       clearCommittedBand(self);
     }
+    } // end else (not useBandHold)
+  } else if (useBandHold) {
+    // Full-viewport frame (newTopRow <= 1): no above-frame row to paint now, but
+    // band-hold is active — the block fits the collapsed screen. Store the model
+    // FULLY PENDING; repositionCommittedBand paints it on the next shrink/collapse.
+    // committedBandBottomRow = collapsedFrameTop - 1 (NOT a 0 sentinel) lets a
+    // subsequent full-viewport commit satisfy overflowPriorContiguous and MERGE.
+    const model = capBandModel(overflowRun, maxBandModel);
+    const collapsedFrameTop = Math.max(1, rows - 1 - extraRows);
+    self.committedBand = model;
+    self.committedBandBottomRow = Math.max(0, collapsedFrameTop - 1);
+    self.committedBandTopRow = Math.max(anchorFloor, collapsedFrameTop - model.length);
+    // Nothing was painted to the terminal: the whole model is PENDING until
+    // repositionCommittedBand materializes it on collapse. If disarm() runs
+    // first (Ctrl-C / abort / exit mid-turn), it flushes this pending model to
+    // scrollback so the committed block is not lost from screen AND history.
+    self.committedBandPaintedRows = 0;
   } else {
-    // No above-frame area: the frame fills the viewport (newTopRow ≤ 1) or
-    // nothing has rendered yet. The block is already in scrollback (Phase 1's
-    // overflow archive). Rather than DROP it, PARK it in coveredBand so the
-    // moment the overlay collapses repositionCommittedBand re-pins it adjacent
-    // to the frame — without this the band is empty on collapse and
-    // CupFrameRenderer shrink-pads blank rows nothing refills (the "massive
-    // blank gap" in big-gap.txt). Cap to the viewport height; the re-pin caps
-    // again to the real above-frame room. clearCommittedBand() resets coveredBand
-    // first, so set it AFTER. (newTopRow ≤ 1 ⇒ nothing rendered yet has no block
-    // to park — textLines is the just-committed content either way.)
     clearCommittedBand(self);
-    if (newTopRow <= 1 && textLines.length > 0) {
-      const cap = Math.max(1, rows - 1);
-      self.coveredBand = textLines.length > cap ? textLines.slice(textLines.length - cap) : textLines;
-    }
   }
   self.commitInFlight = false;
   self.debugLog('commitAbove:phase3:done');
@@ -567,12 +644,7 @@ export function clearCommittedBand(self: CommittedBandHost): void {
   self.committedBand = [];
   self.committedBandTopRow = 0;
   self.committedBandBottomRow = 0;
-  // Drop any covered-but-retained content too: every clear path (disarm, /clear,
-  // resetCommittedBand, fits-path empties) means there is no longer a band to
-  // re-pin, so a stale coveredBand must not resurrect old transcript on the next
-  // shrink. Sites that intentionally PARK content in coveredBand set it AFTER
-  // calling this (commitAbove's full-viewport branch).
-  self.coveredBand = [];
+  self.committedBandPaintedRows = 0;
 }
 
 /**

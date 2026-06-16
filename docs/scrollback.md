@@ -401,7 +401,129 @@ massive gap. (b) When content scrolled into scrollback during a tall phase and
 the frame later collapses, the bottom-anchored band can sit below the
 scrolled-off content with blank viewport rows between them. That live-viewport
 "boundary gap" is the bottom-anchored-frame design tension (the frame does not
-float up to meet sparse content) and is a separate, larger item.
+float up to meet sparse content) and is a separate, larger item — but see the
+band-hold fix below, which closes the most common manifestation.
+
+### Fixed: multi-line block committed under a tall overlay (the overflow path)
+
+**Symptom.** During a long turn (a tall "thought"/tool overlay up), the streamed
+"Done" report committed a markdown TABLE via `commitAbove`. The table rendered
+its header + `├──┼──┤` divider, then a large blank VOID swallowed the body rows,
+and later content (Evidence) resumed far below — and the table was DUPLICATED (a
+full copy in scrollback plus a truncated on-screen copy) with an orphan divider.
+The prose committed just before the table (`Diagnosis complete`, `What I
+diagnosed`) VANISHED entirely.
+
+**Root cause.** The `!fitsAboveFrame` OVERFLOW path (the one #645 left unchanged)
+fired whenever a block was taller than the room above the *current* frame —
+which, under a tall overlay, is only a few rows. That path was written for blocks
+genuinely taller than the SCREEN: it CUP-wrote the whole block at the anchor
+floor (clobbering the prior committed band) and scrolled the entire block into
+scrollback (Phase 1), then painted a truncated on-screen copy (Phase 3). So a
+10-line table committed under a 14-line overlay — which fits fine once the
+overlay collapses — was wrongly archived + truncated + the prior band was lost.
+
+**The fix (band-hold).** A block that overflows the *current* tall frame but fits
+the *collapsed* screen now takes a band-hold path instead of the archive path:
+the full committed run (prior band + new block) is kept in the `committedBand`
+MODEL, capped at `maxBandModel` (the rows that can ever show above a minimal
+frame). Only the bottom `room` lines that fit above the current frame are
+painted; the rest are "pending" — present in the model, not on screen, not in
+scrollback. Nothing is scrolled. When the overlay collapses, the existing
+`repositionCommittedBand()` (which keys off `committedBand.length`, not the
+painted span) materializes the WHOLE run contiguously adjacent to the frame.
+Once pending lines exist, subsequent commits route through band-hold too, so the
+fits-path's room-based `bandOverflow` never scrolls the unpainted rows as blanks.
+A block taller than `maxBandModel` committed with NO pending rows is genuinely
+off-screen and keeps the legacy archive path; the fits path and its exact scroll
+mechanics are untouched (the routing is additive). But once pending rows already
+exist — a streamed table/report grown past `maxBandModel` under a *sustained*
+tall overlay — the commit STAYS on band-hold even though the run now exceeds
+`maxBandModel` (review #649 P1). Routing such a commit to the fits path instead
+would emit room-based line-feeds that scroll the unpainted pending rows into
+scrollback as BLANKS while Phase 3's cap drops the real rows — losing most of the
+report. Band-hold Phase 1 instead archives the genuine overflow (the oldest rows
+beyond what the collapsed screen can hold, chunked by screen height so a run
+taller than the terminal still archives every row) to scrollback as REAL content,
+disjoint from the suffix Phase 3 keeps — no blanks, no drops, no duplicates. Under
+a transient overlay GROWTH between the commit and the collapse, evict-on-growth
+materializes + scrolls the band's overflow as real, contiguous content — so
+band-hold degrades gracefully to contiguous scrollback, never to the
+duplicate/void corruption.
+
+**Regression test.** `src/cli/terminal-compositor.overflow-gap.test.ts` commits a
+rendered markdown table under a 14-line overlay at `extraRows=2`, collapses, and
+asserts (via `@xterm/headless`): the table header appears exactly once, the whole
+table + surrounding prose are VISIBLE and intact in the viewport, there is no
+>=2-row blank void, and the run hugs the frame. It fails on the pre-fix code
+(header found twice + 14-row void) and passes after. A second case in the same
+file streams a multi-block report under a *sustained* 17-line overlay until the
+band-hold model fills `maxBandModel`, commits one more block (run →
+`maxBandModel`+2), collapses, and asserts every committed row is present exactly
+once across scrollback + viewport — covering the pending-row loss of review #649
+P1 (on the pre-fix code the oldest row is dropped entirely).
+
+### Fixed: lost table under a *full-viewport* overlay + the wrap-blind overlap (review #649 follow-ups)
+
+**Symptom.** A `/review` streamed a markdown TABLE under a tall subagent-tree
+overlay: the table rendered its header + `├──┼──┤` divider, then the body rows
+VANISHED, and the next section resumed below — even on the band-hold fix above.
+Separately and intermittently, a new `commitAbove` block "ate" the bottom line
+of the *previously* committed block. Three distinct defects, surfaced together.
+
+**1. Commit-time overlay sync (the trigger — `markdown-stream.ts`).**
+`StreamingMarkdownRenderer.push()` commits a completed block via `commitAbove`
+while the throttled (33 ms) overlay repaint has NOT yet re-rendered — so the
+`markdown-pending` overlay slot still shows the just-committed block. That stale,
+too-tall overlay pins the live frame to row 1 (`prevTopRow == 1`) at the exact
+moment of commit. Fix: `syncPendingOverlay()` re-composes the overlay from the
+post-slice buffer BEFORE `commitAbove` runs (mirroring what `flush()` already did
+via the `flushing` flag). With the block removed from the overlay first, the
+frame is no longer pinned to the top and the commit takes the normal band-hold
+path. **This is the load-bearing fix**; (2) and (3) are defense-in-depth.
+
+**2. Band-hold storage at `prevTopRow <= 1` (`commitAbove`).** If the overlay DOES
+still fill the viewport at commit time, the old code dropped the block:
+`useBandHold` was gated on `prevTopRow > 1`, and Phase 3's `if (newTopRow > 1)`
+guard fell through to `clearCommittedBand()` — losing the block from screen AND
+scrollback (the BLOCKER-1 comment documented exactly this and noted "no test hits
+prevTopRow <= 1"). Fix: band-hold ROUTING is decoupled from `prevTopRow > 1` (a
+block that fits the collapsed screen is HELD, not archived), and a Phase-3
+`newTopRow <= 1` branch stores the model FULLY PENDING with
+`committedBandBottomRow = collapsedFrameTop - 1`. `repositionCommittedBand()`
+paints it on collapse; the non-zero bottom row lets consecutive full-viewport
+commits MERGE (same geometry) so a multi-block report accumulates instead of
+keeping only the last block. `fitsAboveFrame` keeps its OWN `prevTopRow > 1`
+guard — the single-copy fits path genuinely needs a known frame top.
+
+**3. Wrap-aware line counting (`commitAbove`, the "eating the bottom" overlap).**
+`lineCount`/`textLines` were derived from the `\n` count alone — wrap-blind. A
+logical line wider than `cols` hard-wraps into ≥2 PHYSICAL rows in the terminal,
+but `commitAbove` positions/scrolls exactly one row per `textLines` entry. So
+Phase 1 scrolled too few lines and Phase 3 CUP-painted a wide line that the
+terminal then auto-wrapped over the next row — overwriting ("eating") the
+adjacent committed content. Fix: each logical line is split into its visual rows
+up front via `hardWrapToWidth` (a pure CHARACTER wrap that matches the terminal
+and preserves ANSI — `wrap.ts`); `lineCount` is the visual-row count. For lines
+that fit `cols` this is a no-op, so narrow content is unchanged. NOTE:
+`wrapToWidth` (word-wrap, `hard: false`) must NOT be used here — it does not split
+long unbreakable tokens, so it under-counts physical rows.
+
+**Regression tests.** `terminal-compositor.h1-prevtoprow.test.ts` (block held +
+painted on collapse at `prevTopRow==1`; multi-block accumulation; and the
+partial-shrink transition below), `terminal-compositor.wrap-overlap.test.ts` (a
+wide block's wrapped tail survives a following commit), and the H3 ordering case
+in `markdown-stream.test.ts` (every `commitAbove` is preceded by an overlay sync
+that no longer shows the committed block). Each fails on the pre-fix code and
+passes after.
+
+**Partial-shrink transition (covered).** The transition where a pending band
+stored at `prevTopRow <= 1` then sees the overlay PARTIALLY shrink on the *next*
+commit (rather than fully collapse) is handled by `repositionCommittedBand`
+re-pinning the pending model above the new frame top on the shrink — so the next
+commit satisfies `overflowPriorContiguous` and merges contiguously, and both
+blocks survive in commit order. Verified by the third case in
+`terminal-compositor.h1-prevtoprow.test.ts`.
 
 ## What is and isn't in scrollback after a commit
 

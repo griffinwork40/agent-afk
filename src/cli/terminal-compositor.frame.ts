@@ -68,6 +68,7 @@ export interface FrameHost {
   committedBand: string[];
   committedBandTopRow: number;
   committedBandBottomRow: number;
+  committedBandPaintedRows: number;
   hasCommitted: boolean;
   anchorRow: number | undefined;
   lastKnownRows: number;

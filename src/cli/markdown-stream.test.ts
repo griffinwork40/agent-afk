@@ -533,6 +533,59 @@ describe('StreamingMarkdownRenderer', () => {
       await renderer.flush();
     });
 
+    it('syncs the overlay (dropping the committed block) BEFORE each commitAbove (H3 prevTopRow==1 guard)', async () => {
+      // Regression (PR #649 follow-up): when push() commits a multi-line block
+      // mid-stream, commitAbove() must NOT fire while the overlay still renders
+      // that block. A stale, too-tall overlay pins the live frame to row 1
+      // (prevTopRow==1), routing the committed block down the legacy overflow
+      // path where the band-hold gate is suppressed and the block can be
+      // dropped from screen AND scrollback (the "lost table" symptom).
+      //
+      // Assert the ORDERING contract: every commitAbove is immediately preceded
+      // by a setOverlay whose content no longer contains the block being
+      // committed. Pre-fix the push() loop committed with no preceding overlay
+      // sync, so commitAbove saw the full block still in the overlay.
+      const events: Array<{ kind: 'overlay' | 'commit'; text: string }> = [];
+      const stub = {
+        setOverlay(text: string) { events.push({ kind: 'overlay', text }); },
+        commitAbove(text: string) { events.push({ kind: 'commit', text }); },
+        arm: async () => {},
+        disarm: () => {},
+        getBuffer: () => ({ text: '', queued: false }),
+        isArmed: () => true,
+      };
+      const ttyStream = new PassThrough();
+      (ttyStream as any).isTTY = true;
+      renderer = new StreamingMarkdownRenderer({
+        out: ttyStream,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        compositor: stub as any,
+      });
+
+      // A multi-line block (rendered-table shape: no internal blank line)
+      // followed by its paragraph boundary, then a second block — one push.
+      const tableBlock = 'ROW_ALPHA\nROW_BETA\nROW_GAMMA\nROW_DELTA';
+      renderer.push(`${tableBlock}\n\nTRAILING PROSE\n\n`);
+
+      const commitIdxs = events
+        .map((e, i) => (e.kind === 'commit' ? i : -1))
+        .filter((i) => i >= 0);
+      expect(commitIdxs.length, 'at least one block must have committed').toBeGreaterThanOrEqual(1);
+      for (const ci of commitIdxs) {
+        const prev = events[ci - 1];
+        expect(prev?.kind, `commitAbove at event ${ci} must be preceded by an overlay sync`).toBe('overlay');
+        // The synced overlay must not still show the lines being committed.
+        const committedText = events[ci]!.text;
+        for (const marker of ['ROW_ALPHA', 'ROW_BETA', 'ROW_GAMMA', 'ROW_DELTA']) {
+          if (committedText.includes(marker)) {
+            expect(prev!.text, `overlay before commit must not still show "${marker}"`).not.toContain(marker);
+          }
+        }
+      }
+
+      await renderer.flush();
+    });
+
     it('routes pending overlay through compositor.setOverlay on repaint', async () => {
       vi.useFakeTimers();
       const { stub, overlayCalls } = makeStubCompositor();
