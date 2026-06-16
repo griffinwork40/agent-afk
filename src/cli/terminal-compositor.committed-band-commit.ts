@@ -32,6 +32,8 @@ export interface CommittedBandHost {
   committedBand: string[];
   committedBandTopRow: number;
   committedBandBottomRow: number;
+  /** How many of committedBand's rows (its bottom suffix) are painted on screen. */
+  committedBandPaintedRows: number;
   /** Re-entrancy guard: suppresses a repaint during the clear→write window. */
   committing: boolean;
   /** Suppresses the shrink re-pin (repositionCommittedBand) for a commit. */
@@ -478,6 +480,9 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
       self.committedBand = model;
       self.committedBandBottomRow = newTopRow - 1;
       self.committedBandTopRow = bandTop;
+      // Only the bottom `paintedCount` rows reached the terminal; the rest of
+      // the model is pending (painted by repositionCommittedBand on collapse).
+      self.committedBandPaintedRows = paintedCount;
     } else {
     const newPainted = Math.min(textLines.length, maxRun);
     if (newPainted > 0) {
@@ -603,6 +608,11 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
       self.committedBand = capped;
       self.committedBandBottomRow = newTopRow - 1;
       self.committedBandTopRow = bandTop;
+      // The whole `capped` run is materialized: the fits arm CUP-paints all of
+      // it above the frame; the overflow arm paints the tail that fits AND
+      // Phase 1 already archived the full block to scrollback. Either way no row
+      // of `capped` is unpainted-and-unarchived, so nothing is pending here.
+      self.committedBandPaintedRows = capped.length;
     } else {
       clearCommittedBand(self);
     }
@@ -618,6 +628,11 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
     self.committedBand = model;
     self.committedBandBottomRow = Math.max(0, collapsedFrameTop - 1);
     self.committedBandTopRow = Math.max(anchorFloor, collapsedFrameTop - model.length);
+    // Nothing was painted to the terminal: the whole model is PENDING until
+    // repositionCommittedBand materializes it on collapse. If disarm() runs
+    // first (Ctrl-C / abort / exit mid-turn), it flushes this pending model to
+    // scrollback so the committed block is not lost from screen AND history.
+    self.committedBandPaintedRows = 0;
   } else {
     clearCommittedBand(self);
   }
@@ -629,6 +644,7 @@ export function clearCommittedBand(self: CommittedBandHost): void {
   self.committedBand = [];
   self.committedBandTopRow = 0;
   self.committedBandBottomRow = 0;
+  self.committedBandPaintedRows = 0;
 }
 
 /**

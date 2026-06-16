@@ -75,6 +75,11 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     self.committedBand = self.committedBand.slice(overflow);
     self.committedBandTopRow = 1;
     self.committedBandBottomRow = room;
+    // The full band was re-painted top-aligned above before the scroll, so
+    // every surviving row is materialized on screen (and the evicted prefix is
+    // now in scrollback) — none are pending. Promote any previously-pending
+    // rows that this growth just materialized.
+    self.committedBandPaintedRows = self.committedBand.length;
     return;
   }
 
@@ -112,6 +117,12 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
       }
       if (self.committedBand.length === 0 || self.committedBandBottomRow < floor) {
         self.clearCommittedBand();
+      } else {
+        // Survivors were scrolled by the terminal as real on-screen rows (this
+        // path runs only after a banner-era commit painted them), so all are
+        // materialized — none pending. (A fully-pending band has no banner above
+        // it and cannot reach this branch; this keeps the invariant exact.)
+        self.committedBandPaintedRows = self.committedBand.length;
       }
     }
   }

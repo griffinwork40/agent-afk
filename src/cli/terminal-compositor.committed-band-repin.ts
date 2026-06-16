@@ -113,4 +113,9 @@ export function repositionCommittedBand(
   }
   self.committedBandTopRow = newTop;
   self.committedBandBottomRow = targetBottom;
+  // `fit` rows (the band's bottom suffix) are now materialized on screen — this
+  // is the collapse repaint that drains a fully-pending band-hold model. Record
+  // it so a subsequent disarm() does not re-flush already-painted rows into
+  // scrollback (which would duplicate them).
+  self.committedBandPaintedRows = fit;
 }

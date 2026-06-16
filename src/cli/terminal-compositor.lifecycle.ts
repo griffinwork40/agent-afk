@@ -59,6 +59,9 @@ export interface LifecycleHost {
   pendingResizeErase: { top: number; bottom: number } | null;
   readonly committedBand: string[];
   readonly committedBandTopRow: number;
+  // Read by disarm() to flush genuinely-unpainted committed-band rows to
+  // scrollback before teardown. See committedBandPaintedRows on the class.
+  readonly committedBandPaintedRows: number;
 }
 
 /**
@@ -297,6 +300,21 @@ export function disarm(self: LifecycleHost): void {
     self.resizeImmediateUnsub = null;
   }
 
+  // External constraint (band-hold materialization ordering): a block committed
+  // under a full-viewport overlay is HELD in the committedBand model fully
+  // pending — never painted to the terminal, never archived to scrollback —
+  // until repositionCommittedBand materializes it when the overlay collapses
+  // (committed-band-commit.ts newTopRow<=1 storage branch). If disarm() runs
+  // FIRST (Ctrl-C / turn abort / mid-turn exit), logUpdate.clear() + resetState()
+  // below discard that model, losing the block from screen AND history. So the
+  // pending rows MUST be flushed to scrollback as real content BEFORE the clear
+  // — the inverse-before-teardown rule. The painted suffix is already on screen
+  // (repositionCommittedBand / Phase 3 painted it), so it is intentionally left
+  // untouched; re-emitting it would duplicate it in scrollback (HARD CONSTRAINT
+  // #1). Pending rows go to scrollback ONLY, never an on-screen truncated copy
+  // (HARD CONSTRAINT #2).
+  flushPendingCommittedBand(self);
+
   if (self.logUpdate) {
     try {
       self.logUpdate.clear(self.scrollRegion?.getExtraRows() ?? 0);
@@ -346,4 +364,53 @@ export function disarm(self: LifecycleHost): void {
   // buffer-identity guard in updateGhost's resolve handler will then
   // silently drop any result that arrives after this point.
   self.ghostEngine?.dispose();
+}
+
+/**
+ * Flush the genuinely-unpainted prefix of the committed band to scrollback as
+ * REAL content, so a disarm before repositionCommittedBand materializes a
+ * band-hold model does not lose the committed block from screen AND history.
+ *
+ * Pending rows are the PREFIX `committedBand[0 .. length - committedBandPaintedRows)`
+ * (every paint site materializes the BOTTOM suffix — see committedBandPaintedRows
+ * on the class). When all rows are painted (the common teardown: overlay
+ * collapsed → repositionCommittedBand painted everything → painted === length)
+ * this is a no-op and the on-screen rows are left exactly as they are — never
+ * re-emitted (HARD CONSTRAINT #1: no duplicate in scrollback).
+ *
+ * Mechanism: the proven top-write-then-scroll the band-hold Phase-1 archive
+ * uses (committed-band-commit.ts) — CUP+EL each pending row at the anchor floor,
+ * then a CUP to the physical bottom + `\n`×count to scroll them into history.
+ * Chunked by screen height so a pending run taller than the terminal still
+ * archives every row. Wrapped in `withFullScrollRegion` (no-op when no status
+ * line is started) so the `\n` produces a FULL-screen scroll that enters
+ * scrollback rather than a DECSTBM sub-region scroll that silently drops the
+ * displaced top line. Best-effort: a throwing stdout means the process is
+ * exiting anyway and the next teardown step tears us down.
+ */
+function flushPendingCommittedBand(self: LifecycleHost): void {
+  const pendingCount = self.committedBand.length - self.committedBandPaintedRows;
+  if (pendingCount <= 0) return;
+  const pending = self.committedBand.slice(0, pendingCount);
+  const rows = Math.max(1, self.stdout.rows ?? 24);
+  const anchorFloor = Math.max(self.anchorRow ?? 1, 1);
+  const write = (): void => {
+    const chunkMax = Math.max(1, rows - anchorFloor + 1);
+    for (let start = 0; start < pending.length; start += chunkMax) {
+      const chunk = pending.slice(start, Math.min(start + chunkMax, pending.length));
+      const topWrite = chunk
+        .map((l, i) => `\x1b[${anchorFloor + i};1H\x1b[2K${l ?? ''}`)
+        .join('');
+      self.stdout.write(`${topWrite}\x1b[${rows};1H${'\n'.repeat(chunk.length)}`);
+    }
+  };
+  try {
+    if (self.scrollRegion) {
+      self.scrollRegion.withFullScrollRegion(write);
+    } else {
+      write();
+    }
+  } catch {
+    /* stdout closed mid-flush (process exiting) — nothing more we can do */
+  }
 }
