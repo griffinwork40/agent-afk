@@ -204,6 +204,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ...(config.traceWriter !== undefined ? { traceWriter: config.traceWriter } : {}),
           runtimeStateSource,
           ...(config.isSkillDispatch ? { isSkillDispatch: true } : {}),
+          ...(config.isNonInteractive ? { isNonInteractive: true } : {}),
         });
 
     const buildOpts: {
@@ -289,6 +290,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
        * AnthropicDirectProvider.
        */
       isSkillDispatch?: boolean;
+      /**
+       * When true, this is a non-interactive surface (daemon, scheduler/cron,
+       * one-shot chat) where no human answers elicitations. Strip `ask_question`
+       * only (not `terminal_font_size`). Parity with the `config.isNonInteractive`
+       * toolDefs filter in AnthropicDirectProvider.
+       */
+      isNonInteractive?: boolean;
     },
   ): SessionToolDispatcher {
     const handlers = createBuiltinHandlers(permissionMode, opts.cwd);
@@ -325,7 +333,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
       ? this.schemas.filter(
           (t) => t.name !== 'ask_question' && t.name !== 'terminal_font_size',
         )
-      : this.schemas;
+      : opts.isNonInteractive
+        ? this.schemas.filter((t) => t.name !== 'ask_question')
+        : this.schemas;
 
     const dispatcherOpts: ConstructorParameters<typeof SessionToolDispatcher>[0] = {
       handlers,

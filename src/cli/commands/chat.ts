@@ -564,6 +564,10 @@ export function registerChatCommand(program: Command): void {
           // (anti-leak invariant, credential-resolver.ts).
           apiKey: getApiKeyForModel(sessionModel),
           maxTurns: parseInt(options.maxTurns, 10),
+          // One-shot `afk chat` is headless: no REPL/Telegram elicitation
+          // handler is installed, so ask_question can only auto-decline. Strip
+          // it so the model proceeds on an assumption instead of wasting a turn.
+          isNonInteractive: true,
           hookRegistry: createDefaultHookRegistry((info) => {
             console.log(formatSubagentCompletion(info));
           }, 'cli', sharedMemoryStore, undefined, loadHooksConfig({ cwd: worktreeCwd }), { cwd: worktreeCwd }).registry,

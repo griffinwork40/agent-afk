@@ -175,6 +175,11 @@ export function buildDaemonSessionFactory(
     return new AgentSession(injectHotMemory({
       ...config,
       provider,
+      // Daemon sessions are headless: no human watches to answer ask_question.
+      // Stamped after `...config` so it is forced regardless of caller config;
+      // this is the production chokepoint the scheduler routes every task
+      // through, so it also covers scheduler/cron-spawned sessions.
+      isNonInteractive: true,
     }));
   };
 }
