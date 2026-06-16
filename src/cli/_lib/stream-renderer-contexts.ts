@@ -10,6 +10,7 @@
 
 import type { OrchestratorCtx } from './stream-renderer-orchestrator.js';
 import type { SubagentCtx } from './stream-renderer-subagent.js';
+import type { ProgressEvent } from '../../agent/types.js';
 import type { TerminalCompositor } from '../terminal-compositor.js';
 import type { OverlayComposer } from './overlay-composer.js';
 import type { ToolLane } from '../commands/interactive/tool-lane.js';
@@ -36,6 +37,7 @@ export function makeOrchestratorCtx(args: {
   coordinator: CommitCoordinator;
   stageTracker?: StageTrackerState;
   activeSkillName?: string;
+  lastProgressByTask: Map<string, ProgressEvent>;
 }): OrchestratorCtx {
   return {
     out: args.out,
@@ -47,6 +49,7 @@ export function makeOrchestratorCtx(args: {
     thinkingMode: args.thinkingMode,
     streamingMarkdown: args.streamingMarkdown,
     coordinator: args.coordinator,
+    lastProgressByTask: args.lastProgressByTask,
     // Hand the tracker only when we have a TTY compositor — non-TTY
     // surfaces (Telegram, daemon, tests) never call setComposedOverlay
     // anyway, and propagating a tracker through them would just be
@@ -62,16 +65,15 @@ export function makeOrchestratorCtx(args: {
 export function makeSubagentCtx(args: {
   isTTY: boolean;
   compositor: TerminalCompositor | null;
-  overlayComposer: OverlayComposer | null;
   toolLane: ToolLane;
   out: Writer;
   streamingMarkdown: Map<string, StreamingMarkdownRenderer>;
   thinkingMode: 'off' | 'summary' | 'live';
+  orchestratorCtx: OrchestratorCtx;
 }): SubagentCtx {
   return {
     isTTY: args.isTTY,
     compositor: args.compositor,
-    overlayComposer: args.overlayComposer,
     toolLane: args.toolLane,
     out: args.out,
     streamingMarkdown: args.streamingMarkdown,
@@ -80,6 +82,15 @@ export function makeSubagentCtx(args: {
     // governs both surfaces. One knob, one mental model. See
     // SubagentCtx.thinkingMode for the per-mode behavior contract.
     thinkingMode: args.thinkingMode,
+    // Invariant (issue #389): every subagent event handler routes its overlay
+    // repaint through `setComposedOverlay(ctx.orchestratorCtx)`. That call is
+    // guarded by `ctx.orchestratorCtx`, so production MUST thread the live
+    // orchestrator ctx here — otherwise the guard is permanently false and no
+    // subagent repaint ever reaches the compositor. Required (not optional) so
+    // `tsc` fails loudly if a future caller forgets it. The ctx shares the
+    // renderer's toolLane / thinkingLane / lastProgressByTask, so the composed
+    // frame includes the orchestrator's thinking paragraph + progress banner.
+    orchestratorCtx: args.orchestratorCtx,
   };
 }
 

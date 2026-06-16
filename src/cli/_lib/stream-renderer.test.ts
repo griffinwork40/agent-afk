@@ -610,6 +610,7 @@ describe('handleOrchestratorEvent — pending markdown commit on tool boundary',
       thinkingMode: 'summary' as const,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       streamingMarkdown: { current: stubs.markdownRenderer as any },
+      lastProgressByTask: new Map(),
     };
     const source = freshSourceState(undefined);
 
@@ -620,7 +621,6 @@ describe('handleOrchestratorEvent — pending markdown commit on tool boundary',
       },
       source,
       ctx,
-      new Map(),
     );
 
     expect(stubs.commitPendingCalls.length).toBe(1);
@@ -649,6 +649,7 @@ describe('handleOrchestratorEvent — pending markdown commit on tool boundary',
       thinkingMode: 'summary' as const,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       streamingMarkdown: { current: stubs.markdownRenderer as any },
+      lastProgressByTask: new Map(),
     };
     const source = freshSourceState(undefined);
 
@@ -659,7 +660,6 @@ describe('handleOrchestratorEvent — pending markdown commit on tool boundary',
       },
       source,
       ctx,
-      new Map(),
     );
 
     expect(stubs.commitPendingCalls.length).toBe(1);
@@ -687,6 +687,7 @@ describe('handleOrchestratorEvent — pending markdown commit on tool boundary',
       thinkingLane: new ThinkingLane(),
       thinkingMode: 'summary' as const,
       streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
     };
     const source = freshSourceState(undefined);
 
@@ -694,7 +695,6 @@ describe('handleOrchestratorEvent — pending markdown commit on tool boundary',
       { type: 'chunk', chunk: { type: 'content', content: 'hello world' } },
       source,
       ctx,
-      new Map(),
     );
 
     const disables = stubs.setSpinnerCalls.filter((c) => c.enabled === false);
@@ -722,6 +722,7 @@ describe('handleOrchestratorEvent — pending markdown commit on tool boundary',
       thinkingMode: 'summary' as const,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       streamingMarkdown: { current: stubs.markdownRenderer as any },
+      lastProgressByTask: new Map(),
     };
     const source = freshSourceState(undefined);
 
@@ -732,7 +733,6 @@ describe('handleOrchestratorEvent — pending markdown commit on tool boundary',
       },
       source,
       ctx,
-      new Map(),
     );
 
     const enables = stubs.setSpinnerCalls.filter((c) => c.enabled === true);
@@ -767,18 +767,34 @@ describe('handleSubagentEvent — streaming content via markdown renderer', () =
     );
     const { freshSourceState } = await import('./stream-renderer-source.js');
     const { ToolLane } = await import('../commands/interactive/tool-lane.js');
+    const { ThinkingLane } = await import('../commands/interactive/thinking-lane.js');
     const { StreamingMarkdownRenderer } = await import('../markdown-stream.js');
 
     const stubs = makeOverlayStubs();
     const { writer } = makeWriter();
     const streamingMarkdown = new Map<string, InstanceType<typeof StreamingMarkdownRenderer>>();
+    const toolLane = new ToolLane();
+    // Provide orchestratorCtx so subagent handlers route through
+    // setComposedOverlay (issue #389 — all overlay repaints composed).
+    const orchCtx = {
+      out: writer,
+      isTTY: true,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      compositor: stubs.compositor as any,
+      toolLane,
+      thinkingLane: new ThinkingLane(),
+      thinkingMode: 'off' as const,
+      streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
+    };
     const ctx = {
       isTTY: true,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       compositor: stubs.compositor as any,
-      toolLane: new ToolLane(),
+      toolLane,
       out: writer,
       streamingMarkdown,
+      orchestratorCtx: orchCtx,
     };
     const source = freshSourceState('pragmatist');
     synthesizeAgentEntry('src-A', source, ctx);
@@ -824,18 +840,34 @@ describe('handleSubagentEvent — streaming content via markdown renderer', () =
     );
     const { freshSourceState } = await import('./stream-renderer-source.js');
     const { ToolLane } = await import('../commands/interactive/tool-lane.js');
+    const { ThinkingLane } = await import('../commands/interactive/thinking-lane.js');
     const { StreamingMarkdownRenderer } = await import('../markdown-stream.js');
 
     const stubs = makeOverlayStubs();
     const { writer } = makeWriter();
     const streamingMarkdown = new Map<string, InstanceType<typeof StreamingMarkdownRenderer>>();
+    const toolLane = new ToolLane();
+    // Provide orchestratorCtx so subagent handlers route through
+    // setComposedOverlay (issue #389 — all overlay repaints composed).
+    const orchCtx = {
+      out: writer,
+      isTTY: true,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      compositor: stubs.compositor as any,
+      toolLane,
+      thinkingLane: new ThinkingLane(),
+      thinkingMode: 'off' as const,
+      streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
+    };
     const ctx = {
       isTTY: true,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       compositor: stubs.compositor as any,
-      toolLane: new ToolLane(),
+      toolLane,
       out: writer,
       streamingMarkdown,
+      orchestratorCtx: orchCtx,
     };
     const source = freshSourceState('pragmatist');
     synthesizeAgentEntry('src-A', source, ctx);
@@ -873,6 +905,7 @@ describe('handleSubagentEvent — streaming content via markdown renderer', () =
     );
     const { freshSourceState } = await import('./stream-renderer-source.js');
     const { ToolLane } = await import('../commands/interactive/tool-lane.js');
+    const { ThinkingLane } = await import('../commands/interactive/thinking-lane.js');
     const { StreamingMarkdownRenderer } = await import('../markdown-stream.js');
 
     const stubs = makeOverlayStubs();
@@ -888,6 +921,19 @@ describe('handleSubagentEvent — streaming content via markdown renderer', () =
       return origSet(id, tail);
     };
 
+    // Provide orchestratorCtx so subagent handlers route through
+    // setComposedOverlay (issue #389 — all overlay repaints composed).
+    const orchCtx = {
+      out: writer,
+      isTTY: true,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      compositor: stubs.compositor as any,
+      toolLane,
+      thinkingLane: new ThinkingLane(),
+      thinkingMode: 'off' as const,
+      streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
+    };
     const ctx = {
       isTTY: true,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -895,6 +941,7 @@ describe('handleSubagentEvent — streaming content via markdown renderer', () =
       toolLane,
       out: writer,
       streamingMarkdown,
+      orchestratorCtx: orchCtx,
     };
     const source = freshSourceState('pragmatist');
     synthesizeAgentEntry('src-A', source, ctx);
@@ -1476,9 +1523,10 @@ describe('setComposedOverlay — live thinking preview', () => {
       thinkingLane,
       thinkingMode: 'live' as const,
       streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
     };
 
-    setComposedOverlay(ctx, new Map());
+    setComposedOverlay(ctx);
 
     const overlay = overlayCalls.at(-1) ?? '';
     expect(overlay).toContain('◆');
@@ -1503,9 +1551,10 @@ describe('setComposedOverlay — live thinking preview', () => {
       thinkingLane,
       thinkingMode: 'summary' as const,
       streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
     };
 
-    setComposedOverlay(ctx, new Map());
+    setComposedOverlay(ctx);
 
     const overlay = overlayCalls.at(-1) ?? '';
     expect(overlay).not.toContain('reasoning');
@@ -1539,9 +1588,10 @@ describe('setComposedOverlay — live thinking preview', () => {
       thinkingLane,
       thinkingMode: 'live' as const,
       streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
     };
 
-    setComposedOverlay(ctx, new Map());
+    setComposedOverlay(ctx);
 
     const overlay = overlayCalls.at(-1) ?? '';
     // Tail is preserved (last wrapped lines kept).
@@ -1575,9 +1625,10 @@ describe('setComposedOverlay — live thinking preview', () => {
       thinkingLane,
       thinkingMode: 'live' as const,
       streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
     };
 
-    setComposedOverlay(ctx, new Map());
+    setComposedOverlay(ctx);
 
     const overlay = overlayCalls.at(-1) ?? '';
     // eslint-disable-next-line no-control-regex

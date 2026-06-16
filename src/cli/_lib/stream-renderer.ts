@@ -46,6 +46,7 @@ import {
 import {
   handleOrchestratorEvent,
   setComposedOverlay,
+  type OrchestratorCtx,
 } from './stream-renderer-orchestrator.js';
 import { CommitCoordinator } from './commit-coordinator.js';
 import { handleSubagentEvent, synthesizeAgentEntry } from './stream-renderer-subagent.js';
@@ -456,7 +457,6 @@ export class StreamRenderer {
     this.resizeUnsub = subscribeToResize(this.overlayComposer, false);
   }
 
-
   /**
    * Public accessor for the underlying TerminalCompositor. Returns null
    * before {@link arm} resolves, on non-TTY surfaces, or after {@link dispose}.
@@ -493,6 +493,33 @@ export class StreamRenderer {
    * Process one OutputEvent. `meta.subagentId` identifies the source; absent
    * meta is treated as the orchestrator source (`__main__`).
    */
+  /**
+   * Build a fresh OrchestratorCtx snapshot from the renderer's live
+   * collaborators (compositor, overlay composer, shared tool lane, thinking
+   * lane, progress map, …). Both the orchestrator branch and the subagent
+   * branch (issue #389) compose overlays through this so EVERY repaint —
+   * including those triggered by subagent state transitions — includes the
+   * full frame: orchestrator thinking paragraph + shared tool lane + progress
+   * banner. Cheap to rebuild per event (a shallow wrapper over shared refs);
+   * the orchestrator path already did so inline before this extraction.
+   */
+  private buildOrchestratorCtx(): OrchestratorCtx {
+    return makeOrchestratorCtx({
+      out: this.out,
+      isTTY: this.isTTY,
+      compositor: this.compositor,
+      overlayComposer: this.overlayComposer,
+      toolLane: this.toolLane,
+      thinkingLane: this.thinkingLane,
+      thinkingMode: this.thinkingMode,
+      streamingMarkdown: this.streamingMarkdownRef,
+      coordinator: this.coordinator,
+      lastProgressByTask: this.lastProgressByTask,
+      ...(this.isTTY ? { stageTracker: this.stageTracker } : {}),
+      ...(this.activeSkillName ? { activeSkillName: this.activeSkillName } : {}),
+    });
+  }
+
   process(event: OutputEvent, meta?: SubagentProgressMeta): void {
     if (this.disposed) return;
 
@@ -516,11 +543,11 @@ export class StreamRenderer {
         synthesizeAgentEntry(sourceId, source, makeSubagentCtx({
           isTTY: this.isTTY,
           compositor: this.compositor,
-          overlayComposer: this.overlayComposer,
           toolLane: this.toolLane,
           out: this.out,
           streamingMarkdown: this.subagentMarkdown,
           thinkingMode: this.thinkingMode,
+          orchestratorCtx: this.buildOrchestratorCtx(),
         }), parentSyntheticId);
       }
     }
@@ -529,19 +556,7 @@ export class StreamRenderer {
       // Snapshot the stage before the event so we can fire onStageChange
       // exactly when the stage transitions (not on every event).
       const stageBefore = this.stageTracker.stage;
-      handleOrchestratorEvent(event, source, makeOrchestratorCtx({
-        out: this.out,
-        isTTY: this.isTTY,
-        compositor: this.compositor,
-        overlayComposer: this.overlayComposer,
-        toolLane: this.toolLane,
-        thinkingLane: this.thinkingLane,
-        thinkingMode: this.thinkingMode,
-        streamingMarkdown: this.streamingMarkdownRef,
-        coordinator: this.coordinator,
-        ...(this.isTTY ? { stageTracker: this.stageTracker } : {}),
-        ...(this.activeSkillName ? { activeSkillName: this.activeSkillName } : {}),
-      }), this.lastProgressByTask);
+      handleOrchestratorEvent(event, source, this.buildOrchestratorCtx());
       // Fire onStageChange when the loop stage transitions so the LoopStageBar
       // footer row repaints immediately — without polling or threading the bar
       // through the overlay compositor. Swallows errors defensively.
@@ -552,11 +567,11 @@ export class StreamRenderer {
       handleSubagentEvent(event, sourceId, source, makeSubagentCtx({
         isTTY: this.isTTY,
         compositor: this.compositor,
-        overlayComposer: this.overlayComposer,
         toolLane: this.toolLane,
         out: this.out,
         streamingMarkdown: this.subagentMarkdown,
         thinkingMode: this.thinkingMode,
+        orchestratorCtx: this.buildOrchestratorCtx(),
       }));
       // Refresh staleness timestamp and clear any pause annotation on new activity.
       source.lastEventAt = Date.now();
@@ -668,20 +683,7 @@ export class StreamRenderer {
             this.coordinator.drainSubagent(sourceId);
           }
         }
-        const orchestratorCtx = makeOrchestratorCtx({
-          out: this.out,
-          isTTY: this.isTTY,
-          compositor: this.compositor,
-          overlayComposer: this.overlayComposer,
-          toolLane: this.toolLane,
-          thinkingLane: this.thinkingLane,
-          thinkingMode: this.thinkingMode,
-          streamingMarkdown: this.streamingMarkdownRef,
-          coordinator: this.coordinator,
-          ...(this.isTTY ? { stageTracker: this.stageTracker } : {}),
-          ...(this.activeSkillName ? { activeSkillName: this.activeSkillName } : {}),
-        });
-        setComposedOverlay(orchestratorCtx, this.lastProgressByTask);
+        setComposedOverlay(this.buildOrchestratorCtx());
       }
     }
   }

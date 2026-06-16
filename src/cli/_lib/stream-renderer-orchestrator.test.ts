@@ -91,6 +91,8 @@ function makeCtx(
     thinkingLane: new ThinkingLane(),
     thinkingMode: 'off',
     streamingMarkdown: { current: null },
+    // lastProgressByTask is now part of OrchestratorCtx (issue #389 hoist).
+    lastProgressByTask: new Map(),
   };
 }
 
@@ -117,16 +119,15 @@ describe('handleOrchestratorEvent — tool_diff arm', () => {
 
     const ctx = makeCtx(toolLane, { isTTY: true, compositor });
     const source: SourceState = freshSourceState('__main__');
-    const lastProgress = new Map();
     const diff = makeMinimalDiff();
     const id = 'tu-1';
 
     // First: register the tool use so the entry exists in the lane.
-    handleOrchestratorEvent(toolStartEvent(id), source, ctx, lastProgress);
-    handleOrchestratorEvent(toolResultEvent(id), source, ctx, lastProgress);
+    handleOrchestratorEvent(toolStartEvent(id), source, ctx);
+    handleOrchestratorEvent(toolResultEvent(id), source, ctx);
 
     // Now send the tool_diff sidecar.
-    handleOrchestratorEvent(toolDiffEvent(id, diff), source, ctx, lastProgress);
+    handleOrchestratorEvent(toolDiffEvent(id, diff), source, ctx);
 
     // The compositor must have received at least one setOverlay call after
     // the tool_diff (the overlay is set for every chunk when isTTY is true).
@@ -157,20 +158,19 @@ describe('handleOrchestratorEvent — tool_diff arm', () => {
 
     const ctx = makeCtx(toolLane, { isTTY: true, compositor });
     const source: SourceState = freshSourceState('__main__');
-    const lastProgress = new Map();
     const diff = makeMinimalDiff();
     const id = 'tu-flush';
 
     // Register tool, result, then flush the lane (simulates turn end).
-    handleOrchestratorEvent(toolStartEvent(id), source, ctx, lastProgress);
-    handleOrchestratorEvent(toolResultEvent(id), source, ctx, lastProgress);
+    handleOrchestratorEvent(toolStartEvent(id), source, ctx);
+    handleOrchestratorEvent(toolResultEvent(id), source, ctx);
     toolLane.flush(); // lane now empty
 
     const overlayCallsBefore = setOverlay.mock.calls.length;
 
     // tool_diff arrives after flush — must not throw.
     expect(() => {
-      handleOrchestratorEvent(toolDiffEvent(id, diff), source, ctx, lastProgress);
+      handleOrchestratorEvent(toolDiffEvent(id, diff), source, ctx);
     }).not.toThrow();
 
     // Because isTTY=true, setComposedOverlay IS still called — but the lane
@@ -193,16 +193,15 @@ describe('handleOrchestratorEvent — tool_diff arm', () => {
     // No compositor on non-TTY.
     const ctx = makeCtx(toolLane, { isTTY: false, compositor: null });
     const source: SourceState = freshSourceState('__main__');
-    const lastProgress = new Map();
     const diff = makeMinimalDiff();
     const id = 'tu-nontty';
 
-    handleOrchestratorEvent(toolStartEvent(id), source, ctx, lastProgress);
-    handleOrchestratorEvent(toolResultEvent(id), source, ctx, lastProgress);
+    handleOrchestratorEvent(toolStartEvent(id), source, ctx);
+    handleOrchestratorEvent(toolResultEvent(id), source, ctx);
 
     // Must not throw on non-TTY.
     expect(() => {
-      handleOrchestratorEvent(toolDiffEvent(id, diff), source, ctx, lastProgress);
+      handleOrchestratorEvent(toolDiffEvent(id, diff), source, ctx);
     }).not.toThrow();
 
     // Source should not be marked errored.
@@ -247,13 +246,11 @@ describe('handleOrchestratorEvent — thinking overlay (live mode)', () => {
     const ctx = makeCtx(toolLane, { isTTY: true, compositor });
     ctx.thinkingMode = 'live';
     const source: SourceState = freshSourceState('__main__');
-    const lastProgress = new Map();
 
     handleOrchestratorEvent(
       thinkingEvent('Let me reason about this step by step.'),
       source,
       ctx,
-      lastProgress,
     );
 
     expect(setOverlay).toHaveBeenCalled();
@@ -277,13 +274,11 @@ describe('handleOrchestratorEvent — thinking overlay (live mode)', () => {
     const ctx = makeCtx(toolLane, { isTTY: true, compositor });
     ctx.thinkingMode = 'summary';
     const source: SourceState = freshSourceState('__main__');
-    const lastProgress = new Map();
 
     handleOrchestratorEvent(
       thinkingEvent('Hidden in summary mode.'),
       source,
       ctx,
-      lastProgress,
     );
 
     // setComposedOverlay IS called in summary mode (the case-arm fires it so
@@ -308,13 +303,11 @@ describe('handleOrchestratorEvent — thinking overlay (live mode)', () => {
     const ctx = makeCtx(toolLane, { isTTY: true, compositor });
     ctx.thinkingMode = 'off';
     const source: SourceState = freshSourceState('__main__');
-    const lastProgress = new Map();
 
     handleOrchestratorEvent(
       thinkingEvent('Dropped on the floor.'),
       source,
       ctx,
-      lastProgress,
     );
 
     expect(setOverlay).not.toHaveBeenCalled();
@@ -383,7 +376,6 @@ describe('handleOrchestratorEvent — content chunk preserves in-flight subagent
       contentChunk('Here is some interleaved orchestrator prose.'),
       source,
       ctx,
-      new Map(),
     );
 
     // ── Scrollback assertions ────────────────────────────────────────────
@@ -437,7 +429,6 @@ describe('handleOrchestratorEvent — content chunk preserves in-flight subagent
       contentChunk('Prose while subagent is still working.'),
       source,
       ctx,
-      new Map(),
     );
 
     // No completed roots → no scrollback commits beyond markdown.
@@ -474,7 +465,7 @@ describe('handleOrchestratorEvent — content chunk preserves in-flight subagent
     const ctx = makeCtx(toolLane, { isTTY: true, compositor });
     const source: SourceState = freshSourceState('__main__');
 
-    handleOrchestratorEvent(contentChunk('Prose.'), source, ctx, new Map());
+    handleOrchestratorEvent(contentChunk('Prose.'), source, ctx);
 
     const scrollback = commitAbove.mock.calls.map((c) => strip(c[0])).join('\n');
     expect(scrollback).toContain('ls');
@@ -560,15 +551,15 @@ describe('handleOrchestratorEvent — tool-use-loop scrollback (no content emiss
     const source: SourceState = freshSourceState('__main__');
 
     // Iteration 1: bash A starts and completes.
-    handleOrchestratorEvent(bashStart('bash-A', '"ls"'), source, ctx, new Map());
-    handleOrchestratorEvent(bashResult('bash-A'), source, ctx, new Map());
+    handleOrchestratorEvent(bashStart('bash-A', '"ls"'), source, ctx);
+    handleOrchestratorEvent(bashResult('bash-A'), source, ctx);
 
     // Before the next tool fires, nothing is in scrollback (correct — the
     // flush trigger is on the NEXT tool_use_detail, not on tool_result).
     expect(commitAbove).not.toHaveBeenCalled();
 
     // Iteration 2: bash B starts. THIS is the flush trigger.
-    handleOrchestratorEvent(bashStart('bash-B', '"pwd"'), source, ctx, new Map());
+    handleOrchestratorEvent(bashStart('bash-B', '"pwd"'), source, ctx);
 
     // bash-A must now be in scrollback.
     const scrollback = commitAbove.mock.calls.map((c) => strip(c[0])).join('\n');
@@ -592,15 +583,15 @@ describe('handleOrchestratorEvent — tool-use-loop scrollback (no content emiss
     const { ctx, commitAbove } = makeLoopCtx(toolLane);
     const source: SourceState = freshSourceState('__main__');
 
-    handleOrchestratorEvent(editStart('edit-1'), source, ctx, new Map());
-    handleOrchestratorEvent(editResult('edit-1'), source, ctx, new Map());
-    handleOrchestratorEvent(toolDiffEvent('edit-1', makeMinimalDiff()), source, ctx, new Map());
+    handleOrchestratorEvent(editStart('edit-1'), source, ctx);
+    handleOrchestratorEvent(editResult('edit-1'), source, ctx);
+    handleOrchestratorEvent(toolDiffEvent('edit-1', makeMinimalDiff()), source, ctx);
 
     // Pre-trigger: entry is still in the lane WITH the diff attached.
     expect(toolLane.hasEntry('edit-1')).toBe(true);
 
     // Next tool starts — fires the eager flush.
-    handleOrchestratorEvent(bashStart('bash-1', '"echo"'), source, ctx, new Map());
+    handleOrchestratorEvent(bashStart('bash-1', '"echo"'), source, ctx);
 
     // edit_file committed to scrollback. The diff hunk markers must be
     // present (proving addDiff wasn't silently lost by a too-early flush).
@@ -636,13 +627,12 @@ describe('handleOrchestratorEvent — tool-use-loop scrollback (no content emiss
       },
       source,
       ctx,
-      new Map(),
     );
 
     // Now a flat tool fires (e.g., the orchestrator does a bash call
     // alongside the in-flight subagent). The flush should commit nothing
     // because the only root (agent-1) is in-flight.
-    handleOrchestratorEvent(bashStart('bash-1', '"ls"'), source, ctx, new Map());
+    handleOrchestratorEvent(bashStart('bash-1', '"ls"'), source, ctx);
 
     // No scrollback writes — agent-1 is still in-flight.
     expect(commitAbove).not.toHaveBeenCalled();
@@ -671,7 +661,7 @@ describe('handleOrchestratorEvent — tool-use-loop scrollback (no content emiss
     };
     const source: SourceState = freshSourceState('__main__');
 
-    handleOrchestratorEvent(bashStart('bash-B', '"pwd"'), source, ctx, new Map());
+    handleOrchestratorEvent(bashStart('bash-B', '"pwd"'), source, ctx);
 
     // Lane untouched on non-TTY (no eager flush).
     expect(toolLane.hasEntry('bash-A')).toBe(true);
@@ -739,7 +729,7 @@ describe('handleOrchestratorEvent — stage rail single-paint invariant', () => 
     const { ctx, setOverlay } = makeStageCtx(toolLane);
     const source: SourceState = freshSourceState('__main__');
 
-    handleOrchestratorEvent(toolStart('tu-1'), source, ctx, new Map());
+    handleOrchestratorEvent(toolStart('tu-1'), source, ctx);
 
     // Pre-fix: 2 calls (pre-switch + case-arm). Post-fix: 1 (case-arm only).
     expect(setOverlay).toHaveBeenCalledTimes(1);
@@ -758,10 +748,10 @@ describe('handleOrchestratorEvent — stage rail single-paint invariant', () => 
     const source: SourceState = freshSourceState('__main__');
 
     // Prime: send tool_use_detail first so tool_result has something to flip.
-    handleOrchestratorEvent(toolStart('tu-1'), source, ctx, new Map());
+    handleOrchestratorEvent(toolStart('tu-1'), source, ctx);
     setOverlay.mockClear();
 
-    handleOrchestratorEvent(toolResultEvt('tu-1'), source, ctx, new Map());
+    handleOrchestratorEvent(toolResultEvt('tu-1'), source, ctx);
 
     expect(setOverlay).toHaveBeenCalledTimes(1);
     const overlay = strip(setOverlay.mock.calls[0]?.[0] ?? '');
@@ -778,7 +768,7 @@ describe('handleOrchestratorEvent — stage rail single-paint invariant', () => 
     ctx.thinkingMode = 'live';
     const source: SourceState = freshSourceState('__main__');
 
-    handleOrchestratorEvent(thinkingEvt('reasoning step'), source, ctx, new Map());
+    handleOrchestratorEvent(thinkingEvt('reasoning step'), source, ctx);
 
     expect(setOverlay).toHaveBeenCalledTimes(1);
     const overlay = strip(setOverlay.mock.calls[0]?.[0] ?? '');
@@ -807,7 +797,7 @@ describe('handleOrchestratorEvent — stage rail single-paint invariant', () => 
     ctx.thinkingMode = 'summary';
     const source: SourceState = freshSourceState('__main__');
 
-    handleOrchestratorEvent(thinkingEvt('hidden reasoning'), source, ctx, new Map());
+    handleOrchestratorEvent(thinkingEvt('hidden reasoning'), source, ctx);
 
     // No overlay update in summary mode — thinking is buffered silently.
     expect(setOverlay).toHaveBeenCalledTimes(0);
@@ -831,7 +821,7 @@ describe('handleOrchestratorEvent — stage rail single-paint invariant', () => 
         durationMs: 100,
       },
     };
-    handleOrchestratorEvent(progressEvent, source, ctx, new Map());
+    handleOrchestratorEvent(progressEvent, source, ctx);
 
     expect(setOverlay).toHaveBeenCalledTimes(1);
   });
@@ -842,14 +832,14 @@ describe('handleOrchestratorEvent — stage rail single-paint invariant', () => 
     const source: SourceState = freshSourceState('__main__');
 
     // Register the tool first so addDiff has an entry to attach to.
-    handleOrchestratorEvent(toolStart('tu-1'), source, ctx, new Map());
+    handleOrchestratorEvent(toolStart('tu-1'), source, ctx);
     setOverlay.mockClear();
 
     const diffEvent: OutputEvent = {
       type: 'chunk',
       chunk: { type: 'tool_diff', toolUseId: 'tu-1', diff: makeMinimalDiff() },
     };
-    handleOrchestratorEvent(diffEvent, source, ctx, new Map());
+    handleOrchestratorEvent(diffEvent, source, ctx);
 
     expect(setOverlay).toHaveBeenCalledTimes(1);
   });
@@ -869,7 +859,7 @@ describe('handleOrchestratorEvent — stage rail single-paint invariant', () => 
     // No stageTracker assigned.
     const source: SourceState = freshSourceState('__main__');
 
-    handleOrchestratorEvent(toolStart('tu-1'), source, ctx, new Map());
+    handleOrchestratorEvent(toolStart('tu-1'), source, ctx);
 
     expect(setOverlay).toHaveBeenCalledTimes(1);
   });
@@ -897,8 +887,7 @@ describe('handleOrchestratorEvent — per-phase interleaved thinking (TTY)', () 
     const ctx = makeCtx(toolLane, { isTTY: true, compositor });
     ctx.thinkingMode = 'live';
     const source: SourceState = freshSourceState('__main__');
-    const lastProgress = new Map();
-    const fire = (e: OutputEvent) => handleOrchestratorEvent(e, source, ctx, lastProgress);
+    const fire = (e: OutputEvent) => handleOrchestratorEvent(e, source, ctx);
 
     // think_A → T1 → think_B → T2  (each phase sealed at the NEXT tool boundary)
     fire(thinkingEvent('reasoning that leads to the first tool call'));
@@ -934,7 +923,7 @@ describe('handleOrchestratorEvent — per-phase interleaved thinking (TTY)', () 
     const ctx = makeCtx(new ToolLane(), { isTTY: true, compositor });
     ctx.thinkingMode = 'off';
     const source: SourceState = freshSourceState('__main__');
-    const fire = (e: OutputEvent) => handleOrchestratorEvent(e, source, ctx, new Map());
+    const fire = (e: OutputEvent) => handleOrchestratorEvent(e, source, ctx);
 
     fire(thinkingEvent('reasoning that should be dropped'));
     fire(toolStartEvent('tu_1'));
@@ -984,8 +973,7 @@ describe('handleOrchestratorEvent — progress arm (duplicate banner regression)
 
     const ctx = makeCtx(new ToolLane(), { isTTY: true, compositor });
     const source: SourceState = freshSourceState('__main__');
-    const lastProgress = new Map();
-    const fire = (e: OutputEvent) => handleOrchestratorEvent(e, source, ctx, lastProgress);
+    const fire = (e: OutputEvent) => handleOrchestratorEvent(e, source, ctx);
 
     // Stale entry from a first runTurn, then a fresh taskId from a second
     // runTurn replaying through the same renderer.
@@ -993,9 +981,9 @@ describe('handleOrchestratorEvent — progress arm (duplicate banner regression)
     fire(progressEvent('task-2-live', 'Iteration 15: used memory_update'));
 
     // Invariant: at most one entry. The second taskId evicts the first.
-    expect(lastProgress.size).toBe(1);
-    expect(lastProgress.has('task-2-live')).toBe(true);
-    expect(lastProgress.has('task-1-stale')).toBe(false);
+    expect(ctx.lastProgressByTask.size).toBe(1);
+    expect(ctx.lastProgressByTask.has('task-2-live')).toBe(true);
+    expect(ctx.lastProgressByTask.has('task-1-stale')).toBe(false);
 
     // The composed overlay renders one banner, not two: exactly one '◦' glyph
     // (one banner block) and only the live task's description survives.
