@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.8.1] - 2026-06-16
+
+### Fixed
+- correct prerelease version compare + debounce auto-update re-trigger (port afk-workshop#801) (7ec504b)
+
+### Changed
+- Merge pull request #177 from griffinwork40/afk-port/pr-801 (d249963)
+
 ## [4.8.0] - 2026-06-16
 
 ### Added
