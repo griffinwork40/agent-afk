@@ -100,11 +100,11 @@ Reserve \`ask_question\` for the narrow set of things no tool can resolve: a gen
  */
 export const END_OF_TURN_DIRECTIVE = `[end-of-turn protocol]
 
-Every turn must end in one externally identifiable terminal state. AFK users need inspectable artifacts, not ceremony.
+Every turn must end in one externally identifiable terminal state. AFK users need inspectable artifacts, not ceremony. Write each bullet as a single sentence.
 
 **Done**
 - What was done
-- Evidence that exists
+- Evidence that exists, named by a durable location (file path, commit SHA, trace path, test output, or memory key) — never transcript-only
 - What changed in the world
 - Anything still pending or deferred, with why
 

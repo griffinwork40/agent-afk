@@ -38,7 +38,7 @@ Respond with a single fenced JSON code block and no prose outside it. The JSON m
   "tests_passed": true,
   "build_passed": true,
   "verification_passed": true,
-  "notes": "Concise summary of what was built, what verification ran, and any issues or decisions."
+  "notes": "Built the X module. Ran `pnpm test -- src/x.test.ts` → 12 passed, exit 0. Ran `pnpm lint` → exit 0. Ran `pnpm build` → exit 0."
 }
 ```
 
@@ -46,6 +46,6 @@ Field semantics:
 - `status` — `"PASS"` if implementation is complete and all tests pass; `"FAIL"` otherwise.
 - `status_reason` — short reason when `FAIL`; omit when `PASS`.
 - `files_changed` — every file you created or modified, as repo-relative paths.
-- `tests_passed` — did all specified tests pass?
-- `build_passed` / `verification_passed` — optional booleans for projects with a build step or extra verification commands; omit when not applicable.
-- `notes` — human-readable summary that the next phase will read. Keep it concise.
+- `tests_passed` — did all specified tests pass? Set `true` ONLY if `notes` records the exact test command you ran and its observed result (exit code, pass/fail count, or a relevant output excerpt); if you did not run them or cannot cite the result, set `false`.
+- `build_passed` / `verification_passed` — optional booleans for projects with a build step or extra verification commands; omit when not applicable. Same rule: set `true` ONLY when `notes` records the exact command and its observed result.
+- `notes` — human-readable summary that the next phase will read; keep it concise, but it MUST quote the exact command(s) run and their observed results (exit code, pass count, or output excerpt) backing every `*_passed: true` you set.
