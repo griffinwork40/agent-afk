@@ -23,6 +23,7 @@ import type {
   ProviderCompleteArgs,
 } from '../../provider.js';
 import type { HookRegistry } from '../../hooks.js';
+import { resolveSessionHookRegistry } from '../../hooks.js';
 import type { SubagentExecutor } from '../../tools/subagent-executor.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import type { ComposeExecutor } from '../../tools/compose-executor.js';
@@ -350,14 +351,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
       // Constraint (semantic invariant): MCP schemas appended AFTER builtins
       // so builtin tool names always take precedence in any overlap.
       schemas: [...baseSchemas, ...mcpSchemas],
+      // Session hook registry via the one canonical resolver (query-scoped
+      // config registry wins over any constructor-provided one). Mirrors
+      // AnthropicDirectProvider; the required key on the dispatcher options
+      // makes a silent drop (c6892c6) a compile error.
+      hookRegistry: resolveSessionHookRegistry(opts.hookRegistry, this.providerOpts.hookRegistry),
     };
-    // Prefer the session-scoped registry from the query config (production
-    // path); fall back to any constructor-provided registry. Without this the
-    // plan-mode gate (the sole built-in PreToolUse hook) never reached the
-    // dispatcher and write tools ran unblocked in plan mode.
-    const effectiveHookRegistry = opts.hookRegistry ?? this.providerOpts.hookRegistry;
-    if (effectiveHookRegistry !== undefined)
-      dispatcherOpts.hookRegistry = effectiveHookRegistry;
     // Union live MCP wire-names into the (statically-snapshotted) allowlist so
     // OAuth servers whose tools were discovered after construction are not
     // rejected by the gate while present in `schemas`/`handlers`. No-op when no

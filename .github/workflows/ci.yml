@@ -52,6 +52,9 @@ jobs:
       - name: Audit env-registry docs (docs/env-registry.{json,md} in sync with src/config/env.ts)
         run: pnpm scan:env:check
 
+      - name: Audit SDK dependency surface (no unlocked @anthropic-ai/sdk imports)
+        run: pnpm audit:sdk:check
+
       - name: Build
         run: pnpm build
 

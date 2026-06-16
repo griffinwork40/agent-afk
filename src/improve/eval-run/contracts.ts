@@ -127,6 +127,9 @@ async function runRepeatLoopCircuitBreaker(): Promise<ContractProbeResult> {
   const dispatcher = new SessionToolDispatcher({
     handlers: new Map<string, ToolHandler>([[PROBE_TOOL, handler]]),
     schemas: [],
+    // Deliberately hook-less probe dispatcher — declared explicitly now that
+    // hookRegistry is a required key on the dispatcher options.
+    hookRegistry: undefined,
     permissions: { allowedTools: [PROBE_TOOL] },
   });
 

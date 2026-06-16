@@ -47,6 +47,7 @@ import { builtinToolSchemas, agentTool, skillTool, composeTool } from '../../too
 import { TOOL_SYSTEM_PROMPT_BASE, SLASH_COMMAND_ROUTING_PROMPT, BASH_PASSTHROUGH_PROMPT, MEMORY_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT_READONLY } from '../../tools/system-prompt.js';
 import { withMcpToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
 import type { HookRegistry } from '../../hooks.js';
+import { resolveSessionHookRegistry } from '../../hooks.js';
 import type { SubagentExecutor } from '../../tools/subagent-executor.js';
 import { maxOutputTokensFor } from '../../model-limits.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
@@ -352,12 +353,11 @@ export class AnthropicDirectProvider implements ModelProvider {
       // Constraint (semantic invariant): MCP schemas appended AFTER builtins
       // so builtin tool names always take precedence in any overlap.
       schemas: [...this.schemas, ...mcpSchemas],
-      // Prefer the session-scoped registry from the query config (the
-      // production path — see the opts.hookRegistry doc above); fall back to
-      // any constructor-provided registry. Without this, the plan-mode gate
-      // (the sole built-in PreToolUse hook) never reached the dispatcher and
-      // write tools ran unblocked in plan mode.
-      hookRegistry: opts?.hookRegistry ?? this.hookRegistry,
+      // Session hook registry via the one canonical resolver (query-scoped
+      // config registry wins over any constructor-provided one). Without this
+      // the plan-mode gate (the sole built-in PreToolUse hook) never reached
+      // the dispatcher and write tools ran unblocked in plan mode (c6892c6).
+      hookRegistry: resolveSessionHookRegistry(opts?.hookRegistry, this.hookRegistry),
       // Union live MCP wire-names into the (statically-snapshotted) allowlist so
       // OAuth servers whose tools were discovered after construction are not
       // rejected by the gate while present in `schemas`/`handlers`. No-op when

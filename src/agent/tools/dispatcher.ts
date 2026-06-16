@@ -122,7 +122,14 @@ function partitionIntoBatches(
 export interface SessionToolDispatcherOptions {
   handlers: Map<string, ToolHandler>;
   schemas: AnthropicToolDef[];
-  hookRegistry?: HookRegistry;
+  /**
+   * Session hook registry. REQUIRED KEY (value-nullable): every dispatcher
+   * construction must explicitly thread the registry or `undefined`. When this
+   * was optional, provider code could silently drop `config.hookRegistry`,
+   * disabling the plan-mode write gate (c6892c6). Resolve via
+   * `resolveSessionHookRegistry` — never re-implement the precedence.
+   */
+  hookRegistry: HookRegistry | undefined;
   permissions?: ToolPermissionConfig;
   subagentExecutor?: SubagentExecutor;
   skillExecutor?: SkillExecutor;
