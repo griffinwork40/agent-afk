@@ -39,6 +39,7 @@
  */
 
 import { createHash } from 'crypto';
+import { appendFileSync } from 'fs';
 import { mkdir, open, writeFile } from 'fs/promises';
 import type { FileHandle } from 'fs/promises';
 import { join } from 'path';
@@ -96,6 +97,40 @@ export interface NdjsonTraceWriterOptions {
  *     opens the file. This avoids cluttering `~/.afk/state/witness/`
  *     with empty directories for sessions that never emit.
  */
+// ---------------------------------------------------------------------------
+// Synchronous process-exit seal backstop.
+//
+// History: witness traces were frequently left UNSEALED (no `session_sealed`
+// record) whenever the process exited WITHOUT running `AgentSession.close()` —
+// an uncaught exception mid-turn, an early stdin-EOF that raced the REPL's
+// readline 'close' handler before it attached, or a `process.exit()` that
+// bypassed cleanup. A reader cannot distinguish such an orphaned trace from a
+// still-live session, so failures masquerade as "still running" or are simply
+// lost. See docs analysis 2026-06-16 (sibling of the SIGHUP fix).
+//
+// `seal()` is async (appendFile + fsync) and so cannot run from a
+// `process.on('exit')` handler, which must be synchronous. Instead each live
+// NdjsonTraceWriter registers itself here (on first file open) and a single
+// shared exit handler synchronously appends a terminal `session_sealed`
+// record for any writer that emitted events but never sealed. Node fires
+// 'exit' on uncaught exceptions (empirically verified), explicit
+// `process.exit()`, and normal event-loop drain — i.e. every *catchable*
+// termination. SIGKILL is uncatchable and a trace killed that way stays
+// genuinely unsealed (nothing in-process can help).
+// ---------------------------------------------------------------------------
+const liveTraceWriters = new Set<NdjsonTraceWriter>();
+let exitBackstopInstalled = false;
+
+function ensureExitBackstop(): void {
+  if (exitBackstopInstalled) return;
+  exitBackstopInstalled = true;
+  process.on('exit', () => {
+    for (const w of liveTraceWriters) {
+      w.sealOnProcessExit();
+    }
+  });
+}
+
 export class NdjsonTraceWriter implements TraceWriter {
   private readonly traceDir: string;
   private readonly tracePath: string;
@@ -184,13 +219,62 @@ export class NdjsonTraceWriter implements TraceWriter {
     // even across processes (we only have one here, but defense in
     // depth is cheap).
     this.fh = await open(this.tracePath, 'a');
+    // Register with the process-exit backstop now that a real on-disk file
+    // exists: if the process dies before seal() runs, the exit handler
+    // synchronously seals this trace instead of orphaning it.
+    liveTraceWriters.add(this);
+    ensureExitBackstop();
   }
 
   private async closeHandle(): Promise<void> {
+    // De-register from the exit backstop first: a closed/sealed writer must
+    // not be touched by the synchronous exit handler.
+    liveTraceWriters.delete(this);
     if (!this.fh) return;
     const fh = this.fh;
     this.fh = null;
     await fh.close();
+  }
+
+  /**
+   * Synchronous terminal seal for the process-exit backstop — see the
+   * module-level comment above the class. Appends a `session_sealed`
+   * record with `status: 'failed'` and `incomplete: true` iff this writer
+   * emitted at least one event but never sealed. No-op once sealed (the
+   * normal `seal()` already ran) or when nothing was written (no orphaned
+   * file to seal). Runs inside a `process.on('exit')` handler, so it MUST
+   * be fully synchronous and MUST NOT throw.
+   */
+  sealOnProcessExit(): void {
+    if (this.sealed || this.seq === 0) return;
+    this.sealed = true;
+    liveTraceWriters.delete(this);
+    try {
+      const persisted: TraceEvent = {
+        ts: new Date().toISOString(),
+        seq: this.seq++,
+        kind: 'session_sealed',
+        payload: {
+          status: 'failed',
+          finalCostUsd: 0,
+          finalTurnCount: 0,
+          closedAt: new Date().toISOString(),
+          incomplete: true,
+        },
+      };
+      // Synchronous append: the async `fh`/queue cannot be awaited from an
+      // exit handler. O_APPEND keeps this ordered even though the async file
+      // handle may still be open — the OS closes it as the process dies.
+      appendFileSync(this.tracePath, `${JSON.stringify(persisted)}\n`);
+    } catch {
+      /* exit handler: swallow — a broken seal must never block process exit */
+    }
+    // Release the async handle. At a real process exit the OS reclaims it
+    // anyway; doing it here keeps a directly-invoked call (and tests) from
+    // leaking a FileHandle to GC. Fire-and-forget — cannot await in 'exit'.
+    const fh = this.fh;
+    this.fh = null;
+    if (fh) void fh.close().catch(() => {});
   }
 
   private async appendLine(event: TraceEvent): Promise<void> {
