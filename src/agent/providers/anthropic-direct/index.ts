@@ -300,6 +300,16 @@ export class AnthropicDirectProvider implements ModelProvider {
        * `get_runtime_state` against a dispatcher built without a source.
        */
       runtimeStateSource?: RuntimeStateSource;
+      /**
+       * Session-scoped hook registry sourced from `AgentConfig.hookRegistry`.
+       * Threaded here so `PreToolUse`/`PostToolUse` hooks (notably the
+       * plan-mode gate) fire on the per-query dispatcher. Production entry
+       * points construct the provider WITHOUT a constructor-time
+       * `hookRegistry` and supply the session registry on the query config
+       * instead, so falling back to `this.hookRegistry` when this is unset
+       * preserves any constructor-provided registry.
+       */
+      hookRegistry?: import('../../hooks.js').HookRegistry;
     },
   ): SessionToolDispatcher {
     const handlers = createBuiltinHandlers(permissionMode, opts?.cwd);
@@ -342,7 +352,12 @@ export class AnthropicDirectProvider implements ModelProvider {
       // Constraint (semantic invariant): MCP schemas appended AFTER builtins
       // so builtin tool names always take precedence in any overlap.
       schemas: [...this.schemas, ...mcpSchemas],
-      hookRegistry: this.hookRegistry,
+      // Prefer the session-scoped registry from the query config (the
+      // production path — see the opts.hookRegistry doc above); fall back to
+      // any constructor-provided registry. Without this, the plan-mode gate
+      // (the sole built-in PreToolUse hook) never reached the dispatcher and
+      // write tools ran unblocked in plan mode.
+      hookRegistry: opts?.hookRegistry ?? this.hookRegistry,
       // Union live MCP wire-names into the (statically-snapshotted) allowlist so
       // OAuth servers whose tools were discovered after construction are not
       // rejected by the gate while present in `schemas`/`handlers`. No-op when
@@ -632,6 +647,7 @@ export class AnthropicDirectProvider implements ModelProvider {
           parentSessionId: config.parentSessionId,
           traceWriter: config.traceWriter,
           runtimeStateSource,
+          hookRegistry: config.hookRegistry,
         });
 
     // External-dispatcher branch: the caller owns routing for whatever tools
@@ -839,6 +855,7 @@ export class AnthropicDirectProvider implements ModelProvider {
             parentSessionId: config.parentSessionId,
             traceWriter: config.traceWriter,
             runtimeStateSource,
+            hookRegistry: config.hookRegistry,
           });
           return { userSystem: newUserSystem, dispatcher: newDispatcher };
         };

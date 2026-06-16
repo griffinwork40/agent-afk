@@ -22,7 +22,8 @@ import {
 import { OpenAICompatibleProvider } from './index.js';
 import type { OpenAIChunk } from './translate.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
-import { createHookRegistry } from '../../hooks.js';
+import { createHookRegistry, type HookRegistry } from '../../hooks.js';
+import { createPlanModeGate } from '../../plan-mode-gate.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import type { ToolHandler } from '../../tools/types.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../anthropic-direct/plan-mode-addendum.js';
@@ -311,6 +312,105 @@ describe('OpenAICompatibleProvider — readOnlyMemory option', () => {
     if (out?.type === 'tool.output') {
       expect(out.isError).toBe(true);
       expect(out.content).toMatch(/unknown tool|not permitted|not allowed|permission|allowlist/i);
+    }
+  });
+});
+
+describe('OpenAICompatibleProvider — plan-mode gate via config.hookRegistry', () => {
+  // Mirrors the anthropic-direct gate-wiring regression: a provider built
+  // WITHOUT a constructor-time hookRegistry (production shape) must still
+  // honor the plan-mode gate when the session registry arrives on the query
+  // config. Before the fix, `config.hookRegistry` was dropped on the internal
+  // dispatcher path and write tools ran unblocked in plan mode.
+  const EDIT_FILE_ARGS = JSON.stringify({
+    file_path: '/tmp/afk-openai-plan-gate-nonexistent.txt',
+    old_string: 'a',
+    new_string: 'b',
+  });
+
+  function scriptEditFileThenDone(): void {
+    installScriptedClient();
+    scriptedTurns = [
+      {
+        chunks: [
+          {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'call_edit',
+                      type: 'function',
+                      function: { name: 'edit_file', arguments: EDIT_FILE_ARGS },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+            usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
+          },
+        ],
+      },
+      {
+        chunks: [
+          {
+            choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+          },
+        ],
+      },
+    ];
+  }
+
+  function planGateRegistry(mode: 'plan' | 'default'): HookRegistry {
+    const registry = createHookRegistry();
+    registry.register('PreToolUse', createPlanModeGate(() => mode));
+    return registry;
+  }
+
+  it('BLOCKS edit_file for a top-level session in plan mode', async () => {
+    scriptEditFileThenDone();
+    const provider = new OpenAICompatibleProvider({
+      permissions: { allowedTools: ['edit_file'] },
+    });
+    const q = provider.query({
+      prompt: singleInput('edit the file'),
+      config: baseConfig({ permissionMode: 'plan', hookRegistry: planGateRegistry('plan') }),
+    });
+    const events = await collect(q);
+
+    const out = events.find((e) => e.type === 'tool.output');
+    expect(out?.type).toBe('tool.output');
+    if (out?.type === 'tool.output') {
+      expect(out.isError).toBe(true);
+      expect(out.content).toContain('plan mode');
+    }
+  });
+
+  it('does NOT block edit_file for a forked subagent in plan mode (parentSessionId self-skip)', async () => {
+    scriptEditFileThenDone();
+    const provider = new OpenAICompatibleProvider({
+      permissions: { allowedTools: ['edit_file'] },
+    });
+    const q = provider.query({
+      prompt: singleInput('edit the file'),
+      config: baseConfig({
+        permissionMode: 'plan',
+        parentSessionId: 'parent-session-123',
+        hookRegistry: planGateRegistry('plan'),
+      }),
+    });
+    const events = await collect(q);
+
+    const out = events.find((e) => e.type === 'tool.output');
+    expect(out?.type).toBe('tool.output');
+    if (out?.type === 'tool.output') {
+      expect(out.content).not.toContain('plan mode');
+      expect(out.content).not.toContain('blocked by PreToolUse hook');
     }
   });
 });

@@ -205,6 +205,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
           runtimeStateSource,
           ...(config.isSkillDispatch ? { isSkillDispatch: true } : {}),
           ...(config.isNonInteractive ? { isNonInteractive: true } : {}),
+          ...(config.hookRegistry !== undefined ? { hookRegistry: config.hookRegistry } : {}),
         });
 
     const buildOpts: {
@@ -297,6 +298,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
        * toolDefs filter in AnthropicDirectProvider.
        */
       isNonInteractive?: boolean;
+      /**
+       * Session-scoped hook registry from `AgentConfig.hookRegistry`. Threaded
+       * here so `PreToolUse`/`PostToolUse` hooks (notably the plan-mode gate)
+       * fire on the per-query dispatcher. Falls back to the constructor-time
+       * `providerOpts.hookRegistry` when unset. Mirrors AnthropicDirectProvider.
+       */
+      hookRegistry?: import('../../hooks.js').HookRegistry;
     },
   ): SessionToolDispatcher {
     const handlers = createBuiltinHandlers(permissionMode, opts.cwd);
@@ -343,8 +351,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
       // so builtin tool names always take precedence in any overlap.
       schemas: [...baseSchemas, ...mcpSchemas],
     };
-    if (this.providerOpts.hookRegistry !== undefined)
-      dispatcherOpts.hookRegistry = this.providerOpts.hookRegistry;
+    // Prefer the session-scoped registry from the query config (production
+    // path); fall back to any constructor-provided registry. Without this the
+    // plan-mode gate (the sole built-in PreToolUse hook) never reached the
+    // dispatcher and write tools ran unblocked in plan mode.
+    const effectiveHookRegistry = opts.hookRegistry ?? this.providerOpts.hookRegistry;
+    if (effectiveHookRegistry !== undefined)
+      dispatcherOpts.hookRegistry = effectiveHookRegistry;
     // Union live MCP wire-names into the (statically-snapshotted) allowlist so
     // OAuth servers whose tools were discovered after construction are not
     // rejected by the gate while present in `schemas`/`handlers`. No-op when no
