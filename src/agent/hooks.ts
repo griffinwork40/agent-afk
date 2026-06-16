@@ -179,3 +179,22 @@ export interface HookRegistry {
 export function createHookRegistry(): HookRegistry {
   return createHookRegistryImpl();
 }
+
+/**
+ * Resolve the hook registry a provider threads into its per-query dispatcher.
+ * Precedence: the query-scoped session registry (`AgentConfig.hookRegistry`,
+ * supplied per `provider.query({ config })` — the production path) wins over a
+ * constructor-time registry (legacy / test convenience). `undefined` only when
+ * neither is set.
+ *
+ * Single canonical merge point for every provider — do not re-implement the
+ * precedence inline. `SessionToolDispatcherOptions.hookRegistry` is a required
+ * key, so building a dispatcher without threading this result is a compile
+ * error (the c6892c6 plan-mode write-gate regression, made structural).
+ */
+export function resolveSessionHookRegistry(
+  queryScoped: HookRegistry | undefined,
+  constructorScoped: HookRegistry | undefined,
+): HookRegistry | undefined {
+  return queryScoped ?? constructorScoped;
+}
