@@ -8,13 +8,13 @@ How `agent-afk` is put together. Reference for contributors and anyone embedding
 |------|---------|
 | `src/agent/` | Provider-agnostic session harness. `AgentSession` is the single runtime entry point; delegates to a `ModelProvider` from `providerForModel()`. |
 | `src/agent/providers/anthropic-direct/` | Wraps `@anthropic-ai/sdk` Messages API. Default for `claude-*`, `opus`, `sonnet`, `haiku`. `'anthropic'` is a silent alias. |
-| `src/agent/providers/openai-codex.ts` | Wraps `@openai/codex-sdk` for `gpt-*`, `o1*`, `o3*`, `o4*`, `codex-*`. |
+| `src/agent/providers/openai-compatible/` | Talks directly to OpenAI's Chat Completions API (and any compatible endpoint via `baseURL`). Default for `gpt-*`, `o1*`, `o3*`, `o4*`, `codex-*`, and HuggingFace-style `org/model` ids served by local OpenAI-shim runners. `'openai-codex'` is a deprecated alias. |
 | `src/cli/` | Commander-based terminal surface. Commands in `src/cli/commands/`. REPL: `commands/interactive/` (bootstrap → loop → turn → markdown stream → cleanup). Slash commands in `src/cli/slash/` via Levenshtein-hint dispatcher. |
 | `src/telegram/` | Telegraf bot, per-chat session management, allowlist via `AFK_TELEGRAM_ALLOWED_CHAT_IDS`. |
 | `src/skills/` | Headless mirrors of plugin orchestration skills. Each has `prompts/` (markdown) loaded by `src/skills/_lib/prompt-loader.ts`. |
 | `src/skills/_agents/` | Vendored agent definitions. Drift detection: `vendored.test.ts`. |
 
-Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/session/stream-consumer.ts`. **Nothing outside `src/agent/providers/` imports from any model SDK directly.**
+Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/session/stream-consumer.ts`. **No model SDK is imported for runtime use outside `src/agent/providers/`** — the rest of the tree imports only the SDK's `ContentBlockParam` *type*, with one legacy runtime `Anthropic` import in `src/cli/interactive.ts` as a known exception.
 
 ## Cross-cutting subsystems
 
@@ -26,7 +26,7 @@ Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/s
 
 ## Skills & subagents
 
-`agent-afk` ships four built-in subagent orchestrators. These are **built-in skills** exposed through the slash registry: typing `/mint add dark mode` in the REPL parses the slash form, resolves it to a TypeScript handler under `src/skills/<name>/index.ts`, and dispatches a fresh subagent via `SubagentManager.forkSubagent()`. Every dispatch is logged to `~/.afk/agent-framework/routing-decisions.jsonl`.
+`agent-afk` ships six built-in skills exposed through the slash registry: typing `/mint add dark mode` in the REPL parses the slash form, resolves it to a TypeScript handler under `src/skills/<name>/index.ts`, and dispatches a fresh subagent via `SubagentManager.forkSubagent()`. Every dispatch is logged to `~/.afk/agent-framework/routing-decisions.jsonl`.
 
 The canonical list lives in `src/skills/all.ts`:
 
@@ -34,8 +34,10 @@ The canonical list lives in `src/skills/all.ts`:
 |---|---|
 | `/mint` | End-to-end feature/refactor pipeline: spec → research → plan → parallelize → build → verify → heal → ship |
 | `/diagnose` | Parallel hypothesis generation + validation for bugs and failing tests |
-| `/forge` | Generate new skills autonomously, gated by capability evaluations (Pro feature) |
 | `/audit-fit` | Audit `~/.afk` artifacts (skills, commands, agents, hooks) for correct type categorization |
+| `/get-started` | Guided first-run onboarding for AFK |
+| `/service-setup` | Install an AFK background process (telegram bot / daemon) as a macOS LaunchAgent |
+| `/telegram-setup` | First-time Telegram bot onboarding |
 
 Skills surface in two shapes:
 
@@ -50,13 +52,12 @@ All AFK state under `~/.afk/` (never `~/.claude/`):
 
 ```
 ~/.afk/
-  config/    afk.env, afk.config.json
+  config/    afk.env, afk.config.json, mcp.json, settings.json (shell-hook trust gate, etc.)
   state/     sessions/  todos/  transcripts/  daemon/   ($AFK_STATE_DIR overrides this tier)
   plugins/   logs/  cache/
-  agents/    user-defined subagents (SDK)
-  commands/  user-defined slash commands (SDK)
-  skills/    user-defined skills (SDK)
-  settings.json    SDK settings (model, permissions, MCP, etc.)
+  agents/    user-defined subagents
+  commands/  user-defined slash commands
+  skills/    user-defined skills
   agent-framework/   AFK telemetry + briefs (via paths.ts)
 ```
 
@@ -129,25 +130,18 @@ This is intentional — `agent-afk` is built for unattended work, where a permis
 
 ### Default allowed tools
 
-From `src/agent/session/query-options.ts`:
+Sub-agents inherit a default allowlist defined in `src/agent/tools/nesting.ts` as `CHILD_ALLOWED_TOOLS`:
 
 ```typescript
-[
-  'Bash',
-  'Read',
-  'Write',
-  'Edit',
-  'Glob',
-  'Grep',
-  'WebSearch',
-  'WebFetch',
-  'LS',
-  'Task',
-  'BashOutput',
-]
+// src/agent/tools/nesting.ts
+export const CHILD_ALLOWED_TOOLS = [
+  ...BUILTIN_TOOL_NAMES,    // bash, read_file, write_file, edit_file, glob, grep, web_scrape, …
+  ...AWARENESS_TOOL_NAMES,  // get_runtime_state, …
+  'memory_search', 'agent', 'skill',
+];
 ```
 
-Override per-session by passing `config.tools.allowedTools` to `AgentSession`, or disable individual tools via `config.tools.disallowedTools`.
+A read-only skill's forked child uses the tighter `RECON_ALLOWED_TOOLS` instead (no `write_file`/`edit_file`; `bash` admitted only behind the mutating-command guard). Override per-session by passing `config.tools.allowedTools` to `AgentSession`, or disable individual tools via `config.tools.disallowedTools`.
 
 ## `AgentSession` API
 

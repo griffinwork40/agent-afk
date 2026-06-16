@@ -149,7 +149,7 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'AFK_MAX_BUDGET_USD',
-    description: 'Per-turn USD budget ceiling. Aborts the turn when projected spend would exceed this.',
+    description: 'Cumulative USD budget ceiling for the session. Aborts the turn when the running cost crosses this.',
     type: 'number',
     required: false,
     default: '5.00',

@@ -59,8 +59,8 @@ agent tool refuses anything outside the **agent** tier and tells you the exact
 
 | Tier | Who can set it | Keys |
 |------|----------------|------|
-| **Agent** | agent tool **and** CLI | Non-secret behavioural settings: `model`, `models.{small,medium,large}`, `maxTokens`, `temperature`, `autoRouting.*`, `telegram.notify.*`, `interactive.worktreeAutoname`, `interactive.suggestGhost`, `updatePolicy`, `autoResumeOnUsageLimit`, `bgSummaries`, `maxSummaryCallsPerSession`; and any non-secret `AFK_*` env var. |
-| **Human** | CLI only — agent refused | Credentials (all secret env vars: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `EXA_API_KEY`, …) and safety/identity config: `systemPrompt`, `enableShellHooks`, `interactive.worktreeBranchPrefix`, `interactive.worktreeBase`, `daemon.task`, `daemon.taskId`. |
+| **Agent** | agent tool **and** CLI | Non-secret behavioural settings: `model`, `models.{local,small,medium,large}`, `maxTokens`, `temperature`, `autoRouting.*`, `interactive.worktreeAutoname`, `interactive.suggestGhost`, `autoResumeOnUsageLimit`, `bgSummaries`, `maxSummaryCallsPerSession`; and any non-secret `AFK_*` env var. |
+| **Human** | CLI only — agent refused | Credentials (all secret env vars: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `EXA_API_KEY`, …) and safety/identity config: `systemPrompt`, `enableShellHooks`, `telegram.notify.*` (notification-redirect vector), `updatePolicy` (auto self-update is scope-widening), `interactive.worktreeBranchPrefix`, `interactive.worktreeBase`, `daemon.task`, `daemon.taskId`. |
 | **Never** | nobody (via these surfaces) | Inherited/process env (`PATH`, `HOME`, `SHELL`, `NODE_ENV`, …), unknown keys, `mcp.json`, and `~/.afk/state`. |
 
 Why credentials and `systemPrompt`/`enableShellHooks` are human-only: an agent

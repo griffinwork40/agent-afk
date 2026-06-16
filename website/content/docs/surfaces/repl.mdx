@@ -68,14 +68,15 @@ Type `/` in the REPL to see available commands. Typos are caught automatically �
 
 ### Background tasks
 
-Press **Ctrl+B** to detach the current turn into a tracked background task. The status bar at
-the bottom of the REPL shows running task counts.
+Press **Ctrl+B** to background a running foreground subagent (there is no whole-turn detach). The
+status bar at the bottom of the REPL shows running background-subagent counts.
 
 | Command | Description |
 |---|---|
-| `/bg` | List backgrounded tasks |
-| `/tasks` | Show running/queued tasks with status |
-| `/attach <id>` | Re-attach to a backgrounded task |
+| `/bgsub` | List background subagent jobs |
+| `/bgsub:status` | Show status of background subagent jobs |
+| `/bgsub:join <id>` | Wait for and inject a background subagent's result |
+| `/bgsub:cancel <id>` | Cancel a running background subagent job |
 
 ### Built-in skills
 
@@ -83,6 +84,9 @@ the bottom of the REPL shows running task counts.
 |---|---|
 | `/mint <idea>` | End-to-end feature pipeline: spec → build → verify → ship |
 | `/diagnose <bug>` | Parallel root-cause analysis for bugs and failing tests |
+| `/get-started` | Guided first-run onboarding for AFK |
+| `/service-setup` | Install an AFK background process as a macOS LaunchAgent |
+| `/telegram-setup` | First-time Telegram bot onboarding |
 
 <Callout type="info">
 Maintainer-loop skills (`/forge`, `/audit-fit`) are hidden by default. Set `AFK_INTERNAL=1`

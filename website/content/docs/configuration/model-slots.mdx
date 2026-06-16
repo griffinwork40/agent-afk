@@ -1,10 +1,10 @@
 ---
 title: "Model Slots"
-description: "Bind capability tiers (small / medium / large) to specific models and providers, including per-slot API keys and endpoints for mixing Anthropic with local shims or hosted OpenAI."
+description: "Bind capability tiers (local / small / medium / large) to specific models and providers, including per-slot API keys and endpoints for mixing Anthropic with local shims or hosted OpenAI."
 ---
 
-Model slots let you assign specific models to three fixed **capability tiers**
-— `small`, `medium`, and `large`. The three tiers — small, medium, large — are fixed labels (cheapest → most capable). Bind any model to each one; skills and subagents pick the right tier automatically.
+Model slots let you assign specific models to four fixed **capability tiers**
+— `local`, `small`, `medium`, and `large` (cheapest → most capable). They're fixed labels; bind any model to each one and skills and subagents pick the right tier automatically. The `local` tier is **unset by default** — configure it to point at a local OpenAI-compatible shim (Ollama, LM Studio, MLX, vLLM).
 
 This means you can mix providers per tier: Anthropic on one tier, a local
 OpenAI-compatible shim on another, and hosted OpenAI on a third — all in the
@@ -16,6 +16,7 @@ An unconfigured install uses these defaults:
 
 | Tier | Default model ID | Legacy aliases |
 |------|-----------------|----------------|
+| `local` | _(unset — configure via `AFK_MODEL_LOCAL`)_ | — |
 | `small` | `claude-haiku-4-5-20251001` | `haiku` |
 | `medium` | `claude-sonnet-4-6` | `sonnet`, `sonnet_1m` |
 | `large` | `claude-opus-4-8` | `opus`, `opus_1m` |
@@ -26,7 +27,7 @@ If you never touch slots, behavior is identical to before this feature existed.
 
 Each slot accepts a bare model ID string, or an object with optional per-slot
 provider credentials. The full object shape (`ModelSlotConfigEntry`, source:
-`src/cli/config.ts:201`) is:
+`src/cli/config.ts:229`) is:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -124,7 +125,7 @@ Each tier's credentials are applied automatically — an Anthropic key can't lea
 
 ## What you can mix in the same process
 
-- All three tiers on Anthropic (unchanged default behavior).
+- All bound tiers on Anthropic — `small`/`medium`/`large` by default; `local` is unset until you configure it (unchanged default behavior).
 - Each tier on a different provider, endpoint, and key — e.g. Anthropic on
   large, a local MLX shim on small, hosted OpenAI on medium.
 - Per-tier credentials via `afk.config.json` or `AFK_MODEL_*` env vars.
