@@ -402,6 +402,44 @@ describe('StatusLine resize handling', () => {
     status.stop();
   });
 
+  it('clears the PRE-resize row, not a mid-window repaint row, when a repaint lands between resize and debounce', () => {
+    // Race that preResizePaintedRow guards: a repaint() (e.g. a streaming token)
+    // arrives in the 150ms debounce window AFTER SIGWINCH but BEFORE the
+    // debounced onResize(). The mid-window repaint mutates lastPaintedRow to the
+    // NEW row; without the immediate-channel snapshot, onResize() would read that
+    // new row, decide old===new, and skip the stale-row clear — leaving a ghost.
+    vi.useFakeTimers();
+    const stream = mockStream({ isTTY: true, rows: 24 });
+    const status = new StatusLine({
+      stream: stream as unknown as NodeJS.WriteStream,
+      throttleMs: 0,
+    });
+    status.start();
+    // Paint at rows=24 → lastPaintedRow = 24.
+    status.repaint({ model: 'sonnet' });
+    stream.writes.length = 0;
+
+    // SIGWINCH → grow to 30. The IMMEDIATE channel snapshots preResizePaintedRow=24
+    // and nulls lastPaintedRow, synchronously, before the debounced onResize().
+    stream.rows = 30;
+    process.stdout.emit('resize');
+
+    // Mid-window repaint lands before the debounce: paints at row 30 and sets
+    // lastPaintedRow = 30 (the value that would corrupt the old-row reference).
+    status.repaint({ model: 'opus' });
+
+    // Flush the debounced channel → onResize() fires.
+    vi.advanceTimersByTime(150);
+
+    const out = lastJoined(stream);
+    // onResize() must clear the TRUE pre-resize row (24), NOT the mid-window row.
+    expect(out).toContain('\x1b[24;1H');
+    expect(out).toContain('\x1b[2K');
+    // New scroll region for the 30-row terminal is armed.
+    expect(out).toContain('\x1b[1;29r');
+    status.stop();
+  });
+
   it('does not emit an invalid 1;0 scroll region when the terminal has one row', () => {
     const stream = mockStream({ isTTY: true, rows: 1 });
     const status = new StatusLine({

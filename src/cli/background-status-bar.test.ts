@@ -654,4 +654,83 @@ describe('BackgroundStatusBar resize-immediate channel', () => {
     // rowHandler must not be called after stop.
     expect(rowHandler).not.toHaveBeenCalled();
   });
+
+  // -------------------------------------------------------------------------
+  // R4. On terminal EXPAND, the rows painted at the OLD start-row address are
+  //     erased on the recovery repaint, so they do not strand as a ghost stripe
+  //     (PR #174 review finding 2). The old address is snapshotted from the
+  //     STORED lastPaintStartRow — not recomputed from the new stream.rows.
+  // -------------------------------------------------------------------------
+  it('erases pre-resize rows at their old address on terminal expand', () => {
+    const mockStream = makeMockStream();
+    const registry = new FakeRegistry();
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
+      stream: mockStream,
+      throttleMs: 0,
+    });
+    bar.start();
+
+    // Paint 1 running job at rows=24 → startRow = max(1, 24 - 1 - 0) = 23.
+    registry.fireStarted(makeJob('j1'));
+    (mockStream.write as ReturnType<typeof vi.fn>).mockClear();
+
+    // Expand the terminal to 30 rows, then fire SIGWINCH. The immediate channel
+    // snapshots the OLD painted address (startRow 23, rowCount 1).
+    Object.defineProperty(mockStream, 'rows', { value: 30, configurable: true });
+    process.stdout.emit('resize');
+
+    // Debounced repaint: new startRow = max(1, 30 - 1 - 0) = 29. The recovery
+    // repaint must erase the stranded old row 23 BEFORE painting the new row 29.
+    __flushResizeBusForTests();
+
+    const writes = (mockStream.write as ReturnType<typeof vi.fn>).mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .join('');
+
+    // Old row 23 was addressed for erase.
+    expect(writes).toContain('\x1b[23;1H');
+    // New content painted at row 29.
+    expect(writes).toContain('\x1b[29;1H');
+    // The old-row erase precedes the new-row paint.
+    expect(writes.indexOf('\x1b[23;1H')).toBeLessThan(writes.indexOf('\x1b[29;1H'));
+
+    bar.stop();
+  });
+
+  // -------------------------------------------------------------------------
+  // R5. On terminal SHRINK, the old rows are now below the viewport; addressing
+  //     them would clamp onto the status-line row, so they are skipped. The bar
+  //     must NOT emit a cursor-move to the (now off-screen) old start-row.
+  // -------------------------------------------------------------------------
+  it('does not erase off-screen old rows on terminal shrink', () => {
+    const mockStream = makeMockStream();
+    Object.defineProperty(mockStream, 'rows', { value: 30, configurable: true });
+    const registry = new FakeRegistry();
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
+      stream: mockStream,
+      throttleMs: 0,
+    });
+    bar.start();
+
+    // Paint 1 running job at rows=30 → startRow = max(1, 30 - 1 - 0) = 29.
+    registry.fireStarted(makeJob('j1'));
+    (mockStream.write as ReturnType<typeof vi.fn>).mockClear();
+
+    // Shrink to 24 rows, then fire SIGWINCH. Old address (29) is now below the
+    // 24-row viewport and must be skipped (not clamped onto the status line).
+    Object.defineProperty(mockStream, 'rows', { value: 24, configurable: true });
+    process.stdout.emit('resize');
+    __flushResizeBusForTests();
+
+    const writes = (mockStream.write as ReturnType<typeof vi.fn>).mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .join('');
+
+    // The off-screen old row 29 must NOT be addressed.
+    expect(writes).not.toContain('\x1b[29;1H');
+    // New content paints at the new startRow = max(1, 24 - 1 - 0) = 23.
+    expect(writes).toContain('\x1b[23;1H');
+
+    bar.stop();
+  });
 });
