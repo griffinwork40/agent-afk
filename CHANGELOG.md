@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.7.1] - 2026-06-16
+
+### Fixed
+- seal provider-error turns as failed, not silent success (204dff1)
+
+### Changed
+- Merge pull request #167 from griffinwork40/fix/seal-provider-error-as-failed (6e371f5)
+
 ## [4.7.0] - 2026-06-16
 
 ### Added
