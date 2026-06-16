@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.8.3] - 2026-06-16
+
+### Fixed
+- exclude ask_question elicitation declines from tool-failure-density (bad0c6c)
+
+### Changed
+- Merge pull request #184 from griffinwork40/feat/improve-exclude-elicitation-declines (6ff4553)
+
 ## [4.8.2] - 2026-06-16
 
 ### Fixed
