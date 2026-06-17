@@ -80,8 +80,6 @@ const PINNED_HASHES = {
   // escape sequences that parseSkillMetadata (tool-injector.ts) renders
   // literally — replaced with a literal ≥ and unquoted terms so the
   // model-facing description is clean.
-  // BACK-PORT GAP: the same enhancement should land in the upstream example-plugin
-  // shadow-verify skill (drift test is skipped here — example-plugin not co-located).
   // Hash re-bumped during PR #187 review: the Merge section now enumerates the
   // new UNVERIFIED-COMPOSITION / UNVERIFIED-ECHO-CHAMBER verdict states — prose-
   // consistency fix only; no behavior change to the composition-axis guard.
