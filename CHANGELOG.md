@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.15.0] - 2026-06-17
+
+### Added
+- forward reasoning_effort for o-series models (#128) (#193) (467af9b)
+
 ## [4.14.0] - 2026-06-17
 
 ### Added
