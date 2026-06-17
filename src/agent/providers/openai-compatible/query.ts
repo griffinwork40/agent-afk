@@ -43,7 +43,7 @@ import type {
   ProviderUsage,
 } from '../../provider.js';
 import { sumProviderUsage } from '../../usage.js';
-import { contextLimitFor } from '../../model-limits.js';
+import { contextLimitFor, maxOutputTokensFor } from '../../model-limits.js';
 import { resolveModelId } from '../../session/model-resolution.js';
 import { collectSkillEntries } from '../../tools/skill-bridge.js';
 import { extractRawToolInput } from '../../facets/raw-input.js';
@@ -105,6 +105,41 @@ export type OpenAIClientFactory = (opts: {
 let clientFactory: OpenAIClientFactory | null = null;
 export function __setOpenAIClientFactory(factory: OpenAIClientFactory | null): void {
   clientFactory = factory;
+}
+
+/**
+ * Resolve the streaming output-token cap for the OpenAI API.
+ *
+ * Mirrors the o-series field-selection logic in `oneshot.ts:91–96`:
+ * o-series reasoning models (o1/o3/o4…) reject `max_tokens` and require
+ * `max_completion_tokens`; everything else (chat models, local shims)
+ * wants `max_tokens`.  Strips any `provider/` prefix (OpenRouter-style ids)
+ * before the regex check so `openai/o3` is treated the same as `o3`.
+ *
+ * Returns `undefined` when no cap is configured, so shims that reject the
+ * field simply don't see it on the wire.
+ */
+function resolveStreamingMaxTokens(
+  model: string,
+  configMaxOutput: number | undefined,
+): Record<string, number> | undefined {
+  // Strip any `provider/` prefix (OpenRouter-style ids) before the o-series
+  // regex — mirrors oneshot.ts:93.
+  const bareModel = model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model;
+  const isOSeries = /^o[0-9]/.test(bareModel);
+
+  // Resolve the effective cap: honour config.maxOutputTokens when finite+positive,
+  // otherwise fall back to the model's output ceiling (matching Anthropic's
+  // resolveMaxTokens).  Uses maxOutputTokensFor (output ceiling), not
+  // contextLimitFor (context window), because the cap bounds *output*, not
+  // the full context window.
+  const ceiling = maxOutputTokensFor(model);
+  const effectiveMax =
+    typeof configMaxOutput === 'number' && Number.isFinite(configMaxOutput) && configMaxOutput > 0
+      ? Math.floor(configMaxOutput)
+      : ceiling;
+
+  return isOSeries ? { max_completion_tokens: effectiveMax } : { max_tokens: effectiveMax };
 }
 
 /** Construction options. */
@@ -551,6 +586,18 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         input: req.input,
         stream: true,
       };
+      // Thread the output-token cap into the streaming request so callers can
+      // bound output length (parity with Anthropic's always-forwarded
+      // max_tokens).  Reuses the o-series field-selection logic from
+      // oneshot.ts:91–96.
+      const maxTokensField = resolveStreamingMaxTokens(
+        this.currentModel,
+        this.opts.config.maxOutputTokens,
+      );
+      if (maxTokensField !== undefined) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        Object.assign(requestBody, maxTokensField);
+      }
       // The private ChatGPT backend (subscription path) has two hard
       // requirements the public Responses API does not: a non-empty
       // `instructions`, and `store: false`. Scope both to that path so the
@@ -591,6 +638,18 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         stream: true,
         stream_options: { include_usage: true },
       };
+      // Thread the output-token cap into the streaming request so callers can
+      // bound output length (parity with Anthropic's always-forwarded
+      // max_tokens).  Reuses the o-series field-selection logic from
+      // oneshot.ts:91–96.
+      const maxTokensField = resolveStreamingMaxTokens(
+        this.currentModel,
+        this.opts.config.maxOutputTokens,
+      );
+      if (maxTokensField !== undefined) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        Object.assign(requestBody, maxTokensField);
+      }
       // Only attach `tools` when the dispatcher actually has any — empty
       // arrays make some providers reject the request.
       if (this.openAITools && this.openAITools.length > 0) {
