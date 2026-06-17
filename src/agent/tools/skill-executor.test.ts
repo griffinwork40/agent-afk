@@ -16,6 +16,14 @@ vi.mock('../auth/credential-resolver.js', () => ({
   loadOpenAICredential: vi.fn(() => undefined),
 }));
 
+// Mock writeSkillInvocation so the call-site wiring test can assert it was
+// called without performing real I/O (the guard would suppress writes under
+// vitest anyway, but mocking is cleaner for assertion purposes).
+const mockWriteSkillInvocation = vi.hoisted(() => vi.fn());
+vi.mock('../telemetry/skill-invocation-writer.js', () => ({
+  writeSkillInvocation: mockWriteSkillInvocation,
+}));
+
 import { SkillExecutor } from './skill-executor.js';
 import { registerSkill, _resetRegistry } from '../../skills/index.js';
 import { SubagentManager } from '../subagent.js';
@@ -2362,6 +2370,42 @@ describe('SkillExecutor', () => {
       expect(mockRunToResult).toHaveBeenCalledWith(
         'Run the plugin-no-args skill now, following the instructions in your system prompt.',
       );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // (d) skill-invocation-writer call-site wiring
+  // ---------------------------------------------------------------------------
+  describe('writeSkillInvocation wiring', () => {
+    beforeEach(() => {
+      mockWriteSkillInvocation.mockClear();
+    });
+
+    it('calls writeSkillInvocation once with correct skillName for an inline registry skill', async () => {
+      // mockWriteSkillInvocation is hoisted and mocked at file scope via
+      // vi.hoisted + vi.mock, so it is already in effect here.
+      const handler = vi.fn().mockResolvedValue('wired output');
+      registerSkill({
+        name: 'wired-skill',
+        description: 'Test wiring for writeSkillInvocation',
+        handler,
+      });
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'sess-wiring-test',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        cwd: '/tmp/test-cwd',
+      });
+
+      await executor.execute(makeCall({ name: 'wired-skill', arguments: 'test args' }));
+
+      expect(mockWriteSkillInvocation).toHaveBeenCalledOnce();
+      const callArg = mockWriteSkillInvocation.mock.calls[0][0] as { skillName: string };
+      expect(callArg.skillName).toBe('wired-skill');
     });
   });
 });
