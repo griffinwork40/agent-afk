@@ -32,7 +32,7 @@ function fakeCtx(): SlashContext {
       turnTokens: [],
       turns: [],
       model: 'sonnet',
-      planMode: false,
+      permissionMode: 'default',
     },
     out: {
       line: (t = '') => lines.push(t),

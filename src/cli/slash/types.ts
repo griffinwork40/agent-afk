@@ -9,6 +9,7 @@
 
 import type { SessionRef } from '../../agent/session-ref.js';
 import type { AgentModelInput } from '../../agent/types.js';
+import type { PermissionMode } from '../../agent/types/sdk-types.js';
 import type { TrustedSkillLedger } from '../trusted-skill-ledger.js';
 import type { ImageAttachment } from '../input/attachments.js';
 import type { ResolvedResumeTarget } from '../resume-session.js';
@@ -72,8 +73,15 @@ export interface SessionStats {
    * initial session may carry any string the SDK/proxy accepts.
    */
   model: AgentModelInput;
-  /** Plan-mode toggle — when true, session uses 'plan' PermissionMode. */
-  planMode: boolean;
+  /**
+   * Current REPL permission mode — the single source of truth the prompt
+   * marker, status line, and the plan/AFK gate getters all read. `'plan'`
+   * gates writes (plan mode); `'autonomous'` is AFK mode (the operator is away
+   * — autonomous work + Telegram reporting, with a high-risk gate); `'default'`
+   * is normal interactive operation. Mutually exclusive by construction (one
+   * field), which is why AFK is not a separate boolean alongside plan.
+   */
+  permissionMode: PermissionMode;
   /** SDK session ID once initialized. Populated from ResponseMetadata. */
   sessionId?: string;
   /**

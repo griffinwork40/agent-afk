@@ -10,6 +10,7 @@ import { createHookRegistry, type HookRegistry } from './hooks.js';
 import { shadowVerifyNudge } from './shadow-verify-nudge.js';
 import { MemoryStore, createMemorySessionEndHook } from './memory/index.js';
 import { createPlanModeGate } from './plan-mode-gate.js';
+import { createAfkModeGate } from './afk-mode-gate.js';
 import { cleanupComposeSpills } from './tools/compose-executor.js';
 import type { PermissionMode } from './types/sdk-types.js';
 import type { LoadedHooksConfig } from './hooks/config-loader.js';
@@ -40,6 +41,14 @@ export function createDefaultHookRegistry(
   const store = memoryStore ?? new MemoryStore();
   if (getPermissionMode !== undefined) {
     registry.register('PreToolUse', createPlanModeGate(getPermissionMode));
+    // AFK-mode safety ceiling. Reads the same mode getter; AFK ('autonomous')
+    // and plan are mutually exclusive permission modes, so at most one of the
+    // two gates ever fires for a given tool call. Unlike the plan gate, this
+    // one applies tree-wide (no subagent exemption) — see afk-mode-gate.ts.
+    registry.register(
+      'PreToolUse',
+      createAfkModeGate(getPermissionMode, agentOptions?.cwd),
+    );
   }
   registry.register('SessionEnd', createMemorySessionEndHook(store, surface));
   // Clean up compose-truncation spill files when the session ends. Files

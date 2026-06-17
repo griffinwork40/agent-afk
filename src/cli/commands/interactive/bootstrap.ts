@@ -527,7 +527,7 @@ export async function bootstrapSession(
     (info) => { completionWriter.fn(formatSubagentCompletion(info)); },
     'cli',
     sharedMemoryStore,
-    () => (stats.planMode ? 'plan' : 'default'),
+    () => stats.permissionMode,
     loadHooksConfig({ cwd: extras?.cwd }),
     { cwd: extras?.cwd },
   ).registry;

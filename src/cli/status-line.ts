@@ -12,6 +12,7 @@
  *   status.stop();   // before exit
  */
 
+import type { PermissionMode } from '../agent/types/sdk-types.js';
 import { truncateDisplayWidth, displayWidth } from './display.js';
 import { palette } from './palette.js';
 import { ResizeBus } from './terminal-size.js';
@@ -26,7 +27,12 @@ export interface StatusLineFields {
   contextLimit?: number;
   contextUsedTokens?: number;
   contextSparkline?: string;
-  planMode?: boolean;
+  /**
+   * Current REPL permission mode. Renders a never-dropped indicator: `● plan`
+   * (plan mode, warning tone) or `◐ AFK` (autonomous/AFK mode, info tone).
+   * `'default'` and other modes render no indicator.
+   */
+  permissionMode?: PermissionMode;
   /**
    * Effective working directory for the session. Rendered leftmost so that
    * right-edge truncation (which strips trailing parts first) preserves the
@@ -356,7 +362,11 @@ export class StatusLine {
     // it is emitted inline via completionWriter (see bootstrap.ts).
     parts.push({ text: palette.brand(f.model) }); // never drop
 
-    if (f.planMode) parts.push({ text: palette.warning('● plan') }); // never drop
+    if (f.permissionMode === 'plan') {
+      parts.push({ text: palette.warning('● plan') }); // never drop
+    } else if (f.permissionMode === 'autonomous') {
+      parts.push({ text: palette.info('◐ AFK') }); // never drop
+    }
 
     if (f.contextPct !== undefined) {
       const barOutput = formatContextBar({

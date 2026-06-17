@@ -298,9 +298,9 @@ export class SessionManager {
 
     // Map StoredSession → SessionStats.
     // Critical rename: stored.startedAt === SessionStats.sessionStartTime.
-    // Fields not persisted (turnCosts, turnTokens, planMode) are reconstructed
-    // as empty/default — they are runtime-only display helpers, not resumption
-    // data. The round-trip contract is: saveSession(hydrated) === the original
+    // Fields not persisted (turnCosts, turnTokens, permissionMode) are
+    // reconstructed as empty/default — they are runtime-only display helpers,
+    // not resumption data. The round-trip contract is: saveSession(hydrated) === the original
     // sidecar (modulo savedAt timestamp), so a post-hydration persist does NOT
     // fork a new file.
     const stats: SessionStats = {
@@ -318,7 +318,7 @@ export class SessionManager {
       // Runtime-only fields — reconstructed as empty defaults.
       turnCosts: [],
       turnTokens: [],
-      planMode: false,
+      permissionMode: 'default',
     };
     // Carry forward the per-chat cwd override if one was set via /cd.
     const chatCwd = this.sessionData.get(chatId)?.cwd;

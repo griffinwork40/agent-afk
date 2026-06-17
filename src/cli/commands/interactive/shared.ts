@@ -30,7 +30,7 @@ export type { ResumeSwapResult } from '../../slash/types.js';
  * consistently.
  *
  * Callers own any fields that are NOT derived from the stored payload
- * (e.g. `cwd`, `planMode`, `turnCosts`, `turnTokens` on initial bootstrap
+ * (e.g. `cwd`, `permissionMode`, `turnCosts`, `turnTokens` on initial bootstrap
  * may be managed differently).
  */
 export function reseedStatsFromStored(
@@ -645,7 +645,7 @@ export function formatStatusFields(stats: SessionStats, sampler?: ContextSampler
     contextLimit,
     contextUsedTokens,
     contextSparkline,
-    planMode: stats.planMode,
+    permissionMode: stats.permissionMode,
     ...(stats.cwd !== undefined ? { cwd: stats.cwd } : {}),
   };
 }

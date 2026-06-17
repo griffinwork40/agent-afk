@@ -27,7 +27,7 @@ function makeStats(): SessionStats {
     turnTokens: [],
     turns: [],
     model: 'sonnet',
-    planMode: false,
+    permissionMode: 'default',
   };
 }
 
@@ -388,7 +388,7 @@ describe('/plan', () => {
     const { ctx } = makeCtx({ session: { current: sess } as unknown as SlashContext['session'] });
     await dispatch('/plan on', ctx);
     expect(sess.setPermissionMode).toHaveBeenCalledWith('plan');
-    expect(ctx.stats.planMode).toBe(true);
+    expect(ctx.stats.permissionMode).toBe('plan');
     expect(ctx.ui.repaintStatusLine).toHaveBeenCalledTimes(1);
   });
 
@@ -396,7 +396,7 @@ describe('/plan', () => {
     const sess = fakeSession();
     const { ctx } = makeCtx({ session: { current: sess } as unknown as SlashContext['session'] });
     const res = await dispatch('/plan', ctx);
-    expect(ctx.stats.planMode).toBe(true);
+    expect(ctx.stats.permissionMode).toBe('plan');
     expect(res.result).toBe('continue');
   });
 
@@ -406,20 +406,20 @@ describe('/plan', () => {
     const res = await dispatch('/plan list all files', ctx);
     expect(res.handled).toBe(true);
     expect(sess.setPermissionMode).toHaveBeenCalledWith('plan');
-    expect(ctx.stats.planMode).toBe(true);
+    expect(ctx.stats.permissionMode).toBe('plan');
     expect(res.result).toEqual({ kind: 'submit', message: 'list all files' });
   });
 
   it('/plan <free text> while already in plan mode returns submit without toggling off', async () => {
     const sess = fakeSession();
     const stats = makeStats();
-    stats.planMode = true;
+    stats.permissionMode = 'plan';
     const { ctx } = makeCtx({ session: { current: sess } as unknown as SlashContext['session'], stats });
     const res = await dispatch('/plan list all files', ctx);
     expect(res.handled).toBe(true);
     // setPermissionMode should NOT be called again (already in plan mode)
     expect(sess.setPermissionMode).not.toHaveBeenCalled();
-    expect(ctx.stats.planMode).toBe(true);
+    expect(ctx.stats.permissionMode).toBe('plan');
     expect(res.result).toEqual({ kind: 'submit', message: 'list all files' });
   });
 
@@ -449,7 +449,7 @@ describe('/plan', () => {
     it('/plan off while in plan mode flips to default FIRST, then seeds a save-and-implement turn', async () => {
       const sess = fakeSession();
       const stats = makeStats();
-      stats.planMode = true;
+      stats.permissionMode = 'plan';
       const { ctx } = makeCtx({ session: { current: sess } as unknown as SlashContext['session'], stats });
 
       const res = await dispatch('/plan off', ctx);
@@ -457,7 +457,7 @@ describe('/plan', () => {
       // The flip MUST happen before the turn so writes are permitted when the
       // seeded message runs (the model has to write the plan file + implement).
       expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
-      expect(ctx.stats.planMode).toBe(false);
+      expect(ctx.stats.permissionMode).toBe('default');
 
       // A submit turn is seeded.
       expect(res.handled).toBe(true);
@@ -475,32 +475,32 @@ describe('/plan', () => {
     it('bare /plan while in plan mode also exits and seeds save-and-implement', async () => {
       const sess = fakeSession();
       const stats = makeStats();
-      stats.planMode = true;
+      stats.permissionMode = 'plan';
       const { ctx } = makeCtx({ session: { current: sess } as unknown as SlashContext['session'], stats });
 
       const res = await dispatch('/plan', ctx);
 
       expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
-      expect(ctx.stats.planMode).toBe(false);
+      expect(ctx.stats.permissionMode).toBe('default');
       expect(submitKind(res)).toBe('submit');
       expect(submitMessage(res)).toContain('.afk/plans');
     });
 
     it('does NOT seed an implement turn when the flip fails (writes still refused)', async () => {
-      // If setPermissionMode rejects, togglePlanMode leaves planMode true and
+      // If setPermissionMode rejects, togglePlanMode leaves permissionMode plan and
       // surfaces an error. Seeding an implement turn while writes are refused
       // would only produce gate refusals — so the handler returns 'continue'.
       const sess = fakeSession({
         setPermissionMode: vi.fn().mockRejectedValue(new Error('handle closing')),
       });
       const stats = makeStats();
-      stats.planMode = true;
+      stats.permissionMode = 'plan';
       const { ctx } = makeCtx({ session: { current: sess } as unknown as SlashContext['session'], stats });
 
       const res = await dispatch('/plan off', ctx);
 
       expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
-      expect(ctx.stats.planMode).toBe(true);
+      expect(ctx.stats.permissionMode).toBe('plan');
       expect(res.result).toBe('continue');
     });
 
@@ -511,7 +511,7 @@ describe('/plan', () => {
       // togglePlanMode sets 'default' — already default, harmless, emits OFF copy.
       // No submit turn: there is no plan to save when not in plan mode.
       expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
-      expect(ctx.stats.planMode).toBe(false);
+      expect(ctx.stats.permissionMode).toBe('default');
       expect(res.result).toBe('continue');
     });
   });

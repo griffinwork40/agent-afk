@@ -360,7 +360,7 @@ describe('StatusLine resize handling', () => {
     });
     status.start();
     stream.writes.length = 0;
-    status.repaint({ model: 'sonnet', planMode: true });
+    status.repaint({ model: 'sonnet', permissionMode: 'plan' });
     const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
     expect(out).toContain('…');
     expect(out).not.toContain('\x1b');
@@ -797,7 +797,7 @@ describe('StatusLine narrow-terminal priority drop', () => {
     status.stop();
   });
 
-  it('with planMode: never drops plan indicator', () => {
+  it('with plan mode: never drops plan indicator', () => {
     stream.columns = 30;
     const status = new StatusLine({
       stream: stream as unknown as NodeJS.WriteStream,
@@ -810,10 +810,31 @@ describe('StatusLine narrow-terminal priority drop', () => {
       cwd: '/tmp',
       cost: 0.05,
       tokens: 1200,
-      planMode: true,
+      permissionMode: 'plan',
     });
     const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
     expect(out).toContain('● plan');
+    expect(out).not.toContain('tok');
+    status.stop();
+  });
+
+  it('with AFK mode: never drops the AFK indicator', () => {
+    stream.columns = 30;
+    const status = new StatusLine({
+      stream: stream as unknown as NodeJS.WriteStream,
+      throttleMs: 0,
+    });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({
+      model: 'sonnet',
+      cwd: '/tmp',
+      cost: 0.05,
+      tokens: 1200,
+      permissionMode: 'autonomous',
+    });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('◐ AFK');
     expect(out).not.toContain('tok');
     status.stop();
   });

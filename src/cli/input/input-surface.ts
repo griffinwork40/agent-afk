@@ -104,7 +104,7 @@ export interface InputSurfaceReadOpts {
  * autocomplete state as the between-turn reader.
  *
  * `promptText` is supplied per-turn by the caller (not stored on the
- * surface) because it depends on the current `model + planMode` at
+ * surface) because it depends on the current `model + permissionMode` at
  * turn start, and the StreamRenderer is reconstructed per-turn anyway
  * — the string's lifetime matches the renderer's.
  */
@@ -491,7 +491,7 @@ export class InputSurface {
   /**
    * Build the refs bag passed to `runTurn` via the `inputSurface`
    * parameter. The promptText is supplied by the caller because it
-   * depends on the current model + planMode at turn start.
+   * depends on the current model + permissionMode at turn start.
    */
   toRunTurnRefs(promptText: string): InputSurfaceRefs {
     return {

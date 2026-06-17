@@ -11,7 +11,7 @@ describe('session-stats', () => {
     expect(s.totalTurns).toBe(0);
     expect(s.totalCostUsd).toBe(0);
     expect(s.model).toBe('sonnet');
-    expect(s.planMode).toBe(false);
+    expect(s.permissionMode).toBe('default');
     expect(s.turns).toEqual([]);
     expect(s.sessionStartTime).toBeGreaterThan(0);
   });
@@ -231,9 +231,9 @@ describe('resetStats', () => {
     expect(s.turnTokens).toBe(tokensRef);
   });
 
-  it('drops sessionId but preserves model and planMode', () => {
+  it('drops sessionId but preserves model and permissionMode', () => {
     const s = createSessionStats('sonnet');
-    s.planMode = true;
+    s.permissionMode = 'plan';
     recordTurn(s, 'q', 'a', {
       totalCostUsd: 0,
       durationMs: 0,
@@ -244,7 +244,7 @@ describe('resetStats', () => {
     resetStats(s);
     expect(s.sessionId).toBeUndefined();
     expect(s.model).toBe('sonnet');
-    expect(s.planMode).toBe(true);
+    expect(s.permissionMode).toBe('plan');
   });
 
   it('drops the auto-derived name so the next conversation re-derives its own', () => {

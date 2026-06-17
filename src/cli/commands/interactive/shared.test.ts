@@ -27,7 +27,7 @@ function makeStats(turns: TurnRecord[]): SessionStats {
     turnTokens: [],
     turns,
     model: 'sonnet',
-    planMode: false,
+    permissionMode: 'default',
   };
 }
 

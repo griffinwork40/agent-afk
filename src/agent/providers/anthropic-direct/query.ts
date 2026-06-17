@@ -52,6 +52,7 @@ import {
   withSystemBreakpoint,
 } from './cache-policy.js';
 import { buildPlanModeAddendumBlock } from './plan-mode-addendum.js';
+import { buildAfkModeAddendumBlock } from './afk-mode-addendum.js';
 import { collectSkillEntries } from '../../tools/skill-bridge.js';
 import { contextLimitFor } from '../../model-limits.js';
 import { resolveModelId } from '../../session/model-resolution.js';
@@ -434,11 +435,14 @@ export class AnthropicDirectQuery implements ProviderQuery {
     if (userSys && userSys.length > 0) {
       blocks.push({ type: 'text', text: userSys });
     }
-    // Plan-mode posture: appended as the *last* block so the cache
-    // breakpoint stamper lands on it. Toggling plan mode mid-session busts
-    // the cache exactly once (correct); same-mode turns hit cleanly.
+    // Plan-mode / AFK-mode posture: appended as the *last* block so the cache
+    // breakpoint stamper lands on it. Toggling mode mid-session busts the cache
+    // exactly once (correct); same-mode turns hit cleanly. The two modes are
+    // mutually exclusive permission-mode values, so at most one block is added.
     const planBlock = buildPlanModeAddendumBlock(this.state.currentPermissionMode);
     if (planBlock !== null) blocks.push(planBlock);
+    const afkBlock = buildAfkModeAddendumBlock(this.state.currentPermissionMode);
+    if (afkBlock !== null) blocks.push(afkBlock);
     if (blocks.length === 0) return null;
     if (!isCacheEnabled({ baseUrl: this.baseUrl })) return blocks;
     return withSystemBreakpoint(blocks, getCacheTtl());
