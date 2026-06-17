@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.9.0] - 2026-06-17
+
+### Added
+- native AFK skill-invocation JSONL writer (port afk-workshop#804) (7699403)
+
+### Changed
+- Merge pull request #186 from griffinwork40/afk-port/pr-804 (f3f4422)
+
 ## [4.8.3] - 2026-06-16
 
 ### Fixed
