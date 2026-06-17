@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.13.0] - 2026-06-17
+
+### Added
+- add retry/backoff for transient errors (429, 5xx) (#192) (e58b48d)
+
 ## [4.12.1] - 2026-06-17
 
 ### Fixed
