@@ -23,9 +23,19 @@ When a proposal — a plan, fix, decomposition, scoping, or named recommendation
 3. Recommend ONE top choice with a one-paragraph rationale.
 4. Flag `dissent = true` when ≥2 critics returned `strong` alternatives disagreeing with the recommendation — signals the synthesizer is overruling well-argued dissent, so confidence is low. Include a `dissent_note` summarizing the strongest counter-argument.
 
+**Wave 3.5 — Composition-boundary check (fires on convergence):**
+Critics that converge may all have evaluated the proposal in artifact-isolation — none read the boundaries where it composes with siblings. A convergent verdict reached in isolation can be confidently wrong (e.g., critics agree on a UI glyph asserting visual continuity, but none saw that parallel-branch flushes reorder it). When the synthesis recommendation is **convergent** — recommendation ≠ original with `dissent = false`, OR ≥2 critics returned the same alternative — dispatch ONE context-injection verifier (same research-agent base) BEFORE surfacing:
+1. Its job is NOT to re-evaluate the proposal in isolation. It reads the 3 nearest composition boundaries — upstream caller, downstream consumer, and the render/event/state pipeline that interleaves the proposal's target with siblings.
+2. For each boundary: does the recommendation survive when the boundary varies? Check **temporal interleaving** (can flushes / parallel branches / sibling completions reorder it?), **state threading** (does it assume a point-of-use state upstream can break?), **adjacency assumptions** (does it presume render-tree / scrollback / call-graph adjacency that isn't load-bearing under recomposition?).
+3. Returns `CONFIRMED` only if the recommendation survives all three; otherwise `OVERRIDE: <specific boundary condition that breaks it>`.
+
+Until the verifier returns `CONFIRMED`, the convergent recommendation is a **candidate**, not a recommendation. On `OVERRIDE`, fold the named condition into the matrix and re-rank.
+
+**Scope guard:** skip when the proposal is purely local with no composition surface, or is anchored to an external referent that survives independently of the system. Fires once per convergent verdict, not per critic.
+
 **Merge + surface:**
-- Recommendation = `original` → the proposal survived critique; proceed with it.
-- Recommendation ≠ `original`, `dissent = false` → synthesis found a better path; surface the alternative with rationale before acting.
+- Recommendation = `original` → the proposal survived critique; proceed with it — **unless ≥2 critics converged on the same alternative** (the second convergence condition above), in which case run Wave 3.5 first and, on `OVERRIDE`, re-rank before acting.
+- Recommendation ≠ `original`, `dissent = false` → synthesis found a better path; run Wave 3.5, then surface the alternative with rationale (on `OVERRIDE`, re-rank first) before acting.
 - `dissent = true` → present the matrix to the user; do not act. Confidence is low.
 
 **When to invoke:**
