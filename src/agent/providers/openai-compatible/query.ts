@@ -116,13 +116,13 @@ export function __setOpenAIClientFactory(factory: OpenAIClientFactory | null): v
  * wants `max_tokens`.  Strips any `provider/` prefix (OpenRouter-style ids)
  * before the regex check so `openai/o3` is treated the same as `o3`.
  *
- * Returns `undefined` when no cap is configured, so shims that reject the
- * field simply don't see it on the wire.
+ * Always returns an object containing the resolved cap; uses the model's
+ * output ceiling as a fallback so the field is always present on the wire.
  */
 function resolveStreamingMaxTokens(
   model: string,
   configMaxOutput: number | undefined,
-): Record<string, number> | undefined {
+): Record<string, number> {
   // Strip any `provider/` prefix (OpenRouter-style ids) before the o-series
   // regex — mirrors oneshot.ts:93.
   const bareModel = model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model;
@@ -590,14 +590,11 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       // bound output length (parity with Anthropic's always-forwarded
       // max_tokens).  Reuses the o-series field-selection logic from
       // oneshot.ts:91–96.
-      const maxTokensField = resolveStreamingMaxTokens(
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+      Object.assign(requestBody, resolveStreamingMaxTokens(
         this.currentModel,
         this.opts.config.maxOutputTokens,
-      );
-      if (maxTokensField !== undefined) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        Object.assign(requestBody, maxTokensField);
-      }
+      ));
       // The private ChatGPT backend (subscription path) has two hard
       // requirements the public Responses API does not: a non-empty
       // `instructions`, and `store: false`. Scope both to that path so the
@@ -642,14 +639,11 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       // bound output length (parity with Anthropic's always-forwarded
       // max_tokens).  Reuses the o-series field-selection logic from
       // oneshot.ts:91–96.
-      const maxTokensField = resolveStreamingMaxTokens(
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+      Object.assign(requestBody, resolveStreamingMaxTokens(
         this.currentModel,
         this.opts.config.maxOutputTokens,
-      );
-      if (maxTokensField !== undefined) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        Object.assign(requestBody, maxTokensField);
-      }
+      ));
       // Only attach `tools` when the dispatcher actually has any — empty
       // arrays make some providers reject the request.
       if (this.openAITools && this.openAITools.length > 0) {
