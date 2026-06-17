@@ -231,6 +231,18 @@ describe('assembleSystemPrompt', () => {
       expect(END_OF_TURN_DIRECTIVE).toContain('**Asking**');
       expect(END_OF_TURN_DIRECTIVE).toContain('**Interrupted**');
     });
+
+    it('carries the uncommitted-mutation guard in the Done block', () => {
+      // Regression guard for the commit-gate invariant (pattern card
+      // "world_changed && commits=0 leaves work in an unrecoverable
+      // intermediate state"). A Done state that claims clean completion while
+      // files were mutated but never committed is the failure this prevents.
+      // The check is self-observed: the agent reasons from its own in-turn
+      // tool history, because world_changes telemetry (facets/derive.ts) is
+      // computed post-session and is not visible to the model at turn-end.
+      expect(END_OF_TURN_DIRECTIVE).toMatch(/git commit/);
+      expect(END_OF_TURN_DIRECTIVE).toMatch(/uncommitted/i);
+    });
   });
 
   describe('end-to-end contract with parseTerminalState', () => {
