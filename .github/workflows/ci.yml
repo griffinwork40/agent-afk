@@ -92,6 +92,32 @@ jobs:
           path: coverage/
           retention-days: 14
 
+  # The docs site under website/ is a standalone npm app (Fumadocs/Next.js)
+  # with its own tsconfig and dependency tree — not part of the root pnpm
+  # workspace. This job catches TypeScript errors and broken Next.js builds
+  # that would otherwise land silently on main. See issue #144.
+  docs:
+    name: Docs Site (typecheck + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: cd website && npm ci
+
+      - name: Typecheck
+        run: cd website && npm run typecheck
+
+      - name: Build
+        run: cd website && npm run build
+
   # Exercise the publish-path esbuild bundle on every PR so prompt-inlining
   # regressions, externalised-dep mistakes, or shebang/permission bugs are
   # caught before `prepublishOnly` fires at release time.
