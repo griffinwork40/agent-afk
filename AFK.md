@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Standalone TypeScript CLI + daemon + Telegram bot built on `@anthropic-ai/sdk`. Runs **outside** Claude Code as its own process. Binary: `afk`. Node ≥20, pnpm-only (lockfile is pnpm-specific).
+Standalone TypeScript CLI + daemon + Telegram bot built on `@anthropic-ai/sdk`. Runs **outside** Claude Code as its own process. Binary: `afk`. Node ≥22, pnpm-only (lockfile is pnpm-specific).
 
 ## Commands
 
@@ -44,7 +44,7 @@ Three layers under `src/`:
 | `src/skills/` | Headless mirrors of plugin orchestration skills. Each has `prompts/` (markdown) loaded by `src/skills/_lib/prompt-loader.ts`. |
 | `src/skills/_agents/` | Vendored agent definitions. Drift detection: `vendored.test.ts`. |
 
-Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/session/stream-consumer.ts`. **Nothing outside `src/agent/providers/` imports from any model SDK directly.**
+Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/session/stream-consumer.ts`. **No model SDK is imported for runtime use outside `src/agent/providers/`** — the rest of the tree imports only the SDK's `ContentBlockParam` *type*, with one legacy runtime `Anthropic` import in `src/cli/interactive.ts` as a known exception.
 
 ### Cross-cutting subsystems
 

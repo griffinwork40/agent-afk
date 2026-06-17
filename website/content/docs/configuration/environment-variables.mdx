@@ -30,10 +30,13 @@ All environment variables recognized by `agent-afk` are listed here, grouped by 
 | `AFK_MAX_BUDGET_USD` | number | Per-turn USD budget ceiling. Aborts the turn when projected spend would exceed this. | `5.00` |
 | `AFK_MAX_OUTPUT_TOKENS` | number | Cap on output tokens per turn. Falls back to provider default when unset. | — |
 | `AFK_MAX_TOKENS` | number | Cap on total tokens per turn (input + output). Default 4096. | `4096` |
-| `AFK_MODEL` | string | Default model for agent turns. Accepts slot names (small, medium, large), legacy aliases (opus, sonnet, haiku), the fixed-id fable alias (Claude Fable 5), or full model IDs. | `sonnet` |
+| `AFK_MODEL` | string | Default model for agent turns. Accepts slot names (local, small, medium, large), legacy aliases (opus, sonnet, haiku), the fixed-id fable alias (Claude Fable 5), or full model IDs. | `sonnet` |
 | `AFK_MODEL_LARGE` | string | Bind the "large" capability tier (most capable) to a model id/alias. Overrides afk.config.json models.large. | — |
 | `AFK_MODEL_LARGE_API_KEY` | string | Per-slot API key for the "large" tier (Stage 2). Overrides global credentials for this tier only. | — |
 | `AFK_MODEL_LARGE_BASE_URL` | string | Per-slot endpoint base URL for the "large" tier (Stage 2). Anthropic Messages base or OpenAI-compatible base per the tier provider. | — |
+| `AFK_MODEL_LOCAL` | string | Bind the "local" capability tier (cheapest/fastest, user-configured) to a model id. Overrides afk.config.json models.local. Point at a local Ollama, LM Studio, or any OpenAI-compatible shim. | — |
+| `AFK_MODEL_LOCAL_API_KEY` | string | Per-slot API key for the "local" tier. Overrides global credentials for this tier only. | — |
+| `AFK_MODEL_LOCAL_BASE_URL` | string | Per-slot endpoint base URL for the "local" tier. Anthropic Messages base or OpenAI-compatible base per the tier provider. | — |
 | `AFK_MODEL_MEDIUM` | string | Bind the "medium" capability tier (general-use) to a model id/alias. Overrides afk.config.json models.medium. | — |
 | `AFK_MODEL_MEDIUM_API_KEY` | string | Per-slot API key for the "medium" tier (Stage 2). Overrides global credentials for this tier only. | — |
 | `AFK_MODEL_MEDIUM_BASE_URL` | string | Per-slot endpoint base URL for the "medium" tier (Stage 2). Anthropic Messages base or OpenAI-compatible base per the tier provider. | — |
