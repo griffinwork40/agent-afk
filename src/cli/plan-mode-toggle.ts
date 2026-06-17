@@ -41,7 +41,7 @@ export async function togglePlanMode(
       if (!hasShownFirstUseTip) hasShownFirstUseTip = true;
       ctx.out.success(
         palette.warning('● plan mode ON') +
-        palette.dim(' — write_file, edit_file, and write-intent bash are refused.') +
+        palette.dim(' — writes are refused; read-only bash runs, mutating bash is blocked.') +
         tip,
       );
     } else {

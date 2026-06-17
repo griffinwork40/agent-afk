@@ -54,9 +54,11 @@ describe('plan-mode-addendum', () => {
       expect(PLAN_MODE_ADDENDUM_TEXT.toLowerCase()).toContain('plan mode');
     });
 
-    it('names the write-class tools that are refused', () => {
-      // Regression guard: if the gate's denylist changes, this should change
-      // in lockstep so the model is told the truth about what is refused.
+    it('names file/memory write tools refused and describes bash mutation-gating', () => {
+      // Regression guard: the addendum must tell the model the truth about what
+      // the hook gate refuses. File/memory write tools are refused; bash is
+      // mutation-gated — read-only recon runs, state-mutating bash is refused
+      // via classifyBashCommand. Keep this in lockstep with plan-mode-gate.ts.
       expect(PLAN_MODE_ADDENDUM_TEXT).toContain('write_file');
       expect(PLAN_MODE_ADDENDUM_TEXT).toContain('edit_file');
       expect(PLAN_MODE_ADDENDUM_TEXT.toLowerCase()).toContain('bash');

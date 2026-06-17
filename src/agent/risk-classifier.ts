@@ -5,10 +5,9 @@
  * operator-facing UI (status line, permission prompts) and the audit log.
  * Does NOT wire to `permissions.onAsk` — that is Stream C's job.
  *
- * The rule table mirrors the philosophy of BASH_DENYLIST in
- * `src/agent/plan-mode-gate.ts`: substring-matching against the raw command
- * string is intentionally conservative. We catch the shapes a model
- * naturally emits; we do not attempt to parse shell syntax comprehensively.
+ * The bash rule table uses substring-matching against the raw command string
+ * and is intentionally conservative: we catch the shapes a model naturally
+ * emits; we do not attempt to parse shell syntax comprehensively.
  *
  * BUILTIN_WRITE_DENYLIST from `src/agent/tools/handlers/write-denylist.ts`
  * is reused for the write_file / edit_file path-based risk check so the

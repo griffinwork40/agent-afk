@@ -53,7 +53,7 @@ const STATIC_TIPS: readonly LoadingTip[] = [
   },
   {
     id: 'kbd:shift-tab',
-    text: 'Shift+Tab toggles plan mode (no file writes) without leaving the prompt.',
+    text: 'Shift+Tab toggles plan mode (write tools refused) without leaving the prompt.',
     source: 'static',
   },
   {
