@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.11.0] - 2026-06-17
+
+### Added
+- composition-boundary guard for shadow-verify and devils-advocate (f549407)
+
+### Fixed
+- resolve PR #187 review nits — Wave 3.5 routing + UNVERIFIED-* merge states (09a0dea)
+
+### Changed
+- Merge pull request #187 from griffinwork40/feat/composition-boundary-guard (d6a80e7)
+
 ## [4.10.0] - 2026-06-17
 
 ### Added
