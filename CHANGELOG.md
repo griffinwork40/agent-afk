@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.12.1] - 2026-06-17
+
+### Fixed
+- thread max_tokens into streaming request body (issue #125) (#195) (8f6b0e3)
+
 ## [4.12.0] - 2026-06-17
 
 ### Added
