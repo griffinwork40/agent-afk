@@ -18,7 +18,7 @@ import type { SuggestEngine, SuggestContext } from './input/suggest.js';
 export type { SuggestEngine, SuggestContext };
 
 export interface LogUpdateFn {
-  render: (content: string, targetBottomRow: number) => void;
+  render: (content: string, targetBottomRow: number, anchorFloor?: number) => void;
   clear: (extraRows?: number) => void;
   done: () => void;
   /**

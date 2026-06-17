@@ -33,6 +33,8 @@
  *     ≥ 2 lines, or at `targetBottomRow` itself for a 1-line frame.
  *   - Frames grow UPWARD as line count increases; the bottom is pinned.
  *   - `newTopRow = max(1, targetBottomRow - lineCount + 1)`.
+ *   - A supplied `anchorFloor` caps the shrink-pad so `newTopRow` never rises
+ *     above it — protecting a fixed banner that occupies rows 1..anchorFloor-1.
  */
 
 import wrapAnsi from 'wrap-ansi';
@@ -128,9 +130,15 @@ export class CupFrameRenderer {
    *   - `content` is the raw frame string (may contain ANSI codes).
    *   - `targetBottomRow` is 1-based; caller passes `rows - 1`.
    *   - If `targetBottomRow < 1`, defaults to 1.
+   *   - `anchorFloor` (optional, 1-based) is the first row this renderer may
+   *     write to or erase — the row just below a fixed banner (welcome logo /
+   *     update notice) the compositor armed with. The shrink-pad is clamped so
+   *     the padded frame top never climbs above it (see the shrink-pad block).
+   *     Defaults to 1 (whole screen writable) when omitted.
    */
-  render(content: string, targetBottomRow: number): void {
+  render(content: string, targetBottomRow: number, anchorFloor?: number): void {
     const bottomRow = Math.max(1, targetBottomRow);
+    const floor = Math.max(1, anchorFloor ?? 1);
     const width = this.stream.columns ?? 80;
     const useSyncOutput = this.stream.isTTY === true;
 
@@ -155,13 +163,23 @@ export class CupFrameRenderer {
     // to peak and never decreased — the live frame stayed locked at peak
     // height forever even when overlay content collapsed (user-reported
     // 'huge gap' between scrollback and live content).
-    const frameLines =
+    // Anchor-floor clamp: a large shrink (e.g. the slash-command autocomplete
+    // dropdown collapsing from ~9 rows back to the bare input) would otherwise
+    // prepend enough blank rows that newTopRow climbs ABOVE `floor`, blanking
+    // the banner rows above it (the bottom of the goblin logo) and opening a
+    // visible gap. Cap the pad so the padded frame top lands at or below
+    // `floor`:  newTopRow = bottomRow - (rawLineCount + pad) + 1 >= floor
+    //           => pad <= bottomRow - rawLineCount + 1 - floor
+    // When no banner is armed (floor === 1) maxPad is large and the pad is the
+    // full raw-to-raw delta — byte-identical to the pre-clamp behaviour.
+    const rawShrinkPad =
       this.previousRawLineCount > rawLineCount
-        ? [
-            ...Array<string>(this.previousRawLineCount - rawLineCount).fill(''),
-            ...allLines,
-          ]
-        : allLines;
+        ? this.previousRawLineCount - rawLineCount
+        : 0;
+    const maxPad = Math.max(0, bottomRow - rawLineCount + 1 - floor);
+    const shrinkPad = Math.min(rawShrinkPad, maxPad);
+    const frameLines =
+      shrinkPad > 0 ? [...Array<string>(shrinkPad).fill(''), ...allLines] : allLines;
 
     const lineCount = frameLines.length;
 

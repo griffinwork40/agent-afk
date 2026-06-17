@@ -607,6 +607,41 @@ describe('CupFrameRenderer — no trailing-\\n scroll', () => {
     expect(countBareNewlines(out2)).toBe(0);
   });
 
+  it('clamps the shrink-pad to anchorFloor — never writes above a banner ceiling', () => {
+    // Regression: typing a slash command as the FIRST message opened the
+    // autocomplete dropdown (a tall frame); closing it (a large shrink) padded
+    // enough blank rows that newTopRow climbed above the welcome-banner ceiling,
+    // blanking the bottom of the goblin logo and opening a gap. With
+    // anchorFloor=12 (banner occupies rows 1..11), the padded top must never
+    // rise above row 12.
+    const stream = makeMockStream(true, 80, 24);
+    const allWrites = collectWrites(stream);
+    const renderer = new CupFrameRenderer(stream);
+
+    // Render 1: a 9-row "open dropdown" frame just below the banner,
+    // bottomRow=20 → occupies rows 12..20 (top pinned at the floor).
+    const dropdown = Array.from({ length: 9 }, (_, i) => `menu${i + 1}`).join('\n');
+    renderer.render(dropdown, 20, 12);
+    expect(renderer.topRow).toBe(12);
+    void allWrites();
+
+    // Render 2: dropdown closes → 2-row input frame at bottomRow=14. The raw
+    // shrink delta is 7, but the floor clamp caps the pad to 1 so newTopRow=12.
+    const chunks: string[] = [];
+    (stream as NodeJS.ReadWriteStream).on('data', (c: unknown) => chunks.push(String(c)));
+    renderer.render('input\n> ', 14, 12);
+    const out2 = chunks.join('');
+
+    // No CUP write may target any banner row (1..11).
+    for (let row = 1; row <= 11; row++) {
+      expect(out2, `must not touch banner row ${row}`).not.toContain(`\x1b[${row};1H`);
+    }
+    // Frame top stays at or below the floor; content is still bottom-pinned.
+    expect(renderer.topRow).toBeGreaterThanOrEqual(12);
+    expect(out2).toContain('input');
+    expect(countBareNewlines(out2)).toBe(0);
+  });
+
   it('does not pad on grow (larger frame than previous)', () => {
     const stream = makeMockStream(true, 80, 24);
     const allWrites = collectWrites(stream);

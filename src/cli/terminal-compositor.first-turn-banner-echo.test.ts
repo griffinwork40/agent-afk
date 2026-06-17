@@ -160,17 +160,13 @@ describe('first turn after banner — idle banner-followed frame commit', () => 
     expect(idx((l) => l.includes('india'))).toBeGreaterThan(idx((l) => l.includes('DUPCHECK')));
     expect(idx((l) => l.includes('RESPONSE_OK'))).toBeGreaterThan(idx((l) => l.includes('india')));
 
-    // Banner integrity: banner lines still present exactly once (stale
-    // anchor bookkeeping previously let commits orphan into banner rows).
-    // Exemption — the LAST banner row (BANNER_LINE_10): the pre-commit
-    // chrome collapse's shrink-pad climbs above anchorRow and blanks it
-    // BEFORE any commit fires (probe: collapse alone leaves topRow=11 and
-    // row 11 erased, no commitAbove involved). That is a separate
-    // pre-existing renderer defect (shrink-pad has no anchorRow floor) —
-    // out of scope for the commit-geometry fix this file guards. In
-    // production the observed deflation is 1 row, landing on the blank
-    // row below the banner, so it is not user-visible today.
-    for (let i = 0; i < BANNER_ROWS - 1; i++) {
+    // Banner integrity: ALL banner lines present exactly once (stale anchor
+    // bookkeeping previously let commits orphan into banner rows). The LAST
+    // banner row (BANNER_LINE_10) is now covered too: CupFrameRenderer's
+    // `anchorFloor` param (threaded from self.anchorRow) caps the pre-commit
+    // chrome-collapse shrink-pad so it can no longer climb above anchorRow and
+    // blank that row (previously a known, exempted renderer defect).
+    for (let i = 0; i < BANNER_ROWS; i++) {
       expect(ls.filter((l) => l.trim() === `BANNER_LINE_${i}`), `banner row ${i}:\n${dump}`).toHaveLength(1);
     }
 
