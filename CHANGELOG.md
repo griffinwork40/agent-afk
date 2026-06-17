@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.14.0] - 2026-06-17
+
+### Added
+- autonomous permission mode + scrubbed Telegram reporting (#197) (b3384fe)
+
 ## [4.13.0] - 2026-06-17
 
 ### Added
