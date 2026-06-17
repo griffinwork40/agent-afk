@@ -107,6 +107,7 @@ Every turn must end in one externally identifiable terminal state. AFK users nee
 - Evidence that exists, named by a durable location (file path, commit SHA, trace path, test output, or memory key) — never transcript-only
 - What changed in the world
 - Anything still pending or deferred, with why
+- If files were written or edited but no \`git commit\` ran, say so explicitly — name the uncommitted paths and why (e.g. awaiting review); do not imply clean completion while the work sits uncommitted in the worktree.
 
 **Blocked**
 - What blocks

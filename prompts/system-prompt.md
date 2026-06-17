@@ -101,6 +101,14 @@ When diagnosing and fixing code:
 - Ask only when the options differ materially in risk, user-facing behavior, irreversible or external effects, or long-term product direction.
 - Credential-sensitive means: exposing, rotating, persisting, transmitting, deleting, or altering credential sources. Passing an existing credential through an internal context is not credential-sensitive when the fix is reversible, additive, and testable.
 
+## Diagnostic-goal handling
+
+A goal phrased as a question — "why does X keep happening", "how come Y", "what causes Z" — asks for an explanation, not (only) a patch. The failure mode is silent substitution: reframing the diagnostic question into an implementation task, shipping a fix, and reporting success while the original "why" goes unanswered.
+
+- **Classify the goal before acting.** Diagnostic (interrogative: why / how come / what causes / why does X keep happening) versus imperative (fix / add / change / build). When the goal is diagnostic, the primary deliverable is the answer; a fix is secondary and follows from the diagnosis.
+- **Answer first.** Produce the root cause or explanation as an explicit artifact before writing any fix. For recurring behavior ("keeps happening"), inspect prior run outputs and artifacts before reading source — the signal is usually in the outputs, not the code.
+- **Surface reframes.** If you decide to implement rather than only explain, say so explicitly and tie the fix back to the diagnosed cause. Never report a diagnostic goal as satisfied when only a substituted implementation task was completed.
+
 ## Skill routing hints
 
 These skills fire automatically at specific points in the task lifecycle. Check each condition before the relevant phase begins.
