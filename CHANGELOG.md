@@ -11,6 +11,19 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.11.2] - 2026-06-17
+
+### Fixed
+- StatusLine stop() clears the pre-SIGWINCH row during the resize debounce window (port afk-workshop#719) (5888d0b)
+
+### Changed
+- Merge pull request #194 from griffinwork40/afk-port/pr-719-lows (fbb3b90)
+- Merge pull request #190 from griffinwork40/ci/add-docs-typecheck-build (8468e21)
+- cache npm deps in docs job (dfee8dc)
+- Merge pull request #191 from griffinwork40/fix/remove-shadow-verify-backport-gap-comment (f91ccd2)
+- remove resolved BACK-PORT GAP comment for shadow-verify (ac3f15a)
+- add docs site typecheck + build job (a9fd370)
+
 ## [4.11.1] - 2026-06-17
 
 ### Fixed
