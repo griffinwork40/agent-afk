@@ -24,6 +24,7 @@ import { ringBellIfEnabled } from '../../_lib/capture-mode.js';
 import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import { parseTerminalState, type TerminalState } from './terminal-state.js';
 import { renderVerdictCard } from './verdict-card.js';
+import { pushTerminalStateToTelegram } from './afk-push.js';
 import { buildUserPayload } from '../../slash/_lib/user-payload.js';
 import { expandAtFileTokens } from './at-file-inject.js';
 
@@ -530,6 +531,13 @@ export async function runTurn(
         writeAbove('');
         if (h.onTerminalState) {
           try { h.onTerminalState(verdict); } catch { /* ledger update is best-effort */ }
+        }
+        // AFK mode: the operator is away and the transcript is unwatched, so
+        // surface the terminal state to them over Telegram. Scrubbed + rate-
+        // limited (afk-push.ts); no-ops when Telegram is unconfigured.
+        // Fire-and-forget — outbound notification must never block the turn.
+        if (stats.permissionMode === 'autonomous') {
+          void pushTerminalStateToTelegram(verdict);
         }
       }
 

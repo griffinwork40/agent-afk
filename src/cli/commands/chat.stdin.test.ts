@@ -142,7 +142,7 @@ vi.mock('../slash/session-stats.js', () => ({
     turnTokens: [],
     turns: [],
     model: 'sonnet',
-    planMode: false,
+    permissionMode: 'default',
   })),
   recordTurn: vi.fn(() => ({ user: '', assistant: '', timestamp: Date.now() })),
 }));

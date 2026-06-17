@@ -49,7 +49,7 @@ const mockCreateSessionStats = vi.fn(() => ({
   turnTokens: [] as Array<{ input: number; output: number; cache: number }>,
   turns: [] as import('../slash/types.js').TurnRecord[],
   model: 'sonnet' as import('../../agent/types.js').AgentModelInput,
-  planMode: false,
+  permissionMode: 'default',
 }));
 const mockRecordTurn = vi.fn(() => ({
   user: '',
@@ -226,7 +226,7 @@ describe('afk chat — --resume / --continue / --session-id', () => {
       turnTokens: [],
       turns: [],
       model: 'sonnet',
-      planMode: false,
+      permissionMode: 'default',
     });
     mockRecordTurn.mockReturnValue({ user: '', assistant: '', timestamp: Date.now() });
     // Reset stdin to non-TTY so message args work without stdin logic firing.
@@ -363,7 +363,7 @@ describe('afk chat — --resume / --continue / --session-id', () => {
       turnTokens: [] as Array<{ input: number; output: number; cache: number }>,
       turns: [] as import('../slash/types.js').TurnRecord[],
       model: 'sonnet' as const,
-      planMode: false,
+      permissionMode: 'default',
     };
     mockCreateSessionStats.mockReturnValue(statsObj);
     // Simulate recordTurn incrementing totalTurns
@@ -394,7 +394,7 @@ describe('afk chat — --resume / --continue / --session-id', () => {
       turnTokens: [] as Array<{ input: number; output: number; cache: number }>,
       turns: [] as import('../slash/types.js').TurnRecord[],
       model: 'sonnet' as const,
-      planMode: false,
+      permissionMode: 'default',
     };
     mockCreateSessionStats.mockReturnValue(statsObj);
     mockRecordTurn.mockImplementation(() => {
@@ -424,7 +424,7 @@ describe('afk chat — --resume / --continue / --session-id', () => {
       turnTokens: [] as Array<{ input: number; output: number; cache: number }>,
       turns: [] as import('../slash/types.js').TurnRecord[],
       model: 'sonnet' as const,
-      planMode: false,
+      permissionMode: 'default',
     };
     mockCreateSessionStats.mockReturnValue(statsObj);
     mockRecordTurn.mockImplementation(() => {

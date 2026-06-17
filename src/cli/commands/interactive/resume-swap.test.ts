@@ -43,7 +43,7 @@ function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
     turnTokens: [],
     turns: [],
     model: 'sonnet',
-    planMode: false,
+    permissionMode: 'default',
     ...overrides,
   };
 }
@@ -505,22 +505,22 @@ describe('performResumeSwap — waitForInitialization rejection', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tests — stats.planMode reset on swap (LOW-12b)
+// Tests — stats.permissionMode reset on swap (LOW-12b)
 // ---------------------------------------------------------------------------
 
-describe('performResumeSwap — stats.planMode reset', () => {
-  it('resets stats.planMode to false on successful swap with stored session', async () => {
+describe('performResumeSwap — stats.permissionMode reset', () => {
+  it('resets stats.permissionMode to default on successful swap with stored session', async () => {
     const { deps, stats } = buildDeps();
-    stats.planMode = true;
+    stats.permissionMode = 'plan';
     await performResumeSwap(makeTarget('t-plan', makeStoredSession()), deps);
-    expect(stats.planMode).toBe(false);
+    expect(stats.permissionMode).toBe('default');
   });
 
-  it('resets stats.planMode to false on successful swap with no stored session', async () => {
+  it('resets stats.permissionMode to default on successful swap with no stored session', async () => {
     const { deps, stats } = buildDeps();
-    stats.planMode = true;
+    stats.permissionMode = 'plan';
     await performResumeSwap(makeTarget('bare-id'), deps);
-    expect(stats.planMode).toBe(false);
+    expect(stats.permissionMode).toBe('default');
   });
 });
 
@@ -563,7 +563,7 @@ describe('reseedStatsFromStored wiring — shared helper', () => {
     const stats = {
       totalTurns: 0, totalCostUsd: 0, totalTokens: 0, totalDurationMs: 0,
       sessionStartTime: 0, turnCosts: [], turnTokens: [], turns: [],
-      model: 'sonnet' as const, planMode: false,
+      model: 'sonnet' as const, permissionMode: 'default',
     } as import('../../slash/types.js').SessionStats;
     const stored: import('../../session-store.js').StoredSession = {
       model: 'opus', totalTurns: 5, totalCostUsd: 1.5, totalTokens: 30000,

@@ -10,6 +10,7 @@ import { register, registerIfAbsent, resetRegistry } from './registry.js';
 import { coreCommands } from './commands/core.js';
 import { infoCommands } from './commands/info.js';
 import { planCmd } from './commands/plan.js';
+import { afkCmd } from './commands/afk.js';
 import { todoCmd } from './commands/todo.js';
 import { saveCmd } from './commands/save.js';
 import { nameCmd } from './commands/name.js';
@@ -38,6 +39,7 @@ export function registerAll(): void {
   for (const cmd of coreCommands) register(cmd);
   for (const cmd of infoCommands) register(cmd);
   register(planCmd);
+  register(afkCmd);
   register(todoCmd);
   register(saveCmd);
   register(nameCmd);

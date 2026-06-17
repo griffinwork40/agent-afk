@@ -19,7 +19,12 @@ export type PermissionMode =
   | 'bypassPermissions'
   | 'plan'
   | 'dontAsk'
-  | 'auto';
+  | 'auto'
+  // AFK mode: the operator is away-from-keyboard. The agent reports terminal
+  // state to Telegram and works autonomously on reversible operations, while a
+  // mechanical gate (`agent/afk-mode-gate.ts`) refuses high-risk/irreversible
+  // ops. agent-afk-local addition (not from the upstream SDK union).
+  | 'autonomous';
 
 export type SettingSource = 'user' | 'project' | 'local';
 

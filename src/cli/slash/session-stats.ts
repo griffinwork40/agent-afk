@@ -22,14 +22,14 @@ export function createSessionStats(model: AgentModelInput): SessionStats {
     turnTokens: [],
     turns: [],
     model,
-    planMode: false,
+    permissionMode: 'default',
   };
 }
 
 /**
  * Reset session counters in-place. Used by `/clear` after the SDK session
  * is rebuilt — the conversation is gone, so per-turn counters/history must
- * be zeroed too. Preserves user-controlled state (`model`, `planMode`)
+ * be zeroed too. Preserves user-controlled state (`model`, `permissionMode`)
  * and refreshes `sessionStartTime` so elapsed-time displays restart from
  * the clear, not from the original launch. Drops `sessionId` because the
  * rebuilt SDK session will issue a new one, and drops the auto-derived
@@ -51,7 +51,8 @@ export function resetStats(stats: SessionStats): void {
   // make the NEXT conversation's first turn persist a fresh sidecar under the
   // PREVIOUS conversation's name — a user-visible misattribution.
   delete stats.name;
-  // Preserve `planMode` (user-controlled state — the gate reads it live).
+  // Preserve `permissionMode` (user-controlled state — the plan/AFK gates read
+  // it live; `/clear` should not silently drop the operator out of AFK mode).
 }
 
 /**

@@ -35,7 +35,7 @@ function makeCtx(): { ctx: SlashContext; lines: string[] } {
       turnTokens: [],
       turns: [],
       model: 'sonnet',
-      planMode: false,
+      permissionMode: 'default',
     },
     out: {
       line: (t = '') => lines.push(t),

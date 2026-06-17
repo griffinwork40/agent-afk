@@ -124,7 +124,7 @@ function makeCtx(): InteractiveCtx {
     stats: {
       totalTurns: 0,
       model: 'sonnet',
-      planMode: false,
+      permissionMode: 'default',
       sessionId: 'mock',
     },
     statusLine: {
@@ -137,7 +137,7 @@ function makeCtx(): InteractiveCtx {
     contextSampler: { onTurn: vi.fn(async () => {}), getRatio: () => undefined, refresh: vi.fn(async () => {}) },
     completionWriter: { fn: vi.fn(), idleFn: vi.fn() },
     replRenderer: { writeLine: vi.fn(), setCompositor: vi.fn() },
-    slashCtx: { stats: { planMode: false } },
+    slashCtx: { stats: { permissionMode: 'default' } },
     rl: { close: vi.fn() },
     options: { thinkingUi: undefined },
     inputSurfaceRef: { current: null },

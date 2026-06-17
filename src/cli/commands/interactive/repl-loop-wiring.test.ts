@@ -135,7 +135,7 @@ function makeMinimalCtx(backgroundRegistry: BackgroundAgentRegistry): Interactiv
       turnTokens: [],
       turns: [],
       model: 'sonnet',
-      planMode: false,
+      permissionMode: 'default',
       sessionId: 'mock',
     },
     statusLine: {
@@ -147,7 +147,7 @@ function makeMinimalCtx(backgroundRegistry: BackgroundAgentRegistry): Interactiv
     contextSampler: { onTurn: vi.fn(async () => {}), getRatio: () => undefined },
     completionWriter: { fn: () => {}, idleFn: () => {} },
     replRenderer: { writeLine: vi.fn(), setCompositor: vi.fn() },
-    slashCtx: { stats: { planMode: false } },
+    slashCtx: { stats: { permissionMode: 'default' } },
     rl: { close: vi.fn() },
     options: { thinkingUi: undefined },
     backgroundRegistry,

@@ -213,7 +213,7 @@ function makeStats(): SessionStats {
     turnTokens: [],
     turns: [],
     model: 'sonnet',
-    planMode: false,
+    permissionMode: 'default',
   };
 }
 

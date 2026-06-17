@@ -5,7 +5,7 @@
  * keybinding in the REPL input loop. Both paths emit identical copy and
  * update the same stats/status-line plumbing. It flips the session permission
  * mode (`'plan'` <-> `'default'`) and mirrors the result onto
- * `stats.planMode` — the value the REPL prompt and status line read.
+ * `stats.permissionMode` — the value the REPL prompt and status line read.
  *
  * Exit semantics differ by entry point and live in the callers, not here:
  *   - `/plan off` (slash command) flips to default, then seeds a turn that
@@ -14,8 +14,8 @@
  *     "exit without implementing" escape hatch.
  *
  * If `setPermissionMode` rejects (e.g. the provider's query handle is closing
- * or already torn down), `stats.planMode` is left unchanged and the failure is
- * surfaced via `ctx.out.error` so the caller can detect a no-op flip.
+ * or already torn down), `stats.permissionMode` is left unchanged and the
+ * failure is surfaced via `ctx.out.error` so the caller can detect a no-op flip.
  */
 
 import { palette } from './palette.js';
@@ -27,12 +27,12 @@ export async function togglePlanMode(
   ctx: SlashContext,
   desired?: boolean,
 ): Promise<void> {
-  const current = ctx.stats.planMode;
+  const current = ctx.stats.permissionMode === 'plan';
   const next = desired !== undefined ? desired : !current;
 
   try {
     await ctx.session.current.setPermissionMode(next ? 'plan' : 'default');
-    ctx.stats.planMode = next;
+    ctx.stats.permissionMode = next ? 'plan' : 'default';
     ctx.ui.repaintStatusLine();
     if (next) {
       const tip = hasShownFirstUseTip

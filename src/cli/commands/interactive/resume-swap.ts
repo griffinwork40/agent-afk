@@ -180,12 +180,12 @@ export async function performResumeSwap(
     deps.stats.turnCosts = [];
     deps.stats.turnTokens = [];
   }
-  // Reset plan-mode state — the incoming session starts in default mode.
-  // planMode is user-controlled state that does NOT persist in StoredSession
-  // (by design: it's a per-session UI toggle, not a durable preference).
-  // Carrying it forward would cause the resumed session to inherit an
-  // unexpected permission mode from the outgoing session.
-  deps.stats.planMode = false;
+  // Reset permission mode — the incoming session starts in default mode.
+  // permissionMode (plan / AFK) is user-controlled state that does NOT persist
+  // in StoredSession (by design: it's a per-session UI toggle, not a durable
+  // preference). Carrying it forward would cause the resumed session to inherit
+  // an unexpected permission mode from the outgoing session.
+  deps.stats.permissionMode = 'default';
 
   // Step 8 — Update ctx.resumeTarget for potential banner helpers.
   // Wrapped in try/catch so a misbehaving onSwapped handler cannot abort the

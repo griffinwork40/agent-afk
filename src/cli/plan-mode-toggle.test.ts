@@ -2,11 +2,11 @@
  * Unit tests for the plan-mode toggle helper.
  *
  * `togglePlanMode` flips the session permission mode ('plan' <-> 'default'),
- * mirrors the result onto `stats.planMode`, and emits the ON/OFF copy. It is
+ * mirrors the result onto `stats.permissionMode`, and emits the ON/OFF copy. It is
  * the shared primitive behind both the /plan slash command and the Shift+Tab
  * keybinding. The exit-and-implement behavior lives in the slash command
  * (`slash/commands/plan.ts`), not here — this file covers the raw flip,
- * including its failure semantics (leave planMode unchanged on rejection).
+ * including its failure semantics (leave permissionMode unchanged on rejection).
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -24,7 +24,7 @@ function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
     turnTokens: [],
     turns: [],
     model: 'sonnet',
-    planMode: false,
+    permissionMode: 'default',
     ...overrides,
   };
 }
@@ -59,52 +59,52 @@ function makeCtx(opts: {
 
 describe('togglePlanMode', () => {
   it('flips default → plan and emits ON copy', async () => {
-    const stats = makeStats({ planMode: false });
+    const stats = makeStats({ permissionMode: 'default' });
     const { ctx, sess, lines } = makeCtx({ stats });
 
     await togglePlanMode(ctx, true);
 
     expect(sess.setPermissionMode).toHaveBeenCalledWith('plan');
-    expect(stats.planMode).toBe(true);
+    expect(stats.permissionMode).toBe('plan');
     const joined = lines.join('\n').toLowerCase();
     expect(joined).toContain('plan mode on');
   });
 
   it('flips plan → default and emits OFF copy', async () => {
-    const stats = makeStats({ planMode: true });
+    const stats = makeStats({ permissionMode: 'plan' });
     const { ctx, sess, lines } = makeCtx({ stats });
 
     await togglePlanMode(ctx, false);
 
     expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
-    expect(stats.planMode).toBe(false);
+    expect(stats.permissionMode).toBe('default');
     const joined = lines.join('\n').toLowerCase();
     expect(joined).toContain('plan mode off');
     expect(joined).toContain('default permissions restored');
   });
 
   it('toggles based on current mode when no explicit desired is passed', async () => {
-    const stats = makeStats({ planMode: true });
+    const stats = makeStats({ permissionMode: 'plan' });
     const { ctx, sess } = makeCtx({ stats });
 
     await togglePlanMode(ctx);
 
     expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
-    expect(stats.planMode).toBe(false);
+    expect(stats.permissionMode).toBe('default');
   });
 
-  it('leaves planMode unchanged and surfaces an error when setPermissionMode rejects', async () => {
+  it('leaves permissionMode unchanged and surfaces an error when setPermissionMode rejects', async () => {
     // The provider's query handle can reject (closing or torn down). The
-    // helper must NOT advance stats.planMode — callers (e.g. /plan off) read
+    // helper must NOT advance stats.permissionMode — callers (e.g. /plan off) read
     // it back to decide whether to seed a follow-up turn.
     const setPermissionMode = vi.fn().mockRejectedValue(new Error('boom'));
-    const stats = makeStats({ planMode: true });
+    const stats = makeStats({ permissionMode: 'plan' });
     const { ctx, lines } = makeCtx({ stats, setPermissionMode });
 
     await togglePlanMode(ctx, false);
 
     expect(setPermissionMode).toHaveBeenCalledWith('default');
-    expect(stats.planMode).toBe(true);
+    expect(stats.permissionMode).toBe('plan');
     expect(lines.some((l) => l.startsWith('ERROR:'))).toBe(true);
   });
 });

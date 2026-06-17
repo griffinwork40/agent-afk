@@ -1,4 +1,5 @@
 import { palette } from '../../palette.js';
+import type { PermissionMode } from '../../../agent/types/sdk-types.js';
 
 /**
  * Cross-phase state + helpers shared by the repl-loop orchestrator and its
@@ -55,8 +56,11 @@ export interface TurnState {
   requestSoftStop?: (() => void) | null;
 }
 
-export function buildPrompt(model: string, planMode: boolean): string {
+export function buildPrompt(model: string, mode: PermissionMode): string {
   const base = palette.brand('afk') + palette.dim(` (${model})`);
-  const marker = planMode ? palette.warning(' ● plan') : '';
+  const marker =
+    mode === 'plan' ? palette.warning(' ● plan') :
+    mode === 'autonomous' ? palette.info(' ◐ AFK') :
+    '';
   return base + marker + palette.dim('  › ');
 }

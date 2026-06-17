@@ -81,6 +81,7 @@ import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import type { ToolResult } from '../anthropic-direct/types.js';
 import { contextWindowTokensUsed, buildContextUsageFields } from '../anthropic-direct/query/auto-compact.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../anthropic-direct/plan-mode-addendum.js';
+import { AFK_MODE_ADDENDUM_TEXT } from '../anthropic-direct/afk-mode-addendum.js';
 
 const PROVIDER_NAME = 'openai-compatible';
 
@@ -511,12 +512,19 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       vision,
     });
 
-    // Inject plan-mode posture addendum so the model understands write refusals.
-    if (this.currentPermissionMode === 'plan' && messages[0]?.role === 'system') {
-      messages[0] = {
-        ...messages[0],
-        content: (messages[0].content as string) + '\n\n' + PLAN_MODE_ADDENDUM_TEXT,
-      };
+    // Inject plan-mode / AFK-mode posture addendum onto the system message.
+    // The two are mutually exclusive permission modes, so at most one applies.
+    if (messages[0]?.role === 'system') {
+      const addendum =
+        this.currentPermissionMode === 'plan' ? PLAN_MODE_ADDENDUM_TEXT :
+        this.currentPermissionMode === 'autonomous' ? AFK_MODE_ADDENDUM_TEXT :
+        null;
+      if (addendum !== null) {
+        messages[0] = {
+          ...messages[0],
+          content: (messages[0].content as string) + '\n\n' + addendum,
+        };
+      }
     }
 
     const state = createStreamState();

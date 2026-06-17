@@ -40,7 +40,7 @@
  *      mode, so the writes land.
  *
  * If the flip fails (a transient `setPermissionMode` rejection — surfaced by
- * `togglePlanMode`, which leaves `planMode` unchanged), no implement turn is
+ * `togglePlanMode`, which leaves `permissionMode` unchanged), no implement turn is
  * seeded: seeding one while writes are still refused would only produce a
  * wall of gate refusals.
  *
@@ -50,7 +50,7 @@
  *
  * Scope: plan mode is a REPL-only conversation affordance. Other surfaces
  * (Telegram) never enter plan mode (their sessions are constructed with
- * `planMode: false` and no toggle path), so this command's exit behavior is
+ * `permissionMode: 'default'` and no toggle path), so this command's exit behavior is
  * exercised only by the REPL's `{ kind: 'submit' }` consumer.
  */
 
@@ -82,9 +82,9 @@ export function buildPlanExitPrompt(plansDir: string): string {
  */
 async function exitAndImplement(ctx: SlashContext): Promise<SlashResult> {
   await togglePlanMode(ctx, false);
-  if (ctx.stats.planMode) {
+  if (ctx.stats.permissionMode === 'plan') {
     // Flip failed — togglePlanMode already surfaced the error and left
-    // planMode unchanged. Do NOT seed an implement turn while writes are
+    // permissionMode unchanged. Do NOT seed an implement turn while writes are
     // still refused; the model would only collect gate refusals.
     return 'continue';
   }
@@ -106,7 +106,7 @@ export const planCmd: SlashCommand = {
 
     // Free-text arg: enter plan mode unconditionally and submit as prompt.
     if (arg !== '' && argLower !== 'on' && argLower !== 'off') {
-      if (!ctx.stats.planMode) {
+      if (ctx.stats.permissionMode !== 'plan') {
         await togglePlanMode(ctx, true);
       }
       return { kind: 'submit', message: arg };
@@ -115,10 +115,10 @@ export const planCmd: SlashCommand = {
     const desired =
       argLower === 'on' ? true :
       argLower === 'off' ? false :
-      !ctx.stats.planMode;
+      ctx.stats.permissionMode !== 'plan';
 
     if (desired === true) {
-      if (ctx.stats.planMode) {
+      if (ctx.stats.permissionMode === 'plan') {
         // Already on — nothing to do. togglePlanMode would emit a no-op
         // success line; suppress it for ergonomics.
         return 'continue';
@@ -128,7 +128,7 @@ export const planCmd: SlashCommand = {
     }
 
     // desired === false
-    if (!ctx.stats.planMode) {
+    if (ctx.stats.permissionMode !== 'plan') {
       // Already off — toggle to surface the affordance (no-op on the gate).
       // No plan to save, so no implement turn is seeded.
       await togglePlanMode(ctx, false);

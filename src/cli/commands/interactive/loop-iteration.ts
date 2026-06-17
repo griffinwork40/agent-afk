@@ -185,7 +185,7 @@ export async function runInputLoop(
         // readLine echo path so scrollback parity holds).
         const queued = seedBuffer;
         seedBuffer = undefined;
-        const prompt = buildPrompt(ctx.stats.model, ctx.stats.planMode);
+        const prompt = buildPrompt(ctx.stats.model, ctx.stats.permissionMode);
         const echo = formatSubmittedEcho({
           buffer: queued.text,
           promptText: prompt,
@@ -201,7 +201,7 @@ export async function runInputLoop(
         // on non-TTY surfaces. Shift+Tab and onSigint are wired ONCE at
         // armCompositor time (above) — no need to re-pass per-call.
         const result = await surface.readLine({
-          promptFn: () => buildPrompt(ctx.stats.model, ctx.stats.planMode),
+          promptFn: () => buildPrompt(ctx.stats.model, ctx.stats.permissionMode),
           onSigint: sigintHandler,
           onShiftTab: () => {
             // Shift+Tab is the keyboard speed lane: a raw plan-mode flip with
@@ -491,7 +491,7 @@ export async function runInputLoop(
         // by armCompositor and the renderer's borrow skips this branch
         // — passing them anyway is a defensive belt-and-suspenders for
         // surfaces that haven't armed (e.g. a future test path).
-        surface.toRunTurnRefs(buildPrompt(ctx.stats.model, ctx.stats.planMode)),
+        surface.toRunTurnRefs(buildPrompt(ctx.stats.model, ctx.stats.permissionMode)),
       );
     }
 }

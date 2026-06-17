@@ -31,7 +31,7 @@ function makeWriter(): Writer & { lines: string[] } {
 function makeCtx(writer: Writer): SlashContext {
   return {
     out: writer,
-    stats: { totalTurns: 0, totalCostUsd: 0, totalTokens: 0, totalDurationMs: 0, sessionStartTime: 0, turnCosts: [], turnTokens: [], turns: [], model: 'claude-opus' as const, planMode: false },
+    stats: { totalTurns: 0, totalCostUsd: 0, totalTokens: 0, totalDurationMs: 0, sessionStartTime: 0, turnCosts: [], turnTokens: [], turns: [], model: 'claude-opus' as const, permissionMode: 'default' },
     session: {} as never,
     ui: { clearScreen: () => {}, repaintStatusLine: () => {} },
   } as SlashContext;

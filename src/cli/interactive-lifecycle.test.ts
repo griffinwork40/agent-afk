@@ -78,7 +78,7 @@ describe('interactive bootstrap status line hooks', () => {
     expect(registerAll).toHaveBeenCalledTimes(1);
 
     ctx.stats.model = 'opus';
-    ctx.stats.planMode = true;
+    ctx.stats.permissionMode = 'plan';
     ctx.stats.totalCostUsd = 1.25;
     ctx.stats.totalTokens = 2048;
 
@@ -91,7 +91,7 @@ describe('interactive bootstrap status line hooks', () => {
       contextLimit: 200000,
       contextUsedTokens: undefined,
       contextSparkline: undefined,
-      planMode: true,
+      permissionMode: 'plan',
       cwd: process.cwd(),
     });
 
@@ -126,7 +126,7 @@ describe('interactive bootstrap status line hooks', () => {
       contextLimit: 200000,
       contextUsedTokens: undefined,
       contextSparkline: undefined,
-      planMode: true,
+      permissionMode: 'plan',
       cwd: process.cwd(),
     });
     const clearCall = stdoutWrite.mock.invocationCallOrder[
@@ -337,7 +337,7 @@ describe('interactive command exit teardown', () => {
           turnTokens: [{ input: 256, output: 256, cache: 0 }],
           turns: [],
           model: 'sonnet',
-          planMode: false,
+          permissionMode: 'default',
           sessionId: 'sdk-exit',
         },
         statusLine,
@@ -497,7 +497,7 @@ describe('interactive worktree flag', () => {
         turnTokens: [],
         turns: [],
         model: 'sonnet',
-        planMode: false,
+        permissionMode: 'default',
       },
       statusLine,
       slashCtx: {
@@ -668,7 +668,7 @@ describe('interactive worktree flag', () => {
           ],
           turns: [],
           model: 'claude-opus-4',
-          planMode: false,
+          permissionMode: 'default',
           sessionId: 'item8-test',
         },
         statusLine,
@@ -772,7 +772,7 @@ describe('interactive worktree flag', () => {
           turnTokens: [],
           turns: [],
           model: 'sonnet',
-          planMode: false,
+          permissionMode: 'default',
         },
         statusLine,
         slashCtx: {
@@ -896,7 +896,7 @@ describe('interactive signal-handler wiring (PR #486)', () => {
           turnTokens: [],
           turns: [],
           model: 'sonnet',
-          planMode: false,
+          permissionMode: 'default',
         },
         statusLine,
         slashCtx: { ui: { repaintStatusLine } } as never,
