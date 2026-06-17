@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.10.0] - 2026-06-17
+
+### Added
+- gate bash by mutation, not a substring denylist (2eb6d5f)
+
+### Changed
+- Merge pull request #188 from griffinwork40/afk/20260617-053220-bbd8c1 (ccbc5ac)
+
 ## [4.9.1] - 2026-06-17
 
 ### Fixed
