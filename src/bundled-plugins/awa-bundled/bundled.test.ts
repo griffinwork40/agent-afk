@@ -37,7 +37,7 @@ const __dirname = dirname(__filename);
 const PINNED_HASHES = {
   contract: '748eaf01deda592913f463b23c81a6be3a89ae3b316f31f531a8488dc5bc1a7c',
   'devils-advocate':
-    'a86982c9d8e2ec65e409f92b2715f551c4d6861b08bb10ac5e20e1e6f1717efa',
+    '3e7f65b240ef3a9530efba2b71ea9912c6d53e43d69a551612f1c4b8b31fd1c6',
   // gather + parallelize carry a bundled-only `context: load` frontmatter line
   // (2026-06 skill-execution-mode work). `context` is an agent-afk-specific
   // field; Claude Code upstream skills are natively inline/progressive-disclosure,
@@ -80,7 +80,7 @@ const PINNED_HASHES = {
   // BACK-PORT GAP: the same enhancement should land in the upstream example-plugin
   // shadow-verify skill (drift test is skipped here — example-plugin not co-located).
   'shadow-verify':
-    '07aeb4724877001351de868012d796841fb3b9596e0086cd4b302a17c183c977',
+    'fafc8db3bf78aa41aa406416d968f8af8aba764eb4ffd9ecb1c77d232819a6ab',
   // Hash bumped 2026-06: Phase 4 (commit) + Phase 8 (PR) switched from the
   // `--body "$(cat <<'EOF' … EOF)"` heredoc-in-command-substitution antipattern
   // to the file-based form (`git commit -F` / `gh pr create --body-file`). The
