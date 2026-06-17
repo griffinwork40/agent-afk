@@ -314,7 +314,11 @@ export class StatusLine {
     }
     const rows = this.currentRows();
     this.stream.write('\x1b[s');
-    this.stream.write(`\x1b[${this.lastPaintedRow ?? this.paintRow(rows)};1H`);
+    // Symmetric with onResize(): prefer preResizePaintedRow so a mid-debounce
+    // repaint() that re-seeded lastPaintedRow to the new geometry doesn't cause
+    // stop() to erase the wrong (new-geometry) row.
+    const rowToErase = this.preResizePaintedRow ?? this.lastPaintedRow ?? this.paintRow(rows);
+    this.stream.write(`\x1b[${rowToErase};1H`);
     this.stream.write('\x1b[2K');
     // Reset scroll region to full.
     this.stream.write('\x1b[r');

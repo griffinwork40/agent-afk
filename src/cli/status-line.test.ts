@@ -440,6 +440,36 @@ describe('StatusLine resize handling', () => {
     status.stop();
   });
 
+  it('stop() during debounce window clears the pre-SIGWINCH row, not the new-geometry row', () => {
+    // Race: SIGWINCH fires (preResizePaintedRow=24, lastPaintedRow=null), then a
+    // mid-window repaint() seeds lastPaintedRow=30. stop() must erase row 24
+    // (preResizePaintedRow), NOT row 30 (lastPaintedRow after the mid-window repaint).
+    vi.useFakeTimers();
+    const stream = mockStream({ isTTY: true, rows: 24 });
+    const status = new StatusLine({
+      stream: stream as unknown as NodeJS.WriteStream,
+      throttleMs: 0,
+    });
+    status.start();
+    status.repaint({ model: 'sonnet' }); // lastPaintedRow=24
+
+    // SIGWINCH: preResizePaintedRow=24, lastPaintedRow=null.
+    stream.rows = 30;
+    process.stdout.emit('resize');
+
+    // Mid-window repaint seeds lastPaintedRow=30.
+    status.repaint({ model: 'sonnet' });
+
+    stream.writes.length = 0;
+    status.stop();
+    const out = lastJoined(stream);
+
+    // Must erase the true pre-SIGWINCH row (24).
+    expect(out).toContain('\x1b[24;1H');
+    // Must NOT erase the new-geometry row (30) — sharp: fails on buggy code.
+    expect(out).not.toContain('\x1b[30;1H');
+  });
+
   it('does not emit an invalid 1;0 scroll region when the terminal has one row', () => {
     const stream = mockStream({ isTTY: true, rows: 1 });
     const status = new StatusLine({
