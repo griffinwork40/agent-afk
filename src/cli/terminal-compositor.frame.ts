@@ -271,7 +271,7 @@ export function repaint(self: FrameHost): void {
   // whether the render wiped the band (the collapse render, whose stale-tall
   // top erases down through it).
   const preRenderFrameTop = self.logUpdate.topRow ?? 0;
-  self.logUpdate.render(frame, targetBottomRow);
+  self.logUpdate.render(frame, targetBottomRow, self.anchorRow);
   self.repositionCommittedBand(desiredTopRow, preRenderFrameTop, targetBottomRow);
 }
 
@@ -340,6 +340,6 @@ function repaintPickerFrame(self: FrameHost): void {
     : Math.max(1, targetBottomRow - frameLines.length + 1);
   preserveRowsBeforeFrameRender(self, desiredTopRow);
   const preRenderFrameTop = self.logUpdate.topRow ?? 0;
-  self.logUpdate.render(frame, targetBottomRow);
+  self.logUpdate.render(frame, targetBottomRow, self.anchorRow);
   self.repositionCommittedBand(desiredTopRow, preRenderFrameTop, targetBottomRow);
 }
