@@ -11,6 +11,18 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.9.1] - 2026-06-17
+
+### Fixed
+- add spec-compliance axis + thread stated intent to dimension agents (26f1a22)
+- add spec-compliance axis to design-review verify gate (port afk-workshop#802) (188396f)
+
+### Changed
+- Merge pull request #185 from griffinwork40/fix/bundle-review-spec-compliance (16d0098)
+- Merge pull request #182 from griffinwork40/afk-port/pr-802 (194d5f6)
+- Merge pull request #183 from griffinwork40/afk/20260616-180623-db5293 (5376562)
+- fix verified accuracy gaps across website and repo docs (0e1b05a)
+
 ## [4.9.0] - 2026-06-17
 
 ### Added
