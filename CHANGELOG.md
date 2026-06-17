@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.11.1] - 2026-06-17
+
+### Fixed
+- clamp shrink-pad to anchorFloor so the slash-command dropdown can't erase the welcome banner (2367ab8)
+
+### Changed
+- Merge pull request #189 from griffinwork40/afk/20260617-062257-f74a5a (f59b5eb)
+
 ## [4.11.0] - 2026-06-17
 
 ### Added
