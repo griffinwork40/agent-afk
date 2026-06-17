@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.12.0] - 2026-06-17
+
+### Added
+- diagnostic-goal handling + commit-gate terminal-state invariant (port afk-workshop#808) (c505a5f)
+
+### Changed
+- Merge pull request #196 from griffinwork40/afk-port/pr-808 (89c02ad)
+
 ## [4.11.2] - 2026-06-17
 
 ### Fixed
