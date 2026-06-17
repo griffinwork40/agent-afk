@@ -9,13 +9,17 @@
  *   /plan <free text>        — enter plan mode and pre-fill the prompt with
  *                              <free text> for immediate submission
  *
- * Enforcement: in plan mode, write_file, edit_file, memory_update,
- * procedure_write, and write-intent bash are refused by the plan-mode gate
- * hook (`src/agent/plan-mode-gate.ts`). This is hook-level refusal in
- * agent-afk's own harness — the model is not lied to about which permission
- * mode it is in, and there is no upstream permission-mode layer being relied
- * on. (agent-afk talks to the Anthropic Messages API directly via
- * `@anthropic-ai/sdk`; it does not use `@anthropic-ai/claude-agent-sdk`.)
+ * Enforcement: in plan mode, write_file, edit_file, memory_update, and
+ * procedure_write are refused by the plan-mode gate hook
+ * (`src/agent/plan-mode-gate.ts`). `bash` is mutation-gated rather than blanket-
+ * refused: read-only recon (git status/log/diff, ls, cat, grep, find) runs,
+ * while state-mutating commands are refused via the shared `classifyBashCommand`
+ * classifier (best-effort, not a security boundary — the same classifier that
+ * gates read-only skill phases). This is hook-level refusal in agent-afk's own
+ * harness — the model is not lied to about which permission mode it is in, and
+ * there is no upstream permission-mode layer being relied on. (agent-afk talks
+ * to the Anthropic Messages API directly via `@anthropic-ai/sdk`; it does not
+ * use `@anthropic-ai/claude-agent-sdk`.)
  *
  * Posture: the `anthropic-direct` provider appends a planning-topology
  * addendum to the system prompt whenever permissionMode === 'plan', so the
@@ -95,7 +99,7 @@ export const planCmd: SlashCommand = {
   name: '/plan',
   usage: '/plan [on|off|<prompt>]',
   summary: 'Toggle plan mode; /plan off saves the plan to a file then implements it',
-  hint: 'Think through an approach without touching files — writes are refused until you exit. /plan off saves the plan + implements it; Shift+Tab exits without implementing.',
+  hint: 'Think through an approach without changing anything — write tools and state-mutating bash are refused until you exit; read-only investigation runs. /plan off saves the plan + implements it; Shift+Tab exits without implementing.',
   async handler(ctx, args): Promise<SlashResult> {
     const arg = args.trim();
     const argLower = arg.toLowerCase();

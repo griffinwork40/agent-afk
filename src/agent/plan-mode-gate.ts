@@ -1,26 +1,30 @@
 /**
  * Plan-mode gate hook factory.
  *
- * Returns a `HookHandler` that blocks write-class tool calls when the session
+ * Returns a `HookHandler` that blocks state-mutating tool calls when the session
  * is in 'plan' mode. The handler reads the current mode at call time (not at
  * construction time), so toggling the mode mid-session is reflected immediately
  * without reconstructing the registry.
  *
  * Blocked operations:
  *   - Any tool categorized as `'write'` by `tool-category.ts` — always blocked
- *     in plan mode. This covers `write_file`, `edit_file`, `memory_update`, and
- *     `procedure_write` (the last two previously fell through and allowed plan
- *     mode to mutate persistent memory — now fixed).
- *   - `bash` — blocked when the command matches a write-intent denylist.
- *     Unknown/read-only bash commands pass through.
+ *     in plan mode. Covers `write_file`, `edit_file`, `memory_update`,
+ *     `procedure_write`, `config_set`, and `terminal_font_size`: the tools that
+ *     persist state to disk or memory. This is the meaningful, non-bypassable
+ *     no-mutation guarantee.
+ *   - `bash` — blocked when `classifyBashCommand` (`tools/readonly-bash.ts`)
+ *     judges the command state-mutating; read-only recon (`git status/log/diff`,
+ *     `ls`, `cat`, `grep`, `find`, and chains thereof) passes through. This is
+ *     the SAME best-effort classifier that gates read-only skill phases (the
+ *     dispatcher's `readOnlyBash` path), so the mutation rules live in one place
+ *     and the two consumers cannot drift apart.
  *
- * This gate is a best-effort honesty primitive, not a security boundary.
- * Interpreter-mediated writes (`python -c`, `node -e`, `curl -o`, `wget -O`,
- * heredocs, `dd`, `truncate`, etc.) are not caught. The denylist is
- * substring-matched against the raw command string and is intentionally
- * conservative: it catches the common write-intent shapes a model would
- * naturally emit in plan mode, and surfaces refusal so the user can choose
- * to exit plan mode rather than silently allowing the side-effect.
+ * The bash check is an honesty guardrail, NOT a security boundary. Because bash
+ * is Turing-complete, no classifier is exhaustive — obfuscated writes
+ * (`eval "$(printf …)"`, `sh -c "…"`) slip through, as `readonly-bash.ts` itself
+ * documents. It catches the mutation shapes a cooperative model naturally emits
+ * while planning and surfaces refusal so the user can `/plan off` rather than
+ * silently allow the side-effect.
  *
  * @module agent/plan-mode-gate
  */
@@ -28,29 +32,7 @@
 import type { HookContext, HookDecision } from './hooks.js';
 import type { PermissionMode } from './types/sdk-types.js';
 import { categorizeTool } from './tool-category.js';
-
-const BASH_DENYLIST = [
-  'git commit',
-  'git push',
-  'git reset',
-  'rm ',
-  'mv ',
-  'mkdir',
-  'touch',
-  'chmod',
-  'chown',
-  'cp ',
-  'tee ',
-  ' > ',
-  ' >> ',
-  'npm install',
-  'pnpm install',
-  'pip install',
-  'apt ',
-  'apt-get ',
-  'brew install',
-  ' && ',
-];
+import { classifyBashCommand } from './tools/readonly-bash.js';
 
 export function createPlanModeGate(
   getMode: () => PermissionMode,
@@ -68,10 +50,8 @@ export function createPlanModeGate(
     const { toolName } = context;
 
     // External constraint (semantic invariant): any tool categorized as 'write'
-    // persists state to disk. Block all of them, not just file-write tools.
-    // Previously only write_file and edit_file were blocked; memory_update and
-    // procedure_write now blocked too (bug fix — plan mode must not allow
-    // persistent-memory mutation).
+    // persists state to disk or memory. Block all of them — write_file,
+    // edit_file, memory_update, procedure_write, config_set, terminal_font_size.
     if (categorizeTool(toolName) === 'write') {
       return {
         decision: 'block',
@@ -79,17 +59,23 @@ export function createPlanModeGate(
       };
     }
 
+    // `bash` is mutation-gated, not blanket-refused: read-only recon runs,
+    // state-mutating commands are refused. Reuses the same best-effort
+    // classifier as the read-only skill phases (single source of mutation
+    // rules). Best-effort, not a sandbox — see the module header.
     if (toolName === 'bash') {
       const cmd =
         typeof context.input === 'object' && context.input !== null
           ? String((context.input as Record<string, unknown>)['command'] ?? '')
           : '';
-      const denied = BASH_DENYLIST.some((p) => cmd.includes(p));
-      if (denied) {
+      const verdict = classifyBashCommand(cmd);
+      if (verdict.mutating) {
         return {
           decision: 'block',
           reason:
-            'plan mode: write-intent bash is refused. Use /plan off or rephrase as a read-only command.',
+            `plan mode: bash refused — command looks state-mutating ` +
+            `(${verdict.reason ?? 'mutation detected'}). Read-only investigation ` +
+            `(git status/log/diff, ls, cat, grep, find) is allowed. Use /plan off to act.`,
         };
       }
     }

@@ -29,8 +29,9 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 export const PLAN_MODE_ADDENDUM_TEXT = [
   '## Plan mode is active',
   '',
-  'Write-class tools (`write_file`, `edit_file`, write-intent `bash`) are refused at the hook layer.',
-  'The user has asked you to plan, not yet to act. Treat this turn as planning work.',
+  'File and memory write tools (`write_file`, `edit_file`, `memory_update`, `procedure_write`) are refused at the hook layer.',
+  '`bash` runs for read-only investigation (git status/log/diff, ls, cat, grep, find — chained or not); state-mutating bash (file writes, rm, installs, commits, pushes) is refused while planning. The user has asked you to plan, not yet to act — exit plan mode to make changes.',
+  'Treat this turn as planning work.',
   '',
   'Traverse the shape that matches the work — skip steps the terrain already covers, do not skip steps the terrain hides:',
   '',

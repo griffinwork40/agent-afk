@@ -34,7 +34,24 @@ describe('createPlanModeGate', () => {
     expect(result.reason).toContain('edit_file');
   });
 
-  it('blocks bash with git commit in plan mode', () => {
+  // Bash is mutation-gated in plan mode via the shared `classifyBashCommand`
+  // classifier (tools/readonly-bash.ts): read-only recon passes, state-mutating
+  // commands are refused. These tests exercise the REAL classifier through the
+  // gate (no mock), so they double as an integration check that the gate wires
+  // to it. The file/memory write-tool gate above is the separate, hard
+  // no-mutation guarantee.
+  it('blocks state-mutating bash (rm) in plan mode', () => {
+    const { gate } = makeGate('plan');
+    const result = gate({
+      event: 'PreToolUse',
+      toolName: 'bash',
+      input: { command: 'rm file.txt' },
+    });
+    expect(result.decision).toBe('block');
+    expect(result.reason).toContain('state-mutating');
+  });
+
+  it('blocks state-mutating bash (git commit) in plan mode', () => {
     const { gate } = makeGate('plan');
     const result = gate({
       event: 'PreToolUse',
@@ -44,14 +61,27 @@ describe('createPlanModeGate', () => {
     expect(result.decision).toBe('block');
   });
 
-  it('blocks bash with rm in plan mode', () => {
+  it('blocks output redirection to a file in plan mode', () => {
     const { gate } = makeGate('plan');
     const result = gate({
       event: 'PreToolUse',
       toolName: 'bash',
-      input: { command: 'rm file.txt' },
+      input: { command: 'echo hello > out.txt' },
     });
     expect(result.decision).toBe('block');
+  });
+
+  it('allows chained read-only bash (git status && git log) in plan mode', () => {
+    // Regression guard for the friction the old substring denylist caused: it
+    // listed ` && `, so every chained command was refused — even when both
+    // halves were read-only. The classifier parses properly and allows this.
+    const { gate } = makeGate('plan');
+    const result = gate({
+      event: 'PreToolUse',
+      toolName: 'bash',
+      input: { command: 'git status && git log --oneline -5' },
+    });
+    expect(result.decision).toBeUndefined();
   });
 
   it('allows read-only bash (git status) in plan mode', () => {
@@ -60,6 +90,16 @@ describe('createPlanModeGate', () => {
       event: 'PreToolUse',
       toolName: 'bash',
       input: { command: 'git status' },
+    });
+    expect(result.decision).toBeUndefined();
+  });
+
+  it('allows read-only bash (grep) in plan mode', () => {
+    const { gate } = makeGate('plan');
+    const result = gate({
+      event: 'PreToolUse',
+      toolName: 'bash',
+      input: { command: 'grep -rn foo src' },
     });
     expect(result.decision).toBeUndefined();
   });
