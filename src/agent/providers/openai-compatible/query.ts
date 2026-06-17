@@ -19,8 +19,6 @@
  * Things deliberately deferred:
  *   - File checkpointing / rewindFiles (deferred — `canRewind: false`)
  *   - Compact (provider opts out by leaving `compact` undefined)
- *   - Reasoning effort knob for o-series (will be wired when AgentConfig
- *     `effort` flows through cleanly)
  *
  * @module agent/providers/openai-compatible/query
  */
@@ -28,6 +26,7 @@
 import OpenAI from 'openai';
 import { randomUUID } from 'node:crypto';
 import type { AgentConfig } from '../../types/config-types.js';
+import type { EffortLevel } from '../../types/sdk-types.js';
 import type {
   ProviderQuery,
   ProviderEvent,
@@ -142,6 +141,49 @@ export interface OpenAICompatibleQueryOptions {
 
 function normalizePermissionMode(mode: string | undefined): string {
   return mode ?? 'default';
+}
+
+/**
+ * Detect OpenAI o-series reasoning models (o1, o3, o4, and their variants).
+ * Strips any `provider/` prefix (OpenRouter-style ids) before matching.
+ * Mirrors the detection in `oneshot.ts` for the `max_completion_tokens` switch.
+ */
+export function isOSeriesModel(model: string): boolean {
+  const bareModel = model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model;
+  return /^o[0-9]/.test(bareModel);
+}
+
+/**
+ * Map AFK's `EffortLevel` to OpenAI's `reasoning_effort` values.
+ * OpenAI accepts `low`, `medium`, `high`. AFK's `xhigh` and `max` are
+ * Anthropic-specific and map to `high` for OpenAI.
+ */
+export function mapEffortForOpenAI(effort: EffortLevel): 'low' | 'medium' | 'high' {
+  switch (effort) {
+    case 'low':
+      return 'low';
+    case 'medium':
+      return 'medium';
+    case 'high':
+    case 'xhigh':
+    case 'max':
+      return 'high';
+  }
+}
+
+/**
+ * Resolve the `reasoning_effort` to send for a given model + effort config.
+ * Returns `undefined` when effort should not be forwarded (non-o-series model
+ * or no effort configured). Callers attach the result to the request body
+ * under `reasoning_effort` (Chat Completions) or `reasoning.effort` (Responses).
+ */
+export function resolveReasoningEffort(
+  effort: EffortLevel | undefined,
+  model: string,
+): 'low' | 'medium' | 'high' | undefined {
+  if (effort === undefined) return undefined;
+  if (!isOSeriesModel(model)) return undefined;
+  return mapEffortForOpenAI(effort);
 }
 
 /** Internal record used to drive the per-turn iteration loop. */
@@ -560,6 +602,12 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       if (instructions !== undefined) requestBody['instructions'] = instructions;
       if (isChatGptBackend) requestBody['store'] = false;
       if (req.tools && req.tools.length > 0) requestBody['tools'] = req.tools;
+      // Forward reasoning effort for o-series models on the Responses API.
+      // Uses the `reasoning: { effort }` shape per OpenAI's Responses API spec.
+      const responsesEffort = resolveReasoningEffort(this.opts.config.effort, this.currentModel);
+      if (responsesEffort !== undefined) {
+        requestBody['reasoning'] = { effort: responsesEffort };
+      }
 
       let stream: AsyncIterable<ResponsesStreamEvent>;
       try {
@@ -595,6 +643,12 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       // arrays make some providers reject the request.
       if (this.openAITools && this.openAITools.length > 0) {
         requestBody['tools'] = this.openAITools;
+      }
+      // Forward reasoning effort for o-series models on Chat Completions.
+      // Uses the `reasoning_effort` field per OpenAI's Chat Completions API spec.
+      const chatEffort = resolveReasoningEffort(this.opts.config.effort, this.currentModel);
+      if (chatEffort !== undefined) {
+        requestBody['reasoning_effort'] = chatEffort;
       }
 
       let stream: AsyncIterable<OpenAIChunk>;

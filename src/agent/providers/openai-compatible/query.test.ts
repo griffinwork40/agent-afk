@@ -600,6 +600,163 @@ describe('OpenAICompatibleQuery — model-slot resolution in request body', () =
   });
 });
 
+describe('OpenAICompatibleQuery — reasoning_effort for o-series models', () => {
+  it('forwards reasoning_effort for o-series models when effort is set', async () => {
+    pendingChunks = [
+      { choices: [{ delta: { content: 'ok' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'o3', effort: 'high' }),
+      singleInput('hi'),
+    );
+    await collect(q);
+    expect(createCalls).toHaveLength(1);
+    const args = createCalls[0]!.args as Record<string, unknown>;
+    expect(args['reasoning_effort']).toBe('high');
+  });
+
+  it('does NOT forward reasoning_effort for non-o-series models', async () => {
+    pendingChunks = [
+      { choices: [{ delta: { content: 'ok' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'gpt-4o', effort: 'high' }),
+      singleInput('hi'),
+    );
+    await collect(q);
+    const args = createCalls[0]!.args as Record<string, unknown>;
+    expect(args['reasoning_effort']).toBeUndefined();
+  });
+
+  it('does NOT forward reasoning_effort when effort is undefined', async () => {
+    pendingChunks = [
+      { choices: [{ delta: { content: 'ok' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'o3' }),
+      singleInput('hi'),
+    );
+    await collect(q);
+    const args = createCalls[0]!.args as Record<string, unknown>;
+    expect(args['reasoning_effort']).toBeUndefined();
+  });
+
+  it('maps xhigh to high for OpenAI', async () => {
+    pendingChunks = [
+      { choices: [{ delta: { content: 'ok' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'o4-mini', effort: 'xhigh' }),
+      singleInput('hi'),
+    );
+    await collect(q);
+    const args = createCalls[0]!.args as Record<string, unknown>;
+    expect(args['reasoning_effort']).toBe('high');
+  });
+
+  it('maps max to high for OpenAI', async () => {
+    pendingChunks = [
+      { choices: [{ delta: { content: 'ok' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'o1', effort: 'max' }),
+      singleInput('hi'),
+    );
+    await collect(q);
+    const args = createCalls[0]!.args as Record<string, unknown>;
+    expect(args['reasoning_effort']).toBe('high');
+  });
+
+  it('handles OpenRouter-style prefixed model ids (e.g. openai/o3)', async () => {
+    pendingChunks = [
+      { choices: [{ delta: { content: 'ok' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'openai/o3', effort: 'medium' }),
+      singleInput('hi'),
+    );
+    await collect(q);
+    const args = createCalls[0]!.args as Record<string, unknown>;
+    expect(args['reasoning_effort']).toBe('medium');
+  });
+
+  it('forwards reasoning.effort on the Responses API path for o-series models', async () => {
+    // Install a mock that also supports the Responses API
+    const responsesFactory: OpenAIClientFactory = () =>
+      ({
+        chat: {
+          completions: {
+            create: async () => { throw new Error('should not be called'); },
+          },
+        },
+        responses: {
+          create: async (args: Record<string, unknown>) => {
+            createCalls.push({ args });
+            const gen = (async function* () {
+              yield { type: 'response.output_text.delta', delta: 'ok' };
+              yield { type: 'response.completed', response: { usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } };
+            })();
+            return gen;
+          },
+        },
+      }) as unknown as OpenAI;
+    __setOpenAIClientFactory(responsesFactory);
+
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'o3', effort: 'low' }),
+      singleInput('hi'),
+      { useResponsesApi: true },
+    );
+    await collect(q);
+    expect(createCalls).toHaveLength(1);
+    const args = createCalls[0]!.args as Record<string, unknown>;
+    expect(args['reasoning']).toEqual({ effort: 'low' });
+
+    // Restore the default mock for subsequent tests
+    installMockClient();
+  });
+
+  it('does NOT forward reasoning.effort on the Responses API path for non-o-series models', async () => {
+    const responsesFactory: OpenAIClientFactory = () =>
+      ({
+        chat: {
+          completions: {
+            create: async () => { throw new Error('should not be called'); },
+          },
+        },
+        responses: {
+          create: async (args: Record<string, unknown>) => {
+            createCalls.push({ args });
+            const gen = (async function* () {
+              yield { type: 'response.output_text.delta', delta: 'ok' };
+              yield { type: 'response.completed', response: { usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } };
+            })();
+            return gen;
+          },
+        },
+      }) as unknown as OpenAI;
+    __setOpenAIClientFactory(responsesFactory);
+
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'gpt-4o', effort: 'high' }),
+      singleInput('hi'),
+      { useResponsesApi: true },
+    );
+    await collect(q);
+    const args = createCalls[0]!.args as Record<string, unknown>;
+    expect(args['reasoning']).toBeUndefined();
+
+    // Restore the default mock
+    installMockClient();
+  });
+});
+
 describe('OpenAICompatibleQuery — auth failure path', () => {
   it('emits session.init then error when no auth is resolvable', async () => {
     // Use hermetic auth deps so this test is isolated from the host machine's
