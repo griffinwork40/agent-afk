@@ -15,6 +15,7 @@ import type { ProviderEvent, ProviderUserTurn } from '../../provider.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import {
   __setOpenAIClientFactory,
+  __setRetryBaseDelay,
   buildQueryFromConfig,
   OpenAICompatibleQuery,
   type OpenAIClientFactory,
@@ -1555,5 +1556,225 @@ describe('image (vision) input — issue #127', () => {
     expect(text).toMatch(/cannot view images/i);
     // The data must never reach the wire as an image part.
     expect(JSON.stringify(args.messages)).not.toContain('image_url');
+  });
+});
+
+// ---- retry / backoff tests (issue #126) -----------------------------------
+
+/**
+ * Build an APIError-like object with a `status` field. The OpenAI SDK throws
+ * `APIError` instances; our retry predicates only inspect `status`.
+ */
+function makeApiError(status: number, message?: string): Error {
+  const e = new Error(message ?? `HTTP ${status}`);
+  (e as Error & { status: number }).status = status;
+  return e;
+}
+
+/**
+ * Install a mock client that fails the first `failCount` connection attempts
+ * with the given status code, then succeeds with `pendingChunks`.
+ */
+function installConnectionRetryMock(failStatus: number, failCount: number): void {
+  let attempts = 0;
+  const factory: OpenAIClientFactory = () =>
+    ({
+      chat: {
+        completions: {
+          create: async (args: { stream?: boolean }, options?: { signal?: AbortSignal }) => {
+            createCalls.push({ args, signal: options?.signal });
+            attempts++;
+            if (attempts <= failCount) {
+              throw makeApiError(failStatus);
+            }
+            if (!args.stream) throw new Error('mock only supports streaming mode');
+            const chunks = pendingChunks.slice();
+            return (async function* () {
+              for (const c of chunks) yield c;
+            })();
+          },
+        },
+      },
+    }) as unknown as OpenAI;
+  __setOpenAIClientFactory(factory);
+}
+
+/**
+ * Install a mock client that succeeds on connection but throws a retryable
+ * error mid-stream after `goodChunks` chunks, up to `failCount` times, then
+ * succeeds fully.
+ */
+function installMidStreamRetryMock(
+  failStatus: number,
+  failCount: number,
+  goodChunksBeforeFail: OpenAIChunk[] = [],
+): void {
+  let attempts = 0;
+  const factory: OpenAIClientFactory = () =>
+    ({
+      chat: {
+        completions: {
+          create: async (args: { stream?: boolean }, options?: { signal?: AbortSignal }) => {
+            createCalls.push({ args, signal: options?.signal });
+            attempts++;
+            if (!args.stream) throw new Error('mock only supports streaming mode');
+            if (attempts <= failCount) {
+              // Succeed on connection, then fail mid-stream after some chunks.
+              const chunks = goodChunksBeforeFail.slice();
+              return (async function* () {
+                for (const c of chunks) yield c;
+                throw makeApiError(failStatus);
+              })();
+            }
+            // Final attempt: succeed fully.
+            const chunks = pendingChunks.slice();
+            return (async function* () {
+              for (const c of chunks) yield c;
+            })();
+          },
+        },
+      },
+    }) as unknown as OpenAI;
+  __setOpenAIClientFactory(factory);
+}
+
+describe('OpenAICompatibleQuery — retry / backoff (issue #126)', () => {
+  beforeEach(() => {
+    createCalls = [];
+    pendingChunks = [];
+    pendingError = null;
+    __setRetryBaseDelay(0); // no real waits in tests
+  });
+
+  afterEach(() => {
+    __setOpenAIClientFactory(null);
+    __setRetryBaseDelay(null); // restore production default
+  });
+
+  const successChunk: OpenAIChunk = {
+    choices: [{ delta: { content: 'hello' }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+  };
+
+  // ── Connection-phase retry ──────────────────────────────────────────────
+
+  it.each([429, 500, 502, 503, 529])(
+    'retries on HTTP %d and succeeds on second attempt',
+    async (status) => {
+      pendingChunks = [successChunk];
+      installConnectionRetryMock(status, 1); // fail once, then succeed
+
+      const q = buildQueryFromConfig(baseConfig(), singleInput('hi'));
+      const events = await collect(q);
+      const types = events.map((e) => e.type);
+
+      // Should have succeeded — no error event.
+      expect(types).not.toContain('error');
+      expect(types).toContain('session.init');
+      // Two connection attempts: one failed, one succeeded.
+      expect(createCalls).toHaveLength(2);
+    },
+  );
+
+  it('surfaces error after exhausting connection retry budget (3 retries)', async () => {
+    pendingChunks = [successChunk];
+    installConnectionRetryMock(429, 10); // always fails — budget is 3 retries (4 total attempts)
+
+    const q = buildQueryFromConfig(baseConfig(), singleInput('hi'));
+    const events = await collect(q);
+    const types = events.map((e) => e.type);
+
+    expect(types).toContain('error');
+    // 1 initial + 3 retries = 4 total attempts.
+    expect(createCalls).toHaveLength(4);
+  });
+
+  it.each([400, 401, 403, 404])(
+    'does NOT retry on non-retryable HTTP %d',
+    async (status) => {
+      pendingChunks = [successChunk];
+      installConnectionRetryMock(status, 10);
+
+      const q = buildQueryFromConfig(baseConfig(), singleInput('hi'));
+      const events = await collect(q);
+      const types = events.map((e) => e.type);
+
+      expect(types).toContain('error');
+      // Only one attempt — no retries for client errors.
+      expect(createCalls).toHaveLength(1);
+    },
+  );
+
+  // ── Mid-stream retry ────────────────────────────────────────────────────
+
+  it('emits stream.retry on mid-stream 429 and succeeds on retry', async () => {
+    pendingChunks = [successChunk];
+    const partialChunk: OpenAIChunk = {
+      choices: [{ delta: { content: 'partial' }, finish_reason: null }],
+    };
+    installMidStreamRetryMock(429, 1, [partialChunk]);
+
+    const q = buildQueryFromConfig(baseConfig(), singleInput('hi'));
+    const events = await collect(q);
+    const types = events.map((e) => e.type);
+
+    expect(types).toContain('stream.retry');
+    expect(types).not.toContain('error');
+    // Two attempts: one mid-stream fail, one success.
+    expect(createCalls).toHaveLength(2);
+  });
+
+  it('emits stream.retry on mid-stream 503 and succeeds on retry', async () => {
+    pendingChunks = [successChunk];
+    installMidStreamRetryMock(503, 1, []);
+
+    const q = buildQueryFromConfig(baseConfig(), singleInput('hi'));
+    const events = await collect(q);
+    const types = events.map((e) => e.type);
+
+    expect(types).toContain('stream.retry');
+    expect(types).not.toContain('error');
+    expect(createCalls).toHaveLength(2);
+  });
+
+  it('surfaces error after exhausting mid-stream retry budget', async () => {
+    pendingChunks = [successChunk];
+    installMidStreamRetryMock(529, 10); // always fails mid-stream — budget is 3
+
+    const q = buildQueryFromConfig(baseConfig(), singleInput('hi'));
+    const events = await collect(q);
+    const types = events.map((e) => e.type);
+
+    expect(types).toContain('error');
+    // 1 initial + 3 retries = 4 total attempts.
+    expect(createCalls).toHaveLength(4);
+    // Should have emitted 3 stream.retry events (one per retry).
+    const retryEvents = events.filter((e) => e.type === 'stream.retry');
+    expect(retryEvents).toHaveLength(3);
+  });
+
+  // ── Abort during backoff ────────────────────────────────────────────────
+
+  it('aborts cleanly during connection-phase backoff', async () => {
+    installConnectionRetryMock(429, 10); // always fails
+
+    const q = buildQueryFromConfig(baseConfig(), singleInput('hi'));
+    const iterator = q[Symbol.asyncIterator]();
+
+    // Pull session.init.
+    const init = await iterator.next();
+    expect(init.value?.type).toBe('session.init');
+
+    // Interrupt immediately — the retry backoff should notice the abort.
+    await q.interrupt();
+
+    const result = await iterator.next();
+    // Should get turn.completed (aborted path) or done — not hang.
+    const ev = result.value;
+    expect(
+      ev === undefined ||
+      ev.type === 'turn.completed' ||
+      ev.type === 'error',
+    ).toBe(true);
   });
 });
