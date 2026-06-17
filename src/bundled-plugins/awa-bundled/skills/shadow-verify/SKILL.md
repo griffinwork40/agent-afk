@@ -18,6 +18,7 @@ When a sub-agent (or wave) returns investigation findings, code-review conclusio
 - `CONFIRMED` → surface the claim as validated.
 - `REFUTED` → replace the claim with the verifier's corrected finding, annotated `[was: confident, now: refuted]`, and show it alongside the original with evidence. Do not act until the conflict is resolved.
 - `UNVERIFIABLE` → surface with a `[needs-human-review]` tag rather than passing it through silently.
+- `UNVERIFIED-COMPOSITION` / `UNVERIFIED-ECHO-CHAMBER` (from the composition-axis guard below) → surface with a `[needs-human-review]` tag naming the missed boundary; do not pass through as validated.
 
 Bound the loop: at most 3 verification rounds per session. Claims still unresolved after 3 rounds are escalated to the user, never silently dropped.
 

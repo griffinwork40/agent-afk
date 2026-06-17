@@ -36,8 +36,11 @@ const __dirname = dirname(__filename);
 // developer to look at both copies.
 const PINNED_HASHES = {
   contract: '748eaf01deda592913f463b23c81a6be3a89ae3b316f31f531a8488dc5bc1a7c',
+  // Hash re-bumped during PR #187 review: the Merge section now routes the
+  // second convergence condition (≥2 critics agree on the same alternative) to
+  // Wave 3.5 — prose-consistency fix only; no behavior change to the guard.
   'devils-advocate':
-    '3e7f65b240ef3a9530efba2b71ea9912c6d53e43d69a551612f1c4b8b31fd1c6',
+    '8a729f40297e43f33aa84f80c66f21c9a46fd8b610727601f4e13dc597be633b',
   // gather + parallelize carry a bundled-only `context: load` frontmatter line
   // (2026-06 skill-execution-mode work). `context` is an agent-afk-specific
   // field; Claude Code upstream skills are natively inline/progressive-disclosure,
@@ -79,8 +82,11 @@ const PINNED_HASHES = {
   // model-facing description is clean.
   // BACK-PORT GAP: the same enhancement should land in the upstream example-plugin
   // shadow-verify skill (drift test is skipped here — example-plugin not co-located).
+  // Hash re-bumped during PR #187 review: the Merge section now enumerates the
+  // new UNVERIFIED-COMPOSITION / UNVERIFIED-ECHO-CHAMBER verdict states — prose-
+  // consistency fix only; no behavior change to the composition-axis guard.
   'shadow-verify':
-    'fafc8db3bf78aa41aa406416d968f8af8aba764eb4ffd9ecb1c77d232819a6ab',
+    '9a9f7f2d0482f4258036e4b204113f37f3b44e1b390d6ddaaf97f13e7b4cd858',
   // Hash bumped 2026-06: Phase 4 (commit) + Phase 8 (PR) switched from the
   // `--body "$(cat <<'EOF' … EOF)"` heredoc-in-command-substitution antipattern
   // to the file-based form (`git commit -F` / `gh pr create --body-file`). The

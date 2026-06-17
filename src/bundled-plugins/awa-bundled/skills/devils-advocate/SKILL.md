@@ -34,7 +34,7 @@ Until the verifier returns `CONFIRMED`, the convergent recommendation is a **can
 **Scope guard:** skip when the proposal is purely local with no composition surface, or is anchored to an external referent that survives independently of the system. Fires once per convergent verdict, not per critic.
 
 **Merge + surface:**
-- Recommendation = `original` → the proposal survived critique; proceed with it.
+- Recommendation = `original` → the proposal survived critique; proceed with it — **unless ≥2 critics converged on the same alternative** (the second convergence condition above), in which case run Wave 3.5 first and, on `OVERRIDE`, re-rank before acting.
 - Recommendation ≠ `original`, `dissent = false` → synthesis found a better path; run Wave 3.5, then surface the alternative with rationale (on `OVERRIDE`, re-rank first) before acting.
 - `dissent = true` → present the matrix to the user; do not act. Confidence is low.
 
