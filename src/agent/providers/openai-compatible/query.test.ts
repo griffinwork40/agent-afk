@@ -551,6 +551,82 @@ describe('OpenAICompatibleQuery — text streaming', () => {
       { role: 'user', content: 'next q' },
     ]);
   });
+
+  // ---- streaming max_tokens (issue #125) --------------------------------
+
+  it('includes max_tokens on the Chat Completions streaming path (default config)', async () => {
+    pendingChunks = [
+      { choices: [{ delta: { content: 'ok' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    const q = buildQueryFromConfig(baseConfig({ model: 'gpt-4o-mini' }), singleInput('hi'));
+    await collect(q);
+    const body = createCalls[0]!.args as Record<string, unknown>;
+    expect(body).toHaveProperty('max_tokens');
+    // Default output ceiling for gpt-4o-mini is 64k.
+    expect(body.max_tokens).toBe(64000);
+  });
+
+  it('honours config.maxOutputTokens on the Chat Completions streaming path', async () => {
+    pendingChunks = [
+      { choices: [{ delta: { content: 'ok' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'gpt-4o-mini', maxOutputTokens: 2048 }),
+      singleInput('hi'),
+    );
+    await collect(q);
+    const body = createCalls[0]!.args as Record<string, unknown>;
+    expect(body).toHaveProperty('max_tokens');
+    expect(body.max_tokens).toBe(2048);
+  });
+
+  it('uses max_completion_tokens for o-series models on Chat Completions', async () => {
+    pendingChunks = [
+      { choices: [{ delta: { content: 'ok' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'o3-mini' }),
+      singleInput('hi'),
+    );
+    await collect(q);
+    const body = createCalls[0]!.args as Record<string, unknown>;
+    expect(body).toHaveProperty('max_completion_tokens');
+    expect(body).not.toHaveProperty('max_tokens');
+  });
+
+  it('uses max_completion_tokens for o-series with custom maxOutputTokens', async () => {
+    pendingChunks = [
+      { choices: [{ delta: { content: 'ok' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'o3-mini', maxOutputTokens: 4096 }),
+      singleInput('hi'),
+    );
+    await collect(q);
+    const body = createCalls[0]!.args as Record<string, unknown>;
+    expect(body).toHaveProperty('max_completion_tokens');
+    expect(body.max_completion_tokens).toBe(4096);
+    expect(body).not.toHaveProperty('max_tokens');
+  });
+
+  it('strips provider/ prefix before o-series detection (OpenRouter-style)', async () => {
+    pendingChunks = [
+      { choices: [{ delta: { content: 'ok' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'openai/o3-mini' }),
+      singleInput('hi'),
+    );
+    await collect(q);
+    const body = createCalls[0]!.args as Record<string, unknown>;
+    expect(body).toHaveProperty('max_completion_tokens');
+    expect(body).not.toHaveProperty('max_tokens');
+  });
 });
 
 describe('OpenAICompatibleQuery — model-slot resolution in request body', () => {
