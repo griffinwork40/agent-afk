@@ -36,6 +36,7 @@ import { validateBotToken } from './telegram/setup-wizard.js';
 import { AgentSession } from './agent/session.js';
 import { constructTelegramSession } from './telegram/construct-session.js';
 import { createDefaultHookRegistry } from './agent/default-hook-registry.js';
+import { seedPersistedGrants } from './agent/permissions-store.js';
 import { loadHooksConfig } from './agent/hooks/config-loader.js';
 import { MemoryStore } from './agent/memory/index.js';
 import { providerForModel, AnthropicDirectProvider } from './agent/providers/index.js';
@@ -336,6 +337,15 @@ async function main() {
         // permissionMode is intentionally omitted here: AgentSession defaults
         // to 'default' (post-C2 fix), which is the correct mode for Telegram
         // sessions that run under the operator's explicit allowedTools list.
+        const telegramHookBundle = createDefaultHookRegistry(
+          undefined,
+          'telegram',
+          sharedMemoryStore,
+          undefined,
+          loadHooksConfig(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
+          { cwd: sessionCwd !== undefined && sessionCwd.length > 0 ? sessionCwd : undefined },
+          () => sessionCwd,
+        );
         const session = constructTelegramSession({
           ...(sessionConfig.apiKey !== undefined ? { apiKey: sessionConfig.apiKey } : {}),
           model: sessionConfig.model,
@@ -347,15 +357,14 @@ async function main() {
           // configured worktree (AFK_TELEGRAM_CWD or sessionConfig.cwd).
           ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
           provider: directProvider,
-          hookRegistry: createDefaultHookRegistry(
-            undefined,
-            'telegram',
-            sharedMemoryStore,
-            undefined,
-            loadHooksConfig(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
-            { cwd: sessionCwd !== undefined && sessionCwd.length > 0 ? sessionCwd : undefined },
-          ).registry,
+          hookRegistry: telegramHookBundle.registry,
         });
+        // Wire the path-approval grant ref to the provider so elicitation
+        // approvals mutate readRoots / writeRoots on the right backend.
+        telegramHookBundle.pathApprovalGrantRef.current = directProvider;
+        // Seed read/write roots from persisted `persist` grants so the
+        // prompt's "future sessions inherit it" promise holds. No-op when none.
+        seedPersistedGrants(directProvider);
         boundSession = session;
         return session;
       }
@@ -394,6 +403,10 @@ async function main() {
     },
   });
 
+  // Elicitation wiring (path-approval + ask_question) is installed inside
+  // `bot.start()` via composeTelegramElicitation — a SINGLE composed handler,
+  // so the two systems no longer clobber each other on `elicitationRouter
+  // .install` (PR #477 review B1/B2). See `TelegramBot.start()`.
   try {
     bot.start();
     console.log('✅ Bot started successfully!');

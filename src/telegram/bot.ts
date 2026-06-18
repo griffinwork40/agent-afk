@@ -14,8 +14,11 @@ import { handleFarmCallback } from './handlers/farm-callbacks.js';
 import { MessageHandler } from './handlers/message.js';
 import { createAllowlistMiddleware } from './allowlist.js';
 import { FARM_CALLBACK_PREFIX } from './farm-callback-data.js';
-import { ELICITATION_CALLBACK_PREFIX } from './elicitation-callback-data.js';
 import { makeTelegramElicitationHandler } from './elicitation-handler.js';
+import {
+  createTelegramElicitationHandler,
+  composeTelegramElicitation,
+} from './elicitation-telegram.js';
 import { elicitationRouter } from '../agent/elicitation-router.js';
 import { SessionWatchManager, resolveWatchTarget, listWatchableSessions } from './watch.js';
 import { splitLongMessage } from './formatter.js';
@@ -228,24 +231,32 @@ export class TelegramBot {
     this.log('Loading sessions...');
     await this.sessionManager.loadSessions();
 
-    // Install the Telegram elicitation handler so ask_question calls from
-    // the agent are routed to the first allowed Telegram chat. This covers
-    // the common single-operator case; multi-chat support would require
-    // per-session handler installation.
+    // Wire elicitation prompts to Telegram. TWO systems share the router:
+    //   - ask_question (agent questions) → makeTelegramElicitationHandler
+    //     (afk:e: inline buttons + typed replies via messageHandler).
+    //   - path-approval + MCP form/url   → createTelegramElicitationHandler
+    //     (afk:pa: enum keyboard).
+    // They MUST be composed into a SINGLE installed handler: elicitationRouter
+    // .install is last-wins, so installing both separately clobbers the first
+    // (PR #477 review B1 — the path-approval install was silently overwritten
+    // here). composeTelegramElicitation routes by request kind. Each factory
+    // still registers its own DISJOINT bot.action prefix (afk:e:<digit>: vs
+    // afk:pa:), so taps never cross-route (B2). Both factories run here, before
+    // launch(), so their action handlers register ahead of the first update.
     const chatIds = [...this.options.allowedChatIds];
     if (chatIds.length > 0) {
       const primaryChatId = chatIds[0]!;
-      const elicitCallbackRe = new RegExp(`^${escapeRegExp(ELICITATION_CALLBACK_PREFIX)}`);
-      elicitationRouter.install(
-        makeTelegramElicitationHandler(this.messageHandler, this.bot, primaryChatId),
+      const askHandler = makeTelegramElicitationHandler(
+        this.messageHandler,
+        this.bot,
+        primaryChatId,
       );
-      // Register the elicitation action handler
-      this.bot.action(elicitCallbackRe, async (ctx) => {
-        // answerCbQuery is handled inside makeTelegramElicitationHandler's
-        // per-button action callbacks; this outer handler is a safety net
-        // in case the inner one wasn't registered yet.
-        await ctx.answerCbQuery().catch(() => {});
-      });
+      const formHandler = createTelegramElicitationHandler(
+        this.bot,
+        new Set(this.options.allowedChatIds),
+        (...args) => this.log('[elicitation]', ...args),
+      );
+      elicitationRouter.install(composeTelegramElicitation(askHandler, formHandler));
     }
 
     this.log('Starting bot...');

@@ -140,6 +140,49 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_DISABLE_BASH_INTERPRETER_GUARD',
+    description:
+      'Skip ONLY the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) when set to 1, ' +
+      'leaving the rest of path-approval intact. Use for headless flows (CI, daemon) whose ' +
+      'automation legitimately runs interpreter one-liners but should still keep path-approval ' +
+      'enabled. The restricted-root substring check is unaffected. Default: guard enabled. To ' +
+      'disable all path-approval + bash restriction instead, use AFK_DISABLE_PATH_APPROVAL=1.',
+    type: 'boolean',
+    required: false,
+    default: '0',
+    example: '1',
+    category: 'process',
+  },
+  {
+    name: 'AFK_DISABLE_PATH_APPROVAL',
+    description:
+      'Skip the path-approval + bash-restriction hooks entirely when set to 1. Use for headless ' +
+      'flows that need wide-open file access (CI scripts, batch jobs). Default: hooks enabled. ' +
+      'Note: on headless surfaces (afk chat, daemon) the grant manager is never wired, so ' +
+      'the interpreter denylist (python -c, node -e, sh -c, ...) hard-blocks by default — set ' +
+      'AFK_DISABLE_BASH_INTERPRETER_GUARD=1 to lift just that guard, or this var to 1 to disable ' +
+      'all of path-approval.',
+    type: 'boolean',
+    required: false,
+    default: '0',
+    example: '1',
+    category: 'process',
+  },
+  {
+    name: 'AFK_FORCE_BASH_INTERPRETER_GUARD',
+    description:
+      'Apply the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) even on headless ' +
+      'surfaces (afk chat, daemon) where no grant manager is wired. By default the denylist ' +
+      'fires only on interactive surfaces (REPL/Telegram), failing open on headless so legitimate ' +
+      'automation is not hard-blocked with no recourse. Set to 1 to opt headless flows back into the ' +
+      'guard. Overridden by AFK_DISABLE_BASH_INTERPRETER_GUARD=1. Default: off (headless fails open).',
+    type: 'boolean',
+    required: false,
+    default: '0',
+    example: '1',
+    category: 'process',
+  },
+  {
     name: 'AFK_EFFORT',
     description: 'Effort hint guiding adaptive-thinking depth, forwarded as Anthropic output_config.effort (model-gated; ignored where unsupported). Accepts low | medium | high | xhigh | max.',
     type: 'string',
@@ -1054,8 +1097,11 @@ export const env = {
   get AFK_COMPACT_MODEL(): string | undefined { return process.env['AFK_COMPACT_MODEL']; },
   get AFK_DEFAULT_SUBAGENT_MODEL(): string | undefined { return process.env['AFK_DEFAULT_SUBAGENT_MODEL']; },
   get AFK_DIAGNOSE_BASELINE(): string | undefined { return process.env['AFK_DIAGNOSE_BASELINE']; },
+  get AFK_DISABLE_BASH_INTERPRETER_GUARD(): string | undefined { return process.env['AFK_DISABLE_BASH_INTERPRETER_GUARD']; },
+  get AFK_DISABLE_PATH_APPROVAL(): string | undefined { return process.env['AFK_DISABLE_PATH_APPROVAL']; },
   get AFK_DISABLE_PROMPT_CACHE(): string | undefined { return process.env['AFK_DISABLE_PROMPT_CACHE']; },
   get AFK_EFFORT(): string | undefined { return process.env['AFK_EFFORT']; },
+  get AFK_FORCE_BASH_INTERPRETER_GUARD(): string | undefined { return process.env['AFK_FORCE_BASH_INTERPRETER_GUARD']; },
   get AFK_MAX_BUDGET_USD(): string | undefined { return process.env['AFK_MAX_BUDGET_USD']; },
   get AFK_MAX_OUTPUT_TOKENS(): string | undefined { return process.env['AFK_MAX_OUTPUT_TOKENS']; },
   get AFK_MAX_TOKENS(): string | undefined { return process.env['AFK_MAX_TOKENS']; },

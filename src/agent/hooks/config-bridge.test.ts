@@ -341,6 +341,7 @@ describe('createDefaultHookRegistry integration', () => {
   let afkHome: string;
   let projectCwd: string;
   let originalAfkHome: string | undefined;
+  let originalDisablePathApproval: string | undefined;
 
   beforeEach(() => {
     afkHome = join(tmp, 'afk-home');
@@ -349,17 +350,27 @@ describe('createDefaultHookRegistry integration', () => {
     mkdirSync(projectCwd, { recursive: true });
     originalAfkHome = process.env['AFK_HOME'];
     process.env['AFK_HOME'] = afkHome;
+    // These tests count config-driven PreToolUse hooks specifically. The
+    // path-approval feature otherwise registers 2 always-on PreToolUse hooks
+    // (path-approval + bash-restriction) in createDefaultHookRegistry, which
+    // would inflate the counts and conflate two orthogonal concerns. Disable
+    // it so the assertions measure only the config bridge under test.
+    originalDisablePathApproval = process.env['AFK_DISABLE_PATH_APPROVAL'];
+    process.env['AFK_DISABLE_PATH_APPROVAL'] = '1';
   });
 
   afterEach(() => {
     if (originalAfkHome === undefined) delete process.env['AFK_HOME'];
     else process.env['AFK_HOME'] = originalAfkHome;
+    if (originalDisablePathApproval === undefined)
+      delete process.env['AFK_DISABLE_PATH_APPROVAL'];
+    else process.env['AFK_DISABLE_PATH_APPROVAL'] = originalDisablePathApproval;
   });
 
   it('createDefaultHookRegistry without hookConfig → 0 config hooks registered', () => {
     const { registry } = createDefaultHookRegistry();
     // Built-in handlers exist for SubagentStop and SessionEnd, but NO PreToolUse
-    // config hooks since we passed no hookConfig.
+    // config hooks since we passed no hookConfig (path-approval disabled above).
     expect(registry.count('PreToolUse')).toBe(0);
   });
 

@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**111 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**114 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -148,6 +148,9 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 
 | Name | Type | Required | Default | Example | Description |
 |------|------|----------|---------|---------|-------------|
+| `AFK_DISABLE_BASH_INTERPRETER_GUARD` | boolean |  | `0` | `1` | Skip ONLY the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) when set to 1, leaving the rest of path-approval intact. Use for headless flows (CI, daemon) whose automation legitimately runs interpreter one-liners but should still keep path-approval enabled. The restricted-root substring check is unaffected. Default: guard enabled. To disable all path-approval + bash restriction instead, use AFK_DISABLE_PATH_APPROVAL=1. |
+| `AFK_DISABLE_PATH_APPROVAL` | boolean |  | `0` | `1` | Skip the path-approval + bash-restriction hooks entirely when set to 1. Use for headless flows that need wide-open file access (CI scripts, batch jobs). Default: hooks enabled. Note: on headless surfaces (afk chat, daemon) the grant manager is never wired, so the interpreter denylist (python -c, node -e, sh -c, ...) hard-blocks by default — set AFK_DISABLE_BASH_INTERPRETER_GUARD=1 to lift just that guard, or this var to 1 to disable all of path-approval. |
+| `AFK_FORCE_BASH_INTERPRETER_GUARD` | boolean |  | `0` | `1` | Apply the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) even on headless surfaces (afk chat, daemon) where no grant manager is wired. By default the denylist fires only on interactive surfaces (REPL/Telegram), failing open on headless so legitimate automation is not hard-blocked with no recourse. Set to 1 to opt headless flows back into the guard. Overridden by AFK_DISABLE_BASH_INTERPRETER_GUARD=1. Default: off (headless fails open). |
 | `AFK_SHELL_WRAPPER` | boolean |  |  | `1` | Set to 1 or true by the optional afk shell wrapper function (installed via `afk shell-init`). Signals that the parent shell has the wrapper active so the post-exit cd can fire. |
 | `AGENT_SURFACE` | string |  |  | `cli` | Internal surface marker propagated to subprocesses. Identifies which AFK surface (cli, telegram, daemon) spawned the process. |
 | `ASCIINEMA_REC` | boolean |  |  | `1` | Set to 1 by asciinema rec while a session is being recorded. Triggers capture-mode. |

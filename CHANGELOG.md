@@ -11,6 +11,13 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Added
+- Path-access approval: typed file tools (`read_file`, `write_file`, `edit_file`, `list_directory`, `glob`, `grep`) targeting a path outside the session's granted roots now prompt for approval — once / session / persist / deny — via the REPL or Telegram elicitation surface. Persisted grants are stored in `~/.afk/config/permissions.json` and replayed on future sessions
+- Bash restriction hook: hard-blocks interpreter one-liners (`python -c`, `node -e`, `sh -c`, ...) and restricted-root substrings (`~/.ssh`, `~/.aws`, ...), routing the model back to the prompt-able typed file tools
+- `AFK_DISABLE_BASH_INTERPRETER_GUARD` env var — lifts only the bash interpreter-eval denylist while keeping the rest of path-approval enabled
+- `AFK_DISABLE_PATH_APPROVAL` env var — disables the path-approval + bash-restriction hooks entirely (for headless flows that need wide-open file access)
+- `AFK_FORCE_BASH_INTERPRETER_GUARD` env var — opts headless surfaces back into the interpreter denylist
+
 ## [4.15.0] - 2026-06-17
 
 ### Added

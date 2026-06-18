@@ -534,7 +534,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       // PostToolUse hook fires for agent calls too.
       // Fire-and-forget: mirrors executeCore() — hook latency must not block
       // the tool result from being returned to the model on the critical path.
-      this.firePostToolUse(call.name, result.content, call.signal);
+      this.firePostToolUse(call.name, result.content, call.signal, call.input);
       return result;
     }
 
@@ -555,14 +555,14 @@ export class SessionToolDispatcher implements ToolDispatcher {
       }
       // Fire-and-forget: mirrors executeCore() — hook + trace-write latency
       // must not add to per-tool round-trip time on the single-call path.
-      this.firePostToolUse(call.name, result.content, call.signal);
+      this.firePostToolUse(call.name, result.content, call.signal, call.input);
       return result;
     }
 
     // 3c. Compose tool — DAG-based parallel subagent dispatch
     if (call.name === 'compose') {
       const result = await this.executeCompose(call);
-      this.firePostToolUse(call.name, result.content, call.signal);
+      this.firePostToolUse(call.name, result.content, call.signal, call.input);
       return result;
     }
 
@@ -587,7 +587,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // 6. PostToolUse hook — fire-and-forget to align with executeCore().
     // Errors are caught inside firePostToolUse (.catch(() => {})), so
     // hook failures never surface as tool errors (same behaviour as before).
-    this.firePostToolUse(call.name, result.content, call.signal);
+    this.firePostToolUse(call.name, result.content, call.signal, call.input);
 
     return result;
   }
@@ -765,7 +765,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
         const message = err instanceof Error ? err.message : String(err);
         result = { content: `Agent tool error: ${message}`, isError: true };
       }
-      this.firePostToolUse(call.name, result.content, call.signal);
+      this.firePostToolUse(call.name, result.content, call.signal, call.input);
       return result;
     }
 
@@ -784,14 +784,14 @@ export class SessionToolDispatcher implements ToolDispatcher {
         const message = err instanceof Error ? err.message : String(err);
         result = { content: `Skill tool error: ${message}`, isError: true };
       }
-      this.firePostToolUse(call.name, result.content, call.signal);
+      this.firePostToolUse(call.name, result.content, call.signal, call.input);
       return result;
     }
 
     // Compose tool — DAG-based parallel subagent dispatch
     if (call.name === 'compose') {
       const result = await this.executeCompose(call);
-      this.firePostToolUse(call.name, result.content, call.signal);
+      this.firePostToolUse(call.name, result.content, call.signal, call.input);
       return result;
     }
 
@@ -812,7 +812,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       result = { content: `Tool execution error: ${message}`, isError: true };
     }
 
-    this.firePostToolUse(call.name, result.content, call.signal);
+    this.firePostToolUse(call.name, result.content, call.signal, call.input);
     return result;
   }
 
@@ -837,12 +837,18 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * completion. Routes through `dispatchPostToolUse` so the
    * witness-layer `hook_decision` event lands automatically.
    */
-  private firePostToolUse(toolName: string, output: string, signal: AbortSignal): void {
+  private firePostToolUse(
+    toolName: string,
+    output: string,
+    signal: AbortSignal,
+    input?: unknown,
+  ): void {
     if (!this.hookRegistry) return;
     const postCtx: PostToolUseContext = {
       event: 'PostToolUse',
       toolName,
       output,
+      ...(input !== undefined ? { input } : {}),
     };
     void dispatchPostToolUse(this.hookRegistry, postCtx, {
       signal,

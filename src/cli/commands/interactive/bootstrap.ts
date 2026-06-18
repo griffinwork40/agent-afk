@@ -45,6 +45,7 @@ import { SkillExecutor } from '../../../agent/tools/skill-executor.js';
 import { ComposeExecutor } from '../../../agent/tools/compose-executor.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory } from '../../../agent/tools/nesting.js';
 import { AnthropicDirectProvider } from '../../../agent/providers/anthropic-direct/index.js';
+import { seedPersistedGrants } from '../../../agent/permissions-store.js';
 import { providerForModel } from '../../../agent/providers/index.js';
 import { createMemoizedProviderFactory } from './provider-factory.js';
 import { BUILTIN_TOOL_NAMES } from '../../../agent/tools/schemas.js';
@@ -523,14 +524,20 @@ export async function bootstrapSession(
   // Stable hookRegistry shared across sessions (including swaps).
   // The hook callbacks close over `stats` and `completionWriter` which are
   // also stable, so the new session gets the same routing without re-wiring.
-  const hookRegistry = createDefaultHookRegistry(
+  // `pathApprovalGrantRef` is populated below once the provider exists; the
+  // path-approval hook fails open until then (mirroring `setAllowDirDispatcher`
+  // wiring order).
+  const hookRegistryBundle = createDefaultHookRegistry(
     (info) => { completionWriter.fn(formatSubagentCompletion(info)); },
     'cli',
     sharedMemoryStore,
     () => stats.permissionMode,
     loadHooksConfig({ cwd: extras?.cwd }),
     { cwd: extras?.cwd },
-  ).registry;
+    () => extras?.cwd ?? process.cwd(),
+  );
+  const hookRegistry = hookRegistryBundle.registry;
+  const pathApprovalGrantRef = hookRegistryBundle.pathApprovalGrantRef;
 
   // Capture deps needed by both the initial build and the swap closure.
   const sharedDeps: BuildAgentSessionDeps = {
@@ -756,6 +763,13 @@ export async function bootstrapSession(
   // implements the GrantManager interface; other providers are no-ops.
   if (startupProvider instanceof AnthropicDirectProvider) {
     setAllowDirDispatcher(startupProvider);
+    // Wire the same provider into the path-approval + bash-restriction hooks so
+    // they can mutate grants when the user picks Session / Always (persist) on
+    // the elicitation prompt.
+    pathApprovalGrantRef.current = startupProvider;
+    // Seed read/write roots from persisted `persist` grants so the prompt's
+    // "future sessions inherit it" promise actually holds. No-op when none.
+    seedPersistedGrants(startupProvider);
   }
 
   const rl = readline.createInterface({
