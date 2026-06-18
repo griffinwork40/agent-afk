@@ -76,6 +76,23 @@ export function formatElapsed(startedAt: number): string {
 }
 
 /**
+ * Absolute-position erase-and-paint of one terminal row, returned as a string
+ * for accumulation into a batched write (never written directly here).
+ *
+ * Emits CUP (`\x1b[{row};1H` — cursor to column 1 of `row`) then EL
+ * (`\x1b[2K` — erase entire line), then `line`. Omitting `line` (or passing
+ * `undefined`) erases the row and writes nothing — the bare-erase form.
+ *
+ * Invariant: emits NO `\n`, so callers that rely on CUP+EL writes never
+ * triggering the DECSTBM scroll region stay correct. Shared by the
+ * committed-band commit/repin and frame-preserve render paths, which batch
+ * these into one `out` string before a single `stdout.write`.
+ */
+export function eraseAndPaintRow(row: number, line?: string): string {
+  return `\x1b[${row};1H\x1b[2K${line ?? ''}`;
+}
+
+/**
  * Format a loading tip into the dim 💡 row that sits beneath the spinner.
  *
  * The literal `Tip:` label is load-bearing, not decoration: most tips are
