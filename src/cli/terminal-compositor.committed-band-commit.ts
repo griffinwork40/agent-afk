@@ -14,6 +14,7 @@
  */
 
 import type { LogUpdateFn, CompositorScrollRegionGuard } from './terminal-compositor.types.js';
+import { eraseAndPaintRow } from './terminal-compositor.types.js';
 import { hardWrapToWidth } from './wrap.js';
 import { capBandModel, decideCommitMode } from './commit-mode.js';
 
@@ -360,7 +361,7 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
           for (let start = 0; start < genuineOverflow; start += chunkMax) {
             const chunk = overflowRun.slice(start, Math.min(start + chunkMax, genuineOverflow));
             const topWrite = chunk
-              .map((l, i) => `\x1b[${anchorFloor + i};1H\x1b[2K${l ?? ''}`)
+              .map((l, i) => eraseAndPaintRow(anchorFloor + i, l))
               .join('');
             self.stdout.write(`${topWrite}\x1b[${rows};1H${'\n'.repeat(chunk.length)}`);
           }
@@ -470,7 +471,7 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
       for (let i = 0; i < paintedCount; i++) {
         const row = bandTop + i;
         if (row >= newTopRow) break; // Never overwrite the live frame.
-        out += `\x1b[${row};1H\x1b[2K${model[model.length - paintedCount + i] ?? ''}`;
+        out += eraseAndPaintRow(row, model[model.length - paintedCount + i]);
       }
       if (out.length > 0) {
         writeWithGuard(() => {
@@ -572,13 +573,13 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
         if (oldBandTop > 0 && oldBandTop < bandTop) {
           const eraseFloor = Math.max(postScrollFloor, oldBandTop);
           for (let r = eraseFloor; r < bandTop; r++) {
-            out += `\x1b[${r};1H\x1b[2K`;
+            out += eraseAndPaintRow(r);
           }
         }
         for (let i = 0; i < capped.length; i++) {
           const row = bandTop + i;
           if (row >= newTopRow) break; // Never overwrite the live frame.
-          out += `\x1b[${row};1H\x1b[2K${capped[i] ?? ''}`;
+          out += eraseAndPaintRow(row, capped[i]);
         }
       } else {
         // Overflow (block taller than the above-frame region): Phase 1 already
@@ -597,7 +598,7 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
         for (let i = startIdx; i < textLines.length; i++) {
           const row = anchorFloor + (i - startIdx);
           if (row >= newTopRow) break;
-          out += `\x1b[${row};1H\x1b[2K${textLines[i] ?? ''}`;
+          out += eraseAndPaintRow(row, textLines[i]);
         }
       }
       if (out.length > 0) {
