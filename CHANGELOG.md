@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.19.0] - 2026-06-18
+
+### Added
+- render MCP form enum/boolean fields as arrow-key selector (47546b9)
+
+### Changed
+- Merge pull request #212 from griffinwork40/afk/20260618-153242-30da7d (2cff1df)
+
 ## [4.18.3] - 2026-06-18
 
 ### Changed
