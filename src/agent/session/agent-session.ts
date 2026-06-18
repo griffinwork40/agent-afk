@@ -48,6 +48,7 @@ import type {
 } from '../types.js';
 import { QueryInputStream } from './input-iterable.js';
 import { SessionLedgerWriter } from '../session-ledger.js';
+import type { ElicitationRequest } from '../types/sdk-types.js';
 import { env } from '../../config/env.js';
 import { resolveModelId } from './model-resolution.js';
 import { setSlotBindings } from './model-slots.js';
@@ -579,6 +580,23 @@ export class AgentSession implements IAgentSession {
     this.ledger = null;
     this.ledgerInitAttempted = false;
     return ledger.close(reason);
+  }
+
+  /**
+   * Append an AFK remote-control `elicitation` record to this session's own
+   * ledger. No-op when the session is unledgered (subagent, ledger disabled,
+   * or no provider session id yet) — the caller's keyboard fallback still
+   * works regardless (channel is additive, scope.lock invariant #3).
+   *
+   * Used by the REPL AFK ledger channel (`makeLedgerChannelHandler`'s injected
+   * `emitElicitation`): the handler must NOT own a second `SessionLedgerWriter`
+   * (fd leak / spurious `closed` record), so it appends through the session's
+   * lifecycle-managed writer here. A watching Telegram daemon renders the
+   * appended `elicitation` to the operator's phone. Additive: changes no
+   * existing path.
+   */
+  recordLedgerElicitation(reqId: string, request: ElicitationRequest): void {
+    this.ledger?.record({ kind: 'elicitation', reqId, request });
   }
 
   private summarizeContentBlocks(blocks: ContentBlockParam[]): string {

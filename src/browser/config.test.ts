@@ -25,7 +25,11 @@ function withFile(content: string): (path: string) => string | undefined {
 // ---------------------------------------------------------------------------
 
 describe('loadBrowserConfig — headless default per surface', () => {
-  const headlessSurfaces = ['daemon', 'subagent', 'telegram'] as const;
+  // 'afk' is the surface string the CLI sets for the whole process
+  // (src/cli/index.ts), so it must default to headless — otherwise web_scrape's
+  // render escalation opens visible Chromium windows. See the regression test
+  // below.
+  const headlessSurfaces = ['daemon', 'subagent', 'telegram', 'afk'] as const;
   const headedSurfaces = ['repl', 'interactive', 'cli'] as const;
 
   for (const surface of headlessSurfaces) {
@@ -49,6 +53,25 @@ describe('loadBrowserConfig — headless default per surface', () => {
 
   it('unknown surface string → headless: false (headed default)', () => {
     const cfg = loadBrowserConfig({ surface: 'something-exotic', env: makeEnv(), readFileSync: noFile });
+    expect(cfg.headless).toBe(false);
+  });
+
+  // Regression: the CLI entrypoint sets AGENT_SURFACE='afk' for the whole
+  // process, so 'afk' — not 'cli'/'repl'/'interactive' — is the surface every
+  // run actually reports. Before this was added to HEADLESS_SURFACES, 'afk'
+  // fell through to the headed default and web_scrape's render escalation
+  // launched a VISIBLE Chromium window (many at once under parallel scrapes).
+  it("surface='afk' (the real default CLI surface) → headless: true", () => {
+    const cfg = loadBrowserConfig({ surface: 'afk', env: makeEnv(), readFileSync: noFile });
+    expect(cfg.headless).toBe(true);
+  });
+
+  it("surface='afk' with AFK_BROWSER_HEADLESS=0 → headless: false (env opt-in to headed)", () => {
+    const cfg = loadBrowserConfig({
+      surface: 'afk',
+      env: makeEnv({ AFK_BROWSER_HEADLESS: '0' }),
+      readFileSync: noFile,
+    });
     expect(cfg.headless).toBe(false);
   });
 });

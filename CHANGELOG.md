@@ -18,6 +18,28 @@ auto-release workflow to deduplicate commits across successive runs.
 - `AFK_DISABLE_PATH_APPROVAL` env var — disables the path-approval + bash-restriction hooks entirely (for headless flows that need wide-open file access)
 - `AFK_FORCE_BASH_INTERPRETER_GUARD` env var — opts headless surfaces back into the interpreter denylist
 
+## [4.16.1] - 2026-06-18
+
+### Fixed
+- default the 'afk' CLI surface to headless (7ef070d)
+
+### Changed
+- Merge pull request #205 from griffinwork40/fix/afk-surface-headless-default (0cce23f)
+
+## [4.16.0] - 2026-06-18
+
+### Added
+- remote /abort + REPL abort-watcher + presence auto-subscribe (iteration 4) (d60342b)
+- daemon renders ledger elicitations + signed write-back (iteration 3) (0cb884c)
+- wire /afk toggle to the ledger elicitation channel (iteration 2) (d408f6c)
+- REPL ledger-channel elicitation handler (iteration 1) (4ab9ca2)
+- ledger channel foundation — record kinds + per-session HMAC (552cd01)
+
+### Changed
+- Merge pull request #203 from griffinwork40/afk/20260617-201405-0b2298 (c035e93)
+- drop dead newAbortReason field, harden digestsEqual hex guard (881f7ec)
+- remote-control docs + no-second-poller invariant test (iteration 5) (004ed33)
+
 ## [4.15.0] - 2026-06-17
 
 ### Added

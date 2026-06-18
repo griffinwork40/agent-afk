@@ -39,6 +39,16 @@ export interface PresenceFileInfo {
   model: { provider: string; name: string };
   workspace: RuntimeWorkspace;
   pid: number;
+  /**
+   * AFK remote-control marker (bidirectional Telegram). Set `true` by the REPL
+   * `/afk on` toggle and cleared on `/afk off` via {@link setPresenceAfk}. A
+   * watching Telegram daemon filters `readPresenceFiles()` on
+   * `surface === 'cli' && afk === true` to auto-discover sessions whose
+   * questions it should render to the operator's phone. Optional/additive:
+   * absent (treated as `false`) on sessions that never entered AFK mode and on
+   * every non-REPL surface.
+   */
+  afk?: boolean;
 }
 
 /** A presence record loaded from disk — same as PresenceFileInfo plus the file path. */
@@ -86,6 +96,25 @@ export async function writePresenceFile(info: PresenceFileInfo): Promise<void> {
     await writeFile(filePath, JSON.stringify(info, null, 2), 'utf8');
   } catch {
     // Best-effort — swallow silently.
+  }
+}
+
+/**
+ * Update the `afk` marker on an existing presence file (best-effort,
+ * read-modify-write). Used by the REPL `/afk` toggle so a watching Telegram
+ * daemon can discover AFK sessions via `readPresenceFiles()`. No-op when the
+ * presence file is absent or unreadable (presence is non-critical — the
+ * keyboard elicitation path works regardless). Preserves every other field.
+ */
+export async function setPresenceAfk(sessionId: string, afk: boolean): Promise<void> {
+  try {
+    const filePath = presenceFilePath(sessionId);
+    const raw = await readFile(filePath, 'utf8');
+    const parsed = JSON.parse(raw) as PresenceFileInfo;
+    parsed.afk = afk;
+    await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
+  } catch {
+    // Best-effort — presence is non-critical.
   }
 }
 

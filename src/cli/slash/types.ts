@@ -8,6 +8,7 @@
  */
 
 import type { SessionRef } from '../../agent/session-ref.js';
+import type { ElicitationHandler } from '../../agent/elicitation-router.js';
 import type { AgentModelInput } from '../../agent/types.js';
 import type { PermissionMode } from '../../agent/types/sdk-types.js';
 import type { TrustedSkillLedger } from '../trusted-skill-ledger.js';
@@ -227,6 +228,23 @@ export interface SlashContext {
      */
     appendUser?(userInput: string): Promise<void>;
   };
+  /**
+   * AFK bidirectional Telegram (scope.lock criterion 1). Swap the active
+   * elicitation handler: a non-null handler is installed (the AFK ledger
+   * channel, which races a watching daemon's phone reply against the keyboard);
+   * `null` restores the surface's default stdin handler. Wired in
+   * `surface-setup.ts` after the router install. Absent on surfaces without a
+   * swappable router (Telegram, daemon, tests) — `toggleAfkMode` no-ops the
+   * swap when absent (keyboard stays live; channel is additive, invariant #3).
+   */
+  swapElicitationHandler?: (handler: ElicitationHandler | null) => void;
+  /**
+   * The surface's default stdin elicitation handler — exposed so the AFK
+   * ledger channel can compose it as its always-live keyboard fallback
+   * (invariant #3). Wired alongside `swapElicitationHandler`; absent on
+   * surfaces that never install a stdin handler.
+   */
+  stdinElicitationHandler?: ElicitationHandler;
 }
 
 /** The handler's return value — controls the REPL's next action. */

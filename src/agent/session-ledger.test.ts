@@ -282,3 +282,54 @@ describe('tailLedger', () => {
     expect(records).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// AFK remote-control records (cross-process elicitation / abort protocol)
+// ---------------------------------------------------------------------------
+
+describe('AFK remote-control ledger records', () => {
+  it('round-trips an elicitation request through the ledger', async () => {
+    const id = freshId();
+    const writer = new SessionLedgerWriter(id);
+    writer.record({
+      kind: 'elicitation',
+      reqId: 'r1',
+      request: {
+        serverName: 'agent',
+        origin: 'agent',
+        type: 'choice',
+        message: 'Pick one',
+        choices: ['a', 'b'],
+      },
+    });
+    await writer.close();
+
+    const records = await collect(readLedger(id));
+    const elic = records.find((r) => r.kind === 'elicitation');
+    expect(elic).toBeDefined();
+    if (elic && elic.kind === 'elicitation') {
+      expect(elic.reqId).toBe('r1');
+      expect(elic.request.type).toBe('choice');
+      expect(elic.request.choices).toEqual(['a', 'b']);
+    }
+  });
+
+  it('round-trips a signed response and an abort request', async () => {
+    const id = freshId();
+    const writer = new SessionLedgerWriter(id);
+    writer.record({
+      kind: 'elicitation_response',
+      reqId: 'r1',
+      result: { action: 'accept', content: { value: 'b' } },
+      hmac: 'deadbeef',
+    });
+    writer.record({ kind: 'abort_request', nonce: 'n1', hmac: 'cafef00d' });
+    await writer.close();
+
+    const records = await collect(readLedger(id));
+    const resp = records.find((r) => r.kind === 'elicitation_response');
+    const abort = records.find((r) => r.kind === 'abort_request');
+    expect(resp && resp.kind === 'elicitation_response' && resp.result.action).toBe('accept');
+    expect(abort && abort.kind === 'abort_request' && abort.nonce).toBe('n1');
+  });
+});

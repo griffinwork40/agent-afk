@@ -524,6 +524,18 @@ export function getSessionLedgerPath(sessionId: string): string {
 }
 
 /**
+ * Per-session HMAC key for the AFK remote-control channel:
+ * `~/.afk/state/sessions/<sessionId>/session.key`. Written 0600 by the REPL
+ * when AFK mode is enabled; read by the Telegram daemon to sign the
+ * elicitation responses and abort requests it writes back into the session
+ * ledger, and re-verified by the REPL before it acts on them.
+ * @throws if `sessionId` fails {@link isSafeLedgerSessionId}.
+ */
+export function getSessionKeyPath(sessionId: string): string {
+  return join(getSessionLedgerDir(sessionId), 'session.key');
+}
+
+/**
  * Path to the MCP server-status file.
  *
  * Written by `KeychainOAuthProvider.redirectToAuthorization()` when an MCP

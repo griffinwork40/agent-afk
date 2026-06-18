@@ -30,8 +30,8 @@ afk
 ```
 
 The agent will issue `browser_open` → `browser_observe` → … under the hood.
-A real Chromium window opens (headed by default in REPL — the operator
-watches the work).
+The browser runs **headless by default**; set `AFK_BROWSER_HEADLESS=0` to open a
+real Chromium window and watch the agent work.
 
 ---
 
@@ -85,8 +85,10 @@ Environment variables override the defaults. All are optional.
 | `AFK_BROWSER_CONFIG`           | (none)           | Absolute path to a JSON file overriding env-derived config  |
 | `AFK_SESSION_ID`               | `default`        | Override the per-session BrowserContext key                 |
 
-\* Headless `on` for daemon / subagent / telegram surfaces;
-headed for repl / interactive / cli (so an operator can watch the agent).
+\* Headless by default on every AFK surface — the CLI runs as surface `afk`,
+which is headless so background work (including `web_scrape`'s render
+escalation) never pops a visible window. Set `AFK_BROWSER_HEADLESS=0` to force
+headed, e.g. to watch the agent drive a real Chromium window in the REPL.
 
 ### Domain policy
 
