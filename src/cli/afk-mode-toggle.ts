@@ -27,6 +27,9 @@
 import { env } from '../config/env.js';
 import { resolveConfiguredNotifyTargets } from '../telegram/notify-routing.js';
 import { resetAfkPushBudget } from './commands/interactive/afk-push.js';
+import { ensureSessionKey } from '../agent/afk-channel.js';
+import { makeLedgerChannelHandler } from '../agent/afk-ledger-channel.js';
+import { setPresenceAfk } from '../agent/awareness/presence.js';
 import { palette } from './palette.js';
 import type { SlashContext } from './slash/types.js';
 
@@ -49,6 +52,27 @@ export async function toggleAfkMode(
     ctx.ui.repaintStatusLine();
     if (next) {
       resetAfkPushBudget();
+      // Bidirectional AFK (scope.lock criterion 1): swap the elicitation handler
+      // to the ledger channel so a watching Telegram daemon can answer the
+      // agent's questions from the operator's phone — racing the keyboard
+      // fallback (invariant #3). Built lazily here because the provider session
+      // id is known only after the first turn; if it is not yet available we
+      // skip the swap and stay keyboard-only (safe degrade). The channel is
+      // bound to the session captured at toggle time.
+      const sess = ctx.session.current;
+      const id = sess.sessionId;
+      const swap = ctx.swapElicitationHandler;
+      const fallback = ctx.stdinElicitationHandler;
+      if (id && swap && fallback) {
+        const ledgerHandler = makeLedgerChannelHandler({
+          sessionId: id,
+          key: ensureSessionKey(id),
+          emitElicitation: (rec) => sess.recordLedgerElicitation(rec.reqId, rec.request),
+          fallback,
+        });
+        swap(ledgerHandler);
+        void setPresenceAfk(id, true);
+      }
       ctx.out.success(
         palette.info('◐ AFK mode ON') +
         palette.dim(
@@ -64,6 +88,11 @@ export async function toggleAfkMode(
         );
       }
     } else {
+      // Restore the stdin elicitation handler (`null` → reinstall stdin) and
+      // clear the AFK presence marker so a watching daemon stops tracking.
+      ctx.swapElicitationHandler?.(null);
+      const id = ctx.session.current.sessionId;
+      if (id) void setPresenceAfk(id, false);
       ctx.out.success(
         palette.success('○ AFK mode OFF') + palette.dim(' — default permissions restored'),
       );

@@ -198,7 +198,7 @@ export async function setupSurface(
   // back to the numbered-text path — preserving the pre-picker behaviour
   // for surfaces that can't render a live frame.
   const armedCompositor = surface.getCompositor();
-  elicitationRouter.install(makeReplElicitationHandler({
+  const stdinElicitationHandler = makeReplElicitationHandler({
     readLine: (prompt) =>
       surface.readLine({ promptFn: () => prompt }).then((r) => r.text),
     writer: {
@@ -222,7 +222,8 @@ export async function setupSurface(
       pickFromList: (opts) => runPicker(armedCompositor, opts),
       readTextOverlay: (opts) => runTextInput(armedCompositor, opts),
     } : {}),
-  }));
+  });
+  elicitationRouter.install(stdinElicitationHandler);
 
   // Stage 3e fix — wire the persistent compositor into the ReplRenderer
   // and SlashContext ONCE, here, immediately after the surface arms.
@@ -314,6 +315,18 @@ export async function setupSurface(
   // matching the normal-turn append at onTurnComplete in the loop. Without it,
   // skill-turn output is absent from the autosaved markdown transcript.
   ctx.slashCtx.transcript = transcript;
+
+  // AFK bidirectional Telegram (scope.lock criterion 1): expose the surface's
+  // stdin elicitation handler + a swap primitive so `/afk on` can install the
+  // ledger channel (racing a watching daemon's phone reply against this
+  // keyboard handler) and `/afk off` can restore stdin (`null` → reinstall the
+  // stdin handler). This is the authoritative wiring point — `/afk` is a slash
+  // command that only runs after this surface setup, so the bootstrap-time
+  // startup handler is always superseded here. The router captures its handler
+  // at enqueue time (elicitation-router.ts), so swapping mid-session is safe.
+  ctx.slashCtx.stdinElicitationHandler = stdinElicitationHandler;
+  ctx.slashCtx.swapElicitationHandler = (handler) =>
+    elicitationRouter.install(handler ?? stdinElicitationHandler);
 
   // Wire the armed surface into the elicitation handler's compositor ref so
   // ask_question suspend/resume can yield stdin raw-mode to rl.question.
