@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.16.1] - 2026-06-18
+
+### Fixed
+- default the 'afk' CLI surface to headless (7ef070d)
+
+### Changed
+- Merge pull request #205 from griffinwork40/fix/afk-surface-headless-default (0cce23f)
+
 ## [4.16.0] - 2026-06-18
 
 ### Added
