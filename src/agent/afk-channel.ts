@@ -109,6 +109,10 @@ function digestsEqual(a: string, b: string): boolean {
   if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length || a.length === 0) {
     return false;
   }
+  // Reject non-hex inputs explicitly: Buffer.from(_, 'hex') silently truncates
+  // at the first invalid nibble rather than throwing, so a malformed digest
+  // would otherwise slip past the try/catch and lean solely on the length guard.
+  if (!/^[0-9a-f]+$/i.test(a) || !/^[0-9a-f]+$/i.test(b)) return false;
   let bufA: Buffer;
   let bufB: Buffer;
   try {

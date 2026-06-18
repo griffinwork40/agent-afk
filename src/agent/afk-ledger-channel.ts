@@ -50,8 +50,6 @@ export interface AbortWatcherDeps {
    * forwarded to the session AbortGraph.
    */
   onAbort: (reason: string) => void;
-  /** Nonce generator; injectable for tests. */
-  newAbortReason?: () => string;
 }
 
 /** Handle returned by {@link makeAbortWatcher} — call `stop()` to tear down. */
