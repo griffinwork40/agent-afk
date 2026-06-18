@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { resolveEffort, resolveMaxTokens, resolveThinkingParam } from './index.js';
+import { resolveEffort, resolveMaxTokens, resolveThinkingParam } from './resolve-params.js';
 import { maxOutputTokensFor } from '../../model-limits.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import type { ThinkingConfig } from '../../types/sdk-types.js';
