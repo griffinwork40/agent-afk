@@ -82,6 +82,24 @@ describe('writePresenceFile + readPresenceFiles', () => {
     const ids = records.map((r) => r.sessionId).sort();
     expect(ids).toEqual(['session-a', 'session-b']);
   });
+
+  it('round-trips the actor field when present', async () => {
+    const { writePresenceFile, readPresenceFiles } = await getPresenceMod();
+    await writePresenceFile(mkInfo({ sessionId: 'with-actor', actor: 'main' }));
+
+    const records = await readPresenceFiles();
+    expect(records).toHaveLength(1);
+    expect(records[0]!.actor).toBe('main');
+  });
+
+  it('omits actor cleanly when not set (absent on the record)', async () => {
+    const { writePresenceFile, readPresenceFiles } = await getPresenceMod();
+    await writePresenceFile(mkInfo({ sessionId: 'no-actor' }));
+
+    const records = await readPresenceFiles();
+    expect(records).toHaveLength(1);
+    expect(records[0]!.actor).toBeUndefined();
+  });
 });
 
 describe('removePresenceFile', () => {

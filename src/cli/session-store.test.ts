@@ -405,3 +405,37 @@ describe('session-store — naming', () => {
     expect(findSession('sdk-legacy')?.data.sessionId).toBe('sdk-legacy');
   });
 });
+
+describe('session-store — session identity (source / actor)', () => {
+  it('persists and round-trips a daemon source and subagent actor', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'q', 'a', { sessionId: 'sdk-ident' });
+    stats.source = 'daemon';
+    stats.actor = 'subagent';
+    const path = saveSession(stats, 'ident-sess');
+
+    const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+    expect(raw['source']).toBe('daemon');
+    expect(raw['actor']).toBe('subagent');
+
+    const loaded = loadSession('ident-sess');
+    expect(loaded!.source).toBe('daemon');
+    expect(loaded!.actor).toBe('subagent');
+
+    const entry = listSessions().find((e) => e.id === 'ident-sess');
+    expect(entry?.source).toBe('daemon');
+    expect(entry?.actor).toBe('subagent');
+  });
+
+  it('omits actor when unset (back-compat — absent on the sidecar)', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'q', 'a', { sessionId: 'sdk-no-actor' });
+    const path = saveSession(stats, 'plain-sess');
+
+    const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+    expect('actor' in raw).toBe(false);
+
+    const loaded = loadSession('plain-sess');
+    expect(loaded!.actor).toBeUndefined();
+  });
+});

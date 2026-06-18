@@ -31,7 +31,9 @@ describe('createMemorySessionEndHook', () => {
     hook(endCtx({ sessionId: 'top-level', reason: 'closed' }));
 
     expect(startSession).toHaveBeenCalledTimes(1);
-    expect(startSession).toHaveBeenCalledWith({ session_id: 'top-level', surface: 'cli' });
+    // actor is derived from the (absent) parentSessionId → 'main' for a
+    // top-level session.
+    expect(startSession).toHaveBeenCalledWith({ session_id: 'top-level', surface: 'cli', actor: 'main' });
     expect(endSession).toHaveBeenCalledTimes(1);
   });
 

@@ -289,3 +289,97 @@ describe('SQLite connection setup — WAL-mode concurrency', () => {
     expect(() => new MemoryStore(dir)).toThrow(/disk I\/O error/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Schema migration v2 → v3 — nullable sessions.actor column (Stage D)
+// ---------------------------------------------------------------------------
+
+describe('schema migration — sessions.actor (v2 → v3)', () => {
+  let migDir: string;
+
+  beforeEach(() => {
+    migDir = join(
+      tmpdir(),
+      `afk-memory-migration-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(migDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (existsSync(migDir)) rmSync(migDir, { recursive: true, force: true });
+  });
+
+  it('upgrades a v2 DB to v3, adds a nullable actor column, and preserves existing rows', () => {
+    const dbPath = join(migDir, 'memory.db');
+    // Build a minimal v2 database: the pre-v3 sessions table (no actor column),
+    // stamped user_version = 2, with one pre-existing session row.
+    const seed = new Database(dbPath);
+    seed.exec(`
+      CREATE TABLE sessions (
+        session_id TEXT PRIMARY KEY,
+        surface TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        summary TEXT,
+        tools_used TEXT NOT NULL DEFAULT '[]',
+        outcome TEXT,
+        token_count INTEGER,
+        cost_usd REAL
+      );
+    `);
+    seed
+      .prepare('INSERT INTO sessions (session_id, surface, started_at) VALUES (?, ?, ?)')
+      .run('legacy-sess', 'cli', '2026-01-01T00:00:00.000Z');
+    seed.pragma('user_version = 2');
+    seed.close();
+
+    // Opening the store runs the v2 → v3 migration.
+    const migrated = new MemoryStore(migDir);
+    migrated.startSession({ session_id: 'sub-sess', surface: 'telegram', actor: 'subagent' });
+    migrated.startSession({ session_id: 'plain-sess', surface: 'cli' });
+
+    const check = new Database(dbPath, { readonly: true });
+    try {
+      expect(check.pragma('user_version', { simple: true })).toBe(3);
+      const cols = (check.pragma('table_info(sessions)') as Array<{ name: string }>).map(
+        (c) => c.name,
+      );
+      expect(cols).toContain('actor');
+
+      // Pre-existing row survives the migration; its actor reads back NULL.
+      const legacy = check
+        .prepare('SELECT surface, actor FROM sessions WHERE session_id = ?')
+        .get('legacy-sess') as { surface: string; actor: string | null };
+      expect(legacy.surface).toBe('cli');
+      expect(legacy.actor).toBeNull();
+
+      // New writes persist actor, or NULL when omitted.
+      const sub = check
+        .prepare('SELECT actor FROM sessions WHERE session_id = ?')
+        .get('sub-sess') as { actor: string | null };
+      expect(sub.actor).toBe('subagent');
+      const plain = check
+        .prepare('SELECT actor FROM sessions WHERE session_id = ?')
+        .get('plain-sess') as { actor: string | null };
+      expect(plain.actor).toBeNull();
+    } finally {
+      check.close();
+    }
+  });
+
+  it('stamps a fresh DB at v3 with the actor column present', () => {
+    const freshStore = new MemoryStore(migDir);
+    freshStore.startSession({ session_id: 's', surface: 'cli', actor: 'main' });
+
+    const check = new Database(join(migDir, 'memory.db'), { readonly: true });
+    try {
+      expect(check.pragma('user_version', { simple: true })).toBe(3);
+      const row = check
+        .prepare('SELECT actor FROM sessions WHERE session_id = ?')
+        .get('s') as { actor: string | null };
+      expect(row.actor).toBe('main');
+    } finally {
+      check.close();
+    }
+  });
+});

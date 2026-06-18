@@ -294,15 +294,16 @@ describe('Concurrent open', () => {
 });
 
 describe('Schema versioning', () => {
-  it('stamps user_version = 2 on a fresh database (schema v2 adds fingerprint UNIQUE index)', () => {
+  it('stamps the current schema version (3) on a fresh database', () => {
     // The store created in beforeEach is a fresh DB.
     // Re-open the same dir with better-sqlite3 directly to read the pragma.
+    // Bumped to v3 in Stage D (added the nullable sessions.actor column).
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const Database = require('better-sqlite3');
     const db = new Database(join(tmpMemDir, 'memory.db'));
     const version = db.pragma('user_version', { simple: true });
     db.close();
-    expect(version).toBe(2);
+    expect(version).toBe(3);
   });
 
   it('opens cleanly when user_version matches SCHEMA_VERSION', () => {

@@ -11,6 +11,7 @@
 
 import type { HookHandler } from '../hooks.js';
 import { MemoryStore } from './memory-store.js';
+import { deriveActor } from '../session/session-identity.js';
 
 export function createMemorySessionEndHook(
   store: MemoryStore,
@@ -28,7 +29,11 @@ export function createMemorySessionEndHook(
     try {
       const sessionId = context.sessionId;
       if (sessionId) {
-        store.startSession({ session_id: sessionId, surface });
+        // `actor` is DERIVED from the parent linkage rather than hardcoded:
+        // past the subagent guard above, `parentSessionId` is absent so this
+        // resolves to 'main', but the derivation keeps the row correct if that
+        // guard is ever relaxed to record worker sessions.
+        store.startSession({ session_id: sessionId, surface, actor: deriveActor(context.parentSessionId) });
         store.endSession(sessionId, context.reason ?? 'session ended', 'completed');
       }
     } catch {

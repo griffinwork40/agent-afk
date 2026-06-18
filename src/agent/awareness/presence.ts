@@ -25,6 +25,7 @@ import { unlinkSync, existsSync } from 'fs';
 import { join } from 'path';
 import { getPresenceDir } from '../../paths.js';
 import type { RuntimeWorkspace } from './types.js';
+import type { TraceActor } from '../session/session-identity.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,6 +35,13 @@ import type { RuntimeWorkspace } from './types.js';
 export interface PresenceFileInfo {
   sessionId: string;
   surface: string;
+  /**
+   * Execution role ('main' | 'subagent'). Presence files are written for
+   * top-level sessions only, so this is 'main' when set; carried for schema
+   * uniformity with the other session-identity telemetry surfaces. Optional —
+   * absent on presence files written before this field existed.
+   */
+  actor?: TraceActor;
   cwd: string;
   startedAt: string;            // ISO 8601
   model: { provider: string; name: string };

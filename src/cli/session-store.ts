@@ -20,14 +20,15 @@ import { randomUUID } from 'node:crypto';
 import { ensureSessionsMigrated, getSessionsDir } from '../paths.js';
 import type { SessionStats, TurnRecord } from './slash/types.js';
 import type { AgentModelInput } from '../agent/types.js';
+import type { TraceActor } from '../agent/session/session-identity.js';
 
 export interface StoredSession {
   sessionId?: string;
   /** Human-readable session name (kebab-case). Optional — absent on legacy
    * sidecars saved before naming existed; those resolve by id/sessionId. */
   name?: string;
-  /** Origin surface ('cli' | 'telegram'). Absent on legacy sidecars → 'cli'. */
-  source?: 'cli' | 'telegram';
+  /** Origin surface ('cli' | 'telegram' | 'daemon'). Absent on legacy sidecars → 'cli'. */
+  source?: 'cli' | 'telegram' | 'daemon';
   /** Telegram chat id when source === 'telegram' (reverse lookup). */
   telegramChatId?: number;
   model: AgentModelInput;
@@ -42,6 +43,9 @@ export interface StoredSession {
   forkedFrom?: string;
   /** Wall-clock time the fork was created (set by /fork). */
   forkedAt?: number;
+  /** Execution role ('main' | 'subagent'). Sidecars are top-level-only, so
+   *  'main' when set; absent on legacy/un-threaded saves. */
+  actor?: TraceActor;
 }
 
 export interface SessionListEntry {
@@ -49,7 +53,8 @@ export interface SessionListEntry {
   id: string;   // derived from the filename
   sessionId?: string;
   name?: string;
-  source?: 'cli' | 'telegram';
+  source?: 'cli' | 'telegram' | 'daemon';
+  actor?: TraceActor;
   model: AgentModelInput;
   startedAt: number;
   savedAt: number;
@@ -123,6 +128,7 @@ export function saveSession(stats: SessionStats, overrideId?: string): string {
     sessionId: stats.sessionId,
     ...(stats.name ? { name: stats.name } : {}),
     ...(stats.source ? { source: stats.source } : {}),
+    ...(stats.actor ? { actor: stats.actor } : {}),
     ...(stats.telegramChatId !== undefined ? { telegramChatId: stats.telegramChatId } : {}),
     model: stats.model,
     startedAt: stats.sessionStartTime,
@@ -273,6 +279,7 @@ export function listSessions(): SessionListEntry[] {
         sessionId: loaded.sessionId,
         name: loaded.name,
         source: loaded.source,
+        actor: loaded.actor,
         model: loaded.model,
         startedAt: loaded.startedAt,
         savedAt: loaded.savedAt,

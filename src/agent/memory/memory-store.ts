@@ -73,8 +73,11 @@ const HOT_TRUNCATION_SENTINEL =
  * v1 → v2: Added UNIQUE index on facts(content, created_at, session_id, category)
  *          to prevent same-ms duplicate inserts from breaking WAL fingerprint
  *          lookups. Migration deduplicates any existing colliding rows.
+ * v2 → v3: Added a nullable `actor` column to sessions ('main' | 'subagent'
+ *          execution role). ALTER ADD COLUMN with no default → existing rows
+ *          read back NULL, so the migration cannot fail on stored data.
  */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -86,7 +89,11 @@ CREATE TABLE IF NOT EXISTS sessions (
   tools_used TEXT NOT NULL DEFAULT '[]',
   outcome TEXT,
   token_count INTEGER,
-  cost_usd REAL
+  cost_usd REAL,
+  -- v3: execution role 'main' | 'subagent'. Nullable (NULL on pre-v3 rows).
+  -- Listed last to match the position ALTER TABLE ADD COLUMN appends it on
+  -- migrated databases, so fresh and migrated DBs share one column order.
+  actor TEXT
 );
 
 CREATE TABLE IF NOT EXISTS facts (
@@ -183,8 +190,13 @@ export class MemoryStore {
     } else if (existingVersion === SCHEMA_VERSION) {
       // Expected version — no migration needed.
     } else if (existingVersion < SCHEMA_VERSION) {
-      // Incremental migrations.
-      if (existingVersion === 1) {
+      // Incremental migrations — applied in ascending order so a DB at ANY
+      // supported older version catches up to SCHEMA_VERSION within a single
+      // open (a v1 DB runs v1→v2 then v2→v3; a v2 DB runs only v2→v3). Each
+      // step is guarded by the version it migrates FROM and stamps user_version
+      // on completion. The chain is exhaustive over [1, SCHEMA_VERSION); a
+      // future step appends a new `if (existingVersion < N)` block.
+      if (existingVersion < 2) {
         // v1 → v2: add UNIQUE index on facts(content, created_at, session_id, category).
         // First, deduplicate any colliding rows keeping the lowest id.
         this.db.exec(`
@@ -204,12 +216,26 @@ export class MemoryStore {
         `);
         this.db.pragma(`user_version = 2`);
         debugLog('memory-store: migrated schema v1 → v2 (added fingerprint UNIQUE index)');
-      } else {
-        this.db.close();
-        throw new Error(
-          `memory.db schema version ${existingVersion} is older than the current version ${SCHEMA_VERSION}. ` +
-            `Delete ${join(this.dir, DB_FILE)} to start fresh (your stored facts will be lost).`,
-        );
+      }
+      if (existingVersion < 3) {
+        // v2 → v3: add a NULLABLE `actor` column to sessions (execution role
+        // 'main' | 'subagent'). No default → existing rows read back NULL, so
+        // the migration cannot fail on stored data, and older builds that
+        // ignore the column keep reading the DB (forward-compatible).
+        //
+        // SQLite has no `ADD COLUMN IF NOT EXISTS`, so guard on table_info to
+        // keep the step idempotent: re-running against a DB that already has
+        // the column (an interrupted migration that stamped the ALTER but not
+        // the version, or a version stamped backwards) must not throw
+        // "duplicate column name".
+        const hasActor = (
+          this.db.pragma('table_info(sessions)') as Array<{ name: string }>
+        ).some((col) => col.name === 'actor');
+        if (!hasActor) {
+          this.db.exec(`ALTER TABLE sessions ADD COLUMN actor TEXT;`);
+        }
+        this.db.pragma(`user_version = 3`);
+        debugLog('memory-store: migrated schema v2 → v3 (added sessions.actor column)');
       }
     } else {
       // existingVersion > SCHEMA_VERSION: DB was written by a newer build.
@@ -502,9 +528,9 @@ export class MemoryStore {
       data: { ...session, started_at: now },
     });
     this.db.prepare(`
-      INSERT OR IGNORE INTO sessions (session_id, surface, started_at)
-      VALUES (?, ?, ?)
-    `).run(session.session_id, session.surface, now);
+      INSERT OR IGNORE INTO sessions (session_id, surface, started_at, actor)
+      VALUES (?, ?, ?, ?)
+    `).run(session.session_id, session.surface, now, session.actor ?? null);
   }
 
   endSession(
@@ -654,9 +680,9 @@ export class MemoryStore {
           if (entry.type === 'session_start') {
             const d = entry.data;
             this.db.prepare(`
-              INSERT OR IGNORE INTO sessions (session_id, surface, started_at)
-              VALUES (?, ?, ?)
-            `).run(d['session_id'], d['surface'], d['started_at']);
+              INSERT OR IGNORE INTO sessions (session_id, surface, started_at, actor)
+              VALUES (?, ?, ?, ?)
+            `).run(d['session_id'], d['surface'], d['started_at'], d['actor'] ?? null);
             replayed++;
           } else if (entry.type === 'session_end') {
             const d = entry.data;
