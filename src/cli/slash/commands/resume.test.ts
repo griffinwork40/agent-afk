@@ -129,3 +129,58 @@ describe('/resume — C2 same-session guard', () => {
     expect(lines.some((l) => /WARN:.*No saved session/i.test(l))).toBe(true);
   });
 });
+
+describe('/resume — no-arg CWD filtering', () => {
+  it('shows only sessions matching ctx.stats.cwd', async () => {
+    // Save two sessions in different directories.
+    const statsA = createSessionStats('sonnet');
+    statsA.cwd = '/proj/foo';
+    recordTurn(statsA, 'foo work', 'done', { sessionId: 'sdk-cwd-a', totalCostUsd: 0.01, durationMs: 10, usage: { input_tokens: 5, output_tokens: 5 } });
+    statsA.name = 'session-foo';
+    saveSession(statsA);
+
+    const statsB = createSessionStats('sonnet');
+    statsB.cwd = '/proj/bar';
+    recordTurn(statsB, 'bar work', 'done', { sessionId: 'sdk-cwd-b', totalCostUsd: 0.01, durationMs: 10, usage: { input_tokens: 5, output_tokens: 5 } });
+    statsB.name = 'session-bar';
+    saveSession(statsB);
+
+    const { ctx, lines } = makeCtx(undefined);
+    ctx.stats.cwd = '/proj/foo';
+    await resumeCmd.handler(ctx, '');
+
+    const allText = lines.join('\n');
+    expect(allText).toContain('session-foo');
+    expect(allText).not.toContain('session-bar');
+  });
+
+  it('falls back to global list with distinct header when no local sessions', async () => {
+    const statsB = createSessionStats('sonnet');
+    statsB.cwd = '/proj/bar';
+    recordTurn(statsB, 'bar work', 'done', { sessionId: 'sdk-fallback', totalCostUsd: 0.01, durationMs: 10, usage: { input_tokens: 5, output_tokens: 5 } });
+    statsB.name = 'session-bar-only';
+    saveSession(statsB);
+
+    const { ctx, lines } = makeCtx(undefined);
+    ctx.stats.cwd = '/proj/unrelated';
+    await resumeCmd.handler(ctx, '');
+
+    const allText = lines.join('\n');
+    expect(allText).toMatch(/Saved sessions — all \(none in this directory\)/);
+    expect(allText).toContain('session-bar-only');
+  });
+
+  it('explicit target path ignores cwd entirely', async () => {
+    const statsC = createSessionStats('sonnet');
+    statsC.cwd = '/proj/bar';
+    recordTurn(statsC, 'some work', 'done', { sessionId: 'sdk-explicit', totalCostUsd: 0.01, durationMs: 10, usage: { input_tokens: 5, output_tokens: 5 } });
+    const path = saveSession(statsC);
+    const sidecarId = path.split('/').pop()!.replace(/\.json$/, '');
+
+    const { ctx, requestResumeSpy } = makeCtx('sdk-other');
+    ctx.stats.cwd = '/proj/other';
+    await resumeCmd.handler(ctx, sidecarId);
+
+    expect(requestResumeSpy).toHaveBeenCalledOnce();
+  });
+});
