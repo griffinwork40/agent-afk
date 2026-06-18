@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.18.1] - 2026-06-18
+
+### Changed
+- Merge pull request #207 from griffinwork40/refactor/split-diagnose-into-phases (421e4b5)
+- Merge pull request #210 from griffinwork40/refactor/split-tool-lane-overlay-test (0d9e6d0)
+- extract overlay-rendering cluster into its own test file (58b90e2)
+- split diagnose/index.ts into modules (e95ef57)
+
 ## [4.18.0] - 2026-06-18
 
 ### Added
