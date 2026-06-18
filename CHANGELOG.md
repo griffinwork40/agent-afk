@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.18.3] - 2026-06-18
+
+### Changed
+- Merge pull request #208 from griffinwork40/refactor/extract-resolve-params (2acc9a0)
+- extract pure param resolvers into resolve-params.ts (c5462c0)
+
 ## [4.18.2] - 2026-06-18
 
 ### Changed
