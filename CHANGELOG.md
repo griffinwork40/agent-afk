@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.18.0] - 2026-06-18
+
+### Added
+- scope /resume session list to current working directory (3ba3674)
+
+### Changed
+- Merge pull request #209 from griffinwork40/afk/20260618-123959-6040de (e5c19af)
+
 ## [4.17.0] - 2026-06-18
 
 ### Added
