@@ -42,6 +42,10 @@ export interface StoredSession {
   forkedFrom?: string;
   /** Wall-clock time the fork was created (set by /fork). */
   forkedAt?: number;
+  /** Effective working directory when the session was started. Used by /resume
+   * to filter the list to sessions from the current directory. Absent on
+   * legacy sidecars — those surface only in the global fallback view. */
+  cwd?: string;
 }
 
 export interface SessionListEntry {
@@ -55,6 +59,7 @@ export interface SessionListEntry {
   savedAt: number;
   totalTurns: number;
   totalCostUsd: number;
+  cwd?: string;
 }
 
 export interface FoundSession {
@@ -124,6 +129,7 @@ export function saveSession(stats: SessionStats, overrideId?: string): string {
     ...(stats.name ? { name: stats.name } : {}),
     ...(stats.source ? { source: stats.source } : {}),
     ...(stats.telegramChatId !== undefined ? { telegramChatId: stats.telegramChatId } : {}),
+    ...(stats.cwd ? { cwd: stats.cwd } : {}),
     model: stats.model,
     startedAt: stats.sessionStartTime,
     savedAt: Date.now(),
@@ -278,6 +284,7 @@ export function listSessions(): SessionListEntry[] {
         savedAt: loaded.savedAt,
         totalTurns: loaded.totalTurns,
         totalCostUsd: loaded.totalCostUsd,
+        cwd: loaded.cwd,
       });
     } catch {
       // skip corrupted files
