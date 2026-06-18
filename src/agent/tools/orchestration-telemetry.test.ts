@@ -24,6 +24,7 @@ import type {
 } from '../subagent.js';
 import type { IAgentSession } from '../types.js';
 import type { AgentConfig } from '../types/config-types.js';
+import type { Surface } from '../awareness/types.js';
 import type { ToolCall } from './types.js';
 import {
   SubagentExecutor,
@@ -101,6 +102,62 @@ function findEvent(event: string): Record<string, unknown> | undefined {
 
 beforeEach(() => {
   appendRoutingDecision.mockClear();
+});
+
+// ---------------------------------------------------------------------------
+// Stage B: session identity (origin + actor) on subagent routing rows.
+// ---------------------------------------------------------------------------
+
+function makeExecWithIdentity(opts: { surface?: Surface; depth: number }) {
+  const manager = mockManager(mockHandle({ id: 'child-id' }));
+  const parentSession: Partial<IAgentSession> = {
+    sessionId: 'parent-sess',
+    getInputStreamRef: vi.fn(),
+    abortSignal: new AbortController().signal,
+  };
+  const ctx: SubagentExecutorContext = {
+    subagentManager: manager as unknown as SubagentExecutorContext['subagentManager'],
+    parentSession: parentSession as SubagentExecutorContext['parentSession'],
+    defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+    depth: opts.depth,
+    ...(opts.surface !== undefined ? { surface: opts.surface } : {}),
+  };
+  return new SubagentExecutor(ctx);
+}
+
+describe('subagent routing rows — origin + actor', () => {
+  it('(1) top-level executor (surface set, depth 0) emits origin + actor:main', async () => {
+    const executor = makeExecWithIdentity({ surface: 'daemon', depth: 0 });
+    await executor.execute(makeCall());
+    const evt = findEvent('subagent.completed');
+    expect(evt).toBeDefined();
+    expect(evt?.['origin']).toBe('daemon');
+    expect(evt?.['actor']).toBe('main');
+  });
+
+  it('(1) telegram top-level → origin:telegram, actor:main', async () => {
+    const executor = makeExecWithIdentity({ surface: 'telegram', depth: 0 });
+    await executor.execute(makeCall());
+    expect(findEvent('subagent.completed')?.['origin']).toBe('telegram');
+    expect(findEvent('subagent.completed')?.['actor']).toBe('main');
+  });
+
+  it('(2) nested executor (depth > 0) emits actor:subagent with inherited origin', async () => {
+    const executor = makeExecWithIdentity({ surface: 'cli', depth: 1 });
+    await executor.execute(makeCall());
+    const evt = findEvent('subagent.completed');
+    expect(evt?.['actor']).toBe('subagent');
+    expect(evt?.['origin']).toBe('cli');
+  });
+
+  it('(4) un-threaded executor (no surface) omits origin + actor', async () => {
+    const executor = makeExecWithIdentity({ depth: 0 });
+    await executor.execute(makeCall());
+    const evt = findEvent('subagent.completed');
+    expect(evt).toBeDefined();
+    expect('origin' in (evt ?? {})).toBe(false);
+    expect('actor' in (evt ?? {})).toBe(false);
+  });
 });
 
 describe('subagent.completed telemetry', () => {

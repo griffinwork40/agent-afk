@@ -278,6 +278,8 @@ async function main() {
         const subagentExecutor = new SubagentExecutor({
           subagentManager: rootManager,
           parentSession: deferredParent,
+          // Session origin for routing-decision telemetry (Telegram → telegram).
+          surface: 'telegram',
           defaultConfig: {
             apiKey: telegramApiKey,
             systemPrompt: layeredBasePrompt,
@@ -294,6 +296,8 @@ async function main() {
 
         const skillExecutor = new SkillExecutor({
           parentSession: deferredParent,
+          // Session origin for skill-invocation + routing telemetry (Telegram → telegram).
+          surface: 'telegram',
           defaultModel: sessionConfig.model,
           defaultSubagentModel: getDefaultSubagentModel(sessionConfig.model),
           apiKey: telegramApiKey,

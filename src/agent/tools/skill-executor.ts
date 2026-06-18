@@ -41,6 +41,8 @@ import { writeSkillInvocation } from '../telemetry/skill-invocation-writer.js';
 import { isTrustedSkill } from '../_lib/trusted-skill-registry.js';
 import { emitTrustedSkillComplete, emitTrustedSkillStart } from '../_lib/trusted-skill-events.js';
 import { debugLog } from '../../utils/debug.js';
+import type { Surface } from '../awareness/types.js';
+import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from '../session/session-identity.js';
 
 export interface SkillExecutorContext {
   parentSession: Pick<IAgentSession, 'sessionId' | 'getInputStreamRef' | 'abortSignal'> &
@@ -49,6 +51,14 @@ export interface SkillExecutorContext {
     // back to that parent. See SubagentManager.forkSubagent's parent fallback.
     Partial<Pick<IAgentSession, 'hookRegistry'>>;
   defaultModel?: string;
+  /**
+   * User-facing surface of the session that owns this executor (cli/telegram/
+   * daemon). Set at top-level wiring sites. Recorded as `origin` on the
+   * skill-invocation + routing rows this executor emits. `actor` is derived
+   * from {@link SkillExecutorContext.depth}. Optional/back-compat: when unset,
+   * rows omit `origin`/`actor`.
+   */
+  surface?: Surface;
   /**
    * Default model for forked skill subagents, overriding `defaultModel` when
    * set. Sourced from `AFK_DEFAULT_SUBAGENT_MODEL`; falls back to `'sonnet'`
@@ -209,6 +219,19 @@ export class SkillExecutor {
 
   constructor(private readonly ctx: SkillExecutorContext) {}
 
+  /**
+   * Session-identity fields for telemetry rows (skill-invocations + routing).
+   * Only populated when this executor was wired with a `surface` (the Stage B
+   * top-level wiring); legacy/un-threaded contexts return `{}` so rows omit
+   * `origin`/`actor`, preserving back-compat. `actor` derives from `depth`
+   * (>0 ⟺ this executor is owned by a subagent).
+   */
+  private sessionIdentity(): { origin?: TraceOrigin; actor?: TraceActor } {
+    return this.ctx.surface !== undefined
+      ? { origin: deriveOrigin(this.ctx.surface), actor: actorFromDepth(this.ctx.depth) }
+      : {};
+  }
+
   async execute(call: ToolCall): Promise<ToolResult> {
     if (call.signal.aborted) {
       return { content: 'Skill tool call aborted', isError: true };
@@ -221,6 +244,7 @@ export class SkillExecutor {
       // changing the error precedence (parse errors still come later).
       const requestedName = extractRequestedSkillName(call.input);
       void appendRoutingDecision({
+        ...this.sessionIdentity(),
         event: 'delegation.skipped',
         parent_session_id: this.ctx.parentSession.sessionId,
         reason: 'max_depth',
@@ -353,8 +377,10 @@ export class SkillExecutor {
       sessionId: this.ctx.parentSession.sessionId,
       cwd: this.ctx.cwd,
       model: skill.model ?? this.ctx.defaultModel,
+      ...this.sessionIdentity(),
     });
     void appendRoutingDecision({
+      ...this.sessionIdentity(),
       event: 'skill.dispatched',
       requested_name: skill.name,
       parent_session_id: this.ctx.parentSession.sessionId,
@@ -412,6 +438,7 @@ export class SkillExecutor {
               : 0
           : undefined;
       void appendRoutingDecision({
+        ...this.sessionIdentity(),
         event: 'skill.completed',
         requested_name: skill.name,
         parent_session_id: this.ctx.parentSession.sessionId,
@@ -527,6 +554,9 @@ export class SkillExecutor {
         apiKey: this.ctx.apiKey,
         ...(this.ctx.baseUrl !== undefined ? { baseUrl: this.ctx.baseUrl } : {}),
       } as AgentConfig,
+      // Inherit origin from the skill executor; `depth + 1` makes grandchild
+      // `agent`-dispatch rows carry actor:'subagent'.
+      ...(this.ctx.surface !== undefined ? { surface: this.ctx.surface } : {}),
       defaultSubagentModel: this.ctx.defaultSubagentModel,
       childProviderFactory: this.ctx.childProviderFactory,
       childSkillExecutorFactory: this.ctx.childSkillExecutorFactory,
@@ -637,6 +667,7 @@ export class SkillExecutor {
       sessionId: this.ctx.parentSession.sessionId,
       cwd: this.ctx.cwd,
       model: typeof skillChildModel === 'string' ? skillChildModel : undefined,
+      ...this.sessionIdentity(),
     });
 
     const manager = new SubagentManager({
@@ -786,6 +817,7 @@ export class SkillExecutor {
   ): void {
     const depth = this.ctx.depth ?? 0;
     const base = {
+      ...this.sessionIdentity(),
       requested_name: name,
       parent_session_id: this.ctx.parentSession.sessionId,
       depth,
@@ -930,6 +962,7 @@ export class SkillExecutor {
       sessionId: this.ctx.parentSession.sessionId,
       cwd: this.ctx.cwd,
       model: typeof pluginChildModel === 'string' ? pluginChildModel : undefined,
+      ...this.sessionIdentity(),
     });
 
     const manager = new SubagentManager({

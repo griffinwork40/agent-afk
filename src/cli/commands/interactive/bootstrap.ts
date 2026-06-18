@@ -292,6 +292,8 @@ export async function bootstrapSession(
   const subagentExecutor = new SubagentExecutor({
     subagentManager: rootManager,
     parentSession: deferredParent,
+    // Session origin for routing-decision telemetry (REPL → cli).
+    surface: 'cli',
     defaultConfig: {
       apiKey,
       systemPrompt: basePrompt,
@@ -315,6 +317,8 @@ export async function bootstrapSession(
 
   const skillExecutor = new SkillExecutor({
     parentSession: deferredParent,
+    // Session origin for skill-invocation + routing telemetry (REPL → cli).
+    surface: 'cli',
     defaultModel: sessionModel,
     defaultSubagentModel: getDefaultSubagentModel(sessionModel),
     apiKey,

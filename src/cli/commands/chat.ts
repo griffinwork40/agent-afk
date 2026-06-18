@@ -481,6 +481,8 @@ export function registerChatCommand(program: Command): void {
         const subagentExecutor = new SubagentExecutor({
           subagentManager: rootManager,
           parentSession: deferredParent,
+          // Session origin for routing-decision telemetry (afk chat → cli).
+          surface: 'cli',
           defaultConfig: {
             apiKey,
             systemPrompt: basePrompt,
@@ -501,6 +503,8 @@ export function registerChatCommand(program: Command): void {
 
         const skillExecutor = new SkillExecutor({
           parentSession: deferredParent,
+          // Session origin for skill-invocation + routing telemetry (afk chat → cli).
+          surface: 'cli',
           defaultModel: options.model,
           defaultSubagentModel: getDefaultSubagentModel(options.model),
           apiKey,

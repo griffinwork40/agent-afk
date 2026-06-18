@@ -28,6 +28,8 @@ import type { SkillExecutor } from './skill-executor.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { debugLog } from '../../utils/debug.js';
 import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
+import type { Surface } from '../awareness/types.js';
+import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from '../session/session-identity.js';
 
 export { DEFAULT_MAX_NESTING_DEPTH, type ChildProviderFactoryArgs } from './nesting.js';
 
@@ -47,6 +49,15 @@ export interface SubagentExecutorContext {
    * the same convention; see `ComposeExecutorContext.systemPrompt`.
    */
   defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl'>;
+  /**
+   * User-facing surface of the session that owns this executor (cli/telegram/
+   * daemon). Set at top-level wiring sites; inherited by nested child executors.
+   * Recorded as `origin` on the routing-decision rows this executor emits.
+   * Optional/back-compat: when unset, rows omit `origin`/`actor`. The `actor`
+   * role itself is derived from {@link SubagentExecutorContext.depth}, not from
+   * a separate field.
+   */
+  surface?: Surface;
   /**
    * Per-model credential resolver. When provided, the executor calls this
    * with the child's effective model string to resolve the appropriate API
@@ -505,6 +516,15 @@ export class SubagentExecutor implements SubagentControl {
     const maxDepth = this.ctx.maxDepth ?? DEFAULT_MAX_NESTING_DEPTH;
     let childManager: SubagentManager | undefined;
 
+    // Session identity for routing-decision rows. Only emitted when this
+    // executor was wired with a `surface` (the new top-level wiring); legacy/
+    // un-threaded contexts omit both fields, preserving back-compat. `actor`
+    // comes from `depth` (>0 ⟺ this executor is owned by a subagent).
+    const identity: { origin?: TraceOrigin; actor?: TraceActor } =
+      this.ctx.surface !== undefined
+        ? { origin: deriveOrigin(this.ctx.surface), actor: actorFromDepth(depth) }
+        : {};
+
     // Resolve the child's effective model and the provider it routes to FIRST,
     // so we can decide whether the parent's Anthropic-shaped `apiKey` /
     // `baseUrl` (sourced from `loadCredential()` + `AFK_LOCAL_BASE_URL`) should
@@ -583,6 +603,9 @@ export class SubagentExecutor implements SubagentControl {
         subagentManager: childManager,
         parentSession: childParentSession as Pick<IAgentSession, 'sessionId' | 'getInputStreamRef' | 'abortSignal'>,
         defaultConfig: this.ctx.defaultConfig,
+        // Inherit origin from the parent; `depth + 1` below makes this child's
+        // emitted rows carry actor:'subagent'.
+        ...(this.ctx.surface !== undefined ? { surface: this.ctx.surface } : {}),
         defaultSubagentModel: this.ctx.defaultSubagentModel,
         childProviderFactory: this.ctx.childProviderFactory,
         childSkillExecutorFactory: this.ctx.childSkillExecutorFactory,
@@ -657,6 +680,7 @@ export class SubagentExecutor implements SubagentControl {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       void emitTelemetry({
+        ...identity,
         event: 'subagent.failed',
         subagent_id: 'unknown',
         id_prefix: parsed.id_prefix,
@@ -850,6 +874,7 @@ export class SubagentExecutor implements SubagentControl {
         const content = typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent);
         const trace = result.trace;
         void emitTelemetry({
+          ...identity,
           event: 'subagent.completed',
           subagent_id: handle.id,
           parent_session_id: parentSessionId,
@@ -872,6 +897,7 @@ export class SubagentExecutor implements SubagentControl {
         result.error?.message ?? 'Subagent failed with no output';
       const failedTrace = result.trace;
       void emitTelemetry({
+        ...identity,
         event: 'subagent.failed',
         subagent_id: handle.id,
         id_prefix: parsed.id_prefix,
@@ -914,6 +940,7 @@ export class SubagentExecutor implements SubagentControl {
       // execute() as an error path; we preserve that by re-throwing.
       const message = err instanceof Error ? err.message : String(err);
       void emitTelemetry({
+        ...identity,
         event: 'subagent.failed',
         subagent_id: handle.id,
         id_prefix: parsed.id_prefix,

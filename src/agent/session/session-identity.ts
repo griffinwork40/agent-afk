@@ -60,3 +60,15 @@ export function deriveOrigin(surface: Surface | undefined): TraceOrigin {
 export function deriveActor(parentSessionId: string | null | undefined): TraceActor {
   return parentSessionId == null ? 'main' : 'subagent';
 }
+
+/**
+ * Derive the actor role from an executor's nesting depth. Equivalent to
+ * {@link deriveActor} but sourced from the `depth` already carried by the
+ * subagent/skill executor contexts: a top-level (depth 0 / undefined) executor
+ * is owned by a `main` session, any nested executor (depth > 0) is owned by a
+ * `subagent`. Using depth avoids threading a redundant `parentSessionId` into
+ * the executor contexts purely for telemetry.
+ */
+export function actorFromDepth(depth: number | undefined): TraceActor {
+  return (depth ?? 0) > 0 ? 'subagent' : 'main';
+}
