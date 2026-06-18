@@ -18,8 +18,11 @@
   - DEFERRED in B/C: deep skill→skill grandchild `origin` via
     `createChildSkillExecutorFactory` (nesting.ts, fragile 8-positional sig) —
     actor stays correct via depth, origin reads `unknown`.
-- **Stage D — NOT YET DONE** (memory DB migration, sidecar, presence). Untouched
-  per scope. The memory-DB step is the only one requiring a SCHEMA_VERSION bump.
+- **Stage D — DONE + verified + committed** (memory DB migration, sidecar,
+  presence). SCHEMA_VERSION bumped 2→3 (nullable `sessions.actor`, idempotent
+  ALTER); sidecar `source` gained `'daemon'` + optional `actor`; presence gained
+  optional `actor` (derived via `actorFromDepth` at the top-level provider gate).
+  Full suite green except the 2 unrelated pre-existing env failures.
 - Mirror of this plan persisted to cross-session memory as procedure
   `normalize-session-identity-telemetry-plan` (survives worktree sweeps).
 
@@ -95,12 +98,20 @@ unknown→unknown.
 - Widen `SkillExecutorContext` (skill-executor.ts:46) to expose surface +
   parentSessionId; update stub `createStubParentSession` (skill-executor.ts:524).
 
-### Stage D — state artifacts
-- `cli/session-store.ts:21-47` — add 'daemon' to `source`; add optional `actor?`.
-- `awareness/presence.ts:33-51` — add optional `actor?`.
-- `memory/memory-store.ts` — ONLY migration: nullable `actor TEXT` on sessions
-  (DDL :80-90), bump SCHEMA_VERSION, migration block mirroring v1→v2 @ :191-211;
-  thread through startSession (:500) / memory-hooks.ts:17. Keep NULLABLE.
+### Stage D — state artifacts (SHIPPED)
+- `cli/session-store.ts` — `source` union gained `'daemon'`; optional `actor?` on
+  `StoredSession` + `SessionListEntry`, threaded through `saveSession`/
+  `listSessions`. `SessionStats` (`cli/slash/types.ts`) widened to match.
+- `agent/awareness/presence.ts` — optional `actor?` on `PresenceFileInfo`;
+  populated at both provider presence call sites via `actorFromDepth(depth)`
+  (top-level gate ⇒ `'main'`).
+- `agent/memory/memory-store.ts` — SCHEMA_VERSION 2→3; nullable `actor TEXT` on
+  sessions; migration restructured into a sequential v1→v2→v3 catch-up chain; the
+  v2→v3 `ALTER` is idempotent (guards on `table_info`) so it tolerates re-runs /
+  interrupted migrations. `actor` threaded through `NewSession`, `startSession`,
+  the WAL-replay insert, and `memory-hooks.ts` (derived via `deriveActor`).
+  NOTE: real paths are under `src/agent/memory/…`, not the `src/memory/…` /
+  `src/agent/memory-hooks.ts` cited in the original plan.
 
 ## Risks / do-NOT-change-yet
 - Do NOT repurpose `surface:'afk'` (frozen provenance; breaks shared schema).
