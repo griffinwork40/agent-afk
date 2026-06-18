@@ -21,7 +21,7 @@ import type { ToolHandlerContext } from '../types.js';
 // resolving the nearest existing ancestor and re-appending trailing segments —
 // this prevents throwing on legitimate new-file writes while still resolving
 // all existing symlinks in the ancestor chain.
-function realpathSafe(p: string): string {
+export function realpathSafe(p: string): string {
   try {
     return realpathSync.native(p);
   } catch {
@@ -32,6 +32,33 @@ function realpathSafe(p: string): string {
     if (dir === p) return p; // reached filesystem root
     return path.join(realpathSafe(dir), base);
   }
+}
+
+// Invariant: the realpath of a granted root is filesystem-stable within a
+// session — adding or revoking a root mutates the roots array, not what
+// realpathSafe(root) returns for a given string. Under this module's
+// non-adversarial threat model (a granted root's symlink is not retargeted
+// mid-session), caching root -> realpath across calls is safe and removes the
+// N+1 realpath syscalls that resolveAndContain / wouldBeRestricted otherwise
+// pay on EVERY typed-file-tool call (linear in granted-root count). The
+// candidate path is always resolved fresh; only roots are memoized.
+const rootRealpathCache = new Map<string, string>();
+
+function realpathRoot(root: string): string {
+  const cached = rootRealpathCache.get(root);
+  if (cached !== undefined) return cached;
+  const real = realpathSafe(root);
+  rootRealpathCache.set(root, real);
+  return real;
+}
+
+/**
+ * Test-only: clear the cross-call root realpath cache so suites that point the
+ * same root string at different real targets across cases don't see a stale
+ * entry. Production never needs this (root realpaths are session-stable).
+ */
+export function _resetRootRealpathCacheForTests(): void {
+  rootRealpathCache.clear();
 }
 
 /**
@@ -76,7 +103,7 @@ export function resolveAndContain(
 
   // Path is allowed if it is inside ANY root (compare real paths throughout).
   for (const root of roots) {
-    const realRoot = realpathSafe(root);
+    const realRoot = realpathRoot(root);
     const rel = path.relative(realRoot, realAbs);
     if (!rel.startsWith('..')) {
       return abs;
@@ -134,7 +161,7 @@ export function wouldBeRestricted(
       : (context?.writeRoots ?? [resolveBase]);
 
   for (const root of roots) {
-    const realRoot = realpathSafe(root);
+    const realRoot = realpathRoot(root);
     const rel = path.relative(realRoot, realAbs);
     if (!rel.startsWith('..')) {
       return { restricted: false, resolved: abs, roots };

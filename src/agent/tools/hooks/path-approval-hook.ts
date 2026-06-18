@@ -52,7 +52,7 @@
 
 import { elicitationRouter } from '../../elicitation-router.js';
 import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
-import { wouldBeRestricted } from '../handlers/_cwd-utils.js';
+import { wouldBeRestricted, realpathSafe } from '../handlers/_cwd-utils.js';
 import { appendGrant } from '../../permissions-store.js';
 import type { HookContext, HookDecision, HookHandler } from '../../hooks.js';
 
@@ -382,9 +382,16 @@ async function promptForApproval(args: {
 }): Promise<HookDecision> {
   const { toolName, resolvedPath, capturedCwd, mode, grantManager, state, surface, signal } = args;
 
+  // Show the symlink-resolved target when it differs from the displayed path so
+  // the consent decision reflects the REAL destination — a workspace symlink
+  // pointing outside (e.g. `./link -> /etc`) would otherwise be approved under
+  // its innocuous symlink label. realpathSafe never throws (it resolves the
+  // nearest existing ancestor for not-yet-created write targets).
+  const realTarget = realpathSafe(resolvedPath);
+  const realTargetSuffix = realTarget !== resolvedPath ? `\n  (resolves to: ${realTarget})` : '';
   const message =
     `Tool \`${toolName}\` wants to ${mode === 'write' ? 'WRITE to' : 'read'} a path ` +
-    `outside this session's granted roots:\n\n  ${resolvedPath}\n\n` +
+    `outside this session's granted roots:\n\n  ${resolvedPath}${realTargetSuffix}\n\n` +
     `Choose how to handle this and future requests for this path.`;
 
   // Form-mode elicitation with a single enum field, four choices. The REPL
@@ -499,7 +506,12 @@ async function promptForApproval(args: {
           path: resolvedPath,
           mode,
           decision: 'allow',
-          source: surface === 'telegram' ? 'elicit:telegram' : 'elicit:repl',
+          source:
+            surface === 'telegram'
+              ? 'elicit:telegram'
+              : surface === 'repl'
+                ? 'elicit:repl'
+                : 'elicit:unknown',
           reason: `Approved via ${surface} prompt for ${toolName}`,
         });
       } catch (err) {

@@ -143,10 +143,11 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     name: 'AFK_DISABLE_BASH_INTERPRETER_GUARD',
     description:
       'Skip ONLY the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) when set to 1, ' +
-      'leaving the rest of path-approval intact. Use for headless flows (CI, daemon) whose ' +
-      'automation legitimately runs interpreter one-liners but should still keep path-approval ' +
-      'enabled. The restricted-root substring check is unaffected. Default: guard enabled. To ' +
-      'disable all path-approval + bash restriction instead, use AFK_DISABLE_PATH_APPROVAL=1.',
+      'leaving the rest of path-approval intact. Applies on interactive surfaces (REPL/Telegram), ' +
+      'where the denylist is active but your workflow legitimately runs interpreter one-liners. ' +
+      'The restricted-root substring check is unaffected. Default: denylist active on interactive ' +
+      'surfaces; headless already fails open (opt in with AFK_FORCE_BASH_INTERPRETER_GUARD=1). To ' +
+      'disable all of path-approval + bash restriction instead, use AFK_DISABLE_PATH_APPROVAL=1.',
     type: 'boolean',
     required: false,
     default: '0',
@@ -158,10 +159,9 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     description:
       'Skip the path-approval + bash-restriction hooks entirely when set to 1. Use for headless ' +
       'flows that need wide-open file access (CI scripts, batch jobs). Default: hooks enabled. ' +
-      'Note: on headless surfaces (afk chat, daemon) the grant manager is never wired, so ' +
-      'the interpreter denylist (python -c, node -e, sh -c, ...) hard-blocks by default — set ' +
-      'AFK_DISABLE_BASH_INTERPRETER_GUARD=1 to lift just that guard, or this var to 1 to disable ' +
-      'all of path-approval.',
+      'Note: on headless surfaces (afk chat, daemon) no grant manager is wired, so the interpreter ' +
+      'denylist (python -c, node -e, sh -c, ...) fails OPEN by default — opt headless flows into it ' +
+      'with AFK_FORCE_BASH_INTERPRETER_GUARD=1, or set this var to 1 to disable all of path-approval.',
     type: 'boolean',
     required: false,
     default: '0',

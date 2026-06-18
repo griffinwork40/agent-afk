@@ -68,7 +68,7 @@ import type { HookContext, HookDecision } from '../../hooks.js';
  * not to evaluate code on the user's behalf.
  */
 const INTERPRETER_DENYLIST =
-  /\b(python|python3|node|ruby|perl|osascript|sh|bash|zsh|fish|tclsh|lua)\s+-[cCeE](\s|$)/;
+  /\b(python|python3|node|ruby|perl|osascript|sh|bash|zsh|fish|lua)\s+-[cCeE](\s|$)/;
 
 export interface BashRestrictionHookOptions {
   /**
