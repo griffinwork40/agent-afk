@@ -62,6 +62,16 @@ export interface DefaultHookRegistryResult {
  */
 let warnedPathApprovalDisabled = false;
 
+/**
+ * Test-only: reset the once-per-process warning flag so Vitest files that
+ * exercise the AFK_DISABLE_PATH_APPROVAL=1 warn path don't bleed state into
+ * each other (module scope persists across files in a single worker).
+ * Production never needs this — the flag is intentionally process-sticky.
+ */
+export function _resetWarningForTests(): void {
+  warnedPathApprovalDisabled = false;
+}
+
 export function createDefaultHookRegistry(
   onSubagentComplete?: (info: SubagentCompleteInfo) => void,
   surface?: string,

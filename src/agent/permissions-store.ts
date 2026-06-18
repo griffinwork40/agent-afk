@@ -48,11 +48,15 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { dirname, isAbsolute } from 'path';
+import { randomUUID } from 'node:crypto';
 import { getPermissionsStorePath } from '../paths.js';
 
 export type GrantMode = 'read' | 'write';
 export type GrantDecision = 'allow' | 'deny';
-export type GrantSource = 'elicit:repl' | 'elicit:telegram' | 'manual';
+// `elicit:unknown` covers persist grants approved on a surface that did not
+// identify itself as 'repl' or 'telegram' (PathApprovalSurface === 'unknown').
+// Stamping those as 'elicit:repl' produced an inaccurate audit label.
+export type GrantSource = 'elicit:repl' | 'elicit:telegram' | 'elicit:unknown' | 'manual';
 
 export interface PermissionGrant {
   /** ULID — sortable, opaque, unique per grant. */
@@ -163,7 +167,10 @@ function isValidGrant(value: unknown): value is PermissionGrant {
     (v['mode'] === 'read' || v['mode'] === 'write') &&
     (v['decision'] === 'allow' || v['decision'] === 'deny') &&
     typeof v['grantedAt'] === 'string' &&
-    (v['source'] === 'elicit:repl' || v['source'] === 'elicit:telegram' || v['source'] === 'manual')
+    (v['source'] === 'elicit:repl' ||
+      v['source'] === 'elicit:telegram' ||
+      v['source'] === 'elicit:unknown' ||
+      v['source'] === 'manual')
   );
 }
 
@@ -277,7 +284,11 @@ export function seedPersistedGrants(
  */
 function writeAtomic(filePath: string, contents: PermissionsFile): void {
   mkdirSync(dirname(filePath), { recursive: true });
-  const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  // randomUUID (not Date.now()) keeps the temp name collision-free even when
+  // two persist writes land in the same process-millisecond — Date.now() has
+  // ms granularity, so concurrent writes could share a temp name and lose a
+  // grant to last-write-wins.
+  const tmp = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
   writeFileSync(tmp, JSON.stringify(contents, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
   // fs.renameSync is atomic within a single filesystem on POSIX + NTFS;
   // sufficient for our user-scope config file.
