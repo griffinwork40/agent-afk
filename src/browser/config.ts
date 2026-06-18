@@ -64,7 +64,15 @@ function matchesGlob(host: string, pattern: string): boolean {
 // Headless default
 // ---------------------------------------------------------------------------
 
-const HEADLESS_SURFACES = new Set(['daemon', 'subagent', 'telegram']);
+// Invariant: 'afk' is the surface string the CLI entrypoint sets for the whole
+// process (src/cli/index.ts defaults AGENT_SURFACE to 'afk'), so it is the
+// surface every chat/REPL/one-shot run actually reports. It MUST be in this
+// set: without it, resolveHeadlessDefault() falls through to its headed default
+// and every browser launch — including web_scrape's render escalation — opens a
+// visible Chromium window (many at once under parallel scrapes). The
+// 'repl'/'interactive'/'cli' names below are never emitted at runtime; headed
+// is opt-in via AFK_BROWSER_HEADLESS=0 (checked first, above surface).
+const HEADLESS_SURFACES = new Set(['daemon', 'subagent', 'telegram', 'afk']);
 const HEADED_SURFACES = new Set(['repl', 'interactive', 'cli']);
 
 function resolveHeadlessDefault(
