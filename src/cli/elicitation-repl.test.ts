@@ -1768,3 +1768,149 @@ describe('allow_custom — TTY multi-selector path (renderMultiSelector)', () =>
     expect(result.content?.['value']).toEqual(['alpha', 'beta']);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Form mode — picker path (enum / boolean fields + pickFromList, TTY surfaces)
+// ---------------------------------------------------------------------------
+//
+// When a pickFromList dep is wired (armed compositor / interactive TTY), an
+// `enum` or `boolean` form field is rendered as the arrow-key PickerController
+// overlay — the same component the ask_question choice prompts use — instead
+// of a typed `> ` readLine prompt. This is what makes the path-approval prompt
+// (a single enum field) a keyboard selector. Without the dep (non-TTY/daemon/
+// tests), the typed path remains the fallback.
+describe('form mode — picker path (enum/boolean)', () => {
+  // Mirrors the path-approval hook's form: one required enum field.
+  function pathApprovalForm(): ElicitationRequest {
+    return formRequest(
+      {
+        choice: {
+          type: 'string',
+          title: 'Choose one',
+          enum: ['once', 'session', 'persist', 'deny'],
+          description: "'once' allows this single call only. 'session' allows this path until the session ends.",
+        },
+      },
+      ['choice'],
+    );
+  }
+
+  it('enum field + pickFromList: renders a selector and returns the picked value (no typed prompt)', async () => {
+    const lines: string[] = [];
+    const readLine = vi.fn();
+    const pickFromList = vi.fn().mockResolvedValueOnce(['session']);
+    const handler = makeReplElicitationHandler({
+      readLine,
+      writer: { line: (t = '') => lines.push(t) },
+      pendingCount: () => 0,
+      pickFromList,
+    });
+
+    const result = await handler(pathApprovalForm(), { signal: NO_SIGNAL });
+
+    expect(result.action).toBe('accept');
+    expect(result.content?.['choice']).toBe('session');
+    // Selector was used, NOT the typed readLine prompt.
+    expect(pickFromList).toHaveBeenCalledTimes(1);
+    expect(readLine).not.toHaveBeenCalled();
+    const call = pickFromList.mock.calls[0]?.[0];
+    expect(call?.options).toEqual(['once', 'session', 'persist', 'deny']);
+    expect(call?.multi).toBe(false);
+    // Result echo persists in scrollback.
+    expect(lines.some((l) => l.includes('\u2713') && l.includes('session'))).toBe(true);
+  });
+
+  it('enum field WITHOUT pickFromList: falls back to the typed readLine path', async () => {
+    const readLine = vi.fn().mockResolvedValueOnce('persist');
+    const handler = makeReplElicitationHandler({
+      readLine,
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      // no pickFromList → typed fallback
+    });
+
+    const result = await handler(pathApprovalForm(), { signal: NO_SIGNAL });
+
+    expect(result.action).toBe('accept');
+    expect(result.content?.['choice']).toBe('persist');
+    expect(readLine).toHaveBeenCalledTimes(1);
+  });
+
+  it('enum field + pickFromList: null result (Esc/Ctrl+C) maps to cancel', async () => {
+    const pickFromList = vi.fn().mockResolvedValueOnce(null);
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      pickFromList,
+    });
+
+    const result = await handler(pathApprovalForm(), { signal: NO_SIGNAL });
+    expect(result.action).toBe('cancel');
+  });
+
+  it('number-typed enum + pickFromList: preserves the original numeric type', async () => {
+    const pickFromList = vi.fn().mockResolvedValueOnce(['2']);
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      pickFromList,
+    });
+
+    const result = await handler(
+      formRequest({ n: { type: 'number', enum: [1, 2, 3] } }, ['n']),
+      { signal: NO_SIGNAL },
+    );
+
+    expect(result.action).toBe('accept');
+    // Selector returns the display string '2'; resolver maps it back to the
+    // original numeric enum entry.
+    expect(result.content?.['n']).toBe(2);
+  });
+
+  it('boolean field + pickFromList: Yes/No selector maps to true/false', async () => {
+    const pickFromList = vi.fn().mockResolvedValueOnce(['No']);
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      pickFromList,
+    });
+
+    const result = await handler(
+      formRequest({ enabled: { type: 'boolean', description: 'Enabled?' } }, ['enabled']),
+      { signal: NO_SIGNAL },
+    );
+
+    expect(result.action).toBe('accept');
+    expect(result.content?.['enabled']).toBe(false);
+    expect(pickFromList.mock.calls[0]?.[0]?.options).toEqual(['Yes', 'No']);
+  });
+
+  it('optional enum field + pickFromList: choosing the skip sentinel omits the field', async () => {
+    // The skip sentinel is the last option for an OPTIONAL field.
+    const pickFromList = vi.fn().mockImplementationOnce(async (opts: { options: readonly string[] }) => {
+      const sentinel = opts.options[opts.options.length - 1];
+      return [sentinel];
+    });
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      pickFromList,
+    });
+
+    // `mode` optional (not in required[]).
+    const result = await handler(
+      formRequest({ mode: { type: 'string', enum: ['fast', 'slow'] } }),
+      { signal: NO_SIGNAL },
+    );
+
+    expect(result.action).toBe('accept');
+    // Skipped optional field is omitted from content (no default declared).
+    expect(result.content && 'mode' in result.content).toBe(false);
+    // Sentinel was appended after the real options.
+    expect(pickFromList.mock.calls[0]?.[0]?.options.length).toBe(3);
+  });
+});
