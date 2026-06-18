@@ -20,9 +20,13 @@
  * @module telegram/watch
  */
 
-import { tailLedger, ledgerExists, type LedgerRecord } from '../agent/session-ledger.js';
+import { tailLedger, ledgerExists, SessionLedgerWriter, type LedgerRecord } from '../agent/session-ledger.js';
 import { findSession, listSessions } from '../cli/session-store.js';
 import { readPresenceFiles } from '../agent/awareness/presence.js';
+import { readSessionKey, signElicitationResponse } from '../agent/afk-channel.js';
+import { makeTelegramElicitationHandler } from './elicitation-handler.js';
+import type { MessageHandler } from './handlers/message.js';
+import type { Telegraf } from 'telegraf';
 
 type SendFn = (text: string) => Promise<void>;
 type LogFn = (...args: unknown[]) => void;
@@ -135,19 +139,39 @@ interface ActiveWatch {
   finished: Promise<void>;
 }
 
+// Invariant: SessionWatchManager holds a reference to the daemon's SOLE Telegraf
+// instance and the MessageHandler. These are used only to render elicitation
+// records interactively via makeTelegramElicitationHandler — never to create a
+// second poller. bot and messageHandler may be undefined (e.g. in tests that do
+// not exercise the elicitation path) — the watch loop degrades gracefully by
+// skipping the write-back rather than throwing.
+
 /**
  * Per-chat watch registry. Owns the tail loops and their teardown.
  */
 export class SessionWatchManager {
   private readonly watches = new Map<number, ActiveWatch>();
   private readonly log: LogFn;
+  private readonly bot: Telegraf | undefined;
+  private readonly messageHandler: MessageHandler | undefined;
 
-  constructor(log: LogFn = () => {}) {
+  constructor(log: LogFn = () => {}, bot?: Telegraf, messageHandler?: MessageHandler) {
     this.log = log;
+    this.bot = bot;
+    this.messageHandler = messageHandler;
   }
 
   /** The session id this chat is watching, if any. */
   watching(chatId: number): string | undefined {
+    return this.watches.get(chatId)?.sessionId;
+  }
+
+  /**
+   * The session id that `chatId` is currently watching, or undefined.
+   * Alias for {@link watching} — exposed under the name the `/abort` handler
+   * uses so the call site reads clearly.
+   */
+  getWatched(chatId: number): string | undefined {
     return this.watches.get(chatId)?.sessionId;
   }
 
@@ -192,6 +216,20 @@ export class SessionWatchManager {
     let flushTimer: NodeJS.Timeout | null = null;
     let sending = Promise.resolve();
 
+    // Contract: build a per-run elicitation handler only when bot + messageHandler
+    // are available (they are injected from bot.ts but absent in legacy tests).
+    // The handler is created lazily once and reused across multiple elicitation
+    // records in the same watch run so the wildcard bot.action dispatch table
+    // is only registered once.
+    // ledgerOriginated:true tells the handler to register the chatId in
+    // messageHandler.ledgerOriginatedPendingChats alongside pendingElicitations,
+    // so the message-handler idle-guard fires the resolver even with no active
+    // AgentSession for this chat (the REPL runs in a separate process).
+    const elicitHandler =
+      this.bot !== undefined && this.messageHandler !== undefined
+        ? makeTelegramElicitationHandler(this.messageHandler, this.bot, chatId, { ledgerOriginated: true })
+        : undefined;
+
     const flush = (): void => {
       flushTimer = null;
       if (batch.length === 0) return;
@@ -205,6 +243,44 @@ export class SessionWatchManager {
 
     try {
       for await (const rec of tailLedger(sessionId, { signal })) {
+        // Invariant: elicitation records are handled interactively — the phone
+        // renders the question and the signed response is written back to the
+        // ledger. They are NOT forwarded as push lines; the normal render path
+        // returns null for unknown kinds so elicitation/elicitation_response
+        // and abort_request records are already invisible to the push branch.
+        if (rec.kind === 'elicitation' && elicitHandler !== undefined) {
+          // Flush any accumulated push lines before blocking on the question
+          // so the operator sees prior context before the prompt appears.
+          if (flushTimer) clearTimeout(flushTimer);
+          flush();
+          await sending;
+
+          // Await the operator's answer (or abort). The per-run signal bounds
+          // the wait: if the user /unwatches or the bot shuts down, the abort
+          // propagates through the handler and we get { action: 'decline' }.
+          const result = await elicitHandler(rec.request, { signal });
+
+          // Invariant: write-back MUST be HMAC-signed (invariant #4). If the
+          // key is absent (REPL has not enabled AFK mode), skip silently — an
+          // unsigned elicitation_response would be ignored by the REPL anyway.
+          const key = readSessionKey(sessionId);
+          if (key !== null) {
+            const hmac = signElicitationResponse(key, sessionId, rec.reqId, result);
+            // A single-record writer is sufficient; we do not own the session
+            // lifecycle. The writer opens, appends, and can be GC'd.
+            new SessionLedgerWriter(sessionId).record({
+              kind: 'elicitation_response',
+              reqId: rec.reqId,
+              result,
+              hmac,
+            });
+          } else {
+            this.log('[watch] no session key for', sessionId, '— skipping elicitation write-back');
+          }
+          // Do not add a push line for elicitation records.
+          continue;
+        }
+
         const line = renderLedgerRecord(rec);
         if (!line) continue;
         batch.push(line);

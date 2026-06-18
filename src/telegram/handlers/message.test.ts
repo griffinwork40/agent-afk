@@ -208,3 +208,119 @@ describe('MessageHandler queue-depth acknowledgment', () => {
     expect(replies[0]).not.toContain('#6');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Criterion 3 (C3): ledger-originated pending resolver bypass (idle-guard fix)
+// ---------------------------------------------------------------------------
+
+describe('MessageHandler.ledgerOriginatedPendingChats bypass (C3)', () => {
+  it('fires a ledger-originated pending resolver even with no active session (no session at all)', async () => {
+    // Simulate no session in the manager: getSessionIfExists returns undefined.
+    const sessionManager = {
+      getSession: vi.fn().mockResolvedValue({ state: 'idle' }),
+      getSessionIfExists: vi.fn().mockReturnValue(undefined),
+      resetSession: vi.fn(),
+    };
+    const bot = {
+      telegram: { sendMessage: vi.fn().mockResolvedValue({}) },
+      command: vi.fn(),
+      on: vi.fn(),
+    };
+    const handler = new MessageHandler(
+      bot as unknown as import('telegraf').Telegraf,
+      sessionManager as unknown as import('../session-manager.js').SessionManager,
+      new Set<number>(),
+      vi.fn(),
+    );
+
+    const chatId = 55;
+    const resolved: string[] = [];
+
+    // Pre-seed as ledger-originated (as makeTelegramElicitationHandler would do).
+    handler.pendingElicitations.set(chatId, (text) => resolved.push(text));
+    handler.ledgerOriginatedPendingChats.add(chatId);
+
+    const { ctx } = makeMessageCtx(chatId, 'ledger answer');
+    await handler.handle(ctx);
+
+    // Resolver must fire even though there is no active session.
+    expect(resolved).toEqual(['ledger answer']);
+    // Both maps must be cleaned up after consumption.
+    expect(handler.pendingElicitations.has(chatId)).toBe(false);
+    expect(handler.ledgerOriginatedPendingChats.has(chatId)).toBe(false);
+  });
+
+  it('fires a ledger-originated pending resolver even when session is idle', async () => {
+    // Session exists but is idle — session-local path would drop this as stale.
+    const sessionManager = {
+      getSession: vi.fn().mockResolvedValue({ state: 'idle' }),
+      getSessionIfExists: vi.fn().mockReturnValue({ state: 'idle' }),
+      resetSession: vi.fn(),
+    };
+    const bot = {
+      telegram: { sendMessage: vi.fn().mockResolvedValue({}) },
+      command: vi.fn(),
+      on: vi.fn(),
+    };
+    const handler = new MessageHandler(
+      bot as unknown as import('telegraf').Telegraf,
+      sessionManager as unknown as import('../session-manager.js').SessionManager,
+      new Set<number>(),
+      vi.fn(),
+    );
+
+    const chatId = 56;
+    const resolved: string[] = [];
+
+    handler.pendingElicitations.set(chatId, (text) => resolved.push(text));
+    handler.ledgerOriginatedPendingChats.add(chatId);
+
+    const { ctx } = makeMessageCtx(chatId, 'idle session answer');
+    await handler.handle(ctx);
+
+    expect(resolved).toEqual(['idle session answer']);
+    expect(handler.pendingElicitations.has(chatId)).toBe(false);
+    expect(handler.ledgerOriginatedPendingChats.has(chatId)).toBe(false);
+  });
+
+  it('still drops a genuinely stale session-local entry (no ledger-origin flag) when session is idle', async () => {
+    // Session exists but is idle — this simulates a session reset mid-elicitation.
+    const sessionManager = {
+      getSession: vi.fn().mockResolvedValue({ state: 'idle' }),
+      getSessionIfExists: vi.fn().mockReturnValue({ state: 'idle' }),
+      resetSession: vi.fn(),
+    };
+    const bot = {
+      telegram: { sendMessage: vi.fn().mockResolvedValue({}) },
+      command: vi.fn(),
+      on: vi.fn(),
+    };
+    const handler = new MessageHandler(
+      bot as unknown as import('telegraf').Telegraf,
+      sessionManager as unknown as import('../session-manager.js').SessionManager,
+      new Set<number>(),
+      vi.fn(),
+    );
+
+    const chatId = 57;
+    let resolverCalled = false;
+
+    // Pre-seed WITHOUT the ledger-origin flag (session-local, now stale).
+    handler.pendingElicitations.set(chatId, () => { resolverCalled = true; });
+    // ledgerOriginatedPendingChats NOT set — this is the stale-session path.
+
+    const { ctx } = makeMessageCtx(chatId, 'stale reply');
+    await handler.handle(ctx);
+
+    // Resolver must NOT fire — the stale-session guard must drop it.
+    expect(resolverCalled).toBe(false);
+    // The stale entry must be cleaned up.
+    expect(handler.pendingElicitations.has(chatId)).toBe(false);
+  });
+
+  it('ledgerOriginatedPendingChats is a public Set initialized to empty', () => {
+    const handler = makeHandler();
+    expect(handler.ledgerOriginatedPendingChats).toBeInstanceOf(Set);
+    expect(handler.ledgerOriginatedPendingChats.size).toBe(0);
+  });
+});

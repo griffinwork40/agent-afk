@@ -171,6 +171,75 @@ Covered:
 - `setup-wizard.test.ts` — `getMe` validation, `getUpdates` parsing,
   poll-with-early-stop
 
+## Bidirectional AFK — daemon role
+
+When a REPL session runs `/afk on`, the daemon becomes the **phone-side half** of a
+bidirectional elicitation channel. The two processes communicate **only through the
+per-session ledger file** (`~/.afk/state/sessions/<id>/events.jsonl`) — no sockets,
+no shared memory, no second Telegram poller.
+
+### Auto-subscribe
+
+Every 30 seconds (configurable via `TelegramBot.AUTO_SUBSCRIBE_INTERVAL_MS`), the bot
+reads all presence files and automatically starts watching any session where
+`surface === 'cli' && afk === true`. No manual `/watch` is needed — stepping away with
+`/afk on` is enough.
+
+### Rendering elicitations to the phone
+
+When the daemon's `SessionWatchManager._run` tail sees an `elicitation` record, it
+invokes `makeTelegramElicitationHandler` (from `elicitation-handler.ts`) to render the
+question interactively:
+
+- **`text` / open-ended questions** — sends a plain message and waits for the next
+  text reply from the operator.
+- **`choice` / `confirm` questions** — renders Telegram inline-keyboard buttons; the
+  operator taps an option.
+
+The message-handler bypasses the `state === 'idle'` guard for ledger-originated
+elicitations via `ledgerOriginatedPendingChats` (a `Set<number>` in
+`handlers/message.ts`) so phone replies are delivered even though no `AgentSession` is
+running inside the daemon for this session.
+
+### Signed write-back
+
+After the operator answers, the daemon:
+
+1. Reads the per-session HMAC key from `~/.afk/state/sessions/<id>/session.key`
+   (written 0600 by the REPL on `/afk on`).
+2. Signs the response with `signElicitationResponse` (HMAC-SHA256 over
+   `recordKind‖sessionId‖reqId‖stableStringify(result)`).
+3. Appends a signed `elicitation_response` record to the ledger.
+
+The REPL verifies the HMAC before acting on the response. An unverified or stray write
+is silently ignored — it cannot drive the agent.
+
+### Remote abort
+
+`/abort` (sent to the bot while watching a session):
+
+1. Daemon looks up the currently-watched session via `watchManager.getWatched(chatId)`.
+2. Signs a `abort_request` record (HMAC over `recordKind‖sessionId‖nonce`).
+3. Appends it to the ledger.
+
+The REPL's `makeAbortWatcher` tail (running since `/afk on`) verifies the HMAC and
+fires the `AbortGraph` — aborting the session cleanly. An unsigned or cross-session
+abort record is ignored.
+
+### Security boundary
+
+The HMAC layer guards against **accidental cross-session bleed** and **stray writers**.
+It is NOT a defence against a malicious same-user process (which can read the 0600 key
+and already has the user's OS privileges). Telegram ingress remains gated by the
+existing `AFK_TELEGRAM_ALLOWED_CHAT_IDS` allowlist. The AFK safety gate
+(`afk-mode-gate.ts`) is **non-overridable** — a remote reply is an input to the
+agent's reasoning, never a gate bypass.
+
+For the full design, threat model, flow diagram, five hard invariants, and known
+limitations, see [`docs/afk-remote-control.md`](../../docs/afk-remote-control.md).
+
+---
+
 ## Design decisions
 
 1. **One session per chat.** Simpler than per-user; works for both

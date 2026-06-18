@@ -27,8 +27,19 @@
 import { env } from '../config/env.js';
 import { resolveConfiguredNotifyTargets } from '../telegram/notify-routing.js';
 import { resetAfkPushBudget } from './commands/interactive/afk-push.js';
+import { ensureSessionKey } from '../agent/afk-channel.js';
+import { makeLedgerChannelHandler, makeAbortWatcher, type AbortWatcherHandle } from '../agent/afk-ledger-channel.js';
+import { setPresenceAfk } from '../agent/awareness/presence.js';
 import { palette } from './palette.js';
 import type { SlashContext } from './slash/types.js';
+
+// Module-level abort-watcher handle. One REPL = one AFK session at a time, so
+// a single handle is sufficient. Cleared on /afk off or when a new /afk on
+// replaces it (the old one is stopped first).
+//
+// Invariant: the handle is always stopped before being replaced so we never
+// leave orphaned tail loops running against old sessions.
+let _abortWatcherHandle: AbortWatcherHandle | null = null;
 
 /** True when Telegram outbound is fully configured (token + ≥1 chat target). */
 function isTelegramConfigured(): boolean {
@@ -49,6 +60,36 @@ export async function toggleAfkMode(
     ctx.ui.repaintStatusLine();
     if (next) {
       resetAfkPushBudget();
+      // Bidirectional AFK (scope.lock criterion 1): swap the elicitation handler
+      // to the ledger channel so a watching Telegram daemon can answer the
+      // agent's questions from the operator's phone — racing the keyboard
+      // fallback (invariant #3). Built lazily here because the provider session
+      // id is known only after the first turn; if it is not yet available we
+      // skip the swap and stay keyboard-only (safe degrade). The channel is
+      // bound to the session captured at toggle time.
+      const sess = ctx.session.current;
+      const id = sess.sessionId;
+      const swap = ctx.swapElicitationHandler;
+      const fallback = ctx.stdinElicitationHandler;
+      if (id && swap && fallback) {
+        const key = ensureSessionKey(id);
+        const ledgerHandler = makeLedgerChannelHandler({
+          sessionId: id,
+          key,
+          emitElicitation: (rec) => sess.recordLedgerElicitation(rec.reqId, rec.request),
+          fallback,
+        });
+        swap(ledgerHandler);
+        // Start the abort-watcher (criterion 4). Stop any previous one first
+        // (idempotent guard — protects against rapid /afk on/on).
+        _abortWatcherHandle?.stop();
+        _abortWatcherHandle = makeAbortWatcher({
+          sessionId: id,
+          key,
+          onAbort: (reason) => sess.abort(reason),
+        });
+        void setPresenceAfk(id, true);
+      }
       ctx.out.success(
         palette.info('◐ AFK mode ON') +
         palette.dim(
@@ -64,6 +105,14 @@ export async function toggleAfkMode(
         );
       }
     } else {
+      // Restore the stdin elicitation handler (`null` → reinstall stdin) and
+      // clear the AFK presence marker so a watching daemon stops tracking.
+      ctx.swapElicitationHandler?.(null);
+      // Stop the abort-watcher (best-effort; guarded against null).
+      _abortWatcherHandle?.stop();
+      _abortWatcherHandle = null;
+      const id = ctx.session.current.sessionId;
+      if (id) void setPresenceAfk(id, false);
       ctx.out.success(
         palette.success('○ AFK mode OFF') + palette.dim(' — default permissions restored'),
       );
