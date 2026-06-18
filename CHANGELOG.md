@@ -11,12 +11,25 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.17.0] - 2026-06-18
+
 ### Added
 - Path-access approval: typed file tools (`read_file`, `write_file`, `edit_file`, `list_directory`, `glob`, `grep`) targeting a path outside the session's granted roots now prompt for approval — once / session / persist / deny — via the REPL or Telegram elicitation surface. Persisted grants are stored in `~/.afk/config/permissions.json` and replayed on future sessions
 - Bash restriction hook: hard-blocks interpreter one-liners (`python -c`, `node -e`, `ruby -e`, `perl -e`, `sh -c`, `bash -c`, `lua -e`, ...) and restricted-root substrings (`~/.ssh`, `~/.aws`, ...), routing the model back to the prompt-able typed file tools
 - `AFK_DISABLE_BASH_INTERPRETER_GUARD` env var — lifts only the bash interpreter-eval denylist while keeping the rest of path-approval enabled
 - `AFK_DISABLE_PATH_APPROVAL` env var — disables the path-approval + bash-restriction hooks entirely (for headless flows that need wide-open file access)
 - `AFK_FORCE_BASH_INTERPRETER_GUARD` env var — opts headless surfaces back into the interpreter denylist
+
+### Added
+- elicit user approval for restricted-path tool calls (port afk-workshop#477) (42c013f)
+
+### Fixed
+- resolve PR #202 review findings (H1/M1/M2/L1-L4/N1-N2) (cc07c7f)
+
+### Changed
+- Merge pull request #202 from griffinwork40/afk-port/pr-477 (e443d01)
+- Merge remote-tracking branch 'origin/main' into afk-port/pr-477 (d3439cb)
+- Merge pull request #204 from griffinwork40/afk-port/pr-477-review (086ca4e)
 
 ## [4.16.1] - 2026-06-18
 
