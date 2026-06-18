@@ -246,6 +246,17 @@ export function getSessionGrantsPath(): string {
 }
 
 /**
+ * Persisted user-approved path-access grants written by the path-approval
+ * elicitation flow when the user selects [Always — persist]. See
+ * `src/agent/permissions-store.ts` for the schema. Lives under
+ * `~/.afk/config/` rather than `state/` because it's policy (dotfile-syncable)
+ * not runtime data.
+ */
+export function getPermissionsStorePath(): string {
+  return join(getAfkConfigDir(), 'permissions.json');
+}
+
+/**
  * Root for Speculative Branch Farm worktrees.
  *
  * Each farm lives at `<getFarmsDir()>/<taskSlug>/` and contains:

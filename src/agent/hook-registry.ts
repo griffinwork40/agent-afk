@@ -24,6 +24,7 @@ import type {
   HookDecision,
   HookHandler,
   HookRegistry,
+  RegisterOptions,
 } from './hooks.js';
 
 /**
@@ -105,20 +106,36 @@ export class HookHandlerTimeoutError extends Error {
   }
 }
 
-class HookRegistryImpl implements HookRegistry {
-  private readonly handlers = new Map<HarnessHookEvent, HookHandler[]>();
+/**
+ * Internal wrapper threading per-handler registration options through dispatch.
+ * The public {@link HookRegistry.register} accepts a plain `HookHandler` and an
+ * optional {@link RegisterOptions}; we store both as one entry so the dispatch
+ * loop can decide whether to apply the timeout race per-handler.
+ */
+interface RegisteredHandler {
+  handler: HookHandler;
+  options: RegisterOptions;
+}
 
-  register(event: HarnessHookEvent, handler: HookHandler): () => void {
+class HookRegistryImpl implements HookRegistry {
+  private readonly handlers = new Map<HarnessHookEvent, RegisteredHandler[]>();
+
+  register(
+    event: HarnessHookEvent,
+    handler: HookHandler,
+    options: RegisterOptions = {},
+  ): () => void {
     let list = this.handlers.get(event);
     if (!list) {
       list = [];
       this.handlers.set(event, list);
     }
-    list.push(handler);
+    const entry: RegisteredHandler = { handler, options };
+    list.push(entry);
     return () => {
       const current = this.handlers.get(event);
       if (!current) return;
-      const idx = current.indexOf(handler);
+      const idx = current.indexOf(entry);
       if (idx >= 0) current.splice(idx, 1);
     };
   }
@@ -142,20 +159,33 @@ class HookRegistryImpl implements HookRegistry {
 
     let lastDecision: HookDecision = {};
 
-    for (const handler of snapshot) {
+    for (const entry of snapshot) {
       assertNotAborted(signal, context.event);
 
       let decision: HookDecision;
       try {
-        const handlerResult = handler(context);
+        // Forward the turn/dispatch signal as the second handler argument so
+        // longRunning handlers (e.g. path-approval awaiting an elicitation
+        // prompt) can cancel on session/turn teardown — `assertNotAborted`
+        // only gates BETWEEN handlers, not during a single in-flight await.
+        const handlerResult = entry.handler(context, signal);
         // External constraint: every handler must be bounded so a hung handler
         // cannot stall the dispatch loop. Callers can pass `Infinity` to opt
         // out explicitly (e.g. inside tests with fake timers), but the default
         // is the documented HOOK_HANDLER_TIMEOUT_MS ceiling.
-        decision =
-          handlerTimeoutMs > 0 && Number.isFinite(handlerTimeoutMs)
-            ? await withHandlerTimeout(handlerResult, handlerTimeoutMs, context.event)
-            : await handlerResult;
+        //
+        // `longRunning` opts out for handlers that legitimately await human
+        // input (e.g. path-approval calling elicitationRouter.route(), which
+        // waits indefinitely and relies on the forwarded `signal` for teardown
+        // rather than a timer). The opt-out is per-handler at registration
+        // time so a hung policy hook cannot mask it ad-hoc.
+        const applyTimeout =
+          !entry.options.longRunning &&
+          handlerTimeoutMs > 0 &&
+          Number.isFinite(handlerTimeoutMs);
+        decision = applyTimeout
+          ? await withHandlerTimeout(handlerResult, handlerTimeoutMs, context.event)
+          : await handlerResult;
       } catch (err) {
         if (err instanceof HookHandlerTimeoutError) {
           // Timeout: re-throw as-is so dispatchSubagentStop can catch it

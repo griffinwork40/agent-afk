@@ -173,6 +173,24 @@
       "category": "misc"
     },
     {
+      "name": "AFK_DISABLE_BASH_INTERPRETER_GUARD",
+      "description": "Skip ONLY the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) when set to 1, leaving the rest of path-approval intact. Applies on interactive surfaces (REPL/Telegram), where the denylist is active but your workflow legitimately runs interpreter one-liners. The restricted-root substring check is unaffected. Default: denylist active on interactive surfaces; headless already fails open (opt in with AFK_FORCE_BASH_INTERPRETER_GUARD=1). To disable all of path-approval + bash restriction instead, use AFK_DISABLE_PATH_APPROVAL=1.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "process"
+    },
+    {
+      "name": "AFK_DISABLE_PATH_APPROVAL",
+      "description": "Skip the path-approval + bash-restriction hooks entirely when set to 1. Use for headless flows that need wide-open file access (CI scripts, batch jobs). Default: hooks enabled. Note: on headless surfaces (afk chat, daemon) no grant manager is wired, so the interpreter denylist (python -c, node -e, sh -c, ...) fails OPEN by default — opt headless flows into it with AFK_FORCE_BASH_INTERPRETER_GUARD=1, or set this var to 1 to disable all of path-approval.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "process"
+    },
+    {
       "name": "AFK_DISABLE_PROMPT_CACHE",
       "description": "Disable Anthropic prompt caching when set to 1/true/yes/on. Unset = caching enabled.",
       "type": "boolean",
@@ -196,6 +214,15 @@
       "required": false,
       "example": "medium",
       "category": "model"
+    },
+    {
+      "name": "AFK_FORCE_BASH_INTERPRETER_GUARD",
+      "description": "Apply the bash interpreter-eval denylist (python -c, node -e, sh -c, ...) even on headless surfaces (afk chat, daemon) where no grant manager is wired. By default the denylist fires only on interactive surfaces (REPL/Telegram), failing open on headless so legitimate automation is not hard-blocked with no recourse. Set to 1 to opt headless flows back into the guard. Overridden by AFK_DISABLE_BASH_INTERPRETER_GUARD=1. Default: off (headless fails open).",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "process"
     },
     {
       "name": "AFK_FRAMEWORK_DIR",

@@ -136,6 +136,13 @@ export interface PostToolUseContext {
   sessionId?: string;
   subagentId?: string;
   toolName: string;
+  /**
+   * Tool-call input passed through from {@link PreToolUseContext}. Carried
+   * verbatim so hooks that need to correlate Pre/PostToolUse for the same
+   * call (e.g. the path-approval hook's "Once" cleanup) can recompute the
+   * resolved path identically.
+   */
+  input?: unknown;
   output?: unknown;
 }
 
@@ -148,11 +155,36 @@ export type HookContext =
   | PreToolUseContext
   | PostToolUseContext;
 
-export type HookHandler = (context: HookContext) => HookDecision | Promise<HookDecision>;
+/**
+ * A hook handler. `signal` is the turn/dispatch {@link AbortSignal} forwarded
+ * by `dispatch()`; handlers that await human input (see `longRunning` below)
+ * MUST observe it so session/turn teardown can cancel the wait. Synchronous
+ * and short-lived handlers can ignore it.
+ */
+export type HookHandler = (
+  context: HookContext,
+  signal?: AbortSignal,
+) => HookDecision | Promise<HookDecision>;
+
+/**
+ * Per-handler registration options.
+ *
+ * `longRunning` opts the handler out of the per-handler timeout enforced by
+ * `dispatch()`. Use ONLY for handlers that legitimately need to await human
+ * input (e.g. the path-approval hook calling `elicitationRouter.route()`,
+ * which waits indefinitely for an operator who may be away from keyboard).
+ * The default 30s per-handler timeout exists to bound hung policy handlers —
+ * opting out of it means YOU own teardown: observe the turn `AbortSignal`
+ * (passed as the second handler argument) so session/turn abort can still
+ * cancel the wait. There is no time-based auto-decline.
+ */
+export interface RegisterOptions {
+  longRunning?: boolean;
+}
 
 export interface HookRegistry {
   /** Register a handler for an event. Returns an unsubscribe function. */
-  register(event: HarnessHookEvent, handler: HookHandler): () => void;
+  register(event: HarnessHookEvent, handler: HookHandler, options?: RegisterOptions): () => void;
   /**
    * Dispatch a context through the handlers registered for its event.
    * Throws {@link AbortError} if `signal` aborts before or during dispatch.

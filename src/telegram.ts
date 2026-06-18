@@ -36,9 +36,10 @@ import { validateBotToken } from './telegram/setup-wizard.js';
 import { AgentSession } from './agent/session.js';
 import { constructTelegramSession } from './telegram/construct-session.js';
 import { createDefaultHookRegistry } from './agent/default-hook-registry.js';
+import { seedPersistedGrants } from './agent/permissions-store.js';
 import { loadHooksConfig } from './agent/hooks/config-loader.js';
 import { MemoryStore } from './agent/memory/index.js';
-import { providerForModel, AnthropicDirectProvider } from './agent/providers/index.js';
+import { providerForModel, AnthropicDirectProvider, OpenAICompatibleProvider } from './agent/providers/index.js';
 import { detectAuthMode } from './agent/providers/anthropic-direct/auth.js';
 import { loadConfig, loadCredential } from './cli/config.js';
 import { getEnvConfigPath } from './paths.js';
@@ -336,6 +337,15 @@ async function main() {
         // permissionMode is intentionally omitted here: AgentSession defaults
         // to 'default' (post-C2 fix), which is the correct mode for Telegram
         // sessions that run under the operator's explicit allowedTools list.
+        const telegramHookBundle = createDefaultHookRegistry(
+          undefined,
+          'telegram',
+          sharedMemoryStore,
+          undefined,
+          loadHooksConfig(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
+          { cwd: sessionCwd !== undefined && sessionCwd.length > 0 ? sessionCwd : undefined },
+          () => sessionCwd,
+        );
         const session = constructTelegramSession({
           ...(sessionConfig.apiKey !== undefined ? { apiKey: sessionConfig.apiKey } : {}),
           model: sessionConfig.model,
@@ -347,15 +357,14 @@ async function main() {
           // configured worktree (AFK_TELEGRAM_CWD or sessionConfig.cwd).
           ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
           provider: directProvider,
-          hookRegistry: createDefaultHookRegistry(
-            undefined,
-            'telegram',
-            sharedMemoryStore,
-            undefined,
-            loadHooksConfig(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
-            { cwd: sessionCwd !== undefined && sessionCwd.length > 0 ? sessionCwd : undefined },
-          ).registry,
+          hookRegistry: telegramHookBundle.registry,
         });
+        // Wire the path-approval grant ref to the provider so elicitation
+        // approvals mutate readRoots / writeRoots on the right backend.
+        telegramHookBundle.pathApprovalGrantRef.current = directProvider;
+        // Seed read/write roots from persisted `persist` grants so the
+        // prompt's "future sessions inherit it" promise holds. No-op when none.
+        seedPersistedGrants(directProvider);
         boundSession = session;
         return session;
       }
@@ -371,6 +380,25 @@ async function main() {
       // permissionMode is intentionally omitted here: AgentSession defaults
       // to 'default' (post-C2 fix), which is the correct mode for Telegram
       // sessions that rely on hook-based permission enforcement.
+      // Construct the OpenAI-compatible provider explicitly (rather than
+      // letting AgentSession build it internally) so we hold a handle to wire
+      // path-approval. A bare `new OpenAICompatibleProvider()` matches what
+      // resolveProvider() would have constructed for this branch — baseURL /
+      // apiKey / cwd / roots all flow through the per-query config, not the
+      // constructor — so this is behavior-preserving. Mirrors the Anthropic
+      // branch above; without it, getGrantManager() stays undefined and BOTH
+      // path-approval and the bash interpreter denylist silently fail open for
+      // every OpenAI-compatible Telegram session (PR #202 review H1).
+      const codexProvider = new OpenAICompatibleProvider();
+      const codexHookBundle = createDefaultHookRegistry(
+        undefined,
+        'telegram',
+        sharedMemoryStore,
+        undefined,
+        loadHooksConfig(codexSessionCwd !== undefined && codexSessionCwd.length > 0 ? { cwd: codexSessionCwd } : {}),
+        { cwd: codexSessionCwd !== undefined && codexSessionCwd.length > 0 ? codexSessionCwd : undefined },
+        () => codexSessionCwd,
+      );
       const session = constructTelegramSession({
         ...(sessionConfig.apiKey !== undefined ? { apiKey: sessionConfig.apiKey } : {}),
         model: sessionConfig.model,
@@ -380,20 +408,23 @@ async function main() {
         ...(codexSessionCwd !== undefined && codexSessionCwd.length > 0
           ? { cwd: codexSessionCwd }
           : {}),
-        hookRegistry: createDefaultHookRegistry(
-          undefined,
-          'telegram',
-          sharedMemoryStore,
-          undefined,
-          loadHooksConfig(codexSessionCwd !== undefined && codexSessionCwd.length > 0 ? { cwd: codexSessionCwd } : {}),
-          { cwd: codexSessionCwd !== undefined && codexSessionCwd.length > 0 ? codexSessionCwd : undefined },
-        ).registry,
+        provider: codexProvider,
+        hookRegistry: codexHookBundle.registry,
       });
+      // Wire the path-approval grant ref + seed persisted `persist` grants so
+      // the OpenAI Telegram surface gets the same restricted-path prompts and
+      // persisted-grant replay as the Anthropic branch.
+      codexHookBundle.pathApprovalGrantRef.current = codexProvider;
+      seedPersistedGrants(codexProvider);
 
       return session;
     },
   });
 
+  // Elicitation wiring (path-approval + ask_question) is installed inside
+  // `bot.start()` via composeTelegramElicitation — a SINGLE composed handler,
+  // so the two systems no longer clobber each other on `elicitationRouter
+  // .install` (PR #477 review B1/B2). See `TelegramBot.start()`.
   try {
     bot.start();
     console.log('✅ Bot started successfully!');
