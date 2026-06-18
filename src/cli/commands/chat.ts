@@ -554,6 +554,9 @@ export function registerChatCommand(program: Command): void {
         // the AgentSession.
         session = new AgentSession(injectHotMemory({
           model: sessionModel,
+          // User-facing surface for trace `origin` attribution. One-shot
+          // `afk chat` is a CLI entrypoint → 'cli'.
+          surface: 'cli',
           // Resolve the credential for the ACTUAL session model, not the
           // env-derived default (`getApiKey()` keys off AFK_MODEL/CLAUDE_MODEL).
           // Without this, `--model gpt-5.5` while CLAUDE_MODEL is a Claude id

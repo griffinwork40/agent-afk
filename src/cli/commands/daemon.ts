@@ -180,6 +180,10 @@ export function buildDaemonSessionFactory(
       // this is the production chokepoint the scheduler routes every task
       // through, so it also covers scheduler/cron-spawned sessions.
       isNonInteractive: true,
+      // User-facing surface for trace `origin` attribution. Forced after
+      // `...config` for the same reason as `isNonInteractive`: every daemon +
+      // scheduler/cron session routes through here → 'daemon'.
+      surface: 'daemon',
     }));
   };
 }
