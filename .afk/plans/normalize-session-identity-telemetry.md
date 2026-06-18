@@ -7,8 +7,19 @@
   `session_init_start` trace event. Lint clean; 65 targeted tests pass; full
   suite shows only 2 pre-existing env failures (local-MLX config bleed —
   proven identical on a stashed/clean tree).
-- **Stages B–D — NOT YET DONE** (routing-decisions, skill-invocations, state
-  artifacts). Shared prerequisite identified during Stage A (see below).
+- **Stages B + C — DONE + verified + committed** (commit `696953f`).
+  routing-decisions.jsonl + skill-invocations.jsonl rows now carry optional
+  `origin` + `actor`; frozen `surface:'afk'` unchanged. Minimal widening: added
+  `surface?` to `SubagentExecutorContext` + `SkillExecutorContext`; actor derives
+  from the EXISTING `depth` (depth>0 ⟺ subagent) — no `parentSessionId` field
+  added. Top-level executors tagged at bootstrap/chat (cli), daemon (daemon),
+  telegram (telegram); nested child executors inherit surface. Extracted pure
+  `buildRoutingDecisionRow` for testability. +12 tests, all green.
+  - DEFERRED in B/C: deep skill→skill grandchild `origin` via
+    `createChildSkillExecutorFactory` (nesting.ts, fragile 8-positional sig) —
+    actor stays correct via depth, origin reads `unknown`.
+- **Stage D — NOT YET DONE** (memory DB migration, sidecar, presence). Untouched
+  per scope. The memory-DB step is the only one requiring a SCHEMA_VERSION bump.
 - Mirror of this plan persisted to cross-session memory as procedure
   `normalize-session-identity-telemetry-plan` (survives worktree sweeps).
 
