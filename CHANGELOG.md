@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.18.2] - 2026-06-18
+
+### Changed
+- Merge pull request #211 from griffinwork40/simplify/terminal-compositor-dedup (6da7b60)
+- centralize committed-band CUP+EL escape into eraseAndPaintRow (57f417e)
+
 ## [4.18.1] - 2026-06-18
 
 ### Changed
