@@ -5,7 +5,7 @@
  * (env must be set before importing modules that resolve paths).
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -16,6 +16,13 @@ process.env['AFK_HOME'] = tmpDir;
 import { SessionWatchManager, renderLedgerRecord, resolveWatchTarget } from './watch.js';
 import { SessionLedgerWriter, type LedgerRecord } from '../agent/session-ledger.js';
 import { getSessionsDir } from '../paths.js';
+import {
+  ensureSessionKey,
+  readSessionKey,
+  verifyElicitationResponse,
+} from '../agent/afk-channel.js';
+import type { ElicitationResult } from '../agent/types/sdk-types.js';
+import type { MessageHandler } from './handlers/message.js';
 
 let seq = 0;
 function freshId(): string {
@@ -208,5 +215,207 @@ describe('SessionWatchManager', () => {
 
     // First batch send threw; later batches must still be delivered.
     expect(sent.join('\n')).toContain('second-batch');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Criterion 3: elicitation intercept + signed write-back (C1+C2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a minimal stub of the Telegraf bot + MessageHandler sufficient for the
+ * elicitation path in _run. The bot stub only needs sendMessage (for the text
+ * prompt) and action registration (no-op here). The MessageHandler stub only
+ * needs pendingElicitations and ledgerOriginatedPendingChats maps plus enough
+ * surface for makeTelegramElicitationHandler to function.
+ */
+function makeElicitStubs(chatId: number) {
+  // Track the pending resolver installed by the elicitation handler.
+  const pendingElicitations = new Map<number, (text: string) => void>();
+  const ledgerOriginatedPendingChats = new Set<number>();
+
+  const sentMessages: string[] = [];
+  const bot = {
+    action: vi.fn(),
+    telegram: {
+      sendMessage: vi.fn().mockImplementation((_chatId: number, text: string) => {
+        sentMessages.push(text);
+        return Promise.resolve({ message_id: 1 });
+      }),
+    },
+  };
+
+  // A minimal MessageHandler-shaped object. We only need the two maps.
+  const messageHandler = {
+    pendingElicitations,
+    ledgerOriginatedPendingChats,
+  } as unknown as MessageHandler;
+
+  return { bot, messageHandler, sentMessages, pendingElicitations, ledgerOriginatedPendingChats, chatId };
+}
+
+describe('SessionWatchManager — elicitation intercept + signed write-back (criterion 3)', () => {
+  it('intercepts an elicitation record, renders via telegram handler, writes back a HMAC-signed response', async () => {
+    const id = freshId();
+    const chatId = 42;
+
+    // Write the REPL-side session key (normally written by /afk on).
+    const key = ensureSessionKey(id);
+    expect(key).toBeTruthy();
+
+    const { bot, messageHandler, pendingElicitations } = makeElicitStubs(chatId);
+
+    const writer = new SessionLedgerWriter(id);
+    writer.recordUser('setup');
+    await sleep(50);
+
+    const sent: string[] = [];
+    const manager = new SessionWatchManager(
+      () => {},
+      bot as unknown as import('telegraf').Telegraf,
+      messageHandler,
+    );
+    manager.start(chatId, id, async (text) => { sent.push(text); });
+
+    await sleep(100);
+
+    // Write an elicitation record into the ledger (as the REPL would).
+    const reqId = 'req-123';
+    writer.record({
+      kind: 'elicitation',
+      reqId,
+      request: { type: 'text', message: 'What is your name?' },
+    });
+
+    // Give the tail loop time to process the record and install the interceptor.
+    await sleep(200);
+
+    // Simulate the operator typing an answer into Telegram (the message handler
+    // fires the resolver, which is what handle() would do when it sees a text).
+    const resolver = pendingElicitations.get(chatId);
+    expect(resolver).toBeDefined();
+    resolver!('Alice');
+
+    // Give _run time to receive the result and write back the response.
+    await sleep(200);
+
+    // The elicitation_response record must be in the ledger and HMAC-verified.
+    const ledgerPath = path.join(
+      tmpDir, 'state', 'sessions', id, 'events.jsonl',
+    );
+    const lines = fs.readFileSync(ledgerPath, 'utf8').trim().split('\n');
+    const responseRecord = lines
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .find((r) => r?.kind === 'elicitation_response');
+
+    expect(responseRecord).toBeDefined();
+    expect(responseRecord.reqId).toBe(reqId);
+    const result: ElicitationResult = responseRecord.result;
+    expect(result.action).toBe('accept');
+
+    // Verify the HMAC using the real verifyElicitationResponse.
+    const readKey = readSessionKey(id);
+    expect(readKey).toBeTruthy();
+    const valid = verifyElicitationResponse(readKey!, id, reqId, result, responseRecord.hmac);
+    expect(valid).toBe(true);
+
+    await writer.close();
+    manager.stop(chatId);
+  });
+
+  it('skips the write-back when no session key is present', async () => {
+    const id = freshId();
+    const chatId = 43;
+    // Deliberately do NOT call ensureSessionKey — no key on disk.
+
+    const { bot, messageHandler, pendingElicitations } = makeElicitStubs(chatId);
+
+    const writer = new SessionLedgerWriter(id);
+    writer.recordUser('setup');
+    await sleep(50);
+
+    const manager = new SessionWatchManager(
+      () => {},
+      bot as unknown as import('telegraf').Telegraf,
+      messageHandler,
+    );
+    manager.start(chatId, id, async () => {});
+
+    await sleep(100);
+
+    writer.record({
+      kind: 'elicitation',
+      reqId: 'req-no-key',
+      request: { type: 'text', message: 'Skip?' },
+    });
+
+    await sleep(200);
+
+    // Answer the pending resolver.
+    const resolver = pendingElicitations.get(chatId);
+    expect(resolver).toBeDefined();
+    resolver!('any answer');
+
+    await sleep(200);
+
+    // No elicitation_response should be in the ledger.
+    const ledgerPath = path.join(tmpDir, 'state', 'sessions', id, 'events.jsonl');
+    const lines = fs.readFileSync(ledgerPath, 'utf8').trim().split('\n');
+    const responseRecord = lines
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .find((r) => r?.kind === 'elicitation_response');
+
+    expect(responseRecord).toBeUndefined();
+
+    await writer.close();
+    manager.stop(chatId);
+  });
+
+  it('still relays normal (non-elicitation) records as push lines', async () => {
+    const id = freshId();
+    const chatId = 44;
+
+    const { bot, messageHandler } = makeElicitStubs(chatId);
+
+    const writer = new SessionLedgerWriter(id);
+    writer.recordUser('hello');
+    await sleep(50);
+
+    const sent: string[] = [];
+    const manager = new SessionWatchManager(
+      () => {},
+      bot as unknown as import('telegraf').Telegraf,
+      messageHandler,
+    );
+    manager.start(chatId, id, async (text) => { sent.push(text); });
+
+    await sleep(100);
+    writer.recordUser('normal record');
+    await sleep(300);
+    await writer.close();
+    await sleep(600);
+
+    expect(sent.join('\n')).toContain('normal record');
+
+    manager.stop(chatId);
+  });
+
+  it('renderLedgerRecord returns null for elicitation kinds (no push line)', () => {
+    expect(renderLedgerRecord(rec({
+      kind: 'elicitation',
+      reqId: 'r1',
+      request: { type: 'text', message: 'Q?' },
+    }))).toBeNull();
+    expect(renderLedgerRecord(rec({
+      kind: 'elicitation_response',
+      reqId: 'r1',
+      result: { action: 'accept', content: { value: 'A' } },
+      hmac: 'abc',
+    }))).toBeNull();
+    expect(renderLedgerRecord(rec({
+      kind: 'abort_request',
+      nonce: 'n1',
+      hmac: 'abc',
+    }))).toBeNull();
   });
 });

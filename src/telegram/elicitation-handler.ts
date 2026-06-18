@@ -71,12 +71,33 @@ function truncateLabel(label: string, maxBytes = 64): string {
  * @param messageHandler - The message handler instance (for `pendingElicitations`).
  * @param bot - The Telegraf bot instance (for `bot.action` registration).
  * @param chatId - The Telegram chat ID to send questions to.
+ * @param opts.ledgerOriginated - When true, every text-intercept entry also
+ *   registers the chatId in `messageHandler.ledgerOriginatedPendingChats` so
+ *   the message handler's idle-guard fires the resolver even with no active
+ *   AgentSession for this chat (the REPL session runs in a separate process).
  */
 export function makeTelegramElicitationHandler(
   messageHandler: MessageHandler,
   bot: Telegraf,
   chatId: number,
+  opts?: { ledgerOriginated?: boolean },
 ): ElicitationHandler {
+  // Contract: ledgerOriginated elicitations bypass the session-state guard in
+  // MessageHandler.handle() — the resolver fires on the next text reply
+  // regardless of whether an AgentSession exists for this chat.
+  const ledgerOriginated = opts?.ledgerOriginated ?? false;
+
+  // Helpers that keep pendingElicitations and ledgerOriginatedPendingChats in
+  // sync. All text-intercept registrations and deletions must use these instead
+  // of touching the maps directly, so the bypass set never drifts from reality.
+  function setPending(resolver: (text: string) => void): void {
+    messageHandler.pendingElicitations.set(chatId, resolver);
+    if (ledgerOriginated) messageHandler.ledgerOriginatedPendingChats.add(chatId);
+  }
+  function deletePending(): void {
+    messageHandler.pendingElicitations.delete(chatId);
+    if (ledgerOriginated) messageHandler.ledgerOriginatedPendingChats.delete(chatId);
+  }
   /**
    * H3: Single dispatch table for confirm/choice elicitations.
    * Keys are elicitation IDs; values are `(choiceIndex) => void` resolvers.
@@ -176,7 +197,7 @@ export function makeTelegramElicitationHandler(
           pendingChoiceElicitations.delete(elicitId);
           // Custom-entry abort: also drop the chatId-keyed text intercept so a
           // stale handler can't swallow the user's next message.
-          if (inCustomTextWait) messageHandler.pendingElicitations.delete(chatId);
+          if (inCustomTextWait) deletePending();
           resolve({ action: 'decline' });
         };
         options.signal.addEventListener('abort', onAbort, { once: true });
@@ -194,7 +215,7 @@ export function makeTelegramElicitationHandler(
             inCustomTextWait = true;
             bot.telegram.sendMessage(chatId, '✍️ Please type your custom answer:').catch(() => {});
             if (options.signal.aborted) { resolve({ action: 'decline' }); return; }
-            messageHandler.pendingElicitations.set(chatId, (text: string) => {
+            setPending((text: string) => {
               if (resolved) return;
               resolved = true;
               options.signal.removeEventListener('abort', onAbort);
@@ -248,7 +269,7 @@ export function makeTelegramElicitationHandler(
         if (messageHandler.pendingElicitations.has(chatId)) {
           console.warn('[elicitation-handler] abort: cleaning up stale pendingElicitation for chatId', chatId);
         }
-        messageHandler.pendingElicitations.delete(chatId);
+        deletePending();
         resolve({ action: 'decline' });
       };
       options.signal.addEventListener('abort', onAbort, { once: true });
@@ -284,7 +305,7 @@ export function makeTelegramElicitationHandler(
             // H1: abort guard — if abort fired between `resolved = false` and `.set()`,
             // the promise is already settled; skip re-registration to avoid a dangling intercept.
             if (options.signal.aborted) return;
-            messageHandler.pendingElicitations.set(chatId, handleText);
+            setPending(handleText);
             // H1: re-attach abort listener so abort during the next wait resolves the promise.
             options.signal.addEventListener('abort', onAbort, { once: true });
             return;
@@ -297,7 +318,7 @@ export function makeTelegramElicitationHandler(
             bot.telegram.sendMessage(chatId, '❌ Please enter a valid number.').catch(() => {});
             // H1: abort guard before re-registration.
             if (options.signal.aborted) return;
-            messageHandler.pendingElicitations.set(chatId, handleText);
+            setPending(handleText);
             // H1: re-attach abort listener for the next wait.
             options.signal.addEventListener('abort', onAbort, { once: true });
             return;
@@ -308,7 +329,7 @@ export function makeTelegramElicitationHandler(
             bot.telegram.sendMessage(chatId, `❌ Value must be ≥ ${request.min}.`).catch(() => {});
             // H1: abort guard before re-registration.
             if (options.signal.aborted) return;
-            messageHandler.pendingElicitations.set(chatId, handleText);
+            setPending(handleText);
             // H1: re-attach abort listener for the next wait.
             options.signal.addEventListener('abort', onAbort, { once: true });
             return;
@@ -319,7 +340,7 @@ export function makeTelegramElicitationHandler(
             bot.telegram.sendMessage(chatId, `❌ Value must be ≤ ${request.max}.`).catch(() => {});
             // H1: abort guard before re-registration.
             if (options.signal.aborted) return;
-            messageHandler.pendingElicitations.set(chatId, handleText);
+            setPending(handleText);
             // H1: re-attach abort listener for the next wait.
             options.signal.addEventListener('abort', onAbort, { once: true });
             return;
@@ -355,7 +376,7 @@ export function makeTelegramElicitationHandler(
               ).catch(() => {});
               // H1: abort guard before re-registration.
               if (options.signal.aborted) return;
-              messageHandler.pendingElicitations.set(chatId, handleText);
+              setPending(handleText);
               // H1: re-attach abort listener for the next wait.
               options.signal.addEventListener('abort', onAbort, { once: true });
               return;
@@ -373,7 +394,7 @@ export function makeTelegramElicitationHandler(
           bot.telegram.sendMessage(chatId, '❌ Please enter a response (or type :cancel to skip).').catch(() => {});
           // H1: abort guard before re-registration.
           if (options.signal.aborted) return;
-          messageHandler.pendingElicitations.set(chatId, handleText);
+          setPending(handleText);
           // H1: re-attach abort listener for the next wait.
           options.signal.addEventListener('abort', onAbort, { once: true });
           return;
@@ -382,7 +403,7 @@ export function makeTelegramElicitationHandler(
       }
 
       // Register intercept
-      messageHandler.pendingElicitations.set(chatId, handleText);
+      setPending(handleText);
 
       // Build prompt text
       let promptText = displayText;
@@ -419,7 +440,7 @@ export function makeTelegramElicitationHandler(
           // M6: log sendMessage failure so callers can diagnose silent declines
           // without a visible error (e.g., MarkdownV2 parse failure, network error).
           console.warn('[elicitation-handler] sendMessage failed; declining elicitation for chatId', chatId);
-          messageHandler.pendingElicitations.delete(chatId);
+          deletePending();
           resolve({ action: 'decline' });
         }
       });

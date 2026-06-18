@@ -60,7 +60,10 @@ export class TelegramBot {
       this.registeredCommandChats,
       this.log.bind(this)
     );
-    this.watchManager = new SessionWatchManager(this.log.bind(this));
+    // Invariant: pass the SOLE Telegraf instance and the MessageHandler so
+    // _run can render elicitation records interactively. No second bot
+    // instance is created here — this.bot is the single getUpdates poller.
+    this.watchManager = new SessionWatchManager(this.log.bind(this), this.bot, this.messageHandler);
 
     this.setupHandlers();
   }

@@ -119,6 +119,24 @@ export class MessageHandler {
    */
   public pendingElicitations = new Map<number, (text: string) => void>();
 
+  /**
+   * Chat IDs whose active pendingElicitations entry was registered by a
+   * ledger-originated (daemon-watch) elicitation rather than a session-local
+   * ask_question call.
+   *
+   * Invariant: the idle-guard in handle() must fire the resolver for these
+   * chats even when no AgentSession is active for the chat (the REPL session
+   * lives in a different process). Without this bypass, every phone reply to a
+   * ledger-originated elicitation is silently dropped because the guard sees
+   * no in-flight session and treats the pending entry as stale.
+   *
+   * Lifecycle: entries are added by makeTelegramElicitationHandler before it
+   * installs the resolver (via the ledgerOriginatedElicitation flag passed by
+   * the watch loop), and deleted when the resolver fires or is aborted — exactly
+   * mirroring the pendingElicitations Map lifecycle.
+   */
+  public ledgerOriginatedPendingChats = new Set<number>();
+
   constructor(
     bot: Telegraf,
     sessionManager: SessionManager,
@@ -340,16 +358,33 @@ export class MessageHandler {
     // session message queue. Intercept BEFORE the session.state check so
     // that elicitation replies are never swallowed by the busy-queue branch.
     //
-    // Guard: only route to the elicit resolver when the session is actually
-    // streaming/processing (i.e. genuinely awaiting a reply). If the session
-    // was reset (/clear) while an elicitation was in flight, the abort signal
-    // on the old AbortController never fires, leaving a stale entry in
-    // pendingElicitations that would silently eat the user's next message.
-    // Checking the live session state here catches that case: a freshly-created
-    // session is always 'idle', so we delete the stale entry and fall through
-    // to processOne instead of routing to a dead resolver.
+    // Guard: only route to the elicit resolver when the resolver is live.
+    // Two cases are distinguished:
+    //
+    //   1. Ledger-originated elicitation (daemon watching a REPL session):
+    //      the REPL session runs in a separate process, so this chat has NO
+    //      in-flight AgentSession. We must fire the resolver regardless of
+    //      session state — the ledgerOriginatedPendingChats set tracks these
+    //      so we can bypass the session-state check safely.
+    //
+    //   2. Session-local elicitation (ask_question from this chat's session):
+    //      the resolver is live only while the session is non-idle. If the
+    //      session was reset (/clear) while an elicitation was in flight, the
+    //      abort signal on the old AbortController never fires, leaving a stale
+    //      entry that would silently eat the user's next message. Checking the
+    //      live session state here catches that case: a freshly-created session
+    //      is always 'idle', so we delete the stale entry and fall through to
+    //      processOne instead of routing to a dead resolver.
     const elicitResolver = this.pendingElicitations.get(chatId);
     if (elicitResolver) {
+      // Case 1: ledger-originated bypass — fire resolver without session check.
+      if (this.ledgerOriginatedPendingChats.has(chatId)) {
+        this.pendingElicitations.delete(chatId);
+        this.ledgerOriginatedPendingChats.delete(chatId);
+        elicitResolver(messageText);
+        return;
+      }
+      // Case 2: session-local — fire only when the session is genuinely busy.
       const existingSession = this.sessionManager.getSessionIfExists(chatId);
       if (existingSession && existingSession.state !== 'idle') {
         this.pendingElicitations.delete(chatId);
