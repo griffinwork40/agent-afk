@@ -190,6 +190,77 @@ function renderFormHeader(
   writer.line();
 }
 
+/** Sentinel option appended to OPTIONAL enum/boolean pickers so the selector
+ *  can express "leave unset" — mirrors the typed path's empty→default skip. */
+const FORM_SKIP_SENTINEL = '\u2014 skip (optional) \u2014';
+
+/**
+ * Render an `enum` / `boolean` form field as an arrow-key picker — the same
+ * `PickerController` overlay the `ask_question` choice path uses — instead of a
+ * typed `readLine` prompt. Only reached when a `pickFromList` dep is wired
+ * (TTY/REPL); the typed path in {@link promptField} remains the non-TTY /
+ * daemon / test fallback.
+ *
+ * Returns a {@link FieldOutcome}:
+ *   - `{ tag: 'value', value }` on confirm (enum values map back to their
+ *     ORIGINAL typed entry so number/boolean enums preserve their type);
+ *   - `{ tag: 'value', value: fieldDef.default }` when an optional field's skip
+ *     sentinel is chosen (caller omits `undefined`);
+ *   - `{ tag: 'cancel' }` on Esc / Ctrl+C / abort (picker resolves `null`).
+ */
+async function pickFormField(
+  fieldDef: FieldDef,
+  isRequired: boolean,
+  label: string,
+  displayKey: string,
+  pickFromList: NonNullable<ReplElicitationDeps['pickFromList']>,
+  writer: ReplElicitationDeps['writer'],
+  signal: AbortSignal,
+): Promise<FieldOutcome> {
+  // Build the option labels + a resolver from display-string back to the
+  // declared field value. Enum first (takes precedence over `type`), matching
+  // the typed path's type-hint ordering.
+  let baseLabels: string[];
+  let resolveValue: (picked: string) => unknown;
+  if (fieldDef.enum !== undefined) {
+    const enumValues = fieldDef.enum.slice(0, MAX_ENUM_VALUES);
+    baseLabels = enumValues.map((v) => sanitizeSchemaString(String(v), 64));
+    resolveValue = (picked: string): unknown => {
+      const idx = baseLabels.indexOf(picked);
+      return idx >= 0 ? enumValues[idx] : picked;
+    };
+  } else {
+    // boolean
+    baseLabels = ['Yes', 'No'];
+    resolveValue = (picked: string): unknown => picked === 'Yes';
+  }
+
+  const options = isRequired ? baseLabels : [...baseLabels, FORM_SKIP_SENTINEL];
+  // The field label (enum `description` carries the per-choice guidance for
+  // path-approval) renders INSIDE the picker frame and vanishes on confirm;
+  // server + message stay in scrollback via the unchanged renderFormHeader.
+  const header = [palette.bold('  ? ' + label), ''];
+
+  let selected: readonly string[] | null;
+  try {
+    selected = await pickFromList({ header, options, multi: false, signal });
+  } catch {
+    return { tag: 'cancel' };
+  }
+  if (signal.aborted) return { tag: 'cancel' };
+  if (selected === null) return { tag: 'cancel' };
+  const picked = selected[0];
+  if (picked === undefined) return { tag: 'cancel' };
+  if (!isRequired && picked === FORM_SKIP_SENTINEL) {
+    // Optional skip → declared default (caller omits undefined). Mirrors the
+    // typed path's empty-input branch.
+    return { tag: 'value', value: fieldDef.default };
+  }
+  // Single-line echo into scrollback (picker frame already vanished on confirm).
+  writer.line(palette.dim('  \u2713 ') + palette.brand(`${displayKey}: ${sanitizeSchemaString(picked, 128)}`));
+  return { tag: 'value', value: resolveValue(picked) };
+}
+
 async function promptField(
   fieldKey: string,
   fieldDef: FieldDef,
@@ -197,6 +268,7 @@ async function promptField(
   readLine: ReplElicitationDeps['readLine'],
   writer: ReplElicitationDeps['writer'],
   signal: AbortSignal,
+  pickFromList?: ReplElicitationDeps['pickFromList'],
 ): Promise<FieldOutcome> {
   // M-3a: detect an abort fired between fields (after the previous promptField
   // resolved but before this one starts) before printing any label or blocking
@@ -212,6 +284,16 @@ async function promptField(
   // fieldKey is also reflected to the terminal; sanitise for display, but
   // keep the original key for content[] assignment downstream.
   const displayKey = sanitizeSchemaString(fieldKey, 64);
+
+  // Arrow-key selector path for enum / boolean fields when a picker is wired
+  // (TTY/REPL surfaces). Routes the same PickerController overlay the
+  // ask_question choice prompts use, so the path-approval prompt (a single
+  // enum field) becomes a keyboard selector instead of a typed entry. Falls
+  // through to the typed readLine loop below on non-TTY surfaces (daemon,
+  // pipes, tests) where pickFromList is undefined.
+  if (pickFromList && (fieldDef.enum !== undefined || fieldType === 'boolean')) {
+    return pickFormField(fieldDef, isRequired, label, displayKey, pickFromList, writer, signal);
+  }
 
   // Build type-hint string and emit unknown-type warning (once, before loop)
   let typeHint: string;
@@ -968,6 +1050,7 @@ export function makeReplElicitationHandler(
             deps.readLine,
             deps.writer,
             signal,
+            deps.pickFromList,
           );
           if (outcome.tag === 'cancel') return CANCEL;
           if (outcome.tag === 'decline') return DECLINE;
