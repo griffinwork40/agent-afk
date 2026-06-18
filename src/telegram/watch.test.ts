@@ -19,7 +19,10 @@ import { getSessionsDir } from '../paths.js';
 import {
   ensureSessionKey,
   readSessionKey,
+  signAbortRequest,
+  verifyAbortRequest,
   verifyElicitationResponse,
+  freshChannelId,
 } from '../agent/afk-channel.js';
 import type { ElicitationResult } from '../agent/types/sdk-types.js';
 import type { MessageHandler } from './handlers/message.js';
@@ -417,5 +420,63 @@ describe('SessionWatchManager — elicitation intercept + signed write-back (cri
       nonce: 'n1',
       hmac: 'abc',
     }))).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Criterion 4: getWatched() getter + daemon abort-record signing
+// ---------------------------------------------------------------------------
+
+describe('SessionWatchManager — getWatched (criterion 4)', () => {
+  it('getWatched returns the watched session id and undefined when not watching', async () => {
+    const id = freshId();
+    const writer = new SessionLedgerWriter(id);
+    writer.recordUser('x');
+    await sleep(50);
+
+    const manager = new SessionWatchManager();
+    expect(manager.getWatched(20)).toBeUndefined();
+
+    manager.start(20, id, async () => {});
+    expect(manager.getWatched(20)).toBe(id);
+
+    manager.stop(20);
+    expect(manager.getWatched(20)).toBeUndefined();
+
+    await writer.close();
+  });
+});
+
+describe('Criterion 4: daemon /abort writes a HMAC-signed abort_request', () => {
+  it('a signed abort_request written like the daemon /abort handler does verifies correctly', () => {
+    // This test simulates what bot.ts /abort does: read the key, sign, and write.
+    // Verifying the record with the real verifyAbortRequest confirms the
+    // REPL abort-watcher would accept it (Invariant #4).
+    const id = freshId();
+    const key = ensureSessionKey(id)!;
+    expect(key).toBeTruthy();
+
+    // Simulate the /abort command path: sign a nonce exactly as bot.ts does.
+    const nonce = freshChannelId();
+    const hmac = signAbortRequest(key, id, nonce);
+
+    // The record is what SessionLedgerWriter.record() would emit.
+    const record = { kind: 'abort_request' as const, nonce, hmac };
+
+    // The REPL abort-watcher calls verifyAbortRequest before acting.
+    const valid = verifyAbortRequest(key, id, record.nonce, record.hmac);
+    expect(valid).toBe(true);
+  });
+
+  it('an abort_request with a forged HMAC does NOT verify (REPL would ignore it)', () => {
+    const id = freshId();
+    const key = ensureSessionKey(id)!;
+    const nonce = freshChannelId();
+    // Daemon signs with a DIFFERENT key (simulating a cross-session stray write).
+    const wrongKey = ensureSessionKey(freshId())!;
+    const forgedHmac = signAbortRequest(wrongKey, id, nonce);
+
+    const valid = verifyAbortRequest(key, id, nonce, forgedHmac);
+    expect(valid).toBe(false);
   });
 });

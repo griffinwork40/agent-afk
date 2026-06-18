@@ -167,6 +167,15 @@ export class SessionWatchManager {
   }
 
   /**
+   * The session id that `chatId` is currently watching, or undefined.
+   * Alias for {@link watching} — exposed under the name the `/abort` handler
+   * uses so the call site reads clearly.
+   */
+  getWatched(chatId: number): string | undefined {
+    return this.watches.get(chatId)?.sessionId;
+  }
+
+  /**
    * Start watching `sessionId` for `chatId`, replacing any existing watch.
    * `send` delivers rendered batches to the chat; failures are logged and
    * the watch continues (a transient Telegram error must not kill the tail).

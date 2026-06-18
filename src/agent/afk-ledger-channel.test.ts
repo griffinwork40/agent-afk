@@ -17,9 +17,9 @@ import * as path from 'node:path';
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-ledgerchan-test-'));
 process.env['AFK_HOME'] = tmpDir;
 
-import { makeLedgerChannelHandler } from './afk-ledger-channel.js';
+import { makeLedgerChannelHandler, makeAbortWatcher } from './afk-ledger-channel.js';
 import { SessionLedgerWriter } from './session-ledger.js';
-import { ensureSessionKey, signElicitationResponse } from './afk-channel.js';
+import { ensureSessionKey, signElicitationResponse, signAbortRequest } from './afk-channel.js';
 import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js';
 
 let seq = 0;
@@ -160,6 +160,112 @@ describe('makeLedgerChannelHandler', () => {
     await sleep(300);
     resolveKbd(kbdResult);
     await expect(p).resolves.toEqual(kbdResult);
+    await writer.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// makeAbortWatcher — criterion 4
+// ---------------------------------------------------------------------------
+
+describe('makeAbortWatcher (criterion 4)', () => {
+  it('fires onAbort ONLY on a VERIFIED abort_request, not on a forged one', async () => {
+    const id = freshId();
+    const key = ensureSessionKey(id)!;
+    const writer = new SessionLedgerWriter(id);
+    const abortReasons: string[] = [];
+
+    const watcher = makeAbortWatcher({
+      sessionId: id,
+      key,
+      onAbort: (reason) => abortReasons.push(reason),
+    });
+
+    await sleep(80);
+
+    // Write a FORGED abort_request (bad HMAC). Must be IGNORED.
+    writer.record({ kind: 'abort_request', nonce: 'bad-nonce', hmac: 'deadbeefdeadbeef' });
+    await sleep(200);
+    expect(abortReasons).toHaveLength(0);
+
+    // Write a VERIFIED abort_request. Must fire onAbort exactly once.
+    const nonce = 'valid-nonce-001';
+    const hmac = signAbortRequest(key, id, nonce);
+    writer.record({ kind: 'abort_request', nonce, hmac });
+    await sleep(200);
+
+    expect(abortReasons).toHaveLength(1);
+    expect(abortReasons[0]).toContain('abort');
+
+    watcher.stop();
+    await writer.close();
+  });
+
+  it('key=null → never calls onAbort, even for a validly-signed record', async () => {
+    const id = freshId();
+    const key = ensureSessionKey(id)!; // a real key exists on disk…
+    const writer = new SessionLedgerWriter(id);
+    const abortReasons: string[] = [];
+
+    // …but the watcher is given no key → ledger branch disabled.
+    const watcher = makeAbortWatcher({
+      sessionId: id,
+      key: null,
+      onAbort: (reason) => abortReasons.push(reason),
+    });
+
+    await sleep(60);
+    const nonce = 'valid-nonce-002';
+    const hmac = signAbortRequest(key, id, nonce);
+    writer.record({ kind: 'abort_request', nonce, hmac });
+    await sleep(300);
+
+    expect(abortReasons).toHaveLength(0);
+
+    watcher.stop();
+    await writer.close();
+  });
+
+  it('stop() ends the watcher — no further onAbort calls after stop', async () => {
+    const id = freshId();
+    const key = ensureSessionKey(id)!;
+    const writer = new SessionLedgerWriter(id);
+    const abortReasons: string[] = [];
+
+    const watcher = makeAbortWatcher({
+      sessionId: id,
+      key,
+      onAbort: (reason) => abortReasons.push(reason),
+    });
+
+    await sleep(60);
+    // Stop the watcher before any record arrives.
+    watcher.stop();
+    await sleep(60);
+
+    // A valid abort_request arrives AFTER stop → must NOT trigger onAbort.
+    const nonce = 'post-stop-nonce';
+    const hmac = signAbortRequest(key, id, nonce);
+    writer.record({ kind: 'abort_request', nonce, hmac });
+    await sleep(200);
+
+    expect(abortReasons).toHaveLength(0);
+
+    await writer.close();
+  });
+
+  it('stop() is idempotent — calling it multiple times does not throw', async () => {
+    const id = freshId();
+    const key = ensureSessionKey(id)!;
+    const writer = new SessionLedgerWriter(id);
+    const watcher = makeAbortWatcher({
+      sessionId: id,
+      key,
+      onAbort: () => {},
+    });
+    watcher.stop();
+    watcher.stop();
+    watcher.stop(); // must not throw
     await writer.close();
   });
 });

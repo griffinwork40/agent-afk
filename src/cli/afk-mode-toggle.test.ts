@@ -39,8 +39,13 @@ const ledgerHandlerSentinel: ElicitationHandler = () => Promise.resolve({ action
 const makeLedgerChannelHandler = vi.fn(
   (_deps: unknown): ElicitationHandler => ledgerHandlerSentinel,
 );
+// Stub abort-watcher: returns a no-op handle; correctness tested in its own suite.
+const makeAbortWatcher = vi.fn(
+  (_deps: unknown): { stop: () => void } => ({ stop: () => {} }),
+);
 vi.mock('../agent/afk-ledger-channel.js', () => ({
   makeLedgerChannelHandler: (deps: unknown) => makeLedgerChannelHandler(deps),
+  makeAbortWatcher: (deps: unknown) => makeAbortWatcher(deps),
 }));
 const setPresenceAfk = vi.fn();
 vi.mock('../agent/awareness/presence.js', () => ({
@@ -191,6 +196,7 @@ describe('toggleAfkMode — AFK ledger channel wiring (scope.lock criterion 1)',
     resetAfkPushBudget.mockClear();
     ensureSessionKey.mockClear();
     makeLedgerChannelHandler.mockClear();
+    makeAbortWatcher.mockClear();
     setPresenceAfk.mockClear();
   });
 
@@ -284,5 +290,56 @@ describe('toggleAfkMode — AFK ledger channel wiring (scope.lock criterion 1)',
     expect(swapCalls).toHaveLength(0);
     expect(setPresenceAfk).not.toHaveBeenCalled();
     expect(ctx.stats.permissionMode).toBe('autonomous');
+  });
+
+  // Criterion 4: abort-watcher wiring
+  it('on /afk on, starts the abort-watcher bound to the same session and key', async () => {
+    const { ctx } = makeCtx({
+      stats: makeStats({ permissionMode: 'default' }),
+      sessionId: 's2',
+      withChannel: true,
+    });
+
+    await toggleAfkMode(ctx, true);
+
+    expect(makeAbortWatcher).toHaveBeenCalledTimes(1);
+    expect(makeAbortWatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 's2',
+        key: 'a'.repeat(64),
+        onAbort: expect.any(Function),
+      }),
+    );
+  });
+
+  it('on /afk off, stops the abort-watcher (stop() is called)', async () => {
+    // Turn ON first to install the watcher.
+    const { ctx } = makeCtx({
+      stats: makeStats({ permissionMode: 'default' }),
+      sessionId: 's3',
+      withChannel: true,
+    });
+    await toggleAfkMode(ctx, true);
+
+    const handle = makeAbortWatcher.mock.results[0]?.value as { stop: ReturnType<typeof vi.fn> } | undefined;
+    expect(handle).toBeDefined();
+    // The stub returns { stop: () => {} }; spy on it.
+    const stopSpy = vi.spyOn(handle!, 'stop');
+
+    // Now turn OFF.
+    await toggleAfkMode(ctx, false);
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('abort-watcher is not started when no channel (non-REPL surface)', async () => {
+    const { ctx } = makeCtx({
+      stats: makeStats({ permissionMode: 'default' }),
+      sessionId: 's4',
+      withChannel: false,
+    });
+
+    await toggleAfkMode(ctx, true);
+
+    expect(makeAbortWatcher).not.toHaveBeenCalled();
   });
 });

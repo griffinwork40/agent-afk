@@ -1,5 +1,5 @@
 /**
- * AFK remote-control: REPL-side ledger ElicitationChannel.
+ * AFK remote-control: REPL-side ledger ElicitationChannel + abort-watcher.
  *
  * Invariant: in AFK mode the REPL swaps its stdin elicitation handler for the
  * one this factory returns. When the agent asks a question, the handler:
@@ -11,9 +11,10 @@
  *      whichever settles first, cancelling the losers via a child AbortSignal.
  *
  * Invariant (scope.lock #4): a ledger reply is acted on ONLY if its per-session
- * HMAC verifies. An unverified/forged `elicitation_response` is ignored, never
- * resolved. With no key the ledger branch is disabled and the handler degrades
- * to the keyboard fallback.
+ * HMAC verifies. An unverified/forged `elicitation_response` or `abort_request`
+ * is ignored, never resolved. With no key the ledger branch is disabled and the
+ * handler degrades to the keyboard fallback. The abort-watcher likewise ignores
+ * any record whose HMAC does not verify — a stray write cannot abort the session.
  *
  * Invariant (#3): the channel is ADDITIVE — the stdin `fallback` always races
  * alongside the phone, so the keyboard never stops working and there is no
@@ -26,11 +27,93 @@
  */
 
 import { tailLedger } from './session-ledger.js';
-import { verifyElicitationResponse, freshChannelId } from './afk-channel.js';
+import { verifyElicitationResponse, verifyAbortRequest, freshChannelId } from './afk-channel.js';
 import type { ElicitationHandler } from './elicitation-router.js';
 import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js';
 
 const DECLINE: ElicitationResult = { action: 'decline' };
+
+// ---------------------------------------------------------------------------
+// AbortWatcher
+// ---------------------------------------------------------------------------
+
+export interface AbortWatcherDeps {
+  /** Session id whose ledger to tail for abort_request records. */
+  sessionId: string;
+  /**
+   * Per-session HMAC key. When null the watcher is a no-op: we cannot verify
+   * any abort record, so we must never act on one (Invariant #4).
+   */
+  key: string | null;
+  /**
+   * Called ONLY when a VERIFIED abort_request arrives. The reason string is
+   * forwarded to the session AbortGraph.
+   */
+  onAbort: (reason: string) => void;
+  /** Nonce generator; injectable for tests. */
+  newAbortReason?: () => string;
+}
+
+/** Handle returned by {@link makeAbortWatcher} — call `stop()` to tear down. */
+export interface AbortWatcherHandle {
+  stop: () => void;
+}
+
+/**
+ * Start a background ledger tail that watches for `abort_request` records.
+ *
+ * Invariant (scope.lock #4): the REPL fires the AbortGraph ONLY on a
+ * HMAC-VERIFIED abort_request. An unverified record (bad HMAC, forged nonce,
+ * or cross-session write) is IGNORED, never actioned. With `key === null` the
+ * watcher exits immediately and the `onAbort` callback is NEVER called.
+ *
+ * Mirrors the robustness pattern of `makeLedgerChannelHandler`: a child
+ * AbortController bounds the tail loop; errors are caught and swallowed so a
+ * transient I/O failure cannot propagate to the caller.
+ *
+ * Contract: `stop()` may be called multiple times idempotently. After `stop()`,
+ * `onAbort` is guaranteed not to be called regardless of in-flight records.
+ */
+export function makeAbortWatcher(deps: AbortWatcherDeps): AbortWatcherHandle {
+  const { sessionId, key, onAbort } = deps;
+
+  // Invariant #4: if there is no key we cannot verify → never abort.
+  if (key === null) {
+    return { stop: () => { /* no-op */ } };
+  }
+
+  const child = new AbortController();
+
+  // Run the tail loop in the background. Errors are caught; the loop exits
+  // cleanly when the AbortController is aborted via stop().
+  void (async () => {
+    try {
+      for await (const rec of tailLedger(sessionId, {
+        fromStart: false,
+        signal: child.signal,
+      })) {
+        if (rec.kind !== 'abort_request') continue;
+        // Invariant #4: ONLY act on a VERIFIED abort_request. A forged or
+        // stray write with a bad HMAC is silently ignored — the session
+        // continues unaffected.
+        if (verifyAbortRequest(key, sessionId, rec.nonce, rec.hmac)) {
+          onAbort('remote abort via Telegram');
+          // One verified abort is enough — stop watching.
+          child.abort();
+          return;
+        }
+      }
+    } catch {
+      // Tail I/O error or deliberate abort — exit quietly.
+    }
+  })();
+
+  return {
+    stop: () => {
+      child.abort();
+    },
+  };
+}
 
 export interface LedgerChannelDeps {
   /** Session id whose ledger carries the channel (the REPL's own session). */

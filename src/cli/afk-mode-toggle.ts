@@ -28,10 +28,18 @@ import { env } from '../config/env.js';
 import { resolveConfiguredNotifyTargets } from '../telegram/notify-routing.js';
 import { resetAfkPushBudget } from './commands/interactive/afk-push.js';
 import { ensureSessionKey } from '../agent/afk-channel.js';
-import { makeLedgerChannelHandler } from '../agent/afk-ledger-channel.js';
+import { makeLedgerChannelHandler, makeAbortWatcher, type AbortWatcherHandle } from '../agent/afk-ledger-channel.js';
 import { setPresenceAfk } from '../agent/awareness/presence.js';
 import { palette } from './palette.js';
 import type { SlashContext } from './slash/types.js';
+
+// Module-level abort-watcher handle. One REPL = one AFK session at a time, so
+// a single handle is sufficient. Cleared on /afk off or when a new /afk on
+// replaces it (the old one is stopped first).
+//
+// Invariant: the handle is always stopped before being replaced so we never
+// leave orphaned tail loops running against old sessions.
+let _abortWatcherHandle: AbortWatcherHandle | null = null;
 
 /** True when Telegram outbound is fully configured (token + ≥1 chat target). */
 function isTelegramConfigured(): boolean {
@@ -64,13 +72,22 @@ export async function toggleAfkMode(
       const swap = ctx.swapElicitationHandler;
       const fallback = ctx.stdinElicitationHandler;
       if (id && swap && fallback) {
+        const key = ensureSessionKey(id);
         const ledgerHandler = makeLedgerChannelHandler({
           sessionId: id,
-          key: ensureSessionKey(id),
+          key,
           emitElicitation: (rec) => sess.recordLedgerElicitation(rec.reqId, rec.request),
           fallback,
         });
         swap(ledgerHandler);
+        // Start the abort-watcher (criterion 4). Stop any previous one first
+        // (idempotent guard — protects against rapid /afk on/on).
+        _abortWatcherHandle?.stop();
+        _abortWatcherHandle = makeAbortWatcher({
+          sessionId: id,
+          key,
+          onAbort: (reason) => sess.abort(reason),
+        });
         void setPresenceAfk(id, true);
       }
       ctx.out.success(
@@ -91,6 +108,9 @@ export async function toggleAfkMode(
       // Restore the stdin elicitation handler (`null` → reinstall stdin) and
       // clear the AFK presence marker so a watching daemon stops tracking.
       ctx.swapElicitationHandler?.(null);
+      // Stop the abort-watcher (best-effort; guarded against null).
+      _abortWatcherHandle?.stop();
+      _abortWatcherHandle = null;
       const id = ctx.session.current.sessionId;
       if (id) void setPresenceAfk(id, false);
       ctx.out.success(
