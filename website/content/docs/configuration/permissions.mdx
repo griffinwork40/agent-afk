@@ -83,14 +83,15 @@ needs wider access. See [Subagents](/guides/subagents).
 
 ## Bash restrictions
 
-Alongside path approval, a bash-restriction hook hard-blocks two classes of command on interactive
-surfaces (REPL, Telegram) — no prompt, just a refusal that routes the model back to the typed file
-tools:
+Alongside path approval, a bash-restriction hook blocks two classes of command by default on
+interactive surfaces (REPL, Telegram) — no prompt, just a refusal that routes the model back to the
+typed file tools:
 
 - **Interpreter one-liners** — `python -c`, `python3 -c`, `node -e`, `ruby -e`, `perl -e`,
   `osascript -e`, `sh -c`, `bash -c`, `zsh -c`, `fish -c`, `lua -e`, and the like. These are an
   easy way to bypass path containment, so they are blocked; the model is told to use `read_file` /
-  `write_file` / `edit_file` (which carry their own per-call approval) instead.
+  `write_file` / `edit_file` (which carry their own per-call approval) instead. Lift just this
+  denylist with `AFK_DISABLE_BASH_INTERPRETER_GUARD=1`.
 - **Restricted roots** — commands referencing sensitive paths such as `~/.ssh`, `~/.gnupg`,
   `~/.aws`, `~/.config/gh`, `~/.netrc`, `~/.password-store`, `~/Library/Application Support`,
   `/etc/shadow`, and `/etc/sudoers`. A restricted path is allowed only when a granted root already
