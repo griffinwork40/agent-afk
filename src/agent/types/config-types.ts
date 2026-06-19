@@ -20,6 +20,7 @@ import type { TraceWriter } from '../trace/index.js';
 import type { AgentModelInput } from './model-types.js';
 import type { ModelSlots } from '../session/model-slots.js';
 import type { CanUseTool, PermissionBubbler } from './permission-types.js';
+import type { Surface } from '../awareness/types.js';
 
 /** Tool permissions configuration */
 export interface ToolConfig {
@@ -385,6 +386,18 @@ export interface AgentConfig {
   // `SubagentManager.forkSubagent` + `SubagentExecutor` for forked children
   // so subagents can introspect their place in the topology.
 
+  /**
+   * User-facing execution surface that produced this session (the same value
+   * the provider stores at `opts.surface`). Set by each top-level entrypoint
+   * (REPL → 'cli', `afk chat` → 'cli', daemon/scheduler → 'daemon', Telegram →
+   * 'telegram'); forked subagents inherit the parent's value. Persisted to the
+   * witness trace as `origin` on `session_init_start` so trace-only analysis can
+   * distinguish cli/telegram/daemon. Distinct from the JSONL telemetry
+   * `surface: 'afk'|'plugin'` provenance tag. Optional/back-compat — undefined
+   * maps to `origin: 'unknown'`.
+   */
+  surface?: Surface;
+
   /** Parent session ID when this session was forked as a subagent. */
   parentSessionId?: string;
 
@@ -428,9 +441,11 @@ export interface AgentConfig {
    * (its skill-dispatch-specific numeric-arg lure does not apply here).
    *
    * Interactive surfaces (REPL, Telegram) leave this unset so a human can still
-   * be asked even when away-from-keyboard. Foreground/background sub-agent
-   * elicitation policy is governed separately by `denyElicitations` in
-   * `subagent.ts` and is deliberately NOT changed by this flag.
+   * be asked even when away-from-keyboard. Forked sub-agents default this to
+   * `true` (see `subagent.ts`): a sub-agent has no human relationship of its own
+   * and must return Blocked/Asking findings to its parent rather than eliciting
+   * the operator directly. Callers may override a fork with
+   * `isNonInteractive: false`.
    *
    * Default: `false`.
    */

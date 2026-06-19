@@ -37,11 +37,19 @@ describe('usageLimitBox', () => {
     expect(rows[rows.length - 1]?.endsWith('╯')).toBe(true);
   });
 
-  it('usage-limit reason shows the auto-resume copy by default', () => {
+  it('usage-limit reason shows the auto-resume copy + actionable escapes by default', () => {
     const out = strip(usageLimitBox({ reason: 'usage-limit' }));
     expect(out).toContain("You've hit your Claude subscription limit");
     expect(out).toContain('auto-resume when the limit resets');
-    expect(out).toContain('ANTHROPIC_API_KEY');
+    // A: the live card advertises the real at-keyboard escapes.
+    expect(out).toContain('/model');
+    expect(out).toContain('claude login');
+    expect(out).toContain('Press Esc to stop waiting');
+    // A: the misleading "export ANTHROPIC_API_KEY" bullet was dropped from the
+    // live auto-resume card — the running turn never re-reads env, and the
+    // keychain hot-swap watches only the OAuth token (env helps future sessions
+    // only). The manual (autoResume:false) branch keeps it (covered below).
+    expect(out).not.toContain('ANTHROPIC_API_KEY');
   });
 
   it('autoResume:false swaps in the manual "send the message again" copy', () => {

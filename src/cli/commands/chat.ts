@@ -481,6 +481,8 @@ export function registerChatCommand(program: Command): void {
         const subagentExecutor = new SubagentExecutor({
           subagentManager: rootManager,
           parentSession: deferredParent,
+          // Session origin for routing-decision telemetry (afk chat → cli).
+          surface: 'cli',
           defaultConfig: {
             apiKey,
             systemPrompt: basePrompt,
@@ -501,6 +503,8 @@ export function registerChatCommand(program: Command): void {
 
         const skillExecutor = new SkillExecutor({
           parentSession: deferredParent,
+          // Session origin for skill-invocation + routing telemetry (afk chat → cli).
+          surface: 'cli',
           defaultModel: options.model,
           defaultSubagentModel: getDefaultSubagentModel(options.model),
           apiKey,
@@ -554,6 +558,9 @@ export function registerChatCommand(program: Command): void {
         // the AgentSession.
         session = new AgentSession(injectHotMemory({
           model: sessionModel,
+          // User-facing surface for trace `origin` attribution. One-shot
+          // `afk chat` is a CLI entrypoint → 'cli'.
+          surface: 'cli',
           // Resolve the credential for the ACTUAL session model, not the
           // env-derived default (`getApiKey()` keys off AFK_MODEL/CLAUDE_MODEL).
           // Without this, `--model gpt-5.5` while CLAUDE_MODEL is a Claude id

@@ -44,6 +44,27 @@ describe('buildSkillInvocationRow', () => {
     expect(Object.prototype.hasOwnProperty.call(row, 'command')).toBe(false);
   });
 
+  it('(1)(3) includes origin + actor when provided, alongside an unchanged surface:afk', () => {
+    const row = buildSkillInvocationRow({ skillName: 'mint', origin: 'telegram', actor: 'main' });
+    expect(row.origin).toBe('telegram');
+    expect(row.actor).toBe('main');
+    // The frozen provenance tag is a SEPARATE field; origin never overwrites it.
+    expect(row.surface).toBe('afk');
+  });
+
+  it('(2) records actor:subagent for a skill dispatched from within a subagent', () => {
+    const row = buildSkillInvocationRow({ skillName: 'review', origin: 'cli', actor: 'subagent' });
+    expect(row.actor).toBe('subagent');
+    expect(row.origin).toBe('cli');
+  });
+
+  it('(4) omits origin/actor when absent (back-compat), keeping surface:afk', () => {
+    const row = buildSkillInvocationRow({ skillName: 'diagnose' });
+    expect(Object.prototype.hasOwnProperty.call(row, 'origin')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(row, 'actor')).toBe(false);
+    expect(row.surface).toBe('afk');
+  });
+
   it('includes optional fields when provided', () => {
     const row = buildSkillInvocationRow({
       skillName: 'ship',

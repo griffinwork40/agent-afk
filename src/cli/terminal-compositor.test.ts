@@ -1443,6 +1443,55 @@ describe('TerminalCompositor', () => {
       expect(c.getBuffer()).toEqual({ text: '', queued: false });
     });
 
+    // ── Usage-limit pause: Enter ends the wait AND queues (B) ──────────────
+    //
+    // While a turn is parked in a usage-limit pause, the compositor's `paused`
+    // flag is set. A submitted line must still queue (so it flushes as the next
+    // turn) AND fire onPauseInterrupt (so the turn handler ends the auto-resume
+    // wait via session.interrupt). This is the one-gesture escape: type
+    // `/model <name>` + Enter during the pause → on the new provider next turn.
+    it('Enter during a usage-limit pause fires onPauseInterrupt and still queues the buffer', async () => {
+      const onPauseInterrupt = vi.fn();
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onPauseInterrupt });
+      await c.arm();
+      c.paused = true;
+      for (const ch of 'hi') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      stdin.emit('keypress', undefined, { name: 'return' });
+      expect(onPauseInterrupt).toHaveBeenCalledTimes(1);
+      // Buffer stays queued so the next readLine's idle-flush dispatches it.
+      expect(c.getBuffer()).toEqual({ text: '', queued: true });
+      c.disarm();
+    });
+
+    // Regression guard: when NOT paused, Enter is plain type-ahead — it queues
+    // but must NOT fire onPauseInterrupt (else normal mid-stream typing would
+    // spuriously interrupt the turn).
+    it('Enter when NOT paused does not fire onPauseInterrupt (normal type-ahead queue)', async () => {
+      const onPauseInterrupt = vi.fn();
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onPauseInterrupt });
+      await c.arm();
+      // paused defaults to false.
+      for (const ch of 'hi') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      stdin.emit('keypress', undefined, { name: 'return' });
+      expect(onPauseInterrupt).not.toHaveBeenCalled();
+      expect(c.getBuffer()).toEqual({ text: '', queued: true });
+      c.disarm();
+    });
+
+    // An empty-buffer Enter during a pause is suppressed (nothing to submit), so
+    // it must not fire the pause-interrupt either — a stray Enter shouldn't kill
+    // the wait when the user has typed nothing.
+    it('Enter on an empty buffer during a pause does not fire onPauseInterrupt', async () => {
+      const onPauseInterrupt = vi.fn();
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onPauseInterrupt });
+      await c.arm();
+      c.paused = true;
+      stdin.emit('keypress', undefined, { name: 'return' });
+      expect(onPauseInterrupt).not.toHaveBeenCalled();
+      expect(c.getBuffer()).toEqual({ text: '', queued: false });
+      c.disarm();
+    });
+
     // ── h1 regression: ESC with an open autocomplete dropdown ──────────────
     //
     // Bug: while the agent streamed, ghost-text / slash autocomplete frequently

@@ -51,6 +51,7 @@ import {
   removePresenceFileSync,
   type RuntimeStateSource,
 } from '../../awareness/index.js';
+import { actorFromDepth } from '../../session/session-identity.js';
 
 const PROVIDER_NAME = 'openai-compatible';
 
@@ -234,6 +235,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
       void writePresenceFile({
         sessionId,
         surface: this.providerOpts.surface ?? 'cli',
+        // Top-level gate above ⇒ depth 0/undefined ⇒ 'main'. Derived (not
+        // hardcoded) to stay correct if that gate is ever changed.
+        actor: actorFromDepth(config.depth),
         cwd: config.cwd ?? process.cwd(),
         startedAt: new Date().toISOString(),
         model: { provider: PROVIDER_NAME, name: modelName },

@@ -7,6 +7,8 @@
  * @module agent/memory/types
  */
 
+import type { TraceActor } from '../session/session-identity.js';
+
 export type FactCategory = 'preference' | 'convention' | 'decision' | 'learning';
 export type SessionOutcome = 'completed' | 'failed' | 'abandoned';
 export type MemoryUpdateAction = 'set' | 'supersede' | 'remove';
@@ -42,11 +44,21 @@ export interface SessionRecord {
   outcome: SessionOutcome | null;
   token_count: number | null;
   cost_usd: number | null;
+  /** Execution role ('main' | 'subagent'); NULL on rows written before v3. */
+  actor?: TraceActor | null;
 }
 
 export interface NewSession {
   session_id: string;
   surface: string;
+  /**
+   * Execution role of the owning session: 'main' | 'subagent'. Optional and
+   * additive — absent on legacy callers (and read back as NULL). Subagent
+   * sessions are suppressed upstream by the SessionEnd hook's parent-session
+   * guard, so in practice this is 'main' whenever set today; the column exists
+   * for schema uniformity with the other session-identity telemetry surfaces.
+   */
+  actor?: TraceActor;
 }
 
 export interface Procedure {

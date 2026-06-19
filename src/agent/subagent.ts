@@ -381,6 +381,15 @@ export class SubagentManager {
       abortSignal: childController.signal,
       apiKey: options.config.apiKey || this.parentApiKey,
       baseUrl: options.config.baseUrl ?? this.parentBaseUrl,
+      // External constraint: a forked sub-agent has no human relationship of its
+      // own — it returns findings (including Blocked/Asking) to its PARENT, which
+      // owns the operator surface. Mark every fork non-interactive by default so
+      // the provider strips `ask_question` from the child toolset; otherwise the
+      // child could call it and reach the REPL/Telegram human via the
+      // process-wide elicitation router, interleaved into the parent's turn with
+      // no attribution. A caller may opt a fork back in with
+      // `isNonInteractive: false`.
+      isNonInteractive: options.config.isNonInteractive ?? true,
       // Awareness metadata: surface parent identity + phase role into the
       // child's config so the get_runtime_state tool's `self` view can report
       // the topology fields. Caller-supplied values on options.config win on
@@ -411,12 +420,17 @@ export class SubagentManager {
         (this.parentCanUseTool !== undefined && options.config.canUseTool === undefined
           ? { canUseTool: this.parentCanUseTool }
           : undefined),
-      // External constraint: background subagents have no interactive surface —
-      // auto-decline prevents silent session hangs on MCP elicitation requests.
-      // When denyElicitations is true, override whatever the caller set.
-      // Otherwise the `...options.config` spread above already propagates any
-      // parent-configured handler (including DENY_ELICITATION) transitively.
-      ...(options.denyElicitations === true ? { onElicitation: DENY_ELICITATION } : {}),
+      // External constraint: close the MCP elicitation path too. A
+      // non-interactive sub-agent must not serve `onElicitation` to the
+      // operator, so deny by default (install DENY_ELICITATION) unless a caller
+      // explicitly opts back in with `denyElicitations: false` (no in-tree
+      // caller does). This unifies the three elicitation channels — ask_question
+      // (stripped via isNonInteractive above), path-approval (auto-denied via the
+      // parentSessionId guard in path-approval-hook.ts), and MCP onElicitation
+      // (here) — so every fork is uniformly non-interactive. When opted out, the
+      // `...options.config` spread above still propagates any parent-configured
+      // handler transitively.
+      ...(options.denyElicitations === false ? {} : { onElicitation: DENY_ELICITATION }),
       // Phase role enforcement: when phaseRole === 'read-only', construct a
       // provider whose permissions.allowedTools is restricted to
       // READ_ONLY_PHASE_TOOLS. This is the ONLY wiring that reaches the

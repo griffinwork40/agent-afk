@@ -57,6 +57,47 @@ describe('session_phase payload schema — acceptance', () => {
     ).not.toThrow();
   });
 
+  it('accepts origin + actor on session_init_start (identity anchor)', () => {
+    const parsed = SessionPhasePayloadSchema.parse({
+      phase: 'session_init_start',
+      origin: 'telegram',
+      actor: 'subagent',
+    });
+    expect(parsed.origin).toBe('telegram');
+    expect(parsed.actor).toBe('subagent');
+  });
+
+  it('accepts every origin + actor enum value', () => {
+    for (const origin of ['cli', 'telegram', 'daemon', 'unknown'] as const) {
+      expect(() =>
+        SessionPhasePayloadSchema.parse({ phase: 'session_init_start', origin }),
+      ).not.toThrow();
+    }
+    for (const actor of ['main', 'subagent'] as const) {
+      expect(() =>
+        SessionPhasePayloadSchema.parse({ phase: 'session_init_start', actor }),
+      ).not.toThrow();
+    }
+  });
+
+  it('rejects an out-of-union origin or actor', () => {
+    expect(() =>
+      SessionPhasePayloadSchema.parse({ phase: 'session_init_start', origin: 'web' }),
+    ).toThrow();
+    expect(() =>
+      SessionPhasePayloadSchema.parse({ phase: 'session_init_start', actor: 'root' }),
+    ).toThrow();
+  });
+
+  it('back-compat: a legacy payload without origin/actor parses, leaving them undefined', () => {
+    const parsed = SessionPhasePayloadSchema.parse({
+      phase: 'session_init_start',
+      model: 'sonnet',
+    });
+    expect(parsed.origin).toBeUndefined();
+    expect(parsed.actor).toBeUndefined();
+  });
+
   it('accepts resolvedModel alone on model_ttfb', () => {
     expect(() =>
       SessionPhasePayloadSchema.parse({
@@ -271,6 +312,19 @@ describe('emitSessionPhase', () => {
     const events = writer.events;
     if (events[0]!.kind !== 'session_phase') throw new Error('unreachable');
     expect(events[0]!.payload.metadata).toEqual({ serverCount: 2 });
+  });
+
+  it('round-trips origin + actor on session_init_start', async () => {
+    const writer = new InMemoryTraceWriter();
+    await emitSessionPhase(writer, {
+      phase: 'session_init_start',
+      origin: 'daemon',
+      actor: 'main',
+    });
+    const events = writer.events;
+    if (events[0]!.kind !== 'session_phase') throw new Error('unreachable');
+    expect(events[0]!.payload.origin).toBe('daemon');
+    expect(events[0]!.payload.actor).toBe('main');
   });
 });
 

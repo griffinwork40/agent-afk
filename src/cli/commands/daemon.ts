@@ -115,6 +115,8 @@ export function buildDaemonSessionFactory(
     const subagentExecutor = new SubagentExecutor({
       subagentManager: rootManager,
       parentSession: stubParent,
+      // Session origin for routing-decision telemetry (daemon/scheduler → daemon).
+      surface: 'daemon',
       defaultConfig: {
         ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
         ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
@@ -130,6 +132,8 @@ export function buildDaemonSessionFactory(
 
     const skillExecutor = new SkillExecutor({
       parentSession: stubParent,
+      // Session origin for skill-invocation + routing telemetry (daemon → daemon).
+      surface: 'daemon',
       defaultModel: opts.model,
       defaultSubagentModel: getDefaultSubagentModel(opts.model),
       ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
@@ -180,6 +184,10 @@ export function buildDaemonSessionFactory(
       // this is the production chokepoint the scheduler routes every task
       // through, so it also covers scheduler/cron-spawned sessions.
       isNonInteractive: true,
+      // User-facing surface for trace `origin` attribution. Forced after
+      // `...config` for the same reason as `isNonInteractive`: every daemon +
+      // scheduler/cron session routes through here → 'daemon'.
+      surface: 'daemon',
     }));
   };
 }

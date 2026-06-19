@@ -380,10 +380,11 @@ describe('SubagentManager', () => {
     });
   });
 
-  // External constraint: background subagents have no surface to serve
-  // elicitations. denyElicitations installs DENY_ELICITATION on the child
-  // config so the SDK auto-declines instead of stalling. Foreground
-  // subagents are unaffected.
+  // External constraint: a forked sub-agent has no human relationship of its
+  // own, so every fork is non-interactive by default — DENY_ELICITATION is
+  // installed on the child config so the SDK auto-declines MCP elicitations
+  // instead of routing them to the operator. A caller opts a fork back in with
+  // denyElicitations: false (then the parent's handler, if any, propagates).
   describe('denyElicitations / DENY_ELICITATION', () => {
     it('DENY_ELICITATION resolves to { action: "decline" } regardless of input', async () => {
       const { DENY_ELICITATION } = await import('./subagent.js');
@@ -407,7 +408,7 @@ describe('SubagentManager', () => {
       expect(shared.lastConfig?.onElicitation).toBe(DENY_ELICITATION);
     });
 
-    it('denyElicitations: false leaves onElicitation untouched (foreground default)', async () => {
+    it('denyElicitations: false (explicit opt-out) leaves onElicitation untouched', async () => {
       shared.lastConfig = null;
       const mgr = new SubagentManager();
       await mgr.forkSubagent({
@@ -415,7 +416,8 @@ describe('SubagentManager', () => {
         config: { model: 'sonnet' },
         denyElicitations: false,
       });
-      // No handler explicitly set on parent config → child receives none.
+      // Explicit opt-out: no DENY_ELICITATION installed. No handler on the
+      // parent config → child receives none.
       expect(shared.lastConfig?.onElicitation).toBeUndefined();
     });
 
@@ -435,18 +437,57 @@ describe('SubagentManager', () => {
       expect(shared.lastConfig?.onElicitation).toBe(DENY_ELICITATION);
     });
 
-    it('denyElicitations omitted: parent onElicitation propagates to child (transitive)', async () => {
+    it('denyElicitations omitted: DENY_ELICITATION installed by default (overrides parent handler)', async () => {
+      const { DENY_ELICITATION } = await import('./subagent.js');
       const parentHandler = vi.fn();
       shared.lastConfig = null;
       const mgr = new SubagentManager();
       await mgr.forkSubagent({
         parent: { sessionId: 'p' },
         config: { model: 'sonnet', onElicitation: parentHandler as any },
-        // denyElicitations omitted — inheritance via ...options.config spread
+        // denyElicitations omitted — forks now default to non-interactive, so
+        // DENY_ELICITATION is installed unless the caller opts out with false.
       });
-      // Transitive propagation: a bg grandparent's DENY_ELICITATION (or any
-      // other handler) flows through unless explicitly overridden.
+      // Default-deny: a fork is non-interactive by default, so even a
+      // parent-provided handler is overridden. The parent owns the operator
+      // relationship; the sub-agent reports findings back rather than eliciting.
+      expect(shared.lastConfig?.onElicitation).toBe(DENY_ELICITATION);
+    });
+
+    it('denyElicitations: false (opt-out) lets a parent onElicitation propagate to the child', async () => {
+      const parentHandler = vi.fn();
+      shared.lastConfig = null;
+      const mgr = new SubagentManager();
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet', onElicitation: parentHandler as any },
+        denyElicitations: false,
+      });
+      // Explicit opt-out preserves transitive inheritance via the
+      // ...options.config spread (e.g. a parent that itself has a live surface).
       expect(shared.lastConfig?.onElicitation).toBe(parentHandler);
+    });
+
+    it('forked sub-agents are non-interactive by default (isNonInteractive omitted → true)', async () => {
+      shared.lastConfig = null;
+      const mgr = new SubagentManager();
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet' },
+      });
+      // The provider strips `ask_question` from a non-interactive toolset, so a
+      // fork cannot prompt the operator via that tool either.
+      expect(shared.lastConfig?.isNonInteractive).toBe(true);
+    });
+
+    it('isNonInteractive: false on the fork config is respected (caller opt-in to interactive)', async () => {
+      shared.lastConfig = null;
+      const mgr = new SubagentManager();
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet', isNonInteractive: false },
+      });
+      expect(shared.lastConfig?.isNonInteractive).toBe(false);
     });
   });
 

@@ -273,6 +273,15 @@ export interface TerminalCompositorOptions {
   onSoftStop?: () => void;
   onBackground?: () => void;
   /**
+   * Fires when the user submits a line WHILE the turn is parked in a
+   * usage-limit pause (`paused === true`). Distinct from `onSoftStop` so the
+   * gentle "ending the wait" copy stays separate from the ESC stop notice.
+   * The handler ends the provider's auto-resume wait (caller calls
+   * `session.interrupt()`); the just-queued buffer then flushes as the next
+   * turn via the same idle-transition path ESC uses. No-op outside a pause.
+   */
+  onPauseInterrupt?: () => void;
+  /**
    * Fires on Shift+Tab. Replaces the historical reader.ts onShiftTab
    * binding (plan-mode toggle) so the persistent compositor offers
    * the same gesture across both idle and streaming phases.

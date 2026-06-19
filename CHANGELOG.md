@@ -11,6 +11,53 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.21.1] - 2026-06-19
+
+### Fixed
+- make forked sub-agents non-interactive (96d7b3a)
+
+### Changed
+- Merge pull request #218 from griffinwork40/fix/subagents-non-interactive (3e4f8e8)
+
+## [4.21.0] - 2026-06-19
+
+### Added
+- interactive usage-limit picker (C) (de2d3be)
+- make usage-limit pause actionable at the keyboard (A+B) (4ecc2d2)
+
+### Fixed
+- guard runPicker promise with .catch() to avoid unhandled REPL rejection (3d92e53)
+
+### Changed
+- Merge pull request #217 from griffinwork40/afk/20260618-163800-fba9fe (80f4e95)
+
+## [4.20.0] - 2026-06-19
+
+### Added
+- persist session origin/actor into state artifacts (Stage D) (d71a734)
+- record origin + actor on routing + skill-invocation rows (Stage B+C) (696953f)
+- record session origin + actor on witness trace (Stage A) (f5fa3a1)
+
+### Fixed
+- make v2→v3 actor-column migration concurrency-safe (8f1fed9)
+
+### Changed
+- Merge pull request #214 from griffinwork40/afk-20260618-123344-8c609e (7ff9ba5)
+- Merge remote-tracking branch 'origin/main' into afk-20260618-123344-8c609e (de10091)
+- mark Stage D done (session identity in state artifacts) (4c042c1)
+- mark Stage B+C done (origin/actor on JSONL telemetry) (5e34188)
+- session-identity normalization plan (Stage A done; B-D scoped) (abf3797)
+
+## [4.19.1] - 2026-06-19
+
+### Fixed
+- tag provider surface as 'telegram' for presence/watch (2162ab5)
+
+### Changed
+- Merge pull request #216 from griffinwork40/fix/telegram-presence-surface (03629b6)
+- Merge pull request #213 from griffinwork40/chore/mailmap-attribution (629ae9c)
+- add .mailmap to re-attribute afk-port port commit (772cf55)
+
 ## [4.19.0] - 2026-06-18
 
 ### Added

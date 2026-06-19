@@ -51,6 +51,7 @@ import { SessionLedgerWriter } from '../session-ledger.js';
 import type { ElicitationRequest } from '../types/sdk-types.js';
 import { env } from '../../config/env.js';
 import { resolveModelId } from './model-resolution.js';
+import { deriveOrigin, deriveActor } from './session-identity.js';
 import { setSlotBindings } from './model-slots.js';
 import { applySlotCredentials } from './slot-credentials.js';
 import {
@@ -161,6 +162,10 @@ export class AgentSession implements IAgentSession {
       phase: 'session_init_start',
       model: configuredModel,
       resolvedModel: resolveModelId(config.model) ?? configuredModel,
+      // Session-identity attribution anchor: origin (user-facing surface) +
+      // actor (main vs subagent) so trace-only analysis answers both questions.
+      origin: deriveOrigin(config.surface),
+      actor: deriveActor(config.parentSessionId),
     });
 
     this.initSdkLifecycle();

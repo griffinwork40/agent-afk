@@ -557,6 +557,24 @@ export interface SessionPhasePayload {
    * alias expansion applies (most non-Claude / raw ids).
    */
   resolvedModel?: string;
+  /**
+   * User-facing surface that produced this session. Set on `session_init_start`
+   * (the always-emitted attribution anchor) so trace-only analysis can answer
+   * "which entrypoint produced this work?" without consulting any sidecar.
+   * Derived from the session's `surface` (repl collapses to 'cli'); a forked
+   * subagent inherits its parent's origin. `'unknown'` when the surface was
+   * never set. Orthogonal to the JSONL telemetry `surface: 'afk'|'plugin'`
+   * provenance tag — that names the WRITER ecosystem, this names the entrypoint.
+   */
+  origin?: 'cli' | 'telegram' | 'daemon' | 'unknown';
+  /**
+   * Actor role that produced this session. Set on `session_init_start`:
+   * `'main'` for a top-level session, `'subagent'` for a forked child
+   * (derived from `parentSessionId`). Answers "main session or subagent?"
+   * orthogonally to `origin` — a subagent forked under a Telegram session is
+   * `{ origin: 'telegram', actor: 'subagent' }`.
+   */
+  actor?: 'main' | 'subagent';
 }
 
 // ---------------------------------------------------------------------------

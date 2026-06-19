@@ -81,6 +81,14 @@ export class TerminalCompositor {
   softStopped = false;
   /** @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost). */
   onBackground?: () => void;
+  /**
+   * Per-turn pause-interrupt handler — see
+   * {@link TerminalCompositorOptions.onPauseInterrupt}. Invoked when the user
+   * submits a line while {@link paused} is true; ends the usage-limit wait so
+   * the queued buffer flushes as the next turn.
+   * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
+   */
+  onPauseInterrupt?: () => void;
   /** @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost). */
   onShiftTab?: () => void;
   /**
@@ -223,6 +231,15 @@ export class TerminalCompositor {
   canceled = false;
   /** @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost). */
   backgrounded = false;
+  /**
+   * True while the current turn is parked in a usage-limit pause (set by the
+   * turn handler on the `paused` provider event, cleared on `resumed` / turn
+   * end). While set, a submitted line in {@link handleEnter} additionally
+   * fires {@link onPauseInterrupt} so the queued buffer is not stranded behind
+   * the auto-resume wait. Reset in `resetState()` (defence-in-depth).
+   * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
+   */
+  paused = false;
   /** @internal Relaxed from `private` for the lifecycle module (LifecycleHost). */
   wasRaw = false;
   /** Held while armed; released on disarm().
@@ -381,6 +398,7 @@ export class TerminalCompositor {
     this.onCancel = opts.onCancel;
     this.onSoftStop = opts.onSoftStop;
     this.onBackground = opts.onBackground;
+    this.onPauseInterrupt = opts.onPauseInterrupt;
     this.onShiftTab = opts.onShiftTab;
     // Normalize promptText to a function: string → constant closure;
     // function → use as-is; falsy → dim-chevron fallback.
