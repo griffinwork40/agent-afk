@@ -29,8 +29,8 @@ export interface StatusLineFields {
   contextSparkline?: string;
   /**
    * Current REPL permission mode. Renders a never-dropped indicator: `● plan`
-   * (plan mode, warning tone) or `◐ AFK` (autonomous/AFK mode, info tone).
-   * `'default'` and other modes render no indicator.
+   * (plan mode, warning tone), `◐ AFK` (autonomous/AFK mode, info tone), or
+   * `⚠ BYPASS` (bypassPermissions, warning tone). `'default'` renders none.
    */
   permissionMode?: PermissionMode;
   /**
@@ -366,6 +366,8 @@ export class StatusLine {
       parts.push({ text: palette.warning('● plan') }); // never drop
     } else if (f.permissionMode === 'autonomous') {
       parts.push({ text: palette.info('◐ AFK') }); // never drop
+    } else if (f.permissionMode === 'bypassPermissions') {
+      parts.push({ text: palette.warning('⚠ BYPASS') }); // never drop
     }
 
     if (f.contextPct !== undefined) {
