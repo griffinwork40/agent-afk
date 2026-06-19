@@ -1487,25 +1487,28 @@ describe('SubagentExecutor', () => {
       );
     });
 
-    it('mode: "foreground" passes denyElicitations: false to forkSubagent', async () => {
+    it('mode: "foreground" passes denyElicitations: true to forkSubagent', async () => {
       const handle = mockHandle();
       mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
 
       await executor.execute(
         makeCall({ input: { prompt: 'p', mode: 'foreground' } }),
       );
+      // Foreground forks are non-interactive too: a sub-agent reports
+      // Blocked/Asking to its parent rather than eliciting the operator via the
+      // process-wide router. Both modes now deny MCP elicitation.
       expect(mockSubagentMgr.forkSubagent).toHaveBeenCalledWith(
-        expect.objectContaining({ denyElicitations: false }),
+        expect.objectContaining({ denyElicitations: true }),
       );
     });
 
-    it('mode omitted (default foreground) passes denyElicitations: false to forkSubagent', async () => {
+    it('mode omitted (default foreground) passes denyElicitations: true to forkSubagent', async () => {
       const handle = mockHandle();
       mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
 
       await executor.execute(makeCall({ input: { prompt: 'p' } }));
       expect(mockSubagentMgr.forkSubagent).toHaveBeenCalledWith(
-        expect.objectContaining({ denyElicitations: false }),
+        expect.objectContaining({ denyElicitations: true }),
       );
     });
 

@@ -441,9 +441,11 @@ export interface AgentConfig {
    * (its skill-dispatch-specific numeric-arg lure does not apply here).
    *
    * Interactive surfaces (REPL, Telegram) leave this unset so a human can still
-   * be asked even when away-from-keyboard. Foreground/background sub-agent
-   * elicitation policy is governed separately by `denyElicitations` in
-   * `subagent.ts` and is deliberately NOT changed by this flag.
+   * be asked even when away-from-keyboard. Forked sub-agents default this to
+   * `true` (see `subagent.ts`): a sub-agent has no human relationship of its own
+   * and must return Blocked/Asking findings to its parent rather than eliciting
+   * the operator directly. Callers may override a fork with
+   * `isNonInteractive: false`.
    *
    * Default: `false`.
    */

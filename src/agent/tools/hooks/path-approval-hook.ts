@@ -21,6 +21,10 @@
  * On a `PreToolUse` event whose tool is one of the typed file tools AND whose
  * resolved path falls outside every granted root:
  *
+ *   0. If the call originates inside a forked sub-agent (`parentSessionId`
+ *      set), block immediately — sub-agents never prompt the operator; they
+ *      report the out-of-root path requirement back to their parent, which
+ *      owns the surface and can grant access.
  *   1. Check the in-process "always for this session" allow-cache — if the
  *      path is in there, fall through without prompting.
  *   2. Otherwise, deduplicate against any in-flight request for the same
@@ -203,6 +207,30 @@ async function preToolUseImpl(
     mode,
   );
   if (!result.restricted) return {};
+
+  // A forked sub-agent has no human relationship of its own and must not prompt
+  // the operator for out-of-root access — the prompt would surface on the
+  // parent's REPL/Telegram handler (the elicitation router is process-wide),
+  // interleaved into the parent's turn with no attribution. Auto-deny instead.
+  // The sub-agent inherits the parent's grants (this hook and its grant-manager
+  // closure are shared via the inherited registry), so any path the parent
+  // already approved still passes the `!restricted` check above; only a
+  // genuinely NEW out-of-root path reaches here, and the sub-agent reports the
+  // requirement back to its parent, which owns the surface and can grant it.
+  // Mirrors the `parentSessionId` self-skip used by the memory + plan-mode hooks.
+  if (context.parentSessionId !== undefined) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[path-approval] surface=${opts.surface} tool=${context.toolName} path=${result.resolved} outcome=subagent-autodeny`,
+    );
+    return {
+      decision: 'block',
+      reason:
+        `Sub-agents cannot access paths outside the session's granted roots ` +
+        `(${result.resolved}). Report this path requirement to the parent ` +
+        `session, which owns the operator surface and can grant access.`,
+    };
+  }
 
   // In-session approval cache short-circuits the prompt.
   const key = pathApprovalKey(mode, result.resolved);
