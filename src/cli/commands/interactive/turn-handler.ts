@@ -467,6 +467,14 @@ export async function runTurn(
                   console.error('  ' + palette.error('picker pause-interrupt session.interrupt() failed:'), err);
                 }
               });
+            }).catch((err) => {
+              // Defensive: runPicker never rejects, but the .then() body calls
+              // completionWriter.fn (→ compositor.commitAbove), which can throw
+              // mid-teardown. Swallow outside debug so a throw here can't surface
+              // as an unhandled rejection (the REPL has no process-level handler).
+              if (isDebugEnabled()) {
+                console.error('  ' + palette.error('picker promise rejected:'), err);
+              }
             });
           } else {
             // Passive card — the only surface when no interactive picker applies
