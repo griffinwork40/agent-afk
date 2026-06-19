@@ -109,12 +109,18 @@ All AFK state lives under `~/.afk/` — independent of `~/.claude/`:
 
 You can delete `~/.claude/` entirely and Agent AFK still runs.
 
-## Bypass permissions
+## Permissions
 
-By default, Agent AFK enables bypass permissions: no per-tool prompts. The model can run bash,
-read and write files, fetch URLs, and call MCP servers without asking each time. This is intentional
-— `afk` is built for unattended work, where a permission prompt with no human present wedges the
-session.
+Agent AFK does not prompt before each tool call — there is no per-tool approval flow. The model
+runs bash, reads and writes files, fetches URLs, and calls MCP servers without asking each time.
+This is intentional: `afk` is built for unattended work, where a permission prompt with no human
+present wedges the session.
+
+The one boundary enforced in the interactive default mode is **path containment**: a file tool
+reaching *outside* the session's working directory triggers a one-time approval prompt before it
+runs. Bypass mode (`/bypass`, or `--dangerously-skip-permissions`) turns containment off entirely;
+the `afk daemon` runs in bypass by default. See [Permissions](/configuration/permissions) for the
+full model — path approval, bash restrictions, autonomous mode, and the env-var knobs.
 
 Use `afk` on a machine and account you trust. To keep a session's changes contained, run it in an isolated git worktree — your main checkout stays untouched, and the worktree is removed automatically on a clean exit:
 

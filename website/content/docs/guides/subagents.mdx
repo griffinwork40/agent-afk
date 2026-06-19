@@ -9,6 +9,21 @@ Agent AFK can fork child sessions — subagents — that run isolated tasks in p
 
 Subagents are child sessions that run independently. Each inherits permissions from the parent and runs the same tool surface. What it does not inherit is context — every subagent starts with zero prior conversation.
 
+### Subagents are non-interactive
+
+A forked subagent has no operator surface of its own — it returns findings to its parent, which
+owns the human relationship. So subagents run **non-interactive** by default:
+
+- The `ask_question` tool is stripped from a subagent's toolset entirely — it cannot block on the
+  operator. It must proceed on a stated assumption or return a **Blocked** / **Asking** result to
+  the parent.
+- A path-approval prompt (file access outside the granted roots) is auto-denied rather than
+  surfaced — pre-authorize the path in the parent or run in [bypass mode](/configuration/permissions).
+- MCP elicitations are auto-declined.
+
+The parent session decides what to do with a subagent's Blocked/Asking result — including
+re-dispatching with wider grants or asking you directly.
+
 **Always include in a subagent brief:**
 - Objective
 - Relevant file paths and constraints
@@ -66,7 +81,7 @@ In the REPL, background subagent jobs are surfaced through the `/bgsub` namespac
 /bgsub:join <jobId>    # wait for and return the result
 ```
 
-The status bar at the bottom of the REPL shows running background task counts. `/bg` and `/tasks` also list active background work.
+The status bar at the bottom of the REPL shows running background task counts.
 
 Source: `src/cli/background-status-bar.ts`, `src/cli/commands/interactive/background.js`.
 

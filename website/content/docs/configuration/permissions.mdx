@@ -1,0 +1,178 @@
+---
+title: "Permissions"
+description: "How agent-afk contains tool access: the default path-approval prompt, bash restrictions, bypass mode, autonomous mode, and the env vars that tune them."
+---
+
+`agent-afk` does **not** prompt before each tool call — there is no per-tool "allow this
+bash command?" flow. The agent runs bash, reads and writes files, fetches URLs, and calls MCP
+servers without asking each time. This is intentional: AFK is built for unattended work, where a
+permission prompt with no human in front of it just wedges the session.
+
+The one boundary it does enforce by default is **path containment**: a file tool that reaches
+*outside* the session's working directory asks for approval before it runs. Everything else about
+permissions is a knob layered on top of that.
+
+## Permission modes
+
+A session runs in one permission mode, set by the `permissionMode` key in `afk.config.json`
+(or the `--dangerously-skip-permissions` flag, which forces `bypassPermissions`).
+
+| Mode | Behavior | Set by |
+|---|---|---|
+| `default` | Path containment + path-approval prompts for out-of-root file access. No per-tool flow. | REPL and Telegram default |
+| `plan` | Read-only investigation; write-class tools are blocked until you approve a plan. | `/plan` in the REPL |
+| `autonomous` | Default containment **plus** a risk gate that blocks high-risk actions, and a remote channel so you can answer prompts from Telegram. | `/afk` in the REPL |
+| `bypassPermissions` | Disables containment and path approval entirely — read/write any path with no prompt. | `/bypass`, `--dangerously-skip-permissions`, or `afk daemon` |
+
+The interactive default is `default`, **not** bypass. Plan and autonomous modes are mutually
+exclusive with each other (they share the one mode field).
+
+## Path-access approval
+
+In `default` mode, six typed file tools are contained to the session's **granted roots**:
+
+```
+read_file   write_file   edit_file   list_directory   glob   grep
+```
+
+The initial granted root is the session's working directory (the `cwd` of the first turn). A tool
+that targets a path *inside* a granted root runs with no prompt. A tool that targets a path
+*outside* every granted root pauses and asks:
+
+| Choice | Effect |
+|---|---|
+| **Once** | Allow this one call; the grant is revoked immediately afterward. |
+| **Session** | Add the path to the granted roots for the rest of this session (in memory only). |
+| **Persist** | Like Session, and also write the grant to disk so future sessions skip the prompt. |
+| **Deny** | Block the call. |
+
+The prompt is delivered through the active elicitation surface — inline in the REPL, or pushed to
+your phone over Telegram.
+
+### Pre-authorizing paths with `/allow-dir`
+
+Rather than wait for a prompt, pre-authorize a directory in the REPL:
+
+```
+/allow-dir ~/Projects/shared-lib       # grant read+write for this session
+/allow-dir --revoke ~/Projects/shared-lib   # revoke a previously granted root
+```
+
+The session's initial working directory is a non-revocable base — `/allow-dir --revoke` cannot
+strip it.
+
+### Persisted grants
+
+Choosing **Persist** (or answering an out-of-root prompt with "persist") records the grant to:
+
+```
+~/.afk/config/permissions.json
+```
+
+Persisted `allow` grants are replayed at the start of every future interactive session, so a path
+you trust once stays trusted. A write-mode grant implies read access (write ⊇ read). The file is
+read fail-soft: if it is missing or corrupt, AFK treats it as empty grants rather than locking you
+out.
+
+<Callout type="info">
+Forked **subagents cannot answer a path prompt** — they have no operator surface of their own. An
+out-of-root access in a subagent is auto-denied with a message telling the subagent to surface the
+requirement to its parent. Pre-authorize the path in the parent (or run in bypass) if a subagent
+needs wider access. See [Subagents](/guides/subagents).
+</Callout>
+
+## Bash restrictions
+
+Alongside path approval, a bash-restriction hook hard-blocks two classes of command on interactive
+surfaces (REPL, Telegram) — no prompt, just a refusal that routes the model back to the typed file
+tools:
+
+- **Interpreter one-liners** — `python -c`, `python3 -c`, `node -e`, `ruby -e`, `perl -e`,
+  `osascript -e`, `sh -c`, `bash -c`, `zsh -c`, `fish -c`, `lua -e`, and the like. These are an
+  easy way to bypass path containment, so they are blocked; the model is told to use `read_file` /
+  `write_file` / `edit_file` (which carry their own per-call approval) instead.
+- **Restricted roots** — commands referencing sensitive paths such as `~/.ssh`, `~/.gnupg`,
+  `~/.aws`, `~/.config/gh`, `~/.netrc`, `~/.password-store`, `~/Library/Application Support`,
+  `/etc/shadow`, and `/etc/sudoers`. A restricted path is allowed only when a granted root already
+  covers it.
+
+On **headless** surfaces (`afk chat`, `afk daemon`) the interpreter denylist *fails open* by
+default — no grant manager is wired, so legitimate automation running `python -c` is not
+hard-blocked with no recourse. Opt headless flows back into the denylist with
+`AFK_FORCE_BASH_INTERPRETER_GUARD=1`.
+
+## Bypass mode
+
+Bypass mode (`permissionMode: 'bypassPermissions'`) turns the containment off entirely: filesystem
+tools may read and write **any** path with no confirmation, and the path-approval prompt never
+fires.
+
+```
+/bypass        # enable bypass for the current REPL session
+/bypass off    # return to default mode
+```
+
+While bypass is active the status line shows a `⚠ BYPASS` badge. From the command line, the
+equivalent is the `--dangerously-skip-permissions` flag on both `afk i` and `afk chat`:
+
+```bash
+afk chat "migrate the schema" --dangerously-skip-permissions
+```
+
+<Callout type="warn">
+Bypass lets the agent read and write anywhere on the machine with no prompt. Use it only on a
+machine and account you trust. To keep changes contained while still running unprompted, prefer an
+isolated git worktree (`afk i -w`) over bypass.
+</Callout>
+
+`afk daemon` runs in bypass mode by default — there is no human present to answer a prompt, so a
+path-approval dialog would simply wedge the run. Bypass does **not** affect `ask_question`: the
+model choosing to ask you something is a separate axis from filesystem containment.
+
+## Autonomous mode & remote supervision
+
+`/afk` puts an interactive session into `autonomous` mode, designed for "start it at the keyboard,
+walk away, supervise from your phone":
+
+```
+/afk        # enable autonomous mode
+/afk off    # return to default mode
+```
+
+Three things switch on together:
+
+- **Posture** — a system-prompt addendum tells the model to act autonomously on reversible work and
+  stop at one-way doors.
+- **Risk gate** — a PreToolUse hook classifies each tool call and blocks high-risk actions
+  (destructive bash, writes escaping the workspace) while allowing safe and medium-risk ones. The
+  gate applies to the whole session tree, including subagents. `send_telegram` is always allowed.
+- **Remote channel** — elicitations and a remote `/abort` are bridged through a per-session ledger,
+  so a watching Telegram daemon can answer a prompt or stop the run from your phone. Ledger records
+  are signed with a per-session HMAC key (`~/.afk/state/sessions/<id>/session.key`, mode `0600`)
+  and verified before the REPL acts on them. The keyboard remains live alongside the remote
+  channel — there is no dependency on the daemon being up.
+
+## Surface defaults
+
+| Surface | Default mode | Notes |
+|---|---|---|
+| REPL (`afk i`) | `default` | Out-of-root file access prompts inline; `/bypass` to disable containment. |
+| Telegram bot | `default` | Same as the REPL; prompts are pushed to your chat. |
+| `afk chat` | `default` | Non-interactive — out-of-root access can't be approved, so it is denied; pass `--dangerously-skip-permissions` for wide-open access. |
+| `afk daemon` | `bypassPermissions` | Unattended; containment off so no prompt can wedge the run. |
+
+## Environment variables
+
+| Variable | Effect | Default |
+|---|---|---|
+| `AFK_DISABLE_PATH_APPROVAL` | `1` skips **both** the path-approval and bash-restriction hooks entirely — wide-open file access for headless flows that need it. | `0` (hooks on) |
+| `AFK_DISABLE_BASH_INTERPRETER_GUARD` | `1` skips only the interpreter-eval denylist; the restricted-root check stays active. Wins over the force flag. | `0` (denylist on for interactive) |
+| `AFK_FORCE_BASH_INTERPRETER_GUARD` | `1` forces the interpreter denylist on even on headless surfaces, where it otherwise fails open. | `0` (headless fails open) |
+| `AFK_WRITE_DENYLIST` | Comma-separated path globs the `write_file` tool always refuses, regardless of mode (including bypass). | — |
+
+## See also
+
+- [Editing Configuration](/configuration/editing-config) — config sensitivity tiers; why
+  credentials and safety keys are human-only.
+- [Unattended Runs](/guides/unattended-runs) — running the daemon and Telegram supervision safely.
+- [Subagents](/guides/subagents) — why forked subagents auto-deny out-of-root access.

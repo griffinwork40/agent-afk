@@ -107,7 +107,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 
 | Name | Type | Required | Default | Example | Description |
 |------|------|----------|---------|---------|-------------|
-| `AFK_ALLOW_PROJECT_MCP` | boolean |  |  | `1` | Allow loading MCP configuration from <cwd>/.mcp.json. Disabled by default — opt-in to mitigate config-injection risks. |
+| `AFK_ALLOW_PROJECT_MCP` | boolean |  |  | `0` | Controls auto-loading of MCP configuration from <cwd>/.mcp.json. Auto-loaded by default — set to 0 to disable (mitigates config-injection risk in shared/CI environments). |
 
 ## Routing
 
