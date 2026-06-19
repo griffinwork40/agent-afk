@@ -306,8 +306,30 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (existsSync(migDir)) rmSync(migDir, { recursive: true, force: true });
   });
+
+  /** Seed a minimal pre-v3 (user_version = 2) sessions table, optionally with
+   *  the actor column already present (interrupted-migration shape). */
+  function seedV2Db(dbPath: string, withActorColumn = false): void {
+    const seed = new Database(dbPath);
+    seed.exec(`
+      CREATE TABLE sessions (
+        session_id TEXT PRIMARY KEY,
+        surface TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        summary TEXT,
+        tools_used TEXT NOT NULL DEFAULT '[]',
+        outcome TEXT,
+        token_count INTEGER,
+        cost_usd REAL${withActorColumn ? ',\n        actor TEXT' : ''}
+      );
+    `);
+    seed.pragma('user_version = 2');
+    seed.close();
+  }
 
   it('upgrades a v2 DB to v3, adds a nullable actor column, and preserves existing rows', () => {
     const dbPath = join(migDir, 'memory.db');
@@ -378,6 +400,75 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
         .prepare('SELECT actor FROM sessions WHERE session_id = ?')
         .get('s') as { actor: string | null };
       expect(row.actor).toBe('main');
+    } finally {
+      check.close();
+    }
+  });
+
+  it('swallows a concurrent duplicate-column ALTER and still reaches v3', () => {
+    const dbPath = join(migDir, 'memory.db');
+    seedV2Db(dbPath);
+
+    // Simulate the cross-process race: the table_info guard sees no actor
+    // column, but by the time THIS process runs the ALTER a concurrent opener
+    // has already added it, so SQLite throws "duplicate column name". The mock
+    // adds the column for real (post-condition holds) then throws.
+    const originalExec = Database.prototype.exec;
+    vi.spyOn(Database.prototype, 'exec').mockImplementation(function (
+      this: BetterSqlite3.Database,
+      sql: string,
+    ) {
+      if (/ALTER TABLE sessions ADD COLUMN actor/i.test(sql)) {
+        originalExec.call(this, sql); // the racer wins the ALTER
+        throw new Error('duplicate column name: actor');
+      }
+      return originalExec.call(this, sql);
+    } as BetterSqlite3.Database['exec']);
+
+    expect(() => new MemoryStore(migDir)).not.toThrow();
+
+    const check = new Database(dbPath, { readonly: true });
+    try {
+      expect(check.pragma('user_version', { simple: true })).toBe(3);
+      const cols = (check.pragma('table_info(sessions)') as Array<{ name: string }>).map(
+        (c) => c.name,
+      );
+      expect(cols).toContain('actor');
+    } finally {
+      check.close();
+    }
+  });
+
+  it('re-throws a non-duplicate ALTER failure that leaves the column absent', () => {
+    const dbPath = join(migDir, 'memory.db');
+    seedV2Db(dbPath);
+
+    // The ALTER fails for a real reason and the column stays absent — the
+    // re-check must NOT swallow it.
+    const originalExec = Database.prototype.exec;
+    vi.spyOn(Database.prototype, 'exec').mockImplementation(function (
+      this: BetterSqlite3.Database,
+      sql: string,
+    ) {
+      if (/ALTER TABLE sessions ADD COLUMN actor/i.test(sql)) {
+        throw new Error('disk I/O error');
+      }
+      return originalExec.call(this, sql);
+    } as BetterSqlite3.Database['exec']);
+
+    expect(() => new MemoryStore(migDir)).toThrow(/disk I\/O error/);
+  });
+
+  it('skips the ALTER when an interrupted migration already added the actor column', () => {
+    const dbPath = join(migDir, 'memory.db');
+    // Column present but user_version still 2 (ALTER ran, version stamp did not).
+    seedV2Db(dbPath, true);
+
+    expect(() => new MemoryStore(migDir)).not.toThrow();
+
+    const check = new Database(dbPath, { readonly: true });
+    try {
+      expect(check.pragma('user_version', { simple: true })).toBe(3);
     } finally {
       check.close();
     }

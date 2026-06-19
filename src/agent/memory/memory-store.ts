@@ -218,21 +218,29 @@ export class MemoryStore {
         debugLog('memory-store: migrated schema v1 → v2 (added fingerprint UNIQUE index)');
       }
       if (existingVersion < 3) {
-        // v2 → v3: add a NULLABLE `actor` column to sessions (execution role
-        // 'main' | 'subagent'). No default → existing rows read back NULL, so
-        // the migration cannot fail on stored data, and older builds that
-        // ignore the column keep reading the DB (forward-compatible).
+        // v2 → v3: add a NULLABLE `actor` column to sessions ('main' |
+        // 'subagent' execution role). No default → existing rows read back
+        // NULL, so the migration cannot fail on stored data. (The column is
+        // additive, but the SCHEMA_VERSION guard above still rejects a v3 DB
+        // from older builds — see the deployment note.)
         //
-        // SQLite has no `ADD COLUMN IF NOT EXISTS`, so guard on table_info to
-        // keep the step idempotent: re-running against a DB that already has
-        // the column (an interrupted migration that stamped the ALTER but not
-        // the version, or a version stamped backwards) must not throw
-        // "duplicate column name".
-        const hasActor = (
-          this.db.pragma('table_info(sessions)') as Array<{ name: string }>
-        ).some((col) => col.name === 'actor');
-        if (!hasActor) {
-          this.db.exec(`ALTER TABLE sessions ADD COLUMN actor TEXT;`);
+        // SQLite has no `ADD COLUMN IF NOT EXISTS`. The table_info check is
+        // cheap and covers sequential re-runs. It is NOT atomic across
+        // processes, though — this global DB is cold-opened concurrently by
+        // every AFK surface, so two new-build processes can race the ALTER and
+        // the loser throws "duplicate column name". Wrap it: treat an
+        // already-present column (re-checked via table_info, not the error
+        // text) as success; re-throw if the column stayed absent.
+        const hasActor = (): boolean =>
+          (this.db.pragma('table_info(sessions)') as Array<{ name: string }>).some(
+            (col) => col.name === 'actor',
+          );
+        if (!hasActor()) {
+          try {
+            this.db.exec(`ALTER TABLE sessions ADD COLUMN actor TEXT;`);
+          } catch (err) {
+            if (!hasActor()) throw err;
+          }
         }
         this.db.pragma(`user_version = 3`);
         debugLog('memory-store: migrated schema v2 → v3 (added sessions.actor column)');
