@@ -4026,7 +4026,7 @@ describe('TerminalCompositor — attachments + paste (Stage 3c)', () => {
       expect(c.getBuffer()).toEqual({ text: 'x\ny', queued: false });
     });
 
-    it('Enter inside a bracketed paste clears the queued flag (committed message stays in FIFO)', async () => {
+    it('Enter inside a bracketed paste keeps queued=true while a message is committed (mirror invariant)', async () => {
       mockReadClipboardImage.mockResolvedValue(null);
       const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
       await c.arm();
@@ -4035,17 +4035,19 @@ describe('TerminalCompositor — attachments + paste (Stage 3c)', () => {
       stdin.emit('keypress', undefined, { name: 'return' });
       expect(c.getBuffer()).toEqual({ text: '', queued: true });
       expect(c.getPendingCount()).toBe(1);
-      // A multi-line paste arrives. The `\r` mid-paste clears the queued flag
-      // (the paste path forces `queued = false`), but does NOT pop the FIFO —
-      // 'a' is still committed and will drain on the next → idle transition.
+      // A multi-line paste arrives. The `\r` mid-paste edits the LIVE buffer but
+      // does NOT pop the FIFO — 'a' is still committed. `queued` mirrors
+      // pendingSubmissions (length 1), so it stays true; the message drains on
+      // the next → idle transition.
       startPaste();
       stdin.emit('keypress', 'b', { name: 'b', sequence: 'b' });
       stdin.emit('keypress', '\r', { name: 'return', sequence: '\r' });
       stdin.emit('keypress', 'c', { name: 'c', sequence: 'c' });
       endPaste();
       await new Promise((r) => setImmediate(r));
-      // Live buffer holds only the pasted content ('b\nc'); 'a' is still in FIFO.
-      expect(c.getBuffer()).toEqual({ text: 'b\nc', queued: false });
+      // Live buffer holds only the pasted content ('b\nc'); 'a' is still in FIFO,
+      // so queued stays true (mirror of pendingSubmissions.length > 0).
+      expect(c.getBuffer()).toEqual({ text: 'b\nc', queued: true });
       expect(c.getPendingCount()).toBe(1);
     });
   });

@@ -488,10 +488,13 @@ function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boo
     // per-character autocomplete recompute (a 10KB multi-line paste
     // would otherwise call detectTrigger() once per `\r`). The
     // end-of-paste marker (`\x1b[201~`) triggers a single repaint
-    // over the final buffer. queued must be cleared because any
-    // buffer mutation invalidates a prior Enter-queued state.
+    // over the final buffer. Editing the live buffer does NOT touch the
+    // committed-message FIFO, so keep `queued` mirroring pendingSubmissions
+    // rather than clearing it unconditionally (the pre-multi-queue clear
+    // assumed the buffer WAS the single queued message; commit-on-Enter
+    // retired that coupling).
     self.input = InputCore.insert(self.input, '\n');
-    self.queued = false;
+    self.queued = self.pendingSubmissions.length > 0;
     return true;
   }
   // Dropdown-open: apply the highlighted candidate before any
@@ -540,7 +543,9 @@ function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boo
     // call (handler synchronously calls setInputMode('streaming') /
     // applyEdit / etc.) does not double-fire or race a stale buffer.
     // Mirrors the same invariant in setInputMode's streaming→idle flush.
-    self.queued = false;
+    // `queued` mirrors the committed-message FIFO (untouched on this
+    // immediate-submit path), so keep it in sync instead of clearing.
+    self.queued = self.pendingSubmissions.length > 0;
     self.input = InputCore.seed('');
     self.attachments = [];
     self.pasteRegistry.clear();
