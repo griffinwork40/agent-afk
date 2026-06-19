@@ -92,6 +92,7 @@ describe('classifyConfigKey / specs', () => {
     expect(classifyConfigKey('systemPrompt')).toBe('human');
     expect(classifyConfigKey('enableShellHooks')).toBe('human'); // trust gate — agent must not flip it
     expect(classifyConfigKey('hooks')).toBe('unknown'); // hooks intentionally not listed (no safe per-key validator)
+    expect(classifyConfigKey('permissionMode')).toBe('human'); // self-escalation vector — agent must not set bypass on itself
     expect(classifyConfigKey('interactive.worktreeBranchPrefix')).toBe('human');
     expect(classifyConfigKey('nonsense.key')).toBe('unknown');
   });
@@ -120,6 +121,15 @@ describe('coerceConfigValue', () => {
     const spec = getConfigKeySpec('updatePolicy')!;
     expect(coerceConfigValue(spec, 'auto')).toEqual({ ok: true, value: 'auto' });
     expect(coerceConfigValue(spec, 'sometimes').ok).toBe(false);
+  });
+  it('permissionMode enum accepts the four modes and rejects others', () => {
+    const spec = getConfigKeySpec('permissionMode')!;
+    expect(spec.tier).toBe('human');
+    expect(coerceConfigValue(spec, 'bypassPermissions')).toEqual({ ok: true, value: 'bypassPermissions' });
+    expect(coerceConfigValue(spec, 'default')).toEqual({ ok: true, value: 'default' });
+    expect(coerceConfigValue(spec, 'plan')).toEqual({ ok: true, value: 'plan' });
+    expect(coerceConfigValue(spec, 'autonomous')).toEqual({ ok: true, value: 'autonomous' });
+    expect(coerceConfigValue(spec, 'yolo').ok).toBe(false);
   });
   it('number arrays accept arrays and csv strings', () => {
     const spec = getConfigKeySpec('telegram.notify.targets')!;

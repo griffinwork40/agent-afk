@@ -3,6 +3,14 @@
   "maxTokens": 4096,
   "temperature": 1.0,
   "systemPrompt": "You are a helpful AI assistant.",
+
+  // Permission mode for `afk chat` / `afk interactive`. Omit for the new-install
+  // default of "bypassPermissions": path containment + the path-approval prompt
+  // are OFF, so the agent reads/writes anywhere with no confirmation. Set
+  // "default" to re-enable containment (out-of-root file access prompts), or
+  // "plan" / "autonomous". Telegram + the daemon ignore this key (own posture).
+  // "permissionMode": "default",
+
   "daemon": {
     "task": "/forge-friction --auto",
     "taskId": "default"

@@ -24,6 +24,7 @@ import { readFileSync } from 'fs';
 import { env } from '../../config/env.js';
 import { palette } from '../palette.js';
 import { providerForModel } from '../../agent/providers/index.js';
+import { resolveCliPermissionMode } from '../config.js';
 import { promptSecret } from '../../utils/prompt-secret.js';
 import { classifyEnvKey } from '../../config/settable-keys.js';
 import {
@@ -79,6 +80,11 @@ export function registerConfigCommand(program: Command): void {
           : 'CODEX_API_KEY'
         : null;
 
+      // Effective CLI permission mode (afk chat / interactive). New-install
+      // default is bypass; an afk.config.json `permissionMode` key overrides.
+      const permissionMode = resolveCliPermissionMode();
+      const bypassEnabled = permissionMode === 'bypassPermissions';
+
       if (options.format === 'json') {
         console.log(JSON.stringify({
           model,
@@ -89,7 +95,8 @@ export function registerConfigCommand(program: Command): void {
           },
           thinking: env.AFK_THINKING || null,
           effort: env.AFK_EFFORT || null,
-          bypass: true,
+          permissionMode,
+          bypass: bypassEnabled,
           raw_env: {
             AFK_MODEL: env.AFK_MODEL ?? null,
             AFK_THINKING: env.AFK_THINKING ?? null,
@@ -122,9 +129,14 @@ export function registerConfigCommand(program: Command): void {
         const effortVal = env.AFK_EFFORT || '(unset — SDK default)';
         console.log(`  Effort: ${palette.info(effortVal)}`);
 
-        console.log(`  Bypass Permissions: ${palette.warning('true (enabled)')}`);
+        console.log(
+          `  Permission Mode: ${bypassEnabled
+            ? palette.warning(`${permissionMode} (bypass — path containment off)`)
+            : palette.info(`${permissionMode} (path containment on)`)}`,
+        );
 
         console.log(palette.meta('\n  Edit config:'));
+        console.log(palette.meta('    afk config set permissionMode default  # re-enable path containment'));
         console.log(palette.meta('    afk config set <key> <value>      e.g. afk config set model opus'));
         console.log(palette.meta('    afk config env set <KEY> [value]  e.g. afk config env set AFK_EFFORT high'));
         console.log(palette.meta('    afk config get [key] / afk config env get [key]'));

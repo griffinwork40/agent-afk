@@ -6,7 +6,14 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { join } from 'path';
-import { loadConfig, isValidModel, getModelId, _resetConfigCache } from './config.js';
+import {
+  loadConfig,
+  isValidModel,
+  getModelId,
+  _resetConfigCache,
+  resolveCliPermissionMode,
+  DEFAULT_CLI_PERMISSION_MODE,
+} from './config.js';
 import {
   DEFAULT_SLOT_BINDINGS,
   getSlotBindings,
@@ -637,5 +644,74 @@ describe('loadConfig() — interactive.suggestGhost JSON integration', () => {
     });
     const config = loadConfig();
     expect(config.interactive?.suggestGhost).toBeUndefined();
+  });
+});
+
+describe('loadConfig() — permissionMode default (new-install bypass)', () => {
+  const mockedExistsSync = () => vi.mocked(fs.existsSync);
+  const mockedReadFileSync = () => vi.mocked(fs.readFileSync);
+  const cwdConfigJson = join(process.cwd(), 'afk.config.json');
+
+  // Isolate from the dev machine's real afk.config.json / AFK.md: only the
+  // cwd afk.config.json "exists", with the supplied JSON body.
+  function mockConfig(json: unknown): void {
+    mockedExistsSync().mockImplementation((p) => {
+      const s = String(p);
+      if (s === cwdConfigJson) return true;
+      if (s.endsWith('AFK.md') || s.endsWith('afk.config.json')) return false;
+      return realFsModule.__realExistsSync(p as fs.PathLike);
+    });
+    mockedReadFileSync().mockImplementation((p, ...args) => {
+      if (String(p) === cwdConfigJson) return JSON.stringify(json);
+      return (realFsModule.__realReadFileSync as Function)(p, ...args);
+    });
+  }
+
+  beforeEach(() => {
+    _resetConfigCache();
+    process.env.ANTHROPIC_API_KEY = 'test-api-key-12345';
+  });
+
+  afterEach(() => {
+    delete process.env.ANTHROPIC_API_KEY;
+    mockedExistsSync().mockImplementation(realFsModule.__realExistsSync);
+    mockedReadFileSync().mockImplementation(realFsModule.__realReadFileSync);
+    _resetConfigCache();
+  });
+
+  it('defaults to bypassPermissions when afk.config.json sets no permissionMode', () => {
+    mockConfig({});
+    expect(loadConfig().permissionMode).toBe('bypassPermissions');
+    // The exported constant is the single source of truth.
+    expect(DEFAULT_CLI_PERMISSION_MODE).toBe('bypassPermissions');
+    expect(loadConfig().permissionMode).toBe(DEFAULT_CLI_PERMISSION_MODE);
+  });
+
+  it('honors an explicit permissionMode: "default" (re-enable containment)', () => {
+    mockConfig({ permissionMode: 'default' });
+    expect(loadConfig().permissionMode).toBe('default');
+  });
+
+  it('honors an explicit permissionMode: "plan"', () => {
+    mockConfig({ permissionMode: 'plan' });
+    expect(loadConfig().permissionMode).toBe('plan');
+  });
+
+  it('falls back to the bypass default when permissionMode is garbage (invalid ignored)', () => {
+    mockConfig({ permissionMode: 'totally-not-a-mode' });
+    expect(loadConfig().permissionMode).toBe('bypassPermissions');
+  });
+
+  it('an explicit overrides.permissionMode still wins over the default', () => {
+    mockConfig({});
+    expect(loadConfig({ permissionMode: 'default' }).permissionMode).toBe('default');
+  });
+
+  it('resolveCliPermissionMode() returns the bypass default when unset, and the config value when set', () => {
+    mockConfig({});
+    expect(resolveCliPermissionMode()).toBe('bypassPermissions');
+    _resetConfigCache();
+    mockConfig({ permissionMode: 'plan' });
+    expect(resolveCliPermissionMode()).toBe('plan');
   });
 });
