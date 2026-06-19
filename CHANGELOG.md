@@ -11,6 +11,25 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.22.0] - 2026-06-19
+
+### Added
+- edit queued type-ahead with ↑; stop dequeuing on Backspace (4268d7c)
+- config key + --dangerously-skip-permissions flag for bypass (445c4b9)
+- add /bypass REPL toggle + status-line BYPASS badge (dd3a893)
+- make bypassPermissions disable path containment (core) (39f7a83)
+- queue multiple type-ahead messages mid-turn (8daba12)
+
+### Fixed
+- make the live /bypass toggle actually change enforcement (a6de8c7)
+- keep `queued` mirror in sync on paste + idle-submit paths (fcbf295)
+
+### Changed
+- Merge pull request #215 from griffinwork40/afk/20260618-180522-9c6c46 (2cb373b)
+- Merge pull request #219 from griffinwork40/feat/bypass-grant-all (61e9add)
+- Merge main into afk/20260618-180522-9c6c46 (resolve type-ahead queue conflict) (5d4d70a)
+- correct stale bypass-by-default claims; document /bypass (bed6aa3)
+
 ## [4.21.1] - 2026-06-19
 
 ### Fixed
