@@ -510,6 +510,374 @@ describe('runTurn — pause-interrupt (submit during usage-limit pause)', () => 
   });
 });
 
+// ---------------------------------------------------------------------------
+// Helpers for the picker tests (C — interactive usage-limit picker)
+// ---------------------------------------------------------------------------
+
+import type { PickerController } from '../../terminal-compositor.js';
+
+/**
+ * Minimal fake compositor that implements the PickerHost interface used by
+ * `runPicker` and the subset of `TerminalCompositor` called by `runTurn`
+ * (only `commitAbove` is needed besides the picker surface).
+ */
+function makeFakeCompositor() {
+  let controller: PickerController | null = null;
+  let enteredCount = 0;
+  let exitedCount = 0;
+
+  const comp = {
+    // PickerHost surface
+    enterPickerMode(c: PickerController): void {
+      controller = c;
+      enteredCount++;
+    },
+    exitPickerMode(): void {
+      controller = null;
+      exitedCount++;
+    },
+    repaintPicker(): void { /* no-op in unit tests */ },
+
+    // Called by runTurn at line 229 (blank separator before the stream event)
+    commitAbove(_line: string): void { /* swallow */ },
+
+    // Test-only accessors
+    get capturedController(): PickerController | null { return controller; },
+    get enteredCount(): number { return enteredCount; },
+    get exitedCount(): number { return exitedCount; },
+
+    /** Simulate the user selecting item at index `idx` by dispatching Return. */
+    selectIndex(idx: number): void {
+      if (!controller) throw new Error('No active picker controller');
+      // Navigate to the desired index by pressing Down from index 0.
+      for (let i = 0; i < idx; i++) {
+        controller.onKey(undefined, { name: 'down' });
+      }
+      controller.onKey(undefined, { name: 'return' });
+    },
+
+    /** Simulate pressing Esc in the picker. */
+    pressEscape(): void {
+      if (!controller) throw new Error('No active picker controller');
+      controller.onKey(undefined, { name: 'escape' });
+    },
+  };
+  return comp;
+}
+
+describe('runTurn — usage-limit picker (C)', () => {
+  // The interactive picker is shown when:
+  //   - A TTY compositor is armed (getCompositor returns non-null)
+  //   - The paused event has autoResume === true
+  // On autoResume=false or non-TTY, the passive card path is kept unchanged.
+  //
+  // The picker uses runPicker (src/cli/render/picker.ts) which drives
+  // enterPickerMode / exitPickerMode on the compositor. Selections are
+  // simulated by calling the captured PickerController's onKey method.
+
+  it('shows picker when borrowedCompositor is present and autoResume is true', async () => {
+    const comp = makeFakeCompositor();
+
+    // Stream: paused (autoResume=true) then the user picks "keep waiting" via
+    // the picker, then the auto-resume fires and the turn completes normally.
+    let capturedController: PickerController | null = null;
+    const session = {
+      sessionId: 'mock',
+      sendMessageStream: async function* () {
+        yield { type: 'paused', reason: 'usage-limit', autoResume: true } as const;
+        // Let the microtask queue flush so runPicker can install the controller
+        // via enterPickerMode before we inspect it.
+        await Promise.resolve();
+        // Capture the controller so we can simulate a selection.
+        capturedController = comp.capturedController;
+        // Simulate: user selects "Keep waiting" (index 0).
+        if (capturedController) {
+          capturedController.onKey(undefined, { name: 'return' });
+        }
+        yield { type: 'resumed', hotSwapped: false } as const;
+        yield { type: 'chunk', chunk: { type: 'content', content: 'done' } } as const;
+        yield { type: 'done', metadata: { durationMs: 5 } } as const;
+      },
+      interrupt: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AgentSession;
+
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { h: base, onTurnComplete } = makeHandles();
+    const h: TurnHandles = {
+      ...base,
+      getCompositor: () => comp as unknown as import('../../terminal-compositor.js').TerminalCompositor,
+    };
+    const stats = makeStats();
+
+    await runTurn({ text: 'q', attachments: [] }, session, stats, h);
+
+    // Picker was entered at least once.
+    expect(comp.enteredCount).toBeGreaterThanOrEqual(1);
+    // "Keep waiting" → no interrupt, turn completes normally.
+    expect(session.interrupt).not.toHaveBeenCalled();
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+    expect(stats.totalTurns).toBe(1);
+
+    consoleSpy.mockRestore();
+  });
+
+  it('suppresses the passive "Usage paused" card when the picker is shown (no double-render)', async () => {
+    // Mutual exclusivity: when the interactive picker is shown (TTY +
+    // autoResume), the passive bordered card must NOT also render — otherwise
+    // the user sees the same options twice (prose card + menu). The card's
+    // ' Usage paused ' chip is unique to usageLimitBox(); the picker header
+    // says "Usage limit reached" instead, so the chip is a clean discriminator.
+    const comp = makeFakeCompositor();
+    const session = {
+      sessionId: 'mock',
+      sendMessageStream: async function* () {
+        yield {
+          type: 'paused',
+          reason: 'usage-limit',
+          resetsAt: new Date('2025-01-01T00:00:00Z'),
+          autoResume: true,
+        } as const;
+        await Promise.resolve();
+        comp.capturedController?.onKey(undefined, { name: 'return' }); // keep waiting
+        yield { type: 'resumed', hotSwapped: false } as const;
+        yield { type: 'done', metadata: { durationMs: 5 } } as const;
+      },
+      interrupt: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AgentSession;
+
+    const logged: string[] = [];
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      logged.push(args.map(String).join(' '));
+    });
+    const { h: base } = makeHandles();
+    const h: TurnHandles = {
+      ...base,
+      getCompositor: () => comp as unknown as import('../../terminal-compositor.js').TerminalCompositor,
+    };
+
+    await runTurn({ text: 'q', attachments: [] }, session, makeStats(), h);
+
+    expect(comp.enteredCount).toBeGreaterThanOrEqual(1);
+    // The passive card chip must be absent — the picker replaced it.
+    expect(logged.some((l) => l.includes('Usage paused'))).toBe(false);
+
+    consoleSpy.mockRestore();
+  });
+
+  it('does NOT show picker when autoResume is false (passive card path)', async () => {
+    const comp = makeFakeCompositor();
+
+    const events: OutputEvent[] = [
+      { type: 'paused', reason: 'usage-limit', autoResume: false },
+      // Stream ends without resumed (manual-retry path).
+    ];
+
+    const session = streamFrom(events);
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { h: base } = makeHandles();
+    const h: TurnHandles = {
+      ...base,
+      getCompositor: () => comp as unknown as import('../../terminal-compositor.js').TerminalCompositor,
+    };
+    const stats = makeStats();
+
+    await runTurn({ text: 'q', attachments: [] }, session, stats, h);
+
+    // No picker should be shown for autoResume=false.
+    expect(comp.enteredCount).toBe(0);
+
+    consoleSpy.mockRestore();
+  });
+
+  it('does NOT show picker when compositor is null (non-TTY path)', async () => {
+    const events: OutputEvent[] = [
+      { type: 'paused', reason: 'usage-limit', autoResume: true },
+    ];
+
+    const session = streamFrom(events);
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    // getCompositor returns null → non-TTY path; passive card only.
+    const { h: base } = makeHandles();
+    const h: TurnHandles = { ...base, getCompositor: () => null };
+    const stats = makeStats();
+
+    await runTurn({ text: 'q', attachments: [] }, session, stats, h);
+
+    // No picker error; passive card path silently completes.
+    expect(stats.totalTurns).toBe(0); // no done event
+
+    consoleSpy.mockRestore();
+  });
+
+  it('"keep waiting" selection leaves paused=true so B\'s Enter-during-pause still works', async () => {
+    // B-coexistence guard: after "keep waiting", compositor.paused must stay
+    // true so a subsequent Enter fires the pause-interrupt handler normally.
+    const comp = makeFakeCompositor();
+    const setPausedState = vi.fn();
+
+    const session = {
+      sessionId: 'mock',
+      sendMessageStream: async function* () {
+        yield { type: 'paused', reason: 'usage-limit', autoResume: true } as const;
+        await Promise.resolve();
+        // Simulate "keep waiting" (index 0, press Enter immediately).
+        const ctrl = comp.capturedController;
+        if (ctrl) ctrl.onKey(undefined, { name: 'return' });
+        // After "keep waiting", the picker exits. The stream then auto-resumes.
+        yield { type: 'resumed', hotSwapped: false } as const;
+        yield { type: 'chunk', chunk: { type: 'content', content: 'answer' } } as const;
+        yield { type: 'done', metadata: { durationMs: 5 } } as const;
+      },
+      interrupt: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AgentSession;
+
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { h: base } = makeHandles();
+    const h: TurnHandles = {
+      ...base,
+      setPausedState,
+      getCompositor: () => comp as unknown as import('../../terminal-compositor.js').TerminalCompositor,
+    };
+    const stats = makeStats();
+
+    await runTurn({ text: 'q', attachments: [] }, session, stats, h);
+
+    // setPausedState(true) on paused event, then (false) on resumed, then
+    // (false) again in finally. The key assertion: true is set (pause is live)
+    // and false is set on resumed (not on picker dismiss — "keep waiting"
+    // must not clear the flag).
+    expect(setPausedState).toHaveBeenCalledWith(true);
+    // No interrupt fired — auto-resume completed normally.
+    expect(session.interrupt).not.toHaveBeenCalled();
+    expect(stats.totalTurns).toBe(1);
+
+    consoleSpy.mockRestore();
+  });
+
+  it('"stop waiting" selection triggers interrupt and suppresses recordTurn', async () => {
+    const comp = makeFakeCompositor();
+    const interrupt = vi.fn().mockResolvedValue(undefined);
+
+    const session = {
+      sessionId: 'mock',
+      sendMessageStream: async function* () {
+        yield { type: 'paused', reason: 'usage-limit', autoResume: true } as const;
+        await Promise.resolve();
+        // Simulate "stop waiting" (index 2).
+        const ctrl = comp.capturedController;
+        if (ctrl) {
+          // Navigate down twice to reach index 2, then confirm.
+          ctrl.onKey(undefined, { name: 'down' });
+          ctrl.onKey(undefined, { name: 'down' });
+          ctrl.onKey(undefined, { name: 'return' });
+        }
+        // After interrupt(), the stream should end. Yield a late event to prove
+        // the break guard drops it.
+        yield { type: 'chunk', chunk: { type: 'content', content: 'LATE' } } as const;
+        yield { type: 'done', metadata: { durationMs: 5 } } as const;
+      },
+      interrupt,
+    } as unknown as AgentSession;
+
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { h: base, onTurnComplete } = makeHandles();
+    const h: TurnHandles = {
+      ...base,
+      getCompositor: () => comp as unknown as import('../../terminal-compositor.js').TerminalCompositor,
+    };
+    const stats = makeStats();
+
+    await runTurn({ text: 'q', attachments: [] }, session, stats, h);
+
+    // interrupt was called by the picker selection.
+    expect(interrupt).toHaveBeenCalled();
+    // Turn suppressed — late events after the picker selection are dropped.
+    expect(onTurnComplete).not.toHaveBeenCalled();
+    expect(stats.totalTurns).toBe(0);
+
+    consoleSpy.mockRestore();
+  });
+
+  it('"switch model" selection triggers interrupt, prints hint, suppresses recordTurn', async () => {
+    const comp = makeFakeCompositor();
+    const interrupt = vi.fn().mockResolvedValue(undefined);
+
+    const session = {
+      sessionId: 'mock',
+      sendMessageStream: async function* () {
+        yield { type: 'paused', reason: 'usage-limit', autoResume: true } as const;
+        await Promise.resolve();
+        // Simulate "switch model / provider" (index 1).
+        const ctrl = comp.capturedController;
+        if (ctrl) {
+          ctrl.onKey(undefined, { name: 'down' });
+          ctrl.onKey(undefined, { name: 'return' });
+        }
+        yield { type: 'chunk', chunk: { type: 'content', content: 'LATE' } } as const;
+        yield { type: 'done', metadata: { durationMs: 5 } } as const;
+      },
+      interrupt,
+    } as unknown as AgentSession;
+
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { h: base, onTurnComplete } = makeHandles();
+    const h: TurnHandles = {
+      ...base,
+      getCompositor: () => comp as unknown as import('../../terminal-compositor.js').TerminalCompositor,
+    };
+    const stats = makeStats();
+
+    await runTurn({ text: 'q', attachments: [] }, session, stats, h);
+
+    // interrupt was called.
+    expect(interrupt).toHaveBeenCalled();
+    // /model hint was printed.
+    const wrote = consoleSpy.mock.calls.flat().join('\n');
+    expect(wrote).toContain('/model');
+    // Turn suppressed.
+    expect(onTurnComplete).not.toHaveBeenCalled();
+    expect(stats.totalTurns).toBe(0);
+
+    consoleSpy.mockRestore();
+  });
+
+  it('picker is torn down (abort) when auto-resume fires before the user picks', async () => {
+    // Race: auto-resume arrives while the picker is still open.
+    // The resumed handler aborts the picker so it exits cleanly.
+    const comp = makeFakeCompositor();
+
+    const events: OutputEvent[] = [
+      { type: 'paused', reason: 'usage-limit', autoResume: true },
+      // No explicit picker selection — the stream resumes before user acts.
+      { type: 'resumed', hotSwapped: false },
+      { type: 'chunk', chunk: { type: 'content', content: 'auto-answered' } },
+      { type: 'done', metadata: { durationMs: 5 } },
+    ];
+
+    const session = streamFrom(events);
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { h: base, onTurnComplete } = makeHandles();
+    const h: TurnHandles = {
+      ...base,
+      getCompositor: () => comp as unknown as import('../../terminal-compositor.js').TerminalCompositor,
+    };
+    const stats = makeStats();
+
+    await runTurn({ text: 'q', attachments: [] }, session, stats, h);
+
+    // The turn completed normally (auto-resume won the race).
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+    expect(stats.totalTurns).toBe(1);
+    // No interrupt fired.
+    expect(session.interrupt).not.toHaveBeenCalled();
+    // Picker was entered and then exited (aborted by resumed).
+    expect(comp.enteredCount).toBeGreaterThanOrEqual(1);
+    expect(comp.exitedCount).toBeGreaterThanOrEqual(1);
+
+    consoleSpy.mockRestore();
+  });
+});
+
 describe('runTurn — ghost spinner regression', () => {
   it('emits the blank separator line before arm, not after', async () => {
     // Regression: a console.log() between arm() and the first stream event

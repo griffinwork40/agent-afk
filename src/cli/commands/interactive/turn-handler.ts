@@ -10,6 +10,7 @@ import { palette } from '../../palette.js';
 import { isDebugEnabled } from '../../../utils/debug.js';
 import { formatDuration, formatCost, formatTokens } from '../../format-utils.js';
 import { usageLimitBox } from '../../render.js';
+import { runPicker } from '../../render/picker.js';
 import { classifyError, presentError } from '../../errors/index.js';
 import { contextLimitFor } from '../../model-limits.js';
 import {
@@ -76,6 +77,14 @@ export async function runTurn(
   // queued buffer flushes as the next turn. Like softStopRequested, it ends the
   // turn without a `done` event, so recordTurn is naturally skipped.
   let pauseInterruptRequested = false;
+  // AbortController for the interactive usage-limit picker (C). Created when
+  // the picker is shown (TTY + autoResume=true); aborted on resumed / pause-
+  // interrupt / turn-end so the picker tears down cleanly on every exit path.
+  // Stored in an object (not a bare `let`) so TypeScript's control-flow
+  // narrowing does not collapse the type to `never` in the finally block after
+  // the async .then() assignment — a synchronous read in finally always sees
+  // the latest write even though the assignment happens in a microtask.
+  const pickerRef: { abort: AbortController | null } = { abort: null };
   let lastContextProgressMs = 0;
   const CONTEXT_PROGRESS_MIN_INTERVAL_MS = 15_000;
   const toolEvents: ToolEvent[] = [];
@@ -385,12 +394,91 @@ export async function runTurn(
           // waiting; the stream will deliver a 'resumed' event when ready,
           // at which point we rebuild a fresh renderer for the replayed turn.
           await disposeRendererOnce();
-          (completionWriter ?? { fn: console.log }).fn(usageLimitBox({
-            reason: event.reason,
-            ...(event.resetsAt !== undefined ? { resetsAt: event.resetsAt } : {}),
-            ...(event.accountId !== undefined ? { accountId: event.accountId } : {}),
-            ...(event.autoResume !== undefined ? { autoResume: event.autoResume } : {}),
-          }));
+
+          // Invariant: the interactive picker REPLACES the passive card when a
+          // TTY compositor is armed (borrowedCompositor != null) AND the
+          // provider will auto-resume (autoResume === true) — i.e. there is a
+          // live wait to make a decision about. The two are mutually exclusive:
+          // showing both would duplicate the same options (prose card + menu).
+          // Non-TTY surfaces and autoResume=false fall through to the passive
+          // card, which is the only possible surface there.
+          if (borrowedCompositor && event.autoResume === true) {
+            const ac = new AbortController();
+            pickerRef.abort = ac;
+
+            const resetsAtStr = event.resetsAt
+              ? event.resetsAt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+              : null;
+            // Option labels are referenced both here and in the .then() match
+            // below — keep them as consts so the definition and the match can
+            // never drift apart.
+            const keepLabel = resetsAtStr
+              ? `Keep waiting — auto-resumes at ${resetsAtStr}`
+              : 'Keep waiting — auto-resume in progress';
+            const switchModelLabel = 'Switch model / provider  (type /model after)';
+            const stopLabel = 'Stop waiting';
+
+            // Contract: the picker header carries the context the passive card
+            // would have shown (limit + reset time) plus the out-of-band
+            // account-switch tip — "switch account" is NOT a selectable option
+            // because it happens via `claude login` in another terminal during
+            // the wait, which the keychain hot-swap picks up automatically.
+            // Options are ordered by increasing disruption so the safe default
+            // (keep waiting) is first and pre-selected.
+            const header = [
+              palette.warning('  ⏳ Usage limit reached.') +
+                (resetsAtStr ? palette.dim(`  Auto-resumes at ${resetsAtStr}.`) : ''),
+              palette.dim('  Tip: run `claude login` in another terminal to switch account — this turn resumes on it automatically.'),
+              '',
+            ];
+
+            void runPicker(borrowedCompositor, {
+              header,
+              options: [keepLabel, switchModelLabel, stopLabel],
+              signal: ac.signal,
+              initialIndex: 0,
+            }).then((result) => {
+              // Picker resolved — null means aborted (resumed/turn-end tore it
+              // down); any result means the user made an explicit choice.
+              pickerRef.abort = null;
+              if (!result) return; // aborted — no action needed
+
+              const choice = result[0];
+              if (choice === undefined || choice === keepLabel) {
+                // Keep waiting (or a defensive undefined): the auto-resume path
+                // continues unchanged; B's Enter-during-pause path stays live.
+                return;
+              }
+
+              // Switch model / Stop waiting: end the wait via the pause-interrupt
+              // path (same mechanism as B's Enter-during-pause). session.interrupt()
+              // ends the stream; pauseInterruptRequested breaks the for-await loop
+              // so recordTurn is skipped and the queued buffer flushes next turn.
+              pauseInterruptRequested = true;
+              if (choice === switchModelLabel) {
+                // Cannot pre-fill the input buffer (no public buffer-set API on
+                // the compositor), so guide with a printed hint instead.
+                (completionWriter ?? { fn: console.log }).fn(
+                  palette.dim('  Hint: type /model <name> to switch, then send your message again.'),
+                );
+              }
+              session.interrupt().catch((err) => {
+                if (isDebugEnabled()) {
+                  console.error('  ' + palette.error('picker pause-interrupt session.interrupt() failed:'), err);
+                }
+              });
+            });
+          } else {
+            // Passive card — the only surface when no interactive picker applies
+            // (non-TTY, or autoResume=false where there is no wait to decide on).
+            (completionWriter ?? { fn: console.log }).fn(usageLimitBox({
+              reason: event.reason,
+              ...(event.resetsAt !== undefined ? { resetsAt: event.resetsAt } : {}),
+              ...(event.accountId !== undefined ? { accountId: event.accountId } : {}),
+              ...(event.autoResume !== undefined ? { autoResume: event.autoResume } : {}),
+            }));
+          }
+
           continue;
         }
 
@@ -399,6 +487,10 @@ export async function runTurn(
           // line typed during the replayed turn queues normally (type-ahead)
           // rather than firing the pause-interrupt.
           h.setPausedState?.(false);
+          // Tear down the picker if it's still open — the wait resolved
+          // without user intervention (auto-resume / hot-swap won the race).
+          pickerRef.abort?.abort();
+          pickerRef.abort = null;
           // External constraint: the retry layer replays the ENTIRE turn
           // after this event (retry-layer.ts: `yield* turnWithAuthRetry`),
           // re-streaming all content + tool calls from scratch. We must:
@@ -638,6 +730,11 @@ export async function runTurn(
     // interrupt against a no-longer-paused turn.
     h.setPausedState?.(false);
     h.setPauseInterruptHandler?.(null);
+    // Abort the usage-limit picker if still open (e.g. turn ended via error
+    // or soft-stop before the user made a choice). Idempotent — safe to call
+    // even when the picker already resolved or was never shown.
+    pickerRef.abort?.abort();
+    pickerRef.abort = null;
     h.setInFlight(false);
     h.rearmStatus?.();
   }
