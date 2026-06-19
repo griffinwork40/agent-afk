@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.19.1] - 2026-06-19
+
+### Fixed
+- tag provider surface as 'telegram' for presence/watch (2162ab5)
+
+### Changed
+- Merge pull request #216 from griffinwork40/fix/telegram-presence-surface (03629b6)
+- Merge pull request #213 from griffinwork40/chore/mailmap-attribution (629ae9c)
+- add .mailmap to re-attribute afk-port port commit (772cf55)
+
 ## [4.19.0] - 2026-06-18
 
 ### Added
