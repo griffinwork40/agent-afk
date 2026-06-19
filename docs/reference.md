@@ -68,6 +68,7 @@ All commands support `--format json` where machine-readable output makes sense (
 --max-turns <n>           # safety rail (default 100)
 --max-budget-usd <n>
 --task-budget <tokens>
+--dangerously-skip-permissions  # bypass mode: skip path-approval prompts (read/write anywhere)
 --no-update-check         # suppress startup update check
 --dump-prompt <path>      # write resolved system prompt to file (provenance included)
 ```

@@ -12,6 +12,7 @@ import {
 } from '../agent/session/model-slots.js';
 import { providerForModel, type BundledProviderName } from '../agent/providers/index.js';
 import type { AgentModelInput } from '../agent/types.js';
+import type { PermissionMode } from '../agent/types/sdk-types.js';
 import {
   getAfkHome,
   getEnvConfigPath,
@@ -87,6 +88,13 @@ export interface CliConfig {
    * prompt-dump debug feature; not forwarded to the SDK.
    */
   systemPromptSource?: string;
+  /**
+   * Session permission mode. Sourced from afk.config.json `permissionMode`.
+   * `'bypassPermissions'` disables path containment + the path-approval prompt
+   * (the agent reads/writes anywhere). Defaults to `'default'` at the session
+   * layer when unset. Validated on load — invalid strings are ignored.
+   */
+  permissionMode?: PermissionMode;
   autoRouting?: AutoRoutingConfig;
   /**
    * Daemon defaults sourced from afk.config.json. Stays `undefined` when
@@ -252,6 +260,8 @@ interface ConfigFileSchema {
   maxTokens?: number;
   temperature?: number;
   systemPrompt?: string;
+  /** Session permission mode (validated on load): default | plan | autonomous | bypassPermissions. */
+  permissionMode?: string;
   autoRouting?: {
     interactive?: boolean;
     chat?: boolean;
@@ -607,6 +617,15 @@ function loadJsonConfig(): {
           config.systemPrompt = json.systemPrompt;
         }
 
+        if (typeof json.permissionMode === 'string') {
+          // Validate against the known modes; ignore garbage so a typo can't
+          // silently land the session in an unexpected (or dangerous) mode.
+          const pm = json.permissionMode;
+          if (pm === 'default' || pm === 'plan' || pm === 'autonomous' || pm === 'bypassPermissions') {
+            config.permissionMode = pm;
+          }
+        }
+
         if (json.autoRouting && typeof json.autoRouting === 'object') {
           const ar: AutoRoutingConfig = {};
           if (typeof json.autoRouting.interactive === 'boolean') ar.interactive = json.autoRouting.interactive;
@@ -865,6 +884,7 @@ export function loadConfig(overrides?: Partial<CliConfig>): CliConfig {
     ...(merged.openaiBaseUrl !== undefined ? { openaiBaseUrl: merged.openaiBaseUrl } : {}),
     ...(merged.systemPrompt !== undefined ? { systemPrompt: merged.systemPrompt } : {}),
     ...(systemPromptSource !== undefined ? { systemPromptSource } : {}),
+    ...(merged.permissionMode !== undefined ? { permissionMode: merged.permissionMode } : {}),
     ...(merged.autoRouting !== undefined ? { autoRouting: merged.autoRouting } : {}),
     ...(merged.daemon !== undefined ? { daemon: merged.daemon } : {}),
     ...(merged.telegram !== undefined ? { telegram: merged.telegram } : {}),

@@ -229,6 +229,11 @@ export interface CliOptions {
   continue?: boolean;
   debug?: boolean;
   /**
+   * `--dangerously-skip-permissions` — start the session in `'bypassPermissions'`
+   * (skip path-approval prompts; read/write anywhere). Toggle live with /bypass.
+   */
+  dangerouslySkipPermissions?: boolean;
+  /**
    * `--worktree [branch]` flag. `true` when the flag was passed without a value
    * (auto-named branch). String when the user supplied a branch name.
    * `undefined` when the flag was not passed.

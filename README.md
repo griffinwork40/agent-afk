@@ -157,7 +157,7 @@ Aliases: `afk c` → `chat`, `afk i` → `interactive`, `afk s` → `status`.
 
 The one prompt you may hit is **path approval**: when a file tool (read/write/edit/list/glob/grep) targets a path *outside* the session's working directory, `afk` asks before allowing it. Pre-authorize paths with `/allow-dir <path>` (or answer "persist" at the prompt to remember them across sessions).
 
-To turn path approval off entirely — letting the agent read and write **anywhere** with no prompt — enable **bypass mode** with `/bypass` in the REPL. The status line shows `⚠ BYPASS` while it is active. This is the equivalent of `--dangerously-skip-permissions`; use it only on a machine and account you trust. `afk daemon` runs in bypass mode by default (no human to prompt). Bypass does not change `ask_question` — that is the model choosing to ask you something, a separate axis.
+To turn path approval off entirely — letting the agent read and write **anywhere** with no prompt — enable **bypass mode** any of three ways: `/bypass` in the REPL (the status line shows `⚠ BYPASS`), the `--dangerously-skip-permissions` flag on `afk`/`afk chat`, or `"permissionMode": "bypassPermissions"` in `afk.config.json`. This is the equivalent of Claude Code's `--dangerously-skip-permissions`; use it only on a machine and account you trust. `afk daemon` runs in bypass mode by default (no human to prompt). Bypass does not change `ask_question` — that is the model choosing to ask you something, a separate axis.
 
 ## Troubleshooting
 
