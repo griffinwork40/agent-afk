@@ -1,0 +1,39 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Spine renderer scenarios > ASCII fallback — AGENT_AFK_ASCII=1 swaps box-drawing for ASCII glyphs 1`] = `
+"o → Agent(ascii) [subagent]
+| +- ● Read("x.ts") — ✓ 10 lines
+| \\- Done (1 tool · 0.5s)"
+`;
+
+exports[`Spine renderer scenarios > abort — Agent without a Done synthetic still renders spine + children 1`] = `
+"◉ → Agent(aborted) [subagent]
+│ ╰─ ● Read("file.ts") — ✓ partial"
+`;
+
+exports[`Spine renderer scenarios > nested — Agent inside Agent: outer spine continues past inner block 1`] = `
+"◉ → Agent(mint) [subagent]
+│ ├─ ● Read("daemon.ts") — ✓ 311 lines
+│ ├─ → Agent(gather) [subagent]
+│ │ ├─ ● Read("cron.ts") — ✓ 42 lines
+│ │ ╰─ ● Grep("interval") — ✓ 6 matches
+│ ╰─ Done (4 tools · 8.0s)"
+`;
+
+exports[`Spine renderer scenarios > parallel — three sibling Agents each get their own turn-root + spine 1`] = `
+"◉ → Agent(anthropic-port) [subagent]
+│ ├─ ✎ Edit("anthropic-port.ts") — ✓ edited
+│ ╰─ Done (1 tool · 2.0s)
+◉ → Agent(openai-port) [subagent]
+│ ├─ ✎ Edit("openai-port.ts") — ✓ edited
+│ ╰─ Done (1 tool · 2.0s)
+◉ → Agent(codex-port) [subagent]
+│ ├─ ✎ Edit("codex-port.ts") — ✓ edited
+│ ╰─ Done (1 tool · 2.0s)"
+`;
+
+exports[`Spine renderer scenarios > sequential — single subagent block renders ◉-rooted spine 1`] = `
+"◉ → Agent(diagnose) [subagent]
+│ ├─ ● Read("abort-graph.ts") — ✓ 144 lines
+│ ╰─ Done (1 tool · 1.5s)"
+`;

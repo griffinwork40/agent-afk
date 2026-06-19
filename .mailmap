@@ -1,0 +1,10 @@
+# .mailmap — canonicalizes commit-author identities for `git shortlog`, `git log --use-mailmap`,
+# and GitHub's contributor graph (GitHub honors .mailmap; no history rewrite required).
+#
+# Format:  Proper Name <proper@email>  Commit Name <commit@email>
+#
+# A cross-repo port (commit b1aaf8ad, port of afk-workshop#571) was committed under a synthetic
+# identity, `afk-port <noreply@users.noreply.github.com>`, which maps to no GitHub account. That
+# produced a phantom "noreply" contributor and dropped the real author. Re-attribute it to the
+# actual author. (The afk-port skill was fixed to preserve the source PR author going forward.)
+Griffin Long <griffinwork40@gmail.com> afk-port <noreply@users.noreply.github.com>

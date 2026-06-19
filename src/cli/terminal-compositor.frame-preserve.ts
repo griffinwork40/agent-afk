@@ -9,6 +9,7 @@
  */
 
 import type { FrameHost } from './terminal-compositor.frame.js';
+import { eraseAndPaintRow } from './terminal-compositor.types.js';
 
 /**
  * Preserve rows that the next compositor frame is about to cover.
@@ -58,10 +59,10 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     // follows repaints its own (lower) footprint; survivors sit above it.
     let out = '';
     for (let r = Math.max(1, self.committedBandTopRow); r <= self.committedBandBottomRow; r++) {
-      out += `\x1b[${r};1H\x1b[2K`;
+      out += eraseAndPaintRow(r);
     }
     for (let i = 0; i < bandLen; i++) {
-      out += `\x1b[${1 + i};1H\x1b[2K${self.committedBand[i] ?? ''}`;
+      out += eraseAndPaintRow(1 + i, self.committedBand[i]);
     }
     try {
       self.stdout.write(out);

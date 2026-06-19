@@ -11,12 +11,61 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.19.0] - 2026-06-18
+
+### Added
+- render MCP form enum/boolean fields as arrow-key selector (47546b9)
+
+### Changed
+- Merge pull request #212 from griffinwork40/afk/20260618-153242-30da7d (2cff1df)
+
+## [4.18.3] - 2026-06-18
+
+### Changed
+- Merge pull request #208 from griffinwork40/refactor/extract-resolve-params (2acc9a0)
+- extract pure param resolvers into resolve-params.ts (c5462c0)
+
+## [4.18.2] - 2026-06-18
+
+### Changed
+- Merge pull request #211 from griffinwork40/simplify/terminal-compositor-dedup (6da7b60)
+- centralize committed-band CUP+EL escape into eraseAndPaintRow (57f417e)
+
+## [4.18.1] - 2026-06-18
+
+### Changed
+- Merge pull request #207 from griffinwork40/refactor/split-diagnose-into-phases (421e4b5)
+- Merge pull request #210 from griffinwork40/refactor/split-tool-lane-overlay-test (0d9e6d0)
+- extract overlay-rendering cluster into its own test file (58b90e2)
+- split diagnose/index.ts into modules (e95ef57)
+
+## [4.18.0] - 2026-06-18
+
+### Added
+- scope /resume session list to current working directory (3ba3674)
+
+### Changed
+- Merge pull request #209 from griffinwork40/afk/20260618-123959-6040de (e5c19af)
+
+## [4.17.0] - 2026-06-18
+
 ### Added
 - Path-access approval: typed file tools (`read_file`, `write_file`, `edit_file`, `list_directory`, `glob`, `grep`) targeting a path outside the session's granted roots now prompt for approval — once / session / persist / deny — via the REPL or Telegram elicitation surface. Persisted grants are stored in `~/.afk/config/permissions.json` and replayed on future sessions
 - Bash restriction hook: hard-blocks interpreter one-liners (`python -c`, `node -e`, `ruby -e`, `perl -e`, `sh -c`, `bash -c`, `lua -e`, ...) and restricted-root substrings (`~/.ssh`, `~/.aws`, ...), routing the model back to the prompt-able typed file tools
 - `AFK_DISABLE_BASH_INTERPRETER_GUARD` env var — lifts only the bash interpreter-eval denylist while keeping the rest of path-approval enabled
 - `AFK_DISABLE_PATH_APPROVAL` env var — disables the path-approval + bash-restriction hooks entirely (for headless flows that need wide-open file access)
 - `AFK_FORCE_BASH_INTERPRETER_GUARD` env var — opts headless surfaces back into the interpreter denylist
+
+### Added
+- elicit user approval for restricted-path tool calls (port afk-workshop#477) (42c013f)
+
+### Fixed
+- resolve PR #202 review findings (H1/M1/M2/L1-L4/N1-N2) (cc07c7f)
+
+### Changed
+- Merge pull request #202 from griffinwork40/afk-port/pr-477 (e443d01)
+- Merge remote-tracking branch 'origin/main' into afk-port/pr-477 (d3439cb)
+- Merge pull request #204 from griffinwork40/afk-port/pr-477-review (086ca4e)
 
 ## [4.16.1] - 2026-06-18
 

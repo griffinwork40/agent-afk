@@ -105,10 +105,17 @@ export const resumeCmd: SlashCommand = {
       ctx.out.info('No saved sessions found.  Use /save first.');
       return 'continue';
     }
+    const currentCwd = ctx.stats.cwd ?? process.cwd();
+    const localEntries = entries.filter((e) => e.cwd === currentCwd);
+    const isFiltered = localEntries.length > 0;
+    const displayEntries = isFiltered ? localEntries : entries;
+    const header = isFiltered
+      ? palette.bold(`Saved sessions  (${displayEntries.length})`)
+      : palette.bold(`Saved sessions — all (none in this directory)`);
     ctx.out.line();
-    ctx.out.line(palette.bold(`Saved sessions  (${entries.length})`));
+    ctx.out.line(header);
     ctx.out.line(divider());
-    for (const e of entries.slice(0, 20)) {
+    for (const e of displayEntries.slice(0, 20)) {
       const when = fmtWhen(e.savedAt);
       const model = palette.brand(e.model.padEnd(7));
       const turns = palette.meta(`${e.totalTurns} turn${e.totalTurns === 1 ? '' : 's'}`.padEnd(9));

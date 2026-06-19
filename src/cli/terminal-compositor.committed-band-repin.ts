@@ -6,6 +6,7 @@
  */
 
 import type { CommittedBandHost } from './terminal-compositor.committed-band-commit.js';
+import { eraseAndPaintRow } from './terminal-compositor.types.js';
 
 /**
  * Physically erase the pre-resize on-screen footprint snapshotted by the
@@ -35,7 +36,7 @@ export function flushResizeGhostErase(self: CommittedBandHost): void {
   // scroll region is never triggered.
   let out = '';
   for (let r = top; r <= bottom; r++) {
-    out += `\x1b[${r};1H\x1b[2K`;
+    out += eraseAndPaintRow(r);
   }
   try {
     self.stdout.write(out);
@@ -98,10 +99,10 @@ export function repositionCommittedBand(
   // Erase rows the block vacated when it slid DOWN (the former gap), down to —
   // but not including — its new top.
   for (let r = Math.max(floor, self.committedBandTopRow); r < newTop; r++) {
-    out += `\x1b[${r};1H\x1b[2K`;
+    out += eraseAndPaintRow(r);
   }
   for (let i = 0; i < paint.length; i++) {
-    out += `\x1b[${newTop + i};1H\x1b[2K${paint[i] ?? ''}`;
+    out += eraseAndPaintRow(newTop + i, paint[i]);
   }
   // Re-park the cursor where CupFrameRenderer.render() left it (the frame's
   // bottom content row) so the band write does not displace it.

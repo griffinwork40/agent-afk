@@ -18,6 +18,7 @@ import type {
   KeyInfo,
   LogUpdateFn,
 } from './terminal-compositor.types.js';
+import { eraseAndPaintRow } from './terminal-compositor.types.js';
 import * as InputDispatch from './terminal-compositor.input-dispatch.js';
 import type { KeyDispatchHost } from './terminal-compositor.input-dispatch.js';
 
@@ -399,7 +400,7 @@ function flushPendingCommittedBand(self: LifecycleHost): void {
     for (let start = 0; start < pending.length; start += chunkMax) {
       const chunk = pending.slice(start, Math.min(start + chunkMax, pending.length));
       const topWrite = chunk
-        .map((l, i) => `\x1b[${anchorFloor + i};1H\x1b[2K${l ?? ''}`)
+        .map((l, i) => eraseAndPaintRow(anchorFloor + i, l))
         .join('');
       self.stdout.write(`${topWrite}\x1b[${rows};1H${'\n'.repeat(chunk.length)}`);
     }

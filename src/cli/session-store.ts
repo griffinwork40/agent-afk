@@ -46,6 +46,10 @@ export interface StoredSession {
   /** Execution role ('main' | 'subagent'). Sidecars are top-level-only, so
    *  'main' when set; absent on legacy/un-threaded saves. */
   actor?: TraceActor;
+  /** Effective working directory when the session was started. Used by /resume
+   * to filter the list to sessions from the current directory. Absent on
+   * legacy sidecars — those surface only in the global fallback view. */
+  cwd?: string;
 }
 
 export interface SessionListEntry {
@@ -60,6 +64,7 @@ export interface SessionListEntry {
   savedAt: number;
   totalTurns: number;
   totalCostUsd: number;
+  cwd?: string;
 }
 
 export interface FoundSession {
@@ -130,6 +135,7 @@ export function saveSession(stats: SessionStats, overrideId?: string): string {
     ...(stats.source ? { source: stats.source } : {}),
     ...(stats.actor ? { actor: stats.actor } : {}),
     ...(stats.telegramChatId !== undefined ? { telegramChatId: stats.telegramChatId } : {}),
+    ...(stats.cwd ? { cwd: stats.cwd } : {}),
     model: stats.model,
     startedAt: stats.sessionStartTime,
     savedAt: Date.now(),
@@ -285,6 +291,7 @@ export function listSessions(): SessionListEntry[] {
         savedAt: loaded.savedAt,
         totalTurns: loaded.totalTurns,
         totalCostUsd: loaded.totalCostUsd,
+        cwd: loaded.cwd,
       });
     } catch {
       // skip corrupted files

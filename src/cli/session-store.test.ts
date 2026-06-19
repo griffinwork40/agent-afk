@@ -404,6 +404,25 @@ describe('session-store — naming', () => {
     // Resolving by sidecar id and SDK id still works.
     expect(findSession('sdk-legacy')?.data.sessionId).toBe('sdk-legacy');
   });
+
+  it('persists cwd when set on stats', () => {
+    const stats = createSessionStats('sonnet');
+    stats.cwd = '/proj/foo';
+    recordTurn(stats, 'work here', 'done', { sessionId: 'sdk-cwd-test' });
+    const path = saveSession(stats);
+    const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+    expect(raw['cwd']).toBe('/proj/foo');
+    const entry = listSessions().find((e) => e.sessionId === 'sdk-cwd-test');
+    expect(entry?.cwd).toBe('/proj/foo');
+  });
+
+  it('does not write cwd key when absent from stats', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'no cwd', 'done', { sessionId: 'sdk-no-cwd' });
+    const path = saveSession(stats);
+    const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+    expect('cwd' in raw).toBe(false);
+  });
 });
 
 describe('session-store — session identity (source / actor)', () => {
