@@ -52,6 +52,28 @@ describe('SessionToolDispatcher', () => {
     expect(result.isError).toBeUndefined();
   });
 
+  describe('setAllowAll (live /bypass toggle — file-tool containment half)', () => {
+    it('flips getGrants().allowAll in place, both directions', () => {
+      const d = makeDispatcher();
+      expect(d.getGrants().allowAll).toBe(false);
+      // `/bypass on`: takes effect immediately (read fresh per call via the
+      // handlerContext getter — no dispatcher rebuild needed).
+      d.setAllowAll(true);
+      expect(d.getGrants().allowAll).toBe(true);
+      // `/bypass off`: must restore containment (fail-closed) — the direction
+      // that previously failed UNSAFE because the field was never updated.
+      d.setAllowAll(false);
+      expect(d.getGrants().allowAll).toBe(false);
+    });
+
+    it('can toggle off a construction-time bypass', () => {
+      const d = makeDispatcher({ allowAll: true });
+      expect(d.getGrants().allowAll).toBe(true);
+      d.setAllowAll(false);
+      expect(d.getGrants().allowAll).toBe(false);
+    });
+  });
+
   it('returns isError for unknown tool', async () => {
     const dispatcher = makeDispatcher({
       permissions: { allowedTools: ['echo', 'nonexistent'] },

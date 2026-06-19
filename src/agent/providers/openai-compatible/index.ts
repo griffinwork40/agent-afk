@@ -219,6 +219,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const buildOpts: {
       baseURL?: string;
       toolDispatcher?: ToolDispatcher;
+      onPermissionMode?: (mode: string) => void;
       mcpManager?: import('../../mcp/index.js').McpManager;
     } = {};
     // Per-slot / per-session baseURL (`config.openaiBaseUrl`, set by
@@ -228,6 +229,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const effectiveBaseURL = config.openaiBaseUrl ?? this.providerOpts.baseURL;
     if (effectiveBaseURL !== undefined) buildOpts.baseURL = effectiveBaseURL;
     buildOpts.toolDispatcher = dispatcher;
+    // Path-approval half of the live `/bypass` toggle: keep the provider's
+    // `_currentPermissionMode` (read by getGrants().allowAll) in sync with the
+    // query handle's mode. File-tool half is the dispatcher's setAllowAll().
+    buildOpts.onPermissionMode = (mode: string) => {
+      this._currentPermissionMode = mode;
+    };
     if (this.providerOpts.mcpManager !== undefined) buildOpts.mcpManager = this.providerOpts.mcpManager;
 
     // Phase 2 — Presence file lifecycle (top-level sessions only).

@@ -868,7 +868,10 @@ export class AnthropicDirectProvider implements ModelProvider {
           //    will continue to reference the original `queryDispatcher` — an
           //    accepted minor staleness window for Phase 1 (worktree rename
           //    rarely coincides with mid-session MCP tool refresh).
-          const newDispatcher = this.buildDispatcher(permissionMode, {
+          // Use the LIVE permission mode (not the captured construction-time
+          // `permissionMode`) so a `/cd` after a `/bypass` toggle rebuilds the
+          // dispatcher with the current allowAll, never reverting the toggle.
+          const newDispatcher = this.buildDispatcher(this._currentPermissionMode, {
             cwd: newCwd,
             readRoots: this._sharedReadRoots,
             writeRoots: this._sharedWriteRoots,
@@ -920,6 +923,13 @@ export class AnthropicDirectProvider implements ModelProvider {
         ? { autoResumeOnUsageLimit: config.autoResumeOnUsageLimit }
         : {}),
       ...(cwdDependentsFactory !== undefined ? { cwdDependentsFactory } : {}),
+      // Path-approval half of the live `/bypass` toggle: keep the provider's
+      // `_currentPermissionMode` (read by getGrants().allowAll) in sync with
+      // the query handle's mode. The file-tool half is the dispatcher's
+      // setAllowAll(), flipped inside the same setPermissionMode call.
+      onPermissionMode: (mode: string) => {
+        this._currentPermissionMode = mode;
+      },
       ...(this.mcpManager !== undefined ? { mcpManager: this.mcpManager } : {}),
       ...(resolveAutoCompactThreshold(config.autoCompact) !== undefined
         ? { autoCompactThreshold: resolveAutoCompactThreshold(config.autoCompact) }

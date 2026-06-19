@@ -151,6 +151,14 @@ export interface AnthropicDirectQueryOptions {
    */
   cwdDependentsFactory?: (cwd: string) => { userSystem: string; dispatcher: ToolDispatcher };
   /**
+   * Provider callback invoked by `setPermissionMode()` to update the
+   * provider-level `_currentPermissionMode` — the field the path-approval hook
+   * reads via the provider's `getGrants().allowAll`. This is the path-approval
+   * half of a live `/bypass` toggle; the file-tool half is the dispatcher's
+   * `setAllowAll()`. Supplied by `AnthropicDirectProvider.query()`.
+   */
+  onPermissionMode?: (mode: string) => void;
+  /**
    * Optional MCP manager — used by `session.init` and `mcpServerStatus()`
    * to surface live MCP server status to the REPL (`/mcp`), the Telegram
    * bridge, and the daemon's state file. The query itself does NOT call
@@ -225,6 +233,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
    */
   private readonly retry: RetryLayer;
   private readonly cwdDependentsFactory?: (cwd: string) => { userSystem: string; dispatcher: ToolDispatcher };
+  private readonly onPermissionMode?: (mode: string) => void;
   private readonly mcpManager?: import('../../mcp/index.js').McpManager;
 
   constructor(opts: AnthropicDirectQueryOptions) {
@@ -238,6 +247,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
     if (opts.baseUrl !== undefined) this.baseUrl = opts.baseUrl;
     this.traceWriter = opts.traceWriter;
     this.cwdDependentsFactory = opts.cwdDependentsFactory;
+    this.onPermissionMode = opts.onPermissionMode;
     this.mcpManager = opts.mcpManager;
     this.retry = new RetryLayer({
       client: opts.client,
@@ -464,7 +474,19 @@ export class AnthropicDirectQuery implements ProviderQuery {
   }
 
   async setPermissionMode(mode: string): Promise<void> {
+    // The plan/AFK system-prompt addendum reads this on the next composeSystem.
     this.state.currentPermissionMode = mode;
+    // Live enforcement spans two reads fed by two separate fields — keep both
+    // in sync or a live `/bypass` toggle silently fails (and `/bypass off`
+    // fails UNSAFE: badge clears while the agent stays unrestricted):
+    //  1. File-tool path containment reads the dispatcher's `allowAll` fresh
+    //     per call, so flip it in place — effective on the next tool call.
+    const bypass = mode === 'bypassPermissions';
+    this.state.toolDispatcher.setAllowAll?.(bypass);
+    //  2. The path-approval hook reads the PROVIDER's getGrants().allowAll (a
+    //     different field, `_currentPermissionMode`); update it via the
+    //     provider-supplied callback.
+    this.onPermissionMode?.(mode);
   }
 
   /**

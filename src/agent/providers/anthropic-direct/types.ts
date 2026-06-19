@@ -383,6 +383,16 @@ export interface ToolDispatcherLike {
    * implementation.
    */
   setResolveBase?(cwd: string): void;
+  /**
+   * Optional in-place bypass (`allowAll`) update. Called by a provider query
+   * handle's `setPermissionMode()` so a live `/bypass` toggle changes effective
+   * file-tool path containment mid-session. The dispatcher reads `allowAll`
+   * fresh per call (via its `handlerContext` getter), so flipping it here takes
+   * effect on the NEXT tool call — no dispatcher swap needed. Dispatchers that
+   * own their own permission model can omit this.
+   * See `SessionToolDispatcher.setAllowAll` for the canonical implementation.
+   */
+  setAllowAll?(allow: boolean): void;
 }
 
 /**

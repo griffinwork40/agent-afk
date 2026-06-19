@@ -214,8 +214,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly _readRoots: string[];
   /** Mutable write-root list. Mutated in place by `addWriteRoot`/`revokeRoot`/`setResolveBase`. */
   private readonly _writeRoots: string[];
-  /** When true, all path containment is bypassed (bypassPermissions mode). */
-  private readonly _allowAll: boolean;
+  /**
+   * When true, all path containment is bypassed (bypassPermissions mode).
+   * Mutable so a live `/bypass` toggle can flip it mid-session via
+   * `setAllowAll()` — read fresh per call by the `handlerContext` getter.
+   */
+  private _allowAll: boolean;
   /** Optional per-session env injected into the Bash handler's spawn env. */
   private readonly _env: Record<string, string> | undefined;
   private readonly sessionId: string | undefined;
@@ -327,6 +331,18 @@ export class SessionToolDispatcher implements ToolDispatcher {
       writeRoots: this._writeRoots.slice(),
       allowAll: this._allowAll,
     };
+  }
+
+  /**
+   * Flip the bypass (`allowAll`) flag in place. Mutates rather than rebuilding
+   * so callers holding this dispatcher by reference (e.g. `loop.ts` captured
+   * `runInput.toolDispatcher` for an in-flight turn) see the new value on their
+   * next `handlerContext`/`getGrants()` read. This is the file-tool half of a
+   * live `/bypass` toggle; the path-approval-hook half is the provider's
+   * `_currentPermissionMode` (see the query handle's `setPermissionMode`).
+   */
+  setAllowAll(allow: boolean): void {
+    this._allowAll = allow;
   }
 
   /**
