@@ -71,7 +71,7 @@ All browser environment variables are optional.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AFK_BROWSER_HEADLESS` | surface-aware | `1` forces headless; `0` forces headed. Default is headed for REPL, headless for daemon/subagent/telegram. |
+| `AFK_BROWSER_HEADLESS` | surface-aware | `1` forces headless; `0` forces headed. Default is headed for the interactive REPL, headless for the `daemon`, `subagent`, `telegram`, and `afk` surfaces. |
 | `AFK_BROWSER_ALLOWED_DOMAINS` | (empty — permissive) | Comma-separated host globs. Non-matching navigation is blocked. |
 | `AFK_BROWSER_BLOCKED_DOMAINS` | (empty) | Comma-separated host globs. Matching navigation is blocked regardless of the allowlist. |
 | `AFK_BROWSER_DOM_SNAPSHOTS` | off | `1` writes a gzipped DOM snapshot per `browser_act` to `~/.afk/state/witness/<sid>/browser/dom-snapshots/`. |

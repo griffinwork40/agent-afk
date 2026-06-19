@@ -63,7 +63,7 @@ Agent AFK ships blast-radius controls — the guardrails that keep unattended ru
 
 - **Cost guardrails** — `AFK_MAX_BUDGET_USD` (or `--max-budget-usd` on `afk chat`) aborts a turn that would breach the cost ceiling.
 - **Turn limits** — `--max-turns` caps total turns (`afk chat` defaults to 10, `afk i` to 100), preventing runaway sessions.
-- **Bypass permissions** — by default tool calls run without per-tool approval prompts, which is intentional for unattended work.
+- **Path-access approval** — there are no per-tool prompts, but in the default mode a file tool reaching outside the working directory asks before it runs. [Bypass mode](/configuration/permissions) turns containment off for fully unattended work.
 - **Worktree isolation** — `--worktree` creates a git worktree for the session; on clean exit it is removed automatically.
 
 ## Local-first, no phone-home

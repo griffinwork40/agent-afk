@@ -57,6 +57,16 @@ Type `/` in the REPL to see available commands. Typos are caught automatically �
 | `/limits` | Show rate-limit and budget state |
 | `/debug` | Toggle verbose debug output |
 
+### Permissions
+
+| Command | Description |
+|---|---|
+| `/allow-dir <path>` | Pre-authorize a directory for file tools (`--revoke <path>` to remove a grant) |
+| `/bypass` | Disable path containment entirely (`/bypass off` to restore); shows a `⚠ BYPASS` badge |
+| `/afk` | Enter autonomous mode — risk-gated, with remote answer/abort over Telegram (`/afk off` to exit) |
+
+See [Permissions](/configuration/permissions) for the full model behind these commands.
+
 ### Planning and state
 
 | Command | Description |
@@ -113,6 +123,32 @@ The REPL streams model output token-by-token with markdown rendering. Tool calls
 collapsible lane entries showing the tool name, arguments, and result. Extended thinking renders
 as a summary lane (or live, depending on `--thinking-ui`).
 
+## Type-ahead and queueing
+
+You don't have to wait for the agent to finish a turn before typing your next message. Press
+**Enter** on a non-empty buffer while a turn is in flight and the message is **queued** — the input
+clears so you can draft the next one. The input line shows `[queued]` for one pending message or
+`[N queued]` for several.
+
+Queued messages drain in order (FIFO), one per completed turn. To revise the message you most
+recently queued, press **↑** (Up arrow) on an empty buffer: the last queued message pops back into
+the input as an editable draft (non-destructive). **Backspace does not dequeue** — committed
+type-ahead is only ever recalled for editing with ↑, never silently discarded.
+
+## Usage limits
+
+When your Claude subscription hits its hourly limit mid-session, the REPL shows a usage-limit
+notice rather than failing the turn. By default AFK **auto-resumes** when the limit resets — you
+don't need to retype anything. The notice also lists the actions you can take right now:
+
+- **Switch model** — type `/model <name>` then Enter to continue on a different model.
+- **Switch account** — run `claude login` in any terminal; the session resumes automatically.
+- **Stop waiting** — press **Esc**.
+
+Set `autoResumeOnUsageLimit: false` in `afk.config.json` to opt out of automatic resume (the
+notice then prompts you to resend, switch to API-key billing, or re-auth). The `/limits` command
+shows current rate-limit and budget state at any time.
+
 ## Worktree isolation
 
 `-w` / `--worktree` creates a git worktree for the session. Every bash command and file operation
@@ -146,3 +182,7 @@ startup:
 afk i --resume <session-id>
 afk i --continue              # most recent session in cwd
 ```
+
+`/resume` lists sessions saved from the **current working directory** first — so the picker in a
+project shows that project's sessions, not every session on the machine. When no session was saved
+from the current directory, it falls back to listing all saved sessions.

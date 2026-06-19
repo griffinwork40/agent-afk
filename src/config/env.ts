@@ -731,10 +731,10 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   // ── MCP ───────────────────────────────────────────────────────────────────
   {
     name: 'AFK_ALLOW_PROJECT_MCP',
-    description: 'Allow loading MCP configuration from <cwd>/.mcp.json. Disabled by default — opt-in to mitigate config-injection risks.',
+    description: 'Controls auto-loading of MCP configuration from <cwd>/.mcp.json. Auto-loaded by default — set to 0 to disable (mitigates config-injection risk in shared/CI environments).',
     type: 'boolean',
     required: false,
-    example: '1',
+    example: '0',
     category: 'mcp',
   },
 

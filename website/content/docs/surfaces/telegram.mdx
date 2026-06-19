@@ -69,8 +69,9 @@ Inside Telegram, the bot recognizes:
 | `/reset` | Clear conversation history and start fresh |
 | `/model opus` | Switch the active model (`opus`, `sonnet`, `haiku`, `fable`) |
 
-Any other message is sent to the session as a regular turn. The bot has full tool access via
-bypass mode — same as the REPL.
+Any other message is sent to the session as a regular turn. The bot runs in the **default**
+permission mode — tools execute without per-tool prompts, and file access outside the working
+directory stays contained, the same as the REPL. See [Permissions](/configuration/permissions).
 
 ## Managing the bot process
 

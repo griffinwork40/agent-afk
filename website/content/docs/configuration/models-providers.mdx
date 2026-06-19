@@ -138,6 +138,25 @@ export AFK_EFFORT=medium          # low | medium | high | xhigh | max
 as an effort hint (model-gated; ignored where unsupported). Both can also be
 set per-call with `--thinking` and `--effort` flags.
 
+**OpenAI o-series reasoning effort.** For o-series models (`o1`, `o3`, `o3-mini`,
+`o4`, and `provider/o*` IDs), `AFK_EFFORT` maps to the OpenAI `reasoning_effort`
+parameter: `low` → `low`, `medium` → `medium`, and `high`/`xhigh`/`max` → `high`.
+The value is sent on the Chat Completions request (or as `reasoning.effort` on the
+Responses API). It is omitted entirely when `AFK_EFFORT` is unset or the model is
+not o-series.
+
+## Reliability and retries
+
+The openai-compatible provider retries transient failures automatically. Requests
+that fail with `429`, `500`, `502`, `503`, or `529` are retried up to three times
+with exponential backoff (2s → 4s → 8s); both the initial connection and a dropped
+stream get their own retry budget. Non-transient statuses (`400`, `401`, `403`,
+`404`) are surfaced immediately without retrying.
+
+Output-token caps are threaded into the streaming request body: `AFK_MAX_OUTPUT_TOKENS`
+(or the resolved per-model default) is sent as `max_tokens`, or as `max_completion_tokens`
+for o-series models that require it.
+
 ## Debug: what provider is active?
 
 ```bash

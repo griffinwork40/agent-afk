@@ -109,6 +109,14 @@ In the REPL:
 
 `/mcp auth` reads pending OAuth consent URLs from `~/.afk/state/mcp/server-status.json`. When an MCP server requests OAuth consent (e.g., Supabase re-auth), the REPL prints the server name, message, and URL, then prompts `Continue? [y/N]`.
 
+### Interactive server prompts
+
+Some MCP servers request input mid-session through an elicitation form. On the REPL these render
+inline, and fields with a fixed set of values — `enum` fields and booleans — appear as an
+**arrow-key selector** rather than a free-text prompt (optional fields include a "skip" choice). On
+non-TTY surfaces (daemon, piped input) AFK falls back to a typed prompt. Type `:decline` or
+`:cancel` at any prompt to exit the form.
+
 ### Server failures
 
 Non-fatal by default: a server that fails to connect is reported as a warning and skipped. Mark a server `alwaysLoad: true` in the config to make its failure abort session startup:
