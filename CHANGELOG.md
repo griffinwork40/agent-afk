@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.21.1] - 2026-06-19
+
+### Fixed
+- make forked sub-agents non-interactive (96d7b3a)
+
+### Changed
+- Merge pull request #218 from griffinwork40/fix/subagents-non-interactive (3e4f8e8)
+
 ## [4.21.0] - 2026-06-19
 
 ### Added
