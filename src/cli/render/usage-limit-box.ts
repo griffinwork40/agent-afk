@@ -63,9 +63,19 @@ export function usageLimitBox(opts: {
       // channels promise the same behavior.
       bodyLines.push("I'll auto-resume when the limit resets — no need to retype.");
       bodyLines.push('');
-      bodyLines.push('Other options:');
-      bodyLines.push('  \u2022 Switch to API-key billing: export ANTHROPIC_API_KEY=...');
-      bodyLines.push('  \u2022 Log into another account in any terminal: claude login');
+      // Discoverable at-keyboard escapes. The model switch + Esc are honored
+      // mid-pause: a submitted line ends the wait via the compositor's
+      // pause-interrupt and runs as the next turn (see
+      // terminal-compositor.input-dispatch.ts + turn-handler.ts). The
+      // `claude login` path is picked up live by the keychain hot-swap in
+      // usage-limit.ts. The former `export ANTHROPIC_API_KEY` bullet was
+      // dropped here: the running process already captured its credential and
+      // the hot-swap watches only the keychain OAuth token, so a new env var
+      // in another terminal does nothing for THIS turn (future sessions only).
+      bodyLines.push('Or act now:');
+      bodyLines.push('  \u2022 Switch model — type  /model <name>  then press Enter');
+      bodyLines.push('  \u2022 Switch account — run  claude login  in any terminal (resumes automatically)');
+      bodyLines.push('  \u2022 Press Esc to stop waiting');
     } else {
       bodyLines.push('Options:');
       bodyLines.push('  \u2022 Wait, then send the message again.');

@@ -619,13 +619,20 @@ describe('usageLimitBox', () => {
     expect(out).not.toContain("I'll auto-resume when the limit resets");
   });
 
-  it('keeps the API-key + claude-login escape hatches in both modes', () => {
+  it('advertises mode-appropriate escape hatches (live auto-resume card vs manual)', () => {
     const autoOn = strip(usageLimitBox({ reason: 'usage-limit', autoResume: true }));
     const autoOff = strip(usageLimitBox({ reason: 'usage-limit', autoResume: false }));
-    for (const out of [autoOn, autoOff]) {
-      expect(out).toContain('ANTHROPIC_API_KEY');
-      expect(out).toContain('claude login');
-    }
+    // `claude login` is picked up live by the keychain hot-swap in BOTH modes.
+    expect(autoOn).toContain('claude login');
+    expect(autoOff).toContain('claude login');
+    // Live (auto-resume) card: actionable in-pause escapes; the misleading
+    // env-var bullet is dropped because the running turn never re-reads env.
+    expect(autoOn).toContain('/model');
+    expect(autoOn).toContain('Press Esc to stop waiting');
+    expect(autoOn).not.toContain('ANTHROPIC_API_KEY');
+    // Manual (autoResume:false) card keeps the API-key billing hint — there the
+    // user genuinely starts a fresh send after the reset, so a new env var applies.
+    expect(autoOff).toContain('ANTHROPIC_API_KEY');
   });
 
   it('includes the reset time when resetsAt is provided', () => {
