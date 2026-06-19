@@ -203,9 +203,13 @@ async function preToolUseImpl(
       resolveBase: grants.resolveBase ?? cwd,
       readRoots: grants.readRoots,
       writeRoots: grants.writeRoots,
+      ...(grants.allowAll === true ? { allowAll: true } : {}),
     },
     mode,
   );
+  // Bypass mode: `allowAll` makes wouldBeRestricted return not-restricted, so
+  // this returns {} here — no prompt. (Belt-and-suspenders with the explicit
+  // flag pass-through above.)
   if (!result.restricted) return {};
 
   // A forked sub-agent has no human relationship of its own and must not prompt

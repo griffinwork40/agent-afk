@@ -271,6 +271,29 @@ describe('createPathApprovalHook — outcome mapping', () => {
   });
 });
 
+describe('createPathApprovalHook — allowAll bypass (bypassPermissions, PR2)', () => {
+  // When the provider reports allowAll (session in bypassPermissions), the hook
+  // must NOT prompt for out-of-root paths — wouldBeRestricted returns
+  // not-restricted, mirroring the handler's resolveAndContain which also admits
+  // the path. This is what makes "bypass" actually skip the approval prompt.
+  it('does not prompt for an out-of-root path when grants.allowAll is true', async () => {
+    const handler = vi.fn(async () => ({ action: 'accept', content: { choice: 'session' } }));
+    elicitationRouter.install(handler);
+    const mgr = makeMockGrantManager();
+    const bypassMgr = { ...mgr, getGrants: () => ({ ...mgr.getGrants(), allowAll: true }) };
+    const { preToolUse } = createPathApprovalHook({
+      getGrantManager: () => bypassMgr,
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    const decision = await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }));
+    expect(decision).toEqual({});
+    expect(handler).not.toHaveBeenCalled();
+    expect(mgr._events).toHaveLength(0);
+  });
+});
+
 describe('createPathApprovalHook — concurrency dedup', () => {
   it('two concurrent calls to the same path produce one prompt', async () => {
     let resolveHandler: (() => void) | undefined;

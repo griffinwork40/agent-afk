@@ -120,11 +120,14 @@ Markers never leak back into stored history — `cache-policy.ts` clones-and-sta
 
 ## Bypass permissions
 
-By default, the Claude Agent SDK asks for permission before executing tools like bash, file ops, web requests, etc. **`agent-afk` enables `bypassPermissions: true`** which:
+By default, `agent-afk` runs in permission mode `'default'`: tools execute without a per-tool approval prompt, but a file tool touching a path **outside the session's granted roots** triggers a path-approval prompt (and out-of-root access stays contained until granted). There is no per-tool "allow this bash command?" flow.
 
-- Skips all permission prompts
+**Bypass mode** (`permissionMode: 'bypassPermissions'`) disables path containment and the path-approval prompt entirely — filesystem tools may read/write any path with no confirmation:
+
+- Skips path-approval prompts; disables out-of-root containment
 - Allows fully automated workflows
-- Designed for CLI/scripting and unattended daemon work
+- Enable with `/bypass` in the REPL (status line shows `⚠ BYPASS`); the `afk daemon` sets it directly for unattended work
+- Does **not** affect `ask_question` (the model asking you a question is a separate axis)
 
 This is intentional — `agent-afk` is built for unattended work, where a permission prompt with no human in front of it just wedges the session. Use on a machine and account you trust.
 

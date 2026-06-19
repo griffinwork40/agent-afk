@@ -151,6 +151,7 @@ export function registerChatCommand(program: Command): void {
     .option('--session-id <uuid>', 'Assign a specific UUID to this session (creates new; errors if already exists)')
     .option('--post <targets>', 'Headless publish of the final assistant message: github, telegram, or github,telegram')
     .option('--post-pr <ref>', 'PR number, URL, or branch for --post github (defaults to the current-branch PR)')
+    .option('--dangerously-skip-permissions', 'Bypass mode: skip path-approval prompts; the agent may read/write ANY path with no confirmation (permissionMode=bypassPermissions). Does not affect ask_question.')
     .action(async (rawMessage: string | undefined, options: {
       model: AgentModelInput;
       stream: boolean;
@@ -170,6 +171,7 @@ export function registerChatCommand(program: Command): void {
       sessionId?: string;
       post?: string;
       postPr?: string;
+      dangerouslySkipPermissions?: boolean;
     }) => {
       // -----------------------------------------------------------------------
       // Mutual-exclusion checks for session flags (before spinner so errors
@@ -575,6 +577,15 @@ export function registerChatCommand(program: Command): void {
           // handler is installed, so ask_question can only auto-decline. Strip
           // it so the model proceeds on an assumption instead of wasting a turn.
           isNonInteractive: true,
+          // Bypass mode: --dangerously-skip-permissions wins; else the
+          // afk.config.json `permissionMode` key (validated in loadConfig).
+          // Omitted entirely when neither is set so the session defaults to
+          // 'default' at the session layer.
+          ...(options.dangerouslySkipPermissions
+            ? { permissionMode: 'bypassPermissions' as const }
+            : cliConfig.permissionMode !== undefined
+              ? { permissionMode: cliConfig.permissionMode }
+              : {}),
           hookRegistry: createDefaultHookRegistry((info) => {
             console.log(formatSubagentCompletion(info));
           }, 'cli', sharedMemoryStore, undefined, loadHooksConfig({ cwd: worktreeCwd }), { cwd: worktreeCwd }).registry,

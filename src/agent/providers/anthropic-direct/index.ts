@@ -191,6 +191,12 @@ export class AnthropicDirectProvider implements ModelProvider {
   private _sharedReadRoots: string[] | undefined;
   /** Mutable write-root list — same shared-reference pattern as `_sharedReadRoots`. */
   private _sharedWriteRoots: string[] | undefined;
+  /**
+   * The session's current permission mode, refreshed on each `query()`. Read by
+   * `getGrants()` so the path-approval hook sees `allowAll` in bypassPermissions
+   * mode (the per-query dispatcher gets the same signal via `buildDispatcher`).
+   */
+  private _currentPermissionMode = 'default';
   /** The first cwd ever seen by ensureSharedRoots — non-revocable, mirrors the dispatcher-level guard. */
   private _initialResolveBase: string | undefined;
   /**
@@ -355,6 +361,9 @@ export class AnthropicDirectProvider implements ModelProvider {
     const mcpSchemas = this._mcpToolsCache ?? [];
     return new SessionToolDispatcher({
       handlers,
+      // Bypass mode: when the session runs in bypassPermissions, every per-call
+      // ToolHandlerContext carries allowAll:true so path containment is disabled.
+      allowAll: permissionMode === 'bypassPermissions',
       // Constraint (semantic invariant): MCP schemas appended AFTER builtins
       // so builtin tool names always take precedence in any overlap.
       schemas: [...this.schemas, ...mcpSchemas],
@@ -492,11 +501,12 @@ export class AnthropicDirectProvider implements ModelProvider {
     this.appendProviderAuditLog({ action: 'revoke', path: p, source, sessionId });
   }
 
-  getGrants(): { resolveBase: string | undefined; readRoots: string[]; writeRoots: string[] } {
+  getGrants(): { resolveBase: string | undefined; readRoots: string[]; writeRoots: string[]; allowAll: boolean } {
     return {
       resolveBase: this._initialResolveBase,
       readRoots: this._sharedReadRoots?.slice() ?? [],
       writeRoots: this._sharedWriteRoots?.slice() ?? [],
+      allowAll: this._currentPermissionMode === 'bypassPermissions',
     };
   }
 
@@ -566,6 +576,9 @@ export class AnthropicDirectProvider implements ModelProvider {
     // external dispatcher, use it as-is — external callers own their own
     // lifecycle.
     const permissionMode = config.permissionMode ?? 'default';
+    // Track for getGrants() so the path-approval hook's allowAll stays in sync
+    // with the per-query dispatcher's (both derive from this mode).
+    this._currentPermissionMode = permissionMode;
 
     // Initialise the shared root arrays on first query. Subsequent queries
     // reuse the same array references so /allow-dir grants survive across turns.
@@ -855,7 +868,10 @@ export class AnthropicDirectProvider implements ModelProvider {
           //    will continue to reference the original `queryDispatcher` — an
           //    accepted minor staleness window for Phase 1 (worktree rename
           //    rarely coincides with mid-session MCP tool refresh).
-          const newDispatcher = this.buildDispatcher(permissionMode, {
+          // Use the LIVE permission mode (not the captured construction-time
+          // `permissionMode`) so a `/cd` after a `/bypass` toggle rebuilds the
+          // dispatcher with the current allowAll, never reverting the toggle.
+          const newDispatcher = this.buildDispatcher(this._currentPermissionMode, {
             cwd: newCwd,
             readRoots: this._sharedReadRoots,
             writeRoots: this._sharedWriteRoots,
@@ -907,6 +923,13 @@ export class AnthropicDirectProvider implements ModelProvider {
         ? { autoResumeOnUsageLimit: config.autoResumeOnUsageLimit }
         : {}),
       ...(cwdDependentsFactory !== undefined ? { cwdDependentsFactory } : {}),
+      // Path-approval half of the live `/bypass` toggle: keep the provider's
+      // `_currentPermissionMode` (read by getGrants().allowAll) in sync with
+      // the query handle's mode. The file-tool half is the dispatcher's
+      // setAllowAll(), flipped inside the same setPermissionMode call.
+      onPermissionMode: (mode: string) => {
+        this._currentPermissionMode = mode;
+      },
       ...(this.mcpManager !== undefined ? { mcpManager: this.mcpManager } : {}),
       ...(resolveAutoCompactThreshold(config.autoCompact) !== undefined
         ? { autoCompactThreshold: resolveAutoCompactThreshold(config.autoCompact) }

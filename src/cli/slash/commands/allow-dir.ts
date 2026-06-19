@@ -27,7 +27,7 @@ export interface GrantManager {
   addReadRoot(absPath: string, source: 'slash' | 'tool', sessionId?: string): void;
   addWriteRoot(absPath: string, source: 'slash' | 'tool', sessionId?: string): void;
   revokeRoot(absPath: string, source: 'slash' | 'tool', sessionId?: string): void;
-  getGrants(): { resolveBase: string | undefined; readRoots: string[]; writeRoots: string[] };
+  getGrants(): { resolveBase: string | undefined; readRoots: string[]; writeRoots: string[]; allowAll?: boolean };
 }
 
 let grantManagerRef: GrantManager | undefined;

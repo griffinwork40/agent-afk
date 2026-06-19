@@ -244,6 +244,14 @@ export interface OpenAICompatibleQueryOptions {
    * and the shared handler set all just work.
    */
   toolDispatcher?: ToolDispatcher;
+  /**
+   * Provider callback invoked by `setPermissionMode()` to update the
+   * provider-level `_currentPermissionMode` — the field the path-approval hook
+   * reads via the provider's `getGrants().allowAll`. The path-approval half of
+   * a live `/bypass` toggle (the file-tool half is the dispatcher's
+   * `setAllowAll()`). Supplied by `OpenAICompatibleProvider.query()`.
+   */
+  onPermissionMode?: (mode: string) => void;
   /** Optional MCP manager — populates `session.init` and `mcpServerStatus()`. */
   mcpManager?: import('../../mcp/index.js').McpManager;
   /**
@@ -317,6 +325,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   private readonly opts: OpenAICompatibleQueryOptions;
   private readonly initSessionId: string;
   private readonly toolDispatcher: ToolDispatcher | undefined;
+  private readonly onPermissionMode?: (mode: string) => void;
   /** Pre-computed tool catalog — recomputed only if dispatcher.toolDefs changes (it doesn't today). */
   private readonly openAITools: OpenAIFunctionTool[] | undefined;
   /** Which wire this session speaks: Chat Completions (default) or Responses. */
@@ -349,6 +358,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     this.currentModel = opts.model;
     this.currentPermissionMode = normalizePermissionMode(opts.config.permissionMode);
     this.toolDispatcher = opts.toolDispatcher;
+    this.onPermissionMode = opts.onPermissionMode;
 
     // Pre-compute the OpenAI tool catalog once. Only `SessionToolDispatcher`
     // (and not the structural `ToolDispatcher` minimal interface) exposes
@@ -1088,6 +1098,13 @@ export class OpenAICompatibleQuery implements ProviderQuery {
 
   async setPermissionMode(mode: string): Promise<void> {
     this.currentPermissionMode = normalizePermissionMode(mode);
+    // Live enforcement, two fields kept in sync (else `/bypass off` fails
+    // UNSAFE — badge clears while the agent stays unrestricted):
+    //  1. file-tool containment ← dispatcher's allowAll (read fresh per call).
+    const bypass = this.currentPermissionMode === 'bypassPermissions';
+    this.toolDispatcher?.setAllowAll?.(bypass);
+    //  2. path-approval hook ← provider's _currentPermissionMode (callback).
+    this.onPermissionMode?.(this.currentPermissionMode);
   }
 
   setCwd(cwd: string): void {
@@ -1260,6 +1277,7 @@ export function buildQueryFromConfig(
   options: {
     baseURL?: string;
     toolDispatcher?: ToolDispatcher;
+    onPermissionMode?: (mode: string) => void;
     mcpManager?: import('../../mcp/index.js').McpManager;
     useResponsesApi?: boolean;
     /**
@@ -1291,6 +1309,7 @@ export function buildQueryFromConfig(
   };
   if (options.baseURL !== undefined) opts.baseURL = options.baseURL;
   if (options.toolDispatcher !== undefined) opts.toolDispatcher = options.toolDispatcher;
+  if (options.onPermissionMode !== undefined) opts.onPermissionMode = options.onPermissionMode;
   if (options.mcpManager !== undefined) opts.mcpManager = options.mcpManager;
   if (options.useResponsesApi !== undefined) opts.useResponsesApi = options.useResponsesApi;
   return new OpenAICompatibleQuery(opts);

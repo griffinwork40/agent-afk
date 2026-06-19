@@ -2,6 +2,7 @@ import * as readline from 'node:readline';
 import { elicitationRouter } from '../../../agent/elicitation-router.js';
 import { makeReplElicitationHandler } from '../../elicitation-repl.js';
 import { AgentSession } from '../../../agent/session.js';
+import type { PermissionMode } from '../../../agent/types/sdk-types.js';
 import { unconfiguredSlotError } from '../../../agent/session/model-slots.js';
 import { createDefaultHookRegistry } from '../../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../../agent/hooks/config-loader.js';
@@ -85,6 +86,8 @@ interface BuildAgentSessionDeps {
   cwd: string | undefined;
   maxTurns: number;
   autoResumeOnUsageLimit: boolean | undefined;
+  /** Initial session permission mode (e.g. 'bypassPermissions'). Omit for 'default'. */
+  permissionMode?: PermissionMode;
   baseUrl?: string;
 }
 
@@ -108,6 +111,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
     apiKey: getApiKeyForModel(deps.model),
     maxTurns: deps.maxTurns,
     hookRegistry: deps.hookRegistry,
+    ...(deps.permissionMode !== undefined ? { permissionMode: deps.permissionMode } : {}),
     ...(deps.systemPrompt !== undefined ? { systemPrompt: deps.systemPrompt } : {}),
     ...(deps.systemPromptSource !== undefined ? { systemPromptSource: deps.systemPromptSource } : {}),
     ...(deps.thinking !== undefined ? { thinking: deps.thinking } : {}),
@@ -499,6 +503,16 @@ export async function bootstrapSession(
   if (resumeTarget?.stored) {
     reseedStatsFromStored(stats, resumeTarget.stored, resumeTarget.resumeId);
   }
+  // Initial permission mode: --dangerously-skip-permissions wins, else the
+  // afk.config.json `permissionMode` key (validated in loadConfig). Stamped on
+  // stats so the status-line badge + the plan/AFK/bypass gate getters reflect it
+  // from turn 1; the session is constructed with the same value via sharedDeps.
+  const initialPermissionMode = options.dangerouslySkipPermissions
+    ? ('bypassPermissions' as const)
+    : cliConfig.permissionMode;
+  if (initialPermissionMode !== undefined) {
+    stats.permissionMode = initialPermissionMode;
+  }
   // Stamp the effective working directory on stats so the status line can
   // render it. We capture the same cwd the provider will see: the explicit
   // `extras.cwd` override (e.g. from `--worktree`) when present, else
@@ -562,6 +576,7 @@ export async function bootstrapSession(
     cwd: extras?.cwd,
     maxTurns: parseInt(options.maxTurns, 10),
     autoResumeOnUsageLimit: cliConfig.autoResumeOnUsageLimit,
+    ...(initialPermissionMode !== undefined ? { permissionMode: initialPermissionMode } : {}),
   };
 
   const session = buildAgentSession(sharedDeps);
@@ -668,6 +683,10 @@ export async function bootstrapSession(
         ...sharedDeps,
         model: t.stored?.model ?? sharedDeps.model,
         resumeConfig: resumeConfigFor(t),
+        // Preserve the LIVE permission mode across a model swap (e.g. the user
+        // toggled /bypass after startup) rather than resetting to the initial
+        // config value carried in sharedDeps.
+        permissionMode: stats.permissionMode,
       }),
     });
   };

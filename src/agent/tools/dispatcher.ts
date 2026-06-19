@@ -150,6 +150,12 @@ export interface SessionToolDispatcherOptions {
    */
   writeRoots?: string[];
   /**
+   * When true, the per-call `ToolHandlerContext` carries `allowAll: true`,
+   * disabling ALL path containment (bypassPermissions mode). Derived by the
+   * provider's `buildDispatcher` from the session permission mode.
+   */
+  allowAll?: boolean;
+  /**
    * Extra environment variables surfaced on every `ToolHandlerContext.env`.
    * Consumed by the Bash handler to inject `PLUGIN_ROOT` (and any future
    * per-session overrides) without mutating `process.env`. Captured by
@@ -208,6 +214,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly _readRoots: string[];
   /** Mutable write-root list. Mutated in place by `addWriteRoot`/`revokeRoot`/`setResolveBase`. */
   private readonly _writeRoots: string[];
+  /**
+   * When true, all path containment is bypassed (bypassPermissions mode).
+   * Mutable so a live `/bypass` toggle can flip it mid-session via
+   * `setAllowAll()` — read fresh per call by the `handlerContext` getter.
+   */
+  private _allowAll: boolean;
   /** Optional per-session env injected into the Bash handler's spawn env. */
   private readonly _env: Record<string, string> | undefined;
   private readonly sessionId: string | undefined;
@@ -238,6 +250,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this.parentSessionId = opts.parentSessionId;
     this.traceWriter = opts.traceWriter;
     this.readOnlyBash = opts.readOnlyBash === true;
+    this._allowAll = opts.allowAll === true;
 
     // When caller passes arrays by reference (provider sharing pattern), use
     // them directly so mutations are visible without rebuilding. Otherwise
@@ -257,6 +270,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       resolveBase: this.resolveBase,
       readRoots: this._readRoots.slice(),
       writeRoots: this._writeRoots.slice(),
+      ...(this._allowAll ? { allowAll: true } : {}),
       ...(this._env !== undefined ? { env: this._env } : {}),
     };
   }
@@ -310,12 +324,25 @@ export class SessionToolDispatcher implements ToolDispatcher {
   }
 
   /** Returns a snapshot of current grant state (for /allow-dir display). */
-  getGrants(): { resolveBase: string | undefined; readRoots: string[]; writeRoots: string[] } {
+  getGrants(): { resolveBase: string | undefined; readRoots: string[]; writeRoots: string[]; allowAll: boolean } {
     return {
       resolveBase: this.resolveBase,
       readRoots: this._readRoots.slice(),
       writeRoots: this._writeRoots.slice(),
+      allowAll: this._allowAll,
     };
+  }
+
+  /**
+   * Flip the bypass (`allowAll`) flag in place. Mutates rather than rebuilding
+   * so callers holding this dispatcher by reference (e.g. `loop.ts` captured
+   * `runInput.toolDispatcher` for an in-flight turn) see the new value on their
+   * next `handlerContext`/`getGrants()` read. This is the file-tool half of a
+   * live `/bypass` toggle; the path-approval-hook half is the provider's
+   * `_currentPermissionMode` (see the query handle's `setPermissionMode`).
+   */
+  setAllowAll(allow: boolean): void {
+    this._allowAll = allow;
   }
 
   /**

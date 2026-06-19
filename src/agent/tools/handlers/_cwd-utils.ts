@@ -86,6 +86,13 @@ export function resolveAndContain(
     ? inputPath
     : path.resolve(resolveBase ?? process.cwd(), inputPath);
 
+  // Bypass mode: the session runs in `bypassPermissions`, which disables all
+  // path containment. Admit any path (no throw). This is the same switch the
+  // path-approval hook consults to skip its prompt, so the two stay in sync.
+  if (context?.allowAll === true) {
+    return abs;
+  }
+
   // No base set — no containment enforcement.
   if (resolveBase === undefined) {
     return abs;
@@ -145,6 +152,12 @@ export function wouldBeRestricted(
   const abs = path.isAbsolute(inputPath)
     ? inputPath
     : path.resolve(resolveBase ?? process.cwd(), inputPath);
+
+  // Bypass mode (bypassPermissions): never restricted, so the path-approval
+  // hook does not prompt. Mirrors the short-circuit in `resolveAndContain`.
+  if (context?.allowAll === true) {
+    return { restricted: false, resolved: abs, roots: [] };
+  }
 
   if (resolveBase === undefined) {
     // No containment enforcement — never restricted.
