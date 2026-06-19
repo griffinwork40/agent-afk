@@ -16,6 +16,7 @@ import { palette } from './palette.js';
 import { MAX_DROPDOWN_ROWS } from './terminal-compositor.autocomplete.js';
 import type { InputCoreState } from './input-core.js';
 import type { AutocompleteState } from './input/autocomplete-state.js';
+import type { SubmissionPayload } from './terminal-compositor.types.js';
 
 /**
  * Narrowest TerminalCompositor state slice the frame renderers read. Every
@@ -25,6 +26,8 @@ import type { AutocompleteState } from './input/autocomplete-state.js';
  */
 export interface RenderHost {
   readonly queued: boolean;
+  /** Pending submission FIFO — its length drives the `[N queued]` suffix. */
+  readonly pendingSubmissions: readonly SubmissionPayload[];
   readonly input: InputCoreState;
   readonly activeGhost: string | null;
   readonly autocompleteState?: AutocompleteState;
@@ -38,12 +41,17 @@ export interface RenderHost {
  * caret + optional dim inline ghost suffix + optional `[queued]` marker.
  */
 export function renderInputLine(self: RenderHost): string {
-  // `[queued]` suffix while a buffer is queued mid-stream. Without it,
-  // pressing Enter is visually a no-op — the typed text just sits in
-  // the input row with no signal that submission was registered. The
-  // dim grey keeps it low-salience so it doesn't compete with the
-  // streaming overlay above.
-  const suffix = self.queued ? '  ' + palette.dim('[queued]') : '';
+  // `[queued]` / `[N queued]` suffix while messages are queued mid-stream.
+  // Without it, pressing Enter is visually a no-op — the input clears with no
+  // signal that the message was committed to the send queue. The dim grey
+  // keeps it low-salience so it doesn't compete with the streaming overlay
+  // above. Singular `[queued]` for one (preserves the long-standing label);
+  // `[N queued]` once additional messages stack up.
+  const pendingCount = self.pendingSubmissions.length;
+  const suffix =
+    pendingCount > 0
+      ? '  ' + palette.dim(pendingCount === 1 ? '[queued]' : `[${pendingCount} queued]`)
+      : '';
   const rawBefore = self.input.buffer.slice(0, self.input.cursor);
   const cursorEnd = nextGraphemeIndex(self.input.buffer, self.input.cursor);
   const cursorText =

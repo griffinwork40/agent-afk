@@ -61,8 +61,13 @@ export interface KeyDispatchHost {
   readonly armed: boolean;
   /** Live input buffer state. */
   input: InputCoreState;
-  /** Whether the buffer is queued for submission on the next idle transition. */
+  /** Maintained mirror of `pendingSubmissions.length > 0` (renderer/getBuffer read it). */
   queued: boolean;
+  /**
+   * FIFO of messages typed + Entered mid-turn, awaiting drain. Enter (streaming
+   * mode) pushes the committed buffer here; the idle flush shifts one per turn.
+   */
+  pendingSubmissions: SubmissionPayload[];
   /** Input mode — `'streaming'` | `'idle'` | `'picker'`. */
   readonly inputMode: CompositorInputMode;
   /** Active picker controller (non-null iff inputMode === 'picker'). */
@@ -111,14 +116,18 @@ export interface KeyDispatchHost {
 }
 
 /**
- * Apply a pure InputCore transition. If the state reference changed, clear the
- * queued flag, refresh autocomplete + ghost, and repaint; otherwise it's a
- * no-op (e.g. moveLeft at 0). Returns whether the state reference changed.
+ * Apply a pure InputCore transition. If the state reference changed, refresh
+ * autocomplete + ghost and repaint; otherwise it's a no-op (e.g. moveLeft at
+ * 0). Returns whether the state reference changed.
+ *
+ * Editing the live buffer does NOT touch {@link KeyDispatchHost.pendingSubmissions}:
+ * committed messages live in their own FIFO, independent of the in-progress
+ * buffer. (Pre-multi-queue this cleared a `queued` flag because the buffer WAS
+ * the single queued message; commit-on-Enter retired that coupling.)
  */
 export function applyEdit(self: KeyDispatchHost, next: InputCoreState): boolean {
   if (next === self.input) return false;
   self.input = next;
-  self.queued = false;
   // During a bracketed-paste burst, suppress per-character work —
   // a 10KB paste would otherwise trigger 10K log-update frames AND
   // 10K detectTrigger scans. The paste end marker (`\x1b[201~`)
@@ -296,21 +305,19 @@ function handleEscape(self: KeyDispatchHost, key: KeyInfo): boolean {
   // Soft-stop: once-only per turn. Second ESC while streaming is
   // a no-op — the stream is already halting.
   if (self.softStopped) return true;
-  // Contract: ESC soft-stop does NOT touch the buffer's queued state.
-  // Enter is the ONLY queue trigger. So:
-  //   - queued === true  (user pressed Enter): left untouched. It
-  //     auto-submits as the next turn via the idle-transition flush
-  //     (setInputMode → idle), since that branch fires on `queued`.
-  //   - queued === false (user only TYPED, no Enter): stays an editable
-  //     draft. The text is NOT dropped — setInputMode no longer
-  //     de-queues and never clears the buffer, so the typed characters
-  //     persist into the idle input row and simply wait for an explicit
-  //     Enter. This is the "ESC with nothing queued leaves what I typed
+  // Contract: ESC soft-stop does NOT touch the submission queue or the live
+  // buffer. Enter is the ONLY queue trigger. So:
+  //   - Already-queued messages (pendingSubmissions, user pressed Enter):
+  //     left untouched. They auto-submit as sequential turns via the
+  //     idle-transition flush (setInputMode → idle), one payload per turn.
+  //   - The live buffer (text the user only TYPED, no Enter): stays an
+  //     editable draft. setInputMode never clears it, so the typed
+  //     characters persist into the idle input row and wait for an explicit
+  //     Enter. This is the "ESC with nothing submitted leaves what I typed
   //     in the input field" behavior.
-  // We deliberately do NOT auto-queue a typed-but-unconfirmed buffer
-  // here: queuing it would fling it as a turn the user never submitted.
-  // (Ctrl+C keeps the legacy auto-queue in handleInterrupt below —
-  // hard-abort has intentionally different semantics.)
+  // We deliberately do NOT auto-commit a typed-but-unconfirmed buffer here:
+  // committing it would fling it as a turn the user never submitted. Ctrl+C
+  // (handleInterrupt below) follows the same no-auto-commit rule.
   self.softStopped = true;
   if (self.onSoftStop) self.onSoftStop();
   return true;
@@ -398,14 +405,31 @@ function handleVerticalNav(self: KeyDispatchHost, key: KeyInfo): boolean {
       }
       return true;
     }
-    // History recall (↑) — only when history is wired in.
-    // External constraint: a recalled buffer must enter the same edit
-    // lifecycle as a typed character so `self.queued` is cleared. If we
-    // skip applyEdit and inline-assign self.input here, a queued flag from
-    // an earlier Enter survives the recall — the next Enter (or the next
-    // turn boundary) then auto-submits the recalled text the user never
-    // committed. Route through applyEdit() so queued is reset alongside
-    // the autocomplete refresh and repaint.
+    // ↑ on an EMPTY buffer with queued messages: pull the most-recently
+    // committed message (LIFO, newest first) back into the live buffer for
+    // editing. Non-destructive successor to the old Backspace-dequeue — the
+    // message returns as an editable draft (re-Enter re-commits it to the
+    // FIFO) instead of being silently discarded. Gated on an empty buffer so
+    // an in-progress draft is never clobbered; once the buffer is non-empty,
+    // ↑ falls through to history navigation below.
+    //
+    // Seeds the EXPANDED `text` (not `displayText`): the pasteRegistry was
+    // cleared when the message was committed, so a surviving placeholder
+    // token would no longer expand on re-commit. Attachments snapshotted at
+    // commit time are restored to the live list so re-Enter re-captures them.
+    if (self.pendingSubmissions.length > 0 && self.input.buffer.length === 0) {
+      const payload = self.pendingSubmissions.pop()!;
+      self.queued = self.pendingSubmissions.length > 0; // maintain the mirror
+      self.attachments = [...payload.attachments];
+      self.history?.resetRecall();
+      self.applyEdit(InputCore.seed(payload.text));
+      return true;
+    }
+    // History recall (↑) — only when history is wired in. Routes through
+    // applyEdit() so the recalled buffer gets the same autocomplete refresh +
+    // repaint as a typed edit. Committed messages in pendingSubmissions are
+    // independent of buffer edits and untouched by history nav (commit-on-Enter
+    // retired the old buffer-IS-the-queued-message coupling).
     if (self.history) {
       const recalled = self.history.back(self.input.buffer);
       if (recalled !== null) {
@@ -427,8 +451,9 @@ function handleVerticalNav(self: KeyDispatchHost, key: KeyInfo): boolean {
       }
       return true;
     }
-    // History forward (↓) — only when history is wired in. See ↑ branch
-    // for the queued-flag invariant; applyEdit() resets it.
+    // History forward (↓) — only when history is wired in. Routes through
+    // applyEdit() like the ↑ branch; committed messages in pendingSubmissions
+    // are untouched by history nav.
     if (self.history) {
       const recalled = self.history.forward();
       if (recalled !== null) {
@@ -485,10 +510,13 @@ function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boo
     // per-character autocomplete recompute (a 10KB multi-line paste
     // would otherwise call detectTrigger() once per `\r`). The
     // end-of-paste marker (`\x1b[201~`) triggers a single repaint
-    // over the final buffer. queued must be cleared because any
-    // buffer mutation invalidates a prior Enter-queued state.
+    // over the final buffer. Editing the live buffer does NOT touch the
+    // committed-message FIFO, so keep `queued` mirroring pendingSubmissions
+    // rather than clearing it unconditionally (the pre-multi-queue clear
+    // assumed the buffer WAS the single queued message; commit-on-Enter
+    // retired that coupling).
     self.input = InputCore.insert(self.input, '\n');
-    self.queued = false;
+    self.queued = self.pendingSubmissions.length > 0;
     return true;
   }
   // Dropdown-open: apply the highlighted candidate before any
@@ -537,7 +565,9 @@ function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boo
     // call (handler synchronously calls setInputMode('streaming') /
     // applyEdit / etc.) does not double-fire or race a stale buffer.
     // Mirrors the same invariant in setInputMode's streaming→idle flush.
-    self.queued = false;
+    // `queued` mirrors the committed-message FIFO (untouched on this
+    // immediate-submit path), so keep it in sync instead of clearing.
+    self.queued = self.pendingSubmissions.length > 0;
     self.input = InputCore.seed('');
     self.attachments = [];
     self.pasteRegistry.clear();
@@ -555,23 +585,46 @@ function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boo
     );
     return true;
   }
-  // Streaming mode (default) — today's behavior. Set queued; parent
-  // fires onSubmit via setInputMode('idle') (InputSurface, Stage 3b+).
-  // Note: the submit flush reads self.input.buffer directly — not via
-  // getBuffer() — so pasteRegistry is still populated when expansion runs.
-  if (!self.queued) {
-    self.queued = true;
-    self.repaint();
-  }
+  // Streaming mode (default) — multi-message type-ahead queue. Commit the
+  // current buffer to the pending-submission FIFO and clear the live input so
+  // the user can immediately compose the NEXT message. Each committed message
+  // drains as its own sequential turn when the surface flips to idle (see the
+  // flush in setInputMode). The parent fires onSubmit per drained payload via
+  // setInputMode('idle') (InputSurface, Stage 3b+).
+  //
+  // Payloads are self-contained: paste placeholders are expanded and
+  // attachments snapshotted HERE (at commit), then the live pasteRegistry +
+  // attachments are cleared. This decouples a queued message from later
+  // live-buffer state — a subsequent paste/edit can't corrupt an already-
+  // queued message. (Pre-multi-queue, Enter set a single `queued` flag and the
+  // flush expanded the buffer lazily; commit-on-Enter moves expansion forward.)
+  const displayText = self.input.buffer;
+  const expandedText = Paste.expandPastePlaceholders(self, displayText);
+  const attachments = [...self.attachments];
+  self.pendingSubmissions.push(
+    expandedText === displayText
+      ? { text: expandedText, attachments }
+      : { text: expandedText, displayText, attachments },
+  );
+  self.queued = true; // maintained mirror: pendingSubmissions is now non-empty
+  // Clear the compose window for the next message. Mirrors the idle-mode
+  // submit reset above so dropdown chrome / paste side-table / attachments
+  // from this message don't bleed into the next.
+  self.input = InputCore.seed('');
+  self.attachments = [];
+  self.pasteRegistry.clear();
+  self.history?.resetRecall();
+  self.autocompleteState?.reset();
+  self.repaint();
   // Usage-limit pause escape: while the turn is parked waiting for auto-resume
-  // (the loop is suspended in `await runTurn`), a queued line would otherwise
+  // (the loop is suspended in `await runTurn`), a queued message would otherwise
   // sit stranded behind the wait. Fire the pause-interrupt so the wait ends
-  // (handler calls session.interrupt) and the buffer we just queued flushes as
-  // the NEXT turn via the idle-transition flush — the same path ESC uses.
-  // Ordering: queue is set ABOVE, then we interrupt (teardown-before-setup), so
-  // the next readLine()'s setInputMode('idle') dispatches the buffer. Reached
-  // only past the empty-buffer suppression above, so there is always content to
-  // run; idempotent if the user presses Enter twice (interrupt is idempotent).
+  // (handler calls session.interrupt) and the committed payload drains as the
+  // NEXT turn via the idle-transition flush — the same path ESC uses.
+  // Ordering: payload is committed and compose window cleared ABOVE, then we
+  // interrupt (teardown-before-setup). Idempotent if the user presses Enter
+  // twice (interrupt is idempotent); the second payload joins the FIFO and
+  // drains as a subsequent turn.
   if (self.paused && self.onPauseInterrupt) self.onPauseInterrupt();
   return true;
 }
@@ -605,10 +658,6 @@ function handleBackspace(self: KeyDispatchHost, key: KeyInfo): boolean {
   if (next !== self.input) {
     self.history?.resetRecall();
     self.applyEdit(next);
-  } else if (self.queued) {
-    // Cursor at 0 but was queued — Backspace just unqueues.
-    self.queued = false;
-    self.repaint();
   } else if (self.attachments.length > 0) {
     // Buffer empty + attachments present — pop the last attachment.
     // Ported from reader.ts:668. Lets the user "undo" an
@@ -616,6 +665,11 @@ function handleBackspace(self: KeyDispatchHost, key: KeyInfo): boolean {
     self.attachments.pop();
     self.repaint();
   }
+  // Note: Backspace deliberately does NOT dequeue. Committed type-ahead
+  // messages (pendingSubmissions) are recalled for editing via ↑
+  // (handleVerticalNav) — non-destructive — never discarded here. A prior
+  // revision popped the newest queued message on an empty buffer, which
+  // silently destroyed typed content; ↑-to-edit replaced that affordance.
   return true;
 }
 
