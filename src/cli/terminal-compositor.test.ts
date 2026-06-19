@@ -1899,14 +1899,16 @@ describe('TerminalCompositor', () => {
       expect(c.getBuffer()).toEqual({ text: '', queued: false });
     });
 
-    it('Backspace after Enter unqueues', async () => {
+    it('Backspace after Enter does NOT unqueue (queue is edited via ↑, not Backspace)', async () => {
       const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
       await c.arm();
       stdin.emit('keypress', 'h', { name: 'h', sequence: 'h' });
-      stdin.emit('keypress', undefined, { name: 'return' });
+      stdin.emit('keypress', undefined, { name: 'return' }); // commits 'h', live buffer → ''
       expect(c.getBuffer().queued).toBe(true);
-      stdin.emit('keypress', undefined, { name: 'backspace' });
-      expect(c.getBuffer()).toEqual({ text: '', queued: false });
+      expect(c.getPendingCount()).toBe(1);
+      stdin.emit('keypress', undefined, { name: 'backspace' }); // empty buffer → no-op on the queue
+      expect(c.getBuffer()).toEqual({ text: '', queued: true });
+      expect(c.getPendingCount()).toBe(1);
     });
 
     it('typing after queue leaves the committed message queued and grows the live buffer', async () => {
@@ -1979,9 +1981,11 @@ describe('TerminalCompositor', () => {
       expect(c.getPendingCount()).toBe(1);
     });
 
-    it('Backspace on empty live buffer while queued pops the most-recently-committed message (LIFO)', async () => {
-      // New contract: with buffer empty and 1 message queued, Backspace pops
-      // it → getPendingCount() 1→0, queued→false, live buffer stays ''.
+    it('Backspace on empty live buffer does NOT dequeue (queue is edited via ↑, not deleted)', async () => {
+      // Contract: Backspace never touches pendingSubmissions. With the buffer
+      // empty and 1 message queued, Backspace is a no-op on the queue — the
+      // committed message is recalled for editing with ↑, never discarded by
+      // Backspace (which previously popped it and silently lost the text).
       const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
       await c.arm();
       stdin.emit('keypress', 'a', { name: 'a', sequence: 'a' });
@@ -1990,9 +1994,9 @@ describe('TerminalCompositor', () => {
       stdin.emit('keypress', undefined, { name: 'return' }); // commits 'abc', live buffer → ''
       expect(c.getBuffer()).toEqual({ text: '', queued: true });
       expect(c.getPendingCount()).toBe(1);
-      stdin.emit('keypress', undefined, { name: 'backspace' }); // empty live buffer → LIFO pop
-      expect(c.getBuffer()).toEqual({ text: '', queued: false });
-      expect(c.getPendingCount()).toBe(0);
+      stdin.emit('keypress', undefined, { name: 'backspace' }); // empty live buffer → no-op on queue
+      expect(c.getBuffer()).toEqual({ text: '', queued: true });
+      expect(c.getPendingCount()).toBe(1);
     });
 
     it('arrow keys do not trigger cancel', async () => {
@@ -2094,11 +2098,12 @@ describe('TerminalCompositor', () => {
       };
     }
 
-    it('↑ recall after Enter fills the live buffer without touching the committed queue', async () => {
-      // New contract: Enter commits the buffer to the FIFO (live buffer → '').
-      // History recall via ↑ edits the LIVE buffer only — committed messages in
-      // pendingSubmissions are untouched. queued remains true (mirrors pendingCount>0).
-      // The recalled text is the next message draft, not an auto-submit.
+    it('↑ on an empty buffer pulls the newest queued message for editing (queue takes priority over history)', async () => {
+      // Contract: when messages are queued and the live buffer is empty, ↑
+      // recalls the most-recently-committed message (LIFO) for editing — NOT
+      // history. The pulled message leaves the FIFO and becomes an editable
+      // draft (re-Enter re-commits it). History recall only applies once the
+      // queue is empty (see the next test).
       const history = makeHistory(['previous-message']);
       const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), history });
       await c.arm();
@@ -2106,31 +2111,27 @@ describe('TerminalCompositor', () => {
       stdin.emit('keypress', undefined, { name: 'return' }); // commits 'h', live buffer → ''
       expect(c.getBuffer()).toEqual({ text: '', queued: true });
       expect(c.getPendingCount()).toBe(1);
-      stdin.emit('keypress', undefined, { name: 'up' }); // recalls 'previous-message' into live buffer
-      // Live buffer now holds the recalled text; committed 'h' is still pending.
-      expect(c.getBuffer()).toEqual({ text: 'previous-message', queued: true });
-      expect(c.getPendingCount()).toBe(1);
+      stdin.emit('keypress', undefined, { name: 'up' }); // pulls queued 'h' back (NOT 'previous-message')
+      // Live buffer now holds the recalled queued message; the FIFO is empty.
+      expect(c.getBuffer()).toEqual({ text: 'h', queued: false });
+      expect(c.getPendingCount()).toBe(0);
     });
 
-    it('↓ recall after Enter navigates history in the live buffer; committed queue is preserved', async () => {
-      // New contract: history nav via ↑/↓ edits the LIVE buffer; the committed
-      // queue is untouched. queued stays true throughout (mirror of pendingCount>0).
+    it('↑/↓ recall history when no messages are queued (queue-empty fall-through)', async () => {
+      // With an empty FIFO, ↑/↓ behave as pure history navigation on the live
+      // buffer — the queued-message pull is gated on a non-empty queue, so it
+      // never intercepts here.
       const history = makeHistory(['older', 'newer']);
       const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), history });
       await c.arm();
-      stdin.emit('keypress', 'x', { name: 'x', sequence: 'x' });
-      stdin.emit('keypress', undefined, { name: 'return' }); // commits 'x', live buffer → ''
-      expect(c.getBuffer()).toEqual({ text: '', queued: true });
-      expect(c.getPendingCount()).toBe(1);
-      // Walk into history; live buffer changes, queue stays.
+      expect(c.getPendingCount()).toBe(0);
       stdin.emit('keypress', undefined, { name: 'up' });  // recalls 'newer'
-      expect(c.getBuffer().queued).toBe(true);
-      expect(c.getPendingCount()).toBe(1);
+      expect(c.getBuffer().text).toBe('newer');
       stdin.emit('keypress', undefined, { name: 'up' });  // recalls 'older'
-      expect(c.getBuffer().queued).toBe(true);
+      expect(c.getBuffer().text).toBe('older');
       stdin.emit('keypress', undefined, { name: 'down' }); // advances back to 'newer'
-      expect(c.getBuffer().queued).toBe(true);
-      expect(c.getPendingCount()).toBe(1);
+      expect(c.getBuffer().text).toBe('newer');
+      expect(c.getPendingCount()).toBe(0);
     });
   });
 
@@ -3779,6 +3780,56 @@ describe('TerminalCompositor — multi-message queue', () => {
     stdin.emit('keypress', undefined, { name: 'return' });
     expect(writes.all()).toContain('[2 queued]');
   });
+
+  it('↑ pulls the newest queued message (LIFO) for editing and re-Enter re-commits it', async () => {
+    const onSubmit = vi.fn();
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSubmit });
+    await c.arm();
+
+    const typeAndEnter = (text: string) => {
+      for (const ch of text) stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      stdin.emit('keypress', undefined, { name: 'return' });
+    };
+
+    typeAndEnter('one');
+    typeAndEnter('two');
+    expect(c.getPendingCount()).toBe(2);
+
+    // ↑ on the (empty) live buffer pulls the NEWEST queued message ('two')
+    // back for editing; the older 'one' stays queued.
+    stdin.emit('keypress', undefined, { name: 'up' });
+    expect(c.getBuffer()).toEqual({ text: 'two', queued: true });
+    expect(c.getPendingCount()).toBe(1);
+
+    // Edit the recalled draft and re-Enter → re-commits to the BACK of the FIFO.
+    stdin.emit('keypress', '!', { name: '!', sequence: '!' });
+    stdin.emit('keypress', undefined, { name: 'return' });
+    expect(c.getBuffer()).toEqual({ text: '', queued: true });
+    expect(c.getPendingCount()).toBe(2);
+
+    // Drain: FIFO order is 'one' (oldest) then the edited 'two!'.
+    c.setInputMode('idle');
+    expect(onSubmit).toHaveBeenLastCalledWith({ text: 'one', attachments: [] });
+    c.setInputMode('streaming');
+    c.setInputMode('idle');
+    expect(onSubmit).toHaveBeenLastCalledWith({ text: 'two!', attachments: [] });
+    expect(c.getPendingCount()).toBe(0);
+  });
+
+  it('↑ does not pull the queue while the live buffer holds a draft', async () => {
+    // The queued-message pull is gated on an EMPTY buffer. With a draft in
+    // progress and no history wired, ↑ is a no-op — the draft and the queue
+    // are both preserved (↑ never clobbers an in-progress message).
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+    await c.arm();
+    for (const ch of 'queued') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+    stdin.emit('keypress', undefined, { name: 'return' }); // commits 'queued', buffer → ''
+    expect(c.getPendingCount()).toBe(1);
+    for (const ch of 'draft') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+    stdin.emit('keypress', undefined, { name: 'up' }); // buffer non-empty → gate blocks the pull
+    expect(c.getBuffer()).toEqual({ text: 'draft', queued: true });
+    expect(c.getPendingCount()).toBe(1);
+  });
 });
 
 // Mock readClipboardImage so the bracketed-paste / Ctrl+V branches can be
@@ -3841,6 +3892,30 @@ describe('TerminalCompositor — attachments + paste (Stage 3c)', () => {
       // assert directly without scraping log-update writes, so we just
       // assert no attachment landed. The render-path test below covers
       // the visible status row.
+    });
+  });
+
+  describe('multi-message queue — attachment round-trip on ↑ recall', () => {
+    it('↑ restores a queued message\'s attachments when pulling it back for editing', async () => {
+      const fake = fakeImage('shot.png');
+      mockReadClipboardImage.mockResolvedValue(fake);
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      // Compose text + attach an image, then commit (streaming Enter). The
+      // attachment is snapshotted into the FIFO payload and the live list clears.
+      for (const ch of 'look') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      stdin.emit('keypress', undefined, { name: 'v', ctrl: true });
+      await new Promise((r) => setImmediate(r));
+      expect(c.getAttachments()).toEqual([fake]);
+      stdin.emit('keypress', undefined, { name: 'return' });
+      expect(c.getPendingCount()).toBe(1);
+      expect(c.getAttachments()).toEqual([]); // live list cleared at commit
+      // ↑ on the empty buffer pulls the message back: text AND the snapshotted
+      // attachment are restored to the live buffer for editing / re-commit.
+      stdin.emit('keypress', undefined, { name: 'up' });
+      expect(c.getBuffer().text).toBe('look');
+      expect(c.getAttachments()).toEqual([fake]);
+      expect(c.getPendingCount()).toBe(0);
     });
   });
 

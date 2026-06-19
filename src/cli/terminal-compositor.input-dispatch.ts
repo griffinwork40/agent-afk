@@ -405,14 +405,31 @@ function handleVerticalNav(self: KeyDispatchHost, key: KeyInfo): boolean {
       }
       return true;
     }
-    // History recall (↑) — only when history is wired in.
-    // External constraint: a recalled buffer must enter the same edit
-    // lifecycle as a typed character so `self.queued` is cleared. If we
-    // skip applyEdit and inline-assign self.input here, a queued flag from
-    // an earlier Enter survives the recall — the next Enter (or the next
-    // turn boundary) then auto-submits the recalled text the user never
-    // committed. Route through applyEdit() so queued is reset alongside
-    // the autocomplete refresh and repaint.
+    // ↑ on an EMPTY buffer with queued messages: pull the most-recently
+    // committed message (LIFO, newest first) back into the live buffer for
+    // editing. Non-destructive successor to the old Backspace-dequeue — the
+    // message returns as an editable draft (re-Enter re-commits it to the
+    // FIFO) instead of being silently discarded. Gated on an empty buffer so
+    // an in-progress draft is never clobbered; once the buffer is non-empty,
+    // ↑ falls through to history navigation below.
+    //
+    // Seeds the EXPANDED `text` (not `displayText`): the pasteRegistry was
+    // cleared when the message was committed, so a surviving placeholder
+    // token would no longer expand on re-commit. Attachments snapshotted at
+    // commit time are restored to the live list so re-Enter re-captures them.
+    if (self.pendingSubmissions.length > 0 && self.input.buffer.length === 0) {
+      const payload = self.pendingSubmissions.pop()!;
+      self.queued = self.pendingSubmissions.length > 0; // maintain the mirror
+      self.attachments = [...payload.attachments];
+      self.history?.resetRecall();
+      self.applyEdit(InputCore.seed(payload.text));
+      return true;
+    }
+    // History recall (↑) — only when history is wired in. Routes through
+    // applyEdit() so the recalled buffer gets the same autocomplete refresh +
+    // repaint as a typed edit. Committed messages in pendingSubmissions are
+    // independent of buffer edits and untouched by history nav (commit-on-Enter
+    // retired the old buffer-IS-the-queued-message coupling).
     if (self.history) {
       const recalled = self.history.back(self.input.buffer);
       if (recalled !== null) {
@@ -434,8 +451,9 @@ function handleVerticalNav(self: KeyDispatchHost, key: KeyInfo): boolean {
       }
       return true;
     }
-    // History forward (↓) — only when history is wired in. See ↑ branch
-    // for the queued-flag invariant; applyEdit() resets it.
+    // History forward (↓) — only when history is wired in. Routes through
+    // applyEdit() like the ↑ branch; committed messages in pendingSubmissions
+    // are untouched by history nav.
     if (self.history) {
       const recalled = self.history.forward();
       if (recalled !== null) {
@@ -640,14 +658,6 @@ function handleBackspace(self: KeyDispatchHost, key: KeyInfo): boolean {
   if (next !== self.input) {
     self.history?.resetRecall();
     self.applyEdit(next);
-  } else if (self.pendingSubmissions.length > 0) {
-    // Buffer can't delete further (empty / cursor at 0) but messages are
-    // queued — Backspace un-queues the most recently committed one (LIFO).
-    // Successor to the pre-multi-queue "Backspace at 0 unqueues" affordance;
-    // mirrors the attachment-pop below.
-    self.pendingSubmissions.pop();
-    self.queued = self.pendingSubmissions.length > 0;
-    self.repaint();
   } else if (self.attachments.length > 0) {
     // Buffer empty + attachments present — pop the last attachment.
     // Ported from reader.ts:668. Lets the user "undo" an
@@ -655,6 +665,11 @@ function handleBackspace(self: KeyDispatchHost, key: KeyInfo): boolean {
     self.attachments.pop();
     self.repaint();
   }
+  // Note: Backspace deliberately does NOT dequeue. Committed type-ahead
+  // messages (pendingSubmissions) are recalled for editing via ↑
+  // (handleVerticalNav) — non-destructive — never discarded here. A prior
+  // revision popped the newest queued message on an empty buffer, which
+  // silently destroyed typed content; ↑-to-edit replaced that affordance.
   return true;
 }
 
