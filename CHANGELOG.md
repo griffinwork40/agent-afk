@@ -11,6 +11,18 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.21.0] - 2026-06-19
+
+### Added
+- interactive usage-limit picker (C) (de2d3be)
+- make usage-limit pause actionable at the keyboard (A+B) (4ecc2d2)
+
+### Fixed
+- guard runPicker promise with .catch() to avoid unhandled REPL rejection (3d92e53)
+
+### Changed
+- Merge pull request #217 from griffinwork40/afk/20260618-163800-fba9fe (80f4e95)
+
 ## [4.20.0] - 2026-06-19
 
 ### Added
