@@ -116,6 +116,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
    */
   private _sharedReadRoots: string[] | undefined;
   private _sharedWriteRoots: string[] | undefined;
+  /**
+   * Current permission mode, refreshed per `query()` — read by `getGrants()` so
+   * the path-approval hook's `allowAll` matches the per-query dispatcher's.
+   */
+  private _currentPermissionMode = 'default';
   private _initialResolveBase: string | undefined;
   /**
    * Presence-registration guard — same semantics as
@@ -149,6 +154,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
   query(args: ProviderQueryArgs): ProviderQuery {
     const config = args.config;
     const permissionMode = config.permissionMode ?? 'default';
+    this._currentPermissionMode = permissionMode;
 
     // Lazily init the shared root arrays (mirrors AnthropicDirectProvider).
     this.ensureSharedRoots(config.cwd);
@@ -389,6 +395,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // the provider's construction-time flag so a read-only skill's forked
     // OpenAI-routed child also blocks mutating shell commands.
     if (this.providerOpts.readOnlyBash === true) dispatcherOpts.readOnlyBash = true;
+    // Bypass mode: disable path containment for every per-call context.
+    dispatcherOpts.allowAll = permissionMode === 'bypassPermissions';
 
     return new SessionToolDispatcher(dispatcherOpts);
   }
@@ -442,11 +450,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this.appendProviderAuditLog({ action: 'revoke', path: p, source, sessionId });
   }
 
-  getGrants(): { resolveBase: string | undefined; readRoots: string[]; writeRoots: string[] } {
+  getGrants(): { resolveBase: string | undefined; readRoots: string[]; writeRoots: string[]; allowAll: boolean } {
     return {
       resolveBase: this._initialResolveBase,
       readRoots: this._sharedReadRoots?.slice() ?? [],
       writeRoots: this._sharedWriteRoots?.slice() ?? [],
+      allowAll: this._currentPermissionMode === 'bypassPermissions',
     };
   }
 

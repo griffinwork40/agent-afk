@@ -110,6 +110,29 @@ describe('wouldBeRestricted', () => {
 // Symlink containment tests (H1 security fix)
 // ---------------------------------------------------------------------------
 
+describe('allowAll bypass (bypassPermissions mode)', () => {
+  // External invariant: both functions MUST agree under allowAll too —
+  // resolveAndContain admits the path (no throw), wouldBeRestricted reports
+  // not-restricted — so the path-approval hook skips its prompt for exactly the
+  // paths the handler will then accept.
+  it('resolveAndContain admits an out-of-root path when allowAll is set', () => {
+    expect(resolveAndContain(OUTSIDE, ctx({ allowAll: true }))).toBe(OUTSIDE);
+    expect(resolveAndContain(OUTSIDE, ctx({ allowAll: true }), 'write')).toBe(OUTSIDE);
+  });
+
+  it('wouldBeRestricted reports not-restricted for an out-of-root path when allowAll is set', () => {
+    const r = wouldBeRestricted(OUTSIDE, ctx({ allowAll: true }));
+    expect(r.restricted).toBe(false);
+    expect(r.resolved).toBe(OUTSIDE);
+    expect(wouldBeRestricted(OUTSIDE, ctx({ allowAll: true }), 'write').restricted).toBe(false);
+  });
+
+  it('allowAll does not disturb in-root resolution (relative paths still anchor to resolveBase)', () => {
+    expect(resolveAndContain('src/foo.ts', ctx({ allowAll: true }))).toBe(INSIDE);
+    expect(wouldBeRestricted(INSIDE, ctx({ allowAll: true })).restricted).toBe(false);
+  });
+});
+
 describe('symlink containment', () => {
   // Track tmp dirs created per test so afterEach can clean them up.
   const tmps: string[] = [];

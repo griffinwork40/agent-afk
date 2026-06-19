@@ -66,6 +66,14 @@ export interface ToolHandlerContext {
    * future handler needs env-aware behavior, it can read this same key.
    */
   env?: Record<string, string>;
+  /**
+   * When true, ALL path containment is bypassed: `resolveAndContain` and
+   * `wouldBeRestricted` admit any path. Set by the dispatcher when the session
+   * runs in `bypassPermissions` mode. This is the single switch that makes
+   * "bypass" actually skip the path-approval prompt AND the handler containment
+   * throw. Default (unset) enforces containment against the granted roots.
+   */
+  allowAll?: boolean;
 }
 
 /**

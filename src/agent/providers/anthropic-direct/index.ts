@@ -191,6 +191,12 @@ export class AnthropicDirectProvider implements ModelProvider {
   private _sharedReadRoots: string[] | undefined;
   /** Mutable write-root list — same shared-reference pattern as `_sharedReadRoots`. */
   private _sharedWriteRoots: string[] | undefined;
+  /**
+   * The session's current permission mode, refreshed on each `query()`. Read by
+   * `getGrants()` so the path-approval hook sees `allowAll` in bypassPermissions
+   * mode (the per-query dispatcher gets the same signal via `buildDispatcher`).
+   */
+  private _currentPermissionMode = 'default';
   /** The first cwd ever seen by ensureSharedRoots — non-revocable, mirrors the dispatcher-level guard. */
   private _initialResolveBase: string | undefined;
   /**
@@ -355,6 +361,9 @@ export class AnthropicDirectProvider implements ModelProvider {
     const mcpSchemas = this._mcpToolsCache ?? [];
     return new SessionToolDispatcher({
       handlers,
+      // Bypass mode: when the session runs in bypassPermissions, every per-call
+      // ToolHandlerContext carries allowAll:true so path containment is disabled.
+      allowAll: permissionMode === 'bypassPermissions',
       // Constraint (semantic invariant): MCP schemas appended AFTER builtins
       // so builtin tool names always take precedence in any overlap.
       schemas: [...this.schemas, ...mcpSchemas],
@@ -492,11 +501,12 @@ export class AnthropicDirectProvider implements ModelProvider {
     this.appendProviderAuditLog({ action: 'revoke', path: p, source, sessionId });
   }
 
-  getGrants(): { resolveBase: string | undefined; readRoots: string[]; writeRoots: string[] } {
+  getGrants(): { resolveBase: string | undefined; readRoots: string[]; writeRoots: string[]; allowAll: boolean } {
     return {
       resolveBase: this._initialResolveBase,
       readRoots: this._sharedReadRoots?.slice() ?? [],
       writeRoots: this._sharedWriteRoots?.slice() ?? [],
+      allowAll: this._currentPermissionMode === 'bypassPermissions',
     };
   }
 
@@ -566,6 +576,9 @@ export class AnthropicDirectProvider implements ModelProvider {
     // external dispatcher, use it as-is — external callers own their own
     // lifecycle.
     const permissionMode = config.permissionMode ?? 'default';
+    // Track for getGrants() so the path-approval hook's allowAll stays in sync
+    // with the per-query dispatcher's (both derive from this mode).
+    this._currentPermissionMode = permissionMode;
 
     // Initialise the shared root arrays on first query. Subsequent queries
     // reuse the same array references so /allow-dir grants survive across turns.
