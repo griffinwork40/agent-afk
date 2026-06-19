@@ -644,10 +644,14 @@ export class SubagentExecutor implements SubagentControl {
         agentType: (parsed.id_prefix && parsed.id_prefix !== 'agent-tool')
           ? stripEscapeSequences(parsed.id_prefix).replace(/[\r\n]+/g, ' ').trim() || 'agent'
           : stripEscapeSequences(parsed.prompt).replace(/[\r\n]+/g, ' ').slice(0, 40).trim() || 'agent',
-        // External constraint: background subagents have no interactive surface
-        // to serve elicitation prompts — auto-decline prevents silent hangs.
-        // Foreground subagents continue to route through the default handler.
-        denyElicitations: parsed.mode === 'background',
+        // A forked sub-agent has no human relationship of its own: it returns
+        // findings (including Blocked/Asking) to its PARENT, which owns the
+        // operator surface. Deny MCP elicitation for BOTH foreground and
+        // background forks — together with the isNonInteractive default in
+        // subagent.ts this makes every sub-agent uniformly non-interactive.
+        // (Previously only background denied; foreground leaked elicitations to
+        // the REPL/Telegram human via the process-wide elicitation router.)
+        denyElicitations: true,
       });
       // Backfill: give the depth-1 child executor a real parentId so any
       // depth-2 forks it spawns carry handle.id as their parentId.

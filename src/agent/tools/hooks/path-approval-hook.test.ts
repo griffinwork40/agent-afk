@@ -108,6 +108,60 @@ describe('createPathApprovalHook — typed-tool gating', () => {
   });
 });
 
+describe('createPathApprovalHook — sub-agent auto-deny (PR1)', () => {
+  // A forked sub-agent (parentSessionId set) must never prompt the operator for
+  // out-of-root access — the prompt would surface on the parent's handler with
+  // no attribution. The hook auto-denies instead; the sub-agent reports the
+  // path requirement back to its parent.
+  it('blocks an out-of-root path for a forked sub-agent without prompting', async () => {
+    const handler = vi.fn(async () => ({ action: 'accept', content: { choice: 'session' } }));
+    elicitationRouter.install(handler);
+    const mgr = makeMockGrantManager();
+    const { preToolUse } = createPathApprovalHook({
+      getGrantManager: () => mgr,
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    const decision = await preToolUse({
+      event: 'PreToolUse',
+      toolName: 'read_file',
+      input: { file_path: '/etc/hosts' },
+      sessionId: 'child-1',
+      parentSessionId: 'parent-1',
+    });
+
+    expect(decision.decision).toBe('block');
+    // Never routed to the operator, never granted.
+    expect(handler).not.toHaveBeenCalled();
+    expect(mgr._events).toHaveLength(0);
+  });
+
+  it('leaves inherited in-root access untouched for a sub-agent (no prompt, no block)', async () => {
+    const handler = vi.fn(async () => ({ action: 'accept', content: { choice: 'session' } }));
+    elicitationRouter.install(handler);
+    const mgr = makeMockGrantManager();
+    const { preToolUse } = createPathApprovalHook({
+      getGrantManager: () => mgr,
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    // In-root path: the `!restricted` check returns {} BEFORE the sub-agent
+    // guard, so paths the parent already grants stay accessible to the child.
+    const decision = await preToolUse({
+      event: 'PreToolUse',
+      toolName: 'read_file',
+      input: { file_path: '/tmp/repo/src/foo.ts' },
+      sessionId: 'child-1',
+      parentSessionId: 'parent-1',
+    });
+
+    expect(decision).toEqual({});
+    expect(handler).not.toHaveBeenCalled();
+  });
+});
+
 describe('createPathApprovalHook — outcome mapping', () => {
   it('once: allows the call, records for post-cleanup; PostToolUse revokes', async () => {
     elicitationRouter.install(async () => ({ action: 'accept', content: { choice: 'once' } }));
