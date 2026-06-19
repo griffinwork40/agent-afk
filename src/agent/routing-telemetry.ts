@@ -10,6 +10,7 @@ import { env } from '../config/env.js';
 import { mkdir, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { getAgentFrameworkDir } from '../paths.js';
+import type { TraceOrigin, TraceActor } from './session/session-identity.js';
 
 function getRoutingTelemetryPath(): string {
   return join(getAgentFrameworkDir(), 'routing-decisions.jsonl');
@@ -27,6 +28,19 @@ function getRoutingTelemetryPath(): string {
  */
 export interface RoutingDecisionEntry {
   event: string;
+  /**
+   * User-facing surface that produced this row (cli/telegram/daemon/unknown).
+   * Distinct from the hardcoded `surface: 'afk'` provenance tag added at write
+   * time — that names the writer ecosystem (afk vs plugin); this names the
+   * session entrypoint. Optional/back-compat: legacy rows omit it.
+   */
+  origin?: TraceOrigin | undefined;
+  /**
+   * Actor role of the session that EMITTED this row: 'main' for a top-level
+   * session, 'subagent' for a forked one (derived from the emitting executor's
+   * nesting depth). Orthogonal to `subagent_id`, which names the row's SUBJECT.
+   */
+  actor?: TraceActor | undefined;
   /** Subagent id when the event is about a specific child. */
   subagent_id?: string | undefined;
   id_prefix?: string | undefined;
@@ -93,6 +107,24 @@ export interface RoutingDecisionEntry {
 }
 
 /**
+ * Build the persisted routing-decision row from an entry. Pure (no I/O) so the
+ * row shape is unit-testable independent of the vitest write guard below.
+ *
+ * Invariant: `surface: 'afk'` is the frozen writer-ecosystem PROVENANCE tag
+ * (afk vs plugin) and is added unconditionally here — it is NOT the session
+ * surface. The user-facing surface travels in the `origin` field. Undefined
+ * entry fields (incl. an absent `origin`/`actor`) are dropped so legacy rows
+ * stay byte-identical and consumers never see explicit nulls.
+ */
+export function buildRoutingDecisionRow(entry: RoutingDecisionEntry): Record<string, unknown> {
+  const row: Record<string, unknown> = { surface: 'afk' };
+  for (const [k, v] of Object.entries(entry)) {
+    if (v !== undefined) row[k] = v;
+  }
+  return row;
+}
+
+/**
  * Append a routing-decision entry. Best-effort: mkdir + append with
  * POSIX O_APPEND atomicity (entries are well under PIPE_BUF). Swallows
  * errors so telemetry never breaks dispatch.
@@ -109,13 +141,7 @@ export async function appendRoutingDecision(
     await mkdir(dirname(telemetryPath), { recursive: true });
 
     const ts = new Date().toISOString().split('.')[0] + 'Z';
-    // Drop undefined fields so JSONL stays compact and consumers don't have
-    // to special-case the difference between "absent" and "explicit null".
-    const cleaned: Record<string, unknown> = { ts, surface: 'afk' };
-    for (const [k, v] of Object.entries(entry)) {
-      if (v !== undefined) cleaned[k] = v;
-    }
-    const line = JSON.stringify(cleaned) + '\n';
+    const line = JSON.stringify({ ts, ...buildRoutingDecisionRow(entry) }) + '\n';
 
     await writeFile(telemetryPath, line, { flag: 'a' });
   } catch {

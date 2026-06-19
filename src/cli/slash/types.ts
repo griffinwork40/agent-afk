@@ -10,6 +10,7 @@
 import type { SessionRef } from '../../agent/session-ref.js';
 import type { ElicitationHandler } from '../../agent/elicitation-router.js';
 import type { AgentModelInput } from '../../agent/types.js';
+import type { TraceActor } from '../../agent/session/session-identity.js';
 import type { PermissionMode } from '../../agent/types/sdk-types.js';
 import type { TrustedSkillLedger } from '../trusted-skill-ledger.js';
 import type { ImageAttachment } from '../input/attachments.js';
@@ -105,14 +106,22 @@ export interface SessionStats {
    * Origin surface of the session. Persisted to the shared session store so a
    * resumer can tell where a session came from. Undefined is treated as 'cli'
    * (the default surface); the Telegram bot sets 'telegram' so CLI `/resume`
-   * can flag and resume conversations that started in chat.
+   * can flag and resume conversations that started in chat; the daemon sets
+   * 'daemon'.
    */
-  source?: 'cli' | 'telegram';
+  source?: 'cli' | 'telegram' | 'daemon';
   /**
    * Telegram chat id, set only when `source === 'telegram'`. Enables reverse
    * lookup from a stored session back to its chat (used by later phases).
    */
   telegramChatId?: number;
+  /**
+   * Execution role of the session ('main' | 'subagent'), persisted to the
+   * shared session store for uniform session-identity telemetry. Sidecars are
+   * only written for top-level sessions, so this is 'main' when set; left
+   * optional/absent on legacy and un-threaded callers.
+   */
+  actor?: TraceActor;
 }
 
 /** Minimal console writer passed to handlers — thin wrapper around chalk output. */

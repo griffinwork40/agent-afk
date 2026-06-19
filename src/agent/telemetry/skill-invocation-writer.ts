@@ -27,6 +27,7 @@ import { appendFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { env } from '../../config/env.js';
 import { getAgentFrameworkDir } from '../../paths.js';
+import type { TraceOrigin, TraceActor } from '../session/session-identity.js';
 
 /** Input shape accepted by the public writer and `buildSkillInvocationRow`. */
 export interface SkillInvocationInput {
@@ -36,6 +37,10 @@ export interface SkillInvocationInput {
   cwd?: string | undefined;
   model?: string | undefined;
   command?: string | undefined;
+  /** User-facing surface that dispatched the skill (cli/telegram/daemon/unknown). */
+  origin?: TraceOrigin | undefined;
+  /** Actor role of the dispatching session (main/subagent). */
+  actor?: TraceActor | undefined;
 }
 
 /** The persisted JSONL row shape. Optional fields are omitted (never `null`)
@@ -51,6 +56,11 @@ export interface SkillInvocationRow {
   cwd?: string;
   model?: string;
   command?: string;
+  /** User-facing surface (cli/telegram/daemon/unknown). Distinct from the
+   *  frozen `surface: 'afk'` provenance tag above. Omitted when unknown. */
+  origin?: TraceOrigin;
+  /** Actor role of the dispatching session (main/subagent). Omitted when absent. */
+  actor?: TraceActor;
 }
 
 /**
@@ -71,6 +81,8 @@ export function buildSkillInvocationRow(input: SkillInvocationInput): SkillInvoc
     ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
     ...(input.model !== undefined ? { model: input.model } : {}),
     ...(input.command !== undefined ? { command: input.command } : {}),
+    ...(input.origin !== undefined ? { origin: input.origin } : {}),
+    ...(input.actor !== undefined ? { actor: input.actor } : {}),
   };
 }
 

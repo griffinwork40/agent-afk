@@ -42,8 +42,11 @@ export function constructTelegramSession(
   const trace = (deps.createTraceWriter ?? createDefaultTraceWriter)();
   // Default trace writer is spread FIRST so an operator-supplied
   // baseConfig.traceWriter still wins — escape-hatch parity with the daemon's
-  // spawnSession (where ...sessionConfig is spread last).
-  const config: AgentConfig = trace ? { traceWriter: trace.writer, ...baseConfig } : baseConfig;
+  // spawnSession (where ...sessionConfig is spread last). `surface: 'telegram'`
+  // is stamped last (always telegram here) for trace `origin` attribution.
+  const config: AgentConfig = trace
+    ? { traceWriter: trace.writer, ...baseConfig, surface: 'telegram' }
+    : { ...baseConfig, surface: 'telegram' };
   const construct = deps.newSession ?? ((c: AgentConfig) => new AgentSession(c));
   return construct(config);
 }

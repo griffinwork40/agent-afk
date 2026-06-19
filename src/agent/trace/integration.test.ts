@@ -186,4 +186,45 @@ describe('AgentSession + witness-layer wiring', () => {
       expect(initStart.payload.resolvedModel).toBe('gpt-4o');
     });
   });
+
+  describe('session_init_start — session identity (origin + actor)', () => {
+    function initStartOf(w: InMemoryTraceWriter) {
+      const ev = w.events.find(
+        (e) => e.kind === 'session_phase' && e.payload.phase === 'session_init_start',
+      );
+      if (ev?.kind !== 'session_phase') throw new Error('no session_init_start');
+      return ev.payload;
+    }
+
+    it('top-level telegram session → origin telegram, actor main', async () => {
+      const session = new AgentSession({ ...config, surface: 'telegram' });
+      await session.waitForInitialization();
+      await session.close();
+      const p = initStartOf(writer);
+      expect(p.origin).toBe('telegram');
+      expect(p.actor).toBe('main');
+    });
+
+    it('forked session (parentSessionId set) → actor subagent, origin inherited from surface', async () => {
+      const session = new AgentSession({
+        ...config,
+        surface: 'daemon',
+        parentSessionId: 'parent-uuid',
+      });
+      await session.waitForInitialization();
+      await session.close();
+      const p = initStartOf(writer);
+      expect(p.actor).toBe('subagent');
+      expect(p.origin).toBe('daemon');
+    });
+
+    it('back-compat: a config with no surface → origin unknown, actor main', async () => {
+      const session = new AgentSession(config); // no surface, no parent
+      await session.waitForInitialization();
+      await session.close();
+      const p = initStartOf(writer);
+      expect(p.origin).toBe('unknown');
+      expect(p.actor).toBe('main');
+    });
+  });
 });

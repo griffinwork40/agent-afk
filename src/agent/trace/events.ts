@@ -375,6 +375,12 @@ export const SessionPhasePayloadSchema = z.object({
   // present on session_init_start; resolvedModel also on model_ttfb.
   model: z.string().optional(),
   resolvedModel: z.string().optional(),
+  // Session-identity attribution — see SessionPhasePayload JSDoc in types.ts.
+  // `origin` = user-facing surface (cli/telegram/daemon); `actor` = main vs
+  // subagent. Both set on session_init_start. Orthogonal to the JSONL
+  // `surface: 'afk'|'plugin'` provenance tag.
+  origin: z.enum(['cli', 'telegram', 'daemon', 'unknown']).optional(),
+  actor: z.enum(['main', 'subagent']).optional(),
 });
 
 // ---------------------------------------------------------------------------

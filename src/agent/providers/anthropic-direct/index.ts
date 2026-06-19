@@ -76,6 +76,7 @@ import {
   removePresenceFileSync,
   type RuntimeStateSource,
 } from '../../awareness/index.js';
+import { actorFromDepth } from '../../session/session-identity.js';
 
 const PROVIDER_NAME = 'anthropic-direct';
 const DEFAULT_MODEL = 'claude-sonnet-4-5-20250929';
@@ -627,6 +628,10 @@ export class AnthropicDirectProvider implements ModelProvider {
       void writePresenceFile({
         sessionId,
         surface: this.surface,
+        // Presence is written only under the top-level gate above, so depth is
+        // 0/undefined here ⇒ 'main'. Derived (not hardcoded) to stay correct
+        // if that gate is ever changed.
+        actor: actorFromDepth(config.depth),
         cwd: config.cwd ?? process.cwd(),
         startedAt: new Date().toISOString(),
         model: { provider: PROVIDER_NAME, name: model },

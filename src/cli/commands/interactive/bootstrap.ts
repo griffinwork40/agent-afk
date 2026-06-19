@@ -96,6 +96,9 @@ interface BuildAgentSessionDeps {
 export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
   return new AgentSession(injectHotMemory({
     model: deps.model,
+    // User-facing surface for trace `origin` attribution. The REPL is a CLI
+    // entrypoint → 'cli'. (Mid-session swap reuses this helper, also 'cli'.)
+    surface: 'cli',
     // Resolve the credential for the ACTUAL session model, not the env-derived
     // default. `getApiKey()` keys off AFK_MODEL/CLAUDE_MODEL, so launching
     // `afk -m gpt-5.5` while CLAUDE_MODEL is a Claude id would inject the
@@ -289,6 +292,8 @@ export async function bootstrapSession(
   const subagentExecutor = new SubagentExecutor({
     subagentManager: rootManager,
     parentSession: deferredParent,
+    // Session origin for routing-decision telemetry (REPL → cli).
+    surface: 'cli',
     defaultConfig: {
       apiKey,
       systemPrompt: basePrompt,
@@ -312,6 +317,8 @@ export async function bootstrapSession(
 
   const skillExecutor = new SkillExecutor({
     parentSession: deferredParent,
+    // Session origin for skill-invocation + routing telemetry (REPL → cli).
+    surface: 'cli',
     defaultModel: sessionModel,
     defaultSubagentModel: getDefaultSubagentModel(sessionModel),
     apiKey,

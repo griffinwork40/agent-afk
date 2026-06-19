@@ -20,6 +20,7 @@ import type { TraceWriter } from '../trace/index.js';
 import type { AgentModelInput } from './model-types.js';
 import type { ModelSlots } from '../session/model-slots.js';
 import type { CanUseTool, PermissionBubbler } from './permission-types.js';
+import type { Surface } from '../awareness/types.js';
 
 /** Tool permissions configuration */
 export interface ToolConfig {
@@ -384,6 +385,18 @@ export interface AgentConfig {
   // the snapshot reports `null` for the missing values. Populated by
   // `SubagentManager.forkSubagent` + `SubagentExecutor` for forked children
   // so subagents can introspect their place in the topology.
+
+  /**
+   * User-facing execution surface that produced this session (the same value
+   * the provider stores at `opts.surface`). Set by each top-level entrypoint
+   * (REPL → 'cli', `afk chat` → 'cli', daemon/scheduler → 'daemon', Telegram →
+   * 'telegram'); forked subagents inherit the parent's value. Persisted to the
+   * witness trace as `origin` on `session_init_start` so trace-only analysis can
+   * distinguish cli/telegram/daemon. Distinct from the JSONL telemetry
+   * `surface: 'afk'|'plugin'` provenance tag. Optional/back-compat — undefined
+   * maps to `origin: 'unknown'`.
+   */
+  surface?: Surface;
 
   /** Parent session ID when this session was forked as a subagent. */
   parentSessionId?: string;
