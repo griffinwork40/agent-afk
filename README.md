@@ -153,9 +153,11 @@ Aliases: `afk c` → `chat`, `afk i` → `interactive`, `afk s` → `status`.
 
 ## A note on permissions
 
-`afk` runs with **full permissions** by default: no per-tool prompts. Claude can run bash, read and write files, fetch URLs, and call MCP servers without asking each time. This is intentional — `afk` is built for unattended work, where a permission prompt with no human in front of it is just a wedged session.
+`afk` does not prompt before each tool call — there is no per-tool approval flow. Claude runs bash, reads and writes files, fetches URLs, and calls MCP servers without asking each time. This is intentional — `afk` is built for unattended work, where a permission prompt with no human in front of it is just a wedged session.
 
-Use `afk` on a machine and account you trust. Override per-session with `--permission-mode` if you want stricter behavior.
+The one prompt you may hit is **path approval**: when a file tool (read/write/edit/list/glob/grep) targets a path *outside* the session's working directory, `afk` asks before allowing it. Pre-authorize paths with `/allow-dir <path>` (or answer "persist" at the prompt to remember them across sessions).
+
+To turn path approval off entirely — letting the agent read and write **anywhere** with no prompt — enable **bypass mode** with `/bypass` in the REPL. The status line shows `⚠ BYPASS` while it is active. This is the equivalent of `--dangerously-skip-permissions`; use it only on a machine and account you trust. `afk daemon` runs in bypass mode by default (no human to prompt). Bypass does not change `ask_question` — that is the model choosing to ask you something, a separate axis.
 
 ## Troubleshooting
 

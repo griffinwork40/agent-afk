@@ -68,7 +68,6 @@ All commands support `--format json` where machine-readable output makes sense (
 --max-turns <n>           # safety rail (default 100)
 --max-budget-usd <n>
 --task-budget <tokens>
---permission-mode <mode>  # default | acceptEdits | bypassPermissions | plan
 --no-update-check         # suppress startup update check
 --dump-prompt <path>      # write resolved system prompt to file (provenance included)
 ```
@@ -194,7 +193,7 @@ The setup wizard prompts for the token and the chat IDs allowed to interact with
 - `/reset` — clear conversation
 - `/model local|small|medium|large|opus|sonnet|haiku|fable` — switch model
 
-Send any other message to chat. The bot has full tool access via bypass mode.
+Send any other message to chat. The bot runs in the default permission mode — tools execute without per-tool prompts, and file access outside the working directory stays contained.
 
 **Background-service helpers:**
 
