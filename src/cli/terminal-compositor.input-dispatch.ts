@@ -97,11 +97,15 @@ export interface KeyDispatchHost {
   canceled: boolean;
   /** Once-only guard for Ctrl+B background in streaming mode. */
   backgrounded: boolean;
+  /** True while the turn is parked in a usage-limit pause — see {@link TerminalCompositor.paused}. */
+  paused: boolean;
 
   /** Per-turn handlers (read + invoked; the class owns reassignment between turns). */
   readonly onCancel?: () => void;
   readonly onSoftStop?: () => void;
   readonly onBackground?: () => void;
+  /** Submitted-line-during-pause handler — see {@link TerminalCompositorOptions.onPauseInterrupt}. */
+  readonly onPauseInterrupt?: () => void;
   readonly onShiftTab?: () => void;
   readonly onSubmit?: (payload: SubmissionPayload) => void;
 }
@@ -559,6 +563,16 @@ function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boo
     self.queued = true;
     self.repaint();
   }
+  // Usage-limit pause escape: while the turn is parked waiting for auto-resume
+  // (the loop is suspended in `await runTurn`), a queued line would otherwise
+  // sit stranded behind the wait. Fire the pause-interrupt so the wait ends
+  // (handler calls session.interrupt) and the buffer we just queued flushes as
+  // the NEXT turn via the idle-transition flush — the same path ESC uses.
+  // Ordering: queue is set ABOVE, then we interrupt (teardown-before-setup), so
+  // the next readLine()'s setInputMode('idle') dispatches the buffer. Reached
+  // only past the empty-buffer suppression above, so there is always content to
+  // run; idempotent if the user presses Enter twice (interrupt is idempotent).
+  if (self.paused && self.onPauseInterrupt) self.onPauseInterrupt();
   return true;
 }
 

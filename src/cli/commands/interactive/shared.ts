@@ -564,6 +564,27 @@ export interface TurnHandles {
    */
   setSoftStopHandler?(handler: (() => void) | null): void;
   /**
+   * Toggle the compositor's `paused` flag for the duration of a usage-limit
+   * pause (set true on the `paused` provider event, false on `resumed` / turn
+   * end). While true, a submitted line fires the pause-interrupt handler below
+   * instead of merely queuing — ending the auto-resume wait so the queued
+   * command runs as the next turn.
+   *
+   * Wired by the REPL to `surface.setPausedState(...)`. Absent on non-REPL
+   * callers and a no-op on non-TTY surfaces — the turn handler treats this as
+   * a no-op when undefined.
+   */
+  setPausedState?(paused: boolean): void;
+  /**
+   * Install/clear the per-turn pause-interrupt handler on the surface's
+   * persistent compositor. The turn handler sets a `session.interrupt()`
+   * closure at turn start and clears it (`null`) at turn end.
+   *
+   * Wired by the REPL to `surface.setPauseInterruptHandler(...)`. Absent on
+   * non-REPL callers and non-TTY surfaces — treated as a no-op when undefined.
+   */
+  setPauseInterruptHandler?(handler: (() => void) | null): void;
+  /**
    * Fired mid-turn on tool_result events so the REPL can refresh the
    * context sampler and repaint the status line with live context usage.
    * The turn handler throttles calls internally (min interval) — callers

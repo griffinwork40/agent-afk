@@ -475,6 +475,8 @@ export async function runInputLoop(
         getCompositor: () => surface.getCompositor(),
         setBackgroundHandler: (handler) => surface.setBackgroundHandler(handler),
         setSoftStopHandler: installSoftStop,
+        setPausedState: (paused) => surface.setPausedState(paused),
+        setPauseInterruptHandler: (handler) => surface.setPauseInterruptHandler(handler),
         async onContextProgress() {
           await ctx.contextSampler.refresh();
           ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler));

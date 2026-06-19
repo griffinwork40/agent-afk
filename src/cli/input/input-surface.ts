@@ -223,6 +223,15 @@ export class InputSurface {
   private softStopHandler: (() => void) | null = null;
 
   /**
+   * Mutable pause-interrupt handler ref. The compositor's `onPauseInterrupt`
+   * closure dereferences this when the user submits a line during a
+   * usage-limit pause (compositor `paused === true`), so the per-turn
+   * `turn-handler.ts` can install its `session.interrupt()` closure without
+   * reconstructing the compositor. Cleared (null) between turns.
+   */
+  private pauseInterruptHandler: (() => void) | null = null;
+
+  /**
    * Reject callback for the currently-pending readLine Promise (if any).
    * Set inside `readLine()` before the compositor path blocks, and
    * cleared once the Promise settles. Used by `dispose()` to abort any
@@ -285,6 +294,10 @@ export class InputSurface {
       // so per-turn swaps via this.backgroundHandler take effect
       // immediately.
       onBackground: () => { this.backgroundHandler?.(); },
+      // Pause-interrupt handler is mutable — close over the surface's ref so
+      // the per-turn turn-handler swap takes effect immediately. Fires when
+      // the user submits a line during a usage-limit pause.
+      onPauseInterrupt: () => { this.pauseInterruptHandler?.(); },
       ...(opts.onShiftTab ? { onShiftTab: opts.onShiftTab } : {}),
       history: this.history,
       autocompleteState: this.autocompleteState,
@@ -326,6 +339,7 @@ export class InputSurface {
     this.armedStdout = null;
     this.backgroundHandler = null;
     this.softStopHandler = null;
+    this.pauseInterruptHandler = null;
   }
 
   /**
@@ -357,6 +371,26 @@ export class InputSurface {
    */
   setSoftStopHandler(handler: (() => void) | null): void {
     this.softStopHandler = handler;
+  }
+
+  /**
+   * Install or clear the per-turn pause-interrupt handler. The compositor's
+   * `onPauseInterrupt` closure dereferences this ref, so swapping it here
+   * takes effect immediately without reconstructing the compositor. Wired by
+   * the REPL to the turn handler's `session.interrupt()` closure; cleared at
+   * turn end. No-op (benign null-ref mutation) when no compositor is armed.
+   */
+  setPauseInterruptHandler(handler: (() => void) | null): void {
+    this.pauseInterruptHandler = handler;
+  }
+
+  /**
+   * Toggle the compositor's `paused` flag — set true while a usage-limit
+   * pause is parked so a submitted line fires {@link setPauseInterruptHandler}.
+   * No-op when no compositor is armed (non-TTY).
+   */
+  setPausedState(paused: boolean): void {
+    if (this.compositor) this.compositor.paused = paused;
   }
 
   /**

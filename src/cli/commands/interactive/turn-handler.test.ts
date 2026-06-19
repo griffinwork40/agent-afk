@@ -418,6 +418,98 @@ describe('runTurn — usage-limit pause/resume', () => {
   });
 });
 
+describe('runTurn — pause-interrupt (submit during usage-limit pause)', () => {
+  // When the user submits a line while the turn is parked in a usage-limit
+  // pause, the compositor's Enter path queues the buffer AND fires the
+  // installed pause-interrupt handler. That handler ends the auto-resume wait
+  // (session.interrupt) so the queued buffer flushes as the next turn at the
+  // next readLine. The turn ends WITHOUT a done event, so recordTurn /
+  // onTurnComplete are suppressed — mirroring the ESC soft-stop path.
+  //
+  // Non-TTY in vitest means the compositor stays null, so the Enter→queue→fire
+  // chain itself is covered by the terminal-compositor unit tests. Here we
+  // assert the turn-handler WIRING contract: paused toggles the compositor
+  // paused flag, the handler fires interrupt + suppresses the turn, and both
+  // the flag and the handler ref are cleared on teardown.
+
+  it('fires interrupt, suppresses recordTurn, and clears paused state when a line is submitted mid-pause', async () => {
+    let capturedHandler: (() => void) | null = null;
+    const setPauseInterruptHandler = vi.fn((fn: (() => void) | null) => {
+      capturedHandler = fn;
+    });
+    const setPausedState = vi.fn();
+    const interrupt = vi.fn().mockResolvedValue(undefined);
+
+    const session = {
+      sessionId: 'mock',
+      sendMessageStream: async function* () {
+        yield { type: 'paused', reason: 'usage-limit', autoResume: true };
+        // Simulate the user typing a line + Enter during the pause: the
+        // compositor queues the buffer and fires the pause-interrupt handler.
+        capturedHandler?.();
+        // The auto-resume wait is now aborted; in the live flow the stream
+        // ends here. Yield one more event to prove the break guard drops it
+        // (it must NOT accumulate into the recorded turn).
+        yield { type: 'chunk', chunk: { type: 'content', content: 'LATE' } };
+        yield { type: 'done', metadata: { durationMs: 5 } };
+      },
+      interrupt,
+    } as unknown as AgentSession;
+
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { h: base, onTurnComplete } = makeHandles();
+    const h: TurnHandles = { ...base, setPausedState, setPauseInterruptHandler };
+    const stats = makeStats();
+
+    await runTurn({ text: 'q', attachments: [] }, session, stats, h);
+
+    // paused → setPausedState(true); finally → setPausedState(false).
+    expect(setPausedState).toHaveBeenCalledWith(true);
+    expect(setPausedState).toHaveBeenLastCalledWith(false);
+    // The handler ended the wait via session.interrupt().
+    expect(interrupt).toHaveBeenCalled();
+    // The "ending wait" notice was written (distinct from the ESC stop notice).
+    const wrote = consoleSpy.mock.calls.flat().join('\n');
+    expect(wrote).toContain('Ending wait');
+    // Turn suppressed: no recordTurn (totalTurns stays 0), no onTurnComplete —
+    // the LATE chunk after the interrupt was dropped by the break guard.
+    expect(stats.totalTurns).toBe(0);
+    expect(onTurnComplete).not.toHaveBeenCalled();
+    // The handler ref is cleared on teardown so it can't fire between turns.
+    expect(setPauseInterruptHandler).toHaveBeenLastCalledWith(null);
+
+    consoleSpy.mockRestore();
+  });
+
+  it('clears the paused flag on resumed so a line typed during the replay queues normally', async () => {
+    // Auto-resume succeeds (no user interrupt): the paused flag must flip back
+    // to false on `resumed` so type-ahead during the replayed turn queues
+    // (normal behavior) instead of firing the pause-interrupt.
+    const setPausedState = vi.fn();
+    const setPauseInterruptHandler = vi.fn();
+    const events: OutputEvent[] = [
+      { type: 'paused', reason: 'usage-limit', autoResume: true },
+      { type: 'resumed', hotSwapped: false },
+      { type: 'chunk', chunk: { type: 'content', content: 'answer' } },
+      { type: 'done', metadata: { durationMs: 10 } },
+    ];
+
+    const session = streamFrom(events);
+    const { h: base, onTurnComplete } = makeHandles();
+    const h: TurnHandles = { ...base, setPausedState, setPauseInterruptHandler };
+    const stats = makeStats();
+
+    await runTurn({ text: 'q', attachments: [] }, session, stats, h);
+
+    // true on paused, false on resumed (and again on finally).
+    expect(setPausedState).toHaveBeenNthCalledWith(1, true);
+    expect(setPausedState).toHaveBeenNthCalledWith(2, false);
+    // No interrupt fired; the turn completed normally via the replay.
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+    expect(stats.totalTurns).toBe(1);
+  });
+});
+
 describe('runTurn — ghost spinner regression', () => {
   it('emits the blank separator line before arm, not after', async () => {
     // Regression: a console.log() between arm() and the first stream event

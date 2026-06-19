@@ -71,6 +71,11 @@ export async function runTurn(
   let doneFired = false;
   let doneMeta: ResponseMetadata | undefined;
   let softStopRequested = false;
+  // Set when the user submits a line DURING a usage-limit pause: the
+  // pause-interrupt handler (installed below) ends the auto-resume wait so the
+  // queued buffer flushes as the next turn. Like softStopRequested, it ends the
+  // turn without a `done` event, so recordTurn is naturally skipped.
+  let pauseInterruptRequested = false;
   let lastContextProgressMs = 0;
   const CONTEXT_PROGRESS_MIN_INTERVAL_MS = 15_000;
   const toolEvents: ToolEvent[] = [];
@@ -242,6 +247,23 @@ export async function runTurn(
       });
     }
 
+    // Install the per-turn pause-interrupt handler. When the user submits a
+    // line while the turn is parked in a usage-limit pause (compositor
+    // `paused === true`, toggled by setPausedState on the paused/resumed events
+    // below), end the auto-resume wait so the just-queued buffer flushes as the
+    // next turn. Mirrors the ESC soft-stop interrupt; session.interrupt() is
+    // idempotent, so a double Enter during the pause is a safe no-op.
+    if (h.setPauseInterruptHandler) {
+      h.setPauseInterruptHandler(() => {
+        pauseInterruptRequested = true;
+        session.interrupt().catch((err) => {
+          if (isDebugEnabled()) {
+            console.error('  ' + palette.error('pause-interrupt session.interrupt() failed:'), err);
+          }
+        });
+      });
+    }
+
     await armAndWire();
 
     // Install the per-turn Ctrl+B handler on the surface's persistent
@@ -300,7 +322,7 @@ export async function runTurn(
         // already initiated in the handler, the stream's async iterator
         // terminates naturally (no throw), and the post-stream block detects
         // softStopRequested to render the notice and suppress recordTurn.
-        if (softStopRequested) {
+        if (softStopRequested || pauseInterruptRequested) {
           break;
         }
 
@@ -354,6 +376,10 @@ export async function runTurn(
         }
 
         if (event.type === 'paused') {
+          // Mark the compositor paused so a submitted line ends the wait (via
+          // the pause-interrupt handler + input-dispatch Enter path) instead of
+          // sitting queued behind the auto-resume. Cleared on resumed / finally.
+          h.setPausedState?.(true);
           // Disarm before raw console output so the card doesn't tear the
           // live overlay. Auto-resume path continues — the provider is now
           // waiting; the stream will deliver a 'resumed' event when ready,
@@ -369,6 +395,10 @@ export async function runTurn(
         }
 
         if (event.type === 'resumed') {
+          // Pause is over (auto-resume / hot-swap). Clear the paused flag so a
+          // line typed during the replayed turn queues normally (type-ahead)
+          // rather than firing the pause-interrupt.
+          h.setPausedState?.(false);
           // External constraint: the retry layer replays the ENTIRE turn
           // after this event (retry-layer.ts: `yield* turnWithAuthRetry`),
           // re-streaming all content + tool calls from scratch. We must:
@@ -481,7 +511,17 @@ export async function runTurn(
       write('');
     }
 
-    if (doneFired && !softStopRequested) {
+    // Pause-interrupt: the user submitted a line during a usage-limit pause to
+    // end the wait. The queued buffer flushes as the next turn at the next
+    // readLine (idle-transition flush). Gentle note, distinct from ESC's stop.
+    if (pauseInterruptRequested) {
+      const write = completionWriter ? completionWriter.fn : console.log;
+      // Owns one trailing blank (TUI rhythm contract — see docs/tui-rhythm.md).
+      write(palette.dim('▶ Ending wait — running your next command…'));
+      write('');
+    }
+
+    if (doneFired && !softStopRequested && !pauseInterruptRequested) {
       recordTurn(stats, historyText, responseText, doneMeta, toolEvents);
 
       if (h.onTurnComplete) {
@@ -593,6 +633,11 @@ export async function runTurn(
     // presses are a no-op (compositor mode gate already drops them in
     // idle; this is a defense-in-depth clear).
     h.setSoftStopHandler?.(null);
+    // Clear the pause flag + pause-interrupt handler so a line submitted
+    // between turns queues normally (type-ahead) instead of firing the
+    // interrupt against a no-longer-paused turn.
+    h.setPausedState?.(false);
+    h.setPauseInterruptHandler?.(null);
     h.setInFlight(false);
     h.rearmStatus?.();
   }
