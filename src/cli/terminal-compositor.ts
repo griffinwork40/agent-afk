@@ -235,8 +235,27 @@ export class TerminalCompositor {
   overlay = '';
   /** @internal Relaxed from `private` — read/written by sibling free-function modules via Host interfaces. */
   input: InputCoreState = InputCore.seed('');
-  /** @internal Relaxed from `private` — read/written by sibling free-function modules via Host interfaces. */
+  /**
+   * `true` IFF {@link pendingSubmissions} is non-empty — a maintained mirror
+   * kept in sync at every queue mutation. Read by the renderer (the
+   * `[queued]` / `[N queued]` suffix) and {@link getBuffer}. Stored as a plain
+   * boolean (not a getter) so the sibling Host-interface field shape is
+   * unchanged.
+   * @internal Relaxed from `private` — read/written by sibling free-function modules via Host interfaces.
+   */
   queued = false;
+  /**
+   * FIFO queue of messages the user typed + Entered mid-turn (streaming mode).
+   * Each Enter commits the live buffer here and clears the input so the next
+   * message composes fresh; the queue drains one payload per turn when the
+   * surface flips to `'idle'` (see the flush in
+   * `./terminal-compositor.input-mode.ts`). Payloads are self-contained —
+   * paste placeholders are expanded and attachments snapshotted at commit
+   * time, so a queued message never depends on later live-buffer state.
+   * Reset by `resetState()`.
+   * @internal Relaxed from `private` — read/written by sibling free-function modules via Host interfaces.
+   */
+  pendingSubmissions: SubmissionPayload[] = [];
 
   /** @internal Relaxed from `private` for the lifecycle module (LifecycleHost). */
   handleKeypress: ((char: string | undefined, key: KeyInfo) => void) | null = null;
@@ -660,6 +679,15 @@ export class TerminalCompositor {
    */
   getBuffer(): { text: string; queued: boolean } {
     return Paste.getBuffer(this);
+  }
+
+  /**
+   * Number of messages queued for submission — typed + Entered during a
+   * streaming turn and not yet drained. 0 between turns once the queue
+   * empties. Surfaced for tests and any caller that wants to show queue depth.
+   */
+  getPendingCount(): number {
+    return this.pendingSubmissions.length;
   }
 
   /**

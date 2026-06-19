@@ -8,10 +8,9 @@
  * are byte-for-byte moves with `this.` rewritten to `self.`.
  */
 
-import { InputCore, type InputCoreState } from './input-core.js';
+import { type InputCoreState } from './input-core.js';
 import type { ImageAttachment } from './input/attachments.js';
 import type { AutocompleteState } from './input/autocomplete-state.js';
-import * as Paste from './terminal-compositor.paste.js';
 import type {
   CompositorInputMode,
   PickerController,
@@ -49,8 +48,15 @@ export interface InputModeHost {
   /** Once-only Ctrl+B background guard. */
   backgrounded: boolean;
 
-  /** Whether the buffer is queued for submission. */
+  /** Maintained mirror of `pendingSubmissions.length > 0`. */
   queued: boolean;
+
+  /**
+   * FIFO of messages typed + Entered mid-turn. The `→ idle` flush shifts ONE
+   * payload (oldest first) per transition so the queue drains one message per
+   * turn. The live buffer is NOT part of this queue.
+   */
+  pendingSubmissions: SubmissionPayload[];
 
   /** Live input buffer. */
   input: InputCoreState;
@@ -126,9 +132,10 @@ export function repaintPicker(self: InputModeHost): void {
 }
 
 /**
- * Invariant: in the `→ 'idle'` flush path with `queued && onSubmit`, fire
- * `onSubmit(buffer)` BEFORE clearing `queued` and the buffer (teardown-
- * before-setup; otherwise a reentrant onSubmit observes stale state).
+ * Invariant: in the `→ 'idle'` flush path, SHIFT the next payload off
+ * `pendingSubmissions` BEFORE invoking `onSubmit` (teardown-before-setup;
+ * otherwise a reentrant onSubmit observes the not-yet-consumed queue and
+ * could double-fire the same payload).
  *
  * Transition input mode. Default is `'streaming'`; the persistent
  * InputSurface flips to `'idle'` between turns and back to
@@ -136,24 +143,23 @@ export function repaintPicker(self: InputModeHost): void {
  *
  * ## Ordered operation
  *
- * External constraint: `→ 'idle'` with `queued && onSubmit` MUST
- * fire `onSubmit(buffer)` BEFORE clearing `queued` and the buffer.
- * Otherwise a reentrant `onSubmit` handler (e.g. one that
- * synchronously calls `setInputMode('streaming')` again) would
- * observe stale state. Mirror of the teardown-before-setup
- * invariant on TUI lifecycle ops.
+ * External constraint: `→ 'idle'` with a non-empty `pendingSubmissions` +
+ * `onSubmit` MUST shift the payload off the queue BEFORE invoking the
+ * handler. Otherwise a reentrant `onSubmit` (e.g. one that synchronously
+ * calls `setInputMode('streaming')` again) would observe stale queue state.
+ * Mirror of the teardown-before-setup invariant on TUI lifecycle ops.
  *
  * ## Flush semantics (mode → idle)
  *
- * Fires on ANY transition to idle while queued + handler are both
- * set, not just `streaming → idle`. The `idle → idle` case covers
- * a race where the user types-and-Enters in the brief window
- * between a previous `readLine` resolving and the next one
- * installing a handler: the Enter falls through to the streaming-
- * queue branch (sets `queued=true`), and the next `readLine`'s
- * `setInputMode('idle')` is what fires the synthesized submission.
- * Without this widening, the queued buffer would be stranded until
- * the user pressed Enter a second time.
+ * Fires on ANY transition to idle while the queue is non-empty + a handler
+ * is set, not just `streaming → idle`. ONE payload drains per transition
+ * (FIFO, oldest first): the loop runs it as a turn, and that turn's end
+ * re-enters idle to drain the next — sequential-turn delivery. The
+ * `idle → idle` case also covers a race where the user types-and-Enters in
+ * the brief window between a previous `readLine` resolving and the next one
+ * installing a handler: the Enter commits to the queue, and the next
+ * `readLine`'s `setInputMode('idle')` drains it. Without this widening, a
+ * queued message would be stranded until the user pressed Enter again.
  */
 export function setInputMode(self: InputModeHost, mode: CompositorInputMode): void {
   const prev = self.inputMode;
@@ -210,35 +216,29 @@ export function setInputMode(self: InputModeHost, mode: CompositorInputMode): vo
     // the next readLine→idle to flush. The streaming→idle repaint at the
     // bottom of this function clears/refreshes the frame either way.
   }
-  // → idle with queued buffer + handler: flush. Widened from
-  // streaming→idle to any→idle to cover the inter-readLine race
-  // (see jsdoc above). Buffer-empty + attachment-empty queues are
-  // ignored — Enter on a fully-empty input is suppressed at the
-  // keypress level (compositor.ts:1148) so this branch only fires
-  // when there's something meaningful to submit.
-  if (mode === 'idle' && self.queued && self.onSubmit) {
-    // displayText keeps the placeholder representation (for the
-    // scrollback echo); text is the expanded form (for the model).
-    // When no truncation happened the two are byte-equal and
-    // displayText is omitted from the payload to keep existing
-    // call-sites that deep-match on { text, attachments } happy.
-    const displayText = self.input.buffer;
-    const expandedText = Paste.expandPastePlaceholders(self, displayText);
-    const attachments = [...self.attachments];
+  // → idle with queued messages + handler: drain ONE payload (oldest first).
+  // Widened from streaming→idle to any→idle to cover the inter-readLine race
+  // (see jsdoc above). The queue holds only Enter-committed messages, so a
+  // fully-empty input never lands here (Enter on empty input is suppressed at
+  // the keypress level). One payload drains per `→ idle` transition: onSubmit
+  // resolves the surface's readLine, the loop runs that message as a turn, and
+  // that turn's end re-enters idle to drain the next payload — sequential-turn
+  // delivery, one queued message per turn.
+  //
+  // Unlike the pre-multi-queue single-slot flush, this does NOT clear
+  // self.input / attachments / pasteRegistry: the live buffer holds the user's
+  // in-progress NEXT message, which must survive draining a queued one. Each
+  // payload is self-contained (paste-expanded + attachments snapshotted at
+  // commit time in handleEnter), so no live-buffer read is needed here.
+  if (mode === 'idle' && self.pendingSubmissions.length > 0 && self.onSubmit) {
     const handler = self.onSubmit;
-    // Clear local state BEFORE invoking the handler so a reentrant
-    // call back into this compositor (e.g. handler triggers another
-    // setInputMode) does not double-fire on the same buffer.
-    self.queued = false;
-    self.input = InputCore.seed('');
-    self.attachments = [];
-    self.pasteRegistry.clear();
+    // Shift BEFORE invoking the handler so a reentrant call back into this
+    // compositor (e.g. the handler synchronously flips mode again) observes
+    // the already-consumed queue and cannot double-fire the same payload.
+    const payload = self.pendingSubmissions.shift()!;
+    self.queued = self.pendingSubmissions.length > 0;
     self.repaint();
-    handler(
-      expandedText === displayText
-        ? { text: expandedText, attachments }
-        : { text: expandedText, displayText, attachments },
-    );
+    handler(payload);
     return;
   }
   // Other transitions (idle→idle without queue, streaming→streaming,

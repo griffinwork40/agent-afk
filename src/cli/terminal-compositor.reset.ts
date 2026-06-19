@@ -11,7 +11,7 @@
 import { InputCore, type InputCoreState } from './input-core.js';
 import type { AutocompleteState } from './input/autocomplete-state.js';
 import type { ImageAttachment } from './input/attachments.js';
-import type { CompositorInputMode, PickerController } from './terminal-compositor.types.js';
+import type { CompositorInputMode, PickerController, SubmissionPayload } from './terminal-compositor.types.js';
 
 /**
  * Narrowest TerminalCompositor state slice {@link resetState} clears. Spans the
@@ -28,6 +28,7 @@ export interface ResetStateHost {
   overlay: string;
   input: InputCoreState;
   queued: boolean;
+  pendingSubmissions: SubmissionPayload[];
   canceled: boolean;
   backgrounded: boolean;
   softStopped: boolean;
@@ -54,6 +55,10 @@ export function resetState(self: ResetStateHost): void {
   self.overlay = '';
   self.input = InputCore.seed('');
   self.queued = false;
+  // Drop any queued-but-undrained messages — a disarm/rearm cycle (skill
+  // dispatchers, tests, session swap) must not carry stale type-ahead into
+  // the next compose window.
+  self.pendingSubmissions = [];
   self.canceled = false;
   self.backgrounded = false;
   self.softStopped = false;

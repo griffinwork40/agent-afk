@@ -379,7 +379,9 @@ describe('InputSurface', () => {
         stdin.emit('keypress', ch, { name: ch, sequence: ch });
       }
       stdin.emit('keypress', undefined, { name: 'return' });
-      expect(compositor.getBuffer()).toEqual({ text: 'queued', queued: true });
+      // New contract: Enter commits 'queued' to the FIFO and clears the live buffer.
+      expect(compositor.getBuffer()).toEqual({ text: '', queued: true });
+      expect(compositor.getPendingCount()).toBe(1);
 
       // Now call readLine. The widened flush invariant fires the just-
       // installed handler synchronously inside setInputMode('idle').

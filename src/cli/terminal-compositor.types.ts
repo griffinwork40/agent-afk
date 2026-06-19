@@ -159,10 +159,11 @@ export interface CompositorScrollRegionGuard {
 /**
  * Input mode controls how Enter resolves.
  *
- * - `'streaming'` (default) — Enter on a non-empty buffer flips
- *   `queued = true` and keeps the buffer intact. Today's behavior;
- *   used by the agent-turn compositor where the user is typing
- *   ahead of the next prompt while the agent finishes.
+ * - `'streaming'` (default) — Enter on a non-empty buffer COMMITS it to the
+ *   pending-submission FIFO and clears the input so the next message composes
+ *   fresh (multi-message type-ahead). Used by the agent-turn compositor where
+ *   the user queues messages while the agent finishes; each drains as its own
+ *   turn (see below).
  * - `'idle'` — Enter on a non-empty buffer fires `onSubmit(buffer)`
  *   immediately and clears the buffer. Used by the persistent
  *   InputSurface between turns (Stage 3b+) so the same compositor
@@ -174,12 +175,12 @@ export interface CompositorScrollRegionGuard {
  *   `idle`/`streaming` mode. Used by `ask_question` choice/multi_choice
  *   elicitations to render an inquirer-style in-place selector.
  *
- * Transitioning from `'streaming' → 'idle'` while `queued` fires
- * `onSubmit(buffer)` once and clears the buffer — this is the
- * "stream ended, your queued message just auto-submitted" path
- * mandated by the user's (b) choice in the input-surface refactor.
+ * Transitioning to `'idle'` while the FIFO is non-empty drains ONE payload
+ * via `onSubmit` (oldest first) — the "stream ended, your queued message just
+ * auto-submitted" path. Each subsequent turn's end drains the next, so N
+ * queued messages run as N sequential turns.
  *
- * `'idle' → 'streaming'` is a no-op transition (no buffer flush).
+ * `'idle' → 'streaming'` is a no-op transition (no flush).
  */
 export type CompositorInputMode = 'idle' | 'streaming' | 'picker';
 
@@ -278,10 +279,10 @@ export interface TerminalCompositorOptions {
    */
   onShiftTab?: () => void;
   /**
-   * One-shot submission handler invoked when the buffer "submits" —
+   * One-shot submission handler invoked when a message "submits" —
    * either immediately on Enter in `'idle'` mode, or deferred until
-   * the mode transitions to `'idle'` (consuming the queued buffer)
-   * in `'streaming'` mode.
+   * the mode transitions to `'idle'` (draining one queued payload,
+   * oldest first) in `'streaming'` mode.
    *
    * Receives the text buffer plus any clipboard image attachments
    * collected via bracketed-paste / Ctrl+V during the submission's
@@ -289,11 +290,11 @@ export interface TerminalCompositorOptions {
    * copy) so the handler can persist them past the compositor's
    * synchronous clear.
    *
-   * Optional — when omitted, Enter behaves as today (set `queued`
-   * flag in streaming mode, accessible via {@link getBuffer} +
-   * {@link getAttachments}). The existing arm/disarm-per-turn
-   * callers in the repo do not set this; only the persistent
-   * InputSurface installs it.
+   * Optional — when omitted, streaming-mode Enter still commits to the
+   * pending-submission FIFO (observable via {@link getPendingCount} and the
+   * `queued` flag from {@link getBuffer}), but nothing drains, since draining
+   * requires a handler. The existing arm/disarm-per-turn callers in the repo
+   * do not set this; only the persistent InputSurface installs it.
    */
   onSubmit?: (payload: SubmissionPayload) => void;
   /**

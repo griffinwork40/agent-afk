@@ -24,14 +24,17 @@ export const MAX_DROPDOWN_ROWS = 6;
 
 /**
  * Narrowest TerminalCompositor state slice the autocomplete/ghost functions
- * touch. `input`/`queued`/`activeGhost` are mutated; `autocompleteState` is
+ * touch. `input`/`activeGhost` are mutated; `autocompleteState` is
  * mutated in-place (never reassigned, so it stays a `readonly` view).
  * `repaint` is the cross-cluster render callback (a class method on the host).
+ *
+ * Note: applying a completion/ghost does NOT touch the pending-submission
+ * queue — editing the live buffer is independent of committed messages
+ * (commit-on-Enter), so the host needs no `queued`/`pendingSubmissions` slice.
  */
 export interface AutocompleteHost {
   readonly autocompleteState?: AutocompleteState;
   input: InputCoreState;
-  queued: boolean;
   activeGhost: string | null;
   readonly ghostEngine: SuggestEngine | undefined;
   readonly ghostGetContext: (() => SuggestContext) | undefined;
@@ -191,7 +194,6 @@ export function applyDropdownSelection(self: AutocompleteHost): boolean {
   ac.candidates = [];
   ac.viewportStart = 0;
   ac.selectedIndex = 0;
-  self.queued = false;
   updateAutocomplete(self);
   self.repaint();
   return true;
@@ -228,7 +230,6 @@ export function applyGhostAccept(self: AutocompleteHost): boolean {
     self.input.buffer + stripGhostControlChars(ghost.slice(self.input.buffer.length));
   const next = InputCore.seed(sanitizedGhost);
   self.input = next;
-  self.queued = false;
   self.activeGhost = null;
   updateAutocomplete(self);
   self.repaint();

@@ -217,20 +217,20 @@ describe('TerminalCompositor interaction coverage', () => {
     }
     keypress(stdin, undefined, { name: 'return' });
 
-    // Buffer is queued internally AND the visual `[queued]` glyph is
-    // painted in the input row so the user has explicit feedback that
-    // their Enter was registered (Stage 3d's no-glyph variant was a
-    // regression — without the cue, Enter felt like a no-op). The text
-    // remains in the buffer so setInputMode('idle') flushes it at
-    // stream end.
-    expect(compositor.getBuffer()).toEqual({ text: 'queued work', queued: true });
+    // Buffer is committed to the FIFO (live buffer cleared) AND the visual
+    // `[queued]` glyph is painted in the input row so the user has explicit
+    // feedback that their Enter was registered. setInputMode('idle') drains
+    // the FIFO payload as the next turn.
+    expect(compositor.getBuffer()).toEqual({ text: '', queued: true });
+    expect(compositor.getPendingCount()).toBe(1);
     expect(stripAnsi(writes.all())).toContain('[queued]');
 
     writes.clear();
     compositor.commitAbove('final block');
     compositor.setOverlay('follow-up chunk');
 
-    expect(compositor.getBuffer()).toEqual({ text: 'queued work', queued: true });
+    expect(compositor.getBuffer()).toEqual({ text: '', queued: true });
+    expect(compositor.getPendingCount()).toBe(1);
     expect(stripAnsi(writes.all())).toContain('final block');
 
     compositor.disarm();
@@ -259,7 +259,9 @@ describe('TerminalCompositor interaction coverage', () => {
     keypress(stdin, undefined, { name: 'c', ctrl: true });
 
     expect(onCancel).toHaveBeenCalledTimes(1);
-    expect(compositor.getBuffer()).toEqual({ text: 'draft', queued: true });
+    // New contract: Enter committed 'draft' to the FIFO and cleared the live buffer.
+    expect(compositor.getBuffer()).toEqual({ text: '', queued: true });
+    expect(compositor.getPendingCount()).toBe(1);
 
     compositor.disarm();
   });
