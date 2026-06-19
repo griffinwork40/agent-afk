@@ -325,6 +325,13 @@ async function main() {
           subagentExecutor,
           skillExecutor,
           composeExecutor,
+          // Tag the presence file (~/.afk/state/presence/<id>.json) and
+          // get_runtime_state as the Telegram surface. Without this the provider
+          // defaults to 'cli' (anthropic-direct/index.ts) and `/watch`
+          // mis-classifies Telegram sessions as CLI. The hook registry already
+          // receives 'telegram' below — this aligns the provider-owned surface
+          // (presence/runtime-state) with the hook-registry surface.
+          surface: 'telegram',
         });
 
         // Bind after session creation so deferred parent proxy resolves.
@@ -380,16 +387,17 @@ async function main() {
       // permissionMode is intentionally omitted here: AgentSession defaults
       // to 'default' (post-C2 fix), which is the correct mode for Telegram
       // sessions that rely on hook-based permission enforcement.
-      // Construct the OpenAI-compatible provider explicitly (rather than
-      // letting AgentSession build it internally) so we hold a handle to wire
-      // path-approval. A bare `new OpenAICompatibleProvider()` matches what
-      // resolveProvider() would have constructed for this branch — baseURL /
-      // apiKey / cwd / roots all flow through the per-query config, not the
-      // constructor — so this is behavior-preserving. Mirrors the Anthropic
-      // branch above; without it, getGrantManager() stays undefined and BOTH
-      // path-approval and the bash interpreter denylist silently fail open for
-      // every OpenAI-compatible Telegram session (PR #202 review H1).
-      const codexProvider = new OpenAICompatibleProvider();
+      // Construct the OpenAI-compatible provider explicitly (rather than letting
+      // AgentSession build it internally) so we hold a handle to wire
+      // path-approval. baseURL / apiKey / cwd / roots flow through the per-query
+      // config (not the constructor), so omitting them here is behavior-
+      // preserving vs. resolveProvider(). Without the explicit handle,
+      // getGrantManager() stays undefined and BOTH path-approval and the bash
+      // interpreter denylist silently fail open for OpenAI-compatible Telegram
+      // sessions (PR #202 review H1). surface:'telegram' is the lone constructor
+      // arg — there is no per-query surface field — and prevents the presence
+      // file mis-labeling Telegram sessions as 'cli' in `/watch`.
+      const codexProvider = new OpenAICompatibleProvider({ surface: 'telegram' });
       const codexHookBundle = createDefaultHookRegistry(
         undefined,
         'telegram',
