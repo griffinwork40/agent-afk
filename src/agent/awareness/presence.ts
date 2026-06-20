@@ -127,6 +127,29 @@ export async function setPresenceAfk(sessionId: string, afk: boolean): Promise<v
 }
 
 /**
+ * Update the `cwd` field on an existing presence file (best-effort,
+ * read-modify-write). Called from `AgentSession.setCwd` so a session's presence
+ * record tracks its CURRENT working directory after a mid-session cwd change —
+ * notably the born-named `afk -w` worktree, which is created on the first turn
+ * AFTER presence was written with the launch dir. Without this the worktree
+ * sweep's live-session guard (`isPathWithin(presence.cwd, worktreePath)`) never
+ * matches, so the sweep can reap the worktree out from under the running
+ * session. No-op when the file is absent (subagents never have one). Preserves
+ * every other field.
+ */
+export async function updatePresenceCwd(sessionId: string, cwd: string): Promise<void> {
+  try {
+    const filePath = presenceFilePath(sessionId);
+    const raw = await readFile(filePath, 'utf8');
+    const parsed = JSON.parse(raw) as PresenceFileInfo;
+    parsed.cwd = cwd;
+    await writeFile(filePath, JSON.stringify(parsed, null, 2), 'utf8');
+  } catch {
+    // Best-effort — presence is non-critical.
+  }
+}
+
+/**
  * Asynchronously delete a presence file by session ID.
  *
  * Safe to call even if the file does not exist (ENOENT is swallowed).

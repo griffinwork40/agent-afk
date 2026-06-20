@@ -25,8 +25,18 @@ import type {
 } from '@anthropic-ai/sdk/resources';
 import { AgentSession } from './agent-session.js';
 import { AnthropicDirectProvider, __setAnthropicClientFactory } from '../providers/anthropic-direct/index.js';
+import { updatePresenceCwd } from '../awareness/presence.js';
 
 vi.mock('../../utils/debug.js', () => ({ debugLog: vi.fn() }));
+
+// Spy on updatePresenceCwd while keeping every other presence export real (the
+// provider still writes/removes presence normally). Lets the setCwd→presence
+// wiring be asserted deterministically — updatePresenceCwd's own file behavior
+// is covered in presence.test.ts, so we only check it is invoked correctly.
+vi.mock('../awareness/presence.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../awareness/presence.js')>();
+  return { ...actual, updatePresenceCwd: vi.fn() };
+});
 
 // ---------------------------------------------------------------------------
 // Mock Anthropic client (same pattern as plan-mode-system-payload.test.ts)
@@ -158,6 +168,52 @@ describe('AgentSession.setCwd() — live session propagation (T19)', () => {
       expect(turn2System).toContain(NEW_CWD);
       expect(turn2System).not.toContain(OLD_CWD);
       expect(turn2System).toContain('Working directory');
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('(T19-6) setCwd() re-writes the session presence file with the new cwd', async () => {
+    // Regression: a born-named `afk -w` worktree is created on turn 1, AFTER
+    // the presence file was written with the launch dir. If setCwd does not
+    // re-write presence.cwd, the worktree-sweep live-session guard never matches
+    // and the sweep deletes the worktree out from under the running session.
+    messagesCreateMock.mockImplementation(() => fromArray(makeTextStream('ok')));
+    vi.mocked(updatePresenceCwd).mockClear();
+
+    const provider = new AnthropicDirectProvider();
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      apiKey: 'sk-ant-oat01-test',
+      cwd: OLD_CWD,
+      sessionId: 'sess-presence-cwd',
+      provider,
+    });
+    try {
+      session.setCwd(NEW_CWD);
+      expect(updatePresenceCwd).toHaveBeenCalledWith('sess-presence-cwd', NEW_CWD);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('(T19-7) setCwd() does not touch presence when the session has no sessionId', async () => {
+    // The presence file is keyed by sessionId and only written for top-level
+    // sessions. A session without one (e.g. a sub-agent fork) must not attempt
+    // the presence re-write.
+    messagesCreateMock.mockImplementation(() => fromArray(makeTextStream('ok')));
+    vi.mocked(updatePresenceCwd).mockClear();
+
+    const provider = new AnthropicDirectProvider();
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      apiKey: 'sk-ant-oat01-test',
+      cwd: OLD_CWD,
+      provider,
+    });
+    try {
+      session.setCwd(NEW_CWD);
+      expect(updatePresenceCwd).not.toHaveBeenCalled();
     } finally {
       await session.close();
     }

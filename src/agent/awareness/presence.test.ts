@@ -102,6 +102,30 @@ describe('writePresenceFile + readPresenceFiles', () => {
   });
 });
 
+describe('updatePresenceCwd', () => {
+  it('updates the cwd field on an existing file, preserving every other field', async () => {
+    const { writePresenceFile, updatePresenceCwd, readPresenceFiles } = await getPresenceMod();
+    await writePresenceFile(mkInfo({ sessionId: 'cwd-update', cwd: '/launch/dir', actor: 'main' }));
+
+    // Simulate a born-named worktree being created mid-session.
+    await updatePresenceCwd('cwd-update', '/launch/dir/.afk-worktrees/afk-xyz');
+
+    const records = await readPresenceFiles();
+    expect(records).toHaveLength(1);
+    expect(records[0]!.cwd).toBe('/launch/dir/.afk-worktrees/afk-xyz');
+    // Read-modify-write must not drop the other fields.
+    expect(records[0]!.sessionId).toBe('cwd-update');
+    expect(records[0]!.actor).toBe('main');
+    expect(records[0]!.pid).toBe(process.pid);
+  });
+
+  it('is a no-op when no presence file exists (does not throw, creates nothing)', async () => {
+    const { updatePresenceCwd, readPresenceFiles } = await getPresenceMod();
+    await expect(updatePresenceCwd('ghost-session', '/some/where')).resolves.toBeUndefined();
+    expect(await readPresenceFiles()).toHaveLength(0);
+  });
+});
+
 describe('removePresenceFile', () => {
   it('deletes the file; subsequent readPresenceFiles omits it', async () => {
     const { writePresenceFile, removePresenceFile, readPresenceFiles } = await getPresenceMod();

@@ -52,6 +52,7 @@ import type { ElicitationRequest } from '../types/sdk-types.js';
 import { env } from '../../config/env.js';
 import { resolveModelId } from './model-resolution.js';
 import { deriveOrigin, deriveActor } from './session-identity.js';
+import { updatePresenceCwd } from '../awareness/presence.js';
 import { setSlotBindings } from './model-slots.js';
 import { applySlotCredentials } from './slot-credentials.js';
 import {
@@ -754,7 +755,7 @@ export class AgentSession implements IAgentSession {
   /**
    * Update the working directory for the current session.
    *
-   * Two things happen atomically:
+   * Three things happen atomically:
    *   1. `config.cwd` is updated so future `reset()` calls rebuild the
    *      provider query with the correct path.
    *   2. `providerQuery.setCwd(cwd)` is called (when the query supports it)
@@ -765,7 +766,12 @@ export class AgentSession implements IAgentSession {
    *      cwd). The provider also splices its shared `readRoots`/`writeRoots`
    *      arrays in place so containment checks accept paths under the new
    *      cwd, and any `/allow-dir` grants accumulated under the old cwd
-   *      survive intact.
+   *      survive intact. The provider's `setCwd` ALSO re-anchors the forked
+   *      sub-agent / skill executors so child tool calls land in the new cwd.
+   *   3. The session's presence file is re-written with the new cwd (best-
+   *      effort, top-level sessions only). This keeps the worktree-sweep
+   *      live-session guard accurate after a born-named `afk -w` worktree is
+   *      created on turn 1, so the sweep never reaps an in-use worktree.
    *
    * `AnthropicDirectQuery` implements both the in-flight propagation and
    * the next-turn rebuild. Providers that don't implement the optional
@@ -781,6 +787,15 @@ export class AgentSession implements IAgentSession {
   setCwd(cwd: string): void {
     this.config = { ...this.config, cwd };
     this.providerQuery.setCwd?.(cwd);
+    // Keep the session's presence record pointing at the CURRENT cwd. A born-
+    // named `afk -w` worktree is created on turn 1, AFTER presence was written
+    // with the launch dir; without this update presence.cwd stays stale and the
+    // worktree sweep's live-session guard can't see that the worktree is in use,
+    // so it gets deleted mid-run. Fire-and-forget + self-guarding (no-op when no
+    // presence file exists, e.g. sub-agents); only top-level sessions key one.
+    if (this.config.sessionId !== undefined) {
+      void updatePresenceCwd(this.config.sessionId, cwd);
+    }
   }
 
   /**
