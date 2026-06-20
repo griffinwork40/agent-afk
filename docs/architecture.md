@@ -120,16 +120,27 @@ Markers never leak back into stored history — `cache-policy.ts` clones-and-sta
 
 ## Bypass permissions
 
-By default, `agent-afk` runs in permission mode `'default'`: tools execute without a per-tool approval prompt, but a file tool touching a path **outside the session's granted roots** triggers a path-approval prompt (and out-of-root access stays contained until granted). There is no per-tool "allow this bash command?" flow.
+Permission mode `'default'` runs tools without a per-tool approval prompt, but a file tool touching a path **outside the session's granted roots** triggers a path-approval prompt (and out-of-root access stays contained until granted). There is no per-tool "allow this bash command?" flow.
 
 **Bypass mode** (`permissionMode: 'bypassPermissions'`) disables path containment and the path-approval prompt entirely — filesystem tools may read/write any path with no confirmation:
 
 - Skips path-approval prompts; disables out-of-root containment
 - Allows fully automated workflows
-- Enable with `/bypass` in the REPL (status line shows `⚠ BYPASS`); the `afk daemon` sets it directly for unattended work
+- Enable with `/bypass` in the REPL (status line shows `⚠ BYPASS`)
 - Does **not** affect `ask_question` (the model asking you a question is a separate axis)
 
-This is intentional — `agent-afk` is built for unattended work, where a permission prompt with no human in front of it just wedges the session. Use on a machine and account you trust.
+### Default mode by surface
+
+The effective default is resolved per surface, not in one global constant:
+
+| Surface | Default mode | Where it's set |
+|---------|--------------|----------------|
+| `afk chat`, `afk interactive` (REPL) | **`bypassPermissions`** | `DEFAULT_CLI_PERMISSION_MODE` in `src/cli/config.ts` — the `loadConfig()` resolution layer that both surfaces read. An `afk.config.json` `permissionMode` key overrides it. |
+| Telegram | `default` | `src/telegram.ts` omits `permissionMode`; relies on hook-based enforcement + the operator's `allowedTools`. |
+| `afk daemon` | `bypassPermissions` | `src/agent/daemon/scheduler.ts` sets it explicitly (no human to prompt). |
+| Embedded `new AgentSession(...)` / subagents inheriting no mode | `default` | The session-layer `?? 'default'` fallback in `src/agent/session/session-setup.ts`. |
+
+So the **CLI surfaces are bypass-by-default for new installs** (built for unattended work, where a permission prompt with no human in front of it just wedges the session — use on a machine and account you trust), while Telegram, the embedding API, and uninitialised subagents stay contained. Change the CLI default with `afk config set permissionMode default` (persistent) or `/bypass` (live, one session).
 
 ### Default allowed tools
 

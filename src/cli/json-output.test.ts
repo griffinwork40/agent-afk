@@ -63,6 +63,8 @@ describe('CLI JSON output', () => {
       expect(parsed.providers.codex).toHaveProperty('source');
       expect(parsed).toHaveProperty('model');
       expect(parsed).toHaveProperty('bypass');
+      expect(parsed).toHaveProperty('permissionMode');
+      expect(typeof parsed.bypass).toBe('boolean');
     });
   });
 
@@ -95,6 +97,8 @@ describe('CLI JSON output', () => {
       expect(parsed).toHaveProperty('thinking');
       expect(parsed).toHaveProperty('effort');
       expect(parsed).toHaveProperty('bypass');
+      expect(parsed).toHaveProperty('permissionMode');
+      expect(typeof parsed.bypass).toBe('boolean');
       expect(parsed).toHaveProperty('raw_env');
       expect(parsed.raw_env).toHaveProperty('AFK_MODEL');
       expect(parsed.raw_env).toHaveProperty('AFK_THINKING');

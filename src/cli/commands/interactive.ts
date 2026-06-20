@@ -185,7 +185,7 @@ export function registerInteractiveCommand(program: Command): void {
     )
     .option('--provider <name>', "Provider to use: anthropic|anthropic-direct|openai|openai-compatible. Default: auto-selected by model")
     .option('--dump-prompt [path]', 'Dump resolved SDK prompt+options+provenance to file (default: ~/.afk/logs/prompt-dump-<ISO>.json) or "stderr"')
-    .option('--dangerously-skip-permissions', 'Start in bypass mode: skip path-approval prompts; the agent may read/write ANY path with no confirmation. Toggle live with /bypass. Does not affect ask_question.')
+    .option('--dangerously-skip-permissions', 'Force bypass mode (already the default for new installs): skip path-approval prompts; read/write ANY path with no confirmation. Toggle live with /bypass; disable persistently with `afk config set permissionMode default`. Does not affect ask_question.')
     .option(
       '--mcp-config <path>',
       'Path to an additional MCP config file (highest priority — merges over ~/.afk/config/mcp.json, project-local .mcp.json, and plugin-contributed configs). File format identical to mcp.json.',

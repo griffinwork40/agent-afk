@@ -16,6 +16,7 @@ import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
 import { divider } from '../../render.js';
 import { providerForModel } from '../../../agent/providers/index.js';
+import { resolveCliPermissionMode } from '../../config.js';
 import { runDoctorChecks } from '../../commands/doctor-checks.js';
 import type { SlashCommand } from '../types.js';
 
@@ -64,7 +65,12 @@ const configCmd: SlashCommand = {
     out.line(
       `  effort      ${env.AFK_EFFORT ? palette.info(env.AFK_EFFORT) : palette.dim('(unset — SDK default)')}`,
     );
-    out.line(`  bypass perms ${palette.warning('true (enabled)')}`);
+    const permissionMode = resolveCliPermissionMode();
+    out.line(
+      `  perm mode   ${permissionMode === 'bypassPermissions'
+        ? palette.warning(`${permissionMode} (bypass — containment off)`)
+        : palette.info(`${permissionMode} (containment on)`)}`,
+    );
 
     out.line();
     out.line(palette.bold('Environment variables'));

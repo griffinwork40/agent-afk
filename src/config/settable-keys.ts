@@ -189,8 +189,9 @@ export interface ConfigKeySpec {
  * rewriting its own prompt is recursive-risk), `hooks` (could disable safety
  * hooks), `importFrom` (a trust grant), `daemon.*` (controls autonomous runs),
  * the worktree git-ref fields (CLI-flag-injection sensitive), `telegram.notify.*`
- * (redirecting outbound notifications is an exfiltration vector), and
- * `updatePolicy` (auto self-update is autonomous-code scope-widening).
+ * (redirecting outbound notifications is an exfiltration vector), `updatePolicy`
+ * (auto self-update is autonomous-code scope-widening), and `permissionMode`
+ * (the agent flipping itself to bypassPermissions is privilege escalation).
  */
 export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'model', tier: 'agent', type: 'string', description: 'Default model id / alias.' },
@@ -216,6 +217,11 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
 
   // Human-only (CLI with --allow gate; agent tool refuses).
   { path: 'systemPrompt', tier: 'human', type: 'string', description: 'Operator system-prompt overlay.' },
+  // Session permission mode. Default for new installs (when unset) is
+  // bypassPermissions — path containment + the approval prompt OFF. Human-tier:
+  // the agent must NOT be able to escalate its own permissions (set bypass) via
+  // config_set; only the human CLI (`afk config set permissionMode <mode>`) can.
+  { path: 'permissionMode', tier: 'human', type: 'enum', enumValues: ['default', 'plan', 'autonomous', 'bypassPermissions'], description: 'Session permission mode for afk chat/interactive (human-tier: privilege-escalation vector). Unset → bypassPermissions (new-install default); set `default` to re-enable path containment + the approval prompt.' },
   // enableShellHooks is the TRUST GATE that activates shell hooks at load time
   // (config-loader userGlobalEnabled). Even though the agent cannot define `hooks`,
   // it must not be able to flip the activation gate on its own config — human-only.

@@ -504,9 +504,11 @@ export async function bootstrapSession(
     reseedStatsFromStored(stats, resumeTarget.stored, resumeTarget.resumeId);
   }
   // Initial permission mode: --dangerously-skip-permissions wins, else the
-  // afk.config.json `permissionMode` key (validated in loadConfig). Stamped on
-  // stats so the status-line badge + the plan/AFK/bypass gate getters reflect it
-  // from turn 1; the session is constructed with the same value via sharedDeps.
+  // resolved afk.config.json `permissionMode` (loadConfig now always returns one
+  // — DEFAULT_CLI_PERMISSION_MODE = bypass for new installs, overridable by the
+  // config key). Stamped on stats so the status-line badge + the plan/AFK/bypass
+  // gate getters reflect it from turn 1; the session is constructed with the same
+  // value via sharedDeps. The `!== undefined` guard is retained defensively.
   const initialPermissionMode = options.dangerouslySkipPermissions
     ? ('bypassPermissions' as const)
     : cliConfig.permissionMode;

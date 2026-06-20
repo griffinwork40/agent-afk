@@ -144,6 +144,18 @@ describe('config mutation engine', () => {
       const r = setConfigValue('updatePolicy', 'auto', { filePath: jsonFile, allowHumanOnly: true });
       expect(r.class).toBe('human');
     });
+
+    it('permissionMode: the agent cannot escalate itself to bypass; the human CLI can set it', () => {
+      // config_set (agent tool) never passes allowHumanOnly → refused.
+      expect(() => setConfigValue('permissionMode', 'bypassPermissions', { filePath: jsonFile })).toThrow(
+        HumanOnlyKeyRefused,
+      );
+      // afk config set (human surface) opts in → allowed, validated, persisted.
+      const r = setConfigValue('permissionMode', 'default', { filePath: jsonFile, allowHumanOnly: true });
+      expect(r.class).toBe('human');
+      expect(r.value).toBe('default');
+      expect(JSON.parse(readFileSync(jsonFile, 'utf-8')).permissionMode).toBe('default');
+    });
   });
 
   describe('config: setConfigValue', () => {

@@ -321,6 +321,26 @@ const DEFAULT_CONFIG: Omit<CliConfig, 'apiKey'> = {
   updatePolicy: 'notify',
 };
 
+/**
+ * Invariant: the CLI-surface default permission mode. When `afk.config.json`
+ * sets no `permissionMode`, the human-driven CLI surfaces (`afk chat` and
+ * `afk interactive`) start in `bypassPermissions` — path containment and the
+ * path-approval prompt are OFF, so the agent reads/writes anywhere with no
+ * confirmation. This is the new-install default and it persists every session
+ * until the operator changes it (`afk config set permissionMode default`, a
+ * `permissionMode` key in afk.config.json, `--dangerously-skip-permissions`, or
+ * the live `/bypass` toggle).
+ *
+ * Scope is deliberately narrow: this default lives at the loadConfig() layer,
+ * which only `afk chat` + `afk interactive` consume via `cliConfig.permissionMode`.
+ * The deeper session-layer fallback stays `'default'` (see
+ * `src/agent/session/session-setup.ts`) so Telegram (which omits permissionMode
+ * and relies on hook-based enforcement), embedded/library `AgentSession` use, and
+ * subagents that inherit no explicit mode all remain contained. The daemon sets
+ * `bypassPermissions` explicitly and is unaffected.
+ */
+export const DEFAULT_CLI_PERMISSION_MODE: PermissionMode = 'bypassPermissions';
+
 // Track if dotenv has been loaded to avoid reloading
 let dotenvLoaded = false;
 
@@ -839,6 +859,19 @@ export function loadTelegramConfig(): NonNullable<CliConfig['telegram']> {
   return loadJsonConfig().config.telegram ?? {};
 }
 
+/**
+ * Resolve the effective CLI permission mode for display / status surfaces:
+ * the afk.config.json `permissionMode` when set, else the new-install default
+ * (`DEFAULT_CLI_PERMISSION_MODE` = bypass). Reads the memoized JSON directly so
+ * it is side-effect-free and never throws on the `local-*`-model guard that the
+ * full `loadConfig` enforces — same rationale as `loadTelegramConfig`. This is
+ * the canonical answer to "what mode would a fresh `afk chat`/`afk i` run in?"
+ * and the single source the status displays read so they stop hardcoding bypass.
+ */
+export function resolveCliPermissionMode(): PermissionMode {
+  return loadJsonConfig().config.permissionMode ?? DEFAULT_CLI_PERMISSION_MODE;
+}
+
 export function loadConfig(overrides?: Partial<CliConfig>): CliConfig {
   const envConfig = loadEnvConfig();
   const { config: jsonConfig, sourcePath: jsonSourcePath, modelsPartial } = loadJsonConfig();
@@ -884,7 +917,9 @@ export function loadConfig(overrides?: Partial<CliConfig>): CliConfig {
     ...(merged.openaiBaseUrl !== undefined ? { openaiBaseUrl: merged.openaiBaseUrl } : {}),
     ...(merged.systemPrompt !== undefined ? { systemPrompt: merged.systemPrompt } : {}),
     ...(systemPromptSource !== undefined ? { systemPromptSource } : {}),
-    ...(merged.permissionMode !== undefined ? { permissionMode: merged.permissionMode } : {}),
+    // New-install default is bypass (DEFAULT_CLI_PERMISSION_MODE); an explicit
+    // afk.config.json / env / override `permissionMode` still wins.
+    permissionMode: merged.permissionMode ?? DEFAULT_CLI_PERMISSION_MODE,
     ...(merged.autoRouting !== undefined ? { autoRouting: merged.autoRouting } : {}),
     ...(merged.daemon !== undefined ? { daemon: merged.daemon } : {}),
     ...(merged.telegram !== undefined ? { telegram: merged.telegram } : {}),

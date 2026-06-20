@@ -6,6 +6,7 @@ import { AgentSession } from '../../agent/session.js';
 import { providerForModel } from '../../agent/providers/index.js';
 import { statusPanel } from '../render.js';
 import { getApiKeyForModel, getModel, getApiKey, getCodexApiKey } from '../shared-helpers.js';
+import { resolveCliPermissionMode } from '../config.js';
 
 export function registerStatusCommand(program: Command): void {
   program
@@ -35,6 +36,11 @@ export function registerStatusCommand(program: Command): void {
 
         spinner.succeed(`${provider} provider reachable`);
 
+        // Effective new-install/default permission mode for the CLI surfaces
+        // (afk chat / interactive). Read once; both output formats reflect it
+        // instead of hardcoding bypass-on.
+        const permissionMode = resolveCliPermissionMode();
+
         if (options.format === 'json') {
           const anthropicApiKey = getApiKey();
           const codexApiKey = getCodexApiKey();
@@ -63,9 +69,13 @@ export function registerStatusCommand(program: Command): void {
               },
             },
             model: String(model),
-            bypass: true,
+            permissionMode,
+            bypass: permissionMode === 'bypassPermissions',
           }, null, 2));
         } else {
+          const bypassRow = permissionMode === 'bypassPermissions'
+            ? { label: 'Permissions', value: 'Bypass — path containment off (read/write anywhere)', kind: 'warn' as const }
+            : { label: 'Permissions', value: `Contained — mode: ${permissionMode}`, kind: 'info' as const };
           console.log(
             '\n' +
               statusPanel('Agent AFK · Status', [
@@ -82,7 +92,7 @@ export function registerStatusCommand(program: Command): void {
                   kind: apiKey ? 'ok' : 'warn',
                 },
                 { label: 'Model', value: String(model), kind: 'info' },
-                { label: 'Bypass', value: 'Permissions disabled', kind: 'warn' },
+                bypassRow,
               ]) +
               '\n',
           );
