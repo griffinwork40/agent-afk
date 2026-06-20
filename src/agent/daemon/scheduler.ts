@@ -24,6 +24,23 @@ import type { ExecFileFn } from '../worktree-sweep.js';
 import { IdleDetector } from './idle-detector.js';
 import { dequeueNext } from './queue-store.js';
 import { getQueueDir } from '../../paths.js';
+import type { ScheduledTask as CronTask } from 'node-cron';
+import { AgentSession } from '../session/agent-session.js';
+import { createDefaultHookRegistry } from '../default-hook-registry.js';
+import { loadHooksConfig } from '../hooks/config-loader.js';
+import { createDefaultTraceWriter } from '../trace/factory.js';
+import { MemoryStore, injectHotMemory } from '../memory/index.js';
+import type { AgentConfig } from '../types.js';
+import { getTelemetryPath } from '../../paths.js';
+import { redactInlineSecrets } from '../session/prompt-dump.js';
+import { ScheduledTask, validateScheduledTask } from './triggers.js';
+import {
+  DEFAULT_SESSIONSTART_COOLDOWN_MS,
+  defaultBriefsDir,
+  evaluateSessionStartGates,
+  type GateDecision,
+  type SessionStartSkipReason,
+} from './gates.js';
 
 // Promisified once at module scope — the daemon's builtin worktree-prune task
 // reuses the same node:child_process exec function on every tick; there is no
@@ -53,23 +70,6 @@ export async function resolveWorktreePruneRoot(
     return null;
   }
 }
-import type { ScheduledTask as CronTask } from 'node-cron';
-import { AgentSession } from '../session/agent-session.js';
-import { createDefaultHookRegistry } from '../default-hook-registry.js';
-import { loadHooksConfig } from '../hooks/config-loader.js';
-import { createDefaultTraceWriter } from '../trace/factory.js';
-import { MemoryStore, injectHotMemory } from '../memory/index.js';
-import type { AgentConfig } from '../types.js';
-import { getTelemetryPath } from '../../paths.js';
-import { redactInlineSecrets } from '../session/prompt-dump.js';
-import { ScheduledTask, validateScheduledTask } from './triggers.js';
-import {
-  DEFAULT_SESSIONSTART_COOLDOWN_MS,
-  defaultBriefsDir,
-  evaluateSessionStartGates,
-  type GateDecision,
-  type SessionStartSkipReason,
-} from './gates.js';
 
 /**
  * Build a charset-safe witness `sessionLabel` for a daemon tick, shaped

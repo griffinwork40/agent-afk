@@ -352,6 +352,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
    *   2. `_readRoots` / `_writeRoots` — any entry that equals the prior
    *      resolveBase is replaced in place with `newCwd`. Other grants
    *      (added via /allow-dir) are preserved.
+   *   3. The forked sub-agent / skill executors this dispatcher owns are
+   *      re-anchored via their `setCwd` so child `agent` / skill tool calls
+   *      land in `newCwd` (the worktree) instead of the host `process.cwd()`.
+   *      This is the openai-compatible provider's ONLY executor re-anchor hook
+   *      (its `query.setCwd` routes straight here); anthropic-direct re-anchors
+   *      the same instances again in `cwdDependentsFactory` (idempotent).
    *
    * Mutates in place. Callers must keep the same dispatcher reference; the
    * point of this method is that callers holding the dispatcher by reference
@@ -393,6 +399,16 @@ export class SessionToolDispatcher implements ToolDispatcher {
       if (!this._readRoots.includes(newCwd)) this._readRoots.push(newCwd);
       if (!this._writeRoots.includes(newCwd)) this._writeRoots.push(newCwd);
     }
+
+    // Re-anchor the forked executors this dispatcher dispatches to (item 3
+    // above) so child `agent` / skill tool calls follow the cwd change instead
+    // of staying frozen on the launch dir — the openai-compatible provider's
+    // only re-anchor path (anthropic-direct also does this in
+    // cwdDependentsFactory on the same instances). No-op when the executors are
+    // absent (sub-agents, the eval-run probe dispatcher); `setCwd` is
+    // idempotent, so the anthropic-direct double-set is harmless.
+    this.subagentExecutor?.setCwd(newCwd);
+    this.skillExecutor?.setCwd(newCwd);
   }
 
   private appendAuditLog(entry: {
