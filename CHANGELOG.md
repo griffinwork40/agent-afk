@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.23.1] - 2026-06-20
+
+### Fixed
+- render non-empty fenced code blocks not preceded by a blank line (6de3a6e)
+
+### Changed
+- Merge pull request #222 from griffinwork40/afk/20260620-075608-f550fc (7aa3528)
+
 ## [4.23.0] - 2026-06-20
 
 ### Added
