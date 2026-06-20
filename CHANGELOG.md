@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.23.2] - 2026-06-20
+
+### Fixed
+- re-anchor executors in dispatcher.setResolveBase (openai-compatible parity) (d53b198)
+- skip worktree-prune gracefully when daemon cwd is not a git repo (9e96e80)
+- propagate setCwd to sub-agent/skill executors (re-anchor forks) (fec6a73)
+- re-write presence cwd on setCwd so live worktrees aren't reaped (95c31d7)
+
+### Changed
+- Merge pull request #223 from griffinwork40/fix/worktree-cwd-presence-propagation (87b3147)
+
 ## [4.23.1] - 2026-06-20
 
 ### Fixed
