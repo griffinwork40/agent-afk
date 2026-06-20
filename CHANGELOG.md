@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.23.0] - 2026-06-20
+
+### Added
+- default to bypass mode for new installs (024d808)
+
+### Changed
+- Merge pull request #220 from griffinwork40/afk/20260619-170734-66ec93 (fb41455)
+- Merge pull request #221 from griffinwork40/afk/20260619-171015-92ea08 (eba6bfe)
+- note the interpreter denylist is default-on and tunable (792d3af)
+- sync docs website with v4.9-v4.22; add permissions page (0f76702)
+
 ## [4.22.0] - 2026-06-19
 
 ### Added
