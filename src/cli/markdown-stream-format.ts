@@ -180,11 +180,34 @@ export function findBlockBoundary(text: string): number {
     }
   }
 
-  // Check for closing fenced code fence (``` or ~~~ on its own line)
-  // Pattern: newline, optional spaces, fence marker, optional spaces, newline
-  const closeCodeFenceMatch = text.match(/\n[ \t]*(?:```|~~~)[ \t]*\n/);
-  if (closeCodeFenceMatch && closeCodeFenceMatch.index !== undefined) {
-    return closeCodeFenceMatch.index + closeCodeFenceMatch[0].length;
+  // Commit at a CLOSING fenced code fence (``` or ~~~ on its own line).
+  // Pattern: newline, optional spaces, BARE fence marker, optional spaces,
+  // newline. (A fence with a language tag — `\n```bash\n` — never matches, so
+  // only bare fence lines are candidates here.)
+  //
+  // Invariant: this regex cannot tell an OPENING fence from a CLOSING one — a
+  // bare opener that directly follows non-blank text (e.g. "run:\n```\nbody")
+  // is also a "\n```\n" line. Committing at the opener would slice it into the
+  // previous block, where marked re-lexes the orphaned, never-closed fence as
+  // an empty code block ("(empty code block)") and the body becomes a stray
+  // paragraph — the exact "non-empty fence renders as two empty blocks" render
+  // bug. So scan every candidate fence line and commit only at the first one
+  // whose prefix (up to and including that fence) has EVEN fence parity, i.e.
+  // closes an open block. An opener leaves odd parity → defer past it to its
+  // matching closer; if none has arrived yet, return -1 so the whole fence
+  // stays pending until the closer streams in (or flush() commits the tail).
+  const fenceLineRe = /\n[ \t]*(?:```|~~~)[ \t]*\n/g;
+  let fence: RegExpExecArray | null;
+  while ((fence = fenceLineRe.exec(text)) !== null) {
+    const endIdx = fence.index + fence[0].length;
+    if (!isInOpenCodeFence(text.slice(0, endIdx))) {
+      return endIdx; // even parity → this fence closed a block; commit here
+    }
+    // Odd parity → this is an opener. Advance past its leading '\n' (not its
+    // whole match) so an immediately-adjacent closer can reuse the shared
+    // newline (e.g. the empty fence "```\n```\n"). m.index+1 > lastIndex
+    // guarantees forward progress, so the loop always terminates.
+    fenceLineRe.lastIndex = fence.index + 1;
   }
 
   return -1;
