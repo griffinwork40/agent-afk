@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.24.0] - 2026-06-20
+
+### Added
+- restyle bypass indicator as a "full-power" badge, not a caution (bef7ea1)
+
+### Changed
+- Merge pull request #224 from griffinwork40/afk/20260620-174826-3dd82c (3335c7d)
+
 ## [4.23.2] - 2026-06-20
 
 ### Fixed
