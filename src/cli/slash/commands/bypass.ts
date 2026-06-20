@@ -29,15 +29,15 @@ import { palette } from '../../palette.js';
 import type { SlashCommand, SlashContext, SlashResult } from '../types.js';
 
 const ON_NOTICE =
-  palette.warning('⚠ bypass mode ON') +
+  palette.bypass('⚡ BYPASS ON') +
   palette.dim(
-    ' — path-approval prompts OFF; the agent can read/write ANY path on this ' +
-    'machine with no confirmation. Run /bypass off to restore containment. ' +
-    '(Does not affect ask_question.)',
+    ' — full-power mode: path-approval prompts OFF; the agent can read/write ANY ' +
+    'path on this machine with no confirmation. Run /bypass off to restore ' +
+    'containment. (Does not affect ask_question.)',
   );
 
 const OFF_NOTICE =
-  palette.success('○ bypass mode OFF') +
+  palette.success('○ BYPASS OFF') +
   palette.dim(' — default permissions restored (path containment + prompts back on)');
 
 export const bypassCmd: SlashCommand = {
@@ -70,9 +70,11 @@ export const bypassCmd: SlashCommand = {
       await ctx.session.current.setPermissionMode(desired ? 'bypassPermissions' : 'default');
       ctx.stats.permissionMode = desired ? 'bypassPermissions' : 'default';
       ctx.ui.repaintStatusLine();
-      // Use the error channel for the ON notice so the warning is visually
-      // prominent (it is a high-consequence, easy-to-forget mode).
-      if (desired) ctx.out.error(ON_NOTICE);
+      // ON notice goes through the plain line channel (not error/✗) so it reads
+      // as a cool "full-power" badge rather than a red alarm — bypass is the
+      // default mode, so the indicator informs without alarming. The dim text
+      // still spells out exactly what bypass does, so nothing is hidden.
+      if (desired) ctx.out.line(ON_NOTICE);
       else ctx.out.success(OFF_NOTICE);
     } catch (err) {
       ctx.out.error(

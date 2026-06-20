@@ -23,18 +23,24 @@ function makeCtx(mode: PermissionMode): {
     stats: { permissionMode: mode },
     session: { current: { setPermissionMode } },
     ui: { repaintStatusLine: repaint },
-    out: { success: vi.fn(), error: vi.fn() },
+    // `line` carries the ON notice (a cool "full-power" badge, not a red alarm);
+    // `success` carries the OFF notice; `error` only fires on a toggle failure.
+    out: { line: vi.fn(), success: vi.fn(), error: vi.fn() },
   } as unknown as SlashContext;
   return { ctx, setPermissionMode, repaint };
 }
 
 describe('/bypass command', () => {
-  it('/bypass on from default → enters bypassPermissions, mirrors stats, repaints, continues', async () => {
+  it('/bypass on from default → enters bypassPermissions, mirrors stats, repaints, surfaces ON notice via line, continues', async () => {
     const { ctx, setPermissionMode, repaint } = makeCtx('default');
     const result = await bypassCmd.handler(ctx, 'on');
     expect(setPermissionMode).toHaveBeenCalledWith('bypassPermissions');
     expect(ctx.stats.permissionMode).toBe('bypassPermissions');
     expect(repaint).toHaveBeenCalled();
+    // ON notice routes through the plain line channel (not error/✗) so it reads
+    // as a "full-power" badge rather than a red alarm.
+    expect((ctx.out.line as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
+    expect((ctx.out.error as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
     expect(result).toBe('continue');
   });
 
