@@ -217,7 +217,10 @@ export class SubagentManager {
   private readonly progressSink: SubagentProgressSink | undefined;
   private readonly parentApiKey: string | undefined;
   private readonly parentBaseUrl: string | undefined;
-  private readonly parentCwd: string | undefined;
+  // Mutable so AgentSession.setCwd can re-anchor forks after a born-named
+  // `afk -w` worktree is created mid-session. Read at fork time (forkSubagent),
+  // so updating it makes every subsequent fork inherit the new worktree cwd.
+  private parentCwd: string | undefined;
   private readonly abortGraph: AbortGraph;
   private readonly rootId: string;
   private readonly rootController: AbortController;
@@ -287,6 +290,17 @@ export class SubagentManager {
     cb: (usage: import('./subagent/result.js').SubagentTrace['usage'], costUsd: number | undefined) => void,
   ): void {
     this.onSubagentSucceededCb = cb;
+  }
+
+  /**
+   * Re-anchor the cwd inherited by future forks. Called (transitively, via the
+   * provider's `setCwd`) when the session's working directory changes — most
+   * importantly when a born-named `afk -w` worktree is created on turn 1, after
+   * this manager was constructed in the launch dir. Existing in-flight children
+   * are unaffected; only forks dispatched after this call inherit `cwd`.
+   */
+  setCwd(cwd: string): void {
+    this.parentCwd = cwd;
   }
 
   /**

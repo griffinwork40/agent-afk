@@ -896,6 +896,57 @@ describe('SkillExecutor', () => {
       expect((capturedManager as unknown as { parentCwd: string | undefined }).parentCwd)
         .toBe('/tmp/wt/feat-x');
     });
+
+    // setCwd re-anchors mid-session: a born-named `afk -w` worktree is created
+    // on turn 1, after the SkillExecutor was constructed in the launch dir.
+    // Without re-anchoring, skill subagents keep resolving against the launch
+    // dir (host repo).
+    it('setCwd re-anchors the per-call SubagentManager for skill subagents', async () => {
+      registerSkill({
+        name: 'fork-skill-setcwd',
+        description: 'test',
+        context: 'fork',
+        handler: vi.fn(),
+      });
+
+      vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({
+        'system.md': 'fake-system-prompt',
+      });
+
+      let capturedManager: SubagentManager | undefined;
+      vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockImplementation(
+        function (this: SubagentManager) {
+          capturedManager = this;
+          return Promise.resolve({
+            id: 'h',
+            runToResult: vi.fn().mockResolvedValue({
+              status: 'succeeded',
+              message: { content: 'ok' },
+            }),
+            teardown: vi.fn().mockResolvedValue(undefined),
+          }) as any;
+        } as any,
+      );
+      vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'parent-123',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        cwd: '/tmp/launch/dir',
+      });
+
+      executor.setCwd('/tmp/launch/dir/.afk-worktrees/afk-xyz');
+
+      const result = await executor.execute(makeCall({ name: 'fork-skill-setcwd' }));
+
+      expect(result.isError).toBeUndefined();
+      expect((capturedManager as unknown as { parentCwd: string | undefined }).parentCwd)
+        .toBe('/tmp/launch/dir/.afk-worktrees/afk-xyz');
+    });
   });
 
   describe('resolveApiKeyForModel — per-model credential resolution (skill fork path)', () => {

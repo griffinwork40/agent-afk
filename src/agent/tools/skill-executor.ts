@@ -216,8 +216,19 @@ function parseSkillInput(input: unknown): SkillInput {
 
 export class SkillExecutor {
   private pluginBodies: Map<string, PluginSkillBody> | null = null;
+  // Current worktree cwd. Seeded from ctx.cwd; updated by setCwd when the
+  // session's cwd changes (born-named `afk -w` worktree created on turn 1) so
+  // skill-forked sub-agents anchor to the worktree, not the host process.cwd().
+  private currentCwd: string | undefined;
 
-  constructor(private readonly ctx: SkillExecutorContext) {}
+  constructor(private readonly ctx: SkillExecutorContext) {
+    this.currentCwd = ctx.cwd;
+  }
+
+  /** Re-anchor the cwd used for skill-forked sub-agents after a cwd change. */
+  setCwd(cwd: string): void {
+    this.currentCwd = cwd;
+  }
 
   /**
    * Session-identity fields for telemetry rows (skill-invocations + routing).
@@ -375,7 +386,7 @@ export class SkillExecutor {
     writeSkillInvocation({
       skillName: skill.name,
       sessionId: this.ctx.parentSession.sessionId,
-      cwd: this.ctx.cwd,
+      cwd: this.currentCwd,
       model: skill.model ?? this.ctx.defaultModel,
       ...this.sessionIdentity(),
     });
@@ -544,7 +555,7 @@ export class SkillExecutor {
       // dispatches its own `agent` calls (grandchild forks), the manager's
       // forkSubagent injects cwd into the grandchild's config. Mirrors
       // subagent-executor.ts:294.
-      ...(this.ctx.cwd !== undefined ? { cwd: this.ctx.cwd } : {}),
+      ...(this.currentCwd !== undefined ? { cwd: this.currentCwd } : {}),
     });
     const childExecutor = new SubagentExecutor({
       subagentManager: childManager,
@@ -570,7 +581,7 @@ export class SkillExecutor {
       maxDepth,
       // Forward cwd so the grandchild executor's own childManager (when it
       // recursively constructs one for great-grandchild forks) is also cwd-anchored.
-      ...(this.ctx.cwd !== undefined ? { cwd: this.ctx.cwd } : {}),
+      ...(this.currentCwd !== undefined ? { cwd: this.currentCwd } : {}),
       // Invariant: background dispatch requires the registry to be present
       // in every SubagentExecutor in the chain — root → skill-forked child →
       // skill-forked grandchild. Without forwarding, a plugin skill's
@@ -665,7 +676,7 @@ export class SkillExecutor {
     writeSkillInvocation({
       skillName: skill.name,
       sessionId: this.ctx.parentSession.sessionId,
-      cwd: this.ctx.cwd,
+      cwd: this.currentCwd,
       model: typeof skillChildModel === 'string' ? skillChildModel : undefined,
       ...this.sessionIdentity(),
     });
@@ -680,7 +691,7 @@ export class SkillExecutor {
       // forwarding here is what gives the skill subagent's bash/grep/file
       // tools the worktree anchor. Without it, every `/diagnose`, `/mint`,
       // etc. run their first-tier subagents against the host repo.
-      ...(this.ctx.cwd !== undefined ? { cwd: this.ctx.cwd } : {}),
+      ...(this.currentCwd !== undefined ? { cwd: this.currentCwd } : {}),
     });
 
     // Thread traceWriter into the child's AgentConfig so its tool_use, hook,
@@ -960,7 +971,7 @@ export class SkillExecutor {
     writeSkillInvocation({
       skillName: skillName,
       sessionId: this.ctx.parentSession.sessionId,
-      cwd: this.ctx.cwd,
+      cwd: this.currentCwd,
       model: typeof pluginChildModel === 'string' ? pluginChildModel : undefined,
       ...this.sessionIdentity(),
     });
@@ -972,7 +983,7 @@ export class SkillExecutor {
       ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
       progressSink: getCurrentSink(),
       // Worktree isolation — same rationale as executeForkedRegistrySkill above.
-      ...(this.ctx.cwd !== undefined ? { cwd: this.ctx.cwd } : {}),
+      ...(this.currentCwd !== undefined ? { cwd: this.currentCwd } : {}),
     });
 
     // PLUGIN_ROOT is injected here so shell commands in the plugin SKILL.md

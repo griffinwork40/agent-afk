@@ -215,6 +215,22 @@ describe('SubagentManager', () => {
     expect((shared.lastConfig as unknown as Record<string, unknown>)['cwd']).toBeUndefined();
   });
 
+  // setCwd re-anchors forks mid-session. A born-named `afk -w` worktree is
+  // created on turn 1, AFTER the root manager was constructed in the launch
+  // dir; without re-anchoring, forked subagents keep inheriting the launch dir.
+  it('forkSubagent inherits the updated cwd after setCwd (mid-session re-anchor)', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager({ cwd: '/tmp/launch/dir' });
+    mgr.setCwd('/tmp/launch/dir/.afk-worktrees/afk-xyz');
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      config: { model: 'sonnet' },
+    });
+    expect(shared.lastConfig).toEqual(
+      expect.objectContaining({ cwd: '/tmp/launch/dir/.afk-worktrees/afk-xyz' }),
+    );
+  });
+
   it('list() and get() track active handles', async () => {
     const mgr = new SubagentManager();
     const h = await mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } });
