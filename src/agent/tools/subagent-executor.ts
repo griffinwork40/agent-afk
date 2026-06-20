@@ -416,7 +416,25 @@ function buildFailurePayload(args: {
 }
 
 export class SubagentExecutor implements SubagentControl {
-  constructor(private readonly ctx: SubagentExecutorContext) {}
+  // Current worktree cwd. Seeded from ctx.cwd; updated by setCwd when the
+  // session's cwd changes (born-named `afk -w` worktree created on turn 1).
+  // Read when building the depth-2+ child manager/executor below.
+  private currentCwd: string | undefined;
+
+  constructor(private readonly ctx: SubagentExecutorContext) {
+    this.currentCwd = ctx.cwd;
+  }
+
+  /**
+   * Re-anchor the cwd used for forked sub-agents after a mid-session cwd change.
+   * Updates the depth-2+ anchor (this.currentCwd) AND the root manager that
+   * dispatches depth-1 forks, so the whole `agent`-tool tree follows the new
+   * worktree instead of falling back to the host's process.cwd().
+   */
+  setCwd(cwd: string): void {
+    this.currentCwd = cwd;
+    this.ctx.subagentManager.setCwd(cwd);
+  }
 
   /**
    * In-flight foreground subagents that can be promoted to background, keyed
@@ -596,7 +614,7 @@ export class SubagentExecutor implements SubagentControl {
       // bash/grep/read_file fall back to process.cwd() (host repo).
       childManager = new SubagentManager({
         parentAbortSignal: call.signal,
-        ...(this.ctx.cwd !== undefined ? { cwd: this.ctx.cwd } : {}),
+        ...(this.currentCwd !== undefined ? { cwd: this.currentCwd } : {}),
       });
       childParentSession = createStubParentSession(call.signal) as ReturnType<typeof createStubParentSession> & { sessionId: string | undefined };
       const childExecutor = new SubagentExecutor({
@@ -619,7 +637,7 @@ export class SubagentExecutor implements SubagentControl {
         // Forward cwd so the depth-1 child executor, when it constructs
         // ITS own childManager for depth-3+ forks, also receives cwd. The
         // chain holds for arbitrary depth up to maxDepth.
-        ...(this.ctx.cwd !== undefined ? { cwd: this.ctx.cwd } : {}),
+        ...(this.currentCwd !== undefined ? { cwd: this.currentCwd } : {}),
         // Propagate read-only constraints so depth ≥ 2 forks (this depth-1
         // child calling the `agent` tool) keep the same tool allowlist and
         // bash gate that the originating read-only skill imposed.

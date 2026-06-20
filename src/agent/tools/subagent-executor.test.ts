@@ -1227,6 +1227,50 @@ describe('SubagentExecutor', () => {
       //     holds for arbitrary depth up to maxDepth.
       expect(capturedChildExecutorCtx!.cwd).toBe('/tmp/wt/feat-x');
     });
+
+    // setCwd re-anchors mid-session (born-named `afk -w` worktree on turn 1):
+    //   (1) the root manager (depth-1 forks) is re-anchored via manager.setCwd
+    //   (2) the depth-2+ childManager built in execute() uses the new cwd
+    it('setCwd re-anchors the root manager and depth-2+ child managers', async () => {
+      let capturedChildExecutorCtx: SubagentExecutorContext | undefined;
+
+      const handle = mockHandle();
+      const manager = {
+        forkSubagent: vi.fn().mockResolvedValue(handle),
+        teardownAll: vi.fn().mockResolvedValue(undefined),
+        setCwd: vi.fn(),
+      };
+
+      const factory = vi.fn().mockImplementation(({ childExecutor }: { childExecutor: SubagentExecutor }) => {
+        capturedChildExecutorCtx = (childExecutor as any).ctx as SubagentExecutorContext;
+        return { name: 'p', query: vi.fn() };
+      });
+
+      const exec = new SubagentExecutor({
+        subagentManager: manager as any,
+        parentSession: {
+          sessionId: 'root',
+          getInputStreamRef: vi.fn(),
+          abortSignal: new AbortController().signal,
+        },
+        defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+        childProviderFactory: factory,
+        depth: 0,
+        maxDepth: DEFAULT_MAX_NESTING_DEPTH,
+        cwd: '/tmp/launch/dir',
+      });
+
+      exec.setCwd('/tmp/launch/dir/.afk-worktrees/afk-xyz');
+
+      // (1) depth-1 forks: the root manager was re-anchored.
+      expect(manager.setCwd).toHaveBeenCalledWith('/tmp/launch/dir/.afk-worktrees/afk-xyz');
+
+      // (2) depth-2+ forks: the child manager + executor built in execute() use it.
+      await exec.execute(makeCall());
+      const childManager = capturedChildExecutorCtx!.subagentManager as unknown as { parentCwd: string | undefined };
+      expect(childManager.parentCwd).toBe('/tmp/launch/dir/.afk-worktrees/afk-xyz');
+      expect(capturedChildExecutorCtx!.cwd).toBe('/tmp/launch/dir/.afk-worktrees/afk-xyz');
+    });
   });
 
   // ISSUE H3: agentType fallback chain — all three legs.

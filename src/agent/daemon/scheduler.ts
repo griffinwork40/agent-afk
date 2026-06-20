@@ -24,11 +24,6 @@ import type { ExecFileFn } from '../worktree-sweep.js';
 import { IdleDetector } from './idle-detector.js';
 import { dequeueNext } from './queue-store.js';
 import { getQueueDir } from '../../paths.js';
-
-// Promisified once at module scope — the daemon's builtin worktree-prune task
-// reuses the same node:child_process exec function on every tick; there is no
-// reason to re-resolve it dynamically inside the handler.
-const builtinPruneExecFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
 import type { ScheduledTask as CronTask } from 'node-cron';
 import { AgentSession } from '../session/agent-session.js';
 import { createDefaultHookRegistry } from '../default-hook-registry.js';
@@ -46,6 +41,35 @@ import {
   type GateDecision,
   type SessionStartSkipReason,
 } from './gates.js';
+
+// Promisified once at module scope — the daemon's builtin worktree-prune task
+// reuses the same node:child_process exec function on every tick; there is no
+// reason to re-resolve it dynamically inside the handler.
+const builtinPruneExecFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
+
+/**
+ * Resolve the repo root for the builtin worktree-prune sweep. An explicit
+ * `override` (AFK_WORKTREE_SWEEP_ROOT) wins; otherwise discover the repo
+ * enclosing `cwd` via `git rev-parse --show-toplevel`. Returns `null` when the
+ * cwd is not inside a git repository — the daemon's cwd is frequently $HOME
+ * (launchd sets WorkingDirectory=homedir), so the caller skips gracefully
+ * instead of erroring `fatal: not a git repository` on every nightly run.
+ * Exported for unit testing with a stubbed execFile.
+ */
+export async function resolveWorktreePruneRoot(
+  execFile: ExecFileFn,
+  cwd: string,
+  override: string | undefined,
+): Promise<string | null> {
+  if (override !== undefined && override.length > 0) return override;
+  try {
+    const top = await execFile('git', ['rev-parse', '--show-toplevel'], { cwd });
+    const root = top.stdout.trim();
+    return root.length > 0 ? root : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Build a charset-safe witness `sessionLabel` for a daemon tick, shaped
@@ -363,7 +387,26 @@ export class CronScheduler {
     };
 
     try {
-      const repoRoot = env.AFK_WORKTREE_SWEEP_ROOT ?? process.cwd();
+      const repoRoot = await resolveWorktreePruneRoot(
+        builtinPruneExecFile,
+        process.cwd(),
+        env.AFK_WORKTREE_SWEEP_ROOT,
+      );
+      if (repoRoot === null) {
+        // Daemon cwd is not inside a git repo (commonly $HOME under launchd).
+        // Skip rather than erroring on every tick; the per-repo REPL boot-prune
+        // still handles cleanup for repos the user actually works in.
+        const skipped: TelemetryRecord = {
+          ...baseRecord,
+          durationMs: this.now() - startTimeMs,
+          status: 'skipped',
+          responseExcerpt:
+            'worktree-prune skipped: daemon cwd is not inside a git repository ' +
+            '(set AFK_WORKTREE_SWEEP_ROOT to target a repo)',
+        };
+        this.writeTelemetry(skipped, task);
+        return skipped;
+      }
 
       const maxAgeDaysClean =
         parseInt(env.AFK_WORKTREE_MAX_AGE_CLEAN ?? '', 10) || 14;

@@ -1330,4 +1330,85 @@ describe('dead-owner — live-session protection', () => {
     expect(deadOwnerCandidates).toHaveLength(1);
     expect(result.removed).toContain(worktreePath);
   });
+
+  it('end-to-end: REAL updatePresenceCwd flips the verdict from reap to spare', async () => {
+    // Closes the seam the unit tests leave open: presence.test.ts covers the
+    // updatePresenceCwd file round-trip in isolation, and agent-session.test.ts
+    // asserts setCwd→updatePresenceCwd via a MOCK. Neither proves the on-disk
+    // record updatePresenceCwd writes is consumed by the sweep's live-session
+    // guard. This composes the REAL updatePresenceCwd write with the REAL
+    // readPresenceFiles reader the daemon sweep uses by default.
+    //
+    // The worktree's creator pid is DEAD (and the meta is fresh, so it is not
+    // 'unknown'), so the presence.cwd path is the ONLY thing that can spare it —
+    // exactly the born-named `afk -w` scenario. dryRun keeps the worktree on
+    // disk across both phases so the verdict flip is attributable solely to the
+    // cwd write. AFK_HOME is set to repoRoot in beforeEach, so the real presence
+    // dir is isolated to this test's tmpdir.
+    const { writePresenceFile, updatePresenceCwd, readPresenceFiles } = await import('./awareness/presence.js');
+
+    const deadOwnerPid = findDeadPid();
+    const worktreePath = join(afkWorktreesDir, 'afk-e2e-presence-wt');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        pid: deadOwnerPid,
+        createdAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+        baseSha: 'base123',
+        baseBranch: 'main',
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot, head: 'base123' });
+    const wtBlock = worktreeBlock({
+      path: worktreePath,
+      head: 'base123',
+      branch: 'refs/heads/afk/e2e-presence-wt',
+    });
+    const porcelainOut = `${mainBlock}\n\n${wtBlock}\n`;
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) return { stdout: porcelainOut, stderr: '' };
+      if (args.includes('status') && args.includes('--porcelain')) return { stdout: '', stderr: '' };
+      if (args.includes('rev-list') && args.includes('--count')) return { stdout: '0\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+    // dryRun:true keeps the worktree on disk so the same fixture is swept twice.
+    // readPresence is the production default (readPresenceFiles), passed
+    // explicitly so the intent — exercise the real on-disk read path — is clear.
+    const sweepOpts = {
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: true,
+      telemetryPath: telemetryFile,
+      readPresence: readPresenceFiles,
+    };
+
+    // Turn 0: a live session writes presence with the LAUNCH dir. The born-named
+    // worktree does not exist yet, so presence.cwd points at the host repo.
+    const sessionId = 'e2e-presence-cwd';
+    await writePresenceFile({
+      sessionId,
+      surface: 'cli',
+      cwd: repoRoot, // stale launch dir, NOT the worktree
+      startedAt: new Date().toISOString(),
+      model: { provider: 'anthropic-direct', name: 'test-model' },
+      workspace: { branch: null, headSha: null, dirty: null, dirtyCount: null, remoteUrl: null },
+      pid: process.pid, // alive — this test process
+    });
+
+    // Phase 1 (pre-fix state): stale presence.cwd → guard can't match → reaped.
+    const before = await runSweep(sweepOpts);
+    expect(before.candidates.filter((c) => c.verdict === 'dead-owner')).toHaveLength(1);
+
+    // Turn 1: the worktree is created and setCwd fires updatePresenceCwd.
+    await updatePresenceCwd(sessionId, worktreePath);
+
+    // Phase 2 (fixed state): presence.cwd now inside the worktree → spared.
+    const after = await runSweep(sweepOpts);
+    expect(after.candidates.filter((c) => c.verdict === 'dead-owner')).toHaveLength(0);
+    expect(after.removed).not.toContain(worktreePath);
+  });
 });

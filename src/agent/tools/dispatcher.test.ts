@@ -313,6 +313,48 @@ describe('SessionToolDispatcher', () => {
     });
   });
 
+  describe('setResolveBase — executor re-anchoring (openai-compatible worktree cwd fix)', () => {
+    // Regression: the openai-compatible provider's query.setCwd routes straight
+    // to dispatcher.setResolveBase. Before this, setResolveBase migrated the
+    // path roots but left the forked agent/skill executors frozen on the launch
+    // dir, so child tool calls in a born-named `afk -w` worktree ran against the
+    // host repo. setResolveBase must now re-anchor the executors it owns.
+    it('re-anchors subagent + skill executors to the new cwd on a real cwd change', () => {
+      const subagentExecutor = { execute: vi.fn(), setCwd: vi.fn() } as any;
+      const skillExecutor = { execute: vi.fn(), setCwd: vi.fn() } as any;
+      const dispatcher = makeDispatcher({
+        cwd: '/tmp/launch/dir',
+        subagentExecutor,
+        skillExecutor,
+      });
+
+      dispatcher.setResolveBase('/tmp/launch/dir/.afk-worktrees/afk-xyz');
+
+      expect(subagentExecutor.setCwd).toHaveBeenCalledWith('/tmp/launch/dir/.afk-worktrees/afk-xyz');
+      expect(skillExecutor.setCwd).toHaveBeenCalledWith('/tmp/launch/dir/.afk-worktrees/afk-xyz');
+    });
+
+    it('does not re-anchor when the cwd is unchanged (no-op guard)', () => {
+      const subagentExecutor = { execute: vi.fn(), setCwd: vi.fn() } as any;
+      const skillExecutor = { execute: vi.fn(), setCwd: vi.fn() } as any;
+      const dispatcher = makeDispatcher({
+        cwd: '/tmp/same/dir',
+        subagentExecutor,
+        skillExecutor,
+      });
+
+      dispatcher.setResolveBase('/tmp/same/dir'); // identical → early return
+
+      expect(subagentExecutor.setCwd).not.toHaveBeenCalled();
+      expect(skillExecutor.setCwd).not.toHaveBeenCalled();
+    });
+
+    it('does not throw when no executors are configured (eval-run probe dispatcher)', () => {
+      const dispatcher = makeDispatcher({ cwd: '/tmp/launch/dir' });
+      expect(() => dispatcher.setResolveBase('/tmp/launch/dir/.afk-worktrees/afk-xyz')).not.toThrow();
+    });
+  });
+
   describe('defaultConcurrencyClassifier', () => {
     it('marks read-only tools as safe', () => {
       expect(defaultConcurrencyClassifier('read_file')).toBe(true);

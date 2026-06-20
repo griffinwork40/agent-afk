@@ -9,10 +9,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CronScheduler, daemonTraceLabel } from './scheduler.js';
+import { CronScheduler, daemonTraceLabel, resolveWorktreePruneRoot } from './scheduler.js';
 import { getTraceDir } from '../../paths.js';
 import type { AgentSession } from '../session/agent-session.js';
 import type { AgentConfig } from '../types.js';
+import type { ExecFileFn } from '../worktree-sweep.js';
 
 function makeTmpDir(): string {
   return mkdtempSync(join(tmpdir(), 'agent-afk-scheduler-'));
@@ -286,5 +287,40 @@ describe('daemonTraceLabel', () => {
     const label = daemonTraceLabel('///');
     expect(SAFE.test(label)).toBe(true);
     expect(label.startsWith('task-')).toBe(true);
+  });
+});
+
+describe('resolveWorktreePruneRoot', () => {
+  it('returns the explicit override without invoking git', async () => {
+    const mock = vi.fn();
+    const root = await resolveWorktreePruneRoot(mock as unknown as ExecFileFn, '/anywhere', '/pinned/repo');
+    expect(root).toBe('/pinned/repo');
+    expect(mock).not.toHaveBeenCalled();
+  });
+
+  it('discovers the repo root via git rev-parse when no override is set', async () => {
+    const mock = vi.fn().mockResolvedValue({ stdout: '/Users/me/proj\n', stderr: '' });
+    const root = await resolveWorktreePruneRoot(mock as unknown as ExecFileFn, '/Users/me/proj/sub', undefined);
+    expect(root).toBe('/Users/me/proj');
+    expect(mock).toHaveBeenCalledWith('git', ['rev-parse', '--show-toplevel'], { cwd: '/Users/me/proj/sub' });
+  });
+
+  it('returns null when cwd is not a git repo (rev-parse throws) — the daemon $HOME case', async () => {
+    const mock = vi.fn().mockRejectedValue(new Error('fatal: not a git repository'));
+    const root = await resolveWorktreePruneRoot(mock as unknown as ExecFileFn, '/Users/me', undefined);
+    expect(root).toBeNull();
+  });
+
+  it('returns null when git yields empty output', async () => {
+    const mock = vi.fn().mockResolvedValue({ stdout: '   \n', stderr: '' });
+    const root = await resolveWorktreePruneRoot(mock as unknown as ExecFileFn, '/x', undefined);
+    expect(root).toBeNull();
+  });
+
+  it('treats an empty-string override as unset and falls back to discovery', async () => {
+    const mock = vi.fn().mockResolvedValue({ stdout: '/repo\n', stderr: '' });
+    const root = await resolveWorktreePruneRoot(mock as unknown as ExecFileFn, '/repo/x', '');
+    expect(root).toBe('/repo');
+    expect(mock).toHaveBeenCalled();
   });
 });
