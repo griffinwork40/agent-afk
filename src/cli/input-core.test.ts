@@ -188,6 +188,69 @@ describe('InputCore', () => {
     });
   });
 
+  // Home/End key routing (feat: line-relative Home/End)
+  //
+  // The Home and End keys in the compositor dispatch to moveLineStart and
+  // moveLineEnd respectively (NOT the buffer-absolute moveHome/moveEnd).
+  // These tests document the contract at the InputCore level — the key
+  // routing itself is exercised by integration tests.
+  describe('Home/End key contract: line-relative, not buffer-absolute', () => {
+    it('Home on the second line of a multi-line buffer stops at line start, not buffer start', () => {
+      // cursor mid-way through "second" (e.g. index 9 = "sec|ond")
+      const state = { buffer: 'first\nsecond', cursor: 9 };
+      const result = InputCore.moveLineStart(state);
+      // Should land at index 6 (start of "second"), NOT at index 0 (buffer start)
+      expect(result).toEqual({ buffer: 'first\nsecond', cursor: 6 });
+      expect(result.cursor).not.toBe(0);
+    });
+
+    it('End on the first line of a multi-line buffer stops at line end, not buffer end', () => {
+      // cursor at start of "first" (index 0)
+      const state = { buffer: 'first\nsecond', cursor: 0 };
+      const result = InputCore.moveLineEnd(state);
+      // Should land at index 5 (end of "first" before '\n'), NOT at index 12 (buffer end)
+      expect(result).toEqual({ buffer: 'first\nsecond', cursor: 5 });
+      expect(result.cursor).not.toBe(12);
+    });
+
+    it('Home on the first line is equivalent to buffer-absolute moveHome', () => {
+      const state = InputCore.seed('hello world');
+      expect(InputCore.moveLineStart(state)).toEqual(InputCore.moveHome(state));
+    });
+
+    it('End on the last line is equivalent to buffer-absolute moveEnd', () => {
+      const state = { buffer: 'hello world', cursor: 0 };
+      expect(InputCore.moveLineEnd(state)).toEqual(InputCore.moveEnd(state));
+    });
+  });
+
+  // Ctrl+D key contract (feat: Ctrl+D forward-delete / EOF)
+  //
+  // When buffer is non-empty, Ctrl+D calls InputCore.deleteForward.
+  // When buffer is empty, the dispatcher fires onCancel (tested at integration
+  // level). These tests cover the deleteForward half at the InputCore level.
+  describe('Ctrl+D key contract: deleteForward on non-empty buffer', () => {
+    it('deleteForward removes the character at the cursor', () => {
+      // cursor before 'w' in "hello world"
+      const state = { buffer: 'hello world', cursor: 6 };
+      expect(InputCore.deleteForward(state)).toEqual({ buffer: 'hello orld', cursor: 6 });
+    });
+
+    it('deleteForward is a no-op at end of buffer (matches EOF guard)', () => {
+      // At buffer end, deleteForward returns the same state — the dispatcher
+      // checks buffer.length === 0 before this path, so empty-buffer EOF is
+      // handled by onCancel, not deleteForward.
+      const state = InputCore.seed('hello');
+      expect(InputCore.deleteForward(state)).toBe(state);
+    });
+
+    it('deleteForward removes a whole grapheme cluster', () => {
+      // cursor before a multi-code-unit emoji
+      const state = { buffer: 'a🙂b', cursor: 1 };
+      expect(InputCore.deleteForward(state)).toEqual({ buffer: 'ab', cursor: 1 });
+    });
+  });
+
   describe('word movement (Alt+B / Alt+F)', () => {
     it('moveWordBackward moves to start of previous word', () => {
       const state = InputCore.seed('hello world');

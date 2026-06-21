@@ -46,6 +46,15 @@ import type {
 export interface KeyDispatchHost {
   /** Re-render the live frame. */
   repaint(): void;
+  /**
+   * Clear the terminal viewport (erase entire screen + cursor home) and
+   * repaint the live compositor frame. Used by the Ctrl+L binding.
+   *
+   * External constraint (ordered-operation invariant): the physical screen
+   * erase must precede repaint() — if repaint fires first its cursor-math
+   * is wrong relative to the cleared screen. Mirrors reader.ts:566-576.
+   */
+  clearScreen(): void;
   /** Apply a pure InputCore transition (clears queued, refreshes autocomplete/ghost, repaints). */
   applyEdit(next: InputCoreState): boolean;
   /** Recompute autocomplete dropdown state for the current buffer. */
@@ -765,6 +774,31 @@ function handleCursorAndEdit(self: KeyDispatchHost, key: KeyInfo): boolean {
     return true;
   }
 
+  // Ctrl+L → clear screen and repaint the live frame.
+  // External constraint: clearScreen() writes the erase sequences BEFORE
+  // repaint() so log-update's cursor-math starts from a clean screen.
+  // Mirrors reader.ts:566-576. Works in idle and streaming modes alike —
+  // there is no turn-scoped state to protect here.
+  if (key?.ctrl && key?.name === 'l') {
+    self.clearScreen();
+    return true;
+  }
+
+  // Ctrl+D → EOF / forward-delete.
+  // When the buffer is EMPTY: trigger the same onCancel path used by idle
+  // Ctrl+C (equivalent to EOF on an empty line — standard shell behavior).
+  // When the buffer is NON-EMPTY: forward-delete one character at the
+  // cursor (readline `delete-char`). Mirrors reader.ts:462-478.
+  if (key?.ctrl && key?.name === 'd') {
+    if (self.input.buffer.length === 0) {
+      if (self.onCancel) self.onCancel();
+    } else {
+      self.history?.resetRecall();
+      self.applyEdit(InputCore.deleteForward(self.input));
+    }
+    return true;
+  }
+
   if (key?.name === 'left') {
     self.applyEdit(InputCore.moveLeft(self.input));
     return true;
@@ -786,13 +820,23 @@ function handleCursorAndEdit(self: KeyDispatchHost, key: KeyInfo): boolean {
     return true;
   }
 
+  // Home → move to start of current logical line (`moveLineStart`).
+  // In a multi-line buffer this lands at the character after the previous
+  // '\n', not at absolute position 0 — matching the user's visual intent
+  // when editing a multi-line draft. Ctrl+A retains the same behavior
+  // (it has always called moveLineStart). moveHome / moveEnd (buffer-
+  // absolute) are intentionally NOT used here.
   if (key?.name === 'home') {
-    self.applyEdit(InputCore.moveHome(self.input));
+    self.applyEdit(InputCore.moveLineStart(self.input));
     return true;
   }
 
+  // End → move to end of current logical line (`moveLineEnd`).
+  // Symmetric counterpart to Home above. In a multi-line buffer this
+  // lands at the '\n' position (the character before the newline),
+  // not at the absolute buffer end. Ctrl+E retains the same behavior.
   if (key?.name === 'end') {
-    self.applyEdit(InputCore.moveEnd(self.input));
+    self.applyEdit(InputCore.moveLineEnd(self.input));
     return true;
   }
 

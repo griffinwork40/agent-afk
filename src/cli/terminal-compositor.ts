@@ -775,6 +775,31 @@ export class TerminalCompositor {
   }
 
   /**
+   * Clear the terminal viewport and repaint the live frame (Ctrl+L binding).
+   *
+   * // Invariant: the physical erase MUST precede repaint(). log-update's
+   * // CupFrameRenderer tracks the last rendered frame's top row; if repaint()
+   * // fires before the erase, it will attempt to cursor-up to a stale row
+   * // position on a screen that has already been cleared, producing garbled
+   * // output. The sequence is: (1) reset log-update geometry so the next
+   * // render() treats the screen as clean, (2) write the erase sequences to
+   * // stdout, (3) call repaint() which then paints at the correct (0,0) origin.
+   * // resetGeometry() is optional (absent on test stubs); if absent, the
+   * // erase-then-repaint still works — CupFrameRenderer simply erases the
+   * // stale ghost region before drawing. Mirrors reader.ts:566-576.
+   * @internal Public for the input-dispatch module (KeyDispatchHost).
+   */
+  clearScreen(): void {
+    // Step 1: drop tracked geometry so the next render starts from row 0.
+    this.logUpdate?.resetGeometry?.();
+    // Step 2: cursor home + erase entire screen (viewport only — no scrollback
+    // wipe here, unlike the /clear slash command which also sends CSI 3J).
+    this.stdout.write('\x1b[H\x1b[2J');
+    // Step 3: repaint the live frame at the now-clean origin.
+    this.repaint();
+  }
+
+  /**
    * Reset all per-cycle state back to its armed-cycle defaults (overlay, input,
    * paste/attachment, committed-band, resize ghost-erase, picker). Body extracted
    * to terminal-compositor.reset.ts — see {@link Reset.resetState} for the
