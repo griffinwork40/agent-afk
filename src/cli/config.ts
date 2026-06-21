@@ -124,6 +124,15 @@ export interface CliConfig {
       primaryChatId?: number;
       targets?: number[];
     };
+    /**
+     * AFK-mode "Done" verification gate (opt-in; default off when omitted). When
+     * true, a terminal-state push whose kind is `Done` is relabelled
+     * "⚠️ Done (unverified)" unless the turn produced corroborating evidence — a
+     * successful file write/edit or executed command (see
+     * `doneHasCorroboratingEvidence` in `afk-push.ts`). Keeps the "get pinged
+     * when it finishes" notification honest without blocking the turn.
+     */
+    verifyDone?: boolean;
   };
   /**
    * `afk interactive` defaults.
@@ -291,6 +300,8 @@ interface ConfigFileSchema {
       primaryChatId?: number;
       targets?: number[];
     };
+    /** Opt-in AFK "Done" verification gate; default off. See `CliConfig.telegram.verifyDone`. */
+    verifyDone?: boolean;
   };
   interactive?: {
     worktreeAutoname?: boolean;
@@ -704,6 +715,9 @@ function loadJsonConfig(): {
               if (targets.length > 0) parsed.targets = targets;
             }
             telegram.notify = parsed;
+          }
+          if (typeof json.telegram.verifyDone === 'boolean') {
+            telegram.verifyDone = json.telegram.verifyDone;
           }
           config.telegram = telegram;
         }

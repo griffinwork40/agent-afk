@@ -29,6 +29,7 @@
 
 import { redactInlineSecrets } from '../../../agent/session/prompt-dump.js';
 import { pushIfConfigured } from '../../../telegram/push.js';
+import type { ToolEvent } from '../../slash/types.js';
 import type { TerminalState, TerminalKind } from './terminal-state.js';
 
 /** Per-AFK-session push budget. Generous enough for a long autonomous run,
@@ -68,13 +69,49 @@ const KIND_FIELDS: Record<TerminalKind, ReadonlyArray<readonly [string, keyof Te
   ],
 };
 
+// ---------------------------------------------------------------------------
+// "Done" verification (opt-in via telegram.verifyDone)
+// ---------------------------------------------------------------------------
+
+// Contract: tools whose SUCCESSFUL invocation is observable corroboration that
+// real work happened this turn — a file mutation or an executed command. A
+// `Done` turn with none of these may be a self-certified completion with no
+// artifact behind it. Read-only tools (read_file/grep/glob/list_directory/…)
+// deliberately do NOT count: reading is not doing. Conservative + opt-in by
+// design; extend this set rather than loosening the success check.
+export const DONE_EVIDENCE_TOOLS: ReadonlySet<string> = new Set([
+  'write_file',
+  'edit_file',
+  'bash',
+]);
+
+/**
+ * True when at least one of this turn's tool events is a successful
+ * ({@link ToolEvent.isError} not `true`) corroborating tool call — see
+ * {@link DONE_EVIDENCE_TOOLS}. Pure: the caller owns the policy decision of
+ * whether to act on the result (gated behind `telegram.verifyDone`).
+ */
+export function doneHasCorroboratingEvidence(toolEvents: readonly ToolEvent[]): boolean {
+  return toolEvents.some((e) => DONE_EVIDENCE_TOOLS.has(e.toolName) && e.isError !== true);
+}
+
 /**
  * Format a parsed terminal state into a compact, scannable Telegram message
  * built strictly from structured fields, then scrub secrets. Returns the
  * ready-to-send string (the caller decides whether to send).
+ *
+ * When `opts.unverified` is true AND the kind is `done`, the header is
+ * downgraded to "⚠️ Done (unverified)" and a trailing caveat line is appended —
+ * the caller sets this only when `telegram.verifyDone` is on and the turn
+ * produced no corroborating evidence ({@link doneHasCorroboratingEvidence}).
  */
-export function formatTerminalStateForTelegram(state: TerminalState): string {
-  const header = `🤖 AFK · ${KIND_LABEL[state.kind]}`;
+export function formatTerminalStateForTelegram(
+  state: TerminalState,
+  opts: { unverified?: boolean } = {},
+): string {
+  const downgraded = state.kind === 'done' && opts.unverified === true;
+  const kindLabel = downgraded ? '⚠️ Done (unverified)' : KIND_LABEL[state.kind];
+  const header = `🤖 AFK · ${kindLabel}`;
   const lines: string[] = [];
   for (const [label, field] of KIND_FIELDS[state.kind]) {
     const value = state[field];
@@ -86,6 +123,11 @@ export function formatTerminalStateForTelegram(state: TerminalState): string {
   // Use the model's own terminal-state body (not tool output) as a last resort.
   if (lines.length === 0 && state.rawBody.trim().length > 0) {
     lines.push(state.rawBody.trim());
+  }
+  if (downgraded) {
+    lines.push(
+      '• ⚠️ Unverified: no file write/edit or successful command recorded this turn — confirm before relying on this.',
+    );
   }
 
   const body = lines.length > 0 ? lines.join('\n') : '(no detail)';
@@ -118,11 +160,14 @@ export function afkPushCount(): number {
  * Telegram is unconfigured (`pushIfConfigured` returns null). On reaching the
  * cap, sends one "muted" notice then stops. Best-effort — never throws.
  *
- * `pushImpl` is injectable for tests; defaults to `pushIfConfigured`.
+ * `pushImpl` is injectable for tests; defaults to `pushIfConfigured`. `opts`
+ * forwards the (opt-in) verification flag to the formatter — see
+ * `formatTerminalStateForTelegram`.
  */
 export async function pushTerminalStateToTelegram(
   state: TerminalState,
   pushImpl: typeof pushIfConfigured = pushIfConfigured,
+  opts: { unverified?: boolean } = {},
 ): Promise<void> {
   try {
     if (pushCount >= MAX_PUSHES_PER_SESSION) {
@@ -136,7 +181,7 @@ export async function pushTerminalStateToTelegram(
       return;
     }
     pushCount += 1;
-    await pushImpl(formatTerminalStateForTelegram(state));
+    await pushImpl(formatTerminalStateForTelegram(state, opts));
   } catch {
     // Outbound notification is best-effort; never let it break the turn.
   }
