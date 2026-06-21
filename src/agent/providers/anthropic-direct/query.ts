@@ -383,6 +383,21 @@ export class AnthropicDirectQuery implements ProviderQuery {
           this.abort.clear(controller);
         }
 
+        // Invariant: a turn aborted mid-flight must terminate this generator,
+        // not loop back for another prompt. When the turn THROWS, the catch
+        // above returns on `signal.aborted`. But an interrupt that lands during
+        // the usage-limit wait makes `turnWithRetries` return CLEANLY (no throw
+        // — see retry-layer's `if (result === 'aborted') return`), so the catch
+        // never fires and we arrive here with the signal still aborted. Without
+        // this guard the loop falls through to `promptIterator.next()` and
+        // blocks forever while the consumer (`sendMessageStreamInternal`) is
+        // still awaiting a terminal event for the aborted turn — the REPL hangs:
+        // Ctrl+C can't quit, auto-resume never re-fires, and queued input never
+        // drains. Returning yields `{done:true}` to the consumer so the turn
+        // unwinds cleanly. Mirrors the catch-path guard above. (`abort.clear`
+        // in the finally nulls the slot but does NOT reset `signal.aborted`.)
+        if (controller.signal.aborted) return;
+
         // Auto-compaction: fire at the natural turn boundary — after the
         // per-turn event loop exits and the abort slot is cleared — so we
         // never trigger while a tool call is in flight.
