@@ -303,6 +303,7 @@ export const worktreeCmd: SlashCommand = {
   name: '/worktree',
   summary: 'List or prune afk-managed git worktrees',
   usage: '/worktree list | /worktree prune [--apply] [--scope <interactive|diagnose|all>]',
+  hint: 'When you want to audit or clean up stale afk-managed git worktrees from past sessions.',
   async handler(ctx, args) {
     const trimmed = args.trim();
     if (trimmed.length === 0 || trimmed.startsWith('list')) {

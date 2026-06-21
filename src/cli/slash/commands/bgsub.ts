@@ -142,6 +142,7 @@ export const bgsubCmd: SlashCommand = {
   name: '/bgsub',
   summary: 'List background subagent jobs',
   usage: '/bgsub [id]',
+  hint: 'When you want to check on background subagent jobs spawned with mode="background" during this session.',
   async handler(ctx, args) {
     const registry = ensureRegistry(ctx);
     if (!registry) return 'continue';
@@ -174,6 +175,7 @@ export const bgsubStatusCmd: SlashCommand = {
   name: '/bgsub:status',
   summary: 'Show one background job',
   usage: '/bgsub:status <id>',
+  hint: 'When you need the full detail view for one specific background job by its ID.',
   async handler(ctx, args) {
     const registry = ensureRegistry(ctx);
     if (!registry) return 'continue';
@@ -197,6 +199,7 @@ export const bgsubJoinCmd: SlashCommand = {
   name: '/bgsub:join',
   summary: 'Wait for a background subagent job and print its result',
   usage: '/bgsub:join <id>',
+  hint: 'When a background subagent has finished and you want to surface its result into the conversation.',
   async handler(ctx, args) {
     const registry = ensureRegistry(ctx);
     if (!registry) return 'continue';
@@ -287,6 +290,7 @@ export const bgsubCancelCmd: SlashCommand = {
   name: '/bgsub:cancel',
   summary: 'Cancel a running background subagent job',
   usage: '/bgsub:cancel <id>',
+  hint: 'When you want to abort a background subagent job that is still in progress.',
   async handler(ctx, args) {
     const registry = ensureRegistry(ctx);
     if (!registry) return 'continue';

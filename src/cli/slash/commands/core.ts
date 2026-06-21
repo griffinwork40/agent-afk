@@ -105,6 +105,7 @@ const helpCmd: SlashCommand = {
     }
     ctx.out.line();
     ctx.out.line(palette.dim('  Tip: Ctrl+C interrupts a running turn; a second press exits.'));
+    ctx.out.line(palette.dim('  Hidden: /keys for keybindings · @ to attach files · !cmd to run shell · Shift+Tab to change mode'));
     ctx.out.line();
     return 'continue';
   },

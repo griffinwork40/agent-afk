@@ -22,6 +22,7 @@ export const changelogCmd: SlashCommand = {
   name: '/changelog',
   usage: '/changelog [--dry-run]',
   summary: 'Generate CHANGELOG entries from commits since last tag',
+  hint: 'When you are preparing a release and want to auto-generate changelog entries from conventional commits.',
   async handler(ctx, args) {
     const dryRun = args.split(/\s+/).includes('--dry-run');
     const repoRoot = process.cwd();

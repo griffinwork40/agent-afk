@@ -9,6 +9,7 @@ import type { SlashCommand } from '../types.js';
 export const statsCmd: SlashCommand = {
   name: '/stats',
   summary: 'Show session statistics including skill runs',
+  hint: 'When you want a summary of skill invocations, token usage, and cost for the current session.',
   async handler(ctx) {
     const ledger = ctx.ledger;
     if (!ledger) {

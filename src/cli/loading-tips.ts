@@ -48,7 +48,7 @@ export interface LoadingTip {
 const STATIC_TIPS: readonly LoadingTip[] = [
   {
     id: 'kbd:ctrl-b',
-    text: 'Ctrl+B during a turn detaches it to the background so you can keep typing — find it later with /tasks.',
+    text: 'Ctrl+B during a turn detaches it to the background so you can keep typing — find it later with /bgsub.',
     source: 'static',
   },
   {
