@@ -526,6 +526,51 @@ describe('renderMarkdownToTerminal', () => {
       // No bullet character before the glyph — task items must not emit "• [x]"
       expect(out).not.toMatch(/•/);
     });
+
+    // M1 regression: GFM task syntax is valid on ORDERED items too
+    // ("1. [x] done"). The prior prefix ternary checked `list.ordered` first
+    // and never re-tested `isTask`, so ordered task items lost the glyph — and
+    // because the `checkbox` token is filtered out regardless, the raw "[x]"
+    // was lost too, leaving a bare "1. done".
+    it('renders ordered checked task with both the number and the ☑ glyph (M1)', () => {
+      const out = stripAnsi(renderMarkdownToTerminal('1. [x] done\n'));
+      expect(out).toContain('☑');
+      expect(out).toMatch(/1\.\s*☑\s*done/);
+      expect(out).not.toContain('[x]');
+    });
+
+    it('renders ordered unchecked task with both the number and the ☐ glyph (M1)', () => {
+      const out = stripAnsi(renderMarkdownToTerminal('1. [ ] todo\n'));
+      expect(out).toContain('☐');
+      expect(out).toMatch(/1\.\s*☐\s*todo/);
+      expect(out).not.toContain('[ ]');
+    });
+
+    it('renders a mixed ordered task list preserving sequential numbers and glyphs (M1)', () => {
+      const out = stripAnsi(renderMarkdownToTerminal('1. [x] done\n2. [ ] todo\n'));
+      expect(out).toMatch(/1\.\s*☑\s*done/);
+      expect(out).toMatch(/2\.\s*☐\s*todo/);
+      expect(out).not.toMatch(/\[x\]/);
+      expect(out).not.toMatch(/\[ \]/);
+    });
+
+    // L4 coverage: a task item with rich inline formatting. The checkbox
+    // filter strips the leading `checkbox` token, then renders the remaining
+    // inline tokens (strong/em/codespan) through renderInline — confirm that
+    // path survives: the glyph and words remain, markup is consumed, and the
+    // bold SGR is actually emitted (not rendered as raw "**bold**").
+    it('renders inline formatting (bold + code) inside a task item (L4)', () => {
+      const raw = renderMarkdownToTerminal('- [x] **bold** and `code` here\n');
+      const out = stripAnsi(raw);
+      expect(out).toContain('☑');
+      expect(out).toContain('bold');
+      expect(out).toContain('code');
+      expect(out).toContain('here');
+      expect(out).not.toContain('**');
+      expect(out).not.toContain('[x]');
+      // chalk.bold → \x1b[1m proves inline tokens were rendered, not emitted raw.
+      expect(raw).toContain('\u001b[1m');
+    });
   });
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -559,6 +604,16 @@ describe('renderMarkdownToTerminal', () => {
       expect(ruleLine).toBeDefined();
       expect(ruleLine!.length).toBe(80);
       expect(ruleLine!.length).not.toBe(40);
+    });
+
+    // L3 coverage: the `maxTableWidth ?? 40` fallback. Callers that omit opts
+    // (no width) must get exactly 40 dashes — the only place the default
+    // constant is exercised.
+    it('rule defaults to 40 dashes when no maxWidth is provided', () => {
+      const out = stripAnsi(renderMarkdownToTerminal('---\n'));
+      const ruleLine = out.split('\n').find((l) => /─/.test(l));
+      expect(ruleLine).toBeDefined();
+      expect(ruleLine!.length).toBe(40);
     });
   });
 

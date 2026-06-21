@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderDropdownRows } from './terminal-compositor.render.js';
 import type { RenderHost } from './terminal-compositor.render.js';
+import { displayWidth, stripAnsi } from './display.js';
 import type { AutocompleteState } from './input/autocomplete-state.js';
 import type { Candidate } from './input/types.js';
 
@@ -50,39 +51,43 @@ describe('renderDropdownRows — wide-char soft-wrap counting', () => {
     expect(rows[0]).toContain('/mint');
   });
 
-  it('counts CJK candidate display width in columns, not UTF-16 code units', () => {
-    // A CJK string like '東京都' has .length === 3 but display width === 6
-    // (each character occupies 2 terminal columns). On a narrow 12-col terminal
-    // the old .length measure would compute softWraps=0 (3 < 12) and emit no
-    // placeholder; the correct displayWidth measure (6 < 12) also emits no
-    // placeholder — so the key test is that the row is present without an
-    // incorrect extra blank.
-    const host = makeHost(80, [{ value: '東京都', summary: 'CJK candidate' }]);
+  it('measures wide-char (CJK) candidates in display columns, not UTF-16 length', () => {
+    // '東京都市' has .length === 4 but display width === 8 (each char is 2
+    // terminal columns). The fix measures the rendered row with displayWidth
+    // (matching `cols`, also display columns) instead of .length.
+    //
+    // A test that distinguishes displayWidth from a naive .length purely via the
+    // soft-wrap COUNT is not constructable at this layer: formatDropdownRow
+    // truncates every row to `min(cols-4, 60)` display columns — always < cols —
+    // so softWraps is 0 for any well-formed CJK row no matter which width measure
+    // the source uses. We therefore pin the observable contract instead: wide
+    // content that fits the budget produces exactly one row with no phantom
+    // soft-wrap placeholders, and the rendered row's display width stays within
+    // the terminal (i.e. it was truncated/measured in display columns).
+    const cols = 41; // smallest width that passes the `cols > 40` guard
+    const host = makeHost(cols, [{ value: '東京都市', summary: '東京の候補' }]);
     const rows = renderDropdownRows(host);
-    // At 80 cols, even 2*3=6 display cols fits; no placeholder expected.
-    const nonBlank = rows.filter((r) => r.length > 0);
+    const blanks = rows.filter((r) => r === '');
+    const nonBlank = rows.filter((r) => r !== '');
     expect(nonBlank).toHaveLength(1);
+    expect(blanks).toHaveLength(0);
+    expect(displayWidth(stripAnsi(nonBlank[0]!))).toBeLessThanOrEqual(cols);
   });
 
-  it('adds correct soft-wrap placeholder for a candidate that genuinely wraps', () => {
-    // Construct a candidate whose formatted row is WIDER than the terminal.
-    // maxWidth is capped at Math.min(cols-4, 60). On a 50-col terminal:
-    //   maxWidth = min(46, 60) = 46
-    // formatDropdownRow truncates/pads to maxWidth, so rowStr display width ≈ 46.
-    // With cols=50, ceil(46/50)-1 = 0 → no soft-wrap even with wide content.
-    // To force a soft-wrap, we need rowStr wider than cols. renderDropdownRows
-    // truncates with maxWidth but does NOT truncate the overall rowStr to cols —
-    // ANSI escape overhead can push the raw string wider. We test the no-wrap
-    // case reliably and assert placeholder count is non-negative (regression guard).
+  it('emits one row per fitting candidate with the value preserved and no phantom blanks', () => {
+    // formatDropdownRow truncates each row to min(cols-4, 60) display columns,
+    // so a normal ASCII candidate always fits in one visual row. Assert the real
+    // structural contract (the prior version asserted `blanks.length >= 0` and
+    // `toBeTruthy()` on already-non-empty rows — both vacuously true):
+    //   - exactly one rendered (non-blank) row,
+    //   - zero blank soft-wrap placeholders,
+    //   - the rendered row carries the candidate value.
     const host = makeHost(50, [{ value: '/test-cmd', summary: 'Summary text here' }]);
     const rows = renderDropdownRows(host);
-    // All placeholder rows must be empty strings (the contract from the source).
     const blanks = rows.filter((r) => r === '');
-    expect(blanks.length).toBeGreaterThanOrEqual(0);
-    // Every non-blank row must contain the candidate value.
     const nonBlanks = rows.filter((r) => r !== '');
-    for (const row of nonBlanks) {
-      expect(row).toBeTruthy();
-    }
+    expect(nonBlanks).toHaveLength(1);
+    expect(blanks).toHaveLength(0);
+    expect(nonBlanks.every((r) => stripAnsi(r).includes('/test-cmd'))).toBe(true);
   });
 });
