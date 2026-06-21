@@ -222,8 +222,21 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           const startNum = list.ordered ? (typeof list.start === 'number' ? list.start : 1) : 1;
           for (let i = 0; i < list.items.length; i++) {
             const item = list.items[i]!;
-            const prefix = list.ordered ? `  ${startNum + i}. ` : '  • ';
-            const itemText = item.tokens ? renderTokens(item.tokens as Token[]) : item.text;
+            // Task-list items: replace bullet with checkbox glyph and drop the
+            // leading `checkbox` token so it does not also emit raw "[x] ".
+            // Invariant: the `checkbox` token is always the first child of a
+            // task item — filter it out before passing tokens to renderTokens,
+            // and emit the glyph as the prefix instead of the bullet character.
+            const isTask = item.task === true;
+            const prefix = list.ordered
+              ? `  ${startNum + i}. `
+              : isTask
+                ? (item.checked ? '  ☑ ' : '  ☐ ')
+                : '  • ';
+            const renderableTokens: Token[] = item.tokens
+              ? (isTask ? (item.tokens as Token[]).filter((t) => t.type !== 'checkbox') : (item.tokens as Token[]))
+              : [];
+            const itemText = renderableTokens.length > 0 ? renderTokens(renderableTokens) : item.text;
             const lines: string[] = [];
             let first = true;
             const prefixWidth = visualWidth(prefix);
@@ -272,8 +285,14 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
         }
         case 'space':
           return '\n';
-        case 'hr':
-          return palette.dim('─'.repeat(40)) + '\n';
+        case 'hr': {
+          // Use the configured maxTableWidth so the rule tracks the wrap width
+          // instead of overflowing or falling short. Fallback to 40 when no
+          // width is set (e.g. direct callers that omit opts). Cap at
+          // maxTableWidth so the rule never exceeds the compositor's row budget.
+          const hrWidth = maxTableWidth ?? 40;
+          return palette.dim('─'.repeat(hrWidth)) + '\n';
+        }
         case 'blockquote': {
           const bq = token as Tokens.Blockquote;
           const inner = bq.tokens ? renderTokens(bq.tokens as Token[]) : bq.text;

@@ -497,6 +497,38 @@ describe('renderMarkdownToTerminal', () => {
   });
 
   // ──────────────────────────────────────────────────────────────────────────
+  // Task-list checkboxes (GFM [ ] / [x])
+  // ──────────────────────────────────────────────────────────────────────────
+  describe('task-list checkboxes', () => {
+    it('renders checked item with ☑ glyph and no raw [x]', () => {
+      const out = stripAnsi(renderMarkdownToTerminal('- [x] done\n'));
+      expect(out).toContain('☑');
+      expect(out).not.toContain('[x]');
+      expect(out).not.toContain('[ ]');
+    });
+
+    it('renders unchecked item with ☐ glyph and no raw [ ]', () => {
+      const out = stripAnsi(renderMarkdownToTerminal('- [ ] todo\n'));
+      expect(out).toContain('☐');
+      expect(out).not.toContain('[ ]');
+      expect(out).not.toContain('[x]');
+    });
+
+    it('renders mixed task list with correct glyphs and no raw bracket syntax', () => {
+      const out = stripAnsi(renderMarkdownToTerminal('- [x] done\n- [ ] todo\n'));
+      expect(out).toContain('☑');
+      expect(out).toContain('☐');
+      expect(out).toContain('done');
+      expect(out).toContain('todo');
+      // No raw bracket forms anywhere in the output
+      expect(out).not.toMatch(/\[x\]/);
+      expect(out).not.toMatch(/\[ \]/);
+      // No bullet character before the glyph — task items must not emit "• [x]"
+      expect(out).not.toMatch(/•/);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
   // F2 regression: hr trailing newline
   // ──────────────────────────────────────────────────────────────────────────
   describe('hr (horizontal rule)', () => {
@@ -511,6 +543,22 @@ describe('renderMarkdownToTerminal', () => {
       // There must be a newline between the rule and the paragraph text
       expect(out).toMatch(/─+\n[\s\S]*Next paragraph/);
       expect(out).not.toMatch(/─+Next paragraph/);
+    });
+
+    it('rule width tracks the configured maxWidth', () => {
+      const w = 60;
+      const out = stripAnsi(renderMarkdownToTerminal('---\n', { maxWidth: w }));
+      const ruleLine = out.split('\n').find((l) => /─/.test(l));
+      expect(ruleLine).toBeDefined();
+      expect(ruleLine!.length).toBe(w);
+    });
+
+    it('rule width is not hardcoded to 40 — a width of 80 produces 80 dashes', () => {
+      const out = stripAnsi(renderMarkdownToTerminal('---\n', { maxWidth: 80 }));
+      const ruleLine = out.split('\n').find((l) => /─/.test(l));
+      expect(ruleLine).toBeDefined();
+      expect(ruleLine!.length).toBe(80);
+      expect(ruleLine!.length).not.toBe(40);
     });
   });
 
