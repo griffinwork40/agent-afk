@@ -76,8 +76,15 @@ const HOT_TRUNCATION_SENTINEL =
  * v2 → v3: Added a nullable `actor` column to sessions ('main' | 'subagent'
  *          execution role). ALTER ADD COLUMN with no default → existing rows
  *          read back NULL, so the migration cannot fail on stored data.
+ * v3 → v4: Added a nullable `evidence` column to facts (provenance citation
+ *          backing a codebase fact, for the AFK_MEMORY_EVIDENCE_GATE feature).
+ *          ALTER ADD COLUMN with no default → existing rows read back NULL
+ *          (= uncited), so the migration cannot fail on stored data. The
+ *          column is additive and populated/consulted only when the gate is
+ *          enabled, but the SCHEMA_VERSION guard still rejects a v4 DB from
+ *          older builds — enabling the prototype migrates the DB forward.
  */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -106,7 +113,12 @@ CREATE TABLE IF NOT EXISTS facts (
   superseded_by INTEGER REFERENCES facts(id),
   confidence REAL NOT NULL DEFAULT 1.0,
   access_count INTEGER NOT NULL DEFAULT 0,
-  last_accessed TEXT
+  last_accessed TEXT,
+  -- v4: provenance citation backing a codebase fact (file:line, commit SHA,
+  -- trace-event id). Nullable (NULL on pre-v4 rows and uncited writes).
+  -- Listed last to match the position ALTER TABLE ADD COLUMN appends it on
+  -- migrated databases, so fresh and migrated DBs share one column order.
+  evidence TEXT
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
@@ -245,6 +257,31 @@ export class MemoryStore {
         this.db.pragma(`user_version = 3`);
         debugLog('memory-store: migrated schema v2 → v3 (added sessions.actor column)');
       }
+      if (existingVersion < 4) {
+        // v3 → v4: add a NULLABLE `evidence` column to facts (provenance
+        // citation backing a codebase fact). No default → existing rows read
+        // back NULL (= uncited), so the migration cannot fail on stored data.
+        //
+        // Same concurrency-safe ALTER wrapper as the v2→v3 actor migration:
+        // SQLite has no `ADD COLUMN IF NOT EXISTS`, and this global DB is
+        // cold-opened concurrently by every AFK surface, so two new-build
+        // processes can race the ALTER and the loser throws "duplicate column
+        // name". Treat an already-present column (re-checked via table_info,
+        // not the error text) as success; re-throw if the column stayed absent.
+        const hasEvidence = (): boolean =>
+          (this.db.pragma('table_info(facts)') as Array<{ name: string }>).some(
+            (col) => col.name === 'evidence',
+          );
+        if (!hasEvidence()) {
+          try {
+            this.db.exec(`ALTER TABLE facts ADD COLUMN evidence TEXT;`);
+          } catch (err) {
+            if (!hasEvidence()) throw err;
+          }
+        }
+        this.db.pragma(`user_version = 4`);
+        debugLog('memory-store: migrated schema v3 → v4 (added facts.evidence column)');
+      }
     } else {
       // existingVersion > SCHEMA_VERSION: DB was written by a newer build.
       this.db.close();
@@ -380,8 +417,8 @@ export class MemoryStore {
       data: { ...fact, created_at: now },
     });
     const stmt = this.db.prepare(`
-      INSERT INTO facts (session_id, created_at, category, content, source_surface)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO facts (session_id, created_at, category, content, source_surface, evidence)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
     const result = stmt.run(
       fact.session_id ?? null,
@@ -389,16 +426,26 @@ export class MemoryStore {
       fact.category,
       fact.content,
       fact.source_surface,
+      fact.evidence ?? null,
     );
     return Number(result.lastInsertRowid);
   }
 
-  supersedeFact(factId: number, newContent: string, category?: string): number {
+  supersedeFact(
+    factId: number,
+    newContent: string,
+    category?: string,
+    evidence?: string | null,
+  ): number {
     const old = this.db.prepare('SELECT * FROM facts WHERE id = ?').get(factId) as Fact | undefined;
     if (!old) throw new Error(`Fact ${factId} not found`);
 
     const now = new Date().toISOString();
     const resolvedCategory = category ?? old.category;
+    // `undefined` = caller did not re-supply evidence → carry the prior
+    // citation forward. An explicit `null` clears it; an explicit string
+    // replaces it.
+    const resolvedEvidence = evidence === undefined ? old.evidence : evidence;
 
     this.appendWAL({
       type: 'fact',
@@ -409,12 +456,13 @@ export class MemoryStore {
         category: resolvedCategory,
         content: newContent,
         source_surface: old.source_surface,
+        evidence: resolvedEvidence,
       },
     });
 
     const stmt = this.db.prepare(`
-      INSERT INTO facts (session_id, created_at, category, content, source_surface, confidence)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO facts (session_id, created_at, category, content, source_surface, confidence, evidence)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
 
     let newId: number;
@@ -426,6 +474,7 @@ export class MemoryStore {
         newContent,
         old.source_surface,
         1.0,
+        resolvedEvidence,
       );
       newId = Number(result.lastInsertRowid);
     } catch (e: unknown) {
@@ -638,6 +687,9 @@ export class MemoryStore {
           created_at: f.created_at,
           source_session: f.session_id,
           confidence: f.confidence,
+          // Raw provenance; the verdict + [unverified] tag are applied by the
+          // memory-tool handler (policy layer) only when the gate is enabled.
+          evidence: f.evidence ?? null,
         });
       }
     } catch {
@@ -707,14 +759,15 @@ export class MemoryStore {
             ).get(d['content'], d['created_at'], d['session_id'] ?? '', d['category'] ?? '');
             if (!existing) {
               this.db.prepare(`
-                INSERT INTO facts (session_id, created_at, category, content, source_surface)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO facts (session_id, created_at, category, content, source_surface, evidence)
+                VALUES (?, ?, ?, ?, ?, ?)
               `).run(
                 d['session_id'] ?? null,
                 d['created_at'],
                 d['category'],
                 d['content'],
                 d['source_surface'] ?? 'cli',
+                d['evidence'] ?? null,
               );
               replayed++;
             }

@@ -310,8 +310,11 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     if (existsSync(migDir)) rmSync(migDir, { recursive: true, force: true });
   });
 
-  /** Seed a minimal pre-v3 (user_version = 2) sessions table, optionally with
-   *  the actor column already present (interrupted-migration shape). */
+  /** Seed a minimal pre-v4 database (user_version = 2): the pre-v3 sessions
+   *  table (optionally with the actor column already present — the
+   *  interrupted-migration shape) plus a pre-v4 facts table (no evidence
+   *  column). Both tables are present because opening the store runs the full
+   *  v2 → v3 → v4 chain, and the v3 → v4 step ALTERs `facts`. */
   function seedV2Db(dbPath: string, withActorColumn = false): void {
     const seed = new Database(dbPath);
     seed.exec(`
@@ -326,15 +329,29 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
         token_count INTEGER,
         cost_usd REAL${withActorColumn ? ',\n        actor TEXT' : ''}
       );
+      CREATE TABLE facts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT,
+        created_at TEXT NOT NULL,
+        category TEXT NOT NULL,
+        content TEXT NOT NULL,
+        source_surface TEXT NOT NULL DEFAULT 'cli',
+        superseded_by INTEGER,
+        confidence REAL NOT NULL DEFAULT 1.0,
+        access_count INTEGER NOT NULL DEFAULT 0,
+        last_accessed TEXT
+      );
     `);
     seed.pragma('user_version = 2');
     seed.close();
   }
 
-  it('upgrades a v2 DB to v3, adds a nullable actor column, and preserves existing rows', () => {
+  it('upgrades a v2 DB to v4, adds a nullable actor column, and preserves existing rows', () => {
     const dbPath = join(migDir, 'memory.db');
-    // Build a minimal v2 database: the pre-v3 sessions table (no actor column),
-    // stamped user_version = 2, with one pre-existing session row.
+    // Build a minimal v2 database: the pre-v3 sessions table (no actor column)
+    // plus a pre-v4 facts table (no evidence column), stamped user_version = 2,
+    // with one pre-existing session row. The facts table is required because
+    // opening the store runs the full chain and the v3 → v4 step ALTERs it.
     const seed = new Database(dbPath);
     seed.exec(`
       CREATE TABLE sessions (
@@ -348,6 +365,18 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
         token_count INTEGER,
         cost_usd REAL
       );
+      CREATE TABLE facts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT,
+        created_at TEXT NOT NULL,
+        category TEXT NOT NULL,
+        content TEXT NOT NULL,
+        source_surface TEXT NOT NULL DEFAULT 'cli',
+        superseded_by INTEGER,
+        confidence REAL NOT NULL DEFAULT 1.0,
+        access_count INTEGER NOT NULL DEFAULT 0,
+        last_accessed TEXT
+      );
     `);
     seed
       .prepare('INSERT INTO sessions (session_id, surface, started_at) VALUES (?, ?, ?)')
@@ -355,14 +384,15 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     seed.pragma('user_version = 2');
     seed.close();
 
-    // Opening the store runs the v2 → v3 migration.
+    // Opening the store runs the v2 → v3 → v4 migration chain (actor added at
+    // v3, evidence at v4). This test asserts the actor (v3) behavior.
     const migrated = new MemoryStore(migDir);
     migrated.startSession({ session_id: 'sub-sess', surface: 'telegram', actor: 'subagent' });
     migrated.startSession({ session_id: 'plain-sess', surface: 'cli' });
 
     const check = new Database(dbPath, { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(3);
+      expect(check.pragma('user_version', { simple: true })).toBe(4);
       const cols = (check.pragma('table_info(sessions)') as Array<{ name: string }>).map(
         (c) => c.name,
       );
@@ -389,13 +419,13 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     }
   });
 
-  it('stamps a fresh DB at v3 with the actor column present', () => {
+  it('stamps a fresh DB at v4 with the actor column present', () => {
     const freshStore = new MemoryStore(migDir);
     freshStore.startSession({ session_id: 's', surface: 'cli', actor: 'main' });
 
     const check = new Database(join(migDir, 'memory.db'), { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(3);
+      expect(check.pragma('user_version', { simple: true })).toBe(4);
       const row = check
         .prepare('SELECT actor FROM sessions WHERE session_id = ?')
         .get('s') as { actor: string | null };
@@ -405,7 +435,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     }
   });
 
-  it('swallows a concurrent duplicate-column ALTER and still reaches v3', () => {
+  it('swallows a concurrent duplicate-column ALTER and still reaches v4', () => {
     const dbPath = join(migDir, 'memory.db');
     seedV2Db(dbPath);
 
@@ -429,7 +459,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     const check = new Database(dbPath, { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(3);
+      expect(check.pragma('user_version', { simple: true })).toBe(4);
       const cols = (check.pragma('table_info(sessions)') as Array<{ name: string }>).map(
         (c) => c.name,
       );
@@ -468,7 +498,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     const check = new Database(dbPath, { readonly: true });
     try {
-      expect(check.pragma('user_version', { simple: true })).toBe(3);
+      expect(check.pragma('user_version', { simple: true })).toBe(4);
     } finally {
       check.close();
     }

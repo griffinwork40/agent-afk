@@ -217,6 +217,19 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_MEMORY_EVIDENCE_GATE',
+    description:
+      'Opt-in (set to 1) evidence gate for durable memory writes. When enabled, a codebase ' +
+      'fact (memory_update category "convention") stored without an `evidence` citation is ' +
+      'recalled as [unverified], and memory_search results carry a verification verdict. ' +
+      'User preferences and agent reflections are never gated. Default off — memory behaves ' +
+      'identically to legacy when unset.',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'misc',
+  },
+  {
     name: 'AFK_MODEL',
     description: 'Default model for agent turns. Accepts slot names (local, small, medium, large), legacy aliases (opus, sonnet, haiku), the fixed-id fable alias (Claude Fable 5), or full model IDs.',
     type: 'string',
@@ -1116,6 +1129,7 @@ export const env = {
   get AFK_MAX_BUDGET_USD(): string | undefined { return process.env['AFK_MAX_BUDGET_USD']; },
   get AFK_MAX_OUTPUT_TOKENS(): string | undefined { return process.env['AFK_MAX_OUTPUT_TOKENS']; },
   get AFK_MAX_TOKENS(): string | undefined { return process.env['AFK_MAX_TOKENS']; },
+  get AFK_MEMORY_EVIDENCE_GATE(): string | undefined { return process.env['AFK_MEMORY_EVIDENCE_GATE']; },
   get AFK_MODEL(): string | undefined { return process.env['AFK_MODEL']; },
   get AFK_MODEL_LARGE(): string | undefined { return process.env['AFK_MODEL_LARGE']; },
   get AFK_MODEL_LARGE_API_KEY(): string | undefined { return process.env['AFK_MODEL_LARGE_API_KEY']; },

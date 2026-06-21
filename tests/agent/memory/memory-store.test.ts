@@ -294,16 +294,17 @@ describe('Concurrent open', () => {
 });
 
 describe('Schema versioning', () => {
-  it('stamps the current schema version (3) on a fresh database', () => {
+  it('stamps the current schema version (4) on a fresh database', () => {
     // The store created in beforeEach is a fresh DB.
     // Re-open the same dir with better-sqlite3 directly to read the pragma.
-    // Bumped to v3 in Stage D (added the nullable sessions.actor column).
+    // Bumped to v3 in Stage D (nullable sessions.actor column), then to v4 by
+    // the evidence-gate feature (nullable facts.evidence column).
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const Database = require('better-sqlite3');
     const db = new Database(join(tmpMemDir, 'memory.db'));
     const version = db.pragma('user_version', { simple: true });
     db.close();
-    expect(version).toBe(3);
+    expect(version).toBe(4);
   });
 
   it('opens cleanly when user_version matches SCHEMA_VERSION', () => {
