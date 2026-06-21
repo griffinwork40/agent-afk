@@ -74,6 +74,23 @@ async function recallOne(query: string): Promise<MemorySearchResult> {
   return fact!;
 }
 
+async function supersede(
+  supersedes: number,
+  content: string,
+  evidence?: string,
+): Promise<Record<string, unknown>> {
+  const input: Record<string, unknown> = {
+    target: 'fact',
+    action: 'supersede',
+    supersedes,
+    content,
+  };
+  if (evidence !== undefined) input['evidence'] = evidence;
+  const res = await update(input, signal);
+  expect(res.isError).toBeFalsy();
+  return JSON.parse(res.content) as Record<string, unknown>;
+}
+
 describe('memory evidence gate (AFK_MEMORY_EVIDENCE_GATE=1)', () => {
   it('1. a citable codebase fact (convention) with evidence is stored and recalled as verified', async () => {
     const out = await setFact(
@@ -127,6 +144,83 @@ describe('memory evidence gate (AFK_MEMORY_EVIDENCE_GATE=1)', () => {
     expect(out['warning']).toBeUndefined();
     const fact = await recallOne('snibbledecide');
     expect(fact.verification).toBe('not-applicable');
+  });
+});
+
+describe('memory evidence gate — supersede + evidence', () => {
+  it('carries a prior citation forward and warns it may be stale (no fresh evidence)', async () => {
+    const set = await setFact('convention', 'snorgflux owns the alpha layer', 'src/alpha.ts:10');
+    expect(set['warning'], 'a cited set must not warn').toBeUndefined();
+
+    // Supersede with changed content and NO fresh evidence → the prior citation
+    // is carried forward, so recall stays 'verified' against the OLD evidence,
+    // but the agent is warned it may no longer back the changed claim.
+    const out = await supersede(set['id'] as number, 'snorgflux owns the beta layer instead');
+    expect(out['warning'], 'a carried-forward citation must warn').toBeDefined();
+    expect(out['warning'] as string).toContain('carried forward');
+
+    const fact = await recallOne('snorgflux');
+    expect(fact.verification).toBe('verified');
+    expect(fact.evidence).toBe('src/alpha.ts:10');
+    expect(fact.content).not.toContain('[unverified]');
+  });
+
+  it('replaces the citation when fresh evidence is supplied (no warning)', async () => {
+    const set = await setFact('convention', 'plimbo owns the gamma layer', 'src/old.ts:1');
+    const out = await supersede(
+      set['id'] as number,
+      'plimbo owns the gamma layer (refined)',
+      'src/new.ts:2',
+    );
+    expect(out['warning'], 'a freshly cited supersede must not warn').toBeUndefined();
+
+    const fact = await recallOne('plimbo');
+    expect(fact.verification).toBe('verified');
+    expect(fact.evidence).toBe('src/new.ts:2');
+  });
+
+  it('clears the citation on empty/whitespace evidence and recalls as [unverified]', async () => {
+    const set = await setFact('convention', 'wuzzle owns the delta layer', 'src/d.ts:1');
+    const out = await supersede(set['id'] as number, 'wuzzle owns the delta layer (unsure)', '   ');
+    expect(out['warning'], 'a cleared citation must warn').toBeDefined();
+    expect(out['warning'] as string).toContain('[unverified]');
+
+    const fact = await recallOne('wuzzle');
+    expect(fact.verification).toBe('unverified');
+    expect(fact.content.startsWith('[unverified]')).toBe(true);
+    expect(fact.evidence ?? null).toBeNull();
+  });
+
+  it('warns and recalls [unverified] when an uncited convention fact is superseded with no evidence', async () => {
+    const set = await setFact('convention', 'gribbnar owns the epsilon layer');
+    expect(set['warning'], 'the uncited set itself must warn').toBeDefined();
+
+    const out = await supersede(set['id'] as number, 'gribbnar owns the epsilon and zeta layers');
+    expect(out['warning'], 'an uncited supersede must warn').toBeDefined();
+    expect(out['warning'] as string).toContain('[unverified]');
+
+    const fact = await recallOne('gribbnar');
+    expect(fact.verification).toBe('unverified');
+    expect(fact.content.startsWith('[unverified]')).toBe(true);
+  });
+
+  it('never warns when superseding a non-codebase category (preference)', async () => {
+    const set = await setFact('preference', 'quibblepref the user prefers tabs');
+    const out = await supersede(set['id'] as number, 'quibblepref the user prefers spaces');
+    expect(out['warning'], 'preferences must never warn on supersede').toBeUndefined();
+
+    const fact = await recallOne('quibblepref');
+    expect(fact.verification).toBe('not-applicable');
+  });
+
+  it('emits no warning on supersede when the gate is off', async () => {
+    // A cited convention fact superseded with no fresh evidence WOULD warn
+    // (carried-forward) under the gate; with the gate off it must be silent.
+    const set = await setFact('convention', 'zibbloff owns the theta layer', 'src/t.ts:1');
+    delete process.env['AFK_MEMORY_EVIDENCE_GATE'];
+    const out = await supersede(set['id'] as number, 'zibbloff owns the theta layer changed');
+    expect(out['warning']).toBeUndefined();
+    expect(out['id']).toBeTypeOf('number');
   });
 });
 

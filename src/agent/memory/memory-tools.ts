@@ -159,6 +159,18 @@ const UNCITED_CODEBASE_FACT_WARNING =
   'sessions can trust it as ground truth rather than an unverified agent claim.';
 
 /**
+ * Returned on a `supersede` of a codebase fact that carries a prior citation
+ * forward unchanged (no fresh evidence supplied this call). The recall verdict
+ * stays 'verified' against the OLD evidence, which may no longer back the
+ * changed content — so the warning nudges the agent to re-cite.
+ */
+const INHERITED_CITATION_SUPERSEDE_WARNING =
+  'Superseded without fresh evidence — the prior citation is carried forward and this ' +
+  'codebase fact (category "convention") is still recalled as verified against the OLD ' +
+  'evidence, which may not back the changed content. Re-supply `evidence` if the claim ' +
+  'changed (or pass an empty string to clear it and recall as [unverified]).';
+
+/**
  * Project raw search results onto the wire shape returned to the agent.
  *
  *   - gate OFF → provenance fields (`evidence`, `verification`) are dropped, so
@@ -311,23 +323,47 @@ export function createMemoryHandlers(
             isError: true,
           };
         }
-        // supersedeFact accepts category?: string, which is compatible with FactCategory | undefined.
+        // Read the prior fact first so the gate can classify the *resolved*
+        // category/evidence for the write-time warning. supersedeFact re-reads
+        // it internally; this extra read is off the hot path (memory_update is
+        // a low-frequency tool) and returns null for a missing id — in which
+        // case supersedeFact throws the same "not found" error below.
+        const prior = store.getFact(parsed.supersedes);
         // evidence: `undefined` carries the prior citation forward; an explicit
         // string replaces it (empty/whitespace normalizes to null = cleared).
+        const freshEvidence =
+          parsed.evidence === undefined ? undefined : normalizeEvidence(parsed.evidence);
+        // supersedeFact accepts category?: string, which is compatible with FactCategory | undefined.
         const newId = store.supersedeFact(
           parsed.supersedes,
           parsed.content,
           parsed.category ?? undefined,
-          parsed.evidence === undefined ? undefined : normalizeEvidence(parsed.evidence),
+          freshEvidence,
         );
-        return {
-          content: JSON.stringify({
-            id: newId,
-            action: 'supersede',
-            target: 'fact',
-            supersedes: parsed.supersedes,
-          }),
+        const result: Record<string, unknown> = {
+          id: newId,
+          action: 'supersede',
+          target: 'fact',
+          supersedes: parsed.supersedes,
         };
+        // Evidence gate (opt-in): mirror the `set` warning on the supersede
+        // path. supersede is the recommended way to update a fact, so an
+        // uncited codebase fact must nudge here too. The warning reflects the
+        // RESOLVED state after carry-forward: a fresh citation silences it; a
+        // carried-forward citation warns it may be stale; no citation at all
+        // warns it will be recalled as [unverified].
+        if (evidenceGateEnabled()) {
+          const resolvedCategory: FactCategory | undefined = parsed.category ?? prior?.category;
+          if (resolvedCategory && requiresEvidence(resolvedCategory)) {
+            const resolvedEvidence = freshEvidence === undefined ? (prior?.evidence ?? null) : freshEvidence;
+            if (!resolvedEvidence) {
+              result['warning'] = UNCITED_CODEBASE_FACT_WARNING;
+            } else if (freshEvidence === undefined) {
+              result['warning'] = INHERITED_CITATION_SUPERSEDE_WARNING;
+            }
+          }
+        }
+        return { content: JSON.stringify(result) };
       }
 
       if (parsed.action === 'remove') {
