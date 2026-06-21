@@ -381,3 +381,110 @@ export function listCards(): CardListEntry[] {
 export function getCard(slug: string): FailureCard | undefined {
   return readCardIfExists(getFailureCardJsonPath(slug));
 }
+
+// ---------------------------------------------------------------------------
+// Regressed-card selection — read-side observability view
+//
+// Invariant: regression is a READ-SIDE signal only. None of the helpers below
+// mutate a card, change its status, or touch scan merge semantics. A regressed
+// card stays exactly as triaged on disk; we merely surface that it kept firing
+// after a human closed/deferred it. This deliberately does NOT auto-reopen,
+// because most `resolved` cards are resolved-as-expected (Ctrl+C aborts,
+// network noise) and recur by design — auto-reopen would re-spam them.
+// ---------------------------------------------------------------------------
+
+/** Projection returned for a regressed card. Derived on read; never persisted. */
+export interface RegressedCardEntry {
+  slug: string;
+  pattern: FailureCard['pattern'];
+  severity: FailureCard['severity'];
+  status: FailureCard['status'];
+  /** Union evidence count (`occurrenceCount`) at time of read. */
+  occurrenceCount: number;
+  lastSeen: string;
+  /** The most recent triage-note timestamp the recurrence is measured against. */
+  latestNoteAt: string;
+}
+
+/**
+ * Most recent triage-note timestamp on a card, or undefined when it has no
+ * notes. Notes are not guaranteed ordered on disk, so take the max rather than
+ * the last element. Pure; no I/O.
+ */
+export function latestNoteAt(card: FailureCard): string | undefined {
+  let max: string | undefined;
+  for (const note of card.notes) {
+    if (max === undefined || Date.parse(note.at) > Date.parse(max)) max = note.at;
+  }
+  return max;
+}
+
+/**
+ * A card is "regressed" when a human triaged it but it kept firing afterwards:
+ *   - status is `resolved` or `deferred`, AND
+ *   - it has at least one triage note, AND
+ *   - `lastSeen` is strictly later than the latest triage note.
+ *
+ * Pure predicate; no I/O; never mutates. Timestamps are compared as epoch
+ * millis (not lexically) so any RFC3339 offset form compares correctly; an
+ * unparseable timestamp is treated as not-regressed (conservative).
+ */
+export function isRegressed(card: FailureCard): boolean {
+  if (card.status !== 'resolved' && card.status !== 'deferred') return false;
+  const noteAt = latestNoteAt(card);
+  if (noteAt === undefined) return false;
+  const last = Date.parse(card.lastSeen);
+  const note = Date.parse(noteAt);
+  if (Number.isNaN(last) || Number.isNaN(note)) return false;
+  return last > note;
+}
+
+/**
+ * Filter + project the regressed cards from a list, most-recent recurrence
+ * first (then slug for stable ordering). Pure (no I/O) so the selection logic
+ * is unit-testable without the filesystem.
+ */
+export function selectRegressed(cards: FailureCard[]): RegressedCardEntry[] {
+  const out: RegressedCardEntry[] = [];
+  for (const card of cards) {
+    if (!isRegressed(card)) continue;
+    const latest = latestNoteAt(card);
+    // isRegressed guarantees a note exists; this guard satisfies the type
+    // checker and stays defensive without an assertion.
+    if (latest === undefined) continue;
+    out.push({
+      slug: card.slug,
+      pattern: card.pattern,
+      severity: card.severity,
+      status: card.status,
+      occurrenceCount: card.occurrenceCount,
+      lastSeen: card.lastSeen,
+      latestNoteAt: latest,
+    });
+  }
+  out.sort((a, b) => {
+    if (a.lastSeen !== b.lastSeen) return a.lastSeen < b.lastSeen ? 1 : -1;
+    return a.slug < b.slug ? -1 : 1;
+  });
+  return out;
+}
+
+/**
+ * Read every card from disk and return the regressed subset. Mirrors
+ * {@link listCards}, but reads full cards because the regression check needs
+ * `notes`, which {@link CardListEntry} omits. Missing dir → empty; corrupt
+ * cards are skipped (same policy as listCards).
+ */
+export function listRegressedCards(): RegressedCardEntry[] {
+  const dir = getFailureCardsDir();
+  if (!existsSync(dir)) return [];
+  const cards: FailureCard[] = [];
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith('.json')) continue;
+    if (name.startsWith('.')) continue;
+    const card = readCardIfExists(join(dir, name));
+    if (!card) continue;
+    cards.push(card);
+  }
+  return selectRegressed(cards);
+}
