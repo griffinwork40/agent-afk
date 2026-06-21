@@ -11,6 +11,18 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.27.3] - 2026-06-21
+
+### Fixed
+- resolve PR #229 review — ordered task glyphs + honest render tests (0aaa671)
+- render task-list checkboxes, width-aware rules, wide-char dropdown height (7c81a2a)
+
+### Changed
+- Merge pull request #229 from griffinwork40/fix/tui-markdown-rendering (502b8d4)
+- Merge branch 'main' into fix/tui-markdown-rendering (5c64928)
+- Merge pull request #236 from griffinwork40/fix/mailmap-lightjunction (1fd37c0)
+- re-attribute @LIghtJUNction's PR #96 commit via .mailmap (43f93cf)
+
 ## [4.27.2] - 2026-06-21
 
 ### Fixed
