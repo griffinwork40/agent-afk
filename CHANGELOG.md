@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.27.2] - 2026-06-21
+
+### Fixed
+- terminate query generator on interrupt during usage-limit wait (c462ebd)
+
+### Changed
+- Merge pull request #235 from griffinwork40/afk/fix-usage-limit-hang (77b7b3b)
+
 ## [4.27.1] - 2026-06-21
 
 ### Fixed
