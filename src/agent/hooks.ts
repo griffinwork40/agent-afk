@@ -82,6 +82,15 @@ export interface SessionEndContext {
    * per-session state.
    */
   parentSessionId?: string;
+  /**
+   * Absolute path to this session's witness `trace.jsonl`, when a trace writer
+   * is configured. Threaded from the writer because the trace directory is
+   * keyed by the writer's session LABEL (a random UUID on the one-shot path),
+   * which is NOT the same as {@link sessionId} — a handler cannot reconstruct
+   * it from sessionId alone. Used by the run-receipt hook to read the sealed
+   * trace after SessionEnd. Absent when tracing is disabled.
+   */
+  tracePath?: string;
 }
 
 export interface SubagentStartContext {

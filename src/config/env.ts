@@ -856,6 +856,17 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'debug',
   },
   {
+    name: 'AFK_RUN_RECEIPT_DISABLED',
+    description:
+      'Disable the post-session run receipt (state/receipts/<label>.json and .md). ' +
+      'Set to 1 to skip receipt writes; the underlying witness trace is unaffected. ' +
+      'Receipts are also implicitly off when AFK_TRACE_DISABLED=1 (no trace to summarize).',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'debug',
+  },
+  {
     name: 'DEBUG',
     description: 'Standard Node `debug`-package convention. When set to 1, enables verbose logging in several modules alongside AFK_DEBUG.',
     type: 'string',
@@ -1205,6 +1216,7 @@ export const env = {
   get AFK_DEBUG_COMPOSITOR(): string | undefined { return process.env['AFK_DEBUG_COMPOSITOR']; },
   get AFK_TRACE_DISABLED(): string | undefined { return process.env['AFK_TRACE_DISABLED']; },
   get AFK_SESSION_LEDGER_DISABLED(): string | undefined { return process.env['AFK_SESSION_LEDGER_DISABLED']; },
+  get AFK_RUN_RECEIPT_DISABLED(): string | undefined { return process.env['AFK_RUN_RECEIPT_DISABLED']; },
   get DEBUG(): string | undefined { return process.env['DEBUG']; },
   get AGENT_AFK_ASCII(): string | undefined { return process.env['AGENT_AFK_ASCII']; },
 
