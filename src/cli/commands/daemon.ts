@@ -153,6 +153,8 @@ export function buildDaemonSessionFactory(
       // Per-model credential resolver — mirrors #640 for the compose fork-path.
       resolveApiKeyForModel: getApiKeyForModel,
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
+      // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
+      ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
       systemPrompt: '',
     });
 

@@ -401,14 +401,15 @@ export class SessionToolDispatcher implements ToolDispatcher {
     }
 
     // Re-anchor the forked executors this dispatcher dispatches to (item 3
-    // above) so child `agent` / skill tool calls follow the cwd change instead
-    // of staying frozen on the launch dir — the openai-compatible provider's
-    // only re-anchor path (anthropic-direct also does this in
-    // cwdDependentsFactory on the same instances). No-op when the executors are
-    // absent (sub-agents, the eval-run probe dispatcher); `setCwd` is
-    // idempotent, so the anthropic-direct double-set is harmless.
+    // above) so child `agent` / skill / compose tool calls follow the cwd
+    // change instead of staying frozen on the launch dir — the
+    // openai-compatible provider's only re-anchor path (anthropic-direct also
+    // does this in cwdDependentsFactory on the same instances). No-op when the
+    // executors are absent (sub-agents, the eval-run probe dispatcher); `setCwd`
+    // is idempotent, so the anthropic-direct double-set is harmless.
     this.subagentExecutor?.setCwd(newCwd);
     this.skillExecutor?.setCwd(newCwd);
+    this.composeExecutor?.setCwd(newCwd);
   }
 
   private appendAuditLog(entry: {
