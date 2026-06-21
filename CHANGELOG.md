@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.26.0] - 2026-06-21
+
+### Added
+- add `cards list --regressed` observability view (de0b2d4)
+
+### Changed
+- Merge pull request #226 from griffinwork40/improve/cards-regressed-view (f0c3765)
+
 ## [4.25.0] - 2026-06-21
 
 ### Changed
