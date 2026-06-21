@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.29.0] - 2026-06-21
+
+### Added
+- opt-in "Done" verification for AFK Telegram pushes (#237) (9efb1c1)
+
+### Changed
+- Merge pull request #238 from griffinwork40/feat/telegram-verify-done (ef8d204)
+- resolve PR #238 review feedback (5fd2d60)
+
 ## [4.28.0] - 2026-06-21
 
 ### Added
