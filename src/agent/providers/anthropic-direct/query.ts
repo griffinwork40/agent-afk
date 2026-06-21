@@ -309,6 +309,15 @@ export class AnthropicDirectQuery implements ProviderQuery {
           // entered yet, so clear the slot here. `abort.clear()` is the
           // only write path to null and uses compare-and-clear so a
           // parallel scope replacing the slot is preserved.
+          //
+          // This fires only when `begin()` drained a pending abort onto the
+          // fresh controller — i.e. an `interrupt()`/`close()` that arrived
+          // BETWEEN turns (no live controller to fire on). The REPL never
+          // interrupts between turns (the ESC soft-stop handler is per-turn
+          // and `handleSigint` fires only while `turnInFlight`), so unlike the
+          // mid-turn abort handled below, terminating here is correct and
+          // expected (covered by anthropic-direct.test.ts's pendingAbort +
+          // compact-not-blocked guards).
           this.abort.clear(controller);
           return;
         }
@@ -357,6 +366,12 @@ export class AnthropicDirectQuery implements ProviderQuery {
           onUsageProgress: (usage) => { this.state.lastUsage = usage; },
         };
 
+        // Tracks whether THIS turn yielded a terminal event (`turn.completed`
+        // → 'done', or `error`). The abort handling below synthesizes a
+        // terminal event only when the turn produced none, so the consumer's
+        // `providerIterator.next()` loop is never advanced past a turn it
+        // already saw end.
+        let turnEmittedTerminal = false;
         try {
           for await (const event of this.retry.turnWithRetries(runInput, () => this.state.closed)) {
             if (this.state.closed) return;
@@ -372,10 +387,32 @@ export class AnthropicDirectQuery implements ProviderQuery {
               // generator is resumed.
               this.abort.clear(controller);
             }
+            if (event.type === 'turn.completed' || event.type === 'error') {
+              turnEmittedTerminal = true;
+            }
             yield event;
           }
         } catch (err) {
-          if (controller.signal.aborted) return;
+          // Invariant: a `close()` terminates this generator; an `interrupt()`
+          // (ESC soft-stop) must NOT — it aborts the current turn but keeps the
+          // session alive for the next message. Both abort the per-turn
+          // controller, so distinguish on `state.closed` (only `close()` sets
+          // it), NOT on `signal.aborted` (true for both). Returning on
+          // interrupt is the "can't resume after ESC" bug: it permanently ends
+          // the shared provider iterator (AgentSession reuses ONE iterator
+          // across turns), so every later `sendMessageStream` gets `{done:true}`
+          // and silently runs no turn while slash commands — which bypass the
+          // iterator — keep working.
+          if (this.state.closed) return;
+          if (controller.signal.aborted) {
+            this.abort.clear(controller);
+            // `loop.ts` yields `turn.completed` on a graceful mid-stream abort,
+            // so a terminal event is usually already delivered. Synthesize one
+            // only if the throw pre-empted it, so the consumer unwinds instead
+            // of hanging on a `next()` that never resolves.
+            if (!turnEmittedTerminal) yield this.makeInterruptedTurnEvent();
+            continue;
+          }
           const e = err instanceof Error ? err : new Error(String(err));
           yield { type: 'error', error: e };
           return;
@@ -383,20 +420,22 @@ export class AnthropicDirectQuery implements ProviderQuery {
           this.abort.clear(controller);
         }
 
-        // Invariant: a turn aborted mid-flight must terminate this generator,
-        // not loop back for another prompt. When the turn THROWS, the catch
-        // above returns on `signal.aborted`. But an interrupt that lands during
-        // the usage-limit wait makes `turnWithRetries` return CLEANLY (no throw
-        // — see retry-layer's `if (result === 'aborted') return`), so the catch
-        // never fires and we arrive here with the signal still aborted. Without
-        // this guard the loop falls through to `promptIterator.next()` and
-        // blocks forever while the consumer (`sendMessageStreamInternal`) is
-        // still awaiting a terminal event for the aborted turn — the REPL hangs:
-        // Ctrl+C can't quit, auto-resume never re-fires, and queued input never
-        // drains. Returning yields `{done:true}` to the consumer so the turn
-        // unwinds cleanly. Mirrors the catch-path guard above. (`abort.clear`
-        // in the finally nulls the slot but does NOT reset `signal.aborted`.)
-        if (controller.signal.aborted) return;
+        // A turn that exits the loop CLEANLY (no throw) while the signal is
+        // aborted is an interrupt: `loop.ts` handles a mid-stream abort by
+        // yielding `turn.completed` and returning, and an interrupt during the
+        // usage-limit auto-resume wait makes the retry layer return cleanly
+        // (retry-layer's `if (result === 'aborted') return`) with NO terminal
+        // event. In both cases the session must survive — only `close()`
+        // (state.closed) terminates the generator. Emit a terminal event if
+        // the turn produced none (the usage-limit-wait case — the hang behind
+        // commit c462ebd, which `return` fixed at the cost of bricking resume),
+        // then loop back for the next prompt. (`abort.clear` in the finally
+        // nulls the slot but does NOT reset `signal.aborted`.)
+        if (this.state.closed) return;
+        if (controller.signal.aborted) {
+          if (!turnEmittedTerminal) yield this.makeInterruptedTurnEvent();
+          continue;
+        }
 
         // Auto-compaction: fire at the natural turn boundary — after the
         // per-turn event loop exits and the abort slot is cleared — so we
@@ -475,6 +514,27 @@ export class AnthropicDirectQuery implements ProviderQuery {
 
   async interrupt(): Promise<void> {
     this.abort.requestAbort('interrupted');
+  }
+
+  /**
+   * Synthetic terminal event for an interrupted turn that yielded none of its
+   * own. The harness consumer (`AgentSession.sendMessageStreamInternal`) breaks
+   * its shared-`providerIterator.next()` loop only on a terminal output
+   * (`turn.completed` → 'done', or `error`); without one it strands on a
+   * `next()` that never resolves. `loop.ts` already yields `turn.completed` on
+   * a normal mid-stream abort, but an interrupt during the usage-limit
+   * auto-resume wait makes the retry layer return cleanly with NO terminal
+   * event — this fills that gap so the turn unwinds while the session stays
+   * alive for the next prompt. Mirrors the OpenAI-compatible provider's
+   * `finishTurn` (openai-compatible/query.ts). Minimal usage (no
+   * `totalCostUsd`) so the budget gate in `transformProviderEvent` is skipped.
+   */
+  private makeInterruptedTurnEvent(): ProviderEvent {
+    return {
+      type: 'turn.completed',
+      usage: { stopReason: 'interrupted', resultSubtype: 'interrupted', isError: false },
+      sessionId: this.initSessionId,
+    };
   }
 
   async setModel(model?: string): Promise<void> {
