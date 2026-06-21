@@ -9,10 +9,18 @@
 
 import type { AnthropicToolDef, ToolHandler } from '../tools/types.js';
 import { MemoryStore, HOT_SOFT_WARN_RATIO } from './memory-store.js';
+import {
+  evidenceGateEnabled,
+  requiresEvidence,
+  verificationStatus,
+  applyUnverifiedTag,
+  normalizeEvidence,
+} from './memory-evidence.js';
 import type {
   FactCategory,
   MemoryUpdateAction,
   MemoryUpdateTarget,
+  MemorySearchResult,
 } from './types.js';
 
 /**
@@ -86,6 +94,13 @@ export const memoryUpdateTool: AnthropicToolDef = {
         enum: ['preference', 'convention', 'decision', 'learning'],
         description: 'Required for fact target',
       },
+      evidence: {
+        type: 'string',
+        description:
+          'Optional provenance citation backing a codebase fact — a file:line, commit SHA, ' +
+          'or trace-event id. When the evidence gate is enabled, a "convention" fact stored ' +
+          'without it is recalled as [unverified]; preferences and reflections never need it.',
+      },
       supersedes: {
         type: 'number',
         description: 'Fact ID being superseded (for supersede action)',
@@ -135,6 +150,47 @@ export const memoryToolSchemas: readonly AnthropicToolDef[] = [
 
 export const MEMORY_TOOL_NAMES = memoryToolSchemas.map((t) => t.name);
 
+// ── Evidence-gate policy (opt-in: AFK_MEMORY_EVIDENCE_GATE=1) ─────────────────
+
+/** Returned on a `set`/`supersede` of an uncited codebase fact under the gate. */
+const UNCITED_CODEBASE_FACT_WARNING =
+  'Stored without evidence — this codebase fact (category "convention") will be recalled as ' +
+  '[unverified]. Supply `evidence` (a file:line, commit SHA, or trace-event id) so future ' +
+  'sessions can trust it as ground truth rather than an unverified agent claim.';
+
+/**
+ * Project raw search results onto the wire shape returned to the agent.
+ *
+ *   - gate OFF → provenance fields (`evidence`, `verification`) are dropped, so
+ *     the JSON is byte-identical to pre-gate behavior (a true no-op).
+ *   - gate ON  → each codebase fact gains a `verification` verdict and any
+ *     uncited one has its `content` prefixed with `[unverified]`. Preferences,
+ *     reflections, and procedures are passed through verdict 'not-applicable'
+ *     (no tag) so a reflection is never lent false factual authority.
+ *
+ * Pure: no I/O, no env read (the gate flag is resolved by the caller).
+ */
+function projectSearchResults(
+  results: MemorySearchResult[],
+  gateOn: boolean,
+): MemorySearchResult[] {
+  if (!gateOn) {
+    return results.map((r) => {
+      const legacy = { ...r };
+      delete legacy.evidence;
+      delete legacy.verification;
+      return legacy;
+    });
+  }
+  return results.map((r) => {
+    if (r.type !== 'fact' || !r.category) {
+      return { ...r, verification: 'not-applicable' as const };
+    }
+    const verification = verificationStatus(r.category, r.evidence);
+    return { ...r, verification, content: applyUnverifiedTag(r.content, verification) };
+  });
+}
+
 // ── Handler implementations ─────────────────────────────────────────────────
 
 /**
@@ -161,7 +217,7 @@ export function createMemoryHandlers(
         since: parsed.since,
         limit: parsed.limit ?? 10,
       });
-      return { content: JSON.stringify(results) };
+      return { content: JSON.stringify(projectSearchResults(results, evidenceGateEnabled())) };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return { content: `memory_search error: ${message}`, isError: true };
@@ -223,13 +279,23 @@ export function createMemoryHandlers(
             isError: true,
           };
         }
+        const category = parsed.category as FactCategory;
+        const evidence = normalizeEvidence(parsed.evidence);
         const id = store.storeFact({
           session_id: sessionId,
-          category: parsed.category as FactCategory,
+          category,
           content: parsed.content,
           source_surface: surface ?? 'cli',
+          evidence,
         });
-        return { content: JSON.stringify({ id, action: 'set', target: 'fact' }) };
+        const result: Record<string, unknown> = { id, action: 'set', target: 'fact' };
+        // Evidence gate (opt-in): a codebase fact stored without a citation is
+        // not rejected — it is stored and will be recalled as [unverified].
+        // Surface a warning so the agent can supply evidence next time.
+        if (evidenceGateEnabled() && requiresEvidence(category) && !evidence) {
+          result['warning'] = UNCITED_CODEBASE_FACT_WARNING;
+        }
+        return { content: JSON.stringify(result) };
       }
 
       if (parsed.action === 'supersede') {
@@ -245,11 +311,14 @@ export function createMemoryHandlers(
             isError: true,
           };
         }
-        // supersedeFact accepts category?: string, which is compatible with FactCategory | undefined
+        // supersedeFact accepts category?: string, which is compatible with FactCategory | undefined.
+        // evidence: `undefined` carries the prior citation forward; an explicit
+        // string replaces it (empty/whitespace normalizes to null = cleared).
         const newId = store.supersedeFact(
           parsed.supersedes,
           parsed.content,
           parsed.category ?? undefined,
+          parsed.evidence === undefined ? undefined : normalizeEvidence(parsed.evidence),
         );
         return {
           content: JSON.stringify({
@@ -358,6 +427,7 @@ interface MemoryUpdateInput {
   action: MemoryUpdateAction;
   content?: string;
   category?: FactCategory;
+  evidence?: string;
   supersedes?: number;
   id?: number;
 }
@@ -401,6 +471,13 @@ function parseMemoryUpdateInput(input: unknown): MemoryUpdateInput {
       );
     }
     parsed.category = obj['category'] as FactCategory;
+  }
+
+  if (obj['evidence'] !== undefined) {
+    if (typeof obj['evidence'] !== 'string') {
+      throw new Error('evidence must be a string');
+    }
+    parsed.evidence = obj['evidence'];
   }
 
   if (obj['supersedes'] !== undefined) {
