@@ -222,8 +222,31 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
           const startNum = list.ordered ? (typeof list.start === 'number' ? list.start : 1) : 1;
           for (let i = 0; i < list.items.length; i++) {
             const item = list.items[i]!;
-            const prefix = list.ordered ? `  ${startNum + i}. ` : '  • ';
-            const itemText = item.tokens ? renderTokens(item.tokens as Token[]) : item.text;
+            // Task-list items: emit the ☑/☐ glyph and drop the leading
+            // `checkbox` token so it does not also render raw "[x] ".
+            // Invariant: the `checkbox` token is always the first child of a
+            // task item — filter it out before passing tokens to renderTokens
+            // (below), and emit the glyph in the prefix instead.
+            // GFM allows task syntax on ordered items too (marked sets
+            // `item.task` for "1. [x] done"). The `isTask` branch must be
+            // reachable in BOTH the ordered and unordered cases: an ordered
+            // task keeps its number AND gains the glyph ("1. ☑ done").
+            // Checking `list.ordered` first without re-testing `isTask` dropped
+            // the glyph for ordered tasks — and because the `checkbox` token is
+            // filtered out regardless, the user got neither glyph nor "[x]".
+            const isTask = item.task === true;
+            const checkboxGlyph = item.checked ? '☑' : '☐';
+            const prefix = list.ordered
+              ? isTask
+                ? `  ${startNum + i}. ${checkboxGlyph} `
+                : `  ${startNum + i}. `
+              : isTask
+                ? `  ${checkboxGlyph} `
+                : '  • ';
+            const renderableTokens: Token[] = item.tokens
+              ? (isTask ? (item.tokens as Token[]).filter((t) => t.type !== 'checkbox') : (item.tokens as Token[]))
+              : [];
+            const itemText = renderableTokens.length > 0 ? renderTokens(renderableTokens) : item.text;
             const lines: string[] = [];
             let first = true;
             const prefixWidth = visualWidth(prefix);
@@ -272,8 +295,14 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
         }
         case 'space':
           return '\n';
-        case 'hr':
-          return palette.dim('─'.repeat(40)) + '\n';
+        case 'hr': {
+          // Use the configured maxTableWidth so the rule tracks the wrap width
+          // instead of overflowing or falling short — it is already the
+          // compositor's row budget, so no separate capping is needed. Fall
+          // back to 40 when no width is set (e.g. direct callers that omit opts).
+          const hrWidth = maxTableWidth ?? 40;
+          return palette.dim('─'.repeat(hrWidth)) + '\n';
+        }
         case 'blockquote': {
           const bq = token as Tokens.Blockquote;
           const inner = bq.tokens ? renderTokens(bq.tokens as Token[]) : bq.text;

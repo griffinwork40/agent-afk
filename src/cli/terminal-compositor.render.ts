@@ -166,7 +166,10 @@ export function renderDropdownRows(self: RenderHost): string[] {
     if (!candidate) continue;
     const rowStr = formatDropdownRow(candidate, idx === ac.selectedIndex, maxWidth, ac.trigger?.kind);
     // Count soft-wraps so the frame height stays accurate.
-    const rowWidth = stripAnsi(rowStr).length;
+    // Use displayWidth (not .length) so CJK/emoji candidate rows measure
+    // display columns, matching the `cols` variable (also display columns).
+    // UTF-16 .length under-counts wide chars and produces ghost/clip artifacts.
+    const rowWidth = displayWidth(stripAnsi(rowStr));
     const softWraps = Math.max(0, Math.ceil(rowWidth / cols) - 1);
     rows.push(rowStr);
     // Push blank placeholders so log-update's line count stays correct
