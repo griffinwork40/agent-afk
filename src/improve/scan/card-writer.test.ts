@@ -22,12 +22,17 @@ import { tmpdir } from 'os';
 import type { DetectorResult, FailureCard } from '../schemas.js';
 import {
   getCard,
+  isRegressed,
+  latestNoteAt,
   listCards,
+  listRegressedCards,
   mergeCard,
   readCardIfExists,
   renderMarkdown,
+  selectRegressed,
   writeCard,
 } from './card-writer.js';
+import { triageCard } from '../triage.js';
 import { getFailureCardJsonPath, getFailureCardsIndexPath } from '../paths.js';
 
 // ---------------------------------------------------------------------------
@@ -289,5 +294,257 @@ describe('renderMarkdown', () => {
     const md = renderMarkdown(card);
     expect(md).toContain('confirmed');
     expect(md).not.toContain('Phase 1A does not write notes');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regressed-card selection (pure)
+// ---------------------------------------------------------------------------
+
+function makeCard(overrides: Partial<FailureCard> = {}): FailureCard {
+  return {
+    schemaVersion: 1,
+    slug: 'tool-failure-memory-search',
+    title: 'memory_search failing repeatedly',
+    pattern: 'repeated-tool-use',
+    severity: 'medium',
+    status: 'resolved',
+    firstSeen: '2026-05-01T10:00:00.000Z',
+    lastSeen: '2026-06-10T10:00:00.000Z',
+    occurrenceCount: 5,
+    evidence: [
+      {
+        sessionId: 'sess-A',
+        tracePath: 'state/witness/sess-A/trace.jsonl',
+        eventIndices: [1],
+        excerpt: '{"kind":"tool_call"}',
+      },
+    ],
+    detail: { detector: 'test' },
+    notes: [{ at: '2026-06-01T10:00:00.000Z', text: 'resolved as expected' }],
+    ...overrides,
+  };
+}
+
+describe('latestNoteAt (pure)', () => {
+  it('returns undefined for a card with no notes', () => {
+    expect(latestNoteAt(makeCard({ notes: [] }))).toBeUndefined();
+  });
+
+  it('returns the only note timestamp', () => {
+    expect(latestNoteAt(makeCard({ notes: [{ at: '2026-06-01T10:00:00.000Z', text: 'x' }] }))).toBe(
+      '2026-06-01T10:00:00.000Z',
+    );
+  });
+
+  it('returns the MAX timestamp regardless of on-disk note order', () => {
+    const card = makeCard({
+      notes: [
+        { at: '2026-06-05T10:00:00.000Z', text: 'later' },
+        { at: '2026-06-01T10:00:00.000Z', text: 'earlier' },
+        { at: '2026-06-03T10:00:00.000Z', text: 'middle' },
+      ],
+    });
+    expect(latestNoteAt(card)).toBe('2026-06-05T10:00:00.000Z');
+  });
+});
+
+describe('isRegressed (pure)', () => {
+  it('is true when resolved + note + lastSeen strictly after latest note', () => {
+    expect(
+      isRegressed(
+        makeCard({
+          status: 'resolved',
+          notes: [{ at: '2026-06-01T10:00:00.000Z', text: 'fixed' }],
+          lastSeen: '2026-06-10T10:00:00.000Z',
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it('is true for a deferred card that fired again', () => {
+    expect(
+      isRegressed(
+        makeCard({
+          status: 'deferred',
+          notes: [{ at: '2026-06-01T10:00:00.000Z', text: 'later' }],
+          lastSeen: '2026-06-10T10:00:00.000Z',
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it('is false for an open card even if it fired after a note (status gate)', () => {
+    expect(
+      isRegressed(
+        makeCard({
+          status: 'open',
+          notes: [{ at: '2026-06-01T10:00:00.000Z', text: 'n' }],
+          lastSeen: '2026-06-10T10:00:00.000Z',
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('is false for a resolved card with no triage notes (note gate)', () => {
+    expect(isRegressed(makeCard({ status: 'resolved', notes: [] }))).toBe(false);
+  });
+
+  it('is false when lastSeen equals the latest note (must be STRICTLY later)', () => {
+    expect(
+      isRegressed(
+        makeCard({
+          notes: [{ at: '2026-06-10T10:00:00.000Z', text: 'n' }],
+          lastSeen: '2026-06-10T10:00:00.000Z',
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('is false when lastSeen predates the note (fixed and quiet)', () => {
+    expect(
+      isRegressed(
+        makeCard({
+          notes: [{ at: '2026-06-10T10:00:00.000Z', text: 'n' }],
+          lastSeen: '2026-06-01T10:00:00.000Z',
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('measures against the LATEST note, not an earlier one', () => {
+    // lastSeen sits after the first note but before the most recent note → not regressed.
+    expect(
+      isRegressed(
+        makeCard({
+          notes: [
+            { at: '2026-06-01T10:00:00.000Z', text: 'first' },
+            { at: '2026-06-20T10:00:00.000Z', text: 'second' },
+          ],
+          lastSeen: '2026-06-10T10:00:00.000Z',
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('ignores an unparseable lastSeen (conservative not-regressed)', () => {
+    expect(
+      isRegressed(
+        makeCard({
+          notes: [{ at: '2026-06-01T10:00:00.000Z', text: 'n' }],
+          lastSeen: 'not-a-date',
+        }),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('selectRegressed (pure)', () => {
+  it('returns [] for an empty input', () => {
+    expect(selectRegressed([])).toEqual([]);
+  });
+
+  it('keeps only regressed cards and projects the expected fields', () => {
+    const regressed = makeCard({
+      slug: 'regressed-one',
+      status: 'resolved',
+      severity: 'high',
+      occurrenceCount: 9,
+      notes: [{ at: '2026-06-01T10:00:00.000Z', text: 'fixed' }],
+      lastSeen: '2026-06-10T10:00:00.000Z',
+    });
+    const quiet = makeCard({
+      slug: 'quiet-resolved',
+      notes: [{ at: '2026-06-10T10:00:00.000Z', text: 'fixed' }],
+      lastSeen: '2026-06-01T10:00:00.000Z',
+    });
+    const open = makeCard({ slug: 'still-open', status: 'open', notes: [] });
+
+    const out = selectRegressed([regressed, quiet, open]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toEqual({
+      slug: 'regressed-one',
+      pattern: 'repeated-tool-use',
+      severity: 'high',
+      status: 'resolved',
+      occurrenceCount: 9,
+      lastSeen: '2026-06-10T10:00:00.000Z',
+      latestNoteAt: '2026-06-01T10:00:00.000Z',
+    });
+  });
+
+  it('sorts by lastSeen descending, then slug', () => {
+    const a = makeCard({
+      slug: 'aaa',
+      notes: [{ at: '2026-06-01T10:00:00.000Z', text: 'n' }],
+      lastSeen: '2026-06-09T10:00:00.000Z',
+    });
+    const b = makeCard({
+      slug: 'bbb',
+      notes: [{ at: '2026-06-01T10:00:00.000Z', text: 'n' }],
+      lastSeen: '2026-06-12T10:00:00.000Z',
+    });
+    const c = makeCard({
+      slug: 'ccc',
+      notes: [{ at: '2026-06-01T10:00:00.000Z', text: 'n' }],
+      lastSeen: '2026-06-12T10:00:00.000Z',
+    });
+    const out = selectRegressed([a, b, c]).map((e) => e.slug);
+    // b and c share lastSeen → tie broken by slug ascending; a is older → last.
+    expect(out).toEqual(['bbb', 'ccc', 'aaa']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listRegressedCards (round-trip): proves the real scan-merge + triage path
+// feeds the regression view WITHOUT changing merge semantics.
+// ---------------------------------------------------------------------------
+
+describe('listRegressedCards (round-trip)', () => {
+  it('returns empty when no cards exist', () => {
+    expect(listRegressedCards()).toEqual([]);
+  });
+
+  it('flags a card that re-fired after being resolved, but not a quiet one', () => {
+    // Card 1: detected, resolved with a note, then detected AGAIN later → regressed.
+    writeCard(makeDetection({ slug: 'repeated-tool-grep-aaaaaaaaaaaa', observedAt: '2026-05-20T10:00:00.000Z' }));
+    triageCard('repeated-tool-grep-aaaaaaaaaaaa', {
+      status: 'resolved',
+      note: 'fixed in commit X',
+      now: () => new Date('2026-05-21T10:00:00.000Z'),
+    });
+    // Re-detection with a NEW session + later observedAt advances lastSeen past the note.
+    writeCard(
+      makeDetection({
+        slug: 'repeated-tool-grep-aaaaaaaaaaaa',
+        observedAt: '2026-05-25T10:00:00.000Z',
+        evidence: [
+          {
+            sessionId: 'sess-Z',
+            tracePath: 'state/witness/sess-Z/trace.jsonl',
+            eventIndices: [3, 5, 7, 9],
+            excerpt: 'recurred',
+          },
+        ],
+      }),
+    );
+
+    // Card 2: detected, resolved with a note, and never fired again → quiet.
+    writeCard(makeDetection({ slug: 'repeated-tool-grep-bbbbbbbbbbbb', observedAt: '2026-05-20T10:00:00.000Z' }));
+    triageCard('repeated-tool-grep-bbbbbbbbbbbb', {
+      status: 'resolved',
+      note: 'expected behavior',
+      now: () => new Date('2026-05-26T10:00:00.000Z'),
+    });
+
+    // Card 1's status must still be 'resolved' (merge preserves it — not auto-reopened).
+    expect(getCard('repeated-tool-grep-aaaaaaaaaaaa')?.status).toBe('resolved');
+
+    const regressed = listRegressedCards();
+    expect(regressed).toHaveLength(1);
+    expect(regressed[0]?.slug).toBe('repeated-tool-grep-aaaaaaaaaaaa');
+    expect(regressed[0]?.status).toBe('resolved');
+    expect(regressed[0]?.latestNoteAt).toBe('2026-05-21T10:00:00.000Z');
+    expect(regressed[0]?.lastSeen).toBe('2026-05-25T10:00:00.000Z');
   });
 });

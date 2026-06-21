@@ -9,8 +9,10 @@
  *       Scan witness traces, run every registered detector, print a
  *       summary. Default is DRY-RUN; pass `--write` to persist cards.
  *
- *   afk improve cards list [--pattern] [--severity] [--status] [--json]
- *       Tabular listing of all cards on disk.
+ *   afk improve cards list [--pattern] [--severity] [--status] [--regressed] [--json]
+ *       Tabular listing of all cards on disk. `--regressed` narrows to
+ *       resolved/deferred cards that fired again after their latest triage
+ *       note (a read-side observability view; never changes status).
  *
  *   afk improve cards show <slug> [--json]
  *       Print one card.
@@ -81,7 +83,8 @@ import {
   disabledByDefaultDetectorNames,
   type DetectorOptions,
 } from '../../improve/scan/detectors/index.js';
-import { writeCard, listCards, getCard } from '../../improve/scan/card-writer.js';
+import { writeCard, listCards, getCard, listRegressedCards } from '../../improve/scan/card-writer.js';
+import type { RegressedCardEntry } from '../../improve/scan/card-writer.js';
 import { renderMarkdown } from '../../improve/scan/card-writer.js';
 import { triageCard, TriageError } from '../../improve/triage.js';
 import type { CardStatus } from '../../improve/schemas.js';
@@ -320,6 +323,55 @@ function registerScanSubcommand(improve: Command): void {
 // cards (group)
 // ---------------------------------------------------------------------------
 
+/**
+ * Render the `cards list --regressed` view: resolved/deferred cards that kept
+ * firing after their latest triage note. Read-only — surfaces an observability
+ * signal, never changes status. Composes with --pattern/--severity/--status.
+ */
+function renderRegressedList(opts: {
+  pattern?: string;
+  severity?: string;
+  status?: string;
+  json: boolean;
+}): void {
+  let rows: RegressedCardEntry[] = listRegressedCards();
+  if (opts.pattern) rows = rows.filter((e) => e.pattern === opts.pattern);
+  if (opts.severity) rows = rows.filter((e) => e.severity === opts.severity);
+  if (opts.status) rows = rows.filter((e) => e.status === opts.status);
+
+  if (opts.json) {
+    console.log(JSON.stringify(rows, null, 2));
+    return;
+  }
+
+  if (rows.length === 0) {
+    console.log(
+      'No regressed cards found (no resolved/deferred card has fired since its latest triage note).',
+    );
+    return;
+  }
+
+  const header =
+    'SLUG                                              | PATTERN              | SEV    | STATUS    | N    | LAST SEEN                | LATEST NOTE';
+  const sep = '-'.repeat(header.length);
+  console.log(`${rows.length} regressed card(s): triaged, then fired again afterwards.`);
+  console.log(header);
+  console.log(sep);
+  for (const e of rows) {
+    console.log(
+      [
+        e.slug.padEnd(50).slice(0, 50),
+        e.pattern.padEnd(20),
+        e.severity.padEnd(6),
+        e.status.padEnd(9),
+        String(e.occurrenceCount).padEnd(4),
+        e.lastSeen.padEnd(24),
+        e.latestNoteAt,
+      ].join(' | '),
+    );
+  }
+}
+
 function registerCardsSubcommand(improve: Command): void {
   const cards = improve
     .command('cards')
@@ -331,15 +383,26 @@ function registerCardsSubcommand(improve: Command): void {
     .option('--pattern <name>', 'Filter by pattern name')
     .option('--severity <level>', 'Filter by severity: low | medium | high')
     .option('--status <state>', 'Filter by status: open | deferred | resolved')
+    .option(
+      '--regressed',
+      'Only show resolved/deferred cards that fired again after their latest triage note',
+      false,
+    )
     .option('--json', 'Emit JSON instead of a table', false)
     .action(
       (opts: {
         pattern?: string;
         severity?: string;
         status?: string;
+        regressed: boolean;
         json: boolean;
       }) => {
         try {
+          if (opts.regressed) {
+            renderRegressedList(opts);
+            return;
+          }
+
           let entries = listCards();
           if (opts.pattern) entries = entries.filter((e) => e.pattern === opts.pattern);
           if (opts.severity) entries = entries.filter((e) => e.severity === opts.severity);
