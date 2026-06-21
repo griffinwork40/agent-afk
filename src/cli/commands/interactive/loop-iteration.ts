@@ -13,7 +13,7 @@ import { renderDebugBanner } from '../../debug-banner.js';
 import { isDebugEnabled, debugLog } from '../../../utils/debug.js';
 import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
-import { togglePlanMode } from '../../plan-mode-toggle.js';
+import { cyclePermissionMode } from '../../permission-mode-cycle.js';
 import {
   autoRegisterPluginPassthroughs,
   getPluginShadowingNoticeLines,
@@ -204,11 +204,12 @@ export async function runInputLoop(
           promptFn: () => buildPrompt(ctx.stats.model, ctx.stats.permissionMode),
           onSigint: sigintHandler,
           onShiftTab: () => {
-            // Shift+Tab is the keyboard speed lane: a raw plan-mode flip with
-            // no seeded turn. It exits plan mode WITHOUT saving or implementing
-            // the plan — the manual-takeover escape hatch. (`/plan off`, by
-            // contrast, flips and then seeds a save-and-implement turn.)
-            togglePlanMode(ctx.slashCtx).catch(() => {});
+            // Shift+Tab is the keyboard speed lane: it advances the permission-
+            // mode ring default → plan → bypass → default (AFK is excluded —
+            // it stays on /afk; if already in AFK, Shift+Tab exits it to
+            // default). No seeded turn. (`/plan off`, by contrast, exits plan
+            // and seeds a save-and-implement turn.)
+            cyclePermissionMode(ctx.slashCtx).catch(() => {});
             ctx.statusLine.rearm();
           },
         });

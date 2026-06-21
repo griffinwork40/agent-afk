@@ -61,8 +61,8 @@ vi.mock('./verdict-ledger.js', () => ({
 }));
 vi.mock('../../debug-banner.js', () => ({ renderDebugBanner: () => '' }));
 vi.mock('../../../utils/debug.js', () => ({ isDebugEnabled: () => false }));
-vi.mock('../../plan-mode-toggle.js', () => ({
-  togglePlanMode: vi.fn(async () => {}),
+vi.mock('../../permission-mode-cycle.js', () => ({
+  cyclePermissionMode: vi.fn(async () => {}),
 }));
 
 // Fake TerminalCompositor for the completionWriter idle-wiring test.
@@ -518,5 +518,48 @@ describe('runReplLoop — AFK_SUGGEST_GHOST: ghost-text master toggle', () => {
     const armOpts2 = await captureArmOpts('1');
     expect(armOpts2.suggest).toBeDefined();
     expect(armOpts2.suggest!.getContext().llmEnabled()).toBe(false);
+  });
+});
+
+/**
+ * Regression test — Shift+Tab routes to the permission-mode cycle (PR #225).
+ *
+ * `setupSurface` hands the persistent compositor an `onShiftTab` closure that
+ * must call `cyclePermissionMode(ctx.slashCtx)` — the default → plan → bypass
+ * ring — NOT the historical `togglePlanMode`. The unit suite covers the cycle
+ * itself; this test covers the WIRING end-to-end by firing the real closure
+ * captured off `armCompositor`. Before PR #225 the keypress→handler wiring had
+ * no test at all (the fake input surface stored `onShiftTab` but never invoked
+ * it), so a silent repoint regression would have gone unnoticed.
+ */
+describe('runReplLoop — Shift+Tab wired to cyclePermissionMode (persistent compositor)', () => {
+  it('the armCompositor onShiftTab closure invokes cyclePermissionMode(ctx.slashCtx) and rearms the status line', async () => {
+    const cycleMod = await import('../../permission-mode-cycle.js');
+    const cycleSpy = vi.mocked(cycleMod.cyclePermissionMode);
+    cycleSpy.mockClear();
+
+    const ctx = makeMinimalCtx(new BackgroundAgentRegistry({}));
+    const turnState: TurnState = {
+      turnInFlight: false,
+      lastSigintAt: 0,
+      activeCompositor: null,
+    } as TurnState;
+
+    await runReplLoop(ctx, makeTranscript() as never, turnState, vi.fn());
+
+    // The closure is installed during bootstrap (armCompositor) but never fired
+    // by the loop itself — so the cycle has NOT run yet.
+    expect(cycleSpy).not.toHaveBeenCalled();
+
+    const armOpts = fakeCompositorState.lastArmOpts as { onShiftTab?: () => void };
+    expect(typeof armOpts.onShiftTab).toBe('function');
+
+    // Fire the captured handler — this exercises the REAL surface-setup.ts
+    // closure, not a re-implementation.
+    armOpts.onShiftTab!();
+
+    expect(cycleSpy).toHaveBeenCalledTimes(1);
+    expect(cycleSpy).toHaveBeenCalledWith(ctx.slashCtx);
+    expect(ctx.statusLine.rearm).toHaveBeenCalled();
   });
 });

@@ -61,6 +61,7 @@ export function buildPrompt(model: string, mode: PermissionMode): string {
   const marker =
     mode === 'plan' ? palette.warning(' ● plan') :
     mode === 'autonomous' ? palette.info(' ◐ AFK') :
+    mode === 'bypassPermissions' ? palette.bypass(' ⚡ bypass') :
     '';
   return base + marker + palette.dim('  › ');
 }

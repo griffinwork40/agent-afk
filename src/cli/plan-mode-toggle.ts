@@ -1,17 +1,16 @@
 /**
  * Shared toggle helper for plan mode.
  *
- * `togglePlanMode` is used by the /plan slash command and the Shift+Tab
- * keybinding in the REPL input loop. Both paths emit identical copy and
- * update the same stats/status-line plumbing. It flips the session permission
- * mode (`'plan'` <-> `'default'`) and mirrors the result onto
- * `stats.permissionMode` — the value the REPL prompt and status line read.
+ * `togglePlanMode` is used by the `/plan` slash command. (Shift+Tab no longer
+ * calls it directly — it routes through `cyclePermissionMode` in
+ * `permission-mode-cycle.ts`, which advances the ring default → plan → bypass.)
+ * It flips the session permission mode (`'plan'` <-> `'default'`) and mirrors the
+ * result onto `stats.permissionMode` — the value the REPL prompt and status
+ * line read.
  *
- * Exit semantics differ by entry point and live in the callers, not here:
- *   - `/plan off` (slash command) flips to default, then seeds a turn that
- *     saves the plan to a file and implements it (see `slash/commands/plan.ts`).
- *   - Shift+Tab calls this helper raw — a bare flip with no seeded turn, the
- *     "exit without implementing" escape hatch.
+ * Exit semantics live in the caller, not here: `/plan off` flips to default,
+ * then seeds a turn that saves the plan to a file and implements it (see
+ * `slash/commands/plan.ts`).
  *
  * If `setPermissionMode` rejects (e.g. the provider's query handle is closing
  * or already torn down), `stats.permissionMode` is left unchanged and the
@@ -37,7 +36,7 @@ export async function togglePlanMode(
     if (next) {
       const tip = hasShownFirstUseTip
         ? ''
-        : palette.dim(' /plan off saves the plan + implements; Shift+Tab just exits.');
+        : palette.dim(' /plan off saves the plan + implements; Shift+Tab cycles to the next mode.');
       if (!hasShownFirstUseTip) hasShownFirstUseTip = true;
       ctx.out.success(
         palette.warning('● plan mode ON') +
