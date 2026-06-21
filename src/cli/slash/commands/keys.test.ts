@@ -55,6 +55,7 @@ describe('/keys slash command', () => {
     expect(body).toContain('Editing');
     expect(body).toContain('History');
     expect(body).toContain('Multi-line');
+    expect(body).toContain('Attach');
     expect(body).toContain('Misc');
   });
 
@@ -69,6 +70,15 @@ describe('/keys slash command', () => {
     expect(body).toContain('ctrl+l');
     expect(body).toContain('alt+b');
     expect(body).toContain('alt+f');
+  });
+
+  it('documents @ file attachment, ctrl+v paste, and ctrl+x remove', async () => {
+    const { ctx, lines } = makeCtx();
+    await keysCmd.handler(ctx, '');
+    const body = lines.join('\n');
+    expect(body).toContain('@<path>');
+    expect(body).toContain('ctrl+v');
+    expect(body).toContain('ctrl+x');
   });
 
   it('is registered in the global slash registry', () => {

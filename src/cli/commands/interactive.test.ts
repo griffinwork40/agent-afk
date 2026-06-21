@@ -556,13 +556,19 @@ describe('interactive command - streaming logic', () => {
       expect(hint).toContain('/exit to quit');
     });
 
+    it('surfaces discoverable features: @ file attach and Shift+Tab mode switch', () => {
+      const hint = startupHintLine();
+      expect(hint).toContain('@ for files');
+      expect(hint).toContain('Shift+Tab');
+    });
+
     it('omits /resume — useless to a new user, redundant when resuming', () => {
       expect(startupHintLine()).not.toContain('/resume');
     });
 
-    it('stays compact (≤ 4 dot-separated items) so the busiest startup line is scannable', () => {
+    it('stays compact (≤ 6 dot-separated items) so the busiest startup line is scannable', () => {
       const items = startupHintLine().split(' · ');
-      expect(items.length).toBeLessThanOrEqual(4);
+      expect(items.length).toBeLessThanOrEqual(6);
     });
   });
 
