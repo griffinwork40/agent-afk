@@ -8,3 +8,10 @@
 # produced a phantom "noreply" contributor and dropped the real author. Re-attribute it to the
 # actual author. (The afk-port skill was fixed to preserve the source PR author going forward.)
 Griffin Long <griffinwork40@gmail.com> afk-port <noreply@users.noreply.github.com>
+#
+# PR #96 (commit 4bc3b560) was authored by @LIghtJUNction but recorded with a malformed GitHub
+# noreply email whose numeric prefix (1005396112984780862) is not a valid GitHub user ID, so
+# GitHub could not link the commit and surfaced an "Anonymous" contributor instead of crediting
+# the real account (@LIghtJUNction, id 106986785). Map it to their canonical noreply address so
+# the contributor graph links the commit to the account.
+LIghtJUNction <106986785+LIghtJUNction@users.noreply.github.com> <1005396112984780862+LIghtJUNction@users.noreply.github.com>
