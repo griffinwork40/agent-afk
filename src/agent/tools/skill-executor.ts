@@ -170,6 +170,29 @@ interface SkillInput {
  * `truncate` (subagent-executor.ts:158) — kept local so each emitter owns
  * its own bounds and the telemetry helper stays schema-only.
  */
+// Invariant: "gate" skills fire as routing-hint disciplines and are frequently
+// applied INLINE — the model follows the hint without dispatching the skill
+// tool. Tagging dispatched gate invocations gives partial gate-firing
+// visibility; fully inline applications stay uncountable here without model
+// self-report. This roster is the semantic gate category — keep it in sync with
+// the routing-hint gates in the system prompt's skill-routing section.
+const GATE_SKILLS = new Set<string>([
+  'ask-gate',
+  'fanout-pace',
+  'right-size-delegation',
+  'premise-gate',
+  'intent-lock',
+  'long-bash-gate',
+  'exploration-gate',
+  'irreversible-action-gate',
+  'safe-destruct',
+  'plan-probe',
+]);
+
+function isGateSkill(name: string): boolean {
+  return GATE_SKILLS.has(name);
+}
+
 const MAX_TELEMETRY_ERROR_CHARS = 240;
 
 function truncateTelemetryString(s: string, max = MAX_TELEMETRY_ERROR_CHARS): string {
@@ -396,6 +419,7 @@ export class SkillExecutor {
       requested_name: skill.name,
       parent_session_id: this.ctx.parentSession.sessionId,
       depth,
+      ...(isGateSkill(skill.name) ? { is_gate: true } : {}),
       ...(skill.model !== undefined ? { model: skill.model } : {}),
     }).catch(() => {});
 
@@ -833,6 +857,7 @@ export class SkillExecutor {
       parent_session_id: this.ctx.parentSession.sessionId,
       depth,
       mode: 'load',
+      ...(isGateSkill(name) ? { is_gate: true } : {}),
       ...(model !== undefined ? { model } : {}),
     };
     void appendRoutingDecision({ event: 'skill.dispatched', ...base }).catch(() => {});
