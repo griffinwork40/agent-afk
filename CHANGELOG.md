@@ -11,8 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.25.0] - 2026-06-21
+
 ### Changed
 - Shift+Tab now cycles permission modes (default → plan → bypass) instead of toggling plan mode on/off; AFK (autonomous) stays on `/afk` and, if active, Shift+Tab exits it cleanly to default
+
+### Added
+- Shift+Tab cycles permission modes (default → plan → bypass) (0b3e019)
+
+### Changed
+- Merge pull request #225 from griffinwork40/afk/20260620-194641-1e7273 (b98d443)
+- strengthen Shift+Tab permission-cycle coverage (PR #225 review) (ef8fefc)
 
 ## [4.24.0] - 2026-06-20
 
