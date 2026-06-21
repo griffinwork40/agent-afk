@@ -96,6 +96,7 @@ describe('cyclePermissionMode', () => {
 
     expect(sess.setPermissionMode).toHaveBeenCalledWith('bypassPermissions');
     expect(stats.permissionMode).toBe('bypassPermissions');
+    expect(ctx.ui.repaintStatusLine).toHaveBeenCalled();
     expect(lines.join('\n').toLowerCase()).toContain('bypass on');
   });
 
@@ -107,7 +108,16 @@ describe('cyclePermissionMode', () => {
 
     expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
     expect(stats.permissionMode).toBe('default');
-    expect(lines.join('\n').toLowerCase()).toContain('default');
+    expect(ctx.ui.repaintStatusLine).toHaveBeenCalled();
+    // Wrapping out of bypass is a pure ring step — it must NOT touch the AFK
+    // teardown helper (that path is reserved for `autonomous`).
+    expect(toggleAfkMode).not.toHaveBeenCalled();
+    // Pin the distinctive default-landing copy ("… approval prompts restored."),
+    // not merely the substring "default" (which also appears in the marker glyph
+    // and would match almost any output).
+    const out = lines.join('\n').toLowerCase();
+    expect(out).toContain('default');
+    expect(out).toContain('restored');
   });
 
   it('autonomous (AFK) → exits via toggleAfkMode(ctx, false), never a raw setPermissionMode', async () => {
