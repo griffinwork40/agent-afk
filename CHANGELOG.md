@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.28.0] - 2026-06-21
+
+### Added
+- warn on supersede of uncited/stale-cited codebase facts (065c3ea)
+- evidence-gate durable memory writes behind AFK_MEMORY_EVIDENCE_GATE (a942ef4)
+
+### Changed
+- Merge pull request #240 from griffinwork40/feat/memory-evidence-gate (250d38e)
+- bump parallel tests/ schema assertion to v4 (4c9403b)
+
 ## [4.27.3] - 2026-06-21
 
 ### Fixed
