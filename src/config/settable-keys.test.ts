@@ -88,6 +88,7 @@ describe('classifyConfigKey / specs', () => {
     expect(classifyConfigKey('temperature')).toBe('agent');
     expect(classifyConfigKey('telegram.notify.mode')).toBe('human'); // notification-redirect vector
     expect(classifyConfigKey('telegram.notify.targets')).toBe('human');
+    expect(classifyConfigKey('telegram.verifyDone')).toBe('human'); // self-honesty gate — agent must not disable its own verification
     expect(classifyConfigKey('updatePolicy')).toBe('human'); // auto self-update is scope-widening
     expect(classifyConfigKey('systemPrompt')).toBe('human');
     expect(classifyConfigKey('enableShellHooks')).toBe('human'); // trust gate — agent must not flip it

@@ -563,6 +563,55 @@ describe('Config Loader', () => {
       expect(resolveModelInput('fast')).toBe('o4-mini');
     });
   });
+
+  describe('telegram.verifyDone (afk.config.json parsing)', () => {
+    const mockedExistsSync = () => vi.mocked(fs.existsSync);
+    const mockedReadFileSync = () => vi.mocked(fs.readFileSync);
+    const cwdConfigJson = join(process.cwd(), 'afk.config.json');
+
+    function mockConfig(json: unknown): void {
+      mockedExistsSync().mockImplementation((p) => {
+        const s = String(p);
+        if (s === cwdConfigJson) return true;
+        if (s.endsWith('AFK.md') || s.endsWith('afk.config.json')) return false;
+        return realFsModule.__realExistsSync(p as fs.PathLike);
+      });
+      mockedReadFileSync().mockImplementation((p, ...args) => {
+        if (String(p) === cwdConfigJson) return JSON.stringify(json);
+        return (realFsModule.__realReadFileSync as Function)(p, ...args);
+      });
+    }
+
+    beforeEach(() => {
+      _resetConfigCache();
+    });
+
+    afterEach(() => {
+      _resetConfigCache();
+      mockedExistsSync().mockImplementation(realFsModule.__realExistsSync);
+      mockedReadFileSync().mockImplementation(realFsModule.__realReadFileSync);
+    });
+
+    it('parses telegram.verifyDone: true', () => {
+      mockConfig({ telegram: { verifyDone: true } });
+      expect(loadConfig().telegram?.verifyDone).toBe(true);
+    });
+
+    it('parses telegram.verifyDone: false', () => {
+      mockConfig({ telegram: { verifyDone: false } });
+      expect(loadConfig().telegram?.verifyDone).toBe(false);
+    });
+
+    it('defaults to undefined (off) when verifyDone is absent', () => {
+      mockConfig({ telegram: { notify: { mode: 'primary' } } });
+      expect(loadConfig().telegram?.verifyDone).toBeUndefined();
+    });
+
+    it('ignores a non-boolean verifyDone (defensive parse → undefined)', () => {
+      mockConfig({ telegram: { verifyDone: 'yes' } });
+      expect(loadConfig().telegram?.verifyDone).toBeUndefined();
+    });
+  });
 });
 
 describe('resolveSuggestGhost (pure precedence function)', () => {

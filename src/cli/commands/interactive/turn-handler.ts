@@ -25,7 +25,8 @@ import { ringBellIfEnabled } from '../../_lib/capture-mode.js';
 import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import { parseTerminalState, type TerminalState } from './terminal-state.js';
 import { renderVerdictCard } from './verdict-card.js';
-import { pushTerminalStateToTelegram } from './afk-push.js';
+import { pushTerminalStateToTelegram, doneHasCorroboratingEvidence } from './afk-push.js';
+import { loadTelegramConfig } from '../../config.js';
 import { buildUserPayload } from '../../slash/_lib/user-payload.js';
 import { expandAtFileTokens } from './at-file-inject.js';
 
@@ -677,7 +678,16 @@ export async function runTurn(
         // limited (afk-push.ts); no-ops when Telegram is unconfigured.
         // Fire-and-forget — outbound notification must never block the turn.
         if (stats.permissionMode === 'autonomous') {
-          void pushTerminalStateToTelegram(verdict);
+          // Opt-in (telegram.verifyDone): when the turn self-certifies `Done`
+          // but produced no corroborating evidence this turn (a successful file
+          // write/edit or command — see doneHasCorroboratingEvidence), label the
+          // push "⚠️ Done (unverified)" so the away operator isn't pinged a
+          // confident "finished" with nothing behind it. Default off; never blocks.
+          const unverified =
+            verdict.kind === 'done' &&
+            loadTelegramConfig().verifyDone === true &&
+            !doneHasCorroboratingEvidence(toolEvents);
+          void pushTerminalStateToTelegram(verdict, undefined, { unverified });
         }
       }
 
