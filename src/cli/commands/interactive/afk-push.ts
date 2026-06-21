@@ -77,8 +77,14 @@ const KIND_FIELDS: Record<TerminalKind, ReadonlyArray<readonly [string, keyof Te
 // real work happened this turn — a file mutation or an executed command. A
 // `Done` turn with none of these may be a self-certified completion with no
 // artifact behind it. Read-only tools (read_file/grep/glob/list_directory/…)
-// deliberately do NOT count: reading is not doing. Conservative + opt-in by
-// design; extend this set rather than loosening the success check.
+// deliberately do NOT count: reading is not doing. Delegation tools
+// (agent/compose/skill) also do NOT count: a subagent's internal write/command
+// streams to the CHILD session and never reaches the parent's tool events (the
+// `tool.use.start` → `tool_use_detail` emit in stream-consumer.ts is per-session),
+// so a `Done` turn whose work happened entirely inside a subagent is flagged
+// "unverified" by design — the parent has no observable artifact standing behind
+// the claim. This is the conservative default; the operator can still confirm.
+// Extend this set rather than loosening the success check.
 export const DONE_EVIDENCE_TOOLS: ReadonlySet<string> = new Set([
   'write_file',
   'edit_file',
