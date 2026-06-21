@@ -44,9 +44,10 @@
  * seeded: seeding one while writes are still refused would only produce a
  * wall of gate refusals.
  *
- * Escape hatch: Shift+Tab from the REPL performs a raw `togglePlanMode` flip
- * with no seeded turn — exit plan mode WITHOUT saving or implementing. Use it
- * to take manual control after planning.
+ * Escape hatch: Shift+Tab from the REPL advances the permission-mode ring
+ * (default → plan → bypass) with no seeded turn — it does NOT save or implement.
+ * From plan mode it steps to bypass; use it to drop planning and take manual
+ * control. (Cycle lives in `permission-mode-cycle.ts`.)
  *
  * Scope: plan mode is a REPL-only conversation affordance. Other surfaces
  * (Telegram) never enter plan mode (their sessions are constructed with
@@ -99,7 +100,7 @@ export const planCmd: SlashCommand = {
   name: '/plan',
   usage: '/plan [on|off|<prompt>]',
   summary: 'Toggle plan mode; /plan off saves the plan to a file then implements it',
-  hint: 'Think through an approach without changing anything — write tools and state-mutating bash are refused until you exit; read-only investigation runs. /plan off saves the plan + implements it; Shift+Tab exits without implementing.',
+  hint: 'Think through an approach without changing anything — write tools and state-mutating bash are refused until you exit; read-only investigation runs. /plan off saves the plan + implements it; Shift+Tab cycles to the next mode without implementing.',
   async handler(ctx, args): Promise<SlashResult> {
     const arg = args.trim();
     const argLower = arg.toLowerCase();

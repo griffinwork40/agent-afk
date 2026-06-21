@@ -69,8 +69,8 @@ export interface ReadWithAutocompleteOpts {
   initialBuffer?: string;
   /**
    * Invoked when the user presses Shift+Tab (sequence `\x1b[Z` or
-   * `{ shift: true, name: 'tab' }`). Used by the REPL to toggle plan mode
-   * without requiring the user to type a slash command.
+   * `{ shift: true, name: 'tab' }`). Used by the REPL to cycle permission
+   * modes (default → plan → bypass) without typing a slash command.
    *
    * Only fires on the TTY path — non-TTY input never generates keypresses.
    */

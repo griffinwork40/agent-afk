@@ -6,7 +6,7 @@ import { runPicker } from '../../render/picker.js';
 import { runTextInput } from '../../render/text-input.js';
 import { debugLog } from '../../../utils/debug.js';
 import { env } from '../../../config/env.js';
-import { togglePlanMode } from '../../plan-mode-toggle.js';
+import { cyclePermissionMode } from '../../permission-mode-cycle.js';
 import type { InteractiveCtx } from './shared.js';
 import { formatStatusFields } from './shared.js';
 import type { TranscriptHandle } from './transcript.js';
@@ -103,10 +103,10 @@ export async function setupSurface(
     onShiftTab: () => {
       // Replicated from the user-turn onShiftTab handler below — the
       // persistent compositor uses ONE onShiftTab across both phases
-      // (plan-mode toggle is REPL-global, not turn-scoped). Shift+Tab is a
-      // raw flip with no seeded turn: the "exit plan mode without saving or
-      // implementing" escape hatch (cf. `/plan off`, which saves + implements).
-      togglePlanMode(ctx.slashCtx).catch(() => {});
+      // (the permission-mode cycle is REPL-global, not turn-scoped). Shift+Tab
+      // advances the ring default → plan → bypass → default (AFK stays on
+      // /afk); cf. `/plan off`, which saves the plan + implements it.
+      cyclePermissionMode(ctx.slashCtx).catch(() => {});
       ctx.statusLine.rearm();
     },
     // StatusLine doubles as DECSTBM scroll-region guard so commitAbove

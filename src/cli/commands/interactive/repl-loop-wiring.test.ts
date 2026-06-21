@@ -61,8 +61,8 @@ vi.mock('./verdict-ledger.js', () => ({
 }));
 vi.mock('../../debug-banner.js', () => ({ renderDebugBanner: () => '' }));
 vi.mock('../../../utils/debug.js', () => ({ isDebugEnabled: () => false }));
-vi.mock('../../plan-mode-toggle.js', () => ({
-  togglePlanMode: vi.fn(async () => {}),
+vi.mock('../../permission-mode-cycle.js', () => ({
+  cyclePermissionMode: vi.fn(async () => {}),
 }));
 
 // Fake TerminalCompositor for the completionWriter idle-wiring test.

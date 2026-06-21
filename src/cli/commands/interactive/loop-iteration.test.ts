@@ -70,7 +70,7 @@ vi.mock('./verdict-ledger.js', () => ({
 vi.mock('../../slash/commands/sh.js', () => ({ setShellPassthrough: vi.fn() }));
 vi.mock('../../debug-banner.js', () => ({ renderDebugBanner: () => '' }));
 vi.mock('../../../utils/debug.js', () => ({ isDebugEnabled: () => false, debugLog: () => {} }));
-vi.mock('../../plan-mode-toggle.js', () => ({ togglePlanMode: vi.fn(async () => {}) }));
+vi.mock('../../permission-mode-cycle.js', () => ({ cyclePermissionMode: vi.fn(async () => {}) }));
 
 // Shell-passthrough mock — `dispatch` routes to the hoisted spy so the
 // shell-branch test can assert it was invoked; drain methods are inert.
