@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.27.1] - 2026-06-21
+
+### Fixed
+- re-anchor compose DAG nodes on cwd change (e3d57f3)
+
+### Changed
+- Merge pull request #228 from griffinwork40/fix/compose-cwd-reanchor (c46e4f3)
+
 ## [4.27.0] - 2026-06-21
 
 ### Added
