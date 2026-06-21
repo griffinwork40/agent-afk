@@ -973,6 +973,12 @@ export class AgentSession implements IAgentSession {
         // Subagent provenance: lets session-scoped SessionEnd hooks (e.g. the
         // memory writer) skip forked children, which inherit this registry.
         parentSessionId: this.config.parentSessionId,
+        // Authoritative trace path for the run-receipt hook. The witness dir is
+        // keyed by the writer's session label (random on the one-shot path),
+        // not by sessionId, so a hook cannot reconstruct it — thread it here.
+        ...(this.config.traceWriter
+          ? { tracePath: this.config.traceWriter.getTracePath() }
+          : {}),
       },
       this.config.traceWriter ? { traceWriter: this.config.traceWriter } : {},
     );
