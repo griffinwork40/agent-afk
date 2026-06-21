@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.27.0] - 2026-06-21
+
+### Added
+- surface hidden REPL features in help, hints & banner (0688398)
+- add read-only SessionEnd run receipt (611ad70)
+
+### Changed
+- Merge pull request #230 from griffinwork40/feat/tui-discoverability (f630689)
+- Merge pull request #234 from griffinwork40/feat/session-end-run-receipt (6b21e8e)
+
 ## [4.26.1] - 2026-06-21
 
 ### Fixed
