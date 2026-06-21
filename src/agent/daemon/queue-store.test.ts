@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, readdirSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { enqueue, dequeueNext, listPending } from './queue-store.js';
@@ -96,6 +96,66 @@ describe('dequeueNext', () => {
     enqueue('only', {}, tmpDir);
     dequeueNext(tmpDir);
     expect(dequeueNext(tmpDir)).toBeNull();
+  });
+});
+
+describe('dequeueNext — malformed (poison) entries', () => {
+  it('quarantines a malformed JSON entry at the FIFO head and returns the next valid task', () => {
+    // Drop a corrupt file that sorts before any enqueued task.
+    writeFileSync(join(tmpDir, '0000-q-poison.json'), '{ not valid json');
+    enqueue('valid-task', {}, tmpDir);
+
+    const task = dequeueNext(tmpDir);
+    expect(task).not.toBeNull();
+    expect(task!.command).toBe('valid-task');
+
+    // No malformed entry left in the FIFO path; valid task consumed.
+    const remaining = readdirSync(tmpDir).filter(
+      (f) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+    );
+    expect(remaining).toHaveLength(0);
+
+    // Malformed entry preserved in poison/ for diagnosis.
+    const poison = readdirSync(join(tmpDir, 'poison'));
+    expect(poison).toHaveLength(1);
+  });
+
+  it('returns null when every entry is malformed (all quarantined, queue unblocked)', () => {
+    writeFileSync(join(tmpDir, '0001-q-a.json'), 'garbage');
+    writeFileSync(join(tmpDir, '0002-q-b.json'), 'also{bad');
+
+    expect(dequeueNext(tmpDir)).toBeNull();
+
+    // Both moved aside — a subsequent call finds an empty FIFO path.
+    const remaining = readdirSync(tmpDir).filter(
+      (f) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+    );
+    expect(remaining).toHaveLength(0);
+    expect(readdirSync(join(tmpDir, 'poison'))).toHaveLength(2);
+    // And the queue is unblocked: another dequeue returns null cleanly.
+    expect(dequeueNext(tmpDir)).toBeNull();
+  });
+
+  it('preserves the malformed entry bytes in poison/ (not deleted)', () => {
+    writeFileSync(join(tmpDir, '0001-q-x.json'), '!!broken!!');
+    dequeueNext(tmpDir);
+
+    const poison = readdirSync(join(tmpDir, 'poison'));
+    expect(poison).toHaveLength(1);
+    const restored = readFileSync(join(tmpDir, 'poison', poison[0]!), 'utf-8');
+    expect(restored).toBe('!!broken!!');
+  });
+
+  it('does not treat the poison/ subdir itself as a queue entry', () => {
+    // Create a poison dir first, then a valid task. dequeueNext must not
+    // try to read `poison` as a .json file (it is filtered out by suffix).
+    mkdirSync(join(tmpDir, 'poison'), { recursive: true });
+    writeFileSync(join(tmpDir, 'poison', 'stale.json'), 'old');
+    enqueue('valid', {}, tmpDir);
+
+    const task = dequeueNext(tmpDir);
+    expect(task).not.toBeNull();
+    expect(task!.command).toBe('valid');
   });
 });
 

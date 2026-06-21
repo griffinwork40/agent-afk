@@ -289,10 +289,15 @@ export class CronScheduler {
         ...(queued.notifyOn !== undefined ? { notifyOn: queued.notifyOn } : {}),
       };
       await this.runOnce(syntheticTask, 'pull');
-    } catch {
-      // Mirror the cron error path: errors are captured inside runOnce and
-      // written to telemetry. Any uncaught error here is silently swallowed
-      // so a bad queue entry never kills the poll loop.
+    } catch (err) {
+      // Errors thrown INSIDE runOnce are captured there and written to
+      // telemetry. Errors reaching here come from the dequeue path (now
+      // quarantined inside dequeueNext) or from synthetic-task construction.
+      // Log so a bad tick is visible in daemon logs instead of vanishing;
+      // the poll loop still survives (mirrors writeTelemetry's logging path).
+      const msg = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console
+      console.error(`[daemon] pull tick failed: ${msg}`);
     } finally {
       this.isDequeuing = false;
     }

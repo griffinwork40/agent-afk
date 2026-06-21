@@ -92,16 +92,32 @@ export function enqueue(
 }
 
 /**
+ * Subdirectory (relative to `queueDir`) used to quarantine malformed queue
+ * entries instead of silently dropping them or letting them block the FIFO
+ * queue forever. See `dequeueNext` for the poison-handling contract.
+ */
+const POISON_SUBDIR = 'poison';
+
+/**
  * Dequeue the next pending task (FIFO order) and remove it from disk.
  *
  * ORDERING INVARIANT: the queue file is removed from disk BEFORE this
- * function returns. Callers (e.g. `pullTick`) must spawn the session only
- * after `dequeueNext` has returned a non-null result — reverse order risks
- * double-fire on daemon restart if the process crashes between dequeue and
- * spawn.
+ * function returns a task. Callers (e.g. `pullTick`) must spawn the session
+ * only after `dequeueNext` has returned a non-null result — reverse order
+ * risks double-fire on daemon restart if the process crashes between dequeue
+ * and spawn.
+ *
+ * POISON-HANDLING CONTRACT: a malformed entry (truncated write, corrupted
+ * JSON, or a stray non-JSON file dropped into the queue dir) is moved aside
+ * into `<queueDir>/poison/` and skipped — NOT returned and NOT left in the
+ * FIFO path. This keeps the queue draining past corrupt entries while
+ * preserving them for diagnosis. Previously a parse error threw before the
+ * file was removed and `pullTick` swallowed it, leaving a single poison
+ * entry to silently deadlock every subsequent task with no log or telemetry.
  *
  * @param queueDir - Override the queue directory (defaults to `getQueueDir()`).
- * @returns The dequeued `QueuedTask`, or `null` if the queue is empty.
+ * @returns The dequeued `QueuedTask`, or `null` if the queue is empty or every
+ *          remaining entry is malformed (all quarantined).
  */
 export function dequeueNext(queueDir: string = getQueueDir()): QueuedTask | null {
   mkdirSync(queueDir, { recursive: true });
@@ -110,19 +126,72 @@ export function dequeueNext(queueDir: string = getQueueDir()): QueuedTask | null
     .filter((f) => f.endsWith('.json') && !f.startsWith('.tmp-'))
     .sort();
 
-  // noUncheckedIndexedAccess guard
-  const first = sorted[0];
-  if (first === undefined) return null;
+  for (const filename of sorted) {
+    const filePath = join(queueDir, filename);
+    let raw: string;
+    try {
+      raw = readFileSync(filePath, 'utf-8');
+    } catch (err) {
+      quarantinePoisonEntry(queueDir, filename, err);
+      continue;
+    }
+    let task: QueuedTask;
+    try {
+      task = JSON.parse(raw) as QueuedTask;
+    } catch (err) {
+      quarantinePoisonEntry(queueDir, filename, err);
+      continue;
+    }
+    // ORDERING INVARIANT: remove from disk BEFORE returning task.
+    // See JSDoc above — do NOT move this after the return.
+    unlinkSync(filePath);
+    return task;
+  }
+  return null;
+}
 
-  const filePath = join(queueDir, first);
-  const raw = readFileSync(filePath, 'utf-8');
-  const task = JSON.parse(raw) as QueuedTask;
-
-  // ORDERING INVARIANT: remove from disk BEFORE returning task.
-  // See JSDoc above — do NOT move this after the return.
-  unlinkSync(filePath);
-
-  return task;
+/**
+ * Move an unparseable queue file into `<queueDir>/poison/` so it stops
+ * blocking FIFO dequeue but is preserved for diagnosis. Uses an atomic
+ * same-directory rename (`poison/` is created lazily). On a name collision
+ * inside `poison/` (e.g. the same corrupt filename re-quarantined after a
+ * manual restore), a timestamp + random suffix is appended so nothing is
+ * ever overwritten. Never throws — if the entry cannot be moved aside it is
+ * best-effort unlinked so the queue unblocks instead of deadlocking. Every
+ * outcome is logged to stderr so the operator can investigate.
+ */
+function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown): void {
+  const reason = err instanceof Error ? err.message : String(err);
+  const poisonDir = join(queueDir, POISON_SUBDIR);
+  const src = join(queueDir, filename);
+  try {
+    mkdirSync(poisonDir, { recursive: true });
+    let dest = join(poisonDir, filename);
+    try {
+      renameSync(src, dest);
+    } catch {
+      // Collision or transient failure — disambiguate and retry once.
+      dest = join(poisonDir, `${Date.now()}-${randomBytes(3).toString('hex')}-${filename}`);
+      renameSync(src, dest);
+    }
+    // eslint-disable-next-line no-console
+    console.error(
+      `[daemon] pull-queue: quarantined malformed entry ${filename} → ${POISON_SUBDIR}/ (${reason})`,
+    );
+  } catch (moveErr) {
+    // Last resort: if we cannot move it aside, unlink so the queue unblocks
+    // rather than deadlocking on every subsequent tick.
+    const moveReason = moveErr instanceof Error ? moveErr.message : String(moveErr);
+    // eslint-disable-next-line no-console
+    console.error(
+      `[daemon] pull-queue: failed to quarantine malformed entry ${filename}; removing to unblock queue (${moveReason})`,
+    );
+    try {
+      unlinkSync(src);
+    } catch {
+      // ignore — nothing more we can do; the next readdir will retry.
+    }
+  }
 }
 
 /**
