@@ -690,6 +690,81 @@ describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
     expect(messagesCreateMock).toHaveBeenCalledTimes(1);
   });
 
+  it('interrupt during wait: 429+ts → paused → interrupt() → generator terminates (no hang, no resumed)', async () => {
+    // Regression guard for the usage-limit hang. When Ctrl+C (interrupt) lands
+    // during the usage-limit wait, `turnWithRetries` returns CLEANLY (not via
+    // throw — see retry-layer's `if (result === 'aborted') return`), so the
+    // catch-path abort guard in query.ts never fires. Without the post-finally
+    // guard the outer loop falls through to the next `promptIterator.next()`
+    // and BLOCKS there forever while the consumer is still awaiting a terminal
+    // event for the aborted turn — the REPL hangs (can't quit, auto-resume
+    // never re-fires, queued input never drains).
+    //
+    // The prompt stream below blocks on its 2nd pull, exactly like the live
+    // REPL idle wait, so the hang is observable. A single-shot stream would
+    // return `done` on the 2nd loop and mask the bug. Uses REAL timers because
+    // the abort short-circuits waitForReset synchronously (the signal is
+    // already aborted when waitForReset is entered) and we want a wall-clock
+    // failsafe that fires if the hang regresses.
+    vi.useRealTimers();
+
+    let releaseSecondPull: (() => void) | undefined;
+    const blockingPrompt = (async function* (): AsyncIterable<{ content: string }> {
+      yield { content: 'hello' };
+      // 2nd pull blocks until released — mirrors the REPL awaiting next input.
+      await new Promise<void>((resolve) => { releaseSecondPull = resolve; });
+    })();
+
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      if (callIdx === 1) throw make429UsageLimitError(60 * 60 * 1_000); // 1h reset
+      return fromArray(makeTextStream('should not reach'));
+    });
+
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: blockingPrompt,
+      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
+    });
+
+    const events: ProviderEvent[] = [];
+    const collectWithInterrupt = async (): Promise<void> => {
+      for await (const ev of query) {
+        events.push(ev);
+        if (ev.type === 'paused') {
+          // User hits Ctrl+C during the usage-limit wait.
+          await query.interrupt();
+        }
+      }
+    };
+
+    // Fail fast and legibly if the hang regresses: once interrupted, the
+    // generator must terminate well within this window.
+    let failsafeTimer: ReturnType<typeof setTimeout> | undefined;
+    const failsafe = new Promise<never>((_resolve, reject) => {
+      failsafeTimer = setTimeout(
+        () => reject(new Error(
+          'HANG: query generator did not terminate after interrupt() during the usage-limit wait — regression of the query.ts post-finally abort guard',
+        )),
+        2_000,
+      );
+    });
+
+    try {
+      await Promise.race([collectWithInterrupt(), failsafe]);
+    } finally {
+      if (failsafeTimer !== undefined) clearTimeout(failsafeTimer);
+      releaseSecondPull?.();
+    }
+
+    const types = events.map((e) => e.type);
+    expect(types).toContain('paused');
+    expect(types).not.toContain('resumed');
+    // Only the first (429'd) call — the interrupt prevents any replay.
+    expect(messagesCreateMock).toHaveBeenCalledTimes(1);
+  });
+
   it('2h cap: 429 with resetsAt > 2h from now → error surfaces immediately, no paused/resumed', async () => {
     messagesCreateMock.mockImplementation(() => {
       throw make429UsageLimitError(3 * 60 * 60 * 1_000); // 3h reset
