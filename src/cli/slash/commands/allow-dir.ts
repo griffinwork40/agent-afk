@@ -41,6 +41,7 @@ export const allowDirCmd: SlashCommand = {
   name: '/allow-dir',
   summary: 'Manage per-session directory access grants for tool handlers',
   usage: '/allow-dir [--rw | --revoke] [<path>]',
+  hint: 'When the model needs read or write access to a directory outside the session root — grant it here without restarting.',
   flags: ['--rw', '--revoke'] as const,
 
   async handler(ctx, args) {

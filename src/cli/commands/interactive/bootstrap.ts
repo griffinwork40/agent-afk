@@ -363,6 +363,8 @@ export async function bootstrapSession(
     // Per-model credential resolver — mirrors #640 for the compose fork-path.
     resolveApiKeyForModel: getApiKeyForModel,
     ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
+    // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
+    ...(extras?.cwd !== undefined ? { cwd: extras.cwd } : {}),
     systemPrompt: basePrompt ?? '',
   });
 

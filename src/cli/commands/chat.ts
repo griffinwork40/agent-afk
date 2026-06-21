@@ -4,6 +4,7 @@ import ora from 'ora';
 import { handleCommandError } from '../errors/index.js';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { existsSync } from 'node:fs';
 import { AgentSession } from '../../agent/session.js';
 import { createDefaultHookRegistry } from '../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
@@ -26,6 +27,7 @@ import { BUILTIN_TOOL_NAMES } from '../../agent/tools/schemas.js';
 import { MEMORY_TOOL_NAMES } from '../../agent/memory/index.js';
 import { AWARENESS_TOOL_NAMES } from '../../agent/awareness/index.js';
 import { createDefaultTraceWriter } from '../../agent/trace/factory.js';
+import { receiptPathsFor } from '../../agent/trace/receipt.js';
 import { setupWorktree } from './interactive/worktree.js';
 import { resolveResumeTarget, resumeConfigFor } from '../resume-session.js';
 import { saveSession, findSession } from '../session-store.js';
@@ -268,6 +270,9 @@ export function registerChatCommand(program: Command): void {
       // with a misleading resume hint (stats.totalTurns is pre-seeded from the
       // prior session and would otherwise trip the > 0 persistence check).
       let encounteredError = false;
+      // Hoisted out of the try so the finally block can surface the run-receipt
+      // path after session.close() (the trace const is block-scoped to try).
+      let receiptTracePath: string | undefined;
 
       try {
         // Optional worktree isolation. Mirrors `afk interactive -w`: the
@@ -418,6 +423,7 @@ export function registerChatCommand(program: Command): void {
         // to keep stdout clean for piping; operators inspect the file under
         // ~/.afk/state/witness/ after the run.
         const trace = createDefaultTraceWriter();
+        receiptTracePath = trace?.tracePath;
 
         const rootManager = new SubagentManager({
           apiKey,
@@ -536,6 +542,8 @@ export function registerChatCommand(program: Command): void {
           // Per-model credential resolver — mirrors #640 for the compose fork-path.
           resolveApiKeyForModel: getApiKeyForModel,
           ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
+          // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
+          ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
           systemPrompt: basePrompt ?? '',
         });
 
@@ -775,6 +783,19 @@ export function registerChatCommand(program: Command): void {
         }
         if (session) {
           await session.close();
+          // Best-effort run-receipt pointer on stderr (stdout stays pipe-clean
+          // for piping/JSON consumers). The SessionEnd hook wrote the receipt
+          // during close(); surface its path if the file is present.
+          if (receiptTracePath !== undefined) {
+            try {
+              const { mdPath } = receiptPathsFor(receiptTracePath);
+              if (existsSync(mdPath)) {
+                process.stderr.write(`Receipt: ${mdPath}\n`);
+              }
+            } catch {
+              /* best-effort — never mask the run's real outcome */
+            }
+          }
         }
         sharedMemoryStore?.close();
         // Worktree cleanup: session close must finish before

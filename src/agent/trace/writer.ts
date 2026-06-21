@@ -61,6 +61,14 @@ export interface TraceWriter {
    *  writer is sealed. */
   write(event: TraceEventInput): Promise<void>;
 
+  /** Absolute path to the JSONL file this writer appends to. The file-backed
+   *  writer returns its real path; the in-memory writer returns a
+   *  non-filesystem sentinel (`in-memory://trace`) so consumers that try to
+   *  read it (e.g. the run-receipt writer) simply find nothing. Threaded into
+   *  the SessionEnd context so a hook can locate the trace without knowing the
+   *  writer's randomly-generated session label. */
+  getTracePath(): string;
+
   /** Write the terminal `session_sealed` record and close the underlying
    *  resource. Idempotent — subsequent calls resolve to no-op. After
    *  `seal()` returns, `write()` rejects. */
@@ -415,6 +423,12 @@ export class InMemoryTraceWriter implements TraceWriter {
     }
 
     this._events.push({ ts, seq, kind: event.kind, payload: event.payload } as TraceEvent);
+  }
+
+  /** In-memory writer has no backing file; return a non-filesystem sentinel
+   *  so a reader (e.g. the run-receipt writer) finds nothing and no-ops. */
+  getTracePath(): string {
+    return 'in-memory://trace';
   }
 
   async seal(payload: SessionSealedPayload): Promise<void> {

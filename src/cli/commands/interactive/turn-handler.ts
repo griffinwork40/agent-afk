@@ -86,7 +86,7 @@ export async function runTurn(
   // the latest write even though the assignment happens in a microtask.
   const pickerRef: { abort: AbortController | null } = { abort: null };
   let lastContextProgressMs = 0;
-  const CONTEXT_PROGRESS_MIN_INTERVAL_MS = 15_000;
+  const CONTEXT_PROGRESS_MIN_INTERVAL_MS = 3_000;
   const toolEvents: ToolEvent[] = [];
   const pendingTools = new Map<string, ToolEvent>();
 
@@ -774,7 +774,7 @@ export function printTurnFooter(
   if (contextPct >= 1.0) {
     const overByTok = Math.round((contextPct - 1.0) * contextLimit);
     const limitK = Math.round(contextLimit / 1000);
-    console.log(palette.error(
+    write(palette.error(
       `  context OVER ${limitK}k tok by ~${formatTokens(overByTok)} tok — model output may be silently truncated`
     ));
   } else if (contextPct > 0.5) {

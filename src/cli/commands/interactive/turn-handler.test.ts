@@ -1810,7 +1810,7 @@ describe('runTurn — mid-turn context progress', () => {
   });
 
   // Two tool_use+tool_result pairs with the clock frozen: the first fires,
-  // the second is suppressed (within the 15 s throttle window).
+  // the second is suppressed (within the 3 s throttle window).
   it('fires onContextProgress on the first tool_result', async () => {
     vi.setSystemTime(1_000_000);
 
@@ -1831,7 +1831,7 @@ describe('runTurn — mid-turn context progress', () => {
 
     await runTurn({ text: 'q', attachments: [] }, session, stats, h);
 
-    // First fires, second suppressed (clock didn't advance past 15 s).
+    // First fires, second suppressed (clock didn't advance past 3 s).
     expect(onContextProgress).toHaveBeenCalledTimes(1);
   });
 

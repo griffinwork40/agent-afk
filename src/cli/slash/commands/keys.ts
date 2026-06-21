@@ -51,11 +51,17 @@ const BINDINGS: Array<{ group: string; rows: Array<[string, string]> }> = [
     ],
   },
   {
+    group: 'Attach',
+    rows: [
+      ['@<path>', 'Autocomplete and attach a file — type @ then start the path'],
+      ['ctrl+v', 'Paste image from clipboard (macOS: Cmd+V also works)'],
+      ['ctrl+x', 'Remove the last attached image from the prompt'],
+    ],
+  },
+  {
     group: 'Misc',
     rows: [
       ['ctrl+l', 'Clear screen and repaint'],
-      ['ctrl+v', 'Paste image from clipboard'],
-      ['ctrl+x', 'Remove last attached image'],
       ['ctrl+c', 'Interrupt running turn / exit (second press)'],
       ['ctrl+d', 'EOF / exit (when buffer is empty)'],
       ['tab', 'Accept autocomplete suggestion'],
@@ -67,6 +73,7 @@ const BINDINGS: Array<{ group: string; rows: Array<[string, string]> }> = [
 export const keysCmd: SlashCommand = {
   name: '/keys',
   summary: 'Show keybinding reference',
+  hint: 'When you want the full list of keyboard shortcuts available in the interactive REPL.',
   async handler(ctx) {
     ctx.out.line();
     ctx.out.line(palette.bold(palette.brand('Keybindings')));

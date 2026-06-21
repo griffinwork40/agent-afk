@@ -11,6 +11,44 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.27.2] - 2026-06-21
+
+### Fixed
+- terminate query generator on interrupt during usage-limit wait (c462ebd)
+
+### Changed
+- Merge pull request #235 from griffinwork40/afk/fix-usage-limit-hang (77b7b3b)
+
+## [4.27.1] - 2026-06-21
+
+### Fixed
+- re-anchor compose DAG nodes on cwd change (e3d57f3)
+
+### Changed
+- Merge pull request #228 from griffinwork40/fix/compose-cwd-reanchor (c46e4f3)
+
+## [4.27.0] - 2026-06-21
+
+### Added
+- surface hidden REPL features in help, hints & banner (0688398)
+- add read-only SessionEnd run receipt (611ad70)
+
+### Changed
+- Merge pull request #230 from griffinwork40/feat/tui-discoverability (f630689)
+- Merge pull request #234 from griffinwork40/feat/session-end-run-receipt (6b21e8e)
+
+## [4.26.1] - 2026-06-21
+
+### Fixed
+- timelier context-usage signal & overlay-safe overflow warning (6e759de)
+
+### Changed
+- Merge pull request #232 from griffinwork40/fix/tui-context-visibility (46038c4)
+- Merge pull request #227 from griffinwork40/afk/claude-login-update (d478ae6)
+- Merge pull request #233 from griffinwork40/chore/tui-remove-dead-repl (19fbe66)
+- remove dead legacy readline REPL & unused jest devDeps (5e8edea)
+- use `claude login` for the OAuth flow in quickstart (6661928)
+
 ## [4.26.0] - 2026-06-21
 
 ### Added

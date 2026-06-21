@@ -295,6 +295,18 @@ export function getTraceDir(sessionId: string): string {
   return join(getAfkStateDir(), 'witness', sessionId);
 }
 
+/**
+ * Directory for post-session run receipts.
+ *
+ * Each completed top-level session writes `<label>.json` + `<label>.md` here,
+ * keyed by the witness-trace label so a receipt sits 1:1 with the trace it
+ * summarizes (see `src/agent/trace/receipt.ts`). Read-only derivatives of the
+ * sealed witness trace — they carry no state the trace doesn't already hold.
+ */
+export function getReceiptsDir(): string {
+  return join(getAfkStateDir(), 'receipts');
+}
+
 export function getDaemonStateDir(instanceId: string = 'default'): string {
   return join(getAfkStateDir(), 'daemon', `agent-afk@${instanceId}`);
 }

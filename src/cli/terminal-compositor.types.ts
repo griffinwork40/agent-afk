@@ -63,7 +63,7 @@ export interface KeyInfo {
 // Braille spinner frames from ora's `dots` preset.
 export const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const;
 
-export const ELAPSED_GRACE_MS = 5_000;
+export const ELAPSED_GRACE_MS = 2_000;
 
 export function formatElapsed(startedAt: number): string {
   const elapsed = Date.now() - startedAt;

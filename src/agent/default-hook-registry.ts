@@ -12,6 +12,7 @@ import { MemoryStore, createMemorySessionEndHook } from './memory/index.js';
 import { createPlanModeGate } from './plan-mode-gate.js';
 import { createAfkModeGate } from './afk-mode-gate.js';
 import { cleanupComposeSpills } from './tools/compose-executor.js';
+import { runReceiptSessionEndHook } from './trace/receipt.js';
 import { env } from '../config/env.js';
 import {
   createPathApprovalHook,
@@ -186,6 +187,11 @@ export function createDefaultHookRegistry(
     if (context.sessionId) cleanupComposeSpills(context.sessionId);
     return {};
   });
+  // Read-only run receipt: after the trace is sealed (sealing precedes
+  // SessionEnd dispatch — see agent-session.ts dispatchSessionEndOnce), emit a
+  // JSON+Markdown summary of the run under ~/.afk/state/receipts/. Best-effort
+  // and never injects/blocks; skips subagents and honors AFK_RUN_RECEIPT_DISABLED.
+  registry.register('SessionEnd', runReceiptSessionEndHook);
   if (onSubagentComplete) {
     registry.register('SubagentStop', (context) => {
       if (context.event !== 'SubagentStop') return {};

@@ -86,6 +86,16 @@ export interface ComposeExecutorContext {
    * system prompt and no tool context.
    */
   systemPrompt: string;
+  /**
+   * Working directory inherited by every compose DAG node. Seeded into the
+   * SubagentManager so forked nodes anchor to the session's worktree instead
+   * of the host's `process.cwd()`. Re-anchored mid-session via
+   * {@link ComposeExecutor.setCwd} (born-named `afk -w` worktree created on
+   * turn 1). Mirrors the SubagentExecutor / SkillExecutor cwd convention.
+   * Optional: when absent, nodes fall back to `process.cwd()` (pre-fix
+   * behavior).
+   */
+  cwd?: string;
 }
 
 interface ComposeNodeInput {
@@ -432,7 +442,26 @@ function formatTruncationWarning(t: TruncationEvent): string {
 }
 
 export class ComposeExecutor {
-  constructor(private readonly ctx: ComposeExecutorContext) {}
+  // Current worktree cwd. Seeded from ctx.cwd; updated by setCwd when the
+  // session's cwd changes (born-named `afk -w` worktree created on turn 1) so
+  // compose DAG nodes anchor to the worktree, not the host's process.cwd().
+  // Mirrors the SubagentExecutor / SkillExecutor re-anchor convention.
+  private currentCwd: string | undefined;
+
+  constructor(private readonly ctx: ComposeExecutorContext) {
+    this.currentCwd = ctx.cwd;
+  }
+
+  /**
+   * Re-anchor the cwd inherited by compose DAG nodes after a mid-session cwd
+   * change. Forks dispatched after this call inherit the new worktree instead
+   * of the launch dir. Wired from `dispatcher.setResolveBase()` and
+   * anthropic-direct's `cwdDependentsFactory`, mirroring the sub-agent / skill
+   * executors. Only affects nodes spawned after the call.
+   */
+  setCwd(cwd: string): void {
+    this.currentCwd = cwd;
+  }
 
   async execute(call: ToolCall): Promise<ToolResult> {
     if (call.signal.aborted) {
@@ -516,6 +545,10 @@ export class ComposeExecutor {
       apiKey: this.ctx.apiKey,
       progressSink: chainedSink,
       ...(this.ctx.baseUrl !== undefined ? { baseUrl: this.ctx.baseUrl } : {}),
+      // Anchor every forked DAG node to the session's worktree (re-anchored via
+      // setCwd). Without this the manager's parentCwd is undefined and nodes
+      // fall back to the host's process.cwd() (subagent.ts fork fallback).
+      ...(this.currentCwd !== undefined ? { cwd: this.currentCwd } : {}),
     });
 
     const startedAt = Date.now();

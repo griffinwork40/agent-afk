@@ -838,12 +838,14 @@ export class AnthropicDirectProvider implements ModelProvider {
           }
           this._currentCwd = newCwd;
 
-          // 1b. Re-anchor the forked sub-agent / skill executors so child tool
-          //     calls (the `agent` and skill tools) land in the new worktree
-          //     instead of the host's process.cwd(). Without this, a born-named
-          //     `afk -w` worktree leaves the executors frozen on the launch dir.
+          // 1b. Re-anchor the forked sub-agent / skill / compose executors so
+          //     child tool calls (the `agent`, skill, and compose tools) land in
+          //     the new worktree instead of the host's process.cwd(). Without
+          //     this, a born-named `afk -w` worktree leaves the executors frozen
+          //     on the launch dir.
           this.subagentExecutor?.setCwd(newCwd);
           this.skillExecutor?.setCwd(newCwd);
+          this.composeExecutor?.setCwd(newCwd);
 
           // 2. Rebuild system-prompt fragment with the new `# Environment` line.
           //    Build a fresh copy each invocation — splice mutates in place.

@@ -20,6 +20,7 @@ interface CapturedManagerOpts {
   progressSink?: SubagentProgressSink;
   apiKey?: string;
   parentAbortSignal?: AbortSignal;
+  cwd?: string;
 }
 let lastManagerOpts: CapturedManagerOpts | undefined;
 
@@ -997,6 +998,39 @@ describe('ComposeExecutor', () => {
       }));
 
       expect(result.isError).toBeFalsy();
+    });
+  });
+
+  describe('cwd re-anchoring', () => {
+    it('seeds ctx.cwd into the SubagentManager so DAG nodes anchor to the worktree', async () => {
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext({ cwd: '/tmp/worktree-abc' }));
+
+      await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'task a' }] }));
+
+      expect(lastManagerOpts?.cwd).toBe('/tmp/worktree-abc');
+    });
+
+    it('omits cwd when ctx.cwd is undefined (falls back to process.cwd())', async () => {
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext());
+
+      await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'task a' }] }));
+
+      expect(lastManagerOpts?.cwd).toBeUndefined();
+    });
+
+    it('setCwd() re-anchors the cwd passed to the SubagentManager on the next execute', async () => {
+      // Mirrors the born-named `afk -w` worktree flow: executor is constructed
+      // with the launch dir, then re-anchored to the worktree on turn 1 before
+      // the first compose call forks any DAG node.
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext({ cwd: '/tmp/launch-dir' }));
+
+      executor.setCwd('/tmp/born-named-worktree');
+      await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'task a' }] }));
+
+      expect(lastManagerOpts?.cwd).toBe('/tmp/born-named-worktree');
     });
   });
 

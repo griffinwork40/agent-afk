@@ -320,6 +320,8 @@ async function main() {
           // Per-model credential resolver — mirrors #640 for the compose fork-path.
           resolveApiKeyForModel: getApiKeyForModel,
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
+          // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
+          ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
           systemPrompt: layeredBasePrompt ?? '',
         });
 
