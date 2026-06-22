@@ -92,6 +92,16 @@ export interface RoutingDecisionEntry {
   /** JSON-encoded string array of unique tool names invoked (privacy: names only, no inputs). */
   tool_names?: string | undefined;
   /**
+   * True when a dispatched skill (on `skill.dispatched` rows) is a routing-hint
+   * "gate" skill (ask-gate, premise-gate, fanout-pace, …). Lets usage queries
+   * measure gate-firing through the existing event surface. Privacy: a boolean
+   * flag only — no user content. NOTE: this captures only gates invoked through
+   * the skill tool; a gate the model applies purely inline (following the
+   * routing hint without dispatching the skill) produces no row and stays
+   * uncounted — closing that requires model self-report (deliberately deferred).
+   */
+  is_gate?: boolean | undefined;
+  /**
    * Tool name for tool-level events (e.g. `tool.overflow_kill`).
    * Privacy: short identifier only (e.g. "grep", "bash") — not the tool input.
    */
