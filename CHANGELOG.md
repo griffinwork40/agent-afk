@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.29.1] - 2026-06-22
+
+### Fixed
+- keep session alive after mid-turn interrupt (ESC) (073004c)
+
+### Changed
+- Merge pull request #242 from griffinwork40/fix/interrupt-mid-turn-resume (095e318)
+
 ## [4.29.0] - 2026-06-21
 
 ### Added
