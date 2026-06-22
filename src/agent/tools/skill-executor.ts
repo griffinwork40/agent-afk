@@ -857,10 +857,17 @@ export class SkillExecutor {
       parent_session_id: this.ctx.parentSession.sessionId,
       depth,
       mode: 'load',
-      ...(isGateSkill(name) ? { is_gate: true } : {}),
       ...(model !== undefined ? { model } : {}),
     };
-    void appendRoutingDecision({ event: 'skill.dispatched', ...base }).catch(() => {});
+    // `is_gate` rides only the `skill.dispatched` row — not the shared `base`,
+    // which also feeds the `skill.completed` emit below. Matches the field doc
+    // ("on skill.dispatched rows") and the fork path, keeping the gate flag on
+    // a single canonical row across both dispatch paths.
+    void appendRoutingDecision({
+      event: 'skill.dispatched',
+      ...base,
+      ...(isGateSkill(name) ? { is_gate: true } : {}),
+    }).catch(() => {});
     void appendRoutingDecision({
       event: 'skill.completed',
       status: 'succeeded',
