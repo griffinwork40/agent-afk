@@ -624,6 +624,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'paths',
   },
   {
+    name: 'AFK_COMPANION_PRIMER',
+    description: 'Opt-in: absolute path to a single companion-primer file. When set, its content is bounded (capped, fenced as <companion-primer>) and appended to the system prompt at session start for top-level sessions (chat/REPL/telegram/daemon), as lower-authority "reflections, not facts" context. Unset (default) = no-op. Only the one named file is ever read — never a directory or repo walk.',
+    type: 'string',
+    required: false,
+    example: '/Users/me/Projects/afk-companion/PRIMER.md',
+    category: 'paths',
+  },
+  {
     name: 'HOME',
     description: 'Standard Unix home directory. Used as the fallback when AFK_HOME is unset.',
     type: 'string',
@@ -1119,6 +1127,7 @@ export const env = {
   // Model / agent runtime
   get AFK_COMPACT_KEEP_LAST_TURNS(): string | undefined { return process.env['AFK_COMPACT_KEEP_LAST_TURNS']; },
   get AFK_COMPACT_MODEL(): string | undefined { return process.env['AFK_COMPACT_MODEL']; },
+  get AFK_COMPANION_PRIMER(): string | undefined { return process.env['AFK_COMPANION_PRIMER']; },
   get AFK_DEFAULT_SUBAGENT_MODEL(): string | undefined { return process.env['AFK_DEFAULT_SUBAGENT_MODEL']; },
   get AFK_DIAGNOSE_BASELINE(): string | undefined { return process.env['AFK_DIAGNOSE_BASELINE']; },
   get AFK_DISABLE_BASH_INTERPRETER_GUARD(): string | undefined { return process.env['AFK_DISABLE_BASH_INTERPRETER_GUARD']; },

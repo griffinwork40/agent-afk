@@ -26,6 +26,7 @@ import { parseThinking, parseEffort, getApiKey, getApiKeyForModel, getModel, get
 import { loadSchedules, toScheduledTask } from '../../agent/daemon/schedule-store.js';
 import { AgentSession } from '../../agent/session.js';
 import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
+import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import { SubagentManager } from '../../agent/subagent.js';
 import { SubagentExecutor } from '../../agent/tools/subagent-executor.js';
 import { SkillExecutor } from '../../agent/tools/skill-executor.js';
@@ -178,7 +179,7 @@ export function buildDaemonSessionFactory(
       surface: 'daemon',
     });
 
-    return new AgentSession(injectHotMemory({
+    return new AgentSession(injectCompanionPrimer(injectHotMemory({
       ...config,
       provider,
       // Daemon sessions are headless: no human watches to answer ask_question.
@@ -190,7 +191,7 @@ export function buildDaemonSessionFactory(
       // `...config` for the same reason as `isNonInteractive`: every daemon +
       // scheduler/cron session routes through here → 'daemon'.
       surface: 'daemon',
-    }));
+    })));
   };
 }
 
