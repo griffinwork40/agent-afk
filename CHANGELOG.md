@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.31.1] - 2026-06-22
+
+### Fixed
+- brief-queue gate counts only top-level .md files (eeb9cef)
+
+### Changed
+- Merge pull request #246 from griffinwork40/fix/daemon-brief-gate-ignore-subdirs (ac17a87)
+
 ## [4.31.0] - 2026-06-22
 
 ### Added
