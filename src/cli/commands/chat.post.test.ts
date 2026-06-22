@@ -68,6 +68,13 @@ vi.mock('../shared-helpers.js', () => ({
   resolveBaseSystemPrompt: vi.fn(() => ({ prompt: undefined, source: 'none' })),
 }));
 
+vi.mock('../../agent/mcp/index.js', () => ({
+  McpManager: {
+    fromConfig: vi.fn(),
+  },
+  loadMcpConfig: vi.fn(() => ({ mcpServers: {}, sources: [], warnings: [] })),
+}));
+
 vi.mock('../../agent/routing-directive.js', () => ({
   assembleSystemPrompt: vi.fn(() => undefined),
 }));

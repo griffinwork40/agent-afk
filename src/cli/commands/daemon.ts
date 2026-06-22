@@ -159,6 +159,8 @@ export function buildDaemonSessionFactory(
     });
 
     memoryStore ??= new MemoryStore();
+    const mcpManager = config.mcpManager;
+    const mcpToolWireNames = mcpManager?.getMcpToolWireNames() ?? [];
 
     const provider = parseProvider(undefined, {
       subagentExecutor,
@@ -167,15 +169,17 @@ export function buildDaemonSessionFactory(
       memoryStore,
       model: String(opts.model),
       ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
+      ...(mcpManager !== undefined ? { mcpManager } : {}),
     }) ?? new AnthropicDirectProvider({
       permissions: {
-        allowedTools: [...BUILTIN_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'agent', 'skill', 'compose'],
+        allowedTools: [...BUILTIN_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'agent', 'skill', 'compose', ...mcpToolWireNames],
       },
       subagentExecutor,
       skillExecutor,
       composeExecutor,
       memoryStore,
       surface: 'daemon',
+      ...(mcpManager !== undefined ? { mcpManager } : {}),
     });
 
     return new AgentSession(injectHotMemory({

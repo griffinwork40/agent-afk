@@ -34,6 +34,10 @@ import { saveSession, findSession } from '../session-store.js';
 import { createSessionStats, recordTurn } from '../slash/session-stats.js';
 import { runReviewPostPublish, parsePostTargets, type PostTarget } from '../slash/_lib/review-post.js';
 import type { Writer } from '../slash/types.js';
+import { McpManager, loadMcpConfig } from '../../agent/mcp/index.js';
+import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
+import { emitSessionPhase } from '../../agent/trace/emit.js';
+
 
 /** Loose UUID format check: 8-4-4-4-12 hex groups separated by dashes. */
 function isUuidShaped(s: string): boolean {
@@ -148,6 +152,7 @@ export function registerChatCommand(program: Command): void {
       '--worktree-base <ref>',
       'Base git ref for the worktree created by --worktree. Default: the remote\'s default branch (origin/main), fetched fresh. Pass HEAD to base on your local checkout instead. Also: AFK_WORKTREE_BASE.',
     )
+    .option('--mcp-config <path>', 'Path to an additional MCP config file (highest priority — merges over ~/.afk/config/mcp.json, project-local .mcp.json, and plugin-contributed configs). File format identical to mcp.json.')
     .option('--resume <id>', 'Resume a persisted session by id')
     .option('--continue', 'Continue the most recent persisted session in cwd')
     .option('--session-id <uuid>', 'Assign a specific UUID to this session (creates new; errors if already exists)')
@@ -168,6 +173,7 @@ export function registerChatCommand(program: Command): void {
       dumpPrompt?: string | boolean;
       worktree?: string | true;
       worktreeBase?: string;
+      mcpConfig?: string;
       resume?: string;
       continue?: boolean;
       sessionId?: string;
@@ -258,6 +264,7 @@ export function registerChatCommand(program: Command): void {
       let sharedMemoryStore: MemoryStore | undefined;
       let worktreeHandle: Awaited<ReturnType<typeof setupWorktree>> | undefined;
       let worktreeCwd: string | undefined;
+      let mcpManager: McpManager | undefined;
       // Whether this run should persist a session sidecar on exit.
       // True only when a session flag (--resume / --continue / --session-id) is set.
       let shouldPersist = false;
@@ -549,17 +556,70 @@ export function registerChatCommand(program: Command): void {
 
         sharedMemoryStore = new MemoryStore();
 
-        // Pass sharedMemoryStore into parseProvider so that when --provider
-        // anthropic-direct is explicit, both paths share the same SQLite DB
-        // (C7 fix: avoid dual MemoryStore instances on the same file).
-        provider = parseProvider(options.provider, { subagentExecutor, skillExecutor, composeExecutor, memoryStore: sharedMemoryStore, model: String(options.model), ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}) })
+        {
+          const projectCwd = worktreeCwd ?? process.cwd();
+          const importedMcpConfigs = resolveImportedRoots(loadImportFromConfig())
+            .mcpConfigs.filter((c) => c.format === 'json')
+            .map((c) => c.source);
+          const loaded = loadMcpConfig({
+            cwd: projectCwd,
+            ...(importedMcpConfigs.length > 0 ? { importedMcpConfigs } : {}),
+            ...(options.mcpConfig !== undefined ? { cliOverride: options.mcpConfig } : {}),
+          });
+          const enabledCount = Object.values(loaded.mcpServers).filter((s) => !s.disabled).length;
+          if (enabledCount > 0) {
+            const mcpStartedAt = Date.now();
+            void emitSessionPhase(trace?.writer, {
+              phase: 'mcp_connect_start',
+              metadata: { serverCount: enabledCount },
+            });
+            try {
+              mcpManager = await McpManager.fromConfig(loaded.mcpServers, {
+                warnings: loaded.warnings,
+                ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
+              });
+            } finally {
+              void emitSessionPhase(trace?.writer, {
+                phase: 'mcp_connect_done',
+                durationMs: Date.now() - mcpStartedAt,
+                metadata: { serverCount: enabledCount },
+              });
+            }
+          } else if (loaded.warnings.length > 0) {
+            for (const w of loaded.warnings) {
+              process.stderr.write(`[mcp] ${w}\n`);
+            }
+          }
+        }
+
+        const mcpToolWireNames = mcpManager?.getMcpToolWireNames() ?? [];
+        provider = parseProvider(options.provider, {
+          subagentExecutor,
+          skillExecutor,
+          composeExecutor,
+          memoryStore: sharedMemoryStore,
+          model: String(options.model),
+          ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
+          ...(mcpManager !== undefined ? { mcpManager } : {}),
+        })
           ?? new AnthropicDirectProvider({
-            permissions: { allowedTools: [...BUILTIN_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'agent', 'skill', 'compose'] },
+            permissions: {
+              allowedTools: [
+                ...BUILTIN_TOOL_NAMES,
+                ...MEMORY_TOOL_NAMES,
+                ...AWARENESS_TOOL_NAMES,
+                'agent',
+                'skill',
+                'compose',
+                ...mcpToolWireNames,
+              ],
+            },
             subagentExecutor,
             skillExecutor,
             composeExecutor,
             memoryStore: sharedMemoryStore,
             surface: 'cli',
+            ...(mcpManager !== undefined ? { mcpManager } : {}),
           });
 
 
@@ -796,6 +856,9 @@ export function registerChatCommand(program: Command): void {
               /* best-effort — never mask the run's real outcome */
             }
           }
+        }
+        if (mcpManager) {
+          await mcpManager.disconnectAll();
         }
         sharedMemoryStore?.close();
         // Worktree cleanup: session close must finish before

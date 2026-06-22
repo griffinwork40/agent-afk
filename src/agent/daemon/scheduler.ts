@@ -30,6 +30,7 @@ import { createDefaultHookRegistry } from '../default-hook-registry.js';
 import { loadHooksConfig } from '../hooks/config-loader.js';
 import { createDefaultTraceWriter } from '../trace/factory.js';
 import { MemoryStore, injectHotMemory } from '../memory/index.js';
+import { McpManager, loadMcpConfig } from '../mcp/index.js';
 import type { AgentConfig } from '../types.js';
 import { getTelemetryPath } from '../../paths.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
@@ -319,11 +320,13 @@ export class CronScheduler {
 
     let session: AgentSession | null = null;
     let memoryStore: MemoryStore | null = null;
+    let mcpManager: McpManager | null = null;
     this.idleDetector.increment();
     try {
-      const spawned = this.spawnSession(task.taskId);
+      const spawned = await this.spawnSession(task.taskId);
       session = spawned.session;
       memoryStore = spawned.memoryStore;
+      mcpManager = spawned.mcpManager ?? null;
       const response = await session.sendMessage(task.command);
       const responseText = redactInlineSecrets(response.content);
       const record: TelemetryRecord = {
@@ -350,6 +353,13 @@ export class CronScheduler {
           await session.close();
         } catch {
           // already-closed sessions throw; ignore.
+        }
+      }
+      if (mcpManager) {
+        try {
+          await mcpManager.disconnectAll();
+        } catch {
+          // MCP server shutdown is best-effort during daemon tick teardown.
         }
       }
       memoryStore?.close();
@@ -454,7 +464,11 @@ export class CronScheduler {
     }
   }
 
-  private spawnSession(taskId: string): { session: AgentSession; memoryStore: MemoryStore } {
+  private async spawnSession(taskId: string): Promise<{
+    session: AgentSession;
+    memoryStore: MemoryStore;
+    mcpManager?: McpManager;
+  }> {
     // Derive a unique-per-tick sessionId (daemonTraceLabel appends a random
     // suffix, so each tick gets its own label) so hook commands receive a
     // non-empty AFK_SESSION_ID and traces stay greppable by task name.
@@ -476,6 +490,19 @@ export class CronScheduler {
     // daemonTraceLabel) so traces are greppable by task name while each tick
     // still gets its own trace dir.
     const trace = createDefaultTraceWriter({ sessionLabel: daemonTraceLabel(taskId) });
+
+    let mcpManager: McpManager | undefined;
+    const loadedMcp = loadMcpConfig({ cwd: agentCwd });
+    const enabledMcpCount = Object.values(loadedMcp.mcpServers).filter((s) => !s.disabled).length;
+    if (enabledMcpCount > 0) {
+      mcpManager = await McpManager.fromConfig(loadedMcp.mcpServers, {
+        warnings: loadedMcp.warnings,
+        ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
+      });
+    } else if (loadedMcp.warnings.length > 0) {
+      for (const warning of loadedMcp.warnings) console.warn(`[mcp] ${warning}`);
+    }
+
     const config: AgentConfig = {
       model: 'sonnet',
       // Daemon-spawned sessions run autonomously and require tool use without
@@ -495,14 +522,22 @@ export class CronScheduler {
       // sessionConfig.traceWriter still wins (escape-hatch parity with
       // permissionMode).
       ...(trace ? { traceWriter: trace.writer } : {}),
+      ...(mcpManager !== undefined ? { mcpManager } : {}),
       // sessionConfig may override permissionMode if the operator explicitly
       // wants a different mode for daemon tasks (intentional escape hatch).
       ...this.options.sessionConfig,
     };
-    const session = this.options.sessionFactory
-      ? this.options.sessionFactory(config)
-      : new AgentSession(injectHotMemory(config));
-    return { session, memoryStore };
+    try {
+      const session = this.options.sessionFactory
+        ? this.options.sessionFactory(config)
+        : new AgentSession(injectHotMemory(config));
+      return { session, memoryStore, ...(mcpManager !== undefined ? { mcpManager } : {}) };
+    } catch (err) {
+      if (mcpManager) {
+        await mcpManager.disconnectAll().catch(() => undefined);
+      }
+      throw err;
+    }
   }
 
   private telemetryPath(): string {

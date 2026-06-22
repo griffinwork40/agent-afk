@@ -48,18 +48,35 @@ function makeScheduler(
 let queueDir: string;
 let telemetryDir: string;
 let telemetryPath: string;
+// Isolate AFK_HOME so spawnSession's loadMcpConfig() does not pick up the
+// operator's real ~/.afk/config/mcp.json (which would try to connect real MCP
+// servers under fake timers and hang the tick). Mirrors scheduler.test.ts.
+let homeDir: string | undefined;
+let savedAfkHome: string | undefined;
+let savedAllowProjectMcp: string | undefined;
 
 beforeEach(() => {
   vi.useFakeTimers();
   queueDir = mkdtempSync(join(tmpdir(), 'afk-pull-test-queue-'));
   telemetryDir = mkdtempSync(join(tmpdir(), 'afk-pull-test-tel-'));
   telemetryPath = join(telemetryDir, 'forge-telemetry.jsonl');
+  homeDir = mkdtempSync(join(tmpdir(), 'afk-pull-test-home-'));
+  savedAfkHome = process.env['AFK_HOME'];
+  savedAllowProjectMcp = process.env['AFK_ALLOW_PROJECT_MCP'];
+  process.env['AFK_HOME'] = homeDir;
+  process.env['AFK_ALLOW_PROJECT_MCP'] = '0';
 });
 
 afterEach(async () => {
   vi.useRealTimers();
   rmSync(queueDir, { recursive: true, force: true });
   rmSync(telemetryDir, { recursive: true, force: true });
+  if (savedAfkHome === undefined) delete process.env['AFK_HOME'];
+  else process.env['AFK_HOME'] = savedAfkHome;
+  if (savedAllowProjectMcp === undefined) delete process.env['AFK_ALLOW_PROJECT_MCP'];
+  else process.env['AFK_ALLOW_PROJECT_MCP'] = savedAllowProjectMcp;
+  if (homeDir !== undefined) rmSync(homeDir, { recursive: true, force: true });
+  homeDir = undefined;
 });
 
 // ---------------------------------------------------------------------------

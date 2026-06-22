@@ -55,6 +55,7 @@ import { BUILTIN_TOOL_NAMES } from './agent/tools/schemas.js';
 import { MEMORY_TOOL_NAMES } from './agent/memory/index.js';
 import { AWARENESS_TOOL_NAMES } from './agent/awareness/index.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory } from './agent/tools/nesting.js';
+import { attachMcpCleanup, loadTelegramMcpManager } from './telegram/mcp-session.js';
 
 // Capture version once at module load. Used by checkVersionDrift on each stats tick.
 // One level up from dist/ reaches project root where package.json lives.
@@ -229,15 +230,18 @@ async function main() {
         typeof overlayPrompt === 'string' ? overlayPrompt : undefined,
       );
 
-      let directProvider;
-      if (!isCodex) {
+      const sessionCwd = sessionConfig.cwd ?? telegramCwd;
+      const mcpManager = await loadTelegramMcpManager(sessionCwd);
+      let returnedSession: AgentSession | undefined;
+      try {
+        let directProvider;
+        if (!isCodex) {
         let boundSession: AgentSession | undefined;
         const telegramApiKey = sessionConfig.apiKey ?? config.apiKey ?? '';
         const telegramBaseUrl = config.baseUrl;
         // Inherit configured-or-host cwd so forked subagents stay in the
         // same working tree as the parent session — important when the
         // bot is pointed at a worktree via AFK_TELEGRAM_CWD.
-        const sessionCwd = sessionConfig.cwd ?? telegramCwd;
         const rootManager = new SubagentManager({
           apiKey: telegramApiKey,
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
@@ -325,12 +329,21 @@ async function main() {
           systemPrompt: layeredBasePrompt ?? '',
         });
 
-        const allowedTools = [...BUILTIN_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'agent', 'skill', 'compose'];
+        const allowedTools = [
+          ...BUILTIN_TOOL_NAMES,
+          ...MEMORY_TOOL_NAMES,
+          ...AWARENESS_TOOL_NAMES,
+          'agent',
+          'skill',
+          'compose',
+          ...(mcpManager?.getMcpToolWireNames() ?? []),
+        ];
         directProvider = new AnthropicDirectProvider({
           permissions: { allowedTools },
           subagentExecutor,
           skillExecutor,
           composeExecutor,
+          ...(mcpManager !== undefined ? { mcpManager } : {}),
           // Tag the presence file (~/.afk/state/presence/<id>.json) and
           // get_runtime_state as the Telegram surface. Without this the provider
           // defaults to 'cli' (anthropic-direct/index.ts) and `/watch`
@@ -359,7 +372,7 @@ async function main() {
           { cwd: sessionCwd !== undefined && sessionCwd.length > 0 ? sessionCwd : undefined },
           () => sessionCwd,
         );
-        const session = constructTelegramSession({
+        const session = attachMcpCleanup(constructTelegramSession({
           ...(sessionConfig.apiKey !== undefined ? { apiKey: sessionConfig.apiKey } : {}),
           model: sessionConfig.model,
           ...(systemPromptInner !== undefined ? { systemPrompt: systemPromptInner } : {}),
@@ -371,7 +384,8 @@ async function main() {
           ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
           provider: directProvider,
           hookRegistry: telegramHookBundle.registry,
-        });
+        }), mcpManager);
+        returnedSession = session;
         // Wire the path-approval grant ref to the provider so elicitation
         // approvals mutate readRoots / writeRoots on the right backend.
         telegramHookBundle.pathApprovalGrantRef.current = directProvider;
@@ -388,7 +402,7 @@ async function main() {
         ? assembleSystemPrompt(rawPrompt, telegramAutoRouting, 'telegram', pendingBriefContext())
         : rawPrompt;
       // Codex branch: same cwd resolution as the Anthropic branch above.
-      const codexSessionCwd = sessionConfig.cwd ?? telegramCwd;
+      const codexSessionCwd = sessionCwd;
 
       // permissionMode is intentionally omitted here: AgentSession defaults
       // to 'default' (post-C2 fix), which is the correct mode for Telegram
@@ -403,7 +417,10 @@ async function main() {
       // sessions (PR #202 review H1). surface:'telegram' is the lone constructor
       // arg — there is no per-query surface field — and prevents the presence
       // file mis-labeling Telegram sessions as 'cli' in `/watch`.
-      const codexProvider = new OpenAICompatibleProvider({ surface: 'telegram' });
+      const codexProvider = new OpenAICompatibleProvider({
+        surface: 'telegram',
+        ...(mcpManager !== undefined ? { mcpManager } : {}),
+      });
       const codexHookBundle = createDefaultHookRegistry(
         undefined,
         'telegram',
@@ -413,7 +430,7 @@ async function main() {
         { cwd: codexSessionCwd !== undefined && codexSessionCwd.length > 0 ? codexSessionCwd : undefined },
         () => codexSessionCwd,
       );
-      const session = constructTelegramSession({
+      const session = attachMcpCleanup(constructTelegramSession({
         ...(sessionConfig.apiKey !== undefined ? { apiKey: sessionConfig.apiKey } : {}),
         model: sessionConfig.model,
         ...(systemPrompt !== undefined ? { systemPrompt } : {}),
@@ -424,14 +441,23 @@ async function main() {
           : {}),
         provider: codexProvider,
         hookRegistry: codexHookBundle.registry,
-      });
+      }), mcpManager);
+      returnedSession = session;
       // Wire the path-approval grant ref + seed persisted `persist` grants so
       // the OpenAI Telegram surface gets the same restricted-path prompts and
       // persisted-grant replay as the Anthropic branch.
       codexHookBundle.pathApprovalGrantRef.current = codexProvider;
       seedPersistedGrants(codexProvider);
 
-      return session;
+        return session;
+      } catch (error) {
+        if (returnedSession !== undefined) {
+          await returnedSession.close().catch(() => undefined);
+        } else if (mcpManager !== undefined) {
+          await mcpManager.disconnectAll();
+        }
+        throw error;
+      }
     },
   });
 

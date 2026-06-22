@@ -152,6 +152,13 @@ export interface AgentConfig {
    */
   mcpServers?: Record<string, import('../mcp/types.js').McpServerConfig>;
 
+  /**
+   * Live MCP manager for the session. Entry points that own MCP lifecycle
+   * construct this with `McpManager.fromConfig()` and close it after the
+   * AgentSession shuts down; provider/session wiring only consumes it.
+   */
+  mcpManager?: import('../mcp/index.js').McpManager;
+
   /** Subagent definitions. Passed through when SDK V2 supports it. */
   agents?: Record<string, AgentDefinition>;
 
