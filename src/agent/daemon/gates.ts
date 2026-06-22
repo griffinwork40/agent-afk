@@ -71,14 +71,23 @@ export function readLastTickTime(taskId: string, telemetryPath: string): number 
 }
 
 /**
- * Count pending briefs in `briefsDir`. A "brief" is any regular file whose
- * name does not start with `.` (dotfiles are ignored). Missing directory
- * returns 0.
+ * Count pending briefs in `briefsDir`. A "brief" is a top-level regular `.md`
+ * file; subdirectories (notably the `consumed/` and `failed/` lifecycle bins,
+ * which persist once any brief has been processed) and non-`.md` files are
+ * ignored. Missing directory returns 0.
+ *
+ * Mirrors the brief detection in `pendingBriefContext`
+ * (agent/routing-directive.ts) so the daemon's sessionstart gate and the
+ * system-prompt nudge agree on the count. A bare `readdirSync(...).filter(name
+ * => !name.startsWith('.'))` would count `consumed/`/`failed/` as pending
+ * briefs and permanently trip the `briefs_pending` skip.
  */
 export function countPendingBriefs(briefsDir: string): number {
   if (!existsSync(briefsDir)) return 0;
   try {
-    return readdirSync(briefsDir).filter((name) => !name.startsWith('.')).length;
+    return readdirSync(briefsDir, { withFileTypes: true }).filter(
+      (entry) => entry.isFile() && entry.name.endsWith('.md'),
+    ).length;
   } catch {
     return 0;
   }
