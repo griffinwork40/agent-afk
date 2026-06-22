@@ -7,7 +7,7 @@
  * provider-visible tool catalog includes the bridged fixture tools.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -15,11 +15,11 @@ import { fileURLToPath } from 'node:url';
 
 import { OpenAICompatibleProvider } from '../agent/providers/index.js';
 import type { ProviderEvent } from '../agent/provider.js';
-import type { AgentConfig } from '../agent/types.js';
+import type { AgentConfig, IAgentSession } from '../agent/types.js';
 import type { AgentSession } from '../agent/session.js';
 import type { McpManager } from '../agent/mcp/index.js';
 import { constructTelegramSession } from './construct-session.js';
-import { loadTelegramMcpManager } from './mcp-session.js';
+import { attachMcpCleanup, loadTelegramMcpManager } from './mcp-session.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -129,4 +129,54 @@ describe('Telegram MCP session wiring', () => {
     },
     { timeout: 15_000 },
   );
+});
+
+describe('attachMcpCleanup', () => {
+  it('wraps session.close() to disconnect the manager exactly once, after close', async () => {
+    const order: string[] = [];
+    const disconnectAll = vi.fn(async () => {
+      order.push('disconnect');
+    });
+    const close = vi.fn(async () => {
+      order.push('close');
+    });
+    const session = { close } as unknown as IAgentSession;
+    const manager = { disconnectAll } as unknown as McpManager;
+
+    const wrapped = attachMcpCleanup(session, manager);
+    expect(wrapped).toBe(session);
+
+    await wrapped.close();
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(disconnectAll).toHaveBeenCalledTimes(1);
+    // Teardown order mirrors the other surfaces: session closes BEFORE MCP disconnect.
+    expect(order).toEqual(['close', 'disconnect']);
+
+    // Idempotent: a second close() does not double-disconnect the manager.
+    await wrapped.close();
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(disconnectAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('still disconnects the manager when the wrapped close() rejects', async () => {
+    const disconnectAll = vi.fn(async () => {});
+    const close = vi.fn(async () => {
+      throw new Error('close failed');
+    });
+    const session = { close } as unknown as IAgentSession;
+    const manager = { disconnectAll } as unknown as McpManager;
+
+    const wrapped = attachMcpCleanup(session, manager);
+    await expect(wrapped.close()).rejects.toThrow('close failed');
+    // The finally in attachMcpCleanup runs disconnectAll even on a failed close.
+    expect(disconnectAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('is a no-op passthrough when no manager is supplied', () => {
+    const close = vi.fn();
+    const session = { close } as unknown as IAgentSession;
+    expect(attachMcpCleanup(session, undefined)).toBe(session);
+    // close is left unwrapped.
+    expect(session.close).toBe(close);
+  });
 });

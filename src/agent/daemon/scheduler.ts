@@ -31,6 +31,7 @@ import { loadHooksConfig } from '../hooks/config-loader.js';
 import { createDefaultTraceWriter } from '../trace/factory.js';
 import { MemoryStore, injectHotMemory } from '../memory/index.js';
 import { McpManager, loadMcpConfig } from '../mcp/index.js';
+import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
 import type { AgentConfig } from '../types.js';
 import { getTelemetryPath } from '../../paths.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
@@ -492,15 +493,33 @@ export class CronScheduler {
     const trace = createDefaultTraceWriter({ sessionLabel: daemonTraceLabel(taskId) });
 
     let mcpManager: McpManager | undefined;
-    const loadedMcp = loadMcpConfig({ cwd: agentCwd });
+    // Mirror the chat / telegram / interactive surfaces: include MCP configs
+    // contributed by imported roots so the daemon reaches the same MCP
+    // surface-parity, not just cwd `.mcp.json` + the global config.
+    const importedMcpConfigs = resolveImportedRoots(loadImportFromConfig())
+      .mcpConfigs.filter((c) => c.format === 'json')
+      .map((c) => c.source);
+    const loadedMcp = loadMcpConfig({
+      cwd: agentCwd,
+      ...(importedMcpConfigs.length > 0 ? { importedMcpConfigs } : {}),
+    });
     const enabledMcpCount = Object.values(loadedMcp.mcpServers).filter((s) => !s.disabled).length;
-    if (enabledMcpCount > 0) {
-      mcpManager = await McpManager.fromConfig(loadedMcp.mcpServers, {
-        warnings: loadedMcp.warnings,
-        ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
-      });
-    } else if (loadedMcp.warnings.length > 0) {
-      for (const warning of loadedMcp.warnings) console.warn(`[mcp] ${warning}`);
+    try {
+      if (enabledMcpCount > 0) {
+        mcpManager = await McpManager.fromConfig(loadedMcp.mcpServers, {
+          warnings: loadedMcp.warnings,
+          ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
+        });
+      } else if (loadedMcp.warnings.length > 0) {
+        for (const warning of loadedMcp.warnings) console.warn(`[mcp] ${warning}`);
+      }
+    } catch (err) {
+      // McpManager.fromConfig re-throws when an `alwaysLoad` server fails to
+      // connect. runOnce()'s finally cannot close this tick's MemoryStore
+      // (its local is still null until spawnSession returns), so close it here
+      // to avoid orphaning the SQLite handle on a connect failure.
+      memoryStore.close();
+      throw err;
     }
 
     const config: AgentConfig = {
@@ -536,6 +555,10 @@ export class CronScheduler {
       if (mcpManager) {
         await mcpManager.disconnectAll().catch(() => undefined);
       }
+      // Session construction failed after MCP connected — close this tick's
+      // MemoryStore too (runOnce()'s finally can't, per the fromConfig catch
+      // above) so it is not orphaned.
+      memoryStore.close();
       throw err;
     }
   }
