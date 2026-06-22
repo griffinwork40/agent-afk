@@ -88,17 +88,27 @@ describe('countPendingBriefs', () => {
     expect(countPendingBriefs(dir)).toBe(0);
   });
 
-  it('counts regular files, ignoring dotfiles', () => {
+  it('counts top-level .md files, ignoring dotfiles and non-md files', () => {
     writeFileSync(join(dir, 'brief-1.md'), '');
     writeFileSync(join(dir, 'brief-2.md'), '');
     writeFileSync(join(dir, '.hidden'), '');
+    writeFileSync(join(dir, 'notes.txt'), '');
     expect(countPendingBriefs(dir)).toBe(2);
   });
 
-  it('counts subdirectories (each is one brief)', () => {
-    mkdirSync(join(dir, 'brief-a'));
-    mkdirSync(join(dir, 'brief-b'));
-    expect(countPendingBriefs(dir)).toBe(2);
+  it('does NOT count subdirectories (consumed/ and failed/ lifecycle bins)', () => {
+    // Regression: the daemon's briefs dir always holds consumed/ and failed/
+    // subdirs once any brief has been processed. Counting them as pending
+    // briefs would permanently trip the sessionstart gate's briefs_pending
+    // skip even when zero real briefs remain. Only top-level .md files count,
+    // and .md files nested inside those bins must not leak into the count.
+    mkdirSync(join(dir, 'consumed'));
+    mkdirSync(join(dir, 'failed'));
+    writeFileSync(join(dir, 'consumed', 'old-brief.md'), '');
+    expect(countPendingBriefs(dir)).toBe(0);
+
+    writeFileSync(join(dir, 'real-brief.md'), '');
+    expect(countPendingBriefs(dir)).toBe(1);
   });
 });
 
