@@ -37,7 +37,6 @@ import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import { getCurrentSink } from '../_lib/skill-sink-channel.js';
 import { loadSkillPrompts } from '../../skills/_lib/prompt-loader.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
-import { writeSkillInvocation } from '../telemetry/skill-invocation-writer.js';
 import { isTrustedSkill } from '../_lib/trusted-skill-registry.js';
 import { emitTrustedSkillComplete, emitTrustedSkillStart } from '../_lib/trusted-skill-events.js';
 import { debugLog } from '../../utils/debug.js';
@@ -380,16 +379,11 @@ export class SkillExecutor {
     // `subagent.dispatched` rows with `skill-fork-<name>` / `skill-<name>`
     // id_prefix via SubagentManager.forkSubagent (subagent.ts:385), so they
     // are already countable. The inline path runs the handler directly, so
-    // without these two events the 5 inline skills (mint, forge, diagnose,
-    // audit-fit, score) are invisible to operator usage queries.
+    // without this `skill.dispatched` row the 5 inline skills (mint, forge,
+    // diagnose, audit-fit, score) are invisible to operator usage queries.
+    // (skill-invocations.jsonl writer removed — routing-decisions.jsonl is the
+    // canonical skill-usage source; see chore/deprecate-skill-invocations-writer.)
     const depth = this.ctx.depth ?? 0;
-    writeSkillInvocation({
-      skillName: skill.name,
-      sessionId: this.ctx.parentSession.sessionId,
-      cwd: this.currentCwd,
-      model: skill.model ?? this.ctx.defaultModel,
-      ...this.sessionIdentity(),
-    });
     void appendRoutingDecision({
       ...this.sessionIdentity(),
       event: 'skill.dispatched',
@@ -671,14 +665,6 @@ export class SkillExecutor {
         ? this.ctx.resolveApiKeyForModel(skillChildModel)
         : resolveCredentialForModel(skillChildModel),
       parentApiKey: this.ctx.apiKey,
-    });
-
-    writeSkillInvocation({
-      skillName: skill.name,
-      sessionId: this.ctx.parentSession.sessionId,
-      cwd: this.currentCwd,
-      model: typeof skillChildModel === 'string' ? skillChildModel : undefined,
-      ...this.sessionIdentity(),
     });
 
     const manager = new SubagentManager({
@@ -966,14 +952,6 @@ export class SkillExecutor {
         ? this.ctx.resolveApiKeyForModel(pluginChildModel)
         : resolveCredentialForModel(pluginChildModel),
       parentApiKey: this.ctx.apiKey,
-    });
-
-    writeSkillInvocation({
-      skillName: skillName,
-      sessionId: this.ctx.parentSession.sessionId,
-      cwd: this.currentCwd,
-      model: typeof pluginChildModel === 'string' ? pluginChildModel : undefined,
-      ...this.sessionIdentity(),
     });
 
     const manager = new SubagentManager({
