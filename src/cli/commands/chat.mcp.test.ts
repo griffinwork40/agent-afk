@@ -1,17 +1,26 @@
 /**
- * Tests for stdin input resolution in `afk chat`.
+ * Focused regression tests for one-shot chat MCP behavior in `afk chat`.
  *
- * Covers: `-` sentinel, pipe-auto-detect (omitted arg + piped stdin),
- * literal arg pass-through, and TTY-stdin error.
+ * Verifies that configuring an MCP server (using the stdio fixture) wires
+ * the MCP tools into the provider's allowedTools set, and that omitting config
+ * leaves the default (no MCP tools) behavior unchanged.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Command } from 'commander';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve, join } from 'node:path';
+import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import type { OutputEvent } from '../../agent/types/session-types.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const FIXTURE = resolve(__dirname, '../../agent/mcp/__fixtures__/test-server.mjs');
 
 async function* makeStream(events: OutputEvent[]): AsyncIterable<OutputEvent> {
   for (const event of events) {
@@ -20,7 +29,7 @@ async function* makeStream(events: OutputEvent[]): AsyncIterable<OutputEvent> {
 }
 
 // ---------------------------------------------------------------------------
-// Mocks — must be hoisted above module imports.
+// Mocks — hoisted above module imports.
 // ---------------------------------------------------------------------------
 
 vi.mock('../../agent/session.js', () => {
@@ -58,13 +67,6 @@ vi.mock('../shared-helpers.js', () => ({
   loadSystemPrompt: vi.fn(() => undefined),
   loadConfigSystemPrompt: vi.fn(() => undefined),
   resolveBaseSystemPrompt: vi.fn(() => ({ prompt: undefined, source: 'none' })),
-}));
-
-vi.mock('../../agent/mcp/index.js', () => ({
-  McpManager: {
-    fromConfig: vi.fn(),
-  },
-  loadMcpConfig: vi.fn(() => ({ mcpServers: {}, sources: [], warnings: [] })),
 }));
 
 vi.mock('../../agent/routing-directive.js', () => ({
@@ -154,11 +156,19 @@ vi.mock('../slash/session-stats.js', () => ({
   recordTurn: vi.fn(() => ({ user: '', assistant: '', timestamp: Date.now() })),
 }));
 
+// We also mock the import config logic to return empty lists so we only load our override mcp config
+vi.mock('../../config/import-sources.js', () => ({
+  loadImportFromConfig: vi.fn(() => ({})),
+  resolveImportedRoots: vi.fn(() => ({ mcpConfigs: [] })),
+}));
+
 // ---------------------------------------------------------------------------
 // Import after mocks
 // ---------------------------------------------------------------------------
 
 import { AgentSession } from '../../agent/session.js';
+import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
+import { McpManager } from '../../agent/mcp/index.js';
 import { registerChatCommand } from './chat.js';
 
 // ---------------------------------------------------------------------------
@@ -172,150 +182,96 @@ async function runChat(...args: string[]): Promise<void> {
   await program.parseAsync(['node', 'afk', 'chat', ...args]);
 }
 
-/** Capture stderr lines written during fn(). */
-async function captureStderr(fn: () => Promise<void>): Promise<string> {
-  const chunks: string[] = [];
-  const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
-    chunks.push(String(chunk));
-    return true;
-  });
-  try {
-    await fn();
-  } catch {
-    // ignore — we just want stderr
-  } finally {
-    spy.mockRestore();
-  }
-  return chunks.join('');
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('afk chat — stdin input', () => {
+describe('afk chat — MCP integration', () => {
+  let tempDir: string;
+  let mcpConfigPath: string;
+  const originalIsTTY = process.stdin.isTTY;
+
   beforeEach(() => {
     vi.mocked(AgentSession).mockClear();
+    vi.mocked(AnthropicDirectProvider).mockClear();
+    // Force non-TTY for headless runChat execution
+    // @ts-expect-error - overriding readonly property for tests
+    process.stdin.isTTY = false;
+    process.exitCode = undefined;
+
+    tempDir = mkdtempSync(join(tmpdir(), 'afk-chat-mcp-test-'));
+    vi.stubEnv('AFK_HOME', tempDir);
+    mcpConfigPath = join(tempDir, 'mcp.json');
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
-    // Reset process.exitCode after each test.
+    // @ts-expect-error - restore
+    process.stdin.isTTY = originalIsTTY;
     process.exitCode = undefined;
+    vi.unstubAllEnvs();
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
   });
 
-  it('passes a literal positional message directly', async () => {
-    vi.mocked(AgentSession).mockImplementationOnce(() => ({
-      close: vi.fn().mockResolvedValue(undefined),
-      sendMessage: vi.fn().mockResolvedValue({ content: 'pong', timestamp: new Date() }),
-      sendMessageStream: vi.fn().mockReturnValue(makeStream([{ type: 'done' }])),
-      getLastResponseMetadata: vi.fn().mockReturnValue(null),
-      getInputStreamRef: vi.fn().mockReturnValue({ pushUserMessage: vi.fn() }),
-      sessionId: 'mock-session-id',
-      abortSignal: new AbortController().signal,
-    }));
+  it('wires up MCP servers, handshake succeeds, exposes tools, and disconnects after session close', async () => {
+    const disconnectSpy = vi.spyOn(McpManager.prototype, 'disconnectAll');
+    try {
+      const mcpConfig = {
+        mcpServers: {
+          testsrv: {
+            type: 'stdio',
+            command: process.execPath,
+            args: [FIXTURE],
+          },
+        },
+      };
+      writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig), 'utf-8');
 
+      await runChat('hello world', '--mcp-config', mcpConfigPath, '--format', 'json');
+
+      // Verify AnthropicDirectProvider was initialized with the MCP tools.
+      expect(vi.mocked(AnthropicDirectProvider)).toHaveBeenCalled();
+      const firstCallArgs = vi.mocked(AnthropicDirectProvider).mock.calls[0]?.[0];
+      expect(firstCallArgs).toBeDefined();
+      expect(firstCallArgs?.permissions?.allowedTools).toEqual(
+        expect.arrayContaining([
+          'mcp__testsrv__add',
+          'mcp__testsrv__boom',
+          'mcp__testsrv__echo',
+        ]),
+      );
+
+      // Verify that the provider also received mcpManager.
+      expect(firstCallArgs?.mcpManager).toBeDefined();
+
+      // Verify cleanup ordering: the agent session closes before MCP children disconnect.
+      const sessionInstance = vi.mocked(AgentSession).mock.results[0]?.value as { close: ReturnType<typeof vi.fn> } | undefined;
+      expect(sessionInstance?.close).toHaveBeenCalledTimes(1);
+      expect(disconnectSpy).toHaveBeenCalledTimes(1);
+      expect(sessionInstance!.close.mock.invocationCallOrder[0]).toBeLessThan(
+        disconnectSpy.mock.invocationCallOrder[0]!,
+      );
+    } finally {
+      disconnectSpy.mockRestore();
+    }
+  }, 15000);
+
+  it('no-config behavior remains unchanged and does not register MCP tools', async () => {
+    // We pass an empty configuration file or no --mcp-config flag
     await runChat('hello world', '--format', 'json');
 
-    const instance = vi.mocked(AgentSession).mock.results[0]?.value as
-      { sendMessage: ReturnType<typeof vi.fn> } | undefined;
-    expect(instance?.sendMessage).toHaveBeenCalledWith('hello world', expect.anything());
-  });
+    expect(vi.mocked(AnthropicDirectProvider)).toHaveBeenCalled();
+    const firstCallArgs = vi.mocked(AnthropicDirectProvider).mock.calls[0]?.[0];
+    expect(firstCallArgs).toBeDefined();
 
-  it('reads from stdin when arg is `-` and stdin is a pipe', async () => {
-    // Simulate a piped stdin stream.
-    const originalIsTTY = process.stdin.isTTY;
-    // @ts-expect-error — forcing non-TTY for test
-    process.stdin.isTTY = false;
+    // Verify no mcp__ tools are present in allowedTools
+    const mcpTools = firstCallArgs?.permissions?.allowedTools.filter((t: string) => t.startsWith('mcp__'));
+    expect(mcpTools).toEqual([]);
 
-    let stdinData = '';
-    vi.mocked(AgentSession).mockImplementationOnce(() => ({
-      close: vi.fn().mockResolvedValue(undefined),
-      sendMessage: vi.fn().mockImplementation((msg: string) => {
-        stdinData = msg;
-        return Promise.resolve({ content: 'ok', timestamp: new Date() });
-      }),
-      sendMessageStream: vi.fn().mockReturnValue(makeStream([{ type: 'done' }])),
-      getLastResponseMetadata: vi.fn().mockReturnValue(null),
-      getInputStreamRef: vi.fn().mockReturnValue({ pushUserMessage: vi.fn() }),
-      sessionId: 'mock-session-id',
-      abortSignal: new AbortController().signal,
-    }));
-
-    // Stub process.stdin to emit "piped content\n" then end.
-    const { Readable } = await import('node:stream');
-    const mockStdin = new Readable({ read() {} });
-    const originalStdin = process.stdin;
-    Object.defineProperty(process, 'stdin', { value: mockStdin, configurable: true });
-
-    const runPromise = runChat('-', '--format', 'json');
-    mockStdin.push('piped content\n');
-    mockStdin.push(null); // EOF
-    await runPromise;
-
-    Object.defineProperty(process, 'stdin', { value: originalStdin, configurable: true });
-    // @ts-expect-error
-    process.stdin.isTTY = originalIsTTY;
-
-    expect(stdinData).toBe('piped content');
-  });
-
-  it('errors when `-` is used and stdin is a TTY', async () => {
-    const originalIsTTY = process.stdin.isTTY;
-    // @ts-expect-error
-    process.stdin.isTTY = true;
-
-    const stderr = await captureStderr(() => runChat('-', '--format', 'json'));
-
-    // @ts-expect-error
-    process.stdin.isTTY = originalIsTTY;
-
-    expect(stderr).toContain('no stdin available');
-    expect(process.exitCode).toBe(1);
-  });
-
-  it('errors when no message is supplied and stdin is a TTY', async () => {
-    const originalIsTTY = process.stdin.isTTY;
-    // @ts-expect-error
-    process.stdin.isTTY = true;
-
-    const stderr = await captureStderr(() => runChat('--format', 'json'));
-
-    // @ts-expect-error
-    process.stdin.isTTY = originalIsTTY;
-
-    expect(stderr).toMatch(/missing message/);
-    expect(process.exitCode).toBe(1);
-  });
-
-  // Regression: readStdin used to hang forever when stdin had already reached
-  // EOF before the call (process.stdin.readableEnded === true). The fix
-  // resolves with '' synchronously; the empty-message guard then exits 1.
-  it('exits cleanly when stdin reached EOF before the handler ran', async () => {
-    const originalIsTTY = process.stdin.isTTY;
-    // @ts-expect-error
-    process.stdin.isTTY = false;
-
-    const { Readable } = await import('node:stream');
-    const endedStdin = new Readable({ read() {} });
-    endedStdin.push(null); // EOF immediately
-    // Wait one tick so the stream transitions to readableEnded=true.
-    await new Promise<void>((r) => setImmediate(r));
-
-    const originalStdin = process.stdin;
-    Object.defineProperty(process, 'stdin', { value: endedStdin, configurable: true });
-
-    // Tight timeout to fail loudly if the regression returns and readStdin hangs.
-    const stderr = await Promise.race([
-      captureStderr(() => runChat('-', '--format', 'json')),
-      new Promise<string>((_, rej) => setTimeout(() => rej(new Error('readStdin hung')), 2000)),
-    ]);
-
-    Object.defineProperty(process, 'stdin', { value: originalStdin, configurable: true });
-    // @ts-expect-error
-    process.stdin.isTTY = originalIsTTY;
-
-    expect(stderr).toMatch(/message is empty/);
-    expect(process.exitCode).toBe(1);
-  });
+    // Verify no mcpManager is passed
+    expect(firstCallArgs?.mcpManager).toBeUndefined();
+  }, 15000);
 });
