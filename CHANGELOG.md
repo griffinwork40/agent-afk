@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.31.0] - 2026-06-22
+
+### Added
+- wire MCP servers into chat, daemon, and telegram surfaces (96b9fae)
+
+### Fixed
+- daemon imported-config parity + close MemoryStore on connect failure (#244) (77e92fe)
+
+### Changed
+- Merge pull request #244 from sorcerai/fix/mcp-surface-parity (f16aa4b)
+
 ## [4.30.0] - 2026-06-22
 
 ### Added
