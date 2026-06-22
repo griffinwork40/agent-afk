@@ -11,6 +11,19 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.30.0] - 2026-06-22
+
+### Added
+- tag dispatched gate skills with is_gate (port afk-workshop#823) (57c38d3)
+
+### Fixed
+- scope is_gate to skill.dispatched on the load path (port afk-workshop#823) (8b08141)
+
+### Changed
+- Merge pull request #243 from griffinwork40/afk-port/pr-823 (ba9acda)
+- Merge pull request #245 from griffinwork40/afk-port/pr-824 (e388965)
+- deprecate redundant skill-invocations.jsonl writer (port afk-workshop#824) (e3c563f)
+
 ## [4.29.1] - 2026-06-22
 
 ### Fixed
