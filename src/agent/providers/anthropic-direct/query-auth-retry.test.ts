@@ -65,6 +65,52 @@ async function* singleInput(content: string): AsyncIterable<{ content: string }>
   yield { content };
 }
 
+/** A prompt stream we can push user turns to over the life of the test. */
+function createPushStream(): {
+  push: (item: { content: string }) => void;
+  close: () => void;
+  iterable: AsyncIterable<{ content: string }>;
+} {
+  const queue: Array<{ content: string }> = [];
+  let waiting: ((r: IteratorResult<{ content: string }>) => void) | null = null;
+  let closed = false;
+  return {
+    push(item): void {
+      if (waiting) {
+        const resolve = waiting;
+        waiting = null;
+        resolve({ value: item, done: false });
+      } else {
+        queue.push(item);
+      }
+    },
+    close(): void {
+      closed = true;
+      if (waiting) {
+        const resolve = waiting;
+        waiting = null;
+        resolve({ value: undefined as unknown as { content: string }, done: true });
+      }
+    },
+    iterable: {
+      [Symbol.asyncIterator](): AsyncIterator<{ content: string }> {
+        return {
+          next(): Promise<IteratorResult<{ content: string }>> {
+            const head = queue.shift();
+            if (head !== undefined) return Promise.resolve({ value: head, done: false });
+            if (closed) {
+              return Promise.resolve({ value: undefined as unknown as { content: string }, done: true });
+            }
+            return new Promise((resolve) => {
+              waiting = resolve;
+            });
+          },
+        };
+      },
+    },
+  };
+}
+
 /** Build a minimal text-only stream that ends with stop_reason=end_turn. */
 function makeTextStream(text: string): RawMessageStreamEvent[] {
   return [
@@ -690,80 +736,90 @@ describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
     expect(messagesCreateMock).toHaveBeenCalledTimes(1);
   });
 
-  it('interrupt during wait: 429+ts → paused → interrupt() → generator terminates (no hang, no resumed)', async () => {
-    // Regression guard for the usage-limit hang. When Ctrl+C (interrupt) lands
-    // during the usage-limit wait, `turnWithRetries` returns CLEANLY (not via
-    // throw — see retry-layer's `if (result === 'aborted') return`), so the
-    // catch-path abort guard in query.ts never fires. Without the post-finally
-    // guard the outer loop falls through to the next `promptIterator.next()`
-    // and BLOCKS there forever while the consumer is still awaiting a terminal
-    // event for the aborted turn — the REPL hangs (can't quit, auto-resume
-    // never re-fires, queued input never drains).
+  it('interrupt during wait: 429+ts → paused → interrupt() → yields terminal + stays resumable (no hang, no auto-resume)', async () => {
+    // Regression guard for the usage-limit interrupt path. When Ctrl+C
+    // (interrupt) lands during the usage-limit wait, `turnWithRetries` returns
+    // CLEANLY (not via throw — see retry-layer's `if (result === 'aborted')
+    // return`), so the catch-path abort guard never fires and control reaches
+    // the post-loop guard with the signal still aborted.
     //
-    // The prompt stream below blocks on its 2nd pull, exactly like the live
-    // REPL idle wait, so the hang is observable. A single-shot stream would
-    // return `done` on the 2nd loop and mask the bug. Uses REAL timers because
-    // the abort short-circuits waitForReset synchronously (the signal is
-    // already aborted when waitForReset is entered) and we want a wall-clock
-    // failsafe that fires if the hang regresses.
+    // Contract (fix/interrupt-mid-turn-resume): the generator must NOT
+    // terminate. An earlier fix (commit c462ebd) `return`ed here to stop the
+    // consumer hanging on a `next()` that never resolves — but terminating the
+    // generator permanently exhausts AgentSession's shared providerIterator, so
+    // every later `sendMessageStream` silently runs no turn (the "can't resume
+    // after ESC" bug). The correct behavior: emit a terminal `turn.completed`
+    // (so the consumer unblocks — still no hang) AND loop back to await the
+    // next prompt (so the session stays usable). The interrupted turn is
+    // abandoned — no `resumed`, no replay.
+    //
+    // Uses REAL timers because the abort short-circuits waitForReset
+    // synchronously (the signal is already aborted when waitForReset re-checks).
     vi.useRealTimers();
 
-    let releaseSecondPull: (() => void) | undefined;
-    const blockingPrompt = (async function* (): AsyncIterable<{ content: string }> {
-      yield { content: 'hello' };
-      // 2nd pull blocks until released — mirrors the REPL awaiting next input.
-      await new Promise<void>((resolve) => { releaseSecondPull = resolve; });
-    })();
-
+    const prompts = createPushStream();
     let callIdx = 0;
     messagesCreateMock.mockImplementation(() => {
       callIdx += 1;
       if (callIdx === 1) throw make429UsageLimitError(60 * 60 * 1_000); // 1h reset
-      return fromArray(makeTextStream('should not reach'));
+      return fromArray(makeTextStream('resumed after interrupt'));
     });
 
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
-      prompt: blockingPrompt,
+      prompt: prompts.iterable,
       config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
     });
 
-    const events: ProviderEvent[] = [];
-    const collectWithInterrupt = async (): Promise<void> => {
-      for await (const ev of query) {
-        events.push(ev);
-        if (ev.type === 'paused') {
-          // User hits Ctrl+C during the usage-limit wait.
-          await query.interrupt();
-        }
+    const it = (query as AsyncIterable<ProviderEvent>)[Symbol.asyncIterator]();
+    await it.next(); // session.init
+
+    // Turn 1: 429 → paused → interrupt during the wait.
+    prompts.push({ content: 'hello' });
+    const turn1Types: string[] = [];
+    let interrupted = false;
+    let r = await it.next();
+    while (!r.done) {
+      const ev = r.value as ProviderEvent;
+      turn1Types.push(ev.type);
+      if (ev.type === 'paused' && !interrupted) {
+        interrupted = true;
+        await query.interrupt(); // user hits Ctrl+C during the usage-limit wait
       }
-    };
-
-    // Fail fast and legibly if the hang regresses: once interrupted, the
-    // generator must terminate well within this window.
-    let failsafeTimer: ReturnType<typeof setTimeout> | undefined;
-    const failsafe = new Promise<never>((_resolve, reject) => {
-      failsafeTimer = setTimeout(
-        () => reject(new Error(
-          'HANG: query generator did not terminate after interrupt() during the usage-limit wait — regression of the query.ts post-finally abort guard',
-        )),
-        2_000,
-      );
-    });
-
-    try {
-      await Promise.race([collectWithInterrupt(), failsafe]);
-    } finally {
-      if (failsafeTimer !== undefined) clearTimeout(failsafeTimer);
-      releaseSecondPull?.();
+      if (ev.type === 'turn.completed') break; // terminal — the consumer unblocks here
+      r = await it.next();
     }
 
-    const types = events.map((e) => e.type);
-    expect(types).toContain('paused');
-    expect(types).not.toContain('resumed');
-    // Only the first (429'd) call — the interrupt prevents any replay.
-    expect(messagesCreateMock).toHaveBeenCalledTimes(1);
-  });
+    // The interrupt unblocked the turn via a terminal event — no hang — and the
+    // generator did NOT terminate (the bug terminated it here, bricking resume).
+    expect(turn1Types).toContain('paused');
+    expect(turn1Types).not.toContain('resumed');
+    expect(r.done).toBe(false);
+    expect((r.value as ProviderEvent).type).toBe('turn.completed');
+
+    // Resumability: a fresh prompt runs a new turn. The interrupted turn was
+    // abandoned (callIdx 1 = the 429); callIdx 2 is this new prompt, NOT a
+    // replay — `resumed` never appeared.
+    prompts.push({ content: 'next' });
+    let reply = '';
+    let sawTurn2 = false;
+    r = await it.next();
+    while (!r.done) {
+      const ev = r.value as ProviderEvent;
+      if (ev.type === 'delta.text') reply += ev.text;
+      if (ev.type === 'turn.completed') {
+        sawTurn2 = true;
+        break;
+      }
+      r = await it.next();
+    }
+    expect(sawTurn2).toBe(true);
+    expect(reply).toContain('resumed after interrupt');
+    expect(callIdx).toBe(2);
+
+    prompts.close();
+    await it.return?.();
+  }, 10_000);
 
   it('2h cap: 429 with resetsAt > 2h from now → error surfaces immediately, no paused/resumed', async () => {
     messagesCreateMock.mockImplementation(() => {
