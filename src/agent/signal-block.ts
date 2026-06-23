@@ -46,12 +46,6 @@
  *   observer's job; we just gatekeep the shape.
  *
  * @module agent/signal-block
- *
- * TODO(signal-block-wiring): `parseSignal` is defined and tested but not yet
- * imported by any runtime caller (`handle.ts`, `result.ts`, `executor.ts`).
- * Wiring into the subagent result pipeline is intentionally deferred to a
- * follow-up PR — this PR only lands the parser + schema so observers can
- * adopt it incrementally. Remove this TODO when a caller imports it.
  */
 
 import { z } from 'zod';

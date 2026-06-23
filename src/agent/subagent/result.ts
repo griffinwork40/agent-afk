@@ -10,6 +10,7 @@
 import type { ZodError, ZodType } from 'zod';
 import type { Message } from '../types.js';
 import { extractStructuredOutput } from '../output-extractor.js';
+import { parseSignal, type Signal } from '../signal-block.js';
 
 export type SubagentStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
@@ -93,6 +94,13 @@ export interface SubagentResult<T = unknown> {
   completionPercent?: number;
   /** Execution trace: tool calls, tool results, thinking presence, and usage. */
   trace?: SubagentTrace;
+  /**
+   * Passive SIGNAL block parsed from the subagent's final message, when present
+   * and well-formed. Non-authoritative v0 metadata — callers MUST NOT use this
+   * to gate finalization, block tools, or alter control flow. Only set when the
+   * message contained a valid SIGNAL block; absent otherwise.
+   */
+  signal?: Signal;
 }
 
 /**
@@ -106,14 +114,17 @@ export function buildResultFromMessage<T>(
   outputSchema: ZodType<T> | undefined,
   trace?: SubagentTrace,
 ): SubagentResult<T> {
+  const sig = parseSignal(message.content);
+  const signal = sig.ok ? sig.signal : undefined;
+
   if (!outputSchema) {
-    return { id, status, message, trace };
+    return { id, status, message, trace, ...(signal !== undefined && { signal }) };
   }
 
   const candidate = extractStructuredOutput(message.content);
   const parsed = outputSchema.safeParse(candidate);
   if (parsed.success) {
-    return { id, status, message, output: parsed.data, trace };
+    return { id, status, message, output: parsed.data, trace, ...(signal !== undefined && { signal }) };
   }
 
   return {
@@ -125,6 +136,7 @@ export function buildResultFromMessage<T>(
     }),
     schemaError: parsed.error,
     trace,
+    ...(signal !== undefined && { signal }),
   };
 }
 
