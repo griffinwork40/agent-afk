@@ -31,6 +31,7 @@ import type { SubagentProgressSink } from './types/session-types.js';
 import { dispatchSubagentStart } from './subagent-hooks.js';
 import { emitSubagentLifecycle } from './trace/emit.js';
 import type { AbortOrigin, TraceWriter } from './trace/index.js';
+import type { Surface } from './awareness/types.js';
 import { appendRoutingDecision } from './routing-telemetry.js';
 import { getCurrentSink } from './_lib/skill-sink-channel.js';
 import { buildPhaseRestrictedProvider, type PhaseRole } from './tools/nesting.js';
@@ -187,13 +188,22 @@ export interface SubagentManagerOptions {
    */
   cwd?: string;
   /**
-   * Witness-layer trace writer threaded into the manager's {@link AbortGraph}
-   * so cascade aborts emit `abort` events. When omitted, AbortGraph runs
-   * without trace emission — useful for tests and harnesses that don't need
-   * the witness layer. Forked children inherit the writer via their
-   * `config.traceWriter` (callers thread it through `forkSubagent` options).
+   * Witness-layer trace writer. Threaded into the manager's {@link AbortGraph}
+   * so cascade aborts emit `abort` events, AND auto-inherited by every forked
+   * child whose `config.traceWriter` is unset — so all worker sessions write
+   * into the same trace file without per-call plumbing. When omitted, AbortGraph
+   * runs without trace emission and child sessions emit no traces (useful for
+   * tests and harnesses that don't need the witness layer).
    */
   traceWriter?: TraceWriter;
+  /**
+   * Execution surface inherited by all forked children whose `config.surface`
+   * is unset. Governs the `origin` field (`cli` / `telegram` / `daemon`) in
+   * every child session's trace events. Set by each top-level entrypoint (farm
+   * → `'cli'`, daemon → `'daemon'`, telegram → `'telegram'`) so worker sessions
+   * report the correct origin without per-call plumbing.
+   */
+  surface?: Surface;
   /**
    * Optional callback invoked after each forked subagent reaches
    * `succeeded` status. Receives the subagent's token usage and optional
@@ -221,6 +231,8 @@ export class SubagentManager {
   // `afk -w` worktree is created mid-session. Read at fork time (forkSubagent),
   // so updating it makes every subsequent fork inherit the new worktree cwd.
   private parentCwd: string | undefined;
+  private readonly parentTraceWriter: TraceWriter | undefined;
+  private readonly parentSurface: Surface | undefined;
   private readonly abortGraph: AbortGraph;
   private readonly rootId: string;
   private readonly rootController: AbortController;
@@ -236,6 +248,8 @@ export class SubagentManager {
     this.parentApiKey = options.apiKey;
     this.parentBaseUrl = options.baseUrl;
     this.parentCwd = options.cwd;
+    this.parentTraceWriter = options.traceWriter;
+    this.parentSurface = options.surface;
     this.onSubagentSucceededCb = options.onSubagentSucceeded;
     // Witness layer: AbortGraph receives the writer at construction so
     // cascades fire `abort` events without per-call plumbing.
@@ -423,6 +437,20 @@ export class SubagentManager {
       // process.cwd() and operates on the wrong working tree).
       ...(options.config.cwd === undefined && this.parentCwd !== undefined
         ? { cwd: this.parentCwd }
+        : {}),
+      // Invariant: a forked child's trace origin comes from its inherited
+      // parent surface, not from any actor-role value (see session-identity.ts).
+      // Inherit traceWriter + surface from the manager so every worker session
+      // (e.g. farm branch workers) writes into the same trace file and reports
+      // the correct origin ('cli'/'daemon'/'telegram') without per-call plumbing.
+      // Guard: explicit values on options.config win (the ...options.config
+      // spread at line 392 already set them); these only fill the gap when
+      // the per-fork config omits them — matching the cwd inheritance pattern.
+      ...(options.config.traceWriter === undefined && this.parentTraceWriter !== undefined
+        ? { traceWriter: this.parentTraceWriter }
+        : {}),
+      ...(options.config.surface === undefined && this.parentSurface !== undefined
+        ? { surface: this.parentSurface }
         : {}),
       // Child session inherits the SAME resolved registry (see `registry`
       // above) so its own SessionStart/SessionEnd/PreToolUse fire against it.

@@ -370,16 +370,17 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
   const abortController = new AbortController();
   const manager = new SubagentManager({
     parentAbortSignal: abortController.signal,
-    // Wire the trace writer so AbortGraph cascade aborts are recorded in the
-    // witness layer. Once manager-level traceWriter inheritance lands in
-    // SubagentManager, forked worker sessions will also receive this writer
-    // automatically — making farm workers fully visible in the trace.
+    // Wire the trace writer and surface into the manager so every forked
+    // farm worker session inherits them automatically (via manager-level
+    // inheritance in SubagentManager.forkSubagent — mirrors cwd inheritance).
+    // Result: all worker sessions write into the same trace file and report
+    // origin='cli' in their trace events, not 'unknown'.
     ...(trace !== null ? { traceWriter: trace.writer } : {}),
+    surface: 'cli',
   });
-  // surface: 'cli' — farm is a CLI entrypoint; workers must report
-  // origin='cli', not 'unknown'. The value is set here at the parentSession
-  // level for documentation; the worker AgentConfigs will receive surface
-  // once SubagentManager propagates it (same pattern as cwd inheritance).
+  // surface: 'cli' — farm is a CLI entrypoint; workers report origin='cli'
+  // via inheritance from the manager (above). Repeated on parentSession for
+  // completeness / downstream callers that read the synthetic session object.
   const parentSession = {
     sessionId: `farm-${manifest.taskSlug}`,
     abortSignal: abortController.signal,
