@@ -11,6 +11,20 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.31.2] - 2026-06-23
+
+### Fixed
+- redact poison-quarantine logs and harden listPending (bd272f8)
+- quarantine malformed pull-queue entries instead of silent deadlock (c1d543f)
+
+### Changed
+- Merge pull request #241 from sorcerai/fix/daemon-pull-queue-poison-deadlock (6d6e360)
+- Delete .claude/scheduled_tasks.lock (52fba48)
+- Delete .afk/plans/shift-tab-permission-mode-cycle.md (50f68da)
+- Delete .afk/plans/normalize-session-identity-telemetry.md (7550c43)
+- Delete .afk/plans/default-permission-mode-bypass.md (387afb3)
+- Update .gitignore to exclude local plans dir (01ccea6)
+
 ## [4.31.1] - 2026-06-22
 
 ### Fixed
