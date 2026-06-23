@@ -34,7 +34,7 @@ import { TelegramBot } from './telegram/bot.js';
 import { parseAllowedChatIds } from './telegram/allowlist.js';
 import { validateBotToken } from './telegram/setup-wizard.js';
 import { AgentSession } from './agent/session.js';
-import { constructTelegramSession } from './telegram/construct-session.js';
+import { constructTelegramSession, createTelegramTraceWriter } from './telegram/construct-session.js';
 import { createDefaultHookRegistry } from './agent/default-hook-registry.js';
 import { seedPersistedGrants } from './agent/permissions-store.js';
 import { loadHooksConfig } from './agent/hooks/config-loader.js';
@@ -231,7 +231,13 @@ async function main() {
       );
 
       const sessionCwd = sessionConfig.cwd ?? telegramCwd;
-      const mcpManager = await loadTelegramMcpManager(sessionCwd);
+      // Create the trace writer before loadTelegramMcpManager so the MCP
+      // connect phase (mcp_server_start/done, mcp_connect_start/done) is
+      // captured in the same session trace as the rest of the Telegram session.
+      const telegramTraceWriter = createTelegramTraceWriter();
+      const mcpManager = await loadTelegramMcpManager(sessionCwd, {
+        ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
+      });
       let returnedSession: AgentSession | undefined;
       try {
         let directProvider;
@@ -384,7 +390,7 @@ async function main() {
           ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
           provider: directProvider,
           hookRegistry: telegramHookBundle.registry,
-        }), mcpManager);
+        }, { traceWriter: telegramTraceWriter }), mcpManager);
         returnedSession = session;
         // Wire the path-approval grant ref to the provider so elicitation
         // approvals mutate readRoots / writeRoots on the right backend.
@@ -441,7 +447,7 @@ async function main() {
           : {}),
         provider: codexProvider,
         hookRegistry: codexHookBundle.registry,
-      }), mcpManager);
+      }, { traceWriter: telegramTraceWriter }), mcpManager);
       returnedSession = session;
       // Wire the path-approval grant ref + seed persisted `persist` grants so
       // the OpenAI Telegram surface gets the same restricted-path prompts and

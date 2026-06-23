@@ -17,7 +17,8 @@ import { OpenAICompatibleProvider } from '../agent/providers/index.js';
 import type { ProviderEvent } from '../agent/provider.js';
 import type { AgentConfig, IAgentSession } from '../agent/types.js';
 import type { AgentSession } from '../agent/session.js';
-import type { McpManager } from '../agent/mcp/index.js';
+import { McpManager } from '../agent/mcp/index.js';
+import type { TraceWriter } from '../agent/trace/index.js';
 import { constructTelegramSession } from './construct-session.js';
 import { attachMcpCleanup, loadTelegramMcpManager } from './mcp-session.js';
 
@@ -86,6 +87,27 @@ describe('Telegram MCP session wiring', () => {
   it('returns undefined when the Telegram session has no MCP config', async () => {
     await expect(loadTelegramMcpManager(noConfigCwd)).resolves.toBeUndefined();
   });
+
+  it(
+    'forwards the traceWriter option into McpManager.fromConfig',
+    async () => {
+      await writeFixtureMcpConfig(projectCwd);
+      const fakeWriter = { __trace: true } as unknown as TraceWriter;
+
+      const fromConfigSpy = vi.spyOn(McpManager, 'fromConfig');
+      try {
+        manager = await loadTelegramMcpManager(projectCwd, { traceWriter: fakeWriter });
+        expect(manager).toBeDefined();
+        expect(fromConfigSpy).toHaveBeenCalledOnce();
+        // The second argument to fromConfig must carry our traceWriter.
+        const optsArg = fromConfigSpy.mock.calls[0]?.[1];
+        expect(optsArg?.traceWriter).toBe(fakeWriter);
+      } finally {
+        fromConfigSpy.mockRestore();
+      }
+    },
+    { timeout: 15_000 },
+  );
 
   it(
     'exposes project-local fixture MCP tools through the Telegram provider/session path',

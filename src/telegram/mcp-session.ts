@@ -11,8 +11,24 @@
 import type { IAgentSession } from '../agent/types.js';
 import { McpManager, loadMcpConfig, getMcpConfigPath } from '../agent/mcp/index.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../config/import-sources.js';
+import { emitSessionPhase } from '../agent/trace/emit.js';
+import type { TraceWriter } from '../agent/trace/index.js';
 
-export async function loadTelegramMcpManager(cwd: string | undefined): Promise<McpManager | undefined> {
+export interface LoadTelegramMcpManagerOptions {
+  /**
+   * Witness-layer trace writer for the current session. When present,
+   * `loadTelegramMcpManager` emits `mcp_connect_start`/`mcp_connect_done`
+   * span events around the connect phase (surface-parity with chat.ts) and
+   * threads the writer into `McpManager.fromConfig` so per-server
+   * `mcp_server_start`/`mcp_server_done` events are also captured.
+   */
+  traceWriter?: TraceWriter;
+}
+
+export async function loadTelegramMcpManager(
+  cwd: string | undefined,
+  opts: LoadTelegramMcpManagerOptions = {},
+): Promise<McpManager | undefined> {
   const importedMcpConfigs = resolveImportedRoots(loadImportFromConfig())
     .mcpConfigs.filter((c) => c.format === 'json')
     .map((c) => c.source);
@@ -30,7 +46,24 @@ export async function loadTelegramMcpManager(cwd: string | undefined): Promise<M
     ? loaded.sources[0]
     : `${loaded.sources.length} source(s)`;
   console.log(`  mcp: ${enabledCount} server(s) from ${sourcesLabel ?? getMcpConfigPath()}`);
-  return McpManager.fromConfig(loaded.mcpServers, { warnings: loaded.warnings });
+
+  const mcpStartedAt = Date.now();
+  void emitSessionPhase(opts.traceWriter, {
+    phase: 'mcp_connect_start',
+    metadata: { serverCount: enabledCount },
+  });
+  try {
+    return await McpManager.fromConfig(loaded.mcpServers, {
+      warnings: loaded.warnings,
+      ...(opts.traceWriter !== undefined ? { traceWriter: opts.traceWriter } : {}),
+    });
+  } finally {
+    void emitSessionPhase(opts.traceWriter, {
+      phase: 'mcp_connect_done',
+      durationMs: Date.now() - mcpStartedAt,
+      metadata: { serverCount: enabledCount },
+    });
+  }
 }
 
 export function attachMcpCleanup<T extends IAgentSession>(session: T, mcpManager: McpManager | undefined): T {
