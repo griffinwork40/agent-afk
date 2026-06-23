@@ -1596,6 +1596,76 @@ describe('TerminalCompositor', () => {
       expect(onCancel).toHaveBeenCalledTimes(1);
     });
 
+    // ── New keybindings (PR 231): Ctrl+L, Ctrl+D, line-relative Home/End ────
+    //
+    // Dispatch-level coverage for the key ROUTING. The InputCore pure-function
+    // contracts (moveLineStart / moveLineEnd / deleteForward) live in
+    // input-core.test.ts; these tests drive real keypress events through an
+    // armed compositor to prove the keys are wired to those functions.
+    it('Ctrl+L clears the viewport (CSI 2J) + repaints, and does NOT wipe scrollback (no CSI 3J)', async () => {
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      writes.clear(); // isolate the writes produced by Ctrl+L alone
+      stdin.emit('keypress', undefined, { name: 'l', ctrl: true });
+      const out = writes.all();
+      // clearScreen() writes cursor-home + erase-entire-screen before repaint.
+      expect(out).toContain('\x1b[H\x1b[2J');
+      // Ctrl+L preserves scrollback — unlike /clear it must NOT send CSI 3J.
+      expect(out).not.toContain('\x1b[3J');
+    });
+
+    it('Ctrl+D on an EMPTY buffer fires onCancel (EOF on an empty line)', async () => {
+      const onCancel = vi.fn();
+      const c = new TerminalCompositor({ stdout, stdin, onCancel });
+      await c.arm();
+      stdin.emit('keypress', undefined, { name: 'd', ctrl: true });
+      expect(onCancel).toHaveBeenCalledTimes(1);
+      expect(c.getBuffer()).toEqual({ text: '', queued: false });
+    });
+
+    it('Ctrl+D on a NON-EMPTY buffer forward-deletes one char and does NOT fire onCancel', async () => {
+      const onCancel = vi.fn();
+      const c = new TerminalCompositor({ stdout, stdin, onCancel });
+      await c.arm();
+      for (const ch of 'hello') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      stdin.emit('keypress', undefined, { name: 'home' }); // cursor → line start (index 0)
+      stdin.emit('keypress', undefined, { name: 'd', ctrl: true }); // forward-delete 'h'
+      expect(c.getBuffer()).toEqual({ text: 'ello', queued: false });
+      expect(onCancel).not.toHaveBeenCalled();
+    });
+
+    it('Home routes to moveLineStart: on line 2 of a multi-line draft it lands at the line start, not buffer start', async () => {
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      // Build 'first\nsecond' (shift+Enter inserts a soft newline); cursor ends on line 2.
+      for (const ch of 'first') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      stdin.emit('keypress', undefined, { name: 'return', shift: true });
+      for (const ch of 'second') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      stdin.emit('keypress', undefined, { name: 'home' }); // line-relative → start of "second"
+      stdin.emit('keypress', 'z', { name: 'z', sequence: 'z' }); // marker at the cursor
+      // Line-relative Home inserts at the start of line 2 → 'first\nzsecond'.
+      // Buffer-absolute moveHome would instead have produced 'zfirst\nsecond'.
+      expect(c.getBuffer()).toEqual({ text: 'first\nzsecond', queued: false });
+    });
+
+    it('End routes to moveLineEnd: on line 1 of a multi-line draft it lands at the line end, not buffer end', async () => {
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      // Build 'first\nsecond'; cursor ends at index 12 (on line 2).
+      for (const ch of 'first') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      stdin.emit('keypress', undefined, { name: 'return', shift: true });
+      for (const ch of 'second') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      // Move into the MIDDLE of line 1: Home (→ start of line 2, idx 6) then Left×2 (→ idx 4).
+      stdin.emit('keypress', undefined, { name: 'home' });
+      stdin.emit('keypress', undefined, { name: 'left' });
+      stdin.emit('keypress', undefined, { name: 'left' });
+      stdin.emit('keypress', undefined, { name: 'end' }); // line-relative → end of line 1 (idx 5)
+      stdin.emit('keypress', 'z', { name: 'z', sequence: 'z' }); // marker at the cursor
+      // Line-relative End inserts at the end of line 1 → 'firstz\nsecond'.
+      // Buffer-absolute moveEnd would instead have produced 'first\nsecondz'.
+      expect(c.getBuffer()).toEqual({ text: 'firstz\nsecond', queued: false });
+    });
+
     // ── Soft-stop drain (regression: ESC → perpetual input-lag-of-one) ──────
     //
     // Reported bug: after ESC (soft-stop), the user's next typed+Enter'd
