@@ -11,6 +11,23 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.35.0] - 2026-06-23
+
+### Added
+- fixture-replay eval-run for closure-anomaly (b16f563)
+- emit tool_call + session_phase events from openai-compatible provider (819e688)
+
+### Fixed
+- inherit traceWriter + surface into farm worker sessions (38f730f)
+- wire traceWriter + surface into farm sessions (bffe26b)
+- pass traceWriter to MCP manager in telegram sessions (ea74f7d)
+
+### Changed
+- Merge pull request #260 from griffinwork40/fix/telegram-mcp-trace-writer (8862c63)
+- Merge pull request #259 from griffinwork40/fix/farm-trace-wiring (7709ae3)
+- Merge pull request #258 from griffinwork40/feat/openai-trace-events (61ae0cf)
+- Merge pull request #264 from griffinwork40/feat/improve-eval-run-closure-replay (02dc1b4)
+
 ## [4.34.0] - 2026-06-23
 
 ### Added
