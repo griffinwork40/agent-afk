@@ -7,12 +7,14 @@
  * no I/O side effects (the circuit-breaker probe builds a throwaway dispatcher
  * with no trace writer / hooks; the others read constants and pure helpers).
  *
- * ## Why guardrail-presence, not fixture replay
+ * ## Guardrail-presence vs. fixture-replay
  *
- * An eval-case's own assertion is `pattern-absent`: replay the committed
- * fixture through the detector after the fix lands and expect zero findings.
- * That broader replay capability is reserved for a later sprint. This runner
- * validates the *fix* instead — the guardrail the pattern maps to:
+ * The contracts here are the guardrail-PRESENCE layer: each proves a guardrail
+ * EXISTS and behaves against a synthetic stimulus. A complementary
+ * fixture-REPLAY layer ({@link ./replay}) re-drives a card's actual recorded
+ * failure through the live guardrail for patterns that have a handler
+ * (currently `repeated-tool-use`); the runner runs both. A contract validates
+ * the *fix* — the guardrail the pattern maps to:
  *
  *   - `repeated-tool-use`    → the repeat-loop circuit breaker (PR #80).
  *   - `subagent-block`       → the skill max-depth recovery hint (PR #80).
