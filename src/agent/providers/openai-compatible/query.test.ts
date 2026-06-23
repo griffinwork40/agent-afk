@@ -2011,3 +2011,224 @@ describe('OpenAICompatibleQuery — retry / backoff (issue #126)', () => {
     ).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Witness-layer trace emission — parity with anthropic-direct/loop.test.ts
+// ---------------------------------------------------------------------------
+
+describe('OpenAICompatibleQuery — witness-layer trace emission', () => {
+  // Build a two-turn scripted client: turn 1 returns a tool_call, turn 2 text.
+  function installToolThenTextClient(
+    toolId: string,
+    toolName: string,
+    toolArgs: string,
+  ): void {
+    const factory = () =>
+      ({
+        chat: {
+          completions: {
+            create: (() => {
+              let callIdx = 0;
+              return async (_args: unknown, _opts?: unknown) => {
+                const turn = callIdx++;
+                if (turn === 0) {
+                  // First call: tool_call finish
+                  return (async function* () {
+                    yield {
+                      choices: [
+                        {
+                          delta: {
+                            tool_calls: [
+                              {
+                                index: 0,
+                                id: toolId,
+                                type: 'function',
+                                function: { name: toolName, arguments: toolArgs },
+                              },
+                            ],
+                          },
+                        },
+                      ],
+                    };
+                    yield {
+                      choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+                      usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
+                    };
+                  })();
+                } else {
+                  // Subsequent calls: text finish
+                  return (async function* () {
+                    yield {
+                      choices: [
+                        { delta: { content: 'done' }, finish_reason: 'stop' },
+                      ],
+                      usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+                    };
+                  })();
+                }
+              };
+            })(),
+          },
+        },
+      }) as unknown as import('openai').default;
+    __setOpenAIClientFactory(factory);
+  }
+
+  it('emits tool_call started+completed for each dispatched tool', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    installToolThenTextClient('call_search_1', 'search', '{"q":"hello"}');
+
+    const handlerCalls: string[] = [];
+    const { dispatcher } = makeDispatcherForPR2();
+    // Override the echo handler so it returns a deterministic result.
+    (dispatcher as unknown as { handlers: Map<string, unknown> }).handlers?.set(
+      'search',
+      async () => {
+        handlerCalls.push('search');
+        return { content: 'search result' };
+      },
+    );
+
+    // Build a provider that has the trace writer threaded in.
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'env:OPENAI_API_KEY' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'test-session',
+      promptStream: singleInput('search please'),
+      config: { model: 'gpt-4o-mini', apiKey: 'sk-test' } as AgentConfig,
+      toolDispatcher: dispatcher,
+      traceWriter: writer,
+    });
+
+    await collect(q);
+    // Drain microtasks so fire-and-forget emit calls settle.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const toolCallEvents = writer.events.filter((e) => e.kind === 'tool_call');
+    expect(toolCallEvents).toHaveLength(2);
+    if (toolCallEvents[0]?.kind !== 'tool_call' || toolCallEvents[1]?.kind !== 'tool_call') {
+      throw new Error('unreachable');
+    }
+    const [started, completed] = [toolCallEvents[0], toolCallEvents[1]];
+    expect(started.payload.phase).toBe('started');
+    expect(completed.payload.phase).toBe('completed');
+
+    if (started.payload.phase !== 'started') throw new Error('unreachable');
+    if (completed.payload.phase !== 'completed') throw new Error('unreachable');
+
+    expect(started.payload.toolUseId).toBe('call_search_1');
+    expect(started.payload.name).toBe('search');
+    expect(started.payload.inputBytes).toBeGreaterThan(0);
+
+    expect(completed.payload.toolUseId).toBe('call_search_1');
+    expect(completed.payload.name).toBe('search');
+    expect(completed.payload.isError).toBe(false);
+    expect(completed.payload.truncated).toBe(false);
+    expect(completed.payload.durationMs).toBeGreaterThanOrEqual(0);
+    expect(completed.payload.resultBytes).toBeGreaterThan(0);
+  });
+
+  it('emits session_phase loop_start and loop_end for each turn', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    // Simple text-only turn — no tools.
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'hello' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+      },
+    ];
+    // installMockClient() was already called in beforeEach; pendingChunks drives it.
+
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'env:OPENAI_API_KEY' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'test-session-2',
+      promptStream: singleInput('hi'),
+      config: { model: 'gpt-4o-mini', apiKey: 'sk-test' } as AgentConfig,
+      traceWriter: writer,
+    });
+
+    await collect(q);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const phaseEvents = writer.events.filter((e) => e.kind === 'session_phase');
+    const phases = phaseEvents.map((e) =>
+      e.kind === 'session_phase' ? e.payload.phase : '',
+    );
+    expect(phases).toContain('loop_start');
+    expect(phases).toContain('loop_end');
+    // loop_end must carry a durationMs.
+    const loopEnd = phaseEvents.find(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'loop_end',
+    );
+    if (!loopEnd || loopEnd.kind !== 'session_phase') throw new Error('unreachable');
+    expect(typeof loopEnd.payload.durationMs).toBe('number');
+  });
+
+  it('emits model_ttfb on the first streamed chunk', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'hello' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+      },
+    ];
+
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'env:OPENAI_API_KEY' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'test-session-3',
+      promptStream: singleInput('hi'),
+      config: { model: 'gpt-4o-mini', apiKey: 'sk-test' } as AgentConfig,
+      traceWriter: writer,
+    });
+
+    await collect(q);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const ttfbEvents = writer.events.filter(
+      (e) => e.kind === 'session_phase' && e.payload.phase === 'model_ttfb',
+    );
+    expect(ttfbEvents).toHaveLength(1);
+    const ttfb = ttfbEvents[0]!;
+    if (ttfb.kind !== 'session_phase') throw new Error('unreachable');
+    expect(typeof ttfb.payload.durationMs).toBe('number');
+    expect(ttfb.payload.resolvedModel).toBe('gpt-4o-mini');
+  });
+
+  it('emits no events and does not throw when traceWriter is absent', async () => {
+    // No traceWriter — all emit helpers are no-ops.
+    installToolThenTextClient('call_noop', 'echo', '{"msg":"hi"}');
+
+    const handlerMap = new Map<string, unknown>([
+      ['echo', async () => ({ content: 'echoed' })],
+    ]);
+    const { SessionToolDispatcher: STD } = await import('../../tools/dispatcher.js');
+    const { createHookRegistry: chr } = await import('../../hooks.js');
+    const disp = new STD({
+      handlers: handlerMap as Map<string, import('../../tools/types.js').ToolHandler>,
+      schemas: [{ name: 'echo', description: 'Echo', input_schema: { type: 'object' } }],
+      hookRegistry: chr(),
+    });
+
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'env:OPENAI_API_KEY' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'test-session-4',
+      promptStream: singleInput('echo hi'),
+      config: { model: 'gpt-4o-mini', apiKey: 'sk-test' } as AgentConfig,
+      toolDispatcher: disp,
+      // traceWriter intentionally absent
+    });
+
+    // Should not throw.
+    const events = await collect(q);
+    expect(events.some((e) => e.type === 'turn.completed')).toBe(true);
+  });
+});
