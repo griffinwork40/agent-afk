@@ -231,6 +231,89 @@ describe('SubagentManager', () => {
     );
   });
 
+  // -------------------------------------------------------------------------
+  // traceWriter + surface inheritance (witness layer / origin attribution)
+  // Mirrors the cwd inheritance tests above: manager-level values propagate
+  // into child AgentConfig so farm/DAG workers report the correct trace origin
+  // without per-call plumbing.
+  // -------------------------------------------------------------------------
+
+  it('inherits traceWriter from manager when child config omits it', async () => {
+    shared.lastConfig = null;
+    const fakeWriter = { write: vi.fn(), close: vi.fn(), getTracePath: vi.fn() };
+    const mgr = new SubagentManager({ traceWriter: fakeWriter as unknown as import('./trace/index.js').TraceWriter });
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      config: { model: 'sonnet' },
+    });
+    expect(shared.lastConfig).toEqual(
+      expect.objectContaining({ traceWriter: fakeWriter }),
+    );
+  });
+
+  it('lets explicit child traceWriter override the manager default', async () => {
+    shared.lastConfig = null;
+    const managerWriter = { write: vi.fn(), close: vi.fn(), getTracePath: vi.fn() };
+    const childWriter = { write: vi.fn(), close: vi.fn(), getTracePath: vi.fn() };
+    const mgr = new SubagentManager({
+      traceWriter: managerWriter as unknown as import('./trace/index.js').TraceWriter,
+    });
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      config: {
+        model: 'sonnet',
+        traceWriter: childWriter as unknown as import('./trace/index.js').TraceWriter,
+      },
+    });
+    expect(shared.lastConfig).toEqual(
+      expect.objectContaining({ traceWriter: childWriter }),
+    );
+  });
+
+  it('omits traceWriter on child when neither manager nor child config set it', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager();
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      config: { model: 'sonnet' },
+    });
+    expect((shared.lastConfig as unknown as Record<string, unknown>)['traceWriter']).toBeUndefined();
+  });
+
+  it('inherits surface from manager when child config omits it', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager({ surface: 'cli' });
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      config: { model: 'sonnet' },
+    });
+    expect(shared.lastConfig).toEqual(
+      expect.objectContaining({ surface: 'cli' }),
+    );
+  });
+
+  it('lets explicit child surface override the manager default', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager({ surface: 'cli' });
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      config: { model: 'sonnet', surface: 'daemon' },
+    });
+    expect(shared.lastConfig).toEqual(
+      expect.objectContaining({ surface: 'daemon' }),
+    );
+  });
+
+  it('omits surface on child when neither manager nor child config set it', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager();
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      config: { model: 'sonnet' },
+    });
+    expect((shared.lastConfig as unknown as Record<string, unknown>)['surface']).toBeUndefined();
+  });
+
   it('list() and get() track active handles', async () => {
     const mgr = new SubagentManager();
     const h = await mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } });

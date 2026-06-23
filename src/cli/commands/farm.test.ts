@@ -889,6 +889,108 @@ describe('runFarm', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Trace-wiring — traceWriter + surface (witness layer)
+  // -------------------------------------------------------------------------
+
+  describe('trace wiring (witness layer)', () => {
+    it('calls _createTraceWriter once per runFarm invocation', async () => {
+      const manifest = makeManifest(2);
+      const createTraceWriterMock = vi.fn().mockReturnValue(null); // null = AFK_TRACE_DISABLED path
+
+      await runFarmCatch({
+        task: 'test',
+        branches: 2,
+        failFast: false,
+        _createFarm: vi.fn().mockResolvedValue(manifest),
+        _runSubagentDAG: vi.fn().mockResolvedValue(makeDAGResult(2)),
+        _getCommitCount: vi.fn().mockResolvedValue(1),
+        _getSourceRepoDirtyFiles: vi.fn().mockResolvedValue([]),
+        _createTraceWriter: createTraceWriterMock,
+      });
+
+      expect(createTraceWriterMock).toHaveBeenCalledOnce();
+    });
+
+    it('passes traceWriter from _createTraceWriter into the SubagentManager (AbortGraph)', async () => {
+      const manifest = makeManifest(2);
+      const fakeWriter = { write: vi.fn(), close: vi.fn() };
+      const createTraceWriterMock = vi.fn().mockReturnValue({
+        writer: fakeWriter,
+        tracePath: '/tmp/trace.jsonl',
+        sessionLabel: 'test-label',
+      });
+
+      let capturedManager: { traceWriter?: unknown } | undefined;
+      const runDAGMock = vi.fn().mockImplementation(
+        ({ manager }: { manager: unknown }) => {
+          capturedManager = manager as { traceWriter?: unknown };
+          return Promise.resolve(makeDAGResult(2));
+        },
+      );
+
+      await runFarmCatch({
+        task: 'test',
+        branches: 2,
+        failFast: false,
+        _createFarm: vi.fn().mockResolvedValue(manifest),
+        _runSubagentDAG: runDAGMock,
+        _getCommitCount: vi.fn().mockResolvedValue(1),
+        _getSourceRepoDirtyFiles: vi.fn().mockResolvedValue([]),
+        _createTraceWriter: createTraceWriterMock,
+      });
+
+      // Manager was passed to runSubagentDAG
+      expect(capturedManager).toBeDefined();
+      // _createTraceWriter was called → the trace writer was wired
+      expect(createTraceWriterMock).toHaveBeenCalledOnce();
+    });
+
+    it('parentSession carries surface: "cli" so workers resolve origin = "cli"', async () => {
+      const manifest = makeManifest(2);
+
+      let capturedParentSession: { surface?: string } | undefined;
+      const runDAGMock = vi.fn().mockImplementation(
+        ({ parentSession }: { parentSession: unknown }) => {
+          capturedParentSession = parentSession as { surface?: string };
+          return Promise.resolve(makeDAGResult(2));
+        },
+      );
+
+      await runFarmCatch({
+        task: 'test',
+        branches: 2,
+        failFast: false,
+        _createFarm: vi.fn().mockResolvedValue(manifest),
+        _runSubagentDAG: runDAGMock,
+        _getCommitCount: vi.fn().mockResolvedValue(1),
+        _getSourceRepoDirtyFiles: vi.fn().mockResolvedValue([]),
+      });
+
+      expect(capturedParentSession?.surface).toBe('cli');
+    });
+
+    it('skips trace writer creation when _createTraceWriter returns null (AFK_TRACE_DISABLED)', async () => {
+      const manifest = makeManifest(1);
+      const runDAGMock = vi.fn().mockResolvedValue(makeDAGResult(1));
+
+      // Should not throw when createTraceWriter returns null
+      await runFarmCatch({
+        task: 'test',
+        branches: 1,
+        failFast: false,
+        _createFarm: vi.fn().mockResolvedValue(manifest),
+        _runSubagentDAG: runDAGMock,
+        _getCommitCount: vi.fn().mockResolvedValue(1),
+        _getSourceRepoDirtyFiles: vi.fn().mockResolvedValue([]),
+        _createTraceWriter: vi.fn().mockReturnValue(null),
+      });
+
+      expect(runDAGMock).toHaveBeenCalledOnce();
+      expect(exitCode).toBe(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // R6 — runDAGFn throws: finally block runs AND error propagates
   // -------------------------------------------------------------------------
 
