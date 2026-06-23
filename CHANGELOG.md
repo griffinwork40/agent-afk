@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.33.0] - 2026-06-23
+
+### Added
+- wire passive SIGNAL-block parsing into buildResultFromMessage (18be452)
+
+### Changed
+- Merge pull request #254 from griffinwork40/feat/wire-signal-block (3610ea4)
+
 ## [4.32.0] - 2026-06-23
 
 ### Added
