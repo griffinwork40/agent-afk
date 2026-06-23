@@ -11,6 +11,7 @@ import type { CardSpec } from '../render.js';
 import { card, errorBox } from '../render.js';
 import { renderMarkdownToTerminal } from '../formatter.js';
 import { formatThoughtSummary } from '../commands/interactive/thinking-lane.js';
+import { commitBlockAbove } from './commit-block.js';
 
 import type { OrchestratorCtx } from './stream-renderer-orchestrator.js';
 
@@ -39,7 +40,9 @@ export function emitPanel(
   const rendered = card(spec);
   const lines = rendered.split('\n');
   if (ctx.isTTY && ctx.compositor) {
-    for (const line of lines) ctx.compositor.commitAbove(line);
+    // Atomic block commit — a card is ONE coherent artifact; per-line commits
+    // desync band-hold under a tall overlay. See commit-block.ts.
+    commitBlockAbove(ctx.compositor, lines);
   } else {
     for (const line of lines) ctx.out.line(line);
   }
@@ -204,7 +207,10 @@ export function finalizeOrchestrator(
           anchor: 'before-content',
           commits: [() => {
             if (isTTY && compositor) {
-              for (const line of lines) compositor.commitAbove(line);
+              // Atomic block commit — the flushed root is ONE coherent block;
+              // per-line commits desync band-hold under a tall overlay (a live
+              // subagent's rows). See commit-block.ts.
+              commitBlockAbove(compositor, lines);
               compositor.commitAbove('');
               // Refresh the overlay from CURRENT lane state — in-flight
               // subagent rows that survived the selective flush must keep
@@ -322,7 +328,11 @@ export function flushToolLaneToScrollback(ctx: OrchestratorCtx): void {
   // own trailing. See docs/tui-rhythm.md.
   if (ctx.isTTY && ctx.compositor) {
     if (lines.length > 0) {
-      for (const line of lines) ctx.compositor.commitAbove(line);
+      // Atomic block commit — the flushed root(s) form ONE coherent block;
+      // committing line-by-line desyncs the band-hold model under a tall
+      // overlay and scrolls blank rows into scrollback (the "weird gaps"
+      // bug). See commit-block.ts.
+      commitBlockAbove(ctx.compositor, lines);
       ctx.compositor.commitAbove('');
     }
     // Refresh from current lane state. Empty when all roots were

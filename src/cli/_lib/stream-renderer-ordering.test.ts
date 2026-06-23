@@ -20,6 +20,23 @@ import type { ResponseMetadata } from '../../agent/types/message-types.js';
 
 // ─── shared helpers ──────────────────────────────────────────────────────────
 
+/**
+ * First character offset of ANY needle in the joined scrollback (-1 if none).
+ *
+ * Ordering across committed blocks must be asserted by RENDERED position, not
+ * by commitAbove call index: a flushed block (e.g. an eager ancestor skill
+ * header + its subagent child rows) is committed as ONE atomic commitAbove call
+ * (commit-block.ts) rather than one call per line, so two markers can share a
+ * call index while still rendering in the correct top-to-bottom order. Joining
+ * the calls with '\n' and comparing char offsets reflects what the user sees
+ * regardless of commit granularity, and still catches the pre-fix regression
+ * (a header deferred to dispose lands AFTER its children → later offset).
+ */
+function firstPos(joined: string, ...needles: string[]): number {
+  const found = needles.map((n) => joined.indexOf(n)).filter((p) => p >= 0);
+  return found.length ? Math.min(...found) : -1;
+}
+
 function makeWriter(): { writer: Writer; lines: string[] } {
   const lines: string[] = [];
   const writer: Writer = {
@@ -678,16 +695,18 @@ describe('Eager ancestor-header emission — skill frame header precedes subagen
     r.process(doneEvent(), { subagentId: 'sa-a', agentType: 'critic-pragmatist', parentId: 'skill-tu-1' });
 
     // Assert: skill header is already in scrollback after the first subagent done.
-    const skillIdx = commitAboveCalls.findIndex((c) => c.includes('skill') || c.includes('diagnose'));
-    const agentAIdx = commitAboveCalls.findIndex((c) => c.includes('critic-pragmatist') || c.includes('file-a'));
+    // Order by RENDERED char offset (the block is one atomic commit — see firstPos).
+    const sb = commitAboveCalls.join('\n');
+    const skillPos = firstPos(sb, 'skill', 'diagnose');
+    const agentAPos = firstPos(sb, 'critic-pragmatist', 'file-a');
 
-    expect(skillIdx, 'skill header must be committed to scrollback').toBeGreaterThanOrEqual(0);
-    expect(agentAIdx, 'agent-A block must be committed to scrollback').toBeGreaterThanOrEqual(0);
+    expect(skillPos, 'skill header must be committed to scrollback').toBeGreaterThanOrEqual(0);
+    expect(agentAPos, 'agent-A block must be committed to scrollback').toBeGreaterThanOrEqual(0);
 
     // The fix: skill header appears BEFORE subagent-A block in scrollback.
     // Pre-fix failure mode: skill header was only emitted at dispose-time
     // flush() — AFTER both subagent blocks — landing below its children.
-    expect(skillIdx, 'skill header must precede subagent-A block').toBeLessThan(agentAIdx);
+    expect(skillPos, 'skill header must precede subagent-A block').toBeLessThan(agentAPos);
 
     await r.dispose();
   });
@@ -759,14 +778,16 @@ describe('Eager ancestor-header emission — skill frame header precedes subagen
     ).toBe(1);
 
     // Both subagent blocks must be in scrollback AFTER the skill header.
-    const skillIdx = commitAboveCalls.findIndex((c) => c.includes('skill') || c.includes('diagnose'));
-    const agentAIdx = commitAboveCalls.findIndex((c) => c.includes('critic-pragmatist'));
-    const agentBIdx = commitAboveCalls.findIndex((c) => c.includes('critic-paranoid'));
+    // Order by RENDERED char offset (blocks are atomic commits — see firstPos).
+    const sb = commitAboveCalls.join('\n');
+    const skillPos = firstPos(sb, 'skill', 'diagnose');
+    const agentAPos = firstPos(sb, 'critic-pragmatist');
+    const agentBPos = firstPos(sb, 'critic-paranoid');
 
-    expect(agentAIdx, 'agent-A in scrollback').toBeGreaterThanOrEqual(0);
-    expect(agentBIdx, 'agent-B in scrollback').toBeGreaterThanOrEqual(0);
-    expect(skillIdx).toBeLessThan(agentAIdx);
-    expect(skillIdx).toBeLessThan(agentBIdx);
+    expect(agentAPos, 'agent-A in scrollback').toBeGreaterThanOrEqual(0);
+    expect(agentBPos, 'agent-B in scrollback').toBeGreaterThanOrEqual(0);
+    expect(skillPos).toBeLessThan(agentAPos);
+    expect(skillPos).toBeLessThan(agentBPos);
   });
 });
 
@@ -1280,20 +1301,18 @@ describe('Skill-nesting — Agent nests under skill spine when activeSkillName s
     r.process(doneEvent(), { subagentId: 'sa-review-w1', agentType: 'review-w1', parentId: 'agent-tu-e2e' });
 
     // Step 4: skill header must appear in scrollback BEFORE the Agent done-block.
-    // (Eager ancestor-header emission in flushSource.)
-    const skillIdx = commitAboveCalls.findIndex(
-      (c) => c.includes('skill') || c.includes('review'),
-    );
-    const agentIdx = commitAboveCalls.findIndex(
-      (c) => c.includes('review-w1') || c.includes('Bash') || c.includes('bash'),
-    );
+    // (Eager ancestor-header emission in flushSource.) Order by RENDERED char
+    // offset — the done-block is one atomic commit (see firstPos).
+    const sb = commitAboveCalls.join('\n');
+    const skillPos = firstPos(sb, 'skill', 'review');
+    const agentPos = firstPos(sb, 'review-w1', 'Bash', 'bash');
 
-    expect(skillIdx, 'skill header must be committed to scrollback').toBeGreaterThanOrEqual(0);
-    expect(agentIdx, 'agent done-block must be committed to scrollback').toBeGreaterThanOrEqual(0);
+    expect(skillPos, 'skill header must be committed to scrollback').toBeGreaterThanOrEqual(0);
+    expect(agentPos, 'agent done-block must be committed to scrollback').toBeGreaterThanOrEqual(0);
     expect(
-      skillIdx,
+      skillPos,
       'skill header must precede agent done-block in scrollback (single ◉ root)',
-    ).toBeLessThan(agentIdx);
+    ).toBeLessThan(agentPos);
 
     r.process(doneEvent());
     await r.dispose();

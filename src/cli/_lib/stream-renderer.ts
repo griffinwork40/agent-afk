@@ -49,6 +49,7 @@ import {
   type OrchestratorCtx,
 } from './stream-renderer-orchestrator.js';
 import { CommitCoordinator } from './commit-coordinator.js';
+import { commitBlockAbove } from './commit-block.js';
 import { handleSubagentEvent, synthesizeAgentEntry } from './stream-renderer-subagent.js';
 import { OverlayComposer } from './overlay-composer.js';
 import { createStageTracker, type StageTrackerState } from '../commands/interactive/loop-stage.js';
@@ -626,7 +627,10 @@ export class StreamRenderer {
             anchor: `after-subagent:${sourceId}`,
             commits: [() => {
               if (compositor) {
-                for (const line of lines) compositor.commitAbove(line);
+                // Atomic block commit — a subagent block is ONE coherent
+                // artifact; per-line commits desync band-hold under a tall
+                // overlay. See commit-block.ts.
+                commitBlockAbove(compositor, lines);
                 // One blank line after the subagent block so the next
                 // orchestrator message (or a subsequent subagent block) has
                 // breathing room in scrollback.
@@ -753,7 +757,10 @@ export class StreamRenderer {
     if (this.toolLane.hasPending()) {
       const lines = this.toolLane.flush();
       if (this.isTTY && this.compositor) {
-        for (const line of lines) this.compositor.commitAbove(line);
+        // Atomic block commit — the safety-net flush is ONE coherent block;
+        // per-line commits desync band-hold under a tall overlay. See
+        // commit-block.ts.
+        commitBlockAbove(this.compositor, lines);
         this.compositor.commitAbove('');
         if (this.overlayComposer) {
           this.overlayComposer.markDirty('tool-lane');

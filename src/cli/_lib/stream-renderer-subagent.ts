@@ -14,6 +14,7 @@ import type { ToolLane } from '../commands/interactive/tool-lane.js';
 import type { Writer } from '../slash/types.js';
 import type { CardSpec } from '../render.js';
 import { card } from '../render.js';
+import { commitBlockAbove } from './commit-block.js';
 import { StreamingMarkdownRenderer } from '../markdown-stream.js';
 import { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import { syntheticResult, formatDoneSummary } from './stream-renderer-source.js';
@@ -400,12 +401,13 @@ export function emitSubagentPanel(
   }
 
   const rendered = card(spec);
-  for (const line of rendered.split('\n')) {
-    if (ctx.isTTY && ctx.compositor) {
-      ctx.compositor.commitAbove(line);
-    } else {
-      ctx.out.line(line);
-    }
+  const cardLines = rendered.split('\n');
+  if (ctx.isTTY && ctx.compositor) {
+    // Atomic block commit — the subagent panel card is ONE coherent artifact;
+    // per-line commits desync band-hold under a tall overlay. See commit-block.ts.
+    commitBlockAbove(ctx.compositor, cardLines);
+  } else {
+    for (const line of cardLines) ctx.out.line(line);
   }
   // Invariant (TUI rhythm contract): subagent panel card owns ONE
   // trailing blank line so the next block (more prose, the next tool,
