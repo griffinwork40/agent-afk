@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CronScheduler } from './scheduler.js';
@@ -193,6 +193,54 @@ describe('pull tick — telemetry record fields', () => {
     const record = JSON.parse(readFileSync(telemetryPath, 'utf-8').trim());
     expect(record.taskId).toBe(queued.id);
     expect(record.trigger).toBe('pull');
+
+    await scheduler.stop();
+  });
+});
+
+describe('pull tick — malformed queue entries do not deadlock', () => {
+  it('skips a poison entry and processes the valid task behind it on the same tick', async () => {
+    // Poison file at the FIFO head sorts before any enqueued task.
+    writeFileSync(join(queueDir, '0000-q-poison.json'), '{ broken');
+    enqueue('valid-task', {}, queueDir);
+
+    const scheduler = makeScheduler(queueDir, telemetryPath);
+    scheduler.startPullLoop();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    // The valid task was reached despite the poison entry at the head.
+    const lines = readFileSync(telemetryPath, 'utf-8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+    const record = JSON.parse(lines[0]!);
+    expect(record.command).toBe('valid-task');
+    expect(record.status).toBe('success');
+
+    // Poison entry moved aside, not blocking the FIFO path.
+    expect(readdirSync(join(queueDir, 'poison'))).toHaveLength(1);
+    const remaining = readdirSync(queueDir).filter(
+      (f) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+    );
+    expect(remaining).toHaveLength(0);
+
+    await scheduler.stop();
+  });
+
+  it('drains multiple poison entries on a single tick while still running the valid task behind them', async () => {
+    writeFileSync(join(queueDir, '0001-q-bad1.json'), 'nope');
+    writeFileSync(join(queueDir, '0002-q-bad2.json'), 'also{bad');
+    enqueue('good', {}, queueDir);
+
+    const scheduler = makeScheduler(queueDir, telemetryPath);
+    scheduler.startPullLoop();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    const lines = readFileSync(telemetryPath, 'utf-8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!).command).toBe('good');
+    // Both poison entries quarantined on the single tick.
+    expect(readdirSync(join(queueDir, 'poison'))).toHaveLength(2);
 
     await scheduler.stop();
   });
