@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.33.1] - 2026-06-23
+
+### Fixed
+- use exact painted-row count for the band-hold pending signal (196f818)
+- commit flushed blocks atomically so band-hold doesn't gap scrollback (10e25ed)
+
+### Changed
+- Merge pull request #257 from griffinwork40/fix/tui-overflow-pending-exact-count (ee8ebd4)
+- Merge pull request #255 from griffinwork40/fix/tui-band-hold-pending-gap (8965b3b)
+
 ## [4.33.0] - 2026-06-23
 
 ### Added
