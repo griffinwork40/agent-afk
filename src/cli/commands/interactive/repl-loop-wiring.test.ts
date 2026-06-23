@@ -145,6 +145,7 @@ function makeMinimalCtx(backgroundRegistry: BackgroundAgentRegistry): Interactiv
       setAfterScrollRestore: vi.fn(),
     },
     contextSampler: { onTurn: vi.fn(async () => {}), getRatio: () => undefined },
+    gitStatusSampler: { refresh: vi.fn(async () => {}), setOnUpdate: vi.fn(), getBranch: () => undefined, getPr: () => undefined },
     completionWriter: { fn: () => {}, idleFn: () => {} },
     replRenderer: { writeLine: vi.fn(), setCompositor: vi.fn() },
     slashCtx: { stats: { permissionMode: 'default' } },

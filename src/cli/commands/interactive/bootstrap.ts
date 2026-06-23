@@ -19,6 +19,7 @@ import {
 import { loadConfig } from '../../config.js';
 import { assembleSystemPrompt, pendingBriefContext } from '../../../agent/routing-directive.js';
 import { StatusLine } from '../../status-line.js';
+import { GitStatusSampler } from '../../git-status-sampler.js';
 import { registerAll } from '../../slash/index.js';
 import { setAllowDirDispatcher } from '../../slash/commands/allow-dir.js';
 import { createConsoleWriter } from '../../slash/writer.js';
@@ -614,6 +615,13 @@ export async function bootstrapSession(
   // called by performResumeSwap (resume-swap.ts step 8) on every mid-session
   // swap to rebind the source and reset the cache; no call needed here.
   const contextSampler = new ContextSampler(session);
+  // GitStatusSampler resolves the current branch (fast, local) + open PR
+  // (network, detached) for the status line. Bound to the session's effective
+  // cwd — under `--worktree` that differs from process.cwd(). Construction is
+  // side-effect-free (no process spawn): the initial sample + the on-update
+  // repaint wiring are kicked by setupSurface (REPL Phase 1), so bootstrap-only
+  // unit tests never shell out to git/gh.
+  const gitStatusSampler = new GitStatusSampler({ cwd: stats.cwd ?? process.cwd() });
 
   const slashCtx: SlashContext = {
     session: sessionRef,
@@ -644,12 +652,12 @@ export async function bootstrapSession(
         process.stdout.write('\x1b[3J\x1b[2J\x1b[H');
         statusLine.start();
         // Read contextSampler at call time so any swap-replaced sampler is used.
-        statusLine.repaint(formatStatusFields(stats, contextSampler));
+        statusLine.repaint(formatStatusFields(stats, contextSampler, gitStatusSampler));
       },
       // Read contextSampler at call time (not at closure-capture time) so
       // a mid-session swap that calls contextSampler.attach(newSession) is
       // reflected on the next repaint.
-      repaintStatusLine: () => statusLine.repaint(formatStatusFields(stats, contextSampler)),
+      repaintStatusLine: () => statusLine.repaint(formatStatusFields(stats, contextSampler, gitStatusSampler)),
     },
     ledger: trustedSkillLedger,
     // Expose mcpManager so `/mcp auth complete` can call completeAuth().
@@ -670,6 +678,7 @@ export async function bootstrapSession(
       sessionRef,
       stats,
       contextSampler,
+      gitStatusSampler,
       statusLine,
       backgroundRegistry,
       completionWriter,
@@ -703,6 +712,7 @@ export async function bootstrapSession(
     stats,
     statusLine,
     contextSampler,
+    gitStatusSampler,
     completionWriter,
     replRenderer,
     slashCtx,

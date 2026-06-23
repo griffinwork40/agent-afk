@@ -12,6 +12,7 @@ import type { ReplRenderer } from './repl-renderer.js';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
 import { contextLimitFor } from '../../model-limits.js';
 import { ContextSampler } from '../../context-sampler.js';
+import type { GitStatusSampler } from '../../git-status-sampler.js';
 import { formatTurnSparkline } from '../../context-sparkline.js';
 import { palette } from '../../palette.js';
 
@@ -284,6 +285,7 @@ export interface InteractiveCtx {
   stats: SessionStats;          // mutable across turns
   statusLine: StatusLine;        // mutable — owns terminal side-effects
   contextSampler: ContextSampler; // mutable — cached SDK calls
+  gitStatusSampler: GitStatusSampler; // mutable — cached git branch + PR for the status line
   completionWriter: CompletionWriter;
   replRenderer: ReplRenderer;
   slashCtx: SlashContext;
@@ -634,7 +636,11 @@ export function contextRatio(stats: SessionStats, sampler?: ContextSampler): num
   return used / contextLimitFor(stats.model);
 }
 
-export function formatStatusFields(stats: SessionStats, sampler?: ContextSampler) {
+export function formatStatusFields(
+  stats: SessionStats,
+  sampler?: ContextSampler,
+  gitSampler?: GitStatusSampler,
+) {
   const pct = contextRatio(stats, sampler);
   const contextLimit = contextLimitFor(stats.model);
 
@@ -663,6 +669,9 @@ export function formatStatusFields(stats: SessionStats, sampler?: ContextSampler
     }
   }
 
+  const branch = gitSampler?.getBranch();
+  const pr = gitSampler?.getPr();
+
   return {
     model: stats.model,
     cost: stats.totalCostUsd,
@@ -673,5 +682,7 @@ export function formatStatusFields(stats: SessionStats, sampler?: ContextSampler
     contextSparkline,
     permissionMode: stats.permissionMode,
     ...(stats.cwd !== undefined ? { cwd: stats.cwd } : {}),
+    ...(branch !== undefined ? { branch } : {}),
+    ...(pr !== undefined ? { pr } : {}),
   };
 }

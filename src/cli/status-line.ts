@@ -41,6 +41,20 @@ export interface StatusLineFields {
    * worth keeping visible on narrow terminals.
    */
   cwd?: string;
+  /**
+   * Current git branch (e.g. `feat/x`). Rendered after the cwd as `⎇ <branch>`
+   * — both are "where am I?" identity fields. Undefined on a detached HEAD or
+   * outside a git repo, in which case no branch segment is drawn. Sampled
+   * off-thread (see git-status-sampler.ts), so this is a cache read.
+   */
+  branch?: string;
+  /**
+   * Open PR number for the current branch, appended to the branch segment as
+   * `#<n>` (e.g. `⎇ feat/x #123`). Undefined when there is no open PR for the
+   * branch, when `gh` is unavailable, or before the (network) lookup settles.
+   * Only meaningful alongside `branch`.
+   */
+  pr?: number;
 }
 
 interface StatusLineOpts {
@@ -337,11 +351,13 @@ export class StatusLine {
   }
 
   private formatLine(f: StatusLineFields): string {
-    // Invariant: parts are built in semantic order (cwd, model, plan, context,
-    // cost, tokens), tagged with droppability priority so narrow terminals can
-    // shed lower-priority fields before resorting to right-edge truncation that
-    // arbitrarily loses model info. Drop order: tokens → cost → context bar.
-    // Never drop: cwd, model, plan.
+    // Invariant: parts are built in semantic order (cwd, branch, model, plan,
+    // context, cost, tokens), tagged with droppability priority so narrow
+    // terminals can shed lower-priority fields before resorting to right-edge
+    // truncation that arbitrarily loses model info. Drop order (drop-first →
+    // drop-last): tokens → cost → context bar → branch. The branch drops LAST
+    // among droppables because it is identity ("which branch am I on?"), like
+    // cwd. Never drop: cwd, model, plan.
     interface Part {
       text: string;
       droppablePriority?: number; // undefined = never drop, higher = drop first
@@ -357,6 +373,16 @@ export class StatusLine {
       const cwdBudget = Math.max(8, Math.floor(maxW * 0.4));
       const formatted = formatCwd(f.cwd, { maxWidth: cwdBudget });
       if (formatted) parts.push({ text: palette.dim(formatted) }); // never drop
+    }
+
+    // Git branch (+ open PR) sits next to the cwd — both answer "where am I?".
+    // The branch name is capped at 30 cols so a long branch can't dominate the
+    // line; the whole segment is droppable (lowest priority ⇒ dropped last).
+    if (f.branch) {
+      const branchText = truncateDisplayWidth(f.branch, 30);
+      let gitText = `${palette.dim('⎇')} ${palette.fileRef(branchText)}`;
+      if (f.pr !== undefined) gitText += ` ${palette.meta(`#${f.pr}`)}`;
+      parts.push({ text: gitText, droppablePriority: 1 }); // drop last among droppables
     }
 
     // Trusted-skill in-flight indicator no longer renders on the status line;
@@ -379,15 +405,15 @@ export class StatusLine {
         sparkline: f.contextSparkline,
         width: maxW,
       });
-      parts.push({ text: barOutput, droppablePriority: 1 }); // drop 3rd (after cost)
+      parts.push({ text: barOutput, droppablePriority: 2 }); // drop 3rd (after cost, before branch)
     }
 
     if (f.cost !== undefined) {
-      parts.push({ text: palette.meta(`$${f.cost.toFixed(2)}`), droppablePriority: 2 }); // drop 2nd
+      parts.push({ text: palette.meta(`$${f.cost.toFixed(2)}`), droppablePriority: 3 }); // drop 2nd
     }
 
     if (f.tokens !== undefined) {
-      parts.push({ text: palette.meta(`${formatTokens(f.tokens)} tok`), droppablePriority: 3 }); // drop 1st
+      parts.push({ text: palette.meta(`${formatTokens(f.tokens)} tok`), droppablePriority: 4 }); // drop 1st
     }
 
     // Join with separator and measure the result.
