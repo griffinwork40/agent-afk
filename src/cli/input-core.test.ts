@@ -193,7 +193,8 @@ describe('InputCore', () => {
   // The Home and End keys in the compositor dispatch to moveLineStart and
   // moveLineEnd respectively (NOT the buffer-absolute moveHome/moveEnd).
   // These tests document the contract at the InputCore level — the key
-  // routing itself is exercised by integration tests.
+  // routing (Home/End → moveLineStart/moveLineEnd) is exercised by the
+  // dispatch tests in terminal-compositor.test.ts ("keypress handling").
   describe('Home/End key contract: line-relative, not buffer-absolute', () => {
     it('Home on the second line of a multi-line buffer stops at line start, not buffer start', () => {
       // cursor mid-way through "second" (e.g. index 9 = "sec|ond")
@@ -227,8 +228,9 @@ describe('InputCore', () => {
   // Ctrl+D key contract (feat: Ctrl+D forward-delete / EOF)
   //
   // When buffer is non-empty, Ctrl+D calls InputCore.deleteForward.
-  // When buffer is empty, the dispatcher fires onCancel (tested at integration
-  // level). These tests cover the deleteForward half at the InputCore level.
+  // When buffer is empty, the dispatcher fires onCancel — exercised by the
+  // Ctrl+D dispatch tests in terminal-compositor.test.ts ("keypress handling").
+  // These tests cover the deleteForward half at the InputCore level.
   describe('Ctrl+D key contract: deleteForward on non-empty buffer', () => {
     it('deleteForward removes the character at the cursor', () => {
       // cursor before 'w' in "hello world"
