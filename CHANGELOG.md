@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.34.0] - 2026-06-23
+
+### Added
+- fixture-replay eval-run proves recorded failure fixed (cbcf73f)
+
+### Changed
+- Merge pull request #263 from griffinwork40/feat/improve-eval-run-fixture-replay (7bc4edf)
+
 ## [4.33.2] - 2026-06-23
 
 ### Fixed
