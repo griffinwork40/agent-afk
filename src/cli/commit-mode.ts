@@ -32,6 +32,14 @@ export interface CommitModeInput {
   committedBand: string[];
   /** Tracked bottom row of the committed band (0 when unset). */
   committedBandBottomRow: number;
+  /**
+   * How many of `committedBand`'s rows are MATERIALIZED on the terminal now
+   * (always the bottom suffix nearest the frame). The complementary prefix
+   * `committedBand.slice(0, length - committedBandPaintedRows)` is PENDING —
+   * held only in the in-memory band model, never painted, never archived.
+   * Drives the EXACT `overflowHasPending` signal (see decideCommitMode).
+   */
+  committedBandPaintedRows: number;
 }
 
 /** The routing decision + the geometry the caller's phases consume. */
@@ -48,7 +56,7 @@ export interface CommitMode {
   overflowPriorContiguous: boolean;
   /** Prior band + new lines (merged when contiguous, else just the new lines). */
   overflowRun: string[];
-  /** Prior band carries rows never painted on screen because the held overlay left only `room` rows visible. */
+  /** Prior band carries rows never painted on screen (`committedBandPaintedRows < committedBand.length`) — held only in the model, not on screen, not in scrollback. */
   overflowHasPending: boolean;
   /** Route this commit through the band-hold path (hold in the model; don't archive + truncate). */
   useBandHold: boolean;
@@ -76,14 +84,18 @@ export interface CommitMode {
  *    `prevTopRow <= 1` the block is HELD in the model and painted by
  *    repositionCommittedBand() on collapse, NOT dropped down the overflow path.
  *
- *  • `overflowHasPending` — once the prior band carries PENDING rows (rows in
- *    the model never painted because the held overlay left only `room` visible),
- *    the commit MUST stay on band-hold even when the merged run exceeds
- *    maxBandModel (review #649 P1). The fits path scrolls from
+ *  • `overflowHasPending` — once the prior band carries PENDING rows (rows held
+ *    in the model but never painted: `committedBandPaintedRows < committedBand
+ *    .length`), the commit MUST stay on band-hold even when the merged run
+ *    exceeds maxBandModel (review #649 P1). The fits path scrolls from
  *    `committedBand.length`, which counts those pending rows; routing there
  *    would scroll unpainted blanks into scrollback while Phase 3's cap drops the
  *    real rows. Band-hold Phase 1 instead archives the genuine overflow (the
- *    oldest rows beyond what the collapsed screen holds) as REAL content.
+ *    oldest rows beyond what the collapsed screen holds) as REAL content. This
+ *    test compares the EXACT painted-row count, NOT the `room` geometry proxy
+ *    (`committedBand.length > room`): after a single intervening repaint grew
+ *    `room` past the band length while pending rows remained, the proxy read
+ *    false and dropped them (the two-block follow-up deferred from PR #255).
  *
  * A block taller than the collapsed screen with no pending rows
  * (`overflowRun.length > maxBandModel`, `!overflowHasPending`) takes neither
@@ -105,6 +117,7 @@ export function decideCommitMode(input: CommitModeInput): CommitMode {
     extraRows,
     committedBand,
     committedBandBottomRow,
+    committedBandPaintedRows,
   } = input;
 
   const fitsAboveFrame = prevTopRow > 1 && lineCount <= frameTop - anchorFloor;
@@ -115,7 +128,8 @@ export function decideCommitMode(input: CommitModeInput): CommitMode {
   const overflowPriorContiguous =
     committedBand.length > 0 && anchorRow <= 1 && committedBandBottomRow === frameTop - 1;
   const overflowRun = overflowPriorContiguous ? [...committedBand, ...textLines] : textLines;
-  const overflowHasPending = overflowPriorContiguous && committedBand.length > room;
+  const overflowHasPending =
+    overflowPriorContiguous && committedBand.length > committedBandPaintedRows;
   const useBandHold =
     overflowHasPending || (overflowRun.length <= maxBandModel && !fitsAboveFrame);
 

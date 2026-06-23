@@ -19,6 +19,7 @@ function base(overrides: Partial<CommitModeInput> = {}): CommitModeInput {
     extraRows: 2,
     committedBand: [],
     committedBandBottomRow: 0,
+    committedBandPaintedRows: 0,
     ...overrides,
   };
 }
@@ -89,6 +90,34 @@ describe('decideCommitMode', () => {
     expect(m.overflowRun).toHaveLength(22);
     expect(m.overflowRun.length > m.maxBandModel).toBe(true);
     expect(m.useBandHold).toBe(true); // without the override this would be false
+  });
+
+  it('overflowHasPending uses the exact painted-row count, not the room geometry proxy (#255 two-block follow-up)', () => {
+    // Deferred #255 follow-up. Under a single intervening repaint the frame top
+    // can grow so `room` (frameTop - anchorFloor = 7) exceeds the band length
+    // (5) WHILE pending rows remain (only 3 of 5 painted). The OLD proxy
+    // `committedBand.length > room` reads 5 > 7 = FALSE → routes to the fits
+    // path, which scrolls the 2 unpainted rows into scrollback as BLANKS (the
+    // drop). The EXACT signal `committedBand.length > committedBandPaintedRows`
+    // reads 5 > 3 = TRUE → stays on band-hold and archives REAL content.
+    const band = ['b0', 'b1', 'b2', 'b3', 'b4'];
+    const m = decideCommitMode(
+      base({
+        prevTopRow: 8,
+        frameTop: 8, // room = 8 - 1 = 7
+        lineCount: 2,
+        textLines: ['new-a', 'new-b'],
+        committedBand: band,
+        committedBandBottomRow: 7, // === frameTop - 1 → contiguous
+        committedBandPaintedRows: 3, // 2 of 5 rows still pending
+      }),
+    );
+    // Prove this geometry is exactly where the proxy and the exact signal DIVERGE.
+    expect(m.room).toBe(7);
+    expect(band.length > m.room).toBe(false); // the old proxy → "no pending" (wrong)
+    expect(m.overflowPriorContiguous).toBe(true);
+    expect(m.overflowHasPending).toBe(true); // the exact signal → pending (right)
+    expect(m.useBandHold).toBe(true); // would route to the fits path under the proxy
   });
 
   it('merges the prior band into the run only when verifiably contiguous', () => {
