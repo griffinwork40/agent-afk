@@ -30,8 +30,9 @@ covers any specific recorded failure.
 ### 2. Fixture-replay (`replay.ts`) — "is the behaviour fixed?"
 
 For patterns with a registered replay handler (**currently `repeated-tool-use`
-only**), the runner re-drives **this card's actual recorded failure** through
-the live guardrail and asserts it would not recur at the recorded magnitude.
+and `closure-anomaly`**), the runner re-drives **this card's actual recorded
+failure** through the live guardrail and asserts it would not recur at the
+recorded magnitude.
 
 This is the layer that distinguishes *"a guardrail exists"* from *"this
 failure is fixed."* It is strictly stronger than the presence check because it
@@ -51,29 +52,41 @@ which is exactly why this layer does something else.
 
 #### What it actually does
 
-1. **Reproduce.** Parse the committed fixture and run the detector to confirm
-   it still encodes the recorded pattern (and to extract the recorded
-   `toolName` + `runLength`).
-2. **Re-drive.** Feed that recorded loop's shape (byte-identical calls to the
-   recorded tool, bounded to the breaker threshold) through the **live**
-   `SessionToolDispatcher` and observe whether the circuit breaker trips at or
-   before the recorded length.
+Each handler runs the same two-step shape — **reproduce** (confirm the fixture
+still encodes the pattern and extract the recorded failure shape) then
+**re-drive** (feed that shape through the live guardrail) — specialised per
+pattern:
+
+- **`repeated-tool-use`** — reproduce extracts the recorded `toolName` +
+  `runLength`; re-drive feeds that loop's shape (byte-identical calls to the
+  recorded tool, bounded to the breaker threshold) through the live
+  `SessionToolDispatcher` and observes whether the circuit breaker trips at or
+  before the recorded length.
+- **`closure-anomaly`** — reproduce extracts the recorded `closureReason`
+  (selected by the evidence `seq`, since this detector has no fingerprint);
+  re-drive calls the live `buildClosureGuidance(reason)` and asserts the
+  recorded anomalous closure now carries actionable recovery guidance.
+  *Neutralisation here is advisory, not preventive* — the abort still aborts;
+  "neutralised" means the closure no longer surfaces without a recovery path.
+  The guardrail covers `abort` today; an anomalous reason it does not cover yet
+  (e.g. `timeout`) yields no guidance → **fail-closed**, mirroring how the
+  repeat-loop handler fails a sub-threshold loop.
 
 | Outcome | `replay:` checks | Run verdict |
 |---|---|---|
-| Reproduces **and** guardrail neutralises the loop | reproduces ✓, neutralised ✓ | `pass` — fixed |
+| Reproduces **and** guardrail neutralises the recorded failure | reproduces ✓, neutralised ✓ | `pass` — fixed |
 | Reproduces **but** guardrail does not neutralise it | reproduces ✓, neutralised ✗ | `fail` — still reproduces |
 | Fixture intact but no longer encodes the pattern | reproduces – (skipped) | `unsupported` — **never `pass`**; the card-specific behaviour was not verified, even though the guardrail contract passed |
 | Fixture missing / sha256 mismatch | (no replay) | `fail` via `fixture-integrity` before any replay runs |
 
 #### Boundary (no overclaiming)
 
-The replay re-drives the recorded loop **shape** (tool name + consecutive
-byte-identical count), not the original tool or LLM execution. It proves the
-live guardrail covers the recorded failure; it does not prove the loop can
-never arise for an unrelated reason. The fixture bytes are checksum-pinned by
-the eval-case, so the stimulus is stable across runs and the whole check is
-deterministic.
+The replay re-drives the recorded failure **shape** (the loop's tool +
+consecutive byte-identical count, or the closure reason), not the original tool
+or LLM execution. It proves the live guardrail covers the recorded failure; it
+does not prove the failure can never arise for an unrelated reason. The fixture
+bytes are checksum-pinned by the eval-case, so the stimulus is stable across
+runs and the whole check is deterministic.
 
 ## Status precedence
 

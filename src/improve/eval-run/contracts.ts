@@ -13,8 +13,8 @@
  * EXISTS and behaves against a synthetic stimulus. A complementary
  * fixture-REPLAY layer ({@link ./replay}) re-drives a card's actual recorded
  * failure through the live guardrail for patterns that have a handler
- * (currently `repeated-tool-use`); the runner runs both. A contract validates
- * the *fix* — the guardrail the pattern maps to:
+ * (currently `repeated-tool-use` and `closure-anomaly`); the runner runs both.
+ * A contract validates the *fix* — the guardrail the pattern maps to:
  *
  *   - `repeated-tool-use`    → the repeat-loop circuit breaker (PR #80).
  *   - `subagent-block`       → the skill max-depth recovery hint (PR #80).
