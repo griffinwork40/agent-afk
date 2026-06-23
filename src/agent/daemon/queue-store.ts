@@ -19,6 +19,7 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFile
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { getQueueDir } from '../../paths.js';
+import { redactInlineSecrets } from '../session/prompt-dump.js';
 
 export interface QueuedTask {
   /** Unique task identifier, e.g. `q-1716000000000-abc123`. */
@@ -95,6 +96,11 @@ export function enqueue(
  * Subdirectory (relative to `queueDir`) used to quarantine malformed queue
  * entries instead of silently dropping them or letting them block the FIFO
  * queue forever. See `dequeueNext` for the poison-handling contract.
+ *
+ * NOTE(#337-poison-gc): quarantined files are never auto-pruned — `poison/`
+ * grows unbounded and is expected to be inspected and cleared manually by the
+ * operator. A periodic sweep (e.g. prune entries older than N days) is a
+ * tracked follow-up, kept out of this fix to limit its scope.
  */
 const POISON_SUBDIR = 'poison';
 
@@ -161,7 +167,14 @@ export function dequeueNext(queueDir: string = getQueueDir()): QueuedTask | null
  * outcome is logged to stderr so the operator can investigate.
  */
 function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown): void {
-  const reason = err instanceof Error ? err.message : String(err);
+  // Redact every error-derived string before logging: a JSON.parse SyntaxError
+  // can embed a snippet of the malformed entry's bytes, and a queue `command`
+  // may carry an inline secret. This matches the daemon's existing convention
+  // for error-derived logs (see redactInlineSecrets use in scheduler.ts runOnce).
+  // NOTE(#337-poison-telemetry): quarantines are logged to stderr only — a
+  // structured `status:'poison'` telemetry record for parity with runOnce is a
+  // tracked follow-up, not added here to keep the change focused.
+  const reason = redactInlineSecrets(err instanceof Error ? err.message : String(err));
   const poisonDir = join(queueDir, POISON_SUBDIR);
   const src = join(queueDir, filename);
   try {
@@ -170,7 +183,12 @@ function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown)
     try {
       renameSync(src, dest);
     } catch {
-      // Collision or transient failure — disambiguate and retry once.
+      // First rename failed — almost always a name collision with a file of the
+      // same name already in poison/ (e.g. re-quarantined after a manual
+      // restore). Retry once with a unique timestamp+random prefix so an
+      // existing poison file is never overwritten. poison/ is a subdir of
+      // queueDir, so a cross-device (EXDEV) rename cannot occur here; any other
+      // rename failure rethrows and is handled by the outer catch.
       dest = join(poisonDir, `${Date.now()}-${randomBytes(3).toString('hex')}-${filename}`);
       renameSync(src, dest);
     }
@@ -181,15 +199,25 @@ function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown)
   } catch (moveErr) {
     // Last resort: if we cannot move it aside, unlink so the queue unblocks
     // rather than deadlocking on every subsequent tick.
-    const moveReason = moveErr instanceof Error ? moveErr.message : String(moveErr);
+    const moveReason = redactInlineSecrets(moveErr instanceof Error ? moveErr.message : String(moveErr));
     // eslint-disable-next-line no-console
     console.error(
       `[daemon] pull-queue: failed to quarantine malformed entry ${filename}; removing to unblock queue (${moveReason})`,
     );
     try {
       unlinkSync(src);
-    } catch {
-      // ignore — nothing more we can do; the next readdir will retry.
+    } catch (unlinkErr) {
+      // Even the unlink failed (e.g. queue-dir permission loss). Surface it
+      // instead of swallowing — otherwise the stuck entry re-fails silently on
+      // every tick. The queue is NOT deadlocked (dequeueNext's loop still
+      // reaches valid entries behind it); the next readdir retries this one.
+      const unlinkReason = redactInlineSecrets(
+        unlinkErr instanceof Error ? unlinkErr.message : String(unlinkErr),
+      );
+      // eslint-disable-next-line no-console
+      console.error(
+        `[daemon] pull-queue: could not remove unquarantinable entry ${filename}; will retry next tick (${unlinkReason})`,
+      );
     }
   }
 }
@@ -197,8 +225,15 @@ function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown)
 /**
  * List all pending tasks in FIFO order without removing them.
  *
+ * Mirrors `dequeueNext`'s tolerance for malformed entries: a poison file
+ * (unreadable or unparseable) is SKIPPED rather than thrown on, so one corrupt
+ * file cannot crash a `queue list` view. Unlike `dequeueNext`, this read-only
+ * path does NOT quarantine (move) the entry — a listing must not mutate the
+ * queue, and quarantining here could race the daemon's concurrent dequeue. The
+ * dequeue path stays responsible for moving poison aside.
+ *
  * @param queueDir - Override the queue directory (defaults to `getQueueDir()`).
- * @returns Array of `QueuedTask` sorted by sequence (FIFO).
+ * @returns Array of `QueuedTask` sorted by sequence (FIFO); malformed entries omitted.
  */
 export function listPending(queueDir: string = getQueueDir()): QueuedTask[] {
   try {
@@ -211,9 +246,18 @@ export function listPending(queueDir: string = getQueueDir()): QueuedTask[] {
     .filter((f) => f.endsWith('.json') && !f.startsWith('.tmp-'))
     .sort();
 
-  return sorted.map((filename) => {
+  const tasks: QueuedTask[] = [];
+  for (const filename of sorted) {
     const filePath = join(queueDir, filename);
-    const raw = readFileSync(filePath, 'utf-8');
-    return JSON.parse(raw) as QueuedTask;
-  });
+    try {
+      tasks.push(JSON.parse(readFileSync(filePath, 'utf-8')) as QueuedTask);
+    } catch (err) {
+      const reason = redactInlineSecrets(err instanceof Error ? err.message : String(err));
+      // eslint-disable-next-line no-console
+      console.error(
+        `[daemon] pull-queue: skipping unreadable entry ${filename} in listPending (${reason})`,
+      );
+    }
+  }
+  return tasks;
 }

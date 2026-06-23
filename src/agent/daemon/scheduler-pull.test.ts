@@ -209,7 +209,7 @@ describe('pull tick — malformed queue entries do not deadlock', () => {
     await scheduler.stop();
   });
 
-  it('keeps draining across ticks when multiple poison entries are present', async () => {
+  it('drains multiple poison entries on a single tick while still running the valid task behind them', async () => {
     writeFileSync(join(queueDir, '0001-q-bad1.json'), 'nope');
     writeFileSync(join(queueDir, '0002-q-bad2.json'), 'also{bad');
     enqueue('good', {}, queueDir);

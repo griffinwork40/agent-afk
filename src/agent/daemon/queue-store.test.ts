@@ -157,6 +157,25 @@ describe('dequeueNext — malformed (poison) entries', () => {
     expect(task).not.toBeNull();
     expect(task!.command).toBe('valid');
   });
+
+  it('quarantines an unreadable entry (read error, not parse error) and keeps draining', () => {
+    // A directory whose name ends in `.json` passes the FIFO filter but makes
+    // readFileSync throw EISDIR — exercising the read-error branch, which is
+    // distinct from the JSON.parse branch every other poison test covers.
+    mkdirSync(join(tmpDir, '0000-q-unreadable.json'), { recursive: true });
+    enqueue('valid-after-unreadable', {}, tmpDir);
+
+    const task = dequeueNext(tmpDir);
+    expect(task).not.toBeNull();
+    expect(task!.command).toBe('valid-after-unreadable');
+
+    // The unreadable entry was moved aside into poison/, not left at the head.
+    expect(readdirSync(join(tmpDir, 'poison'))).toHaveLength(1);
+    const remaining = readdirSync(tmpDir).filter(
+      (f) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+    );
+    expect(remaining).toHaveLength(0);
+  });
 });
 
 describe('listPending', () => {
@@ -180,5 +199,21 @@ describe('listPending', () => {
     enqueue('keep', {}, tmpDir);
     listPending(tmpDir);
     expect(readdirSync(tmpDir)).toHaveLength(1);
+  });
+
+  it('skips malformed entries instead of throwing', () => {
+    enqueue('alpha', {}, tmpDir);
+    writeFileSync(join(tmpDir, '0002-q-poison.json'), '{ not json');
+    enqueue('gamma', {}, tmpDir);
+
+    // Must not throw on the poison entry, and returns only the parseable tasks.
+    const tasks = listPending(tmpDir);
+    expect(tasks.map((t) => t.command)).toEqual(['alpha', 'gamma']);
+
+    // Read-only: nothing moved or removed — the poison entry is left in place
+    // for the dequeue path to quarantine, and no poison/ dir is created here.
+    const remaining = readdirSync(tmpDir).filter((f) => f.endsWith('.json'));
+    expect(remaining).toHaveLength(3);
+    expect(readdirSync(tmpDir)).not.toContain('poison');
   });
 });

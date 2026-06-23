@@ -295,7 +295,9 @@ export class CronScheduler {
       // quarantined inside dequeueNext) or from synthetic-task construction.
       // Log so a bad tick is visible in daemon logs instead of vanishing;
       // the poll loop still survives (mirrors writeTelemetry's logging path).
-      const msg = err instanceof Error ? err.message : String(err);
+      // Redact error-derived text before logging, matching the runOnce
+      // telemetry path (a synthetic task's command may carry an inline secret).
+      const msg = redactInlineSecrets(err instanceof Error ? err.message : String(err));
       // eslint-disable-next-line no-console
       console.error(`[daemon] pull tick failed: ${msg}`);
     } finally {
