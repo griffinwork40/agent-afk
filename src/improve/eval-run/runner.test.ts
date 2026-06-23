@@ -27,6 +27,8 @@ import {
 } from './runner.js';
 import { makeCheck } from './contracts.js';
 import {
+  REPLAY_CHECK_CLOSURE_GUIDED,
+  REPLAY_CHECK_CLOSURE_REPRODUCES,
   REPLAY_CHECK_NEUTRALIZED,
   REPLAY_CHECK_REPRODUCES,
   type LoopDriver,
@@ -71,6 +73,44 @@ const DEFAULT_FIXTURE_BYTES = Buffer.from('{"seq":0,"kind":"tool_call"}\n');
 const LOOP_FIXTURE_BYTES = readFileSync(
   resolve(__dirname, '__fixtures__/repeated-tool-use-loop.fixture.jsonl'),
 );
+
+/** The committed fixture that encodes a real `abort` closure. */
+const CLOSURE_FIXTURE_BYTES = readFileSync(
+  resolve(__dirname, '__fixtures__/closure-anomaly-abort.fixture.jsonl'),
+);
+
+/** Build a closure fixture: a prefix ending in a `closure` event with `reason`. */
+function closureFixtureBytes(reason: string): Buffer {
+  const lines = [
+    JSON.stringify({
+      ts: '2026-06-20T10:00:00.000Z',
+      seq: 0,
+      kind: 'tool_call',
+      payload: { phase: 'started', toolUseId: 'tu-1', name: 'bash', inputBytes: 80 },
+    }),
+    JSON.stringify({
+      ts: '2026-06-20T10:00:00.050Z',
+      seq: 1,
+      kind: 'tool_call',
+      payload: {
+        phase: 'completed',
+        toolUseId: 'tu-1',
+        name: 'bash',
+        resultBytes: 256,
+        isError: false,
+        truncated: false,
+        durationMs: 50,
+      },
+    }),
+    JSON.stringify({
+      ts: '2026-06-20T10:00:01.000Z',
+      seq: 2,
+      kind: 'closure',
+      payload: { reason, finalTurnCount: 3, finalCostUsd: 0.0123, finalTokens: { input: 1200, output: 340 } },
+    }),
+  ];
+  return Buffer.from(lines.join('\n') + '\n', 'utf8');
+}
 
 /**
  * Build a schema-valid EvalCase and (by default) write its fixture under the
@@ -252,10 +292,18 @@ describe('runEvalCase', () => {
   });
 
   it('validates the closure-anomaly (abort recovery hint) contract end to end', async () => {
-    const run = await runEvalCase(makeEvalCase({ pattern: 'closure-anomaly' }), { ...baseCtx, clockMs: stubClock([1, 2]) });
+    // An abort-closure fixture exercises BOTH layers: the guardrail-presence
+    // contract and the fixture-replay (reproduces + guided). All pass → `pass`.
+    const run = await runEvalCase(
+      makeEvalCase({ pattern: 'closure-anomaly', fixtureBytes: CLOSURE_FIXTURE_BYTES }),
+      { ...baseCtx, clockMs: stubClock([1, 2]) },
+    );
     expect(run.status).toBe('pass');
     expect(run.contract).toBe('closure-abort-recovery-hint');
     expect(run.checks.some((c) => c.name === 'abort-closure-has-guidance' && c.status === 'pass')).toBe(true);
+    // The replay layer also ran against the recorded abort closure.
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_CLOSURE_REPRODUCES)?.status).toBe('pass');
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_CLOSURE_GUIDED)?.status).toBe('pass');
   });
 
   it('a failed check beats a passing contract (corrupt fixture forces fail)', async () => {
@@ -382,6 +430,19 @@ describe('renderEvalRunMarkdown', () => {
     expect(md).not.toContain('proving the behaviour is fixed');
   });
 
+  it('renders the "behaviour fixed" disclaimer for a closure-anomaly replay run', async () => {
+    const run = await runEvalCase(
+      makeEvalCase({ pattern: 'closure-anomaly', fixtureBytes: CLOSURE_FIXTURE_BYTES }),
+      { evalRunId: 'closure-anomaly-abort-run-20260611-dddddd', now: FIXED_NOW, clockMs: stubClock([0, 1]) },
+    );
+    const md = renderEvalRunMarkdown(run);
+    // The guided check drove → the (now pattern-agnostic) "behaviour fixed"
+    // disclaimer renders and the closure guided check shows in the table.
+    expect(md).toContain('proving the behaviour is fixed');
+    expect(md).toContain('NOT re-execute the original tool/LLM');
+    expect(md).toContain(REPLAY_CHECK_CLOSURE_GUIDED);
+  });
+
   it('escapes pipes in table cells so the markdown table stays valid', async () => {
     const run = await runEvalCase(makeEvalCase({ pattern: 'tool-failure-density' }), {
       evalRunId: 'slug-run-20260611-bbbbbb',
@@ -459,6 +520,46 @@ describe('runEvalCase fixture-replay', () => {
     const run = await runEvalCase(makeEvalCase({ pattern: 'tool-failure-density' }), baseCtx);
     expect(run.checks.some((c) => c.name === REPLAY_CHECK_REPRODUCES)).toBe(false);
     expect(run.checks.some((c) => c.name === REPLAY_CHECK_NEUTRALIZED)).toBe(false);
+  });
+
+  it('PASSES end to end when the live guardrail guides the recorded abort closure', async () => {
+    const run = await runEvalCase(
+      makeEvalCase({ pattern: 'closure-anomaly', fixtureBytes: CLOSURE_FIXTURE_BYTES }),
+      baseCtx,
+    );
+
+    expect(run.status).toBe('pass');
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_CLOSURE_REPRODUCES)?.status).toBe('pass');
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_CLOSURE_GUIDED)?.status).toBe('pass');
+  });
+
+  it('FAILS end to end for an anomalous closure the guardrail does not cover (fail-closed)', async () => {
+    // `timeout` reproduces but buildClosureGuidance returns null for it today.
+    const run = await runEvalCase(
+      makeEvalCase({ pattern: 'closure-anomaly', fixtureBytes: closureFixtureBytes('timeout') }),
+      baseCtx,
+    );
+
+    expect(run.status).toBe('fail');
+    // The fixture still reproduces an anomalous closure, so that check passes …
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_CLOSURE_REPRODUCES)?.status).toBe('pass');
+    // … but no recovery guidance exists for the reason → the gate fails.
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_CLOSURE_GUIDED)?.status).toBe('fail');
+  });
+
+  it('reports unsupported (NOT pass) when an intact fixture has no anomalous closure', async () => {
+    // A benign `model_end_turn` close is intact but not anomalous → the replay
+    // is skipped. The guardrail contract passes, but a skipped replay must never
+    // surface as `pass` — that would be guardrail presence masquerading as
+    // card-specific behavioural proof.
+    const run = await runEvalCase(
+      makeEvalCase({ pattern: 'closure-anomaly', fixtureBytes: closureFixtureBytes('model_end_turn') }),
+      baseCtx,
+    );
+
+    expect(run.status).toBe('unsupported');
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_CLOSURE_REPRODUCES)?.status).toBe('skipped');
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_CLOSURE_GUIDED)).toBeUndefined();
   });
 });
 

@@ -21,15 +21,16 @@
  *      guardrail a pattern maps to EXISTS and behaves against a synthetic
  *      stimulus. Every supported pattern has one.
  *   2. Fixture-replay (see {@link ./replay}) — for patterns with a registered
- *      handler (currently `repeated-tool-use`), re-drives THIS card's recorded
- *      failure through the live guardrail and asserts it is neutralised at the
- *      recorded magnitude. This is the "is the behaviour fixed?" signal, not
- *      merely "does a guardrail exist?". It runs only after the fixture's
- *      sha256 re-verifies — a corrupt/missing fixture forces `fail` first.
+ *      handler (currently `repeated-tool-use` and `closure-anomaly`), re-drives
+ *      THIS card's recorded failure through the live guardrail and asserts it is
+ *      neutralised at the recorded magnitude. This is the "is the behaviour
+ *      fixed?" signal, not merely "does a guardrail exist?". It runs only after
+ *      the fixture's sha256 re-verifies — a corrupt/missing fixture forces
+ *      `fail` first.
  *
  * The replay does NOT re-execute the original tool/LLM; it re-drives the
- * recorded loop shape. The boundary is documented on {@link ./replay} and
- * {@link EvalRunSchema}.
+ * recorded failure conditions (the loop shape, or the closure reason). The
+ * boundary is documented on {@link ./replay} and {@link EvalRunSchema}.
  *
  * ## Eval-run ID format
  *
@@ -70,7 +71,7 @@ import { sha256Bytes } from '../eval-gen/replay-fixture.js';
 import type { IdContext } from '../eval-gen/writer.js';
 import { makeCheck, resolveContract, snapshot, supportedContractPatterns } from './contracts.js';
 import {
-  REPLAY_CHECK_NEUTRALIZED,
+  isReplayNeutralizeCheck,
   resolveReplayHandler,
   type LoopDriver,
 } from './replay.js';
@@ -212,7 +213,7 @@ export async function runEvalCase(evalCase: EvalCase, ctx: RunEvalCaseContext): 
   // produced no neutralise check — i.e. the recorded loop did not reproduce, so
   // the card-specific behaviour was never actually verified. That must not
   // surface as `pass`: see decideStatus.
-  const replayDrove = checks.some((c) => c.name === REPLAY_CHECK_NEUTRALIZED);
+  const replayDrove = checks.some((c) => isReplayNeutralizeCheck(c.name));
   const replayInconclusive =
     replayHandler !== undefined && fixture.check.status === 'pass' && replayRan && !replayDrove;
 
@@ -421,17 +422,18 @@ export function renderEvalRunMarkdown(run: EvalRun): string {
   );
   out.push('');
 
-  // A NEUTRALIZED check is present only when a fixture-replay actually drove
-  // the recorded loop (not when it was skipped for a non-reproducing fixture),
-  // so it is the honest signal that this run proved a fix vs. only a guardrail.
-  const didReplay = run.checks.some((c) => c.name === REPLAY_CHECK_NEUTRALIZED);
+  // A neutralise check (repeat-loop or closure-guided) is present only when a
+  // fixture-replay actually drove the recorded failure (not when it was skipped
+  // for a non-reproducing fixture), so it is the honest signal that this run
+  // proved a fix vs. only a guardrail.
+  const didReplay = run.checks.some((c) => isReplayNeutralizeCheck(c.name));
   if (didReplay) {
     out.push('> **What this is.** A deterministic validation of pattern');
     out.push(`> \`${run.patternId}\`. It re-drove the failure recorded in the committed`);
-    out.push('> fixture through the LIVE guardrail and asserts the loop would not recur');
-    out.push('> at the recorded magnitude — proving the behaviour is fixed, not merely');
-    out.push('> that a guardrail exists. It re-drives the recorded loop shape; it does');
-    out.push('> NOT re-execute the original tool/LLM.');
+    out.push('> fixture through the LIVE guardrail and asserts the recorded failure is');
+    out.push('> neutralised at the recorded magnitude — proving the behaviour is fixed,');
+    out.push('> not merely that a guardrail exists. It re-drives the recorded failure');
+    out.push('> conditions; it does NOT re-execute the original tool/LLM.');
   } else {
     out.push('> **What this is.** A narrow, deterministic check that the guardrail');
     out.push(`> mapped to pattern \`${run.patternId}\` is present and behaving. It`);
