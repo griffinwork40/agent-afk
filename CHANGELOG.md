@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.33.2] - 2026-06-23
+
+### Fixed
+- accept absent hook_decision.decision key (zod 4.4 regression) (ac246d7)
+
+### Changed
+- Merge pull request #256 from griffinwork40/fix/hook-decision-schema-zod44 (6d39441)
+
 ## [4.33.1] - 2026-06-23
 
 ### Fixed
