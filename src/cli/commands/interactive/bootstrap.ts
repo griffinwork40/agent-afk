@@ -286,6 +286,8 @@ export async function bootstrapSession(
     // rather than forwarding the parent's captured apiKey — fixes Anthropic
     // children starving when the main model is OpenAI-routed.
     getApiKeyForModel,
+    // Surface: REPL skill executor children inherit origin 'cli'.
+    'cli',
   );
 
   // Pass `sessionModel` to `getDefaultSubagentModel` so OpenAI-routed
@@ -366,6 +368,9 @@ export async function bootstrapSession(
     // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
     ...(extras?.cwd !== undefined ? { cwd: extras.cwd } : {}),
     systemPrompt: basePrompt ?? '',
+    // Session identity for routing-decision rows (REPL → cli).
+    surface: 'cli',
+    depth: 0,
   });
 
   const sharedMemoryStore = new MemoryStore();

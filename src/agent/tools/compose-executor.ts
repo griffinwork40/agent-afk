@@ -16,8 +16,10 @@ import { runSubagentDAG, type SubagentDAGNode } from '../dag-subagent.js';
 import { providerForModel } from '../providers/index.js';
 import type { DAGEdge, DAGRunResult } from '../dag.js';
 import type { AgentModelInput, IAgentSession } from '../types.js';
+import type { Surface } from '../awareness/types.js';
 import type { ToolCall, ToolResult } from './types.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
+import { deriveOrigin, actorFromDepth } from '../session/session-identity.js';
 import type { SubagentExecutionError } from '../subagent/result.js';
 import type { SubagentProgressSink } from '../types/session-types.js';
 import { getCurrentSink } from '../_lib/skill-sink-channel.js';
@@ -96,6 +98,20 @@ export interface ComposeExecutorContext {
    * behavior).
    */
   cwd?: string;
+  /**
+   * User-facing surface of the session that owns this executor
+   * (cli/telegram/daemon). Recorded as `origin` on compose routing-decision
+   * rows. `actor` is derived from {@link ComposeExecutorContext.depth}.
+   * Optional/back-compat: when unset, rows omit `origin`/`actor`.
+   * Mirrors the same field on {@link SubagentExecutorContext}.
+   */
+  surface?: Surface;
+  /**
+   * Nesting depth this executor sits at. Used together with `surface` to
+   * derive `actor` for routing-decision rows (depth 0 → `main`; depth > 0
+   * → `subagent`). Optional/back-compat: defaults to 0 when unset.
+   */
+  depth?: number;
 }
 
 interface ComposeNodeInput {
@@ -487,6 +503,15 @@ export class ComposeExecutor {
       };
     }
 
+    // Session identity for routing-decision rows. Mirrors the same pattern
+    // in SubagentExecutor (subagent-executor.ts:541-544): only emitted when
+    // `surface` is set; legacy/un-threaded contexts omit both fields.
+    // `actor` comes from `depth` (>0 ⟺ this executor is owned by a subagent).
+    const identity =
+      this.ctx.surface !== undefined
+        ? { origin: deriveOrigin(this.ctx.surface), actor: actorFromDepth(this.ctx.depth) }
+        : {};
+
     // Per-node tool-call budget: count tool_use_detail chunks per subagentId
     // via a chained progressSink that forwards to the ambient sink (so CLI
     // rendering stays intact) and kills the offending handle on the first
@@ -553,6 +578,7 @@ export class ComposeExecutor {
 
     const startedAt = Date.now();
     void appendRoutingDecision({
+      ...identity,
       event: 'compose.started',
       parent_session_id: this.ctx.parentSession.sessionId,
       node_count: parsed.nodes.length,
@@ -667,6 +693,7 @@ export class ComposeExecutor {
       }
 
       void appendRoutingDecision({
+        ...identity,
         event: 'compose.completed',
         parent_session_id: this.ctx.parentSession.sessionId,
         node_count: parsed.nodes.length,
@@ -702,6 +729,7 @@ export class ComposeExecutor {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       void appendRoutingDecision({
+        ...identity,
         event: 'compose.failed',
         parent_session_id: this.ctx.parentSession.sessionId,
         error_message: message.slice(0, 240),

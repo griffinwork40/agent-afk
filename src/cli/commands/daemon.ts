@@ -110,6 +110,8 @@ export function buildDaemonSessionFactory(
       opts.cwd,
       // Per-model credential resolver — see bootstrap.ts for rationale.
       getApiKeyForModel,
+      // Surface: daemon skill executor children inherit origin 'daemon'.
+      'daemon',
     );
 
     const subagentExecutor = new SubagentExecutor({
@@ -156,6 +158,9 @@ export function buildDaemonSessionFactory(
       // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
       systemPrompt: '',
+      // Session identity for routing-decision rows (daemon/scheduler → daemon).
+      surface: 'daemon',
+      depth: 0,
     });
 
     memoryStore ??= new MemoryStore();
