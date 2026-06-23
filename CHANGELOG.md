@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.32.0] - 2026-06-23
+
+### Added
+- add Ctrl+L, Ctrl+D, and line-relative Home/End (c2d4f36)
+
+### Changed
+- Merge pull request #231 from griffinwork40/feat/tui-repl-keybindings (b528fc0)
+- add dispatch-level coverage for Ctrl+L/Ctrl+D/Home/End keys (7463f7d)
+
 ## [4.31.2] - 2026-06-23
 
 ### Fixed
