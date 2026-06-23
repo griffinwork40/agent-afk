@@ -71,7 +71,13 @@ export const HookEventNameSchema = z.enum([
 
 export const HookDecisionPayloadSchema = z.object({
   hookEvent: HookEventNameSchema,
-  decision: z.union([z.literal('block'), z.literal('approve'), z.undefined()]),
+  // Invariant: `decision` is absent on the wire for the pass-through case —
+  // the writer sets it to `undefined`, and JSON.stringify drops undefined-valued
+  // keys, so a persisted line has no `decision` key at all. `.optional()` (not a
+  // `z.undefined()` union member) is required: zod ≥4.4 treats a union-with-undefined
+  // field as nonoptional and rejects a MISSING key, which silently invalidated
+  // every pass-through hook_decision line in `afk improve scan`.
+  decision: z.union([z.literal('block'), z.literal('approve')]).optional(),
   reason: z.string().optional(),
   blockedTool: z.string().optional(),
   injectedContextBytes: z.number().int().nonnegative().optional(),

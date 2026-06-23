@@ -125,6 +125,31 @@ describe('hook_decision payload', () => {
     ).not.toThrow();
   });
 
+  // Regression: the pass-through case writes `decision: undefined`, and
+  // JSON.stringify drops undefined-valued keys, so a PERSISTED line has no
+  // `decision` key at all. The reader must accept the absent-key form. Under a
+  // `z.union([..., z.undefined()])` field, zod ≥4.4 rejected the missing key
+  // ("expected nonoptional"), silently invalidating ~every hook_decision line
+  // in `afk improve scan`. `.optional()` is what makes absence valid.
+  it('accepts a payload with the decision key entirely absent', () => {
+    expect(() =>
+      HookDecisionPayloadSchema.parse({ hookEvent: 'SessionStart' }),
+    ).not.toThrow();
+  });
+
+  it('round-trips a pass-through event through JSON (the reader path)', () => {
+    const event = {
+      ts: '2026-06-23T16:08:08.736Z',
+      seq: 7,
+      kind: 'hook_decision' as const,
+      payload: { hookEvent: 'SessionStart' as const, decision: undefined },
+    };
+    // JSON.stringify drops `decision: undefined`; the on-disk line has no key.
+    const onDisk = JSON.parse(JSON.stringify(event));
+    expect(Object.prototype.hasOwnProperty.call(onDisk.payload, 'decision')).toBe(false);
+    expect(TraceEventSchema.safeParse(onDisk).success).toBe(true);
+  });
+
   it('rejects unknown hookEvent', () => {
     expect(() =>
       HookDecisionPayloadSchema.parse({
