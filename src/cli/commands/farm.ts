@@ -24,6 +24,7 @@ import {
 } from '../../skills/score/index.js';
 import { writeFarmFact } from '../../skills/score/memory-write.js';
 import { sendFarmDigest } from '../../skills/score/digest.js';
+import { createDefaultTraceWriter } from '../../agent/trace/factory.js';
 import type { FarmRunRecord, FarmBranchRecord } from '../../skills/score/farm-run-record.js';
 import type { SubagentDAGNode } from '../../agent/dag-subagent.js';
 import type { FarmManifest, CreatedBranch } from '../../agent/worktree.js';
@@ -261,6 +262,7 @@ export interface RunFarmOptions {
   _writeFarmFact?: typeof writeFarmFact;
   _sendFarmDigest?: typeof sendFarmDigest;
   _setFarmMemoryFactId?: typeof setFarmMemoryFactId;
+  _createTraceWriter?: typeof createDefaultTraceWriter;
 }
 
 export async function runFarm(opts: RunFarmOptions): Promise<void> {
@@ -286,6 +288,7 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
     _writeFarmFact: writeFarmFactFn = writeFarmFact,
     _sendFarmDigest: sendFarmDigestFn = sendFarmDigest,
     _setFarmMemoryFactId: setFarmMemoryFactIdFn = setFarmMemoryFactId,
+    _createTraceWriter: createTraceWriterFn = createDefaultTraceWriter,
   } = opts;
 
   // Captured at runFarm entry so the FarmRunRecord reports actual wall-clock
@@ -351,13 +354,36 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
   }));
 
   // -- Run DAG --
+  // Witness layer: open the trace writer before the SubagentManager so the
+  // AbortGraph (which emits cascade-abort events) shares the same writer.
+  // The factory returns null under AFK_TRACE_DISABLED=1 (operator opt-out).
+  //
+  // Contract: surface 'cli' is the correct origin for `afk farm` — it is a
+  // CLI batch command whose workers should resolve to origin='cli', matching
+  // `afk chat` / `afk interactive`. Worker sessions forked via runSubagentDAG
+  // inherit the writer through SubagentManager once SubagentManager gains
+  // manager-level traceWriter inheritance (tracked as a follow-up: the
+  // `dag-subagent.ts` forkSubagent path does not yet forward traceWriter from
+  // SubagentManagerOptions into child AgentConfigs the way apiKey/baseUrl/cwd
+  // do; adding that inheritance is the remaining gap).
+  const trace = createTraceWriterFn();
   const abortController = new AbortController();
   const manager = new SubagentManager({
     parentAbortSignal: abortController.signal,
+    // Wire the trace writer so AbortGraph cascade aborts are recorded in the
+    // witness layer. Once manager-level traceWriter inheritance lands in
+    // SubagentManager, forked worker sessions will also receive this writer
+    // automatically — making farm workers fully visible in the trace.
+    ...(trace !== null ? { traceWriter: trace.writer } : {}),
   });
+  // surface: 'cli' — farm is a CLI entrypoint; workers must report
+  // origin='cli', not 'unknown'. The value is set here at the parentSession
+  // level for documentation; the worker AgentConfigs will receive surface
+  // once SubagentManager propagates it (same pattern as cwd inheritance).
   const parentSession = {
     sessionId: `farm-${manifest.taskSlug}`,
     abortSignal: abortController.signal,
+    surface: 'cli' as const,
   };
 
   let dagResult: DAGRunResult;
