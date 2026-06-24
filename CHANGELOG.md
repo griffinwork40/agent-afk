@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.36.0] - 2026-06-24
+
+### Added
+- classification eval for tool-failure-density contract (f714332)
+
+### Changed
+- Merge pull request #266 from griffinwork40/feat/improve-eval-run-tool-failure-classification (ee55b8b)
+
 ## [4.35.0] - 2026-06-23
 
 ### Added
