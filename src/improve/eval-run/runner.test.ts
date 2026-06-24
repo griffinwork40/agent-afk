@@ -13,7 +13,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 import { tmpdir } from 'os';
 import {
   decideStatus,
@@ -26,6 +26,13 @@ import {
   writeEvalRun,
 } from './runner.js';
 import { makeCheck } from './contracts.js';
+import {
+  REPLAY_CHECK_CLOSURE_GUIDED,
+  REPLAY_CHECK_CLOSURE_REPRODUCES,
+  REPLAY_CHECK_NEUTRALIZED,
+  REPLAY_CHECK_REPRODUCES,
+  type LoopDriver,
+} from './replay.js';
 import { sha256Bytes } from '../eval-gen/replay-fixture.js';
 import { EvalCaseSchema, type EvalCase, type FailurePattern } from '../schemas.js';
 import {
@@ -61,6 +68,49 @@ function mkdtemp(): string {
 
 const FIXED_NOW = () => new Date('2026-06-11T12:00:00.000Z');
 const DEFAULT_FIXTURE_BYTES = Buffer.from('{"seq":0,"kind":"tool_call"}\n');
+
+/** The committed fixture that encodes a real 8× repeated-tool-use loop. */
+const LOOP_FIXTURE_BYTES = readFileSync(
+  resolve(__dirname, '__fixtures__/repeated-tool-use-loop.fixture.jsonl'),
+);
+
+/** The committed fixture that encodes a real `abort` closure. */
+const CLOSURE_FIXTURE_BYTES = readFileSync(
+  resolve(__dirname, '__fixtures__/closure-anomaly-abort.fixture.jsonl'),
+);
+
+/** Build a closure fixture: a prefix ending in a `closure` event with `reason`. */
+function closureFixtureBytes(reason: string): Buffer {
+  const lines = [
+    JSON.stringify({
+      ts: '2026-06-20T10:00:00.000Z',
+      seq: 0,
+      kind: 'tool_call',
+      payload: { phase: 'started', toolUseId: 'tu-1', name: 'bash', inputBytes: 80 },
+    }),
+    JSON.stringify({
+      ts: '2026-06-20T10:00:00.050Z',
+      seq: 1,
+      kind: 'tool_call',
+      payload: {
+        phase: 'completed',
+        toolUseId: 'tu-1',
+        name: 'bash',
+        resultBytes: 256,
+        isError: false,
+        truncated: false,
+        durationMs: 50,
+      },
+    }),
+    JSON.stringify({
+      ts: '2026-06-20T10:00:01.000Z',
+      seq: 2,
+      kind: 'closure',
+      payload: { reason, finalTurnCount: 3, finalCostUsd: 0.0123, finalTokens: { input: 1200, output: 340 } },
+    }),
+  ];
+  return Buffer.from(lines.join('\n') + '\n', 'utf8');
+}
 
 /**
  * Build a schema-valid EvalCase and (by default) write its fixture under the
@@ -165,6 +215,20 @@ describe('decideStatus precedence', () => {
   it('pass when a contract ran and every check passed', () => {
     expect(decideStatus({ hasContract: true, contractThrew: false, checks: [passCheck] })).toBe('pass');
   });
+
+  it('replayInconclusive forces unsupported even with a contract and passing checks', () => {
+    // A skipped replay must never read as `pass` — guardrail presence is not
+    // card-specific behavioural proof.
+    expect(
+      decideStatus({ hasContract: true, contractThrew: false, checks: [passCheck], replayInconclusive: true }),
+    ).toBe('unsupported');
+  });
+
+  it('a real failure still beats replayInconclusive', () => {
+    expect(
+      decideStatus({ hasContract: true, contractThrew: false, checks: [failCheck], replayInconclusive: true }),
+    ).toBe('fail');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -178,8 +242,13 @@ describe('runEvalCase', () => {
     clockMs: stubClock([1000, 1042]),
   };
 
-  it('passes for a supported pattern with an intact fixture', async () => {
-    const run = await runEvalCase(makeEvalCase({ pattern: 'repeated-tool-use' }), { ...baseCtx, clockMs: stubClock([1000, 1042]) });
+  it('passes for a supported pattern with an intact fixture that reproduces the loop', async () => {
+    // Intact fixture that actually encodes the recorded loop → the replay layer
+    // runs end to end (reproduces + neutralised) alongside the guardrail contract.
+    const run = await runEvalCase(makeEvalCase({ pattern: 'repeated-tool-use', fixtureBytes: LOOP_FIXTURE_BYTES }), {
+      ...baseCtx,
+      clockMs: stubClock([1000, 1042]),
+    });
 
     expect(run.status).toBe('pass');
     expect(run.contract).toBe('repeat-loop-circuit-breaker');
@@ -191,9 +260,11 @@ describe('runEvalCase', () => {
     // fixture-integrity is always the first check.
     expect(run.checks[0]?.name).toBe('fixture-integrity');
     expect(run.checks[0]?.status).toBe('pass');
-    // ...followed by the 4 circuit-breaker checks, all passing.
+    // fixture-integrity + 4 circuit-breaker checks + 2 fixture-replay checks.
     expect(run.checks.every((c) => c.status === 'pass')).toBe(true);
-    expect(run.checks).toHaveLength(5);
+    expect(run.checks).toHaveLength(7);
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_REPRODUCES)?.status).toBe('pass');
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_NEUTRALIZED)?.status).toBe('pass');
   });
 
   it('fails when the committed fixture no longer matches its sha256', async () => {
@@ -221,10 +292,18 @@ describe('runEvalCase', () => {
   });
 
   it('validates the closure-anomaly (abort recovery hint) contract end to end', async () => {
-    const run = await runEvalCase(makeEvalCase({ pattern: 'closure-anomaly' }), { ...baseCtx, clockMs: stubClock([1, 2]) });
+    // An abort-closure fixture exercises BOTH layers: the guardrail-presence
+    // contract and the fixture-replay (reproduces + guided). All pass → `pass`.
+    const run = await runEvalCase(
+      makeEvalCase({ pattern: 'closure-anomaly', fixtureBytes: CLOSURE_FIXTURE_BYTES }),
+      { ...baseCtx, clockMs: stubClock([1, 2]) },
+    );
     expect(run.status).toBe('pass');
     expect(run.contract).toBe('closure-abort-recovery-hint');
     expect(run.checks.some((c) => c.name === 'abort-closure-has-guidance' && c.status === 'pass')).toBe(true);
+    // The replay layer also ran against the recorded abort closure.
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_CLOSURE_REPRODUCES)?.status).toBe('pass');
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_CLOSURE_GUIDED)?.status).toBe('pass');
   });
 
   it('a failed check beats a passing contract (corrupt fixture forces fail)', async () => {
@@ -267,7 +346,7 @@ describe('runEvalCase', () => {
 
 describe('writeEvalRun / getEvalRun / listEvalRuns', () => {
   it('writes JSON + md + index, and round-trips through getEvalRun', async () => {
-    const run = await runEvalCase(makeEvalCase(), {
+    const run = await runEvalCase(makeEvalCase({ fixtureBytes: LOOP_FIXTURE_BYTES }), {
       evalRunId: 'repeated-tool-grep-abc123-run-20260611-aaa111',
       now: FIXED_NOW,
       clockMs: stubClock([0, 3]),
@@ -293,12 +372,12 @@ describe('writeEvalRun / getEvalRun / listEvalRuns', () => {
   });
 
   it('lists runs newest-first', async () => {
-    const older = await runEvalCase(makeEvalCase(), {
+    const older = await runEvalCase(makeEvalCase({ fixtureBytes: LOOP_FIXTURE_BYTES }), {
       evalRunId: 'slug-run-20260611-000001',
       now: () => new Date('2026-06-11T10:00:00.000Z'),
       clockMs: stubClock([0, 1]),
     });
-    const newer = await runEvalCase(makeEvalCase(), {
+    const newer = await runEvalCase(makeEvalCase({ fixtureBytes: LOOP_FIXTURE_BYTES }), {
       evalRunId: 'slug-run-20260611-000002',
       now: () => new Date('2026-06-11T11:00:00.000Z'),
       clockMs: stubClock([0, 1]),
@@ -317,22 +396,51 @@ describe('writeEvalRun / getEvalRun / listEvalRuns', () => {
 // ---------------------------------------------------------------------------
 
 describe('renderEvalRunMarkdown', () => {
-  it('renders the header, disclaimer, checks table, and evidence', async () => {
-    const run = await runEvalCase(makeEvalCase({ pattern: 'repeated-tool-use' }), {
-      evalRunId: 'repeated-tool-grep-abc123-run-20260611-7e1a09',
-      now: FIXED_NOW,
-      clockMs: stubClock([0, 7]),
-    });
+  it('renders the header, replay disclaimer, checks table, and evidence', async () => {
+    const run = await runEvalCase(
+      makeEvalCase({ pattern: 'repeated-tool-use', fixtureBytes: LOOP_FIXTURE_BYTES }),
+      {
+        evalRunId: 'repeated-tool-grep-abc123-run-20260611-7e1a09',
+        now: FIXED_NOW,
+        clockMs: stubClock([0, 7]),
+      },
+    );
     const md = renderEvalRunMarkdown(run);
 
     expect(md).toContain('# repeated-tool-grep-abc123-run-20260611-7e1a09 — `eval-run` — `pass`');
-    expect(md).toContain('does');
-    expect(md).toContain('NOT replay the fixture through the detector');
+    // The fixture reproduced + was neutralised, so the replay disclaimer renders.
+    expect(md).toContain('proving the behaviour is fixed');
+    expect(md).toContain('NOT re-execute the original tool/LLM');
     expect(md).toContain('## Result: ✓ PASS');
     expect(md).toContain('| Check | Status | Expected | Actual |');
     expect(md).toContain('fixture-integrity');
+    expect(md).toContain(REPLAY_CHECK_NEUTRALIZED);
     expect(md).toContain('REPEAT_CIRCUIT_BREAKER_THRESHOLD');
     expect(md).toContain(`\`${EVAL_RUN_RUNNER_VERSION}\``);
+  });
+
+  it('renders the guardrail-only disclaimer for a pattern with no replay handler', async () => {
+    const run = await runEvalCase(makeEvalCase({ pattern: 'tool-failure-density' }), {
+      evalRunId: 'slug-run-20260611-cccccc',
+      now: FIXED_NOW,
+      clockMs: stubClock([0, 1]),
+    });
+    const md = renderEvalRunMarkdown(run);
+    expect(md).toContain('the guardrail the pattern maps to');
+    expect(md).not.toContain('proving the behaviour is fixed');
+  });
+
+  it('renders the "behaviour fixed" disclaimer for a closure-anomaly replay run', async () => {
+    const run = await runEvalCase(
+      makeEvalCase({ pattern: 'closure-anomaly', fixtureBytes: CLOSURE_FIXTURE_BYTES }),
+      { evalRunId: 'closure-anomaly-abort-run-20260611-dddddd', now: FIXED_NOW, clockMs: stubClock([0, 1]) },
+    );
+    const md = renderEvalRunMarkdown(run);
+    // The guided check drove → the (now pattern-agnostic) "behaviour fixed"
+    // disclaimer renders and the closure guided check shows in the table.
+    expect(md).toContain('proving the behaviour is fixed');
+    expect(md).toContain('NOT re-execute the original tool/LLM');
+    expect(md).toContain(REPLAY_CHECK_CLOSURE_GUIDED);
   });
 
   it('escapes pipes in table cells so the markdown table stays valid', async () => {
@@ -351,6 +459,107 @@ describe('renderEvalRunMarkdown', () => {
       const delimiters = row.replace(/\\\|/g, '').split('|').length - 1;
       expect(delimiters).toBe(5);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runEvalCase — fixture-replay (the "behaviour fixed?" gate)
+// ---------------------------------------------------------------------------
+
+describe('runEvalCase fixture-replay', () => {
+  const baseCtx = {
+    evalRunId: 'repeated-tool-get-runtime-state-abc123-run-20260611-7e1a09',
+    now: FIXED_NOW,
+    clockMs: stubClock([0, 5]),
+  };
+
+  it('PASSES end to end when the live guardrail neutralises the recorded loop', async () => {
+    const run = await runEvalCase(
+      makeEvalCase({ pattern: 'repeated-tool-use', fixtureBytes: LOOP_FIXTURE_BYTES }),
+      baseCtx,
+    );
+
+    expect(run.status).toBe('pass');
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_REPRODUCES)?.status).toBe('pass');
+    const neutralized = run.checks.find((c) => c.name === REPLAY_CHECK_NEUTRALIZED);
+    expect(neutralized?.status).toBe('pass');
+    expect(neutralized?.actual).toContain('tripped at call 8');
+  });
+
+  it('FAILS end to end when the recorded loop still reproduces (guardrail stripped)', async () => {
+    // Inject a driver whose breaker never trips — the pre-fix world.
+    const noBreaker: LoopDriver = async (_tool, count) => ({ trippedAtCall: null, callsDriven: count });
+    const run = await runEvalCase(
+      makeEvalCase({ pattern: 'repeated-tool-use', fixtureBytes: LOOP_FIXTURE_BYTES }),
+      { ...baseCtx, driveLoop: noBreaker },
+    );
+
+    expect(run.status).toBe('fail');
+    // The fixture still reproduces, so that check passes …
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_REPRODUCES)?.status).toBe('pass');
+    // … but the loop is not neutralised → the gate fails.
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_NEUTRALIZED)?.status).toBe('fail');
+  });
+
+  it('reports unsupported (NOT pass) when an intact fixture no longer reproduces the loop', async () => {
+    // The default 1-line stub fixture is intact but encodes no loop, so the
+    // replay is skipped. The guardrail contract passes, but a skipped replay
+    // must never surface as `pass` — that would be guardrail presence
+    // masquerading as card-specific behavioural proof.
+    const run = await runEvalCase(makeEvalCase({ pattern: 'repeated-tool-use' }), baseCtx);
+
+    expect(run.status).toBe('unsupported');
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_REPRODUCES)?.status).toBe('skipped');
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_NEUTRALIZED)).toBeUndefined();
+    // The guardrail contract itself still passed — the demotion is purely the
+    // missing card-specific proof, not a guardrail regression.
+    expect(run.checks.filter((c) => c.name.startsWith('replay:')).length).toBe(1);
+  });
+
+  it('does not run a replay for a pattern with no registered handler', async () => {
+    const run = await runEvalCase(makeEvalCase({ pattern: 'tool-failure-density' }), baseCtx);
+    expect(run.checks.some((c) => c.name === REPLAY_CHECK_REPRODUCES)).toBe(false);
+    expect(run.checks.some((c) => c.name === REPLAY_CHECK_NEUTRALIZED)).toBe(false);
+  });
+
+  it('PASSES end to end when the live guardrail guides the recorded abort closure', async () => {
+    const run = await runEvalCase(
+      makeEvalCase({ pattern: 'closure-anomaly', fixtureBytes: CLOSURE_FIXTURE_BYTES }),
+      baseCtx,
+    );
+
+    expect(run.status).toBe('pass');
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_CLOSURE_REPRODUCES)?.status).toBe('pass');
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_CLOSURE_GUIDED)?.status).toBe('pass');
+  });
+
+  it('FAILS end to end for an anomalous closure the guardrail does not cover (fail-closed)', async () => {
+    // `timeout` reproduces but buildClosureGuidance returns null for it today.
+    const run = await runEvalCase(
+      makeEvalCase({ pattern: 'closure-anomaly', fixtureBytes: closureFixtureBytes('timeout') }),
+      baseCtx,
+    );
+
+    expect(run.status).toBe('fail');
+    // The fixture still reproduces an anomalous closure, so that check passes …
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_CLOSURE_REPRODUCES)?.status).toBe('pass');
+    // … but no recovery guidance exists for the reason → the gate fails.
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_CLOSURE_GUIDED)?.status).toBe('fail');
+  });
+
+  it('reports unsupported (NOT pass) when an intact fixture has no anomalous closure', async () => {
+    // A benign `model_end_turn` close is intact but not anomalous → the replay
+    // is skipped. The guardrail contract passes, but a skipped replay must never
+    // surface as `pass` — that would be guardrail presence masquerading as
+    // card-specific behavioural proof.
+    const run = await runEvalCase(
+      makeEvalCase({ pattern: 'closure-anomaly', fixtureBytes: closureFixtureBytes('model_end_turn') }),
+      baseCtx,
+    );
+
+    expect(run.status).toBe('unsupported');
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_CLOSURE_REPRODUCES)?.status).toBe('skipped');
+    expect(run.checks.find((c) => c.name === REPLAY_CHECK_CLOSURE_GUIDED)).toBeUndefined();
   });
 });
 

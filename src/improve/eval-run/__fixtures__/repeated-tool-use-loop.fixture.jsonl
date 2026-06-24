@@ -1,0 +1,16 @@
+{"ts":"2026-06-20T10:00:00.000Z","seq":0,"kind":"tool_call","payload":{"phase":"started","toolUseId":"tu-1","name":"get_runtime_state","inputBytes":120}}
+{"ts":"2026-06-20T10:00:00.050Z","seq":1,"kind":"tool_call","payload":{"phase":"completed","toolUseId":"tu-1","name":"get_runtime_state","resultBytes":512,"isError":false,"truncated":false,"durationMs":50}}
+{"ts":"2026-06-20T10:00:01.000Z","seq":2,"kind":"tool_call","payload":{"phase":"started","toolUseId":"tu-2","name":"get_runtime_state","inputBytes":120}}
+{"ts":"2026-06-20T10:00:01.050Z","seq":3,"kind":"tool_call","payload":{"phase":"completed","toolUseId":"tu-2","name":"get_runtime_state","resultBytes":512,"isError":false,"truncated":false,"durationMs":50}}
+{"ts":"2026-06-20T10:00:02.000Z","seq":4,"kind":"tool_call","payload":{"phase":"started","toolUseId":"tu-3","name":"get_runtime_state","inputBytes":120}}
+{"ts":"2026-06-20T10:00:02.050Z","seq":5,"kind":"tool_call","payload":{"phase":"completed","toolUseId":"tu-3","name":"get_runtime_state","resultBytes":512,"isError":false,"truncated":false,"durationMs":50}}
+{"ts":"2026-06-20T10:00:03.000Z","seq":6,"kind":"tool_call","payload":{"phase":"started","toolUseId":"tu-4","name":"get_runtime_state","inputBytes":120}}
+{"ts":"2026-06-20T10:00:03.050Z","seq":7,"kind":"tool_call","payload":{"phase":"completed","toolUseId":"tu-4","name":"get_runtime_state","resultBytes":512,"isError":false,"truncated":false,"durationMs":50}}
+{"ts":"2026-06-20T10:00:04.000Z","seq":8,"kind":"tool_call","payload":{"phase":"started","toolUseId":"tu-5","name":"get_runtime_state","inputBytes":120}}
+{"ts":"2026-06-20T10:00:04.050Z","seq":9,"kind":"tool_call","payload":{"phase":"completed","toolUseId":"tu-5","name":"get_runtime_state","resultBytes":512,"isError":false,"truncated":false,"durationMs":50}}
+{"ts":"2026-06-20T10:00:05.000Z","seq":10,"kind":"tool_call","payload":{"phase":"started","toolUseId":"tu-6","name":"get_runtime_state","inputBytes":120}}
+{"ts":"2026-06-20T10:00:05.050Z","seq":11,"kind":"tool_call","payload":{"phase":"completed","toolUseId":"tu-6","name":"get_runtime_state","resultBytes":512,"isError":false,"truncated":false,"durationMs":50}}
+{"ts":"2026-06-20T10:00:06.000Z","seq":12,"kind":"tool_call","payload":{"phase":"started","toolUseId":"tu-7","name":"get_runtime_state","inputBytes":120}}
+{"ts":"2026-06-20T10:00:06.050Z","seq":13,"kind":"tool_call","payload":{"phase":"completed","toolUseId":"tu-7","name":"get_runtime_state","resultBytes":512,"isError":false,"truncated":false,"durationMs":50}}
+{"ts":"2026-06-20T10:00:07.000Z","seq":14,"kind":"tool_call","payload":{"phase":"started","toolUseId":"tu-8","name":"get_runtime_state","inputBytes":120}}
+{"ts":"2026-06-20T10:00:07.050Z","seq":15,"kind":"tool_call","payload":{"phase":"completed","toolUseId":"tu-8","name":"get_runtime_state","resultBytes":512,"isError":false,"truncated":false,"durationMs":50}}

@@ -254,6 +254,7 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
     extraRows,
     committedBand: self.committedBand,
     committedBandBottomRow: self.committedBandBottomRow,
+    committedBandPaintedRows: self.committedBandPaintedRows,
   });
 
   // Suppress the shrink re-pin for the whole commit; Phase 3 sets the band.

@@ -18,16 +18,13 @@
  * @module agent/tools/handlers/browser-act
  */
 
-import type { ToolHandler } from '../types.js';
+import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { BrowserHandlerOptions } from './browser-open.js';
 import type { Target, ActAction } from '../../../browser/types.js';
 import { truncateTargetText, hashSelector } from '../../../browser/sanitize.js';
 import { env } from '../../../config/env.js';
-
-// History: browser_event witness emission is a no-op in this handler.
-// See browser-open.ts for the full rationale. The target field sanitization
-// helpers (truncateTargetText, hashSelector) are imported and called so the
-// logic is in place for when browser_event emission is wired.
+import { emitBrowserEvent } from '../../trace/emit.js';
+import type { BrowserEventTarget } from '../../trace/types.js';
 
 import {
   browserTimeoutFailureClass,
@@ -150,26 +147,26 @@ function buildAmbiguousMessage(
 }
 
 /**
- * Sanitize the target for witness emission. Returns a descriptor string
- * safe to include in trace records.
- *
- * History: this is computed eagerly even though browser_event emission is
- * currently a no-op (no TraceWriter in ToolHandlerContext). The function is
- * called at the point where `target` is in scope so future wiring only needs
- * to pass the result into `emitBrowserEvent`.
+ * Sanitize the target for witness emission. Returns a `BrowserEventTarget`
+ * safe to include in trace records — selector contents are hashed, semantic
+ * text is truncated to 80 chars.
  */
-function witnessTarget(target: Target): string {
+function witnessTarget(target: Target): BrowserEventTarget {
   if (target.kind === 'semantic') {
-    return `semantic:${truncateTargetText(target.text)}`;
+    return {
+      kind: 'semantic',
+      text: truncateTargetText(target.text),
+      ...(target.role !== undefined ? { role: target.role } : {}),
+    };
   }
   if (target.kind === 'element_id') {
-    return `element_id:${target.elementId}`;
+    return { kind: 'element_id', elementId: target.elementId };
   }
-  return `selector:${hashSelector(target.selector)}`;
+  return { kind: 'selector', selectorHash: hashSelector(target.selector) };
 }
 
 export function createBrowserActHandler(opts: BrowserHandlerOptions = {}): ToolHandler {
-  return async (input, signal) => {
+  return async (input, signal, context?: ToolHandlerContext) => {
     // Pre-aborted short-circuit.
     if (signal.aborted) {
       const reason = signal.reason;
@@ -182,9 +179,7 @@ export function createBrowserActHandler(opts: BrowserHandlerOptions = {}): ToolH
       return { content: parsed.error, isError: true };
     }
 
-    // Compute witness target descriptor (no-op currently — ready for future wiring).
-    const _targetWitness = witnessTarget(parsed.target);
-    void _targetWitness; // suppress noUnusedLocals
+    const targetWitness = witnessTarget(parsed.target);
 
     const sessionId = env.AFK_SESSION_ID ?? 'default';
     if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
@@ -210,6 +205,7 @@ export function createBrowserActHandler(opts: BrowserHandlerOptions = {}): ToolH
       return { content: `browser_act failed to get provider: ${msg}`, isError: true };
     }
 
+    const t0 = Date.now();
     try {
       const result = await provider.act({
         sessionId,
@@ -219,15 +215,36 @@ export function createBrowserActHandler(opts: BrowserHandlerOptions = {}): ToolH
         timeoutMs: parsed.timeoutMs,
         screenshot: parsed.screenshot,
       });
+      const durationMs = Date.now() - t0;
 
       if ('outcome' in result) {
         if (result.outcome === 'ambiguous_target') {
+          void emitBrowserEvent(context?.traceWriter, {
+            tool: 'browser_act',
+            action: parsed.action,
+            toolUseId: context?.toolUseId ?? '',
+            target: targetWitness,
+            urlBefore: null,
+            urlAfter: null,
+            status: 'ambiguous_target',
+            durationMs,
+          });
           return {
             content: buildAmbiguousMessage(result.query, result.candidates),
             isError: true,
           };
         }
         if (result.outcome === 'blocked_by_policy') {
+          void emitBrowserEvent(context?.traceWriter, {
+            tool: 'browser_act',
+            action: parsed.action,
+            toolUseId: context?.toolUseId ?? '',
+            target: targetWitness,
+            urlBefore: null,
+            urlAfter: null,
+            status: 'blocked_by_policy',
+            durationMs,
+          });
           return {
             content: `browser_act blocked: ${result.reason}`,
             isError: true,
@@ -236,10 +253,33 @@ export function createBrowserActHandler(opts: BrowserHandlerOptions = {}): ToolH
         }
       }
 
-      // BrowserObservation
+      // BrowserObservation — url is the post-action URL.
+      void emitBrowserEvent(context?.traceWriter, {
+        tool: 'browser_act',
+        action: parsed.action,
+        toolUseId: context?.toolUseId ?? '',
+        target: targetWitness,
+        urlBefore: result.url,
+        urlAfter: result.url,
+        status: 'ok',
+        durationMs,
+        ...(result.screenshotPath !== null ? { screenshotPath: result.screenshotPath } : {}),
+      });
       return { content: JSON.stringify(result, null, 2) };
     } catch (err) {
+      const durationMs = Date.now() - t0;
       const msg = err instanceof Error ? err.message : String(err);
+      void emitBrowserEvent(context?.traceWriter, {
+        tool: 'browser_act',
+        action: parsed.action,
+        toolUseId: context?.toolUseId ?? '',
+        target: targetWitness,
+        urlBefore: null,
+        urlAfter: null,
+        status: 'error',
+        durationMs,
+        error: { reason: msg, recoverable: false },
+      });
       const failureClass = browserTimeoutFailureClass(err);
       return {
         content: `browser_act failed: ${msg}`,

@@ -125,8 +125,13 @@ export type HookEventName =
 
 export interface HookDecisionPayload {
   hookEvent: HookEventName;
-  /** `undefined` when no hook emitted a decision (all handlers passed). */
-  decision: 'block' | 'approve' | undefined;
+  /**
+   * `undefined` when no hook emitted a decision (all handlers passed). This is
+   * the common pass-through case. Optional (not `: 'block' | 'approve' | undefined`)
+   * because JSON.stringify drops undefined-valued keys: a persisted line has no
+   * `decision` key, and the reader's schema must validate that absent-key form.
+   */
+  decision?: 'block' | 'approve';
   reason?: string;
   /** Set only when `hookEvent === 'PreToolUse'` and `decision === 'block'`. */
   blockedTool?: string;

@@ -263,6 +263,11 @@ export class SessionToolDispatcher implements ToolDispatcher {
   /**
    * Returns a fresh snapshot of the current handler context. Called for every
    * handler invocation so grant mutations are always reflected.
+   *
+   * Note: `toolUseId` and `traceWriter` are NOT included here — they are
+   * per-call values added inline by `execute()` and `executeCore()` via
+   * `callHandlerContext(call)` so the getter stays call-agnostic and can be
+   * used safely by code that doesn't have a live ToolCall reference.
    */
   private get handlerContext(): ToolHandlerContext {
     return {
@@ -272,6 +277,19 @@ export class SessionToolDispatcher implements ToolDispatcher {
       writeRoots: this._writeRoots.slice(),
       ...(this._allowAll ? { allowAll: true } : {}),
       ...(this._env !== undefined ? { env: this._env } : {}),
+    };
+  }
+
+  /**
+   * Returns a per-call handler context that augments the base `handlerContext`
+   * with the tool-call-specific fields (`toolUseId`, `traceWriter`). Used by
+   * `execute()` and `executeCore()` when dispatching to a named handler.
+   */
+  private callHandlerContext(call: ToolCall): ToolHandlerContext {
+    return {
+      ...this.handlerContext,
+      toolUseId: call.id,
+      ...(this.traceWriter !== undefined ? { traceWriter: this.traceWriter } : {}),
     };
   }
 
@@ -622,7 +640,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // 5. Execute handler
     let result: ToolResult;
     try {
-      result = await handler(call.input, call.signal, this.handlerContext);
+      result = await handler(call.input, call.signal, this.callHandlerContext(call));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       result = { content: `Tool execution error: ${message}`, isError: true };
@@ -850,7 +868,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
 
     let result: ToolResult;
     try {
-      result = await handler(call.input, call.signal, this.handlerContext);
+      result = await handler(call.input, call.signal, this.callHandlerContext(call));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       result = { content: `Tool execution error: ${message}`, isError: true };

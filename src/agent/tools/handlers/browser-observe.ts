@@ -13,15 +13,10 @@
  * @module agent/tools/handlers/browser-observe
  */
 
-import type { ToolHandler } from '../types.js';
+import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { BrowserHandlerOptions } from './browser-open.js';
 import { env } from '../../../config/env.js';
-
-// History: browser_event witness emission is a no-op in this handler.
-// See the matching comment in browser-open.ts for the full rationale.
-// Short version: ToolHandlerContext carries no TraceWriter today; the
-// dispatcher already emits surrounding tool_call events; browser_event
-// wiring is deferred to a follow-up PR.
+import { emitBrowserEvent } from '../../trace/emit.js';
 
 import { isPlaywrightMissing, playwrightMissingHint } from './playwright-hints.js';
 
@@ -72,7 +67,7 @@ function parseInput(raw: unknown): ParsedObserveInput | { error: string } {
 }
 
 export function createBrowserObserveHandler(opts: BrowserHandlerOptions = {}): ToolHandler {
-  return async (input, signal) => {
+  return async (input, signal, context?: ToolHandlerContext) => {
     // Pre-aborted short-circuit.
     if (signal.aborted) {
       const reason = signal.reason;
@@ -109,6 +104,7 @@ export function createBrowserObserveHandler(opts: BrowserHandlerOptions = {}): T
       return { content: `browser_observe failed to get provider: ${msg}`, isError: true };
     }
 
+    const t0 = Date.now();
     try {
       const obs = await provider.observe({
         sessionId,
@@ -116,9 +112,29 @@ export function createBrowserObserveHandler(opts: BrowserHandlerOptions = {}): T
         includeHidden: parsed.includeHidden,
         maxElements: parsed.maxElements,
       });
+      const durationMs = Date.now() - t0;
+      void emitBrowserEvent(context?.traceWriter, {
+        tool: 'browser_observe',
+        toolUseId: context?.toolUseId ?? '',
+        urlBefore: obs.url,
+        urlAfter: obs.url,
+        status: 'ok',
+        durationMs,
+        ...(obs.screenshotPath !== null ? { screenshotPath: obs.screenshotPath } : {}),
+      });
       return { content: JSON.stringify(obs, null, 2) };
     } catch (err) {
+      const durationMs = Date.now() - t0;
       const msg = err instanceof Error ? err.message : String(err);
+      void emitBrowserEvent(context?.traceWriter, {
+        tool: 'browser_observe',
+        toolUseId: context?.toolUseId ?? '',
+        urlBefore: null,
+        urlAfter: null,
+        status: 'error',
+        durationMs,
+        error: { reason: msg, recoverable: false },
+      });
       return { content: `browser_observe failed: ${msg}`, isError: true };
     }
   };

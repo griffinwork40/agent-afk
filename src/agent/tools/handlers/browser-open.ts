@@ -16,17 +16,10 @@
  * @module agent/tools/handlers/browser-open
  */
 
-import type { ToolHandler } from '../types.js';
+import type { ToolHandler, ToolHandlerContext } from '../types.js';
+import type { BrowserObservation } from '../../../browser/types.js';
 import { env } from '../../../config/env.js';
-
-// History: browser_event witness emission is currently a no-op in this
-// handler because `ToolHandlerContext` does not carry a `TraceWriter` field.
-// The dispatcher (`src/agent/tools/dispatcher.ts`) already emits `tool_call`
-// started/completed events that bookend every tool invocation. A future PR
-// that plumbs `sessionId` + `TraceWriter` into `ToolHandlerContext` will
-// allow handlers to also emit `browser_event` records for the browser-domain
-// semantic layer. Until then, browser_event emission lives in the dispatcher
-// tier, not in these handlers. See design doc: design-native-browser-control.
+import { emitBrowserEvent } from '../../trace/emit.js';
 
 import {
   browserTimeoutFailureClass,
@@ -103,7 +96,7 @@ export interface BrowserHandlerOptions {
 }
 
 export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): ToolHandler {
-  return async (input, signal) => {
+  return async (input, signal, context?: ToolHandlerContext) => {
     // Pre-aborted short-circuit.
     if (signal.aborted) {
       const reason = signal.reason;
@@ -140,6 +133,7 @@ export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): Tool
       return { content: `browser_open failed to get provider: ${msg}`, isError: true };
     }
 
+    const t0 = Date.now();
     try {
       const result = await provider.open({
         sessionId,
@@ -148,8 +142,17 @@ export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): Tool
         screenshot: parsed.screenshot,
         timeoutMs: parsed.timeoutMs,
       });
+      const durationMs = Date.now() - t0;
 
       if ('outcome' in result && result.outcome === 'blocked_by_policy') {
+        void emitBrowserEvent(context?.traceWriter, {
+          tool: 'browser_open',
+          toolUseId: context?.toolUseId ?? '',
+          urlBefore: null,
+          urlAfter: null,
+          status: 'blocked_by_policy',
+          durationMs,
+        });
         return {
           content: `browser_open blocked: ${result.reason}`,
           isError: true,
@@ -157,10 +160,33 @@ export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): Tool
         };
       }
 
-      // BrowserObservation
-      return { content: JSON.stringify(result, null, 2) };
+      // BrowserObservation — url is the post-load URL.
+      // Cast is safe: the blocked_by_policy branch returned above, so result
+      // is BrowserObservation here. TypeScript's 'outcome' in narrowing does
+      // not flow through the early-return so we assert manually.
+      const obs = result as BrowserObservation;
+      void emitBrowserEvent(context?.traceWriter, {
+        tool: 'browser_open',
+        toolUseId: context?.toolUseId ?? '',
+        urlBefore: null,
+        urlAfter: obs.url,
+        status: 'ok',
+        durationMs,
+        ...(obs.screenshotPath !== null ? { screenshotPath: obs.screenshotPath } : {}),
+      });
+      return { content: JSON.stringify(obs, null, 2) };
     } catch (err) {
+      const durationMs = Date.now() - t0;
       const msg = err instanceof Error ? err.message : String(err);
+      void emitBrowserEvent(context?.traceWriter, {
+        tool: 'browser_open',
+        toolUseId: context?.toolUseId ?? '',
+        urlBefore: null,
+        urlAfter: null,
+        status: 'error',
+        durationMs,
+        error: { reason: msg, recoverable: false },
+      });
       const failureClass = browserTimeoutFailureClass(err);
       return {
         content: `browser_open failed: ${msg}`,

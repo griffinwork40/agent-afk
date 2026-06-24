@@ -27,6 +27,8 @@ import OpenAI from 'openai';
 import { randomUUID } from 'node:crypto';
 import type { AgentConfig } from '../../types/config-types.js';
 import type { EffortLevel } from '../../types/sdk-types.js';
+import { emitToolCall, emitSessionPhase } from '../../trace/emit.js';
+import type { TraceWriter } from '../../trace/index.js';
 import type {
   ProviderQuery,
   ProviderEvent,
@@ -261,6 +263,14 @@ export interface OpenAICompatibleQueryOptions {
    * Responses automatically regardless of this flag.
    */
   useResponsesApi?: boolean;
+  /**
+   * Witness-layer trace writer. When provided, `loop_start`/`loop_end`/
+   * `model_ttfb` session_phase events and `tool_call` started/completed
+   * events are emitted — mirroring the anthropic-direct provider's trace
+   * coverage. All emit calls are fire-and-forget; a broken writer never
+   * stalls or crashes the session.
+   */
+  traceWriter?: TraceWriter;
 }
 
 function normalizePermissionMode(mode: string | undefined): string {
@@ -330,6 +340,8 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   private readonly openAITools: OpenAIFunctionTool[] | undefined;
   /** Which wire this session speaks: Chat Completions (default) or Responses. */
   private readonly wireMode: WireMode;
+  /** Witness-layer trace writer (optional). Mirrors RunTurnInput.traceWriter in anthropic-direct. */
+  private readonly traceWriter: TraceWriter | undefined;
 
   /** Running conversation state for multi-turn sessions. */
   private priorTurns: OpenAIMessage[] = [];
@@ -359,6 +371,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     this.currentPermissionMode = normalizePermissionMode(opts.config.permissionMode);
     this.toolDispatcher = opts.toolDispatcher;
     this.onPermissionMode = opts.onPermissionMode;
+    this.traceWriter = opts.traceWriter;
 
     // Pre-compute the OpenAI tool catalog once. Only `SessionToolDispatcher`
     // (and not the structural `ToolDispatcher` minimal interface) exposes
@@ -475,6 +488,29 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // anthropic-direct/loop.ts.
     const turnStartTime = Date.now();
     const taskId = randomUUID();
+
+    // Witness layer: mark loop entry. Mirrors anthropic-direct/loop.ts:229.
+    // Fire-and-forget — a broken trace writer must never stall the turn.
+    void emitSessionPhase(this.traceWriter, { phase: 'loop_start' });
+    try {
+    yield* this._runTurnInner(content, controller, turnStartTime, taskId);
+    } finally {
+      // Witness layer: loop_end fires regardless of which exit path fired —
+      // abort, error, clean end-of-turn, or iteration cap. Mirrors
+      // anthropic-direct/loop.ts:728–734.
+      void emitSessionPhase(this.traceWriter, {
+        phase: 'loop_end',
+        durationMs: Date.now() - turnStartTime,
+      });
+    }
+  }
+
+  private async *_runTurnInner(
+    content: ProviderUserTurn['content'],
+    controller: AbortController,
+    turnStartTime: number,
+    taskId: string,
+  ): AsyncGenerator<ProviderEvent> {
 
     // Vision capability is fixed for the turn (the model can only change
     // between turns via setModel). Computed once here and threaded into the
@@ -757,6 +793,9 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       for (;;) {
         const state = createStreamState();
 
+        // Witness layer: stamp request-initiation time for model_ttfb below.
+        const requestStartedAt = Date.now();
+
         // ── Connection-phase retry ──────────────────────────────────────
         let stream: AsyncIterable<ResponsesStreamEvent>;
         let connectionError: unknown = null;
@@ -786,10 +825,23 @@ export class OpenAICompatibleQuery implements ProviderQuery {
 
         // ── Mid-stream consumption with retry ───────────────────────────
         let streamError: unknown = null;
+        // Witness layer: emit model_ttfb exactly once per API call, on the
+        // first translated stream event. Reset per for(;;) iteration so each
+        // retry-driven call reports its own time-to-first-byte. Mirrors
+        // anthropic-direct/loop.ts:307–327.
+        let ttfbEmitted = false;
         try {
           for await (const event of stream!) {
             if (this.closed) return null;
             for (const ev of translateResponsesEvent(event, state, this.initSessionId)) {
+              if (!ttfbEmitted) {
+                ttfbEmitted = true;
+                void emitSessionPhase(this.traceWriter, {
+                  phase: 'model_ttfb',
+                  durationMs: Date.now() - requestStartedAt,
+                  resolvedModel: this.currentModel,
+                });
+              }
               yield ev;
             }
           }
@@ -855,6 +907,9 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       for (;;) {
         const state = createStreamState();
 
+        // Witness layer: stamp request-initiation time for model_ttfb below.
+        const requestStartedAt = Date.now();
+
         // ── Connection-phase retry ──────────────────────────────────────
         let stream: AsyncIterable<OpenAIChunk>;
         let connectionError: unknown = null;
@@ -885,10 +940,23 @@ export class OpenAICompatibleQuery implements ProviderQuery {
 
         // ── Mid-stream consumption with retry ───────────────────────────
         let streamError: unknown = null;
+        // Witness layer: emit model_ttfb exactly once per API call, on the
+        // first translated stream event. Reset per for(;;) iteration so each
+        // retry-driven call reports its own time-to-first-byte. Mirrors
+        // anthropic-direct/loop.ts:307–327.
+        let ttfbEmitted = false;
         try {
           for await (const chunk of stream!) {
             if (this.closed) return null;
             for (const ev of translateChunk(chunk, state, this.initSessionId)) {
+              if (!ttfbEmitted) {
+                ttfbEmitted = true;
+                void emitSessionPhase(this.traceWriter, {
+                  phase: 'model_ttfb',
+                  durationMs: Date.now() - requestStartedAt,
+                  resolvedModel: this.currentModel,
+                });
+              }
               yield ev;
             }
           }
@@ -960,8 +1028,26 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     }
     const { calls, parseErrors } = accumulatedToolCallsToToolCalls(accumulated, signal);
 
+    // Witness layer: per-call start timestamps keyed by toolUseId so the
+    // completed trace event carries an accurate durationMs. Mirrors
+    // anthropic-direct/loop.ts:524-525. Lives within this dispatchAndAppend
+    // invocation only — the next tool-use round starts fresh.
+    const startTimes = new Map<string, number>();
+
     // Emit tool.use.start BEFORE dispatching, matching anthropic-direct.
+    // Witness layer: tool_call.started fires here too — BEFORE dispatch so
+    // even a crashing tool leaves evidence that it was attempted. Mirrors
+    // anthropic-direct/loop.ts:535-543.
     for (const call of calls) {
+      const now = Date.now();
+      startTimes.set(call.id, now);
+      // Fire-and-forget — emitToolCall swallows writer errors internally.
+      void emitToolCall(this.traceWriter, {
+        phase: 'started',
+        toolUseId: call.id,
+        name: call.name,
+        inputBytes: Buffer.byteLength(JSON.stringify(call.input ?? {}), 'utf8'),
+      });
       yield {
         type: 'tool.use.start',
         toolUseId: call.id,
@@ -1035,6 +1121,25 @@ export class OpenAICompatibleQuery implements ProviderQuery {
           };
         }
         results.push({ call, result });
+
+        // Witness layer: tool_call.completed pairs with the .started event
+        // emitted above. Mirrors anthropic-direct/loop.ts:605-624.
+        // Fire-and-forget to keep the loop iteration cheap.
+        const startedAt = startTimes.get(call.id);
+        const durationMs = typeof startedAt === 'number' ? Date.now() - startedAt : 0;
+        const truncated = result.truncated === true || result.content.includes('[output truncated');
+        void emitToolCall(this.traceWriter, {
+          phase: 'completed',
+          toolUseId: call.id,
+          name: call.name,
+          resultBytes: Buffer.byteLength(result.content, 'utf8'),
+          isError: result.isError === true,
+          truncated,
+          durationMs,
+          ...(result.circuitBreaker === true ? { circuitBreaker: true } : {}),
+          ...(result.failureClass ? { failureClass: result.failureClass } : {}),
+        });
+
         yield {
           type: 'tool.output',
           toolUseId: call.id,
@@ -1312,5 +1417,8 @@ export function buildQueryFromConfig(
   if (options.onPermissionMode !== undefined) opts.onPermissionMode = options.onPermissionMode;
   if (options.mcpManager !== undefined) opts.mcpManager = options.mcpManager;
   if (options.useResponsesApi !== undefined) opts.useResponsesApi = options.useResponsesApi;
+  // Thread traceWriter from AgentConfig so witness events are emitted for
+  // openai-compatible sessions when a session-scoped trace writer is present.
+  if (config.traceWriter !== undefined) opts.traceWriter = config.traceWriter;
   return new OpenAICompatibleQuery(opts);
 }

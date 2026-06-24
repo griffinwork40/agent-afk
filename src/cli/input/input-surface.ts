@@ -52,6 +52,7 @@ import { colorizeInputBuffer, type SlashRegistryView } from '../input-highlight.
 import { list as listSlashCommands } from '../slash/registry.js';
 import { formatSubmittedEcho } from './echo.js';
 import { describeAttachmentSummary } from './attachments.js';
+import { commitBlockAbove } from '../_lib/commit-block.js';
 
 /**
  * Minimal StatusLine surface used by InputSurface — kept structural
@@ -476,13 +477,12 @@ export class InputSurface {
             isTTY: Boolean(echoStdout.isTTY),
             attachmentSummary: describeAttachmentSummary([...payload.attachments]),
           });
-          // formatSubmittedEcho can return multi-line strings (long
-          // input is rendered as a card with `\n` between rows).
-          // commitAbove expects one logical line per call — split so
-          // each row commits as its own scrollback entry.
-          for (const line of echo.split('\n')) {
-            compositor.commitAbove(line);
-          }
+          // formatSubmittedEcho can return multi-line strings (long input is
+          // rendered as a card with `\n` between rows). Commit the echo as ONE
+          // atomic block: commitAbove handles a multi-line block with a single
+          // geometry decision; committing row-by-row would desync the band-hold
+          // model under a tall overlay (the "weird gaps" bug). See commit-block.ts.
+          commitBlockAbove(compositor, echo.split('\n'));
 
           resolve({ text: payload.text, attachments: [...payload.attachments] });
         };

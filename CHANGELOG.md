@@ -11,6 +11,65 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.36.0] - 2026-06-24
+
+### Added
+- classification eval for tool-failure-density contract (f714332)
+
+### Changed
+- Merge pull request #266 from griffinwork40/feat/improve-eval-run-tool-failure-classification (ee55b8b)
+
+## [4.35.0] - 2026-06-23
+
+### Added
+- fixture-replay eval-run for closure-anomaly (b16f563)
+- emit tool_call + session_phase events from openai-compatible provider (819e688)
+
+### Fixed
+- inherit traceWriter + surface into farm worker sessions (38f730f)
+- wire traceWriter + surface into farm sessions (bffe26b)
+- pass traceWriter to MCP manager in telegram sessions (ea74f7d)
+
+### Changed
+- Merge pull request #260 from griffinwork40/fix/telegram-mcp-trace-writer (8862c63)
+- Merge pull request #259 from griffinwork40/fix/farm-trace-wiring (7709ae3)
+- Merge pull request #258 from griffinwork40/feat/openai-trace-events (61ae0cf)
+- Merge pull request #264 from griffinwork40/feat/improve-eval-run-closure-replay (02dc1b4)
+
+## [4.34.0] - 2026-06-23
+
+### Added
+- fixture-replay eval-run proves recorded failure fixed (cbcf73f)
+
+### Changed
+- Merge pull request #263 from griffinwork40/feat/improve-eval-run-fixture-replay (7bc4edf)
+
+## [4.33.2] - 2026-06-23
+
+### Fixed
+- accept absent hook_decision.decision key (zod 4.4 regression) (ac246d7)
+
+### Changed
+- Merge pull request #256 from griffinwork40/fix/hook-decision-schema-zod44 (6d39441)
+
+## [4.33.1] - 2026-06-23
+
+### Fixed
+- use exact painted-row count for the band-hold pending signal (196f818)
+- commit flushed blocks atomically so band-hold doesn't gap scrollback (10e25ed)
+
+### Changed
+- Merge pull request #257 from griffinwork40/fix/tui-overflow-pending-exact-count (ee8ebd4)
+- Merge pull request #255 from griffinwork40/fix/tui-band-hold-pending-gap (8965b3b)
+
+## [4.33.0] - 2026-06-23
+
+### Added
+- wire passive SIGNAL-block parsing into buildResultFromMessage (18be452)
+
+### Changed
+- Merge pull request #254 from griffinwork40/feat/wire-signal-block (3610ea4)
+
 ## [4.32.0] - 2026-06-23
 
 ### Added

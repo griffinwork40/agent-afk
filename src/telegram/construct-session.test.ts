@@ -7,11 +7,11 @@
  * handed to `new AgentSession(...)` without constructing a real session.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { constructTelegramSession } from './construct-session.js';
+import { constructTelegramSession, createTelegramTraceWriter } from './construct-session.js';
 import type { AgentConfig } from '../agent/types.js';
 import type { AgentSession } from '../agent/session.js';
 import type { TraceWriter } from '../agent/trace/writer.js';
@@ -74,5 +74,50 @@ describe('constructTelegramSession', () => {
       { newSession: (c): AgentSession => { captured = c; return {} as unknown as AgentSession; } },
     );
     expect(captured?.traceWriter).toBe(operatorWriter);
+  });
+
+  it('uses a pre-created traceWriter from deps.traceWriter instead of calling the factory', () => {
+    const preCreated = { __preCreated: true } as unknown as TraceWriter;
+    const factorySpy = vi.fn();
+    let captured: AgentConfig | undefined;
+    constructTelegramSession(
+      { model: 'sonnet' },
+      {
+        traceWriter: preCreated,
+        createTraceWriter: factorySpy,
+        newSession: (c): AgentSession => { captured = c; return {} as unknown as AgentSession; },
+      },
+    );
+    expect(captured?.traceWriter).toBe(preCreated);
+    expect(factorySpy).not.toHaveBeenCalled();
+  });
+
+  it('suppresses tracing when deps.traceWriter is null (explicit disable)', () => {
+    let captured: AgentConfig | undefined;
+    constructTelegramSession(
+      { model: 'sonnet' },
+      {
+        traceWriter: null,
+        newSession: (c): AgentSession => { captured = c; return {} as unknown as AgentSession; },
+      },
+    );
+    expect(captured?.traceWriter).toBeUndefined();
+  });
+});
+
+describe('createTelegramTraceWriter', () => {
+  it('returns a TraceWriter when the factory succeeds', () => {
+    const fakeWriter = { __fake: true } as unknown as TraceWriter;
+    const result = createTelegramTraceWriter(() => ({
+      writer: fakeWriter,
+      tracePath: '/tmp/fake',
+      sessionLabel: 'test-label',
+    }));
+    expect(result).toBe(fakeWriter);
+  });
+
+  it('returns null when the factory returns null (tracing disabled)', () => {
+    const result = createTelegramTraceWriter(() => null);
+    expect(result).toBeNull();
   });
 });
