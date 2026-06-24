@@ -11,6 +11,20 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.40.1] - 2026-06-24
+
+### Fixed
+- bottom-pin the input frame on a fresh session (54e25f5)
+
+### Changed
+- Merge pull request #279 from griffinwork40/fix/input-bottom-pin-fresh-session (900b8a0)
+- Merge branch 'main' into fix/input-bottom-pin-fresh-session (5cf0ea9)
+- Merge pull request #278 from griffinwork40/afk/standardize-bypass-casing (03c3dfd)
+- Merge pull request #272 from griffinwork40/chore/launch-readiness-polish (951aaf5)
+- lowercase bypass chip + drop redundant model from REPL caret (57c4580)
+- Merge branch 'main' into chore/launch-readiness-polish (666e3d2)
+- launch-readiness polish for README + npm discoverability (e93d7d0)
+
 ## [4.40.0] - 2026-06-24
 
 ### Added
