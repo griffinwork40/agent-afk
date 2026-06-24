@@ -16,13 +16,11 @@
  * @module agent/tools/handlers/browser-screenshot
  */
 
-import type { ToolHandler } from '../types.js';
+import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { BrowserHandlerOptions } from './browser-open.js';
 import type { Target } from '../../../browser/types.js';
 import { env } from '../../../config/env.js';
-
-// History: browser_event witness emission is a no-op in this handler.
-// See browser-open.ts for the full rationale.
+import { emitBrowserEvent } from '../../trace/emit.js';
 
 import { isPlaywrightMissing, playwrightMissingHint } from './playwright-hints.js';
 
@@ -103,7 +101,7 @@ function parseInput(raw: unknown): ParsedScreenshotInput | { error: string } {
 }
 
 export function createBrowserScreenshotHandler(opts: BrowserHandlerOptions = {}): ToolHandler {
-  return async (input, signal) => {
+  return async (input, signal, context?: ToolHandlerContext) => {
     // Pre-aborted short-circuit.
     if (signal.aborted) {
       const reason = signal.reason;
@@ -140,18 +138,34 @@ export function createBrowserScreenshotHandler(opts: BrowserHandlerOptions = {})
       return { content: `browser_screenshot failed to get provider: ${msg}`, isError: true };
     }
 
+    const t0 = Date.now();
     try {
       const screenshotResult = await provider.screenshot({
         sessionId,
         target: parsed.target,
         fullPage: parsed.fullPage,
       });
+      const durationMs = Date.now() - t0;
+
       // Keep the base64 image bytes OUT of the text content — `dataBase64` is
       // megabytes of base64 the model must never see as text. The pixels ride
       // on the `image` field, which the anthropic-direct provider emits as an
       // image content block; the text carries only the metadata so providers
       // that can't render tool-result images still get the path/dimensions.
       const { dataBase64, mediaType, ...meta } = screenshotResult;
+
+      void emitBrowserEvent(context?.traceWriter, {
+        tool: 'browser_screenshot',
+        toolUseId: context?.toolUseId ?? '',
+        // screenshot is a non-navigating read — URL is unchanged; we don't
+        // have a currentUrl() on the provider so we use null for both fields.
+        urlBefore: null,
+        urlAfter: null,
+        status: 'ok',
+        durationMs,
+        screenshotPath: meta.path,
+      });
+
       // Dimension guard. A full_page screenshot of a tall page can stay under
       // the 5 MiB sidecar byte cap yet exceed Anthropic's 8000px pixel limit.
       // Attaching it would 400 the request AND leave a poison image block in
@@ -175,7 +189,17 @@ export function createBrowserScreenshotHandler(opts: BrowserHandlerOptions = {})
         image: { mediaType, data: dataBase64 },
       };
     } catch (err) {
+      const durationMs = Date.now() - t0;
       const msg = err instanceof Error ? err.message : String(err);
+      void emitBrowserEvent(context?.traceWriter, {
+        tool: 'browser_screenshot',
+        toolUseId: context?.toolUseId ?? '',
+        urlBefore: null,
+        urlAfter: null,
+        status: 'error',
+        durationMs,
+        error: { reason: msg, recoverable: false },
+      });
       return { content: `browser_screenshot failed: ${msg}`, isError: true };
     }
   };
