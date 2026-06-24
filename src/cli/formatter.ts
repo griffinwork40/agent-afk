@@ -427,6 +427,26 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
                 constrained[widest] = (constrained[widest] ?? 0) - 1;
                 constrainedTotal -= 1;
               }
+              // Grow back budget lost to flooring in the scale step: Math.floor
+              // discards fractional units, so the total can land BELOW
+              // availableContentWidth (e.g. natural widths [37,3,3,3,3] at
+              // maxWidth 30 use 11 of 14). Hand the reclaimed slack to the widest
+              // columns first (by natural width), capped at each column's natural
+              // width so none is padded past its content, until the budget is met.
+              // Keeps the table as wide as the budget allows. Bounded: the deficit
+              // is < colCount, so one pass over growOrder suffices.
+              const growOrder = constrained
+                .map((_, i) => i)
+                .sort((a, b) => (widths[b] ?? 0) - (widths[a] ?? 0) || a - b);
+              let grow = 0;
+              while (constrainedTotal < availableContentWidth && grow < colCount * 4) {
+                const i = growOrder[grow % growOrder.length]!;
+                if ((constrained[i] ?? 0) < (widths[i] ?? 0)) {
+                  constrained[i] = (constrained[i] ?? 0) + 1;
+                  constrainedTotal += 1;
+                }
+                grow += 1;
+              }
             }
             for (let i = 0; i < colCount; i++) {
               widths[i] = constrained[i] ?? widths[i] ?? 0;
