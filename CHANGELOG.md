@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.37.0] - 2026-06-24
+
+### Added
+- emit browser_event from browser tool handlers (897a02f)
+
+### Changed
+- Merge pull request #262 from griffinwork40/feat/browser-event-emission (df1e42f)
+
 ## [4.36.0] - 2026-06-24
 
 ### Added
