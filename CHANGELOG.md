@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.38.1] - 2026-06-24
+
+### Fixed
+- re-split rendered HTML in pushMarkdown to avoid 4096 truncation (e9f1014)
+- render markdown in daemon task notifications (0f007b4)
+
+### Changed
+- Merge pull request #267 from griffinwork40/fix/telegram-daemon-markdown-render (35fcce9)
+
 ## [4.38.0] - 2026-06-24
 
 ### Added
