@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync, statSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { TranscriptIndex, withTranscriptIndex } from './transcript-index.js';
@@ -267,7 +267,23 @@ describe('TranscriptIndex', () => {
       }
     });
 
-    it('includes a non-empty snippet from the document content', () => {
+    it('stores the "unknown" session_at sentinel for a non-stamp filename', () => {
+      // A stray .md whose name is not the ISO-stamp pattern must not produce a
+      // malformed session_at; filenameToIso returns the sentinel instead.
+      writeTranscript('release-notes.md', `# Notes\n\nThe xanadu feature shipped today.\n`);
+      const idx = new TranscriptIndex(indexDir, transcriptsDir);
+      try {
+        idx.reindex();
+        const results = idx.search('xanadu');
+        expect(results.length).toBe(1);
+        expect(results[0]?.filename).toBe('release-notes.md');
+        expect(results[0]?.session_at).toBe('unknown');
+      } finally {
+        idx.close();
+      }
+    });
+
+    it('returns a snippet containing the matched term, not the session header', () => {
       const idx = new TranscriptIndex(indexDir, transcriptsDir);
       try {
         idx.reindex();
@@ -276,6 +292,11 @@ describe('TranscriptIndex', () => {
         expect(typeof results[0]?.snippet).toBe('string');
         expect(results[0]!.snippet.length).toBeGreaterThan(0);
         expect(results[0]!.snippet.length).toBeLessThanOrEqual(300);
+        // The snippet must be the FTS5 matching excerpt — it contains the matched
+        // term and is NOT the boilerplate "# Session — <ts>" header that every
+        // transcript starts with (the bug a content.slice(0,300) would reintroduce).
+        expect(results[0]!.snippet).toContain('memory_search');
+        expect(results[0]!.snippet).not.toContain('# Session');
       } finally {
         idx.close();
       }
@@ -386,6 +407,23 @@ describe('FTS5 query safety', () => {
       idx.reindex();
       const results = idx.search('xyzzy AND nonexistent');
       expect(results).toEqual([]);
+    } finally {
+      idx.close();
+    }
+  });
+});
+
+describe('index directory permissions', () => {
+  it('creates a fresh index dir with owner-only (0o700) permissions on POSIX', () => {
+    // POSIX file modes only; Windows has no equivalent.
+    if (process.platform === 'win32') return;
+    // Use a dir the test harness has NOT pre-created so the constructor's own
+    // mkdir (with mode 0o700) is what sets the permissions we assert.
+    const freshIndexDir = join(testDir, 'fresh-index');
+    const idx = new TranscriptIndex(freshIndexDir, transcriptsDir);
+    try {
+      const mode = statSync(freshIndexDir).mode & 0o777;
+      expect(mode).toBe(0o700);
     } finally {
       idx.close();
     }

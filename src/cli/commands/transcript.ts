@@ -26,6 +26,24 @@ import { Command } from 'commander';
 import { handleCommandError } from '../errors/index.js';
 import { withTranscriptIndex } from '../../agent/transcript-search/transcript-index.js';
 
+// ── Limit normalization ─────────────────────────────────────────────────────
+
+/** Largest result count `afk transcript search --limit` will honor. */
+export const MAX_SEARCH_LIMIT = 1000;
+
+/**
+ * Normalize the raw `--limit` CLI string to a sane, bounded integer.
+ *
+ * Invalid or non-positive input (NaN, 0, negatives, empty) falls back to
+ * `fallback` (default 10); values above {@link MAX_SEARCH_LIMIT} are capped so a
+ * pathological `--limit` cannot push an unbounded value into the SQL `LIMIT`.
+ */
+export function normalizeLimit(raw: string, fallback = 10): number {
+  const parsed = parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return Math.min(parsed, MAX_SEARCH_LIMIT);
+}
+
 // ── Command registration ────────────────────────────────────────────────────
 
 export function registerTranscriptCommand(program: Command): void {
@@ -63,10 +81,10 @@ export function registerTranscriptCommand(program: Command): void {
         'Supports FTS5 syntax: "exact phrase", term*, AND, OR.\n' +
         'Run `afk transcript reindex` first to build the index.',
     )
-    .option('-n, --limit <number>', 'Maximum results to return', '10')
+    .option('-n, --limit <number>', `Maximum results to return (1-${MAX_SEARCH_LIMIT})`, '10')
     .action(async (query: string, options: { limit: string }) => {
       try {
-        const limit = Math.max(1, parseInt(options.limit, 10) || 10);
+        const limit = normalizeLimit(options.limit);
 
         const results = withTranscriptIndex((idx) => {
           const count = idx.count();
@@ -89,10 +107,9 @@ export function registerTranscriptCommand(program: Command): void {
         }
 
         for (const hit of results.results) {
-          // Format: timestamp header + first line of snippet
+          // Format: timestamp + filename, then the matching excerpt (FTS5 snippet).
           const date = hit.session_at.replace('T', ' ').slice(0, 19);
-          const firstLine = hit.snippet.split('\n').find((l) => l.trim().length > 0) ?? '';
-          process.stdout.write(`${date}  ${hit.filename}\n  ${firstLine.trim()}\n\n`);
+          process.stdout.write(`${date}  ${hit.filename}\n  ${hit.snippet}\n\n`);
         }
         process.stdout.write(
           `${results.results.length} result${results.results.length === 1 ? '' : 's'} ` +

@@ -47,7 +47,9 @@ const SCHEMA_VERSION = 1;
 // table. The FTS5 table uses `content=transcripts` (external content mode) so
 // ranking information (via the hidden `rank` column) is available on queries.
 // `porter` tokenizer matches the memory store convention for stem-aware search.
-// Triggers keep the FTS index in sync with the content table.
+// No per-row sync triggers: reindex() is the only write path and rebuilds the
+// whole FTS index in bulk via the FTS5 'rebuild' command (see reindex()), so
+// INSERT/DELETE triggers would be redundant work on every full reindex.
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS transcripts (
   id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,19 +68,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS transcripts_fts USING fts5(
   tokenize='porter'
 );
 
-CREATE TRIGGER IF NOT EXISTS transcripts_ai AFTER INSERT ON transcripts BEGIN
-  INSERT INTO transcripts_fts(rowid, content) VALUES (new.id, new.content);
-END;
-
-CREATE TRIGGER IF NOT EXISTS transcripts_ad AFTER DELETE ON transcripts BEGIN
-  INSERT INTO transcripts_fts(transcripts_fts, rowid, content) VALUES ('delete', old.id, old.content);
-END;
-
-CREATE TRIGGER IF NOT EXISTS transcripts_au AFTER UPDATE ON transcripts BEGIN
-  INSERT INTO transcripts_fts(transcripts_fts, rowid, content) VALUES ('delete', old.id, old.content);
-  INSERT INTO transcripts_fts(rowid, content) VALUES (new.id, new.content);
-END;
-
 CREATE INDEX IF NOT EXISTS idx_transcripts_session_at ON transcripts(session_at DESC);
 `;
 
@@ -91,8 +80,10 @@ export interface TranscriptSearchResult {
   /** ISO-8601 session timestamp recovered from the filename. */
   session_at: string;
   /**
-   * Leading snippet of the transcript content (first 300 chars). Callers that
-   * want the full body should read the file directly via `getTranscriptsDir()`.
+   * Matching excerpt with surrounding context, produced by FTS5 `snippet()`
+   * (~16 tokens around the best match, whitespace-collapsed for one-line
+   * display). Callers that want the full body should read the file directly via
+   * `getTranscriptsDir()`.
    */
   snippet: string;
   /** Raw FTS5 rank (lower is better). Exposed so callers can sort if needed. */
@@ -110,6 +101,9 @@ export interface TranscriptSearchResult {
  *
  * Example: `2026-06-15T10-45-52-728Z.md` → `2026-06-15T10:45:52.728Z`
  */
+/** Stored in `session_at` when a filename is not a recognizable ISO stamp. */
+const UNKNOWN_SESSION_AT = 'unknown';
+
 function filenameToIso(filename: string): string {
   // Strip the .md suffix, then un-mangle the time portion.
   // The date part (YYYY-MM-DD) already uses '-' legitimately; only the
@@ -118,7 +112,11 @@ function filenameToIso(filename: string): string {
   // Pattern: after the 'T' separator, replace the first two '-' separating
   // HH-MM-SS with ':', and the third '-' separating SS-mmm with '.'.
   // The trailing 'Z' is preserved as-is.
-  return stem.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3}Z)$/, 'T$1:$2:$3.$4');
+  const iso = stem.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3}Z)$/, 'T$1:$2:$3.$4');
+  // A no-op replace (iso === stem) means the filename was not a recognized
+  // stamp (a stray or legacy file). Return a sentinel rather than store a
+  // non-ISO string in `session_at` that callers would render as a timestamp.
+  return iso === stem ? UNKNOWN_SESSION_AT : iso;
 }
 
 // ── TranscriptIndex class ──────────────────────────────────────────────────
@@ -131,7 +129,11 @@ export class TranscriptIndex {
   constructor(indexDir?: string, transcriptsDir?: string) {
     this.indexDir = indexDir ?? join(getAfkStateDir(), INDEX_DIR_NAME);
     this.transcriptsDir = transcriptsDir ?? getTranscriptsDir();
-    mkdirSync(this.indexDir, { recursive: true });
+    // The index DB holds a full copy of every transcript's content, which the
+    // transcript writer deliberately stores at mode 0o600. better-sqlite3
+    // creates index.db (+ -wal/-shm) at the process umask (often 0o644), so a
+    // 0o700 dir is what keeps that duplicated content unreadable by other users.
+    mkdirSync(this.indexDir, { recursive: true, mode: 0o700 });
 
     this.db = new Database(join(this.indexDir, DB_FILE));
     // Invariant: busy_timeout must be set before any schema or data operation
@@ -157,11 +159,13 @@ export class TranscriptIndex {
   /**
    * Rebuild the FTS index from scratch by scanning the transcripts directory.
    *
-   * Invariant (ordered writes): the FTS table is kept in sync with the content
-   * table via SQLite triggers — INSERT on `transcripts` automatically fires
-   * `INSERT INTO transcripts_fts`. The governing constraint is the FTS5 trigger
-   * protocol: content-table rows must be written before the FTS virtual table
-   * can be queried, because FTS5 external-content tables do not self-populate.
+   * Invariant (FTS5 external-content rebuild): content-table rows must be
+   * written before the FTS index is rebuilt, because an external-content FTS5
+   * table (`content=transcripts`) does not self-populate. reindex() therefore
+   * (1) clears the content table, (2) inserts every transcript from disk, then
+   * (3) runs the FTS5 'rebuild' command to reconstruct the index from the
+   * now-current content rows. The bulk rebuild is the single sync point — no
+   * per-row triggers are used.
    *
    * All writes run inside a single transaction for atomicity and performance.
    * A full reindex is used for v1 (reindex-on-demand design). Incremental
@@ -178,23 +182,18 @@ export class TranscriptIndex {
     const files = readdirSync(this.transcriptsDir).filter((f) => f.endsWith('.md'));
     debugLog(`transcript-index: reindexing ${files.length} transcript files`);
 
-    // Invariant (ordered operation sequence): clear the FTS index before
-    // clearing the content table. The FTS `delete` command requires the content
-    // row to still be present in the backing store; however, with external-
-    // content FTS5 we issue a full `rebuild` command after clearing, which
-    // reconstructs the FTS index from the (now-replaced) content table rows
-    // without needing the old rows. Therefore the correct order is:
+    // Invariant (ordered operation sequence): with external-content FTS5 the
+    // index is rebuilt from the content table, so the order is:
     //   1. DELETE all rows from `transcripts` (content table)
-    //   2. INSERT new rows from disk
-    //   3. Rebuild FTS index from updated content table
-    // This is done inside a transaction to ensure atomicity.
+    //   2. INSERT new rows from disk (no ON CONFLICT needed — the table is empty)
+    //   3. Rebuild the FTS index from the updated content table
+    // All inside one transaction for atomicity.
     const doReindex = this.db.transaction(() => {
       this.db.exec(`DELETE FROM transcripts;`);
 
       const insert = this.db.prepare<[string, string, string]>(`
         INSERT INTO transcripts (filename, session_at, content)
         VALUES (?, ?, ?)
-        ON CONFLICT(filename) DO UPDATE SET session_at=excluded.session_at, content=excluded.content
       `);
 
       let count = 0;
@@ -230,7 +229,7 @@ export class TranscriptIndex {
    * Contract:
    * - Returns up to `limit` results, ordered by FTS5 rank (best match first).
    * - Returns an empty array when the index is empty or no query matches.
-   * - Each result includes a 300-char snippet from the start of the document.
+   * - Each result includes an FTS5 `snippet()` excerpt around the best match.
    * - Callers should call {@link reindex} at least once before searching.
    *
    * @param query  FTS5 query string
@@ -241,8 +240,13 @@ export class TranscriptIndex {
     // parse error on an empty MATCH expression).
     if (!query.trim()) return [];
 
+    // Use FTS5 snippet() to return the matching excerpt (not the file header)
+    // and to avoid transferring full `content` per row just to slice it.
+    // snippet(table, colIdx 0, startMark '', endMark '', ellipsis '…', tokens).
     const sql = `
-      SELECT t.filename, t.session_at, t.content, transcripts_fts.rank
+      SELECT t.filename, t.session_at,
+             snippet(transcripts_fts, 0, '', '', '…', 16) AS snippet,
+             transcripts_fts.rank
       FROM transcripts t
       JOIN transcripts_fts ON transcripts_fts.rowid = t.id
       WHERE transcripts_fts MATCH ?
@@ -250,12 +254,14 @@ export class TranscriptIndex {
       LIMIT ?
     `;
 
-    let rows: Array<{ filename: string; session_at: string; content: string; rank: number }>;
+    let rows: Array<{ filename: string; session_at: string; snippet: string; rank: number }>;
     try {
       rows = this.db.prepare(sql).all(query, limit) as typeof rows;
     } catch (err) {
+      // Note: the user-supplied query is intentionally not echoed into the
+      // message; the SQLite error text already pinpoints the parse failure.
       throw new Error(
-        `Transcript FTS5 query failed for "${query}": ${String(err)}. ` +
+        `Transcript FTS5 query failed: ${String(err)}. ` +
           `Use FTS5 syntax — wrap phrases in "quotes", use * for prefix, AND/OR for boolean.`,
       );
     }
@@ -263,7 +269,8 @@ export class TranscriptIndex {
     return rows.map((row) => ({
       filename: row.filename,
       session_at: row.session_at,
-      snippet: row.content.slice(0, 300),
+      // Collapse whitespace/newlines so the one-line CLI display stays clean.
+      snippet: row.snippet.replace(/\s+/g, ' ').trim(),
       rank: row.rank,
     }));
   }
