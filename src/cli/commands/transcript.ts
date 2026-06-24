@@ -65,8 +65,12 @@ export function registerTranscriptCommand(program: Command): void {
     )
     .action(async () => {
       try {
-        const count = withTranscriptIndex((idx) => idx.reindex());
-        process.stdout.write(`Indexed ${count} transcript${count === 1 ? '' : 's'}.\n`);
+        const { indexed, skipped } = withTranscriptIndex((idx) => idx.reindex());
+        const skippedNote =
+          skipped > 0 ? ` (${skipped} skipped — run with DEBUG=1 for details)` : '';
+        process.stdout.write(
+          `Indexed ${indexed} transcript${indexed === 1 ? '' : 's'}${skippedNote}.\n`,
+        );
       } catch (err) {
         handleCommandError(err);
       }

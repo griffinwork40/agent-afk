@@ -116,8 +116,9 @@ describe('TranscriptIndex', () => {
 
       const idx = new TranscriptIndex(indexDir, transcriptsDir);
       try {
-        const n = idx.reindex();
-        expect(n).toBe(2);
+        const result = idx.reindex();
+        expect(result.indexed).toBe(2);
+        expect(result.skipped).toBe(0);
         expect(idx.count()).toBe(2);
       } finally {
         idx.close();
@@ -127,8 +128,9 @@ describe('TranscriptIndex', () => {
     it('returns 0 when the transcripts directory is empty', () => {
       const idx = new TranscriptIndex(indexDir, transcriptsDir);
       try {
-        const n = idx.reindex();
-        expect(n).toBe(0);
+        const result = idx.reindex();
+        expect(result.indexed).toBe(0);
+        expect(result.skipped).toBe(0);
         expect(idx.count()).toBe(0);
       } finally {
         idx.close();
@@ -139,8 +141,9 @@ describe('TranscriptIndex', () => {
       const missingDir = join(testDir, 'no-such-dir');
       const idx = new TranscriptIndex(indexDir, missingDir);
       try {
-        const n = idx.reindex();
-        expect(n).toBe(0);
+        const result = idx.reindex();
+        expect(result.indexed).toBe(0);
+        expect(result.skipped).toBe(0);
       } finally {
         idx.close();
       }
@@ -153,8 +156,9 @@ describe('TranscriptIndex', () => {
 
       const idx = new TranscriptIndex(indexDir, transcriptsDir);
       try {
-        const n = idx.reindex();
-        expect(n).toBe(1);
+        const result = idx.reindex();
+        expect(result.indexed).toBe(1);
+        expect(result.skipped).toBe(0);
       } finally {
         idx.close();
       }
@@ -167,6 +171,23 @@ describe('TranscriptIndex', () => {
       try {
         idx.reindex();
         idx.reindex(); // second call
+        expect(idx.count()).toBe(1);
+      } finally {
+        idx.close();
+      }
+    });
+
+    it('counts unreadable .md entries as skipped, not indexed', () => {
+      writeTranscript('2026-06-15T10-45-52-728Z.md', TRANSCRIPT_A);
+      // A directory whose name ends in .md is enumerated by readdir but cannot
+      // be read: readFileSync throws EISDIR, exercising the skip-count path.
+      mkdirSync(join(transcriptsDir, 'broken.md'));
+
+      const idx = new TranscriptIndex(indexDir, transcriptsDir);
+      try {
+        const result = idx.reindex();
+        expect(result.indexed).toBe(1);
+        expect(result.skipped).toBe(1);
         expect(idx.count()).toBe(1);
       } finally {
         idx.close();

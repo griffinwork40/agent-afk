@@ -26,7 +26,7 @@
 
 import Database from 'better-sqlite3';
 import type BetterSqlite3 from 'better-sqlite3';
-import { existsSync, mkdirSync, readdirSync, readFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'fs';
 import { join, basename } from 'path';
 import { getTranscriptsDir, getAfkStateDir } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
@@ -90,6 +90,14 @@ export interface TranscriptSearchResult {
   rank: number;
 }
 
+/** Outcome of a {@link TranscriptIndex.reindex} run. */
+export interface ReindexResult {
+  /** Number of transcript files successfully read and indexed. */
+  indexed: number;
+  /** Number of `.md` entries skipped because they could not be read. */
+  skipped: number;
+}
+
 // ── Filename helpers ───────────────────────────────────────────────────────
 
 /**
@@ -135,7 +143,21 @@ export class TranscriptIndex {
     // 0o700 dir is what keeps that duplicated content unreadable by other users.
     mkdirSync(this.indexDir, { recursive: true, mode: 0o700 });
 
-    this.db = new Database(join(this.indexDir, DB_FILE));
+    const dbPath = join(this.indexDir, DB_FILE);
+    this.db = new Database(dbPath);
+    // Defense-in-depth beyond the 0o700 dir: tighten the DB file itself to 0o600
+    // so the duplicated transcript content matches the confidentiality of the
+    // source transcripts (also 0o600) even if the file is later copied out of the
+    // dir (backup/sync), where the directory's protection no longer applies.
+    // POSIX only — chmod is a no-op on Windows. Best-effort: a chmod failure must
+    // not break indexing, so it is logged and swallowed.
+    if (process.platform !== 'win32') {
+      try {
+        chmodSync(dbPath, 0o600);
+      } catch (err) {
+        debugLog('transcript-index: could not chmod index.db to 0o600:', String(err));
+      }
+    }
     // Invariant: busy_timeout must be set before any schema or data operation
     // so contended reads wait rather than fail immediately. WAL mode is set
     // next so concurrent readers don't block the writer.
@@ -171,12 +193,12 @@ export class TranscriptIndex {
    * A full reindex is used for v1 (reindex-on-demand design). Incremental
    * indexing (mtime-gated upsert) is left for a future iteration.
    *
-   * @returns count of transcript files indexed
+   * @returns counts of indexed and skipped (unreadable) transcript files
    */
-  reindex(): number {
+  reindex(): ReindexResult {
     if (!existsSync(this.transcriptsDir)) {
       debugLog('transcript-index: transcripts dir does not exist, nothing to index');
-      return 0;
+      return { indexed: 0, skipped: 0 };
     }
 
     const files = readdirSync(this.transcriptsDir).filter((f) => f.endsWith('.md'));
@@ -196,7 +218,8 @@ export class TranscriptIndex {
         VALUES (?, ?, ?)
       `);
 
-      let count = 0;
+      let indexed = 0;
+      let skipped = 0;
       for (const filename of files) {
         const filePath = join(this.transcriptsDir, filename);
         let content: string;
@@ -204,19 +227,20 @@ export class TranscriptIndex {
           content = readFileSync(filePath, 'utf-8');
         } catch (err) {
           debugLog(`transcript-index: skipping unreadable file ${filename}:`, String(err));
+          skipped++;
           continue;
         }
         const sessionAt = filenameToIso(filename);
         insert.run(filename, sessionAt, content);
-        count++;
+        indexed++;
       }
 
       // Rebuild the FTS index from the now-populated content table.
       this.db.exec(`INSERT INTO transcripts_fts(transcripts_fts) VALUES('rebuild');`);
-      return count;
+      return { indexed, skipped };
     });
 
-    return doReindex() as number;
+    return doReindex() as ReindexResult;
   }
 
   /**
