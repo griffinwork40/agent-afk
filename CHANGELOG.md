@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.37.1] - 2026-06-24
+
+### Fixed
+- propagate origin/actor through grandchild-skill, compose, and daemon-fallback routing rows (fe1bdce)
+
+### Changed
+- Merge pull request #261 from griffinwork40/fix/routing-identity-completeness (9a4c3db)
+- Merge branch 'main' into fix/routing-identity-completeness (584ed06)
+
 ## [4.37.0] - 2026-06-24
 
 ### Added
