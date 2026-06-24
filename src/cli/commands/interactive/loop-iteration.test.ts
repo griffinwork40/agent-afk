@@ -135,6 +135,7 @@ function makeCtx(): InteractiveCtx {
       repaint: vi.fn(),
     },
     contextSampler: { onTurn: vi.fn(async () => {}), getRatio: () => undefined, refresh: vi.fn(async () => {}) },
+    gitStatusSampler: { refresh: vi.fn(async () => {}), setOnUpdate: vi.fn(), getBranch: () => undefined, getPr: () => undefined },
     completionWriter: { fn: vi.fn(), idleFn: vi.fn() },
     replRenderer: { writeLine: vi.fn(), setCompositor: vi.fn() },
     slashCtx: { stats: { permissionMode: 'default' } },

@@ -308,7 +308,8 @@ export async function setupSurface(
   ctx.slashCtx.onStageChange = (stage) => deps.getLoopStageBar()?.repaint(stage);
   ctx.slashCtx.onContextProgress = async () => {
     await ctx.contextSampler.refresh();
-    ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler));
+    await ctx.gitStatusSampler.refresh();
+    ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler));
   };
   // Transcript parity for skill turns: runSkillDispatchTurn appends the
   // completed `/skill args → assistant text` exchange through this handle,
@@ -333,6 +334,16 @@ export async function setupSurface(
   if (ctx.inputSurfaceRef) {
     ctx.inputSurfaceRef.current = surface;
   }
+
+  // Git branch + PR sampler: wire an on-change repaint and kick the initial
+  // sample. Deferred to here (REPL Phase 1) rather than bootstrap so a
+  // bootstrap-only unit test never shells out to git/gh. The branch resolves
+  // in ≈ a local git call and the PR lands when its network lookup settles;
+  // onUpdate repaints the status line so both appear without waiting for a turn.
+  ctx.gitStatusSampler.setOnUpdate(() => {
+    ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler));
+  });
+  void ctx.gitStatusSampler.refresh();
 
   return { installSoftStop };
 }

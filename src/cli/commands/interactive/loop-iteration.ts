@@ -440,6 +440,9 @@ export async function runInputLoop(
         },
         async onAfterTurn() {
           await ctx.contextSampler.onTurn(ctx.stats.totalTurns);
+          // Re-sample the git branch each turn (cheap, local). The PR lookup
+          // (network) is detached inside refresh() and lands on a later repaint.
+          await ctx.gitStatusSampler.refresh();
           ctx.statusLine.rearm();
           // Reset the loop-stage bar to 'observing' so the footer rail shows
           // a clean "waiting" state between turns rather than the last active
@@ -480,7 +483,7 @@ export async function runInputLoop(
         setPauseInterruptHandler: (handler) => surface.setPauseInterruptHandler(handler),
         async onContextProgress() {
           await ctx.contextSampler.refresh();
-          ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler));
+          ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler));
         },
         // Repaint the LoopStageBar footer row whenever the agent's loop stage
         // transitions.  The bar is a per-session singleton; the callback is

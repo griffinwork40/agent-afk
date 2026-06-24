@@ -630,6 +630,112 @@ describe('StatusLine with cwd field', () => {
   });
 });
 
+describe('StatusLine with git branch + PR field', () => {
+  let stream: MockStream;
+
+  beforeEach(() => {
+    stream = mockStream({ isTTY: true, rows: 24 });
+  });
+
+  it('renders the branch with the ⎇ glyph when provided', () => {
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', branch: 'feat/x' });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('⎇');
+    expect(out).toContain('feat/x');
+    expect(out).toContain('sonnet');
+    status.stop();
+  });
+
+  it('appends the PR number as #<n> when provided alongside a branch', () => {
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', branch: 'feat/x', pr: 123 });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('feat/x');
+    expect(out).toContain('#123');
+    status.stop();
+  });
+
+  it('omits the git segment entirely when no branch is set', () => {
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({ model: 'sonnet' });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).not.toContain('⎇');
+    expect(out).toContain('sonnet');
+    status.stop();
+  });
+
+  it('does not render a PR number without a branch (pr is only meaningful with branch)', () => {
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', pr: 123 });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).not.toContain('#123');
+    expect(out).not.toContain('⎇');
+    expect(out).toContain('sonnet');
+    status.stop();
+  });
+
+  it('places the branch after cwd and before the model', () => {
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', cwd: '/tmp/proj', branch: 'feat/x' });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    const cwdIdx = out.indexOf('proj');
+    const branchIdx = out.indexOf('feat/x');
+    const modelIdx = out.indexOf('sonnet');
+    expect(cwdIdx).toBeGreaterThanOrEqual(0);
+    expect(branchIdx).toBeGreaterThan(cwdIdx);
+    expect(modelIdx).toBeGreaterThan(branchIdx);
+    status.stop();
+  });
+
+  it('truncates an over-long branch name (cap 30 cols)', () => {
+    stream.columns = 200; // wide enough that the line itself never truncates
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    const longBranch = 'feat/' + 'a'.repeat(60);
+    status.repaint({ model: 'sonnet', branch: longBranch });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('…');
+    expect(out).not.toContain('a'.repeat(40));
+    status.stop();
+  });
+
+  it('keeps the branch but drops tokens/cost on a narrow terminal (branch drops last)', () => {
+    stream.columns = 30;
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', branch: 'feat/x', cost: 0.05, tokens: 1200 });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('feat/x'); // branch (lowest drop priority) survives
+    expect(out).not.toContain('tok'); // tokens (drop-first) gone
+    status.stop();
+  });
+
+  it('drops the branch before the model on a very narrow terminal', () => {
+    stream.columns = 12;
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', branch: 'feat/x' });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('sonnet'); // model never drops
+    expect(out).not.toContain('feat/x');
+    status.stop();
+  });
+});
+
 describe('StatusLine narrow-terminal priority drop', () => {
   let stream: MockStream;
 
