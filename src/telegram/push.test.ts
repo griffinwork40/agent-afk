@@ -3,7 +3,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
-import { push, pushIfConfigured } from './push';
+import { push, pushIfConfigured, pushMarkdown } from './push';
 
 // loadTelegramConfig reads afk.config.json; mock it so these tests are hermetic
 // (notify routing is then driven purely by the env vars set per-test). The pure
@@ -161,6 +161,61 @@ describe('push', () => {
   });
 });
 
+describe('pushMarkdown', () => {
+  test('renders markdown to HTML and sends with parse_mode HTML', async () => {
+    const fetchImpl = makeFetchOk();
+    const result = await pushMarkdown({
+      token: 't',
+      chatId: '1',
+      text: '**bold** and `code`',
+      fetchImpl,
+    });
+    expect(result.ok).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const body = JSON.parse((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1].body);
+    expect(body.parse_mode).toBe('HTML');
+    expect(body.text).toBe('<b>bold</b> and <code>code</code>');
+  });
+
+  test('falls back to plain text when Telegram rejects the HTML', async () => {
+    let call = 0;
+    const fetchImpl = vi.fn(async () => {
+      call++;
+      if (call === 1) {
+        return new Response(
+          JSON.stringify({ ok: false, description: "Bad Request: can't parse entities: unexpected tag" }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true, result: {} }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await pushMarkdown({ token: 't', chatId: '1', text: '**weird** content', fetchImpl });
+
+    expect(result.ok).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const calls = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    const first = JSON.parse(calls[0][1].body);
+    const second = JSON.parse(calls[1][1].body);
+    expect(first.parse_mode).toBe('HTML');
+    // Fallback resends the original raw markdown with no parse_mode.
+    expect(second.parse_mode).toBeUndefined();
+    expect(second.text).toBe('**weird** content');
+  });
+
+  test('does NOT fall back on non-parse failures (e.g. 403 blocked)', async () => {
+    const fetchImpl = makeFetchError(403, 'Forbidden: bot was blocked by the user');
+    const result = await pushMarkdown({ token: 't', chatId: '1', text: '**x**', fetchImpl });
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(403);
+    // No duplicate send — only the HTML attempt was made.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('pushIfConfigured', () => {
   const NOTIFY_KEYS = [
     'TELEGRAM_BOT_TOKEN',
@@ -254,6 +309,18 @@ describe('pushIfConfigured', () => {
     const sent = calls.map((c) => JSON.parse(c[1].body).text as string);
     expect(sent.every((chunk) => chunk.length <= 4096)).toBe(true);
     expect(sent.join('')).toBe(text);
+  });
+
+  test('renders markdown to HTML per chunk when markdown:true', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 't';
+    process.env['AFK_TELEGRAM_ALLOWED_CHAT_IDS'] = '42';
+    const fetchImpl = makeFetchOk();
+
+    await pushIfConfigured('**hello** `world`', { markdown: true, fetchImpl });
+
+    const body = JSON.parse((fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1].body);
+    expect(body.parse_mode).toBe('HTML');
+    expect(body.text).toBe('<b>hello</b> <code>world</code>');
   });
 
   test('forwards reply_markup to every chat when provided', async () => {
