@@ -212,37 +212,28 @@ export function repaint(self: FrameHost): void {
   // hard upper bound for targetBottomRow in ALL branches below.
   const absoluteBottom = Math.max(1, (self.stdout.rows ?? 24) - 1 - extraRows);
   const frame = frameLines.join('\n');
-  // Invariant: content-following placement fires only when ALL conditions hold:
-  //   1. A pre-arm banner is declared (anchorRow > 1). Banner occupies rows
-  //      1..(anchorRow-1); the frame should start at anchorRow+physicalRows-1
-  //      on tall terminals so it is adjacent to the banner instead of floating
-  //      far below it. Without a banner the frame is unconditionally bottom-
-  //      pinned — all resize-ghost, shrink-gap, and scrollback-gap invariants
-  //      (which assume bottom-pinned frames on no-banner sessions) are preserved.
-  //   2. commitInFlight is false. During Phase 2 of commitAbove the frame must
-  //      render at absoluteBottom so Phase 3 can place committed text in the
-  //      above-frame region at anchorRow..(newTopRow-1). Banner-following during
-  //      Phase 2 would move the frame to ~anchorRow, leaving Phase 3 no room to
-  //      write outside the banner zone (textStartRow would equal anchorRow,
-  //      causing the Phase 3 loop to fire 0 iterations and dropping the commit).
+  // Invariant: the input frame is ALWAYS bottom-pinned (targetBottomRow ===
+  // absoluteBottom), on a fresh session and after every commit alike. The
+  // input line is the last frameLines entry, so it sits on absoluteBottom; the
+  // dropdown / hint / streaming overlay grow UPWARD into the empty viewport
+  // above it ("input pinned, content rises") without ever shifting the row the
+  // user types on. This is what makes opening the slash-command menu on a
+  // brand-new session leave the prompt put instead of shoving it down to make
+  // headroom.
   //
-  // contentFloor = max(anchorRow, committedBandBottomRow):
-  //   • anchorRow (not anchorRow-1) is the minimum floor so the frame top lands
-  //     at anchorRow+1, giving Phase 3 exactly one row at anchorRow for text.
-  //   • committedBandBottomRow grows as commits accumulate, naturally marching
-  //     the frame down until contentFloor + physicalRows ≥ absoluteBottom, at
-  //     which point targetBottomRow = absoluteBottom (identical to old path).
-  const hasBanner = self.anchorRow !== undefined && self.anchorRow > 1;
-  let targetBottomRow: number;
-  if (hasBanner && !self.commitInFlight) {
-    const physicalRows = self.logUpdate.measure
-      ? self.logUpdate.measure(frame, absoluteBottom).lineCount
-      : Math.max(1, frameLines.length);
-    const contentFloor = Math.max(self.anchorRow!, self.committedBandBottomRow);
-    targetBottomRow = Math.min(absoluteBottom, contentFloor + physicalRows);
-  } else {
-    targetBottomRow = absoluteBottom;
-  }
+  // History: this used to be a two-regime placement — "content-following"
+  // (frame pinned just below the banner at min(absoluteBottom,
+  // max(anchorRow, committedBandBottomRow) + physicalRows)) while idle with a
+  // banner, bottom-anchored only during a commit or once enough committed
+  // content had marched the frame to the floor. The side effect was that on a
+  // fresh session the prompt sat one row under the banner with no room above
+  // it, so opening the completion dropdown grew physicalRows and pushed the
+  // whole frame DOWN. Unconditional bottom-pinning removes that regime; the
+  // banner is still protected as a ceiling by the anchorRow floor in
+  // frame-preserve.ts / committed-band-repin.ts, and committed text still lands
+  // in the above-frame region — it just accumulates upward from the bottom
+  // (newest hugging the input) instead of downward from the banner.
+  const targetBottomRow = absoluteBottom;
   // Anchor-row enforcement: when an upper-bound was supplied (typically by
   // the surface that knows how many rows the welcome banner / update-
   // notice consumed before arm), make sure the frame's top row does not
