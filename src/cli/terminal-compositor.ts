@@ -22,6 +22,7 @@ import type { AutocompleteState } from './input/autocomplete-state.js';
 import type { IHistoryRing } from './input/types.js';
 import type { ImageAttachment } from './input/attachments.js';
 import { SpinnerController } from './input/spinner.js';
+import { CaretBlinkController, DEFAULT_CARET_BLINK_INTERVAL_MS } from './input/caret-blink.js';
 import type { StdinClaimHandle } from './input/stdin-claim.js';
 import {
   type CompositorInputMode,
@@ -283,6 +284,23 @@ export class TerminalCompositor {
 
   /** @internal Relaxed from `private` for the frame module (FrameHost). */
   readonly spinnerController: SpinnerController;
+  /**
+   * Owns the input caret's blink phase + timer. Started in arm() / resumeInput(),
+   * stopped in disarm() / suspendInput(), reset-to-solid on each non-paste
+   * keystroke. `caretVisible` (read by the frame renderer) reflects its phase.
+   * @internal Relaxed from `private` for the lifecycle module (LifecycleHost).
+   */
+  readonly caretBlinkController: CaretBlinkController;
+  /**
+   * Monotonic frame counter, bumped once per {@link repaint}. Read by the
+   * lifecycle keypress handler (`LifecycleHost.repaintCount`) to tell whether
+   * dispatchKey already painted a frame this keystroke, so the caret-blink
+   * un-hide repaint is issued only when nothing else painted — avoiding a double
+   * frame on an off-phase keystroke. Plain counter; wraparound is unreachable in
+   * a session (Number.MAX_SAFE_INTEGER frames).
+   * @internal Relaxed from `private` for the lifecycle module (LifecycleHost).
+   */
+  repaintCount = 0;
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   committing = false;
   /**
@@ -417,6 +435,17 @@ export class TerminalCompositor {
     this.scrollRegion = opts.scrollRegion;
     this.spinnerController = new SpinnerController({
       captureMode: opts.captureMode ?? false,
+      onTick: () => this.repaint(),
+    });
+    // Caret blink defaults OFF: enablement (incl. reduced-motion) is resolved
+    // by the interactive caller and passed as `caretBlink`, mirroring how the
+    // spinner's motion gating is resolved caller-side (stream-renderer). This
+    // keeps every direct/test construction free of an auto-started recurring
+    // timer. captureMode suppresses the ticker even when enabled.
+    this.caretBlinkController = new CaretBlinkController({
+      enabled: opts.caretBlink ?? false,
+      captureMode: opts.captureMode ?? false,
+      intervalMs: opts.caretBlinkIntervalMs ?? DEFAULT_CARET_BLINK_INTERVAL_MS,
       onTick: () => this.repaint(),
     });
     this.onSubmit = opts.onSubmit;
@@ -718,6 +747,16 @@ export class TerminalCompositor {
     return [...this.attachments];
   }
 
+  /**
+   * Whether the caret glyph is in its visible phase this frame. Read by the
+   * frame renderer (RenderHost.caretVisible) to paint a solid vs. blanked
+   * caret. Always true unless the caret-blink ticker is running and currently
+   * in its off-phase. @internal Relaxed for the render module (RenderHost).
+   */
+  get caretVisible(): boolean {
+    return this.caretBlinkController.visible;
+  }
+
   // Body extracted to terminal-compositor.render.ts (free-functions-on-host).
   /** @internal Relaxed from `private` for the frame module (FrameHost). */
   renderInputLine(): string {
@@ -771,6 +810,9 @@ export class TerminalCompositor {
 
   /** @internal Public for sibling free-function modules (via Host interfaces) and test casts. */
   repaint(): void {
+    // Bump BEFORE painting so the lifecycle keypress handler's post-dispatch
+    // comparison sees the increment from any repaint dispatchKey triggered.
+    this.repaintCount++;
     Frame.repaint(this);
   }
 

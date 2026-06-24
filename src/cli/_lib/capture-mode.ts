@@ -79,6 +79,24 @@ export function detectReducedMotion(env: NodeJS.ProcessEnv = process.env): boole
 }
 
 /**
+ * Decide whether the input caret should blink (pulse on/off like a terminal
+ * cursor).
+ *
+ * ON by default; `AFK_CARET_BLINK=0` opts OUT (steady caret). Only the literal
+ * string "0" disables — any other value (or unset) leaves blinking on. Distinct
+ * in intent from reduced-motion: a motion-sensitive user sets
+ * `AFK_REDUCED_MOTION=1`, which the interactive caller ANDs in to force the
+ * caret solid regardless of this flag. Kept here beside detectReducedMotion /
+ * detectBell because it is the same class of CLI motion / UX preference, read
+ * via the same `env`-parameter pattern.
+ *
+ * Reads `process.env` at call time. Pure function with no side effects.
+ */
+export function detectCaretBlink(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env['AFK_CARET_BLINK'] !== '0';
+}
+
+/**
  * Ring the terminal bell (audible BEL, \x07) if the bell is enabled
  * and the stream is a TTY. Non-printing; does not disturb the overlay.
  *
