@@ -7,7 +7,14 @@
 > Agent AFK isn't "smarter than Claude Code." It's *yours* in a way Claude Code can't be.
 
 [![npm version](https://img.shields.io/npm/v/agent-afk.svg)](https://www.npmjs.com/package/agent-afk)
+[![CI](https://github.com/griffinwork40/agent-afk/actions/workflows/ci.yml/badge.svg)](https://github.com/griffinwork40/agent-afk/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/node/v/agent-afk.svg)](https://nodejs.org/)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/griffinwork40/agent-afk?style=social)](https://github.com/griffinwork40/agent-afk/stargazers)
+
+<!-- DEMO GIF GOES HERE ▸ drop a 20–30s screen recording of one autonomous AFK run (e.g. kick off `afk daemon` / `afk mint "..."`, walk away, get the Telegram ping, come back done). Drag-and-drop the file into a GitHub issue/PR to host it on GitHub's CDN, then paste the URL as ![demo](URL) right here. This is the single biggest star-conversion lever — keep it above the fold. -->
+
+> ⭐ **Like the idea of an agent loop you fully own? [Star the repo](https://github.com/griffinwork40/agent-afk/stargazers)** — it's the fastest way to help other people find it.
 
 ## Claude Code vs. Agent AFK
 
@@ -36,6 +43,8 @@ afk doctor       # environment self-check
 afk login        # save an Anthropic API key or OAuth token
 afk chat "hello"
 ```
+
+**Already using Claude Code or Codex?** Run `afk migrate` — it imports your existing plugins, skills, and MCP servers. It doesn't copy files; it live-reads the source tool's dirs, so anything you install there keeps showing up in AFK with no re-run.
 
 ## What you can do with it
 
@@ -179,6 +188,12 @@ With containment on (`default`), a file tool (read/write/edit/list/glob/grep) ta
 ## Changelog
 
 Recent releases at [`CHANGELOG.md`](CHANGELOG.md), also viewable in-REPL via `/changelog`.
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=griffinwork40/agent-afk&type=Date)](https://star-history.com/#griffinwork40/agent-afk&Date)
+
+If Agent AFK saves you time, **[⭐ star the repo](https://github.com/griffinwork40/agent-afk/stargazers)** — it's the single best way to help it reach more people.
 
 ## License
 
