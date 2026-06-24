@@ -31,6 +31,8 @@ export const palette = {
   goblin: chalk.hex('#9CB04A'),
   /** User cyan — for user prompt text and their "you said" markers. Reserved for user identity only. */
   user: chalk.cyan,
+  /** Caret — thin vertical-bar cursor rendered in the input field. Distinct from `user` (cyan) so the cursor style can evolve independently of user-identity chrome. Soft cornflower blue pairs cleanly with JetBrains Mono dark themes and contrasts the warm brand orange without competing with info sky-blue or fileRef teal. */
+  caret: chalk.hex('#7AA2F7'),
   /** Tool name — steel blue, used as the syntax-theme color for functions / classes / titles in fenced code blocks. Originally also drove `● ToolName` bullet chrome; that role moved to `chrome` so syntax and chrome can evolve independently. */
   tool: chalk.hex('#DCDCAA'),
   /** Bullet chrome — slate grey, used for the `● ToolName` glyph + name itself when no per-tool category color overrides it. Recedes visually so the category-colored variants carry the salience. */

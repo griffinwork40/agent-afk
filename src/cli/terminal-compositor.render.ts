@@ -54,27 +54,31 @@ export function renderInputLine(self: RenderHost): string {
       : '';
   const rawBefore = self.input.buffer.slice(0, self.input.cursor);
   const cursorEnd = nextGraphemeIndex(self.input.buffer, self.input.cursor);
-  const cursorText =
-    self.input.cursor < self.input.buffer.length
-      ? self.input.buffer.slice(self.input.cursor, cursorEnd)
-      : ' ';
+  const atEnd = self.input.cursor >= self.input.buffer.length;
+  // At end-of-buffer show a thin ▏ bar (U+258F, LEFT ONE EIGHTH BLOCK) so
+  // the idle cursor reads as a modern line caret rather than a filled block.
+  // Mid-buffer the character under the cursor is kept and inverse-video is
+  // applied so the active position stays legible during editing.
+  const cursorText = atEnd
+    ? '▏'
+    : self.input.buffer.slice(self.input.cursor, cursorEnd);
   const rawAfter =
     self.input.cursor < self.input.buffer.length
       ? self.input.buffer.slice(cursorEnd)
       : '';
   // Apply the caller-supplied formatter (typically `colorizeInputBuffer`
   // closed over the slash registry) to each segment independently. The
-  // inverse-video cursor block is rendered RAW so it stays a single visual
+  // caret character is rendered RAW so it stays a single visual
   // cell — passing it through a colorizer would compose ANSI codes on top
-  // of the inverse SGR and complicate grapheme-width math.
+  // of the caret SGR and complicate grapheme-width math.
   const before = self.formatInputBuffer?.(rawBefore) ?? rawBefore;
   const after = self.formatInputBuffer?.(rawAfter) ?? rawAfter;
   // Caret is always painted. `repaint()` already gates on `armed`, so this
   // code only runs while we hold raw mode; there is no path where rendering
-  // the inverse block "leaks" a phantom cursor after disarm — every async
-  // repaint source (keypress, resize, spinner) is unsubscribed before
+  // the caret "leaks" a phantom cursor after disarm — every async repaint
+  // source (keypress, resize, spinner) is unsubscribed before
   // `logUpdate.done()` in `disarm()`.
-  const caret = palette.user.inverse(cursorText);
+  const caret = atEnd ? palette.caret(cursorText) : palette.caret.inverse(cursorText);
   // Ghost text: render a dim inline completion AFTER the caret, only when:
   //   1. cursor is at end-of-buffer (no rawAfter)
   //   2. there is an active ghost that strictly extends the current buffer

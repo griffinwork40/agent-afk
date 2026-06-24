@@ -3185,28 +3185,26 @@ describe('TerminalCompositor — caret always rendered while armed', () => {
     writes = collectWrites(stdout);
   });
 
-  it('emits the inverse-video SGR even when buffer is empty', async () => {
-    // Force chalk to color mode so the inverse SGR is actually emitted.
-    // Without this, tests running with chalk.level === 0 see plain text and
-    // can't observe the inverse marker. Saved/restored to avoid leaking state
-    // to other suites.
+  it('emits the thin-bar caret character even when buffer is empty', async () => {
+    // At end-of-buffer the compositor paints a ▏ (U+258F, LEFT ONE EIGHTH BLOCK)
+    // in the caret accent color instead of an inverse-video space block.
+    // chalk.level is forced to 1 so color SGRs are emitted; the ▏ character
+    // itself is present regardless of chalk level. Saved/restored to avoid
+    // leaking state to other suites.
     const chalkModule = await import('chalk');
     const priorLevel = chalkModule.default.level;
     chalkModule.default.level = 1;
     try {
       const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
       await c.arm();
-      // ESC[7m is the SGR for "reverse video" (the inverse block). The compositor
-      // paints `palette.user.inverse(' ')` for an empty buffer — verify the
-      // inverse marker is in the frame.
       const frame = writes.all();
-      expect(frame).toContain('\x1b[7m');
+      expect(frame).toContain('▏');
     } finally {
       chalkModule.default.level = priorLevel;
     }
   });
 
-  it('emits the inverse SGR on the empty buffer even after the buffer goes empty again', async () => {
+  it('emits the thin-bar caret after the buffer goes empty again', async () => {
     // Regression target: previously the caret was suppressed when buffer.length === 0
     // && !queued. Verify that after typing then deleting back to empty, the caret
     // is still painted. This exercises the post-Backspace empty-buffer render.
@@ -3219,7 +3217,7 @@ describe('TerminalCompositor — caret always rendered while armed', () => {
       stdin.emit('keypress', 'x', { name: 'x', sequence: 'x' });
       stdin.emit('keypress', undefined, { name: 'backspace' });
       // Buffer is now empty (and !queued). The most recent rendered frame must
-      // still contain the inverse SGR — i.e., the caret cell.
+      // still contain the ▏ thin-bar caret.
       expect(c.getBuffer().text).toBe('');
       expect(c.getBuffer().queued).toBe(false);
       writes.clear();
@@ -3227,7 +3225,7 @@ describe('TerminalCompositor — caret always rendered while armed', () => {
       // generated from the empty+!queued state.
       c.setOverlay('overlay-content');
       const frame = writes.all();
-      expect(frame).toContain('\x1b[7m');
+      expect(frame).toContain('▏');
     } finally {
       chalkModule.default.level = priorLevel;
     }
