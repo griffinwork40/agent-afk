@@ -5163,21 +5163,26 @@ describe('TerminalCompositor — background-status-bar coexistence', () => {
   });
 });
 
-describe('TerminalCompositor — content-following placement', () => {
-  // These tests verify the content-following behaviour introduced to eliminate
-  // the blank-row gap that appeared on tall terminals between a welcome banner
-  // and the live input frame.
+describe('TerminalCompositor — input bottom-pin placement', () => {
+  // These tests verify that the live input frame is ALWAYS bottom-pinned
+  // (targetBottomRow === absoluteBottom) — on a fresh session, with or without
+  // a banner, and after any number of commits.
   //
-  // Core invariant: content-following fires ONLY when anchorRow > 1 (a pre-arm
-  // banner is declared) AND commitInFlight is false (not inside Phase 2 of
-  // commitAbove). Without a banner the frame is always unconditionally
-  // bottom-pinned — all resize-ghost, shrink-gap, and scrollback-gap invariants
-  // assume this and are preserved. The banner case uses
-  //   contentFloor = max(anchorRow, committedBandBottomRow)
-  //   targetBottomRow = min(absoluteBottom, contentFloor + physicalRows)
-  // so the frame starts just below the banner and marches down as committed
-  // content accumulates, reaching absoluteBottom once the band fills the
-  // viewport (at which point the path is identical to the old bottom-pin).
+  // Core invariant: the input line is the last frameLines entry and always
+  // lands on absoluteBottom (rows-1-extraRows); the dropdown / hint / streaming
+  // overlay grow UPWARD into the empty viewport above it. This is what lets the
+  // slash-command completion menu open on a brand-new session without shoving
+  // the prompt down to make headroom.
+  //
+  // History: this used to be a two-regime "content-following" placement — the
+  // frame pinned just below the banner at
+  //   targetBottomRow = min(absoluteBottom, max(anchorRow, committedBandBottomRow) + physicalRows)
+  // while idle with a banner, marching down to absoluteBottom only as committed
+  // content accumulated. That left a fresh-session prompt one row under the
+  // banner with no headroom, so opening the dropdown grew physicalRows and
+  // pushed the whole frame down. The regime was removed in favour of
+  // unconditional bottom-pinning; the banner is still protected as a ceiling by
+  // the anchorRow floor (frame-preserve.ts / committed-band-repin.ts).
 
   let stdout: MockStdout;
   let stdin: MockStdin;
@@ -5190,8 +5195,8 @@ describe('TerminalCompositor — content-following placement', () => {
   });
 
   it('cold start: no banner, no content — frame stays bottom-pinned', async () => {
-    // Before any commit and without a banner, the content-following branch is
-    // inactive. The frame must land at the standard bottom row (rows-1).
+    // Before any commit and without a banner, the frame must land at the
+    // standard bottom row (rows-1).
     stdout.rows = 70;
     const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), promptText: '> ' });
     await c.arm();
@@ -5201,17 +5206,14 @@ describe('TerminalCompositor — content-following placement', () => {
     c.disarm();
   });
 
-  it('tall terminal + banner: frame follows committed content instead of unconditional bottom-pin', async () => {
-    // Core fix: rows=70, anchorRow=15 (14-row welcome banner). When the
-    // committed band is at a low row (far above absoluteBottom=69), the next
-    // standalone repaint must use content-following rather than bottom-pinning.
-    //
-    // Patch committedBandBottomRow=16 to simulate the state after a small
-    // number of commits (band near the banner). Content-following:
-    //   contentFloor = max(anchorRow=15, committedBandBottomRow=16) = 16
-    //   physicalRows = 3 (overlay + gap + input)
-    //   targetBottomRow = min(absoluteBottom=69, 16+3) = 19
-    // Frame lands at rows 17-19, not row 69 — the gap is gone.
+  it('tall terminal + banner: frame stays bottom-pinned (no content-following) so the dropdown has headroom', async () => {
+    // Regression guard for the fresh-session dropdown-jump fix: rows=70,
+    // anchorRow=15 (14-row welcome banner). Even with a small committed band
+    // sitting near the banner (committedBandBottomRow=16, far above
+    // absoluteBottom=69), the next standalone repaint must bottom-pin the input
+    // frame — NOT follow the content up to ~row 19. Bottom-pinning is what
+    // leaves the empty viewport above the prompt for the completion dropdown to
+    // grow into without shoving the input down.
     stdout.rows = 70;
     const c2 = new TerminalCompositor({
       stdout, stdin, onCancel: vi.fn(), promptText: '> ',
@@ -5237,18 +5239,19 @@ describe('TerminalCompositor — content-following placement', () => {
     writes.clear();
     c2.setOverlay('FOLLOW_TEST');
     const out2 = writes.all();
-    // Frame must NOT be at row 69 (the old unconditional bottom-pin).
-    expect(out2).not.toContain('\x1b[69;1H');
+    // Input frame must land at absoluteBottom = row 69 (70-1), NOT follow the
+    // band up to ~row 19.
+    expect(out2).toContain('\x1b[69;1H');
     // The overlay text must appear in the output (frame rendered).
     expect(out2).toContain('FOLLOW_TEST');
     c2.disarm();
   });
 
   it('no-banner session: frame stays bottom-pinned regardless of committed content', async () => {
-    // Without a banner (anchorRow undefined or ≤1), the content-following path
-    // is never taken. The frame is always at absoluteBottom = rows-1-extraRows
-    // regardless of how many commits have accumulated — this preserves all
-    // resize-ghost, shrink-gap, and scrollback-gap invariants.
+    // Without a banner (anchorRow undefined or ≤1) the frame is always at
+    // absoluteBottom = rows-1-extraRows regardless of how many commits have
+    // accumulated — this preserves all resize-ghost, shrink-gap, and
+    // scrollback-gap invariants.
     stdout.rows = 24;
     const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), promptText: '> ' });
     await c.arm();
@@ -5261,16 +5264,16 @@ describe('TerminalCompositor — content-following placement', () => {
     c.setOverlay('AFTER_COMMITS');
     const out = writes.all();
 
-    // Frame must always be at absoluteBottom = rows-1 = 23 (no banner → no
-    // content-following, regardless of committed content).
+    // Frame must always be at absoluteBottom = rows-1 = 23, regardless of
+    // committed content.
     expect(out).toContain('\x1b[23;1H');
     c.disarm();
   });
 
-  it('reserved extraRows: targetBottomRow never enters reserved rows even when following content', async () => {
+  it('reserved extraRows: targetBottomRow never enters reserved rows', async () => {
     // extraRows=2 → absoluteBottom = 24-1-2 = 21.
-    // With a banner (anchorRow=5) and committed content, content-following must
-    // still cap at absoluteBottom=21 — never write into bg-status-bar rows 22-23.
+    // With a banner (anchorRow=5) and committed content, the bottom-pinned frame
+    // must cap at absoluteBottom=21 — never write into bg-status-bar rows 22-23.
     const mockScrollRegion = {
       withFullScrollRegion<T>(fn: () => T): T { return fn(); },
       getExtraRows(): number { return 2; },
@@ -5282,7 +5285,7 @@ describe('TerminalCompositor — content-following placement', () => {
       scrollRegion: mockScrollRegion,
     });
     await c.arm();
-    // Commit enough lines so content-following would try to reach absoluteBottom.
+    // Commit enough lines to fill the viewport; the frame stays bottom-pinned.
     for (let i = 0; i < 25; i++) {
       c.commitAbove(`LINE_${i}`);
     }
