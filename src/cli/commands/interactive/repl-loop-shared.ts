@@ -56,8 +56,12 @@ export interface TurnState {
   requestSoftStop?: (() => void) | null;
 }
 
-export function buildPrompt(model: string, mode: PermissionMode): string {
-  const base = palette.brand('afk') + palette.dim(` (${model})`);
+export function buildPrompt(mode: PermissionMode): string {
+  // The model name lives only in the persistent status line (status-line.ts,
+  // a never-drop field) — the caret carries just the brand + the non-default
+  // permission-mode chip (the gate-check worth confirming at the cursor), so
+  // model + mode aren't redundantly stacked two lines apart.
+  const base = palette.brand('afk');
   const marker =
     mode === 'plan' ? palette.warning(' ● plan') :
     mode === 'autonomous' ? palette.info(' ◐ AFK') :
