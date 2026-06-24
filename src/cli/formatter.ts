@@ -437,7 +437,7 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
               // is < colCount, so one pass over growOrder suffices.
               const growOrder = constrained
                 .map((_, i) => i)
-                .sort((a, b) => (widths[b] ?? 0) - (widths[a] ?? 0));
+                .sort((a, b) => (widths[b] ?? 0) - (widths[a] ?? 0) || a - b);
               let grow = 0;
               while (constrainedTotal < availableContentWidth && grow < colCount * 4) {
                 const i = growOrder[grow % growOrder.length]!;
