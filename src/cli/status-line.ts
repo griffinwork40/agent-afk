@@ -30,7 +30,7 @@ export interface StatusLineFields {
   /**
    * Current REPL permission mode. Renders a never-dropped indicator: `● plan`
    * (plan mode, warning tone), `◐ AFK` (autonomous/AFK mode, info tone), or
-   * `⚡ BYPASS` (bypassPermissions, bypass tone — a cool "full-power" badge, not
+   * `⚡ bypass` (bypassPermissions, bypass tone — a cool "full-power" badge, not
    * a caution glyph, since bypass is the default mode). `'default'` renders none.
    */
   permissionMode?: PermissionMode;
@@ -394,7 +394,7 @@ export class StatusLine {
     } else if (f.permissionMode === 'autonomous') {
       parts.push({ text: palette.info('◐ AFK') }); // never drop
     } else if (f.permissionMode === 'bypassPermissions') {
-      parts.push({ text: palette.bypass('⚡ BYPASS') }); // never drop
+      parts.push({ text: palette.bypass('⚡ bypass') }); // never drop
     }
 
     if (f.contextPct !== undefined) {

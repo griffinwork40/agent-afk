@@ -1,6 +1,6 @@
 {
   "name": "agent-afk",
-  "version": "4.39.2",
+  "version": "4.40.0",
   "description": "Open-source coding-agent harness you can actually change — own the loop (prompts, gates, routing, skills, terminal states), use any model, run long tasks while you're away.",
   "main": "dist/index.mjs",
   "type": "module",
@@ -57,15 +57,29 @@
     "local-first",
     "mcp",
     "telegram",
-    "cli"
+    "cli",
+    "claude",
+    "anthropic",
+    "llm",
+    "coding-assistant",
+    "coding-agent",
+    "autonomous-agent",
+    "claude-code",
+    "subagent",
+    "daemon",
+    "openai",
+    "afk"
   ],
   "author": "Griffin Long",
   "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/griffinwork40/agent-afk.git"
   },
-  "homepage": "https://github.com/griffinwork40/agent-afk#readme",
+  "homepage": "https://docs.agentafk.com",
   "bugs": {
     "url": "https://github.com/griffinwork40/agent-afk/issues"
   },

@@ -55,7 +55,7 @@ function emitCycleCopy(ctx: SlashContext, mode: CycleMode): void {
       // Plain line (not the ✓ channel) so bypass reads as a cool "full-power"
       // badge rather than a red alarm — matches the `/bypass` ON notice.
       ctx.out.line(
-        palette.bypass('⚡ BYPASS ON') +
+        palette.bypass('⚡ bypass ON') +
           palette.dim(
             ' — path-approval prompts + containment OFF; read/write any path. ' +
               '(Does not affect ask_question.)',

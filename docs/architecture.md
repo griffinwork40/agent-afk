@@ -126,7 +126,7 @@ Permission mode `'default'` runs tools without a per-tool approval prompt, but a
 
 - Skips path-approval prompts; disables out-of-root containment
 - Allows fully automated workflows
-- Enable with `/bypass` in the REPL (status line shows `⚠ BYPASS`)
+- Enable with `/bypass` in the REPL (status line shows `⚡ bypass`)
 - Does **not** affect `ask_question` (the model asking you a question is a separate axis)
 
 ### Default mode by surface

@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.40.0] - 2026-06-24
+
+### Added
+- blinking input caret (pulse on/off like a terminal cursor) (3096ee9)
+
+### Changed
+- Merge pull request #271 from griffinwork40/afk/improve-caret-styling (32d99d6)
+- coalesce off-phase caret-blink reset with the keystroke repaint (16404db)
+- thin ▏ caret + cornflower-blue palette.caret accent (74e25b7)
+
 ## [4.39.2] - 2026-06-24
 
 ### Fixed

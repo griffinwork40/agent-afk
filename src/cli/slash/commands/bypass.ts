@@ -29,7 +29,7 @@ import { palette } from '../../palette.js';
 import type { SlashCommand, SlashContext, SlashResult } from '../types.js';
 
 const ON_NOTICE =
-  palette.bypass('⚡ BYPASS ON') +
+  palette.bypass('⚡ bypass ON') +
   palette.dim(
     ' — full-power mode: path-approval prompts OFF; the agent can read/write ANY ' +
     'path on this machine with no confirmation. Run /bypass off to restore ' +
@@ -37,7 +37,7 @@ const ON_NOTICE =
   );
 
 const OFF_NOTICE =
-  palette.success('○ BYPASS OFF') +
+  palette.success('○ bypass OFF') +
   palette.dim(' — default permissions restored (path containment + prompts back on)');
 
 export const bypassCmd: SlashCommand = {
