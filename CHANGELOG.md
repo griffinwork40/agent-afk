@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.39.1] - 2026-06-24
+
+### Fixed
+- protect narrow table columns from ellipsis truncation (8c65fa3)
+
+### Changed
+- Merge pull request #269 from griffinwork40/fix/table-narrow-column-squeeze (65ce572)
+
 ## [4.39.0] - 2026-06-24
 
 ### Added
