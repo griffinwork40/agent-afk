@@ -102,20 +102,16 @@ describe('renderMarkdownToTerminal', () => {
     });
 
     /**
-     * Proportional column-shrink contract.
+     * Wide:narrow ratio under the degenerate squeeze path.
      *
-     * The pre-edit algorithm shrunk the widest column by 1 each loop, which
-     * tended to equalize columns when one was much wider than the other —
-     * destroying the ratio the table author chose. The current algorithm
-     * shrinks every column proportional to its own reducible width, so the
-     * wide column stays meaningfully wider than the narrow column even
-     * under tight maxWidth constraints.
-     *
-     * Concrete check: with widths [5, 15] and a maxWidth that forces ~9
-     * units of shrink, the new algorithm preserves col2 > 2x col1.
-     * The old algorithm would have flattened them to roughly equal.
+     * Both columns are single, unbreakable tokens (5 and 15 chars), so their
+     * incompressible floors (min(natural, longestWord, CAP)) sum to more than
+     * the content budget at maxWidth 18 — the degenerate path. It shrinks the
+     * floors proportionally, which keeps the wide column meaningfully wider than
+     * the narrow one instead of flattening both to roughly equal (the original
+     * trim-widest-by-1 failure mode).
      */
-    it('preserves wide:narrow ratio under proportional shrink', () => {
+    it('preserves wide:narrow ratio under the degenerate squeeze', () => {
       const sample = [
         '| Short | WideHeader12345 |',
         '|-------|-----------------|',
@@ -131,9 +127,45 @@ describe('renderMarkdownToTerminal', () => {
       expect(cells).toHaveLength(2);
       const col1Width = stringWidth(cells[0]!);
       const col2Width = stringWidth(cells[1]!);
-      // Pre-edit equalize-by-1 would have produced ~1.14x ratio for this
-      // input; proportional shrink keeps the ratio at 2x or higher.
+      // Proportional floor-shrink keeps the ratio at 2x or higher; the original
+      // equalize-by-1 would have produced ~1.14x for this input.
       expect(col2Width).toBeGreaterThanOrEqual(col1Width * 2);
+    });
+
+    /**
+     * Narrow single-word column protection (the "Verd…" bug).
+     *
+     * A content-heavy table much wider than the terminal used to shrink EVERY
+     * column by the same proportion, crushing a narrow single-word column (e.g.
+     * a "Verdict" of CONFIRMED/OVERSTATED) below its content width so each value
+     * was chopped to "CONF…"/"OVER…". Floor-based water-filling gives each column
+     * its incompressible-word width as a floor and takes the squeeze from the
+     * genuinely wide columns instead, so the verdict words render in full while
+     * the table still fits the budget and the commit-time re-wrap stays a no-op.
+     */
+    it('protects a narrow single-word column from ellipsis truncation', () => {
+      const sample = [
+        '| # | Claim | Verdict | Source |',
+        '|---|-------|---------|--------|',
+        '| 1 | The dispatcher mishandles partial rows while streaming output | OVERSTATED | src/cli/formatter.ts:340 plus the downstream wrap pass |',
+        '| 2 | Column widths derive from natural content width alone here | CONFIRMED | src/cli/markdown-stream-format.ts:92 second wrapToWidth |',
+        '',
+      ].join('\n');
+      const maxWidth = 70;
+      const out = stripAnsi(renderMarkdownToTerminal(sample, { maxWidth }));
+      // The narrow Verdict column's single-word values survive in full — not
+      // chopped to "OVER…"/"CONF…" the way the old proportional squeeze did.
+      expect(out).toContain('OVERSTATED');
+      expect(out).toContain('CONFIRMED');
+      // No rendered line exceeds the budget...
+      for (const line of out.split('\n').filter((l) => l.length > 0)) {
+        expect(stringWidth(line)).toBeLessThanOrEqual(maxWidth);
+      }
+      // ...and the commit-time second wrap pass stays a no-op (no orphan-│
+      // fragments, no physical line-count inflation).
+      const rendered = renderMarkdownToTerminal(sample, { maxWidth });
+      expect(wrapToWidth(rendered, maxWidth).split('\n').length)
+        .toBe(rendered.split('\n').length);
     });
 
     /**
