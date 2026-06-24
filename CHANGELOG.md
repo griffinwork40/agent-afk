@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.38.0] - 2026-06-24
+
+### Added
+- show git branch + open PR on the REPL status line (da9c4fd)
+
+### Fixed
+- resolve three medium review findings (f5fd3c5)
+
+### Changed
+- Merge pull request #265 from griffinwork40/afk/git-branch-pr-status (5813da2)
+
 ## [4.37.1] - 2026-06-24
 
 ### Fixed
