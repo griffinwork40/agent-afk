@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.39.0] - 2026-06-24
+
+### Added
+- surface current date in system-prompt environment block (3f600b0)
+
+### Changed
+- Merge pull request #268 from griffinwork40/afk/agent-date-awareness (6204544)
+
 ## [4.38.1] - 2026-06-24
 
 ### Fixed
