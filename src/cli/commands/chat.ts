@@ -485,6 +485,8 @@ export function registerChatCommand(program: Command): void {
           worktreeCwd,
           // Per-model credential resolver — see bootstrap.ts for rationale.
           getApiKeyForModel,
+          // Surface: chat skill executor children inherit origin 'cli'.
+          'cli',
         );
 
         // Pass `options.model` so `getDefaultSubagentModel` can fall back
@@ -552,6 +554,9 @@ export function registerChatCommand(program: Command): void {
           // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
           ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
           systemPrompt: basePrompt ?? '',
+          // Session identity for routing-decision rows (afk chat → cli).
+          surface: 'cli',
+          depth: 0,
         });
 
         sharedMemoryStore = new MemoryStore();

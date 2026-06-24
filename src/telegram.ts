@@ -278,6 +278,8 @@ async function main() {
           sessionCwd !== undefined && sessionCwd.length > 0 ? sessionCwd : undefined,
           // Per-model credential resolver — see bootstrap.ts for rationale.
           getApiKeyForModel,
+          // Surface: Telegram skill executor children inherit origin 'telegram'.
+          'telegram',
         );
 
         // Pass `sessionConfig.model` to `getDefaultSubagentModel` for
@@ -333,6 +335,9 @@ async function main() {
           // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
           ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
           systemPrompt: layeredBasePrompt ?? '',
+          // Session identity for routing-decision rows (Telegram → telegram).
+          surface: 'telegram',
+          depth: 0,
         });
 
         const allowedTools = [

@@ -386,6 +386,34 @@ describe('CronScheduler — witness trace-writer wiring', () => {
 
     await scheduler.stop();
   });
+
+  it('fallback (no sessionFactory) path stamps surface:daemon on the AgentConfig — Fix 3', async () => {
+    // The `sessionFactory` injection seam: capture the config the scheduler
+    // would pass to a real AgentSession without constructing one (avoids
+    // provider / SDK wiring).
+    let captured: AgentConfig | undefined;
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: (config) => {
+        captured = config;
+        return makeSession({ response: 'ok' });
+      },
+    });
+    scheduler.register({
+      taskId: 'surface-fallback-test',
+      command: 'hello',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    });
+
+    await scheduler.tick('surface-fallback-test');
+
+    // Fix 3: the fallback config must carry surface:'daemon' so routing-decision
+    // telemetry rows derive origin:'daemon' instead of 'unknown'.
+    expect(captured?.surface).toBe('daemon');
+
+    await scheduler.stop();
+  });
 });
 
 describe('CronScheduler — MCP fixture wiring', () => {

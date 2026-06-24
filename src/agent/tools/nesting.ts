@@ -11,6 +11,7 @@
 import type { IAgentSession } from '../types.js';
 import type { ModelProvider } from '../provider.js';
 import type { AgentModelInput } from '../types.js';
+import type { Surface } from '../awareness/types.js';
 import { AnthropicDirectProvider } from '../providers/anthropic-direct/index.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible/index.js';
 import { providerForModel } from '../providers/index.js';
@@ -246,6 +247,7 @@ export function createChildSkillExecutorFactory(
   backgroundRegistry?: BackgroundAgentRegistry,
   cwd?: string,
   resolveApiKeyForModel?: (model: string) => string | undefined,
+  surface?: Surface,
 ): (depth: number, maxDepth: number, signal: AbortSignal) => SkillExecutor {
   const factory: (depth: number, maxDepth: number, signal: AbortSignal) => SkillExecutor = (
     depth,
@@ -284,6 +286,11 @@ export function createChildSkillExecutorFactory(
       // pre-captured parent apiKey. Optional — backward compat fallback to
       // apiKey when absent.
       ...(resolveApiKeyForModel !== undefined ? { resolveApiKeyForModel } : {}),
+      // Surface propagates through every depth so grandchild SkillExecutor
+      // routing-decision rows carry the correct origin/actor. Mirrors how
+      // SubagentExecutor threads surface into its recursive child executor
+      // (subagent-executor.ts:626).
+      ...(surface !== undefined ? { surface } : {}),
     });
   return factory;
 }

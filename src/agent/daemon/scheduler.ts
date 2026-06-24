@@ -544,6 +544,13 @@ export class CronScheduler {
       // scheduler / tests). Placed before the sessionConfig spread so an
       // operator escape-hatch could still override it, mirroring permissionMode.
       isNonInteractive: true,
+      // Surface stamps the session as 'daemon' so routing-decision telemetry
+      // rows derive origin:'daemon' correctly. Placed before sessionConfig so
+      // an operator escape-hatch via sessionConfig.surface can still override.
+      // The production factory path (daemon.ts ComposeExecutor / SubagentExecutor
+      // wiring) already stamps surface:'daemon' on its executors; this covers
+      // the fallback/standalone path where no factory is set.
+      surface: 'daemon',
       // Trace writer placed before sessionConfig so an operator-supplied
       // sessionConfig.traceWriter still wins (escape-hatch parity with
       // permissionMode).
