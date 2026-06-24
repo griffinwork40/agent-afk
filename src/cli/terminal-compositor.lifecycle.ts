@@ -12,6 +12,7 @@ import { emitKeypressEventsImmediateEscape } from './input/emit-keypress.js';
 import { acquireStdinClaim, type StdinClaimHandle } from './input/stdin-claim.js';
 import { ResizeBus } from './terminal-size.js';
 import type { SpinnerController } from './input/spinner.js';
+import type { CaretBlinkController } from './input/caret-blink.js';
 import type { SuggestEngine } from './terminal-compositor.types.js';
 import type {
   CompositorScrollRegionGuard,
@@ -52,6 +53,7 @@ export interface LifecycleHost {
   canceled: boolean;
 
   readonly spinnerController: SpinnerController;
+  readonly caretBlinkController: CaretBlinkController;
   readonly ghostEngine: SuggestEngine | undefined;
 
   // Resize ghost-erase state + committed-band rows: read by arm()'s immediate
@@ -86,6 +88,9 @@ export function suspendInput(self: LifecycleHost): void {
     self.stdin.removeListener('keypress', self.handleKeypress);
   }
   try { self.stdin.setRawMode(false); } catch { /* noop */ }
+  // Pause the blink while an external readline (e.g. elicitation) owns the TTY
+  // — its own cursor takes over; resumeInput() restarts the ticker.
+  self.caretBlinkController.stop();
   self.suspended = true;
 }
 
@@ -101,6 +106,8 @@ export function resumeInput(self: LifecycleHost): void {
   }
   self.suspended = false;
   self.repaint();
+  // Resume blinking now that we hold the TTY again. No-op when disabled.
+  self.caretBlinkController.start();
 }
 
 // Contract: arm() installs a keypress listener that calls InputDispatch.dispatchKey(self, ...).
@@ -175,7 +182,17 @@ export async function arm(self: LifecycleHost & KeyDispatchHost): Promise<void> 
   // surfaced in LifecycleHost. The keypress listener calls InputDispatch.dispatchKey
   // directly (with `self` as the KeyDispatchHost) so no relaxation of
   // dispatchKey is needed and no circular dependency is introduced.
-  self.handleKeypress = (char, key) => InputDispatch.dispatchKey(self, char, key);
+  //
+  // Caret-blink reset: a deliberate keystroke snaps the caret back to solid and
+  // restarts the blink dwell window, mirroring terminal cursor behavior (steady
+  // while typing, blinks only when idle). Skipped mid-paste-burst (`self.pasting`
+  // is set by handlePasteMarkers on the `\x1b[200~` open marker) — a 10K-char
+  // paste would otherwise churn the interval per character with no visible
+  // benefit, and applyEdit already suppresses per-char repaints during a burst.
+  self.handleKeypress = (char, key) => {
+    if (!self.pasting) self.caretBlinkController.resetVisible();
+    InputDispatch.dispatchKey(self, char, key);
+  };
   self.stdin.on('keypress', self.handleKeypress);
 
   // Invariant (arm ordering): set `armed = true` BEFORE registering the
@@ -277,10 +294,17 @@ export async function arm(self: LifecycleHost & KeyDispatchHost): Promise<void> 
   // refresh the state via `applyEdit()` → `updateAutocomplete()`.
 
   self.repaint();
+
+  // Start the caret-blink ticker AFTER the first frame is painted so the
+  // initial caret is solid. No-op when blinking is disabled or in capture mode.
+  self.caretBlinkController.start();
 }
 
 export function disarm(self: LifecycleHost): void {
   self.spinnerController.dispose();
+  // Stop the caret-blink ticker so no timer outlives the armed cycle (and no
+  // stray tick fires repaint() against a disarmed compositor).
+  self.caretBlinkController.stop();
 
   if (!self.armed) {
     // Still safe to clear state — no-op for listener/raw-mode.
