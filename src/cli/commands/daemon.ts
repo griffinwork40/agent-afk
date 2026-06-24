@@ -417,7 +417,10 @@ export function registerDaemonCommand(program: Command): void {
           ...(trigger === 'pull' ? { pullPollIntervalMs: 30_000, queueDir: getQueueDir() } : {}),
           tasks,
           onTaskComplete: (record: TelemetryRecord, details?: TaskCompletionDetails) => {
-            void pushIfConfigured(formatTaskCompletion(record, details)).catch(() => undefined);
+            // markdown:true — task output is agent-authored markdown; render it
+            // to Telegram HTML so **bold**/`code`/headers format instead of
+            // showing their literal markers (plain-text fallback on parse error).
+            void pushIfConfigured(formatTaskCompletion(record, details), { markdown: true }).catch(() => undefined);
           },
         });
 

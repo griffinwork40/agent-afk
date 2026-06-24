@@ -306,6 +306,7 @@ describe('afk daemon (CLI integration)', () => {
 
     expect(mockPushIfConfigured).toHaveBeenCalledWith(
       expect.stringContaining('full daemon output'),
+      { markdown: true },
     );
   });
 });
