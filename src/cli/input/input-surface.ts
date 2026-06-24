@@ -49,6 +49,7 @@ import {
   type SuggestContext,
 } from '../terminal-compositor.js';
 import { colorizeInputBuffer, type SlashRegistryView } from '../input-highlight.js';
+import { detectCaptureMode, detectCaretBlink, detectReducedMotion } from '../_lib/capture-mode.js';
 import { list as listSlashCommands } from '../slash/registry.js';
 import { formatSubmittedEcho } from './echo.js';
 import { describeAttachmentSummary } from './attachments.js';
@@ -303,6 +304,12 @@ export class InputSurface {
       history: this.history,
       autocompleteState: this.autocompleteState,
       formatInputBuffer: (segment) => colorizeInputBuffer(segment, this.slashRegistryView),
+      // Blinking caret (pulse on/off like a terminal cursor). Enabled by
+      // default; AFK_CARET_BLINK=0 or AFK_REDUCED_MOTION=1 opt out. captureMode
+      // (script(1)/asciinema/AFK_DEMO_CLEAN) suppresses the ticker inside the
+      // compositor so recordings show a steady caret.
+      caretBlink: detectCaretBlink() && !detectReducedMotion(),
+      captureMode: detectCaptureMode(),
       ...(opts.scrollRegion ? { scrollRegion: opts.scrollRegion } : {}),
       ...(opts.anchorRow !== undefined ? { anchorRow: opts.anchorRow } : {}),
       ...(opts.suggest ? { suggest: opts.suggest } : {}),

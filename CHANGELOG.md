@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.39.2] - 2026-06-24
+
+### Fixed
+- fill width budget in degenerate table squeeze (12cc790)
+
+### Changed
+- Merge pull request #270 from griffinwork40/fix/table-degenerate-growback (8734e4e)
+- make growOrder sort deterministic on equal-width tie-break (ef3cd9d)
+
 ## [4.39.1] - 2026-06-24
 
 ### Fixed

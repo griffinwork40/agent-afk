@@ -29,6 +29,12 @@ export interface RenderHost {
   /** Pending submission FIFO — its length drives the `[N queued]` suffix. */
   readonly pendingSubmissions: readonly SubmissionPayload[];
   readonly input: InputCoreState;
+  /**
+   * Caret blink phase: `false` paints a blanked caret (the off-phase of a
+   * pulsing terminal cursor). Absent on minimal mock hosts ⇒ treated as
+   * visible, so a host that doesn't model blinking renders a solid caret.
+   */
+  readonly caretVisible?: boolean;
   readonly activeGhost: string | null;
   readonly autocompleteState?: AutocompleteState;
   readonly formatInputBuffer?: (segment: string) => string;
@@ -73,12 +79,26 @@ export function renderInputLine(self: RenderHost): string {
   // of the caret SGR and complicate grapheme-width math.
   const before = self.formatInputBuffer?.(rawBefore) ?? rawBefore;
   const after = self.formatInputBuffer?.(rawAfter) ?? rawAfter;
-  // Caret is always painted. `repaint()` already gates on `armed`, so this
-  // code only runs while we hold raw mode; there is no path where rendering
-  // the caret "leaks" a phantom cursor after disarm — every async repaint
-  // source (keypress, resize, spinner) is unsubscribed before
-  // `logUpdate.done()` in `disarm()`.
-  const caret = atEnd ? palette.caret(cursorText) : palette.caret.inverse(cursorText);
+  // Caret is always painted (in its visible phase). `repaint()` already gates
+  // on `armed`, so this code only runs while we hold raw mode; there is no path
+  // where rendering the caret "leaks" a phantom cursor after disarm — every
+  // async repaint source (keypress, resize, spinner, caret-blink) is
+  // unsubscribed/stopped before `logUpdate.done()` in `disarm()`.
+  //
+  // Blink: in the OFF phase paint a blank cell (end-of-buffer) or the
+  // un-inverted char under the cursor (mid-buffer) so the caret pulses on/off
+  // like a terminal cursor. BOTH phases occupy the SAME single cell, so the
+  // ghost-suffix budget below (which reserves +1 for the caret cell) is
+  // unaffected by the phase. `caretVisible` absent (minimal mock host) ⇒ solid.
+  const caretShown = self.caretVisible !== false;
+  let caret: string;
+  if (caretShown) {
+    caret = atEnd ? palette.caret(cursorText) : palette.caret.inverse(cursorText);
+  } else if (atEnd) {
+    caret = ' ';
+  } else {
+    caret = self.formatInputBuffer?.(cursorText) ?? cursorText;
+  }
   // Ghost text: render a dim inline completion AFTER the caret, only when:
   //   1. cursor is at end-of-buffer (no rawAfter)
   //   2. there is an active ghost that strictly extends the current buffer

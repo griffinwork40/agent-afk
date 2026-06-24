@@ -3233,6 +3233,119 @@ describe('TerminalCompositor — caret always rendered while armed', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Caret blink wiring: arm() starts the ticker, each interval toggles the
+// painted caret, a keystroke snaps it back to solid, and disarm() stops it.
+// ---------------------------------------------------------------------------
+
+describe('TerminalCompositor — caret blink', () => {
+  let stdout: MockStdout;
+  let stdin: MockStdin;
+  let writes: ReturnType<typeof collectWrites>;
+
+  beforeEach(() => {
+    stdout = makeMockStdout();
+    stdin = makeMockStdin();
+    writes = collectWrites(stdout);
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it('pulses the ▏ caret on/off on the interval and resets to solid on a keystroke', async () => {
+    vi.useFakeTimers();
+    const c = new TerminalCompositor({
+      stdout,
+      stdin,
+      onCancel: vi.fn(),
+      caretBlink: true,
+      caretBlinkIntervalMs: 50,
+    });
+    await c.arm();
+    // First frame (armed) shows the solid caret.
+    expect(writes.all()).toContain('▏');
+
+    // One interval later the caret blinks OFF — the repaint paints a blank cell.
+    writes.clear();
+    vi.advanceTimersByTime(50);
+    expect(writes.all()).not.toContain('▏');
+
+    // A keystroke snaps the caret back to solid (and types the char).
+    writes.clear();
+    stdin.emit('keypress', 'x', { name: 'x', sequence: 'x' });
+    expect(writes.all()).toContain('▏');
+    expect(c.getBuffer().text).toBe('x');
+
+    // After disarm the ticker is stopped: no further repaints fire.
+    c.disarm();
+    writes.clear();
+    vi.advanceTimersByTime(500);
+    expect(writes.all()).toBe('');
+  });
+
+  it('does not start a blink timer when caretBlink is unset (default)', async () => {
+    vi.useFakeTimers();
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+    await c.arm();
+    expect(writes.all()).toContain('▏'); // solid caret painted at arm
+    writes.clear();
+    // No ticker → no timer-driven repaints regardless of how far time advances.
+    vi.advanceTimersByTime(5000);
+    expect(writes.all()).toBe('');
+    c.disarm();
+  });
+
+  it('coalesces the caret un-hide with the edit repaint — one frame on an off-phase keystroke', async () => {
+    vi.useFakeTimers();
+    const c = new TerminalCompositor({
+      stdout,
+      stdin,
+      onCancel: vi.fn(),
+      caretBlink: true,
+      caretBlinkIntervalMs: 50,
+    });
+    await c.arm();
+    // Blink into the OFF phase (caret painted away).
+    writes.clear();
+    vi.advanceTimersByTime(50);
+    expect(writes.all()).not.toContain('▏');
+
+    // A printable key in the off phase: dispatchKey → applyEdit repaints once,
+    // and that single frame already shows the now-solid caret. resetVisible()
+    // must NOT add a second frame. Before the fix this painted twice.
+    const before = c.repaintCount;
+    writes.clear();
+    stdin.emit('keypress', 'x', { name: 'x', sequence: 'x' });
+    expect(c.repaintCount - before).toBe(1); // exactly one frame, not two
+    expect(c.getBuffer().text).toBe('x');
+    expect(writes.all()).toContain('▏'); // solid caret in that one frame
+    c.disarm();
+  });
+
+  it('un-hides an off-phase caret with exactly one repaint on a non-painting keystroke', async () => {
+    vi.useFakeTimers();
+    const c = new TerminalCompositor({
+      stdout,
+      stdin,
+      onCancel: vi.fn(),
+      caretBlink: true,
+      caretBlinkIntervalMs: 50,
+    });
+    await c.arm();
+    vi.advanceTimersByTime(50); // → off phase
+    // F5 is consumed by no edit handler, so dispatchKey paints nothing; the
+    // caret-blink un-hide must still issue exactly one repaint to show it solid.
+    const before = c.repaintCount;
+    writes.clear();
+    stdin.emit('keypress', undefined, { name: 'f5' });
+    expect(c.repaintCount - before).toBe(1);
+    expect(writes.all()).toContain('▏');
+    c.disarm();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tab applies dropdown selection (Fix C): mirrors reader.ts:769-772 behavior
 // so completion works during agent turns, not just user turns.
 // ---------------------------------------------------------------------------

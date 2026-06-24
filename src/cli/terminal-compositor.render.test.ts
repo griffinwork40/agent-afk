@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { renderDropdownRows } from './terminal-compositor.render.js';
+import { renderDropdownRows, renderInputLine } from './terminal-compositor.render.js';
 import type { RenderHost } from './terminal-compositor.render.js';
 import { displayWidth, stripAnsi } from './display.js';
 import type { AutocompleteState } from './input/autocomplete-state.js';
@@ -89,5 +89,70 @@ describe('renderDropdownRows — wide-char soft-wrap counting', () => {
     expect(nonBlanks).toHaveLength(1);
     expect(blanks).toHaveLength(0);
     expect(nonBlanks.every((r) => stripAnsi(r).includes('/test-cmd'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderInputLine — caret blink phase (▏ thin-bar pulse)
+// ---------------------------------------------------------------------------
+
+const THIN_BAR = '\u258f'; // ▏ LEFT ONE EIGHTH BLOCK
+
+function makeInputHost(opts: {
+  buffer: string;
+  cursor: number;
+  caretVisible?: boolean;
+}): RenderHost {
+  return {
+    queued: false,
+    pendingSubmissions: [],
+    input: { buffer: opts.buffer, cursor: opts.cursor },
+    ...(opts.caretVisible !== undefined ? { caretVisible: opts.caretVisible } : {}),
+    activeGhost: null,
+    promptTextFn: () => '> ',
+    stdout: { columns: 80 } as NodeJS.WriteStream,
+  };
+}
+
+describe('renderInputLine — caret blink', () => {
+  it('paints the ▏ thin-bar caret in the visible phase (end-of-buffer)', () => {
+    const line = renderInputLine(makeInputHost({ buffer: '', cursor: 0, caretVisible: true }));
+    expect(line).toContain(THIN_BAR);
+  });
+
+  it('blanks the caret in the off phase, preserving the one-cell width (end-of-buffer)', () => {
+    const on = renderInputLine(makeInputHost({ buffer: '', cursor: 0, caretVisible: true }));
+    const off = renderInputLine(makeInputHost({ buffer: '', cursor: 0, caretVisible: false }));
+    // Off-phase drops the thin bar entirely…
+    expect(off).not.toContain(THIN_BAR);
+    // …and replaces it with a single blank cell — same display width as the
+    // visible phase so the line never shifts as the caret pulses.
+    expect(displayWidth(stripAnsi(off))).toBe(displayWidth(stripAnsi(on)));
+    expect(stripAnsi(off)).toBe('>  '); // prompt '> ' + one blank caret cell
+  });
+
+  it('defaults to a solid caret when caretVisible is absent (non-blinking host)', () => {
+    const line = renderInputLine(makeInputHost({ buffer: '', cursor: 0 }));
+    expect(line).toContain(THIN_BAR);
+  });
+
+  it('off-phase mid-buffer reveals the underlying char un-inverted (block-cursor off)', async () => {
+    // Cursor sits on the 'b' of 'abc'. The visible phase inverse-videos that
+    // cell (SGR `\x1b[7m`); the off phase shows the bare character. Force chalk
+    // colour so the inverse SGR is observable.
+    const chalkModule = await import('chalk');
+    const priorLevel = chalkModule.default.level;
+    chalkModule.default.level = 1;
+    try {
+      const on = renderInputLine(makeInputHost({ buffer: 'abc', cursor: 1, caretVisible: true }));
+      const off = renderInputLine(makeInputHost({ buffer: 'abc', cursor: 1, caretVisible: false }));
+      expect(on).toContain('\x1b[7m'); // inverse-video open in the visible phase
+      expect(off).not.toContain('\x1b[7m'); // off phase is un-inverted
+      // Same single-cell width in both phases (no inverse ≠ width change).
+      expect(displayWidth(stripAnsi(on))).toBe(displayWidth(stripAnsi(off)));
+      expect(stripAnsi(off)).toContain('abc');
+    } finally {
+      chalkModule.default.level = priorLevel;
+    }
   });
 });
