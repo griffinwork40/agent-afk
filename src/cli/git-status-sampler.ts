@@ -50,6 +50,15 @@ export interface GitStatusSamplerOptions {
    * always forces an immediate re-fetch regardless of this. Default 60_000.
    */
   prTtlMs?: number;
+  /**
+   * Minimum ms between branch re-checks via `git symbolic-ref`. The
+   * `branchInFlight` dedup prevents concurrent spawns; this guards against
+   * serial per-turn subprocess overhead on slow filesystems (network mounts,
+   * Docker volumes). Default 0 (no guard — always re-sample). Production sets
+   * this to 1_000 ms in bootstrap so turns never fork git more than once per
+   * second.
+   */
+  branchTtlMs?: number;
   /** Injectable clock for tests. Defaults to `Date.now`. */
   now?: () => number;
   /** Per-call exec timeout in ms (bounds a hung `gh` when offline). Default 10_000. */
@@ -80,6 +89,7 @@ export class GitStatusSampler {
   private readonly cwd: string;
   private readonly exec: GitStatusExecFn;
   private readonly prTtlMs: number;
+  private readonly branchTtlMs: number;
   private readonly now: () => number;
   private onUpdate: (() => void) | undefined;
 
@@ -89,15 +99,25 @@ export class GitStatusSampler {
   private prBranch: string | undefined;
   /** Timestamp of the last PR fetch attempt (success or "no PR"). */
   private prFetchedAt = 0;
+  /** Timestamp of the last branch check (via `git symbolic-ref`). */
+  private branchFetchedAt = 0;
 
   private branchInFlight: Promise<void> | null = null;
   private prInFlight: Promise<void> | null = null;
   private disposed = false;
+  /**
+   * Incremented by reset() to invalidate in-flight updateBranch /
+   * maybeFetchPr tasks. Each task captures this before its first await and
+   * checks it after settling — a mismatch means reset() fired mid-flight and
+   * the result must be discarded rather than written to shared state.
+   */
+  private resetToken = 0;
 
   constructor(opts: GitStatusSamplerOptions) {
     this.cwd = opts.cwd;
     this.exec = opts.exec ?? defaultExec(opts.timeoutMs ?? 10_000);
     this.prTtlMs = opts.prTtlMs ?? 60_000;
+    this.branchTtlMs = opts.branchTtlMs ?? 0;
     this.now = opts.now ?? Date.now;
     this.onUpdate = opts.onUpdate;
   }
@@ -141,12 +161,19 @@ export class GitStatusSampler {
     if (opts.blockOnPr && this.prInFlight) await this.prInFlight;
   }
 
-  /** Clear cached values so the next refresh starts cold. */
+  /**
+   * Clear cached values so the next refresh starts cold. Increments the
+   * internal generation token so any concurrently-settling updateBranch() or
+   * maybeFetchPr() task detects the reset via token mismatch and discards its
+   * result rather than writing stale state.
+   */
   reset(): void {
+    this.resetToken++;
     this.branch = undefined;
     this.pr = undefined;
     this.prBranch = undefined;
     this.prFetchedAt = 0;
+    this.branchFetchedAt = 0;
     this.branchInFlight = null;
     this.prInFlight = null;
   }
@@ -157,8 +184,22 @@ export class GitStatusSampler {
   }
 
   private async updateBranch(): Promise<void> {
+    // Skip if the branch was checked within branchTtlMs — guards per-turn
+    // subprocess overhead on slow filesystems. Default 0 = always re-sample.
+    if (
+      this.branchTtlMs > 0 &&
+      this.branchFetchedAt > 0 &&
+      this.now() - this.branchFetchedAt < this.branchTtlMs
+    ) {
+      return;
+    }
+    // Capture the generation token before the first await. If reset() fires
+    // while the git call is in flight, the token increments and we discard
+    // the result rather than writing stale state.
+    const token = this.resetToken;
+    this.branchFetchedAt = this.now();
     const newBranch = await this.gitBranch();
-    if (this.disposed) return;
+    if (this.disposed || this.resetToken !== token) return;
     const branchChanged = newBranch !== this.branch;
     this.branch = newBranch;
 
@@ -215,9 +256,12 @@ export class GitStatusSampler {
 
     this.prFetchedAt = this.now();
     const task = (async () => {
+      // Capture the generation token before the network call. If reset() fires
+      // while gh is in flight, the token increments and we discard the result.
+      const token = this.resetToken;
       // resolveCurrentBranchPr never throws — returns the number string or null.
       const prStr = await resolveCurrentBranchPr((file, args) => this.exec(file, args, this.cwd));
-      if (this.disposed) return;
+      if (this.disposed || this.resetToken !== token) return;
       // Discard if the branch changed while the network call was in flight.
       if (this.branch !== branch) return;
       const n = prStr !== null ? Number.parseInt(prStr, 10) : NaN;
@@ -227,6 +271,14 @@ export class GitStatusSampler {
       if (this.pr !== prevPr) this.notify();
     })().finally(() => {
       this.prInFlight = null;
+      // If the branch changed while this fetch was in flight, the branch guard
+      // above discarded the stale result. Kick a follow-up lookup for the
+      // current branch so its PR resolves on the next settled repaint rather
+      // than waiting for the next turn's refresh() call.
+      const currentBranch = this.branch;
+      if (!this.disposed && currentBranch !== undefined && currentBranch !== branch) {
+        void this.maybeFetchPr(currentBranch);
+      }
     });
     this.prInFlight = task;
     return task;

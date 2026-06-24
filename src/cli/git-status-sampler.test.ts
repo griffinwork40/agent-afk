@@ -199,7 +199,7 @@ describe('GitStatusSampler', () => {
     const state = { branch: 'A' };
     const exec: GitStatusExecFn = async (file) => {
       if (file === 'git') return { stdout: state.branch + '\n', stderr: '' };
-      return ghPromise; // gh stays pending
+      return ghPromise; // gh always returns ghPromise (re-used for the follow-up)
     };
     const sampler = new GitStatusSampler({ cwd: '/r', exec, now: () => 1000 });
 
@@ -209,10 +209,69 @@ describe('GitStatusSampler', () => {
     state.branch = 'B';
     await sampler.refresh(); // branch=B; PR(A) still in flight
     expect(sampler.getBranch()).toBe('B');
+    expect(sampler.getPr()).toBeUndefined(); // B's PR not resolved yet
 
-    // Resolve the stale PR(A) lookup — it must be discarded because branch is now B.
+    // Resolve the in-flight gh(A) lookup. A's result is discarded by the branch
+    // guard, then a follow-up fetch for B is kicked automatically. Because
+    // ghPromise is already resolved, B's fetch settles in the next microtask.
     resolveGh({ stdout: '111\n', stderr: '' });
-    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 10)); // allow all microtasks to settle
+    // B's PR is now resolved via the follow-up kick — NOT from A's stale result.
+    expect(sampler.getPr()).toBe(111);
+    expect(sampler.getBranch()).toBe('B'); // branch was never corrupted
+  });
+
+  it('fetches PR for branch B after an in-flight fetch for branch A settles', async () => {
+    // Verify C1: the .finally() follow-up kick resolves the new branch's PR
+    // when B's gh call returns a *different* result from A's.
+    let resolveGhA: (v: { stdout: string; stderr: string }) => void = () => {};
+    const ghAPromise = new Promise<{ stdout: string; stderr: string }>((r) => {
+      resolveGhA = r;
+    });
+    const state = { branch: 'A', ghResult: '111' };
+    const exec: GitStatusExecFn = async (file) => {
+      if (file === 'git') return { stdout: state.branch + '\n', stderr: '' };
+      if (state.branch === 'A') return ghAPromise; // A hangs
+      return { stdout: state.ghResult + '\n', stderr: '' }; // B resolves immediately
+    };
+    const sampler = new GitStatusSampler({ cwd: '/r', exec, now: () => 1000 });
+
+    await sampler.refresh(); // branch=A; PR(A) fetch in flight
+    expect(sampler.getBranch()).toBe('A');
+
+    state.branch = 'B';
+    state.ghResult = '456';
+    await sampler.refresh(); // branch=B; PR(A) still in flight
+    expect(sampler.getBranch()).toBe('B');
+    expect(sampler.getPr()).toBeUndefined(); // B's PR not yet resolved
+
+    // A's stale result settles → discarded → follow-up for B kicks and resolves.
+    resolveGhA({ stdout: '111\n', stderr: '' });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(sampler.getPr()).toBe(456); // B's PR, not A's
+  });
+
+  it('reset() mid-fetch discards the settling result without writing stale state', async () => {
+    // Verify C2: in-flight updateBranch captures a generation token and returns
+    // early if reset() has incremented it before the git call settles.
+    let resolveBranch: (v: { stdout: string; stderr: string }) => void = () => {};
+    const branchPromise = new Promise<{ stdout: string; stderr: string }>((r) => {
+      resolveBranch = r;
+    });
+    const exec: GitStatusExecFn = async (file) => {
+      if (file === 'git') return branchPromise; // branch fetch hangs
+      return { stdout: '123\n', stderr: '' };
+    };
+    const sampler = new GitStatusSampler({ cwd: '/r', exec, now: () => 1000 });
+
+    const refreshPromise = sampler.refresh(); // branch fetch in flight
+    sampler.reset(); // advance the generation token mid-flight
+
+    resolveBranch({ stdout: 'feat/x\n', stderr: '' }); // settle the stale fetch
+    await refreshPromise;
+
+    // The stale result must have been discarded — branch stays cleared.
+    expect(sampler.getBranch()).toBeUndefined();
     expect(sampler.getPr()).toBeUndefined();
   });
 });

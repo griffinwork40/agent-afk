@@ -621,7 +621,13 @@ export async function bootstrapSession(
   // side-effect-free (no process spawn): the initial sample + the on-update
   // repaint wiring are kicked by setupSurface (REPL Phase 1), so bootstrap-only
   // unit tests never shell out to git/gh.
-  const gitStatusSampler = new GitStatusSampler({ cwd: stats.cwd ?? process.cwd() });
+  const gitStatusSampler = new GitStatusSampler({
+    cwd: stats.cwd ?? process.cwd(),
+    // Suppress the per-turn git subprocess if the branch was checked < 1 s
+    // ago — human turns are seconds apart so this is imperceptible, and it
+    // bounds overhead on slow filesystems (network mounts, Docker volumes).
+    branchTtlMs: 1_000,
+  });
 
   const slashCtx: SlashContext = {
     session: sessionRef,
