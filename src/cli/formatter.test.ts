@@ -133,6 +133,35 @@ describe('renderMarkdownToTerminal', () => {
     });
 
     /**
+     * Degenerate path fills the width budget (grow-back).
+     *
+     * When the floors exceed the content budget the allocator scales them down
+     * with Math.floor, discarding fractional units. Without a grow-back step the
+     * table renders narrower than maxWidth allows. One wide column plus several
+     * narrow ones at a tight maxWidth is the concrete case: pre-fix the rendered
+     * border was ~3 columns short of the budget (27 of 30); grow-back hands the
+     * reclaimed slack to the widest column so the table fills the budget exactly.
+     */
+    it('fills the width budget in the degenerate squeeze (grow-back)', () => {
+      const sample = [
+        '| Path | One | Two | Thr | Fou |',
+        '|------|-----|-----|-----|-----|',
+        '| src/cli/formatter.ts:340-the-allocator | abc | def | ghi | jkl |',
+        '',
+      ].join('\n');
+      const maxWidth = 30;
+      const out = stripAnsi(renderMarkdownToTerminal(sample, { maxWidth }));
+      const tableLines = out
+        .split('\n')
+        .filter((l) => /[┌┐└┘├┤┬┴┼│─]/.test(l));
+      const widest = Math.max(...tableLines.map((l) => stringWidth(l)));
+      // Fills (almost) the whole budget — pre-fix it under-allocated to ~27.
+      expect(widest).toBeGreaterThanOrEqual(maxWidth - 1);
+      // ...and never exceeds it.
+      expect(widest).toBeLessThanOrEqual(maxWidth);
+    });
+
+    /**
      * Narrow single-word column protection (the "Verd…" bug).
      *
      * A content-heavy table much wider than the terminal used to shrink EVERY
