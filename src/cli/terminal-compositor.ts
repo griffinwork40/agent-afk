@@ -291,6 +291,16 @@ export class TerminalCompositor {
    * @internal Relaxed from `private` for the lifecycle module (LifecycleHost).
    */
   readonly caretBlinkController: CaretBlinkController;
+  /**
+   * Monotonic frame counter, bumped once per {@link repaint}. Read by the
+   * lifecycle keypress handler (`LifecycleHost.repaintCount`) to tell whether
+   * dispatchKey already painted a frame this keystroke, so the caret-blink
+   * un-hide repaint is issued only when nothing else painted — avoiding a double
+   * frame on an off-phase keystroke. Plain counter; wraparound is unreachable in
+   * a session (Number.MAX_SAFE_INTEGER frames).
+   * @internal Relaxed from `private` for the lifecycle module (LifecycleHost).
+   */
+  repaintCount = 0;
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   committing = false;
   /**
@@ -800,6 +810,9 @@ export class TerminalCompositor {
 
   /** @internal Public for sibling free-function modules (via Host interfaces) and test casts. */
   repaint(): void {
+    // Bump BEFORE painting so the lifecycle keypress handler's post-dispatch
+    // comparison sees the increment from any repaint dispatchKey triggered.
+    this.repaintCount++;
     Frame.repaint(this);
   }
 

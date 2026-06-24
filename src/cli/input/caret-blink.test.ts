@@ -103,23 +103,25 @@ describe('CaretBlinkController', () => {
     expect(c.visible).toBe(true);
   });
 
-  it('resetVisible snaps an off-phase caret back to solid and repaints once', () => {
+  it('resetVisible snaps an off-phase caret back to solid and returns true (no self-repaint)', () => {
     const { c, onTick } = make({ intervalMs: 100 });
     c.start();
     vi.advanceTimersByTime(100); // → off phase
     expect(c.visible).toBe(false);
 
     onTick.mockClear();
-    c.resetVisible();
+    // Pure state mutation: reports the un-hide via its return value and does NOT
+    // repaint — the caller coalesces the repaint with the keystroke's own frame.
+    expect(c.resetVisible()).toBe(true);
     expect(c.visible).toBe(true);
-    expect(onTick).toHaveBeenCalledTimes(1); // un-hid → exactly one repaint
+    expect(onTick).not.toHaveBeenCalled();
   });
 
-  it('resetVisible while already visible does not request a repaint', () => {
+  it('resetVisible while already visible returns false and does not repaint', () => {
     const { c, onTick } = make({ intervalMs: 100 });
     c.start();
     onTick.mockClear();
-    c.resetVisible();
+    expect(c.resetVisible()).toBe(false);
     expect(c.visible).toBe(true);
     expect(onTick).not.toHaveBeenCalled();
   });
@@ -142,17 +144,17 @@ describe('CaretBlinkController', () => {
     expect(onTick).toHaveBeenCalledTimes(1);
   });
 
-  it('resetVisible before start is a no-op', () => {
+  it('resetVisible before start is a no-op and returns false', () => {
     const { c, onTick } = make({ intervalMs: 100 });
-    c.resetVisible();
+    expect(c.resetVisible()).toBe(false);
     expect(c.visible).toBe(true);
     expect(onTick).not.toHaveBeenCalled();
   });
 
-  it('resetVisible is a no-op when disabled', () => {
+  it('resetVisible is a no-op and returns false when disabled', () => {
     const { c, onTick } = make({ enabled: false });
     c.start();
-    c.resetVisible();
+    expect(c.resetVisible()).toBe(false);
     expect(c.visible).toBe(true);
     expect(onTick).not.toHaveBeenCalled();
   });

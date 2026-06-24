@@ -3295,6 +3295,54 @@ describe('TerminalCompositor — caret blink', () => {
     expect(writes.all()).toBe('');
     c.disarm();
   });
+
+  it('coalesces the caret un-hide with the edit repaint — one frame on an off-phase keystroke', async () => {
+    vi.useFakeTimers();
+    const c = new TerminalCompositor({
+      stdout,
+      stdin,
+      onCancel: vi.fn(),
+      caretBlink: true,
+      caretBlinkIntervalMs: 50,
+    });
+    await c.arm();
+    // Blink into the OFF phase (caret painted away).
+    writes.clear();
+    vi.advanceTimersByTime(50);
+    expect(writes.all()).not.toContain('▏');
+
+    // A printable key in the off phase: dispatchKey → applyEdit repaints once,
+    // and that single frame already shows the now-solid caret. resetVisible()
+    // must NOT add a second frame. Before the fix this painted twice.
+    const before = c.repaintCount;
+    writes.clear();
+    stdin.emit('keypress', 'x', { name: 'x', sequence: 'x' });
+    expect(c.repaintCount - before).toBe(1); // exactly one frame, not two
+    expect(c.getBuffer().text).toBe('x');
+    expect(writes.all()).toContain('▏'); // solid caret in that one frame
+    c.disarm();
+  });
+
+  it('un-hides an off-phase caret with exactly one repaint on a non-painting keystroke', async () => {
+    vi.useFakeTimers();
+    const c = new TerminalCompositor({
+      stdout,
+      stdin,
+      onCancel: vi.fn(),
+      caretBlink: true,
+      caretBlinkIntervalMs: 50,
+    });
+    await c.arm();
+    vi.advanceTimersByTime(50); // → off phase
+    // F5 is consumed by no edit handler, so dispatchKey paints nothing; the
+    // caret-blink un-hide must still issue exactly one repaint to show it solid.
+    const before = c.repaintCount;
+    writes.clear();
+    stdin.emit('keypress', undefined, { name: 'f5' });
+    expect(c.repaintCount - before).toBe(1);
+    expect(writes.all()).toContain('▏');
+    c.disarm();
+  });
 });
 
 // ---------------------------------------------------------------------------

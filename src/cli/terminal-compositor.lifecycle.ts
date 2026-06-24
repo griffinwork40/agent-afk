@@ -34,6 +34,14 @@ export interface LifecycleHost {
   repaint(): void;
   resetState(): void;
 
+  /**
+   * Monotonic frame counter — bumped once per {@link repaint}. Read by arm()'s
+   * keypress handler to detect whether dispatchKey already painted a frame this
+   * keystroke, so the caret-blink un-hide repaint fires only when nothing else
+   * did (avoids a double frame on an off-phase keystroke).
+   */
+  readonly repaintCount: number;
+
   readonly stdout: NodeJS.WriteStream;
   readonly stdin: NodeJS.ReadStream;
 
@@ -189,9 +197,20 @@ export async function arm(self: LifecycleHost & KeyDispatchHost): Promise<void> 
   // is set by handlePasteMarkers on the `\x1b[200~` open marker) — a 10K-char
   // paste would otherwise churn the interval per character with no visible
   // benefit, and applyEdit already suppresses per-char repaints during a burst.
+  //
+  // Repaint coalescing: resetVisible() only mutates phase state and REPORTS
+  // whether it un-hid an off-phase caret — it does not paint. Almost every key
+  // dispatchKey handles repaints anyway (applyEdit, nav, dropdown…), and that
+  // frame already reflects the now-solid caret; firing resetVisible's own
+  // repaint too would write the frame twice. So snapshot repaintCount, run
+  // dispatchKey, and repaint here ONLY when the caret was un-hidden AND
+  // dispatchKey painted nothing (e.g. an unbound key) — otherwise the un-hide
+  // rides the edit's frame for free.
   self.handleKeypress = (char, key) => {
-    if (!self.pasting) self.caretBlinkController.resetVisible();
+    const caretUnhidden = self.pasting ? false : self.caretBlinkController.resetVisible();
+    const repaintsBefore = self.repaintCount;
     InputDispatch.dispatchKey(self, char, key);
+    if (caretUnhidden && self.repaintCount === repaintsBefore) self.repaint();
   };
   self.stdin.on('keypress', self.handleKeypress);
 

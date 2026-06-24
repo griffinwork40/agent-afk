@@ -36,8 +36,10 @@ export interface CaretBlinkControllerOptions {
   /** Blink half-period in ms — the dwell time in each (on / off) phase. */
   intervalMs: number;
   /**
-   * Invoked whenever the visible phase flips (and when {@link resetVisible}
-   * un-hides an off-phase caret). The controller's sole render path.
+   * Invoked whenever the blink TIMER flips the visible phase — the controller's
+   * sole render path. {@link resetVisible} does NOT call this; it reports its
+   * un-hide via a return value so the caller can coalesce the repaint with the
+   * keystroke's own frame instead of writing the frame twice.
    */
   onTick: () => void;
 }
@@ -84,16 +86,23 @@ export class CaretBlinkController {
    * Snap the caret back to solid and restart the dwell window — called on every
    * non-paste keystroke so the caret stays steady while typing and blinks only
    * when idle (terminal cursor behavior). No-op when disabled / capture / not
-   * running. Requests a repaint only if it un-hid an off-phase caret; the
-   * keystroke's own edit repaint covers the common (already-visible) case.
+   * running.
+   *
+   * Pure state mutation: this does NOT repaint. It RETURNS whether the call
+   * un-hid an off-phase caret — i.e. whether a frame is needed to show the
+   * now-solid caret. The caller (arm()'s keypress handler) coalesces that with
+   * the keystroke's own edit repaint: a keystroke that repaints anyway (the
+   * common case) shows the solid caret for free in that frame, so only a
+   * non-painting keystroke pays for an extra repaint. Returns false when the
+   * caret was already visible / disabled / capture / not running.
    */
-  resetVisible(): void {
-    if (!this.enabled || this.captureMode || !this.interval) return;
+  resetVisible(): boolean {
+    if (!this.enabled || this.captureMode || !this.interval) return false;
     const wasHidden = !this.visiblePhase;
     this.visiblePhase = true;
     clearInterval(this.interval);
     this.schedule();
-    if (wasHidden) this.onTick();
+    return wasHidden;
   }
 
   /**
