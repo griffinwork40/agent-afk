@@ -11,6 +11,18 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.41.0] - 2026-06-24
+
+### Added
+- searchable conversation transcripts (FTS5) (e37e39b)
+
+### Fixed
+- harden index DB perms; surface skipped files (a03bccb)
+- resolve PR #277 review findings (edabf6b)
+
+### Changed
+- Merge pull request #277 from griffinwork40/feat/transcript-search (3127bfa)
+
 ## [4.40.1] - 2026-06-24
 
 ### Fixed
