@@ -214,6 +214,29 @@ describe('pushMarkdown', () => {
     // No duplicate send — only the HTML attempt was made.
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+
+  test('re-splits rendered HTML so escaping-expanded content is never truncated past 4096', async () => {
+    const fetchImpl = makeFetchOk();
+    // 3000 '<' chars escape to 3000 '&lt;' = 12000 chars of HTML — ~3x Telegram's
+    // 4096 limit. Without the inner re-split, push() truncates to 4096 and the
+    // remaining ~8000 chars are silently dropped.
+    const raw = '<'.repeat(3000);
+    const result = await pushMarkdown({ token: 't', chatId: '1', text: raw, fetchImpl });
+
+    expect(result.ok).toBe(true);
+    const calls = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    // Sent as multiple messages rather than one truncated blob.
+    expect(calls.length).toBeGreaterThan(1);
+    let reassembled = '';
+    for (const call of calls) {
+      const body = JSON.parse(call[1].body);
+      expect(body.parse_mode).toBe('HTML');
+      expect(body.text.length).toBeLessThanOrEqual(4096);
+      reassembled += body.text;
+    }
+    // Full payload delivered across the chunks — no silent truncation.
+    expect(reassembled).toBe('&lt;'.repeat(3000));
+  });
 });
 
 describe('pushIfConfigured', () => {

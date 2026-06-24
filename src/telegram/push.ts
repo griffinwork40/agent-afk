@@ -117,24 +117,39 @@ export async function push(options: PushOptions): Promise<PushResult> {
  * `parse_mode`, Telegram renders the raw `**bold**` / `` `code` `` markers
  * verbatim instead of formatting them. This mirrors the interactive streaming
  * path's `deliverClean` resilience (src/telegram/streaming.ts): render to HTML,
- * and if a formatter edge case yields HTML Telegram won't parse, resend the
- * original text plain so the message is never silently dropped.
+ * split the rendered HTML back under Telegram's 4096-char limit, and if a
+ * formatter edge case yields HTML Telegram won't parse, resend the original
+ * text plain so the message is never silently dropped.
  */
 export async function pushMarkdown(
   options: Omit<PushOptions, 'parseMode'>,
 ): Promise<PushResult> {
   const html = markdownToTelegramHtml(options.text);
-  const htmlResult = await push({ ...options, text: html, parseMode: 'HTML' });
-  if (htmlResult.ok) return htmlResult;
-  // Fall back to plain text ONLY on Telegram's parse-entities rejection — other
-  // failures (rate limit, 403, network) must not trigger a duplicate send.
-  if (
-    htmlResult.status === 400 &&
-    /can't parse entities/i.test(htmlResult.errorMessage ?? '')
-  ) {
-    return push({ ...options });
+  // Re-split the RENDERED html before sending: escaping (& → &amp;) and tag
+  // injection (<b>, <code>) expand the text, so a chunk near the 4096 raw limit
+  // can render past it — and push() hard-truncates at 4096, silently dropping
+  // the tail. Splitting the html keeps every sendMessage within the limit.
+  // Sends are sequential so Telegram preserves message order.
+  const htmlChunks = splitLongMessage(html);
+  let result: PushResult = { ok: true, status: 200 };
+  for (const htmlChunk of htmlChunks) {
+    result = await push({ ...options, text: htmlChunk, parseMode: 'HTML' });
+    if (result.ok) continue;
+    // Fall back to plain text ONLY on Telegram's parse-entities rejection — other
+    // failures (rate limit, 403, network) must not trigger a duplicate send.
+    if (
+      result.status === 400 &&
+      /can't parse entities/i.test(result.errorMessage ?? '')
+    ) {
+      // Resend the ORIGINAL raw text plain so nothing is dropped. Like
+      // deliverClean, this may re-send a sub-chunk already accepted above — a
+      // rare edge (multi-chunk render + mid-stream parse failure) accepted
+      // over silent loss.
+      return push({ ...options });
+    }
+    return result;
   }
-  return htmlResult;
+  return result;
 }
 
 /**
