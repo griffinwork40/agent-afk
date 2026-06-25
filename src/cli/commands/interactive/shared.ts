@@ -231,7 +231,8 @@ export interface CliOptions {
   debug?: boolean;
   /**
    * `--dangerously-skip-permissions` — start the session in `'bypassPermissions'`
-   * (skip path-approval prompts; read/write anywhere). Toggle live with /bypass.
+   * (skip path-approval prompts; read/write anywhere). Toggle live with Shift+Tab
+   * (the permission-mode cycle: default → plan → bypass).
    */
   dangerouslySkipPermissions?: boolean;
   /**
