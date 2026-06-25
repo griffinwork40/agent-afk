@@ -1,4 +1,6 @@
 import type { ReadWithAutocompleteResult } from '../../input-box.js';
+import type { UserPromptSubmitContext } from '../../../agent/hooks.js';
+import { HookBlockedError, AbortError } from '../../../utils/errors.js';
 import { formatSubmittedEcho } from '../../input/echo.js';
 import { describeAttachmentSummary, type ImageAttachment } from '../../input/attachments.js';
 import { dispatch as dispatchSlash, parse as parseSlash } from '../../slash/registry.js';
@@ -394,6 +396,34 @@ export async function runInputLoop(
         runText = shellInjection + runText;
       }
 
+      // UserPromptSubmit hook — fires before every turn submission.
+      // Handlers may block the turn (HookBlockedError → continue loop),
+      // inject additional context (prepended to runText), or approve silently.
+      // AbortError propagates out of the loop unchanged.
+      if (ctx.hookRegistry) {
+        try {
+          const upsCtx: UserPromptSubmitContext = {
+            event: 'UserPromptSubmit',
+            prompt: runText,
+            sessionId: ctx.stats.sessionId,
+          };
+          const upsDecision = await ctx.hookRegistry.dispatch(upsCtx);
+          if (upsDecision.injectContext) {
+            runText = upsDecision.injectContext + runText;
+          }
+        } catch (err) {
+          if (err instanceof HookBlockedError) {
+            ctx.replRenderer.writeLine(
+              palette.warning('⊘ Turn blocked by hook') +
+                (err.reason ? palette.dim(`: ${err.reason}`) : ''),
+            );
+            ctx.statusLine.rearm();
+            continue;
+          }
+          if (err instanceof AbortError) throw err;
+          throw err;
+        }
+      }
 
       await runTurn({ text: runText, attachments }, ctx.session.current, ctx.stats, {
         setInFlight(v: boolean) { turnState.turnInFlight = v; },

@@ -64,6 +64,7 @@ export function loadAndRegisterConfigHooks(
     'SubagentStop',
     'PreToolUse',
     'PostToolUse',
+    'UserPromptSubmit',
   ];
 
   for (const event of validEvents) {
