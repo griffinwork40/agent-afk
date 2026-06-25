@@ -42,7 +42,8 @@ export type HarnessHookEvent =
   | 'SubagentStart'
   | 'SubagentStop'
   | 'PreToolUse'
-  | 'PostToolUse';
+  | 'PostToolUse'
+  | 'Stop';
 
 export interface HookDecision {
   /** False halts session lifecycle; undefined/true continues. */
@@ -155,6 +156,17 @@ export interface PostToolUseContext {
   output?: unknown;
 }
 
+export interface StopContext {
+  event: 'Stop';
+  /** Session id from the REPL session that completed the turn. */
+  sessionId?: string;
+  /**
+   * Parent session id when this Stop fires inside a forked subagent.
+   * Top-level sessions leave this undefined.
+   */
+  parentSessionId?: string;
+}
+
 /** Discriminated union — narrow via `switch (context.event)`. */
 export type HookContext =
   | SessionStartContext
@@ -162,7 +174,8 @@ export type HookContext =
   | SubagentStartContext
   | SubagentStopContext
   | PreToolUseContext
-  | PostToolUseContext;
+  | PostToolUseContext
+  | StopContext;
 
 /**
  * A hook handler. `signal` is the turn/dispatch {@link AbortSignal} forwarded

@@ -112,6 +112,7 @@ import type { InteractiveCtx } from './shared.js';
 import { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import { runTurn } from './turn-handler.js';
 import * as slashMod from '../../slash/registry.js';
+import { createHookRegistry } from '../../../agent/hooks.js';
 
 function makeCtx(): InteractiveCtx {
   return {
@@ -245,5 +246,47 @@ describe('runReplLoop — shell-passthrough dispatch branch', () => {
     expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
     const firstArg = vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string };
     expect(firstArg.text).toBe('!echo hi');
+  });
+});
+
+describe('runReplLoop -- Stop hook fires after runTurn completes', () => {
+  it('dispatches Stop event to ctx.hookRegistry after a completed turn', async () => {
+    // One real text turn, then /exit.
+    surfaceState.readLineQueue = [
+      { text: 'hello', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const registry = createHookRegistry();
+    const stopHandler = vi.fn(async () => ({}));
+    registry.register('Stop', stopHandler);
+
+    const ctx = makeCtx();
+    ctx.hookRegistry = registry;
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    // runTurn fired once (the 'hello' turn).
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
+    // Stop handler fired exactly once, after the turn.
+    expect(stopHandler).toHaveBeenCalledTimes(1);
+    const received = stopHandler.mock.calls[0]?.[0];
+    expect(received).toMatchObject({ event: 'Stop' });
+  });
+
+  it('does not dispatch Stop when ctx.hookRegistry is absent', async () => {
+    surfaceState.readLineQueue = [
+      { text: 'hello', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const ctx = makeCtx();
+    // hookRegistry intentionally not set
+
+    // Should not throw even with no registry.
+    await expect(
+      runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn()),
+    ).resolves.toBeUndefined();
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
   });
 });

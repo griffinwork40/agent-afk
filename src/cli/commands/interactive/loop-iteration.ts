@@ -20,6 +20,7 @@ import {
 } from '../../slash/plugin-skills.js';
 import type { InteractiveCtx } from './shared.js';
 import { formatStatusFields } from './shared.js';
+import { AbortError, HookBlockedError } from '../../../utils/errors.js';
 import type { TranscriptHandle } from './transcript.js';
 import { runTurn } from './turn-handler.js';
 import { saveSession } from '../../session-store.js';
@@ -499,5 +500,26 @@ export async function runInputLoop(
         // surfaces that haven't armed (e.g. a future test path).
         surface.toRunTurnRefs(buildPrompt(ctx.stats.permissionMode)),
       );
+
+      // Contract: Stop fires post-turn as a notification event. AbortError
+      // propagates (abort precedence is non-negotiable). HookBlockedError
+      // surfaces a brief notice and continues -- block does NOT force REPL
+      // continuation in v1 (deferred: block-to-force-continuation and
+      // injectContext-into-next-turn need cross-turn state).
+      if (ctx.hookRegistry) {
+        try {
+          await ctx.hookRegistry.dispatch({
+            event: 'Stop',
+            sessionId: ctx.stats.sessionId,
+          });
+        } catch (err) {
+          if (err instanceof AbortError) throw err;
+          if (err instanceof HookBlockedError) {
+            ctx.completionWriter.fn(
+              palette.dim(`  [stop hook] blocked: ${err.reason ?? 'no reason given'}`),
+            );
+          }
+        }
+      }
     }
 }

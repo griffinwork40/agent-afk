@@ -10,6 +10,7 @@ import type { StoredSession } from '../../session-store.js';
 import type { StatusLine } from '../../status-line.js';
 import type { ReplRenderer } from './repl-renderer.js';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
+import type { HookRegistry } from '../../../agent/hooks.js';
 import { contextLimitFor } from '../../model-limits.js';
 import { ContextSampler } from '../../context-sampler.js';
 import type { GitStatusSampler } from '../../git-status-sampler.js';
@@ -414,6 +415,13 @@ export interface InteractiveCtx {
    * the ghost toggle.
    */
   suggestGhostConfig?: boolean;
+  /**
+   * Hook registry for dispatching harness lifecycle events from the REPL loop.
+   * Absent in test stubs that do not exercise hooks. Set by bootstrap.ts from
+   * `hookRegistryBundle.registry`. The Stop event is dispatched here after each
+   * completed turn.
+   */
+  hookRegistry?: HookRegistry;
 }
 
 /**
