@@ -65,6 +65,15 @@ import { transformProviderEvent, type TransformDeps } from './stream-consumer.js
 
 export class AgentSession implements IAgentSession {
   private config: AgentConfig;
+  /**
+   * Pending plan-exit implement-turn queued by an approved `exit_plan_mode`
+   * tool call (via the injected {@link PlanExitControls}). The REPL drains it
+   * with {@link takePendingPlanExitSeed} after the current turn and auto-submits
+   * it as a fresh user message — reproducing `/plan off`'s save-and-implement
+   * handoff. Lives on the session (not the per-turn dispatcher) so it survives
+   * from the mid-turn tool call to the post-turn REPL boundary.
+   */
+  private _pendingPlanExitSeed: string | undefined;
   private currentState: SessionState = 'idle';
   private providerQuery!: ProviderQuery;
   private providerIterator!: AsyncIterator<ProviderEvent>;
@@ -144,7 +153,24 @@ export class AgentSession implements IAgentSession {
   private ledgerInitAttempted = false;
 
   constructor(config: AgentConfig) {
-    this.config = config;
+    // Wire the plan-exit control bridge for top-level sessions only (plan mode
+    // is a REPL affordance; subagent/forked sessions carry a parentSessionId).
+    // The model-callable `exit_plan_mode` tool uses these callbacks to flip the
+    // live permission mode and queue the implement-turn the REPL drains. Inert
+    // unless the session actually enters plan mode (the providers only register
+    // the tool then). Respect a caller-supplied bridge if one is already set.
+    this.config =
+      config.parentSessionId === undefined && config.planExitControls === undefined
+        ? {
+            ...config,
+            planExitControls: {
+              setPermissionMode: (mode) => this.setPermissionMode(mode),
+              requestImplementSeed: (message) => {
+                this._pendingPlanExitSeed = message;
+              },
+            },
+          }
+        : config;
     this.abortController = new AbortController();
     this._hookRegistry = config.hookRegistry;
 
@@ -750,6 +776,19 @@ export class AgentSession implements IAgentSession {
   async setPermissionMode(mode: PermissionMode): Promise<void> {
     await this.providerQuery.setPermissionMode(mode);
     this.stateManager.setSessionMetadata((prev) => ({ ...prev, permissionMode: mode }));
+  }
+
+  /**
+   * Return and CLEAR the pending plan-exit implement-turn queued by an approved
+   * `exit_plan_mode` call, or `undefined` if none is pending. The REPL drains
+   * this at the top of each input-loop iteration (post-turn) and, when set,
+   * auto-submits the message as a fresh user turn. Single-shot: a second call
+   * returns `undefined` until the next approval.
+   */
+  takePendingPlanExitSeed(): string | undefined {
+    const seed = this._pendingPlanExitSeed;
+    this._pendingPlanExitSeed = undefined;
+    return seed;
   }
 
   /**

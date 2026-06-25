@@ -173,6 +173,19 @@ export async function runInputLoop(
       let text: string;
       let attachments: ReadWithAutocompleteResult['attachments'];
 
+      // Drain any implement-turn queued by an approved `exit_plan_mode` tool
+      // call during the previous turn. The session held it (the per-turn tool
+      // dispatcher can't reach this REPL loop), so we promote it to the seed
+      // buffer here, post-turn — the model-proposed counterpart to `/plan off`'s
+      // seeded save-and-implement handoff. A `/plan off` seed (set directly,
+      // same turn) takes precedence if both are somehow present.
+      if (seedBuffer === undefined) {
+        const planExitSeed = ctx.session.current.takePendingPlanExitSeed();
+        if (planExitSeed !== undefined) {
+          seedBuffer = { text: planExitSeed, attachments: [] };
+        }
+      }
+
       if (seedBuffer !== undefined) {
         // Slash-command follow-up: a previous handler returned
         // { kind: 'submit', message } to chain itself with a user-text

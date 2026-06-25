@@ -211,6 +211,14 @@ export interface IAgentSession {
   setModel(model?: AgentModelInput): Promise<void>;
   setPermissionMode(mode: PermissionMode): Promise<void>;
 
+  /**
+   * Return and CLEAR any implement-turn queued by an approved `exit_plan_mode`
+   * tool call. The REPL drains this post-turn and auto-submits it as a fresh
+   * user message (reproducing `/plan off`'s save-and-implement handoff).
+   * Returns `undefined` when nothing is pending.
+   */
+  takePendingPlanExitSeed(): string | undefined;
+
   waitForInitialization(): Promise<SessionMetadata>;
 
   getSessionIdentity(): SessionIdentity;

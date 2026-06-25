@@ -122,6 +122,7 @@ function makeMinimalCtx(backgroundRegistry: BackgroundAgentRegistry): Interactiv
       current: {
         sessionId: 'mock',
         waitForInitialization: vi.fn(async () => ({})),
+        takePendingPlanExitSeed: vi.fn(() => undefined),
       },
     },
     memoryStore: {} as never,

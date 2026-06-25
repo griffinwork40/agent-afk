@@ -36,6 +36,26 @@ export interface ResumeHistoryTurn {
   assistant: string;
 }
 
+/**
+ * Session-control callbacks handed to the model-callable `exit_plan_mode` tool
+ * so an approved plan exit can (a) flip the live permission mode and (b) queue
+ * the crafted implement-turn for the REPL to auto-submit after the current turn
+ * — reproducing `/plan off`'s save-and-implement handoff from a model-proposed,
+ * elicitation-confirmed exit.
+ *
+ * Populated by `AgentSession` for top-level sessions only (plan mode is a REPL
+ * affordance); the `exit_plan_mode` schema is offered solely while
+ * `permissionMode === 'plan'`, so these callbacks are inert on every other
+ * surface. See `src/agent/tools/handlers/exit-plan-mode.ts` and the seed drain
+ * at `src/cli/commands/interactive/loop-iteration.ts`.
+ */
+export interface PlanExitControls {
+  /** Flip the live session permission mode on approval (e.g. 'default' | 'bypassPermissions'). */
+  setPermissionMode(mode: PermissionMode): Promise<void>;
+  /** Queue the crafted implement-turn message for the REPL to auto-submit after this turn. */
+  requestImplementSeed(message: string): void;
+}
+
 /** Agent session configuration */
 export interface AgentConfig {
   /**
@@ -262,6 +282,14 @@ export interface AgentConfig {
    * SDK event plumbing.
    */
   hookRegistry?: HookRegistry;
+
+  /**
+   * Session-control bridge for the model-callable `exit_plan_mode` tool. When
+   * present (top-level sessions), the providers register the `exit_plan_mode`
+   * handler + schema while `permissionMode === 'plan'`. Absent → the tool is
+   * never offered. See {@link PlanExitControls}.
+   */
+  planExitControls?: PlanExitControls;
 
   /**
    * Witness-layer trace writer. When provided, {@link IAgentSession}
