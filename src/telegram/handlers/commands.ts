@@ -100,7 +100,7 @@ export async function handleCompact(
     }
   } catch (error) {
     if (error instanceof HookBlockedError) {
-      await ctx.reply(`Compaction skipped: ${error.reason ?? 'blocked by hook'}`);
+      await ctx.reply(`Compaction skipped: ${escapeHtml(error.reason ?? 'blocked by hook')}`);
     } else {
       log('Compact error:', error);
       await ctx.reply(formatError(error as Error));

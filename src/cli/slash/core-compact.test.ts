@@ -257,12 +257,12 @@ describe('/compact PreCompact hook integration', () => {
     expect(session.compact).toHaveBeenCalledTimes(1);
   });
 
-  it('re-throws HookBlockedError (should not happen from registry) only after converting to info', async () => {
+  it('converts HookBlockedError thrown by handler to an info skip message', async () => {
     // Verify HookBlockedError is handled gracefully rather than propagating.
     const session = fakeSession();
     const registry = createHookRegistry();
     registry.register('PreCompact', async () => {
-      throw new HookBlockedError('handler threw directly');
+      throw new HookBlockedError('handler threw directly', 'PreCompact');
     });
     const sessionWithRegistry = { ...session, hookRegistry: registry, sessionId: 's' };
     const { ctx, lines } = makeCtx(sessionWithRegistry as unknown as typeof session);

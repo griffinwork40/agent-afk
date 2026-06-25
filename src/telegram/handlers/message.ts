@@ -2,7 +2,7 @@ import { Context } from 'telegraf';
 import type { Message } from 'telegraf/types';
 import { Telegraf } from 'telegraf';
 import { SessionManager } from '../session-manager.js';
-import { formatError, formatClear, formatInternalError, formatCompact, formatCompactNoop, formatQueued } from '../formatter.js';
+import { formatError, formatClear, formatInternalError, formatCompact, formatCompactNoop, formatQueued, escapeHtml } from '../formatter.js';
 import { isRateLimitError, isNetworkError } from '../error-utils.js';
 import { streamResponse } from '../streaming.js';
 import { registerChatCommands } from './registration.js';
@@ -495,7 +495,7 @@ export class MessageHandler {
       }
     } catch (error) {
       if (error instanceof HookBlockedError) {
-        await ctx.reply(`Compaction skipped: ${error.reason ?? 'blocked by hook'}`);
+        await ctx.reply(`Compaction skipped: ${escapeHtml(error.reason ?? 'blocked by hook')}`);
       } else {
         this.log('Compact error (queued):', error);
         await ctx.reply(formatError(error as Error));

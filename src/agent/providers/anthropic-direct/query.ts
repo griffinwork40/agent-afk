@@ -465,6 +465,9 @@ export class AnthropicDirectQuery implements ProviderQuery {
               // boundary here (generator suspended at promptIterator.next()
               // on the next iteration). Awaiting inline keeps the ordering
               // deterministic and avoids a dangling promise race.
+              // TODO(PreCompact): auto-compact does not yet dispatch PreCompact(trigger:'auto').
+              // hookRegistry is not threaded into the provider-internal compact path.
+              // Tracked as a follow-up to feat/pre-compact-hook; remove this comment when wired.
               await this.compact();
             }
           }
