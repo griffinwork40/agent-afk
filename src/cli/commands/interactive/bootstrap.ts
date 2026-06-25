@@ -762,6 +762,7 @@ export async function bootstrapSession(
     ...(cliConfig.interactive?.suggestGhost !== undefined
       ? { suggestGhostConfig: cliConfig.interactive.suggestGhost }
       : {}),
+    hookRegistry: hookRegistryBundle.registry,
   };
 
   // Trusted-skill event subscriptions — emit in-flight + completion badges

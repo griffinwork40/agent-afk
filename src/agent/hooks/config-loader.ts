@@ -227,6 +227,7 @@ export function loadHooksConfigFile(
     'SubagentStop',
     'PreToolUse',
     'PostToolUse',
+    'UserPromptSubmit',
   ];
 
   for (const event of validEvents) {
@@ -344,6 +345,7 @@ export function loadHooksConfig(opts: LoadHooksConfigOptions = {}): LoadedHooksC
     'SubagentStop',
     'PreToolUse',
     'PostToolUse',
+    'UserPromptSubmit',
   ];
 
   for (const layer of layers) {

@@ -76,6 +76,9 @@ export async function executeCommand(
         typeof context.output === 'string' ? context.output : JSON.stringify(context.output);
     }
   }
+  if (context.event === 'UserPromptSubmit') {
+    payload['prompt'] = context.prompt;
+  }
   // transcript_path: always emit the key so hook scripts can detect it.
   // When unknown, emit null (not undefined — JSON.stringify drops undefined).
   payload['transcript_path'] = null;
