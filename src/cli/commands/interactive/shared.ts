@@ -1,4 +1,5 @@
 import * as readline from 'node:readline';
+import type { HookRegistry } from '../../../agent/hooks.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
 import type { MemoryStore } from '../../../agent/memory/index.js';
 import type { AgentModelInput } from '../../../agent/types.js';
@@ -414,6 +415,13 @@ export interface InteractiveCtx {
    * the ghost toggle.
    */
   suggestGhostConfig?: boolean;
+  /**
+   * Hook registry wired at bootstrap. When present, the loop-iteration
+   * dispatch path fires UserPromptSubmit before each runTurn call, enabling
+   * per-prompt policy hooks (blocking, context injection). Absent in test
+   * stubs that do not exercise the hook path.
+   */
+  hookRegistry?: HookRegistry;
 }
 
 /**

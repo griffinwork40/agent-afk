@@ -89,6 +89,9 @@ export async function executeCommand(
     // tool inputs to arbitrary shell scripts. Add tool_input here if a
     // future use-case justifies it, with appropriate size/content guards.
   }
+  if (context.event === 'UserPromptSubmit') {
+    payload['prompt'] = context.prompt;
+  }
   // transcript_path: always emit the key so hook scripts can detect it.
   // When unknown, emit null (not undefined — JSON.stringify drops undefined).
   payload['transcript_path'] = null;
