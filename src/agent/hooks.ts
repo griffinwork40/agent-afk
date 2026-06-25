@@ -42,7 +42,8 @@ export type HarnessHookEvent =
   | 'SubagentStart'
   | 'SubagentStop'
   | 'PreToolUse'
-  | 'PostToolUse';
+  | 'PostToolUse'
+  | 'PreCompact';
 
 export interface HookDecision {
   /** False halts session lifecycle; undefined/true continues. */
@@ -155,6 +156,13 @@ export interface PostToolUseContext {
   output?: unknown;
 }
 
+export interface PreCompactContext {
+  event: 'PreCompact';
+  sessionId?: string;
+  /** 'manual' = /compact command or Telegram /compact; 'auto' = threshold-based. */
+  trigger?: 'manual' | 'auto';
+}
+
 /** Discriminated union — narrow via `switch (context.event)`. */
 export type HookContext =
   | SessionStartContext
@@ -162,7 +170,8 @@ export type HookContext =
   | SubagentStartContext
   | SubagentStopContext
   | PreToolUseContext
-  | PostToolUseContext;
+  | PostToolUseContext
+  | PreCompactContext;
 
 /**
  * A hook handler. `signal` is the turn/dispatch {@link AbortSignal} forwarded

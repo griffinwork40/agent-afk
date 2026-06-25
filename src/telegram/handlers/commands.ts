@@ -4,6 +4,7 @@ import type { Message } from 'telegraf/types';
 import { promises as fs } from 'fs';
 import { homedir } from 'os';
 import { isAbsolute, resolve } from 'path';
+import { HookBlockedError } from '../../utils/errors.js';
 import { SessionManager } from '../session-manager.js';
 import {
   formatError,
@@ -74,6 +75,15 @@ export async function handleCompact(
   try {
     const session = await sessionManager.getSession(chatId);
     await ctx.sendChatAction('typing').catch(() => {});
+    // Invariant: fire PreCompact before compaction. block -> skip, not error.
+    const hookRegistry = session.hookRegistry;
+    if (hookRegistry) {
+      await hookRegistry.dispatch({
+        event: 'PreCompact',
+        sessionId: session.sessionId,
+        trigger: 'manual',
+      });
+    }
     const result = await session.compact();
     if (!result.compacted) {
       await ctx.reply(formatCompactNoop(result.reason ?? 'unknown'));
@@ -89,8 +99,12 @@ export async function handleCompact(
       );
     }
   } catch (error) {
-    log('Compact error:', error);
-    await ctx.reply(formatError(error as Error));
+    if (error instanceof HookBlockedError) {
+      await ctx.reply(`Compaction skipped: ${error.reason ?? 'blocked by hook'}`);
+    } else {
+      log('Compact error:', error);
+      await ctx.reply(formatError(error as Error));
+    }
   }
 }
 

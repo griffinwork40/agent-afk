@@ -6,6 +6,7 @@ import { formatError, formatClear, formatInternalError, formatCompact, formatCom
 import { isRateLimitError, isNetworkError } from '../error-utils.js';
 import { streamResponse } from '../streaming.js';
 import { registerChatCommands } from './registration.js';
+import { HookBlockedError } from '../../utils/errors.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 
 type QueueItem =
@@ -464,6 +465,15 @@ export class MessageHandler {
     try {
       const session = await this.sessionManager.getSession(chatId);
       await ctx.sendChatAction('typing').catch(() => {});
+      // Invariant: fire PreCompact before compaction. block -> skip, not error.
+      const hookRegistry = session.hookRegistry;
+      if (hookRegistry) {
+        await hookRegistry.dispatch({
+          event: 'PreCompact',
+          sessionId: session.sessionId,
+          trigger: 'manual',
+        });
+      }
       const result = await session.compact();
       if (result.reason === 'session-busy') {
         // Session became busy between drain-start and our compact() call (TOCTOU).
@@ -484,8 +494,12 @@ export class MessageHandler {
         }));
       }
     } catch (error) {
-      this.log('Compact error (queued):', error);
-      await ctx.reply(formatError(error as Error));
+      if (error instanceof HookBlockedError) {
+        await ctx.reply(`Compaction skipped: ${error.reason ?? 'blocked by hook'}`);
+      } else {
+        this.log('Compact error (queued):', error);
+        await ctx.reply(formatError(error as Error));
+      }
     } finally {
       // Only drain when we did NOT re-enqueue — the active turn's finally will
       // drain the re-enqueued compact; draining here too causes a cascade.
