@@ -227,6 +227,7 @@ export function loadHooksConfigFile(
     'SubagentStop',
     'PreToolUse',
     'PostToolUse',
+    'Stop',
     'UserPromptSubmit',
   ];
 
@@ -345,6 +346,7 @@ export function loadHooksConfig(opts: LoadHooksConfigOptions = {}): LoadedHooksC
     'SubagentStop',
     'PreToolUse',
     'PostToolUse',
+    'Stop',
     'UserPromptSubmit',
   ];
 

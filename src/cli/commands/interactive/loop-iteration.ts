@@ -1,7 +1,5 @@
 import type { ReadWithAutocompleteResult } from '../../input-box.js';
 import type { UserPromptSubmitContext } from '../../../agent/hooks.js';
-import { HookBlockedError } from '../../../utils/errors.js';
-import { HookHandlerTimeoutError } from '../../../agent/hook-registry.js';
 import { formatSubmittedEcho } from '../../input/echo.js';
 import { describeAttachmentSummary, type ImageAttachment } from '../../input/attachments.js';
 import { dispatch as dispatchSlash, parse as parseSlash } from '../../slash/registry.js';
@@ -14,6 +12,7 @@ import {
 } from '../../slash/preflight/index.js';
 import { renderDebugBanner } from '../../debug-banner.js';
 import { isDebugEnabled, debugLog } from '../../../utils/debug.js';
+import { sanitizeForDisplay } from '../../../utils/terminal-sanitize.js';
 import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
 import { cyclePermissionMode } from '../../permission-mode-cycle.js';
@@ -23,6 +22,9 @@ import {
 } from '../../slash/plugin-skills.js';
 import type { InteractiveCtx } from './shared.js';
 import { formatStatusFields } from './shared.js';
+import { AbortError, HookBlockedError } from '../../../utils/errors.js';
+import { HookHandlerTimeoutError } from '../../../agent/hook-registry.js';
+
 import type { TranscriptHandle } from './transcript.js';
 import { runTurn } from './turn-handler.js';
 import { saveSession } from '../../session-store.js';
@@ -30,6 +32,11 @@ import type { InputSurface } from '../../input/input-surface.js';
 import type { ReplHistory } from '../../input/history.js';
 import { buildPrompt, type TurnState } from './repl-loop-shared.js';
 import type { FooterSubsystems } from './footer-subsystems.js';
+
+/** Per-handler timeout for the post-turn Stop notification. Tighter than the
+ *  registry default (HOOK_HANDLER_TIMEOUT_MS = 30s) because Stop fires every
+ *  REPL turn — a notification hook must not stall the prompt for 30s × N handlers. */
+const STOP_HOOK_HANDLER_TIMEOUT_MS = 5_000;
 
 async function runFirstTurnHookIfNeeded(ctx: InteractiveCtx, text: string): Promise<void> {
   // First-turn hook — awaited before any first-turn side effect that relies on
@@ -417,7 +424,7 @@ export async function runInputLoop(
           if (err instanceof HookBlockedError) {
             ctx.replRenderer.writeLine(
               palette.warning('⊘ Turn blocked by hook') +
-                (err.reason ? palette.dim(`: ${err.reason}`) : ''),
+                (err.reason ? palette.dim(`: ${sanitizeForDisplay(err.reason)}`) : ''),
             );
             ctx.statusLine.rearm();
             continue;
@@ -545,5 +552,47 @@ export async function runInputLoop(
         // surfaces that haven't armed (e.g. a future test path).
         surface.toRunTurnRefs(buildPrompt(ctx.stats.permissionMode)),
       );
+
+      // Contract: Stop fires post-turn as a notification event. AbortError
+      // propagates (abort precedence is non-negotiable). HookBlockedError
+      // surfaces a brief notice and continues -- block does NOT force REPL
+      // continuation in v1 (deferred: block-to-force-continuation and
+      // injectContext-into-next-turn need cross-turn state).
+      //
+      // Invariant: Stop fires only on non-throwing runTurn completions. Any
+      // throw from runTurn (including model errors and abort) bypasses this
+      // block entirely -- error and abort paths skip Stop by design. The
+      // sequential placement (not finally) is intentional: Stop signals
+      // successful turn completion, not turn exit.
+      //
+      // Invariant: slash-command-only iterations (res.handled paths above)
+      // end in `continue` before reaching this block, so Stop does not fire
+      // for slash-command-only turns. Only turns that invoke runTurn trigger
+      // Stop.
+      //
+      // Contract: Stop dispatch uses STOP_HOOK_HANDLER_TIMEOUT_MS (5s) rather
+      // than the registry default (30s) because Stop fires every REPL turn —
+      // a notification hook must not stall the prompt for 30s × N handlers.
+      if (ctx.hookRegistry) {
+        try {
+          await ctx.hookRegistry.dispatch(
+            { event: 'Stop', sessionId: ctx.stats.sessionId },
+            undefined,
+            STOP_HOOK_HANDLER_TIMEOUT_MS,
+          );
+        } catch (err) {
+          if (err instanceof AbortError) throw err;
+          if (err instanceof HookHandlerTimeoutError) {
+            debugLog('[stop hook] handler timed out');
+            ctx.completionWriter.fn(palette.dim('  [stop hook] timed out'));
+          } else if (err instanceof HookBlockedError) {
+            ctx.completionWriter.fn(
+              palette.dim(`  [stop hook] blocked: ${sanitizeForDisplay(err.reason ?? 'no reason given')}`),
+            );
+          } else {
+            debugLog('[stop hook] unexpected error: ' + String(err));
+          }
+        }
+      }
     }
 }
