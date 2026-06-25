@@ -11,6 +11,38 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.43.0] - 2026-06-25
+
+### Added
+- add automate skill to awa-bundled plugin (fa80af0)
+
+### Changed
+- Merge pull request #284 from griffinwork40/afk/refactor-automate-skill-source (e6c0d3f)
+
+## [4.42.0] - 2026-06-25
+
+### Added
+- add UserPromptSubmit as 7th harness hook event (7b4e3b6)
+
+### Fixed
+- fail closed on UserPromptSubmit handler timeout in REPL loop (8bb8a8d)
+
+### Changed
+- Merge pull request #280 from griffinwork40/feat/user-prompt-submit-hook (6c30a87)
+- Update README.md by removing 'afk login' command (f552ca9)
+
+## [4.41.0] - 2026-06-24
+
+### Added
+- searchable conversation transcripts (FTS5) (e37e39b)
+
+### Fixed
+- harden index DB perms; surface skipped files (a03bccb)
+- resolve PR #277 review findings (edabf6b)
+
+### Changed
+- Merge pull request #277 from griffinwork40/feat/transcript-search (3127bfa)
+
 ## [4.40.1] - 2026-06-24
 
 ### Fixed

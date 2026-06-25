@@ -65,6 +65,7 @@ export function loadAndRegisterConfigHooks(
     'PreToolUse',
     'PostToolUse',
     'PreCompact',
+    'UserPromptSubmit',
   ];
 
   for (const event of validEvents) {

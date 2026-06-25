@@ -79,6 +79,9 @@ export async function executeCommand(
   if (context.event === 'PreCompact') {
     payload['trigger'] = context.trigger ?? null;
   }
+  if (context.event === 'UserPromptSubmit') {
+    payload['prompt'] = context.prompt;
+  }
   // transcript_path: always emit the key so hook scripts can detect it.
   // When unknown, emit null (not undefined — JSON.stringify drops undefined).
   payload['transcript_path'] = null;

@@ -35,6 +35,11 @@ const __dirname = dirname(__filename);
 // test cannot prevent that on its own — but the hash-bump moment forces the
 // developer to look at both copies.
 const PINNED_HASHES = {
+  // automate: afk-native scheduled-run skill (create_schedule + send_telegram +
+  // `afk service install daemon`). Mirrors the awa-dev upstream (→ framework);
+  // vendored byte-equal, so no INTENTIONAL_DIFFS entry is needed. Drift row is
+  // wired in UPSTREAM_PATHS below (skips until example-plugin is co-located).
+  automate: '40de5b802991e4be6dcf41305ed02885d0f0bde9b2877bfc1f33dfe9fe634d0f',
   contract: '748eaf01deda592913f463b23c81a6be3a89ae3b316f31f531a8488dc5bc1a7c',
   // Hash re-bumped during PR #187 review: the Merge section now routes the
   // second convergence condition (≥2 critics agree on the same alternative) to
@@ -115,6 +120,7 @@ const WORKSPACE_ROOT = join(__dirname, '../../../..');
 // Upstream source paths relative to WORKSPACE_ROOT.
 // intent-lock, simplify, refactor are bundled-only — no upstream comparison row.
 const UPSTREAM_PATHS: Partial<Record<SkillName, string>> = {
+  automate: 'example-plugin/plugins/framework/skills/automate/SKILL.md',
   contract: 'example-plugin/plugins/framework/skills/contract/SKILL.md',
   gather: 'example-plugin/plugins/framework/skills/gather/SKILL.md',
   'ground-claim': 'example-plugin/plugins/framework/skills/ground-claim/SKILL.md',
