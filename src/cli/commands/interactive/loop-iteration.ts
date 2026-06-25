@@ -1,6 +1,7 @@
 import type { ReadWithAutocompleteResult } from '../../input-box.js';
 import type { UserPromptSubmitContext } from '../../../agent/hooks.js';
-import { HookBlockedError, AbortError } from '../../../utils/errors.js';
+import { HookBlockedError } from '../../../utils/errors.js';
+import { HookHandlerTimeoutError } from '../../../agent/hook-registry.js';
 import { formatSubmittedEcho } from '../../input/echo.js';
 import { describeAttachmentSummary, type ImageAttachment } from '../../input/attachments.js';
 import { dispatch as dispatchSlash, parse as parseSlash } from '../../slash/registry.js';
@@ -399,7 +400,8 @@ export async function runInputLoop(
       // UserPromptSubmit hook — fires before every turn submission.
       // Handlers may block the turn (HookBlockedError → continue loop),
       // inject additional context (prepended to runText), or approve silently.
-      // AbortError propagates out of the loop unchanged.
+      // A handler timeout (HookHandlerTimeoutError) fails closed like a block;
+      // AbortError and any other throw propagate out of the loop unchanged.
       if (ctx.hookRegistry) {
         try {
           const upsCtx: UserPromptSubmitContext = {
@@ -420,7 +422,21 @@ export async function runInputLoop(
             ctx.statusLine.rearm();
             continue;
           }
-          if (err instanceof AbortError) throw err;
+          // A handler that exceeds HOOK_HANDLER_TIMEOUT_MS fails closed exactly
+          // like a deliberate block. hook-registry re-throws
+          // HookHandlerTimeoutError raw (so dispatchSubagentStop can distinguish
+          // a timeout from a block); here we drop the turn with a notice rather
+          // than letting the timeout unwind and crash the REPL loop.
+          if (err instanceof HookHandlerTimeoutError) {
+            ctx.replRenderer.writeLine(
+              palette.warning('⊘ Turn blocked by hook') +
+                palette.dim(`: handler timed out after ${err.timeoutMs}ms`),
+            );
+            ctx.statusLine.rearm();
+            continue;
+          }
+          // AbortError (Ctrl-C teardown) and every other non-block, non-timeout
+          // throw propagate out of the REPL loop unchanged.
           throw err;
         }
       }

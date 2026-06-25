@@ -113,6 +113,7 @@ import { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import { runTurn } from './turn-handler.js';
 import * as slashMod from '../../slash/registry.js';
 import { createHookRegistry } from '../../../agent/hooks.js';
+import { HookHandlerTimeoutError } from '../../../agent/hook-registry.js';
 
 function makeCtx(overrides?: Partial<InteractiveCtx>): InteractiveCtx {
   return {
@@ -309,6 +310,34 @@ describe('runReplLoop — UserPromptSubmit hook integration', () => {
     expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
     const firstArg = vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string };
     expect(firstArg.text).toBe('plain prompt');
+  });
+
+  it('UserPromptSubmit handler timeout fails closed — loop writes a notice and continues, does not crash', async () => {
+    // Regression (PR #280 review, finding #1): the registry re-throws
+    // HookHandlerTimeoutError raw (so dispatchSubagentStop can distinguish a
+    // timeout from a deliberate block). The REPL loop must treat it as a
+    // fail-closed block — drop the turn, write a notice, continue — rather
+    // than letting it unwind and crash the loop.
+    const registry = createHookRegistry();
+    registry.register('UserPromptSubmit', async () => {
+      throw new HookHandlerTimeoutError('UserPromptSubmit', 30_000);
+    });
+
+    surfaceState.readLineQueue = [
+      { text: 'slow prompt', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const ctx = makeCtx({ hookRegistry: registry });
+    // Must RESOLVE, not reject: before the fix the timeout propagated past the
+    // catch and this await would throw, failing the test.
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    // Turn dropped — runTurn not called for the timed-out prompt.
+    expect(vi.mocked(runTurn)).not.toHaveBeenCalled();
+    // A notice naming the timeout was written to the renderer.
+    const lines = vi.mocked(ctx.replRenderer.writeLine).mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => l.includes('blocked by hook') && l.includes('timed out'))).toBe(true);
   });
 
   it('existing tests are unaffected when no hookRegistry is set on ctx', async () => {
