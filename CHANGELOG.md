@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.43.0] - 2026-06-25
+
+### Added
+- add automate skill to awa-bundled plugin (fa80af0)
+
+### Changed
+- Merge pull request #284 from griffinwork40/afk/refactor-automate-skill-source (e6c0d3f)
+
 ## [4.42.0] - 2026-06-25
 
 ### Added
