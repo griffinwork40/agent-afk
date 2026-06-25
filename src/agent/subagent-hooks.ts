@@ -27,6 +27,7 @@ import type {
   HookDecision,
   HookRegistry,
   PostToolUseContext,
+  PostToolUseFailureContext,
   PreToolUseContext,
   SubagentStartContext,
   SubagentStopContext,
@@ -250,6 +251,46 @@ export async function dispatchPostToolUse(
       return;
     }
     debugLog(`PostToolUse hook unexpected error: ${String(err)}`);
+    options.onError?.(err instanceof Error ? err : new Error(String(err)));
+  }
+}
+
+/**
+ * Fire-and-forget PostToolUseFailure dispatch.
+ *
+ * Non-blocking by contract: a tool that has already thrown cannot be un-thrown.
+ * Hook errors and block decisions are swallowed and reported via `onError` so
+ * a bug in a failure-observer hook never propagates back to the tool dispatcher.
+ */
+export async function dispatchPostToolUseFailure(
+  registry: HookRegistry | undefined,
+  context: PostToolUseFailureContext,
+  options: SubagentHookDispatchOptions = {},
+): Promise<void> {
+  if (!registry) return;
+  try {
+    const decision = await registry.dispatch(context, options.signal);
+    await emitHookDecisionFromOutcome(
+      options.traceWriter,
+      'PostToolUseFailure',
+      { toolName: context.toolName },
+      { kind: 'decision', decision },
+    );
+  } catch (err) {
+    if (err instanceof HookBlockedError) {
+      await emitHookDecisionFromOutcome(
+        options.traceWriter,
+        'PostToolUseFailure',
+        { toolName: context.toolName },
+        { kind: 'blocked', err },
+      );
+    }
+    if (err instanceof HookBlockedError || err instanceof AbortError) {
+      debugLog(`PostToolUseFailure hook swallowed ${err.name}: ${err.message}`);
+      options.onError?.(err);
+      return;
+    }
+    debugLog(`PostToolUseFailure hook unexpected error: ${String(err)}`);
     options.onError?.(err instanceof Error ? err : new Error(String(err)));
   }
 }

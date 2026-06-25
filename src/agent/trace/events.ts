@@ -63,6 +63,7 @@ export const ToolCallPayloadSchema = z.discriminatedUnion('phase', [
 export const HookEventNameSchema = z.enum([
   'PreToolUse',
   'PostToolUse',
+  'PostToolUseFailure',
   'SessionStart',
   'SessionEnd',
   'SubagentStart',

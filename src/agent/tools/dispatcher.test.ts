@@ -190,6 +190,62 @@ describe('SessionToolDispatcher', () => {
       expect(result.content).toBe('hello');
       expect(result.isError).toBeUndefined();
     });
+
+    it('PostToolUseFailure fires with error message when handler throws', async () => {
+      const registry = createHookRegistryImpl();
+      const failureSpy = vi.fn(async () => ({}));
+      const postSpy = vi.fn(async () => ({}));
+      registry.register('PostToolUseFailure', failureSpy);
+      registry.register('PostToolUse', postSpy);
+
+      const throwingHandler: ToolHandler = async () => {
+        throw new Error('tool blew up');
+      };
+      const dispatcher = new SessionToolDispatcher({
+        handlers: new Map([['bomb', throwingHandler]]),
+        schemas: [...builtinToolSchemas],
+        permissions: { allowedTools: ['bomb'] },
+        hookRegistry: registry,
+      });
+
+      const call: ToolCall = {
+        id: 'c1',
+        name: 'bomb',
+        input: {},
+        signal: new AbortController().signal,
+      };
+      const result = await dispatcher.execute(call);
+
+      // Tool result is an isError result
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('tool blew up');
+
+      // PostToolUseFailure fired once with correct payload
+      await vi.waitFor(() => expect(failureSpy).toHaveBeenCalledOnce());
+      const callArgs = failureSpy.mock.calls[0] as unknown[];
+      expect(callArgs[0]).toMatchObject({
+        event: 'PostToolUseFailure',
+        toolName: 'bomb',
+        error: 'tool blew up',
+      });
+
+      // PostToolUse must NOT have fired
+      expect(postSpy).not.toHaveBeenCalled();
+    });
+
+    it('PostToolUseFailure does not fire when handler succeeds', async () => {
+      const registry = createHookRegistryImpl();
+      const failureSpy = vi.fn(async () => ({}));
+      registry.register('PostToolUseFailure', failureSpy);
+
+      const dispatcher = makeDispatcher({ hookRegistry: registry });
+      const result = await dispatcher.execute(makeCall());
+
+      expect(result.isError).toBeUndefined();
+      // Give the fire-and-forget a tick to settle
+      await new Promise((r) => setTimeout(r, 10));
+      expect(failureSpy).not.toHaveBeenCalled();
+    });
   });
 
   describe('readOnlyBash gate', () => {

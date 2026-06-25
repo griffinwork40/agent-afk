@@ -62,7 +62,11 @@ export async function executeCommand(
     cwd: agentCwd,
   };
 
-  if (context.event === 'PreToolUse' || context.event === 'PostToolUse') {
+  if (
+    context.event === 'PreToolUse' ||
+    context.event === 'PostToolUse' ||
+    context.event === 'PostToolUseFailure'
+  ) {
     payload['tool_name'] = context.toolName;
   }
   if (context.event === 'PreToolUse') {
@@ -75,6 +79,9 @@ export async function executeCommand(
       payload['tool_output'] =
         typeof context.output === 'string' ? context.output : JSON.stringify(context.output);
     }
+  }
+  if (context.event === 'PostToolUseFailure') {
+    payload['error'] = context.error;
   }
   // transcript_path: always emit the key so hook scripts can detect it.
   // When unknown, emit null (not undefined — JSON.stringify drops undefined).
@@ -95,7 +102,9 @@ export async function executeCommand(
   // operation), TMPDIR / TMP / TEMP (needed for temp-file operations), plus all
   // AFK_* variables that communicate hook context.
   const toolName =
-    context.event === 'PreToolUse' || context.event === 'PostToolUse'
+    context.event === 'PreToolUse' ||
+    context.event === 'PostToolUse' ||
+    context.event === 'PostToolUseFailure'
       ? context.toolName
       : '';
 

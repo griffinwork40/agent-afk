@@ -42,7 +42,8 @@ export type HarnessHookEvent =
   | 'SubagentStart'
   | 'SubagentStop'
   | 'PreToolUse'
-  | 'PostToolUse';
+  | 'PostToolUse'
+  | 'PostToolUseFailure';
 
 export interface HookDecision {
   /** False halts session lifecycle; undefined/true continues. */
@@ -155,6 +156,23 @@ export interface PostToolUseContext {
   output?: unknown;
 }
 
+export interface PostToolUseFailureContext {
+  event: 'PostToolUseFailure';
+  sessionId?: string;
+  subagentId?: string;
+  /**
+   * Parent session id when the tool call originates inside a forked subagent
+   * (set from {@link AgentConfig.parentSessionId}). Top-level sessions leave
+   * this undefined.
+   */
+  parentSessionId?: string;
+  toolName: string;
+  /** Tool-call input, carried verbatim from the originating call. */
+  input?: unknown;
+  /** The error message string from the thrown handler. */
+  error: string;
+}
+
 /** Discriminated union — narrow via `switch (context.event)`. */
 export type HookContext =
   | SessionStartContext
@@ -162,7 +180,8 @@ export type HookContext =
   | SubagentStartContext
   | SubagentStopContext
   | PreToolUseContext
-  | PostToolUseContext;
+  | PostToolUseContext
+  | PostToolUseFailureContext;
 
 /**
  * A hook handler. `signal` is the turn/dispatch {@link AbortSignal} forwarded

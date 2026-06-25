@@ -118,6 +118,7 @@ export type ToolCallPayload = ToolCallStartedPayload | ToolCallCompletedPayload;
 export type HookEventName =
   | 'PreToolUse'
   | 'PostToolUse'
+  | 'PostToolUseFailure'
   | 'SessionStart'
   | 'SessionEnd'
   | 'SubagentStart'
