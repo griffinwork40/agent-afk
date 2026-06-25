@@ -21,6 +21,7 @@ import {
 import type { InteractiveCtx } from './shared.js';
 import { formatStatusFields } from './shared.js';
 import { AbortError, HookBlockedError } from '../../../utils/errors.js';
+import { HookHandlerTimeoutError } from '../../../agent/hook-registry.js';
 import type { TranscriptHandle } from './transcript.js';
 import { runTurn } from './turn-handler.js';
 import { saveSession } from '../../session-store.js';
@@ -506,6 +507,17 @@ export async function runInputLoop(
       // surfaces a brief notice and continues -- block does NOT force REPL
       // continuation in v1 (deferred: block-to-force-continuation and
       // injectContext-into-next-turn need cross-turn state).
+      //
+      // Invariant: Stop fires only on non-throwing runTurn completions. Any
+      // throw from runTurn (including model errors and abort) bypasses this
+      // block entirely -- error and abort paths skip Stop by design. The
+      // sequential placement (not finally) is intentional: Stop signals
+      // successful turn completion, not turn exit.
+      //
+      // Invariant: slash-command-only iterations (res.handled paths above)
+      // end in `continue` before reaching this block, so Stop does not fire
+      // for slash-command-only turns. Only turns that invoke runTurn trigger
+      // Stop.
       if (ctx.hookRegistry) {
         try {
           await ctx.hookRegistry.dispatch({
@@ -514,10 +526,15 @@ export async function runInputLoop(
           });
         } catch (err) {
           if (err instanceof AbortError) throw err;
-          if (err instanceof HookBlockedError) {
+          if (err instanceof HookHandlerTimeoutError) {
+            debugLog('[stop hook] handler timed out');
+            ctx.completionWriter.fn(palette.dim('  [stop hook] timed out'));
+          } else if (err instanceof HookBlockedError) {
             ctx.completionWriter.fn(
               palette.dim(`  [stop hook] blocked: ${err.reason ?? 'no reason given'}`),
             );
+          } else {
+            debugLog('[stop hook] unexpected error: ' + String(err));
           }
         }
       }

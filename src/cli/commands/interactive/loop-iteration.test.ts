@@ -113,6 +113,8 @@ import { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import { runTurn } from './turn-handler.js';
 import * as slashMod from '../../slash/registry.js';
 import { createHookRegistry } from '../../../agent/hooks.js';
+import { HookBlockedError } from '../../../utils/errors.js';
+import { HookHandlerTimeoutError } from '../../../agent/hook-registry.js';
 
 function makeCtx(): InteractiveCtx {
   return {
@@ -287,6 +289,83 @@ describe('runReplLoop -- Stop hook fires after runTurn completes', () => {
     await expect(
       runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn()),
     ).resolves.toBeUndefined();
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates sessionId in the Stop context', async () => {
+    surfaceState.readLineQueue = [
+      { text: 'hello', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const registry = createHookRegistry();
+    const stopHandler = vi.fn(async () => ({}));
+    registry.register('Stop', stopHandler);
+
+    const ctx = makeCtx();
+    ctx.hookRegistry = registry;
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    const received = stopHandler.mock.calls[0]?.[0];
+    expect(received).toMatchObject({ event: 'Stop', sessionId: 'mock' });
+  });
+
+  it('renders a blocked notice and continues when a Stop handler blocks', async () => {
+    surfaceState.readLineQueue = [
+      { text: 'hello', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const registry = createHookRegistry();
+    // A handler that returns decision: 'block' triggers HookBlockedError.
+    registry.register('Stop', async () => ({ decision: 'block', reason: 'test block' }));
+
+    const ctx = makeCtx();
+    ctx.hookRegistry = registry;
+    const writerFn = vi.fn();
+    ctx.completionWriter = { fn: writerFn, idleFn: vi.fn() };
+
+    // The loop should complete (not throw) -- block is non-fatal for Stop.
+    await expect(
+      runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn()),
+    ).resolves.toBeUndefined();
+
+    // completionWriter.fn should have been called with a blocked message.
+    const writeCalls = writerFn.mock.calls.map((c: unknown[]) => c[0]);
+    expect(writeCalls.some((msg: unknown) => typeof msg === 'string' && msg.includes('blocked'))).toBe(true);
+    // runTurn ran the 'hello' turn.
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders a timed-out notice and continues when a Stop handler times out', async () => {
+    surfaceState.readLineQueue = [
+      { text: 'hello', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const registry = createHookRegistry();
+    // Simulate a timed-out handler by throwing HookHandlerTimeoutError directly.
+    // hook-registry.ts re-throws HookHandlerTimeoutError raw (not wrapped as
+    // HookBlockedError), so throwing it from the handler replicates the real
+    // timeout code path through dispatch().
+    registry.register('Stop', async () => {
+      throw new HookHandlerTimeoutError('Stop', 30000);
+    });
+
+    const ctx = makeCtx();
+    ctx.hookRegistry = registry;
+    const writerFn = vi.fn();
+    ctx.completionWriter = { fn: writerFn, idleFn: vi.fn() };
+
+    // The loop should complete (not throw) -- timeout is non-fatal for Stop.
+    await expect(
+      runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn()),
+    ).resolves.toBeUndefined();
+
+    // completionWriter.fn should have been called with a timed-out message.
+    const writeCalls = writerFn.mock.calls.map((c: unknown[]) => c[0]);
+    expect(writeCalls.some((msg: unknown) => typeof msg === 'string' && msg.includes('timed out'))).toBe(true);
     expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
   });
 });
