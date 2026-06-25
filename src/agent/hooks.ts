@@ -18,17 +18,22 @@
  * with the original error attached as `cause`. This prevents a bug in one
  * handler from silently skipping policy enforcement.
  *
- * **Context injection (SubagentStop only):** Foreground subagents hand their
- * final assistant output to the parent through the normal `agent` tool result;
- * `injectContext` is a separate hook-generated framework note, not text typed
- * by the human user. When a `SubagentStop` handler returns `injectContext`, the
- * dispatch result is propagated to the caller, which queues the context string
- * to the parent session's input stream for the parent's next turn. If the
- * parent is aborting, the injection is skipped. DAG/compose and background
- * paths are not guaranteed to inject (some intentionally leave this channel
- * dark), and multiple `injectContext` values do not merge today: hook dispatch
- * returns the last non-blocking decision. Other hook events ignore
- * `injectContext` entirely.
+ * **Context injection (SubagentStop and UserPromptSubmit):** Foreground
+ * subagents hand their final assistant output to the parent through the normal
+ * `agent` tool result; `injectContext` is a separate hook-generated framework
+ * note, not text typed by the human user. When a `SubagentStop` handler returns
+ * `injectContext`, the dispatch result is propagated to the caller, which queues
+ * the context string to the parent session's input stream for the parent's next
+ * turn. If the parent is aborting, the injection is skipped. DAG/compose and
+ * background paths are not guaranteed to inject (some intentionally leave this
+ * channel dark), and multiple `injectContext` values do not merge today: hook
+ * dispatch returns the last non-blocking decision.
+ *
+ * For `UserPromptSubmit`, `injectContext` works differently: the returned string
+ * is prepended to the user's prompt text before `runTurn` is called — allowing
+ * hook handlers to inject per-turn system notes or policy context inline with
+ * the human's message. The injection is performed by the REPL loop immediately
+ * after dispatch; other hook events ignore `injectContext` entirely.
  *
  * @module agent/hooks
  */
@@ -43,7 +48,8 @@ export type HarnessHookEvent =
   | 'SubagentStop'
   | 'PreToolUse'
   | 'PostToolUse'
-  | 'Stop';
+  | 'Stop'
+  | 'UserPromptSubmit';
 
 export interface HookDecision {
   /** False halts session lifecycle; undefined/true continues. */
@@ -53,12 +59,18 @@ export interface HookDecision {
   /** Human-readable rationale for blocking or approving. */
   reason?: string;
   /**
-   * (SubagentStop only) Framework-generated context to inject into the parent
-   * session's next turn. This is not human-authored user text. Queued to the
-   * parent's input stream after dispatch completes; dropped if the parent is
-   * aborting. DAG/compose and background paths may intentionally not inject.
-   * Multiple injected contexts currently do not merge — the last non-blocking
-   * hook decision wins. Ignored for all other hook events.
+   * (SubagentStop and UserPromptSubmit) Framework-generated context to inject.
+   *
+   * For **SubagentStop**: queued to the parent session's input stream after
+   * dispatch completes; dropped if the parent is aborting. DAG/compose and
+   * background paths may intentionally not inject. Multiple injected contexts do
+   * not merge — the last non-blocking hook decision wins.
+   *
+   * For **UserPromptSubmit**: prepended to the user's prompt text before
+   * `runTurn` is called. Allows per-turn system notes or policy context to be
+   * injected inline with the human's message.
+   *
+   * Ignored for all other hook events.
    */
   injectContext?: string;
 }
@@ -167,6 +179,22 @@ export interface StopContext {
   parentSessionId?: string;
 }
 
+export interface UserPromptSubmitContext {
+  event: 'UserPromptSubmit';
+  /**
+   * The full text of the user's prompt at the moment it is submitted to the
+   * REPL loop, after shell injection and forward-manifest stitching but before
+   * `runTurn`. Handlers may inspect it for policy enforcement; the
+   * `injectContext` return value prepends additional context to this text.
+   */
+  prompt: string;
+  /**
+   * Session identifier, propagated from {@link SessionStats.sessionId}.
+   * Optional because early turns may not yet have one.
+   */
+  sessionId?: string;
+}
+
 /** Discriminated union — narrow via `switch (context.event)`. */
 export type HookContext =
   | SessionStartContext
@@ -175,7 +203,8 @@ export type HookContext =
   | SubagentStopContext
   | PreToolUseContext
   | PostToolUseContext
-  | StopContext;
+  | StopContext
+  | UserPromptSubmitContext;
 
 /**
  * A hook handler. `signal` is the turn/dispatch {@link AbortSignal} forwarded

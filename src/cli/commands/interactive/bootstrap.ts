@@ -732,7 +732,6 @@ export async function bootstrapSession(
     ...(resumeTarget !== undefined ? { resumeTarget } : {}),
     teardownTrustedSkillEvents: undefined,  // wired below
     backgroundRegistry,
-    hookRegistry: hookRegistryBundle.registry,
     // Expose the root executor's narrow promotion seam so the turn handler can
     // make Ctrl+B background a running foreground subagent. The executor
     // implements `SubagentControl`; the keyboard layer sees only that interface.
@@ -763,6 +762,7 @@ export async function bootstrapSession(
     ...(cliConfig.interactive?.suggestGhost !== undefined
       ? { suggestGhostConfig: cliConfig.interactive.suggestGhost }
       : {}),
+    hookRegistry: hookRegistryBundle.registry,
   };
 
   // Trusted-skill event subscriptions — emit in-flight + completion badges

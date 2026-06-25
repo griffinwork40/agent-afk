@@ -228,6 +228,7 @@ export function loadHooksConfigFile(
     'PreToolUse',
     'PostToolUse',
     'Stop',
+    'UserPromptSubmit',
   ];
 
   for (const event of validEvents) {
@@ -346,6 +347,7 @@ export function loadHooksConfig(opts: LoadHooksConfigOptions = {}): LoadedHooksC
     'PreToolUse',
     'PostToolUse',
     'Stop',
+    'UserPromptSubmit',
   ];
 
   for (const layer of layers) {

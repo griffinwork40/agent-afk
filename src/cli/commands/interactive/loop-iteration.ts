@@ -1,4 +1,5 @@
 import type { ReadWithAutocompleteResult } from '../../input-box.js';
+import type { UserPromptSubmitContext } from '../../../agent/hooks.js';
 import { formatSubmittedEcho } from '../../input/echo.js';
 import { describeAttachmentSummary, type ImageAttachment } from '../../input/attachments.js';
 import { dispatch as dispatchSlash, parse as parseSlash } from '../../slash/registry.js';
@@ -22,6 +23,7 @@ import type { InteractiveCtx } from './shared.js';
 import { formatStatusFields } from './shared.js';
 import { AbortError, HookBlockedError } from '../../../utils/errors.js';
 import { HookHandlerTimeoutError } from '../../../agent/hook-registry.js';
+
 import type { TranscriptHandle } from './transcript.js';
 import { runTurn } from './turn-handler.js';
 import { saveSession } from '../../session-store.js';
@@ -396,6 +398,49 @@ export async function runInputLoop(
         runText = shellInjection + runText;
       }
 
+      // UserPromptSubmit hook — fires before every turn submission.
+      // Handlers may block the turn (HookBlockedError → continue loop),
+      // inject additional context (prepended to runText), or approve silently.
+      // A handler timeout (HookHandlerTimeoutError) fails closed like a block;
+      // AbortError and any other throw propagate out of the loop unchanged.
+      if (ctx.hookRegistry) {
+        try {
+          const upsCtx: UserPromptSubmitContext = {
+            event: 'UserPromptSubmit',
+            prompt: runText,
+            sessionId: ctx.stats.sessionId,
+          };
+          const upsDecision = await ctx.hookRegistry.dispatch(upsCtx);
+          if (upsDecision.injectContext) {
+            runText = upsDecision.injectContext + runText;
+          }
+        } catch (err) {
+          if (err instanceof HookBlockedError) {
+            ctx.replRenderer.writeLine(
+              palette.warning('⊘ Turn blocked by hook') +
+                (err.reason ? palette.dim(`: ${err.reason}`) : ''),
+            );
+            ctx.statusLine.rearm();
+            continue;
+          }
+          // A handler that exceeds HOOK_HANDLER_TIMEOUT_MS fails closed exactly
+          // like a deliberate block. hook-registry re-throws
+          // HookHandlerTimeoutError raw (so dispatchSubagentStop can distinguish
+          // a timeout from a block); here we drop the turn with a notice rather
+          // than letting the timeout unwind and crash the REPL loop.
+          if (err instanceof HookHandlerTimeoutError) {
+            ctx.replRenderer.writeLine(
+              palette.warning('⊘ Turn blocked by hook') +
+                palette.dim(`: handler timed out after ${err.timeoutMs}ms`),
+            );
+            ctx.statusLine.rearm();
+            continue;
+          }
+          // AbortError (Ctrl-C teardown) and every other non-block, non-timeout
+          // throw propagate out of the REPL loop unchanged.
+          throw err;
+        }
+      }
 
       await runTurn({ text: runText, attachments }, ctx.session.current, ctx.stats, {
         setInFlight(v: boolean) { turnState.turnInFlight = v; },

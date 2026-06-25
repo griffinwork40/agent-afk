@@ -1,4 +1,5 @@
 import * as readline from 'node:readline';
+import type { HookRegistry } from '../../../agent/hooks.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
 import type { MemoryStore } from '../../../agent/memory/index.js';
 import type { AgentModelInput } from '../../../agent/types.js';
@@ -10,7 +11,6 @@ import type { StoredSession } from '../../session-store.js';
 import type { StatusLine } from '../../status-line.js';
 import type { ReplRenderer } from './repl-renderer.js';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
-import type { HookRegistry } from '../../../agent/hooks.js';
 import { contextLimitFor } from '../../model-limits.js';
 import { ContextSampler } from '../../context-sampler.js';
 import type { GitStatusSampler } from '../../git-status-sampler.js';
@@ -418,8 +418,8 @@ export interface InteractiveCtx {
   /**
    * Hook registry for dispatching harness lifecycle events from the REPL loop.
    * Absent in test stubs that do not exercise hooks. Set by bootstrap.ts from
-   * `hookRegistryBundle.registry`. The Stop event is dispatched here after each
-   * completed turn.
+   * `hookRegistryBundle.registry`. Fires UserPromptSubmit before each runTurn
+   * call (enabling per-prompt policy hooks) and Stop after each completed turn.
    */
   hookRegistry?: HookRegistry;
 }

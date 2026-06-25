@@ -116,7 +116,7 @@ import { createHookRegistry } from '../../../agent/hooks.js';
 import { HookBlockedError } from '../../../utils/errors.js';
 import { HookHandlerTimeoutError } from '../../../agent/hook-registry.js';
 
-function makeCtx(): InteractiveCtx {
+function makeCtx(overrides?: Partial<InteractiveCtx>): InteractiveCtx {
   return {
     session: {
       current: {
@@ -146,6 +146,7 @@ function makeCtx(): InteractiveCtx {
     options: { thinkingUi: undefined },
     inputSurfaceRef: { current: null },
     backgroundRegistry: new BackgroundAgentRegistry({}),
+    ...overrides,
   } as unknown as InteractiveCtx;
 }
 
@@ -367,5 +368,110 @@ describe('runReplLoop -- Stop hook fires after runTurn completes', () => {
     const writeCalls = writerFn.mock.calls.map((c: unknown[]) => c[0]);
     expect(writeCalls.some((msg: unknown) => typeof msg === 'string' && msg.includes('timed out'))).toBe(true);
     expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('runReplLoop — UserPromptSubmit hook integration', () => {
+  it('UserPromptSubmit block hook causes loop to continue without calling runTurn', async () => {
+    const registry = createHookRegistry();
+    registry.register('UserPromptSubmit', async () => ({
+      decision: 'block' as const,
+      reason: 'test block',
+    }));
+
+    surfaceState.readLineQueue = [
+      { text: 'blocked prompt', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const ctx = makeCtx({ hookRegistry: registry });
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    // runTurn must NOT have been called — block hook short-circuits the turn.
+    expect(vi.mocked(runTurn)).not.toHaveBeenCalled();
+    // The warning message should have been written to the renderer.
+    const lines = vi.mocked(ctx.replRenderer.writeLine).mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => l.includes('blocked by hook'))).toBe(true);
+  });
+
+  it('UserPromptSubmit injectContext hook prepends context to runText before runTurn', async () => {
+    const registry = createHookRegistry();
+    registry.register('UserPromptSubmit', async () => ({
+      injectContext: '[PREFIX] ',
+    }));
+
+    surfaceState.readLineQueue = [
+      { text: 'base prompt', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const ctx = makeCtx({ hookRegistry: registry });
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
+    const firstArg = vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string };
+    expect(firstArg.text).toBe('[PREFIX] base prompt');
+  });
+
+  it('UserPromptSubmit allow (no return) hook fires and passes through to runTurn unchanged', async () => {
+    const registry = createHookRegistry();
+    const handler = vi.fn(async () => ({}));
+    registry.register('UserPromptSubmit', handler);
+
+    surfaceState.readLineQueue = [
+      { text: 'plain prompt', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const ctx = makeCtx({ hookRegistry: registry });
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
+    const firstArg = vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string };
+    expect(firstArg.text).toBe('plain prompt');
+  });
+
+  it('UserPromptSubmit handler timeout fails closed — loop writes a notice and continues, does not crash', async () => {
+    // Regression (PR #280 review, finding #1): the registry re-throws
+    // HookHandlerTimeoutError raw (so dispatchSubagentStop can distinguish a
+    // timeout from a deliberate block). The REPL loop must treat it as a
+    // fail-closed block — drop the turn, write a notice, continue — rather
+    // than letting it unwind and crash the loop.
+    const registry = createHookRegistry();
+    registry.register('UserPromptSubmit', async () => {
+      throw new HookHandlerTimeoutError('UserPromptSubmit', 30_000);
+    });
+
+    surfaceState.readLineQueue = [
+      { text: 'slow prompt', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const ctx = makeCtx({ hookRegistry: registry });
+    // Must RESOLVE, not reject: before the fix the timeout propagated past the
+    // catch and this await would throw, failing the test.
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    // Turn dropped — runTurn not called for the timed-out prompt.
+    expect(vi.mocked(runTurn)).not.toHaveBeenCalled();
+    // A notice naming the timeout was written to the renderer.
+    const lines = vi.mocked(ctx.replRenderer.writeLine).mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => l.includes('blocked by hook') && l.includes('timed out'))).toBe(true);
+  });
+
+  it('existing tests are unaffected when no hookRegistry is set on ctx', async () => {
+    // No hookRegistry on ctx — dispatch path is skipped entirely.
+    surfaceState.readLineQueue = [
+      { text: 'normal prompt', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const ctx = makeCtx(); // no hookRegistry
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
+    const firstArg = vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string };
+    expect(firstArg.text).toBe('normal prompt');
   });
 });
