@@ -11,6 +11,18 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.42.0] - 2026-06-25
+
+### Added
+- add UserPromptSubmit as 7th harness hook event (7b4e3b6)
+
+### Fixed
+- fail closed on UserPromptSubmit handler timeout in REPL loop (8bb8a8d)
+
+### Changed
+- Merge pull request #280 from griffinwork40/feat/user-prompt-submit-hook (6c30a87)
+- Update README.md by removing 'afk login' command (f552ca9)
+
 ## [4.41.0] - 2026-06-24
 
 ### Added
