@@ -145,6 +145,13 @@ export interface PostToolUseContext {
   event: 'PostToolUse';
   sessionId?: string;
   subagentId?: string;
+  /**
+   * Parent session id when the tool call originates inside a forked subagent
+   * (set from {@link AgentConfig.parentSessionId}). Top-level sessions leave
+   * this undefined. Symmetric with {@link PostToolUseFailureContext} so hook
+   * authors can treat both events uniformly for subagent correlation.
+   */
+  parentSessionId?: string;
   toolName: string;
   /**
    * Tool-call input passed through from {@link PreToolUseContext}. Carried

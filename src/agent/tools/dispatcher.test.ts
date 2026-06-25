@@ -236,14 +236,17 @@ describe('SessionToolDispatcher', () => {
     it('PostToolUseFailure does not fire when handler succeeds', async () => {
       const registry = createHookRegistryImpl();
       const failureSpy = vi.fn(async () => ({}));
+      const postSpy = vi.fn(async () => ({}));
       registry.register('PostToolUseFailure', failureSpy);
+      registry.register('PostToolUse', postSpy);
 
       const dispatcher = makeDispatcher({ hookRegistry: registry });
       const result = await dispatcher.execute(makeCall());
 
       expect(result.isError).toBeUndefined();
-      // Give the fire-and-forget a tick to settle
-      await new Promise((r) => setTimeout(r, 10));
+      // Drain the event loop by waiting for PostToolUse to fire, then assert
+      // PostToolUseFailure did not fire -- avoids the fragile setTimeout fence.
+      await vi.waitFor(() => expect(postSpy).toHaveBeenCalledOnce());
       expect(failureSpy).not.toHaveBeenCalled();
     });
   });
@@ -846,6 +849,35 @@ describe('SessionToolDispatcher', () => {
       ]);
       expect(results[0]!.isError).toBe(true);
       expect(results[0]!.content).toContain('not available');
+    });
+
+    // Compose deferral: PostToolUseFailure hook wiring for compose calls is
+    // deferred (acknowledged in PR #282). This skip-marked test documents the
+    // current behavior so future changes do not accidentally fire or suppress
+    // the hooks without a deliberate decision.
+    it.skip('compose deferral: PostToolUseFailure does NOT fire inside compose, PostToolUse does NOT fire either (deferred -- see PR #282)', async () => {
+      const registry = createHookRegistryImpl();
+      const failureSpy = vi.fn(async () => ({}));
+      const postSpy = vi.fn(async () => ({}));
+      registry.register('PostToolUseFailure', failureSpy);
+      registry.register('PostToolUse', postSpy);
+
+      const throwingExecutor = {
+        execute: vi.fn().mockRejectedValue(new Error('compose exploded')),
+      } as any;
+      const dispatcher = makeDispatcher({
+        composeExecutor: throwingExecutor,
+        permissions: { allowedTools: ['echo', 'compose'] },
+        hookRegistry: registry,
+      });
+      const result = await dispatcher.execute(
+        makeCall({ name: 'compose', input: { nodes: [{ id: 'a', prompt: 'task' }] } }),
+      );
+      expect(result.isError).toBe(true);
+      // Current behavior: neither hook fires for compose errors (deferred).
+      await new Promise((r) => setTimeout(r, 20));
+      expect(failureSpy).not.toHaveBeenCalled();
+      expect(postSpy).not.toHaveBeenCalled();
     });
   });
 });

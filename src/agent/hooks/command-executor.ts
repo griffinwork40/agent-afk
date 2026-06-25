@@ -82,6 +82,12 @@ export async function executeCommand(
   }
   if (context.event === 'PostToolUseFailure') {
     payload['error'] = context.error;
+    // Deliberate omission: tool_input is not forwarded to shell hooks for
+    // PostToolUseFailure. The originating input is available in-process via
+    // context.input, but injecting it into the shell environment or stdin
+    // payload risks forwarding untrusted, potentially large, or sensitive
+    // tool inputs to arbitrary shell scripts. Add tool_input here if a
+    // future use-case justifies it, with appropriate size/content guards.
   }
   // transcript_path: always emit the key so hook scripts can detect it.
   // When unknown, emit null (not undefined — JSON.stringify drops undefined).
@@ -136,6 +142,10 @@ export async function executeCommand(
   childEnv['AFK_SESSION_ID'] = sessionId ?? '';
   childEnv['AFK_HOOK_EVENT'] = context.event;
   childEnv['AFK_TOOL_NAME'] = toolName;
+  // Deliberate omission: no AFK_TOOL_ERROR env var for PostToolUseFailure.
+  // The error string is available in the stdin JSON payload under the 'error'
+  // key. Injecting it as an env var risks shell-injection if the error message
+  // contains shell metacharacters; parse the stdin payload instead.
 
   return new Promise<CommandExecutorResult>((resolve) => {
     // Establish settled flag before spawn so cleanup handlers established

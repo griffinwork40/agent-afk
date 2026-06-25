@@ -5,9 +5,10 @@
  * {@link HookBlockedError}, which prevents the subagent from being created
  * or the tool call from proceeding.
  *
- * `SubagentStop` and `PostToolUse` are non-blocking by contract. A subagent
- * being torn down shouldn't be held open by a policy handler, and a tool
- * that has already run can't be un-run; observers report via `onError`.
+ * `SubagentStop`, `PostToolUse`, and `PostToolUseFailure` are non-blocking by
+ * contract. A subagent being torn down shouldn't be held open by a policy
+ * handler, and a tool that has already run (or thrown) can't be un-run;
+ * observers report via `onError`.
  *
  * `dispatchSubagentStop` returns the {@link HookDecision} from dispatch,
  * allowing callers to inspect `injectContext` and queue it to the parent's

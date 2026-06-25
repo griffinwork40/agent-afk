@@ -14,6 +14,7 @@ import path from 'path';
 import { appendFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { createHash } from 'node:crypto';
+import { debugLog } from '../../utils/debug.js';
 import { HookBlockedError } from '../../utils/errors.js';
 import type { HookRegistry, PreToolUseContext, PostToolUseContext, PostToolUseFailureContext } from '../hooks.js';
 import type { AnthropicToolDef } from '../providers/anthropic-direct/types.js';
@@ -800,7 +801,15 @@ export class SessionToolDispatcher implements ToolDispatcher {
           if (outcome.status === 'fulfilled') {
             results[outcome.value.originalIndex] = outcome.value.result;
           } else {
-            const msg = outcome.reason instanceof Error
+            // Invariant: this branch is unreachable today. `executeCore` wraps
+          // its entire body in try/catch and returns an isError ToolResult
+          // rather than propagating — so the Promise passed to allSettled
+          // always fulfills. The rejection path exists as a latent safety net
+          // for future refactors that might let executeCore propagate. If that
+          // happens, `firePostToolUseFailure` must be called here to preserve
+          // the "exactly one of PostToolUse/PostToolUseFailure fires per call"
+          // invariant documented at the executeCore dispatch site below.
+          const msg = outcome.reason instanceof Error
               ? outcome.reason.message
               : String(outcome.reason);
             // Find the original index from the batch — allSettled preserves order
@@ -953,6 +962,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       toolName,
       output,
       ...(input !== undefined ? { input } : {}),
+      ...(this.parentSessionId !== undefined ? { parentSessionId: this.parentSessionId } : {}),
     };
     void dispatchPostToolUse(this.hookRegistry, postCtx, {
       signal,
@@ -983,7 +993,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
     void dispatchPostToolUseFailure(this.hookRegistry, ctx, {
       signal,
       ...(this.traceWriter ? { traceWriter: this.traceWriter } : {}),
-    }).catch(() => {});
+    }).catch((err: unknown) => {
+      debugLog(`firePostToolUseFailure outer catch (tool=${toolName}): ${String(err)}`);
+    });
   }
 
 }
