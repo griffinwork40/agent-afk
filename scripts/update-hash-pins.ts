@@ -60,6 +60,7 @@ const bundledSkillsDir = join(repoRoot, 'src/bundled-plugins/awa-bundled/skills'
 const bundledTarget: PinTarget = {
   testFile: join(repoRoot, 'src/bundled-plugins/awa-bundled/bundled.test.ts'),
   pins: {
+    automate: join(bundledSkillsDir, 'automate/SKILL.md'),
     contract: join(bundledSkillsDir, 'contract/SKILL.md'),
     'devils-advocate': join(bundledSkillsDir, 'devils-advocate/SKILL.md'),
     gather: join(bundledSkillsDir, 'gather/SKILL.md'),
