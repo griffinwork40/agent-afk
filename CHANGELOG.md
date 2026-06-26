@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.44.2] - 2026-06-26
+
+### Fixed
+- preserve redacted_thinking blocks to prevent session wedge (40984ad)
+
+### Changed
+- Merge pull request #288 from griffinwork40/fix/preserve-redacted-thinking-blocks (fb79fc8)
+
 ## [4.44.1] - 2026-06-26
 
 ### Fixed
