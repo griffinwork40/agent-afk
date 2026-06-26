@@ -13,6 +13,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ### Added
 - `afk trace show` now surfaces the raw provider `stop_reason` (`stop=…`) on the closure line — it was already persisted on the closure event but unrendered, so silent stops (a turn that ends with no output and no error, e.g. a content-safety `refusal`) were only diagnosable by reading the raw `trace.jsonl`
+## [4.44.3] - 2026-06-26
+
+### Fixed
+- surface model content-safety refusals (stop_reason "refusal") instead of ending the turn silently — fixes the "it stopped and I can't send anything else" hang when the model declines a request
+
+### Fixed
+- surface model refusals instead of ending silently (ab84a62)
+
+### Changed
+- Merge pull request #290 from griffinwork40/fix/surface-model-refusal-stop-reason (21710d6)
 
 ## [4.44.2] - 2026-06-26
 
