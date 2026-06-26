@@ -48,6 +48,7 @@ export type HarnessHookEvent =
   | 'SubagentStop'
   | 'PreToolUse'
   | 'PostToolUse'
+  | 'PostToolUseFailure'
   | 'Stop'
   | 'UserPromptSubmit';
 
@@ -157,6 +158,13 @@ export interface PostToolUseContext {
   event: 'PostToolUse';
   sessionId?: string;
   subagentId?: string;
+  /**
+   * Parent session id when the tool call originates inside a forked subagent
+   * (set from {@link AgentConfig.parentSessionId}). Top-level sessions leave
+   * this undefined. Symmetric with {@link PostToolUseFailureContext} so hook
+   * authors can treat both events uniformly for subagent correlation.
+   */
+  parentSessionId?: string;
   toolName: string;
   /**
    * Tool-call input passed through from {@link PreToolUseContext}. Carried
@@ -166,6 +174,23 @@ export interface PostToolUseContext {
    */
   input?: unknown;
   output?: unknown;
+}
+
+export interface PostToolUseFailureContext {
+  event: 'PostToolUseFailure';
+  sessionId?: string;
+  subagentId?: string;
+  /**
+   * Parent session id when the tool call originates inside a forked subagent
+   * (set from {@link AgentConfig.parentSessionId}). Top-level sessions leave
+   * this undefined.
+   */
+  parentSessionId?: string;
+  toolName: string;
+  /** Tool-call input, carried verbatim from the originating call. */
+  input?: unknown;
+  /** The error message string from the thrown handler. */
+  error: string;
 }
 
 export interface StopContext {
@@ -203,6 +228,7 @@ export type HookContext =
   | SubagentStopContext
   | PreToolUseContext
   | PostToolUseContext
+  | PostToolUseFailureContext
   | StopContext
   | UserPromptSubmitContext;
 

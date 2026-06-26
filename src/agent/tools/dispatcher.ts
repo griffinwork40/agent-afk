@@ -14,12 +14,13 @@ import path from 'path';
 import { appendFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { createHash } from 'node:crypto';
+import { debugLog } from '../../utils/debug.js';
 import { HookBlockedError } from '../../utils/errors.js';
-import type { HookRegistry, PreToolUseContext, PostToolUseContext } from '../hooks.js';
+import type { HookRegistry, PreToolUseContext, PostToolUseContext, PostToolUseFailureContext } from '../hooks.js';
 import type { AnthropicToolDef } from '../providers/anthropic-direct/types.js';
 import type { ToolDispatcher } from '../providers/anthropic-direct/tool-dispatcher.js';
 import type { ToolCall, ToolResult } from '../providers/anthropic-direct/types.js';
-import { dispatchPreToolUse, dispatchPostToolUse } from '../subagent-hooks.js';
+import { dispatchPreToolUse, dispatchPostToolUse, dispatchPostToolUseFailure } from '../subagent-hooks.js';
 import type { SubagentExecutor } from './subagent-executor.js';
 import type { SkillExecutor } from './skill-executor.js';
 import type { ComposeExecutor } from './compose-executor.js';
@@ -587,16 +588,23 @@ export class SessionToolDispatcher implements ToolDispatcher {
         };
       }
       let result: ToolResult;
+      let agentThrew = false;
+      let agentErrMsg = '';
       try {
         result = await this.subagentExecutor.execute(call);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        result = { content: `Agent tool error: ${message}`, isError: true };
+        agentThrew = true;
+        agentErrMsg = err instanceof Error ? err.message : String(err);
+        result = { content: `Agent tool error: ${agentErrMsg}`, isError: true };
       }
       // PostToolUse hook fires for agent calls too.
       // Fire-and-forget: mirrors executeCore() — hook latency must not block
       // the tool result from being returned to the model on the critical path.
-      this.firePostToolUse(call.name, result.content, call.signal, call.input);
+      if (agentThrew) {
+        this.firePostToolUseFailure(call.name, agentErrMsg, call.signal, call.input);
+      } else {
+        this.firePostToolUse(call.name, result.content, call.signal, call.input);
+      }
       return result;
     }
 
@@ -609,15 +617,22 @@ export class SessionToolDispatcher implements ToolDispatcher {
         };
       }
       let result: ToolResult;
+      let skillThrew = false;
+      let skillErrMsg = '';
       try {
         result = await this.skillExecutor.execute(call);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        result = { content: `Skill tool error: ${message}`, isError: true };
+        skillThrew = true;
+        skillErrMsg = err instanceof Error ? err.message : String(err);
+        result = { content: `Skill tool error: ${skillErrMsg}`, isError: true };
       }
       // Fire-and-forget: mirrors executeCore() — hook + trace-write latency
       // must not add to per-tool round-trip time on the single-call path.
-      this.firePostToolUse(call.name, result.content, call.signal, call.input);
+      if (skillThrew) {
+        this.firePostToolUseFailure(call.name, skillErrMsg, call.signal, call.input);
+      } else {
+        this.firePostToolUse(call.name, result.content, call.signal, call.input);
+      }
       return result;
     }
 
@@ -639,17 +654,23 @@ export class SessionToolDispatcher implements ToolDispatcher {
 
     // 5. Execute handler
     let result: ToolResult;
+    let handlerThrew = false;
+    let handlerErrMsg = '';
     try {
       result = await handler(call.input, call.signal, this.callHandlerContext(call));
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      result = { content: `Tool execution error: ${message}`, isError: true };
+      handlerThrew = true;
+      handlerErrMsg = err instanceof Error ? err.message : String(err);
+      result = { content: `Tool execution error: ${handlerErrMsg}`, isError: true };
     }
 
-    // 6. PostToolUse hook — fire-and-forget to align with executeCore().
-    // Errors are caught inside firePostToolUse (.catch(() => {})), so
-    // hook failures never surface as tool errors (same behaviour as before).
-    this.firePostToolUse(call.name, result.content, call.signal, call.input);
+    // 6. PostToolUse on success; PostToolUseFailure on thrown handler.
+    // Invariant: exactly one of the two fires per execution — never both.
+    if (handlerThrew) {
+      this.firePostToolUseFailure(call.name, handlerErrMsg, call.signal, call.input);
+    } else {
+      this.firePostToolUse(call.name, result.content, call.signal, call.input);
+    }
 
     return result;
   }
@@ -780,7 +801,15 @@ export class SessionToolDispatcher implements ToolDispatcher {
           if (outcome.status === 'fulfilled') {
             results[outcome.value.originalIndex] = outcome.value.result;
           } else {
-            const msg = outcome.reason instanceof Error
+            // Invariant: this branch is unreachable today. `executeCore` wraps
+          // its entire body in try/catch and returns an isError ToolResult
+          // rather than propagating — so the Promise passed to allSettled
+          // always fulfills. The rejection path exists as a latent safety net
+          // for future refactors that might let executeCore propagate. If that
+          // happens, `firePostToolUseFailure` must be called here to preserve
+          // the "exactly one of PostToolUse/PostToolUseFailure fires per call"
+          // invariant documented at the executeCore dispatch site below.
+          const msg = outcome.reason instanceof Error
               ? outcome.reason.message
               : String(outcome.reason);
             // Find the original index from the batch — allSettled preserves order
@@ -821,13 +850,20 @@ export class SessionToolDispatcher implements ToolDispatcher {
         };
       }
       let result: ToolResult;
+      let agentThrew = false;
+      let agentErrMsg = '';
       try {
         result = await this.subagentExecutor.execute(call);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        result = { content: `Agent tool error: ${message}`, isError: true };
+        agentThrew = true;
+        agentErrMsg = err instanceof Error ? err.message : String(err);
+        result = { content: `Agent tool error: ${agentErrMsg}`, isError: true };
       }
-      this.firePostToolUse(call.name, result.content, call.signal, call.input);
+      if (agentThrew) {
+        this.firePostToolUseFailure(call.name, agentErrMsg, call.signal, call.input);
+      } else {
+        this.firePostToolUse(call.name, result.content, call.signal, call.input);
+      }
       return result;
     }
 
@@ -840,13 +876,20 @@ export class SessionToolDispatcher implements ToolDispatcher {
         };
       }
       let result: ToolResult;
+      let skillThrew = false;
+      let skillErrMsg = '';
       try {
         result = await this.skillExecutor.execute(call);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        result = { content: `Skill tool error: ${message}`, isError: true };
+        skillThrew = true;
+        skillErrMsg = err instanceof Error ? err.message : String(err);
+        result = { content: `Skill tool error: ${skillErrMsg}`, isError: true };
       }
-      this.firePostToolUse(call.name, result.content, call.signal, call.input);
+      if (skillThrew) {
+        this.firePostToolUseFailure(call.name, skillErrMsg, call.signal, call.input);
+      } else {
+        this.firePostToolUse(call.name, result.content, call.signal, call.input);
+      }
       return result;
     }
 
@@ -867,14 +910,22 @@ export class SessionToolDispatcher implements ToolDispatcher {
     }
 
     let result: ToolResult;
+    let handlerThrew = false;
+    let handlerErrMsg = '';
     try {
       result = await handler(call.input, call.signal, this.callHandlerContext(call));
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      result = { content: `Tool execution error: ${message}`, isError: true };
+      handlerThrew = true;
+      handlerErrMsg = err instanceof Error ? err.message : String(err);
+      result = { content: `Tool execution error: ${handlerErrMsg}`, isError: true };
     }
 
-    this.firePostToolUse(call.name, result.content, call.signal, call.input);
+    // Invariant: exactly one of PostToolUse / PostToolUseFailure fires per call.
+    if (handlerThrew) {
+      this.firePostToolUseFailure(call.name, handlerErrMsg, call.signal, call.input);
+    } else {
+      this.firePostToolUse(call.name, result.content, call.signal, call.input);
+    }
     return result;
   }
 
@@ -911,11 +962,40 @@ export class SessionToolDispatcher implements ToolDispatcher {
       toolName,
       output,
       ...(input !== undefined ? { input } : {}),
+      ...(this.parentSessionId !== undefined ? { parentSessionId: this.parentSessionId } : {}),
     };
     void dispatchPostToolUse(this.hookRegistry, postCtx, {
       signal,
       ...(this.traceWriter ? { traceWriter: this.traceWriter } : {}),
     }).catch(() => {});
+  }
+
+  /**
+   * Fire-and-forget PostToolUseFailure dispatch. Mirrors firePostToolUse.
+   * Called only from the catch paths where a tool handler threw — never from
+   * the success path. Errors inside the hook are swallowed so a broken
+   * failure-observer cannot propagate back to the tool dispatcher.
+   */
+  private firePostToolUseFailure(
+    toolName: string,
+    errorMessage: string,
+    signal: AbortSignal,
+    input?: unknown,
+  ): void {
+    if (!this.hookRegistry) return;
+    const ctx: PostToolUseFailureContext = {
+      event: 'PostToolUseFailure',
+      toolName,
+      error: errorMessage,
+      ...(input !== undefined ? { input } : {}),
+      ...(this.parentSessionId !== undefined ? { parentSessionId: this.parentSessionId } : {}),
+    };
+    void dispatchPostToolUseFailure(this.hookRegistry, ctx, {
+      signal,
+      ...(this.traceWriter ? { traceWriter: this.traceWriter } : {}),
+    }).catch((err: unknown) => {
+      debugLog(`firePostToolUseFailure outer catch (tool=${toolName}): ${String(err)}`);
+    });
   }
 
 }

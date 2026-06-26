@@ -64,6 +64,7 @@ export function loadAndRegisterConfigHooks(
     'SubagentStop',
     'PreToolUse',
     'PostToolUse',
+    'PostToolUseFailure',
     'Stop',
     'UserPromptSubmit',
   ];
@@ -84,7 +85,8 @@ export function loadAndRegisterConfigHooks(
           // For tool-scoped events, check the matcher against the tool name.
           if (
             context.event === 'PreToolUse' ||
-            context.event === 'PostToolUse'
+            context.event === 'PostToolUse' ||
+            context.event === 'PostToolUseFailure'
           ) {
             if (!matchFn(context.toolName)) {
               return {};

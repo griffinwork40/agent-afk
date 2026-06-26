@@ -236,6 +236,8 @@ describe('HookContext — discriminated union narrowing', () => {
           return `pre:${ctx.toolName}`;
         case 'PostToolUse':
           return `post:${ctx.toolName}`;
+        case 'PostToolUseFailure':
+          return `post-fail:${ctx.toolName}:${ctx.error}`;
         case 'Stop':
           return `stop:${ctx.sessionId ?? '-'}`;
         case 'UserPromptSubmit':
