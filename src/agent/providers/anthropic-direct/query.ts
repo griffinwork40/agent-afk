@@ -337,6 +337,18 @@ export class AnthropicDirectQuery implements ProviderQuery {
         // either shape natively.
         this.state.messages.push({ role: 'user', content: turn.content });
 
+        // Invariant: the messages array up to and including the just-pushed
+        // user turn is a known-sendable prefix — every prior assistant turn
+        // was accepted by the API at least once, and a bare user turn is
+        // always appendable. The tool-use loop will push assistant/tool_result
+        // turns past this point; if the turn ends in an `error` (e.g. the API
+        // rejects a continuation request), those pushes are left behind in the
+        // reused array and every later turn re-sends — and re-fails on — the
+        // same rejected history, permanently wedging the session. Capturing
+        // the prefix length here lets the error path below truncate back to it
+        // so a failed turn degrades to a recoverable per-turn error instead.
+        const sendablePrefixLen = this.state.messages.length;
+
         const system = this.composeSystem();
         const headers = buildRequestHeaders(
           this.retry.authMode,
@@ -372,6 +384,11 @@ export class AnthropicDirectQuery implements ProviderQuery {
         // `providerIterator.next()` loop is never advanced past a turn it
         // already saw end.
         let turnEmittedTerminal = false;
+        // Tracks whether THIS turn surfaced an `error` event (as opposed to a
+        // clean `turn.completed`). Drives the post-turn history rollback that
+        // prevents a single rejected request from permanently wedging the
+        // session — see `sendablePrefixLen` above.
+        let turnErrored = false;
         try {
           for await (const event of this.retry.turnWithRetries(runInput, () => this.state.closed)) {
             if (this.state.closed) return;
@@ -389,6 +406,9 @@ export class AnthropicDirectQuery implements ProviderQuery {
             }
             if (event.type === 'turn.completed' || event.type === 'error') {
               turnEmittedTerminal = true;
+            }
+            if (event.type === 'error') {
+              turnErrored = true;
             }
             yield event;
           }
@@ -435,6 +455,35 @@ export class AnthropicDirectQuery implements ProviderQuery {
         if (controller.signal.aborted) {
           if (!turnEmittedTerminal) yield this.makeInterruptedTurnEvent();
           continue;
+        }
+
+        // Wedge recovery: a turn that surfaced an `error` (e.g. the API
+        // rejected a continuation request — a malformed thinking block under
+        // interleaved thinking, an over-budget payload, a transient 5xx not
+        // absorbed by the retry layer) leaves its partial assistant/tool_result
+        // pushes in the reused messages array. The loop's own rollback
+        // (`messagesRollbackIdx`) only covers throws DURING tool execution, not
+        // the next iteration's request failure, and `repairOrphanToolUses` only
+        // heals orphan `tool_use` blocks — neither removes an assistant turn the
+        // API keeps rejecting. Without this, every later prompt re-sends the
+        // same rejected history and re-fails: a permanent session wedge where
+        // the user "can't send anything else". Truncating back to the
+        // known-sendable prefix (history through the triggering user turn)
+        // converts that brick into a recoverable per-turn error — the next
+        // prompt starts from a prefix the API has already accepted. Gated on
+        // !aborted (handled above) so an interrupt's partial state is preserved
+        // for resume; `splice` mutates in place per the never-reassign invariant
+        // on `state.messages`.
+        //
+        // Tradeoff: for a multi-iteration tool turn, this drops ALL of the
+        // turn's assistant/tool_result pairs, not just the failing last one —
+        // including iterations that executed successfully. That is intentional:
+        // the turn produced no final answer (it ended in error), and reverting
+        // to the pre-turn prefix is the only target GUARANTEED sendable, whereas
+        // keeping earlier iterations risks leaving the very block the API keeps
+        // rejecting. Recovering the session beats preserving partial tool churn.
+        if (turnErrored && this.state.messages.length > sendablePrefixLen) {
+          this.state.messages.splice(sendablePrefixLen);
         }
 
         // Auto-compaction: fire at the natural turn boundary — after the

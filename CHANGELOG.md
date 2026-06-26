@@ -11,6 +11,9 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Fixed
+- recover from a wedged session when the API rejects a continuation request (a rejected post-tool-use request no longer permanently poisons the reused messages array)
+
 ## [4.44.2] - 2026-06-26
 
 ### Fixed
