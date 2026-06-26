@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.44.1] - 2026-06-26
+
+### Fixed
+- stop mid-turn cutoffs, false rate-limit errors, and tool-call spam (be939f5)
+
+### Changed
+- Merge pull request #287 from griffinwork40/afk/fix-telegram-message-cutoff (5b66999)
+
 ## [4.44.0] - 2026-06-25
 
 ### Added
