@@ -11,8 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.45.0] - 2026-06-26
+
 ### Added
 - `afk trace show` now surfaces the raw provider `stop_reason` (`stop=…`) on the closure line — it was already persisted on the closure event but unrendered, so silent stops (a turn that ends with no output and no error, e.g. a content-safety `refusal`) were only diagnosable by reading the raw `trace.jsonl`
+
+### Added
+- add PostToolUseFailure hook event (#282) (2a750fd)
+- surface raw provider stop_reason in `afk trace show` (#291) (dfa28c5)
+
 ## [4.44.3] - 2026-06-26
 
 ### Fixed
