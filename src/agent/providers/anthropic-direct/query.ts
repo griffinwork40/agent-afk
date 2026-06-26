@@ -31,6 +31,7 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type { ContentBlockParam, MessageParam } from '@anthropic-ai/sdk/resources';
 import { randomUUID } from 'node:crypto';
+import { pathContainmentBypassed } from '../../permission-policy.js';
 import type {
   ProviderAccountInfo,
   ProviderAgentInfo,
@@ -556,8 +557,9 @@ export class AnthropicDirectQuery implements ProviderQuery {
     // fails UNSAFE: badge clears while the agent stays unrestricted):
     //  1. File-tool path containment reads the dispatcher's `allowAll` fresh
     //     per call, so flip it in place — effective on the next tool call.
-    const bypass = mode === 'bypassPermissions';
-    this.state.toolDispatcher.setAllowAll?.(bypass);
+    //     autonomous (AFK) bypasses containment alongside bypassPermissions.
+    const allowAll = pathContainmentBypassed(mode);
+    this.state.toolDispatcher.setAllowAll?.(allowAll);
     //  2. The path-approval hook reads the PROVIDER's getGrants().allowAll (a
     //     different field, `_currentPermissionMode`); update it via the
     //     provider-supplied callback.

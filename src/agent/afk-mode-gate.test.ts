@@ -102,6 +102,31 @@ describe('createAfkModeGate', () => {
     expect(result.decision).toBeUndefined();
   });
 
+  it('prefers a live getCwd() over the static cwd for the workspace-escape check', () => {
+    // Static cwd is the project root, but the live getCwd() reports the session
+    // moved into a deeper subdir. A write into the project root (inside the
+    // STATIC cwd) now escapes the LIVE workspace and must be blocked — proving
+    // the gate reads getCwd() first. In AFK this gate is the sole path-safety
+    // layer (path-approval is disabled via allowAll), so this must stay live.
+    const gate = createAfkModeGate(
+      () => 'autonomous' as PermissionMode,
+      '/Users/dev/project',
+      () => '/Users/dev/project/sub',
+    );
+    const escaping = gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: '/Users/dev/project/feature.ts' },
+    });
+    expect(escaping.decision).toBe('block');
+    const inside = gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: '/Users/dev/project/sub/feature.ts' },
+    });
+    expect(inside.decision).toBeUndefined();
+  });
+
   // ---- send_telegram is the channel: always exempt --------------------------
   it('never blocks send_telegram in AFK mode (it is the operator channel)', () => {
     const { gate } = makeGate('autonomous');

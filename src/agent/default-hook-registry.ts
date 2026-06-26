@@ -93,7 +93,11 @@ export function createDefaultHookRegistry(
     // one applies tree-wide (no subagent exemption) — see afk-mode-gate.ts.
     registry.register(
       'PreToolUse',
-      createAfkModeGate(getPermissionMode, agentOptions?.cwd),
+      // getCwd (live) is preferred over the static agentOptions.cwd so the
+      // gate's workspace-escape rule tracks a mid-session /cwd change — it is
+      // the SOLE path-safety layer in AFK (the path-approval prompt is disabled
+      // via allowAll for 'autonomous'; see agent/permission-policy.ts).
+      createAfkModeGate(getPermissionMode, agentOptions?.cwd, getCwd),
     );
   }
 

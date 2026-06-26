@@ -30,6 +30,7 @@ import type { ComposeExecutor } from '../../tools/compose-executor.js';
 import { withMcpToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
+import { pathContainmentBypassed } from '../../permission-policy.js';
 import { createBuiltinHandlers } from '../../tools/handlers/index.js';
 import {
   builtinToolSchemas,
@@ -402,8 +403,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // the provider's construction-time flag so a read-only skill's forked
     // OpenAI-routed child also blocks mutating shell commands.
     if (this.providerOpts.readOnlyBash === true) dispatcherOpts.readOnlyBash = true;
-    // Bypass mode: disable path containment for every per-call context.
-    dispatcherOpts.allowAll = permissionMode === 'bypassPermissions';
+    // Path-containment bypass: bypassPermissions (explicit) + autonomous (AFK)
+    // both disable path containment for every per-call context.
+    dispatcherOpts.allowAll = pathContainmentBypassed(permissionMode);
 
     return new SessionToolDispatcher(dispatcherOpts);
   }
@@ -462,7 +464,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       resolveBase: this._initialResolveBase,
       readRoots: this._sharedReadRoots?.slice() ?? [],
       writeRoots: this._sharedWriteRoots?.slice() ?? [],
-      allowAll: this._currentPermissionMode === 'bypassPermissions',
+      allowAll: pathContainmentBypassed(this._currentPermissionMode),
     };
   }
 
