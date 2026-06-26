@@ -25,11 +25,14 @@ import { env } from '../../../config/env.js';
 /**
  * Per-block accumulator. The block kind dictates which fields are populated
  * — text/thinking blocks accumulate strings, tool_use blocks accumulate a
- * partial JSON buffer that is parsed at `content_block_stop`.
+ * partial JSON buffer that is parsed at `content_block_stop`, and
+ * redacted_thinking carries an opaque server-encrypted payload delivered
+ * whole at `content_block_start` (it has no deltas).
  */
 type BlockAcc =
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; thinking: string; signature: string }
+  | { kind: 'redacted_thinking'; data: string }
   | { kind: 'tool_use'; id: string; name: string; partialJson: string };
 
 /**
@@ -77,6 +80,17 @@ function buildTurnResult(
           signature: acc.signature,
         });
       }
+    } else if (acc.kind === 'redacted_thinking') {
+      // Invariant: redacted_thinking must be preserved VERBATIM in the
+      // assistant turn. When extended thinking is enabled and the turn
+      // contains tool_use, the Messages API requires the assistant message
+      // to LEAD with a thinking/redacted_thinking block; dropping it makes
+      // the next (continuation) request 400 — and because that malformed
+      // turn persists in the session's reused messages array, every later
+      // turn re-fails too (a permanent session wedge). The payload is
+      // server-encrypted, has no signature to validate, and is always
+      // round-trippable, so it is pushed unconditionally.
+      assistantBlocks.push({ type: 'redacted_thinking', data: acc.data });
     } else {
       assistantBlocks.push({
         type: 'tool_use',
@@ -148,6 +162,11 @@ export async function* translateMessageStream(
               thinking: '',
               signature: '',
             };
+          } else if (cb.type === 'redacted_thinking') {
+            // Redacted reasoning is delivered whole here (no deltas), so
+            // capture `data` at start. Preserved for round-trip; see
+            // buildTurnResult. No visible event — the payload is opaque.
+            blocks[evt.index] = { kind: 'redacted_thinking', data: cb.data };
           } else if (cb.type === 'tool_use') {
             blocks[evt.index] = {
               kind: 'tool_use',
