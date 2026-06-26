@@ -124,6 +124,25 @@ describe('query — Responses wire (public opt-in)', () => {
     // Public API-key path must NOT force store:false (that's a ChatGPT-backend rule).
     expect(createArgsSeen!['store']).toBeUndefined();
   });
+
+  it('caps output via `max_output_tokens` (Responses param) — never Chat Completions `max_tokens`', async () => {
+    installResponsesMock();
+    pendingEvents = [{ type: 'response.completed', response: { status: 'completed' } }];
+    const query = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-x', source: 'env' },
+      model: 'gpt-5',
+      synthesizedSessionId: 'sess-cap-public',
+      promptStream: singleInput('hi'),
+      config: config({ maxOutputTokens: 1234 } as Partial<AgentConfig>),
+      useResponsesApi: true,
+    });
+    await collect(query);
+    // The Responses API uses `max_output_tokens`; the Chat Completions fields
+    // (`max_tokens` / `max_completion_tokens`) must never appear on this wire.
+    expect(createArgsSeen!['max_output_tokens']).toBe(1234);
+    expect(createArgsSeen!['max_tokens']).toBeUndefined();
+    expect(createArgsSeen!['max_completion_tokens']).toBeUndefined();
+  });
 });
 
 describe('query — Responses wire (ChatGPT subscription auth)', () => {
@@ -156,6 +175,26 @@ describe('query — Responses wire (ChatGPT subscription auth)', () => {
     // Backend requirements: store:false + the (system-prompt) instructions present.
     expect(createArgsSeen!['store']).toBe(false);
     expect(createArgsSeen!['instructions']).toBe('You are helpful.');
+  });
+
+  it('omits the output-token cap entirely (the Codex backend 400s on `max_tokens` AND `max_output_tokens`)', async () => {
+    installResponsesMock();
+    pendingEvents = [{ type: 'response.completed', response: { status: 'completed' } }];
+    const auth: OpenAIAuthResolution = { apiKey: 'tok', source: 'chatgpt-oauth', accountId: 'acct_z' };
+    const query = new OpenAICompatibleQuery({
+      auth,
+      model: 'gpt-5.5',
+      synthesizedSessionId: 'sess-cap-chatgpt',
+      promptStream: singleInput('hi'),
+      config: config({ maxOutputTokens: 1234 } as Partial<AgentConfig>),
+    });
+    await collect(query);
+    // The private ChatGPT/Codex backend rejects every output-cap parameter with
+    // an opaque 400 — sending `max_tokens` here was the root cause of the
+    // "ChatGPT subscription" failure. No cap field may be present.
+    expect(createArgsSeen!['max_tokens']).toBeUndefined();
+    expect(createArgsSeen!['max_output_tokens']).toBeUndefined();
+    expect(createArgsSeen!['max_completion_tokens']).toBeUndefined();
   });
 
   it('supplies default instructions when the session has no system prompt (backend requires non-empty)', async () => {
