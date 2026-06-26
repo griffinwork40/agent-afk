@@ -71,6 +71,7 @@ export type {
   PreToolUseContext,
   SessionEndContext,
   SessionStartContext,
+  StopContext,
   SubagentHookStatus,
   SubagentStartContext,
   SubagentStopContext,

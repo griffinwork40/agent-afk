@@ -49,6 +49,8 @@ export type HarnessHookEvent =
   | 'PreToolUse'
   | 'PostToolUse'
   | 'PreCompact'
+  | 'PostToolUseFailure'
+  | 'Stop'
   | 'UserPromptSubmit';
 
 export interface HookDecision {
@@ -157,6 +159,13 @@ export interface PostToolUseContext {
   event: 'PostToolUse';
   sessionId?: string;
   subagentId?: string;
+  /**
+   * Parent session id when the tool call originates inside a forked subagent
+   * (set from {@link AgentConfig.parentSessionId}). Top-level sessions leave
+   * this undefined. Symmetric with {@link PostToolUseFailureContext} so hook
+   * authors can treat both events uniformly for subagent correlation.
+   */
+  parentSessionId?: string;
   toolName: string;
   /**
    * Tool-call input passed through from {@link PreToolUseContext}. Carried
@@ -176,6 +185,34 @@ export interface PreCompactContext {
    * 'auto' (threshold-based) is reserved for future wiring -- see TODO in query.ts.
    */
   trigger?: 'manual' | 'auto';
+}
+
+export interface PostToolUseFailureContext {
+  event: 'PostToolUseFailure';
+  sessionId?: string;
+  subagentId?: string;
+  /**
+   * Parent session id when the tool call originates inside a forked subagent
+   * (set from {@link AgentConfig.parentSessionId}). Top-level sessions leave
+   * this undefined.
+   */
+  parentSessionId?: string;
+  toolName: string;
+  /** Tool-call input, carried verbatim from the originating call. */
+  input?: unknown;
+  /** The error message string from the thrown handler. */
+  error: string;
+}
+
+export interface StopContext {
+  event: 'Stop';
+  /** Session id from the REPL session that completed the turn. */
+  sessionId?: string;
+  /**
+   * Parent session id when this Stop fires inside a forked subagent.
+   * Top-level sessions leave this undefined.
+   */
+  parentSessionId?: string;
 }
 
 export interface UserPromptSubmitContext {
@@ -203,6 +240,8 @@ export type HookContext =
   | PreToolUseContext
   | PostToolUseContext
   | PreCompactContext
+  | PostToolUseFailureContext
+  | StopContext
   | UserPromptSubmitContext;
 
 /**

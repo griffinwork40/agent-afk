@@ -228,6 +228,8 @@ export function loadHooksConfigFile(
     'PreToolUse',
     'PostToolUse',
     'PreCompact',
+    'PostToolUseFailure',
+    'Stop',
     'UserPromptSubmit',
   ];
 
@@ -347,6 +349,8 @@ export function loadHooksConfig(opts: LoadHooksConfigOptions = {}): LoadedHooksC
     'PreToolUse',
     'PostToolUse',
     'PreCompact',
+    'PostToolUseFailure',
+    'Stop',
     'UserPromptSubmit',
   ];
 
