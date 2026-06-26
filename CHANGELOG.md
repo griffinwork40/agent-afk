@@ -11,6 +11,8 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Added
+- `afk trace show` now surfaces the raw provider `stop_reason` (`stop=…`) on the closure line — it was already persisted on the closure event but unrendered, so silent stops (a turn that ends with no output and no error, e.g. a content-safety `refusal`) were only diagnosable by reading the raw `trace.jsonl`
 ## [4.44.3] - 2026-06-26
 
 ### Fixed

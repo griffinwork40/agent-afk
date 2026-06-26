@@ -329,7 +329,16 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
     case 'closure': {
       const p = event.payload;
       const guidance = p.guidance ? `  — ${truncate(p.guidance, 100)}` : '';
-      return line('closure', `${p.reason}  turns=${p.finalTurnCount}  ${fmtUsd(p.finalCostUsd)}${guidance}`);
+      // Surface the raw provider stop_reason (e.g. `refusal`, `max_tokens`)
+      // alongside the AFK-classified closure reason. It is already persisted
+      // on the closure event but was previously unrendered — leaving silent
+      // stops (a turn that ends with no output and no error) diagnosable only
+      // by reading the raw trace.jsonl. See docs: silent-model-loop debugging.
+      const stop = p.lastStopReason ? `  stop=${p.lastStopReason}` : '';
+      return line(
+        'closure',
+        `${p.reason}  turns=${p.finalTurnCount}${stop}  ${fmtUsd(p.finalCostUsd)}${guidance}`,
+      );
     }
 
     case 'claim': {
