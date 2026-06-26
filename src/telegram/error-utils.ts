@@ -14,8 +14,25 @@
  * @module telegram/error-utils
  */
 
+import { TelegramError } from 'telegraf';
 import { classifyUsageLimitError } from '../agent/providers/anthropic-direct/usage-limit.js';
 export type { UsageLimitClassification } from '../agent/providers/anthropic-direct/usage-limit.js';
+
+/**
+ * True when the error originates from the Telegram Bot API itself (telegraf
+ * `TelegramError`) — e.g. flood-control `429 Too Many Requests`, `400`, `403`.
+ *
+ * Invariant: this MUST be checked BEFORE the surface-agnostic
+ * `isRateLimitError` / `isNetworkError` predicates. A Telegram 429's message is
+ * `"429: Too Many Requests: retry after N"`, which `isRateLimitError` matches on
+ * `"too many requests"` — so without this guard a Telegram-side delivery limit
+ * (caused by the bot's own edit/reply rate, not the model) is misreported to the
+ * user as a *Claude* rate limit. Such an error is not a model/agent failure and
+ * must not surface a "Claude rate limit" / "network error" message.
+ */
+export function isTelegramTransportError(error: unknown): boolean {
+  return error instanceof TelegramError;
+}
 
 /**
  * Classify a thrown error as a usage-limit event (OAuth subscription limit or
