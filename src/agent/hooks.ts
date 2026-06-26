@@ -49,6 +49,7 @@ export type HarnessHookEvent =
   | 'PreToolUse'
   | 'PostToolUse'
   | 'PostToolUseFailure'
+  | 'Stop'
   | 'UserPromptSubmit';
 
 export interface HookDecision {
@@ -192,6 +193,17 @@ export interface PostToolUseFailureContext {
   error: string;
 }
 
+export interface StopContext {
+  event: 'Stop';
+  /** Session id from the REPL session that completed the turn. */
+  sessionId?: string;
+  /**
+   * Parent session id when this Stop fires inside a forked subagent.
+   * Top-level sessions leave this undefined.
+   */
+  parentSessionId?: string;
+}
+
 export interface UserPromptSubmitContext {
   event: 'UserPromptSubmit';
   /**
@@ -217,6 +229,7 @@ export type HookContext =
   | PreToolUseContext
   | PostToolUseContext
   | PostToolUseFailureContext
+  | StopContext
   | UserPromptSubmitContext;
 
 /**

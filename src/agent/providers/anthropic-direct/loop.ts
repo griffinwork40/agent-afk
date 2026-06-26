@@ -460,6 +460,35 @@ export async function* runTurn(
     input.onUsageProgress?.(accumulatedUsage);
 
     if (turnResult.stopReason !== 'tool_use') {
+      // Invariant: stop_reason 'refusal' is Anthropic's content-safety stop —
+      // the model declined and the API returns an assistant turn with (almost
+      // always) NO content. The generic empty-completion path below would emit
+      // nothing and end the turn SILENTLY, indistinguishable from a hang: the
+      // operator sees a turn that "stopped" with no answer and no reason. Worse,
+      // the flagged content stays in the conversation, so every later turn
+      // refuses identically — the reported "it stopped and I can't send
+      // anything else". Surface an explicit, display-only notice (NOT pushed to
+      // history — it is operator-facing, not model context) so the refusal is
+      // legible and the operator can rephrase or start a fresh session.
+      if (turnResult.stopReason === 'refusal') {
+        yield {
+          type: 'assistant.message',
+          text:
+            turnResult.text.length > 0
+              ? turnResult.text
+              : 'The model stopped with a content-safety refusal (stop_reason: "refusal") and returned no output. ' +
+                "This is Anthropic's safety system declining the request — not an afk error. " +
+                'Because the flagged context stays in the conversation, follow-up messages will likely be refused the same way; ' +
+                'rephrase the request or start a fresh session to continue.',
+          sessionId: input.ctx.sessionId,
+        };
+        yield {
+          type: 'turn.completed',
+          usage: withTurnDuration(accumulatedUsage),
+          sessionId: input.ctx.sessionId,
+        };
+        return;
+      }
       if (turnResult.text.length > 0) {
         yield {
           type: 'assistant.message',

@@ -416,10 +416,10 @@ export interface InteractiveCtx {
    */
   suggestGhostConfig?: boolean;
   /**
-   * Hook registry wired at bootstrap. When present, the loop-iteration
-   * dispatch path fires UserPromptSubmit before each runTurn call, enabling
-   * per-prompt policy hooks (blocking, context injection). Absent in test
-   * stubs that do not exercise the hook path.
+   * Hook registry for dispatching harness lifecycle events from the REPL loop.
+   * Absent in test stubs that do not exercise hooks. Set by bootstrap.ts from
+   * `hookRegistryBundle.registry`. Fires UserPromptSubmit before each runTurn
+   * call (enabling per-prompt policy hooks) and Stop after each completed turn.
    */
   hookRegistry?: HookRegistry;
 }

@@ -19,6 +19,7 @@ import type {
   HookHandler,
   PreToolUseContext,
   SessionStartContext,
+  StopContext,
   SubagentStopContext,
   UserPromptSubmitContext,
 } from './hooks.js';
@@ -237,10 +238,15 @@ describe('HookContext — discriminated union narrowing', () => {
           return `post:${ctx.toolName}`;
         case 'PostToolUseFailure':
           return `post-fail:${ctx.toolName}:${ctx.error}`;
+        case 'Stop':
+          return `stop:${ctx.sessionId ?? '-'}`;
         case 'UserPromptSubmit':
           return `ups:${ctx.prompt}`;
       }
     };
+
+    const stopHook: StopContext = { event: 'Stop', sessionId: 's-stop' };
+    expect(describe(stopHook)).toBe('stop:s-stop');
 
     const stop: SubagentStopContext = {
       event: 'SubagentStop',

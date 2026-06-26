@@ -65,6 +65,7 @@ export function loadAndRegisterConfigHooks(
     'PreToolUse',
     'PostToolUse',
     'PostToolUseFailure',
+    'Stop',
     'UserPromptSubmit',
   ];
 

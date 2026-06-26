@@ -11,6 +11,38 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Fixed
+- surface model content-safety refusals (stop_reason "refusal") instead of ending the turn silently — fixes the "it stopped and I can't send anything else" hang when the model declines a request
+
+## [4.44.2] - 2026-06-26
+
+### Fixed
+- preserve redacted_thinking blocks to prevent session wedge (40984ad)
+
+### Changed
+- Merge pull request #288 from griffinwork40/fix/preserve-redacted-thinking-blocks (fb79fc8)
+
+## [4.44.1] - 2026-06-26
+
+### Fixed
+- stop mid-turn cutoffs, false rate-limit errors, and tool-call spam (be939f5)
+
+### Changed
+- Merge pull request #287 from griffinwork40/afk/fix-telegram-message-cutoff (5b66999)
+
+## [4.44.0] - 2026-06-25
+
+### Added
+- add Stop as a harness hook event (ea5ba85)
+
+### Fixed
+- sanitize Stop hook reason and bound its dispatch timeout (ea7b5eb)
+- address Stop review findings (b0c0ab6)
+
+### Changed
+- Merge pull request #281 from griffinwork40/feat/stop-hook (d6659b8)
+- Merge origin/main into feat/stop-hook: resolve hook-event conflicts (keep UserPromptSubmit + Stop) (18c9864)
+
 ## [4.43.0] - 2026-06-25
 
 ### Added
