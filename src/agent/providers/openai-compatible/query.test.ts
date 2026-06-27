@@ -675,6 +675,56 @@ describe('OpenAICompatibleQuery — model-slot resolution in request body', () =
     await collect(q);
     expect((createCalls[0]!.args as { model: string }).model).toBe('gpt-4o-mini');
   });
+
+  it('resolves a slot alias passed to setModel mid-session before the request body', async () => {
+    // Regression: openai-compatible `setModel` must resolve aliases like the
+    // construction path (buildQueryFromConfig) already does. Without it, a
+    // mid-session `/model <alias>` switch sent the literal alias as the wire
+    // model and the backend rejected it (the same-backend half of the
+    // ChatGPT/Codex 400 on a tier switch).
+    setSlotBindings({
+      local: { id: '' },
+      small: { id: 'gpt-4o-mini' },
+      medium: { id: 'gpt-5.5' },
+      large: { id: 'gpt-5.5' },
+    });
+    const controlled = makeControlledPromptStream();
+    const q = buildQueryFromConfig(baseConfig({ model: 'small' }), controlled.stream);
+    const iter = q[Symbol.asyncIterator]();
+
+    // Turn 1 on the `small` tier → gpt-4o-mini.
+    pendingChunks = [
+      { choices: [{ delta: { content: 'a' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    controlled.send('one');
+    let ev: IteratorResult<ProviderEvent>;
+    do {
+      ev = await iter.next();
+    } while (!ev.done && ev.value.type !== 'turn.completed');
+    expect((createCalls[0]!.args as { model: string }).model).toBe('gpt-4o-mini');
+
+    // Switch to the `medium` alias mid-session, then drive turn 2.
+    await q.setModel('medium');
+    pendingChunks = [
+      { choices: [{ delta: { content: 'b' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    controlled.send('two');
+    do {
+      ev = await iter.next();
+    } while (!ev.done && ev.value.type !== 'turn.completed');
+
+    // The wire model for turn 2 is the RESOLVED id, not the literal alias.
+    const sentModel = (createCalls[1]!.args as { model: string }).model;
+    expect(sentModel).toBe('gpt-5.5');
+    expect(sentModel).not.toBe('medium');
+
+    controlled.end();
+    while (!(await iter.next()).done) {
+      /* drain */
+    }
+  });
 });
 
 describe('OpenAICompatibleQuery — reasoning_effort for o-series models', () => {
