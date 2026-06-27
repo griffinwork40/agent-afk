@@ -25,6 +25,8 @@ import { dispatchSessionEnd, dispatchSessionStart } from './hooks-dispatch.js';
 import { HookBlockedError } from '../../utils/errors.js';
 import { classifyClosureReason } from './closure-reason.js';
 import { buildClosureGuidance } from './closure-guidance.js';
+import { extractStructuredOutput } from '../output-extractor.js';
+import type { ZodType } from 'zod';
 import type {
   AccountInfo,
   AgentConfig,
@@ -45,6 +47,7 @@ import type {
   SessionMetadata,
   SessionState,
   SlashCommand,
+  StructuredMessageOptions,
 } from '../types.js';
 import { QueryInputStream } from './input-iterable.js';
 import { SessionLedgerWriter } from '../session-ledger.js';
@@ -487,6 +490,34 @@ export class AgentSession implements IAgentSession {
     } finally {
       if (this.currentState === 'processing') this.currentState = 'idle';
     }
+  }
+
+  async sendMessageStructured<T>(
+    content: string,
+    schema: ZodType<T>,
+    options: StructuredMessageOptions = {},
+  ): Promise<T> {
+    // Composes sendMessage() turns — no streaming-internals changes. Each
+    // attempt is one model turn; on a schema mismatch we re-prompt with the
+    // validation error so the model can self-correct, bounded by maxRetries.
+    const { maxRetries = 2, ...sendOpts } = options;
+    let lastError = '';
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const prompt =
+        attempt === 0
+          ? content
+          : `Your previous response did not match the required JSON schema.\n` +
+            `Validation error: ${lastError}\n` +
+            'Respond again with ONLY a JSON object (optionally in a ```json fence) that satisfies the schema.';
+      const message = await this.sendMessage(prompt, sendOpts);
+      const candidate = extractStructuredOutput(message.content);
+      const parsed = schema.safeParse(candidate);
+      if (parsed.success) return parsed.data;
+      lastError = parsed.error.message;
+    }
+    throw new Error(
+      `structured output did not match schema after ${maxRetries + 1} attempt(s): ${lastError}`,
+    );
   }
 
   async *sendMessageStream(content: string | ContentBlockParam[]): AsyncIterableIterator<OutputEvent> {

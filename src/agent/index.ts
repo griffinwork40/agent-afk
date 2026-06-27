@@ -4,7 +4,7 @@
  */
 
 export { AgentSession } from './session.js';
-export { query, queryText } from './query.js';
+export { query, queryText, queryStructured } from './query.js';
 export type { QueryOptions } from './query.js';
 export { SubagentManager } from './subagent.js';
 export { createCanUseToolHook } from './permissions.js';
@@ -34,6 +34,7 @@ export type {
   ResponseMetadata,
   SDKStatus,
   SendMessageOptions,
+  StructuredMessageOptions,
   SessionIdentity,
   SessionMetadata,
   SessionState,

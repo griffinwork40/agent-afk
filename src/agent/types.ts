@@ -36,6 +36,7 @@ export type {
   Message,
   MessageChunk,
   SendMessageOptions,
+  StructuredMessageOptions,
   ToolResultChunk,
   ToolDiffChunk,
 } from './types/message-types.js';

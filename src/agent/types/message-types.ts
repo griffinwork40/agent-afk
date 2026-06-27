@@ -139,3 +139,17 @@ export interface SendMessageOptions {
   /** Optional message metadata */
   metadata?: Record<string, unknown>;
 }
+
+/**
+ * Options for {@link IAgentSession.sendMessageStructured}. Extends
+ * {@link SendMessageOptions} with a bounded retry budget for schema-validated
+ * output (mirrors the Claude Agent SDK's `outputFormat: json_schema` retry).
+ */
+export interface StructuredMessageOptions extends SendMessageOptions {
+  /**
+   * Number of ADDITIONAL re-prompts after the first attempt fails schema
+   * validation. Total model turns = `maxRetries + 1`. Default 2 (so up to 3
+   * turns). On exhaustion, `sendMessageStructured` throws.
+   */
+  maxRetries?: number;
+}

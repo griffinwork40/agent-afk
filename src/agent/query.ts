@@ -10,8 +10,15 @@
  * @module agent/query
  */
 
+import type { ZodType } from 'zod';
 import { AgentSession } from './session.js';
-import type { AgentConfig, AgentModelInput, Message, OutputEvent } from './types.js';
+import type {
+  AgentConfig,
+  AgentModelInput,
+  Message,
+  OutputEvent,
+  StructuredMessageOptions,
+} from './types.js';
 
 /** Default model when a caller omits one (the `medium` capability-tier alias). */
 const DEFAULT_QUERY_MODEL: AgentModelInput = 'sonnet';
@@ -72,6 +79,35 @@ export async function queryText(
   try {
     const message: Message = await session.sendMessage(prompt);
     return message.content;
+  } finally {
+    await session.close();
+  }
+}
+
+/**
+ * Run a single prompt and resolve to its response parsed against a Zod schema,
+ * owning the session lifecycle like {@link query}. Mirrors the Claude Agent
+ * SDK's `outputFormat: json_schema`: the assistant's JSON payload is extracted
+ * and validated, with bounded re-prompting on a schema mismatch (see
+ * {@link StructuredMessageOptions.maxRetries}). Throws if the schema is never
+ * satisfied within the retry budget.
+ *
+ * @example
+ * const schema = z.object({ sentiment: z.enum(['pos', 'neg']) });
+ * const out = await queryStructured('Classify: "great!"', schema, { model: 'sonnet' });
+ * //    ^? { sentiment: 'pos' | 'neg' }
+ */
+export async function queryStructured<T>(
+  prompt: string,
+  schema: ZodType<T>,
+  options: QueryOptions & { maxRetries?: number } = {},
+): Promise<T> {
+  const { maxRetries, ...rest } = options;
+  const session = sessionFor(rest);
+  const structuredOpts: StructuredMessageOptions =
+    maxRetries !== undefined ? { maxRetries } : {};
+  try {
+    return await session.sendMessageStructured(prompt, schema, structuredOpts);
   } finally {
     await session.close();
   }
