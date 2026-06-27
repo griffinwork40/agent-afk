@@ -191,13 +191,36 @@ export function __setOpenAIClientFactory(factory: OpenAIClientFactory | null): v
 }
 
 /**
- * Resolve the streaming output-token cap for the OpenAI API.
+ * Resolve the effective output-token cap (a plain number).
+ *
+ * Honours `config.maxOutputTokens` when finite+positive, otherwise falls back
+ * to the model's output ceiling (matching Anthropic's resolveMaxTokens).  Uses
+ * maxOutputTokensFor (output ceiling), not contextLimitFor (context window),
+ * because the cap bounds *output*, not the full context window.
+ *
+ * Field-name selection (`max_tokens` vs `max_completion_tokens` vs
+ * `max_output_tokens`) is the caller's concern — it differs by wire mode:
+ * Chat Completions uses {@link resolveStreamingMaxTokens}; the Responses API
+ * uses `max_output_tokens` directly.
+ */
+function resolveEffectiveMaxOutputTokens(
+  model: string,
+  configMaxOutput: number | undefined,
+): number {
+  const ceiling = maxOutputTokensFor(model);
+  return typeof configMaxOutput === 'number' && Number.isFinite(configMaxOutput) && configMaxOutput > 0
+    ? Math.floor(configMaxOutput)
+    : ceiling;
+}
+
+/**
+ * Resolve the **Chat Completions** streaming output-token cap.
  *
  * Mirrors the o-series field-selection logic in `oneshot.ts:91–96`:
  * o-series reasoning models (o1/o3/o4…) reject `max_tokens` and require
  * `max_completion_tokens`; everything else (chat models, local shims)
- * wants `max_tokens`.  Strips any `provider/` prefix (OpenRouter-style ids)
- * before the regex check so `openai/o3` is treated the same as `o3`.
+ * wants `max_tokens`.  (The Responses API is different again — it uses
+ * `max_output_tokens` — so this helper is Chat-Completions-only.)
  *
  * Always returns an object containing the resolved cap; uses the model's
  * output ceiling as a fallback so the field is always present on the wire.
@@ -206,23 +229,10 @@ function resolveStreamingMaxTokens(
   model: string,
   configMaxOutput: number | undefined,
 ): Record<string, number> {
-  // Strip any `provider/` prefix (OpenRouter-style ids) before the o-series
-  // regex — mirrors oneshot.ts:93.
-  const bareModel = model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model;
-  const isOSeries = /^o[0-9]/.test(bareModel);
-
-  // Resolve the effective cap: honour config.maxOutputTokens when finite+positive,
-  // otherwise fall back to the model's output ceiling (matching Anthropic's
-  // resolveMaxTokens).  Uses maxOutputTokensFor (output ceiling), not
-  // contextLimitFor (context window), because the cap bounds *output*, not
-  // the full context window.
-  const ceiling = maxOutputTokensFor(model);
-  const effectiveMax =
-    typeof configMaxOutput === 'number' && Number.isFinite(configMaxOutput) && configMaxOutput > 0
-      ? Math.floor(configMaxOutput)
-      : ceiling;
-
-  return isOSeries ? { max_completion_tokens: effectiveMax } : { max_tokens: effectiveMax };
+  const effectiveMax = resolveEffectiveMaxOutputTokens(model, configMaxOutput);
+  return isOSeriesModel(model)
+    ? { max_completion_tokens: effectiveMax }
+    : { max_tokens: effectiveMax };
 }
 
 /** Construction options. */
@@ -761,15 +771,19 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         input: req.input,
         stream: true,
       };
-      // Thread the output-token cap into the streaming request so callers can
-      // bound output length (parity with Anthropic's always-forwarded
-      // max_tokens).  Reuses the o-series field-selection logic from
-      // oneshot.ts:91–96.
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-      Object.assign(requestBody, resolveStreamingMaxTokens(
-        this.currentModel,
-        this.opts.config.maxOutputTokens,
-      ));
+      // Output-token cap. The Responses API uses `max_output_tokens` — NOT Chat
+      // Completions' `max_tokens`/`max_completion_tokens`. The private ChatGPT/
+      // Codex subscription backend rejects *every* output-cap parameter with an
+      // opaque HTTP 400 (`{"detail":"Unsupported parameter: max_tokens"}`, and
+      // likewise for `max_output_tokens`), so omit the cap there entirely and
+      // let the backend apply its own limit. (Sending `max_tokens` here is what
+      // made every ChatGPT-subscription request fail.)
+      if (!isChatGptBackend) {
+        requestBody['max_output_tokens'] = resolveEffectiveMaxOutputTokens(
+          this.currentModel,
+          this.opts.config.maxOutputTokens,
+        );
+      }
       // The private ChatGPT backend (subscription path) has two hard
       // requirements the public Responses API does not: a non-empty
       // `instructions`, and `store: false`. Scope both to that path so the

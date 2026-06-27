@@ -257,23 +257,21 @@ describe('SubagentHandle streaming', () => {
   describe('Sink invocation and event ordering', () => {
     it('calls progressSink for each event in order with correct metadata', async () => {
       const sinkFn = vi.fn();
-      const events: OutputEvent[] = [
-        { type: 'progress', progress: { taskId: 'task-1', description: 'starting', totalTokens: 0, toolUses: 0, durationMs: 10 } },
-        {
-          type: 'message',
-          message: {
-            role: 'assistant',
-            content: 'hello',
-            timestamp: new Date(),
-          },
-        },
-        { type: 'done' },
-      ];
+      // handle.run() returns the `message` event's payload (handle.ts: finalMessage
+      // = event.message), so the expectation must compare against that exact object.
+      // Constructing a second message with its own `new Date()` raced the millisecond
+      // boundary and made `expect(msg).toEqual(finalMessage)` flaky on slower CI
+      // runners. Share one Message reference across the event and the expectation.
       const finalMessage: Message = {
         role: 'assistant',
         content: 'hello',
         timestamp: new Date(),
       };
+      const events: OutputEvent[] = [
+        { type: 'progress', progress: { taskId: 'task-1', description: 'starting', totalTokens: 0, toolUses: 0, durationMs: 10 } },
+        { type: 'message', message: finalMessage },
+        { type: 'done' },
+      ];
 
       const session = createDeterministicMockSession(events, finalMessage);
       const handle = new SubagentHandleImpl(
