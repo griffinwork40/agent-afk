@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.45.2] - 2026-06-27
+
+### Fixed
+- don't send Chat-Completions max_tokens on the Responses path (#293) (f6ed619)
+
 ## [4.45.1] - 2026-06-27
 
 ### Fixed
