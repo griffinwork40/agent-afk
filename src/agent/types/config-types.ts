@@ -475,4 +475,19 @@ export interface AgentConfig {
    * by the existing re-entrance lock in `compact-handler.ts`.
    */
   autoCompact?: boolean | { threshold: number };
+
+  /**
+   * In-process custom tools available to the session. Each entry is created
+   * via the `tool()` helper and provides both a JSON-schema `AnthropicToolDef`
+   * (so the model knows the tool exists) and a validated `ToolHandler`
+   * (so the dispatcher can execute it).
+   *
+   * Custom tools are threaded to the active provider at construction time via
+   * `config.providerFactory` or the bare `resolveProvider` path — see
+   * `src/agent/tools/nesting.ts` and `src/agent/providers/index.ts`.
+   *
+   * Permission gate and PreToolUse/PostToolUse hooks apply identically to
+   * custom tools and built-in tools (no bypass).
+   */
+  customTools?: import('../tools/custom-tool.js').CustomToolDef[];
 }

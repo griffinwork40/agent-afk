@@ -102,6 +102,17 @@ export interface OpenAICompatibleProviderOptions {
    * handler map. Hooks fire for MCP tools automatically via the dispatcher.
    */
   mcpManager?: import('../../mcp/index.js').McpManager;
+  /**
+   * In-process custom tools registered by the library consumer. Mirrors
+   * `AnthropicDirectProviderOptions.customTools` for full provider parity.
+   * Each entry supplies an `AnthropicToolDef` schema (added to the provider's
+   * schema list at construction time) and a `ToolHandler` (registered in the
+   * per-query dispatcher's handler map).
+   *
+   * Precedence: builtins > custom (a custom tool whose name collides with a
+   * builtin is silently skipped — see `buildDispatcher`).
+   */
+  customTools?: import('../../tools/custom-tool.js').CustomToolDef[];
 }
 
 export class OpenAICompatibleProvider implements ModelProvider {
@@ -149,6 +160,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // The `get_runtime_state` tool remains available so the model can
     // pull identity on demand.
     schemas.push(getRuntimeStateTool);
+    // Custom (consumer-registered) tool schemas are appended last so their
+    // names never silently shadow a builtin. Handler-side precedence is
+    // enforced separately in buildDispatcher (builtins win on collision).
+    for (const t of opts.customTools ?? []) schemas.push(t.schema);
     this.schemas = schemas;
   }
 
@@ -338,6 +353,17 @@ export class OpenAICompatibleProvider implements ModelProvider {
     }
     if (opts.runtimeStateSource) {
       handlers.set('get_runtime_state', createGetRuntimeStateHandler(opts.runtimeStateSource));
+    }
+    // Invariant: custom (consumer-registered) handlers are registered AFTER
+    // all builtins and the runtime-state handler, and BEFORE MCP handlers.
+    // If a custom tool name collides with a builtin already in `handlers`,
+    // the builtin wins (we skip the custom registration). This prevents a
+    // user-supplied tool from silently overriding a built-in capability.
+    // Location: src/agent/providers/openai-compatible/index.ts buildDispatcher.
+    for (const t of this.providerOpts.customTools ?? []) {
+      if (!handlers.has(t.schema.name)) {
+        handlers.set(t.schema.name, t.handler);
+      }
     }
     // MCP handlers + schemas — fetched fresh each query so that
     // `notifications/tools/list_changed` refreshes are picked up without

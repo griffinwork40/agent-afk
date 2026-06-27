@@ -223,9 +223,12 @@ export class AgentSession implements IAgentSession {
       // subagentExecutor, skillExecutor, composeExecutor, memoryStore, mcpManager,
       // and permission lists). When absent, fall back to the bare resolveProvider
       // which is suitable for one-shot and test paths that need no executors.
+      // Thread customTools through the fallback so library query() callers get
+      // their tools even without a full providerFactory.
       const resolveProviderFn = this.config.providerFactory
         ? this.config.providerFactory
-        : (m: string | undefined) => resolveProvider(m);
+        : (m: string | undefined) =>
+            resolveProvider(m, undefined, { customTools: this.config.customTools });
       this.providerQuery = new ProviderRouter(
         { prompt: promptIterable, config: this.config },
         {

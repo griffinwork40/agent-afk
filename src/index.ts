@@ -14,6 +14,7 @@ export {
   openaiCompatibleProvider,
   providerForModel,
   resolveProvider,
+  tool,
 } from './agent/index.js';
 export type {
   AccountInfo,
@@ -58,6 +59,7 @@ export type {
   ToolPermissionMode,
   ToolPermissionRules,
   ToolResultChunk,
+  CustomToolDef,
 } from './agent/index.js';
 export type { DiffHunk, DiffLine, DiffPayload } from './utils/diff.js';
 
