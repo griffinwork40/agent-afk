@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.45.4] - 2026-06-27
+
+### Fixed
+- re-point backend on a same-family /model switch to a different endpoint (#297) (38975c1)
+
 ## [4.45.3] - 2026-06-27
 
 ### Added
