@@ -98,6 +98,11 @@ export function createDefaultHookRegistry(
       // the SOLE path-safety layer in AFK (the path-approval prompt is disabled
       // via allowAll for 'autonomous'; see agent/permission-policy.ts).
       createAfkModeGate(getPermissionMode, agentOptions?.cwd, getCwd),
+      // Longrunning: on a high-risk op the gate awaits an operator approve/deny
+      // via elicitationRouter.route() (deny-on-timeout). Bypass the 30s per-
+      // handler deadline; the gate forwards the turn signal so session/turn
+      // teardown cancels the pending prompt. Mirrors the path-approval hook.
+      { longRunning: true },
     );
   }
 

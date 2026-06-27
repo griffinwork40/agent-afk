@@ -1,7 +1,7 @@
 /**
  * AFK-mode gate hook factory.
  *
- * Returns a `HookHandler` that blocks high-risk / irreversible tool calls when
+ * Returns a `HookHandler` that governs high-risk / irreversible tool calls when
  * the session is in `'autonomous'` (AFK) mode. The handler reads the current
  * mode at call time (not at construction time), so toggling the mode
  * mid-session is reflected immediately without reconstructing the registry.
@@ -10,12 +10,13 @@
  * when no human is watching. The posture addendum
  * ({@link module:agent/providers/anthropic-direct/afk-mode-addendum}) asks the
  * model to stop at one-way doors, but posture text is not a safety mechanism.
- * This gate is the enforcement half — it refuses the irreversible/destructive
+ * This gate is the enforcement half — it governs the irreversible/destructive
  * operations that must never run unattended on a model's say-so.
  *
  * Policy: the single source of truth for "how dangerous is this op" is
  * {@link classifyRisk} (`risk-classifier.ts`) — the same taxonomy the status
- * line and audit log use. AFK mode blocks anything it rates `'high'`:
+ * line and audit log use. AFK mode treats anything it rates `'high'` as
+ * requiring explicit operator approval:
  *   - destructive/irreversible bash (`rm`, `sudo`, `git push --force`,
  *     `git reset --hard`, `mkfs`/`dd`/`diskutil`, pipe-to-shell, `eval`,
  *     `chmod`/`chown`)
@@ -25,50 +26,162 @@
  * and `'safe'` ops (reads, tests, lint) are ALLOWED — autonomous work has to be
  * useful, and these are reversible enough to run unattended.
  *
+ * High-risk handling (v1.5 — approve/deny round-trip):
+ *   - MAIN session: instead of a hard block, route an approve/deny prompt to
+ *     the operator via the module-scope {@link elicitationRouter}. In AFK mode
+ *     that router is swapped to the ledger channel (`/afk on`), so the prompt
+ *     renders on the operator's phone (racing the keyboard) and the signed
+ *     answer round-trips back. Approve → the op runs (this single call); deny,
+ *     decline, cancel, or no answer within the timeout → blocked. This reuses
+ *     the proven elicitation hop and adds NO new ledger record. Because the
+ *     wait blocks on a human, the gate is registered `longRunning: true` and
+ *     forwards the turn signal so session/turn teardown cancels the prompt.
+ *   - DENY-ON-TIMEOUT: the elicitation router has no deadline by design (an AFK
+ *     operator may be away). For a *high-risk approval* we impose one anyway —
+ *     an unanswered destructive op degrades to the safe default (refused),
+ *     never silently runs and never stalls the run forever.
+ *   - SUBAGENTS: a forked sub-agent (`parentSessionId` set) never prompts — the
+ *     prompt would surface on the parent's surface with no attribution. It hard-
+ *     blocks, mirroring the path-approval hook's sub-agent auto-deny. The safety
+ *     ceiling still applies tree-wide; only the *approval affordance* is main-
+ *     session-only.
+ *   - NO OPERATOR REACHABLE: when no elicitation handler is installed (headless
+ *     surfaces, or AFK off), `route()` declines immediately → blocked. This is
+ *     the legacy hard-block behavior, preserved as the safe degrade.
+ *
  * Path-safety note: in `'autonomous'` mode the typed-file path-approval prompt
  * is disabled (`allowAll`, see `agent/permission-policy.ts`) so AFK does not
  * stall on keyboard prompts the operator cannot answer. That makes THIS gate
  * the sole path-containment layer in AFK — its workspace-escape rule (a
  * `write_file`/`edit_file` whose path resolves outside the session root →
- * `high` → blocked) is load-bearing, which is why the gate is wired with a
- * live `getCwd` (so a mid-session `/cwd` change cannot stale the boundary).
+ * `high` → approval-gated) is load-bearing, which is why the gate is wired with
+ * a live `getCwd` (so a mid-session `/cwd` change cannot stale the boundary).
  *
  * `send_telegram` is ALWAYS exempt: it is the operator's channel in AFK mode,
  * and the posture explicitly relies on it to surface Asking states.
  *
- * Deliberate divergence from the plan-mode gate: this gate does NOT skip
- * forked subagents (`context.parentSessionId`). Plan mode is a main-session
- * conversation affordance, so its gate exempts subagents. AFK mode is a SAFETY
- * ceiling — an unwatched subagent running `rm -rf` is exactly the risk the gate
- * exists to stop — so the ceiling applies tree-wide. Medium ops (e.g. a skill's
- * worktree commit) stay allowed, so this does not break skill flows; only
- * high-risk ops are refused, in the parent and in every child alike.
- *
  * Like the plan-mode gate, the bash classification is a best-effort honesty
  * guardrail, not a sandbox: bash is Turing-complete, so obfuscated writes can
  * slip through. It catches the destructive shapes a cooperative model naturally
- * emits and surfaces refusal so the operator can take over.
+ * emits and surfaces refusal/approval so the operator can take over.
  *
  * @module agent/afk-mode-gate
  */
 
-import type { HookContext, HookDecision } from './hooks.js';
+import type { HookContext, HookDecision, HookHandler } from './hooks.js';
 import type { PermissionMode } from './types/sdk-types.js';
+import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js';
 import { classifyRisk } from './risk-classifier.js';
+import { elicitationRouter } from './elicitation-router.js';
+
+/** Default deny-on-timeout window for a high-risk approval (ms). */
+const DEFAULT_APPROVAL_TIMEOUT_MS = 300_000;
+/** Cap the tool-input preview shown to the operator in the approval prompt. */
+const MAX_INPUT_PREVIEW = 300;
+
+export interface AfkModeGateOptions {
+  /**
+   * Max time to wait for an operator approve/deny before denying (deny-on-
+   * timeout). Defaults to {@link DEFAULT_APPROVAL_TIMEOUT_MS}.
+   */
+  approvalTimeoutMs?: number;
+  /**
+   * When false, high-risk ops hard-block immediately (legacy behaviour) instead
+   * of eliciting approval. Defaults to true.
+   */
+  promptForApproval?: boolean;
+  /**
+   * Elicitation entry point. Defaults to the module-scope
+   * {@link elicitationRouter}. Injectable for tests.
+   */
+  route?: (
+    request: ElicitationRequest,
+    options: { signal: AbortSignal },
+  ) => Promise<ElicitationResult>;
+}
 
 export function createAfkModeGate(
   getMode: () => PermissionMode,
   cwd?: string,
   getCwd?: () => string | undefined,
-): (context: HookContext) => HookDecision {
-  return function afkModeGate(context: HookContext): HookDecision {
+  opts?: AfkModeGateOptions,
+): HookHandler {
+  const approvalTimeoutMs = opts?.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
+  const promptForApproval = opts?.promptForApproval ?? true;
+  const route =
+    opts?.route ??
+    ((request: ElicitationRequest, options: { signal: AbortSignal }) =>
+      elicitationRouter.route(request, options));
+
+  async function requestApproval(
+    toolName: string,
+    input: unknown,
+    signal?: AbortSignal,
+  ): Promise<HookDecision> {
+    const request = buildApprovalRequest(toolName, input);
+
+    // A child controller so a deny-on-timeout (or a parent turn abort) cancels
+    // the pending elicitation prompt — the real router resolves to a decline on
+    // abort, so the phone prompt does not linger past the decision.
+    const ac = new AbortController();
+    const onParentAbort = (): void => ac.abort();
+    if (signal) {
+      if (signal.aborted) ac.abort();
+      else signal.addEventListener('abort', onParentAbort, { once: true });
+    }
+
+    const TIMEOUT = Symbol('afk-approval-timeout');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutP = new Promise<typeof TIMEOUT>((resolve) => {
+      timer = setTimeout(() => {
+        ac.abort();
+        resolve(TIMEOUT);
+      }, approvalTimeoutMs);
+      timer.unref?.();
+    });
+
+    let outcome: ElicitationResult | typeof TIMEOUT;
+    try {
+      // Race the operator's answer against the deny-on-timeout. Racing (rather
+      // than relying on the handler to observe the abort) guarantees progress
+      // even for a handler that ignores its signal.
+      outcome = await Promise.race([route(request, { signal: ac.signal }), timeoutP]);
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onParentAbort);
+    }
+
+    if (outcome === TIMEOUT) {
+      return blockDecision(
+        toolName,
+        `no approval arrived within ${Math.round(approvalTimeoutMs / 1000)}s`,
+      );
+    }
+    if (outcome.action !== 'accept') {
+      return blockDecision(
+        toolName,
+        outcome.action === 'cancel'
+          ? 'the operator cancelled the approval prompt'
+          : 'no operator approval was available',
+      );
+    }
+    const choice = String(outcome.content?.['choice'] ?? '').toLowerCase();
+    if (choice === 'approve') return {}; // operator approved this single call
+    return blockDecision(toolName, 'the operator denied it');
+  }
+
+  return function afkModeGate(
+    context: HookContext,
+    signal?: AbortSignal,
+  ): HookDecision | Promise<HookDecision> {
     if (context.event !== 'PreToolUse') return {};
-    // No subagent guard, on purpose: the safety ceiling applies tree-wide.
+    // No subagent guard on the ceiling itself, on purpose: the safety ceiling
+    // applies tree-wide. (The approval *affordance* below is main-session-only.)
     if (getMode() !== 'autonomous') return {};
 
     const { toolName } = context;
 
-    // The operator's channel is never blocked — the posture relies on it to
+    // The operator's channel is never gated — the posture relies on it to
     // surface Asking states from an unattended run.
     if (toolName === 'send_telegram') return {};
 
@@ -84,17 +197,71 @@ export function createAfkModeGate(
       workspaceRoot: root,
     });
 
-    if (risk === 'high') {
-      return {
-        decision: 'block',
-        reason:
-          `AFK mode: ${toolName} is refused — this op is high-risk or ` +
-          `irreversible, and AFK mode runs autonomously without a human ` +
-          `watching. Push an Asking summary to Telegram (send_telegram) and ` +
-          `stop, or have the operator run /afk off and take over.`,
-      };
+    if (risk !== 'high') return {};
+
+    // High-risk in AFK. A forked sub-agent must not prompt the operator (the
+    // prompt would surface on the parent's surface with no attribution), and the
+    // approval path can be opted out — both degrade to the legacy hard block.
+    if (context.parentSessionId !== undefined || !promptForApproval) {
+      return blockDecision(toolName, 'AFK mode runs autonomously without a human watching');
     }
 
-    return {};
+    // Main session: ask the operator to approve/deny (deny-on-timeout). Returns
+    // a Promise<HookDecision>; the gate is registered `longRunning: true`.
+    return requestApproval(toolName, context.input, signal);
+  };
+}
+
+/** Build the approve/deny form elicitation (same shape the path-approval hook
+ *  uses, so it renders via the proven REPL numbered-prompt / Telegram inline-
+ *  keyboard path). */
+function buildApprovalRequest(toolName: string, input: unknown): ElicitationRequest {
+  const preview = clipInput(input);
+  const message =
+    `AFK: \`${toolName}\` is high-risk / irreversible and AFK mode runs ` +
+    `unattended. Approve this single call?` +
+    (preview ? `\n\nInput: ${preview}` : '');
+  return {
+    serverName: 'agent-afk',
+    message,
+    mode: 'form',
+    title: 'AFK high-risk approval',
+    requestedSchema: {
+      type: 'object',
+      properties: {
+        choice: {
+          type: 'string',
+          title: 'Approve this high-risk operation?',
+          enum: ['approve', 'deny'],
+          description:
+            "'approve' runs this single call. 'deny' refuses it (the model " +
+            'gets an error and should push an Asking summary or take a safe path).',
+        },
+      },
+      required: ['choice'],
+    },
+  };
+}
+
+/** Compact, bounded preview of a tool input for the approval prompt. */
+function clipInput(input: unknown): string {
+  let s: string;
+  try {
+    s = typeof input === 'string' ? input : JSON.stringify(input);
+  } catch {
+    s = String(input);
+  }
+  if (!s) return '';
+  return s.length > MAX_INPUT_PREVIEW ? `${s.slice(0, MAX_INPUT_PREVIEW)}… [truncated]` : s;
+}
+
+/** The refusal decision surfaced to the model, with a cause-specific tail. */
+function blockDecision(toolName: string, why: string): HookDecision {
+  return {
+    decision: 'block',
+    reason:
+      `AFK mode: ${toolName} is refused — this op is high-risk or irreversible, ` +
+      `and ${why}. Push an Asking summary to Telegram (send_telegram) and stop, ` +
+      `or have the operator run /afk off and take over.`,
   };
 }
