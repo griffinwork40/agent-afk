@@ -69,6 +69,37 @@ describe('decideCommitMode', () => {
     expect(m.useBandHold).toBe(false); // → caller falls through to the legacy archive path
   });
 
+  it('two-table fix: a new block that fits alone takes band-hold even when the merged painted run exceeds maxBandModel', () => {
+    // The recurring "second table renders broken" bug. T1 (12 rows) is committed
+    // and FULLY painted (no pending rows), then T2 (14 rows) commits under the
+    // same tall overlay, contiguous with T1. The merged run = 26 > maxBandModel
+    // (20), but T2 ALONE = 14 <= 20. Pre-fix: overflowHasPending=false and
+    // overflowRun(26) > 20 → useBandHold=false → legacy overflow path splits T2's
+    // header to scrollback and paints a border-less copy on screen. Post-fix: the
+    // `textLines.length <= maxBandModel` clause routes T2 to band-hold, which
+    // archives the oldest 6 rows of T1 to scrollback and holds T2 whole.
+    const band = Array.from({ length: 12 }, (_, i) => `t1-row${i}`);
+    const t2 = Array.from({ length: 14 }, (_, i) => `t2-row${i}`);
+    const m = decideCommitMode(
+      base({
+        prevTopRow: 13,
+        frameTop: 13, // room = 13 - 1 = 12; T2 (14) does NOT fit → fitsAboveFrame false
+        lineCount: 14,
+        textLines: t2,
+        committedBand: band,
+        committedBandBottomRow: 12, // === frameTop - 1 → contiguous
+        committedBandPaintedRows: 12, // T1 FULLY painted → overflowHasPending false
+      }),
+    );
+    expect(m.fitsAboveFrame).toBe(false);
+    expect(m.overflowPriorContiguous).toBe(true);
+    expect(m.overflowHasPending).toBe(false); // the prior band has NO pending rows
+    expect(m.overflowRun).toHaveLength(26);
+    expect(m.overflowRun.length > m.maxBandModel).toBe(true); // merged run overflows
+    expect(t2.length <= m.maxBandModel).toBe(true); // but the new block fits alone
+    expect(m.useBandHold).toBe(true); // pre-fix this was false (the bug)
+  });
+
   it('review #649 P1: overflowHasPending forces band-hold even when the merged run exceeds maxBandModel', () => {
     // A full pending band (20 rows) contiguous with a tall frame (frameTop=2,
     // room=1) plus a 2-row commit → merged run = 22 > maxBandModel = 20. The
