@@ -13,7 +13,8 @@
  */
 
 import { build } from 'esbuild';
-import { readFileSync, writeFileSync, rmSync, mkdirSync, statSync, chmodSync, copyFileSync, readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, writeFileSync, rmSync, mkdirSync, statSync, chmodSync, copyFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { prepareSources } from './esbuild-plugin-inline-prompts.mjs';
@@ -103,6 +104,18 @@ try {
       __AFK_VERSION__: JSON.stringify(pkg.version),
     },
   });
+
+  // Invariant: package.json advertises dist/index.d.ts as the public types
+  // entry. esbuild emits JavaScript only, so the clean publish path must run a
+  // declaration-only TypeScript pass before the artifact is considered valid.
+  execFileSync('pnpm', ['exec', 'tsc', '-p', 'tsconfig.declarations.json'], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+  });
+  const typesEntry = join(distDir, 'index.d.ts');
+  if (!existsSync(typesEntry)) {
+    throw new Error('build:dist did not produce dist/index.d.ts');
+  }
 
   // Post-process: ensure exactly one shebang at the top of executable entry points
   for (const name of ['cli.mjs', 'telegram.mjs']) {
