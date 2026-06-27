@@ -456,8 +456,20 @@ export class SessionToolDispatcher implements ToolDispatcher {
     }
   }
 
+  // Contract: advertised schema MUST mirror the enforced allowlist.
+  // When an allowlist is configured, return only the schemas whose name is
+  // in that set — the model must not be shown tools the permission gate will
+  // reject (read-only / recon forks call bash, get "not in the configured
+  // allowlist", and waste turns).  An undefined allowlist means full access
+  // (all schemas returned unchanged), preserving the default unrestricted path.
+  // MCP tool visibility is preserved because the allowlist is already unioned
+  // with live MCP wire-names before reaching the dispatcher (see
+  // permissions.ts:withMcpToolsAllowed).
   get toolDefs(): readonly AnthropicToolDef[] {
-    return this.schemas;
+    const allowed = this.permissions?.allowedTools;
+    if (!allowed) return this.schemas;
+    const set = new Set(allowed);
+    return this.schemas.filter((s) => set.has(s.name));
   }
 
   /**
