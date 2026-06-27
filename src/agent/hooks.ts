@@ -48,6 +48,7 @@ export type HarnessHookEvent =
   | 'SubagentStop'
   | 'PreToolUse'
   | 'PostToolUse'
+  | 'PreCompact'
   | 'PostToolUseFailure'
   | 'Stop'
   | 'UserPromptSubmit';
@@ -176,6 +177,16 @@ export interface PostToolUseContext {
   output?: unknown;
 }
 
+export interface PreCompactContext {
+  event: 'PreCompact';
+  sessionId?: string;
+  /**
+   * 'manual' = /compact command or Telegram /compact. Only 'manual' is emitted today.
+   * 'auto' (threshold-based) is reserved for future wiring -- see TODO in query.ts.
+   */
+  trigger?: 'manual' | 'auto';
+}
+
 export interface PostToolUseFailureContext {
   event: 'PostToolUseFailure';
   sessionId?: string;
@@ -228,6 +239,7 @@ export type HookContext =
   | SubagentStopContext
   | PreToolUseContext
   | PostToolUseContext
+  | PreCompactContext
   | PostToolUseFailureContext
   | StopContext
   | UserPromptSubmitContext;
