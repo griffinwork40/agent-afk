@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.45.3] - 2026-06-27
+
+### Added
+- add PreCompact hook event (#283) (aa25b10)
+
+### Fixed
+- subset advertised tool schema to permission allowlist (#295) (331ae7b)
+
 ## [4.45.2] - 2026-06-27
 
 ### Fixed
