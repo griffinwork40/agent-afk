@@ -4,6 +4,17 @@
 > local code lane), then independent shadow-verification of the load-bearing
 > claims (3/3 CONFIRMED via independent re-derivation). Gap-closing plan:
 > `.afk/plans/agent-sdk-parity.md`.
+>
+> **Progress (updated 2026-06-26).** Top-3 ranked gaps now CLOSED on branch
+> `feature/agent-sdk-parity`:
+> - Dim 1 packaging + `query()`/`queryText()`/`queryStructured()` — `596da10`, `00298f3`
+> - Dim 4 in-process custom tools (`tool()` helper) — `be6d011`
+> - Dim 16 main-turn structured output (`sendMessageStructured`) — `00298f3`
+>
+> Certified by the full suite: 10,161 pass / 14 skip / 2 pre-existing env fails
+> (config slot-bindings, anthropic compact — both unrelated), coverage thresholds
+> met, `audit:sdk:check` green (no new SDK symbols — zod only). Next: Dim 6
+> `PreCompact` hook. Not yet pushed / no PR.
 
 ## Bottom line
 
@@ -14,10 +25,11 @@ on OpenAI-compatible / local model backends. Measured against the SDK's surface:
 
 - **~80–85% runtime / capability parity** — the harness does almost everything
   the SDK's harness does, and is ahead on several axes.
-- **~50–60% "usable as a published SDK" parity** — it *is* importable
-  (`src/index.ts` exports `AgentSession`, `SubagentManager`, providers, ~40
-  types), but there is no one-shot `query()`, no `exports`/`types` in the
-  manifest, and no in-process custom-tool API.
+- **"usable as a published SDK" parity** — was ~50–60% at assessment; the top-3
+  gaps are now closed (one-shot `query()`/`queryText()`/`queryStructured()`,
+  `exports`/`types` in the manifest, and an in-process `tool()` API), lifting
+  this materially. `src/index.ts` exports `AgentSession`, `SubagentManager`,
+  providers, `query*`, `tool`, and ~40 types.
 
 The two are partly apples-to-oranges: the Agent SDK is a **Claude-only wrapper
 around a closed binary**; agent-afk is a **multi-provider, fully-open,
@@ -28,10 +40,10 @@ the ones worth closing if outside developers are to adopt agent-afk *as an SDK*.
 
 | # | Dimension | Claude Agent SDK | agent-afk | Parity |
 |---|-----------|------------------|-----------|--------|
-| 1 | Entry point | `query({prompt, options})` one-shot + async-iterable streaming input | `new AgentSession(config)` → `sendMessage` / `sendMessageStream`; exported from `src/index.ts` | ◑ Partial — library yes, no one-shot |
+| 1 | Entry point | `query({prompt, options})` one-shot + async-iterable streaming input | `query()` / `queryText()` / `queryStructured()` one-shot (`src/agent/query.ts`) + `AgentSession`; `package.json` `exports`+`types` | ● Done (`596da10`, `00298f3`) — no async-iterable *input* yet |
 | 2 | Options bag | Large flat `Options` | `AgentConfig`: model, systemPrompt, maxTurns, tools allow/deny, mcp, hooks, permissionMode, canUseTool, maxBudgetUsd, resume/fork/persist, autoCompact, depth | ● High |
 | 3 | Streaming events | `SDKMessage` union + opt-in `stream_event` partials | `ProviderEvent` union (delta.text/reasoning, tool.use/output, turn.completed+usage, paused/resumed) | ● High |
-| 4 | **Custom tools** | `tool()` + `createSdkMcpServer()`, in-process, Zod | No per-tool registration; only whole-provider override or external MCP | ○ Gap |
+| 4 | **Custom tools** | `tool()` + `createSdkMcpServer()`, in-process, Zod | `tool(name, desc, zodSchema, handler)` → `AgentConfig.customTools`, threaded into both providers; builtins win on name collision (`src/agent/tools/custom-tool.ts`) | ● Done (`be6d011`) — no `createSdkMcpServer` shape |
 | 5 | External MCP | stdio/http/sse(+proxy) + runtime reconnect/toggle | stdio/streamable-http/sse/oauth, 4-tier config layering, `list_changed` refresh | ● High |
 | 6 | Hooks | ~12 core events incl. PreCompact, Notification, PermissionRequest, PostToolBatch | 9 dispatched: SessionStart/End, SubagentStart/Stop, PreToolUse, PostToolUse, PostToolUseFailure, Stop, UserPromptSubmit | ◑ Partial |
 | 7 | Subagents | `agents` option + fs agents + supportedAgents() | `SubagentManager.forkSubagent` w/ permission bubbling, abort graph, Zod schema, depth=3, + compose/DAG | ● Full / ahead |
@@ -43,32 +55,43 @@ the ones worth closing if outside developers are to adopt agent-afk *as an SDK*.
 | 13 | Model / fallback | alias/id + `fallbackModel` + setModel + effort + thinking — Claude-only | 5-tier `providerForModel` across Anthropic + OpenAI-compatible + local, slots, effort/thinking; no auto-fallback | ● Ahead on multi-provider, behind on auto-fallback |
 | 14 | Cost & usage | total_cost_usd + per-model usage + maxBudgetUsd | totalCostUsd/turn + session running cost/tokens + maxBudgetUsd + BudgetExceededError | ● High |
 | 15 | Abort/interrupt | AbortController + interrupt() + close() + stopTask | AbortGraph (transitive parent→child cascade, child→parent notify) + typed errors | ● Full / ahead |
-| 16 | **Structured output** | `outputFormat: json_schema` on the main query, w/ retry | Zod `outputSchema` on subagents only; absent on `sendMessage` | ◑ Partial |
+| 16 | **Structured output** | `outputFormat: json_schema` on the main query, w/ retry | `sendMessageStructured<T>()` + `queryStructured<T>()`: Zod-validated, bounded re-prompt retry (`maxRetries`, default 2) | ● Done (`00298f3`) |
 
 ● Full/High · ◑ Partial · ○ Gap
 
 ## Gaps that matter (ranked, for "build-your-own-agent" use)
 
-1. **In-process custom tools (Dim 4).** The SDK's `tool()`/`createSdkMcpServer()`
-   is the headline "extend the agent" primitive. agent-afk has no append-a-tool
-   API — the only construction-level seam is supplying a custom `provider`
-   (`AgentConfig.provider`, which carries its own dispatcher) or wiring an
-   external MCP server. **Precise framing (per shadow-verify):** the gap is "no
-   ergonomic per-tool `tool()`-style registration," *not* "impossible to add a
-   tool" — `src/agent/index.ts` does export `SessionToolDispatcher` +
-   `createBuiltinHandlers`, so a determined consumer can rebuild a dispatcher.
-2. **Programmatic packaging (Dim 1).** No `query()` one-shot, and `package.json`
-   lacks `"exports"` + `"types"` (the `dist/*.d.ts` files already build — they're
-   just undeclared). Type resolution is bundler-dependent under nodenext.
-3. **Structured output on the main turn (Dim 16).** Exists for subagents
-   (`ForkSubagentOptions.outputSchema`), absent on `sendMessage`; no json-schema
-   retry loop.
+### Closed (branch `feature/agent-sdk-parity`)
+
+1. ✅ **Programmatic packaging (Dim 1)** — `596da10`. `package.json` now declares
+   `"exports"` + `"types"`; `query()`/`queryText()` one-shot wrappers own the
+   session lifecycle.
+2. ✅ **In-process custom tools (Dim 4)** — `be6d011`. `tool(name, desc,
+   zodSchema, handler)` builds a `CustomToolDef` (wire schema via
+   `z.toJSONSchema`, safe-parse input validation that never throws);
+   `AgentConfig.customTools` threads into both the anthropic-direct and
+   openai-compatible providers; builtins win on name collision so a custom tool
+   cannot shadow `bash`/`write_file`. Reachable from `query()` via
+   `QueryOptions`.
+3. ✅ **Structured output on the main turn (Dim 16)** — `00298f3`.
+   `AgentSession.sendMessageStructured<T>()` + `queryStructured<T>()`: extract
+   JSON (reusing `extractStructuredOutput`), validate against a Zod schema, and
+   re-prompt with the validation error up to `maxRetries` (default 2) before
+   throwing. Composes `sendMessage` — no streaming-internals changes.
+
+### Remaining (ranked)
+
 4. **Hook coverage (Dim 6).** `PreCompact` (persist artifacts before
    compaction), `Notification`, `PermissionRequest` are the meaningful
-   absentees.
+   absentees. PreCompact is the next planned wave (the 7-touch-point additive
+   pattern is well-trodden — see the `UserPromptSubmit`/`PostToolUseFailure`
+   precedents).
 5. **Permission rules-engine (Dim 8).** `canUseTool` + read-only phase gating
    exist, but not persisted allow/deny/ask rule lists with settings-tier
    destinations.
+6. **Backlog.** Auto-`fallbackModel` (Dim 13), standalone session CRUD
+   list/rename/tag/delete (Dim 9), wire the `settingSources` stub (Dim 11),
+   slash-command library add/remove API (Dim 12).
 
 ## Where agent-afk is ahead
 
