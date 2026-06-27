@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.45.1] - 2026-06-27
+
+### Fixed
+- don't fire path-approval prompts in AFK mode (#292) (97dda5e)
+
 ## [4.45.0] - 2026-06-26
 
 ### Added
