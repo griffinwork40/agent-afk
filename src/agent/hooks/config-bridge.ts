@@ -64,6 +64,7 @@ export function loadAndRegisterConfigHooks(
     'SubagentStop',
     'PreToolUse',
     'PostToolUse',
+    'PreCompact',
     'PostToolUseFailure',
     'Stop',
     'UserPromptSubmit',

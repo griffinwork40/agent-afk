@@ -10,6 +10,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { SlashCommand, SlashContext, SessionStats } from './types.js';
 import { coreCommands } from './commands/core.js';
+import { createHookRegistry } from '../../agent/hooks.js';
+import { HookBlockedError } from '../../utils/errors.js';
 
 function makeStats(): SessionStats {
   return {
@@ -184,5 +186,92 @@ describe('/compact slash handler', () => {
     const error = lines.find((l) => l.startsWith('ERROR:'));
     expect(error).toBeDefined();
     expect(error).toContain('blew up');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PreCompact hook integration
+// ---------------------------------------------------------------------------
+
+describe('/compact PreCompact hook integration', () => {
+  const originalWrite = process.stdout.write.bind(process.stdout);
+  beforeEach(() => {
+    process.stdout.write = ((): boolean => true) as typeof process.stdout.write;
+  });
+  afterEach(() => {
+    process.stdout.write = originalWrite;
+  });
+
+  it('fires PreCompact hook with trigger=manual before compaction', async () => {
+    const session = fakeSession();
+    session.compact.mockResolvedValue({
+      compacted: true,
+      messagesBefore: 8,
+      messagesAfter: 3,
+    });
+    const registry = createHookRegistry();
+    const hookHandler = vi.fn(async () => ({}));
+    registry.register('PreCompact', hookHandler);
+    const sessionWithRegistry = { ...session, hookRegistry: registry, sessionId: 'test-sess' };
+    const { ctx } = makeCtx(sessionWithRegistry as unknown as typeof session);
+
+    await getCompactCmd().handler(ctx, '');
+
+    expect(hookHandler).toHaveBeenCalledTimes(1);
+    const [ctx0] = hookHandler.mock.calls[0] as [{ event: string; trigger: string }];
+    expect(ctx0.event).toBe('PreCompact');
+    expect(ctx0.trigger).toBe('manual');
+    expect(session.compact).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips compaction and renders info when PreCompact hook blocks', async () => {
+    const session = fakeSession();
+    const registry = createHookRegistry();
+    registry.register('PreCompact', async () => ({
+      decision: 'block' as const,
+      reason: 'frozen',
+    }));
+    const sessionWithRegistry = { ...session, hookRegistry: registry, sessionId: 'test-sess' };
+    const { ctx, lines } = makeCtx(sessionWithRegistry as unknown as typeof session);
+
+    await getCompactCmd().handler(ctx, '');
+
+    expect(session.compact).not.toHaveBeenCalled();
+    const info = lines.find((l) => l.startsWith('INFO:'));
+    expect(info).toBeDefined();
+    expect(info).toContain('frozen');
+  });
+
+  it('hooks without a registry proceed normally', async () => {
+    const session = fakeSession();
+    session.compact.mockResolvedValue({
+      compacted: true,
+      messagesBefore: 4,
+      messagesAfter: 2,
+    });
+    // No hookRegistry on session — tests that the undefined guard works.
+    const { ctx } = makeCtx(session);
+
+    await getCompactCmd().handler(ctx, '');
+
+    expect(session.compact).toHaveBeenCalledTimes(1);
+  });
+
+  it('converts HookBlockedError thrown by handler to an info skip message', async () => {
+    // Verify HookBlockedError is handled gracefully rather than propagating.
+    const session = fakeSession();
+    const registry = createHookRegistry();
+    registry.register('PreCompact', async () => {
+      throw new HookBlockedError('handler threw directly', 'PreCompact');
+    });
+    const sessionWithRegistry = { ...session, hookRegistry: registry, sessionId: 's' };
+    const { ctx, lines } = makeCtx(sessionWithRegistry as unknown as typeof session);
+
+    await getCompactCmd().handler(ctx, '');
+
+    expect(session.compact).not.toHaveBeenCalled();
+    // HookBlockedError thrown by handler surfaces as a block (fail-safe) -> skipped.
+    const info = lines.find((l) => l.startsWith('INFO:'));
+    expect(info).toBeDefined();
   });
 });

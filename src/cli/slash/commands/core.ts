@@ -12,6 +12,7 @@ import { divider } from '../../render.js';
 import { list } from '../registry.js';
 import { resetStats } from '../session-stats.js';
 import { REPL_SPINNER_OPTIONS } from '../../commands/interactive/shared.js';
+import { HookBlockedError, AbortError } from '../../../utils/errors.js';
 import type { SlashCommand } from '../types.js';
 
 const exitCmd: SlashCommand = {
@@ -55,7 +56,18 @@ const compactCmd: SlashCommand = {
       ...REPL_SPINNER_OPTIONS,
     }).start();
     try {
-      const result = await ctx.session.current.compact();
+      // Invariant: fire PreCompact before compaction so registered handlers can
+      // block or observe the operation. block -> HookBlockedError -> skip.
+      const session = ctx.session.current;
+      const hookRegistry = session.hookRegistry;
+      if (hookRegistry) {
+        await hookRegistry.dispatch({
+          event: 'PreCompact',
+          sessionId: session.sessionId,
+          trigger: 'manual',
+        });
+      }
+      const result = await session.compact();
       spinner.stop();
       if (!result.compacted) {
         const reason = result.reason ?? 'unknown';
@@ -80,6 +92,11 @@ const compactCmd: SlashCommand = {
       }
     } catch (err) {
       spinner.stop();
+      if (err instanceof AbortError) throw err;
+      if (err instanceof HookBlockedError) {
+        ctx.out.info(`Compaction skipped: ${err.reason ?? 'blocked by hook'}`);
+        return 'continue';
+      }
       ctx.out.error(err instanceof Error ? err.message : 'Unknown error');
     }
     return 'continue';
