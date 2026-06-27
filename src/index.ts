@@ -6,6 +6,8 @@
 
 export {
   AgentSession,
+  query,
+  queryText,
   SubagentManager,
   createCanUseToolHook,
   OpenAICompatibleProvider,
@@ -36,6 +38,7 @@ export type {
   ProviderEvent,
   ProviderQuery,
   ProviderUserTurn,
+  QueryOptions,
   RenderHints,
   ResponseMetadata,
   SDKStatus,
