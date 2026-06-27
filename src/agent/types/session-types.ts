@@ -213,11 +213,13 @@ export interface IAgentSession {
 
   /**
    * Return and CLEAR any implement-turn queued by an approved `exit_plan_mode`
-   * tool call. The REPL drains this post-turn and auto-submits it as a fresh
-   * user message (reproducing `/plan off`'s save-and-implement handoff).
-   * Returns `undefined` when nothing is pending.
+   * tool call. Atomically applies the deferred permission-mode flip (closing the
+   * mid-turn TOCTOU window) then returns the seed message. The REPL drains this
+   * post-turn and auto-submits the message as a fresh user turn (reproducing
+   * `/plan off`'s save-and-implement handoff). Returns `undefined` when nothing
+   * is pending.
    */
-  takePendingPlanExitSeed(): string | undefined;
+  takePendingPlanExitSeed(): Promise<string | undefined>;
 
   waitForInitialization(): Promise<SessionMetadata>;
 

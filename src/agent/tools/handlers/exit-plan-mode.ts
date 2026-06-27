@@ -8,13 +8,17 @@
  *   - approve → implement in `bypassPermissions` mode (no prompts, read/write anywhere)
  *   - keep planning (stay in plan; refine)
  *
- * On approval the handler (a) flips the live permission mode via the injected
- * {@link PlanExitControls.setPermissionMode} and (b) queues the SAME crafted
- * implement-turn `/plan off` uses ({@link buildPlanExitPrompt}) via
- * {@link PlanExitControls.requestImplementSeed}. The REPL drains that seed after
- * the current turn (`src/cli/commands/interactive/loop-iteration.ts`) and
- * auto-submits it — so the model receives an explicit, high-quality
- * save-and-implement instruction rather than self-directing from a tool string.
+ * On approval the handler records the approved mode ALONGSIDE the seed message
+ * via {@link PlanExitControls.requestImplementSeed} — the mode flip is NOT
+ * applied here. It is deferred to the post-turn drain boundary in the REPL loop
+ * (`src/cli/commands/interactive/loop-iteration.ts`), where
+ * `takePendingPlanExitSeed()` atomically applies the flip and promotes the seed.
+ * This mirrors how `/plan off` works: the gate stays LOCKED in plan mode for the
+ * entire current turn; it only opens for the clean, seeded implement-turn that
+ * follows — closing the mid-turn TOCTOU window.
+ *
+ * The seeded implement-turn is the SAME crafted prompt {@link buildPlanExitPrompt}
+ * produces — byte-identical to `/plan off`'s handoff.
  *
  * Invariant: the tool is offered ONLY while `permissionMode === 'plan'` (the
  * providers gate registration on that), and `PlanExitControls` is supplied only
@@ -78,6 +82,11 @@ export const exitPlanModeTool: AnthropicToolDef = {
 /**
  * Factory producing a handler closed over the session's {@link PlanExitControls}.
  * Registered per-query by the providers' `buildDispatcher` while in plan mode.
+ *
+ * Security note: the handler does NOT flip the permission mode. It records the
+ * approved mode alongside the seed via `controls.requestImplementSeed(msg, mode)`
+ * and the flip is applied atomically at the post-turn drain boundary — so the
+ * gate remains locked in plan mode for the rest of this turn.
  */
 export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandler {
   return async (_input, signal, context) => {
@@ -121,22 +130,13 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
 
     const mode = picked.includes('bypass') ? 'bypassPermissions' : 'default';
 
-    // Flip the live permission mode so the seeded implement-turn (next turn)
-    // runs with writes permitted. Surfaced as a tool error only if the flip
-    // itself rejects — without it, the seeded turn would collect gate refusals.
-    try {
-      await controls.setPermissionMode(mode);
-    } catch (err) {
-      return {
-        content: `Could not exit plan mode: ${err instanceof Error ? err.message : String(err)}`,
-        isError: true,
-      };
-    }
-
-    // Queue the SAME crafted save-and-implement turn `/plan off` seeds. The REPL
-    // drains it after this turn and auto-submits it as a fresh user message.
+    // Record the approved mode ALONGSIDE the seed. The permission flip is deferred
+    // to the post-turn drain boundary (loop-iteration.ts → takePendingPlanExitSeed)
+    // so the gate stays locked in plan mode for the remainder of this turn —
+    // closing the mid-turn TOCTOU window where the model could issue write tools
+    // in bypass mode before actually ending its turn.
     const plansDir = getProjectPlansDir(context?.resolveBase ?? context?.cwd ?? process.cwd());
-    controls.requestImplementSeed(buildPlanExitPrompt(plansDir));
+    controls.requestImplementSeed(buildPlanExitPrompt(plansDir), mode);
 
     return {
       content:

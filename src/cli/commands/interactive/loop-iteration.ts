@@ -180,7 +180,7 @@ export async function runInputLoop(
       // seeded save-and-implement handoff. A `/plan off` seed (set directly,
       // same turn) takes precedence if both are somehow present.
       if (seedBuffer === undefined) {
-        const planExitSeed = ctx.session.current.takePendingPlanExitSeed();
+        const planExitSeed = await ctx.session.current.takePendingPlanExitSeed();
         if (planExitSeed !== undefined) {
           seedBuffer = { text: planExitSeed, attachments: [] };
         }

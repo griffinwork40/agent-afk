@@ -119,7 +119,7 @@ function makeCtx(): InteractiveCtx {
       current: {
         sessionId: 'mock',
         waitForInitialization: vi.fn(async () => ({})),
-        takePendingPlanExitSeed: vi.fn(() => undefined),
+        takePendingPlanExitSeed: vi.fn(async () => undefined),
       },
     },
     stats: {
