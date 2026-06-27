@@ -28,6 +28,7 @@ import { randomUUID } from 'node:crypto';
 import type { AgentConfig } from '../../types/config-types.js';
 import type { EffortLevel } from '../../types/sdk-types.js';
 import { emitToolCall, emitSessionPhase } from '../../trace/emit.js';
+import { pathContainmentBypassed } from '../../permission-policy.js';
 import type { TraceWriter } from '../../trace/index.js';
 import type {
   ProviderQuery,
@@ -1206,8 +1207,9 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // Live enforcement, two fields kept in sync (else `/bypass off` fails
     // UNSAFE — badge clears while the agent stays unrestricted):
     //  1. file-tool containment ← dispatcher's allowAll (read fresh per call).
-    const bypass = this.currentPermissionMode === 'bypassPermissions';
-    this.toolDispatcher?.setAllowAll?.(bypass);
+    //     autonomous (AFK) bypasses containment alongside bypassPermissions.
+    const allowAll = pathContainmentBypassed(this.currentPermissionMode);
+    this.toolDispatcher?.setAllowAll?.(allowAll);
     //  2. path-approval hook ← provider's _currentPermissionMode (callback).
     this.onPermissionMode?.(this.currentPermissionMode);
   }

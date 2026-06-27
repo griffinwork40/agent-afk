@@ -1043,6 +1043,35 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
     expect(spy).toHaveBeenCalledWith('/new/path');
     q.close();
   });
+
+  it('setPermissionMode flips dispatcher allowAll: autonomous (AFK) + bypass ON, default/plan OFF', async () => {
+    const hookRegistry = createHookRegistry();
+    const dispatcher = new SessionToolDispatcher({
+      handlers: new Map<string, ToolHandler>(),
+      schemas: [] as AnthropicToolDef[],
+      hookRegistry,
+    });
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('x'),
+      config: baseConfig(),
+      toolDispatcher: dispatcher,
+    });
+    // AFK (autonomous) must bypass path containment like bypassPermissions so an
+    // unattended session never stalls on a keyboard path-approval prompt.
+    await q.setPermissionMode('autonomous');
+    expect(dispatcher.getGrants().allowAll).toBe(true);
+    await q.setPermissionMode('bypassPermissions');
+    expect(dispatcher.getGrants().allowAll).toBe(true);
+    // Containment-restoring modes turn it back off.
+    await q.setPermissionMode('default');
+    expect(dispatcher.getGrants().allowAll).toBe(false);
+    await q.setPermissionMode('plan');
+    expect(dispatcher.getGrants().allowAll).toBe(false);
+    q.close();
+  });
 });
 
 describe('OpenAICompatibleQuery — plan-mode addendum (U2)', () => {
