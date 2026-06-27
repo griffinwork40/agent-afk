@@ -6,7 +6,7 @@
  * Root cause being tested: `afk daemon` previously passed no `sessionFactory`
  * to `startDaemon`, so sessions fell through to `resolveProvider()` →
  * `new AnthropicDirectProvider()` with no executor opts, omitting the three
- * orchestration tools. Skill commands like `/forge-friction --auto` would
+ * orchestration tools. Skill commands like `/some-skill --auto` would
  * fail because the provider's permission gate rejected tool calls it had
  * no handler for.
  *
