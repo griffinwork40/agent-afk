@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.45.5] - 2026-06-27
+
+### Fixed
+- stop the second streamed table from rendering broken (missing header/lines) (#296) (9cb4880)
+
 ## [4.45.4] - 2026-06-27
 
 ### Fixed
