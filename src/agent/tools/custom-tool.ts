@@ -52,12 +52,15 @@ export function tool<S extends z.ZodType>(
   // superset of the AnthropicToolDef.input_schema contract.
   const jsonSchema = z.toJSONSchema(schema) as Record<string, unknown>;
 
-  // Normalise to the required `{ type: 'object', ... }` shape.  Most Zod
-  // object schemas already produce `{ type: 'object', properties: … }`;
-  // we force the `type` field to satisfy the AnthropicToolDef constraint.
+  // Contract: AnthropicToolDef.input_schema.type MUST be 'object' (tool inputs
+  // are always object-shaped). `type` is written AFTER the spread so a Zod
+  // schema that serialises to a non-object type (e.g. `z.string()` -> 'string')
+  // cannot override it and emit a wire schema the provider rejects. For the
+  // common `z.object()` case the spread already carries `type: 'object'`, so
+  // forcing it is a no-op; prior order let the spread win (PR #300 review).
   const input_schema: AnthropicToolDef['input_schema'] = {
-    type: 'object' as const,
     ...jsonSchema,
+    type: 'object' as const,
   };
 
   const toolSchema: AnthropicToolDef = {

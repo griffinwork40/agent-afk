@@ -61,10 +61,47 @@ export function withMcpToolsAllowed(
   base: ToolPermissionConfig | undefined,
   mcpToolWireNames: readonly string[],
 ): ToolPermissionConfig | undefined {
-  if (!base?.allowedTools || mcpToolWireNames.length === 0) return base;
+  return unionAllowedTools(base, mcpToolWireNames);
+}
+
+/**
+ * Union consumer-registered custom-tool names into a base permission allowlist.
+ *
+ * Mirrors {@link withMcpToolsAllowed}: a custom tool the consumer registered via
+ * `tool()` + `AgentConfig.customTools` is allowed by the gate when an allowlist
+ * is configured, because registering it IS the grant. Without this, a consumer
+ * who sets `allowedTools` sees their custom tool denied ("not in the configured
+ * allowlist") even though the model can see it. No-op when there is no allowlist
+ * (`undefined` → all tools allowed) or `customToolNames` is empty.
+ *
+ * Only the top-level provider in the library `query()` path carries
+ * `customTools`; restricted sub-agent providers (built in `tools/nesting.ts`)
+ * receive none, so this never widens a sub-agent's allowlist — no privilege
+ * escalation (same containment as the MCP union).
+ */
+export function withCustomToolsAllowed(
+  base: ToolPermissionConfig | undefined,
+  customToolNames: readonly string[],
+): ToolPermissionConfig | undefined {
+  return unionAllowedTools(base, customToolNames);
+}
+
+/**
+ * Shared allowlist-union impl behind {@link withMcpToolsAllowed} and
+ * {@link withCustomToolsAllowed}. Returns `base` unchanged (same reference)
+ * when there is no allowlist (`undefined` → all tools allowed), when `names`
+ * is empty, or when every name is already present — avoiding needless
+ * allocation per query. Otherwise returns a NEW config; `base.allowedTools`
+ * is never mutated.
+ */
+function unionAllowedTools(
+  base: ToolPermissionConfig | undefined,
+  names: readonly string[],
+): ToolPermissionConfig | undefined {
+  if (!base?.allowedTools || names.length === 0) return base;
   const merged = new Set(base.allowedTools);
   let changed = false;
-  for (const name of mcpToolWireNames) {
+  for (const name of names) {
     if (!merged.has(name)) {
       merged.add(name);
       changed = true;

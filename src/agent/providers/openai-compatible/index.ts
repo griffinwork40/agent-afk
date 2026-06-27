@@ -27,7 +27,7 @@ import { resolveSessionHookRegistry } from '../../hooks.js';
 import type { SubagentExecutor } from '../../tools/subagent-executor.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import type { ComposeExecutor } from '../../tools/compose-executor.js';
-import { withMcpToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
+import { withMcpToolsAllowed, withCustomToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
@@ -161,9 +161,14 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // pull identity on demand.
     schemas.push(getRuntimeStateTool);
     // Custom (consumer-registered) tool schemas are appended last so their
-    // names never silently shadow a builtin. Handler-side precedence is
-    // enforced separately in buildDispatcher (builtins win on collision).
-    for (const t of opts.customTools ?? []) schemas.push(t.schema);
+    // names never silently shadow a builtin. A custom schema whose name
+    // collides with an already-present builtin (or an earlier custom tool) is
+    // SKIPPED: otherwise the wire `tools` array carries a duplicate name and
+    // providers that require unique tool names reject the whole request. This
+    // mirrors the handler-map precedence in buildDispatcher (builtins win).
+    for (const t of opts.customTools ?? []) {
+      if (!schemas.some((s) => s.name === t.schema.name)) schemas.push(t.schema);
+    }
     this.schemas = schemas;
   }
 
@@ -401,16 +406,20 @@ export class OpenAICompatibleProvider implements ModelProvider {
       // makes a silent drop (c6892c6) a compile error.
       hookRegistry: resolveSessionHookRegistry(opts.hookRegistry, this.providerOpts.hookRegistry),
     };
-    // Union live MCP wire-names into the (statically-snapshotted) allowlist so
-    // OAuth servers whose tools were discovered after construction are not
-    // rejected by the gate while present in `schemas`/`handlers`. No-op when no
-    // mcpManager (e.g. restricted sub-agents) or no allowlist configured.
-    const effectivePermissions = this.providerOpts.mcpManager
-      ? withMcpToolsAllowed(
-          this.providerOpts.permissions,
-          this.providerOpts.mcpManager.getMcpToolWireNames(),
-        )
-      : this.providerOpts.permissions;
+    // Union live MCP wire-names AND consumer-registered custom-tool names into
+    // the (statically-snapshotted) allowlist so neither is rejected by the gate
+    // while present in `schemas`/`handlers`. No-op when there is no allowlist
+    // (undefined => all allowed) or nothing to union. Mirrors
+    // AnthropicDirectProvider; restricted sub-agents carry no customTools.
+    const effectivePermissions = withCustomToolsAllowed(
+      this.providerOpts.mcpManager
+        ? withMcpToolsAllowed(
+            this.providerOpts.permissions,
+            this.providerOpts.mcpManager.getMcpToolWireNames(),
+          )
+        : this.providerOpts.permissions,
+      (this.providerOpts.customTools ?? []).map((t) => t.schema.name),
+    );
     if (effectivePermissions !== undefined)
       dispatcherOpts.permissions = effectivePermissions;
     if (this.providerOpts.subagentExecutor !== undefined)

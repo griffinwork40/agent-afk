@@ -54,7 +54,7 @@ import { SessionToolDispatcher } from '../../tools/dispatcher.js';
 import { createBuiltinHandlers } from '../../tools/handlers/index.js';
 import { builtinToolSchemas, agentTool, skillTool, composeTool } from '../../tools/schemas.js';
 import { TOOL_SYSTEM_PROMPT_BASE, SLASH_COMMAND_ROUTING_PROMPT, BASH_PASSTHROUGH_PROMPT, MEMORY_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT_READONLY } from '../../tools/system-prompt.js';
-import { withMcpToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
+import { withMcpToolsAllowed, withCustomToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
 import type { HookRegistry } from '../../hooks.js';
 import { resolveSessionHookRegistry } from '../../hooks.js';
 import type { SubagentExecutor } from '../../tools/subagent-executor.js';
@@ -263,9 +263,14 @@ export class AnthropicDirectProvider implements ModelProvider {
     // per-query in `query()` and merged into the dispatcher handler map.
     schemas.push(getRuntimeStateTool);
     // Custom (consumer-registered) tool schemas are appended last so their
-    // names never silently shadow a builtin. Handler-side precedence is
-    // enforced separately in buildDispatcher (builtins win on collision).
-    for (const t of opts.customTools ?? []) schemas.push(t.schema);
+    // names never silently shadow a builtin. A custom schema whose name
+    // collides with an already-present builtin (or an earlier custom tool) is
+    // SKIPPED: otherwise the wire `tools` array carries a duplicate name and
+    // providers that require unique tool names reject the whole request. This
+    // mirrors the handler-map precedence in buildDispatcher (builtins win).
+    for (const t of opts.customTools ?? []) {
+      if (!schemas.some((s) => s.name === t.schema.name)) schemas.push(t.schema);
+    }
     // MCP tools are intentionally NOT pushed into `this.schemas` here.
     // Instead, `buildDispatcher()` serves them from `_mcpToolsCache` /
     // `_mcpHandlersCache`, which are populated on first use and invalidated by
@@ -406,13 +411,18 @@ export class AnthropicDirectProvider implements ModelProvider {
       // the plan-mode gate (the sole built-in PreToolUse hook) never reached
       // the dispatcher and write tools ran unblocked in plan mode (c6892c6).
       hookRegistry: resolveSessionHookRegistry(opts?.hookRegistry, this.hookRegistry),
-      // Union live MCP wire-names into the (statically-snapshotted) allowlist so
-      // OAuth servers whose tools were discovered after construction are not
-      // rejected by the gate while present in `schemas`/`handlers`. No-op when
-      // no mcpManager (e.g. restricted sub-agents) or no allowlist configured.
-      permissions: this.mcpManager
-        ? withMcpToolsAllowed(this.permissions, this.mcpManager.getMcpToolWireNames())
-        : this.permissions,
+      // Union live MCP wire-names AND consumer-registered custom-tool names into
+      // the (statically-snapshotted) allowlist so neither is rejected by the
+      // gate while present in `schemas`/`handlers`. No-op when there is no
+      // allowlist (undefined => all allowed) or nothing to union. Registering a
+      // custom tool is the grant (same as connecting an MCP server); restricted
+      // sub-agents carry no customTools, so this never widens their allowlist.
+      permissions: withCustomToolsAllowed(
+        this.mcpManager
+          ? withMcpToolsAllowed(this.permissions, this.mcpManager.getMcpToolWireNames())
+          : this.permissions,
+        this.customTools.map((t) => t.schema.name),
+      ),
       subagentExecutor: this.subagentExecutor,
       skillExecutor: this.skillExecutor,
       composeExecutor: this.composeExecutor,

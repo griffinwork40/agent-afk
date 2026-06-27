@@ -482,12 +482,18 @@ export interface AgentConfig {
    * (so the model knows the tool exists) and a validated `ToolHandler`
    * (so the dispatcher can execute it).
    *
-   * Custom tools are threaded to the active provider at construction time via
-   * `config.providerFactory` or the bare `resolveProvider` path — see
-   * `src/agent/tools/nesting.ts` and `src/agent/providers/index.ts`.
+   * Forwarded to the provider ONLY on the bare `resolveProvider` fallback path
+   * (neither `provider` nor `providerFactory` set) — the common library
+   * `query()` case. When `provider` (injected) or `providerFactory` is supplied,
+   * that provider owns its own tool wiring and these `customTools` are NOT
+   * auto-forwarded; register them on the injected/constructed provider yourself.
+   * See `resolveProvider` (`src/agent/providers/index.ts`) and `agent-session.ts`.
    *
    * Permission gate and PreToolUse/PostToolUse hooks apply identically to
-   * custom tools and built-in tools (no bypass).
+   * custom tools and built-in tools (no bypass). When an `allowedTools`
+   * allowlist is configured, custom-tool names are unioned into it
+   * automatically (see `withCustomToolsAllowed`), so registering a custom tool
+   * is the grant — it is not denied by the gate.
    */
   customTools?: import('../tools/custom-tool.js').CustomToolDef[];
 }

@@ -258,3 +258,112 @@ describe('AnthropicDirectProvider custom tool wiring', () => {
     expect(names).toContain('openai_custom_tool');
   });
 });
+
+// ---------------------------------------------------------------------------
+// 5. input_schema.type is forced to 'object' even for non-object schemas (#2)
+// ---------------------------------------------------------------------------
+
+describe('tool() input_schema type (PR #300 review fix #2)', () => {
+  it("forces input_schema.type to 'object' for a non-object Zod schema", () => {
+    // z.string() serialises to { type: 'string' }; the AnthropicToolDef
+    // contract requires an object input schema, so `type` must win over the
+    // serialised primitive type. Prior code let the spread override it.
+    const def = tool('stringy', 'string input', z.string(), async () => ({ content: '' }));
+    expect(def.schema.input_schema.type).toBe('object');
+  });
+
+  it("keeps input_schema.type 'object' for the common z.object case", () => {
+    const def = tool('objy', 'object input', z.object({ a: z.string() }), async () => ({ content: '' }));
+    expect(def.schema.input_schema.type).toBe('object');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. Builtin-name collision: schema is NOT duplicated, builtin handler wins (#1)
+// ---------------------------------------------------------------------------
+
+describe('custom tool / builtin name collision (PR #300 review fix #1)', () => {
+  // 'bash' is a built-in tool (schemas.ts) with a built-in handler
+  // (handlers/index.ts). A custom tool that reuses the name must neither
+  // duplicate the wire schema (providers reject duplicate tool names) nor
+  // replace the built-in handler.
+  it('AnthropicDirectProvider lists a colliding builtin name exactly once', () => {
+    const colliding = tool('bash', 'shadow attempt', z.object({ x: z.string() }), async () => ({ content: 'CUSTOM' }));
+    const provider = new AnthropicDirectProvider({ customTools: [colliding] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const names: string[] = (provider as any).schemas.map((s: { name: string }) => s.name);
+    expect(names.filter((n) => n === 'bash')).toHaveLength(1);
+  });
+
+  it('AnthropicDirectProvider keeps the builtin handler (custom does not win)', () => {
+    const colliding = tool('bash', 'shadow attempt', z.object({ x: z.string() }), async () => ({ content: 'CUSTOM' }));
+    const provider = new AnthropicDirectProvider({ customTools: [colliding] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dispatcher = (provider as any).buildDispatcher('default', {});
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const handler = (dispatcher as any).handlers.get('bash');
+    expect(handler).toBeDefined();
+    expect(handler).not.toBe(colliding.handler);
+  });
+
+  it('OpenAICompatibleProvider lists a colliding builtin name exactly once', () => {
+    const colliding = tool('bash', 'shadow attempt', z.object({ x: z.string() }), async () => ({ content: 'CUSTOM' }));
+    const provider = new OpenAICompatibleProvider({ customTools: [colliding] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const names: string[] = (provider as any).schemas.map((s: { name: string }) => s.name);
+    expect(names.filter((n) => n === 'bash')).toHaveLength(1);
+  });
+
+  it('skips an intra-custom duplicate name (keeps the first schema only)', () => {
+    const a = tool('dup_tool', 'first', z.object({ a: z.string() }), async () => ({ content: 'A' }));
+    const b = tool('dup_tool', 'second', z.object({ b: z.string() }), async () => ({ content: 'B' }));
+    const provider = new AnthropicDirectProvider({ customTools: [a, b] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const names: string[] = (provider as any).schemas.map((s: { name: string }) => s.name);
+    expect(names.filter((n) => n === 'dup_tool')).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. OpenAI dispatcher registers the custom HANDLER (not just the schema) (#5c)
+// ---------------------------------------------------------------------------
+
+describe('OpenAICompatibleProvider custom handler registration', () => {
+  it('registers a non-colliding custom handler in the dispatcher handler map', () => {
+    const myTool = tool('oai_handler_tool', 'desc', z.object({ q: z.string() }), async () => ({ content: 'ok' }));
+    const provider = new OpenAICompatibleProvider({ customTools: [myTool] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dispatcher = (provider as any).buildDispatcher('default', {});
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((dispatcher as any).handlers.get('oai_handler_tool')).toBe(myTool.handler);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. Custom-tool names are unioned into a configured allowlist (#3)
+// ---------------------------------------------------------------------------
+
+describe('custom tools + allowlist union (PR #300 review fix #3)', () => {
+  it('unions custom-tool names into a configured allowlist (Anthropic)', () => {
+    const myTool = tool('allowlisted_tool', 'desc', z.object({ x: z.string() }), async () => ({ content: '' }));
+    const provider = new AnthropicDirectProvider({
+      customTools: [myTool],
+      permissions: { allowedTools: ['bash'] },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dispatcher = (provider as any).buildDispatcher('default', {});
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const allowed: string[] = (dispatcher as any).permissions.allowedTools;
+    expect(allowed).toContain('allowlisted_tool');
+    expect(allowed).toContain('bash');
+  });
+
+  it('leaves permissions undefined (allow-all) when no allowlist is set (OpenAI)', () => {
+    const myTool = tool('no_allowlist_tool', 'desc', z.object({ x: z.string() }), async () => ({ content: '' }));
+    const provider = new OpenAICompatibleProvider({ customTools: [myTool] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dispatcher = (provider as any).buildDispatcher('default', {});
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((dispatcher as any).permissions).toBeUndefined();
+  });
+});
