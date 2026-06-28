@@ -35,6 +35,9 @@ function describeRestoredMode(mode: PermissionMode): string {
       return 'bypass restored — no prompts, read/write any path';
     case 'acceptEdits':
       return 'accept-edits restored — edits auto-approved';
+    case 'dontAsk':
+    case 'auto':
+      return 'previous mode restored — no approval prompts';
     case 'default':
     default:
       return 'default permissions restored';

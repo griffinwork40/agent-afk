@@ -123,6 +123,20 @@ describe('togglePlanMode', () => {
     expect(lines.join('\n').toLowerCase()).toContain('accept-edits restored');
   });
 
+  it('restores a non-ring mode (dontAsk) with an accurate status line', async () => {
+    const stats = makeStats({ permissionMode: 'plan' });
+    const { ctx, sess, lines } = makeCtx({ stats, prePlanMode: 'dontAsk' });
+
+    await togglePlanMode(ctx, false);
+
+    expect(sess.setPermissionMode).toHaveBeenCalledWith('dontAsk');
+    expect(stats.permissionMode).toBe('dontAsk');
+    const joined = lines.join('\n').toLowerCase();
+    // Must NOT mislabel as "default permissions restored".
+    expect(joined).toContain('previous mode restored');
+    expect(joined).not.toContain('default permissions restored');
+  });
+
   it('falls back to default on exit when no pre-plan mode was captured', async () => {
     const stats = makeStats({ permissionMode: 'plan' });
     const { ctx, sess } = makeCtx({ stats }); // prePlanMode undefined
