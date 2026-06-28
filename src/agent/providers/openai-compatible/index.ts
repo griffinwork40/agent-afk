@@ -33,6 +33,12 @@ import { SessionToolDispatcher } from '../../tools/dispatcher.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
 import { createBuiltinHandlers } from '../../tools/handlers/index.js';
 import {
+  exitPlanModeTool,
+  createExitPlanModeHandler,
+  EXIT_PLAN_MODE_TOOL_NAME,
+} from '../../tools/handlers/exit-plan-mode.js';
+import type { PlanExitControls } from '../../types/config-types.js';
+import {
   builtinToolSchemas,
   agentTool,
   skillTool,
@@ -215,6 +221,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ...(config.isSkillDispatch ? { isSkillDispatch: true } : {}),
           ...(config.isNonInteractive ? { isNonInteractive: true } : {}),
           ...(config.hookRegistry !== undefined ? { hookRegistry: config.hookRegistry } : {}),
+          ...(config.planExitControls !== undefined ? { planExitControls: config.planExitControls } : {}),
         });
 
     const buildOpts: {
@@ -324,6 +331,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
        * `providerOpts.hookRegistry` when unset. Mirrors AnthropicDirectProvider.
        */
       hookRegistry?: import('../../hooks.js').HookRegistry;
+      /**
+       * Session-control bridge for `exit_plan_mode`, forwarded from the query
+       * config (top-level sessions only). When set AND `permissionMode ===
+       * 'plan'`, the handler + schema are registered. Mirrors AnthropicDirectProvider.
+       */
+      planExitControls?: PlanExitControls;
     },
   ): SessionToolDispatcher {
     const handlers = createBuiltinHandlers(permissionMode, opts.cwd);
@@ -338,6 +351,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
     }
     if (opts.runtimeStateSource) {
       handlers.set('get_runtime_state', createGetRuntimeStateHandler(opts.runtimeStateSource));
+    }
+    // Plan-exit tool: registered per-query ONLY while in plan mode and only when
+    // the session supplied control callbacks (top-level sessions). Mirrors
+    // AnthropicDirectProvider.buildDispatcher; schema appended below to match.
+    const planExitControls = permissionMode === 'plan' ? opts.planExitControls : undefined;
+    if (planExitControls) {
+      handlers.set(EXIT_PLAN_MODE_TOOL_NAME, createExitPlanModeHandler(planExitControls));
     }
     // MCP handlers + schemas — fetched fresh each query so that
     // `notifications/tools/list_changed` refreshes are picked up without
@@ -367,8 +387,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const dispatcherOpts: ConstructorParameters<typeof SessionToolDispatcher>[0] = {
       handlers,
       // Constraint (semantic invariant): MCP schemas appended AFTER builtins
-      // so builtin tool names always take precedence in any overlap.
-      schemas: [...baseSchemas, ...mcpSchemas],
+      // so builtin tool names always take precedence in any overlap. Plan-exit
+      // schema appended last, only while the tool is active (plan mode).
+      schemas: [...baseSchemas, ...mcpSchemas, ...(planExitControls ? [exitPlanModeTool] : [])],
       // Session hook registry via the one canonical resolver (query-scoped
       // config registry wins over any constructor-provided one). Mirrors
       // AnthropicDirectProvider; the required key on the dispatcher options

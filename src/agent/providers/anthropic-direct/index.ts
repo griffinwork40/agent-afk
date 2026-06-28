@@ -52,6 +52,12 @@ export { resolveEffort, resolveMaxTokens, resolveThinkingParam } from './resolve
 import type { ToolDispatcher } from './tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
 import { createBuiltinHandlers } from '../../tools/handlers/index.js';
+import {
+  exitPlanModeTool,
+  createExitPlanModeHandler,
+  EXIT_PLAN_MODE_TOOL_NAME,
+} from '../../tools/handlers/exit-plan-mode.js';
+import type { PlanExitControls } from '../../types/config-types.js';
 import { builtinToolSchemas, agentTool, skillTool, composeTool } from '../../tools/schemas.js';
 import { TOOL_SYSTEM_PROMPT_BASE, SLASH_COMMAND_ROUTING_PROMPT, BASH_PASSTHROUGH_PROMPT, MEMORY_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT_READONLY } from '../../tools/system-prompt.js';
 import { withMcpToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
@@ -323,6 +329,12 @@ export class AnthropicDirectProvider implements ModelProvider {
        * preserves any constructor-provided registry.
        */
       hookRegistry?: import('../../hooks.js').HookRegistry;
+      /**
+       * Session-control bridge for the model-callable `exit_plan_mode` tool,
+       * forwarded from the query config (top-level sessions only). When set AND
+       * `permissionMode === 'plan'`, the handler + schema are registered.
+       */
+      planExitControls?: PlanExitControls;
     },
   ): SessionToolDispatcher {
     const handlers = createBuiltinHandlers(permissionMode, opts?.cwd);
@@ -360,6 +372,15 @@ export class AnthropicDirectProvider implements ModelProvider {
       }
     }
     const mcpSchemas = this._mcpToolsCache ?? [];
+    // Plan-exit tool: the model-callable `exit_plan_mode`, registered per-query
+    // ONLY while in plan mode and only when the session supplied control
+    // callbacks (top-level sessions). Mirrors the `get_runtime_state` per-query
+    // registration above; the schema is appended to the dispatcher's list to
+    // match so the model sees the tool exactly when it is callable.
+    const planExitControls = permissionMode === 'plan' ? opts?.planExitControls : undefined;
+    if (planExitControls) {
+      handlers.set(EXIT_PLAN_MODE_TOOL_NAME, createExitPlanModeHandler(planExitControls));
+    }
     return new SessionToolDispatcher({
       handlers,
       // Path-containment bypass: bypassPermissions (explicit) AND autonomous
@@ -368,8 +389,13 @@ export class AnthropicDirectProvider implements ModelProvider {
       // ceiling (see agent/permission-policy.ts).
       allowAll: pathContainmentBypassed(permissionMode),
       // Constraint (semantic invariant): MCP schemas appended AFTER builtins
-      // so builtin tool names always take precedence in any overlap.
-      schemas: [...this.schemas, ...mcpSchemas],
+      // so builtin tool names always take precedence in any overlap. The
+      // plan-exit schema is appended last, only while the tool is active.
+      schemas: [
+        ...this.schemas,
+        ...mcpSchemas,
+        ...(planExitControls ? [exitPlanModeTool] : []),
+      ],
       // Session hook registry via the one canonical resolver (query-scoped
       // config registry wins over any constructor-provided one). Without this
       // the plan-mode gate (the sole built-in PreToolUse hook) never reached
@@ -673,6 +699,7 @@ export class AnthropicDirectProvider implements ModelProvider {
           traceWriter: config.traceWriter,
           runtimeStateSource,
           hookRegistry: config.hookRegistry,
+          planExitControls: config.planExitControls,
         });
 
     // External-dispatcher branch: the caller owns routing for whatever tools

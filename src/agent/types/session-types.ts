@@ -211,6 +211,16 @@ export interface IAgentSession {
   setModel(model?: AgentModelInput): Promise<void>;
   setPermissionMode(mode: PermissionMode): Promise<void>;
 
+  /**
+   * Return and CLEAR any implement-turn queued by an approved `exit_plan_mode`
+   * tool call. Atomically applies the deferred permission-mode flip (closing the
+   * mid-turn TOCTOU window) then returns the seed message. The REPL drains this
+   * post-turn and auto-submits the message as a fresh user turn (reproducing
+   * `/plan off`'s save-and-implement handoff). Returns `undefined` when nothing
+   * is pending.
+   */
+  takePendingPlanExitSeed(): Promise<string | undefined>;
+
   waitForInitialization(): Promise<SessionMetadata>;
 
   getSessionIdentity(): SessionIdentity;
