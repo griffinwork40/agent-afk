@@ -124,6 +124,63 @@ describe('elicitationRouter', () => {
     expect(result.action).toBe('decline');
   });
 
+  describe('onActive callback', () => {
+    it('fires exactly once for a served request, immediately before the handler', async () => {
+      const order: string[] = [];
+      elicitationRouter.install(async () => {
+        order.push('handler');
+        return { action: 'accept' };
+      });
+      const onActive = vi.fn(() => { order.push('onActive'); });
+      await elicitationRouter.route(URL_REQUEST, { signal: NO_SIGNAL, onActive });
+      expect(onActive).toHaveBeenCalledTimes(1);
+      expect(order).toEqual(['onActive', 'handler']);
+    });
+
+    it('is NOT called when the signal is pre-aborted (fast-path decline)', async () => {
+      elicitationRouter.install(vi.fn().mockResolvedValue({ action: 'accept' } as ElicitationResult));
+      const controller = new AbortController();
+      controller.abort();
+      const onActive = vi.fn();
+      await elicitationRouter.route(URL_REQUEST, { signal: controller.signal, onActive });
+      expect(onActive).not.toHaveBeenCalled();
+    });
+
+    it('is NOT called when the signal is aborted while waiting in queue', async () => {
+      let resolveBlock!: () => void;
+      const block = new Promise<void>((res) => { resolveBlock = res; });
+      elicitationRouter.install(async () => {
+        await block;
+        return { action: 'accept' };
+      });
+      const controller = new AbortController();
+      const p1 = elicitationRouter.route(URL_REQUEST, { signal: NO_SIGNAL });
+      const onActive2 = vi.fn();
+      const p2 = elicitationRouter.route(URL_REQUEST, { signal: controller.signal, onActive: onActive2 });
+      controller.abort();
+      resolveBlock();
+      await p1;
+      await p2;
+      expect(onActive2).not.toHaveBeenCalled();
+    });
+
+    it('is NOT called when no handler is installed', async () => {
+      // No install() — no handler
+      const onActive = vi.fn();
+      const result = await elicitationRouter.route(URL_REQUEST, { signal: NO_SIGNAL, onActive });
+      expect(result.action).toBe('decline');
+      expect(onActive).not.toHaveBeenCalled();
+    });
+
+    it('a throwing onActive does not break the queue or the result', async () => {
+      elicitationRouter.install(async () => ({ action: 'accept' } as ElicitationResult));
+      const onActive = vi.fn(() => { throw new Error('boom from onActive'); });
+      const result = await elicitationRouter.route(URL_REQUEST, { signal: NO_SIGNAL, onActive });
+      expect(onActive).toHaveBeenCalledTimes(1);
+      expect(result.action).toBe('accept');
+    });
+  });
+
   describe('serial queue', () => {
     it('resolves requests in enqueue order — second never starts before first finishes', async () => {
       const order: number[] = [];

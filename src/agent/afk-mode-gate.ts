@@ -39,7 +39,10 @@
  *   - DENY-ON-TIMEOUT: the elicitation router has no deadline by design (an AFK
  *     operator may be away). For a *high-risk approval* we impose one anyway —
  *     an unanswered destructive op degrades to the safe default (refused),
- *     never silently runs and never stalls the run forever.
+ *     never silently runs and never stalls the run forever. The timer is armed
+ *     by the `onActive` callback so it starts only once this request leaves the
+ *     elicitation queue and is actually shown to the operator — a prior queued
+ *     prompt's open time is never charged against this op's window.
  *   - SUBAGENTS: a forked sub-agent (`parentSessionId` set) never prompts — the
  *     prompt would surface on the parent's surface with no attribution. It hard-
  *     blocks, mirroring the path-approval hook's sub-agent auto-deny. The safety
@@ -71,8 +74,10 @@
 import type { HookContext, HookDecision, HookHandler } from './hooks.js';
 import type { PermissionMode } from './types/sdk-types.js';
 import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js';
+import type { TraceWriter } from './trace/index.js';
 import { classifyRisk } from './risk-classifier.js';
 import { elicitationRouter } from './elicitation-router.js';
+import { emitHookDecision } from './trace/emit.js';
 
 /** Default deny-on-timeout window for a high-risk approval (ms). */
 const DEFAULT_APPROVAL_TIMEOUT_MS = 300_000;
@@ -96,8 +101,14 @@ export interface AfkModeGateOptions {
    */
   route?: (
     request: ElicitationRequest,
-    options: { signal: AbortSignal },
+    options: { signal: AbortSignal; onActive?: () => void },
   ) => Promise<ElicitationResult>;
+  /**
+   * Trace writer for structured audit events. When provided, the gate emits a
+   * `hook_decision` event on every approval decision (approve, deny, timeout,
+   * cancel, decline, or unrecognised choice). No-op when undefined.
+   */
+  traceWriter?: TraceWriter;
 }
 
 export function createAfkModeGate(
@@ -108,9 +119,10 @@ export function createAfkModeGate(
 ): HookHandler {
   const approvalTimeoutMs = opts?.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
   const promptForApproval = opts?.promptForApproval ?? true;
+  const traceWriter = opts?.traceWriter;
   const route =
     opts?.route ??
-    ((request: ElicitationRequest, options: { signal: AbortSignal }) =>
+    ((request: ElicitationRequest, options: { signal: AbortSignal; onActive?: () => void }) =>
       elicitationRouter.route(request, options));
 
   async function requestApproval(
@@ -118,6 +130,7 @@ export function createAfkModeGate(
     input: unknown,
     signal?: AbortSignal,
   ): Promise<HookDecision> {
+    const start = Date.now();
     const request = buildApprovalRequest(toolName, input);
 
     // A child controller so a deny-on-timeout (or a parent turn abort) cancels
@@ -132,42 +145,86 @@ export function createAfkModeGate(
 
     const TIMEOUT = Symbol('afk-approval-timeout');
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let armTimer!: () => void;
+    // Contract: timeoutP resolves only after armTimer() is called (i.e. once
+    // this request leaves the elicitation queue and is shown to the operator).
+    // If onActive never fires (no handler / pre-aborted / aborted-in-queue),
+    // the timer is never armed and timeoutP never resolves — that's correct,
+    // because route() resolves DECLINE and wins the race. This ensures a prior
+    // queued prompt's open time is never charged against this op's window.
     const timeoutP = new Promise<typeof TIMEOUT>((resolve) => {
-      timer = setTimeout(() => {
-        ac.abort();
-        resolve(TIMEOUT);
-      }, approvalTimeoutMs);
-      timer.unref?.();
+      armTimer = () => {
+        if (timer) return; // idempotent
+        // Start the deny-on-timeout window only once this request leaves the
+        // elicitation queue and is shown to the operator, so a prior queued
+        // prompt's open time is not charged against this op's window.
+        timer = setTimeout(() => {
+          ac.abort();
+          resolve(TIMEOUT);
+        }, approvalTimeoutMs);
+        timer.unref?.();
+      };
     });
+
+    // Helper to emit the structured audit trace and return the hook decision.
+    // Called on every exit path from requestApproval — centralises the emit so
+    // no path accidentally skips it, and keeps the mapping explicit.
+    function decide(
+      decision: HookDecision,
+      approvalOutcome: 'approved' | 'denied' | 'unrecognised' | 'timeout' | 'decline' | 'cancel',
+    ): HookDecision {
+      const durationMs = Date.now() - start;
+      const isBlock = decision.decision === 'block';
+      void emitHookDecision(traceWriter, {
+        hookEvent: 'PreToolUse',
+        ...(isBlock ? { decision: 'block' as const } : {}),
+        ...(isBlock && decision.reason !== undefined ? { reason: decision.reason } : {}),
+        ...(isBlock ? { blockedTool: toolName } : {}),
+        durationMs,
+        approvalOutcome,
+      });
+      return decision;
+    }
 
     let outcome: ElicitationResult | typeof TIMEOUT;
     try {
       // Race the operator's answer against the deny-on-timeout. Racing (rather
       // than relying on the handler to observe the abort) guarantees progress
-      // even for a handler that ignores its signal.
-      outcome = await Promise.race([route(request, { signal: ac.signal }), timeoutP]);
+      // even for a handler that ignores its signal. The timer is armed via
+      // onActive so it starts only when the prompt is actually shown.
+      outcome = await Promise.race([route(request, { signal: ac.signal, onActive: armTimer }), timeoutP]);
     } finally {
       if (timer) clearTimeout(timer);
       if (signal) signal.removeEventListener('abort', onParentAbort);
     }
 
     if (outcome === TIMEOUT) {
-      return blockDecision(
-        toolName,
-        `no approval arrived within ${Math.round(approvalTimeoutMs / 1000)}s`,
+      return decide(
+        blockDecision(toolName, `no approval arrived within ${Math.round(approvalTimeoutMs / 1000)}s`),
+        'timeout',
       );
     }
     if (outcome.action !== 'accept') {
-      return blockDecision(
-        toolName,
-        outcome.action === 'cancel'
-          ? 'the operator cancelled the approval prompt'
-          : 'no operator approval was available',
+      return decide(
+        blockDecision(
+          toolName,
+          outcome.action === 'cancel'
+            ? 'the operator cancelled the approval prompt'
+            : 'no operator approval was available',
+        ),
+        outcome.action === 'cancel' ? 'cancel' : 'decline',
       );
     }
     const choice = String(outcome.content?.['choice'] ?? '').toLowerCase();
-    if (choice === 'approve') return {}; // operator approved this single call
-    return blockDecision(toolName, 'the operator denied it');
+    if (choice === 'approve') return decide({}, 'approved'); // operator approved this single call
+    if (choice === 'deny') return decide(blockDecision(toolName, 'the operator denied it'), 'denied');
+    // action was 'accept' but choice ∉ {approve,deny} — a handler regression
+    // (dropped/garbled choice), not a deliberate deny. Fail closed with a distinct,
+    // diagnosable reason instead of masquerading as a deny.
+    return decide(
+      blockDecision(toolName, 'the approval prompt returned an unrecognised choice'),
+      'unrecognised',
+    );
   }
 
   return function afkModeGate(

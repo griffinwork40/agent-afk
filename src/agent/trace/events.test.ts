@@ -150,6 +150,39 @@ describe('hook_decision payload', () => {
     expect(TraceEventSchema.safeParse(onDisk).success).toBe(true);
   });
 
+  it('accepts durationMs and approvalOutcome from the AFK high-risk gate', () => {
+    expect(() =>
+      HookDecisionPayloadSchema.parse({
+        hookEvent: 'PreToolUse',
+        decision: 'block',
+        reason: 'the operator denied it',
+        blockedTool: 'bash',
+        durationMs: 1234,
+        approvalOutcome: 'denied',
+      }),
+    ).not.toThrow();
+  });
+
+  it('accepts approvalOutcome:approved with no decision key (pass-through)', () => {
+    expect(() =>
+      HookDecisionPayloadSchema.parse({
+        hookEvent: 'PreToolUse',
+        durationMs: 42,
+        approvalOutcome: 'approved',
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects an unknown approvalOutcome value', () => {
+    expect(() =>
+      HookDecisionPayloadSchema.parse({
+        hookEvent: 'PreToolUse',
+        durationMs: 10,
+        approvalOutcome: 'maybe',
+      }),
+    ).toThrow();
+  });
+
   it('rejects unknown hookEvent', () => {
     expect(() =>
       HookDecisionPayloadSchema.parse({

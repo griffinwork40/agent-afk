@@ -82,6 +82,10 @@ export const HookDecisionPayloadSchema = z.object({
   reason: z.string().optional(),
   blockedTool: z.string().optional(),
   injectedContextBytes: z.number().int().nonnegative().optional(),
+  /** Set only by the AFK high-risk approval gate. Wall-clock ms from gate entry to decision. */
+  durationMs: z.number().nonnegative().optional(),
+  /** Set only by the AFK high-risk approval gate. Fine-grained approval outcome. */
+  approvalOutcome: z.enum(['approved', 'denied', 'unrecognised', 'timeout', 'decline', 'cancel']).optional(),
 });
 
 // ---------------------------------------------------------------------------

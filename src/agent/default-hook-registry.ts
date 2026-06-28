@@ -21,6 +21,7 @@ import {
 import { createBashRestrictionHook } from './tools/hooks/bash-restriction-hook.js';
 import type { GrantManager } from '../cli/slash/commands/allow-dir.js';
 import type { PermissionMode } from './types/sdk-types.js';
+import type { TraceWriter } from './trace/index.js';
 import type { LoadedHooksConfig } from './hooks/config-loader.js';
 import { loadAndRegisterConfigHooks } from './hooks/config-bridge.js';
 
@@ -79,7 +80,7 @@ export function createDefaultHookRegistry(
   memoryStore?: MemoryStore,
   getPermissionMode?: () => PermissionMode,
   hookConfig?: LoadedHooksConfig,
-  agentOptions?: { cwd?: string; sessionId?: string },
+  agentOptions?: { cwd?: string; sessionId?: string; traceWriter?: TraceWriter },
   getCwd?: () => string | undefined,
 ): DefaultHookRegistryResult {
   const registry = createHookRegistry();
@@ -97,7 +98,9 @@ export function createDefaultHookRegistry(
       // gate's workspace-escape rule tracks a mid-session /cwd change — it is
       // the SOLE path-safety layer in AFK (the path-approval prompt is disabled
       // via allowAll for 'autonomous'; see agent/permission-policy.ts).
-      createAfkModeGate(getPermissionMode, agentOptions?.cwd, getCwd),
+      createAfkModeGate(getPermissionMode, agentOptions?.cwd, getCwd, {
+        ...(agentOptions?.traceWriter !== undefined ? { traceWriter: agentOptions.traceWriter } : {}),
+      }),
       // Longrunning: on a high-risk op the gate awaits an operator approve/deny
       // via elicitationRouter.route() (deny-on-timeout). Bypass the 30s per-
       // handler deadline; the gate forwards the turn signal so session/turn

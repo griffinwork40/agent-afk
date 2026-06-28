@@ -662,7 +662,7 @@ export function registerChatCommand(program: Command): void {
               : {}),
           hookRegistry: createDefaultHookRegistry((info) => {
             console.log(formatSubagentCompletion(info));
-          }, 'cli', sharedMemoryStore, undefined, loadHooksConfig({ cwd: worktreeCwd }), { cwd: worktreeCwd }).registry,
+          }, 'cli', sharedMemoryStore, undefined, loadHooksConfig({ cwd: worktreeCwd }), { cwd: worktreeCwd, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}) }).registry,
           ...(systemPrompt !== undefined ? { systemPrompt } : {}),
           ...(systemPromptSource !== undefined ? { systemPromptSource } : {}),
           ...(thinking !== undefined ? { thinking } : {}),

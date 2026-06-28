@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createAfkModeGate } from './afk-mode-gate.js';
 import type { PermissionMode, ElicitationResult } from './types/sdk-types.js';
+import type { TraceWriter } from './trace/index.js';
 
 describe('createAfkModeGate', () => {
   // By default inject a route that DECLINES — i.e. no operator approval is
@@ -221,8 +222,13 @@ describe('createAfkModeGate — high-risk approval round-trip (v1.5)', () => {
   });
 
   it('TIMEOUT: blocks (deny-on-timeout) when no answer arrives before approvalTimeoutMs', async () => {
-    // A route that never resolves — only the timeout can settle the race.
-    const route = vi.fn(() => new Promise<ElicitationResult>(() => { /* never */ }));
+    // A route that calls onActive (arms the timer) then never resolves —
+    // only the deny-on-timeout can settle the race. Without calling onActive
+    // the timer would never be armed and the test would stall.
+    const route = vi.fn((_req: unknown, opts: { signal: AbortSignal; onActive?: () => void }) => {
+      opts.onActive?.(); // arm the timer
+      return new Promise<ElicitationResult>(() => { /* never */ });
+    });
     const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, {
       route,
       approvalTimeoutMs: 50,
@@ -275,5 +281,178 @@ describe('createAfkModeGate — high-risk approval round-trip (v1.5)', () => {
     expect(seenSignal).toBeDefined();
     expect(seenSignal!.aborted).toBe(true);
     expect(result.decision).toBe('block');
+  });
+
+  // Finding 1: distinguish malformed `accept` from a real deny
+  it('DENY: blocks with distinct reason when the operator denies (choice=deny)', async () => {
+    const route = vi.fn(
+      async (): Promise<ElicitationResult> => ({ action: 'accept', content: { choice: 'deny' } }),
+    );
+    const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, { route });
+    const result = await gate({ ...HIGH_RISK });
+    expect(result.decision).toBe('block');
+    expect(result.reason).toContain('the operator denied it');
+  });
+
+  it('UNRECOGNISED: blocks with a diagnosable reason when choice is empty', async () => {
+    const route = vi.fn(
+      async (): Promise<ElicitationResult> => ({ action: 'accept', content: {} }),
+    );
+    const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, { route });
+    const result = await gate({ ...HIGH_RISK });
+    expect(result.decision).toBe('block');
+    expect(result.reason).toContain('unrecognised choice');
+    // Must NOT claim the operator deliberately denied it
+    expect(result.reason).not.toContain('the operator denied it');
+  });
+
+  it('UNRECOGNISED: blocks with a diagnosable reason when choice is an unknown value', async () => {
+    const route = vi.fn(
+      async (): Promise<ElicitationResult> => ({ action: 'accept', content: { choice: 'maybe' } }),
+    );
+    const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, { route });
+    const result = await gate({ ...HIGH_RISK });
+    expect(result.decision).toBe('block');
+    expect(result.reason).toContain('unrecognised choice');
+    expect(result.reason).not.toContain('the operator denied it');
+  });
+
+  it('CANCEL: blocks with the cancel reason when operator cancels the prompt', async () => {
+    const route = vi.fn(
+      async (): Promise<ElicitationResult> => ({ action: 'cancel' }),
+    );
+    const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, { route });
+    const result = await gate({ ...HIGH_RISK });
+    expect(result.decision).toBe('block');
+    expect(result.reason).toContain('the operator cancelled');
+  });
+
+  // Finding 3: emit a structured audit trace on every approval decision
+  describe('trace emission', () => {
+    function fakeWriter(): { writer: TraceWriter; calls: ReturnType<typeof vi.fn> } {
+      const write = vi.fn().mockResolvedValue(undefined);
+      return { writer: { write } as unknown as TraceWriter, calls: write };
+    }
+
+    it('emits hook_decision with approvalOutcome:approved on an approve', async () => {
+      const { writer, calls } = fakeWriter();
+      const route = vi.fn(
+        async (): Promise<ElicitationResult> => ({ action: 'accept', content: { choice: 'approve' } }),
+      );
+      const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, {
+        route,
+        traceWriter: writer,
+      });
+      const result = await gate({ ...HIGH_RISK });
+      expect(result.decision).toBeUndefined(); // allowed
+      expect(calls).toHaveBeenCalledTimes(1);
+      const [event] = calls.mock.calls[0] as [{ kind: string; payload: Record<string, unknown> }];
+      expect(event.kind).toBe('hook_decision');
+      expect(event.payload['approvalOutcome']).toBe('approved');
+      expect(typeof event.payload['durationMs']).toBe('number');
+    });
+
+    it('emits hook_decision with approvalOutcome:denied on a deny', async () => {
+      const { writer, calls } = fakeWriter();
+      const route = vi.fn(
+        async (): Promise<ElicitationResult> => ({ action: 'accept', content: { choice: 'deny' } }),
+      );
+      const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, {
+        route,
+        traceWriter: writer,
+      });
+      const result = await gate({ ...HIGH_RISK });
+      expect(result.decision).toBe('block');
+      expect(calls).toHaveBeenCalledTimes(1);
+      const [event] = calls.mock.calls[0] as [{ kind: string; payload: Record<string, unknown> }];
+      expect(event.payload['approvalOutcome']).toBe('denied');
+      expect(typeof event.payload['durationMs']).toBe('number');
+    });
+
+    it('emits hook_decision with approvalOutcome:timeout on a timeout', async () => {
+      const { writer, calls } = fakeWriter();
+      const route = vi.fn(
+        (_req: unknown, opts: { signal: AbortSignal; onActive?: () => void }) => {
+          // Arm the timer so it can fire
+          opts.onActive?.();
+          return new Promise<ElicitationResult>(() => { /* never */ });
+        },
+      );
+      const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, {
+        route,
+        approvalTimeoutMs: 30,
+        traceWriter: writer,
+      });
+      const result = await gate({ ...HIGH_RISK });
+      expect(result.decision).toBe('block');
+      expect(calls).toHaveBeenCalledTimes(1);
+      const [event] = calls.mock.calls[0] as [{ kind: string; payload: Record<string, unknown> }];
+      expect(event.payload['approvalOutcome']).toBe('timeout');
+    });
+
+    it('emits hook_decision with approvalOutcome:unrecognised for a garbled choice', async () => {
+      const { writer, calls } = fakeWriter();
+      const route = vi.fn(
+        async (): Promise<ElicitationResult> => ({ action: 'accept', content: {} }),
+      );
+      const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, {
+        route,
+        traceWriter: writer,
+      });
+      await gate({ ...HIGH_RISK });
+      const [event] = calls.mock.calls[0] as [{ kind: string; payload: Record<string, unknown> }];
+      expect(event.payload['approvalOutcome']).toBe('unrecognised');
+    });
+  });
+
+  // Finding 2: deny-on-timeout timer starts only after onActive fires
+  describe('onActive gates the timer', () => {
+    it('timeout does NOT fire when onActive is never called (route declines without calling it)', async () => {
+      // A route that immediately declines without calling onActive — timer must
+      // not arm, so even with a tiny approvalTimeoutMs the test does not stall.
+      const route = vi.fn(
+        async (): Promise<ElicitationResult> => ({ action: 'decline' }),
+      );
+      const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, {
+        route,
+        approvalTimeoutMs: 20,
+      });
+      const result = await gate({ ...HIGH_RISK });
+      // Declines without calling onActive → timer never arms → route result wins
+      expect(result.decision).toBe('block');
+      expect(result.reason).toContain('no operator approval was available');
+    });
+
+    it('timeout fires only after onActive is invoked', async () => {
+      // A route that calls onActive then never resolves → timeout should fire.
+      const route = vi.fn(
+        (_req: unknown, opts: { signal: AbortSignal; onActive?: () => void }) => {
+          opts.onActive?.();
+          return new Promise<ElicitationResult>(() => { /* never */ });
+        },
+      );
+      const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, {
+        route,
+        approvalTimeoutMs: 30,
+      });
+      const result = await gate({ ...HIGH_RISK });
+      expect(result.decision).toBe('block');
+      expect(result.reason).toMatch(/within/i);
+    });
+
+    it('approve after onActive fires is still allowed (end-to-end)', async () => {
+      const route = vi.fn(
+        async (_req: unknown, opts: { signal: AbortSignal; onActive?: () => void }): Promise<ElicitationResult> => {
+          opts.onActive?.();
+          return { action: 'accept', content: { choice: 'approve' } };
+        },
+      );
+      const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, {
+        route,
+        approvalTimeoutMs: 5_000,
+      });
+      const result = await gate({ ...HIGH_RISK });
+      expect(result.decision).toBeUndefined(); // allowed
+    });
   });
 });
