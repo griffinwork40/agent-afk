@@ -1,0 +1,23 @@
+# Dependabot configuration
+# Docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+#
+# The repo root is a pnpm workspace; the docs site under website/ is a SEPARATE
+# standalone npm app with its own lockfile (website/package-lock.json). Without
+# an explicit entry, Dependabot never surfaces security or breaking-change
+# updates for the Fumadocs/Next.js stack vendored there. This adds weekly
+# coverage scoped to that directory.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/website"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(dev-deps)"
+    groups:
+      # Fumadocs ships core/ui/mdx in lockstep — collapse them into one PR.
+      fumadocs:
+        patterns:
+          - "fumadocs-*"
