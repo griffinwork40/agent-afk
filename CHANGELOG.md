@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.4.0] - 2026-06-28
+
+### Added
+- export framework skill/facet API for out-of-tree plugins (#305) (8905788)
+
 ## [5.3.2] - 2026-06-28
 
 ### Fixed
