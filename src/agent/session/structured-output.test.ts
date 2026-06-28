@@ -20,10 +20,9 @@ const NAME_SCHEMA = z.object({ name: z.string() });
 
 describe('AgentSession.sendMessageStructured()', () => {
   it('parses and returns the assistant JSON on first attempt', async () => {
-    const provider = createMockProvider();
+    const provider = createMockProvider({ respond: () => '{"name":"world"}' });
     const session = new AgentSession({ model: 'sonnet', provider, apiKey: 'test-key' });
     try {
-      // echo => `Echo: {"name":"world"}` => extracted + parsed.
       const out = await session.sendMessageStructured('{"name":"world"}', NAME_SCHEMA);
       expect(out).toEqual({ name: 'world' });
     } finally {
@@ -67,11 +66,46 @@ describe('AgentSession.sendMessageStructured()', () => {
       await session.close();
     }
   });
+
+  it('injects the JSON schema into the first-attempt prompt by default', async () => {
+    const prompts: string[] = [];
+    const provider = createMockProvider({
+      respond: (turn) => {
+        prompts.push(typeof turn.content === 'string' ? turn.content : '');
+        return '{"name":"world"}';
+      },
+    });
+    const session = new AgentSession({ model: 'sonnet', provider, apiKey: 'test-key' });
+    try {
+      await session.sendMessageStructured('classify this', NAME_SCHEMA);
+      expect(prompts[0]!).toContain('JSON Schema');
+      expect(prompts[0]!).toContain('"name"'); // schema field name reaches the model
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('sends content verbatim when injectSchemaPrompt is false', async () => {
+    const prompts: string[] = [];
+    const provider = createMockProvider({
+      respond: (turn) => {
+        prompts.push(typeof turn.content === 'string' ? turn.content : '');
+        return '{"name":"world"}';
+      },
+    });
+    const session = new AgentSession({ model: 'sonnet', provider, apiKey: 'test-key' });
+    try {
+      await session.sendMessageStructured('{"name":"world"}', NAME_SCHEMA, { injectSchemaPrompt: false });
+      expect(prompts[0]!).toBe('{"name":"world"}');
+    } finally {
+      await session.close();
+    }
+  });
 });
 
 describe('queryStructured()', () => {
   it('resolves to the parsed object and closes the session', async () => {
-    const provider = createMockProvider();
+    const provider = createMockProvider({ respond: () => '{"v":42}' });
     const out = await queryStructured(
       '{"v":42}',
       z.object({ v: z.number() }),

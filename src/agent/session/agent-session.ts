@@ -26,7 +26,7 @@ import { HookBlockedError } from '../../utils/errors.js';
 import { classifyClosureReason } from './closure-reason.js';
 import { buildClosureGuidance } from './closure-guidance.js';
 import { extractStructuredOutput } from '../output-extractor.js';
-import type { ZodType } from 'zod';
+import { z, type ZodType } from 'zod';
 import type {
   AccountInfo,
   AgentConfig,
@@ -500,15 +500,25 @@ export class AgentSession implements IAgentSession {
     // Composes sendMessage() turns — no streaming-internals changes. Each
     // attempt is one model turn; on a schema mismatch we re-prompt with the
     // validation error so the model can self-correct, bounded by maxRetries.
-    const { maxRetries = 2, ...sendOpts } = options;
+    const { maxRetries = 2, injectSchemaPrompt = true, ...sendOpts } = options;
+    // Communicate the target shape to the model (parity with the Claude Agent
+    // SDK's outputFormat: json_schema). target: 'openapi-3.0' suppresses the
+    // draft-2020-12 `$schema` marker the default emitter adds, keeping the block
+    // compatible with both Anthropic and OpenAI-compatible backends.
+    const schemaBlock = injectSchemaPrompt
+      ? '\n\nRespond with ONLY a JSON object (optionally in a ```json fence) that conforms to this JSON Schema:\n```json\n' +
+        JSON.stringify(z.toJSONSchema(schema, { target: 'openapi-3.0' })) +
+        '\n```'
+      : '';
     let lastError = '';
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const prompt =
         attempt === 0
-          ? content
+          ? content + schemaBlock
           : `Your previous response did not match the required JSON schema.\n` +
             `Validation error: ${lastError}\n` +
-            'Respond again with ONLY a JSON object (optionally in a ```json fence) that satisfies the schema.';
+            'Respond again with ONLY a JSON object (optionally in a ```json fence) that satisfies the schema.' +
+            schemaBlock;
       const message = await this.sendMessage(prompt, sendOpts);
       const candidate = extractStructuredOutput(message.content);
       const parsed = schema.safeParse(candidate);

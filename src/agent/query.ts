@@ -100,12 +100,13 @@ export async function queryText(
 export async function queryStructured<T>(
   prompt: string,
   schema: ZodType<T>,
-  options: QueryOptions & { maxRetries?: number } = {},
+  options: QueryOptions & { maxRetries?: number; injectSchemaPrompt?: boolean } = {},
 ): Promise<T> {
-  const { maxRetries, ...rest } = options;
+  const { maxRetries, injectSchemaPrompt, ...rest } = options;
   const session = sessionFor(rest);
-  const structuredOpts: StructuredMessageOptions =
-    maxRetries !== undefined ? { maxRetries } : {};
+  const structuredOpts: StructuredMessageOptions = {};
+  if (maxRetries !== undefined) structuredOpts.maxRetries = maxRetries;
+  if (injectSchemaPrompt !== undefined) structuredOpts.injectSchemaPrompt = injectSchemaPrompt;
   try {
     return await session.sendMessageStructured(prompt, schema, structuredOpts);
   } finally {

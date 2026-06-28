@@ -152,4 +152,12 @@ export interface StructuredMessageOptions extends SendMessageOptions {
    * turns). On exhaustion, `sendMessageStructured` throws.
    */
   maxRetries?: number;
+  /**
+   * When true (default), the JSON Schema derived from the validation schema is
+   * injected into the prompt — on the first attempt and on every retry — so the
+   * model is told the exact shape to produce (mirrors the Claude Agent SDK's
+   * `outputFormat: json_schema`). Set false when the caller has already
+   * engineered the schema into `content` and wants it sent verbatim.
+   */
+  injectSchemaPrompt?: boolean;
 }
