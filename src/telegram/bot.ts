@@ -20,6 +20,7 @@ import {
   composeTelegramElicitation,
 } from './elicitation-telegram.js';
 import { elicitationRouter } from '../agent/elicitation-router.js';
+import { ensurePluginEntrypointsLoaded } from '../agent/tools/skill-bridge.js';
 import { SessionWatchManager, resolveWatchTarget, listWatchableSessions } from './watch.js';
 import { readPresenceFiles } from '../agent/awareness/presence.js';
 import { readSessionKey, signAbortRequest, freshChannelId } from '../agent/afk-channel.js';
@@ -303,6 +304,13 @@ export class TelegramBot {
       );
       elicitationRouter.install(composeTelegramElicitation(askHandler, formHandler));
     }
+
+    // Import any plugin JS entrypoints (manifest `main`) before launching: each
+    // per-chat session assembles its skill manifest synchronously at
+    // construction, so a plugin's registerSkill() side-effects must already have
+    // run before the first update is handled. Idempotent + non-fatal; no-op
+    // without plugins.
+    await ensurePluginEntrypointsLoaded();
 
     this.log('Starting bot...');
     await this.bot.launch();

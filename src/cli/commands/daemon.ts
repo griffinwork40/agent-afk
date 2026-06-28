@@ -29,6 +29,7 @@ import { SubagentManager } from '../../agent/subagent.js';
 import { SubagentExecutor } from '../../agent/tools/subagent-executor.js';
 import { SkillExecutor } from '../../agent/tools/skill-executor.js';
 import { ComposeExecutor } from '../../agent/tools/compose-executor.js';
+import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory, createStubParentSession } from '../../agent/tools/nesting.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import { BUILTIN_TOOL_NAMES } from '../../agent/tools/schemas.js';
@@ -396,6 +397,15 @@ export function registerDaemonCommand(program: Command): void {
       const daemonModel = getModel();
       const daemonApiKey = getApiKey();
       const daemonCwdResolved = daemonCwd !== undefined && daemonCwd.length > 0 ? daemonCwd : undefined;
+
+      // Import any plugin JS entrypoints (manifest `main`) once at daemon
+      // startup, before the session factory is built and before the scheduler
+      // spawns any task session. Each daemon-spawned session assembles its skill
+      // manifest synchronously at construction, so a plugin's registerSkill()
+      // side-effects must already have run for its code-backed skills (e.g. a
+      // scheduled task command) to resolve. Idempotent + non-fatal; no-op
+      // without plugins.
+      await ensurePluginEntrypointsLoaded();
 
       // Build a fully-wired session factory so skill/agent/compose tools are
       // available in daemon-spawned sessions. Without this, commands like
