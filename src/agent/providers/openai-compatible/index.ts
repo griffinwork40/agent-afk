@@ -382,6 +382,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       if (!handlers.has(t.schema.name)) {
         handlers.set(t.schema.name, t.handler);
       }
+    }
     // Plan-exit tool: registered per-query ONLY while in plan mode and only when
     // the session supplied control callbacks (top-level sessions). Mirrors
     // AnthropicDirectProvider.buildDispatcher; schema appended below to match.
