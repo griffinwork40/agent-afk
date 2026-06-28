@@ -26,8 +26,10 @@ import type { SkillExecutor } from './skill-executor.js';
 import type { ComposeExecutor } from './compose-executor.js';
 import type { ToolHandler, ToolHandlerContext, ConcurrencyClassifier } from './types.js';
 import { checkToolPermission, type ToolPermissionConfig } from './permissions.js';
+import type { CanUseTool, PermissionResult } from '../types/sdk-types.js';
 import { classifyBashCommand } from './readonly-bash.js';
 import { getSessionGrantsPath } from '../../paths.js';
+import { emitHookDecision } from '../trace/emit.js';
 import type { TraceWriter } from '../trace/index.js';
 import { builtinToolSchemas, agentTool, skillTool, composeTool } from './schemas.js';
 import { memoryToolSchemas } from '../memory/memory-tools.js';
@@ -132,6 +134,16 @@ export interface SessionToolDispatcherOptions {
    */
   hookRegistry: HookRegistry | undefined;
   permissions?: ToolPermissionConfig;
+  /**
+   * Optional in-process permission callback. When set it is consulted on every
+   * tool call AFTER the static allowlist (`permissions`) but BEFORE the
+   * read-only-bash gate, so an allowlist hard-deny still wins. A `deny` result
+   * short-circuits the call with a permission-denied error; an `allow` result
+   * may carry `updatedInput` to rewrite the call's input before the handler
+   * runs. `ask` is resolved inside the callback (see `createCanUseToolHook`),
+   * so the dispatcher only ever observes a final allow/deny. No-op when unset.
+   */
+  canUseTool?: CanUseTool;
   subagentExecutor?: SubagentExecutor;
   skillExecutor?: SkillExecutor;
   composeExecutor?: ComposeExecutor;
@@ -196,6 +208,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly schemas: AnthropicToolDef[];
   private readonly hookRegistry: HookRegistry | undefined;
   private readonly permissions: ToolPermissionConfig | undefined;
+  private readonly canUseTool: CanUseTool | undefined;
   private readonly subagentExecutor: SubagentExecutor | undefined;
   private readonly skillExecutor: SkillExecutor | undefined;
   private readonly composeExecutor: ComposeExecutor | undefined;
@@ -241,6 +254,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this.schemas = opts.schemas;
     this.hookRegistry = opts.hookRegistry;
     this.permissions = opts.permissions;
+    this.canUseTool = opts.canUseTool;
     this.subagentExecutor = opts.subagentExecutor;
     this.skillExecutor = opts.skillExecutor;
     this.composeExecutor = opts.composeExecutor;
@@ -537,6 +551,64 @@ export class SessionToolDispatcher implements ToolDispatcher {
     };
   }
 
+  /**
+   * Consult the optional `canUseTool` permission callback for a single call.
+   * Returns a permission-denied {@link ToolResult} to short-circuit when the
+   * policy denies (or throws — fail-closed), or `null` to proceed. On an
+   * `allow` result carrying `updatedInput`, the call's input is rewritten in
+   * place so both the handler and the PostToolUse hook observe the new value.
+   *
+   * Invariant: callers MUST invoke this AFTER `checkToolPermission` (the static
+   * allowlist wins) and BEFORE the read-only-bash gate, in BOTH `execute()` and
+   * the `executeBatch()` phase-1 loop, so parallel tool calls are gated too.
+   */
+  private async runCanUseTool(call: ToolCall): Promise<ToolResult | null> {
+    if (!this.canUseTool) return null;
+    let result: PermissionResult;
+    try {
+      result = await this.canUseTool(call.name, (call.input ?? {}) as Record<string, unknown>, {
+        signal: call.signal,
+        toolUseID: call.id,
+      });
+    } catch (err) {
+      // Fail closed: a throwing policy denies the call rather than crashing the
+      // turn. The message names the cause so the denial is never silent.
+      await emitHookDecision(this.traceWriter, {
+        hookEvent: 'PreToolUse',
+        decision: 'block',
+        blockedTool: call.name,
+        reason: `Tool "${call.name}" denied by canUseTool (threw): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      });
+      return {
+        content: `Tool "${call.name}" denied by canUseTool (threw): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        isError: true,
+        failureClass: 'permission-denied',
+      };
+    }
+    if (result.behavior === 'deny') {
+      await emitHookDecision(this.traceWriter, {
+        hookEvent: 'PreToolUse',
+        decision: 'block',
+        blockedTool: call.name,
+        reason: result.message || `Tool "${call.name}" denied by permission policy`,
+      });
+      return {
+        content: result.message || `Tool "${call.name}" denied by permission policy`,
+        isError: true,
+        failureClass: 'permission-denied',
+      };
+    }
+    // allow — apply an optional input rewrite in place.
+    if (result.updatedInput !== undefined) {
+      call.input = result.updatedInput;
+    }
+    return null;
+  }
+
   async execute(call: ToolCall): Promise<ToolResult> {
     if (call.signal.aborted) {
       return { content: 'Tool call aborted', isError: true, failureClass: 'abort' };
@@ -579,6 +651,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
         failureClass: 'permission-denied',
       };
     }
+
+    // 2a. In-process permission callback (canUseTool). Consulted AFTER the
+    // static allowlist (a hard allowlist deny wins) and BEFORE the bash gate.
+    // A `deny` short-circuits here; an `allow` may have rewritten `call.input`.
+    const canUseDeny = await this.runCanUseTool(call);
+    if (canUseDeny) return canUseDeny;
 
     // 2b. Read-only-skill bash gate. Runs after the permission check so the
     // allowlist denial (if any) takes precedence; blocks mutating bash while
@@ -749,6 +827,16 @@ export class SessionToolDispatcher implements ToolDispatcher {
           isError: true,
           failureClass: 'permission-denied',
         };
+        blocked.add(i);
+        continue;
+      }
+
+      // In-process permission callback (canUseTool) — same precedence as
+      // execute(): after the allowlist, before the bash gate. Parallel tool
+      // calls must be gated too, else the policy is bypassed on batched rounds.
+      const canUseDeny = await this.runCanUseTool(call);
+      if (canUseDeny) {
+        results[i] = canUseDeny;
         blocked.add(i);
         continue;
       }
