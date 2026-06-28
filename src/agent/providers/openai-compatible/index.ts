@@ -28,6 +28,7 @@ import type { SubagentExecutor } from '../../tools/subagent-executor.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import type { ComposeExecutor } from '../../tools/compose-executor.js';
 import { withMcpToolsAllowed, withCustomToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
+import type { CanUseTool } from '../../types/sdk-types.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
@@ -74,6 +75,8 @@ export interface OpenAICompatibleProviderOptions {
   hookRegistry?: HookRegistry;
   /** Tool permission gate (allowlist/denylist). */
   permissions?: ToolPermissionConfig;
+  /** In-process permission callback, forwarded to the session dispatcher. */
+  canUseTool?: CanUseTool;
   subagentExecutor?: SubagentExecutor;
   skillExecutor?: SkillExecutor;
   composeExecutor?: ComposeExecutor;
@@ -449,6 +452,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
       dispatcherOpts.skillExecutor = this.providerOpts.skillExecutor;
     if (this.providerOpts.composeExecutor !== undefined)
       dispatcherOpts.composeExecutor = this.providerOpts.composeExecutor;
+    // In-process permission callback (Dim 8) — parity with anthropic-direct.
+    if (this.providerOpts.canUseTool !== undefined)
+      dispatcherOpts.canUseTool = this.providerOpts.canUseTool;
     if (opts.cwd !== undefined) dispatcherOpts.cwd = opts.cwd;
     if (opts.readRoots !== undefined) dispatcherOpts.readRoots = opts.readRoots;
     if (opts.writeRoots !== undefined) dispatcherOpts.writeRoots = opts.writeRoots;

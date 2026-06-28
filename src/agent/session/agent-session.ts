@@ -259,7 +259,10 @@ export class AgentSession implements IAgentSession {
       const resolveProviderFn = this.config.providerFactory
         ? this.config.providerFactory
         : (m: string | undefined) =>
-            resolveProvider(m, undefined, { customTools: this.config.customTools });
+            resolveProvider(m, undefined, {
+              customTools: this.config.customTools,
+              canUseTool: this.config.canUseTool,
+            });
       this.providerQuery = new ProviderRouter(
         { prompt: promptIterable, config: this.config },
         {

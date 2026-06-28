@@ -7,6 +7,7 @@ import {
 import { builtinToolSchemas } from './schemas.js';
 import type { ToolCall } from './types.js';
 import type { ToolHandler } from './types.js';
+import type { CanUseTool } from '../types/sdk-types.js';
 import { createHookRegistryImpl } from '../hook-registry.js';
 
 function makeCall(overrides?: Partial<ToolCall>): ToolCall {
@@ -1243,5 +1244,130 @@ describe('SessionToolDispatcher — repeat-loop circuit breaker', () => {
     const r = await d2.execute(makeCall());
     expect(r.isError).toBeUndefined();
     expect(r.content).toBe('hello');
+  });
+});
+
+describe('SessionToolDispatcher — canUseTool (Dim 8 in-process permission policy)', () => {
+  const allowAll: CanUseTool = async () => ({ behavior: 'allow' });
+
+  it('allow result lets the call through to the handler', async () => {
+    const handler = vi.fn(echoHandler());
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', handler]]),
+      canUseTool: allowAll,
+    });
+    const r = await d.execute(makeCall());
+    expect(r.isError).toBeUndefined();
+    expect(r.content).toBe('hello');
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('deny result short-circuits before the handler runs', async () => {
+    const handler = vi.fn(echoHandler());
+    const denyEcho: CanUseTool = async (name) => ({
+      behavior: 'deny',
+      message: `policy denied ${name}`,
+    });
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', handler]]),
+      canUseTool: denyEcho,
+    });
+    const r = await d.execute(makeCall());
+    expect(r.isError).toBe(true);
+    expect(r.content).toBe('policy denied echo');
+    expect(r.failureClass).toBe('permission-denied');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('deny overrides a tool that the static allowlist permits (policy can restrict)', async () => {
+    // 'echo' IS allowlisted, but the policy denies it. canUseTool runs AFTER
+    // the allowlist, so it can further restrict — never widen.
+    const handler = vi.fn(echoHandler());
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', handler]]),
+      permissions: { allowedTools: ['echo'] },
+      canUseTool: async () => ({ behavior: 'deny', message: 'nope' }),
+    });
+    const r = await d.execute(makeCall());
+    expect(r.isError).toBe(true);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('static allowlist still wins: canUseTool cannot widen a denied tool', async () => {
+    // 'forbidden' is NOT allowlisted. Even though the policy would allow it,
+    // checkToolPermission runs first and denies — canUseTool never widens.
+    const handler = vi.fn(echoHandler());
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['forbidden', handler]]),
+      permissions: { allowedTools: ['echo'] },
+      canUseTool: allowAll,
+    });
+    const r = await d.execute(makeCall({ name: 'forbidden' }));
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('not in the configured allowlist');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('allow.updatedInput rewrites the input the handler receives', async () => {
+    const handler = vi.fn(echoHandler());
+    const rewrite: CanUseTool = async () => ({
+      behavior: 'allow',
+      updatedInput: { message: 'rewritten' },
+    });
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', handler]]),
+      canUseTool: rewrite,
+    });
+    const r = await d.execute(makeCall({ input: { message: 'original' } }));
+    expect(r.content).toBe('rewritten');
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed: a throwing policy denies rather than crashing the turn', async () => {
+    const handler = vi.fn(echoHandler());
+    const boom: CanUseTool = async () => {
+      throw new Error('policy bug');
+    };
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', handler]]),
+      canUseTool: boom,
+    });
+    const r = await d.execute(makeCall());
+    expect(r.isError).toBe(true);
+    expect(r.failureClass).toBe('permission-denied');
+    expect(r.content).toContain('policy bug');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('gates parallel calls in executeBatch (policy not bypassed on batched rounds)', async () => {
+    const handler = vi.fn(echoHandler());
+    const policy: CanUseTool = async (_name, input) => {
+      const msg = (input as { message?: string }).message;
+      return msg === 'deny-me'
+        ? { behavior: 'deny', message: 'blocked in batch' }
+        : { behavior: 'allow' };
+    };
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', handler]]),
+      permissions: { allowedTools: ['echo'] },
+      canUseTool: policy,
+    });
+    const results = await d.executeBatch([
+      makeCall({ id: 'a', input: { message: 'ok' } }),
+      makeCall({ id: 'b', input: { message: 'deny-me' } }),
+    ]);
+    expect(results[0]!.isError).toBeUndefined();
+    expect(results[0]!.content).toBe('ok');
+    expect(results[1]!.isError).toBe(true);
+    expect(results[1]!.content).toBe('blocked in batch');
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('is a no-op when canUseTool is unset (default path unchanged)', async () => {
+    const handler = vi.fn(echoHandler());
+    const d = makeDispatcher({ handlers: new Map<string, ToolHandler>([['echo', handler]]) });
+    const r = await d.execute(makeCall());
+    expect(r.content).toBe('hello');
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 });
