@@ -22,9 +22,11 @@ import type {
   MessageChunk,
   ResponseMetadata,
   SendMessageOptions,
+  StructuredMessageOptions,
 } from './message-types.js';
 import type { ProviderCompactResult, ProviderQuery } from '../provider.js';
 import type { HookRegistry } from '../hooks.js';
+import type { ZodType } from 'zod';
 
 /** Agent session state */
 export type SessionState = 'idle' | 'processing' | 'streaming' | 'compacting' | 'closed';
@@ -178,6 +180,25 @@ export interface IAgentSession {
 
   sendMessage(content: string, options?: SendMessageOptions): Promise<Message>;
   sendMessageStream(content: string | ContentBlockParam[]): AsyncIterable<OutputEvent>;
+
+  /**
+   * Send a message and return its assistant response parsed against a Zod
+   * schema. Extracts a JSON payload from the reply (last fenced ```json block
+   * or last balanced object) and validates it; on mismatch, re-prompts the
+   * model with the validation error up to `maxRetries` times (default 2)
+   * before throwing. Mirrors the Claude Agent SDK's `outputFormat:
+   * json_schema`. Composes `sendMessage` turns — no streaming-path changes.
+   *
+   * Optional (`?`) so adding it does not break external implementers of
+   * `IAgentSession`. `AgentSession` always implements it; the library
+   * `query()`/`queryStructured()` path calls it on the concrete class, never
+   * through this interface.
+   */
+  sendMessageStructured?<T>(
+    content: string,
+    schema: ZodType<T>,
+    options?: StructuredMessageOptions,
+  ): Promise<T>;
 
   interrupt(): Promise<void>;
 

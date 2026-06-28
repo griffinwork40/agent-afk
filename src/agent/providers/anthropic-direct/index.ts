@@ -60,7 +60,7 @@ import {
 import type { PlanExitControls } from '../../types/config-types.js';
 import { builtinToolSchemas, agentTool, skillTool, composeTool } from '../../tools/schemas.js';
 import { TOOL_SYSTEM_PROMPT_BASE, SLASH_COMMAND_ROUTING_PROMPT, BASH_PASSTHROUGH_PROMPT, MEMORY_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT_READONLY } from '../../tools/system-prompt.js';
-import { withMcpToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
+import { withMcpToolsAllowed, withCustomToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
 import type { HookRegistry } from '../../hooks.js';
 import { resolveSessionHookRegistry } from '../../hooks.js';
 import type { SubagentExecutor } from '../../tools/subagent-executor.js';
@@ -163,6 +163,19 @@ export interface AnthropicDirectProviderOptions {
    * reference — never reconstructed per-fork.
    */
   mcpManager?: import('../../mcp/index.js').McpManager;
+  /**
+   * In-process custom tools registered by the library consumer. Each entry
+   * supplies an `AnthropicToolDef` schema (added to the provider's schema
+   * list at construction time) and a `ToolHandler` (registered in the
+   * per-query dispatcher's handler map).
+   *
+   * Custom tools run through the same permission gate and PreToolUse /
+   * PostToolUse hooks as built-in tools — no bypass.
+   *
+   * Precedence: builtins > MCP > custom (a custom tool whose name collides
+   * with a builtin is silently skipped — see `buildDispatcher`).
+   */
+  customTools?: import('../../tools/custom-tool.js').CustomToolDef[];
 }
 
 /**
@@ -188,6 +201,8 @@ export class AnthropicDirectProvider implements ModelProvider {
   private readonly readOnlyBash: boolean;
   /** When set, MCP tools are merged into `schemas` + dispatcher handlers per query. */
   private readonly mcpManager: import('../../mcp/index.js').McpManager | undefined;
+  /** In-process custom tools registered by the library consumer. */
+  private readonly customTools: import('../../tools/custom-tool.js').CustomToolDef[];
   /**
    * Mutable read-root list shared by reference across all per-query
    * dispatchers. Mutations via `addReadRoot`/`revokeRoot` on any dispatcher
@@ -253,6 +268,15 @@ export class AnthropicDirectProvider implements ModelProvider {
     // gating like `agent`/`skill`/`compose`. The source is constructed
     // per-query in `query()` and merged into the dispatcher handler map.
     schemas.push(getRuntimeStateTool);
+    // Custom (consumer-registered) tool schemas are appended last so their
+    // names never silently shadow a builtin. A custom schema whose name
+    // collides with an already-present builtin (or an earlier custom tool) is
+    // SKIPPED: otherwise the wire `tools` array carries a duplicate name and
+    // providers that require unique tool names reject the whole request. This
+    // mirrors the handler-map precedence in buildDispatcher (builtins win).
+    for (const t of opts.customTools ?? []) {
+      if (!schemas.some((s) => s.name === t.schema.name)) schemas.push(t.schema);
+    }
     // MCP tools are intentionally NOT pushed into `this.schemas` here.
     // Instead, `buildDispatcher()` serves them from `_mcpToolsCache` /
     // `_mcpHandlersCache`, which are populated on first use and invalidated by
@@ -272,6 +296,7 @@ export class AnthropicDirectProvider implements ModelProvider {
     this.surface = opts.surface ?? 'cli';
     this.readOnlyMemory = opts.readOnlyMemory === true;
     this.readOnlyBash = opts.readOnlyBash === true;
+    this.customTools = opts.customTools ?? [];
     this.mcpManager = opts.mcpManager;
     if (opts.mcpManager) {
       // Subscribe to the refresh hook to invalidate the MCP tool/handler caches.
@@ -353,6 +378,17 @@ export class AnthropicDirectProvider implements ModelProvider {
     if (opts?.runtimeStateSource) {
       handlers.set('get_runtime_state', createGetRuntimeStateHandler(opts.runtimeStateSource));
     }
+    // Invariant: custom (consumer-registered) handlers are registered AFTER
+    // all builtins and the runtime-state handler, and BEFORE MCP handlers.
+    // If a custom tool name collides with a builtin already in `handlers`,
+    // the builtin wins (we skip the custom registration). This prevents a
+    // user-supplied tool from silently overriding a built-in capability.
+    // Location: src/agent/providers/anthropic-direct/index.ts buildDispatcher.
+    for (const t of this.customTools) {
+      if (!handlers.has(t.schema.name)) {
+        handlers.set(t.schema.name, t.handler);
+      }
+    }
     // MCP handlers + schemas — served from a cache that is invalidated by
     // `onToolsRefreshed` (fired after every `refreshServer()` / `completeAuth()`
     // call).  This preserves the Option A correctness guarantee — the cache
@@ -401,13 +437,18 @@ export class AnthropicDirectProvider implements ModelProvider {
       // the plan-mode gate (the sole built-in PreToolUse hook) never reached
       // the dispatcher and write tools ran unblocked in plan mode (c6892c6).
       hookRegistry: resolveSessionHookRegistry(opts?.hookRegistry, this.hookRegistry),
-      // Union live MCP wire-names into the (statically-snapshotted) allowlist so
-      // OAuth servers whose tools were discovered after construction are not
-      // rejected by the gate while present in `schemas`/`handlers`. No-op when
-      // no mcpManager (e.g. restricted sub-agents) or no allowlist configured.
-      permissions: this.mcpManager
-        ? withMcpToolsAllowed(this.permissions, this.mcpManager.getMcpToolWireNames())
-        : this.permissions,
+      // Union live MCP wire-names AND consumer-registered custom-tool names into
+      // the (statically-snapshotted) allowlist so neither is rejected by the
+      // gate while present in `schemas`/`handlers`. No-op when there is no
+      // allowlist (undefined => all allowed) or nothing to union. Registering a
+      // custom tool is the grant (same as connecting an MCP server); restricted
+      // sub-agents carry no customTools, so this never widens their allowlist.
+      permissions: withCustomToolsAllowed(
+        this.mcpManager
+          ? withMcpToolsAllowed(this.permissions, this.mcpManager.getMcpToolWireNames())
+          : this.permissions,
+        this.customTools.map((t) => t.schema.name),
+      ),
       subagentExecutor: this.subagentExecutor,
       skillExecutor: this.skillExecutor,
       composeExecutor: this.composeExecutor,

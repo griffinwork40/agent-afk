@@ -4,6 +4,8 @@
  */
 
 export { AgentSession } from './session.js';
+export { query, queryText, queryStructured } from './query.js';
+export type { QueryOptions } from './query.js';
 export { SubagentManager } from './subagent.js';
 export { createCanUseToolHook } from './permissions.js';
 export { AbortGraph } from './abort-graph.js';
@@ -32,6 +34,7 @@ export type {
   ResponseMetadata,
   SDKStatus,
   SendMessageOptions,
+  StructuredMessageOptions,
   SessionIdentity,
   SessionMetadata,
   SessionState,
@@ -98,3 +101,5 @@ export type { SessionRef } from './session-ref.js';
 export { SessionToolDispatcher, createBuiltinHandlers, builtinToolSchemas, checkToolPermission } from './tools/index.js';
 export type { ToolHandler, ToolPermissionConfig, SessionToolDispatcherOptions } from './tools/index.js';
 export type { RenderHints } from './providers/anthropic-direct/types.js';
+export { tool } from './tools/custom-tool.js';
+export type { CustomToolDef } from './tools/custom-tool.js';

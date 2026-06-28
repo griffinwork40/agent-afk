@@ -27,7 +27,7 @@ import { resolveSessionHookRegistry } from '../../hooks.js';
 import type { SubagentExecutor } from '../../tools/subagent-executor.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import type { ComposeExecutor } from '../../tools/compose-executor.js';
-import { withMcpToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
+import { withMcpToolsAllowed, withCustomToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
@@ -108,6 +108,17 @@ export interface OpenAICompatibleProviderOptions {
    * handler map. Hooks fire for MCP tools automatically via the dispatcher.
    */
   mcpManager?: import('../../mcp/index.js').McpManager;
+  /**
+   * In-process custom tools registered by the library consumer. Mirrors
+   * `AnthropicDirectProviderOptions.customTools` for full provider parity.
+   * Each entry supplies an `AnthropicToolDef` schema (added to the provider's
+   * schema list at construction time) and a `ToolHandler` (registered in the
+   * per-query dispatcher's handler map).
+   *
+   * Precedence: builtins > custom (a custom tool whose name collides with a
+   * builtin is silently skipped — see `buildDispatcher`).
+   */
+  customTools?: import('../../tools/custom-tool.js').CustomToolDef[];
 }
 
 export class OpenAICompatibleProvider implements ModelProvider {
@@ -155,6 +166,15 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // The `get_runtime_state` tool remains available so the model can
     // pull identity on demand.
     schemas.push(getRuntimeStateTool);
+    // Custom (consumer-registered) tool schemas are appended last so their
+    // names never silently shadow a builtin. A custom schema whose name
+    // collides with an already-present builtin (or an earlier custom tool) is
+    // SKIPPED: otherwise the wire `tools` array carries a duplicate name and
+    // providers that require unique tool names reject the whole request. This
+    // mirrors the handler-map precedence in buildDispatcher (builtins win).
+    for (const t of opts.customTools ?? []) {
+      if (!schemas.some((s) => s.name === t.schema.name)) schemas.push(t.schema);
+    }
     this.schemas = schemas;
   }
 
@@ -352,6 +372,17 @@ export class OpenAICompatibleProvider implements ModelProvider {
     if (opts.runtimeStateSource) {
       handlers.set('get_runtime_state', createGetRuntimeStateHandler(opts.runtimeStateSource));
     }
+    // Invariant: custom (consumer-registered) handlers are registered AFTER
+    // all builtins and the runtime-state handler, and BEFORE MCP handlers.
+    // If a custom tool name collides with a builtin already in `handlers`,
+    // the builtin wins (we skip the custom registration). This prevents a
+    // user-supplied tool from silently overriding a built-in capability.
+    // Location: src/agent/providers/openai-compatible/index.ts buildDispatcher.
+    for (const t of this.providerOpts.customTools ?? []) {
+      if (!handlers.has(t.schema.name)) {
+        handlers.set(t.schema.name, t.handler);
+      }
+    }
     // Plan-exit tool: registered per-query ONLY while in plan mode and only when
     // the session supplied control callbacks (top-level sessions). Mirrors
     // AnthropicDirectProvider.buildDispatcher; schema appended below to match.
@@ -396,16 +427,20 @@ export class OpenAICompatibleProvider implements ModelProvider {
       // makes a silent drop (c6892c6) a compile error.
       hookRegistry: resolveSessionHookRegistry(opts.hookRegistry, this.providerOpts.hookRegistry),
     };
-    // Union live MCP wire-names into the (statically-snapshotted) allowlist so
-    // OAuth servers whose tools were discovered after construction are not
-    // rejected by the gate while present in `schemas`/`handlers`. No-op when no
-    // mcpManager (e.g. restricted sub-agents) or no allowlist configured.
-    const effectivePermissions = this.providerOpts.mcpManager
-      ? withMcpToolsAllowed(
-          this.providerOpts.permissions,
-          this.providerOpts.mcpManager.getMcpToolWireNames(),
-        )
-      : this.providerOpts.permissions;
+    // Union live MCP wire-names AND consumer-registered custom-tool names into
+    // the (statically-snapshotted) allowlist so neither is rejected by the gate
+    // while present in `schemas`/`handlers`. No-op when there is no allowlist
+    // (undefined => all allowed) or nothing to union. Mirrors
+    // AnthropicDirectProvider; restricted sub-agents carry no customTools.
+    const effectivePermissions = withCustomToolsAllowed(
+      this.providerOpts.mcpManager
+        ? withMcpToolsAllowed(
+            this.providerOpts.permissions,
+            this.providerOpts.mcpManager.getMcpToolWireNames(),
+          )
+        : this.providerOpts.permissions,
+      (this.providerOpts.customTools ?? []).map((t) => t.schema.name),
+    );
     if (effectivePermissions !== undefined)
       dispatcherOpts.permissions = effectivePermissions;
     if (this.providerOpts.subagentExecutor !== undefined)

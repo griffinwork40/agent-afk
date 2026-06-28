@@ -157,7 +157,7 @@ jobs:
       - name: Assert bundle entry points exist and are executable
         run: |
           set -e
-          for entry in cli.mjs telegram.mjs index.mjs postinstall.mjs; do
+          for entry in cli.mjs telegram.mjs index.mjs index.d.ts postinstall.mjs; do
             if [ ! -f "dist/$entry" ]; then
               echo "::error::dist/$entry missing after build:dist" >&2
               exit 1

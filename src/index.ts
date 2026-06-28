@@ -6,12 +6,16 @@
 
 export {
   AgentSession,
+  query,
+  queryText,
+  queryStructured,
   SubagentManager,
   createCanUseToolHook,
   OpenAICompatibleProvider,
   openaiCompatibleProvider,
   providerForModel,
   resolveProvider,
+  tool,
 } from './agent/index.js';
 export type {
   AccountInfo,
@@ -36,10 +40,12 @@ export type {
   ProviderEvent,
   ProviderQuery,
   ProviderUserTurn,
+  QueryOptions,
   RenderHints,
   ResponseMetadata,
   SDKStatus,
   SendMessageOptions,
+  StructuredMessageOptions,
   SessionIdentity,
   SessionMetadata,
   SessionState,
@@ -55,6 +61,7 @@ export type {
   ToolPermissionMode,
   ToolPermissionRules,
   ToolResultChunk,
+  CustomToolDef,
 } from './agent/index.js';
 export type { DiffHunk, DiffLine, DiffPayload } from './utils/diff.js';
 

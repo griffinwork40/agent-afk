@@ -260,22 +260,32 @@ export function providerForModel(
  * Construction is cheap (no SDK handshake, no I/O) so allocating a fresh
  * provider per session is preferable to threading sessionId into every
  * shared-state read site.
+ *
+ * @param opts.customTools - In-process custom tools to register on the
+ *   provider. Forwarded from `AgentConfig.customTools` by `AgentSession`
+ *   when no explicit `providerFactory` is set. No-op when empty/absent.
  */
 export function resolveProvider(
   model: string | undefined,
   hints?: ProviderRouteHints,
+  opts?: { customTools?: import('../tools/custom-tool.js').CustomToolDef[] },
 ): ModelProvider {
   const name = providerForModel(model, hints);
+  const customTools = opts?.customTools;
   switch (name) {
     case 'openai-compatible':
     case 'openai-codex':
       // IMPORTANT: fresh instance per session — see docstring above.
-      return new OpenAICompatibleProvider();
+      return new OpenAICompatibleProvider(
+        customTools !== undefined && customTools.length > 0 ? { customTools } : {},
+      );
     case 'anthropic':
     case 'anthropic-direct':
     default:
       // IMPORTANT: fresh instance per session — see docstring above.
-      return new AnthropicDirectProvider();
+      return new AnthropicDirectProvider(
+        customTools !== undefined && customTools.length > 0 ? { customTools } : {},
+      );
   }
 }
 
