@@ -55,7 +55,7 @@ export const afkCmd: SlashCommand = {
       // Do NOT call toggleAfkMode here: it would call setPermissionMode('default')
       // and silently drop plan mode with a misleading "AFK mode OFF" message.
       ctx.out.warn(
-        'AFK is already off — you\'re in plan mode. Use \`/plan off\` to leave plan mode.',
+        'AFK is already off — you\'re in plan mode. Use `/plan off` to leave plan mode.',
       );
       return 'continue';
     }
