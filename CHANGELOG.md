@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.3.1] - 2026-06-28
+
+### Fixed
+- surface most-recent tool-groups instead of burying them in overflow (#303) (93bb246)
+
 ## [5.3.0] - 2026-06-28
 
 ### Added
