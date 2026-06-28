@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.6.0] - 2026-06-28
+
+### Added
+- restore pre-plan permission mode on exit (#306) (1cbf61b)
+
+### Changed
+- bump typescript from 5.9.3 to 6.0.3 in /website (#315) (758303b)
+- migrate docs site to Next.js 16 + React 19 + fumadocs 16 (#317) (56dc929)
+
 ## [5.5.1] - 2026-06-28
 
 ### Fixed
