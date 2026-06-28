@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.3.2] - 2026-06-28
+
+### Fixed
+- redact filename in pull-queue quarantine log lines (#310) (213d20f)
+
+### Changed
+- cover pull-queue poison fallback + collision-retry branches (#313) (4e57cdc)
+- backfill 4 uncovered scraper/render branches (#312) (fb6c480)
+- add Dependabot coverage for website/ npm deps (#309) (f52a161)
+
 ## [5.3.1] - 2026-06-28
 
 ### Fixed
