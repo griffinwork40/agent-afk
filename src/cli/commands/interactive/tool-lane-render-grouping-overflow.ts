@@ -18,12 +18,25 @@ export interface OverflowSibling {
 }
 
 /**
- * If `siblings.length > maxVisible`, returns the first `maxVisible` siblings
- * followed by a single synthetic {@link OverflowSibling} representing the
- * hidden remainder. Otherwise returns `siblings` unchanged.
+ * Recency window. If `siblings.length > maxVisible`, returns a single leading
+ * synthetic {@link OverflowSibling} (summarizing the OLDER head) followed by
+ * the MOST-RECENT `maxVisible` siblings, in dispatch order. Otherwise returns
+ * `siblings` unchanged.
  *
- * The overflow synthetic obeys `assignConnectors`'s last-child rule just like
- * any real sibling — it is added to the list BEFORE `assignConnectors` runs.
+ * History: siblings arrive in first-occurrence (chronological) order, so the
+ * tail is the most recent activity — including the file mutations that
+ * typically land late in a run. The pre-fix `slice(0, maxVisible)` kept the
+ * OLDEST groups and collapsed the newest into the "+N" line, burying exactly
+ * the recent work a watcher most wants to see (reported UX bug:
+ * fix-tool-recency-display). Switching to the tail surfaces it; placing the
+ * overflow FIRST keeps the block readable top→bottom — "… +N older", then the
+ * newest groups — instead of inverting the timeline against the footnote.
+ *
+ * The overflow synthetic obeys `assignConnectors`'s positional rule like any
+ * real sibling — it is added to the list BEFORE `assignConnectors` runs. As
+ * the FIRST sibling it now receives the MID connector (`├`); the last visible
+ * group (overlay path) or the appended result-summary (flush path) keeps the
+ * LAST connector (`└`), so the exactly-one-last-child invariant is preserved.
  *
  * Accepts only real tool / grouped siblings (not overflow or resultSummary
  * synthetics) — those are added after this step.
@@ -33,10 +46,11 @@ export function addOverflowSynthetic(
   maxVisible: number,
 ): Array<ToolEntry | GroupedSibling | OverflowSibling> {
   if (siblings.length <= maxVisible) return siblings;
-  const visible = siblings.slice(0, maxVisible);
-  const hidden = siblings.slice(maxVisible);
+  const splitAt = siblings.length - maxVisible;
+  const hidden = siblings.slice(0, splitAt);
+  const visible = siblings.slice(splitAt);
   const text = formatCategoricalOverflow(hidden);
-  return [...visible, { kind: 'overflow', count: hidden.length, text }];
+  return [{ kind: 'overflow', count: hidden.length, text }, ...visible];
 }
 
 /**
