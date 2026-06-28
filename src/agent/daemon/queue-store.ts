@@ -167,13 +167,18 @@ export function dequeueNext(queueDir: string = getQueueDir()): QueuedTask | null
  * outcome is logged to stderr so the operator can investigate.
  */
 function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown): void {
-  // Redact every error-derived string before logging: a JSON.parse SyntaxError
+  // Redact every caller-supplied string before logging. The filename comes from
+  // the OS readdir listing — normally safe (<seq>-q-<ts>-<hex>.json), but a
+  // stray file with a secret-shaped name dropped into the queue dir would be
+  // logged unredacted without this guard. Error-derived strings (reason,
+  // moveReason, unlinkReason) carry the same risk: a JSON.parse SyntaxError
   // can embed a snippet of the malformed entry's bytes, and a queue `command`
   // may carry an inline secret. This matches the daemon's existing convention
   // for error-derived logs (see redactInlineSecrets use in scheduler.ts runOnce).
   // NOTE(#337-poison-telemetry): quarantines are logged to stderr only — a
   // structured `status:'poison'` telemetry record for parity with runOnce is a
   // tracked follow-up, not added here to keep the change focused.
+  const redactedFilename = redactInlineSecrets(filename);
   const reason = redactInlineSecrets(err instanceof Error ? err.message : String(err));
   const poisonDir = join(queueDir, POISON_SUBDIR);
   const src = join(queueDir, filename);
@@ -194,7 +199,7 @@ function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown)
     }
     // eslint-disable-next-line no-console
     console.error(
-      `[daemon] pull-queue: quarantined malformed entry ${filename} → ${POISON_SUBDIR}/ (${reason})`,
+      `[daemon] pull-queue: quarantined malformed entry ${redactedFilename} → ${POISON_SUBDIR}/ (${reason})`,
     );
   } catch (moveErr) {
     // Last resort: if we cannot move it aside, unlink so the queue unblocks
@@ -202,7 +207,7 @@ function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown)
     const moveReason = redactInlineSecrets(moveErr instanceof Error ? moveErr.message : String(moveErr));
     // eslint-disable-next-line no-console
     console.error(
-      `[daemon] pull-queue: failed to quarantine malformed entry ${filename}; removing to unblock queue (${moveReason})`,
+      `[daemon] pull-queue: failed to quarantine malformed entry ${redactedFilename}; removing to unblock queue (${moveReason})`,
     );
     try {
       unlinkSync(src);
@@ -216,7 +221,7 @@ function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown)
       );
       // eslint-disable-next-line no-console
       console.error(
-        `[daemon] pull-queue: could not remove unquarantinable entry ${filename}; will retry next tick (${unlinkReason})`,
+        `[daemon] pull-queue: could not remove unquarantinable entry ${redactedFilename}; will retry next tick (${unlinkReason})`,
       );
     }
   }
@@ -252,10 +257,11 @@ export function listPending(queueDir: string = getQueueDir()): QueuedTask[] {
     try {
       tasks.push(JSON.parse(readFileSync(filePath, 'utf-8')) as QueuedTask);
     } catch (err) {
+      const redactedFilename = redactInlineSecrets(filename);
       const reason = redactInlineSecrets(err instanceof Error ? err.message : String(err));
       // eslint-disable-next-line no-console
       console.error(
-        `[daemon] pull-queue: skipping unreadable entry ${filename} in listPending (${reason})`,
+        `[daemon] pull-queue: skipping unreadable entry ${redactedFilename} in listPending (${reason})`,
       );
     }
   }

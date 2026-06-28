@@ -3,7 +3,7 @@
  * @module agent/daemon/queue-store.test
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readdirSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -215,5 +215,46 @@ describe('listPending', () => {
     const remaining = readdirSync(tmpDir).filter((f) => f.endsWith('.json'));
     expect(remaining).toHaveLength(3);
     expect(readdirSync(tmpDir)).not.toContain('poison');
+  });
+});
+
+describe('filename redaction in log output', () => {
+  // Anthropic API key pattern that redactInlineSecrets replaces.
+  // Using a syntactically-valid key shape so the pattern fires reliably.
+  const SECRET_FILENAME = 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.json';
+
+  it('redacts a secret-shaped filename from quarantine log (dequeueNext path)', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      writeFileSync(join(tmpDir, `0000-${SECRET_FILENAME}`), '{ invalid json');
+      dequeueNext(tmpDir);
+    } finally {
+      spy.mockRestore();
+    }
+    // Every console.error call must NOT contain the raw secret-shaped name.
+    const raw = SECRET_FILENAME;
+    for (const call of spy.mock.calls) {
+      const msg = String(call[0]);
+      expect(msg).not.toContain(raw);
+      // The log line should contain a redaction marker instead.
+      expect(msg).toMatch(/<REDACTED/);
+    }
+  });
+
+  it('redacts a secret-shaped filename from listPending log', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      // Write corrupt content under the secret-shaped name.
+      writeFileSync(join(tmpDir, `0000-${SECRET_FILENAME}`), '{ invalid json');
+      listPending(tmpDir);
+    } finally {
+      spy.mockRestore();
+    }
+    const raw = SECRET_FILENAME;
+    for (const call of spy.mock.calls) {
+      const msg = String(call[0]);
+      expect(msg).not.toContain(raw);
+      expect(msg).toMatch(/<REDACTED/);
+    }
   });
 });
