@@ -179,7 +179,18 @@ function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown)
   // structured `status:'poison'` telemetry record for parity with runOnce is a
   // tracked follow-up, not added here to keep the change focused.
   const redactedFilename = redactInlineSecrets(filename);
-  const reason = redactInlineSecrets(err instanceof Error ? err.message : String(err));
+  // Invariant: SyntaxError messages from JSON.parse embed a verbatim snippet of
+  // the file content (≤20 chars, or the first ~10 chars for longer inputs). That
+  // window is structurally too short for redactInlineSecrets's {16,}-value
+  // patterns to match, so any short or truncated secret in the malformed bytes
+  // would reach stderr unredacted. For SyntaxError we therefore use a
+  // content-free label; only non-SyntaxError errors (filesystem errors from
+  // readFileSync, etc.) carry paths — not file content — and are safe to redact
+  // and log with their message.
+  const reason =
+    err instanceof SyntaxError
+      ? 'SyntaxError: invalid JSON'
+      : redactInlineSecrets(err instanceof Error ? err.message : String(err));
   const poisonDir = join(queueDir, POISON_SUBDIR);
   const src = join(queueDir, filename);
   try {
@@ -258,7 +269,18 @@ export function listPending(queueDir: string = getQueueDir()): QueuedTask[] {
       tasks.push(JSON.parse(readFileSync(filePath, 'utf-8')) as QueuedTask);
     } catch (err) {
       const redactedFilename = redactInlineSecrets(filename);
-      const reason = redactInlineSecrets(err instanceof Error ? err.message : String(err));
+      // Invariant: SyntaxError messages from JSON.parse embed a verbatim snippet of
+      // the file content (≤20 chars, or the first ~10 chars for longer inputs). That
+      // window is structurally too short for redactInlineSecrets's {16,}-value
+      // patterns to match, so any short or truncated secret in the malformed bytes
+      // would reach stderr unredacted. For SyntaxError we therefore use a
+      // content-free label; only non-SyntaxError errors (filesystem errors from
+      // readFileSync, etc.) carry paths — not file content — and are safe to redact
+      // and log with their message.
+      const reason =
+        err instanceof SyntaxError
+          ? 'SyntaxError: invalid JSON'
+          : redactInlineSecrets(err instanceof Error ? err.message : String(err));
       // eslint-disable-next-line no-console
       console.error(
         `[daemon] pull-queue: skipping unreadable entry ${redactedFilename} in listPending (${reason})`,
