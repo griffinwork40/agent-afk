@@ -49,8 +49,11 @@ export function tool<S extends z.ZodType>(
 ): CustomToolDef {
   // Derive the JSON Schema from the Zod schema.  z.toJSONSchema() is
   // available in Zod v4.3.6+ and returns a plain object whose shape is a
-  // superset of the AnthropicToolDef.input_schema contract.
-  const jsonSchema = z.toJSONSchema(schema) as Record<string, unknown>;
+  // superset of the AnthropicToolDef.input_schema contract. target:
+  // 'openapi-3.0' suppresses the draft-2020-12 `$schema` marker the default
+  // emitter adds, keeping the wire schema compatible with both Anthropic and
+  // OpenAI-compatible backends (parity with sendMessageStructured).
+  const jsonSchema = z.toJSONSchema(schema, { target: 'openapi-3.0' }) as Record<string, unknown>;
 
   // Contract: AnthropicToolDef.input_schema.type MUST be 'object' (tool inputs
   // are always object-shaped). `type` is written AFTER the spread so a Zod
