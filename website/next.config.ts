@@ -4,9 +4,18 @@ import { createMDX } from 'fumadocs-mdx/next';
 
 const nextConfig: NextConfig = {
   trailingSlash: false,
-  // Pin the file-tracing root to this project so Next doesn't infer the
-  // monorepo's pnpm-lock.yaml as the workspace root.
-  outputFileTracingRoot: path.resolve(__dirname),
+  // Invariant: pin the file-tracing root to the MONOREPO ROOT (the parent of
+  // this `website/` dir), not the project dir. Vercel deploys this site with
+  // Root Directory = website; under Next 16 the post-build platform finalizer
+  // locates the app's `.next` by joining <repoRoot> + <relativeAppDir>. When
+  // the tracing root is set to the project dir, Next records relativeAppDir = ""
+  // and the finalizer looks for `<repoRoot>/.next/package.json` (the repo root,
+  // not website/), failing the deploy with ENOENT after a successful build.
+  // Setting the tracing root one level up makes relativeAppDir = "website" so
+  // the finalizer resolves `<repoRoot>/website/.next` correctly. This is also
+  // the documented monorepo value (Next infers the same via the parent lockfile,
+  // but pinning it is deterministic).
+  outputFileTracingRoot: path.resolve(__dirname, '..'),
   images: {
     remotePatterns: [],
   },
