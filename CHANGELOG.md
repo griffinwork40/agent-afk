@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.3.0] - 2026-06-28
+
+### Added
+- high-risk AFK gate routes approve/deny to the phone (Phase 2 v1.5) (#294) (9e94126)
+
+### Changed
+- silent-model-loop debuggability issue + recommendations (#302) (b458191)
+
 ## [5.2.0] - 2026-06-28
 
 ### Added
