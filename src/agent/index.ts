@@ -70,6 +70,7 @@ export type {
   HookHandler,
   HookRegistry,
   PostToolUseContext,
+  PreCompactContext,
   PreToolUseContext,
   SessionEndContext,
   SessionStartContext,

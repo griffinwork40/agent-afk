@@ -53,7 +53,9 @@ function emitCycleCopy(ctx: SlashContext, mode: CycleMode): void {
       return;
     case 'bypassPermissions':
       // Plain line (not the ✓ channel) so bypass reads as a cool "full-power"
-      // badge rather than a red alarm — matches the `/bypass` ON notice.
+      // badge rather than a red alarm. Since the `/bypass` slash command was
+      // retired, Shift+Tab is the only live entry into bypass, so this notice is
+      // the sole at-toggle explainer of what bypass does.
       ctx.out.line(
         palette.bypass('⚡ bypass ON') +
           palette.dim(

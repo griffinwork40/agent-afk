@@ -27,6 +27,7 @@ import { OpenAICompatibleProvider } from '../agent/providers/openai-compatible/i
 import { BUILTIN_TOOL_NAMES } from '../agent/tools/schemas.js';
 import { MEMORY_TOOL_NAMES } from '../agent/memory/index.js';
 import { AWARENESS_TOOL_NAMES } from '../agent/awareness/index.js';
+import { EXIT_PLAN_MODE_TOOL_NAME } from '../agent/tools/handlers/exit-plan-mode.js';
 import type { SubagentExecutor } from '../agent/tools/subagent-executor.js';
 import type { ComposeExecutor } from '../agent/tools/compose-executor.js';
 import type { SkillExecutor } from '../agent/tools/skill-executor.js';
@@ -75,15 +76,23 @@ describe('parseProvider — Agent tool allowlist wiring (PR #84)', () => {
     expect(() => parseProvider('bogus')).toThrow(/anthropic-direct/);
   });
 
-  it("anthropic-direct without a subagentExecutor: allowlist === BUILTIN_TOOL_NAMES + MEMORY_TOOL_NAMES + AWARENESS_TOOL_NAMES (no 'agent')", () => {
+  it("anthropic-direct without a subagentExecutor: allowlist === BUILTIN + MEMORY + AWARENESS + exit_plan_mode (no 'agent')", () => {
     const provider = parseProvider('anthropic-direct');
     expect(provider).toBeInstanceOf(AnthropicDirectProvider);
     const allowed = readAllowedTools(provider as AnthropicDirectProvider);
     // Awareness tools (`get_runtime_state`) are always-on — every provider
     // registers their handlers unconditionally, so the allowlist must include
     // them or the dispatcher permission gate rejects the registered handler.
-    expect(allowed).toEqual([...BUILTIN_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...AWARENESS_TOOL_NAMES]);
+    // `exit_plan_mode` is registered only in plan mode but its name is statically
+    // present in the allowlist (the list is snapshotted at construction).
+    expect(allowed).toEqual([
+      ...BUILTIN_TOOL_NAMES,
+      ...MEMORY_TOOL_NAMES,
+      ...AWARENESS_TOOL_NAMES,
+      EXIT_PLAN_MODE_TOOL_NAME,
+    ]);
     expect(allowed).toContain('get_runtime_state');
+    expect(allowed).toContain('exit_plan_mode');
     expect(allowed).not.toContain('agent');
   });
 
@@ -110,7 +119,8 @@ describe('parseProvider — Agent tool allowlist wiring (PR #84)', () => {
     // 'agent' is added exactly once and the total length matches.
     expect(list.filter((n) => n === 'agent')).toHaveLength(1);
     expect(list).toHaveLength(
-      BUILTIN_TOOL_NAMES.length + MEMORY_TOOL_NAMES.length + AWARENESS_TOOL_NAMES.length + 1,
+      // builtins + memory + awareness + exit_plan_mode + agent
+      BUILTIN_TOOL_NAMES.length + MEMORY_TOOL_NAMES.length + AWARENESS_TOOL_NAMES.length + 1 + 1,
     );
   });
 
@@ -187,8 +197,14 @@ describe('parseProvider — openai-compatible wiring (slice 4)', () => {
     const provider = parseProvider('openai');
     expect(provider).toBeInstanceOf(OpenAICompatibleProvider);
     const allowed = readOpenAIAllowedTools(provider as OpenAICompatibleProvider);
-    expect(allowed).toEqual([...BUILTIN_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...AWARENESS_TOOL_NAMES]);
+    expect(allowed).toEqual([
+      ...BUILTIN_TOOL_NAMES,
+      ...MEMORY_TOOL_NAMES,
+      ...AWARENESS_TOOL_NAMES,
+      EXIT_PLAN_MODE_TOOL_NAME,
+    ]);
     expect(allowed).toContain('get_runtime_state');
+    expect(allowed).toContain('exit_plan_mode');
     expect(allowed).not.toContain('agent');
     expect(allowed).not.toContain('skill');
     expect(allowed).not.toContain('compose');
@@ -227,12 +243,14 @@ describe('parseProvider — openai-compatible wiring (slice 4)', () => {
     const allowed = readOpenAIAllowedTools(provider as OpenAICompatibleProvider);
     expect(allowed).toBeDefined();
     expect(allowed).toHaveLength(
-      BUILTIN_TOOL_NAMES.length + MEMORY_TOOL_NAMES.length + AWARENESS_TOOL_NAMES.length + 3,
+      // builtins + memory + awareness + exit_plan_mode + agent + skill + compose
+      BUILTIN_TOOL_NAMES.length + MEMORY_TOOL_NAMES.length + AWARENESS_TOOL_NAMES.length + 1 + 3,
     );
     expect(allowed).toContain('agent');
     expect(allowed).toContain('skill');
     expect(allowed).toContain('compose');
     expect(allowed).toContain('get_runtime_state');
+    expect(allowed).toContain('exit_plan_mode');
   });
 });
 

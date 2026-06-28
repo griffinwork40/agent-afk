@@ -46,7 +46,11 @@ export const PLAN_MODE_ADDENDUM_TEXT = [
   '  - `devils-advocate` — generate alternatives and rank them before committing',
   '  - `shadow-verify` — independently re-derive load-bearing claims',
   '',
-  'Do not declare readiness silently. When the plan is ready, state: chosen approach, risks named, and alternatives considered. The user will then exit plan mode with `/plan off`, which has you save this plan to a file and implement it (Shift+Tab instead advances the permission-mode ring without saving or implementing) — so keep the plan concrete and complete enough to act on directly.',
+  'Do not declare readiness silently. When the plan is ready, state: chosen approach, risks named, and alternatives considered.',
+  '',
+  'Then, IF the task requires implementation (writing code or files), call the `exit_plan_mode` tool to present your plan. The user picks how to proceed (approve and implement, or keep planning). After calling it, END YOUR TURN — on approval you will receive a separate instruction to save the plan to a file and implement it. Do NOT use `ask_question` to ask whether the plan is OK; that is exactly what `exit_plan_mode` does — use `ask_question` only to resolve open requirement questions first. For research / read-only tasks that need no code changes, do NOT call `exit_plan_mode` — just answer.',
+  '',
+  'Manual fallbacks remain: the user can exit with `/plan off` (same save-and-implement handoff), and Shift+Tab advances the permission-mode ring without saving or implementing. Keep the plan concrete and complete enough to act on directly.',
 ].join('\n');
 
 /**

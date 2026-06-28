@@ -76,13 +76,27 @@ export interface CommitMode {
  * `useBandHold` — keep a block that overflows the CURRENT (tall) frame but
  * fits the COLLAPSED screen in the band model rather than archiving it to
  * scrollback + painting a truncated on-screen copy (the legacy overflow path's
- * duplicate header + orphan divider + blank "void"). Two ways to enter:
+ * duplicate header + orphan divider + blank "void"). Three ways to enter:
  *
  *  • `overflowRun.length <= maxBandModel && !fitsAboveFrame` — the merged run
  *    still fits a collapsed screen but not the current room. Band-hold routing
  *    is deliberately NOT gated on `prevTopRow > 1` (H1, review #649): when
  *    `prevTopRow <= 1` the block is HELD in the model and painted by
  *    repositionCommittedBand() on collapse, NOT dropped down the overflow path.
+ *
+ *  • `textLines.length <= maxBandModel && !fitsAboveFrame` — the NEW block alone
+ *    fits a collapsed screen even though the MERGED run (prior painted band +
+ *    new block) does not. Hold the new block whole; Phase 1 archives the genuine
+ *    overflow (the oldest prior-band rows beyond maxBandModel) to scrollback as
+ *    REAL content, and capBandModel keeps the newest maxBandModel rows — the
+ *    same machinery the `overflowHasPending` arm relies on. Without this clause,
+ *    two blocks that each fit on their own (e.g. two markdown tables committed
+ *    under one tall overlay) push the merged run over maxBandModel with no
+ *    pending rows, drop to the legacy overflow path, and the NEWER block is
+ *    split: its header is archived to scrollback while a truncated, border-less
+ *    copy paints on screen with a blank "void" above it — the recurring "second
+ *    table renders broken / missing lines" bug
+ *    (terminal-compositor.two-table-final.test.ts).
  *
  *  • `overflowHasPending` — once the prior band carries PENDING rows (rows held
  *    in the model but never painted: `committedBandPaintedRows < committedBand
@@ -98,8 +112,9 @@ export interface CommitMode {
  *    false and dropped them (the two-block follow-up deferred from PR #255).
  *
  * A block taller than the collapsed screen with no pending rows
- * (`overflowRun.length > maxBandModel`, `!overflowHasPending`) takes neither
- * flag and falls through to the legacy overflow archive (recoverable).
+ * (`overflowRun.length > maxBandModel` AND `textLines.length > maxBandModel`,
+ * `!overflowHasPending`) takes neither flag and falls through to the legacy
+ * overflow archive (recoverable).
  *
  * `overflowRun` merges the prior band into the new lines only when verifiably
  * contiguous with the frame top (`overflowPriorContiguous`) — otherwise a
@@ -131,7 +146,9 @@ export function decideCommitMode(input: CommitModeInput): CommitMode {
   const overflowHasPending =
     overflowPriorContiguous && committedBand.length > committedBandPaintedRows;
   const useBandHold =
-    overflowHasPending || (overflowRun.length <= maxBandModel && !fitsAboveFrame);
+    overflowHasPending ||
+    (!fitsAboveFrame &&
+      (overflowRun.length <= maxBandModel || textLines.length <= maxBandModel));
 
   return {
     fitsAboveFrame,

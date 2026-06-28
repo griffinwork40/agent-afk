@@ -1213,7 +1213,13 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   }
 
   async setModel(model?: string): Promise<void> {
-    if (model !== undefined) this.currentModel = model;
+    // Resolve slot/legacy aliases (small/medium/large, custom tier names,
+    // haiku/sonnet/opus) to the bound concrete id BEFORE it reaches the request
+    // body — mirroring buildQueryFromConfig (the construction path) and
+    // anthropic-direct's setModel. Without this, a mid-session same-backend
+    // switch to an alias would send the literal alias as the wire model and the
+    // backend would reject it. resolveModelId is a no-op for full ids / `auto`.
+    if (model !== undefined) this.currentModel = resolveModelId(model) ?? model;
   }
 
   async setPermissionMode(mode: string): Promise<void> {

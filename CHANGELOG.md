@@ -11,6 +11,34 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-06-28
+
+### Added
+- retire /bypass, add default badge, steer exit to exit_plan_mode (#286) (a38a566)
+
+## [4.46.0] - 2026-06-28
+
+### Added
+- model-callable exit_plan_mode tool with elicitation picker (#285) (a961ae7)
+
+## [4.45.5] - 2026-06-27
+
+### Fixed
+- stop the second streamed table from rendering broken (missing header/lines) (#296) (9cb4880)
+
+## [4.45.4] - 2026-06-27
+
+### Fixed
+- re-point backend on a same-family /model switch to a different endpoint (#297) (38975c1)
+
+## [4.45.3] - 2026-06-27
+
+### Added
+- add PreCompact hook event (#283) (aa25b10)
+
+### Fixed
+- subset advertised tool schema to permission allowlist (#295) (331ae7b)
+
 ## [4.45.2] - 2026-06-27
 
 ### Fixed

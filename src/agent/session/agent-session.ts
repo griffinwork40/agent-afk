@@ -68,6 +68,17 @@ import { transformProviderEvent, type TransformDeps } from './stream-consumer.js
 
 export class AgentSession implements IAgentSession {
   private config: AgentConfig;
+  /**
+   * Pending plan-exit implement-turn queued by an approved `exit_plan_mode`
+   * tool call (via the injected {@link PlanExitControls}). The REPL drains it
+   * with {@link takePendingPlanExitSeed} after the current turn, which atomically
+   * applies the deferred permission-mode flip and returns the seed message.
+   * Stores both the message and the approved mode so the flip can be deferred to
+   * the post-turn boundary — closing the mid-turn TOCTOU window.
+   * Lives on the session (not the per-turn dispatcher) so it survives from the
+   * mid-turn tool call to the post-turn REPL boundary.
+   */
+  private _pendingPlanExitSeed: { message: string; mode: PermissionMode } | undefined;
   private currentState: SessionState = 'idle';
   private providerQuery!: ProviderQuery;
   private providerIterator!: AsyncIterator<ProviderEvent>;
@@ -147,7 +158,24 @@ export class AgentSession implements IAgentSession {
   private ledgerInitAttempted = false;
 
   constructor(config: AgentConfig) {
-    this.config = config;
+    // Wire the plan-exit control bridge for top-level sessions only (plan mode
+    // is a REPL affordance; subagent/forked sessions carry a parentSessionId).
+    // The model-callable `exit_plan_mode` tool uses these callbacks to flip the
+    // live permission mode and queue the implement-turn the REPL drains. Inert
+    // unless the session actually enters plan mode (the providers only register
+    // the tool then). Respect a caller-supplied bridge if one is already set.
+    this.config =
+      config.parentSessionId === undefined && config.planExitControls === undefined
+        ? {
+            ...config,
+            planExitControls: {
+              setPermissionMode: (mode) => this.setPermissionMode(mode),
+              requestImplementSeed: (message, mode) => {
+                this._pendingPlanExitSeed = { message, mode };
+              },
+            },
+          }
+        : config;
     this.abortController = new AbortController();
     this._hookRegistry = config.hookRegistry;
 
@@ -794,6 +822,41 @@ export class AgentSession implements IAgentSession {
   async setPermissionMode(mode: PermissionMode): Promise<void> {
     await this.providerQuery.setPermissionMode(mode);
     this.stateManager.setSessionMetadata((prev) => ({ ...prev, permissionMode: mode }));
+  }
+
+  /**
+   * Return and CLEAR the pending plan-exit implement-turn queued by an approved
+   * `exit_plan_mode` call, or `undefined` if none is pending. The REPL drains
+   * this at the top of each input-loop iteration (post-turn) and, when set,
+   * atomically applies the deferred permission-mode flip then returns the seed
+   * message to be auto-submitted as a fresh user turn. Single-shot: a second call
+   * returns `undefined` until the next approval.
+   *
+   * The mode flip is applied HERE (not in the handler) so the gate stays locked
+   * in plan mode for the entire model turn and only opens at this clean
+   * post-turn boundary — closing the mid-turn TOCTOU window.
+   *
+   * If the deferred flip rejects (e.g. the provider's query handle is closing —
+   * the same failure mode `togglePlanMode` guards for `/plan off`), the seed is
+   * DROPPED and `undefined` is returned: we must not auto-submit the
+   * implement-turn while still gate-locked in plan mode (it would only collect
+   * write refusals), and the rejection must not escape into the REPL input loop
+   * (which has no try/catch around this drain) and crash it. The model stays in
+   * plan mode and can retry `exit_plan_mode`.
+   */
+  async takePendingPlanExitSeed(): Promise<string | undefined> {
+    const seed = this._pendingPlanExitSeed;
+    this._pendingPlanExitSeed = undefined;
+    if (seed === undefined) return undefined;
+    try {
+      await this.setPermissionMode(seed.mode);
+    } catch (err) {
+      debugLog(
+        `⚠️ AgentSession: deferred plan-exit mode flip to '${seed.mode}' rejected; dropping implement-seed (staying in plan mode): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return undefined;
+    }
+    return seed.message;
   }
 
   /**

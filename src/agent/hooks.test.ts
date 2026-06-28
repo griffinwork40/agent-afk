@@ -17,6 +17,7 @@ import { dispatchSubagentStop } from './subagent-hooks.js';
 import type {
   HookContext,
   HookHandler,
+  PreCompactContext,
   PreToolUseContext,
   SessionStartContext,
   StopContext,
@@ -236,6 +237,8 @@ describe('HookContext — discriminated union narrowing', () => {
           return `pre:${ctx.toolName}`;
         case 'PostToolUse':
           return `post:${ctx.toolName}`;
+        case 'PreCompact':
+          return `pre-compact:${ctx.trigger ?? '-'}`;
         case 'PostToolUseFailure':
           return `post-fail:${ctx.toolName}:${ctx.error}`;
         case 'Stop':
@@ -253,6 +256,7 @@ describe('HookContext — discriminated union narrowing', () => {
       subagentId: 'sub-1',
       status: 'succeeded',
     };
+    const preCompact: PreCompactContext = { event: 'PreCompact', trigger: 'manual' };
     const ups: UserPromptSubmitContext = {
       event: 'UserPromptSubmit',
       prompt: 'hello from user',
@@ -261,6 +265,7 @@ describe('HookContext — discriminated union narrowing', () => {
     expect(describe(stop)).toBe('sub-stop:sub-1:succeeded');
     expect(describe(preToolCtx('Edit'))).toBe('pre:Edit');
     expect(describe(sessionStartCtx('s-99'))).toBe('start:s-99');
+    expect(describe(preCompact)).toBe('pre-compact:manual');
     expect(describe(ups)).toBe('ups:hello from user');
   });
 });

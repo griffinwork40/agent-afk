@@ -105,9 +105,46 @@ describe('SessionToolDispatcher', () => {
     expect(result.failureClass).toBe('abort');
   });
 
-  it('exposes toolDefs from schemas', () => {
-    const dispatcher = makeDispatcher();
+  it('exposes toolDefs from schemas (no allowlist = full pass-through)', () => {
+    // Pass undefined permissions so no allowlist is configured — full schema returned.
+    const dispatcher = makeDispatcher({ permissions: undefined });
     expect(dispatcher.toolDefs).toEqual(builtinToolSchemas);
+  });
+
+  describe('toolDefs allowlist subsetting', () => {
+    it('returns all schemas when no allowlist is configured (permissions undefined)', () => {
+      const dispatcher = new SessionToolDispatcher({
+        handlers: new Map(),
+        schemas: [...builtinToolSchemas],
+        // no permissions → undefined
+      });
+      expect(dispatcher.toolDefs).toEqual(builtinToolSchemas);
+    });
+
+    it('returns only allowlisted schemas when allowedTools is set', () => {
+      const bashSchema = builtinToolSchemas.find((s) => s.name === 'bash')!;
+      const readFileSchema = builtinToolSchemas.find((s) => s.name === 'read_file')!;
+      expect(bashSchema).toBeDefined();
+      expect(readFileSchema).toBeDefined();
+      const dispatcher = new SessionToolDispatcher({
+        handlers: new Map(),
+        schemas: [bashSchema, readFileSchema],
+        permissions: { allowedTools: ['read_file'] },
+      });
+      const defs = dispatcher.toolDefs;
+      expect(defs).toHaveLength(1);
+      expect(defs[0]!.name).toBe('read_file');
+      expect(defs.map((d) => d.name)).not.toContain('bash');
+    });
+
+    it('returns empty array when allowedTools matches no schema', () => {
+      const dispatcher = new SessionToolDispatcher({
+        handlers: new Map(),
+        schemas: [...builtinToolSchemas],
+        permissions: { allowedTools: ['nonexistent_tool'] },
+      });
+      expect(dispatcher.toolDefs).toEqual([]);
+    });
   });
 
   describe('permissions', () => {
