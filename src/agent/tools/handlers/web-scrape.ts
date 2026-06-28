@@ -32,6 +32,7 @@
 import type { ToolHandler } from '../types.js';
 import { scrapeToMarkdown } from '../../../web/scrape.js';
 import { resolveSearchBackend, formatSearchResults } from '../../../web/search.js';
+import { retryFetch } from '../../../web/retryFetch.js';
 import type { RenderFn } from '../../../web/types.js';
 
 // External constraint: Node 20+ ships `fetch` as a global. Older runtimes
@@ -206,7 +207,8 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
       if (parsed.mode === 'raw') {
         let res: Response;
         try {
-          res = await fetchFn(parsed.url!, {
+          // retryFetch survives transient 429/5xx + network blips (idempotent GET).
+          res = await retryFetch(fetchFn, parsed.url!, {
             method: 'GET',
             headers: { 'User-Agent': 'agent-afk/web_scrape', Accept: '*/*' },
             signal: ac.signal,
