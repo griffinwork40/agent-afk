@@ -7,7 +7,8 @@
  * (c) sparse pages degrade to a flagged whole-body fallback.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { Readability } from '@mozilla/readability';
 import { extractReadableMarkdown, THIN_CONTENT_CHARS } from './extract.js';
 
 /** A realistic article page with nav, sidebar, and footer chrome around it. */
@@ -110,5 +111,31 @@ describe('extractReadableMarkdown — thin / fallback paths', () => {
     expect(out.usedFallback).toBe(true);
     expect(out.markdown).toBe('');
     expect(out.textLength).toBe(0);
+  });
+});
+
+describe('extractReadableMarkdown — Readability.parse() throws (safeExtract catch branch)', () => {
+  it('falls back to whole-body content when Readability.parse() throws', () => {
+    // Branch: extract.ts lines 84-89 — the try/catch around `new Readability(clone).parse()`.
+    // When parse() throws (degenerate DOM or internal error), article is set to
+    // null and the function falls through to the whole-body fallback path.
+    // We spy on Readability.prototype.parse to simulate the throw deterministically.
+    const parseSpy = vi.spyOn(Readability.prototype, 'parse').mockImplementationOnce(() => {
+      throw new Error('simulated Readability parse failure');
+    });
+
+    // Provide an HTML page with visible body content so the fallback path
+    // returns something we can assert on.
+    const html = `<!DOCTYPE html><html><head><title>Throws Doc</title></head>
+      <body><div>fallback body content</div></body></html>`;
+
+    const out = extractReadableMarkdown(html, 'https://example.com/throws');
+
+    // The throw was swallowed; we fell back to the whole-body path.
+    expect(out.usedFallback).toBe(true);
+    expect(out.title).toBe('Throws Doc');
+    expect(out.markdown).toContain('fallback body content');
+
+    parseSpy.mockRestore();
   });
 });

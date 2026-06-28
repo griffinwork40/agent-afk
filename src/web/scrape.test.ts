@@ -198,4 +198,63 @@ describe('scrapeToMarkdown — cancellation', () => {
       }),
     ).rejects.toThrow();
   });
+
+  it('propagates an abort that occurs during render (Phase 3 signal.aborted guard)', async () => {
+    // Branch: scrape.ts ~L170 — signal is aborted when the render catch block
+    // runs. The renderFn fires the abort and then throws so the catch branch
+    // sees signal.aborted === true and re-throws rather than degrading.
+    const ac = new AbortController();
+    const fetchFn = vi.fn(async () =>
+      makeResponse({ contentType: 'text/html', body: SHELL_HTML }),
+    );
+    const renderFn = vi.fn<RenderFn>(async () => {
+      ac.abort(new Error('render aborted'));
+      throw new Error('render aborted');
+    });
+
+    await expect(
+      scrapeToMarkdown('https://example.com/a', {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        renderFn,
+        timeoutMs: 5000,
+        signal: ac.signal,
+      }),
+    ).rejects.toThrow(/render aborted/);
+  });
+});
+
+describe('scrapeToMarkdown — render produces fewer chars than thin fetch', () => {
+  it('returns the fetched content with usedRender:false when render yields less text', async () => {
+    // Branch: scrape.ts ~L160 — render succeeds but renderedContent.textLength
+    // is strictly less than fetched.textLength. The condition
+    // `renderedContent.textLength >= fetched.textLength` is false so we fall
+    // through to Phase 4 and return the thin fetched content with usedRender:false.
+    //
+    // Setup: the thin shell HTML has a visible "Loading…" word (a few chars of
+    // text). The render returns a completely empty document — even fewer chars —
+    // so the comparison flips and we keep the fetch result.
+    const fetchFn = vi.fn(async () =>
+      makeResponse({ contentType: 'text/html', body: SHELL_HTML }),
+    );
+    const emptyHtml = '<html><head><title></title></head><body></body></html>';
+    const renderFn = vi.fn<RenderFn>(async () => ({
+      html: emptyHtml,
+      finalUrl: 'https://example.com/a',
+      httpStatus: 200,
+    }));
+
+    const out = await scrapeToMarkdown('https://example.com/a', {
+      fetchFn: fetchFn as unknown as typeof fetch,
+      renderFn,
+      timeoutMs: 5000,
+      signal: freshSignal(),
+    });
+
+    // Render was invoked (thin fetch triggered escalation)…
+    expect(renderFn).toHaveBeenCalledOnce();
+    // …but the render produced less content, so we fell back to the fetch result.
+    expect(out.usedRender).toBe(false);
+    // The thin fetched content should be present (the "Loading" text from SHELL_HTML).
+    expect(out.markdown).toContain('Loading');
+  });
 });
