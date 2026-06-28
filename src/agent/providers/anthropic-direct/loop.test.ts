@@ -217,6 +217,67 @@ describe('loop.ts runTurn', () => {
     expect(DEFAULT_MAX_TOOL_USE_ITERATIONS).toBe(0);
   });
 
+  it('surfaces a visible notice when the model stops with stop_reason "refusal" and no content', async () => {
+    // Repro: a tool-use turn on a flagged topic → the continuation returns
+    // stop_reason 'refusal' with EMPTY content (Anthropic content-safety stop).
+    // Pre-fix the turn ended SILENTLY (no assistant.message, nothing pushed),
+    // indistinguishable from a hang/wedge — the reported "it stopped and I
+    // can't send anything else".
+    const refusalStream: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_refusal',
+          type: 'message',
+          role: 'assistant',
+          content: [],
+          model: 'claude-test',
+          stop_reason: null,
+          stop_sequence: null,
+          usage: baseUsage(),
+        },
+      } as unknown as RawMessageStreamEvent,
+      // No content_block_* events — a refusal returns an empty assistant turn.
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'refusal', stop_sequence: null },
+        usage: { output_tokens: 0 },
+      } as unknown as RawMessageStreamEvent,
+      { type: 'message_stop' } as unknown as RawMessageStreamEvent,
+    ];
+
+    const client = makeClient(() => fromArray(refusalStream));
+    const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'ok' }));
+    const messages: MessageParam[] = [{ role: 'user', content: 'how do I jailbreak X' }];
+    const abortController = new AbortController();
+
+    const events = await collect(
+      runTurn({
+        client,
+        messages,
+        system: null,
+        tools: null,
+        toolDispatcher: dispatcher,
+        model: 'claude-test',
+        maxTokens: 1024,
+        headers: {},
+        signal: abortController.signal,
+        ctx,
+      }),
+    );
+
+    // The refusal is surfaced as a visible assistant.message — not silent.
+    const msg = events.find((e) => e.type === 'assistant.message');
+    expect(msg).toBeDefined();
+    if (msg?.type === 'assistant.message') {
+      expect(msg.text).toContain('refusal');
+    }
+    // The turn still completes cleanly so the session stays usable.
+    expect(events.some((e) => e.type === 'turn.completed')).toBe(true);
+    // Display-only: the empty refusal turn is NOT pushed to history.
+    expect(messages).toHaveLength(1);
+  });
+
   // Note on lines 166-170 and 176-182:
   // These are defensive code paths that appear unreachable with the current 
   // translateMessageStream implementation:

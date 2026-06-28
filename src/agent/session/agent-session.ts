@@ -68,12 +68,14 @@ export class AgentSession implements IAgentSession {
   /**
    * Pending plan-exit implement-turn queued by an approved `exit_plan_mode`
    * tool call (via the injected {@link PlanExitControls}). The REPL drains it
-   * with {@link takePendingPlanExitSeed} after the current turn and auto-submits
-   * it as a fresh user message — reproducing `/plan off`'s save-and-implement
-   * handoff. Lives on the session (not the per-turn dispatcher) so it survives
-   * from the mid-turn tool call to the post-turn REPL boundary.
+   * with {@link takePendingPlanExitSeed} after the current turn, which atomically
+   * applies the deferred permission-mode flip and returns the seed message.
+   * Stores both the message and the approved mode so the flip can be deferred to
+   * the post-turn boundary — closing the mid-turn TOCTOU window.
+   * Lives on the session (not the per-turn dispatcher) so it survives from the
+   * mid-turn tool call to the post-turn REPL boundary.
    */
-  private _pendingPlanExitSeed: string | undefined;
+  private _pendingPlanExitSeed: { message: string; mode: PermissionMode } | undefined;
   private currentState: SessionState = 'idle';
   private providerQuery!: ProviderQuery;
   private providerIterator!: AsyncIterator<ProviderEvent>;
@@ -165,8 +167,8 @@ export class AgentSession implements IAgentSession {
             ...config,
             planExitControls: {
               setPermissionMode: (mode) => this.setPermissionMode(mode),
-              requestImplementSeed: (message) => {
-                this._pendingPlanExitSeed = message;
+              requestImplementSeed: (message, mode) => {
+                this._pendingPlanExitSeed = { message, mode };
               },
             },
           }
@@ -782,13 +784,35 @@ export class AgentSession implements IAgentSession {
    * Return and CLEAR the pending plan-exit implement-turn queued by an approved
    * `exit_plan_mode` call, or `undefined` if none is pending. The REPL drains
    * this at the top of each input-loop iteration (post-turn) and, when set,
-   * auto-submits the message as a fresh user turn. Single-shot: a second call
+   * atomically applies the deferred permission-mode flip then returns the seed
+   * message to be auto-submitted as a fresh user turn. Single-shot: a second call
    * returns `undefined` until the next approval.
+   *
+   * The mode flip is applied HERE (not in the handler) so the gate stays locked
+   * in plan mode for the entire model turn and only opens at this clean
+   * post-turn boundary — closing the mid-turn TOCTOU window.
+   *
+   * If the deferred flip rejects (e.g. the provider's query handle is closing —
+   * the same failure mode `togglePlanMode` guards for `/plan off`), the seed is
+   * DROPPED and `undefined` is returned: we must not auto-submit the
+   * implement-turn while still gate-locked in plan mode (it would only collect
+   * write refusals), and the rejection must not escape into the REPL input loop
+   * (which has no try/catch around this drain) and crash it. The model stays in
+   * plan mode and can retry `exit_plan_mode`.
    */
-  takePendingPlanExitSeed(): string | undefined {
+  async takePendingPlanExitSeed(): Promise<string | undefined> {
     const seed = this._pendingPlanExitSeed;
     this._pendingPlanExitSeed = undefined;
-    return seed;
+    if (seed === undefined) return undefined;
+    try {
+      await this.setPermissionMode(seed.mode);
+    } catch (err) {
+      debugLog(
+        `⚠️ AgentSession: deferred plan-exit mode flip to '${seed.mode}' rejected; dropping implement-seed (staying in plan mode): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return undefined;
+    }
+    return seed.message;
   }
 
   /**

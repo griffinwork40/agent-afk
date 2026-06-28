@@ -17,9 +17,12 @@ import { dispatchSubagentStop } from './subagent-hooks.js';
 import type {
   HookContext,
   HookHandler,
+  PreCompactContext,
   PreToolUseContext,
   SessionStartContext,
+  StopContext,
   SubagentStopContext,
+  UserPromptSubmitContext,
 } from './hooks.js';
 
 function sessionStartCtx(sessionId = 'sess-1'): SessionStartContext {
@@ -234,17 +237,36 @@ describe('HookContext — discriminated union narrowing', () => {
           return `pre:${ctx.toolName}`;
         case 'PostToolUse':
           return `post:${ctx.toolName}`;
+        case 'PreCompact':
+          return `pre-compact:${ctx.trigger ?? '-'}`;
+        case 'PostToolUseFailure':
+          return `post-fail:${ctx.toolName}:${ctx.error}`;
+        case 'Stop':
+          return `stop:${ctx.sessionId ?? '-'}`;
+        case 'UserPromptSubmit':
+          return `ups:${ctx.prompt}`;
       }
     };
+
+    const stopHook: StopContext = { event: 'Stop', sessionId: 's-stop' };
+    expect(describe(stopHook)).toBe('stop:s-stop');
 
     const stop: SubagentStopContext = {
       event: 'SubagentStop',
       subagentId: 'sub-1',
       status: 'succeeded',
     };
+    const preCompact: PreCompactContext = { event: 'PreCompact', trigger: 'manual' };
+    const ups: UserPromptSubmitContext = {
+      event: 'UserPromptSubmit',
+      prompt: 'hello from user',
+      sessionId: 's-42',
+    };
     expect(describe(stop)).toBe('sub-stop:sub-1:succeeded');
     expect(describe(preToolCtx('Edit'))).toBe('pre:Edit');
     expect(describe(sessionStartCtx('s-99'))).toBe('start:s-99');
+    expect(describe(preCompact)).toBe('pre-compact:manual');
+    expect(describe(ups)).toBe('ups:hello from user');
   });
 });
 

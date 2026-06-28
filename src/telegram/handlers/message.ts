@@ -2,10 +2,15 @@ import { Context } from 'telegraf';
 import type { Message } from 'telegraf/types';
 import { Telegraf } from 'telegraf';
 import { SessionManager } from '../session-manager.js';
-import { formatError, formatClear, formatInternalError, formatCompact, formatCompactNoop, formatQueued } from '../formatter.js';
-import { isRateLimitError, isNetworkError } from '../error-utils.js';
+import { formatError, formatClear, formatInternalError, formatCompact, formatCompactNoop, formatQueued, escapeHtml } from '../formatter.js';
+import { isRateLimitError, isNetworkError, isTelegramTransportError } from '../error-utils.js';
 import { streamResponse } from '../streaming.js';
+// Import StreamTimeoutError from its own module, NOT '../streaming.js': many
+// handler tests vi.mock('../streaming.js'), which would make the class resolve
+// to undefined and turn `instanceof StreamTimeoutError` into a TypeError.
+import { StreamTimeoutError } from '../stream-timeout-error.js';
 import { registerChatCommands } from './registration.js';
+import { HookBlockedError } from '../../utils/errors.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 
 type QueueItem =
@@ -327,7 +332,11 @@ export class MessageHandler {
       this.log('Photo handling error:', sanitizedErr);
       // Note: 'session is busy' is no longer handled here — that race is covered
       // inside processOne's catch so it applies uniformly to all callers.
-      if (isRateLimitError(error)) {
+      if (isTelegramTransportError(error)) {
+        // Telegram-side failure fetching the image (e.g. getFileLink 429) — a
+        // Telegram limit, not a Claude one. Attribute it honestly.
+        await ctx.reply('❌ Couldn\'t reach Telegram to fetch that image. Please try resending.');
+      } else if (isRateLimitError(error)) {
         await ctx.reply('⏳ Rate limit reached. Please wait a moment and try again.');
       } else if (isNetworkError(error)) {
         await ctx.reply('❌ Couldn\'t download the image. Please try resending.');
@@ -419,7 +428,10 @@ export class MessageHandler {
       this.log('Message handling error:', error);
       // Note: 'session is busy' is no longer handled here — that race is covered
       // inside processOne's catch so it applies uniformly to all callers.
-      if (isRateLimitError(error)) {
+      if (isTelegramTransportError(error)) {
+        // Telegram-side delivery failure — not a Claude rate limit / network
+        // error. Already logged; stay silent rather than misattribute it.
+      } else if (isRateLimitError(error)) {
         await ctx.reply('⏳ Rate limit reached. Please wait a moment and try again.');
       } else if (isNetworkError(error)) {
         await ctx.reply('🌐 Network error. Please check your connection and try again.');
@@ -464,6 +476,15 @@ export class MessageHandler {
     try {
       const session = await this.sessionManager.getSession(chatId);
       await ctx.sendChatAction('typing').catch(() => {});
+      // Invariant: fire PreCompact before compaction. block -> skip, not error.
+      const hookRegistry = session.hookRegistry;
+      if (hookRegistry) {
+        await hookRegistry.dispatch({
+          event: 'PreCompact',
+          sessionId: session.sessionId,
+          trigger: 'manual',
+        });
+      }
       const result = await session.compact();
       if (result.reason === 'session-busy') {
         // Session became busy between drain-start and our compact() call (TOCTOU).
@@ -484,8 +505,12 @@ export class MessageHandler {
         }));
       }
     } catch (error) {
-      this.log('Compact error (queued):', error);
-      await ctx.reply(formatError(error as Error));
+      if (error instanceof HookBlockedError) {
+        await ctx.reply(`Compaction skipped: ${escapeHtml(error.reason ?? 'blocked by hook')}`);
+      } else {
+        this.log('Compact error (queued):', error);
+        await ctx.reply(formatError(error as Error));
+      }
     } finally {
       // Only drain when we did NOT re-enqueue — the active turn's finally will
       // drain the re-enqueued compact; draining here too causes a cascade.
@@ -599,7 +624,16 @@ export class MessageHandler {
         reEnqueued = true;
         return;
       }
-      if (isRateLimitError(error)) {
+      if (error instanceof StreamTimeoutError) {
+        // Honest timeout — the message already explains the cause. NOT a network
+        // or Claude rate-limit error, so don't misclassify it as one.
+        await ctx.reply(`⏱️ ${error.message}`);
+      } else if (isTelegramTransportError(error)) {
+        // A Telegram-side delivery failure (flood-control 429, transient 5xx) —
+        // NOT a Claude problem. Reporting it as a Claude rate limit is the bug.
+        // Already logged above; stay silent (a further reply would likely hit
+        // the same Telegram limit), and let the queue drain normally.
+      } else if (isRateLimitError(error)) {
         await ctx.reply('⏳ Rate limit reached. Please wait a moment and try again.');
       } else if (isNetworkError(error)) {
         await ctx.reply('🌐 Network error. Please check your connection and try again.');

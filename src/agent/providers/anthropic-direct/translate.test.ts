@@ -152,6 +152,14 @@ function signatureDelta(index: number, signature: string): RawMessageStreamEvent
   } as unknown as RawMessageStreamEvent;
 }
 
+function redactedThinkingStart(index: number, data: string): RawMessageStreamEvent {
+  return {
+    type: 'content_block_start',
+    index,
+    content_block: { type: 'redacted_thinking', data },
+  } as unknown as RawMessageStreamEvent;
+}
+
 describe('anthropic-direct translateMessageStream', () => {
   it('text-only stream emits delta.text events and an end_turn turn-result', async () => {
     const events: RawMessageStreamEvent[] = [
@@ -372,6 +380,66 @@ describe('anthropic-direct translateMessageStream', () => {
       type: 'text',
       text: 'hello',
     });
+  });
+
+  it('preserves a redacted_thinking block verbatim in turn-result', async () => {
+    const events: RawMessageStreamEvent[] = [
+      messageStart(),
+      redactedThinkingStart(0, 'ENCRYPTED_PAYLOAD'),
+      blockStop(0),
+      textBlockStart(1),
+      textDelta(1, 'done'),
+      blockStop(1),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    const out = await collect(
+      translateMessageStream(fromArray(events), { sessionId: SESSION_ID }),
+    );
+
+    const last = out[out.length - 1];
+    if (!last || last.kind !== 'turn-result') {
+      throw new Error('expected turn-result at end');
+    }
+    expect(last.result.assistantBlocks).toEqual([
+      { type: 'redacted_thinking', data: 'ENCRYPTED_PAYLOAD' },
+      { type: 'text', text: 'done' },
+    ]);
+  });
+
+  it('redacted_thinking followed by tool_use leads the assistant turn with the reasoning block (regression: must not be dropped)', async () => {
+    // Regression for the session-wedge bug: a security-adjacent prompt makes
+    // the server emit redacted_thinking, then the model calls tools. When
+    // extended thinking is enabled, the continuation request 400s unless the
+    // assistant turn LEADS with a thinking/redacted_thinking block. Dropping
+    // the redacted block (the pre-fix behavior) produced a tool_use-only turn
+    // that 400'd on every subsequent request — permanently wedging the session.
+    const events: RawMessageStreamEvent[] = [
+      messageStart(),
+      redactedThinkingStart(0, 'OPAQUE'),
+      blockStop(0),
+      toolUseStart(1, 'toolu_9', 'web_scrape'),
+      inputJsonDelta(1, '{"url":"https://x"}'),
+      blockStop(1),
+      messageDelta('tool_use'),
+      messageStop(),
+    ];
+
+    const out = await collect(
+      translateMessageStream(fromArray(events), { sessionId: SESSION_ID }),
+    );
+
+    const last = out[out.length - 1];
+    if (!last || last.kind !== 'turn-result') {
+      throw new Error('expected turn-result at end');
+    }
+    // The reasoning block must come FIRST, before the tool_use.
+    const blocks = last.result.assistantBlocks;
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toEqual({ type: 'redacted_thinking', data: 'OPAQUE' });
+    expect(blocks[1]).toMatchObject({ type: 'tool_use', id: 'toolu_9', name: 'web_scrape' });
+    expect(last.result.toolUseBlocks).toHaveLength(1);
   });
 
   it('error mid-stream yields an error event, no turn-result, and does not throw', async () => {

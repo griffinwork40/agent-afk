@@ -38,6 +38,7 @@ import {
 import { oneShotCompletion, type OneShotInput } from './oneshot.js';
 import { refreshClaudeCodeOauthToken } from '../../auth/keychain.js';
 import { AnthropicDirectQuery } from './query.js';
+import { pathContainmentBypassed } from '../../permission-policy.js';
 import {
   resolveAutoCompactThreshold,
   resolveEffort,
@@ -382,9 +383,11 @@ export class AnthropicDirectProvider implements ModelProvider {
     }
     return new SessionToolDispatcher({
       handlers,
-      // Bypass mode: when the session runs in bypassPermissions, every per-call
-      // ToolHandlerContext carries allowAll:true so path containment is disabled.
-      allowAll: permissionMode === 'bypassPermissions',
+      // Path-containment bypass: bypassPermissions (explicit) AND autonomous
+      // (AFK) both carry allowAll:true so path containment + the path-approval
+      // prompt are disabled per-call. In AFK the afk-mode-gate is the safety
+      // ceiling (see agent/permission-policy.ts).
+      allowAll: pathContainmentBypassed(permissionMode),
       // Constraint (semantic invariant): MCP schemas appended AFTER builtins
       // so builtin tool names always take precedence in any overlap. The
       // plan-exit schema is appended last, only while the tool is active.
@@ -532,7 +535,7 @@ export class AnthropicDirectProvider implements ModelProvider {
       resolveBase: this._initialResolveBase,
       readRoots: this._sharedReadRoots?.slice() ?? [],
       writeRoots: this._sharedWriteRoots?.slice() ?? [],
-      allowAll: this._currentPermissionMode === 'bypassPermissions',
+      allowAll: pathContainmentBypassed(this._currentPermissionMode),
     };
   }
 

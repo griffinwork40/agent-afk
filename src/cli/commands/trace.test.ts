@@ -130,6 +130,57 @@ describe('formatTrace — default human view', () => {
   });
 });
 
+describe('formatTrace — closure stop_reason rendering', () => {
+  const seal: EventObj = {
+    ts: '2026-06-05T12:35:00.500Z',
+    seq: 2,
+    kind: 'session_sealed',
+    payload: {
+      status: 'succeeded',
+      finalCostUsd: 0.01,
+      finalTurnCount: 1,
+      closedAt: '2026-06-05T12:35:00.500Z',
+    },
+  };
+
+  // Regression: the raw provider stop_reason (e.g. `refusal`) is persisted on
+  // the closure event but was previously unrendered, so a silent stop (turn
+  // ends with no output and no error) was only diagnosable from raw
+  // trace.jsonl. `afk trace show` must now surface it.
+  it('renders the raw provider stop_reason on the closure line when present', () => {
+    const closure: EventObj = {
+      ts: '2026-06-05T12:35:00.000Z',
+      seq: 1,
+      kind: 'closure',
+      payload: {
+        reason: 'model_end_turn',
+        finalTurnCount: 1,
+        finalCostUsd: 0.01,
+        finalTokens: {},
+        lastStopReason: 'refusal',
+      },
+    };
+    const out = formatTrace('s', '/p', parseTrace(toJsonl([closure, seal])));
+    expect(out).toContain('stop=refusal');
+  });
+
+  it('omits stop= when the closure carries no lastStopReason', () => {
+    const closure: EventObj = {
+      ts: '2026-06-05T12:35:00.000Z',
+      seq: 1,
+      kind: 'closure',
+      payload: {
+        reason: 'model_end_turn',
+        finalTurnCount: 1,
+        finalCostUsd: 0.01,
+        finalTokens: {},
+      },
+    };
+    const out = formatTrace('s', '/p', parseTrace(toJsonl([closure, seal])));
+    expect(out).not.toContain('stop=');
+  });
+});
+
 describe('formatTrace — root model provenance header', () => {
   const initStart = (model: string, resolvedModel: string): EventObj => ({
     ts: '2026-06-05T12:30:00.000Z',
