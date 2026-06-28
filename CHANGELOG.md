@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.2.0] - 2026-06-28
+
+### Added
+- Agent SDK parity — query() entry, in-process tool(), main-turn structured output (#300) (1a1025c)
+
+### Fixed
+- width-cap the markdown message-fallback render path (#301) (92093f5)
+
 ## [5.1.0] - 2026-06-28
 
 ### Added
