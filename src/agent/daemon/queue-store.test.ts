@@ -176,6 +176,44 @@ describe('dequeueNext — malformed (poison) entries', () => {
     );
     expect(remaining).toHaveLength(0);
   });
+
+  it('collision-retry: uses a unique name when the first rename fails (dest already a directory)', () => {
+    // Branch: quarantinePoisonEntry inner try/catch — first renameSync(src, poison/<filename>)
+    // throws because poison/<filename> already exists as a directory (EISDIR on macOS/Linux).
+    // The retry path appends `${Date.now()}-${randomHex}-<filename>` so the original
+    // poison file (directory here) is never overwritten.
+    //
+    // Setup: pre-create poison/<filename> as a DIRECTORY so renameSync throws EISDIR.
+    const poisonDir = join(tmpDir, 'poison');
+    const poisonedFilename = '0001-q-collision.json';
+    mkdirSync(join(poisonDir, poisonedFilename), { recursive: true });
+
+    // Write the actual (malformed) queue entry with the same name at the queue root.
+    writeFileSync(join(tmpDir, poisonedFilename), 'not-valid-json');
+
+    dequeueNext(tmpDir);
+
+    // The original destination (the directory) is still there — it was NOT overwritten.
+    const poisonEntries = readdirSync(poisonDir);
+    // The directory sentinel is still there; plus one new uniquely-named file.
+    expect(poisonEntries.length).toBe(2);
+
+    // The newly-quarantined file has the timestamp+random prefix pattern and is a FILE.
+    const newEntry = poisonEntries.find((e) => e !== poisonedFilename);
+    expect(newEntry).toBeDefined();
+    // Pattern: <digits>-<hex>-<original filename>
+    expect(newEntry).toMatch(new RegExp(`^\\d+-[a-z0-9]+-${poisonedFilename.replace('.', '\\.')}$`));
+
+    // The content of the uniquely-named file is preserved from the original malformed entry.
+    const rescued = readFileSync(join(poisonDir, newEntry!), 'utf-8');
+    expect(rescued).toBe('not-valid-json');
+
+    // The malformed entry is no longer in the FIFO path (the src was moved).
+    const queueEntries = readdirSync(tmpDir).filter(
+      (f) => f.endsWith('.json') && !f.startsWith('.tmp-'),
+    );
+    expect(queueEntries).toHaveLength(0);
+  });
 });
 
 describe('listPending', () => {
