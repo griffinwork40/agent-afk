@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.7.0] - 2026-06-28
+
+### Added
+- wire canUseTool into the dispatcher — Agent SDK parity Dim 8 (increment 1) (#304) (f0ee88b)
+
 ## [5.6.1] - 2026-06-28
 
 ### Fixed
