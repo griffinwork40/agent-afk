@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.5.1] - 2026-06-28
+
+### Fixed
+- don't silently exit plan mode on /afk off (#311) (55864c8)
+
 ## [5.5.0] - 2026-06-28
 
 ### Added
