@@ -18,7 +18,8 @@
  */
 
 import { InputCore, type InputCoreState } from './input-core.js';
-import { nextGraphemeIndex } from './display.js';
+import { isPrintableGrapheme } from './input/printable.js';
+import { isSoftNewlineEnter, endsWithBackslashContinuation } from './input/enter-decision.js';
 import { readClipboardImage } from './input/clipboard-image.js';
 import { MAX_DROPDOWN_ROWS } from './terminal-compositor.autocomplete.js';
 import * as Paste from './terminal-compositor.paste.js';
@@ -503,9 +504,7 @@ function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boo
   // a single libuv read tick (same Date.now()) from rapid synthetic
   // emits in tests. Bracketed-paste mode is the reliable signal —
   // and is enabled on every TTY in arm().
-  const isShiftEnter = key?.shift === true || sequence === '\x1b[13;2u';
-  const isAltEnter = key?.meta === true;
-  if (isShiftEnter || isAltEnter) {
+  if (isSoftNewlineEnter(key, sequence)) {
     // Explicit user-driven newline — route through applyEdit so the
     // autocomplete dropdown closes (a `\n` in the buffer almost
     // never matches a trigger), history recall is reset, and a
@@ -550,6 +549,23 @@ function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boo
     if (kind !== 'slash') return true;
     if (!applied) return true;
     // Slash + applied: fall through with the now-completed buffer.
+  }
+  // Trailing backslash escapes Enter → convert to a real newline. The
+  // documented escape hatch (mirrors reader.ts via endsWithBackslashContinuation)
+  // for terminals that don't report shift-state on Enter; without it the live
+  // REPL submitted the raw trailing `\` instead of continuing onto a new line.
+  // Routed through applyEdit (like the soft-newline branch above) so the
+  // dropdown closes and history recall resets.
+  if (endsWithBackslashContinuation(self.input.buffer)) {
+    self.history?.resetRecall();
+    self.applyEdit(
+      InputCore.replaceRange(
+        self.input,
+        { start: self.input.buffer.length - 1, end: self.input.buffer.length },
+        '\n',
+      ),
+    );
+    return true;
   }
   // Allow Enter to submit attachment-only messages (empty text + ≥1
   // image) — matches readWithAutocomplete's behavior on Ctrl+D /
@@ -905,18 +921,6 @@ function handleTab(self: KeyDispatchHost, key: KeyInfo): boolean {
     return true;
   }
   return false;
-}
-
-/**
- * True when `s` is a single printable grapheme cluster (one visual character):
- * not a control char (< ' '), and exactly one grapheme — so multi-UTF-16-unit
- * emoji (surrogate pairs, variation selectors, skin-tone modifiers) count as
- * one printable character, while escape sequences and multi-char fragments are
- * rejected. Replaces the old `s.length === 1` UTF-16 code-unit test that
- * silently dropped all astral / composed emoji.
- */
-function isPrintableGrapheme(s: string): boolean {
-  return s >= ' ' && nextGraphemeIndex(s, 0) === s.length;
 }
 
 function handlePrintable(self: KeyDispatchHost, char: string | undefined, key: KeyInfo): void {
