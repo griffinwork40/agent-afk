@@ -50,6 +50,15 @@ export const afkCmd: SlashCommand = {
       // Already on — suppress the no-op success line for ergonomics.
       return 'continue';
     }
+    if (!desired && ctx.stats.permissionMode === 'plan') {
+      // In plan mode — AFK has never been on, so there is nothing to turn off.
+      // Do NOT call toggleAfkMode here: it would call setPermissionMode('default')
+      // and silently drop plan mode with a misleading "AFK mode OFF" message.
+      ctx.out.warn(
+        'AFK is already off — you\'re in plan mode. Use \`/plan off\` to leave plan mode.',
+      );
+      return 'continue';
+    }
     if (!desired && ctx.stats.permissionMode !== 'autonomous') {
       // Already off — surface the affordance with a no-op toggle.
       await toggleAfkMode(ctx, false);
