@@ -188,8 +188,13 @@ export interface IAgentSession {
    * model with the validation error up to `maxRetries` times (default 2)
    * before throwing. Mirrors the Claude Agent SDK's `outputFormat:
    * json_schema`. Composes `sendMessage` turns — no streaming-path changes.
+   *
+   * Optional (`?`) so adding it does not break external implementers of
+   * `IAgentSession`. `AgentSession` always implements it; the library
+   * `query()`/`queryStructured()` path calls it on the concrete class, never
+   * through this interface.
    */
-  sendMessageStructured<T>(
+  sendMessageStructured?<T>(
     content: string,
     schema: ZodType<T>,
     options?: StructuredMessageOptions,
