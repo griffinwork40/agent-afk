@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.5.0] - 2026-06-28
+
+### Added
+- load plugin entrypoints on chat/daemon/telegram surfaces (B4) (#308) (004ec25)
+- add optional baseDir to loadSkillPrompts for out-of-tree plugins (#307) (77a07d3)
+
 ## [5.4.0] - 2026-06-28
 
 ### Added
