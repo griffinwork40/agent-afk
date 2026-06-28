@@ -11,8 +11,17 @@ import wrapAnsi from 'wrap-ansi';
  *
  * @param text  - Source string (may include chalk / ANSI codes).
  * @param width - Target column width; non-finite or ≤0 returns `text` unchanged.
+ * @param opts.breakLongWords - When true, a single token longer than `width` is
+ *   broken at the column boundary instead of overflowing past it. Default false
+ *   (soft word-wrap, the historical behavior). Set this for any sink that paints
+ *   raw lines with no terminal CUP re-wrap, so a bare URL / long identifier
+ *   cannot run off the right edge. Normal words (≤ width) wrap identically.
  */
-export function wrapToWidth(text: string, width: number): string {
+export function wrapToWidth(
+  text: string,
+  width: number,
+  opts: { breakLongWords?: boolean } = {},
+): string {
   if (!Number.isFinite(width) || width <= 0) {
     return text;
   }
@@ -21,7 +30,7 @@ export function wrapToWidth(text: string, width: number): string {
   }
   const w = Math.floor(width);
   return wrapAnsi(text, w, {
-    hard: false,
+    hard: opts.breakLongWords ?? false,
     trim: false,
     wordWrap: true,
   });
