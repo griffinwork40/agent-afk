@@ -1,21 +1,29 @@
 /**
- * Tests for system-prompt layering helpers.
+ * Tests for system-prompt layering helpers and GrantManager type guard.
  *
- * Invariant under test: the framework base (`prompts/system-prompt.md`) is the
- * UNCONDITIONAL foundation; the operator overlay (AFK_SYSTEM_PROMPT →
- * afk.config.json → AFK.md) is APPENDED on top, never substituted for the base.
- * This is the inverse of the historical `overlay ?? framework` behavior, where
- * any operator prompt replaced the framework base wholesale.
+ * Invariant under test (system-prompt): the framework base
+ * (`prompts/system-prompt.md`) is the UNCONDITIONAL foundation; the operator
+ * overlay (AFK_SYSTEM_PROMPT → afk.config.json → AFK.md) is APPENDED on top,
+ * never substituted for the base. This is the inverse of the historical
+ * `overlay ?? framework` behavior, where any operator prompt replaced the
+ * framework base wholesale.
+ *
+ * Invariant under test (isGrantManager): any provider that structurally exposes
+ * addReadRoot / addWriteRoot / revokeRoot / getGrants passes — regardless of its
+ * concrete class — and a plain object missing any of those methods does not.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   OPERATOR_CONFIG_HEADER,
   composeSystemPrompt,
+  isGrantManager,
   resolveBaseSystemPrompt,
 } from './shared-helpers.js';
 import { loadConfig } from './config.js';
+import { AnthropicDirectProvider } from '../agent/providers/index.js';
+import { OpenAICompatibleProvider } from '../agent/providers/openai-compatible/index.js';
 
 // Mock the config module so loadConfig() (the overlay source) is controllable.
 // loadSystemPrompt() is an in-module call in shared-helpers and reads the real
@@ -110,5 +118,61 @@ describe('resolveBaseSystemPrompt', () => {
     vi.mocked(loadConfig).mockReturnValue(fakeConfig('env override', 'env:AFK_SYSTEM_PROMPT'));
     const { source } = resolveBaseSystemPrompt();
     expect(source).toBe('framework+env:AFK_SYSTEM_PROMPT');
+  });
+});
+
+describe('isGrantManager', () => {
+  // Providers opened in these tests need to be closed so SQLite handles release.
+  const anthropicProviders: AnthropicDirectProvider[] = [];
+  const openaiProviders: OpenAICompatibleProvider[] = [];
+
+  afterEach(() => {
+    for (const p of anthropicProviders) p.close();
+    anthropicProviders.length = 0;
+    for (const p of openaiProviders) p.close();
+    openaiProviders.length = 0;
+  });
+
+  it('returns true for AnthropicDirectProvider (which implements GrantManager)', () => {
+    const p = new AnthropicDirectProvider();
+    anthropicProviders.push(p);
+    expect(isGrantManager(p)).toBe(true);
+  });
+
+  it('returns true for OpenAICompatibleProvider (which implements GrantManager)', () => {
+    const p = new OpenAICompatibleProvider();
+    openaiProviders.push(p);
+    expect(isGrantManager(p)).toBe(true);
+  });
+
+  it('returns false for a plain empty object', () => {
+    expect(isGrantManager({})).toBe(false);
+  });
+
+  it('returns false for an object missing some GrantManager methods', () => {
+    // Has three of the four required methods — must still fail.
+    expect(isGrantManager({
+      addReadRoot: () => {},
+      addWriteRoot: () => {},
+      revokeRoot: () => {},
+      // getGrants intentionally absent
+    })).toBe(false);
+  });
+
+  it('returns false for null and non-objects', () => {
+    expect(isGrantManager(null)).toBe(false);
+    expect(isGrantManager(undefined)).toBe(false);
+    expect(isGrantManager(42)).toBe(false);
+    expect(isGrantManager('string')).toBe(false);
+  });
+
+  it('returns true for a plain mock object exposing all four methods', () => {
+    const mock = {
+      addReadRoot: (_path: string) => {},
+      addWriteRoot: (_path: string) => {},
+      revokeRoot: (_path: string) => {},
+      getGrants: () => ({ resolveBase: undefined, readRoots: [], writeRoots: [] }),
+    };
+    expect(isGrantManager(mock)).toBe(true);
   });
 });
