@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createAfkModeGate } from './afk-mode-gate.js';
-import type { PermissionMode, ElicitationResult } from './types/sdk-types.js';
+import type { PermissionMode, ElicitationResult, ElicitationRequest } from './types/sdk-types.js';
 import type { TraceWriter } from './trace/index.js';
 
 describe('createAfkModeGate', () => {
@@ -281,6 +281,27 @@ describe('createAfkModeGate — high-risk approval round-trip (v1.5)', () => {
     expect(seenSignal).toBeDefined();
     expect(seenSignal!.aborted).toBe(true);
     expect(result.decision).toBe('block');
+  });
+
+  // SEC-1 (review): the tool-input preview embedded in the phone approval
+  // prompt must not leak secrets. Mirrors the redaction the AFK push path
+  // applies (cli/commands/interactive/afk-push.ts).
+  it('redacts secrets from the approval-prompt input preview before it reaches the operator', async () => {
+    let seenReq: ElicitationRequest | undefined;
+    const route = vi.fn(async (req: ElicitationRequest): Promise<ElicitationResult> => {
+      seenReq = req;
+      return { action: 'accept', content: { choice: 'deny' } };
+    });
+    const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, { route });
+    const secret = 'wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY';
+    await gate({
+      event: 'PreToolUse',
+      toolName: 'bash',
+      input: { command: `AWS_SECRET_ACCESS_KEY=${secret} terraform apply` },
+    });
+    expect(seenReq).toBeDefined();
+    expect(seenReq!.message).not.toContain(secret);
+    expect(seenReq!.message).toContain('REDACTED');
   });
 
   // Finding 1: distinguish malformed `accept` from a real deny

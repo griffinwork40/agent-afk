@@ -78,6 +78,7 @@ import type { TraceWriter } from './trace/index.js';
 import { classifyRisk } from './risk-classifier.js';
 import { elicitationRouter } from './elicitation-router.js';
 import { emitHookDecision } from './trace/emit.js';
+import { redactInlineSecrets } from './session/prompt-dump.js';
 
 /** Default deny-on-timeout window for a high-risk approval (ms). */
 const DEFAULT_APPROVAL_TIMEOUT_MS = 300_000;
@@ -300,7 +301,14 @@ function buildApprovalRequest(toolName: string, input: unknown): ElicitationRequ
   };
 }
 
-/** Compact, bounded preview of a tool input for the approval prompt. */
+/**
+ * Compact, bounded, secret-redacted preview of a tool input for the approval
+ * prompt. Secrets are scrubbed via {@link redactInlineSecrets} BEFORE truncation
+ * so a credential straddling the {@link MAX_INPUT_PREVIEW} boundary cannot leak a
+ * partial value. This preview renders on the operator's phone in AFK mode, so it
+ * gets the same redaction the AFK push path applies (see
+ * cli/commands/interactive/afk-push.ts).
+ */
 function clipInput(input: unknown): string {
   let s: string;
   try {
@@ -309,6 +317,9 @@ function clipInput(input: unknown): string {
     s = String(input);
   }
   if (!s) return '';
+  // Redact secrets before any truncation — a credential split across the
+  // MAX_INPUT_PREVIEW boundary must not leak a partial value to the phone.
+  s = redactInlineSecrets(s);
   return s.length > MAX_INPUT_PREVIEW ? `${s.slice(0, MAX_INPUT_PREVIEW)}… [truncated]` : s;
 }
 
