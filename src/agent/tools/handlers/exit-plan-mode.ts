@@ -4,8 +4,11 @@
  * The model-proposed counterpart to the `/plan off` slash command. When the
  * model judges its plan ready, it calls `exit_plan_mode`; the handler runs an
  * elicitation picker so the USER chooses how to proceed:
- *   - approve → implement in `default` mode (writes with path containment + prompts)
- *   - approve → implement in `bypassPermissions` mode (no prompts, read/write anywhere)
+ *   - approve → implement, RESTORING the mode the user was in before plan mode
+ *     (default / bypass / acceptEdits / …), captured by `AgentSession` on the
+ *     flip into plan and read here via `PlanExitControls.getPrePlanMode()`
+ *   - approve → escalate to `bypassPermissions` (offered unless the restored
+ *     mode is already bypass — that would be a redundant duplicate row)
  *   - keep planning (stay in plan; refine)
  *
  * On approval the handler records the approved mode ALONGSIDE the seed message
@@ -35,7 +38,7 @@
 
 import type { AnthropicToolDef, ToolHandler } from '../types.js';
 import type { PlanExitControls } from '../../types/config-types.js';
-import type { ElicitationRequest } from '../../types/sdk-types.js';
+import type { ElicitationRequest, PermissionMode } from '../../types/sdk-types.js';
 import { elicitationRouter } from '../../elicitation-router.js';
 import { buildPlanExitPrompt } from '../../plan-mode-exit-prompt.js';
 import { getProjectPlansDir } from '../../../paths.js';
@@ -43,11 +46,38 @@ import { getProjectPlansDir } from '../../../paths.js';
 /** Stable tool name — must be present in the session's tool allowlist. */
 export const EXIT_PLAN_MODE_TOOL_NAME = 'exit_plan_mode';
 
-// Choice labels. Kept clean ASCII < 128 chars so the REPL picker's
-// `sanitizeSchemaString` is a no-op and `content.value` round-trips verbatim.
-const CHOICE_DEFAULT = 'Approve — implement now (default mode: writes ask for confirmation, contained to the workspace)';
+// Choice labels. Kept < 128 chars so the REPL picker's `sanitizeSchemaString`
+// is a no-op and `content.value` round-trips verbatim.
+//
+// Invariant: the result matcher keys off the substring "bypass" to map a pick to
+// `bypassPermissions`. So `restoreChoiceLabel` MUST contain "bypass" only when
+// the restored mode IS bypass, and the static escalation label below is the only
+// other "bypass"-bearing choice — any other restore label must omit the word.
 const CHOICE_BYPASS = 'Approve — implement now (bypass mode: no prompts, read/write any path)';
 const CHOICE_KEEP = 'Keep planning';
+
+/**
+ * Label for the primary "approve and implement" choice, which restores the mode
+ * the user was in BEFORE plan mode. The phrasing reflects the concrete restored
+ * mode so the picker is honest about where you land. See the matcher invariant
+ * above: only the bypass case may contain the substring "bypass".
+ */
+function restoreChoiceLabel(mode: PermissionMode): string {
+  switch (mode) {
+    case 'bypassPermissions':
+      return 'Approve — implement now (restore bypass mode: no prompts, read/write any path)';
+    case 'acceptEdits':
+      return 'Approve — implement now (restore accept-edits mode: edits auto-approved)';
+    case 'dontAsk':
+    case 'auto':
+      return 'Approve — implement now (restore your previous mode: no approval prompts)';
+    case 'default':
+    case 'plan':
+    case 'autonomous':
+    default:
+      return 'Approve — implement now (restore default mode: writes ask for confirmation, contained to the workspace)';
+  }
+}
 
 /**
  * Tool definition for `exit_plan_mode`. Signal-only: no parameters — the plan
@@ -90,6 +120,19 @@ export const exitPlanModeTool: AnthropicToolDef = {
  */
 export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandler {
   return async (_input, signal, context) => {
+    // Restore the mode the user was in before plan mode (falls back to 'default'
+    // when none was captured). This is the PRIMARY approve choice.
+    const prevMode: PermissionMode = controls.getPrePlanMode() ?? 'default';
+    const restoreChoice = restoreChoiceLabel(prevMode);
+
+    // Offer an explicit bypass ESCALATION too — unless the restore choice is
+    // already bypass (the user planned from bypass), in which case a second
+    // bypass row would be redundant.
+    const choices =
+      prevMode === 'bypassPermissions'
+        ? [restoreChoice, CHOICE_KEEP]
+        : [restoreChoice, CHOICE_BYPASS, CHOICE_KEEP];
+
     const request: ElicitationRequest = {
       serverName: 'agent',
       origin: 'agent',
@@ -97,7 +140,7 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
       message:
         'Plan ready. How do you want to proceed? ' +
         '(Your plan is in the conversation above.)',
-      choices: [CHOICE_DEFAULT, CHOICE_BYPASS, CHOICE_KEEP],
+      choices,
     };
 
     const result = await elicitationRouter.route(request, { signal });
@@ -118,8 +161,9 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
       : '';
 
     // Keyword matching is robust to picker sanitization / numbered-fallback
-    // round-tripping. Order matters: detect "keep" first, then the dangerous
-    // "bypass" branch, else the default-mode approval.
+    // round-tripping. Order matters: detect "keep" first, then the "bypass"
+    // branch (the escalation choice, or restore-of-bypass — both land in
+    // bypass), else restore the captured pre-plan mode.
     if (picked.startsWith('Keep') || picked === CHOICE_KEEP) {
       return {
         content:
@@ -128,7 +172,7 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
       };
     }
 
-    const mode = picked.includes('bypass') ? 'bypassPermissions' : 'default';
+    const mode: PermissionMode = picked.includes('bypass') ? 'bypassPermissions' : prevMode;
 
     // Record the approved mode ALONGSIDE the seed. The permission flip is deferred
     // to the post-turn drain boundary (loop-iteration.ts → takePendingPlanExitSeed)

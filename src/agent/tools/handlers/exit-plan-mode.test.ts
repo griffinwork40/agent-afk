@@ -34,7 +34,7 @@ function installPicker(idx: number | null): void {
   }));
 }
 
-function makeControls(): {
+function makeControls(prePlanMode?: PermissionMode): {
   controls: PlanExitControls;
   modeCalls: PermissionMode[];
   seeds: Array<{ message: string; mode: PermissionMode }>;
@@ -51,6 +51,9 @@ function makeControls(): {
       requestImplementSeed: (message, mode) => {
         seeds.push({ message, mode });
       },
+      // Pre-plan mode the handler restores. Undefined → handler falls back to
+      // 'default', which is what the original tests below assert.
+      getPrePlanMode: () => prePlanMode,
     },
   };
 }
@@ -124,6 +127,66 @@ describe('exit_plan_mode handler', () => {
 
     expect(seeds).toEqual([{ message: buildPlanExitPrompt(getProjectPlansDir(process.cwd())), mode: 'default' }]);
   });
+
+  it('approve→restore: the primary choice restores the captured pre-plan mode (acceptEdits)', async () => {
+    // Capture the offered choices so we can assert the picker shape too.
+    let offered: string[] | undefined;
+    elicitationRouter.install(async (request) => {
+      offered = request.choices;
+      return { action: 'accept', content: { value: request.choices?.[0] } };
+    });
+    const { controls, seeds } = makeControls('acceptEdits');
+    const handler = createExitPlanModeHandler(controls);
+
+    const res = await handler({}, new AbortController().signal, { resolveBase: CWD });
+
+    // Non-bypass pre-plan mode → three choices: restore, bypass-escalation, keep.
+    expect(offered).toHaveLength(3);
+    expect(offered?.[0]).toContain('restore');
+    // Primary approve restores the captured mode, not 'default'.
+    expect(seeds).toEqual([{ message: buildPlanExitPrompt(getProjectPlansDir(CWD)), mode: 'acceptEdits' }]);
+    expect(res.content).toContain('mode=acceptEdits');
+  });
+
+  it('approve→escalate: the explicit bypass choice still escalates even when pre-plan mode was acceptEdits', async () => {
+    installPicker(1); // index 1 = the bypass escalation row
+    const { controls, seeds } = makeControls('acceptEdits');
+    const handler = createExitPlanModeHandler(controls);
+
+    const res = await handler({}, new AbortController().signal, { resolveBase: CWD });
+
+    expect(seeds).toEqual([{ message: buildPlanExitPrompt(getProjectPlansDir(CWD)), mode: 'bypassPermissions' }]);
+    expect(res.content).toContain('mode=bypassPermissions');
+  });
+
+  it('pre-plan mode bypass: picker dedupes (no separate bypass row) and approve restores bypass', async () => {
+    let offered: string[] | undefined;
+    elicitationRouter.install(async (request) => {
+      offered = request.choices;
+      return { action: 'accept', content: { value: request.choices?.[0] } };
+    });
+    const { controls, seeds } = makeControls('bypassPermissions');
+    const handler = createExitPlanModeHandler(controls);
+
+    const res = await handler({}, new AbortController().signal, { resolveBase: CWD });
+
+    // Restore IS bypass → only two choices (restore-bypass, keep); no duplicate.
+    expect(offered).toHaveLength(2);
+    expect(seeds).toEqual([{ message: buildPlanExitPrompt(getProjectPlansDir(CWD)), mode: 'bypassPermissions' }]);
+    expect(res.content).toContain('mode=bypassPermissions');
+  });
+
+  it('pre-plan mode bypass: the second choice is "keep planning" (not a flip)', async () => {
+    installPicker(1); // index 1 with a 2-choice picker = keep planning
+    const { controls, modeCalls, seeds } = makeControls('bypassPermissions');
+    const handler = createExitPlanModeHandler(controls);
+
+    const res = await handler({}, new AbortController().signal, { resolveBase: CWD });
+
+    expect(modeCalls).toEqual([]);
+    expect(seeds).toEqual([]);
+    expect(res.content.toLowerCase()).toContain('keep planning');
+  });
 });
 
 describe('AgentSession plan-exit seed bridge', () => {
@@ -190,6 +253,42 @@ describe('AgentSession plan-exit seed bridge', () => {
     await expect(session.takePendingPlanExitSeed()).resolves.toBeUndefined();
     // Single-shot: the dropped seed is cleared (a retry still returns undefined).
     await expect(session.takePendingPlanExitSeed()).resolves.toBeUndefined();
+
+    await session.close();
+  });
+
+  it('captures the pre-plan mode on entering plan, exposed via getPrePlanMode + controls', async () => {
+    const { provider, getControls } = capturingProvider();
+    const session = new AgentSession({ model: 'sonnet', apiKey: 'test-key', provider });
+    await session.waitForInitialization();
+
+    // No plan entered yet → nothing captured.
+    expect(session.getPrePlanMode()).toBeUndefined();
+
+    // Enter plan FROM bypass → bypass is captured as the restore target, and the
+    // injected control bridge surfaces the same value to the exit_plan_mode tool.
+    await session.setPermissionMode('bypassPermissions');
+    await session.setPermissionMode('plan');
+    expect(session.getPrePlanMode()).toBe('bypassPermissions');
+    expect(getControls()?.getPrePlanMode()).toBe('bypassPermissions');
+
+    // A redundant plan→plan flip must NOT clobber the captured mode with 'plan'.
+    await session.setPermissionMode('plan');
+    expect(session.getPrePlanMode()).toBe('bypassPermissions');
+
+    await session.close();
+  });
+
+  it('does not capture autonomous (AFK) as a restorable pre-plan mode → restore falls back', async () => {
+    const { provider } = capturingProvider();
+    const session = new AgentSession({ model: 'sonnet', apiKey: 'test-key', provider });
+    await session.waitForInitialization();
+
+    await session.setPermissionMode('autonomous');
+    await session.setPermissionMode('plan');
+    // 'autonomous' is reset to undefined (AFK is not restorable by a bare flip)
+    // so an approved exit falls back to 'default'.
+    expect(session.getPrePlanMode()).toBeUndefined();
 
     await session.close();
   });

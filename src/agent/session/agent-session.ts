@@ -76,6 +76,16 @@ export class AgentSession implements IAgentSession {
    * mid-turn tool call to the post-turn REPL boundary.
    */
   private _pendingPlanExitSeed: { message: string; mode: PermissionMode } | undefined;
+  /**
+   * The permission mode the session was in immediately BEFORE entering plan
+   * mode. Captured by {@link setPermissionMode} on the transition INTO 'plan'
+   * (covering every entry path — `/plan`, free-text `/plan`, Shift+Tab) and read
+   * by an approved plan-exit ({@link getPrePlanMode}) so the implement-turn
+   * restores it instead of forcing 'default'. `undefined` until the first
+   * plan-entry, and reset to `undefined` when the prior mode was 'autonomous'
+   * (AFK is not restorable by a bare flip) so restore falls back to 'default'.
+   */
+  private _prePlanPermissionMode: PermissionMode | undefined;
   private currentState: SessionState = 'idle';
   private providerQuery!: ProviderQuery;
   private providerIterator!: AsyncIterator<ProviderEvent>;
@@ -170,6 +180,7 @@ export class AgentSession implements IAgentSession {
               requestImplementSeed: (message, mode) => {
                 this._pendingPlanExitSeed = { message, mode };
               },
+              getPrePlanMode: () => this._prePlanPermissionMode,
             },
           }
         : config;
@@ -776,8 +787,31 @@ export class AgentSession implements IAgentSession {
   }
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
+    // Capture the mode being LEFT on the transition INTO plan, so an approved
+    // exit (exit_plan_mode tool or `/plan off`) can restore it instead of
+    // forcing 'default'. Read the live mode BEFORE flipping. Guard on the
+    // non-plan → plan edge only: a redundant plan → plan flip must not overwrite
+    // the real pre-plan mode with 'plan'. 'autonomous' (AFK) is reset to
+    // undefined — it carries dedicated enter/exit machinery (toggleAfkMode) and
+    // is not safe to re-enter by a bare flip — so restore falls back to 'default'.
+    if (mode === 'plan') {
+      const current = this.stateManager.getSessionMetadata().permissionMode;
+      if (current !== 'plan') {
+        this._prePlanPermissionMode = current === 'autonomous' ? undefined : current;
+      }
+    }
     await this.providerQuery.setPermissionMode(mode);
     this.stateManager.setSessionMetadata((prev) => ({ ...prev, permissionMode: mode }));
+  }
+
+  /**
+   * The permission mode the session was in immediately before entering plan
+   * mode, or `undefined` if none was captured (never entered plan, or the prior
+   * mode was 'autonomous'). An approved plan-exit restores this; callers fall
+   * back to 'default' on `undefined`. See {@link _prePlanPermissionMode}.
+   */
+  getPrePlanMode(): PermissionMode | undefined {
+    return this._prePlanPermissionMode;
   }
 
   /**

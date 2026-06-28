@@ -12,6 +12,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { togglePlanMode } from './plan-mode-toggle.js';
 import type { SessionStats, SlashContext } from './slash/types.js';
+import type { PermissionMode } from '../agent/types/sdk-types.js';
 
 function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
   return {
@@ -31,15 +32,20 @@ function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
 
 interface FakeSession {
   setPermissionMode: ReturnType<typeof vi.fn>;
+  getPrePlanMode: ReturnType<typeof vi.fn>;
 }
 
 function makeCtx(opts: {
   stats: SessionStats;
   setPermissionMode?: ReturnType<typeof vi.fn>;
+  prePlanMode?: PermissionMode;
 }): { ctx: SlashContext; sess: FakeSession; lines: string[] } {
   const lines: string[] = [];
   const sess: FakeSession = {
     setPermissionMode: opts.setPermissionMode ?? vi.fn().mockResolvedValue(undefined),
+    // The session captures the pre-plan mode; `/plan off` restores it. Defaults
+    // to undefined → helper falls back to 'default' (the original behavior).
+    getPrePlanMode: vi.fn().mockReturnValue(opts.prePlanMode),
   };
   const ctx: SlashContext = {
     session: { current: sess } as unknown as SlashContext['session'],
@@ -91,6 +97,51 @@ describe('togglePlanMode', () => {
 
     expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
     expect(stats.permissionMode).toBe('default');
+  });
+
+  it('restores the pre-plan mode (bypass) on exit instead of forcing default', async () => {
+    const stats = makeStats({ permissionMode: 'plan' });
+    const { ctx, sess, lines } = makeCtx({ stats, prePlanMode: 'bypassPermissions' });
+
+    await togglePlanMode(ctx, false);
+
+    expect(sess.setPermissionMode).toHaveBeenCalledWith('bypassPermissions');
+    expect(stats.permissionMode).toBe('bypassPermissions');
+    const joined = lines.join('\n').toLowerCase();
+    expect(joined).toContain('plan mode off');
+    expect(joined).toContain('bypass restored');
+  });
+
+  it('restores the pre-plan mode (acceptEdits) on exit', async () => {
+    const stats = makeStats({ permissionMode: 'plan' });
+    const { ctx, sess, lines } = makeCtx({ stats, prePlanMode: 'acceptEdits' });
+
+    await togglePlanMode(ctx, false);
+
+    expect(sess.setPermissionMode).toHaveBeenCalledWith('acceptEdits');
+    expect(stats.permissionMode).toBe('acceptEdits');
+    expect(lines.join('\n').toLowerCase()).toContain('accept-edits restored');
+  });
+
+  it('falls back to default on exit when no pre-plan mode was captured', async () => {
+    const stats = makeStats({ permissionMode: 'plan' });
+    const { ctx, sess } = makeCtx({ stats }); // prePlanMode undefined
+
+    await togglePlanMode(ctx, false);
+
+    expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
+    expect(stats.permissionMode).toBe('default');
+  });
+
+  it('entering plan flips to plan and never consults getPrePlanMode (only exit restores)', async () => {
+    const stats = makeStats({ permissionMode: 'default' });
+    const { ctx, sess } = makeCtx({ stats, prePlanMode: 'bypassPermissions' });
+
+    await togglePlanMode(ctx, true);
+
+    expect(sess.setPermissionMode).toHaveBeenCalledWith('plan');
+    expect(stats.permissionMode).toBe('plan');
+    expect(sess.getPrePlanMode).not.toHaveBeenCalled();
   });
 
   it('leaves permissionMode unchanged and surfaces an error when setPermissionMode rejects', async () => {
