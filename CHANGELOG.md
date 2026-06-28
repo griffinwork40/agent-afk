@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-06-28
+
+### Added
+- retire /bypass, add default badge, steer exit to exit_plan_mode (#286) (a38a566)
+
 ## [4.46.0] - 2026-06-28
 
 ### Added
