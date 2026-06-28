@@ -61,7 +61,7 @@ class ElicitationRouter {
 
   route(
     request: ElicitationRequest,
-    options: { signal: AbortSignal },
+    options: { signal: AbortSignal; onActive?: () => void },
   ): Promise<ElicitationResult> {
     // Fast-path: already aborted before entering the queue
     if (options.signal.aborted) return Promise.resolve(DECLINE);
@@ -105,6 +105,12 @@ class ElicitationRouter {
         });
 
         try {
+          // Contract: onActive fires exactly once, immediately before the handler
+          // is called — only on the path where the operator is actually about to
+          // be prompted (NOT on pre-aborted, aborted-in-queue, or no-handler
+          // DECLINE paths). It is observational only: a throwing callback must
+          // never break the queue or the "must always resolve" invariant.
+          try { options.onActive?.(); } catch { /* observational only */ }
           const result = await Promise.race([
             capturedHandler(request, options).catch(() => DECLINE),
             abortPromise,
@@ -139,7 +145,7 @@ export const elicitationRouter = new ElicitationRouter();
  */
 export async function routeElicitation(
   request: ElicitationRequest,
-  options: { signal: AbortSignal },
+  options: { signal: AbortSignal; onActive?: () => void },
 ): Promise<ElicitationResult> {
   return elicitationRouter.route(request, options);
 }

@@ -124,6 +124,18 @@ export type HookEventName =
   | 'SubagentStart'
   | 'SubagentStop';
 
+/**
+ * Fine-grained outcome of the AFK high-risk approval gate. Set only by that
+ * gate; absent on all other hook_decision events.
+ */
+export type AfkApprovalOutcome =
+  | 'approved'
+  | 'denied'
+  | 'unrecognised'
+  | 'timeout'
+  | 'decline'
+  | 'cancel';
+
 export interface HookDecisionPayload {
   hookEvent: HookEventName;
   /**
@@ -138,6 +150,10 @@ export interface HookDecisionPayload {
   blockedTool?: string;
   /** Set only when the hook returned `injectContext`. */
   injectedContextBytes?: number;
+  /** Set only by the AFK high-risk approval gate. Wall-clock ms from gate entry to decision. */
+  durationMs?: number;
+  /** Set only by the AFK high-risk approval gate. Fine-grained approval outcome. */
+  approvalOutcome?: AfkApprovalOutcome;
 }
 
 // ---------------------------------------------------------------------------

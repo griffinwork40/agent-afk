@@ -482,22 +482,23 @@ export class CronScheduler {
     // non-empty AFK_SESSION_ID and traces stay greppable by task name.
     const sessionId = daemonTraceLabel(taskId);
     const agentCwd = this.options.sessionConfig?.cwd ?? process.cwd();
-    const { registry, memoryStore } = createDefaultHookRegistry(
-      undefined,
-      'daemon',
-      undefined,
-      undefined,
-      loadHooksConfig({ cwd: agentCwd }),
-      { cwd: agentCwd, sessionId },
-    );
     // Witness layer: open a fresh trace per spawned daemon session so its
     // subagent + skill lifecycle events are durable on disk — the AFK
     // (away-from-keyboard) surface where post-hoc inspection matters most.
     // Mirrors chat.ts / interactive bootstrap.ts. Returns null under
     // AFK_TRACE_DISABLED=1. The label is derived from the taskId (see
     // daemonTraceLabel) so traces are greppable by task name while each tick
-    // still gets its own trace dir.
+    // still gets its own trace dir. Created before the hook registry so the
+    // AFK gate's structured audit trace is wired from the start of the session.
     const trace = createDefaultTraceWriter({ sessionLabel: daemonTraceLabel(taskId) });
+    const { registry, memoryStore } = createDefaultHookRegistry(
+      undefined,
+      'daemon',
+      undefined,
+      undefined,
+      loadHooksConfig({ cwd: agentCwd }),
+      { cwd: agentCwd, sessionId, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}) },
+    );
 
     let mcpManager: McpManager | undefined;
     // Mirror the chat / telegram / interactive surfaces: include MCP configs

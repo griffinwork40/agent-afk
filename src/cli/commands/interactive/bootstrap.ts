@@ -565,7 +565,7 @@ export async function bootstrapSession(
     sharedMemoryStore,
     () => stats.permissionMode,
     loadHooksConfig({ cwd: extras?.cwd }),
-    { cwd: extras?.cwd },
+    { cwd: extras?.cwd, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}) },
     () => extras?.cwd ?? process.cwd(),
   );
   const hookRegistry = hookRegistryBundle.registry;
