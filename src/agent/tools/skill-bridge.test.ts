@@ -18,8 +18,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildSkillManifest, collectSkillEntries, discoverPluginSkillBodies } from './skill-bridge.js';
+import {
+  buildSkillManifest,
+  collectSkillEntries,
+  discoverPluginSkillBodies,
+  scanAllPluginRoots,
+} from './skill-bridge.js';
 import { registerSkill, _resetRegistry } from '../../skills/index.js';
+import { _resetPluginScanCache } from '../plugins-scanner.js';
+import { getPluginsDir } from '../../paths.js';
 
 // ---------------------------------------------------------------------------
 // File-level isolation: redirect AFK_HOME + cwd before every test so the
@@ -712,5 +719,37 @@ describe('collectSkillEntries — disk-scan regression (user + project skills)',
       (e) => e.source === 'user' || e.source === 'project',
     );
     expect(userOrProject).toHaveLength(0);
+  });
+});
+
+describe('scanAllPluginRoots', () => {
+  it('returns well-formed local plugin configs', () => {
+    _resetPluginScanCache();
+    const roots = scanAllPluginRoots();
+    expect(Array.isArray(roots)).toBe(true);
+    for (const r of roots) {
+      expect(r.type).toBe('local');
+      expect(typeof r.path).toBe('string');
+    }
+  });
+
+  it('surfaces a user-scope plugin together with its manifest `main`', () => {
+    // AFK_HOME is stubbed to an empty temp dir by the file-level beforeEach, so
+    // getPluginsDir() points inside it. Drop a fixture plugin that declares a
+    // `main`, then assert scanAllPluginRoots() carries it through — this is the
+    // scan→entrypoint flow that loadPluginEntrypoints() consumes at boot.
+    const pluginDir = join(getPluginsDir(), 'with-main');
+    mkdirSync(join(pluginDir, '.claude-plugin'), { recursive: true });
+    writeFileSync(
+      join(pluginDir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'with-main', version: '0.0.0', main: 'dist/index.js' }),
+    );
+    _resetPluginScanCache();
+
+    expect(scanAllPluginRoots()).toContainEqual({
+      type: 'local',
+      path: pluginDir,
+      main: 'dist/index.js',
+    });
   });
 });

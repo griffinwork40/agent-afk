@@ -89,10 +89,15 @@ export function resolveTriggerMode(
 }
 
 /**
- * Compiled-in default daemon task slash command. Used when no flag, env
- * var, or config value is provided.
+ * Compiled-in default daemon task slash command.
+ *
+ * Empty by design: the daemon must not fabricate a task when the user
+ * configured none. Supply a task via --task, the AFK_DAEMON_TASK env var, or
+ * `daemon.task` in afk.config.json; the cron and both triggers require one
+ * (enforced in registerDaemonCommand). This previously defaulted to an
+ * internal-only skill, which a build lacking that skill could not run.
  */
-export const COMPILED_DEFAULT_TASK = '/forge-friction --auto';
+export const COMPILED_DEFAULT_TASK = '';
 
 /**
  * Compiled-in default daemon task ID. Used when no flag, env var, or

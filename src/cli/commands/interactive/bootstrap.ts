@@ -51,6 +51,7 @@ import { seedPersistedGrants } from '../../../agent/permissions-store.js';
 import { providerForModel } from '../../../agent/providers/index.js';
 import { createMemoizedProviderFactory } from './provider-factory.js';
 import { BUILTIN_TOOL_NAMES } from '../../../agent/tools/schemas.js';
+import { ensurePluginEntrypointsLoaded } from '../../../agent/tools/skill-bridge.js';
 import { AWARENESS_TOOL_NAMES } from '../../../agent/awareness/index.js';
 import { McpManager, loadMcpConfig, getMcpConfigPath } from '../../../agent/mcp/index.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../../config/import-sources.js';
@@ -588,6 +589,12 @@ export async function bootstrapSession(
     autoResumeOnUsageLimit: cliConfig.autoResumeOnUsageLimit,
     ...(initialPermissionMode !== undefined ? { permissionMode: initialPermissionMode } : {}),
   };
+
+  // Import any plugin JS entrypoints (manifest `main`) before constructing the
+  // session: the skill manifest is assembled synchronously in the constructor,
+  // so a plugin's registerSkill() side-effects must already have run for its
+  // code-backed skills to appear. Idempotent + non-fatal; no-op without plugins.
+  await ensurePluginEntrypointsLoaded();
 
   const session = buildAgentSession(sharedDeps);
   // Populate sessionRef (declared above deferredParent so the proxy works).

@@ -17,6 +17,7 @@ import '../../skills/all.js';
 import { listSkills, getSkill, isSkillVisible } from '../../skills/index.js';
 import { scanSkillsFromDir } from '../../skills/user-skills.js';
 import { scanLocalPlugins } from '../plugins-scanner.js';
+import { loadPluginEntrypoints } from '../plugins/load-entrypoints.js';
 import { extractPluginSkills } from '../plugins/tool-injector.js';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
 import { getBundledPluginsDir, getProjectPluginsDir, getProjectSkillsDir, getSkillsDir } from '../../paths.js';
@@ -138,12 +139,7 @@ export function collectSkillEntries(
   //    Plugin frontmatter MAY carry `audience: internal` to opt into the
   //    same tier gate — extractPluginSkills() surfaces it as `audience`,
   //    defaulting to 'public' when absent.
-  const plugins = pluginConfigs ?? [
-    ...scanLocalPlugins(getProjectPluginsDir()),
-    ...scanLocalPlugins(),
-    ...scanLocalPlugins(getBundledPluginsDir()),
-    ...importedRoots.pluginRoots.flatMap((root) => scanLocalPlugins(root, { trustAll: true })),
-  ];
+  const plugins = pluginConfigs ?? scanAllPluginRoots();
   for (const plugin of plugins) {
     if (plugin.type !== 'local') continue;
     const skills = extractPluginSkills(plugin.path);
@@ -215,14 +211,7 @@ export function discoverPluginSkillBodies(
   // Imported plugin roots are resolved inline in the fallback so the
   // loadImportFromConfig() + existsSync work only runs when no pluginConfigs
   // were supplied (a caller passing pluginConfigs skips it entirely).
-  const plugins = pluginConfigs ?? [
-    ...scanLocalPlugins(getProjectPluginsDir()),
-    ...scanLocalPlugins(),
-    ...scanLocalPlugins(getBundledPluginsDir()),
-    ...resolveImportedRoots(loadImportFromConfig()).pluginRoots.flatMap((root) =>
-      scanLocalPlugins(root, { trustAll: true }),
-    ),
-  ];
+  const plugins = pluginConfigs ?? scanAllPluginRoots();
 
   for (const plugin of plugins) {
     if (plugin.type !== 'local') continue;
@@ -241,4 +230,38 @@ export function discoverPluginSkillBodies(
   }
 
   return bodies;
+}
+
+/**
+ * Aggregate every plugin root AFK loads from, in priority order:
+ * project-scope → user-scope → bundled → imported (trusted) roots. Single
+ * source of truth for "which plugins exist," shared by skill-manifest
+ * collection, plugin-body discovery, and boot-time entrypoint loading so the
+ * three never drift apart.
+ */
+export function scanAllPluginRoots(): SdkPluginConfig[] {
+  return [
+    ...scanLocalPlugins(getProjectPluginsDir()),
+    ...scanLocalPlugins(),
+    ...scanLocalPlugins(getBundledPluginsDir()),
+    ...resolveImportedRoots(loadImportFromConfig()).pluginRoots.flatMap((root) =>
+      scanLocalPlugins(root, { trustAll: true }),
+    ),
+  ];
+}
+
+/**
+ * Import the JS entrypoint of every discovered plugin that declares a manifest
+ * `main`, so a plugin's top-level `registerSkill()` side-effects populate the
+ * global registry BEFORE the skill manifest is built. Awaiting this before
+ * constructing an AgentSession is what lets a plugin contribute code-backed
+ * skills (the manifest is assembled synchronously at session construction).
+ *
+ * Idempotent and process-global (see {@link loadPluginEntrypoints}): cheap to
+ * await from every surface bootstrap, a no-op for already-loaded entrypoints,
+ * and non-fatal per plugin. A subagent inherits the parent process's registry,
+ * so calling it again in a child is a safe no-op.
+ */
+export async function ensurePluginEntrypointsLoaded(): Promise<void> {
+  await loadPluginEntrypoints(scanAllPluginRoots());
 }

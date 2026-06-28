@@ -9,7 +9,6 @@ import { getQueueDir } from '../../paths.js';
 import { pushIfConfigured } from '../../telegram/push.js';
 import type { TaskCompletionDetails, TelemetryRecord } from '../../agent/daemon/scheduler.js';
 import {
-  COMPILED_DEFAULT_TASK,
   COMPILED_DEFAULT_TASK_ID,
   resolveDaemonHost,
   resolveDaemonTimeoutMs,
@@ -236,7 +235,7 @@ export function registerDaemonCommand(program: Command): void {
       '--host <address>',
       'Bind address for the control HTTP surface. Overrides AFK_DAEMON_HOST. Defaults to 127.0.0.1 (loopback only). The control surface is UNAUTHENTICATED — bind a non-loopback address (e.g. 0.0.0.0) only on a trusted or firewalled network.',
     )
-    .option('-t, --task <command>', `Command to fire on each tick (default: ${COMPILED_DEFAULT_TASK})`)
+    .option('-t, --task <command>', 'Command to fire on each tick. Required for the cron and both triggers; optional otherwise.')
     .option('-c, --cron <expression>', 'Cron expression (e.g. "0 */6 * * *"). Required when --trigger includes cron.')
     .option('-i, --task-id <id>', `Task identifier (default: ${COMPILED_DEFAULT_TASK_ID})`)
     .option('--once', 'Fire one tick and exit (for testing)', false)
@@ -295,6 +294,18 @@ export function registerDaemonCommand(program: Command): void {
       if ((trigger === 'cron' || trigger === 'both') && !options.cron) {
         handleCommandError(new Error(`--cron is required when --trigger is '${trigger}'.`));
       }
+      // A task is mandatory for cron/both: the user scheduled a tick but, with
+      // no --task / AFK_DAEMON_TASK / daemon.task, there is nothing to run. Fail
+      // clearly instead of registering an empty default task (historically this
+      // fell back to an internal-only skill a public build cannot execute).
+      if ((trigger === 'cron' || trigger === 'both') && command.trim() === '') {
+        handleCommandError(
+          new Error(
+            'A daemon task is required for the cron and both triggers. Provide one via ' +
+              '--task, the AFK_DAEMON_TASK env var, or daemon.task in afk.config.json.',
+          ),
+        );
+      }
       // pull mode: no cron expression needed — tasks are dequeued from the queue directory
 
       let thinking: ThinkingConfig | undefined;
@@ -318,8 +329,11 @@ export function registerDaemonCommand(program: Command): void {
       };
 
       // In pull mode, the task queue is file-driven — no ScheduledTask registered.
-      // For all other trigger modes, register the default task.
-      const tasks: ScheduledTask[] = trigger === 'pull'
+      // For other trigger modes, register the default task only when one is
+      // actually configured: with an empty command the daemon runs just its
+      // persisted schedules + worktree-prune rather than fabricating a task.
+      // (cron/both with an empty task already errored above.)
+      const tasks: ScheduledTask[] = (trigger === 'pull' || command.trim() === '')
         ? []
         : [{
             taskId,
