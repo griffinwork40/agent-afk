@@ -385,4 +385,16 @@ export interface BrowserConfig {
   backend: 'playwright';
   /** Optional path to a config JSON used to override anything above. */
   configPath: string | null;
+  /**
+   * Name of the persistent session-vault profile this process reuses. Session
+   * contexts restore `storageState` from (and save it back to)
+   * `~/.afk/state/browser/<defaultProfile>/storageState.json`, so an agent
+   * reuses a human-authorized login across unattended runs. `'default'` when
+   * unset (a fresh, empty profile — identical to pre-vault behavior).
+   *
+   * Resolved from `AFK_BROWSER_DEFAULT_PROFILE`. Operator-controlled, NOT a
+   * per-call model choice: the human runs `afk browser login --profile <name>`
+   * once, then points the agent at that profile via the env var.
+   */
+  defaultProfile: string;
 }

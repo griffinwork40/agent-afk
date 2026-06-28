@@ -379,3 +379,50 @@ describe('enforceDomainPolicy', () => {
     expect(enforceDomainPolicy('https://github.com/', cfg)).toEqual({ allowed: true });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Session-vault default profile
+// ---------------------------------------------------------------------------
+
+describe('loadBrowserConfig — defaultProfile (session vault)', () => {
+  it('defaults to "default" when AFK_BROWSER_DEFAULT_PROFILE is unset', () => {
+    const cfg = loadBrowserConfig({ env: makeEnv(), readFileSync: noFile });
+    expect(cfg.defaultProfile).toBe('default');
+  });
+
+  it('treats empty/whitespace as unset → "default"', () => {
+    expect(
+      loadBrowserConfig({ env: makeEnv({ AFK_BROWSER_DEFAULT_PROFILE: '' }), readFileSync: noFile })
+        .defaultProfile,
+    ).toBe('default');
+    expect(
+      loadBrowserConfig({ env: makeEnv({ AFK_BROWSER_DEFAULT_PROFILE: '   ' }), readFileSync: noFile })
+        .defaultProfile,
+    ).toBe('default');
+  });
+
+  it('reads and trims a custom profile name from env', () => {
+    const cfg = loadBrowserConfig({
+      env: makeEnv({ AFK_BROWSER_DEFAULT_PROFILE: '  work  ' }),
+      readFileSync: noFile,
+    });
+    expect(cfg.defaultProfile).toBe('work');
+  });
+
+  it('throws on an unsafe (path-traversal) profile name', () => {
+    expect(() =>
+      loadBrowserConfig({
+        env: makeEnv({ AFK_BROWSER_DEFAULT_PROFILE: '../../etc' }),
+        readFileSync: noFile,
+      }),
+    ).toThrow(/Invalid browser profile/);
+  });
+
+  it('lets browser.json override the env profile', () => {
+    const cfg = loadBrowserConfig({
+      env: makeEnv({ AFK_BROWSER_DEFAULT_PROFILE: 'work' }),
+      readFileSync: withFile(JSON.stringify({ defaultProfile: 'staging' })),
+    });
+    expect(cfg.defaultProfile).toBe('staging');
+  });
+});

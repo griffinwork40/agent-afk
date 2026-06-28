@@ -1002,6 +1002,21 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     example: '/path/to/browser.json',
     category: 'browser',
   },
+  {
+    name: 'AFK_BROWSER_DEFAULT_PROFILE',
+    description:
+      'Name of the persistent session-vault profile the agent reuses for browser ' +
+      'sessions. The context restores its login from (and saves it back to) ' +
+      '~/.afk/state/browser/<profile>/storageState.json, so a human runs ' +
+      '`afk browser login --profile <name>` once and the agent reuses that ' +
+      'authenticated session across unattended runs. Unset defaults to `default` ' +
+      '(a fresh, empty profile — identical to pre-vault behavior). ' +
+      'Allowed charset: [A-Za-z0-9_-], max 128 chars.',
+    type: 'string',
+    required: false,
+    example: 'work',
+    category: 'browser',
+  },
 
   // ── Filesystem ────────────────────────────────────────────────────────────
   {
@@ -1251,6 +1266,7 @@ export const env = {
   get AFK_BROWSER_DOM_SNAPSHOTS(): string | undefined { return process.env['AFK_BROWSER_DOM_SNAPSHOTS']; },
   get AFK_BROWSER_BACKEND(): string | undefined { return process.env['AFK_BROWSER_BACKEND']; },
   get AFK_BROWSER_CONFIG(): string | undefined { return process.env['AFK_BROWSER_CONFIG']; },
+  get AFK_BROWSER_DEFAULT_PROFILE(): string | undefined { return process.env['AFK_BROWSER_DEFAULT_PROFILE']; },
 
   // Filesystem
   get AFK_WRITE_DENYLIST(): string | undefined { return process.env['AFK_WRITE_DENYLIST']; },

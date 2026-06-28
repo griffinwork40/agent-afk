@@ -17,6 +17,12 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import type { Browser, BrowserContext, Dialog, Page, Request, Response } from 'playwright';
 import type { BrowserConfig } from '../types.js';
+import { getBrowserStorageStatePath } from '../../paths.js';
+
+// Playwright's serialized cookies + localStorage. `newContext({ storageState })`
+// accepts exactly this shape, so reusing the method's return type keeps the
+// vault save/restore round-trip type-safe without importing a named symbol.
+type StorageState = Awaited<ReturnType<BrowserContext['storageState']>>;
 
 // ---------------------------------------------------------------------------
 // Version resolution
@@ -185,7 +191,16 @@ export class BrowserLauncher {
 
     const browser = await this.ensureBrowser();
 
-    const context = await browser.newContext(this.contextOptions());
+    // Session vault: restore a human-authorized login from the configured
+    // profile so the agent reuses it across unattended runs. Missing/corrupt
+    // vault → fresh context (loadStorageState returns undefined), preserving
+    // pre-vault behavior. `renderHtml()` builds ephemeral contexts that never
+    // reach this path, so one-shot renders stay vault-free by design.
+    const storageState = this.loadStorageState(this.config.defaultProfile);
+    const context = await browser.newContext({
+      ...this.contextOptions(),
+      ...(storageState !== undefined ? { storageState } : {}),
+    });
 
     const entry: SessionEntry = {
       context,
@@ -439,6 +454,11 @@ export class BrowserLauncher {
     // before we start tearing it down.
     this.sessions.delete(sessionId);
 
+    // Invariant: persist the vault BEFORE teardown — storageState() requires a
+    // live context. Save-back only refreshes an already-established profile
+    // (see saveStorageState); it never implicitly creates one.
+    await this.saveStorageState(this.config.defaultProfile, entry.context);
+
     if (entry.page !== undefined) {
       await entry.page.close().catch(() => {
         // Swallow — page may already be closed if the browser crashed.
@@ -500,5 +520,45 @@ export class BrowserLauncher {
       viewport: { width: 1280, height: 800 },
       userAgent: `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 agent-afk/${AFK_VERSION}`,
     };
+  }
+
+  /**
+   * Read a profile's persisted `storageState` for restore-on-open. Returns
+   * undefined when the vault file is absent OR unreadable/corrupt — the caller
+   * then builds a fresh context, so a bad vault file degrades to pre-vault
+   * behavior instead of breaking the browser.
+   */
+  private loadStorageState(profile: string): StorageState | undefined {
+    try {
+      const file = getBrowserStorageStatePath(profile);
+      if (!fs.existsSync(file)) return undefined;
+      return JSON.parse(fs.readFileSync(file, 'utf8')) as StorageState;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Persist a session's `storageState` back to its profile on close so a
+   * human-authorized login stays fresh across runs (e.g. rotated tokens).
+   *
+   * Invariant: only an ALREADY-ESTABLISHED profile (its file exists, created by
+   * `afk browser login`) is refreshed — runtime never implicitly creates a
+   * vault for an unconfigured/ephemeral profile, so default sessions stay
+   * cookie-free. Best-effort: a write failure must never break teardown. The
+   * file is written 0600 (secrets-at-rest: cookies + tokens).
+   */
+  private async saveStorageState(profile: string, context: BrowserContext): Promise<void> {
+    try {
+      const file = getBrowserStorageStatePath(profile);
+      if (!fs.existsSync(file)) return;
+      const state = await context.storageState();
+      fs.writeFileSync(file, JSON.stringify(state), { mode: 0o600 });
+      // writeFileSync's `mode` only applies on creation; chmod enforces 0600
+      // even when overwriting a file that pre-existed with looser perms.
+      fs.chmodSync(file, 0o600);
+    } catch {
+      // Swallow — vault maintenance is best-effort and must not break close().
+    }
   }
 }
