@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.6.1] - 2026-06-28
+
+### Fixed
+- restart launchd services + notify on stale manual bot after install (#322) (c40729a)
+
 ## [5.6.0] - 2026-06-28
 
 ### Added
