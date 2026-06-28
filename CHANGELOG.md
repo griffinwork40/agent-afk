@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.7.1] - 2026-06-28
+
+### Fixed
+- interrupt provider turn on ANY incomplete stream exit (#320) (cd45b61)
+
 ## [5.7.0] - 2026-06-28
 
 ### Added
