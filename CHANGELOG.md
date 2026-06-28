@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [4.46.0] - 2026-06-28
+
+### Added
+- model-callable exit_plan_mode tool with elicitation picker (#285) (a961ae7)
+
 ## [4.45.5] - 2026-06-27
 
 ### Fixed
