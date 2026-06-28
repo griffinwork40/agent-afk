@@ -17,7 +17,15 @@
 
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js';
+
+// Mock the Telegram push primitive so park-and-notify can be asserted without
+// touching the network. Hoisted above the router import below.
+vi.mock('../telegram/push.js', () => ({
+  pushIfConfigured: vi.fn().mockResolvedValue(null),
+}));
+
 import { elicitationRouter } from './elicitation-router.js';
+import { pushIfConfigured } from '../telegram/push.js';
 
 const NO_SIGNAL = new AbortController().signal;
 
@@ -32,6 +40,7 @@ const URL_REQUEST: ElicitationRequest = {
 describe('elicitationRouter', () => {
   beforeEach(() => {
     elicitationRouter.uninstall();
+    vi.mocked(pushIfConfigured).mockClear();
   });
 
   afterEach(() => {
@@ -41,6 +50,36 @@ describe('elicitationRouter', () => {
   it('auto-declines when no handler is installed', async () => {
     const result = await elicitationRouter.route(URL_REQUEST, { signal: NO_SIGNAL });
     expect(result.action).toBe('decline');
+  });
+
+  it('park-and-notify: no handler → fires a Telegram notification, then declines', async () => {
+    const result = await elicitationRouter.route(URL_REQUEST, { signal: NO_SIGNAL });
+    expect(result.action).toBe('decline');
+    expect(pushIfConfigured).toHaveBeenCalledTimes(1);
+    const msg = vi.mocked(pushIfConfigured).mock.calls[0]?.[0] as string;
+    expect(msg).toContain('supabase'); // serverName label
+    expect(msg).toContain('Sign in with Supabase to continue'); // request.message
+    expect(msg).toContain('https://supabase.example/oauth/abc'); // request.url
+  });
+
+  it('park-and-notify: does NOT notify when a handler is installed (human already prompted)', async () => {
+    elicitationRouter.install(vi.fn().mockResolvedValue({ action: 'accept' } as ElicitationResult));
+    await elicitationRouter.route(URL_REQUEST, { signal: NO_SIGNAL });
+    expect(pushIfConfigured).not.toHaveBeenCalled();
+  });
+
+  it('park-and-notify: a notification failure never breaks the decline', async () => {
+    vi.mocked(pushIfConfigured).mockRejectedValueOnce(new Error('telegram down'));
+    const result = await elicitationRouter.route(URL_REQUEST, { signal: NO_SIGNAL });
+    expect(result.action).toBe('decline');
+  });
+
+  it('park-and-notify: does NOT fire on the pre-aborted fast path', async () => {
+    const aborted = new AbortController();
+    aborted.abort();
+    const result = await elicitationRouter.route(URL_REQUEST, { signal: aborted.signal });
+    expect(result.action).toBe('decline');
+    expect(pushIfConfigured).not.toHaveBeenCalled();
   });
 
   it('forwards to the installed handler and returns its result', async () => {
