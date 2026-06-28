@@ -11,14 +11,21 @@ import { fileURLToPath } from 'url';
  * Load all markdown prompts from a skill's prompts/ directory.
  * Returns a Record<filename, content> with keys in alphabetical order.
  *
- * @param name - The skill name (matches directory name under src/skills/)
+ * @param name - The skill name (matches a directory name under the skills root)
+ * @param baseDir - Optional absolute path to the skills root that CONTAINS the
+ *   `<name>/` directory. When omitted, resolves the in-tree skills root relative
+ *   to this module (`dist/skills` at runtime, `src/skills` under tsx). Pass this
+ *   so an out-of-tree plugin can load prompts bundled in its own package — e.g.
+ *   `loadSkillPrompts('my-skill', join(dirname(fileURLToPath(import.meta.url)), 'skills'))`.
  * @returns Record mapping filename to file content
  * @throws Error if skill directory or prompts/ subdirectory doesn't exist
  */
-export function loadSkillPrompts(name: string): Record<string, string> {
-  // P3 path-traversal guard: reject any name that could escape the skills/
-  // directory. This is a defence-in-depth check for future callers who may
-  // pass user-controlled input; today's callers already validate via getSkill().
+export function loadSkillPrompts(name: string, baseDir?: string): Record<string, string> {
+  // P3 path-traversal guard: reject any name that could escape the skills root.
+  // This is the only segment that ever derives from a skill id; the guard keeps
+  // a malicious `name` from climbing out of `baseDir` (or the in-tree root).
+  // Today's in-tree callers already validate via getSkill(); plugins pass a
+  // trusted baseDir, so the name remains the sole traversal vector here.
   if (
     name.includes('/') ||
     name.includes('\\') ||
@@ -28,16 +35,16 @@ export function loadSkillPrompts(name: string): Record<string, string> {
     throw new Error(`Skill name contains illegal path components: ${name}`);
   }
 
-  // Resolve the prompts directory relative to this file's location
-  const currentDir = dirname(fileURLToPath(import.meta.url));
-  const projectRoot = join(currentDir, '../..');
-  const skillPath = join(projectRoot, 'skills', name);
+  // Resolve the skills root: an explicit baseDir (plugin-supplied) wins; otherwise
+  // derive the in-tree root relative to this module's location.
+  const skillsDir =
+    baseDir ?? join(dirname(fileURLToPath(import.meta.url)), '../..', 'skills');
+  const skillPath = join(skillsDir, name);
   const promptsPath = join(skillPath, 'prompts');
 
   // Check if skill directory exists
   if (!existsSync(skillPath)) {
-    // Get available skills by listing src/skills/
-    const skillsDir = join(projectRoot, 'skills');
+    // Get available skills by listing the skills root
     let available: string[] = [];
     if (existsSync(skillsDir)) {
       try {
