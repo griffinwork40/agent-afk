@@ -256,6 +256,16 @@ export type AgentDefinition = {
 export type SdkPluginConfig = {
   type: 'local';
   path: string;
+  /**
+   * Optional path (relative to {@link path}, or absolute) of a JS module to
+   * dynamically import at session boot, taken from the plugin manifest's `main`
+   * field. Importing the module runs its top-level side-effects — e.g.
+   * `registerSkill()` calls — so a plugin can contribute code-backed skills or
+   * agents without editing core. Resolved and imported by
+   * {@link loadPluginEntrypoints}; a failing import is non-fatal. Absent when
+   * the manifest declares no `main`.
+   */
+  main?: string;
 };
 
 // ---------------------------------------------------------------------------

@@ -125,7 +125,7 @@ function walk(
     if (key === null) {
       // Path that doesn't fit either layout — keep loading it (matches
       // pre-marketplace behavior for unexpected directory shapes).
-      out.push({ type: 'local', path: dir });
+      pushPlugin(out, dir);
       return;
     }
     if (key.layout === 'cache') {
@@ -136,13 +136,13 @@ function walk(
         const entry = indexPlugins[key.key];
         if (!entry || entry.enabled === false) return;
       }
-      out.push({ type: 'local', path: dir });
+      pushPlugin(out, dir);
       return;
     }
     // Flat layout: include unless explicitly disabled.
     const entry = indexPlugins[key.key];
     if (entry && entry.enabled === false) return;
-    out.push({ type: 'local', path: dir });
+    pushPlugin(out, dir);
     return;
   }
 
@@ -164,6 +164,37 @@ function walk(
     }
     if (stat.isDirectory()) walk(root, full, depth + 1, out, seen, indexPlugins, trustAll);
   }
+}
+
+/**
+ * Read the optional `main` entrypoint from a plugin's manifest. Returns the
+ * declared string (relative or absolute) when present and non-blank, else
+ * undefined. Defensive: the scan must never throw on a malformed/unreadable
+ * manifest — such a plugin simply contributes no entrypoint.
+ */
+function readPluginMain(dir: string): string | undefined {
+  try {
+    const raw = readFileSync(join(dir, '.claude-plugin', 'plugin.json'), 'utf8');
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed !== null && typeof parsed === 'object' && 'main' in parsed) {
+      const main = (parsed as { main?: unknown }).main;
+      if (typeof main === 'string' && main.trim() !== '') return main;
+    }
+  } catch {
+    // Missing/unreadable/invalid manifest → no entrypoint.
+  }
+  return undefined;
+}
+
+/**
+ * Push a discovered plugin onto the scan result, attaching its manifest `main`
+ * entrypoint when declared. Centralizes the three walk() push sites so the
+ * `main` field is populated consistently. Omits the key entirely when absent so
+ * existing `{ type, path }` deep-equality expectations stay green.
+ */
+function pushPlugin(out: SdkPluginConfig[], dir: string): void {
+  const main = readPluginMain(dir);
+  out.push(main !== undefined ? { type: 'local', path: dir, main } : { type: 'local', path: dir });
 }
 
 /**
