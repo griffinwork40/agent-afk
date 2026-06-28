@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.1.0] - 2026-06-28
+
+### Added
+- plugin JS `main` entrypoint run at session boot (#298) (c956398)
+
+### Fixed
+- don't default the daemon task to an unavailable skill (#299) (7bf2742)
+
 ## [5.0.0] - 2026-06-28
 
 ### Added
