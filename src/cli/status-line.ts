@@ -28,10 +28,10 @@ export interface StatusLineFields {
   contextUsedTokens?: number;
   contextSparkline?: string;
   /**
-   * Current REPL permission mode. Renders a never-dropped indicator: `● plan`
-   * (plan mode, warning tone), `◐ AFK` (autonomous/AFK mode, info tone), or
-   * `⚡ bypass` (bypassPermissions, bypass tone — a cool "full-power" badge, not
-   * a caution glyph, since bypass is the default mode). `'default'` renders none.
+   * Current REPL permission mode. Renders a never-dropped indicator: `○ default`
+   * (default/contained mode, success tone), `● plan` (plan mode, warning tone),
+   * `◐ AFK` (autonomous/AFK mode, info tone), or `⚡ bypass` (bypassPermissions,
+   * bypass tone — a cool "full-power" badge, not a caution glyph).
    */
   permissionMode?: PermissionMode;
   /**
