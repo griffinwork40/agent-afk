@@ -99,6 +99,14 @@ vi.mock('../../agent/tools/compose-executor.js', () => ({
   ComposeExecutor: vi.fn().mockImplementation(() => ({})),
 }));
 
+// chat.ts awaits ensurePluginEntrypointsLoaded() before session construction
+// (plugin `main` entrypoints must run before the skill manifest is built). This
+// test isolates MCP wiring, so stub it to a no-op — the real impl scans the
+// filesystem for plugin roots, which is out of scope here.
+vi.mock('../../agent/tools/skill-bridge.js', () => ({
+  ensurePluginEntrypointsLoaded: vi.fn(async () => {}),
+}));
+
 vi.mock('../../agent/tools/nesting.js', () => ({
   createChildProviderFactory: vi.fn(() => ({})),
   createChildSkillExecutorFactory: vi.fn(() => ({})),
