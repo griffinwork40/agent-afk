@@ -40,7 +40,6 @@ Smoke test:
 ```bash
 afk --version    # confirm the install (works before login)
 afk doctor       # environment self-check
-afk login        # save an Anthropic API key or OAuth token
 afk chat "hello"
 ```
 

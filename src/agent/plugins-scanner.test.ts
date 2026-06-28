@@ -51,6 +51,30 @@ describe('plugins-scanner', () => {
     expect(scanLocalPlugins(tmpHome)).toEqual([{ type: 'local', path: pluginDir }]);
   });
 
+  it('attaches the manifest `main` entrypoint when declared', () => {
+    const pluginDir = join(tmpHome, 'with-main');
+    mkdirSync(join(pluginDir, '.claude-plugin'), { recursive: true });
+    writeFileSync(
+      join(pluginDir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'm', version: '0.0.0', main: 'dist/index.js' }),
+    );
+
+    expect(scanLocalPlugins(tmpHome)).toEqual([
+      { type: 'local', path: pluginDir, main: 'dist/index.js' },
+    ]);
+  });
+
+  it('omits `main` when the manifest declares it blank (plain absence covered above)', () => {
+    const blankMain = join(tmpHome, 'blank-main');
+    mkdirSync(join(blankMain, '.claude-plugin'), { recursive: true });
+    writeFileSync(
+      join(blankMain, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'b', version: '0.0.0', main: '   ' }),
+    );
+
+    expect(scanLocalPlugins(tmpHome)).toEqual([{ type: 'local', path: blankMain }]);
+  });
+
   it('discovers a marketplace-cache-layout plugin when it has an enabled index entry', () => {
     const pluginDir = join(tmpHome, 'cache', 'some-market', 'some-plugin');
     writePluginManifest(pluginDir);

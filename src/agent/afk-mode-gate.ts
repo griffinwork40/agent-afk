@@ -25,6 +25,14 @@
  * and `'safe'` ops (reads, tests, lint) are ALLOWED — autonomous work has to be
  * useful, and these are reversible enough to run unattended.
  *
+ * Path-safety note: in `'autonomous'` mode the typed-file path-approval prompt
+ * is disabled (`allowAll`, see `agent/permission-policy.ts`) so AFK does not
+ * stall on keyboard prompts the operator cannot answer. That makes THIS gate
+ * the sole path-containment layer in AFK — its workspace-escape rule (a
+ * `write_file`/`edit_file` whose path resolves outside the session root →
+ * `high` → blocked) is load-bearing, which is why the gate is wired with a
+ * live `getCwd` (so a mid-session `/cwd` change cannot stale the boundary).
+ *
  * `send_telegram` is ALWAYS exempt: it is the operator's channel in AFK mode,
  * and the posture explicitly relies on it to surface Asking states.
  *
@@ -51,6 +59,7 @@ import { classifyRisk } from './risk-classifier.js';
 export function createAfkModeGate(
   getMode: () => PermissionMode,
   cwd?: string,
+  getCwd?: () => string | undefined,
 ): (context: HookContext) => HookDecision {
   return function afkModeGate(context: HookContext): HookDecision {
     if (context.event !== 'PreToolUse') return {};
@@ -65,8 +74,11 @@ export function createAfkModeGate(
 
     // Single source of truth for risk. `workspaceRoot` is set to the session
     // cwd so writes that escape it are flagged `high` (classifyRisk's workspace
-    // boundary rule); falling back to process.cwd() when unknown.
-    const root = cwd ?? process.cwd();
+    // boundary rule). Prefer the live getCwd() (tracks a mid-session /cwd
+    // change) over the static construction-time cwd; fall back to process.cwd()
+    // when both are unknown. This matters because in AFK the path-approval
+    // prompt is disabled (allowAll), so this gate is the SOLE path-safety layer.
+    const root = getCwd?.() ?? cwd ?? process.cwd();
     const risk = classifyRisk(toolName, context.input, {
       cwd: root,
       workspaceRoot: root,

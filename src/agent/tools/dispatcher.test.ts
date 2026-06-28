@@ -105,9 +105,46 @@ describe('SessionToolDispatcher', () => {
     expect(result.failureClass).toBe('abort');
   });
 
-  it('exposes toolDefs from schemas', () => {
-    const dispatcher = makeDispatcher();
+  it('exposes toolDefs from schemas (no allowlist = full pass-through)', () => {
+    // Pass undefined permissions so no allowlist is configured — full schema returned.
+    const dispatcher = makeDispatcher({ permissions: undefined });
     expect(dispatcher.toolDefs).toEqual(builtinToolSchemas);
+  });
+
+  describe('toolDefs allowlist subsetting', () => {
+    it('returns all schemas when no allowlist is configured (permissions undefined)', () => {
+      const dispatcher = new SessionToolDispatcher({
+        handlers: new Map(),
+        schemas: [...builtinToolSchemas],
+        // no permissions → undefined
+      });
+      expect(dispatcher.toolDefs).toEqual(builtinToolSchemas);
+    });
+
+    it('returns only allowlisted schemas when allowedTools is set', () => {
+      const bashSchema = builtinToolSchemas.find((s) => s.name === 'bash')!;
+      const readFileSchema = builtinToolSchemas.find((s) => s.name === 'read_file')!;
+      expect(bashSchema).toBeDefined();
+      expect(readFileSchema).toBeDefined();
+      const dispatcher = new SessionToolDispatcher({
+        handlers: new Map(),
+        schemas: [bashSchema, readFileSchema],
+        permissions: { allowedTools: ['read_file'] },
+      });
+      const defs = dispatcher.toolDefs;
+      expect(defs).toHaveLength(1);
+      expect(defs[0]!.name).toBe('read_file');
+      expect(defs.map((d) => d.name)).not.toContain('bash');
+    });
+
+    it('returns empty array when allowedTools matches no schema', () => {
+      const dispatcher = new SessionToolDispatcher({
+        handlers: new Map(),
+        schemas: [...builtinToolSchemas],
+        permissions: { allowedTools: ['nonexistent_tool'] },
+      });
+      expect(dispatcher.toolDefs).toEqual([]);
+    });
   });
 
   describe('permissions', () => {
@@ -189,6 +226,65 @@ describe('SessionToolDispatcher', () => {
       const result = await dispatcher.execute(makeCall());
       expect(result.content).toBe('hello');
       expect(result.isError).toBeUndefined();
+    });
+
+    it('PostToolUseFailure fires with error message when handler throws', async () => {
+      const registry = createHookRegistryImpl();
+      const failureSpy = vi.fn(async () => ({}));
+      const postSpy = vi.fn(async () => ({}));
+      registry.register('PostToolUseFailure', failureSpy);
+      registry.register('PostToolUse', postSpy);
+
+      const throwingHandler: ToolHandler = async () => {
+        throw new Error('tool blew up');
+      };
+      const dispatcher = new SessionToolDispatcher({
+        handlers: new Map([['bomb', throwingHandler]]),
+        schemas: [...builtinToolSchemas],
+        permissions: { allowedTools: ['bomb'] },
+        hookRegistry: registry,
+      });
+
+      const call: ToolCall = {
+        id: 'c1',
+        name: 'bomb',
+        input: {},
+        signal: new AbortController().signal,
+      };
+      const result = await dispatcher.execute(call);
+
+      // Tool result is an isError result
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('tool blew up');
+
+      // PostToolUseFailure fired once with correct payload
+      await vi.waitFor(() => expect(failureSpy).toHaveBeenCalledOnce());
+      const callArgs = failureSpy.mock.calls[0] as unknown[];
+      expect(callArgs[0]).toMatchObject({
+        event: 'PostToolUseFailure',
+        toolName: 'bomb',
+        error: 'tool blew up',
+      });
+
+      // PostToolUse must NOT have fired
+      expect(postSpy).not.toHaveBeenCalled();
+    });
+
+    it('PostToolUseFailure does not fire when handler succeeds', async () => {
+      const registry = createHookRegistryImpl();
+      const failureSpy = vi.fn(async () => ({}));
+      const postSpy = vi.fn(async () => ({}));
+      registry.register('PostToolUseFailure', failureSpy);
+      registry.register('PostToolUse', postSpy);
+
+      const dispatcher = makeDispatcher({ hookRegistry: registry });
+      const result = await dispatcher.execute(makeCall());
+
+      expect(result.isError).toBeUndefined();
+      // Drain the event loop by waiting for PostToolUse to fire, then assert
+      // PostToolUseFailure did not fire -- avoids the fragile setTimeout fence.
+      await vi.waitFor(() => expect(postSpy).toHaveBeenCalledOnce());
+      expect(failureSpy).not.toHaveBeenCalled();
     });
   });
 
@@ -790,6 +886,35 @@ describe('SessionToolDispatcher', () => {
       ]);
       expect(results[0]!.isError).toBe(true);
       expect(results[0]!.content).toContain('not available');
+    });
+
+    // Compose deferral: PostToolUseFailure hook wiring for compose calls is
+    // deferred (acknowledged in PR #282). This skip-marked test documents the
+    // current behavior so future changes do not accidentally fire or suppress
+    // the hooks without a deliberate decision.
+    it.skip('compose deferral: PostToolUseFailure does NOT fire inside compose, PostToolUse does NOT fire either (deferred -- see PR #282)', async () => {
+      const registry = createHookRegistryImpl();
+      const failureSpy = vi.fn(async () => ({}));
+      const postSpy = vi.fn(async () => ({}));
+      registry.register('PostToolUseFailure', failureSpy);
+      registry.register('PostToolUse', postSpy);
+
+      const throwingExecutor = {
+        execute: vi.fn().mockRejectedValue(new Error('compose exploded')),
+      } as any;
+      const dispatcher = makeDispatcher({
+        composeExecutor: throwingExecutor,
+        permissions: { allowedTools: ['echo', 'compose'] },
+        hookRegistry: registry,
+      });
+      const result = await dispatcher.execute(
+        makeCall({ name: 'compose', input: { nodes: [{ id: 'a', prompt: 'task' }] } }),
+      );
+      expect(result.isError).toBe(true);
+      // Current behavior: neither hook fires for compose errors (deferred).
+      await new Promise((r) => setTimeout(r, 20));
+      expect(failureSpy).not.toHaveBeenCalled();
+      expect(postSpy).not.toHaveBeenCalled();
     });
   });
 });

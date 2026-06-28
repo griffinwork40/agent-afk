@@ -27,10 +27,17 @@ import { resolveSessionHookRegistry } from '../../hooks.js';
 import type { SubagentExecutor } from '../../tools/subagent-executor.js';
 import type { SkillExecutor } from '../../tools/skill-executor.js';
 import type { ComposeExecutor } from '../../tools/compose-executor.js';
-import { withMcpToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
+import { withMcpToolsAllowed, withCustomToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
+import { pathContainmentBypassed } from '../../permission-policy.js';
 import { createBuiltinHandlers } from '../../tools/handlers/index.js';
+import {
+  exitPlanModeTool,
+  createExitPlanModeHandler,
+  EXIT_PLAN_MODE_TOOL_NAME,
+} from '../../tools/handlers/exit-plan-mode.js';
+import type { PlanExitControls } from '../../types/config-types.js';
 import {
   builtinToolSchemas,
   agentTool,
@@ -101,6 +108,17 @@ export interface OpenAICompatibleProviderOptions {
    * handler map. Hooks fire for MCP tools automatically via the dispatcher.
    */
   mcpManager?: import('../../mcp/index.js').McpManager;
+  /**
+   * In-process custom tools registered by the library consumer. Mirrors
+   * `AnthropicDirectProviderOptions.customTools` for full provider parity.
+   * Each entry supplies an `AnthropicToolDef` schema (added to the provider's
+   * schema list at construction time) and a `ToolHandler` (registered in the
+   * per-query dispatcher's handler map).
+   *
+   * Precedence: builtins > custom (a custom tool whose name collides with a
+   * builtin is silently skipped — see `buildDispatcher`).
+   */
+  customTools?: import('../../tools/custom-tool.js').CustomToolDef[];
 }
 
 export class OpenAICompatibleProvider implements ModelProvider {
@@ -148,6 +166,15 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // The `get_runtime_state` tool remains available so the model can
     // pull identity on demand.
     schemas.push(getRuntimeStateTool);
+    // Custom (consumer-registered) tool schemas are appended last so their
+    // names never silently shadow a builtin. A custom schema whose name
+    // collides with an already-present builtin (or an earlier custom tool) is
+    // SKIPPED: otherwise the wire `tools` array carries a duplicate name and
+    // providers that require unique tool names reject the whole request. This
+    // mirrors the handler-map precedence in buildDispatcher (builtins win).
+    for (const t of opts.customTools ?? []) {
+      if (!schemas.some((s) => s.name === t.schema.name)) schemas.push(t.schema);
+    }
     this.schemas = schemas;
   }
 
@@ -214,6 +241,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ...(config.isSkillDispatch ? { isSkillDispatch: true } : {}),
           ...(config.isNonInteractive ? { isNonInteractive: true } : {}),
           ...(config.hookRegistry !== undefined ? { hookRegistry: config.hookRegistry } : {}),
+          ...(config.planExitControls !== undefined ? { planExitControls: config.planExitControls } : {}),
         });
 
     const buildOpts: {
@@ -323,6 +351,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
        * `providerOpts.hookRegistry` when unset. Mirrors AnthropicDirectProvider.
        */
       hookRegistry?: import('../../hooks.js').HookRegistry;
+      /**
+       * Session-control bridge for `exit_plan_mode`, forwarded from the query
+       * config (top-level sessions only). When set AND `permissionMode ===
+       * 'plan'`, the handler + schema are registered. Mirrors AnthropicDirectProvider.
+       */
+      planExitControls?: PlanExitControls;
     },
   ): SessionToolDispatcher {
     const handlers = createBuiltinHandlers(permissionMode, opts.cwd);
@@ -337,6 +371,24 @@ export class OpenAICompatibleProvider implements ModelProvider {
     }
     if (opts.runtimeStateSource) {
       handlers.set('get_runtime_state', createGetRuntimeStateHandler(opts.runtimeStateSource));
+    }
+    // Invariant: custom (consumer-registered) handlers are registered AFTER
+    // all builtins and the runtime-state handler, and BEFORE MCP handlers.
+    // If a custom tool name collides with a builtin already in `handlers`,
+    // the builtin wins (we skip the custom registration). This prevents a
+    // user-supplied tool from silently overriding a built-in capability.
+    // Location: src/agent/providers/openai-compatible/index.ts buildDispatcher.
+    for (const t of this.providerOpts.customTools ?? []) {
+      if (!handlers.has(t.schema.name)) {
+        handlers.set(t.schema.name, t.handler);
+      }
+    }
+    // Plan-exit tool: registered per-query ONLY while in plan mode and only when
+    // the session supplied control callbacks (top-level sessions). Mirrors
+    // AnthropicDirectProvider.buildDispatcher; schema appended below to match.
+    const planExitControls = permissionMode === 'plan' ? opts.planExitControls : undefined;
+    if (planExitControls) {
+      handlers.set(EXIT_PLAN_MODE_TOOL_NAME, createExitPlanModeHandler(planExitControls));
     }
     // MCP handlers + schemas — fetched fresh each query so that
     // `notifications/tools/list_changed` refreshes are picked up without
@@ -366,24 +418,29 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const dispatcherOpts: ConstructorParameters<typeof SessionToolDispatcher>[0] = {
       handlers,
       // Constraint (semantic invariant): MCP schemas appended AFTER builtins
-      // so builtin tool names always take precedence in any overlap.
-      schemas: [...baseSchemas, ...mcpSchemas],
+      // so builtin tool names always take precedence in any overlap. Plan-exit
+      // schema appended last, only while the tool is active (plan mode).
+      schemas: [...baseSchemas, ...mcpSchemas, ...(planExitControls ? [exitPlanModeTool] : [])],
       // Session hook registry via the one canonical resolver (query-scoped
       // config registry wins over any constructor-provided one). Mirrors
       // AnthropicDirectProvider; the required key on the dispatcher options
       // makes a silent drop (c6892c6) a compile error.
       hookRegistry: resolveSessionHookRegistry(opts.hookRegistry, this.providerOpts.hookRegistry),
     };
-    // Union live MCP wire-names into the (statically-snapshotted) allowlist so
-    // OAuth servers whose tools were discovered after construction are not
-    // rejected by the gate while present in `schemas`/`handlers`. No-op when no
-    // mcpManager (e.g. restricted sub-agents) or no allowlist configured.
-    const effectivePermissions = this.providerOpts.mcpManager
-      ? withMcpToolsAllowed(
-          this.providerOpts.permissions,
-          this.providerOpts.mcpManager.getMcpToolWireNames(),
-        )
-      : this.providerOpts.permissions;
+    // Union live MCP wire-names AND consumer-registered custom-tool names into
+    // the (statically-snapshotted) allowlist so neither is rejected by the gate
+    // while present in `schemas`/`handlers`. No-op when there is no allowlist
+    // (undefined => all allowed) or nothing to union. Mirrors
+    // AnthropicDirectProvider; restricted sub-agents carry no customTools.
+    const effectivePermissions = withCustomToolsAllowed(
+      this.providerOpts.mcpManager
+        ? withMcpToolsAllowed(
+            this.providerOpts.permissions,
+            this.providerOpts.mcpManager.getMcpToolWireNames(),
+          )
+        : this.providerOpts.permissions,
+      (this.providerOpts.customTools ?? []).map((t) => t.schema.name),
+    );
     if (effectivePermissions !== undefined)
       dispatcherOpts.permissions = effectivePermissions;
     if (this.providerOpts.subagentExecutor !== undefined)
@@ -402,8 +459,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // the provider's construction-time flag so a read-only skill's forked
     // OpenAI-routed child also blocks mutating shell commands.
     if (this.providerOpts.readOnlyBash === true) dispatcherOpts.readOnlyBash = true;
-    // Bypass mode: disable path containment for every per-call context.
-    dispatcherOpts.allowAll = permissionMode === 'bypassPermissions';
+    // Path-containment bypass: bypassPermissions (explicit) + autonomous (AFK)
+    // both disable path containment for every per-call context.
+    dispatcherOpts.allowAll = pathContainmentBypassed(permissionMode);
 
     return new SessionToolDispatcher(dispatcherOpts);
   }
@@ -462,7 +520,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       resolveBase: this._initialResolveBase,
       readRoots: this._sharedReadRoots?.slice() ?? [],
       writeRoots: this._sharedWriteRoots?.slice() ?? [],
-      allowAll: this._currentPermissionMode === 'bypassPermissions',
+      allowAll: pathContainmentBypassed(this._currentPermissionMode),
     };
   }
 

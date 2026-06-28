@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { streamResponse } from './streaming.js';
+import { streamResponse, StreamTimeoutError, renderSubagentFooter } from './streaming.js';
 import { TelegramError } from 'telegraf';
 import type { Context } from 'telegraf';
 import type { IAgentSession, OutputEvent } from '../agent/types.js';
@@ -446,5 +446,78 @@ describe('generator finalizer cleanup', () => {
     // The generator's finally block must have run — proving iter.return() was
     // called on the error path, not just on the normal exhaustion path.
     expect(finallyRan).toBe(true);
+  });
+});
+
+describe('renderSubagentFooter (bounded sub-agent progress)', () => {
+  it('returns empty string when there is no activity', () => {
+    expect(renderSubagentFooter(0, [])).toBe('');
+    expect(renderSubagentFooter(0, ['ignored'])).toBe('');
+  });
+
+  it('reports the step count and pluralizes correctly', () => {
+    expect(renderSubagentFooter(1, ['recon: read_file a'])).toContain('1 step');
+    expect(renderSubagentFooter(1, ['recon: read_file a'])).not.toContain('1 steps');
+    expect(renderSubagentFooter(5, ['recon: read_file a'])).toContain('5 steps');
+  });
+
+  it('bounds the preview to the last few lines regardless of total step count', () => {
+    // The pre-fix sink appended one line per child tool call, unbounded. The
+    // footer must stay bounded even after 50 tool calls.
+    const many = Array.from({ length: 50 }, (_, i) => `recon: read_file file${i}`);
+    const footer = renderSubagentFooter(50, many);
+    const shownLines = footer.split('\n').filter((l) => l.includes('read_file'));
+    expect(shownLines.length).toBeLessThanOrEqual(4);
+    // The rolling tail keeps the MOST RECENT entries…
+    expect(footer).toContain('file49');
+    // …and drops the oldest.
+    expect(footer).not.toContain('file0 ');
+    // The counter still reflects the true total even though lines are capped.
+    expect(footer).toContain('50 steps');
+  });
+});
+
+describe('inactivity watchdog (timeout → interrupt)', () => {
+  it('throws StreamTimeoutError and interrupts the still-running turn on total silence', async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseHang: () => void = () => {};
+      const hang = new Promise<void>((resolve) => { releaseHang = resolve; });
+      const session = makeSession(async function* () {
+        // One event so receivedAny becomes true (NEXT_EVENT_TIMEOUT_MS applies),
+        // then the provider goes silent — simulating a turn still running with
+        // no parent-stream events AND no sink activity, so the watchdog fires.
+        yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'partial' } };
+        await hang;
+      });
+      // Mirror the real interrupt() contract: aborting the turn unblocks the
+      // in-flight provider pull so the generator can finalize cleanly.
+      (session as { interrupt: ReturnType<typeof vi.fn> }).interrupt = vi.fn(async () => { releaseHang(); });
+      const { ctx } = makeCtx();
+
+      const p = streamResponse(ctx, session, 'go');
+      const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+      // Flush the first event, then advance past the 180s inactivity window.
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(180_001);
+      await rejection;
+      // The fix: a timeout MUST abort the underlying turn so it doesn't keep
+      // streaming into the shared providerIterator and get drained by the next
+      // message ("send a '.' to recover the lost result" bug).
+      expect((session as { interrupt: ReturnType<typeof vi.fn> }).interrupt).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 15_000);
+
+  it('does NOT interrupt on a provider error event — interrupt is timeout-only', async () => {
+    const { ctx } = makeCtx();
+    const session = makeSession(async function* () {
+      yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'partial' } };
+      yield { type: 'error' as const, error: new Error('mid-stream boom') };
+    });
+    await expect(streamResponse(ctx, session, 'go')).rejects.toThrow('mid-stream boom');
+    // A real provider error already ended the turn; interrupting would be wrong.
+    expect((session as { interrupt: ReturnType<typeof vi.fn> }).interrupt).not.toHaveBeenCalled();
   });
 });

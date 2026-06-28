@@ -1,4 +1,5 @@
 import * as readline from 'node:readline';
+import type { HookRegistry } from '../../../agent/hooks.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
 import type { MemoryStore } from '../../../agent/memory/index.js';
 import type { AgentModelInput } from '../../../agent/types.js';
@@ -231,7 +232,8 @@ export interface CliOptions {
   debug?: boolean;
   /**
    * `--dangerously-skip-permissions` — start the session in `'bypassPermissions'`
-   * (skip path-approval prompts; read/write anywhere). Toggle live with /bypass.
+   * (skip path-approval prompts; read/write anywhere). Toggle live with Shift+Tab
+   * (the permission-mode cycle: default → plan → bypass).
    */
   dangerouslySkipPermissions?: boolean;
   /**
@@ -414,6 +416,13 @@ export interface InteractiveCtx {
    * the ghost toggle.
    */
   suggestGhostConfig?: boolean;
+  /**
+   * Hook registry for dispatching harness lifecycle events from the REPL loop.
+   * Absent in test stubs that do not exercise hooks. Set by bootstrap.ts from
+   * `hookRegistryBundle.registry`. Fires UserPromptSubmit before each runTurn
+   * call (enabling per-prompt policy hooks) and Stop after each completed turn.
+   */
+  hookRegistry?: HookRegistry;
 }
 
 /**

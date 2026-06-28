@@ -28,10 +28,10 @@ export interface StatusLineFields {
   contextUsedTokens?: number;
   contextSparkline?: string;
   /**
-   * Current REPL permission mode. Renders a never-dropped indicator: `● plan`
-   * (plan mode, warning tone), `◐ AFK` (autonomous/AFK mode, info tone), or
-   * `⚡ bypass` (bypassPermissions, bypass tone — a cool "full-power" badge, not
-   * a caution glyph, since bypass is the default mode). `'default'` renders none.
+   * Current REPL permission mode. Renders a never-dropped indicator: `○ default`
+   * (default/contained mode, success tone), `● plan` (plan mode, warning tone),
+   * `◐ AFK` (autonomous/AFK mode, info tone), or `⚡ bypass` (bypassPermissions,
+   * bypass tone — a cool "full-power" badge, not a caution glyph).
    */
   permissionMode?: PermissionMode;
   /**
@@ -395,6 +395,13 @@ export class StatusLine {
       parts.push({ text: palette.info('◐ AFK') }); // never drop
     } else if (f.permissionMode === 'bypassPermissions') {
       parts.push({ text: palette.bypass('⚡ bypass') }); // never drop
+    } else if (f.permissionMode === 'default') {
+      // Positive "contained" indicator. Without this, default rendered NO chip
+      // (absence = contained), so cycling back from bypass/plan to default just
+      // dropped the badge with no affirmative "you're locked down" signal —
+      // exactly the gap flagged when `/bypass` was removed in favor of the
+      // Shift+Tab cycle. Now every mode has a visible chip.
+      parts.push({ text: palette.success('○ default') }); // never drop
     }
 
     if (f.contextPct !== undefined) {

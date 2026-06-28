@@ -7,7 +7,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { ProviderRouter, type ProviderRouterDeps } from './provider-router.js';
 import { QueryInputStream } from '../../session/input-iterable.js';
-import { resetSlotBindings } from '../../session/model-slots.js';
+import { resetSlotBindings, setSlotBindings } from '../../session/model-slots.js';
+import { resolveModelId } from '../../session/model-resolution.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import type {
   ModelProvider,
@@ -160,6 +161,36 @@ async function driveTurn(
   return events;
 }
 
+/**
+ * Slot-aware router for routing-SIGNATURE tests (same-family endpoint changes).
+ * Family is decided by the BOUND id's prefix (resolveModelId → fakeFamily) so
+ * slot aliases route correctly; per-slot `provider: 'openai'` makes the real
+ * applySlotCredentials (called inside the router) set `openaiBaseUrl`
+ * deterministically without reading env. Install bindings via setSlotBindings()
+ * BEFORE constructing.
+ */
+function makeSlotRouter(model: string): {
+  router: ProviderRouter;
+  outer: QueryInputStream;
+  openai: FakeProvider;
+  anthropic: FakeProvider;
+} {
+  const anthropic = new FakeProvider('anthropic-direct');
+  const openai = new FakeProvider('openai-compatible', /* supportsCompact */ false);
+  const deps: ProviderRouterDeps = {
+    resolveProvider: (m) =>
+      fakeFamily(resolveModelId(m) ?? m) === 'openai-compatible' ? openai : anthropic,
+    providerNameForModel: (m) => fakeFamily(resolveModelId(m) ?? m),
+    resolveApiKey: () => undefined,
+  };
+  const outer = new QueryInputStream(() => 'sess');
+  const router = new ProviderRouter(
+    { prompt: outer.createIterable(), config: { model } as AgentConfig },
+    deps,
+  );
+  return { router, outer, openai, anthropic };
+}
+
 describe('ProviderRouter', () => {
   beforeEach(() => resetSlotBindings());
   afterEach(() => resetSlotBindings());
@@ -304,5 +335,58 @@ describe('ProviderRouter', () => {
     await driveTurn(iter, outer, 'hi');
     await router.close();
     expect(anthropic.queries[0]!.rec.closed).toBe(true);
+  });
+
+  it('rebuilds the inner on a same-family switch when the resolved endpoint differs', async () => {
+    // Two OpenAI-family tiers on DIFFERENT endpoints: a cloud tier and a local
+    // shim tier with its own baseUrl. Switching cloud → local must REBUILD the
+    // inner so the new endpoint/credentials apply. The prior family-only check
+    // reused the cloud inner and kept the request on the cloud backend (the
+    // gpt-5.5 → local `/model` bug: ChatGPT/Codex 400 on the frozen backend).
+    setSlotBindings({
+      local: { id: '' },
+      small: { id: 'gpt-cloud', provider: 'openai' },
+      medium: { id: 'gpt-local', provider: 'openai', baseUrl: 'http://localhost:8081/v1' },
+      large: { id: 'claude-opus-4-8' },
+    });
+    const { router, outer, openai } = makeSlotRouter('small');
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+
+    await driveTurn(iter, outer, 'on cloud');
+    expect(openai.queries).toHaveLength(1);
+    expect(openai.queries[0]!.rec.config.openaiBaseUrl).toBeUndefined();
+
+    await router.setModel('medium'); // same family (openai), different endpoint
+    const events = await driveTurn(iter, outer, 'on local');
+    expect(events.map((e) => e.type)).toEqual(['delta.text', 'assistant.message', 'turn.completed']);
+
+    // A SECOND inner was constructed, pointed at the local endpoint…
+    expect(openai.queries).toHaveLength(2);
+    expect(openai.queries[1]!.rec.config.openaiBaseUrl).toBe('http://localhost:8081/v1');
+    // …and the old cloud inner was torn down.
+    expect(openai.queries[0]!.rec.closed).toBe(true);
+    await router.close();
+  });
+
+  it('does NOT rebuild a same-family switch when the endpoint is unchanged (forwards instead)', async () => {
+    setSlotBindings({
+      local: { id: '' },
+      small: { id: 'gpt-4o-mini', provider: 'openai' },
+      medium: { id: 'gpt-4o', provider: 'openai' },
+      large: { id: 'claude-opus-4-8' },
+    });
+    const { router, outer, openai } = makeSlotRouter('small');
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+
+    await driveTurn(iter, outer, 'first');
+    await router.setModel('medium'); // same family AND same (default) endpoint
+    await driveTurn(iter, outer, 'second');
+
+    // No rebuild: still ONE inner, and it received the forwarded switch.
+    expect(openai.queries).toHaveLength(1);
+    expect(openai.queries[0]!.rec.setModelCalls).toContain('medium');
+    await router.close();
   });
 });

@@ -25,6 +25,8 @@ import { dispatchSessionEnd, dispatchSessionStart } from './hooks-dispatch.js';
 import { HookBlockedError } from '../../utils/errors.js';
 import { classifyClosureReason } from './closure-reason.js';
 import { buildClosureGuidance } from './closure-guidance.js';
+import { extractStructuredOutput } from '../output-extractor.js';
+import { z, type ZodType } from 'zod';
 import type {
   AccountInfo,
   AgentConfig,
@@ -45,6 +47,7 @@ import type {
   SessionMetadata,
   SessionState,
   SlashCommand,
+  StructuredMessageOptions,
 } from '../types.js';
 import { QueryInputStream } from './input-iterable.js';
 import { SessionLedgerWriter } from '../session-ledger.js';
@@ -65,6 +68,17 @@ import { transformProviderEvent, type TransformDeps } from './stream-consumer.js
 
 export class AgentSession implements IAgentSession {
   private config: AgentConfig;
+  /**
+   * Pending plan-exit implement-turn queued by an approved `exit_plan_mode`
+   * tool call (via the injected {@link PlanExitControls}). The REPL drains it
+   * with {@link takePendingPlanExitSeed} after the current turn, which atomically
+   * applies the deferred permission-mode flip and returns the seed message.
+   * Stores both the message and the approved mode so the flip can be deferred to
+   * the post-turn boundary — closing the mid-turn TOCTOU window.
+   * Lives on the session (not the per-turn dispatcher) so it survives from the
+   * mid-turn tool call to the post-turn REPL boundary.
+   */
+  private _pendingPlanExitSeed: { message: string; mode: PermissionMode } | undefined;
   private currentState: SessionState = 'idle';
   private providerQuery!: ProviderQuery;
   private providerIterator!: AsyncIterator<ProviderEvent>;
@@ -144,7 +158,24 @@ export class AgentSession implements IAgentSession {
   private ledgerInitAttempted = false;
 
   constructor(config: AgentConfig) {
-    this.config = config;
+    // Wire the plan-exit control bridge for top-level sessions only (plan mode
+    // is a REPL affordance; subagent/forked sessions carry a parentSessionId).
+    // The model-callable `exit_plan_mode` tool uses these callbacks to flip the
+    // live permission mode and queue the implement-turn the REPL drains. Inert
+    // unless the session actually enters plan mode (the providers only register
+    // the tool then). Respect a caller-supplied bridge if one is already set.
+    this.config =
+      config.parentSessionId === undefined && config.planExitControls === undefined
+        ? {
+            ...config,
+            planExitControls: {
+              setPermissionMode: (mode) => this.setPermissionMode(mode),
+              requestImplementSeed: (message, mode) => {
+                this._pendingPlanExitSeed = { message, mode };
+              },
+            },
+          }
+        : config;
     this.abortController = new AbortController();
     this._hookRegistry = config.hookRegistry;
 
@@ -223,9 +254,12 @@ export class AgentSession implements IAgentSession {
       // subagentExecutor, skillExecutor, composeExecutor, memoryStore, mcpManager,
       // and permission lists). When absent, fall back to the bare resolveProvider
       // which is suitable for one-shot and test paths that need no executors.
+      // Thread customTools through the fallback so library query() callers get
+      // their tools even without a full providerFactory.
       const resolveProviderFn = this.config.providerFactory
         ? this.config.providerFactory
-        : (m: string | undefined) => resolveProvider(m);
+        : (m: string | undefined) =>
+            resolveProvider(m, undefined, { customTools: this.config.customTools });
       this.providerQuery = new ProviderRouter(
         { prompt: promptIterable, config: this.config },
         {
@@ -484,6 +518,44 @@ export class AgentSession implements IAgentSession {
     } finally {
       if (this.currentState === 'processing') this.currentState = 'idle';
     }
+  }
+
+  async sendMessageStructured<T>(
+    content: string,
+    schema: ZodType<T>,
+    options: StructuredMessageOptions = {},
+  ): Promise<T> {
+    // Composes sendMessage() turns — no streaming-internals changes. Each
+    // attempt is one model turn; on a schema mismatch we re-prompt with the
+    // validation error so the model can self-correct, bounded by maxRetries.
+    const { maxRetries = 2, injectSchemaPrompt = true, ...sendOpts } = options;
+    // Communicate the target shape to the model (parity with the Claude Agent
+    // SDK's outputFormat: json_schema). target: 'openapi-3.0' suppresses the
+    // draft-2020-12 `$schema` marker the default emitter adds, keeping the block
+    // compatible with both Anthropic and OpenAI-compatible backends.
+    const schemaBlock = injectSchemaPrompt
+      ? '\n\nRespond with ONLY a JSON object (optionally in a ```json fence) that conforms to this JSON Schema:\n```json\n' +
+        JSON.stringify(z.toJSONSchema(schema, { target: 'openapi-3.0' })) +
+        '\n```'
+      : '';
+    let lastError = '';
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const prompt =
+        attempt === 0
+          ? content + schemaBlock
+          : `Your previous response did not match the required JSON schema.\n` +
+            `Validation error: ${lastError}\n` +
+            'Respond again with ONLY a JSON object (optionally in a ```json fence) that satisfies the schema.' +
+            schemaBlock;
+      const message = await this.sendMessage(prompt, sendOpts);
+      const candidate = extractStructuredOutput(message.content);
+      const parsed = schema.safeParse(candidate);
+      if (parsed.success) return parsed.data;
+      lastError = parsed.error.message;
+    }
+    throw new Error(
+      `structured output did not match schema after ${maxRetries + 1} attempt(s): ${lastError}`,
+    );
   }
 
   async *sendMessageStream(content: string | ContentBlockParam[]): AsyncIterableIterator<OutputEvent> {
@@ -750,6 +822,41 @@ export class AgentSession implements IAgentSession {
   async setPermissionMode(mode: PermissionMode): Promise<void> {
     await this.providerQuery.setPermissionMode(mode);
     this.stateManager.setSessionMetadata((prev) => ({ ...prev, permissionMode: mode }));
+  }
+
+  /**
+   * Return and CLEAR the pending plan-exit implement-turn queued by an approved
+   * `exit_plan_mode` call, or `undefined` if none is pending. The REPL drains
+   * this at the top of each input-loop iteration (post-turn) and, when set,
+   * atomically applies the deferred permission-mode flip then returns the seed
+   * message to be auto-submitted as a fresh user turn. Single-shot: a second call
+   * returns `undefined` until the next approval.
+   *
+   * The mode flip is applied HERE (not in the handler) so the gate stays locked
+   * in plan mode for the entire model turn and only opens at this clean
+   * post-turn boundary — closing the mid-turn TOCTOU window.
+   *
+   * If the deferred flip rejects (e.g. the provider's query handle is closing —
+   * the same failure mode `togglePlanMode` guards for `/plan off`), the seed is
+   * DROPPED and `undefined` is returned: we must not auto-submit the
+   * implement-turn while still gate-locked in plan mode (it would only collect
+   * write refusals), and the rejection must not escape into the REPL input loop
+   * (which has no try/catch around this drain) and crash it. The model stays in
+   * plan mode and can retry `exit_plan_mode`.
+   */
+  async takePendingPlanExitSeed(): Promise<string | undefined> {
+    const seed = this._pendingPlanExitSeed;
+    this._pendingPlanExitSeed = undefined;
+    if (seed === undefined) return undefined;
+    try {
+      await this.setPermissionMode(seed.mode);
+    } catch (err) {
+      debugLog(
+        `⚠️ AgentSession: deferred plan-exit mode flip to '${seed.mode}' rejected; dropping implement-seed (staying in plan mode): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return undefined;
+    }
+    return seed.message;
   }
 
   /**

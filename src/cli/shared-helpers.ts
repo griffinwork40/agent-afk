@@ -7,6 +7,7 @@ import type { ModelProvider } from '../agent/provider.js';
 import { BUILTIN_TOOL_NAMES } from '../agent/tools/schemas.js';
 import { MEMORY_TOOL_NAMES } from '../agent/memory/index.js';
 import { AWARENESS_TOOL_NAMES } from '../agent/awareness/index.js';
+import { EXIT_PLAN_MODE_TOOL_NAME } from '../agent/tools/handlers/exit-plan-mode.js';
 
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../agent/types.js';
 import { loadConfig } from './config.js';
@@ -419,7 +420,11 @@ export function parseProvider(
     // every provider (see `anthropic-direct/index.ts`, `openai-compatible/index.ts`),
     // so the allowlist must include them or the dispatcher's permission gate
     // rejects the registered handler. Source of truth: `agent/awareness/tool.ts`.
-    const list = [...BUILTIN_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...AWARENESS_TOOL_NAMES];
+    // `exit_plan_mode` is registered only while in plan mode, but the allowlist
+    // is static (snapshotted at construction), so its name must be present here
+    // or the gate rejects it the moment the model calls it. Harmless when the
+    // tool is not registered (the dispatcher just never routes to it).
+    const list = [...BUILTIN_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, EXIT_PLAN_MODE_TOOL_NAME];
     if (opts?.subagentExecutor) list.push('agent');
     if (opts?.skillExecutor) list.push('skill');
     if (opts?.composeExecutor) list.push('compose');

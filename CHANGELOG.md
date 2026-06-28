@@ -11,6 +11,133 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.1.0] - 2026-06-28
+
+### Added
+- plugin JS `main` entrypoint run at session boot (#298) (c956398)
+
+### Fixed
+- don't default the daemon task to an unavailable skill (#299) (7bf2742)
+
+## [5.0.0] - 2026-06-28
+
+### Added
+- retire /bypass, add default badge, steer exit to exit_plan_mode (#286) (a38a566)
+
+## [4.46.0] - 2026-06-28
+
+### Added
+- model-callable exit_plan_mode tool with elicitation picker (#285) (a961ae7)
+
+## [4.45.5] - 2026-06-27
+
+### Fixed
+- stop the second streamed table from rendering broken (missing header/lines) (#296) (9cb4880)
+
+## [4.45.4] - 2026-06-27
+
+### Fixed
+- re-point backend on a same-family /model switch to a different endpoint (#297) (38975c1)
+
+## [4.45.3] - 2026-06-27
+
+### Added
+- add PreCompact hook event (#283) (aa25b10)
+
+### Fixed
+- subset advertised tool schema to permission allowlist (#295) (331ae7b)
+
+## [4.45.2] - 2026-06-27
+
+### Fixed
+- don't send Chat-Completions max_tokens on the Responses path (#293) (f6ed619)
+
+## [4.45.1] - 2026-06-27
+
+### Fixed
+- don't fire path-approval prompts in AFK mode (#292) (97dda5e)
+
+## [4.45.0] - 2026-06-26
+
+### Added
+- `afk trace show` now surfaces the raw provider `stop_reason` (`stop=…`) on the closure line — it was already persisted on the closure event but unrendered, so silent stops (a turn that ends with no output and no error, e.g. a content-safety `refusal`) were only diagnosable by reading the raw `trace.jsonl`
+
+### Added
+- add PostToolUseFailure hook event (#282) (2a750fd)
+- surface raw provider stop_reason in `afk trace show` (#291) (dfa28c5)
+
+## [4.44.3] - 2026-06-26
+
+### Fixed
+- surface model content-safety refusals (stop_reason "refusal") instead of ending the turn silently — fixes the "it stopped and I can't send anything else" hang when the model declines a request
+
+### Fixed
+- surface model refusals instead of ending silently (ab84a62)
+
+### Changed
+- Merge pull request #290 from griffinwork40/fix/surface-model-refusal-stop-reason (21710d6)
+
+## [4.44.2] - 2026-06-26
+
+### Fixed
+- preserve redacted_thinking blocks to prevent session wedge (40984ad)
+
+### Changed
+- Merge pull request #288 from griffinwork40/fix/preserve-redacted-thinking-blocks (fb79fc8)
+
+## [4.44.1] - 2026-06-26
+
+### Fixed
+- stop mid-turn cutoffs, false rate-limit errors, and tool-call spam (be939f5)
+
+### Changed
+- Merge pull request #287 from griffinwork40/afk/fix-telegram-message-cutoff (5b66999)
+
+## [4.44.0] - 2026-06-25
+
+### Added
+- add Stop as a harness hook event (ea5ba85)
+
+### Fixed
+- sanitize Stop hook reason and bound its dispatch timeout (ea7b5eb)
+- address Stop review findings (b0c0ab6)
+
+### Changed
+- Merge pull request #281 from griffinwork40/feat/stop-hook (d6659b8)
+- Merge origin/main into feat/stop-hook: resolve hook-event conflicts (keep UserPromptSubmit + Stop) (18c9864)
+
+## [4.43.0] - 2026-06-25
+
+### Added
+- add automate skill to awa-bundled plugin (fa80af0)
+
+### Changed
+- Merge pull request #284 from griffinwork40/afk/refactor-automate-skill-source (e6c0d3f)
+
+## [4.42.0] - 2026-06-25
+
+### Added
+- add UserPromptSubmit as 7th harness hook event (7b4e3b6)
+
+### Fixed
+- fail closed on UserPromptSubmit handler timeout in REPL loop (8bb8a8d)
+
+### Changed
+- Merge pull request #280 from griffinwork40/feat/user-prompt-submit-hook (6c30a87)
+- Update README.md by removing 'afk login' command (f552ca9)
+
+## [4.41.0] - 2026-06-24
+
+### Added
+- searchable conversation transcripts (FTS5) (e37e39b)
+
+### Fixed
+- harden index DB perms; surface skipped files (a03bccb)
+- resolve PR #277 review findings (edabf6b)
+
+### Changed
+- Merge pull request #277 from griffinwork40/feat/transcript-search (3127bfa)
+
 ## [4.40.1] - 2026-06-24
 
 ### Fixed

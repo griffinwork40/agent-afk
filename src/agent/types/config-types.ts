@@ -36,6 +36,37 @@ export interface ResumeHistoryTurn {
   assistant: string;
 }
 
+/**
+ * Session-control callbacks handed to the model-callable `exit_plan_mode` tool
+ * so an approved plan exit can queue the crafted implement-turn for the REPL to
+ * auto-submit after the current turn — reproducing `/plan off`'s
+ * save-and-implement handoff from a model-proposed, elicitation-confirmed exit.
+ *
+ * **Deferred-flip contract**: the handler does NOT flip the permission mode
+ * mid-turn. Instead it records the approved mode alongside the seed message via
+ * `requestImplementSeed`. The mode flip is deferred to the post-turn drain
+ * boundary in `src/cli/commands/interactive/loop-iteration.ts`, where
+ * `takePendingPlanExitSeed()` atomically applies the flip and promotes the seed
+ * — so the gate stays locked in plan mode for the entire current turn and only
+ * opens for the clean, seeded implement-turn that follows.
+ *
+ * Populated by `AgentSession` for top-level sessions only (plan mode is a REPL
+ * affordance); the `exit_plan_mode` schema is offered solely while
+ * `permissionMode === 'plan'`, so these callbacks are inert on every other
+ * surface. See `src/agent/tools/handlers/exit-plan-mode.ts` and the seed drain
+ * at `src/cli/commands/interactive/loop-iteration.ts`.
+ */
+export interface PlanExitControls {
+  /** Flip the live session permission mode on approval (e.g. 'default' | 'bypassPermissions'). */
+  setPermissionMode(mode: PermissionMode): Promise<void>;
+  /**
+   * Queue the crafted implement-turn message AND the approved mode for the REPL
+   * to apply atomically at the post-turn drain boundary. The mode flip is NOT
+   * applied here — it is deferred to `takePendingPlanExitSeed()`.
+   */
+  requestImplementSeed(message: string, mode: PermissionMode): void;
+}
+
 /** Agent session configuration */
 export interface AgentConfig {
   /**
@@ -264,6 +295,14 @@ export interface AgentConfig {
   hookRegistry?: HookRegistry;
 
   /**
+   * Session-control bridge for the model-callable `exit_plan_mode` tool. When
+   * present (top-level sessions), the providers register the `exit_plan_mode`
+   * handler + schema while `permissionMode === 'plan'`. Absent → the tool is
+   * never offered. See {@link PlanExitControls}.
+   */
+  planExitControls?: PlanExitControls;
+
+  /**
    * Witness-layer trace writer. When provided, {@link IAgentSession}
    * emits structured trace events for tool calls, hook decisions,
    * subagent lifecycle transitions, budget breaches, aborts,
@@ -475,4 +514,25 @@ export interface AgentConfig {
    * by the existing re-entrance lock in `compact-handler.ts`.
    */
   autoCompact?: boolean | { threshold: number };
+
+  /**
+   * In-process custom tools available to the session. Each entry is created
+   * via the `tool()` helper and provides both a JSON-schema `AnthropicToolDef`
+   * (so the model knows the tool exists) and a validated `ToolHandler`
+   * (so the dispatcher can execute it).
+   *
+   * Forwarded to the provider ONLY on the bare `resolveProvider` fallback path
+   * (neither `provider` nor `providerFactory` set) — the common library
+   * `query()` case. When `provider` (injected) or `providerFactory` is supplied,
+   * that provider owns its own tool wiring and these `customTools` are NOT
+   * auto-forwarded; register them on the injected/constructed provider yourself.
+   * See `resolveProvider` (`src/agent/providers/index.ts`) and `agent-session.ts`.
+   *
+   * Permission gate and PreToolUse/PostToolUse hooks apply identically to
+   * custom tools and built-in tools (no bypass). When an `allowedTools`
+   * allowlist is configured, custom-tool names are unioned into it
+   * automatically (see `withCustomToolsAllowed`), so registering a custom tool
+   * is the grant — it is not denied by the gate.
+   */
+  customTools?: import('../tools/custom-tool.js').CustomToolDef[];
 }
