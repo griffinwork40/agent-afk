@@ -77,6 +77,11 @@ export {
 } from './skills/index.js';
 export type { SkillExecutionContext, SkillMetadata } from './skills/index.js';
 export { loadSkillPrompts } from './skills/_lib/prompt-loader.js';
+// PluginApi: the host runtime API injected into a code-backed plugin's
+// default-export entrypoint. A plugin types its entrypoint as
+// `export default (api: PluginApi) => { … }` and registers through `api` so its
+// skills land in the host's singleton registry regardless of install layout.
+export type { PluginApi } from './agent/plugins/load-entrypoints.js';
 
 export {
   deriveSessionFacet,
