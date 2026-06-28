@@ -9,6 +9,7 @@ import type { ToolCall } from './types.js';
 import type { ToolHandler } from './types.js';
 import type { CanUseTool } from '../types/sdk-types.js';
 import { createHookRegistryImpl } from '../hook-registry.js';
+import { InMemoryTraceWriter } from '../trace/writer.js';
 
 function makeCall(overrides?: Partial<ToolCall>): ToolCall {
   return {
@@ -1369,5 +1370,60 @@ describe('SessionToolDispatcher — canUseTool (Dim 8 in-process permission poli
     const r = await d.execute(makeCall());
     expect(r.content).toBe('hello');
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('deny emits a hook_decision block', async () => {
+    const writer = new InMemoryTraceWriter();
+    const denyPolicy: CanUseTool = async (name) => ({
+      behavior: 'deny',
+      message: `policy denied ${name}`,
+    });
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', echoHandler()]]),
+      canUseTool: denyPolicy,
+      traceWriter: writer,
+    });
+    await d.execute(makeCall());
+    const hookEvents = writer.events.filter((e) => e.kind === 'hook_decision');
+    expect(hookEvents).toHaveLength(1);
+    const ev = hookEvents[0]!;
+    if (ev.kind !== 'hook_decision') throw new Error('unreachable');
+    expect(ev.payload.hookEvent).toBe('PreToolUse');
+    expect(ev.payload.decision).toBe('block');
+    expect(ev.payload.blockedTool).toBe('echo');
+    expect(ev.payload.reason).toContain('policy denied echo');
+  });
+
+  it('throw (fail-closed) emits a hook_decision block', async () => {
+    const writer = new InMemoryTraceWriter();
+    const boom: CanUseTool = async () => {
+      throw new Error('policy bug');
+    };
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', echoHandler()]]),
+      canUseTool: boom,
+      traceWriter: writer,
+    });
+    await d.execute(makeCall());
+    const hookEvents = writer.events.filter((e) => e.kind === 'hook_decision');
+    expect(hookEvents).toHaveLength(1);
+    const ev = hookEvents[0]!;
+    if (ev.kind !== 'hook_decision') throw new Error('unreachable');
+    expect(ev.payload.hookEvent).toBe('PreToolUse');
+    expect(ev.payload.decision).toBe('block');
+    expect(ev.payload.blockedTool).toBe('echo');
+    expect(ev.payload.reason).toContain('threw');
+    expect(ev.payload.reason).toContain('policy bug');
+  });
+
+  it('allow emits no hook_decision', async () => {
+    const writer = new InMemoryTraceWriter();
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', echoHandler()]]),
+      canUseTool: allowAll,
+      traceWriter: writer,
+    });
+    await d.execute(makeCall());
+    expect(writer.events.filter((e) => e.kind === 'hook_decision')).toHaveLength(0);
   });
 });

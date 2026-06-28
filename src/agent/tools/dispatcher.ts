@@ -29,6 +29,7 @@ import { checkToolPermission, type ToolPermissionConfig } from './permissions.js
 import type { CanUseTool, PermissionResult } from '../types/sdk-types.js';
 import { classifyBashCommand } from './readonly-bash.js';
 import { getSessionGrantsPath } from '../../paths.js';
+import { emitHookDecision } from '../trace/emit.js';
 import type { TraceWriter } from '../trace/index.js';
 import { builtinToolSchemas, agentTool, skillTool, composeTool } from './schemas.js';
 import { memoryToolSchemas } from '../memory/memory-tools.js';
@@ -572,6 +573,14 @@ export class SessionToolDispatcher implements ToolDispatcher {
     } catch (err) {
       // Fail closed: a throwing policy denies the call rather than crashing the
       // turn. The message names the cause so the denial is never silent.
+      await emitHookDecision(this.traceWriter, {
+        hookEvent: 'PreToolUse',
+        decision: 'block',
+        blockedTool: call.name,
+        reason: `Tool "${call.name}" denied by canUseTool (threw): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      });
       return {
         content: `Tool "${call.name}" denied by canUseTool (threw): ${
           err instanceof Error ? err.message : String(err)
@@ -581,6 +590,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
       };
     }
     if (result.behavior === 'deny') {
+      await emitHookDecision(this.traceWriter, {
+        hookEvent: 'PreToolUse',
+        decision: 'block',
+        blockedTool: call.name,
+        reason: result.message || `Tool "${call.name}" denied by permission policy`,
+      });
       return {
         content: result.message || `Tool "${call.name}" denied by permission policy`,
         isError: true,
