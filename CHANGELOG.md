@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.11.0] - 2026-06-29
+
+### Added
+- agent browser autonomy MVP (session vault, park-and-notify, retrying fetch) (#323) (ff676af)
+
 ## [5.10.3] - 2026-06-29
 
 ### Fixed
