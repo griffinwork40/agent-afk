@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.9.1] - 2026-06-29
+
+### Fixed
+- stop JSON.parse error snippets leaking secrets in poison logs (#318) (0290797)
+
 ## [5.9.0] - 2026-06-29
 
 ### Added
