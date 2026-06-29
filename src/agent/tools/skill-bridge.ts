@@ -20,8 +20,17 @@ import { scanSkillsFromDir } from '../../skills/user-skills.js';
 import { scanLocalPlugins } from '../plugins-scanner.js';
 import { loadPluginEntrypoints } from '../plugins/load-entrypoints.js';
 import { extractPluginSkills } from '../plugins/tool-injector.js';
+import { SubagentManager } from '../subagent.js';
+import { describeFailure } from '../subagent/result.js';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
-import { getBundledPluginsDir, getProjectPluginsDir, getProjectSkillsDir, getSkillsDir } from '../../paths.js';
+import {
+  getAgentFrameworkDir,
+  getBundledPluginsDir,
+  getProjectPluginsDir,
+  getProjectSkillsDir,
+  getSessionsDir,
+  getSkillsDir,
+} from '../../paths.js';
 import { env } from '../../config/env.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
 
@@ -264,11 +273,25 @@ export function scanAllPluginRoots(): SdkPluginConfig[] {
  * so calling it again in a child is a safe no-op.
  */
 export async function ensurePluginEntrypointsLoaded(): Promise<void> {
-  // Inject the host's registry functions (+ loadSkillPrompts) so a code-backed
-  // plugin's default-export entrypoint registers against THIS process's
-  // singleton registry — not a bare-specifier-imported copy of its own, which
-  // would silently write to a registry the host never reads. See PluginApi.
+  // Inject the host's runtime API so a code-backed plugin's default-export
+  // entrypoint (a) registers against THIS process's singleton registry, and
+  // (b) can reach core runtime values (env, SubagentManager, describeFailure,
+  // discoverPluginSkillBodies, the paths getters) WITHOUT a bare
+  // `import 'agent-afk'` — which a marketplace-cloned plugin (no node_modules)
+  // cannot resolve at all. See PluginApi for the full rationale.
   await loadPluginEntrypoints(scanAllPluginRoots(), {
-    pluginApi: { registerSkill, listSkills, getSkill, loadSkillPrompts },
+    pluginApi: {
+      registerSkill,
+      listSkills,
+      getSkill,
+      loadSkillPrompts,
+      env,
+      SubagentManager,
+      describeFailure,
+      discoverPluginSkillBodies,
+      getAgentFrameworkDir,
+      getSkillsDir,
+      getSessionsDir,
+    },
   });
 }
