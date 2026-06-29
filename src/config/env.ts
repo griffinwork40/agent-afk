@@ -796,6 +796,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'misc',
   },
   {
+    name: 'AFK_GOBLIN_SPINNER',
+    description: 'Goblin-themed working spinner (olive frames + goblin verbs) while the agent runs tools. 1 = on (default), 0 = classic dim spinner.',
+    type: 'boolean',
+    required: false,
+    example: '0',
+    category: 'misc',
+  },
+  {
     name: 'AFK_SHOW_DIFFS',
     description: 'Show inline diffs in the tool-lane output for edit/write tool calls. 1 = on, 0 = off.',
     type: 'boolean',
@@ -1234,6 +1242,7 @@ export const env = {
   // UI / output
   get AFK_BANNER_PLAIN(): string | undefined { return process.env['AFK_BANNER_PLAIN']; },
   get AFK_SPINNER_TIPS(): string | undefined { return process.env['AFK_SPINNER_TIPS']; },
+  get AFK_GOBLIN_SPINNER(): string | undefined { return process.env['AFK_GOBLIN_SPINNER']; },
   get AFK_SHOW_DIFFS(): string | undefined { return process.env['AFK_SHOW_DIFFS']; },
   get AFK_SKILL_STREAM_VERBOSE(): string | undefined { return process.env['AFK_SKILL_STREAM_VERBOSE']; },
   get FORCE_COLOR(): string | undefined { return process.env['FORCE_COLOR']; },
