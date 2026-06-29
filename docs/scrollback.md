@@ -525,6 +525,51 @@ commit satisfies `overflowPriorContiguous` and merges contiguously, and both
 blocks survive in commit order. Verified by the third case in
 `terminal-compositor.h1-prevtoprow.test.ts`.
 
+### Known bug (NOT yet fixed): block taller than the COLLAPSED screen blanks the viewport on end-of-turn collapse
+
+Repro: `terminal-compositor.endturn-overflow-gap.repro.test.ts` (marked
+`it.fails`). Operator symptom: after a long turn, the final assistant message
+"disappears" — the viewport is blank above the prompt and the content is only
+reachable by scrolling up into native scrollback.
+
+Mechanism (empirically verified by per-step `@xterm/headless` instrumentation —
+NOT a stale-tall Phase-2 erase; `commitAbove` calls `logUpdate.clear()` first, so
+that erase is a no-op):
+
+1. The block is committed while a tall overlay fills the viewport, so
+   `prevTopRow <= 1` (BLOCKER-1, review #592) and `fitsAboveFrame` is false.
+2. The block is taller than even the COLLAPSED screen, so `decideCommitMode`
+   returns `useBandHold = false` (the `overflowRun.length > maxBandModel &&
+   textLines.length > maxBandModel` case — the one this doc's "the overflow path
+   is unchanged" notes #645 deliberately left alone). Phase 1 archives the whole
+   block to native scrollback.
+3. Phase 3 is guarded by `if (newTopRow > 1)` (`committed-band-commit.ts`).
+   With the overlay still filling the screen `newTopRow === 1`, so Phase 3 is
+   SKIPPED and `committedBand` is left EMPTY.
+4. At end-of-turn the overlay collapses (`setOverlay('')` → `bootstrap.ts`;
+   `loopStageBar.repaint('observing')` → `loop-iteration.ts`). `render()` erases
+   the overlay rows, but `committedBand` is empty so `repositionCommittedBand`
+   has nothing to re-pin — the freed viewport rows stay blank. The content sits
+   in scrollback ABOVE the viewport, unreachable without scrolling.
+
+So the defect is **"viewport not refilled with recent committed content after
+collapse"**, not an erase wiping a painted band. "No existing test hits
+prevTopRow <= 1" (`committed-band-commit.ts`); the repro above is that test.
+
+Why the obvious fix is insufficient (the blocker): routing this case through
+band-hold (so the pending model + `repositionCommittedBand` refill the viewport
+on collapse) fixes the SINGLE-commit case, but regresses the multi-commit case.
+Band-hold's `maxBandModel` is a COMMIT-TIME estimate of the collapsed paint
+capacity; the actual collapse capacity (`repositionCommittedBand`'s `maxFit`) is
+smaller once the collapsed frame's real height (input + rhythm separator +
+loop-stage bar + status line) is accounted for. When `maxBandModel > maxFit`, the
+oldest model rows are neither painted NOR archived to scrollback — silent content
+loss, caught by `terminal-compositor.band-hold-perline-gap.repro.test.ts`
+("a block taller than the collapsed screen still lands every row contiguously").
+A correct fix must reconcile `maxBandModel` with the true collapse paint capacity
+and archive the remainder to scrollback (so the excess is recoverable, never
+dropped) — a change to the deliberately-deferred overflow design, not a one-liner.
+
 ## What is and isn't in scrollback after a commit
 
 After a single `commitAbove(text)`:
