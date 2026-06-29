@@ -503,7 +503,11 @@ describe('Config Loader', () => {
     const mockedReadFileSync = () => vi.mocked(fs.readFileSync);
     const cwdConfigJson = join(process.cwd(), 'afk.config.json');
 
-    const ENV = ['AFK_MODEL', 'CLAUDE_MODEL', 'AFK_MODEL_SMALL', 'AFK_MODEL_MEDIUM', 'AFK_MODEL_LARGE'];
+    const ENV = [
+      'AFK_MODEL', 'CLAUDE_MODEL',
+      'AFK_MODEL_SMALL', 'AFK_MODEL_MEDIUM', 'AFK_MODEL_LARGE',
+      'AFK_MODEL_LOCAL', 'AFK_MODEL_LOCAL_BASE_URL', 'AFK_MODEL_LOCAL_API_KEY',
+    ];
 
     function mockConfig(json: unknown): void {
       mockedExistsSync().mockImplementation((p) => {
