@@ -155,7 +155,76 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     return;
   }
 
-  // Banner present (anchorRow > 1): legacy deficit-based eviction, unchanged.
+  // Invariant (banner-path pending-overflow eviction — collapse-time, before
+  // legacy deficit eviction):
+  // A partially-pending band (0 < committedBandPaintedRows < committedBand.length)
+  // can coexist with anchorRow > 1 when the commit overlay was tall enough to
+  // make prevTopRow ≤ 1 (BLOCKER-1: fitsAboveFrame = false, useBandHold = true)
+  // but short enough that desiredTopRow > anchorRow at Phase-2 repaint time —
+  // so anchorRow was NOT reduced and hasBanner remains true post-commit.
+  // Concretely: maxRun = newTopRow - anchorFloor < bandLen when the overlay's
+  // desiredTopRow leaves only a narrow above-banner strip, making Phase-3 paint
+  // only the bottom `maxRun` rows while the older `bandLen - maxRun` rows stay
+  // pending. On overlay collapse, desiredTopRow rises and the settled maxFit
+  // (= desiredTopRow - anchorFloor) can still be < bandLen if the collapsed
+  // frame has > 1 row (e.g. spinner still active). repositionCommittedBand then
+  // silently drops the oldest bandLen - maxFit pending rows (never painted, never
+  // archived) — content loss. The fully-pending case is handled by the !hasBanner
+  // path's anchor-eviction (newTopRow ≤ 1 → desiredTopRow ≤ 1 < anchorRow →
+  // anchorDeficit > 0 → anchorRow → 1 during Phase-2); only the PARTIALLY-
+  // pending case can reach here with anchorRow > 1.
+  //
+  // Trigger (same signal as the !hasBanner eviction, anchored at floor):
+  //   • overlayCollapsed (overlay is '' — turn has ended, frame at settled height)
+  //   • hasPending (some model rows never painted)
+  //   • bandLen > room (= desiredTopRow - floor) — band won't all fit above frame
+  //   • !commitInFlight && room > 0 (not mid-commit; room exists above frame)
+  //
+  // Action (mirrors !hasBanner path, lines 96-119, with floor = anchorFloor):
+  // Paint the full model top-aligned at [floor, floor+bandLen-1], evict the
+  // oldest `overflow = bandLen - room` rows to scrollback so the subsequent
+  // deficit path sees correct tracked rows and repositionCommittedBand never
+  // drops unpainted content.
+  const bandLenBanner = self.committedBand.length;
+  const floorBanner = Math.max(self.anchorRow ?? 1, 1);
+  const roomBanner = Math.max(0, desiredTopRow - floorBanner);
+  const hasPendingBanner = self.committedBandPaintedRows < bandLenBanner;
+  const overlayCollapsedBanner = self.overlay.trim().length === 0;
+  if (
+    !self.commitInFlight &&
+    hasPendingBanner &&
+    bandLenBanner > roomBanner &&
+    overlayCollapsedBanner &&
+    roomBanner > 0
+  ) {
+    const overflow = bandLenBanner - roomBanner;
+    let out = '';
+    // Erase the old painted position (only the materialized suffix).
+    for (let r = Math.max(floorBanner, self.committedBandTopRow); r <= self.committedBandBottomRow; r++) {
+      out += eraseAndPaintRow(r);
+    }
+    // Paint the FULL model top-aligned at [floor, floor+bandLen-1] so the
+    // scroll evicts real rows — including previously-pending ones never on
+    // screen before. External constraint (DECSTBM paint-before-scroll): CUP
+    // writes precede the \n scroll so the evicted rows hold real content.
+    for (let i = 0; i < bandLenBanner; i++) {
+      out += eraseAndPaintRow(floorBanner + i, self.committedBand[i]);
+    }
+    try {
+      self.stdout.write(out);
+    } catch {
+      /* terminal closed mid-render — next render's lifecycle tears us down */
+    }
+    evictRowsToScrollback(self, overflow);
+    // Survivors physically shifted to [floor, floor+room-1] by the scroll.
+    self.committedBand = self.committedBand.slice(overflow);
+    self.committedBandTopRow = floorBanner;
+    self.committedBandBottomRow = floorBanner + roomBanner - 1;
+    self.committedBandPaintedRows = self.committedBand.length;
+    return;
+  }
+
+  // Legacy deficit-based eviction (unchanged).
   const growthDeficit = (self.hasCommitted && prevTopRow > 1) ? Math.max(0, prevTopRow - desiredTopRow) : 0;
   // Anchor-row enforcement (legacy ceiling): never let the frame top climb
   // above a supplied pre-arm ceiling (welcome banner / update notice)
@@ -190,10 +259,10 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
       if (self.committedBand.length === 0 || self.committedBandBottomRow < floor) {
         self.clearCommittedBand();
       } else {
-        // Survivors were scrolled by the terminal as real on-screen rows (this
-        // path runs only after a banner-era commit painted them), so all are
-        // materialized — none pending. (A fully-pending band has no banner above
-        // it and cannot reach this branch; this keeps the invariant exact.)
+        // Survivors were scrolled by the terminal as real on-screen rows.
+        // The collapse-time pending-overflow eviction above (lines 158-227)
+        // handles partially-pending bands before this deficit path runs, so
+        // any survivors reaching here are fully materialized — none pending.
         self.committedBandPaintedRows = self.committedBand.length;
       }
     }
