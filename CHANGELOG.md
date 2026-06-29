@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.9.0] - 2026-06-29
+
+### Added
+- emit PreCompact hook on auto-compaction (#328) (eba1ef9)
+
+### Changed
+- bring Fumadocs site up to date with code (#331) (729e986)
+
 ## [5.8.1] - 2026-06-29
 
 ### Fixed
