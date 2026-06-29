@@ -418,6 +418,17 @@ describe('loadBrowserConfig — defaultProfile (session vault)', () => {
     ).toThrow(/Invalid browser profile/);
   });
 
+  it('throws on an unsafe (path-traversal) profile name from browser.json', () => {
+    // The file value routes through the same guard as the env var, so a
+    // traversal name in browser.json must be rejected too.
+    expect(() =>
+      loadBrowserConfig({
+        env: makeEnv(),
+        readFileSync: withFile(JSON.stringify({ defaultProfile: '../../etc' })),
+      }),
+    ).toThrow(/Invalid browser profile/);
+  });
+
   it('lets browser.json override the env profile', () => {
     const cfg = loadBrowserConfig({
       env: makeEnv({ AFK_BROWSER_DEFAULT_PROFILE: 'work' }),

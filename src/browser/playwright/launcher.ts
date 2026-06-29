@@ -14,10 +14,12 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { chromium } from 'playwright';
 import type { Browser, BrowserContext, Dialog, Page, Request, Response } from 'playwright';
 import type { BrowserConfig } from '../types.js';
 import { getBrowserStorageStatePath } from '../../paths.js';
+import { debugLog } from '../../utils/debug.js';
 
 // Playwright's serialized cookies + localStorage. `newContext({ storageState })`
 // accepts exactly this shape, so reusing the method's return type keeps the
@@ -529,11 +531,17 @@ export class BrowserLauncher {
    * behavior instead of breaking the browser.
    */
   private loadStorageState(profile: string): StorageState | undefined {
+    const file = getBrowserStorageStatePath(profile);
     try {
-      const file = getBrowserStorageStatePath(profile);
       if (!fs.existsSync(file)) return undefined;
-      return JSON.parse(fs.readFileSync(file, 'utf8')) as StorageState;
-    } catch {
+      const state = JSON.parse(fs.readFileSync(file, 'utf8')) as StorageState;
+      debugLog('[browser/vault] restored session', { profile, file });
+      return state;
+    } catch (err) {
+      // Corrupt/unreadable vault degrades to a fresh context (pre-vault
+      // behavior). Surface under AFK_DEBUG so an unexpected "logged-out"
+      // unattended session is diagnosable rather than silent.
+      debugLog('[browser/vault] ignoring unreadable vault', { profile, file, err });
       return undefined;
     }
   }
@@ -553,12 +561,22 @@ export class BrowserLauncher {
       const file = getBrowserStorageStatePath(profile);
       if (!fs.existsSync(file)) return;
       const state = await context.storageState();
-      fs.writeFileSync(file, JSON.stringify(state), { mode: 0o600 });
-      // writeFileSync's `mode` only applies on creation; chmod enforces 0600
-      // even when overwriting a file that pre-existed with looser perms.
-      fs.chmodSync(file, 0o600);
-    } catch {
+      // Atomic 0600 write: stage into a uniquely-named sibling temp at 0600,
+      // then POSIX-rename it over the vault. The rename swaps the file in whole,
+      // so freshly-written credentials are never observed truncated or at looser
+      // perms (the old write-then-chmod left exactly that transient window). The
+      // temp lives in the same dir as the dest, so the rename never hits EXDEV.
+      const tmp = path.join(
+        path.dirname(file),
+        `.${path.basename(file)}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`,
+      );
+      fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
+      fs.chmodSync(tmp, 0o600); // enforce exact perms regardless of umask
+      fs.renameSync(tmp, file);
+      debugLog('[browser/vault] saved session', { profile, file });
+    } catch (err) {
       // Swallow — vault maintenance is best-effort and must not break close().
+      debugLog('[browser/vault] save failed', { profile, err });
     }
   }
 }

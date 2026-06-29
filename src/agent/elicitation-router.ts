@@ -43,6 +43,20 @@ export type ElicitationHandler = (
 const DECLINE: ElicitationResult = { action: 'decline' };
 
 /**
+ * Cap on the model-authored `message` echoed to Telegram. The prompt itself is
+ * the minimal disclosure the operator needs to act, but a model could embed
+ * sensitive text in it; truncating bounds inadvertent exposure. The richer
+ * `request.context` field is deliberately never sent.
+ */
+const MAX_NOTIFY_MESSAGE_CHARS = 300;
+
+function truncateForNotify(text: string): string {
+  return text.length <= MAX_NOTIFY_MESSAGE_CHARS
+    ? text
+    : `${text.slice(0, MAX_NOTIFY_MESSAGE_CHARS)}…(truncated)`;
+}
+
+/**
  * Park-and-notify: when no elicitation handler is installed (daemon, scheduler,
  * subagent, one-shot — nobody is watching), a prompt would otherwise DECLINE
  * silently, the worst autonomy outcome: the run fails at an auth wall / captcha
@@ -57,7 +71,7 @@ const DECLINE: ElicitationResult = { action: 'decline' };
 function notifyUnattendedElicitation(request: ElicitationRequest): void {
   try {
     const label = request.title ?? request.serverName;
-    const parts = [`🔔 AFK needs you — stuck on: ${label}`, request.message];
+    const parts = [`🔔 AFK needs you — stuck on: ${label}`, truncateForNotify(request.message)];
     if (request.url !== undefined && request.url !== '') parts.push(request.url);
     void pushIfConfigured(parts.join('\n')).catch(() => undefined);
   } catch {

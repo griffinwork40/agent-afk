@@ -31,6 +31,13 @@ describe('retryFetch', () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
+  it('does not retry a 500 (not in the retryable {429,502,503,504} set)', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(res(500));
+    const r = await retryFetch(fetchFn as unknown as FetchFn, 'https://x', {}, { sleep: noSleep });
+    expect(r.status).toBe(500);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
   it('retries a retryable status (503) then succeeds', async () => {
     const fetchFn = vi
       .fn()

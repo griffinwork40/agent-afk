@@ -824,6 +824,39 @@ describe('BrowserLauncher — session vault', () => {
     expect(saved).toHaveProperty('cookies');
   });
 
+  it('saves the vault file at 0600 after refreshing an established profile on close', async () => {
+    const file = establishProfile('work');
+    // Loosen perms first so the assertion proves the atomic save re-tightens to
+    // 0600 (the named observable: "saves storageState mode 0600").
+    fs.chmodSync(file, 0o644);
+    const launcher = new BrowserLauncher(VAULT_CONFIG);
+    await launcher.ensureContext('s1');
+    await launcher.closeSession('s1');
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+  });
+
+  it('renderHtml bypasses the vault even when the default profile IS established', async () => {
+    // A session context WOULD restore this vault; a one-shot render must not —
+    // renderHtml builds an ephemeral context that never loads storageState.
+    establishProfile('work', { cookies: [{ name: 'sid', value: 'abc' }], origins: [] });
+    const launcher = new BrowserLauncher(VAULT_CONFIG);
+    const ctx = makeStubContext();
+    currentStubBrowser.newContext.mockResolvedValueOnce(ctx);
+    ctx.newPage.mockImplementationOnce(async () => {
+      const p = makeStubPage();
+      p.goto.mockResolvedValueOnce({ status: () => 200 });
+      p.content.mockResolvedValueOnce('<html><body>ok</body></html>');
+      p.url.mockReturnValue('https://example.com/final');
+      ctx._pages.push(p);
+      return p;
+    });
+
+    await launcher.renderHtml('https://example.com/start', { timeoutMs: 5000, waitUntil: 'load' });
+
+    expect(firstNewContextOpts()?.['storageState']).toBeUndefined();
+    expect(launcher.activeSessions()).toBe(0); // ephemeral — not tracked as a session
+  });
+
   it('does NOT create a vault file on close for an unestablished/ephemeral profile', async () => {
     const launcher = new BrowserLauncher(VAULT_CONFIG);
     await launcher.ensureContext('s1');

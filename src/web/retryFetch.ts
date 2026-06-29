@@ -19,6 +19,7 @@
  */
 
 import type { FetchFn } from './types.js';
+import { debugLog } from '../utils/debug.js';
 
 /** HTTP statuses worth retrying on an idempotent GET. */
 const RETRYABLE_STATUS = new Set<number>([429, 502, 503, 504]);
@@ -96,13 +97,16 @@ export async function retryFetch(
       }
       // Retryable status with attempts left: free the connection, wait, retry.
       const wait = retryAfterMs(res, maxDelayMs) ?? backoffMs(attempt, baseDelayMs, maxDelayMs);
+      debugLog('[web/retryFetch] retrying', { url, attempt, status: res.status, waitMs: wait });
       await res.body?.cancel().catch(() => undefined);
       await sleep(wait, signal);
     } catch (err) {
       if (signal?.aborted) throw err; // abort is terminal — never retried
       lastErr = err;
       if (attempt === retries) throw err; // exhausted → surface the last error
-      await sleep(backoffMs(attempt, baseDelayMs, maxDelayMs), signal);
+      const waitMs = backoffMs(attempt, baseDelayMs, maxDelayMs);
+      debugLog('[web/retryFetch] retrying after error', { url, attempt, waitMs });
+      await sleep(waitMs, signal);
     }
   }
   // Loop always returns or throws; this satisfies the type checker.

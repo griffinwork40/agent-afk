@@ -82,6 +82,36 @@ describe('elicitationRouter', () => {
     expect(pushIfConfigured).not.toHaveBeenCalled();
   });
 
+  it('park-and-notify: no handler + aborted while waiting in queue → declines without notifying', async () => {
+    // A first request (with a handler) holds the serial queue; a second request
+    // is captured with NO handler, then aborted while it waits behind the first.
+    // When the queue reaches it, the abort re-check fires BEFORE the no-handler
+    // branch — so it declines silently rather than firing park-and-notify.
+    const handler = vi.fn().mockResolvedValue({ action: 'accept' } as ElicitationResult);
+    elicitationRouter.install(handler);
+    const firstSignal = new AbortController();
+    const first = elicitationRouter.route(URL_REQUEST, { signal: firstSignal.signal });
+
+    elicitationRouter.uninstall(); // the second request captures a null handler
+    const secondAbort = new AbortController();
+    const second = elicitationRouter.route(URL_REQUEST, { signal: secondAbort.signal });
+    secondAbort.abort(); // aborted while still queued behind the first
+
+    const [r1, r2] = await Promise.all([first, second]);
+    expect(r1).toEqual({ action: 'accept' });
+    expect(r2).toEqual({ action: 'decline' });
+    expect(pushIfConfigured).not.toHaveBeenCalled();
+  });
+
+  it('park-and-notify: truncates an over-long message to bound inadvertent disclosure', async () => {
+    const longMsg = 'x'.repeat(500);
+    await elicitationRouter.route({ ...URL_REQUEST, message: longMsg }, { signal: NO_SIGNAL });
+    const msg = vi.mocked(pushIfConfigured).mock.calls[0]?.[0] as string;
+    expect(msg).toContain('…(truncated)');
+    expect(msg).not.toContain(longMsg); // the full 500-char message is never sent
+    expect(msg).toContain('x'.repeat(300)); // first 300 chars preserved
+  });
+
   it('forwards to the installed handler and returns its result', async () => {
     const accepted: ElicitationResult = { action: 'accept' };
     const handler = vi.fn().mockResolvedValue(accepted);
