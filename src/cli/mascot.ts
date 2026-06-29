@@ -32,8 +32,11 @@ const PIXEL_PALETTE: Record<string, [number, number, number] | null> = {
   // #2A2A1A ≈ [42, 42, 26]
   X: [42, 42, 26],
   // Brown — the goblin's leather cap (cone + body); the gold band sits below it.
-  // #7A4E2A ≈ [122, 78, 42]
-  B: [122, 78, 42],
+  // Deep leather brown — kept clearly above the terminal black (#0D1209) so it
+  // still reads as "brown" (not a black void) while contrasting the gold band
+  // below. Darkened a second time on request (was #5A3A20).
+  // #3C2614 ≈ [60, 38, 20]
+  B: [60, 38, 20],
 };
 
 /**
