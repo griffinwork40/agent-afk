@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.10.3] - 2026-06-29
+
+### Fixed
+- always allow exit_plan_mode on top-level surfaces (REPL/chat/Telegram) (#334) (14867a3)
+- make agentType required on ForkSubagentOptions; add to all callsites (#330) (f281e79)
+
 ## [5.10.2] - 2026-06-29
 
 ### Fixed
