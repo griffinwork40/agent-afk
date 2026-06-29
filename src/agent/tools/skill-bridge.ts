@@ -14,7 +14,8 @@
 // Barrel import triggers self-registration side-effects for built-in skills.
 import '../../skills/all.js';
 
-import { listSkills, getSkill, isSkillVisible } from '../../skills/index.js';
+import { listSkills, getSkill, registerSkill, isSkillVisible } from '../../skills/index.js';
+import { loadSkillPrompts } from '../../skills/_lib/prompt-loader.js';
 import { scanSkillsFromDir } from '../../skills/user-skills.js';
 import { scanLocalPlugins } from '../plugins-scanner.js';
 import { loadPluginEntrypoints } from '../plugins/load-entrypoints.js';
@@ -263,5 +264,11 @@ export function scanAllPluginRoots(): SdkPluginConfig[] {
  * so calling it again in a child is a safe no-op.
  */
 export async function ensurePluginEntrypointsLoaded(): Promise<void> {
-  await loadPluginEntrypoints(scanAllPluginRoots());
+  // Inject the host's registry functions (+ loadSkillPrompts) so a code-backed
+  // plugin's default-export entrypoint registers against THIS process's
+  // singleton registry — not a bare-specifier-imported copy of its own, which
+  // would silently write to a registry the host never reads. See PluginApi.
+  await loadPluginEntrypoints(scanAllPluginRoots(), {
+    pluginApi: { registerSkill, listSkills, getSkill, loadSkillPrompts },
+  });
 }

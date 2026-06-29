@@ -18,6 +18,29 @@ import { pathToFileURL } from 'url';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
 
 /**
+ * Host runtime API injected into a plugin entrypoint's default-export function.
+ *
+ * Invariant: a code-backed plugin MUST register through this object, not by
+ * importing `agent-afk` itself. The skill registry is a module-level singleton
+ * (`src/skills/index.ts`), so a plugin that imports its OWN copy of `agent-afk`
+ * (its `node_modules`, a bundle, or a version-skewed install — the default for a
+ * marketplace-cloned plugin with no shared `node_modules`) would call a
+ * `registerSkill` backed by a DIFFERENT registry than the host reads → the skill
+ * silently never appears. Receiving these functions from the host guarantees the
+ * same module instance regardless of how the plugin was installed.
+ *
+ * Stateless helpers (`env`, the `paths` getters, `describeFailure`) are safe for
+ * a plugin to import directly — they hold no singleton state — and are
+ * intentionally omitted to keep this surface minimal. The type is derived via
+ * `typeof import(...)` so the injected signatures cannot drift from the source.
+ */
+export type PluginApi = Pick<
+  typeof import('../../skills/index.js'),
+  'registerSkill' | 'listSkills' | 'getSkill'
+> &
+  Pick<typeof import('../../skills/_lib/prompt-loader.js'), 'loadSkillPrompts'>;
+
+/**
  * Resolved-entrypoint paths already imported in this process. Dynamic `import()`
  * caches modules itself, but tracking here lets us skip redundant awaits when
  * the scanner is consulted multiple times per turn and keeps load deterministic.
@@ -34,6 +57,15 @@ export type LoadEntrypointsOptions = {
   importer?: (specifier: string) => Promise<unknown>;
   /** Invoked (non-fatally) when a plugin entrypoint fails to import. */
   onError?: (plugin: SdkPluginConfig, error: unknown) => void;
+  /**
+   * Host API injected into a plugin entrypoint's default-export function. When a
+   * plugin's `main` module exports a callable `default`, it is invoked as
+   * `await mod.default(pluginApi)` AFTER import — the sanctioned way for a
+   * code-backed plugin to register skills against the host's singleton registry
+   * (see {@link PluginApi}). Modules with no default-export function still run
+   * their top-level side-effects at import time (backward-compatible).
+   */
+  pluginApi?: PluginApi;
 };
 
 /**
@@ -56,7 +88,15 @@ export async function loadPluginEntrypoints(
     // double-import, and a failed entrypoint must not be retried this process.
     loadedEntrypoints.add(absPath);
     try {
-      await importer(pathToFileURL(absPath).href);
+      // Importing runs the module's top-level side-effects (back-compat). If it
+      // ALSO exports a callable default, invoke it with the host API so the
+      // plugin registers against the host's singleton registry rather than a
+      // bare-specifier-imported copy of its own (see {@link PluginApi}).
+      const mod = await importer(pathToFileURL(absPath).href);
+      const entry = (mod as { default?: unknown } | undefined)?.default;
+      if (typeof entry === 'function') {
+        await (entry as (api: PluginApi | undefined) => unknown)(opts.pluginApi);
+      }
     } catch (error) {
       opts.onError?.(plugin, error);
     }
