@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.10.2] - 2026-06-29
+
+### Fixed
+- refill the viewport after end-of-turn collapse of an over-tall block (#332) (a0cbf3c)
+
 ## [5.10.1] - 2026-06-29
 
 ### Added
