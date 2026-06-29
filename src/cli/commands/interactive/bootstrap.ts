@@ -55,6 +55,7 @@ import { ensurePluginEntrypointsLoaded } from '../../../agent/tools/skill-bridge
 import { AWARENESS_TOOL_NAMES } from '../../../agent/awareness/index.js';
 import { McpManager, loadMcpConfig, getMcpConfigPath } from '../../../agent/mcp/index.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../../config/import-sources.js';
+import { env } from '../../../config/env.js';
 import { resolveResumeTarget } from '../../resume-session.js';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
 import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
@@ -830,7 +831,7 @@ export async function bootstrapSession(
     // Seed read/write roots from persisted `persist` grants so the prompt's
     // "future sessions inherit it" promise actually holds. No-op when none.
     seedPersistedGrants(startupProvider);
-  } else if (process.env['AFK_DISABLE_PATH_APPROVAL'] !== '1') {
+  } else if (env.AFK_DISABLE_PATH_APPROVAL !== '1') {
     // Emit a one-time advisory when path-approval is enabled but the active
     // provider does not expose the GrantManager API. This makes fail-open
     // explicit rather than silent — the bash interpreter denylist still fires,
