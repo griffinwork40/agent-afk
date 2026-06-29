@@ -297,6 +297,81 @@ describe('filename redaction in log output', () => {
   });
 });
 
+describe('SyntaxError snippet redaction in log output (issue #251)', () => {
+  // V8 embeds a verbatim snippet of the malformed file bytes inside the
+  // SyntaxError.message from JSON.parse — e.g.
+  //   "Unexpected token 'T', "TOKEN=abc12..." is not valid JSON"
+  // redactInlineSecrets's generic KEY=value pattern requires ≥16 chars in the
+  // value, so short secrets and long-but-truncated secrets both slip through.
+  // The fix suppresses the message entirely for SyntaxErrors, replacing it with
+  // the content-free label 'SyntaxError: invalid JSON'.
+
+  it('does not emit short secret value from SyntaxError message (dequeueNext path)', () => {
+    // Short value — 11 chars — below the {16,} threshold; escapes redactInlineSecrets.
+    const shortSecretContent = 'TOKEN=abc12345678';
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      writeFileSync(join(tmpDir, '0000-q-short-secret.json'), shortSecretContent);
+      dequeueNext(tmpDir);
+      // Capture calls before mockRestore() clears them (vitest clears mock.calls on restore).
+      const allMessages = spy.mock.calls.map((c) => String(c[0]));
+      // (a) The secret fragment must NOT appear in any log line.
+      for (const msg of allMessages) {
+        expect(msg).not.toContain('abc12345678');
+        expect(msg).not.toContain('TOKEN=');
+      }
+      // (b) The safe content-free label must appear instead.
+      expect(allMessages.some((m) => m.includes('SyntaxError: invalid JSON'))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('does not emit truncated long-value secret from SyntaxError message (dequeueNext path)', () => {
+    // Long value that gets truncated inside the V8 SyntaxError snippet; after
+    // truncation the remaining fragment is short enough to evade redaction.
+    const longSecretContent = 'OPENAI_API_KEY=sk-proj-abc123def456ghi789jkl012mno345';
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      writeFileSync(join(tmpDir, '0000-q-long-secret.json'), longSecretContent);
+      dequeueNext(tmpDir);
+      // Capture calls before mockRestore() clears them (vitest clears mock.calls on restore).
+      const allMessages = spy.mock.calls.map((c) => String(c[0]));
+      // (a) None of the secret-derived fragments must appear.
+      for (const msg of allMessages) {
+        expect(msg).not.toContain('OPENAI_API_KEY');
+        expect(msg).not.toContain('sk-proj');
+        expect(msg).not.toContain('abc123def456');
+      }
+      // (b) The safe label must appear.
+      expect(allMessages.some((m) => m.includes('SyntaxError: invalid JSON'))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('does not emit secret snippet from SyntaxError message (listPending path)', () => {
+    // Same short-value scenario exercised on the listPending code path.
+    const shortSecretContent = 'TOKEN=abc12345678';
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      writeFileSync(join(tmpDir, '0000-q-list-secret.json'), shortSecretContent);
+      listPending(tmpDir);
+      // Capture calls before mockRestore() clears them (vitest clears mock.calls on restore).
+      const allMessages = spy.mock.calls.map((c) => String(c[0]));
+      // (a) Secret fragments must not appear.
+      for (const msg of allMessages) {
+        expect(msg).not.toContain('abc12345678');
+        expect(msg).not.toContain('TOKEN=');
+      }
+      // (b) Safe label must appear.
+      expect(allMessages.some((m) => m.includes('SyntaxError: invalid JSON'))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe('removePending', () => {
   it('returns false on an empty queue', () => {
     expect(removePending(tmpDir, 'q-0000000000000-aabbcc')).toBe(false);
