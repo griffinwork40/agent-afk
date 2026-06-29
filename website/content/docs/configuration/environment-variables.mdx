@@ -170,6 +170,7 @@ These three tune the path-approval and bash-restriction hooks — see [Permissio
 | `AFK_DEBUG_COMPOSITOR` | boolean | Gate compositor phase-boundary traces to stderr; any truthy value enables. | — |
 | `AFK_DIAGNOSE_BASELINE` | boolean | Kill switch for /diagnose reproducer baseline execution. When set to '0', the /diagnose skill skips executing the detected reproducer command for a ground-truth baseline; default enabled (runs). Set to '0' to disable. | `1` |
 | `AFK_DUMP_PROMPT` | string | Write the resolved system prompt to a file at startup. Accepts a path or 1 for default location. | — |
+| `AFK_RUN_RECEIPT_DISABLED` | boolean | Disable the post-session run receipt (state/receipts/&lt;label&gt;.json and .md). Set to 1 to skip receipt writes; the underlying witness trace is unaffected. Receipts are also implicitly off when AFK_TRACE_DISABLED=1 (no trace to summarize). | — |
 | `AFK_SESSION_LEDGER_DISABLED` | boolean | Disable the per-session durable event ledger (state/sessions/&lt;id&gt;/events.jsonl). Set to 1 to skip ledger writes; live cross-surface watching (e.g. the Telegram /watch command) will report no activity for sessions started while disabled. | — |
 | `AFK_SKILL_STREAM_VERBOSE` | boolean | Verbose streaming output when a skill is dispatched. Logs sub-agent setup, intermediate events, and final result. | — |
 | `AFK_TELEGRAM_TRACE` | boolean | Set to 1 to dump raw bridge traffic between the agent and the Telegram bot — debugging only. | — |
@@ -185,6 +186,7 @@ These three tune the path-approval and bash-restriction hooks — see [Permissio
 | `AFK_BANNER_PLAIN` | boolean | Suppress the ANSI-colored banner at REPL startup. Useful for non-TTY captures and CI logs. | — |
 | `AFK_DEMO_CLEAN` | boolean | Explicit opt-in to capture-mode. When set to 1, suppresses high-frequency repaint drivers (spinner ticker, live thinking-preview) so recorded artifacts contain each state once instead of once per timer tick. | — |
 | `AFK_DIFF_LINES` | number | Maximum number of diff lines shown in the inline diff render during write_file tool calls. Set to 0 for no cap. Non-integer values are silently ignored and the default applies. | — |
+| `AFK_MEMORY_EVIDENCE_GATE` | boolean | Opt-in (set to 1) evidence gate for durable memory writes. When enabled, a codebase fact (memory_update category "convention") stored without an `evidence` citation is recalled as [unverified], and memory_search results carry a verification verdict. User preferences and agent reflections are never gated. Default off — memory behaves identically to legacy when unset. | — |
 | `AFK_SHELL_PASSTHROUGH` | boolean | Enable the interactive REPL `!cmd` / `!&cmd` shell-passthrough feature. On by default. Set to 0, false, off, or no (case-insensitive) to disable, so inputs beginning with ! are sent to the model as literal text instead of being executed as shell commands. Equivalent to the --no-shell-passthrough flag. | `1` |
 | `AFK_SHOW_DIFFS` | boolean | Show inline diffs in the tool-lane output for edit/write tool calls. 1 = on, 0 = off. | — |
 | `AFK_SPINNER_TIPS` | boolean | Show rotating tips in the loading spinner during long calls. 1 = on, 0 = off. | — |

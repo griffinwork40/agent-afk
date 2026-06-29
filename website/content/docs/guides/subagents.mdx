@@ -85,6 +85,18 @@ The status bar at the bottom of the REPL shows running background task counts.
 
 Source: `src/cli/background-status-bar.ts`, `src/cli/commands/interactive/background.js`.
 
+### `afk bg` — CLI background job inspection
+
+From the terminal, inspect persisted background job logs with the `afk bg` command:
+
+```bash
+afk bg list              # list all jobs (most recent first, --max <n> to limit)
+afk bg tail <jobId>      # stream live events (--from-start to replay first)
+afk bg replay <jobId>    # replay all events, then exit
+```
+
+Jobs are persisted to `~/.afk/state/bg/` even after the parent REPL exits. Use `afk bg` to check status, review logs, or re-stream a job's output from disk. Complements `/bgsub:join` when you need access outside an active REPL session.
+
 ## The `compose` tool — DAG orchestration
 
 For structured multi-agent workflows, the `compose` tool dispatches up to 20 subagent nodes with explicit dependency edges. Independent nodes run in parallel; dependent nodes wait.

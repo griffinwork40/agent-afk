@@ -86,7 +86,7 @@ Source: `src/agent/mcp/types.ts` (`McpServerConfig`).
 }
 ```
 
-`${VAR}` placeholders in `env` and `headers` are expanded from the host environment at connect time (not via shell eval). Run `/mcp auth` in the REPL to view and complete any pending OAuth consent flows.
+`${VAR}` placeholders in `env` and `headers` are expanded from the host environment at connect time (not via shell eval). Run `/mcp auth` in the REPL to view and complete any pending OAuth consent flows (the URL is also pushed via Telegram when running headless).
 
 ### Tool naming
 
@@ -98,9 +98,13 @@ mcp__filesystem__read_file
 
 Tools are read fresh per query. When an MCP server sends a `notifications/tools/list_changed` notification, the tool list updates in-place — no session restart needed.
 
+### Surface coverage
+
+MCP servers load on **all surfaces** — REPL, `afk chat`, daemon, and Telegram. Each surface constructs `McpManager` from the resolved config before the `AgentSession` is created, so MCP tools are available regardless of how AFK is invoked.
+
 ### Viewing server status
 
-In the REPL:
+In the REPL, use the `/mcp` slash commands:
 
 ```
 /mcp          # list connected servers and tool counts
@@ -185,6 +189,7 @@ A plugin directory can contain:
 | `agents/<agent>/` | Subagent definition |
 | `commands/<cmd>/` | Slash command |
 | `.claude-plugin/mcp.json` | MCP server config (lowest priority layer) |
+| `main` field in `plugin.json` | JS entrypoint — a module path loaded via dynamic `import()` before `AgentSession` is constructed. Use it to call `registerSkill()` or other side-effecting setup that must run synchronously before the session's skill manifest is assembled. Non-fatal: a failing entrypoint is caught and reported as a warning, never aborting boot. Idempotent per resolved path across plugin reloads. |
 
 Skills from plugins are auto-registered at session start and appear in `/skills` (alias `/builtin-skills`). Use `/reload-plugins` in the REPL to pick up changes after editing a plugin without restarting.
 
