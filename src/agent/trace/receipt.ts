@@ -49,6 +49,20 @@ const REVIEW_EXEMPT_FAILURE_CLASSES: ReadonlySet<ToolFailureClass> = new Set([
   'elicitation-declined',
 ]);
 
+// Invariant: the subset of exempt classes that represent a GATE refusing a
+// tool call — an allowlist/`canUseTool` deny (`permission-denied`), a
+// PreToolUse hook block (`hook-block`), or a policy refusal (`policy-refusal`).
+// These are "the system denylisted this call". Deliberately EXCLUDES `abort`
+// (user/cascade cancellation) and `elicitation-declined` (no handler) — those
+// are not denials. Surfaced as the receipt's `toolCalls.refused` tally so
+// restrictive sub-agent/skill allowlists (e.g. /diagnose, /audit-fit) get a
+// per-session count instead of being buried in `byFailureClass`.
+const GATE_REFUSAL_FAILURE_CLASSES: readonly ToolFailureClass[] = [
+  'permission-denied',
+  'hook-block',
+  'policy-refusal',
+];
+
 /** A single failed tool call, summarized from trace metadata (no raw output). */
 export interface ReceiptToolFailure {
   toolUseId: string;
@@ -89,6 +103,14 @@ export interface RunReceipt {
     errored: number;
     /** `errored` minus the expected-refusal (exempt) classes. */
     erroredNotable: number;
+    /**
+     * Count of tool calls a gate denylisted: `permission-denied` (allowlist /
+     * `canUseTool` deny) + `hook-block` (PreToolUse hook) + `policy-refusal`.
+     * A subset of `errored`; per-class detail is in `byFailureClass`. Divide by
+     * `total` for the refusal rate. Surfaces denials that `erroredNotable`
+     * deliberately excludes — the per-session "how often was a call denied" tally.
+     */
+    refused: number;
     circuitBreakerHits: number;
     byTool: Record<string, { total: number; errored: number }>;
     byFailureClass: Record<string, number>;
@@ -272,6 +294,10 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
   }
 
   const erroredNotable = failures.filter((f) => !f.exempt).length;
+  const refused = GATE_REFUSAL_FAILURE_CLASSES.reduce(
+    (n, cls) => n + (byFailureClass[cls] ?? 0),
+    0,
+  );
   const status = sealedStatus ?? 'unknown';
 
   const startedAt = events[0]?.ts;
@@ -339,6 +365,7 @@ export function generateReceipt(events: TraceEvent[], meta: ReceiptMeta): RunRec
       succeeded,
       errored,
       erroredNotable,
+      refused,
       circuitBreakerHits,
       byTool,
       byFailureClass,
@@ -390,6 +417,13 @@ export function renderReceiptMarkdown(r: RunReceipt): string {
   lines.push('| --- | --- |');
   lines.push(`| Tool calls | ${r.toolCalls.total} |`);
   lines.push(`| Errored | ${r.toolCalls.errored} (${r.toolCalls.erroredNotable} notable) |`);
+  if (r.toolCalls.refused > 0) {
+    const rate =
+      r.toolCalls.total > 0
+        ? ((r.toolCalls.refused / r.toolCalls.total) * 100).toFixed(1)
+        : '0.0';
+    lines.push(`| Refused (denylisted) | ${r.toolCalls.refused} (${rate}% of calls) |`);
+  }
   if (r.toolCalls.circuitBreakerHits > 0)
     lines.push(`| Circuit-breaker hits | ${r.toolCalls.circuitBreakerHits} |`);
   if (r.cost.turnCount !== undefined) lines.push(`| Turns | ${r.cost.turnCount} |`);

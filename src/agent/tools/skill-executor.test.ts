@@ -144,6 +144,53 @@ describe('SkillExecutor', () => {
     );
   });
 
+  it('forwards the witness traceWriter as ctx.traceWriter so skill-forked subagent denials are traced', async () => {
+    // Regression: inline handlers (e.g. /diagnose) that fork their OWN
+    // SubagentManager need the parent's traceWriter to thread it into the fork,
+    // or the child dispatcher's emitHookDecision/emitToolCall no-op and the
+    // restrictive-allowlist permission-denials vanish from the witness trace
+    // (and the run receipt's refusal tally). The executor must surface its
+    // ctx.traceWriter on the SkillExecutionContext handed to the handler.
+    const fakeTraceWriter = { write: vi.fn() } as unknown as import('../trace/index.js').TraceWriter;
+    const handler = vi.fn().mockResolvedValue('ok');
+    registerSkill({ name: 'tracewriter-skill', description: 'test', handler });
+
+    const executor = new SkillExecutor({
+      parentSession: {
+        sessionId: 'parent-session',
+        getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+        abortSignal,
+      },
+      traceWriter: fakeTraceWriter,
+    });
+
+    await executor.execute(makeCall({ name: 'tracewriter-skill' }));
+
+    expect(handler).toHaveBeenCalledWith(
+      undefined,
+      expect.anything(),
+      expect.objectContaining({ traceWriter: fakeTraceWriter }),
+    );
+  });
+
+  it('omits ctx.traceWriter when the executor has none (tracing disabled)', async () => {
+    const handler = vi.fn().mockResolvedValue('ok');
+    registerSkill({ name: 'no-tracewriter-skill', description: 'test', handler });
+
+    const executor = new SkillExecutor({
+      parentSession: {
+        sessionId: 'parent-session',
+        getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+        abortSignal,
+      },
+    });
+
+    await executor.execute(makeCall({ name: 'no-tracewriter-skill' }));
+
+    const ctxArg = handler.mock.calls[0]?.[2] as { traceWriter?: unknown };
+    expect(ctxArg.traceWriter).toBeUndefined();
+  });
+
   it('should return error for unknown skill with available list', async () => {
     registerSkill({
       name: 'known-skill',

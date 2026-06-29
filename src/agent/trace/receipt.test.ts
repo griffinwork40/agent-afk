@@ -129,6 +129,7 @@ describe('generateReceipt — success-only trace', () => {
     expect(r.toolCalls.succeeded).toBe(3);
     expect(r.toolCalls.errored).toBe(0);
     expect(r.toolCalls.erroredNotable).toBe(0);
+    expect(r.toolCalls.refused).toBe(0);
     expect(r.toolCalls.byTool['bash']).toEqual({ total: 2, errored: 0 });
     expect(r.failures).toEqual([]);
     expect(r.humanReviewRequired).toBe(false);
@@ -171,6 +172,9 @@ describe('generateReceipt — failed tool calls', () => {
     expect(r.toolCalls.total).toBe(5);
     expect(r.toolCalls.errored).toBe(4);
     expect(r.toolCalls.erroredNotable).toBe(2); // unclassified + timeout
+    // refused = gate-refusal classes only: policy-refusal counts;
+    // elicitation-declined is exempt-but-not-a-denial, so it does NOT.
+    expect(r.toolCalls.refused).toBe(1);
     expect(r.toolCalls.circuitBreakerHits).toBe(1);
     expect(r.toolCalls.byFailureClass).toMatchObject({
       unclassified: 1,
@@ -202,6 +206,34 @@ describe('generateReceipt — failed tool calls', () => {
     expect(r.subagents.failed).toBe(1);
     expect(r.humanReviewRequired).toBe(true);
     expect(r.humanReviewReasons.join('\n')).toContain('1 subagent(s) failed');
+  });
+
+  it('tallies gate refusals (permission-denied + hook-block) without forcing review', () => {
+    // Mirrors the /diagnose case: a restrictive allowlist denies repeated
+    // tool calls (permission-denied) alongside a PreToolUse hook block.
+    const events = [
+      toolDone('bash', { isError: true, failureClass: 'permission-denied', toolUseId: 'd1' }),
+      toolDone('list_directory', {
+        isError: true,
+        failureClass: 'permission-denied',
+        toolUseId: 'd2',
+      }),
+      toolDone('bash', { isError: true, failureClass: 'hook-block', toolUseId: 'd3' }),
+      toolDone('read_file'), // 1 clean call → total 4, rate 75%
+      closure('model_end_turn'),
+      sealed('succeeded'),
+    ];
+    const r = generateReceipt(events, META);
+
+    expect(r.toolCalls.total).toBe(4);
+    expect(r.toolCalls.refused).toBe(3);
+    // All three are exempt refusals → none count as "notable".
+    expect(r.toolCalls.erroredNotable).toBe(0);
+    // Denials are EXPECTED outcomes — they must not force human review on their own.
+    expect(r.humanReviewRequired).toBe(false);
+
+    const md = renderReceiptMarkdown(r);
+    expect(md).toContain('| Refused (denylisted) | 3 (75.0% of calls) |');
   });
 });
 
@@ -269,6 +301,7 @@ describe('renderReceiptMarkdown', () => {
     expect(md).toContain('✓ no');
     expect(md).toContain('No tool failures recorded.');
     expect(md).not.toContain('## Why review is required');
+    expect(md).not.toContain('Refused (denylisted)');
   });
 });
 
