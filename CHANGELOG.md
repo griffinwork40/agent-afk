@@ -11,6 +11,13 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.8.1] - 2026-06-29
+
+### Fixed
+- honor trailing-backslash newline escape on the live TTY path (#325) (9ffc326)
+- never emit improperly-nested HTML from interleaved emphasis (#321) (b0c1233)
+- wrap schema migrations in transactions to close torn-state window (#319) (74b5c41)
+
 ## [5.8.0] - 2026-06-29
 
 ### Added
