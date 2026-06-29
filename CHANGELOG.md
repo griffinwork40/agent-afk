@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.13.0] - 2026-06-29
+
+### Added
+- inject session-facet substrate into PluginApi (11→15) (#337) (07fbec6)
+
 ## [5.12.0] - 2026-06-29
 
 ### Added
