@@ -54,7 +54,7 @@ import {
 } from './cache-policy.js';
 import { buildPlanModeAddendumBlock } from './plan-mode-addendum.js';
 import { buildAfkModeAddendumBlock } from './afk-mode-addendum.js';
-import { collectSkillEntries } from '../../tools/skill-bridge.js';
+import { collectSupportedCommands } from '../shared/supported-commands.js';
 import { contextLimitFor } from '../../model-limits.js';
 import { resolveModelId } from '../../session/model-resolution.js';
 import type { ToolDispatcher } from './tool-dispatcher.js';
@@ -658,30 +658,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
   }
 
   async supportedCommands(): Promise<ProviderCommandInfo[]> {
-    // Surface every skill discovered by the skill-bridge — built-in TS
-    // skills, user-scope `~/.afk/skills/`, and plugin SKILL.md files under
-    // `~/.afk/plugins/` — so the REPL slash registry can register a
-    // passthrough `/<skill>` for each one. Without this, `/reload-plugins`
-    // reports 0 and typing `/mint` does not autocomplete.
-    //
-    // The model already learns about these skills via the system-prompt
-    // manifest (built from `collectSkillEntries()` in
-    // `AnthropicDirectProvider.query()`); reusing the same collector here
-    // keeps the slash list and the manifest in lockstep.
-    try {
-      const entries = collectSkillEntries();
-      return entries.map((e) => {
-        const info: ProviderCommandInfo = {
-          name: e.name,
-          description: e.description,
-        };
-        if (e.argumentHint) info.argumentHint = e.argumentHint;
-        return info;
-      });
-    } catch {
-      // Discovery is best-effort — the REPL stays usable without it.
-      return [];
-    }
+    return collectSupportedCommands();
   }
 
   async supportedModels(): Promise<ProviderModelInfo[]> {

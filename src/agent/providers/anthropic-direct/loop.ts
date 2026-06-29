@@ -51,6 +51,8 @@ import { translateMessageStream } from './translate.js';
 import { emitToolCall, emitSessionPhase } from '../../trace/emit.js';
 import { extractRawToolInput } from '../../facets/raw-input.js';
 import { env } from '../../../config/env.js';
+import { sleepWithAbort } from '../shared/sleep-with-abort.js';
+import { summarizeToolInput } from '../shared/tool-input-summary.js';
 
 /**
  * Default cap on tool-use rounds within a single user turn. `0` means "no
@@ -113,15 +115,6 @@ export function isOverloadedErrorEvent(err: unknown): boolean {
   return innerType === 'overloaded_error';
 }
 
-function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) { resolve(); return; }
-    const timer = setTimeout(resolve, ms);
-    timer.unref();
-    signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
-  });
-}
-
 async function createWithRetry(
   client: { messages: { create(params: unknown, opts: unknown): unknown } },
   params: AnthropicMessagesCreateParams,
@@ -147,36 +140,6 @@ async function createWithRetry(
       throw e;
     }
   }
-}
-
-function summarizeToolInput(toolName: string, input: unknown): string {
-  if (!input || typeof input !== 'object') return '';
-  const obj = input as Record<string, unknown>;
-  // Skill dispatch: the `name` field IS the skill being invoked (diagnose,
-  // review, mint, …). Surface it as a paren-wrapped label so the tool lane
-  // renders `skill(diagnose)` instead of a bare `skill [skill]` — matching the
-  // `Agent(<label>)` dispatch convention and the paren-wrap signal the overflow
-  // renderer keys on (cli/commands/interactive/tool-lane-render-grouping-overflow.ts).
-  // Unlike `agent`, a skill's label is fully known from the tool input, so it
-  // needs no deferred mergeAgentLabel promotion — and it MUST be surfaced here
-  // because load-mode skills never fork a child Agent row to carry the name.
-  if (toolName === 'skill' || toolName === 'Skill') {
-    const skillName = obj['name'];
-    if (typeof skillName === 'string' && skillName.length > 0) {
-      return `(${skillName.length > 60 ? skillName.slice(0, 59) + '…' : skillName})`;
-    }
-    return '';
-  }
-  const path = obj['file_path'] ?? obj['path'] ?? obj['filePath'];
-  if (typeof path === 'string') return ' ' + path;
-  const cmd = obj['command'] ?? obj['cmd'];
-  if (typeof cmd === 'string') {
-    const firstLine = cmd.split('\n')[0]!;
-    return ' ' + (firstLine.length > 80 ? firstLine.slice(0, 77) + '…' : firstLine);
-  }
-  const query = obj['query'] ?? obj['pattern'] ?? obj['url'] ?? obj['description'];
-  if (typeof query === 'string') return ' ' + query;
-  return '';
 }
 
 /**
