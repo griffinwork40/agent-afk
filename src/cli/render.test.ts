@@ -149,6 +149,23 @@ describe('welcomeBanner', () => {
     expect(out).toContain('/help · /model');
   });
 
+  it('renders the dim product tagline under the wordmark in the hybrid banner', () => {
+    Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
+    const out = strip(welcomeBanner({
+      mode: 'Interactive Mode',
+      model: 'sonnet',
+      version: '5.10.1',
+      cwd: '/tmp/agent-afk',
+    }));
+    // Tagline present (first-run identity), and short enough to survive the
+    // 48-col info column at an 80-col terminal without truncation.
+    expect(out).toContain('the agent harness you can actually change');
+    // The weight-accented wordmark ("Agent " regular + "AFK" bold) must still
+    // strip to the contiguous product name — the accent is a weight step, not
+    // a fragmenting insertion.
+    expect(out).toContain('Agent AFK');
+  });
+
   describe('AFK_BANNER_PLAIN=1 fallback', () => {
     const prevPlain = process.env['AFK_BANNER_PLAIN'];
 

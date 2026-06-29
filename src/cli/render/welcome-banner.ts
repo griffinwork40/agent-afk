@@ -150,6 +150,15 @@ function renderLegacyBoxBanner(opts: WelcomeBannerOpts): string {
 }
 
 /**
+ * One-line product tagline rendered (dim) directly under the wordmark in the
+ * hybrid banner. Mirrors the package.json description / README thesis ("the
+ * harness you can actually change") to give first-run identity. Kept short
+ * (≤44 display cols) so it survives truncation at an 80-col terminal, where
+ * the info column is only `cols − 32 = 48` cols wide.
+ */
+const BANNER_TAGLINE = 'the agent harness you can actually change';
+
+/**
  * Hybrid mascot-left / info-stack-right banner. Borderless. Composed row by
  * row so the sprite and text stay aligned while each info row is truncated to
  * the available terminal width.
@@ -171,11 +180,22 @@ function renderHybridBanner(opts: WelcomeBannerOpts): string {
     infoRows.push(truncateDisplay(row, infoMaxW));
   };
 
-  // Row A: wordmark + optional version chip.
-  const wordmark = palette.bold(palette.brand('Agent AFK'));
+  // Row A: wordmark + optional version chip. The bold weight is carried by
+  // "AFK" alone so the memorable acronym reads as the logo, with "Agent" in
+  // regular-weight brand as its prefix. Same hue keeps the name reading as a
+  // single unit — the weight step is the accent, not a colour change. Stripped
+  // of ANSI the row is still the contiguous "Agent AFK" (tests assert this).
+  const wordmark = palette.brand('Agent ') + palette.bold(palette.brand('AFK'));
   const versionChip =
     opts.version !== undefined ? palette.dim('  ' + formatVersion(opts.version)) : '';
   pushInfoRow(wordmark + versionChip);
+
+  // Row A2: dim tagline — first-run identity. The info stack is short (≈4–6
+  // rows) beside the 13-row sprite and is vertically centered below, so this
+  // line fills otherwise-empty whitespace rather than displacing anything.
+  // Truncated to infoMaxW like every info row, so it degrades gracefully on
+  // narrow terminals.
+  pushInfoRow(palette.dim(BANNER_TAGLINE));
 
   // Row B: model · mode.
   const modeBits: string[] = [];
