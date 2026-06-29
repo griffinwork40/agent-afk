@@ -372,6 +372,15 @@ export interface TerminalCompositorOptions {
    */
   captureMode?: boolean;
   /**
+   * Goblin-themed spinner (olive frames + goblin verb pool) while the agent
+   * works. Default `false` — the interactive surfaces resolve
+   * {@link goblinSpinnerEnabled} (opt-out via `AFK_GOBLIN_SPINNER=0`) and pass
+   * it through to the {@link SpinnerController}; tests/non-interactive
+   * constructions leave it off so the classic dim spinner is unchanged. Purely
+   * cosmetic — no timer or row-budget impact.
+   */
+  goblinSpinner?: boolean;
+  /**
    * Enable the blinking input caret (pulse on/off like a terminal cursor).
    * Default `false` — the caller that owns an interactive surface
    * (`InputSurface.armCompositor`) resolves

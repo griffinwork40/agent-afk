@@ -53,7 +53,7 @@ import { commitBlockAbove } from './commit-block.js';
 import { handleSubagentEvent, synthesizeAgentEntry } from './stream-renderer-subagent.js';
 import { OverlayComposer } from './overlay-composer.js';
 import { createStageTracker, type StageTrackerState } from '../commands/interactive/loop-stage.js';
-import { detectCaptureMode, detectReducedMotion } from './capture-mode.js';
+import { detectCaptureMode, detectReducedMotion, detectGoblinSpinner } from './capture-mode.js';
 import { makeDedupingLineWriter, type DedupingLineWriter } from './dedup-line-writer.js';
 import { registerOverlaySlots, checkPauseAnnotations, subscribeToResize } from './stream-renderer-lifecycle.js';
 import { makeOrchestratorCtx, makeSubagentCtx, resolveParentSyntheticId } from './stream-renderer-contexts.js';
@@ -413,6 +413,7 @@ export class StreamRenderer {
         formatInputBuffer: (segment) => colorizeInputBuffer(segment, slashRegistryView),
         ...(this.scrollRegion ? { scrollRegion: this.scrollRegion } : {}),
         captureMode: this.captureMode,
+        goblinSpinner: detectGoblinSpinner(),
       });
       await compositor.arm();
     }
