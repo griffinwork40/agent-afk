@@ -35,8 +35,10 @@ import type { SdkPluginConfig } from '../types/sdk-types.js';
  *
  * So every runtime VALUE a plugin needs is passed in: the registry trio +
  * `loadSkillPrompts` (identity-critical) plus `env`, `SubagentManager`,
- * `describeFailure`, `discoverPluginSkillBodies`, and the `paths` getters
- * (resolution-critical). Type-only imports are erased at build, so a plugin may
+ * `describeFailure`, `discoverPluginSkillBodies`, the session-facet substrate
+ * (`getOrDeriveFacet`, `listSessionIds`, `deriveSessionFacet`,
+ * `loadStoredSession`), and the `paths` getters (resolution-critical). Type-only
+ * imports are erased at build, so a plugin may
  * still `import type { … } from 'agent-afk'` via a build-time devDependency. The
  * shape is derived via `typeof import(...)` so the injected signatures cannot
  * drift from their source modules.
@@ -50,6 +52,10 @@ export type PluginApi = Pick<
   Pick<typeof import('../subagent.js'), 'SubagentManager'> &
   Pick<typeof import('../subagent/result.js'), 'describeFailure'> &
   Pick<typeof import('../tools/skill-bridge.js'), 'discoverPluginSkillBodies'> &
+  Pick<
+    typeof import('../facets/index.js'),
+    'getOrDeriveFacet' | 'listSessionIds' | 'deriveSessionFacet' | 'loadStoredSession'
+  > &
   Pick<
     typeof import('../../paths.js'),
     'getAgentFrameworkDir' | 'getSkillsDir' | 'getSessionsDir'

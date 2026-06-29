@@ -22,6 +22,12 @@ import { loadPluginEntrypoints } from '../plugins/load-entrypoints.js';
 import { extractPluginSkills } from '../plugins/tool-injector.js';
 import { SubagentManager } from '../subagent.js';
 import { describeFailure } from '../subagent/result.js';
+import {
+  deriveSessionFacet,
+  getOrDeriveFacet,
+  listSessionIds,
+  loadStoredSession,
+} from '../facets/index.js';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
 import {
   getAgentFrameworkDir,
@@ -276,7 +282,7 @@ export async function ensurePluginEntrypointsLoaded(): Promise<void> {
   // Inject the host's runtime API so a code-backed plugin's default-export
   // entrypoint (a) registers against THIS process's singleton registry, and
   // (b) can reach core runtime values (env, SubagentManager, describeFailure,
-  // discoverPluginSkillBodies, the paths getters) WITHOUT a bare
+  // discoverPluginSkillBodies, the session-facet substrate, the paths getters) WITHOUT a bare
   // `import 'agent-afk'` — which a marketplace-cloned plugin (no node_modules)
   // cannot resolve at all. See PluginApi for the full rationale.
   await loadPluginEntrypoints(scanAllPluginRoots(), {
@@ -292,6 +298,10 @@ export async function ensurePluginEntrypointsLoaded(): Promise<void> {
       getAgentFrameworkDir,
       getSkillsDir,
       getSessionsDir,
+      getOrDeriveFacet,
+      listSessionIds,
+      deriveSessionFacet,
+      loadStoredSession,
     },
   });
 }
