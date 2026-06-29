@@ -14,6 +14,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import type { Interface as ReadlineInterface } from 'readline';
 import { list as listSlashCommands } from './slash/registry.js';
+import { endsWithBackslashContinuation } from './input/enter-decision.js';
 
 export type Completer = (line: string) => [string[], string];
 
@@ -156,7 +157,7 @@ export async function readInput(opts: MultiLineReaderOptions): Promise<string> {
     const line: string = await new Promise((resolve) => {
       opts.rl.once('line', (input: string) => resolve(input));
     });
-    if (line.endsWith('\\')) {
+    if (endsWithBackslashContinuation(line)) {
       buffer += line.slice(0, -1) + '\n';
       prompt = cont;
       continue;
