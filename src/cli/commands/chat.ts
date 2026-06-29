@@ -13,6 +13,7 @@ import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/t
 import { unconfiguredSlotError } from '../../agent/session/model-slots.js';
 import { formatDuration, formatCost, formatTokens } from '../format-utils.js';
 import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getDefaultSubagentModel, resolveBaseSystemPrompt } from '../shared-helpers.js';
+import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
 import { loadConfig } from '../config.js';
 import { assembleSystemPrompt } from '../../agent/routing-directive.js';
 import { renderMarkdownToTerminal } from '../formatter.js';
@@ -24,9 +25,6 @@ import { ComposeExecutor } from '../../agent/tools/compose-executor.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory } from '../../agent/tools/nesting.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
-import { BUILTIN_TOOL_NAMES } from '../../agent/tools/schemas.js';
-import { MEMORY_TOOL_NAMES } from '../../agent/memory/index.js';
-import { AWARENESS_TOOL_NAMES } from '../../agent/awareness/index.js';
 import { createDefaultTraceWriter } from '../../agent/trace/factory.js';
 import { receiptPathsFor } from '../../agent/trace/receipt.js';
 import { setupWorktree } from './interactive/worktree.js';
@@ -610,15 +608,7 @@ export function registerChatCommand(program: Command): void {
         })
           ?? new AnthropicDirectProvider({
             permissions: {
-              allowedTools: [
-                ...BUILTIN_TOOL_NAMES,
-                ...MEMORY_TOOL_NAMES,
-                ...AWARENESS_TOOL_NAMES,
-                'agent',
-                'skill',
-                'compose',
-                ...mcpToolWireNames,
-              ],
+              allowedTools: topLevelSurfaceAllowedTools(mcpToolWireNames),
             },
             subagentExecutor,
             skillExecutor,

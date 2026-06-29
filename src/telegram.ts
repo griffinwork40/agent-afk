@@ -46,14 +46,12 @@ import { getEnvConfigPath } from './paths.js';
 import { assembleSystemPrompt, pendingBriefContext } from './agent/routing-directive.js';
 import { resolveModelId } from './agent/session/model-resolution.js';
 import { getDefaultSubagentModel, getMaxOutputTokens, getApiKeyForModel, loadSystemPrompt, composeSystemPrompt } from './cli/shared-helpers.js';
+import { topLevelSurfaceAllowedTools } from './agent/tools/top-level-allowlist.js';
 import type { AgentConfig, AgentModelInput } from './agent/types.js';
 import { SubagentManager } from './agent/subagent.js';
 import { SubagentExecutor } from './agent/tools/subagent-executor.js';
 import { SkillExecutor } from './agent/tools/skill-executor.js';
 import { ComposeExecutor } from './agent/tools/compose-executor.js';
-import { BUILTIN_TOOL_NAMES } from './agent/tools/schemas.js';
-import { MEMORY_TOOL_NAMES } from './agent/memory/index.js';
-import { AWARENESS_TOOL_NAMES } from './agent/awareness/index.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory } from './agent/tools/nesting.js';
 import { attachMcpCleanup, loadTelegramMcpManager } from './telegram/mcp-session.js';
 
@@ -340,15 +338,7 @@ async function main() {
           depth: 0,
         });
 
-        const allowedTools = [
-          ...BUILTIN_TOOL_NAMES,
-          ...MEMORY_TOOL_NAMES,
-          ...AWARENESS_TOOL_NAMES,
-          'agent',
-          'skill',
-          'compose',
-          ...(mcpManager?.getMcpToolWireNames() ?? []),
-        ];
+        const allowedTools = topLevelSurfaceAllowedTools(mcpManager?.getMcpToolWireNames() ?? []);
         directProvider = new AnthropicDirectProvider({
           permissions: { allowedTools },
           subagentExecutor,
