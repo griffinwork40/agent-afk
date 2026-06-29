@@ -369,6 +369,9 @@ describe('SyntaxError snippet redaction in log output (issue #251)', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
 describe('removePending', () => {
   it('returns false on an empty queue', () => {
     expect(removePending(tmpDir, 'q-0000000000000-aabbcc')).toBe(false);
