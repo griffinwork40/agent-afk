@@ -63,8 +63,10 @@ export interface CommitMode {
 }
 
 /**
- * Decide how a `commitAbove` block is routed: the single-copy fits path, the
- * band-hold path, or (by returning neither flag) the legacy overflow archive.
+ * Decide how a `commitAbove` block is routed: the single-copy fits path or the
+ * band-hold path. The legacy overflow archive (returning neither flag) is now
+ * only reached when `maxBandModel === 0` (degenerate 1-row terminal with a
+ * full-height anchor), which is effectively unreachable in practice.
  *
  * `fitsAboveFrame` — the block fits `[anchorFloor, frameTop)`, so Phase 1
  * scrolls only the band overflow and Phase 3 paints the one copy. Gated on
@@ -73,10 +75,9 @@ export interface CommitMode {
  * the `frameTop` fallback would overestimate the above-frame room — the fits
  * path genuinely needs a known frame top.
  *
- * `useBandHold` — keep a block that overflows the CURRENT (tall) frame but
- * fits the COLLAPSED screen in the band model rather than archiving it to
+ * `useBandHold` — keep a block in the band model rather than archiving it to
  * scrollback + painting a truncated on-screen copy (the legacy overflow path's
- * duplicate header + orphan divider + blank "void"). Three ways to enter:
+ * duplicate header + orphan divider + blank "void"). Four ways to enter:
  *
  *  • `overflowRun.length <= maxBandModel && !fitsAboveFrame` — the merged run
  *    still fits a collapsed screen but not the current room. Band-hold routing
@@ -111,10 +112,21 @@ export interface CommitMode {
  *    `room` past the band length while pending rows remained, the proxy read
  *    false and dropped them (the two-block follow-up deferred from PR #255).
  *
- * A block taller than the collapsed screen with no pending rows
- * (`overflowRun.length > maxBandModel` AND `textLines.length > maxBandModel`,
- * `!overflowHasPending`) takes neither flag and falls through to the legacy
- * overflow archive (recoverable).
+ *  • `!fitsAboveFrame && maxBandModel > 0` (the over-tall case) — a block
+ *    taller than the collapsed screen is ALSO routed through band-hold. The
+ *    commit-time `maxBandModel` estimate can exceed the true collapse paint
+ *    capacity `maxFit` (= `targetBottom - floor + 1` in
+ *    `repositionCommittedBand`), because `maxFit` accounts for the REAL
+ *    collapsed frame height (input + gap + spinner + status rows) while
+ *    `maxBandModel` measures against a 1-row minimal frame. The excess
+ *    ("pending overflow") would be silently dropped if left as pure pending:
+ *    `repositionCommittedBand` can only paint `fit` rows and the remainder
+ *    is neither painted nor archived. `preserveRowsBeforeFrameRender` handles
+ *    this: on collapse (desiredTopRow >= prevTopRow, overlay settling lower)
+ *    it detects the pending overflow, paints the full model top-aligned, then
+ *    `evictRowsToScrollback` moves the oldest `overflow = bandLen - room` rows
+ *    into scrollback as REAL content before the re-pin — so every committed
+ *    row lands in scrollback or the viewport, never dropped.
  *
  * `overflowRun` merges the prior band into the new lines only when verifiably
  * contiguous with the frame top (`overflowPriorContiguous`) — otherwise a
@@ -145,10 +157,17 @@ export function decideCommitMode(input: CommitModeInput): CommitMode {
   const overflowRun = overflowPriorContiguous ? [...committedBand, ...textLines] : textLines;
   const overflowHasPending =
     overflowPriorContiguous && committedBand.length > committedBandPaintedRows;
-  const useBandHold =
-    overflowHasPending ||
-    (!fitsAboveFrame &&
-      (overflowRun.length <= maxBandModel || textLines.length <= maxBandModel));
+  // Invariant (band-hold coverage): route ALL !fitsAboveFrame cases through
+  // band-hold when maxBandModel > 0. The over-tall case (overflowRun.length >
+  // maxBandModel) is now included — Phase 1 archives the genuine overflow
+  // (oldest rows beyond maxBandModel) to scrollback as REAL content, and
+  // preserveRowsBeforeFrameRender evicts the pending-band excess at collapse
+  // time so every committed row ends up in scrollback or the viewport. Without
+  // this clause the legacy overflow path archived the whole block but left
+  // committedBand empty, so repositionCommittedBand had nothing to re-pin when
+  // the overlay collapsed — the freed viewport rows stayed blank (the
+  // "end-of-turn viewport void" bug, terminal-compositor.endturn-overflow-gap).
+  const useBandHold = overflowHasPending || (!fitsAboveFrame && maxBandModel > 0);
 
   return {
     fitsAboveFrame,

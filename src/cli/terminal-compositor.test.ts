@@ -854,50 +854,46 @@ describe('TerminalCompositor', () => {
       expect(outWith).toMatch(/\x1b\[22;1H\x1b\[2KB/);
     });
 
-    it('double-newline-terminated commit paints ALL rows including the top border (no trailing-empty slot waste)', async () => {
-      // Regression (table-cutoff): commitBlock always passes `trimmed + '\n\n'`
-      // to commitAbove. After stripping one trailing '\n', `stripped` ends with
-      // '\n', so `stripped.split('\n')` produces a trailing '' — making
-      // textLines.length = lineCount+1 (measure() via wrapToPhysicalLines pops
-      // trailing '' before counting). In the exact-fit scenario (block height
-      // === aboveFrameRoom), the tail-slice `textLines.slice(textLines.length -
-      // newPainted)` starts at index 1 (not 0), silently dropping the FIRST row
-      // (e.g. a table's top border) and painting the trailing '' into the last
-      // screen slot instead. Fix: pop trailing '' from textLines before Phase 3,
-      // mirroring the wrapToPhysicalLines normalization, with a length>1 guard so
-      // commitAbove('') still paints a blank separator row.
+    it('double-newline-terminated commit preserves ALL rows with no content loss (top row archives to scrollback)', async () => {
+      // Updated for the over-tall band-hold fix (commit-mode.ts): the separator-
+      // inclusive bandLineCount (23) exceeds maxBandModel (22) for this exact-fit
+      // scenario (rows=24, idle frame=1 row, maxBandModel=22), so useBandHold=true.
+      // Phase 1 archives LINE_00 (the 1-row genuineOverflow) to scrollback via the
+      // CUP-write-then-scroll mechanism. Phase 3 band-hold paints LINE_01..LINE_21 +
+      // separator at viewport rows 1..22. No content is lost: LINE_00 is in
+      // scrollback and LINE_01..LINE_21 are in the viewport (the end-to-end
+      // no-loss invariant is pinned against a real @xterm/headless buffer by
+      // terminal-compositor.band-hold-perline-gap.repro.test.ts and
+      // terminal-compositor.endturn-overflow-gap.repro.test.ts).
       //
-      // Scenario: 22-row frame is used (rows=24, idle frame=1 row, newTopRow=23,
-      // maxRun=22). We commit a block with exactly 22 real content lines plus the
-      // mandatory commitBlock '\n\n' terminator → `'\n\n'`-terminated, 22 content
-      // lines + trailing '' in textLines (before fix). With fix the top-border
-      // row (LINE_00) is painted at the topmost slot (row 1).
+      // Pre-fix (d86f2a2 regression guard): the original test checked LINE_00 at row
+      // 1 in the viewport — that assertion locked behavior the over-tall fix
+      // legitimately changes. The invariant that MATTERS is "no row dropped", not
+      // "every row in viewport when a 23-element band overflows maxBandModel=22".
       const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
       await c.arm();
       writes.clear();
       // Build 22-line block. commitBlock calls commitAbove(trimmed + '\n\n');
-      // we simulate that by appending '\n\n' ourselves. After the single-'\n'
-      // strip in commitAbove: stripped = 'LINE_00\n…\nLINE_21\n' → split produces
-      // ['LINE_00',…,'LINE_21',''] (23 elements, 22 real).
+      // we simulate that by appending '\n\n' ourselves.
       const lines = Array.from({ length: 22 }, (_, i) => `LINE_${String(i).padStart(2, '0')}`);
       c.commitAbove(lines.join('\n') + '\n\n');
       const out = writes.all();
-      // All 22 lines must appear in Phase 3 CUP writes (rows 1–22).
-      // The critical invariant: LINE_00 (top border / first row) must be present.
-      expect(out).toContain('LINE_00');
-      // LINE_21 (last row) must land immediately above the frame (row 22).
-      expect(out).toMatch(/\x1b\[22;1H\x1b\[2KLINE_21/);
-      // LINE_00 (first row) must land at row 1 (the topmost available slot).
-      expect(out).toMatch(/\x1b\[1;1H\x1b\[2KLINE_00/);
-      // The blank trailing '' must NOT appear as a CUP-painted row occupying
-      // one of the 22 above-frame slots (it would displace LINE_00 in the
-      // unfixed code). Verify each LINE_NN is at the expected row (1..22).
+      // The critical invariant: every content row must appear SOMEWHERE in the
+      // output — either in the Phase 1 CUP-write (scrollback archive) or in
+      // the Phase 3 band-hold viewport paint. No row is silently dropped.
       for (let i = 0; i < 22; i++) {
-        const row = i + 1;
         const label = `LINE_${String(i).padStart(2, '0')}`;
-        const rowPattern = new RegExp(`\\x1b\\[${row};1H\\x1b\\[2K${label}`);
-        expect(out, `${label} must be at row ${row}`).toMatch(rowPattern);
+        expect(out, `${label} must appear in output (not dropped)`).toContain(label);
       }
+      // LINE_21 (last row) must be CUP-painted immediately above the frame (row 21
+      // in the 22-row model — the model is [LINE_01..LINE_21, ''], so LINE_21 is at
+      // model index 20, painted at row 21).
+      expect(out).toMatch(/\x1b\[21;1H\x1b\[2KLINE_21/);
+      // LINE_01 (first retained viewport row) must be at row 1 (top of viewport).
+      expect(out).toMatch(/\x1b\[1;1H\x1b\[2KLINE_01/);
+      // LINE_00 (archived to scrollback via Phase 1) must appear in the output
+      // as a CUP-write at anchorFloor=1 before the scroll.
+      expect(out).toMatch(/\x1b\[1;1H\x1b\[2KLINE_00/);
     });
 
     it('empty commit (compositor.commitAbove("")) places a blank row above the frame', async () => {
@@ -1331,10 +1327,14 @@ describe('TerminalCompositor', () => {
       // accumulation. With a 3-line commit, idle 1-line frame
       // (newTopRow=23), and anchorRow=22, the pre-fix textStartRow =
       // max(1, 20) = 20, which is INSIDE the pre-arm banner zone (rows
-      // 1..21). The fix floors at anchorRow=22, so textStartRow =
-      // max(22, 20) = 22, and the loop break-condition `row >=
-      // newTopRow` skips writing entirely (the text is already in
-      // scrollback via Phase 1).
+      // 1..21). The fix floors at anchorRow=22.
+      //
+      // Post-fix (over-tall band-hold): maxBandModel = overflowTargetBottom -
+      // anchorFloor = 23 - 22 = 1. The 3-line block exceeds maxBandModel, so
+      // useBandHold=true. Phase 1 archives the genuineOverflow (rows L1, L2) to
+      // scrollback via CUP-write at anchorFloor=22 + scroll. Phase 3 band-hold
+      // paints the capped model (last 1 row = [L3]) at row 22 (targetBottom).
+      // The core invariant — no banner-row (rows 1..21) CUP write — is preserved.
       stdout.rows = 24;
       const c = new TerminalCompositor({
         stdout, stdin, onCancel: vi.fn(), promptText: '> ',
@@ -1345,16 +1345,21 @@ describe('TerminalCompositor', () => {
       c.commitAbove('L1\nL2\nL3');
       const out = writes.all();
 
-      // Phase 3 must NOT write at rows 20-21 (banner zone). Pre-fix this
-      // assertion fails — `\x1b[20;1H\x1b[2KL1` lands in pre-arm content.
+      // Phase 3 must NOT write at rows 20-21 (banner zone).
       expect(out).not.toMatch(/\x1b\[20;1H\x1b\[2KL1/);
       expect(out).not.toMatch(/\x1b\[21;1H\x1b\[2KL2/);
-      // Phase 1 still pushed the text into scrollback (preserved for
-      // the user via terminal scroll-up).
+      // All three lines must appear somewhere in the output (no content loss).
+      // L1 and L2 are archived to scrollback via band-hold Phase 1 (CUP at row 22);
+      // L3 is painted in the viewport via Phase 3 band-hold (model=[L3] at row 22).
       expect(out).toContain('L1');
       expect(out).toContain('L2');
       expect(out).toContain('L3');
-      expect(out).toContain('\x1b[24;1H\n\n\n');
+      // Band-hold Phase 1 writes at anchorFloor (row 22) then scrolls:
+      // the oldest genuineOverflow rows (L1, L2) are archived to scrollback.
+      // The old legacy-overflow assertion '\x1b[24;1H\n\n\n' (3 newlines) no
+      // longer applies — band-hold archives 2 rows (2 newlines), not 3.
+      expect(out).toContain('\x1b[24;1H\n\n');
+      expect(out).not.toContain('\x1b[24;1H\n\n\n');
     });
   });
 
