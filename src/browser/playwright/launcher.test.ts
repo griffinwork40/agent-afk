@@ -364,6 +364,36 @@ describe('BrowserLauncher', () => {
       expect(ctx.newPage).not.toHaveBeenCalled();
       expect(ctx.close).toHaveBeenCalledTimes(1);
     });
+
+    it('returns httpStatus:null when page.goto() resolves to null', async () => {
+      // Branch: launcher.ts ~L342 — `resp !== null ? resp.status() : null`.
+      // Playwright's goto() can return null when no HTTP response is produced
+      // (e.g. about:blank, data: URIs, or certain navigation modes). We mock
+      // goto to resolve to null and assert the result carries httpStatus:null.
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const ctx = makeStubContext();
+      currentStubBrowser.newContext.mockResolvedValueOnce(ctx);
+      ctx.newPage.mockImplementationOnce(async () => {
+        const p = makeStubPage();
+        // goto resolves to null — no HTTP response object.
+        p.goto.mockResolvedValueOnce(null);
+        p.content.mockResolvedValueOnce('<html><body>no-response page</body></html>');
+        p.url.mockReturnValue('about:blank');
+        ctx._pages.push(p);
+        return p;
+      });
+
+      const out = await launcher.renderHtml('about:blank', {
+        timeoutMs: 5000,
+        waitUntil: 'load',
+      });
+
+      expect(out.httpStatus).toBeNull();
+      expect(out.html).toBe('<html><body>no-response page</body></html>');
+      expect(out.finalUrl).toBe('about:blank');
+      // Context must still be torn down.
+      expect(ctx.close).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('getPage', () => {

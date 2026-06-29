@@ -477,7 +477,7 @@ describe('renderSubagentFooter (bounded sub-agent progress)', () => {
   });
 });
 
-describe('inactivity watchdog (timeout → interrupt)', () => {
+describe('provider-turn interrupt on incomplete exit (stale-buffer guard)', () => {
   it('throws StreamTimeoutError and interrupts the still-running turn on total silence', async () => {
     vi.useFakeTimers();
     try {
@@ -510,14 +510,46 @@ describe('inactivity watchdog (timeout → interrupt)', () => {
     }
   }, 15_000);
 
-  it('does NOT interrupt on a provider error event — interrupt is timeout-only', async () => {
+  it('does NOT interrupt on a provider error EVENT — the turn already ended (terminal event seen)', async () => {
     const { ctx } = makeCtx();
     const session = makeSession(async function* () {
       yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'partial' } };
       yield { type: 'error' as const, error: new Error('mid-stream boom') };
     });
     await expect(streamResponse(ctx, session, 'go')).rejects.toThrow('mid-stream boom');
-    // A real provider error already ended the turn; interrupting would be wrong.
+    // An 'error' EVENT is terminal: the provider emitted it and parked itself at
+    // the next-prompt boundary, so there is nothing to interrupt. (Contrast with
+    // a RAW throw / non-terminal exit below, which DOES require interrupt().)
+    expect((session as { interrupt: ReturnType<typeof vi.fn> }).interrupt).not.toHaveBeenCalled();
+  });
+
+  it('interrupts on a non-terminal early exit (raw throw, no done/error event)', async () => {
+    // The leak the fix closes: the consumer exits WITHOUT a terminal event
+    // (here a raw throw, standing in for a Telegram render exception or other
+    // mid-stream failure). The shared provider iterator is still live, so
+    // without interrupt() its buffered events would be drained by the user's
+    // NEXT message — the "send a '.' to recover the lost result" bug. Previously
+    // this path was NOT covered because interrupt() was gated on `timedOut` alone.
+    const { ctx } = makeCtx();
+    const session = makeSession(async function* () {
+      yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'partial' } };
+      throw new Error('render boom'); // raw throw — NOT an 'error' OutputEvent
+    });
+    await expect(streamResponse(ctx, session, 'go')).rejects.toThrow('render boom');
+    expect((session as { interrupt: ReturnType<typeof vi.fn> }).interrupt).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT interrupt on a clean turn that reaches done', async () => {
+    // Happy path: a terminal done event was seen, so interrupt() must be a
+    // no-op here — firing it would abort an already-completed turn (and, before
+    // iter.return() runs, currentState is still 'streaming', so the abort would
+    // NOT be swallowed). The gate must therefore key off the terminal event.
+    const { ctx } = makeCtx();
+    const session = makeSession(async function* () {
+      yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'all good' } };
+      yield { type: 'done' as const, metadata: undefined };
+    });
+    await streamResponse(ctx, session, 'go');
     expect((session as { interrupt: ReturnType<typeof vi.fn> }).interrupt).not.toHaveBeenCalled();
   });
 });

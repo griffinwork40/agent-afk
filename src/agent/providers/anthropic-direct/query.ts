@@ -54,7 +54,7 @@ import {
 } from './cache-policy.js';
 import { buildPlanModeAddendumBlock } from './plan-mode-addendum.js';
 import { buildAfkModeAddendumBlock } from './afk-mode-addendum.js';
-import { collectSkillEntries } from '../../tools/skill-bridge.js';
+import { collectSupportedCommands } from '../shared/supported-commands.js';
 import { contextLimitFor } from '../../model-limits.js';
 import { resolveModelId } from '../../session/model-resolution.js';
 import type { ToolDispatcher } from './tool-dispatcher.js';
@@ -70,6 +70,8 @@ import { AbortCoordinator } from './query/abort-coordinator.js';
 import { RetryLayer } from './query/retry-layer.js';
 import { compactHistory } from './query/compact-handler.js';
 import { contextWindowTokensUsed, shouldAutoCompact, buildContextUsageFields } from './query/auto-compact.js';
+import type { HookRegistry } from '../../hooks.js';
+import { HookBlockedError } from '../../../utils/errors.js';
 
 /**
  * Small static starter list returned by `supportedModels()`. The provider
@@ -176,6 +178,14 @@ export interface AnthropicDirectQueryOptions {
    * undefined means auto-compaction is disabled (the default).
    */
   autoCompactThreshold?: number;
+  /**
+   * Hook registry forwarded from the session harness. When present, the
+   * auto-compact path dispatches `PreCompact(trigger:'auto')` before calling
+   * `compact()`, matching the manual-compact paths in the REPL and Telegram
+   * surfaces. A `block` decision (HookBlockedError) skips compaction for that
+   * turn without surfacing an error to the caller.
+   */
+  hookRegistry?: HookRegistry;
 }
 
 /**
@@ -236,6 +246,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private readonly cwdDependentsFactory?: (cwd: string) => { userSystem: string; dispatcher: ToolDispatcher };
   private readonly onPermissionMode?: (mode: string) => void;
   private readonly mcpManager?: import('../../mcp/index.js').McpManager;
+  private readonly hookRegistry?: HookRegistry;
 
   constructor(opts: AnthropicDirectQueryOptions) {
     this.initSessionId = opts.sessionId ?? randomUUID();
@@ -250,6 +261,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
     this.cwdDependentsFactory = opts.cwdDependentsFactory;
     this.onPermissionMode = opts.onPermissionMode;
     this.mcpManager = opts.mcpManager;
+    if (opts.hookRegistry !== undefined) this.hookRegistry = opts.hookRegistry;
     this.retry = new RetryLayer({
       client: opts.client,
       authMode: opts.authMode,
@@ -466,10 +478,29 @@ export class AnthropicDirectQuery implements ProviderQuery {
               // boundary here (generator suspended at promptIterator.next()
               // on the next iteration). Awaiting inline keeps the ordering
               // deterministic and avoids a dangling promise race.
-              // TODO(PreCompact): auto-compact does not yet dispatch PreCompact(trigger:'auto').
-              // hookRegistry is not threaded into the provider-internal compact path.
-              // Tracked as a follow-up to feat/pre-compact-hook; remove this comment when wired.
-              await this.compact();
+              //
+              // Invariant: dispatch PreCompact(trigger:'auto') BEFORE compact()
+              // so registered hooks can block or observe the operation, mirroring
+              // the manual-compact paths in REPL (/compact) and Telegram. A block
+              // decision throws HookBlockedError — caught here to skip compaction
+              // for this turn without propagating to the outer error handler.
+              try {
+                if (this.hookRegistry) {
+                  await this.hookRegistry.dispatch({
+                    event: 'PreCompact',
+                    sessionId: this.initSessionId,
+                    trigger: 'auto',
+                  });
+                }
+                await this.compact();
+              } catch (compactErr) {
+                if (compactErr instanceof HookBlockedError) {
+                  // Hook blocked auto-compaction — skip this turn's compaction
+                  // without surfacing an error; the session continues normally.
+                } else {
+                  throw compactErr;
+                }
+              }
             }
           }
         }
@@ -627,30 +658,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
   }
 
   async supportedCommands(): Promise<ProviderCommandInfo[]> {
-    // Surface every skill discovered by the skill-bridge — built-in TS
-    // skills, user-scope `~/.afk/skills/`, and plugin SKILL.md files under
-    // `~/.afk/plugins/` — so the REPL slash registry can register a
-    // passthrough `/<skill>` for each one. Without this, `/reload-plugins`
-    // reports 0 and typing `/mint` does not autocomplete.
-    //
-    // The model already learns about these skills via the system-prompt
-    // manifest (built from `collectSkillEntries()` in
-    // `AnthropicDirectProvider.query()`); reusing the same collector here
-    // keeps the slash list and the manifest in lockstep.
-    try {
-      const entries = collectSkillEntries();
-      return entries.map((e) => {
-        const info: ProviderCommandInfo = {
-          name: e.name,
-          description: e.description,
-        };
-        if (e.argumentHint) info.argumentHint = e.argumentHint;
-        return info;
-      });
-    } catch {
-      // Discovery is best-effort — the REPL stays usable without it.
-      return [];
-    }
+    return collectSupportedCommands();
   }
 
   async supportedModels(): Promise<ProviderModelInfo[]> {

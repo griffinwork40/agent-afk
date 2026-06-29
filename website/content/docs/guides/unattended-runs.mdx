@@ -152,6 +152,43 @@ afk schedule add \
   --notify always     # always | failure | never
 ```
 
+## Pull queue (`afk queue`)
+
+`afk queue` lets you enqueue tasks that a daemon running in `--trigger pull` mode will drain.
+Tasks are persisted as JSON files in `~/.afk/state/queue/` and consumed one-by-one on the
+daemon's poll interval (30 seconds).
+
+### Subcommands
+
+| Subcommand | Description |
+|---|---|
+| `afk queue add <command>` | Enqueue a command for the pull-trigger daemon to execute |
+| `afk queue list` | List all pending queued tasks in FIFO order |
+| `afk queue remove <id>` | Remove a pending task by id |
+| `afk queue clear` | Remove all pending tasks from the queue |
+
+`add` accepts one option:
+
+| Flag | Description |
+|---|---|
+| `--notify-on <mode>` | When to send a Telegram notification: `failure` \| `always` \| `never` |
+
+### Typical workflow
+
+```bash
+# 1. Start the daemon in pull mode (no cron needed)
+afk daemon --trigger pull
+
+# 2. Enqueue tasks from another terminal (or a script) while the daemon runs
+afk queue add "/forge-friction --auto" --notify-on failure
+afk queue add "/review --auto" --notify-on always
+
+# Tasks are picked up and executed in order on the next poll (≤30s)
+```
+
+The daemon prints `✔ Daemon in pull mode` on start and processes each queued file in
+sequence-number order, deleting it after the task completes.
+
 ## Putting it together
 
 A complete setup for a nightly unattended run:

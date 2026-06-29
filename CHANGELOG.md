@@ -11,6 +11,113 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.10.1] - 2026-06-29
+
+### Added
+- inject host runtime API into plugin entrypoints (fixes singleton trap) (#324) (4cd187b)
+
+### Fixed
+- wire grant manager for OpenAI-compatible providers in REPL bootstrap (#316) (1648120)
+
+### Changed
+- extract shared helpers into providers/shared (#329) (4d557aa)
+
+## [5.10.0] - 2026-06-29
+
+### Added
+- trace skill-forked subagent tool denials + receipt refusal tally (#333) (6cbcee6)
+
+## [5.9.1] - 2026-06-29
+
+### Fixed
+- stop JSON.parse error snippets leaking secrets in poison logs (#318) (0290797)
+
+## [5.9.0] - 2026-06-29
+
+### Added
+- emit PreCompact hook on auto-compaction (#328) (eba1ef9)
+
+### Changed
+- bring Fumadocs site up to date with code (#331) (729e986)
+
+## [5.8.1] - 2026-06-29
+
+### Fixed
+- honor trailing-backslash newline escape on the live TTY path (#325) (9ffc326)
+- never emit improperly-nested HTML from interleaved emphasis (#321) (b0c1233)
+- wrap schema migrations in transactions to close torn-state window (#319) (74b5c41)
+
+## [5.8.0] - 2026-06-29
+
+### Added
+- add list/remove/clear subcommands + document improve & farm in README (#327) (cfea104)
+
+### Changed
+- add dependency-vulnerability audit gate (#326) (6a1f1d7)
+
+## [5.7.1] - 2026-06-28
+
+### Fixed
+- interrupt provider turn on ANY incomplete stream exit (#320) (cd45b61)
+
+## [5.7.0] - 2026-06-28
+
+### Added
+- wire canUseTool into the dispatcher — Agent SDK parity Dim 8 (increment 1) (#304) (f0ee88b)
+
+## [5.6.1] - 2026-06-28
+
+### Fixed
+- restart launchd services + notify on stale manual bot after install (#322) (c40729a)
+
+## [5.6.0] - 2026-06-28
+
+### Added
+- restore pre-plan permission mode on exit (#306) (1cbf61b)
+
+### Changed
+- bump typescript from 5.9.3 to 6.0.3 in /website (#315) (758303b)
+- migrate docs site to Next.js 16 + React 19 + fumadocs 16 (#317) (56dc929)
+
+## [5.5.1] - 2026-06-28
+
+### Fixed
+- don't silently exit plan mode on /afk off (#311) (55864c8)
+
+## [5.5.0] - 2026-06-28
+
+### Added
+- load plugin entrypoints on chat/daemon/telegram surfaces (B4) (#308) (004ec25)
+- add optional baseDir to loadSkillPrompts for out-of-tree plugins (#307) (77a07d3)
+
+## [5.4.0] - 2026-06-28
+
+### Added
+- export framework skill/facet API for out-of-tree plugins (#305) (8905788)
+
+## [5.3.2] - 2026-06-28
+
+### Fixed
+- redact filename in pull-queue quarantine log lines (#310) (213d20f)
+
+### Changed
+- cover pull-queue poison fallback + collision-retry branches (#313) (4e57cdc)
+- backfill 4 uncovered scraper/render branches (#312) (fb6c480)
+- add Dependabot coverage for website/ npm deps (#309) (f52a161)
+
+## [5.3.1] - 2026-06-28
+
+### Fixed
+- surface most-recent tool-groups instead of burying them in overflow (#303) (93bb246)
+
+## [5.3.0] - 2026-06-28
+
+### Added
+- high-risk AFK gate routes approve/deny to the phone (Phase 2 v1.5) (#294) (9e94126)
+
+### Changed
+- silent-model-loop debuggability issue + recommendations (#302) (b458191)
+
 ## [5.2.0] - 2026-06-28
 
 ### Added

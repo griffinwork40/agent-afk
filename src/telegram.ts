@@ -380,7 +380,7 @@ async function main() {
           sharedMemoryStore,
           undefined,
           loadHooksConfig(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
-          { cwd: sessionCwd !== undefined && sessionCwd.length > 0 ? sessionCwd : undefined },
+          { cwd: sessionCwd !== undefined && sessionCwd.length > 0 ? sessionCwd : undefined, ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}) },
           () => sessionCwd,
         );
         const session = attachMcpCleanup(constructTelegramSession({
@@ -438,7 +438,7 @@ async function main() {
         sharedMemoryStore,
         undefined,
         loadHooksConfig(codexSessionCwd !== undefined && codexSessionCwd.length > 0 ? { cwd: codexSessionCwd } : {}),
-        { cwd: codexSessionCwd !== undefined && codexSessionCwd.length > 0 ? codexSessionCwd : undefined },
+        { cwd: codexSessionCwd !== undefined && codexSessionCwd.length > 0 ? codexSessionCwd : undefined, ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}) },
         () => codexSessionCwd,
       );
       const session = attachMcpCleanup(constructTelegramSession({

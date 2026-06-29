@@ -15,7 +15,10 @@
  * @module skills/_lib/prompt-loader.test
  */
 
-import { describe, it, expect } from 'vitest';
+import { afterAll, beforeAll, describe, it, expect } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { loadSkillPrompts } from './prompt-loader.js';
 
 describe('P3 — loadSkillPrompts path-traversal guard', () => {
@@ -72,5 +75,57 @@ describe('P3 — loadSkillPrompts path-traversal guard', () => {
     } catch (err) {
       expect((err as Error).message).not.toMatch(/illegal path component/i);
     }
+  });
+});
+
+describe('loadSkillPrompts — baseDir override (out-of-tree plugin support)', () => {
+  // Simulate a plugin's own skills root: <root>/demo/prompts/*.md
+  let root: string;
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), 'afk-prompt-loader-'));
+    const promptsDir = join(root, 'demo', 'prompts');
+    mkdirSync(promptsDir, { recursive: true });
+    writeFileSync(join(promptsDir, 'system.md'), 'system body');
+    writeFileSync(join(promptsDir, 'agent.md'), 'agent body');
+    writeFileSync(join(promptsDir, 'ignored.txt'), 'not markdown');
+    // A sibling skill dir with no prompts/ subdir, to exercise that error path.
+    mkdirSync(join(root, 'no-prompts'), { recursive: true });
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('loads prompts from the supplied baseDir, not the in-tree root', () => {
+    const prompts = loadSkillPrompts('demo', root);
+    expect(prompts['system.md']).toBe('system body');
+    expect(prompts['agent.md']).toBe('agent body');
+  });
+
+  it('returns only .md files, keyed in alphabetical order', () => {
+    const prompts = loadSkillPrompts('demo', root);
+    expect(Object.keys(prompts)).toEqual(['agent.md', 'system.md']);
+    expect(prompts).not.toHaveProperty('ignored.txt');
+  });
+
+  it('lists available skills from baseDir when the skill is unknown', () => {
+    let msg = '';
+    try {
+      loadSkillPrompts('missing', root);
+    } catch (err) {
+      msg = (err as Error).message;
+    }
+    expect(msg).toMatch(/Unknown skill: missing/);
+    // The available list is derived from baseDir, surfacing the fixture skills.
+    expect(msg).toMatch(/Available:.*demo/);
+  });
+
+  it('throws the no-prompts error for a baseDir skill missing prompts/', () => {
+    expect(() => loadSkillPrompts('no-prompts', root)).toThrow(/has no prompts\/ dir/);
+  });
+
+  it('still enforces the path-traversal guard even with a baseDir', () => {
+    expect(() => loadSkillPrompts('../escape', root)).toThrow(/illegal path component/i);
   });
 });

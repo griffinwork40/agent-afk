@@ -1666,6 +1666,22 @@ describe('TerminalCompositor', () => {
       expect(c.getBuffer()).toEqual({ text: 'firstz\nsecond', queued: false });
     });
 
+    it('trailing backslash + Enter inserts a newline instead of submitting (regression: \\+Enter)', async () => {
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      // Type 'foo\' then press PLAIN Enter. A trailing backslash is the
+      // documented soft-newline escape for terminals that don't report
+      // shift-state on Enter. Before the fix this branch lived only in
+      // reader.ts (the non-TTY/legacy path), never in the compositor's
+      // handleEnter — so in the live REPL plain Enter submitted the raw
+      // 'foo\' instead of continuing onto a new line.
+      for (const ch of 'foo') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      stdin.emit('keypress', '\\', { name: '\\', sequence: '\\' });
+      stdin.emit('keypress', undefined, { name: 'return' });
+      // The trailing '\' is replaced by '\n'; nothing is submitted or queued.
+      expect(c.getBuffer()).toEqual({ text: 'foo\n', queued: false });
+    });
+
     // ── Soft-stop drain (regression: ESC → perpetual input-lag-of-one) ──────
     //
     // Reported bug: after ESC (soft-stop), the user's next typed+Enter'd

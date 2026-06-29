@@ -21,6 +21,7 @@ import { SubagentManager } from '../../agent/subagent.js';
 import { SubagentExecutor } from '../../agent/tools/subagent-executor.js';
 import { SkillExecutor } from '../../agent/tools/skill-executor.js';
 import { ComposeExecutor } from '../../agent/tools/compose-executor.js';
+import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory } from '../../agent/tools/nesting.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import { BUILTIN_TOOL_NAMES } from '../../agent/tools/schemas.js';
@@ -628,6 +629,13 @@ export function registerChatCommand(program: Command): void {
           });
 
 
+        // Import any plugin JS entrypoints (manifest `main`) before constructing
+        // the session: the skill manifest is assembled synchronously in the
+        // AgentSession constructor, so a plugin's registerSkill() side-effects
+        // must already have run for its code-backed skills to appear. Idempotent
+        // + non-fatal; no-op without plugins.
+        await ensurePluginEntrypointsLoaded();
+
         // Witness layer: `trace` was opened above (before executors) so
         // SkillExecutor could be wired with traceWriter; reuse it here for
         // the AgentSession.
@@ -662,7 +670,7 @@ export function registerChatCommand(program: Command): void {
               : {}),
           hookRegistry: createDefaultHookRegistry((info) => {
             console.log(formatSubagentCompletion(info));
-          }, 'cli', sharedMemoryStore, undefined, loadHooksConfig({ cwd: worktreeCwd }), { cwd: worktreeCwd }).registry,
+          }, 'cli', sharedMemoryStore, undefined, loadHooksConfig({ cwd: worktreeCwd }), { cwd: worktreeCwd, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}) }).registry,
           ...(systemPrompt !== undefined ? { systemPrompt } : {}),
           ...(systemPromptSource !== undefined ? { systemPromptSource } : {}),
           ...(thinking !== undefined ? { thinking } : {}),

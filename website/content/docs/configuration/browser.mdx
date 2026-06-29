@@ -127,6 +127,76 @@ The witness layer redacts known credential formats (AWS keys, OpenAI bearer
 tokens, GitHub PATs, Slack tokens, JWTs, `password=` form values) before
 persisting. The page receives the real value; only the trace file is redacted.
 
+## Driving your real Chrome (`afk browser`)
+
+The native `browser_*` tools use Playwright against an isolated Chromium instance — they cannot attach to your real, logged-in Chrome profile. The `afk browser` command group wires Google's [`chrome-devtools-mcp`](https://github.com/ChromeDevTools/chrome-devtools-mcp) into agent-afk's MCP client so the agent can drive the browser you're already signed into.
+
+### Why not Playwright?
+
+Chrome 136+ refuses `--remote-debugging-port` on the default user-data-dir, and Chrome M144's sanctioned `--autoConnect` consent flow requires Puppeteer's `handleDevToolsAsPage` option, which Playwright lacks. `chrome-devtools-mcp` vendors Puppeteer and implements the `--autoConnect` flow, so wiring it in via MCP is the supported path.
+
+### Subcommands
+
+#### `afk browser connect`
+
+Writes a `chrome-devtools` entry to `~/.afk/config/mcp.json` (idempotent — preserves any other servers you have configured) and prints one-time setup steps.
+
+```bash
+afk browser connect                    # target stable Chrome (default)
+afk browser connect --channel canary   # target Chrome Canary's profile
+```
+
+**Flag:**
+
+| Flag | Values | Default | Description |
+|------|--------|---------|-------------|
+| `--channel <channel>` | `stable`, `beta`, `canary`, `dev` | `stable` | Chrome channel whose default profile `--autoConnect` targets |
+
+The MCP entry written looks like:
+
+```json
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "npx",
+      "args": ["chrome-devtools-mcp@latest", "--autoConnect"]
+    }
+  }
+}
+```
+
+Non-stable channels append `--channel <channel>` to that `args` array.
+
+#### `afk browser disconnect`
+
+Removes the `chrome-devtools` entry from `~/.afk/config/mcp.json`.
+
+```bash
+afk browser disconnect
+```
+
+No flags. Safe to run even if the entry is not present (prints a warning and exits cleanly).
+
+### One-time Chrome setup
+
+1. Open `chrome://inspect/#remote-debugging` and **enable** remote debugging.
+2. The first time the agent drives Chrome, click **Allow** on the prompt Chrome shows.
+3. A *"being controlled by automated test software"* banner appears in Chrome while a session is active — that is expected.
+
+**Requirement:** Chrome ≥ 144. The `connect` command detects your installed version and warns if it is too old.
+
+### How it relates to the native browser tools
+
+Once connected, the agent gains `mcp__chrome-devtools__*` tools (`navigate_page`, `click`, `fill`, `take_snapshot`, `take_screenshot`, …) that operate on your real profile. The native `browser_*` tools (Playwright / isolated Chromium) remain available alongside them for throwaway automation that does not need your real logins. Run `/mcp` in the REPL to confirm the `chrome-devtools` server connected.
+
+### Security note
+
+The consent flow is intentionally human-gated and cannot be bypassed: you enable it once at `chrome://inspect`, then approve each new session. While connected, the agent can read and interact with anything in your logged-in profile — only connect when you want it acting as you.
+
+### Known limitation
+
+`chrome-devtools-mcp`'s `take_screenshot` returns an image, but agent-afk's MCP bridge currently text-stubs image results, so those screenshots are not yet visible to the model. Use `take_snapshot` (an accessibility-tree snapshot) as the primary automation surface; it works today.
+
 ## Troubleshooting
 
 **`browserType.launch: Executable doesn't exist`** — run

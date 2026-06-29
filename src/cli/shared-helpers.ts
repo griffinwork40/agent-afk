@@ -13,6 +13,7 @@ import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../agent/type
 import { loadConfig } from './config.js';
 import { loadOpenAICredential, resolveCredentialForModel } from '../agent/auth/credential-resolver.js';
 import { env } from '../config/env.js';
+import type { GrantManager } from './slash/commands/allow-dir.js';
 
 /**
  * Load the runtime system prompt from the installed package
@@ -459,4 +460,25 @@ export function parseProvider(
     });
   }
   return undefined;
+}
+
+/**
+ * Structural type guard for the {@link GrantManager} interface.
+ *
+ * Invariant: the guard checks function presence only — it does NOT validate
+ * return-type shapes or implementation correctness. Any provider that exposes
+ * the four GrantManager methods (addReadRoot, addWriteRoot, revokeRoot,
+ * getGrants) will pass, regardless of its concrete class. This intentionally
+ * avoids `instanceof` so future providers are wired automatically without
+ * touching the bootstrap gate.
+ */
+export function isGrantManager(p: unknown): p is GrantManager {
+  if (p === null || typeof p !== 'object') return false;
+  const obj = p as Record<string, unknown>;
+  return (
+    typeof obj['addReadRoot'] === 'function' &&
+    typeof obj['addWriteRoot'] === 'function' &&
+    typeof obj['revokeRoot'] === 'function' &&
+    typeof obj['getGrants'] === 'function'
+  );
 }

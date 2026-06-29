@@ -617,3 +617,50 @@ describe('formatCompactNoop — new reasons', () => {
     expect(result.toLowerCase()).toContain('failed');
   });
 });
+
+describe('markdownToTelegramHtml — mis-nested emphasis safety net', () => {
+  // Stack check mirroring Telegram's HTML parser: every tag must be closed and
+  // properly nested. A mis-nested run like "<b>..<i>..</b>..</i>" → 400.
+  const tagsBalanced = (html: string): boolean => {
+    const stack: string[] = [];
+    const re = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*>/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(html)) !== null) {
+      const tag = (m[2] ?? '').toLowerCase();
+      if (m[1] === '/') { if (stack.pop() !== tag) return false; }
+      else stack.push(tag);
+    }
+    return stack.length === 0;
+  };
+
+  test('interleaved ** / _ markers never emit improperly-nested tags', () => {
+    // Pre-fix this produced "<b>a <i>b</b> c</i>" → Telegram 400 "can't parse entities".
+    const out = markdownToTelegramHtml('**a _b** c_');
+    expect(tagsBalanced(out)).toBe(true);
+    expect(out).not.toContain('<b>');
+    expect(out).not.toContain('<i>');
+    expect(out).toBe('a b c');
+  });
+
+  test('interleaved __ / * markers never emit improperly-nested tags', () => {
+    const out = markdownToTelegramHtml('__a *b__ c*');
+    expect(tagsBalanced(out)).toBe(true);
+    expect(out).toBe('a b c');
+  });
+
+  test('safety net preserves code/link tags while dropping only mis-nested emphasis', () => {
+    const out = markdownToTelegramHtml('**a _b** `keep=1` c_');
+    expect(tagsBalanced(out)).toBe(true);
+    expect(out).toContain('<code>keep=1</code>'); // code span survives
+    expect(out).not.toContain('<b>');
+    expect(out).not.toContain('<i>');
+  });
+
+  test('properly-nested emphasis is left untouched (no false strip)', () => {
+    // Italic fully containing bold is valid HTML and must be preserved verbatim.
+    expect(markdownToTelegramHtml('*a **b** c*')).toBe('<i>a <b>b</b> c</i>');
+    // Separate spans + identifiers are unaffected by the safety net.
+    expect(markdownToTelegramHtml('**A** and *b* and snake_case'))
+      .toBe('<b>A</b> and <i>b</i> and snake_case');
+  });
+});

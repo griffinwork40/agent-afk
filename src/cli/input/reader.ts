@@ -19,6 +19,8 @@ import stringWidth from 'string-width';
 import { list as listSlashCommands, aliasEntries } from '../slash/registry.js';
 import { stripAnsi } from '../display.js';
 import { acquireStdinClaim } from './stdin-claim.js';
+import { isPrintableGrapheme } from './printable.js';
+import { isSoftNewlineEnter, endsWithBackslashContinuation } from './enter-decision.js';
 import { InputCore, type InputCoreState } from '../input-core.js';
 import { colorizeInputBuffer, type SlashRegistryView } from '../input-highlight.js';
 import { describeAttachmentSummary, renderStatusLine, type ImageAttachment } from './attachments.js';
@@ -727,10 +729,7 @@ export async function readWithAutocompleteTty(
           // some tmux configurations, PuTTY, older macOS Terminal.app profiles)
           // will not insert a newline — plain Enter will submit as usual. Users
           // can always use trailing `\` as an escape hatch (preserved below).
-          const isShiftEnter =
-            key?.shift === true || sequence === '\x1b[13;2u';
-          const isAltEnter = key?.meta === true;
-          if (isShiftEnter || isAltEnter) {
+          if (isSoftNewlineEnter(key, sequence)) {
             input = InputCore.insert(input, '\n');
             opts.history?.resetRecall();
             repaint();
@@ -767,7 +766,7 @@ export async function readWithAutocompleteTty(
             if (kind === 'slash' && applied) {
               onSubmit();
             }
-          } else if (input.buffer.endsWith('\\')) {
+          } else if (endsWithBackslashContinuation(input.buffer)) {
             // Trailing backslash escapes Enter → convert to a real newline.
             input = InputCore.replaceRange(
               input,
@@ -818,15 +817,15 @@ export async function readWithAutocompleteTty(
           return;
         }
 
-        // Printable char: prefer `char` (arg 1), fall back to key.sequence
+        // Printable char: prefer `char` (arg 1), fall back to key.sequence.
+        // isPrintableGrapheme (shared with the compositor's handlePrintable)
+        // admits multi-UTF-16-unit emoji that the old `length === 1` test
+        // silently dropped on this fallback path.
+        const noModifier = !key?.ctrl && !key?.meta;
         const printable =
-          typeof char === 'string' && char.length === 1 && char >= ' ' && !key?.ctrl && !key?.meta
+          noModifier && typeof char === 'string' && isPrintableGrapheme(char)
             ? char
-            : typeof key?.sequence === 'string' &&
-                key.sequence.length === 1 &&
-                key.sequence >= ' ' &&
-                !key?.ctrl &&
-                !key?.meta
+            : noModifier && typeof key?.sequence === 'string' && isPrintableGrapheme(key.sequence)
               ? key.sequence
               : null;
         if (printable !== null) {

@@ -435,25 +435,14 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     }
   });
 
-  it('swallows a concurrent duplicate-column ALTER and still reaches v4', () => {
+  it('handles concurrent racer adding the actor column via pre-check (no try/catch) and still reaches v4', () => {
     const dbPath = join(migDir, 'memory.db');
-    seedV2Db(dbPath);
-
-    // Simulate the cross-process race: the table_info guard sees no actor
-    // column, but by the time THIS process runs the ALTER a concurrent opener
-    // has already added it, so SQLite throws "duplicate column name". The mock
-    // adds the column for real (post-condition holds) then throws.
-    const originalExec = Database.prototype.exec;
-    vi.spyOn(Database.prototype, 'exec').mockImplementation(function (
-      this: BetterSqlite3.Database,
-      sql: string,
-    ) {
-      if (/ALTER TABLE sessions ADD COLUMN actor/i.test(sql)) {
-        originalExec.call(this, sql); // the racer wins the ALTER
-        throw new Error('duplicate column name: actor');
-      }
-      return originalExec.call(this, sql);
-    } as BetterSqlite3.Database['exec']);
+    // Simulate a cross-process race: another opener has already added the actor
+    // column to the DB (user_version still 2 — the racer ran the ALTER but was
+    // killed before stamping the version). With the new pre-check-only pattern,
+    // the transaction body reads table_info, sees the column is already present,
+    // skips the ALTER, and stamps the version — no try/catch needed or present.
+    seedV2Db(dbPath, true /* withActorColumn — racer already added it */);
 
     expect(() => new MemoryStore(migDir)).not.toThrow();
 
@@ -501,6 +490,68 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
       expect(check.pragma('user_version', { simple: true })).toBe(4);
     } finally {
       check.close();
+    }
+  });
+
+  it('atomicity: a pragma throw after the ALTER rolls back the whole step (version NOT stamped, column absent)', () => {
+    const dbPath = join(migDir, 'memory.db');
+    // Start from v2: sessions table without actor, facts table without evidence.
+    seedV2Db(dbPath);
+
+    // Intercept the pragma that stamps user_version = 3 and make it throw
+    // AFTER the ALTER has run inside the transaction body. Because the throw
+    // happens inside the transaction function, better-sqlite3 rolls back the
+    // entire transaction — the ALTER and the version bump together — leaving the
+    // DB in its original pre-v3 state.
+    const originalPragma = Database.prototype.pragma;
+    vi.spyOn(Database.prototype, 'pragma').mockImplementation(function (
+      this: BetterSqlite3.Database,
+      ...args: Parameters<BetterSqlite3.Database['pragma']>
+    ) {
+      if (typeof args[0] === 'string' && /user_version\s*=\s*3/i.test(args[0])) {
+        throw new Error('simulated pragma failure');
+      }
+      return originalPragma.apply(this, args);
+    } as BetterSqlite3.Database['pragma']);
+
+    // Construction must throw because the v2→v3 transaction rolls back.
+    expect(() => new MemoryStore(migDir)).toThrow(/simulated pragma failure/);
+
+    // Both the ALTER and the version stamp must have been rolled back.
+    const check1 = new Database(dbPath, { readonly: true });
+    try {
+      expect(
+        check1.pragma('user_version', { simple: true }),
+        'user_version must still be 2 (transaction rolled back)',
+      ).toBe(2);
+      const cols = (check1.pragma('table_info(sessions)') as Array<{ name: string }>).map(
+        (c) => c.name,
+      );
+      expect(cols, 'actor column must be absent (ALTER rolled back)').not.toContain('actor');
+    } finally {
+      check1.close();
+    }
+
+    // Restore mocks, then verify a fresh open self-heals and migrates cleanly.
+    vi.restoreAllMocks();
+    expect(() => new MemoryStore(migDir)).not.toThrow();
+
+    const check2 = new Database(dbPath, { readonly: true });
+    try {
+      expect(
+        check2.pragma('user_version', { simple: true }),
+        'user_version must be 4 after self-heal',
+      ).toBe(4);
+      const cols = (check2.pragma('table_info(sessions)') as Array<{ name: string }>).map(
+        (c) => c.name,
+      );
+      expect(cols, 'actor column must be present after self-heal').toContain('actor');
+      const factCols = (check2.pragma('table_info(facts)') as Array<{ name: string }>).map(
+        (c) => c.name,
+      );
+      expect(factCols, 'evidence column must be present after self-heal').toContain('evidence');
+    } finally {
+      check2.close();
     }
   });
 });

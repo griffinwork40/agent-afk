@@ -67,74 +67,11 @@ Cost, duration, and token fields appear only when the provider populates them.
 
 ### `--format stream-json`
 
-Writes one JSON object per line to stdout ([newline-delimited JSON](https://ndjson.org/)) — no color codes, no spinner. Use this when a script or CI pipeline needs to parse AFK's output.
+Writes one JSON object per line to stdout ([newline-delimited JSON](https://ndjson.org/)) — no color codes, no spinner. Use this when a script or CI pipeline needs to parse AFK's output. Events include `chunk`, `message`, `done`, `error`, `progress`, `paused`, and `resumed`. The process exits `0` on `done` and `1` on `error`.
 
-```bash
-afk chat "summarise this repo" --format stream-json
-```
+For the full event schema, jq recipes, and TypeScript parsing examples, see [Headless & Machine-Readable Output](../guides/headless).
 
-#### Event types
-
-| `type` | Additional fields | Notes |
-|---|---|---|
-| `chunk` | `chunk: MessageChunk` | Streaming text or tool fragment |
-| `message` | `message: { content, timestamp }` | Complete assistant message |
-| `done` | `metadata?` | Always the final event on success |
-| `error` | `error: { message, name }` | Fatal error; process exits with code 1 |
-| `progress` | `progress: { taskId, description, ... }` | Subagent progress |
-| `suggestion` | `suggestion: string` | Prompt suggestion from the model |
-| `paused` | `reason: 'usage-limit'; resetsAt?` | OAuth usage-limit pause |
-| `resumed` | `hotSwapped: boolean` | Resumed after pause |
-
-#### Example transcript
-
-```json
-{"type":"chunk","chunk":{"type":"content","content":"Hello"}}
-{"type":"chunk","chunk":{"type":"content","content":", world!"}}
-{"type":"message","message":{"content":"Hello, world!","timestamp":"2024-06-01T12:00:01.234Z"}}
-{"type":"done","metadata":{"durationMs":812,"usage":{"input_tokens":14,"output_tokens":5}}}
-```
-
-#### Reading with `jq`
-
-```bash
-# Extract text content only
-afk chat "summarise this repo" --format stream-json \
-  | jq -r 'select(.type == "chunk" and .chunk.type == "content") | .chunk.content'
-
-# Get final token usage
-afk chat "count words" --format stream-json \
-  | jq 'select(.type == "done") | .metadata.usage'
-
-# Detect tool calls
-afk chat "list files" --format stream-json \
-  | jq 'select(.type == "chunk" and .chunk.type == "tool_use")'
-```
-
-#### Parsing in TypeScript
-
-```typescript
-import { createInterface } from 'node:readline';
-import { spawn } from 'node:child_process';
-
-const proc = spawn('afk', ['chat', 'say hi', '--format', 'stream-json']);
-const rl = createInterface({ input: proc.stdout });
-
-for await (const line of rl) {
-  const event = JSON.parse(line);
-  if (event.type === 'chunk' && event.chunk.type === 'content') {
-    process.stdout.write(event.chunk.content);
-  }
-  if (event.type === 'done') break;
-  if (event.type === 'error') {
-    console.error('AFK error:', event.error.message);
-    process.exit(1);
-  }
-}
-```
-
-`--format stream-json` exits with code `1` on error and `0` on `done`. Combine with `tee` to
-log the raw stream while still processing it:
+Combine with `tee` to log the raw stream while still processing it:
 
 ```bash
 afk chat "build the project" --format stream-json | tee run.ndjson

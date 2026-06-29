@@ -268,24 +268,30 @@ export function providerForModel(
 export function resolveProvider(
   model: string | undefined,
   hints?: ProviderRouteHints,
-  opts?: { customTools?: import('../tools/custom-tool.js').CustomToolDef[] },
+  opts?: {
+    customTools?: import('../tools/custom-tool.js').CustomToolDef[];
+    canUseTool?: import('../types/sdk-types.js').CanUseTool;
+  },
 ): ModelProvider {
   const name = providerForModel(model, hints);
   const customTools = opts?.customTools;
+  const canUseTool = opts?.canUseTool;
+  // Mirror the customTools threading: forward each only when present so the
+  // default path constructs the provider with an empty options bag.
+  const ctorOpts = {
+    ...(customTools !== undefined && customTools.length > 0 ? { customTools } : {}),
+    ...(canUseTool !== undefined ? { canUseTool } : {}),
+  };
   switch (name) {
     case 'openai-compatible':
     case 'openai-codex':
       // IMPORTANT: fresh instance per session — see docstring above.
-      return new OpenAICompatibleProvider(
-        customTools !== undefined && customTools.length > 0 ? { customTools } : {},
-      );
+      return new OpenAICompatibleProvider(ctorOpts);
     case 'anthropic':
     case 'anthropic-direct':
     default:
       // IMPORTANT: fresh instance per session — see docstring above.
-      return new AnthropicDirectProvider(
-        customTools !== undefined && customTools.length > 0 ? { customTools } : {},
-      );
+      return new AnthropicDirectProvider(ctorOpts);
   }
 }
 

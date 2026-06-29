@@ -65,6 +65,16 @@ export interface PlanExitControls {
    * applied here — it is deferred to `takePendingPlanExitSeed()`.
    */
   requestImplementSeed(message: string, mode: PermissionMode): void;
+  /**
+   * The permission mode the session was in immediately BEFORE it entered plan
+   * mode — captured by `AgentSession.setPermissionMode` on the flip into 'plan'.
+   * An approved exit restores THIS mode instead of forcing 'default', so a user
+   * who was (say) in bypass before planning lands back in bypass. Returns
+   * `undefined` when nothing was captured (the session started in plan, or the
+   * prior mode was 'autonomous' — AFK has dedicated enter/exit machinery and is
+   * not restorable by a bare flip); callers fall back to 'default'.
+   */
+  getPrePlanMode(): PermissionMode | undefined;
 }
 
 /** Agent session configuration */

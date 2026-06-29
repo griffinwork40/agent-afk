@@ -159,7 +159,38 @@ export function markdownToTelegramHtml(text: string): string {
   // 10. Restore fenced code blocks
   out = out.replace(/\x02FENCED(\d+)\x03/g, (_m, i: string) => fencedBlocks[Number(i)] ?? _m);
 
+  // 11. Safety net: interleaved/overlapping emphasis markers (e.g. "**a _b** c_")
+  // can yield improperly-NESTED tags like "<b>a <i>b</b> c</i>", which Telegram
+  // rejects with HTTP 400 "can't parse entities" — failing or degrading the send.
+  // Code/pre/link tags are emitted as atomic, always-balanced units, so any
+  // imbalance is necessarily from emphasis (<b>/<i>/<s>); drop just those to
+  // recover guaranteed-valid, readable HTML instead of breaking the message.
+  if (!telegramHtmlTagsBalanced(out)) {
+    out = out.replace(/<\/?[bis]>/g, '');
+  }
+
   return out;
+}
+
+/**
+ * True iff every HTML tag in `html` is properly closed and correctly nested — a
+ * simple stack check over the tags markdownToTelegramHtml emits (b, i, s, code,
+ * pre, a). Used as a safety net so a mis-nested emphasis run never produces HTML
+ * that Telegram rejects with a 400 "can't parse entities".
+ */
+function telegramHtmlTagsBalanced(html: string): boolean {
+  const stack: string[] = [];
+  const re = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const tag = (m[2] ?? '').toLowerCase();
+    if (m[1] === '/') {
+      if (stack.pop() !== tag) return false;
+    } else {
+      stack.push(tag);
+    }
+  }
+  return stack.length === 0;
 }
 
 /**

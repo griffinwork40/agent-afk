@@ -19,9 +19,9 @@ exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario
 
 exports[`Snapshot pins — tool-lane-render.ts representative outputs > scenario 5 — subagent Agent entry with overflow (4 children, MAX=3) 1`] = `
 "◉ → Agent(snap-overflower) [subagent] — 4 tools
-│ ├─ ● Read("snap0.ts") — ✓ snap-result-0
+│ ├─ … +1 (1 Read)
 │ ├─ $ Bash("snap1.ts") — ✓ snap-result-1
 │ ├─ ● Grep("snap2.ts") — ✓ snap-result-2
-│ ├─ … +1 (1 Glob)
+│ ├─ ● Glob("snap3.ts") — ✓ snap-result-3
 │ ╰─ Done (4 tools · 4.0s)"
 `;

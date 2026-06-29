@@ -321,7 +321,15 @@ export async function handler(
     );
   }
 
-  const manager = new SubagentManager({ apiKey });
+  // Forward the parent's witness writer (when ctx supplies one) so the
+  // research/git/hypothesis forks below inherit it and their tool activity —
+  // notably the read-only `canUseTool` permission-denials these restrictive
+  // allowlists produce — lands in the parent trace as hook_decision + tool_call
+  // events instead of being lost. See skills/index.ts SkillExecutionContext.traceWriter.
+  const manager = new SubagentManager({
+    apiKey,
+    ...(ctx?.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
+  });
 
   // Phase 1: Triage — reproducer + structured failure classification.
   const reproducer = detectReproducer(parsedInput.context);

@@ -24,6 +24,7 @@ import { appendFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import Anthropic from '@anthropic-ai/sdk';
 import type { AgentConfig } from '../../types/config-types.js';
+import type { CanUseTool } from '../../types/sdk-types.js';
 import type {
   ModelProvider,
   ProviderQuery,
@@ -117,6 +118,8 @@ export interface AnthropicDirectProviderOptions {
   hookRegistry?: HookRegistry;
   /** Tool permission configuration (allowlist). */
   permissions?: ToolPermissionConfig;
+  /** In-process permission callback, forwarded to the session dispatcher. */
+  canUseTool?: CanUseTool;
   /**
    * Optional client factory override. When set, takes precedence over the
    * module-scope `__setAnthropicClientFactory` hook. Useful for callers that
@@ -193,6 +196,7 @@ export class AnthropicDirectProvider implements ModelProvider {
   private readonly schemas: readonly import('../../tools/types.js').AnthropicToolDef[];
   private readonly hookRegistry: import('../../hooks.js').HookRegistry | undefined;
   private readonly permissions: ToolPermissionConfig | undefined;
+  private readonly canUseTool: CanUseTool | undefined;
   private readonly subagentExecutor: import('../../tools/subagent-executor.js').SubagentExecutor | undefined;
   private readonly composeExecutor: import('../../tools/compose-executor.js').ComposeExecutor | undefined;
   private readonly surface: string;
@@ -291,6 +295,7 @@ export class AnthropicDirectProvider implements ModelProvider {
     this.schemas = schemas;
     this.hookRegistry = opts.hookRegistry;
     this.permissions = opts.permissions;
+    this.canUseTool = opts.canUseTool;
     this.subagentExecutor = opts.subagentExecutor;
     this.composeExecutor = opts.composeExecutor;
     this.surface = opts.surface ?? 'cli';
@@ -452,6 +457,9 @@ export class AnthropicDirectProvider implements ModelProvider {
       subagentExecutor: this.subagentExecutor,
       skillExecutor: this.skillExecutor,
       composeExecutor: this.composeExecutor,
+      // In-process permission callback (Dim 8). No-op when unset; forwarded by
+      // reference so it composes with the static allowlist in the dispatcher.
+      ...(this.canUseTool !== undefined ? { canUseTool: this.canUseTool } : {}),
       cwd: opts?.cwd,
       readRoots: opts?.readRoots,
       writeRoots: opts?.writeRoots,
@@ -1014,6 +1022,12 @@ export class AnthropicDirectProvider implements ModelProvider {
       ...(resolveAutoCompactThreshold(config.autoCompact) !== undefined
         ? { autoCompactThreshold: resolveAutoCompactThreshold(config.autoCompact) }
         : {}),
+      // Thread the resolved hook registry into the query so auto-compaction
+      // can dispatch PreCompact(trigger:'auto') before calling compact().
+      // resolveSessionHookRegistry is already called above for the dispatcher;
+      // we reuse config.hookRegistry directly here — the query stores it
+      // separately from the dispatcher and dispatches only PreCompact events.
+      ...(config.hookRegistry !== undefined ? { hookRegistry: config.hookRegistry } : {}),
     });
   }
 }

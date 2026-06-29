@@ -1,0 +1,170 @@
+---
+title: "Self-Improvement Pipeline"
+description: "How afk improve mines session traces to surface failure patterns, triage cards, draft proposals, and generate replay eval-cases."
+---
+
+`afk improve` is a self-improvement pipeline that reads the witness traces AFK writes for every session, runs pattern detectors over them, and produces a chain of artifacts — failure cards → proposals → eval-cases → eval-runs — that guide targeted improvements to the agent's own behavior.
+
+No subcommand in the pipeline makes LLM calls or applies patches. Every step is deterministic and writes artifacts a human reviews before anything changes.
+
+## How it works
+
+The pipeline has four stages:
+
+1. **Scan** — read witness traces, run registered detectors, and write failure cards. Each card captures a named failure pattern (e.g. `repeated-tool-use`), its severity, evidence rows pointing back to source traces, and a status (`open` / `deferred` / `resolved`).
+2. **Cards + triage** — inspect, filter, and annotate cards. Append a note and/or change status on any card without losing prior evidence or notes.
+3. **Propose** — generate a template-mode improvement proposal from a card. The template engine maps the card's pattern to a structured starter proposal a human refines before any patch is written.
+4. **Eval-gen → eval-run** — generate a replay-mode eval-case that slices a byte-identical fixture from the source trace, then run the deterministic validation contract against the live codebase. `eval-run` exits non-zero on regression, making it usable as a CI gate.
+
+Stages are loosely coupled: you can run `scan` repeatedly without generating proposals, or run `eval-run` on an existing eval-case without re-scanning.
+
+## Commands
+
+### `afk improve scan`
+
+Runs all registered detectors against witness traces and prints a summary. **Dry-run by default** — pass `--write` to persist failure cards.
+
+Detectors currently registered: `repeated-tool-use`, `closure-anomaly`, `subagent-block`, `tool-failure-density`. Some detectors are disabled by default; enable them with `--include-disabled` or target them explicitly with `--only`.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--since <duration>` | `7d` | Only scan sessions newer than this (e.g. `24h`, `all`) |
+| `--write` | off | Persist failure cards. Without this flag, scan is dry-run. |
+| `--min-repeats <n>` | detector default | `repeated-tool-use` threshold |
+| `--closure-min-occurrences <n>` | detector default | `closure-anomaly` threshold |
+| `--block-min-occurrences <n>` | detector default | `subagent-block` threshold |
+| `--tool-failure-min-failures <n>` | detector default | `tool-failure-density` absolute count threshold |
+| `--tool-failure-min-rate <rate>` | detector default | `tool-failure-density` rate threshold, 0–1 |
+| `--only <names>` | all enabled | Comma-separated detector names to run |
+| `--include-disabled` | off | Run detectors that are disabled by default |
+
+```bash
+afk improve scan                        # dry-run, last 7 days
+afk improve scan --since 24h --write    # persist cards from the last 24 h
+afk improve scan --only repeated-tool-use --write
+```
+
+### `afk improve cards`
+
+Inspect and triage failure cards written by `scan`. Three subcommands:
+
+**`cards list`** — tabular listing of all cards, newest first.
+
+| Flag | Purpose |
+|---|---|
+| `--pattern <name>` | Filter by pattern name |
+| `--severity <level>` | Filter by severity: `low \| medium \| high` |
+| `--status <state>` | Filter by status: `open \| deferred \| resolved` |
+| `--regressed` | Only show resolved/deferred cards that fired again after their latest triage note (read-only observability view) |
+| `--json` | Emit JSON instead of a table |
+
+**`cards show <slug>`** — print one card. Pass `--json` for raw JSON.
+
+**`cards triage <slug>`** — append a human note and/or change status. Preserves all existing evidence and prior notes.
+
+| Flag | Purpose |
+|---|---|
+| `--note <text>` | Note text to append |
+| `--status <state>` | New status: `open \| deferred \| resolved` |
+| `--json` | Emit the resulting card as JSON |
+
+```bash
+afk improve cards list --status open
+afk improve cards show repeated-tool-use--2026-01-15
+afk improve cards triage repeated-tool-use--2026-01-15 \
+  --note "root-caused to X" --status deferred
+```
+
+### `afk improve propose <slug>`
+
+Generates a template-mode improvement proposal for a failure card and writes it under `proposals/<id>.{json,md}`. **No LLM calls** — the template engine deterministically maps the card's pattern to a starter proposal a human refines before any patch.
+
+| Flag | Purpose |
+|---|---|
+| `--id <override>` | Override the auto-generated proposal id |
+| `--no-write` | Preview mode: render without persisting |
+| `--json` | Emit proposal JSON to stdout (still writes to disk unless `--no-write`) |
+
+```bash
+afk improve propose repeated-tool-use--2026-01-15
+afk improve propose repeated-tool-use--2026-01-15 --no-write  # preview
+```
+
+### `afk improve proposals`
+
+Read-only inspection of proposals on disk. Two subcommands:
+
+**`proposals list`** — tabular listing, newest first. Filter with `--card <slug>` or `--risk <l|m|h>`. Pass `--json` for JSON.
+
+**`proposals show <id>`** — print one proposal. Pass `--json` for raw JSON.
+
+### `afk improve eval-gen <cardSlug>`
+
+Generates a replay-mode eval-case from a failure card. Slices a byte-identical fixture from the source witness trace and writes the eval-case contract under `eval-cases/<id>.{json,md}` alongside the fixture. **No LLM calls.** Does not run the fixture through a detector — that is reserved for a later sprint.
+
+| Flag | Purpose |
+|---|---|
+| `--proposal <id>` | Back-reference to a proposal (validated to exist; does not mutate the proposal artifact) |
+| `--evidence-row <index>` | 0-based index into the card's evidence array. Default: most recent row. |
+| `--id <override>` | Override the auto-generated eval-case id |
+| `--no-write` | Preview mode: render and report fixture size without persisting |
+| `--json` | Emit eval-case JSON to stdout |
+
+```bash
+afk improve eval-gen repeated-tool-use--2026-01-15
+afk improve eval-gen repeated-tool-use--2026-01-15 --no-write  # preview
+```
+
+### `afk improve eval-cases`
+
+Read-only inspection of eval-cases on disk. Two subcommands:
+
+**`eval-cases list`** — tabular listing, newest first. Filter with `--card <slug>`, `--pattern <name>`, or `--status <state>` (`draft | approved | rejected | superseded`). Pass `--json` for JSON.
+
+**`eval-cases show <id>`** — print one eval-case. Pass `--json` for raw JSON.
+
+### `afk improve eval-run <evalCaseIdOrCardSlug>`
+
+Runs the smallest deterministic validation contract for an eval-case's pattern against the live codebase and persists an eval-run result under `eval-runs/<id>.{json,md}`. Re-verifies the committed fixture checksum. **No LLM calls. No patch/apply.** Exits non-zero on `fail` or `error` — usable as a CI gate.
+
+The argument may be an eval-case id or a card slug; if a slug is given, the most recent eval-case for that card is used.
+
+| Flag | Purpose |
+|---|---|
+| `--id <override>` | Override the auto-generated eval-run id |
+| `--no-write` | Run and render without persisting |
+| `--json` | Emit eval-run JSON to stdout |
+
+```bash
+afk improve eval-run repeated-tool-use--2026-01-15
+afk improve eval-run <eval-case-id> --no-write
+```
+
+## Typical workflow
+
+```bash
+# 1. Scan recent sessions; preview first, then persist.
+afk improve scan --since 7d
+afk improve scan --since 7d --write
+
+# 2. Inspect what was found.
+afk improve cards list --status open
+
+# 3. Triage a card: add a note and defer it.
+afk improve cards triage <slug> --note "root-caused to X" --status deferred
+
+# 4. Generate a proposal for a card you want to address.
+afk improve propose <slug>
+afk improve proposals list
+
+# 5. Generate an eval-case to lock in a regression test.
+afk improve eval-gen <slug>
+afk improve eval-cases list
+
+# 6. Run the deterministic contract to verify the guardrail.
+afk improve eval-run <slug>
+```
+
+The pipeline is additive: each step produces durable artifacts on disk. You can pause between any two stages and resume later.
+
+> **Out of scope (reserved for later sprints):** LLM-mode proposals, applying patches, fixture replay through the detector, branch creation, git operations, and PR publishing.

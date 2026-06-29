@@ -308,14 +308,20 @@ user-global file.
 
 #### Event keys
 
-| Event | Fires when |
-|-------|-----------|
-| `PreToolUse` | Before a tool call is dispatched. The hook can block the call. |
-| `PostToolUse` | After a tool call completes. |
-| `SessionStart` | At the start of a session. |
-| `SessionEnd` | When a session finishes. |
-| `SubagentStart` | When a subagent session is forked. |
-| `SubagentStop` | When a subagent session finishes. `hookSpecificOutput.additionalContext` injects text into the parent session. |
+| Event | Fires when | Payload fields (stdin JSON) | Surfaces |
+|-------|-----------|----------------------------|----------|
+| `PreToolUse` | Before a tool call is dispatched. The hook can block the call. | `hook_event_name`, `session_id`, `tool_name`, `tool_input` | All |
+| `PostToolUse` | After a tool call completes successfully. | `hook_event_name`, `session_id`, `tool_name`, `tool_output` (omitted when undefined) | All |
+| `SessionStart` | At the start of a session. | `hook_event_name`, `session_id` | All |
+| `SessionEnd` | When a session finishes. | `hook_event_name`, `session_id`, `reason` | All |
+| `SubagentStart` | When a subagent session is forked. | `hook_event_name`, `session_id` | All |
+| `SubagentStop` | When a subagent session finishes. `hookSpecificOutput.additionalContext` injects text into the parent session. | `hook_event_name`, `session_id` | All |
+| `Stop` | After a main-session turn completes (end of one agent turn). Dispatched from the REPL turn loop only — subagents do not fire it. | `hook_event_name`, `session_id` | REPL only |
+| `UserPromptSubmit` | When the user submits a prompt in the REPL, after shell injection and forward-manifest stitching but before `runTurn`. Handler can return `injectContext` to prepend text to the prompt. | `hook_event_name`, `session_id`, `prompt` | REPL only |
+| `PreCompact` | Before context compaction runs. `trigger` is `"manual"` (via `/compact` command) or `"auto"` (threshold-based, reserved for future wiring). | `hook_event_name`, `session_id`, `trigger` (`null` when unset) | All |
+| `PostToolUseFailure` | After a tool call throws an error. Distinct from `PostToolUse` — only one fires per call. `tool_input` is intentionally not forwarded to shell hooks to avoid exposing sensitive inputs to arbitrary scripts. | `hook_event_name`, `session_id`, `tool_name`, `error` | All |
+
+Every event's payload also includes `cwd` and `transcript_path` (the latter is `null` when no transcript file is tracked).
 
 #### Matcher group fields
 

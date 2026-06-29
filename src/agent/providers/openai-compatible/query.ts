@@ -47,8 +47,8 @@ import type {
 import { sumProviderUsage } from '../../usage.js';
 import { contextLimitFor, maxOutputTokensFor } from '../../model-limits.js';
 import { resolveModelId } from '../../session/model-resolution.js';
-import { collectSkillEntries } from '../../tools/skill-bridge.js';
 import { extractRawToolInput } from '../../facets/raw-input.js';
+import { collectSupportedCommands } from '../shared/supported-commands.js';
 import { debugLog } from '../../../utils/debug.js';
 import {
   resolveOpenAIAuth,
@@ -81,9 +81,11 @@ import { resolveWireMode, envFlagEnabled, isClaudeFamilyModel, DEFAULT_RESPONSES
 import { env } from '../../../config/env.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import type { ToolResult } from '../anthropic-direct/types.js';
-import { contextWindowTokensUsed, buildContextUsageFields } from '../anthropic-direct/query/auto-compact.js';
-import { PLAN_MODE_ADDENDUM_TEXT } from '../anthropic-direct/plan-mode-addendum.js';
-import { AFK_MODE_ADDENDUM_TEXT } from '../anthropic-direct/afk-mode-addendum.js';
+import { contextWindowTokensUsed, buildContextUsageFields } from '../shared/auto-compact.js';
+import { PLAN_MODE_ADDENDUM_TEXT } from '../shared/plan-mode-addendum.js';
+import { AFK_MODE_ADDENDUM_TEXT } from '../shared/afk-mode-addendum.js';
+import { sleepWithAbort } from '../shared/sleep-with-abort.js';
+import { summarizeToolInput } from '../shared/tool-input-summary.js';
 
 const PROVIDER_NAME = 'openai-compatible';
 
@@ -164,15 +166,6 @@ function isRetryableStreamError(err: unknown): boolean {
   const status = getErrorStatus(err);
   if (status === undefined) return false;
   return RETRYABLE_STATUS_CODES.has(status);
-}
-
-function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) { resolve(); return; }
-    const timer = setTimeout(resolve, ms);
-    timer.unref();
-    signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
-  });
 }
 
 /**
@@ -1239,29 +1232,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   }
 
   async supportedCommands(): Promise<ProviderCommandInfo[]> {
-    // Mirrors anthropic-direct/query.ts:supportedCommands — surfaces every
-    // skill discovered by skill-bridge (built-in TS skills, ~/.afk/skills/,
-    // and plugin SKILL.md files) so the REPL slash registry can register a
-    // passthrough /<skill> for each one. Without this, /reload-plugins
-    // reports 0 skills on OpenAI sessions and typing /mint does not
-    // autocomplete. collectSkillEntries() is provider-agnostic (no model
-    // SDK imports) so the body lifts unchanged.
-    //
-    // Extract to a shared helper module when a third provider lands.
-    try {
-      const entries = collectSkillEntries();
-      return entries.map((e) => {
-        const info: ProviderCommandInfo = {
-          name: e.name,
-          description: e.description,
-        };
-        if (e.argumentHint) info.argumentHint = e.argumentHint;
-        return info;
-      });
-    } catch {
-      // Discovery is best-effort — the REPL stays usable without it.
-      return [];
-    }
+    return collectSupportedCommands();
   }
 
   async supportedModels(): Promise<ProviderModelInfo[]> {
@@ -1356,38 +1327,6 @@ function defaultClientFactory(opts: {
   if (opts.baseURL !== undefined) clientOpts.baseURL = opts.baseURL;
   if (opts.defaultHeaders !== undefined) clientOpts.defaultHeaders = opts.defaultHeaders;
   return new OpenAI(clientOpts);
-}
-
-/**
- * Best-effort one-line summary of a tool input. Mirrors the same-named
- * helper in anthropic-direct/loop.ts so `tool.use.start` events render
- * identically across providers.
- */
-function summarizeToolInput(toolName: string, input: unknown): string {
-  if (!input || typeof input !== 'object') return '';
-  const obj = input as Record<string, unknown>;
-  // Skill dispatch: the `name` field IS the skill being invoked (diagnose,
-  // review, mint, …). Surface it as a paren-wrapped label so the tool lane
-  // renders `skill(diagnose)` instead of a bare `skill [skill]`. Mirrors the
-  // anthropic-direct helper exactly so labels render identically across
-  // providers — see the rationale comment in anthropic-direct/loop.ts.
-  if (toolName === 'skill' || toolName === 'Skill') {
-    const skillName = obj['name'];
-    if (typeof skillName === 'string' && skillName.length > 0) {
-      return `(${skillName.length > 60 ? skillName.slice(0, 59) + '…' : skillName})`;
-    }
-    return '';
-  }
-  const path = obj['file_path'] ?? obj['path'] ?? obj['filePath'];
-  if (typeof path === 'string') return ' ' + path;
-  const cmd = obj['command'] ?? obj['cmd'];
-  if (typeof cmd === 'string') {
-    const firstLine = cmd.split('\n')[0]!;
-    return ' ' + (firstLine.length > 80 ? firstLine.slice(0, 77) + '…' : firstLine);
-  }
-  const query = obj['query'] ?? obj['pattern'] ?? obj['url'] ?? obj['description'];
-  if (typeof query === 'string') return ' ' + query;
-  return '';
 }
 
 /**

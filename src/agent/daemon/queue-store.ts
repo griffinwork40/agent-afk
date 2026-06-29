@@ -15,7 +15,7 @@
  * @module agent/daemon/queue-store
  */
 
-import { mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { getQueueDir } from '../../paths.js';
@@ -167,14 +167,30 @@ export function dequeueNext(queueDir: string = getQueueDir()): QueuedTask | null
  * outcome is logged to stderr so the operator can investigate.
  */
 function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown): void {
-  // Redact every error-derived string before logging: a JSON.parse SyntaxError
+  // Redact every caller-supplied string before logging. The filename comes from
+  // the OS readdir listing — normally safe (<seq>-q-<ts>-<hex>.json), but a
+  // stray file with a secret-shaped name dropped into the queue dir would be
+  // logged unredacted without this guard. Error-derived strings (reason,
+  // moveReason, unlinkReason) carry the same risk: a JSON.parse SyntaxError
   // can embed a snippet of the malformed entry's bytes, and a queue `command`
   // may carry an inline secret. This matches the daemon's existing convention
   // for error-derived logs (see redactInlineSecrets use in scheduler.ts runOnce).
   // NOTE(#337-poison-telemetry): quarantines are logged to stderr only — a
   // structured `status:'poison'` telemetry record for parity with runOnce is a
   // tracked follow-up, not added here to keep the change focused.
-  const reason = redactInlineSecrets(err instanceof Error ? err.message : String(err));
+  const redactedFilename = redactInlineSecrets(filename);
+  // Invariant: SyntaxError messages from JSON.parse embed a verbatim snippet of
+  // the file content (≤20 chars, or the first ~10 chars for longer inputs). That
+  // window is structurally too short for redactInlineSecrets's {16,}-value
+  // patterns to match, so any short or truncated secret in the malformed bytes
+  // would reach stderr unredacted. For SyntaxError we therefore use a
+  // content-free label; only non-SyntaxError errors (filesystem errors from
+  // readFileSync, etc.) carry paths — not file content — and are safe to redact
+  // and log with their message.
+  const reason =
+    err instanceof SyntaxError
+      ? 'SyntaxError: invalid JSON'
+      : redactInlineSecrets(err instanceof Error ? err.message : String(err));
   const poisonDir = join(queueDir, POISON_SUBDIR);
   const src = join(queueDir, filename);
   try {
@@ -194,7 +210,7 @@ function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown)
     }
     // eslint-disable-next-line no-console
     console.error(
-      `[daemon] pull-queue: quarantined malformed entry ${filename} → ${POISON_SUBDIR}/ (${reason})`,
+      `[daemon] pull-queue: quarantined malformed entry ${redactedFilename} → ${POISON_SUBDIR}/ (${reason})`,
     );
   } catch (moveErr) {
     // Last resort: if we cannot move it aside, unlink so the queue unblocks
@@ -202,7 +218,7 @@ function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown)
     const moveReason = redactInlineSecrets(moveErr instanceof Error ? moveErr.message : String(moveErr));
     // eslint-disable-next-line no-console
     console.error(
-      `[daemon] pull-queue: failed to quarantine malformed entry ${filename}; removing to unblock queue (${moveReason})`,
+      `[daemon] pull-queue: failed to quarantine malformed entry ${redactedFilename}; removing to unblock queue (${moveReason})`,
     );
     try {
       unlinkSync(src);
@@ -216,7 +232,7 @@ function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown)
       );
       // eslint-disable-next-line no-console
       console.error(
-        `[daemon] pull-queue: could not remove unquarantinable entry ${filename}; will retry next tick (${unlinkReason})`,
+        `[daemon] pull-queue: could not remove unquarantinable entry ${redactedFilename}; will retry next tick (${unlinkReason})`,
       );
     }
   }
@@ -252,12 +268,119 @@ export function listPending(queueDir: string = getQueueDir()): QueuedTask[] {
     try {
       tasks.push(JSON.parse(readFileSync(filePath, 'utf-8')) as QueuedTask);
     } catch (err) {
-      const reason = redactInlineSecrets(err instanceof Error ? err.message : String(err));
+      const redactedFilename = redactInlineSecrets(filename);
+      // Invariant: SyntaxError messages from JSON.parse embed a verbatim snippet of
+      // the file content (≤20 chars, or the first ~10 chars for longer inputs). That
+      // window is structurally too short for redactInlineSecrets's {16,}-value
+      // patterns to match, so any short or truncated secret in the malformed bytes
+      // would reach stderr unredacted. For SyntaxError we therefore use a
+      // content-free label; only non-SyntaxError errors (filesystem errors from
+      // readFileSync, etc.) carry paths — not file content — and are safe to redact
+      // and log with their message.
+      const reason =
+        err instanceof SyntaxError
+          ? 'SyntaxError: invalid JSON'
+          : redactInlineSecrets(err instanceof Error ? err.message : String(err));
       // eslint-disable-next-line no-console
       console.error(
-        `[daemon] pull-queue: skipping unreadable entry ${filename} in listPending (${reason})`,
+        `[daemon] pull-queue: skipping unreadable entry ${redactedFilename} in listPending (${reason})`,
       );
     }
   }
   return tasks;
+}
+
+/**
+ * Remove a single pending task by id.
+ *
+ * Scans the queue directory for a JSON file whose body contains the given
+ * `id`. The search is a linear scan — queue lengths are expected to be small
+ * (single-operator CLI use) so this is fine. Skips directories and temp files
+ * matching the same glob, mirroring `listPending`'s filter.
+ *
+ * @param queueDir - Override the queue directory (defaults to `getQueueDir()`).
+ * @param id       - The task id to remove (e.g. `q-1716000000000-abc123`).
+ * @returns `true` if a matching file was found and removed; `false` if no
+ *          matching task was found (id unknown or already dequeued).
+ * @throws If the matching file exists but cannot be unlinked (e.g. permission
+ *         error). The caller is responsible for surfacing this to the user.
+ */
+export function removePending(queueDir: string = getQueueDir(), id: string): boolean {
+  try {
+    mkdirSync(queueDir, { recursive: true });
+  } catch {
+    return false;
+  }
+
+  const sorted = readdirSync(queueDir)
+    .filter((f) => f.endsWith('.json') && !f.startsWith('.tmp-'))
+    .sort();
+
+  for (const filename of sorted) {
+    const filePath = join(queueDir, filename);
+    // Skip directories (e.g. `poison/` subdir) — only real files hold tasks.
+    try {
+      if (statSync(filePath).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    let task: QueuedTask;
+    try {
+      task = JSON.parse(readFileSync(filePath, 'utf-8')) as QueuedTask;
+    } catch {
+      // Malformed entry — cannot match by id, skip.
+      continue;
+    }
+    if (task.id === id) {
+      unlinkSync(filePath);
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Remove all pending tasks from the queue directory.
+ *
+ * Mirrors `listPending`'s filter (`.json`, not `.tmp-`, not directories) and
+ * deletes every matching file. The `poison/` subdirectory is left intact.
+ * Skips individual files that cannot be unlinked and logs each skip to stderr,
+ * so a single permission error does not abort the whole clear.
+ *
+ * @param queueDir - Override the queue directory (defaults to `getQueueDir()`).
+ * @returns The number of task files successfully removed.
+ */
+export function clearPending(queueDir: string = getQueueDir()): number {
+  try {
+    mkdirSync(queueDir, { recursive: true });
+  } catch {
+    return 0;
+  }
+
+  const sorted = readdirSync(queueDir)
+    .filter((f) => f.endsWith('.json') && !f.startsWith('.tmp-'))
+    .sort();
+
+  let removed = 0;
+  for (const filename of sorted) {
+    const filePath = join(queueDir, filename);
+    // Skip directories (e.g. `poison/` subdir if it somehow has a .json suffix).
+    try {
+      if (statSync(filePath).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    try {
+      unlinkSync(filePath);
+      removed += 1;
+    } catch (err) {
+      const redactedFilename = redactInlineSecrets(filename);
+      const reason = redactInlineSecrets(err instanceof Error ? err.message : String(err));
+      // eslint-disable-next-line no-console
+      console.error(
+        `[daemon] pull-queue: failed to remove entry ${redactedFilename} in clearPending (${reason})`,
+      );
+    }
+  }
+  return removed;
 }

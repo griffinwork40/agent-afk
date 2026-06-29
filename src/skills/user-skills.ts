@@ -155,6 +155,11 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
 
     const manager = new SubagentManager({
       parentAbortSignal: parentSession?.abortSignal,
+      // Forward the parent's witness writer (when ctx supplies one) so this
+      // user-skill's forked sub-agent inherits it and its tool activity —
+      // including any permission-denials a restricted user SKILL.md produces —
+      // lands in the parent trace. See skills/index.ts SkillExecutionContext.traceWriter.
+      ...(ctx?.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
     });
 
     // `parentId: ctx.callId` (when present) anchors the synthesized
