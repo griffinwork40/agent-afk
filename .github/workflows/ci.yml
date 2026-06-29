@@ -55,6 +55,18 @@ jobs:
       - name: Audit SDK dependency surface (no unlocked @anthropic-ai/sdk imports)
         run: pnpm audit:sdk:check
 
+      - name: Audit dependency CVEs (critical severity in prod deps)
+        # Gates on critical-severity CVEs in production dependencies only.
+        # --audit-level=critical: only fail on critical advisories (not high/moderate).
+        # --prod: exclude devDependencies (vitest, coverage-v8, esbuild, etc.) which
+        #   carry several high/moderate unfixable transitive advisories that are dev-
+        #   only build/test tools, not shipped runtime code.
+        # Current state (as of 2026-06-29): no critical CVEs in prod deps → exits 0.
+        # Non-critical prod advisories (4 high via jsdom>undici and
+        #   @modelcontextprotocol/sdk>hono) are acknowledged; upstream fixes are
+        #   tracked in pnpm-lock.yaml — tighten to --audit-level=high once resolved.
+        run: pnpm audit:deps
+
       - name: Build
         run: pnpm build
 
