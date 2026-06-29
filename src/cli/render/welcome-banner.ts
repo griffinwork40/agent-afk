@@ -154,7 +154,7 @@ function renderLegacyBoxBanner(opts: WelcomeBannerOpts): string {
  * hybrid banner. Mirrors the package.json description / README thesis ("the
  * harness you can actually change") to give first-run identity. Kept short
  * (≤44 display cols) so it survives truncation at an 80-col terminal, where
- * the info column is only `cols − 32 = 48` cols wide.
+ * the info column is `cols − LEFT_PAD − MASCOT_WIDTH − GUTTER = 49` cols wide.
  */
 const BANNER_TAGLINE = 'the agent harness you can actually change';
 
@@ -170,9 +170,29 @@ const BANNER_TAGLINE = 'the agent harness you can actually change';
  */
 function renderHybridBanner(opts: WelcomeBannerOpts): string {
   const cols = getTerminalWidth();
-  const GUTTER = cols >= 42 ? '   ' : ' ';
-  const LEFT_PAD = cols >= 42 ? '  ' : ' ';
-  const infoMaxW = Math.max(1, cols - LEFT_PAD.length - MASCOT_WIDTH - GUTTER.length);
+  // Fixed two-space frame on both sides of the sprite. The gutter was widened
+  // historically (3 cols) but, because the goblin's silhouette is narrow at
+  // the forehead/chin and only reaches MASCOT_WIDTH at the swept ears, a 3-col
+  // gutter measured off that max width opened a ragged ~9-col "moat" beside the
+  // wordmark (which sits beside the narrow forehead). Two cols keeps the text
+  // visually attached to the sprite at every window size without colliding with
+  // the ear tips on the rows where they flare to full width.
+  const LEFT_PAD = '  ';
+  const GUTTER = '  ';
+
+  // Below this info width the 27-col sprite crowds the text into a sliver where
+  // every row ellipsizes (version cut mid-number, tagline cut mid-word). When
+  // the budget falls under it, drop the mascot and stack the info column
+  // full-width instead, so the banner stays legible at any narrow window size.
+  const MIN_INFO_COLS = 24;
+  const spriteBudget = cols - LEFT_PAD.length - MASCOT_WIDTH - GUTTER.length;
+  const showMascot = spriteBudget >= MIN_INFO_COLS;
+
+  // Info column width: beside the sprite when shown, else the full terminal
+  // (minus the left pad) in the compact, mascot-less fallback.
+  const infoMaxW = showMascot
+    ? spriteBudget
+    : Math.max(1, cols - LEFT_PAD.length);
 
   // Build info-column rows.
   const infoRows: string[] = [];
@@ -223,24 +243,34 @@ function renderHybridBanner(opts: WelcomeBannerOpts): string {
     pushInfoRow(palette.dim(opts.metaLine));
   }
 
-  // Compose mascot + info rows. The info stack is short (≈3–5 rows) beside a
-  // tall sprite, so top-aligning it strands the text against the cap and opens
-  // a tall void down the right of the face. Vertically center the info block
-  // against the sprite instead: the identity rows land beside the mascot's eyes
-  // (its focal point) and the surrounding whitespace is balanced top and bottom.
-  // When the info column is taller than the sprite (e.g. a /resume metaLine),
-  // infoTopPad collapses to 0 and the layout degrades to the old top-alignment.
-  const sprite = renderMascotLines('idle');
-  const infoTopPad = Math.max(0, Math.floor((sprite.length - infoRows.length) / 2));
-  const totalRows = Math.max(sprite.length, infoTopPad + infoRows.length);
   const lines: string[] = [];
-  for (let i = 0; i < totalRows; i++) {
-    const left = sprite[i] ?? ' '.repeat(MASCOT_WIDTH);
-    const infoIdx = i - infoTopPad;
-    const right = infoIdx >= 0 ? (infoRows[infoIdx] ?? '') : '';
-    // trimEnd drops the trailing GUTTER + transparent sprite columns on rows
-    // with no info text, so blank-right rows leave no selectable whitespace.
-    lines.push((LEFT_PAD + left + GUTTER + right).trimEnd());
+
+  if (showMascot) {
+    // Compose mascot + info rows. The info stack is short (≈3–5 rows) beside a
+    // tall sprite, so top-aligning it strands the text against the cap and opens
+    // a tall void down the right of the face. Vertically center the info block
+    // against the sprite instead: the identity rows land beside the mascot's eyes
+    // (its focal point) and the surrounding whitespace is balanced top and bottom.
+    // When the info column is taller than the sprite (e.g. a /resume metaLine),
+    // infoTopPad collapses to 0 and the layout degrades to the old top-alignment.
+    const sprite = renderMascotLines('idle');
+    const infoTopPad = Math.max(0, Math.floor((sprite.length - infoRows.length) / 2));
+    const totalRows = Math.max(sprite.length, infoTopPad + infoRows.length);
+    for (let i = 0; i < totalRows; i++) {
+      const left = sprite[i] ?? ' '.repeat(MASCOT_WIDTH);
+      const infoIdx = i - infoTopPad;
+      const right = infoIdx >= 0 ? (infoRows[infoIdx] ?? '') : '';
+      // trimEnd drops the trailing GUTTER + transparent sprite columns on rows
+      // with no info text, so blank-right rows leave no selectable whitespace.
+      lines.push((LEFT_PAD + left + GUTTER + right).trimEnd());
+    }
+  } else {
+    // Compact fallback (terminal too narrow for the sprite): stack the info
+    // column flush-left with no mascot. Each row is already truncated to the
+    // full-width infoMaxW, so nothing is crushed into a one-char sliver.
+    for (const row of infoRows) {
+      lines.push((LEFT_PAD + row).trimEnd());
+    }
   }
 
   // Hint line sits flush-left below the whole composition.
