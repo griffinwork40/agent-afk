@@ -1,0 +1,173 @@
+---
+title: "Observability"
+description: "Inspect what a run did: witness traces (afk trace), full-text transcript search (afk transcript), and the /transcript slash command."
+---
+
+Agent AFK records durable evidence of every unattended run so you can review exactly what happened — without watching the terminal. There are two complementary inspection surfaces: the **witness trace** (structured NDJSON of each event as it happened) and the **transcript search index** (full-text search over saved session Markdown files).
+
+## Witness traces (`afk trace`)
+
+Every agent session appends an append-only NDJSON record to:
+
+```
+~/.afk/state/witness/<session-id>/trace.jsonl
+```
+
+The file is written event-by-event during the run, so it survives crashes and partially-written tails are tolerated — malformed trailing lines are counted and skipped, never fatal.
+
+### What a trace records
+
+Each line is a JSON event with a `kind`, a monotonic `seq`, a timestamp `ts`, and a `payload`. The recorded kinds are:
+
+| Kind | What it captures |
+|---|---|
+| `tool_call` | Every tool invocation: name, duration, result size, error flag, subagent id |
+| `hook_decision` | Hook approvals and blocks, with the blocking reason |
+| `subagent_lifecycle` | Subagent start / success / failure / cancel, with cost and turn count |
+| `background_agent` | Background job start, completion, failure, cancel, and join |
+| `budget` | Cost checkpoints against the configured ceiling |
+| `abort` | Abort origin and cascade count |
+| `compaction` | Context-window compaction: messages before/after, estimated tokens saved |
+| `closure` | Session end reason, final turn count, cost, and the provider `stop_reason` |
+| `claim` | Agent-emitted claims: assertion text, confidence, evidence count |
+| `browser_event` | Browser tool actions and their status |
+| `session_phase` | Latency waterfall (init, TTFB, etc.) — hidden by default, shown with `--all` |
+| `session_sealed` | Final seal status, subagent count, cost (written at clean close) |
+
+### `afk trace list`
+
+List all sessions that have a trace, most recent first:
+
+```bash
+afk trace list
+```
+
+Prints `<timestamp>  <session-id>` rows. Pass `-n` / `--max` to cap the output (default 20, max 200):
+
+```bash
+afk trace list --max 50
+```
+
+### `afk trace show`
+
+Pretty-print a session's trace for human review. With no argument, shows the **most recently written** trace:
+
+```bash
+afk trace show            # latest run
+afk trace show <session>  # a specific session id
+```
+
+**Options:**
+
+| Flag | Meaning |
+|---|---|
+| `--all` | Include low-signal events (latency phases, paired tool-call `started` lines) |
+| `--json` | Emit the raw NDJSON unchanged — pipe to `jq` for programmatic inspection |
+| `-n, --limit <N>` | Show only the last N rendered events |
+
+The default view filters out `session_phase` events and paired tool-call `started` lines — keeping the output scannable. Orphaned `started` events (a tool that began but never returned) are always shown because they indicate a crash or abort mid-call.
+
+### Debugging with traces
+
+Common patterns:
+
+```bash
+# Did the last run finish cleanly?
+afk trace show | grep -E "SEALED|closure"
+
+# What tools ran, and did any error?
+afk trace show | grep "tool"
+
+# Which subagents were launched and how did they end?
+afk trace show | grep "subagent"
+
+# Full latency waterfall
+afk trace show --all | grep "phase"
+
+# Raw dump for scripting
+afk trace show --json | jq '.kind'
+```
+
+Because the trace is written live, you can tail it while a long run is in progress:
+
+```bash
+tail -f ~/.afk/state/witness/<session-id>/trace.jsonl | jq .
+```
+
+---
+
+## Transcript search (`afk transcript`)
+
+In addition to structured traces, AFK saves every session as a plain Markdown transcript at:
+
+```
+~/.afk/state/transcripts/<iso-timestamp>.md
+```
+
+The `afk transcript` commands build and query an **SQLite FTS5 full-text index** over these files — a high-recall complement to the curated fact archive searched by `memory_search`.
+
+### Build the index
+
+The index is not built automatically. Run this once (and re-run whenever you want to catch up on new sessions):
+
+```bash
+afk transcript reindex
+```
+
+Output: `Indexed N transcripts.` The operation is idempotent — safe to run repeatedly. It replaces the index atomically.
+
+### `afk transcript search`
+
+Search the index with an FTS5 query:
+
+```bash
+afk transcript search <query>
+```
+
+**Option:**
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `-n, --limit <N>` | `10` | Maximum results (1–1000) |
+
+**FTS5 query syntax** (passed verbatim to SQLite):
+
+| Syntax | Meaning |
+|---|---|
+| `worktree` | Any transcript containing the word `worktree` |
+| `"afk trace"` | Exact phrase match |
+| `trace*` | Prefix match — `trace`, `traces`, `traced`, … |
+| `subagent AND cost` | Both terms must appear |
+| `telegram OR slack` | Either term |
+
+**Examples:**
+
+```bash
+# Find sessions where you discussed rate limiting
+afk transcript search "rate limit"
+
+# Find any transcript mentioning the daemon scheduler
+afk transcript search "daemon AND cron"
+
+# Find recent sessions mentioning a specific function name
+afk transcript search "resolveBaseSystemPrompt"
+
+# Limit to top 3 results
+afk transcript search "MCP server" --limit 3
+```
+
+Each result shows the session timestamp, filename, and an FTS5-extracted snippet around the match. A malformed FTS5 query (e.g. an unclosed quote) throws a descriptive error rather than silently returning nothing.
+
+---
+
+## The `/transcript` slash command
+
+Inside an interactive REPL session (`afk i`), the `/transcript` slash command opens the **current session's** Markdown transcript in your `$PAGER`:
+
+```
+/transcript
+```
+
+This is useful for reviewing your conversation so far without leaving the session. For searching across past sessions, use `afk transcript search` described above.
+
+See the [Interactive REPL](/surfaces/repl) page for the full list of slash commands.

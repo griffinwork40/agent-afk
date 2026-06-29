@@ -21,6 +21,8 @@ An unconfigured install uses these defaults:
 | `medium` | `claude-sonnet-4-6` | `sonnet`, `sonnet_1m` |
 | `large` | `claude-opus-4-8` | `opus`, `opus_1m` |
 
+**Note:** These default model IDs reflect the latest available models as of this writing. As new versions ship, these defaults are updated in the codebase (`src/agent/session/model-slots.ts`). You can override any slot via environment variables (`AFK_MODEL_SMALL`, `AFK_MODEL_MEDIUM`, `AFK_MODEL_LARGE`) or `afk.config.json` — see [Configuring slots](/docs/configuration/model-slots#configuring-slots-in-afkconfigjson) for details.
+
 If you never touch slots, behavior is identical to before this feature existed.
 
 ## Configuring slots in `afk.config.json`

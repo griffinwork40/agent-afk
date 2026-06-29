@@ -22,6 +22,19 @@ The daemon supports four trigger modes set with `--trigger`:
 | `both` | Fire on sessionstart and then on the cron schedule |
 | `pull` | Dequeue tasks from a file-based queue (no cron expression needed) |
 
+### Pull mode
+
+`--trigger pull` starts the daemon without a cron expression. Instead of firing on a schedule,
+it polls `~/.afk/state/queue/` every 30 seconds and dequeues tasks written there by `afk queue add`.
+
+```bash
+afk daemon --trigger pull
+```
+
+No `--cron` or `--task` flag is needed. Tasks are consumed one-by-one in the order they were
+enqueued. Use pull mode when you want to push work to a running daemon on demand rather than
+on a fixed schedule.
+
 ## Common options
 
 ```bash

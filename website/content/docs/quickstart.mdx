@@ -20,6 +20,16 @@ Confirm the binary is on your `PATH`:
 afk --version
 ```
 
+To update to the latest published version at any time:
+
+```bash
+afk update              # installs latest via npm install -g
+afk update --check      # check for a newer version without installing
+afk update --pin 1.2.3  # install a specific semver instead of latest
+```
+
+`afk upgrade` is an alias for `afk update`.
+
 ## Set your API key
 
 The simplest path is an environment variable:
@@ -95,6 +105,19 @@ afk i --model haiku
 | `opus` | Complex reasoning, multi-step planning |
 | `sonnet` | Balanced speed and capability (default) |
 | `haiku` | Fast and cheap, good for simple tasks |
+
+## Coming from Claude Code or Codex?
+
+If you already have plugins, skills, or MCP servers installed in Claude Code or Codex, import them into AFK with a single command:
+
+```bash
+afk migrate             # auto-detects Claude Code and Codex; prompts before writing
+afk migrate --dry-run   # preview what would be imported without changing anything
+afk migrate --mcp       # also import MCP servers (discloses each server's command first)
+afk migrate -y          # skip the confirmation prompt (CI / non-interactive)
+```
+
+Rather than copying files, `afk migrate` records a trust grant in `afk.config.json`. AFK then live-reads the source tool's directories every session — plugins installed in Claude Code tomorrow appear in AFK tomorrow without re-running the command. MCP import is opt-in (`--mcp`) because MCP servers auto-run a command on session start.
 
 ## Next steps
 

@@ -118,7 +118,7 @@ present wedges the session.
 
 The one boundary enforced in the interactive default mode is **path containment**: a file tool
 reaching *outside* the session's working directory triggers a one-time approval prompt before it
-runs. Bypass mode (`/bypass`, or `--dangerously-skip-permissions`) turns containment off entirely;
+runs. Bypass mode (cycle with **Shift+Tab**, or the `--dangerously-skip-permissions` flag) turns containment off entirely;
 the `afk daemon` runs in bypass by default. See [Permissions](/configuration/permissions) for the
 full model — path approval, bash restrictions, autonomous mode, and the env-var knobs.
 
