@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readdirSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { enqueue, dequeueNext, listPending } from './queue-store.js';
+import { enqueue, dequeueNext, listPending, removePending, clearPending } from './queue-store.js';
 
 // Use a fresh temp dir for each test to guarantee isolation
 let tmpDir: string;
@@ -369,5 +369,99 @@ describe('SyntaxError snippet redaction in log output (issue #251)', () => {
     } finally {
       spy.mockRestore();
     }
+describe('removePending', () => {
+  it('returns false on an empty queue', () => {
+    expect(removePending(tmpDir, 'q-0000000000000-aabbcc')).toBe(false);
+  });
+
+  it('removes a task file and returns true when id matches', () => {
+    const task = enqueue('to-remove', {}, tmpDir);
+    expect(readdirSync(tmpDir)).toHaveLength(1);
+
+    const removed = removePending(tmpDir, task.id);
+    expect(removed).toBe(true);
+    expect(readdirSync(tmpDir)).toHaveLength(0);
+  });
+
+  it('returns false when id does not match any task', () => {
+    enqueue('alpha', {}, tmpDir);
+    const removed = removePending(tmpDir, 'q-0000000000000-nonexistent');
+    expect(removed).toBe(false);
+    // File must still be present
+    expect(readdirSync(tmpDir)).toHaveLength(1);
+  });
+
+  it('removes only the matching task, leaving others intact', () => {
+    enqueue('keep-1', {}, tmpDir);
+    const target = enqueue('remove-me', {}, tmpDir);
+    enqueue('keep-2', {}, tmpDir);
+
+    const removed = removePending(tmpDir, target.id);
+    expect(removed).toBe(true);
+
+    const remaining = listPending(tmpDir);
+    expect(remaining).toHaveLength(2);
+    expect(remaining.map((t) => t.command)).toEqual(['keep-1', 'keep-2']);
+  });
+
+  it('skips malformed entries (does not throw) and still removes a valid match', () => {
+    writeFileSync(join(tmpDir, '0001-q-bad.json'), '{ corrupt');
+    const task = enqueue('good', {}, tmpDir);
+
+    // Should find and remove `good` even though a malformed file precedes it.
+    expect(removePending(tmpDir, task.id)).toBe(true);
+  });
+
+  it('creates the queue directory if it does not exist', () => {
+    const nested = join(tmpDir, 'does', 'not', 'exist');
+    const removed = removePending(nested, 'any-id');
+    expect(removed).toBe(false);
+    // Directory must now exist
+    expect(readdirSync(nested)).toHaveLength(0);
+  });
+});
+
+describe('clearPending', () => {
+  it('returns 0 on an empty queue', () => {
+    expect(clearPending(tmpDir)).toBe(0);
+  });
+
+  it('removes all task files and returns the count', () => {
+    enqueue('alpha', {}, tmpDir);
+    enqueue('beta', {}, tmpDir);
+    enqueue('gamma', {}, tmpDir);
+
+    const removed = clearPending(tmpDir);
+    expect(removed).toBe(3);
+    const remaining = readdirSync(tmpDir).filter((f) => f.endsWith('.json'));
+    expect(remaining).toHaveLength(0);
+  });
+
+  it('does not remove the poison/ subdirectory contents', () => {
+    // Enqueue a valid task and a poison entry, then clear.
+    enqueue('real', {}, tmpDir);
+    const poisonDir = join(tmpDir, 'poison');
+    mkdirSync(poisonDir, { recursive: true });
+    writeFileSync(join(poisonDir, 'stale-quarantined.json'), '{ bad }');
+
+    const removed = clearPending(tmpDir);
+    expect(removed).toBe(1); // only the real task file at root level
+
+    // Poison entry was NOT removed.
+    expect(readdirSync(poisonDir)).toHaveLength(1);
+  });
+
+  it('after clear, listPending returns an empty array', () => {
+    enqueue('x', {}, tmpDir);
+    clearPending(tmpDir);
+    expect(listPending(tmpDir)).toEqual([]);
+  });
+
+  it('creates the queue directory if it does not exist', () => {
+    const nested = join(tmpDir, 'new', 'dir');
+    const removed = clearPending(nested);
+    expect(removed).toBe(0);
+    // Directory must now exist
+    expect(readdirSync(nested)).toHaveLength(0);
   });
 });

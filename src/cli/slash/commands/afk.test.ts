@@ -63,6 +63,23 @@ describe('/afk command', () => {
     expect(toggleAfkMode).toHaveBeenCalledWith(ctx, true);
   });
 
+  it('/afk off while in plan mode — warns, preserves plan mode, does NOT toggle', async () => {
+    const warn = vi.fn();
+    const ctx = { ...ctxWithMode('plan'), out: { warn } } as unknown as SlashContext;
+    const result = await afkCmd.handler(ctx, 'off');
+    // Must not clobber plan mode via toggleAfkMode
+    expect(toggleAfkMode).not.toHaveBeenCalled();
+    // Must return continue (no-op for the REPL loop)
+    expect(result).toBe('continue');
+    // Must surface a helpful, accurate message
+    expect(warn).toHaveBeenCalledOnce();
+    const msg: string = warn.mock.calls[0][0] as string;
+    expect(msg).toMatch(/plan mode/i);
+    expect(msg).toMatch(/\/plan off/i);
+    // permissionMode must remain 'plan' (ctx was not mutated)
+    expect((ctx as unknown as { stats: { permissionMode: string } }).stats.permissionMode).toBe('plan');
+  });
+
   it('exposes correct metadata', () => {
     expect(afkCmd.name).toBe('/afk');
     expect(afkCmd.usage).toContain('/afk');

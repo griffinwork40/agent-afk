@@ -15,7 +15,7 @@
  * @module agent/daemon/queue-store
  */
 
-import { mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { getQueueDir } from '../../paths.js';
@@ -288,4 +288,99 @@ export function listPending(queueDir: string = getQueueDir()): QueuedTask[] {
     }
   }
   return tasks;
+}
+
+/**
+ * Remove a single pending task by id.
+ *
+ * Scans the queue directory for a JSON file whose body contains the given
+ * `id`. The search is a linear scan — queue lengths are expected to be small
+ * (single-operator CLI use) so this is fine. Skips directories and temp files
+ * matching the same glob, mirroring `listPending`'s filter.
+ *
+ * @param queueDir - Override the queue directory (defaults to `getQueueDir()`).
+ * @param id       - The task id to remove (e.g. `q-1716000000000-abc123`).
+ * @returns `true` if a matching file was found and removed; `false` if no
+ *          matching task was found (id unknown or already dequeued).
+ * @throws If the matching file exists but cannot be unlinked (e.g. permission
+ *         error). The caller is responsible for surfacing this to the user.
+ */
+export function removePending(queueDir: string = getQueueDir(), id: string): boolean {
+  try {
+    mkdirSync(queueDir, { recursive: true });
+  } catch {
+    return false;
+  }
+
+  const sorted = readdirSync(queueDir)
+    .filter((f) => f.endsWith('.json') && !f.startsWith('.tmp-'))
+    .sort();
+
+  for (const filename of sorted) {
+    const filePath = join(queueDir, filename);
+    // Skip directories (e.g. `poison/` subdir) — only real files hold tasks.
+    try {
+      if (statSync(filePath).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    let task: QueuedTask;
+    try {
+      task = JSON.parse(readFileSync(filePath, 'utf-8')) as QueuedTask;
+    } catch {
+      // Malformed entry — cannot match by id, skip.
+      continue;
+    }
+    if (task.id === id) {
+      unlinkSync(filePath);
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Remove all pending tasks from the queue directory.
+ *
+ * Mirrors `listPending`'s filter (`.json`, not `.tmp-`, not directories) and
+ * deletes every matching file. The `poison/` subdirectory is left intact.
+ * Skips individual files that cannot be unlinked and logs each skip to stderr,
+ * so a single permission error does not abort the whole clear.
+ *
+ * @param queueDir - Override the queue directory (defaults to `getQueueDir()`).
+ * @returns The number of task files successfully removed.
+ */
+export function clearPending(queueDir: string = getQueueDir()): number {
+  try {
+    mkdirSync(queueDir, { recursive: true });
+  } catch {
+    return 0;
+  }
+
+  const sorted = readdirSync(queueDir)
+    .filter((f) => f.endsWith('.json') && !f.startsWith('.tmp-'))
+    .sort();
+
+  let removed = 0;
+  for (const filename of sorted) {
+    const filePath = join(queueDir, filename);
+    // Skip directories (e.g. `poison/` subdir if it somehow has a .json suffix).
+    try {
+      if (statSync(filePath).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    try {
+      unlinkSync(filePath);
+      removed += 1;
+    } catch (err) {
+      const redactedFilename = redactInlineSecrets(filename);
+      const reason = redactInlineSecrets(err instanceof Error ? err.message : String(err));
+      // eslint-disable-next-line no-console
+      console.error(
+        `[daemon] pull-queue: failed to remove entry ${redactedFilename} in clearPending (${reason})`,
+      );
+    }
+  }
+  return removed;
 }

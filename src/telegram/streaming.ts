@@ -128,6 +128,13 @@ export async function streamResponse(
   // event AND by sub-agent sink activity, so the re-armed timeout does not
   // false-fire during deep fan-out.
   let timedOut = false;
+  // Set true once a terminal `done`/`error` event is processed for this turn.
+  // Gates the finally-block interrupt(): any exit WITHOUT a terminal event
+  // (watchdog timeout, a Telegram render exception, an early break) leaves the
+  // long-lived shared provider iterator generating with no consumer, so the
+  // user's NEXT message drains the stale buffer — the "send a '.' to recover
+  // the lost result" bug.
+  let sawTerminalEvent = false;
   let lastActivityAt = Date.now();
   // Bounded sub-agent progress region (see renderSubagentFooter): a rolling
   // counter + the last few lines, instead of an unbounded per-tool-call append.
@@ -455,6 +462,7 @@ export async function streamResponse(
         }
 
         if (event.type === 'done') {
+          sawTerminalEvent = true;
           if (countdownInterval !== null) {
             clearInterval(countdownInterval);
             countdownInterval = null;
@@ -484,6 +492,9 @@ export async function streamResponse(
           break;
         }
         if (event.type === 'error') {
+          // The provider already emitted a terminal error and parked itself, so
+          // no interrupt() is needed (and would wrongly abort the NEXT turn).
+          sawTerminalEvent = true;
           if (countdownInterval !== null) {
             clearInterval(countdownInterval);
             countdownInterval = null;
@@ -508,16 +519,20 @@ export async function streamResponse(
         }
       }
     } finally {
-      // On a genuine inactivity timeout the provider turn is STILL RUNNING — the
-      // watchdog only abandoned our consumer; it did not abort the turn. Without
-      // this, the provider keeps streaming into the long-lived shared
-      // providerIterator with no consumer, and the NEXT message drains those
-      // buffered events — the "turn cut off, send a '.' to recover the lost
-      // result" bug. interrupt() is the same turn-scoped abort the REPL uses for
-      // ESC; it leaves providerIterator parked cleanly at the next-prompt
-      // boundary. Must run BEFORE iter.return(), which flips currentState to
-      // 'idle' and would make interrupt() an early-return no-op.
-      if (timedOut) {
+      // Park the still-running provider turn on ANY exit that did NOT reach a
+      // terminal done/error event: a genuine inactivity timeout (the watchdog
+      // abandoned our consumer but did not abort the turn), a Telegram render
+      // exception, or an early break. Without this the provider keeps streaming
+      // into the long-lived shared providerIterator with no consumer, and the
+      // NEXT message drains those buffered events — the "turn cut off, send a
+      // '.' to recover the lost result" bug. Previously this was gated on
+      // `timedOut` alone, which left every NON-timeout early-exit path leaking.
+      // interrupt() is the same turn-scoped abort the REPL uses for ESC; it
+      // leaves providerIterator parked cleanly at the next-prompt boundary, and
+      // is a no-op once the turn completed cleanly. Must run BEFORE iter.return(),
+      // which flips currentState to 'idle' and would make interrupt() an
+      // early-return no-op.
+      if (timedOut || !sawTerminalEvent) {
         await Promise.resolve(session.interrupt?.()).catch(() => {});
       }
       // Stop the usage-limit countdown timer on EVERY exit path (incl. a throw):

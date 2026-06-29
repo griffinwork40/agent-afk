@@ -11,6 +11,43 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.8.0] - 2026-06-29
+
+### Added
+- add list/remove/clear subcommands + document improve & farm in README (#327) (cfea104)
+
+### Changed
+- add dependency-vulnerability audit gate (#326) (6a1f1d7)
+
+## [5.7.1] - 2026-06-28
+
+### Fixed
+- interrupt provider turn on ANY incomplete stream exit (#320) (cd45b61)
+
+## [5.7.0] - 2026-06-28
+
+### Added
+- wire canUseTool into the dispatcher — Agent SDK parity Dim 8 (increment 1) (#304) (f0ee88b)
+
+## [5.6.1] - 2026-06-28
+
+### Fixed
+- restart launchd services + notify on stale manual bot after install (#322) (c40729a)
+
+## [5.6.0] - 2026-06-28
+
+### Added
+- restore pre-plan permission mode on exit (#306) (1cbf61b)
+
+### Changed
+- bump typescript from 5.9.3 to 6.0.3 in /website (#315) (758303b)
+- migrate docs site to Next.js 16 + React 19 + fumadocs 16 (#317) (56dc929)
+
+## [5.5.1] - 2026-06-28
+
+### Fixed
+- don't silently exit plan mode on /afk off (#311) (55864c8)
+
 ## [5.5.0] - 2026-06-28
 
 ### Added
