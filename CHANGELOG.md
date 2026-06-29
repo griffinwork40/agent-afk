@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.10.1] - 2026-06-29
+
+### Added
+- inject host runtime API into plugin entrypoints (fixes singleton trap) (#324) (4cd187b)
+
+### Fixed
+- wire grant manager for OpenAI-compatible providers in REPL bootstrap (#316) (1648120)
+
+### Changed
+- extract shared helpers into providers/shared (#329) (4d557aa)
+
 ## [5.10.0] - 2026-06-29
 
 ### Added
