@@ -391,6 +391,7 @@ async function handler(
             canUseTool: createCanUseTool(),
           },
           idPrefix: `inspector-${cfg.type}`,
+          agentType: `inspector-${cfg.type}`,
           outputSchema: z.array(VerdictSchema),
           ...(skillCallId ? { parentId: skillCallId } : {}),
         }),

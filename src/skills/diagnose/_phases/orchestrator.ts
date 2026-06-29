@@ -197,6 +197,7 @@ async function testHypothesisInWorktree(
         canUseTool: createVerifierCanUseTool(),
       },
       idPrefix: `diagnose-verifier-${hypothesis.id}`,
+      agentType: `diagnose-verifier-${hypothesis.id}`,
       outputSchema: VerificationResultSchema,
       ...(skillCallId ? { parentId: skillCallId } : {}),
     });
@@ -380,6 +381,7 @@ export async function handler(
       canUseTool: createReadOnlyCanUseTool(),
     },
     idPrefix: 'diagnose-codebase-research',
+    agentType: 'diagnose-codebase-research',
     ...(skillCallId ? { parentId: skillCallId } : {}),
   });
 
@@ -402,6 +404,7 @@ export async function handler(
       canUseTool: createGitOrchestratorCanUseTool(),
     },
     idPrefix: 'diagnose-git-research',
+    agentType: 'diagnose-git-research',
     ...(skillCallId ? { parentId: skillCallId } : {}),
   });
 
@@ -437,6 +440,7 @@ export async function handler(
       canUseTool: createReadOnlyCanUseTool(),
     },
     idPrefix: 'diagnose-hypothesis-synthesis',
+    agentType: 'diagnose-hypothesis-synthesis',
     outputSchema: z.object({
       hypotheses: z.array(HypothesisSchema),
     }),

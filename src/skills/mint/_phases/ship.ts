@@ -40,6 +40,7 @@ export async function runShipPhase(
       apiKey: getApiKey(),
     },
     idPrefix: 'mint-ship',
+    agentType: 'mint-ship',
     ...(skillCallId ? { parentId: skillCallId } : {}),
   });
 

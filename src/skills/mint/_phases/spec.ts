@@ -40,6 +40,7 @@ export async function runSpecPhase(
       apiKey: getApiKey(),
     },
     idPrefix: 'mint-spec',
+    agentType: 'mint-spec',
     phaseRole: 'read-only',
     ...(skillCallId ? { parentId: skillCallId } : {}),
   });

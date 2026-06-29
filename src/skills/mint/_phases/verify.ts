@@ -51,6 +51,7 @@ async function forkVerifyMode(
       apiKey: getApiKey(),
     },
     idPrefix: `mint-verify-${mode}`,
+    agentType: `mint-verify-${mode}`,
     outputSchema: VerifyModeOutputSchema,
     ...(skillCallId ? { parentId: skillCallId } : {}),
   });

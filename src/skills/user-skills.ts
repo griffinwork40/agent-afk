@@ -187,6 +187,7 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
         isSkillDispatch: true,
       },
       idPrefix: `user-skill-${parsed.name}`,
+      agentType: `user-skill-${parsed.name}`,
       ...(skillCallId ? { parentId: skillCallId } : {}),
     });
 
