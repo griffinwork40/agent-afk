@@ -19,6 +19,12 @@ import { SubagentManager } from '../subagent.js';
 import { describeFailure } from '../subagent/result.js';
 import { env } from '../../config/env.js';
 import { getAgentFrameworkDir, getSkillsDir, getSessionsDir } from '../../paths.js';
+import {
+  deriveSessionFacet,
+  getOrDeriveFacet,
+  listSessionIds,
+  loadStoredSession,
+} from '../facets/index.js';
 
 // The full host-injected API, mirroring skill-bridge.ensurePluginEntrypointsLoaded.
 // `discoverPluginSkillBodies` is stubbed here (its real wiring is type-checked at
@@ -35,6 +41,10 @@ const fullApi: PluginApi = {
   getAgentFrameworkDir,
   getSkillsDir,
   getSessionsDir,
+  getOrDeriveFacet,
+  listSessionIds,
+  deriveSessionFacet,
+  loadStoredSession,
 };
 
 let dir: string;
@@ -180,6 +190,10 @@ describe('loadPluginEntrypoints', () => {
         `    describeFailureType: typeof api.describeFailure,\n` +
         `    getAgentFrameworkDirType: typeof api.getAgentFrameworkDir,\n` +
         `    discoverPluginSkillBodiesType: typeof api.discoverPluginSkillBodies,\n` +
+        `    getOrDeriveFacetType: typeof api.getOrDeriveFacet,\n` +
+        `    listSessionIdsType: typeof api.listSessionIds,\n` +
+        `    deriveSessionFacetType: typeof api.deriveSessionFacet,\n` +
+        `    loadStoredSessionType: typeof api.loadStoredSession,\n` +
         `  };\n` +
         `};\n`,
     );
@@ -195,6 +209,10 @@ describe('loadPluginEntrypoints', () => {
       expect(probe?.describeFailureType).toBe('function');
       expect(probe?.getAgentFrameworkDirType).toBe('function');
       expect(probe?.discoverPluginSkillBodiesType).toBe('function');
+      expect(probe?.getOrDeriveFacetType).toBe('function');
+      expect(probe?.listSessionIdsType).toBe('function');
+      expect(probe?.deriveSessionFacetType).toBe('function');
+      expect(probe?.loadStoredSessionType).toBe('function');
     } finally {
       delete store.__afkApiProbe;
     }
