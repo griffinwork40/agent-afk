@@ -33,6 +33,7 @@
  */
 
 import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js';
+import { pushIfConfigured } from '../telegram/push.js';
 
 export type ElicitationHandler = (
   request: ElicitationRequest,
@@ -40,6 +41,43 @@ export type ElicitationHandler = (
 ) => Promise<ElicitationResult>;
 
 const DECLINE: ElicitationResult = { action: 'decline' };
+
+/**
+ * Cap on the model-authored `message` echoed to Telegram. The prompt itself is
+ * the minimal disclosure the operator needs to act, but a model could embed
+ * sensitive text in it; truncating bounds inadvertent exposure. The richer
+ * `request.context` field is deliberately never sent.
+ */
+const MAX_NOTIFY_MESSAGE_CHARS = 300;
+
+function truncateForNotify(text: string): string {
+  return text.length <= MAX_NOTIFY_MESSAGE_CHARS
+    ? text
+    : `${text.slice(0, MAX_NOTIFY_MESSAGE_CHARS)}…(truncated)`;
+}
+
+/**
+ * Park-and-notify: when no elicitation handler is installed (daemon, scheduler,
+ * subagent, one-shot — nobody is watching), a prompt would otherwise DECLINE
+ * silently, the worst autonomy outcome: the run fails at an auth wall / captcha
+ * / permission gate with zero signal to the operator. Instead we fire a
+ * best-effort Telegram notification so the human can act asynchronously, then
+ * the caller still DECLINEs so the run continues rather than blocking.
+ *
+ * Fully fire-and-forget and exception-proof: `pushIfConfigured` no-ops when
+ * Telegram is unconfigured and swallows transport errors; this wrapper never
+ * throws into the router's must-always-resolve path.
+ */
+function notifyUnattendedElicitation(request: ElicitationRequest): void {
+  try {
+    const label = request.title ?? request.serverName;
+    const parts = [`🔔 AFK needs you — stuck on: ${label}`, truncateForNotify(request.message)];
+    if (request.url !== undefined && request.url !== '') parts.push(request.url);
+    void pushIfConfigured(parts.join('\n')).catch(() => undefined);
+  } catch {
+    // Never let a notification failure affect the DECLINE path.
+  }
+}
 
 class ElicitationRouter {
   private handler: ElicitationHandler | null = null;
@@ -85,6 +123,9 @@ class ElicitationRouter {
           return;
         }
         if (!capturedHandler) {
+          // No handler = unattended surface. Surface the prompt out-of-band
+          // (Telegram) instead of declining silently, then DECLINE to continue.
+          notifyUnattendedElicitation(request);
           resolveResult(DECLINE);
           return;
         }

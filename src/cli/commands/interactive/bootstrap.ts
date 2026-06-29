@@ -6,7 +6,7 @@ import type { PermissionMode } from '../../../agent/types/sdk-types.js';
 import { unconfiguredSlotError } from '../../../agent/session/model-slots.js';
 import { createDefaultHookRegistry } from '../../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../../agent/hooks/config-loader.js';
-import { MemoryStore, injectHotMemory, MEMORY_TOOL_NAMES } from '../../../agent/memory/index.js';
+import { MemoryStore, injectHotMemory } from '../../../agent/memory/index.js';
 import type { ThinkingConfig, EffortLevel } from '../../../agent/types.js';
 import type { AgentConfig } from '../../../agent/types.js';
 import type { ModelProvider } from '../../../agent/provider.js';
@@ -16,6 +16,7 @@ import {
   parseThinking, parseEffort, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getThinking, getEffort,
   getMaxOutputTokens, getDefaultSubagentModel, resolveBaseSystemPrompt, isGrantManager,
 } from '../../shared-helpers.js';
+import { topLevelSurfaceAllowedTools } from '../../../agent/tools/top-level-allowlist.js';
 import { loadConfig } from '../../config.js';
 import { assembleSystemPrompt, pendingBriefContext } from '../../../agent/routing-directive.js';
 import { StatusLine } from '../../status-line.js';
@@ -50,9 +51,7 @@ import { AnthropicDirectProvider } from '../../../agent/providers/anthropic-dire
 import { seedPersistedGrants } from '../../../agent/permissions-store.js';
 import { providerForModel } from '../../../agent/providers/index.js';
 import { createMemoizedProviderFactory } from './provider-factory.js';
-import { BUILTIN_TOOL_NAMES } from '../../../agent/tools/schemas.js';
 import { ensurePluginEntrypointsLoaded } from '../../../agent/tools/skill-bridge.js';
-import { AWARENESS_TOOL_NAMES } from '../../../agent/awareness/index.js';
 import { McpManager, loadMcpConfig, getMcpConfigPath } from '../../../agent/mcp/index.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../../config/import-sources.js';
 import { env } from '../../../config/env.js';
@@ -469,15 +468,7 @@ export async function bootstrapSession(
     })
     ?? new AnthropicDirectProvider({
       permissions: {
-        allowedTools: [
-          ...BUILTIN_TOOL_NAMES,
-          ...MEMORY_TOOL_NAMES,
-          ...AWARENESS_TOOL_NAMES,
-          'agent',
-          'skill',
-          'compose',
-          ...mcpToolWireNames,
-        ],
+        allowedTools: topLevelSurfaceAllowedTools(mcpToolWireNames),
       },
       subagentExecutor,
       skillExecutor,

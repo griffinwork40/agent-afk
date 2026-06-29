@@ -76,6 +76,7 @@ vi.mock('../config.js', () => ({
     domSnapshots: false,
     backend: 'playwright',
     configPath: null,
+    defaultProfile: 'default',
   }),
   enforceDomainPolicy: vi.fn(),
 }));
@@ -166,6 +167,7 @@ const defaultConfig: BrowserConfig = {
   domSnapshots: false,
   backend: 'playwright',
   configPath: null,
+  defaultProfile: 'default',
 };
 
 // ---------------------------------------------------------------------------

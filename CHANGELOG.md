@@ -11,6 +11,22 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.11.0] - 2026-06-29
+
+### Added
+- agent browser autonomy MVP (session vault, park-and-notify, retrying fetch) (#323) (ff676af)
+
+## [5.10.3] - 2026-06-29
+
+### Fixed
+- always allow exit_plan_mode on top-level surfaces (REPL/chat/Telegram) (#334) (14867a3)
+- make agentType required on ForkSubagentOptions; add to all callsites (#330) (f281e79)
+
+## [5.10.2] - 2026-06-29
+
+### Fixed
+- refill the viewport after end-of-turn collapse of an over-tall block (#332) (a0cbf3c)
+
 ## [5.10.1] - 2026-06-29
 
 ### Added

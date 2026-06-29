@@ -58,6 +58,7 @@ export async function runBuildPhase(
       apiKey: getApiKey(),
     },
     idPrefix: 'mint-build',
+    agentType: 'mint-build',
     outputSchema: BuildOutputSchema,
     ...(skillCallId ? { parentId: skillCallId } : {}),
   });

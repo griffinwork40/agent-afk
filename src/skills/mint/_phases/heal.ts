@@ -106,6 +106,7 @@ export async function runHealPhase(
         apiKey: getApiKey(),
       },
       idPrefix: 'mint-heal',
+      agentType: 'mint-heal',
       ...(skillCallId ? { parentId: skillCallId } : {}),
     });
 

@@ -38,6 +38,7 @@ export async function runResearchPhase(
       apiKey: getApiKey(),
     },
     idPrefix: 'mint-research',
+    agentType: 'mint-research',
     phaseRole: 'read-only',
     ...(skillCallId ? { parentId: skillCallId } : {}),
   });

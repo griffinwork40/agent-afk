@@ -12,7 +12,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'path';
 import { env as defaultEnv } from '../config/env.js';
-import { getAfkConfigDir } from '../paths.js';
+import { getAfkConfigDir, assertSafeBrowserProfile } from '../paths.js';
 import type { BrowserConfig } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -116,6 +116,18 @@ function resolveBackend(raw: string | undefined): 'playwright' {
   );
 }
 
+/**
+ * Resolve the session-vault profile name. Unset/empty → `'default'`. A
+ * provided name is validated against the filesystem-safe charset and throws
+ * loudly on dangerous input (path traversal) — consistent with this loader's
+ * fail-fast posture on bad config, and matching the guard in the path helpers.
+ */
+function resolveDefaultProfile(raw: string | undefined): string {
+  const name = raw === undefined || raw.trim() === '' ? 'default' : raw.trim();
+  assertSafeBrowserProfile(name);
+  return name;
+}
+
 // ---------------------------------------------------------------------------
 // Boolean env helper
 // ---------------------------------------------------------------------------
@@ -183,6 +195,9 @@ function mergeFileConfig(base: BrowserConfig, fileConfig: Record<string, unknown
       `AFK_BROWSER_BACKEND: only "playwright" is supported in Phase 1, got: ${String(fileConfig['backend'])}`,
     );
   }
+  if (typeof fileConfig['defaultProfile'] === 'string') {
+    result.defaultProfile = resolveDefaultProfile(fileConfig['defaultProfile']);
+  }
 
   return result;
 }
@@ -205,6 +220,7 @@ export function loadBrowserConfig(opts?: LoadBrowserConfigOptions): BrowserConfi
   const blockedDomains = parseDomainList(envSource['AFK_BROWSER_BLOCKED_DOMAINS']);
   const domSnapshots = parseBooleanEnv(envSource['AFK_BROWSER_DOM_SNAPSHOTS']);
   const backend = resolveBackend(envSource['AFK_BROWSER_BACKEND']);
+  const defaultProfile = resolveDefaultProfile(envSource['AFK_BROWSER_DEFAULT_PROFILE']);
 
   const base: BrowserConfig = {
     headless,
@@ -213,6 +229,7 @@ export function loadBrowserConfig(opts?: LoadBrowserConfigOptions): BrowserConfi
     domSnapshots,
     backend,
     configPath: null,
+    defaultProfile,
   };
 
   // Determine JSON config path: explicit env override, or default location.

@@ -14,9 +14,17 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { chromium } from 'playwright';
 import type { Browser, BrowserContext, Dialog, Page, Request, Response } from 'playwright';
 import type { BrowserConfig } from '../types.js';
+import { getBrowserStorageStatePath } from '../../paths.js';
+import { debugLog } from '../../utils/debug.js';
+
+// Playwright's serialized cookies + localStorage. `newContext({ storageState })`
+// accepts exactly this shape, so reusing the method's return type keeps the
+// vault save/restore round-trip type-safe without importing a named symbol.
+type StorageState = Awaited<ReturnType<BrowserContext['storageState']>>;
 
 // ---------------------------------------------------------------------------
 // Version resolution
@@ -185,7 +193,16 @@ export class BrowserLauncher {
 
     const browser = await this.ensureBrowser();
 
-    const context = await browser.newContext(this.contextOptions());
+    // Session vault: restore a human-authorized login from the configured
+    // profile so the agent reuses it across unattended runs. Missing/corrupt
+    // vault → fresh context (loadStorageState returns undefined), preserving
+    // pre-vault behavior. `renderHtml()` builds ephemeral contexts that never
+    // reach this path, so one-shot renders stay vault-free by design.
+    const storageState = this.loadStorageState(this.config.defaultProfile);
+    const context = await browser.newContext({
+      ...this.contextOptions(),
+      ...(storageState !== undefined ? { storageState } : {}),
+    });
 
     const entry: SessionEntry = {
       context,
@@ -439,6 +456,11 @@ export class BrowserLauncher {
     // before we start tearing it down.
     this.sessions.delete(sessionId);
 
+    // Invariant: persist the vault BEFORE teardown — storageState() requires a
+    // live context. Save-back only refreshes an already-established profile
+    // (see saveStorageState); it never implicitly creates one.
+    await this.saveStorageState(this.config.defaultProfile, entry.context);
+
     if (entry.page !== undefined) {
       await entry.page.close().catch(() => {
         // Swallow — page may already be closed if the browser crashed.
@@ -500,5 +522,61 @@ export class BrowserLauncher {
       viewport: { width: 1280, height: 800 },
       userAgent: `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 agent-afk/${AFK_VERSION}`,
     };
+  }
+
+  /**
+   * Read a profile's persisted `storageState` for restore-on-open. Returns
+   * undefined when the vault file is absent OR unreadable/corrupt — the caller
+   * then builds a fresh context, so a bad vault file degrades to pre-vault
+   * behavior instead of breaking the browser.
+   */
+  private loadStorageState(profile: string): StorageState | undefined {
+    const file = getBrowserStorageStatePath(profile);
+    try {
+      if (!fs.existsSync(file)) return undefined;
+      const state = JSON.parse(fs.readFileSync(file, 'utf8')) as StorageState;
+      debugLog('[browser/vault] restored session', { profile, file });
+      return state;
+    } catch (err) {
+      // Corrupt/unreadable vault degrades to a fresh context (pre-vault
+      // behavior). Surface under AFK_DEBUG so an unexpected "logged-out"
+      // unattended session is diagnosable rather than silent.
+      debugLog('[browser/vault] ignoring unreadable vault', { profile, file, err });
+      return undefined;
+    }
+  }
+
+  /**
+   * Persist a session's `storageState` back to its profile on close so a
+   * human-authorized login stays fresh across runs (e.g. rotated tokens).
+   *
+   * Invariant: only an ALREADY-ESTABLISHED profile (its file exists, created by
+   * `afk browser login`) is refreshed — runtime never implicitly creates a
+   * vault for an unconfigured/ephemeral profile, so default sessions stay
+   * cookie-free. Best-effort: a write failure must never break teardown. The
+   * file is written 0600 (secrets-at-rest: cookies + tokens).
+   */
+  private async saveStorageState(profile: string, context: BrowserContext): Promise<void> {
+    try {
+      const file = getBrowserStorageStatePath(profile);
+      if (!fs.existsSync(file)) return;
+      const state = await context.storageState();
+      // Atomic 0600 write: stage into a uniquely-named sibling temp at 0600,
+      // then POSIX-rename it over the vault. The rename swaps the file in whole,
+      // so freshly-written credentials are never observed truncated or at looser
+      // perms (the old write-then-chmod left exactly that transient window). The
+      // temp lives in the same dir as the dest, so the rename never hits EXDEV.
+      const tmp = path.join(
+        path.dirname(file),
+        `.${path.basename(file)}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`,
+      );
+      fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
+      fs.chmodSync(tmp, 0o600); // enforce exact perms regardless of umask
+      fs.renameSync(tmp, file);
+      debugLog('[browser/vault] saved session', { profile, file });
+    } catch (err) {
+      // Swallow — vault maintenance is best-effort and must not break close().
+      debugLog('[browser/vault] save failed', { profile, err });
+    }
   }
 }

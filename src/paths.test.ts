@@ -32,6 +32,10 @@ import {
   getBgJobDir,
   getBgJobLog,
   getBgJobMeta,
+  assertSafeBrowserProfile,
+  getBrowserStateRoot,
+  getBrowserProfileStateDir,
+  getBrowserStorageStatePath,
 } from './paths.js';
 
 let tmpHome: string;
@@ -261,6 +265,62 @@ describe('assertSafeJobId and bg job path accessors', () => {
       expect(getBgJobDir('bg-abc-1').startsWith(root + '/')).toBe(true);
       expect(getBgJobLog('bg-abc-1').startsWith(root + '/')).toBe(true);
       expect(getBgJobMeta('bg-abc-1').startsWith(root + '/')).toBe(true);
+    });
+  });
+});
+
+describe('assertSafeBrowserProfile and browser vault path accessors', () => {
+  describe('assertSafeBrowserProfile', () => {
+    it('accepts simple profile names', () => {
+      expect(() => assertSafeBrowserProfile('default')).not.toThrow();
+      expect(() => assertSafeBrowserProfile('work')).not.toThrow();
+      expect(() => assertSafeBrowserProfile('WORK_2')).not.toThrow();
+      expect(() => assertSafeBrowserProfile('a-b-c')).not.toThrow();
+      expect(() => assertSafeBrowserProfile('a')).not.toThrow();
+    });
+
+    it.each([
+      ['empty string', ''],
+      ['traversal: ../..', '../..'],
+      ['traversal: ../../etc/passwd', '../../etc/passwd'],
+      ['forward slash', 'work/sub'],
+      ['back slash', 'work\\sub'],
+      ['null byte', 'work\u0000'],
+      ['leading dot', '.hidden'],
+      ['parent ref', '..'],
+      ['just dot', '.'],
+      ['space', 'my work'],
+      ['unicode', 'wörk'],
+      ['absolute path', '/etc/passwd'],
+      ['url-encoded slash', 'work%2Fsub'],
+    ])('rejects %s', (_label, payload) => {
+      expect(() => assertSafeBrowserProfile(payload)).toThrow(/Invalid browser profile/);
+    });
+
+    it('rejects payloads longer than 128 chars', () => {
+      expect(() => assertSafeBrowserProfile('a'.repeat(129))).toThrow(/exceeds 128/);
+    });
+
+    it('accepts exactly 128 chars', () => {
+      expect(() => assertSafeBrowserProfile('a'.repeat(128))).not.toThrow();
+    });
+  });
+
+  describe('browser vault path accessors guard against traversal', () => {
+    it('getBrowserProfileStateDir throws on traversal attempt', () => {
+      expect(() => getBrowserProfileStateDir('../../etc/passwd')).toThrow(/Invalid browser profile/);
+    });
+
+    it('getBrowserStorageStatePath throws on traversal attempt', () => {
+      expect(() => getBrowserStorageStatePath('../../etc')).toThrow(/Invalid browser profile/);
+    });
+
+    it('valid profiles resolve under the browser state root, with the storageState leaf', () => {
+      const root = getBrowserStateRoot();
+      expect(getBrowserProfileStateDir('work').startsWith(root + '/')).toBe(true);
+      const statePath = getBrowserStorageStatePath('work');
+      expect(statePath.startsWith(root + '/')).toBe(true);
+      expect(statePath.endsWith('/work/storageState.json')).toBe(true);
     });
   });
 });

@@ -1,10 +1,14 @@
 /**
- * `afk browser` command group — connect the agent to the user's REAL Chrome.
+ * `afk browser` command group — give the agent web hands.
  *
  * Subcommands:
  *   afk browser connect      — wire Google's `chrome-devtools-mcp` (--autoConnect)
  *                              into ~/.afk/config/mcp.json + print setup steps
  *   afk browser disconnect   — remove the chrome-devtools server entry
+ *   afk browser login <url>  — open a headed browser, let the human log in, and
+ *                              save the session to a vault profile the agent's
+ *                              native browser tools reuse across unattended runs
+ *   afk browser profiles     — list saved session-vault profiles
  *
  * Why an MCP server and not a native browser provider:
  *   Driving the user's real, logged-in default Chrome profile is impossible via
@@ -27,13 +31,35 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
-import { dirname, join } from 'path';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
+import { basename, dirname, join } from 'path';
 import { randomBytes } from 'crypto';
+import { createInterface } from 'node:readline';
 import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
 import { getMcpConfigPath, type McpConfigFile } from '../../agent/mcp/config-loader.js';
 import type { McpServerConfig } from '../../agent/mcp/types.js';
+import {
+  assertSafeBrowserProfile,
+  getBrowserProfileStateDir,
+  getBrowserStateRoot,
+  getBrowserStorageStatePath,
+} from '../../paths.js';
+
+/**
+ * Block until the operator presses Enter. Used by `login` to know the human has
+ * finished authenticating before we capture the session. We capture from the
+ * live context (the human must NOT close the window themselves).
+ */
+function waitForEnter(prompt: string): Promise<void> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise<void>((resolve) => {
+    rl.question(prompt, () => {
+      rl.close();
+      resolve();
+    });
+  });
+}
 
 /** MCP server key written into mcpServers. Stable so connect/disconnect agree. */
 export const CHROME_DEVTOOLS_SERVER_NAME = 'chrome-devtools';
@@ -161,7 +187,7 @@ function printSetupGuidance(): void {
 export function registerBrowserCommand(program: Command): void {
   const browser = program
     .command('browser')
-    .description('Connect the agent to your real Chrome browser (via Chrome DevTools MCP)');
+    .description('Give the agent web hands: connect your real Chrome, or save a login it reuses');
 
   browser
     .command('connect')
@@ -217,6 +243,97 @@ export function registerBrowserCommand(program: Command): void {
         delete cfg.mcpServers[CHROME_DEVTOOLS_SERVER_NAME];
         writeMcpConfigFileAtomic(path, cfg);
         console.log(chalk.green(`✓ Removed "${CHROME_DEVTOOLS_SERVER_NAME}" from ${path}`));
+      } catch (err) {
+        handleCommandError(err);
+      }
+    });
+
+  browser
+    .command('login <url>')
+    .description("Open a headed browser, log in manually, and save the session to a vault profile the agent's native browser tools reuse")
+    .option('--profile <name>', 'Vault profile name to save the session under', 'default')
+    .action(async (url: string, opts: { profile?: string }) => {
+      try {
+        const profile = (opts.profile ?? 'default').trim();
+        assertSafeBrowserProfile(profile);
+
+        let parsed: URL;
+        try {
+          parsed = new URL(url);
+        } catch {
+          throw new Error(`Invalid URL: ${url}`);
+        }
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+          throw new Error(`login URL must be http(s), got: ${parsed.protocol}`);
+        }
+
+        const statePath = getBrowserStorageStatePath(profile);
+
+        // Dynamic import: Playwright is heavy; only load it when login actually runs.
+        const { chromium } = await import('playwright');
+        console.log(palette.meta(`Launching a browser for profile "${profile}"…`));
+        const browserInstance = await chromium.launch({ headless: false });
+        // Restore an existing session if present, so re-running login refreshes
+        // the same profile rather than starting from a logged-out state.
+        const context = await browserInstance.newContext(
+          existsSync(statePath) ? { storageState: statePath } : {},
+        );
+        const page = await context.newPage();
+        await page.goto(url, { waitUntil: 'load' }).catch(() => {
+          // Non-fatal — the user can navigate manually if the initial load fails.
+        });
+
+        console.log('');
+        console.log(chalk.bold('Log in to the site in the opened browser window.'));
+        console.log(palette.meta('When fully logged in, return here and press Enter to save the session.'));
+        console.log(palette.meta('(Do NOT close the browser window yourself — this command closes it for you.)'));
+        await waitForEnter('Press Enter to save the session… ');
+
+        const state = await context.storageState();
+        mkdirSync(getBrowserProfileStateDir(profile), { recursive: true });
+        // Atomic 0600 write (temp in the same dir → no EXDEV, then POSIX rename):
+        // the vault is never observed truncated or at looser perms, closing the
+        // write-then-chmod window on freshly-written credentials.
+        const tmp = join(
+          dirname(statePath),
+          `.${basename(statePath)}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`,
+        );
+        writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
+        chmodSync(tmp, 0o600);
+        renameSync(tmp, statePath);
+        await browserInstance.close().catch(() => undefined);
+
+        console.log(chalk.green(`✓ Saved session for profile "${profile}"`));
+        console.log(palette.meta(`  Vault: ${statePath} (0600 — treat as a credential)`));
+        console.log(palette.meta('  Point the agent at it:'));
+        console.log(palette.meta(`    export AFK_BROWSER_DEFAULT_PROFILE=${profile}`));
+      } catch (err) {
+        handleCommandError(err);
+      }
+    });
+
+  browser
+    .command('profiles')
+    .description('List saved browser session-vault profiles')
+    .action(() => {
+      try {
+        const root = getBrowserStateRoot();
+        const dirs = existsSync(root)
+          ? readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory())
+          : [];
+        if (dirs.length === 0) {
+          console.log(palette.meta('No saved profiles. Create one with `afk browser login <url> --profile <name>`.'));
+          return;
+        }
+        console.log(chalk.bold('Saved browser profiles:'));
+        for (const d of dirs) {
+          const hasState = existsSync(join(root, d.name, 'storageState.json'));
+          const marker = hasState ? chalk.green('●') : palette.meta('○');
+          const note = hasState ? '' : palette.meta(' (no saved session)');
+          console.log(`  ${marker} ${d.name}${note}`);
+        }
+        console.log('');
+        console.log(palette.meta('Use one:  export AFK_BROWSER_DEFAULT_PROFILE=<name>'));
       } catch (err) {
         handleCommandError(err);
       }
