@@ -159,6 +159,58 @@ afk --help               # full command tree
 
 Aliases: `afk c` → `chat`, `afk i` → `interactive`, `afk s` → `status`.
 
+### Queue management
+
+`afk queue` manages the pull-trigger daemon's task queue — tasks are persisted as JSON files and consumed one-by-one by `afk daemon --trigger pull`.
+
+```bash
+afk queue add "/forge-friction --auto" --notify-on failure
+                         # enqueue a command; daemon picks it up on next poll
+afk queue list           # print all pending tasks (id, enqueued time, command)
+afk queue remove <id>    # drop a single pending task by id
+afk queue clear          # remove all pending tasks (prompts for confirmation)
+afk queue clear --yes    # clear without prompting (CI / non-interactive)
+```
+
+### Self-improvement pipeline
+
+`afk improve` is a zero-LLM, deterministic pipeline that mines `~/.afk/state/witness/` session traces for ranked failure patterns, without making any model calls.
+
+```bash
+# Scan traces for failure patterns (dry-run; add --write to persist cards)
+afk improve scan [--since 7d] [--write] [--only <detector,...>]
+
+# Inspect failure cards
+afk improve cards list [--pattern <name>] [--severity <level>] [--status open|deferred|resolved]
+afk improve cards show <slug>
+afk improve cards triage <slug> --note "..." [--status resolved]
+
+# Draft a template-mode improvement proposal for a card (no LLM)
+afk improve propose <slug> [--no-write]
+
+# Generate a replay-mode eval-case from a failure card
+afk improve eval-gen <cardSlug> [--evidence-row <i>] [--no-write]
+
+# Run the deterministic guardrail contract for an eval-case
+afk improve eval-run <evalCaseIdOrCardSlug> [--no-write]
+```
+
+Available detectors (run `afk improve scan --help` for thresholds): `repeated-tool-use`, `subagent-block`, `closure-anomaly`, `tool-failure-density`.
+
+### Speculative branch farm
+
+`afk farm` spawns N isolated git worktrees, runs an agent on each in parallel, scores the results (tests + lint + LoC delta), and prints a ranked summary.
+
+```bash
+afk farm "add retry logic to the queue consumer" --branches 3
+afk farm "<task>" -n 5 --model sonnet --fail-fast
+afk farm "<task>" -n 3 --no-score    # skip post-run scoring
+afk farm "<task>" -n 3 --labels "approach-a,approach-b,approach-c"
+afk farm "<task>" -n 3 --no-memory --no-digest  # skip memory write + Telegram
+```
+
+Each branch gets a dedicated worktree under `~/.afk/state/farm/`. A commit-count escape check confirms each agent did real work. On completion, the winner (branch that passes tests and makes the smallest net change) is surfaced; the rest are left for manual cherry-pick or deletion.
+
 ## A note on permissions
 
 `afk` does not prompt before each tool call — there is no per-tool approval flow. Claude runs bash, reads and writes files, fetches URLs, and calls MCP servers without asking each time. This is intentional — `afk` is built for unattended work, where a permission prompt with no human in front of it is just a wedged session.
