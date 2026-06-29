@@ -62,11 +62,19 @@ describe('decideCommitMode', () => {
     expect(m.overflowRun).toHaveLength(5);
   });
 
-  it('legacy overflow: a block taller than the collapsed screen (no pending band) takes neither flag', () => {
+  it('over-tall block (> maxBandModel, no pending band) now takes band-hold (end-of-turn viewport-void fix)', () => {
+    // Pre-fix: this case returned useBandHold=false and fell through to the
+    // legacy overflow archive, leaving committedBand empty after commit. When the
+    // overlay collapsed, repositionCommittedBand had nothing to re-pin, so the
+    // freed viewport rows stayed blank (the "end-of-turn viewport void" bug).
+    // Post-fix: useBandHold=true routes the block through band-hold; Phase 1
+    // archives genuineOverflow rows to scrollback as REAL content; Phase 3 stores
+    // the capped model; repositionCommittedBand (or preserveRowsBeforeFrameRender's
+    // collapse-eviction) fills the viewport on collapse. No content loss.
     const tall = Array.from({ length: 25 }, (_, i) => `row${i}`);
     const m = decideCommitMode(base({ prevTopRow: 3, frameTop: 3, lineCount: 25, textLines: tall }));
     expect(m.fitsAboveFrame).toBe(false);
-    expect(m.useBandHold).toBe(false); // → caller falls through to the legacy archive path
+    expect(m.useBandHold).toBe(true); // post-fix: band-hold routes all !fitsAboveFrame cases
   });
 
   it('two-table fix: a new block that fits alone takes band-hold even when the merged painted run exceeds maxBandModel', () => {

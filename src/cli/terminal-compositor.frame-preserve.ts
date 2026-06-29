@@ -47,12 +47,83 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
   // [1, desiredTopRow-1] — already hugging the new frame top AND contiguous
   // with scrollback, so no gap opens. Full design: docs/scrollback.md.
   if (!hasBanner) {
-    const grew = self.hasCommitted && prevTopRow > 1 && desiredTopRow < prevTopRow;
     const bandLen = self.committedBand.length;
-    if (!grew || bandLen === 0) return;
+
+    // Invariant (collapse-time eviction of pending overflow — content-loss fix):
+    // band-hold's commit-time `maxBandModel` can exceed the true collapse paint
+    // capacity `maxFit` (= `targetBottom - floor + 1` in repositionCommittedBand)
+    // because `maxFit` accounts for the REAL collapsed frame height (input + gap +
+    // spinner + status rows) while `maxBandModel` counts against a 1-row estimate.
+    // When maxBandModel > maxFit, repositionCommittedBand paints only `fit` rows
+    // and the oldest `excess = bandLen - fit` PENDING rows are neither painted nor
+    // archived — SILENT CONTENT LOSS. This branch runs BEFORE render(), owns
+    // evictRowsToScrollback, and is the correct place to resolve it.
+    //
+    // Trigger (gated on the genuine end-of-turn signal — DELIBERATELY not a
+    // room-magnitude threshold nor a shrink-direction heuristic):
+    //   • the OVERLAY is empty (self.overlay.trim() === '') — i.e. the turn
+    //     ended and the live frame is now at its settled (idle) height, so
+    //     `room` is the REAL above-frame capacity. This is the only reliable
+    //     "has the overlay actually collapsed?" signal: a mid-turn minor shrink
+    //     (e.g. the spinner stopping while a TALL overlay is still held) leaves
+    //     the overlay non-empty, so we do NOT fire and the pending band is kept
+    //     intact for the real collapse — never prematurely archiving rows that
+    //     should stay visible (overflow-gap.test.ts "archives the genuine
+    //     overflow ... R10 visible"). AND
+    //   • pending rows exist (committedBandPaintedRows < bandLen), AND
+    //   • the band overflows the room above the settled frame (room =
+    //     desiredTopRow - 1, anchorFloor === 1 here), AND
+    //   • room > 0 AND !commitInFlight (Phase 2 repaint runs mid-commit;
+    //     Phase 3 rewrites the band itself).
+    // Because `room` is the TRUE above-frame room for whatever the collapsed
+    // frame height turns out to be (input + gap + spinner + status, ANY height),
+    // the eviction count (bandLen - room) is exactly the overflow that cannot be
+    // shown — correct for every footer/input geometry, not just a 1–2 row frame.
+    //
+    // Action: paint the FULL model top-aligned (erasing old position) so the
+    // subsequent eviction scrolls REAL rows — never blanks — into scrollback.
+    // Then evict the oldest `overflow = bandLen - room` rows. Survivors remain
+    // at [1, room] hugging the forthcoming frame top, all materialized.
     const room = Math.max(0, desiredTopRow - 1);
-    const overflow = bandLen - room;
-    if (overflow <= 0) return; // whole band fits above the new frame — no scroll
+    const hasPending = self.committedBandPaintedRows < bandLen;
+    const overlayCollapsed = self.overlay.trim().length === 0;
+    if (
+      !self.commitInFlight &&
+      hasPending &&
+      bandLen > room &&
+      overlayCollapsed &&
+      room > 0
+    ) {
+      const overflow = bandLen - room;
+      let out = '';
+      // Erase the old painted position (only the materialized suffix).
+      for (let r = Math.max(1, self.committedBandTopRow); r <= self.committedBandBottomRow; r++) {
+        out += eraseAndPaintRow(r);
+      }
+      // Paint the FULL model top-aligned at [1, bandLen] so the scroll evicts
+      // real rows — including previously-pending ones never on screen before.
+      for (let i = 0; i < bandLen; i++) {
+        out += eraseAndPaintRow(1 + i, self.committedBand[i]);
+      }
+      try {
+        self.stdout.write(out);
+      } catch {
+        /* terminal closed mid-render — next render's lifecycle tears us down */
+      }
+      evictRowsToScrollback(self, overflow);
+      // Survivors physically shifted to [1, room] by the scroll.
+      self.committedBand = self.committedBand.slice(overflow);
+      self.committedBandTopRow = 1;
+      self.committedBandBottomRow = room;
+      self.committedBandPaintedRows = self.committedBand.length;
+      return;
+    }
+
+    const grew = self.hasCommitted && prevTopRow > 1 && desiredTopRow < prevTopRow;
+    if (!grew || bandLen === 0) return;
+    const growRoom = Math.max(0, desiredTopRow - 1);
+    const growOverflow = bandLen - growRoom;
+    if (growOverflow <= 0) return; // whole band fits above the new frame — no scroll
     // Re-paint the full band top-aligned at [1, bandLen], erasing its old
     // floating position, so the scroll carries the oldest `overflow` lines —
     // real content, never blank rows — into scrollback. The frame render that
@@ -69,13 +140,13 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     } catch {
       /* terminal closed mid-render — next render's lifecycle tears us down */
     }
-    evictRowsToScrollback(self, overflow);
-    // Survivors physically shifted to [1, room] by the scroll — already
-    // hugging the new frame top (room === desiredTopRow - 1). Record that so a
+    evictRowsToScrollback(self, growOverflow);
+    // Survivors physically shifted to [1, growRoom] by the scroll — already
+    // hugging the new frame top (growRoom === desiredTopRow - 1). Record that so a
     // later shrink re-pins from the right place.
-    self.committedBand = self.committedBand.slice(overflow);
+    self.committedBand = self.committedBand.slice(growOverflow);
     self.committedBandTopRow = 1;
-    self.committedBandBottomRow = room;
+    self.committedBandBottomRow = growRoom;
     // The full band was re-painted top-aligned above before the scroll, so
     // every surviving row is materialized on screen (and the evicted prefix is
     // now in scrollback) — none are pending. Promote any previously-pending

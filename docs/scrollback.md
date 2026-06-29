@@ -525,10 +525,10 @@ commit satisfies `overflowPriorContiguous` and merges contiguously, and both
 blocks survive in commit order. Verified by the third case in
 `terminal-compositor.h1-prevtoprow.test.ts`.
 
-### Known bug (NOT yet fixed): block taller than the COLLAPSED screen blanks the viewport on end-of-turn collapse
+### Fixed: block taller than the COLLAPSED screen blanked the viewport on end-of-turn collapse
 
-Repro: `terminal-compositor.endturn-overflow-gap.repro.test.ts` (marked
-`it.fails`). Operator symptom: after a long turn, the final assistant message
+Repro / regression guard: `terminal-compositor.endturn-overflow-gap.repro.test.ts`.
+Operator symptom (pre-fix): after a long turn, the final assistant message
 "disappears" — the viewport is blank above the prompt and the content is only
 reachable by scrolling up into native scrollback.
 
@@ -556,19 +556,40 @@ So the defect is **"viewport not refilled with recent committed content after
 collapse"**, not an erase wiping a painted band. "No existing test hits
 prevTopRow <= 1" (`committed-band-commit.ts`); the repro above is that test.
 
-Why the obvious fix is insufficient (the blocker): routing this case through
-band-hold (so the pending model + `repositionCommittedBand` refill the viewport
-on collapse) fixes the SINGLE-commit case, but regresses the multi-commit case.
-Band-hold's `maxBandModel` is a COMMIT-TIME estimate of the collapsed paint
-capacity; the actual collapse capacity (`repositionCommittedBand`'s `maxFit`) is
-smaller once the collapsed frame's real height (input + rhythm separator +
-loop-stage bar + status line) is accounted for. When `maxBandModel > maxFit`, the
-oldest model rows are neither painted NOR archived to scrollback — silent content
-loss, caught by `terminal-compositor.band-hold-perline-gap.repro.test.ts`
-("a block taller than the collapsed screen still lands every row contiguously").
-A correct fix must reconcile `maxBandModel` with the true collapse paint capacity
-and archive the remainder to scrollback (so the excess is recoverable, never
-dropped) — a change to the deliberately-deferred overflow design, not a one-liner.
+The fix (two parts):
+
+1. **Route the over-tall case through band-hold** (`commit-mode.ts`):
+   `useBandHold = overflowHasPending || (!fitsAboveFrame && maxBandModel > 0)`.
+   The block is no longer dropped down the legacy overflow archive — Phase 1
+   archives the genuine overflow (oldest rows beyond `maxBandModel`) to scrollback
+   as REAL content, and the pending capped model is stored so a collapse re-pin
+   can materialize it.
+
+2. **Evict the pending overflow at collapse** (`preserveRowsBeforeFrameRender`,
+   `terminal-compositor.frame-preserve.ts`). Part 1 alone would regress the
+   multi-commit case: band-hold's COMMIT-TIME `maxBandModel` can exceed the true
+   collapse paint capacity (`repositionCommittedBand`'s `maxFit`) once the real
+   collapsed-frame height (input + rhythm separator + loop-stage bar + status) is
+   counted, so `repositionCommittedBand` paints only `fit` rows and the oldest
+   `bandLen - fit` PENDING rows would be neither painted nor archived — silent
+   content loss. The fix evicts that excess to scrollback BEFORE the collapse
+   render, gated on the **genuine end-of-turn signal — the overlay being empty**
+   (`self.overlay.trim() === ''`), NOT a room-magnitude threshold or a
+   shrink-direction heuristic. `room` (= `desiredTopRow - 1`) is then the TRUE
+   above-frame capacity for whatever the collapsed-frame height is, so the
+   eviction count (`bandLen - room`) is exactly the overflow that cannot be shown
+   — correct for ANY footer/input geometry. A mid-turn minor shrink (e.g. the
+   spinner stopping while a tall overlay is still held) leaves the overlay
+   non-empty, so the pending band is preserved intact for the real collapse and
+   rows that should stay visible are never prematurely archived.
+
+Guards: `terminal-compositor.endturn-overflow-gap.repro.test.ts` (the gap is
+closed), `terminal-compositor.band-hold-perline-gap.repro.test.ts` ("a block
+taller than the collapsed screen still lands every row contiguously" — the
+content-loss guard), and `terminal-compositor.overflow-gap.test.ts` ("archives
+the genuine overflow ... R10 visible" — no premature eviction). Verified against
+a real `@xterm/headless` buffer across varied collapsed-frame heights (extraRows,
+spinner-at-settle, multi-step collapse) — no content loss, no premature archival.
 
 ## What is and isn't in scrollback after a commit
 

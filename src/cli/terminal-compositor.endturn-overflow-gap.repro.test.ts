@@ -1,9 +1,9 @@
 /**
- * KNOWN-FAILING repro (it.fails): a final assistant message TALLER than the
- * viewport leaves a large blank void in the viewport after the end-of-turn
- * overlay collapse — the user-reported "stuff disappears from scrollback".
- * Marked `it.fails` per this repo's convention (see splice.test.ts:260); flip
- * to `it(` when the fix lands.
+ * Regression guard: a final assistant message TALLER than the viewport must
+ * NOT leave a blank void in the viewport after the end-of-turn overlay collapse.
+ * Previously KNOWN-FAILING (it.fails); flipped to it() once the fix landed —
+ * see commit-mode.ts (band-hold now covers the over-tall case) and
+ * terminal-compositor.frame-preserve.ts (pending overflow evicted on collapse).
  *
  * MECHANISM (empirically verified by per-step @xterm/headless instrumentation —
  * this CORRECTS an earlier hypothesis that a stale-tall Phase-2 erase wiped the
@@ -96,9 +96,10 @@ const COLS = 80;
 const ROWS = 24;
 
 describe('end-of-turn overflow-gap regression: block taller than viewport, banner-collapse repaint', () => {
-  // it.fails: known bug — currently the viewport blanks above the prompt. Flip
-  // to it() when the overflow-collapse refill is fixed (see header for blocker).
-  it.fails('preserves ALL lines of a block taller than the viewport after the overlay collapses', async () => {
+  // Fixed: band-hold now covers the over-tall case (commit-mode.ts) and
+  // preserveRowsBeforeFrameRender evicts pending overflow on collapse
+  // (terminal-compositor.frame-preserve.ts). Flip from it.fails to it().
+  it('preserves ALL lines of a block taller than the viewport after the overlay collapses', async () => {
     const stdout = makeStdout(COLS, ROWS);
     const stdin = makeStdin();
     const all = collect(stdout);
