@@ -14,7 +14,7 @@ import type { HookRegistry } from '../../../agent/hooks.js';
 import type { TraceWriter } from '../../../agent/trace/index.js';
 import {
   parseThinking, parseEffort, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getThinking, getEffort,
-  getMaxOutputTokens, getDefaultSubagentModel, resolveBaseSystemPrompt,
+  getMaxOutputTokens, getDefaultSubagentModel, resolveBaseSystemPrompt, isGrantManager,
 } from '../../shared-helpers.js';
 import { loadConfig } from '../../config.js';
 import { assembleSystemPrompt, pendingBriefContext } from '../../../agent/routing-directive.js';
@@ -55,6 +55,7 @@ import { ensurePluginEntrypointsLoaded } from '../../../agent/tools/skill-bridge
 import { AWARENESS_TOOL_NAMES } from '../../../agent/awareness/index.js';
 import { McpManager, loadMcpConfig, getMcpConfigPath } from '../../../agent/mcp/index.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../../config/import-sources.js';
+import { env } from '../../../config/env.js';
 import { resolveResumeTarget } from '../../resume-session.js';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
 import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
@@ -818,9 +819,10 @@ export async function bootstrapSession(
   //
   // We wire once here and do not rewire on /model swaps: directory grants are a
   // session-level concept (not per-model), and a Claude→GPT→Claude swap reuses
-  // the cached Claude instance with its grants intact. Only AnthropicDirectProvider
-  // implements the GrantManager interface; other providers are no-ops.
-  if (startupProvider instanceof AnthropicDirectProvider) {
+  // the cached instance with its grants intact. The duck-type guard (isGrantManager)
+  // covers both AnthropicDirectProvider and OpenAICompatibleProvider — and any
+  // future provider that exposes the GrantManager surface — without naming each.
+  if (isGrantManager(startupProvider)) {
     setAllowDirDispatcher(startupProvider);
     // Wire the same provider into the path-approval + bash-restriction hooks so
     // they can mutate grants when the user picks Session / Always (persist) on
@@ -829,6 +831,16 @@ export async function bootstrapSession(
     // Seed read/write roots from persisted `persist` grants so the prompt's
     // "future sessions inherit it" promise actually holds. No-op when none.
     seedPersistedGrants(startupProvider);
+  } else if (env.AFK_DISABLE_PATH_APPROVAL !== '1') {
+    // Emit a one-time advisory when path-approval is enabled but the active
+    // provider does not expose the GrantManager API. This makes fail-open
+    // explicit rather than silent — the bash interpreter denylist still fires,
+    // but the elicitation prompt and bash restricted-path check will not.
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[path-approval] active provider does not implement GrantManager — ' +
+        'path-approval elicitation and bash restricted-path checks will not fire.',
+    );
   }
 
   const rl = readline.createInterface({
