@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.10.0] - 2026-06-29
+
+### Added
+- trace skill-forked subagent tool denials + receipt refusal tally (#333) (6cbcee6)
+
 ## [5.9.1] - 2026-06-29
 
 ### Fixed
