@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.12.0] - 2026-06-29
+
+### Added
+- inject runtime values into PluginApi for code-backed plugins (#335) (337f118)
+
 ## [5.11.0] - 2026-06-29
 
 ### Added
