@@ -4,7 +4,7 @@ import { env } from '../../config/env.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import { wrapToWidth } from '../wrap.js';
 import { palette } from '../palette.js';
-import { renderMascotLines, MASCOT_WIDTH, MASCOT_HEIGHT, mascotSuppressed } from '../mascot.js';
+import { renderMascotLines, MASCOT_WIDTH, mascotSuppressed } from '../mascot.js';
 import { maxInnerBoxWidth, truncateDisplay } from './utils.js';
 
 // ─── Welcome Banner ───────────────────────────────────────────────────────────
@@ -203,15 +203,24 @@ function renderHybridBanner(opts: WelcomeBannerOpts): string {
     pushInfoRow(palette.dim(opts.metaLine));
   }
 
-  // Compose mascot + info rows. Sprite is MASCOT_HEIGHT rows; pad whichever
-  // column is shorter with blank lines so the two columns terminate together.
+  // Compose mascot + info rows. The info stack is short (≈3–5 rows) beside a
+  // tall sprite, so top-aligning it strands the text against the cap and opens
+  // a tall void down the right of the face. Vertically center the info block
+  // against the sprite instead: the identity rows land beside the mascot's eyes
+  // (its focal point) and the surrounding whitespace is balanced top and bottom.
+  // When the info column is taller than the sprite (e.g. a /resume metaLine),
+  // infoTopPad collapses to 0 and the layout degrades to the old top-alignment.
   const sprite = renderMascotLines('idle');
-  const totalRows = Math.max(sprite.length, infoRows.length);
+  const infoTopPad = Math.max(0, Math.floor((sprite.length - infoRows.length) / 2));
+  const totalRows = Math.max(sprite.length, infoTopPad + infoRows.length);
   const lines: string[] = [];
   for (let i = 0; i < totalRows; i++) {
     const left = sprite[i] ?? ' '.repeat(MASCOT_WIDTH);
-    const right = infoRows[i] ?? '';
-    lines.push(LEFT_PAD + left + GUTTER + right);
+    const infoIdx = i - infoTopPad;
+    const right = infoIdx >= 0 ? (infoRows[infoIdx] ?? '') : '';
+    // trimEnd drops the trailing GUTTER + transparent sprite columns on rows
+    // with no info text, so blank-right rows leave no selectable whitespace.
+    lines.push((LEFT_PAD + left + GUTTER + right).trimEnd());
   }
 
   // Hint line sits flush-left below the whole composition.
@@ -220,8 +229,6 @@ function renderHybridBanner(opts: WelcomeBannerOpts): string {
       ...wrapToWidth(palette.dim(LEFT_PAD + normalizeHintLine(opts.hintLine)), cols).split('\n'),
     );
   }
-  // Silence unused-symbol warning when sprite height eq info rows.
-  void MASCOT_HEIGHT;
 
   return lines.join('\n');
 }
