@@ -123,6 +123,7 @@ export async function runParallelizeDispatch(
           env: { PLUGIN_ROOT: skill.pluginPath },
         },
         idPrefix: 'mint-parallelize',
+        agentType: 'mint-parallelize',
         ...(skillCallId ? { parentId: skillCallId } : {}),
       });
       const result = await handle.runToResult(JSON.stringify({ plan }));

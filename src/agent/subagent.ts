@@ -86,13 +86,23 @@ export interface ForkSubagentOptions<T = unknown> {
    */
   outputSchema?: ZodType<T>;
   /**
-   * Optional display label used by the CLI renderer to title the synthesized
-   * `Agent(<label>)` tool-lane entry for this subagent. When omitted, the
-   * renderer falls back to `idPrefix`. Use to give compose-spawned nodes
-   * human-readable labels (e.g. `"diagnose [1/3]"`) without polluting
-   * `idPrefix` — which is also threaded into routing telemetry.
+   * Required display label used by the CLI renderer to title the synthesized
+   * `Agent(<label>)` tool-lane entry for this subagent. Use to give
+   * compose-spawned nodes human-readable labels (e.g. `"diagnose [1/3]"`)
+   * without polluting `idPrefix` — which is also threaded into routing
+   * telemetry.
+   *
+   * Invariant: every `forkSubagent` callsite must supply an explicit label.
+   * The type is `required` (not optional) so future omissions are caught at
+   * compile time rather than silently falling back to the raw `idPrefix` at
+   * render time. Callers that have no better label than `idPrefix` should
+   * pass `agentType: idPrefix` explicitly to document that choice.
+   *
+   * Runtime: empty strings are normalized to `undefined` before use, so
+   * `forkSubagent` still falls back to `idPrefix` if the caller passes `''`.
+   * See `SubagentManager.forkSubagent` (this file, `effectiveAgentType`).
    */
-  agentType?: string;
+  agentType: string;
   /**
    * Optional parent identifier for the renderer's nesting machinery. When
    * provided, overrides the default of `parent.sessionId`. Used by the

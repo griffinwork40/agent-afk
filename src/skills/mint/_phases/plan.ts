@@ -38,6 +38,7 @@ export async function runPlanPhase(
       apiKey: getApiKey(),
     },
     idPrefix: 'mint-plan',
+    agentType: 'mint-plan',
     phaseRole: 'read-only',
     ...(skillCallId ? { parentId: skillCallId } : {}),
   });

@@ -101,9 +101,10 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
         ...(spec.outputSchema !== undefined ? { outputSchema: spec.outputSchema } : {}),
         // Render hints: lift label + parent anchor through to the CLI so the
         // tool-lane can render `Agent(<label>)` entries nested under the
-        // dispatching tool's entry (e.g. `compose`). Both are optional and
-        // execution-neutral — see ForkSubagentOptions.
-        ...(spec.agentType !== undefined ? { agentType: spec.agentType } : {}),
+        // dispatching tool's entry (e.g. `compose`). agentType is required
+        // on ForkSubagentOptions — fall back to idPrefix when the caller did
+        // not supply an explicit display label.
+        agentType: spec.agentType ?? spec.idPrefix ?? `dag-${spec.id}`,
         ...(spec.parentId !== undefined ? { parentId: spec.parentId } : {}),
       });
 
