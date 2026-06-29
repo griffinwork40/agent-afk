@@ -340,7 +340,13 @@ async function handler(
     byType[a.type].push(a);
   }
 
-  const manager = new SubagentManager({ apiKey });
+  // Forward the parent's witness writer (when ctx supplies one) so the
+  // inspector forks below inherit it and their `canUseTool` permission-denials
+  // land in the parent trace. See skills/index.ts SkillExecutionContext.traceWriter.
+  const manager = new SubagentManager({
+    apiKey,
+    ...(ctx?.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
+  });
   const createCanUseTool = (): CanUseTool => async (toolName: string) => {
     if (!researchAgent.allowedTools.includes(toolName as never)) {
       return {

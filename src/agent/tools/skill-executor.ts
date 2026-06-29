@@ -436,6 +436,13 @@ export class SkillExecutor {
           // (context: 'fork') registry/plugin paths below.
           callId: call.id,
           dispatchSkill: this.createDispatchSkillCallback(call),
+          // Forward the witness writer so inline handlers that fork their own
+          // SubagentManager (e.g. /diagnose, /audit-fit) make the forked
+          // sub-agents' tool activity AND permission-denials land in the
+          // parent trace — see SkillExecutionContext.traceWriter.
+          ...(this.ctx.traceWriter !== undefined
+            ? { traceWriter: this.ctx.traceWriter }
+            : {}),
         },
       );
     } catch (err) {
