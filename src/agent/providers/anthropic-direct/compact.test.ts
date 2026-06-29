@@ -227,6 +227,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
 import { AnthropicDirectQuery } from './query.js';
 import type { ToolDispatcher } from './tool-dispatcher.js';
+import { createHookRegistry } from '../../hooks.js';
 
 const autoCompactMock = vi.fn();
 
@@ -428,5 +429,83 @@ describeIntegration('auto-compaction integration', () => {
     for await (const _ev of query) { /* drain */ }
 
     expectIntegration(compactSpy).not.toHaveBeenCalled();
+  });
+
+  itIntegration('dispatches PreCompact(trigger:auto) hook before compact() fires', async () => {
+    let callCount = 0;
+    autoCompactMock.mockImplementation(() => {
+      callCount += 1;
+      if (callCount === 1) return fromArr(makeHighUsageStream());
+      return fromArr(makeSummaryStream());
+    });
+
+    const registry = createHookRegistry();
+    const preCompactContexts: Array<{ trigger?: string }> = [];
+    registry.register('PreCompact', async (ctx) => {
+      preCompactContexts.push({ trigger: (ctx as { trigger?: string }).trigger });
+      return { decision: 'continue' as const };
+    });
+
+    const query = new AnthropicDirectQuery({
+      client: new MockAnthropicForAutoCompact() as unknown as Anthropic,
+      authMode: 'api-key',
+      promptStream: singleTurnStream('test message'),
+      toolDispatcher: noopAutoCompactDispatcher,
+      initialMessages: makeMinimalHistory(),
+      model: 'claude-sonnet-4-5-20250929',
+      maxTokens: 4096,
+      tools: null,
+      userSystem: null,
+      systemPrefix: null,
+      autoCompactThreshold: 0.9,
+      hookRegistry: registry,
+    });
+
+    const compactSpy = vi.spyOn(query, 'compact');
+
+    for await (const _ev of query) { /* drain */ }
+
+    // Hook must have fired exactly once with trigger:'auto'.
+    expectIntegration(preCompactContexts).toHaveLength(1);
+    expectIntegration(preCompactContexts[0]?.trigger).toBe('auto');
+    // compact() must have been called — hook allowed it.
+    expectIntegration(compactSpy).toHaveBeenCalledTimes(1);
+  });
+
+  itIntegration('honors a blocking PreCompact hook — skips compact() without error', async () => {
+    autoCompactMock.mockImplementation(() => fromArr(makeHighUsageStream()));
+
+    const registry = createHookRegistry();
+    registry.register('PreCompact', async () => {
+      return { decision: 'block' as const, reason: 'test block' };
+    });
+
+    const query = new AnthropicDirectQuery({
+      client: new MockAnthropicForAutoCompact() as unknown as Anthropic,
+      authMode: 'api-key',
+      promptStream: singleTurnStream('test message'),
+      toolDispatcher: noopAutoCompactDispatcher,
+      initialMessages: makeMinimalHistory(),
+      model: 'claude-sonnet-4-5-20250929',
+      maxTokens: 4096,
+      tools: null,
+      userSystem: null,
+      systemPrefix: null,
+      autoCompactThreshold: 0.9,
+      hookRegistry: registry,
+    });
+
+    const compactSpy = vi.spyOn(query, 'compact');
+    const events: import('../../provider.js').ProviderEvent[] = [];
+
+    for await (const ev of query) {
+      events.push(ev);
+    }
+
+    // Hook blocked compaction — compact() must NOT have been called.
+    expectIntegration(compactSpy).not.toHaveBeenCalled();
+    // Session still completed normally (not an error event).
+    const completed = events.find((e) => e.type === 'turn.completed');
+    expectIntegration(completed).toBeDefined();
   });
 });

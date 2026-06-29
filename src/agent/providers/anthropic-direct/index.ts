@@ -1022,6 +1022,12 @@ export class AnthropicDirectProvider implements ModelProvider {
       ...(resolveAutoCompactThreshold(config.autoCompact) !== undefined
         ? { autoCompactThreshold: resolveAutoCompactThreshold(config.autoCompact) }
         : {}),
+      // Thread the resolved hook registry into the query so auto-compaction
+      // can dispatch PreCompact(trigger:'auto') before calling compact().
+      // resolveSessionHookRegistry is already called above for the dispatcher;
+      // we reuse config.hookRegistry directly here — the query stores it
+      // separately from the dispatcher and dispatches only PreCompact events.
+      ...(config.hookRegistry !== undefined ? { hookRegistry: config.hookRegistry } : {}),
     });
   }
 }
