@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.8.0] - 2026-06-29
+
+### Added
+- add list/remove/clear subcommands + document improve & farm in README (#327) (cfea104)
+
+### Changed
+- add dependency-vulnerability audit gate (#326) (6a1f1d7)
+
 ## [5.7.1] - 2026-06-28
 
 ### Fixed
