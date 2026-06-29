@@ -79,8 +79,11 @@ export type { SkillExecutionContext, SkillMetadata } from './skills/index.js';
 export { loadSkillPrompts } from './skills/_lib/prompt-loader.js';
 // PluginApi: the host runtime API injected into a code-backed plugin's
 // default-export entrypoint. A plugin types its entrypoint as
-// `export default (api: PluginApi) => { … }` and registers through `api` so its
-// skills land in the host's singleton registry regardless of install layout.
+// `export default (api: PluginApi) => { … }` and consumes the host runtime
+// through `api` — the registry trio + `loadSkillPrompts` (so its skills land in
+// the host's singleton registry regardless of install layout) plus the runtime
+// values (`env`, `SubagentManager`, `describeFailure`, `discoverPluginSkillBodies`,
+// paths getters) a marketplace-cloned plugin can't `import 'agent-afk'` to reach.
 export type { PluginApi } from './agent/plugins/load-entrypoints.js';
 
 export {

@@ -11,9 +11,31 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { pathToFileURL } from 'url';
 import { loadPluginEntrypoints, _resetLoadedEntrypoints } from './load-entrypoints.js';
+import type { PluginApi } from './load-entrypoints.js';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
 import { registerSkill, getSkill, listSkills, _resetRegistry } from '../../skills/index.js';
 import { loadSkillPrompts } from '../../skills/_lib/prompt-loader.js';
+import { SubagentManager } from '../subagent.js';
+import { describeFailure } from '../subagent/result.js';
+import { env } from '../../config/env.js';
+import { getAgentFrameworkDir, getSkillsDir, getSessionsDir } from '../../paths.js';
+
+// The full host-injected API, mirroring skill-bridge.ensurePluginEntrypointsLoaded.
+// `discoverPluginSkillBodies` is stubbed here (its real wiring is type-checked at
+// the skill-bridge assembly site) so this test need not import that heavy barrel.
+const fullApi: PluginApi = {
+  registerSkill,
+  listSkills,
+  getSkill,
+  loadSkillPrompts,
+  env,
+  SubagentManager,
+  describeFailure,
+  discoverPluginSkillBodies: (() => new Map()) as PluginApi['discoverPluginSkillBodies'],
+  getAgentFrameworkDir,
+  getSkillsDir,
+  getSessionsDir,
+};
 
 let dir: string;
 
@@ -117,9 +139,7 @@ describe('loadPluginEntrypoints', () => {
     );
     const plugins: SdkPluginConfig[] = [{ type: 'local', path: dir, main: 'entry.mjs' }];
 
-    await loadPluginEntrypoints(plugins, {
-      pluginApi: { registerSkill, listSkills, getSkill, loadSkillPrompts },
-    });
+    await loadPluginEntrypoints(plugins, { pluginApi: fullApi });
 
     try {
       expect(listSkills()).toContain(skillName);
@@ -136,13 +156,47 @@ describe('loadPluginEntrypoints', () => {
     const store = globalThis as unknown as Record<string, unknown>;
     try {
       await expect(
-        loadPluginEntrypoints(plugins, {
-          pluginApi: { registerSkill, listSkills, getSkill, loadSkillPrompts },
-        }),
+        loadPluginEntrypoints(plugins, { pluginApi: fullApi }),
       ).resolves.toBeUndefined();
       expect(store[key]).toBe(true);
     } finally {
       delete store[key];
+    }
+  });
+
+  it('injects core runtime values (env, SubagentManager, …) a marketplace clone cannot import directly', async () => {
+    // A marketplace-cloned plugin has no node_modules, so a bare
+    // `import { SubagentManager } from 'agent-afk'` throws ERR_MODULE_NOT_FOUND.
+    // Prove the host instead INJECTS these runtime values into the default-export
+    // entrypoint and that they arrive intact (env object, the real SubagentManager
+    // class, the helper functions) — the resolution half of the PluginApi contract.
+    writeFileSync(
+      join(dir, 'entry.mjs'),
+      `export default (api) => {\n` +
+        `  globalThis.__afkApiProbe = {\n` +
+        `    envType: typeof api.env,\n` +
+        `    subagentManagerType: typeof api.SubagentManager,\n` +
+        `    subagentManagerName: api.SubagentManager && api.SubagentManager.name,\n` +
+        `    describeFailureType: typeof api.describeFailure,\n` +
+        `    getAgentFrameworkDirType: typeof api.getAgentFrameworkDir,\n` +
+        `    discoverPluginSkillBodiesType: typeof api.discoverPluginSkillBodies,\n` +
+        `  };\n` +
+        `};\n`,
+    );
+    const plugins: SdkPluginConfig[] = [{ type: 'local', path: dir, main: 'entry.mjs' }];
+    const store = globalThis as unknown as Record<string, unknown>;
+    try {
+      await loadPluginEntrypoints(plugins, { pluginApi: fullApi });
+      const probe = store.__afkApiProbe as Record<string, unknown> | undefined;
+      expect(probe).toBeDefined();
+      expect(probe?.envType).toBe('object');
+      expect(probe?.subagentManagerType).toBe('function');
+      expect(probe?.subagentManagerName).toBe('SubagentManager');
+      expect(probe?.describeFailureType).toBe('function');
+      expect(probe?.getAgentFrameworkDirType).toBe('function');
+      expect(probe?.discoverPluginSkillBodiesType).toBe('function');
+    } finally {
+      delete store.__afkApiProbe;
     }
   });
 });

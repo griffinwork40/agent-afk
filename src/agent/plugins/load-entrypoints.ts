@@ -20,25 +20,40 @@ import type { SdkPluginConfig } from '../types/sdk-types.js';
 /**
  * Host runtime API injected into a plugin entrypoint's default-export function.
  *
- * Invariant: a code-backed plugin MUST register through this object, not by
- * importing `agent-afk` itself. The skill registry is a module-level singleton
- * (`src/skills/index.ts`), so a plugin that imports its OWN copy of `agent-afk`
- * (its `node_modules`, a bundle, or a version-skewed install — the default for a
- * marketplace-cloned plugin with no shared `node_modules`) would call a
- * `registerSkill` backed by a DIFFERENT registry than the host reads → the skill
- * silently never appears. Receiving these functions from the host guarantees the
- * same module instance regardless of how the plugin was installed.
+ * Invariant: a code-backed plugin MUST consume the host runtime through this
+ * object, never via a bare `import … from 'agent-afk'`. Two independent failures
+ * make the bare import wrong inside a plugin:
+ *   1. Singleton identity — the skill registry is a module-level singleton
+ *      (`src/skills/index.ts`). A plugin that imports its OWN copy of the package
+ *      calls a `registerSkill` backed by a DIFFERENT registry than the host
+ *      reads, so the skill silently never appears.
+ *   2. Resolution — a marketplace-cloned plugin has NO `node_modules`, so a bare
+ *      `import 'agent-afk'` does not resolve at all and throws
+ *      `ERR_MODULE_NOT_FOUND` at boot (verified empirically). This bites even the
+ *      STATELESS helpers (`env`, the `paths` getters, `describeFailure`), which
+ *      is precisely why they are injected here rather than imported directly.
  *
- * Stateless helpers (`env`, the `paths` getters, `describeFailure`) are safe for
- * a plugin to import directly — they hold no singleton state — and are
- * intentionally omitted to keep this surface minimal. The type is derived via
- * `typeof import(...)` so the injected signatures cannot drift from the source.
+ * So every runtime VALUE a plugin needs is passed in: the registry trio +
+ * `loadSkillPrompts` (identity-critical) plus `env`, `SubagentManager`,
+ * `describeFailure`, `discoverPluginSkillBodies`, and the `paths` getters
+ * (resolution-critical). Type-only imports are erased at build, so a plugin may
+ * still `import type { … } from 'agent-afk'` via a build-time devDependency. The
+ * shape is derived via `typeof import(...)` so the injected signatures cannot
+ * drift from their source modules.
  */
 export type PluginApi = Pick<
   typeof import('../../skills/index.js'),
   'registerSkill' | 'listSkills' | 'getSkill'
 > &
-  Pick<typeof import('../../skills/_lib/prompt-loader.js'), 'loadSkillPrompts'>;
+  Pick<typeof import('../../skills/_lib/prompt-loader.js'), 'loadSkillPrompts'> &
+  Pick<typeof import('../../config/env.js'), 'env'> &
+  Pick<typeof import('../subagent.js'), 'SubagentManager'> &
+  Pick<typeof import('../subagent/result.js'), 'describeFailure'> &
+  Pick<typeof import('../tools/skill-bridge.js'), 'discoverPluginSkillBodies'> &
+  Pick<
+    typeof import('../../paths.js'),
+    'getAgentFrameworkDir' | 'getSkillsDir' | 'getSessionsDir'
+  >;
 
 /**
  * Resolved-entrypoint paths already imported in this process. Dynamic `import()`
