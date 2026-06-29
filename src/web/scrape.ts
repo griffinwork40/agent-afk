@@ -22,6 +22,7 @@
 
 import { extractReadableMarkdown, THIN_CONTENT_CHARS } from './extract.js';
 import type { ExtractedContent, FetchFn, RenderFn, RenderedPage } from './types.js';
+import { retryFetch } from './retryFetch.js';
 import { debugLog } from '../utils/debug.js';
 
 /** Content-types we treat as HTML (run the extraction pipeline). */
@@ -106,7 +107,9 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
   let fetchErr: unknown = null;
 
   try {
-    const res = await fetchFn(url, {
+    // retryFetch survives transient 429/5xx + network blips (idempotent GET)
+    // before we fall through to render escalation.
+    const res = await retryFetch(fetchFn, url, {
       headers: FETCH_HEADERS,
       redirect: 'follow',
       signal: opts.signal,

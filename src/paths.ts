@@ -492,6 +492,61 @@ export function getBgJobMeta(jobId: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Browser session-vault paths
+//
+// Invariant: a profile name flows into a filesystem path, so it MUST pass
+// assertSafeBrowserProfile() before any join() — same containment rationale as
+// assertSafeJobId. Mirrors the bg-job pattern: a leading guard means every
+// downstream helper is automatically protected without per-call sanitization.
+// ---------------------------------------------------------------------------
+
+const BROWSER_PROFILE_PATTERN = /^[A-Za-z0-9_-]+$/;
+const BROWSER_PROFILE_MAX_LEN = 128;
+
+export function assertSafeBrowserProfile(profile: string): void {
+  if (typeof profile !== 'string' || profile.length === 0) {
+    throw new Error('Invalid browser profile: must be a non-empty string');
+  }
+  if (profile.length > BROWSER_PROFILE_MAX_LEN) {
+    throw new Error(`Invalid browser profile: exceeds ${BROWSER_PROFILE_MAX_LEN} chars`);
+  }
+  if (!BROWSER_PROFILE_PATTERN.test(profile)) {
+    throw new Error(
+      `Invalid browser profile: ${JSON.stringify(profile)} contains characters outside [A-Za-z0-9_-]`,
+    );
+  }
+}
+
+/**
+ * Root directory for persistent browser session-vault profiles.
+ * Each profile gets its own subdirectory: `~/.afk/state/browser/<profile>/`.
+ */
+export function getBrowserStateRoot(): string {
+  return join(getAfkStateDir(), 'browser');
+}
+
+/**
+ * Directory holding a specific browser profile's persisted state.
+ * @throws if `profile` fails {@link assertSafeBrowserProfile}.
+ */
+export function getBrowserProfileStateDir(profile: string): string {
+  assertSafeBrowserProfile(profile);
+  return join(getBrowserStateRoot(), profile);
+}
+
+/**
+ * Path to a profile's Playwright `storageState` (cookies + localStorage).
+ *
+ * Invariant: this file holds live session credentials — callers MUST write it
+ * with `0600` perms and treat it as secrets-at-rest.
+ *
+ * @throws if `profile` fails {@link assertSafeBrowserProfile}.
+ */
+export function getBrowserStorageStatePath(profile: string): string {
+  return join(getBrowserProfileStateDir(profile), 'storageState.json');
+}
+
+// ---------------------------------------------------------------------------
 // Session event-ledger paths
 // ---------------------------------------------------------------------------
 
