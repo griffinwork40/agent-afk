@@ -58,7 +58,7 @@ const CONFIG_OVERRIDE_VARS: readonly string[] = ENV_REGISTRY.filter(
 
 beforeEach(() => {
   for (const key of CONFIG_OVERRIDE_VARS) {
-    delete process.env[key];
+    delete process.env[key]; // audit-env-access: allow — dynamic delete of registry-derived config keys
   }
 });
 
