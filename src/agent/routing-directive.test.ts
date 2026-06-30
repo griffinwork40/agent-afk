@@ -11,11 +11,7 @@
  * motivated this fix.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
 import { parseTerminalState } from '../cli/commands/interactive/terminal-state.js';
 
@@ -23,7 +19,6 @@ import {
   END_OF_TURN_DIRECTIVE,
   ROUTING_DIRECTIVE,
   assembleSystemPrompt,
-  pendingBriefContext,
 } from './routing-directive.js';
 
 const BASE = 'You are a careful assistant.';
@@ -126,55 +121,6 @@ describe('assembleSystemPrompt', () => {
       // Three sections → at least two `\n\n` separators.
       const separators = (out!.match(/\n\n/g) ?? []).length;
       expect(separators).toBeGreaterThanOrEqual(2);
-    });
-  });
-
-  describe('briefContext parameter', () => {
-    const BRIEF_CTX = '[forge: 1 pending skill brief]\n\nRun /forge to process.';
-
-    it('injects briefContext before end-of-turn on the repl surface', () => {
-      const out = assembleSystemPrompt(BASE, false, 'repl', BRIEF_CTX);
-      expect(out).toContain(BRIEF_CTX);
-      expect(out).toContain(END_OF_TURN_DIRECTIVE);
-      // brief context must precede end-of-turn
-      expect(out!.indexOf(BRIEF_CTX)).toBeLessThan(out!.indexOf(END_OF_TURN_DIRECTIVE));
-    });
-
-    it('injects briefContext before end-of-turn on the telegram surface', () => {
-      const out = assembleSystemPrompt(BASE, false, 'telegram', BRIEF_CTX);
-      expect(out).toContain(BRIEF_CTX);
-      expect(out!.indexOf(BRIEF_CTX)).toBeLessThan(out!.indexOf(END_OF_TURN_DIRECTIVE));
-    });
-
-    it('does NOT inject briefContext on one-shot surface', () => {
-      const out = assembleSystemPrompt(BASE, false, 'one-shot', BRIEF_CTX);
-      expect(out).not.toContain(BRIEF_CTX);
-    });
-
-    it('does NOT inject briefContext on subagent surface', () => {
-      const out = assembleSystemPrompt(BASE, false, 'subagent', BRIEF_CTX);
-      expect(out).not.toContain(BRIEF_CTX);
-    });
-
-    it('orders sections as: base, routing, brief-context, end-of-turn', () => {
-      const out = assembleSystemPrompt(BASE, true, 'repl', BRIEF_CTX);
-      expect(out).toBeDefined();
-      const baseIdx = out!.indexOf(BASE);
-      const routingIdx = out!.indexOf(ROUTING_DIRECTIVE);
-      const briefIdx = out!.indexOf(BRIEF_CTX);
-      const endIdx = out!.indexOf(END_OF_TURN_DIRECTIVE);
-      expect(baseIdx).toBeLessThan(routingIdx);
-      expect(routingIdx).toBeLessThan(briefIdx);
-      expect(briefIdx).toBeLessThan(endIdx);
-    });
-
-    it('skips brief injection when briefContext is undefined (backward compat)', () => {
-      const withBrief = assembleSystemPrompt(BASE, false, 'repl', BRIEF_CTX);
-      const withoutBrief = assembleSystemPrompt(BASE, false, 'repl');
-      expect(withBrief).toContain(BRIEF_CTX);
-      expect(withoutBrief).not.toContain(BRIEF_CTX);
-      // Without brief, the output still contains end-of-turn
-      expect(withoutBrief).toContain(END_OF_TURN_DIRECTIVE);
     });
   });
 
@@ -316,90 +262,5 @@ describe('assembleSystemPrompt', () => {
       expect(verdict?.kind).toBe('interrupted');
       expect(verdict?.whatWasInProgress).toContain('migration');
     });
-  });
-});
-
-describe('pendingBriefContext', () => {
-  let tmpDir: string | null = null;
-
-  afterEach(() => {
-    if (tmpDir !== null) {
-      rmSync(tmpDir, { recursive: true, force: true });
-      tmpDir = null;
-    }
-  });
-
-  it('returns undefined when the briefs directory does not exist', () => {
-    expect(pendingBriefContext('/nonexistent/path/briefs-xyz')).toBeUndefined();
-  });
-
-  it('returns undefined when the briefs directory is empty', () => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'afk-briefs-test-'));
-    expect(pendingBriefContext(tmpDir)).toBeUndefined();
-  });
-
-  it('returns undefined when only non-.md files are present', () => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'afk-briefs-test-'));
-    writeFileSync(join(tmpDir, 'not-a-brief.txt'), 'hello');
-    writeFileSync(join(tmpDir, 'README'), 'hello');
-    expect(pendingBriefContext(tmpDir)).toBeUndefined();
-  });
-
-  it('returns undefined when only subdirectories are present', () => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'afk-briefs-test-'));
-    mkdirSync(join(tmpDir, 'consumed'));
-    mkdirSync(join(tmpDir, 'consumed', 'old-brief.md')); // dir named .md
-    expect(pendingBriefContext(tmpDir)).toBeUndefined();
-  });
-
-  it('returns singular nudge for one brief', () => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'afk-briefs-test-'));
-    writeFileSync(join(tmpDir, 'my-skill.md'), '# brief');
-    const ctx = pendingBriefContext(tmpDir);
-    expect(ctx).toBeDefined();
-    expect(ctx).toContain('[forge: 1 pending skill brief]');
-    expect(ctx).toContain('1 skill brief');
-    expect(ctx).toContain('my-skill.md');
-    expect(ctx).toContain('/forge');
-  });
-
-  it('returns plural nudge for multiple briefs', () => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'afk-briefs-test-'));
-    writeFileSync(join(tmpDir, 'alpha.md'), '');
-    writeFileSync(join(tmpDir, 'beta.md'), '');
-    const ctx = pendingBriefContext(tmpDir);
-    expect(ctx).toBeDefined();
-    expect(ctx).toContain('[forge: 2 pending skill briefs]');
-    expect(ctx).toContain('2 skill briefs');
-  });
-
-  it('lists up to 3 brief names in the preview', () => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'afk-briefs-test-'));
-    for (const name of ['a.md', 'b.md', 'c.md']) {
-      writeFileSync(join(tmpDir, name), '');
-    }
-    const ctx = pendingBriefContext(tmpDir);
-    expect(ctx).toBeDefined();
-    expect(ctx).toContain('a.md, b.md, c.md');
-    expect(ctx).not.toContain('+');
-  });
-
-  it('truncates preview to 3 with "+N more" for larger sets', () => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'afk-briefs-test-'));
-    for (const name of ['a.md', 'b.md', 'c.md', 'd.md', 'e.md']) {
-      writeFileSync(join(tmpDir, name), '');
-    }
-    const ctx = pendingBriefContext(tmpDir);
-    expect(ctx).toBeDefined();
-    expect(ctx).toContain('[forge: 5 pending skill briefs]');
-    expect(ctx).toContain('+2 more');
-  });
-
-  it('ignores .md files inside subdirectories (consumed/, failed/)', () => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'afk-briefs-test-'));
-    mkdirSync(join(tmpDir, 'consumed'));
-    writeFileSync(join(tmpDir, 'consumed', 'archived.md'), '');
-    // No top-level .md files → should return undefined
-    expect(pendingBriefContext(tmpDir)).toBeUndefined();
   });
 });

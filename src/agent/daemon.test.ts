@@ -391,14 +391,12 @@ describe('CronScheduler onTaskComplete callback', () => {
 
 describe('CronScheduler.fireOnStart (Phase 6)', () => {
   let telemetryPath: string;
-  let briefsDir: string;
   let scheduler: CronScheduler;
   let lastFakeSession: FakeAgentSessionShape | null = null;
   let nextReply: string | Error = 'ok';
 
   beforeEach(() => {
     telemetryPath = tmpTelemetryFile();
-    briefsDir = mkdtempSync(join(tmpdir(), 'agent-afk-briefs-'));
     lastFakeSession = null;
     nextReply = 'ok';
   });
@@ -406,13 +404,11 @@ describe('CronScheduler.fireOnStart (Phase 6)', () => {
   afterEach(async () => {
     await scheduler.stop();
     rmSync(telemetryPath, { force: true });
-    rmSync(briefsDir, { recursive: true, force: true });
   });
 
   function spinScheduler(now: () => number = Date.now, cooldownMs = 0): CronScheduler {
     scheduler = new CronScheduler({
       telemetryPath,
-      briefsDir,
       cooldownMs,
       now,
       sessionFactory: (_config: AgentConfig) => {
@@ -495,21 +491,6 @@ describe('CronScheduler.fireOnStart (Phase 6)', () => {
       status: 'skipped',
       skipReason: 'cooldown',
       durationMs: 0,
-    });
-    expect(lastFakeSession).toBeNull();
-  });
-
-  it('records a skipped telemetry entry when briefs are pending', async () => {
-    writeFileSync(join(briefsDir, 'brief-1.md'), '');
-    spinScheduler();
-    scheduler.register({ taskId: 't', command: 'x', trigger: 'sessionstart' });
-
-    const records = await scheduler.fireOnStart();
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
-      taskId: 't',
-      status: 'skipped',
-      skipReason: 'briefs_pending',
     });
     expect(lastFakeSession).toBeNull();
   });

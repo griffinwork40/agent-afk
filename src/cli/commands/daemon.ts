@@ -254,12 +254,8 @@ export function registerDaemonCommand(program: Command): void {
       '--sessionstart-cooldown-ms <ms>',
       'Cooldown between Phase 6 sessionstart fires. Overrides AFK_SESSIONSTART_COOLDOWN_MS. Defaults to 6h.',
     )
-    .option(
-      '--briefs-dir <path>',
-      'Override directory scanned for pending briefs (defaults to ~/.afk/agent-framework/briefs).',
-    )
     .option('--dump-prompt [path]', 'Dump resolved SDK prompt+options+provenance to file (default: ~/.afk/logs/prompt-dump-<ISO>.json) or "stderr"')
-    .action(async (options: { port: string; host?: string; task?: string; cron?: string; taskId?: string; once: boolean; timeoutMs?: string; thinking?: string; effort?: string; trigger?: string; sessionstartCooldownMs?: string; briefsDir?: string; dumpPrompt?: string | boolean | undefined }) => {
+    .action(async (options: { port: string; host?: string; task?: string; cron?: string; taskId?: string; once: boolean; timeoutMs?: string; thinking?: string; effort?: string; trigger?: string; sessionstartCooldownMs?: string; dumpPrompt?: string | boolean | undefined }) => {
       const port = parseInt(options.port, 10);
       if (Number.isNaN(port) || port <= 0) {
         handleCommandError(new Error(`Invalid port: ${options.port}`));
@@ -437,7 +433,6 @@ export function registerDaemonCommand(program: Command): void {
           },
           sessionFactory,
           ...(cooldownMs !== undefined ? { cooldownMs } : {}),
-          ...(options.briefsDir !== undefined ? { briefsDir: options.briefsDir } : {}),
           ...(trigger === 'pull' ? { pullPollIntervalMs: 30_000, queueDir: getQueueDir() } : {}),
           tasks,
           onTaskComplete: (record: TelemetryRecord, details?: TaskCompletionDetails) => {

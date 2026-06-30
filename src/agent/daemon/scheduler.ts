@@ -39,7 +39,6 @@ import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { ScheduledTask, validateScheduledTask } from './triggers.js';
 import {
   DEFAULT_SESSIONSTART_COOLDOWN_MS,
-  defaultBriefsDir,
   evaluateSessionStartGates,
   type GateDecision,
   type SessionStartSkipReason,
@@ -103,8 +102,6 @@ export interface SchedulerOptions {
    * 6 hours. `0` disables the cooldown check.
    */
   cooldownMs?: number;
-  /** Directory scanned for pending briefs (sessionstart brief-queue gate). */
-  briefsDir?: string;
   /** Clock injection (tests). Defaults to `Date.now`. */
   now?: () => number;
   /**
@@ -157,7 +154,6 @@ export class CronScheduler {
   private readonly registry = new Map<string, RegisteredEntry>();
   private readonly options: SchedulerOptions;
   private readonly defaultCooldownMs: number;
-  private readonly briefsDir: string;
   private readonly now: () => number;
   private readonly idleDetector = new IdleDetector();
   private pullPollTimer: ReturnType<typeof setInterval> | undefined;
@@ -168,7 +164,6 @@ export class CronScheduler {
   constructor(options: SchedulerOptions = {}) {
     this.options = options;
     this.defaultCooldownMs = options.cooldownMs ?? DEFAULT_SESSIONSTART_COOLDOWN_MS;
-    this.briefsDir = options.briefsDir ?? defaultBriefsDir();
     this.now = options.now ?? Date.now;
     this.queueDir = options.queueDir ?? getQueueDir();
     this.ensureTelemetrySink();
@@ -237,7 +232,6 @@ export class CronScheduler {
         cooldownMs,
         nowMs: this.now(),
         telemetryPath: this.telemetryPath(),
-        briefsDir: this.briefsDir,
       });
       if (decision.fire) {
         records.push(await this.runOnce(task, 'sessionstart'));

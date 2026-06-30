@@ -18,7 +18,7 @@ import {
 } from '../../shared-helpers.js';
 import { topLevelSurfaceAllowedTools } from '../../../agent/tools/top-level-allowlist.js';
 import { loadConfig } from '../../config.js';
-import { assembleSystemPrompt, pendingBriefContext } from '../../../agent/routing-directive.js';
+import { assembleSystemPrompt } from '../../../agent/routing-directive.js';
 import { StatusLine } from '../../status-line.js';
 import { GitStatusSampler } from '../../git-status-sampler.js';
 import { registerAll } from '../../slash/index.js';
@@ -174,7 +174,7 @@ export async function bootstrapSession(
   const { prompt: basePrompt, source: systemPromptSource } = resolveBaseSystemPrompt();
   const cliConfig = loadConfig();
   const autoRouting = cliConfig.autoRouting?.interactive ?? true;
-  const systemPrompt = assembleSystemPrompt(basePrompt, autoRouting, 'repl', pendingBriefContext());
+  const systemPrompt = assembleSystemPrompt(basePrompt, autoRouting, 'repl');
 
   // Wire Agent tool by creating SubagentExecutor first.
   // The executor needs the session's methods, so we use a deferred parent proxy
