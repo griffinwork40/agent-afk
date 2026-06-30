@@ -8,7 +8,7 @@ cron expressions, on session start, or from a pull queue — and optionally push
 notifications via Telegram.
 
 ```bash
-afk daemon --cron "0 */6 * * *" --task "/forge-friction --auto"
+afk daemon --cron "0 */6 * * *" --task "/review --auto"
 ```
 
 ## Trigger modes
@@ -80,7 +80,7 @@ status (✅ success / ⏭️ skipped / ❌ failed), duration, and a response exc
 ```bash
 export TELEGRAM_BOT_TOKEN=1234567890:ABC...
 export AFK_TELEGRAM_ALLOWED_CHAT_IDS=12345678
-afk daemon --cron "0 2 * * *" --task "/mint run-nightly"
+afk daemon --cron "0 2 * * *" --task "run the nightly test suite and triage any failures"
 ```
 
 ## Scheduled tasks with `afk schedule`
