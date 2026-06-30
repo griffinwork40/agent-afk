@@ -382,3 +382,88 @@ describe('[R3 follow-up] dispatchSubagentStop — abort mid-dispatch', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// injectContext merge policy
+// ---------------------------------------------------------------------------
+//
+// Non-blocking handlers that return injectContext must have their values
+// concatenated in registration order (joined by '\n'), not silently dropped by
+// last-wins. Blocking handlers still short-circuit before any accumulation.
+describe('HookRegistryImpl.dispatch — injectContext merge policy', () => {
+  it('concatenates injectContext from two non-blocking handlers in registration order', async () => {
+    const registry = createHookRegistryImpl();
+    registry.register('SubagentStop', async () => ({ injectContext: 'first note' }));
+    registry.register('SubagentStop', async () => ({ injectContext: 'second note' }));
+
+    const decision = await registry.dispatch({ event: 'SubagentStop', subagentId: 'x' });
+    expect(decision.injectContext).toBe('first note\nsecond note');
+  });
+
+  it('concatenates injectContext from three non-blocking handlers in registration order', async () => {
+    const registry = createHookRegistryImpl();
+    registry.register('SubagentStop', async () => ({ injectContext: 'alpha' }));
+    registry.register('SubagentStop', async () => ({ injectContext: 'beta' }));
+    registry.register('SubagentStop', async () => ({ injectContext: 'gamma' }));
+
+    const decision = await registry.dispatch({ event: 'SubagentStop', subagentId: 'x' });
+    expect(decision.injectContext).toBe('alpha\nbeta\ngamma');
+  });
+
+  it('returns the single handler value unchanged when only one handler provides injectContext', async () => {
+    const registry = createHookRegistryImpl();
+    registry.register('SubagentStop', async () => ({ injectContext: 'only note' }));
+
+    const decision = await registry.dispatch({ event: 'SubagentStop', subagentId: 'x' });
+    expect(decision.injectContext).toBe('only note');
+  });
+
+  it('skips handlers that return no injectContext — no leading/trailing newlines', async () => {
+    const registry = createHookRegistryImpl();
+    registry.register('SubagentStop', async () => ({}));
+    registry.register('SubagentStop', async () => ({ injectContext: 'middle note' }));
+    registry.register('SubagentStop', async () => ({}));
+
+    const decision = await registry.dispatch({ event: 'SubagentStop', subagentId: 'x' });
+    expect(decision.injectContext).toBe('middle note');
+    // No stray separator on either end.
+    expect(decision.injectContext?.startsWith('\n')).toBe(false);
+    expect(decision.injectContext?.endsWith('\n')).toBe(false);
+  });
+
+  it('produces no injectContext when no handler returns one', async () => {
+    const registry = createHookRegistryImpl();
+    registry.register('SubagentStop', async () => ({}));
+    registry.register('SubagentStop', async () => ({}));
+
+    const decision = await registry.dispatch({ event: 'SubagentStop', subagentId: 'x' });
+    expect(decision.injectContext).toBeUndefined();
+  });
+
+  it('blocking handler short-circuits before accumulation — later injectContext not reached', async () => {
+    const registry = createHookRegistryImpl();
+    const later = vi.fn(async () => ({ injectContext: 'should-not-appear' }));
+    registry.register('SubagentStop', async () => ({ decision: 'block', reason: 'policy' }));
+    registry.register('SubagentStop', later);
+
+    await expect(registry.dispatch({ event: 'SubagentStop', subagentId: 'x' })).rejects.toThrow();
+    expect(later).not.toHaveBeenCalled();
+  });
+
+  it('preserves last-handler-wins for non-injectContext fields while merging injectContext', async () => {
+    const registry = createHookRegistryImpl();
+    registry.register('SubagentStop', async () => ({
+      injectContext: 'first',
+      reason: 'reason-a',
+    }));
+    registry.register('SubagentStop', async () => ({
+      injectContext: 'second',
+      reason: 'reason-b',
+    }));
+
+    const decision = await registry.dispatch({ event: 'SubagentStop', subagentId: 'x' });
+    expect(decision.injectContext).toBe('first\nsecond');
+    // Non-injectContext fields: last handler wins.
+    expect(decision.reason).toBe('reason-b');
+  });
+});
