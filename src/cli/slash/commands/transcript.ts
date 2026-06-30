@@ -150,19 +150,47 @@ export const transcriptCmd: SlashCommand = {
     );
     await fs.writeFile(tmpPath, formatted, { mode: 0o600 });
 
+    // Invariant (TTY handoff ordering): the pager inherits stdin (`stdio:
+    // 'inherit'`), so it reads the SAME fd 0 the REPL owns. Before spawning we
+    // must (1) suspendInput() — drop the compositor's keypress listener, unset
+    // raw mode, clear the input overlay — AND (2) pause Node's stdin so the
+    // parent stops draining fd 0. Otherwise the REPL reader and the pager both
+    // read() the shared fd and split every keystroke between them (the "glitchy"
+    // pager navigation). The inverse runs on child exit: resume stdin, then
+    // resumeInput() to re-arm raw mode + the listener + repaint. suspendInput
+    // alone (the elicitation path) is NOT sufficient here — elicitation keeps
+    // the input consumer in-process, so it never needs the stdin.pause() that a
+    // cross-process fd handoff additionally requires (arm() left stdin resumed
+    // with a persistent emitKeypressEvents 'data' consumer attached).
+    const compositor = ctx.getCompositor?.() ?? null;
+    let restored = false;
+    const restoreInput = (): void => {
+      if (restored) return;
+      restored = true;
+      try { process.stdin.resume(); } catch { /* best-effort */ }
+      compositor?.resumeInput();
+    };
+    compositor?.suspendInput();
+    try { process.stdin.pause(); } catch { /* best-effort */ }
+
     return new Promise<'continue'>((resolve) => {
-      const child = spawn(pager.cmd, [...pager.args, tmpPath], {
-        stdio: 'inherit',
-      });
-      child.on('error', () => {
-        out.raw(formatted);
+      const finish = (emitFallback: boolean): void => {
+        restoreInput();
+        if (emitFallback) out.raw(formatted);
         fs.unlink(tmpPath).catch(() => {});
         resolve('continue');
-      });
-      child.on('exit', () => {
-        fs.unlink(tmpPath).catch(() => {});
-        resolve('continue');
-      });
+      };
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn(pager.cmd, [...pager.args, tmpPath], { stdio: 'inherit' });
+      } catch {
+        // Synchronous spawn failure (bad options) — restore the TTY and fall
+        // back to inline output rather than leaving stdin suspended/paused.
+        finish(true);
+        return;
+      }
+      child.on('error', () => finish(true));
+      child.on('exit', () => finish(false));
     });
   },
 };
