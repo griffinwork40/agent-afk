@@ -32,6 +32,7 @@ import { createDefaultTraceWriter } from '../trace/factory.js';
 import { MemoryStore, injectHotMemory } from '../memory/index.js';
 import { McpManager, loadMcpConfig } from '../mcp/index.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
+import { emitSessionPhase } from '../trace/emit.js';
 import type { AgentConfig } from '../types.js';
 import { getTelemetryPath } from '../../paths.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
@@ -514,10 +515,28 @@ export class CronScheduler {
     const enabledMcpCount = Object.values(loadedMcp.mcpServers).filter((s) => !s.disabled).length;
     try {
       if (enabledMcpCount > 0) {
-        mcpManager = await McpManager.fromConfig(loadedMcp.mcpServers, {
-          warnings: loadedMcp.warnings,
-          ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
+        // Witness layer: bracket the whole-fleet MCP connect with
+        // mcp_connect_start / mcp_connect_done phases — surface-parity with
+        // chat.ts, interactive/bootstrap.ts, and telegram/mcp-session.ts.
+        // try/finally so mcp_connect_done fires even when an alwaysLoad server
+        // makes fromConfig throw. Fire-and-forget; never gates the connect.
+        const mcpStartedAt = Date.now();
+        void emitSessionPhase(trace?.writer, {
+          phase: 'mcp_connect_start',
+          metadata: { serverCount: enabledMcpCount },
         });
+        try {
+          mcpManager = await McpManager.fromConfig(loadedMcp.mcpServers, {
+            warnings: loadedMcp.warnings,
+            ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
+          });
+        } finally {
+          void emitSessionPhase(trace?.writer, {
+            phase: 'mcp_connect_done',
+            durationMs: Date.now() - mcpStartedAt,
+            metadata: { serverCount: enabledMcpCount },
+          });
+        }
       } else if (loadedMcp.warnings.length > 0) {
         for (const warning of loadedMcp.warnings) console.warn(`[mcp] ${warning}`);
       }

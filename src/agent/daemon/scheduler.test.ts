@@ -10,6 +10,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as traceEmit from '../trace/emit.js';
 
 const schedulerTestState = vi.hoisted(() => ({ cleanupOrder: [] as string[] }));
 
@@ -479,6 +480,81 @@ describe('CronScheduler — MCP fixture wiring', () => {
         ]);
         expect(schedulerTestState.cleanupOrder).toEqual(['session.close', 'mcp.disconnect', 'memory.close']);
       } finally {
+        await scheduler?.stop();
+        if (savedHome === undefined) delete process.env['AFK_HOME'];
+        else process.env['AFK_HOME'] = savedHome;
+        if (savedTraceDisabled === undefined) delete process.env['AFK_TRACE_DISABLED'];
+        else process.env['AFK_TRACE_DISABLED'] = savedTraceDisabled;
+        if (savedAllowProjectMcp === undefined) delete process.env['AFK_ALLOW_PROJECT_MCP'];
+        else process.env['AFK_ALLOW_PROJECT_MCP'] = savedAllowProjectMcp;
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    { timeout: 15_000 },
+  );
+});
+
+describe('CronScheduler — mcp_connect_* trace phases', () => {
+  it(
+    'emits mcp_connect_start then mcp_connect_done around McpManager.fromConfig',
+    async () => {
+      const dir = makeTmpDir();
+      const telemetryPath = join(dir, 'forge-telemetry.jsonl');
+      const savedHome = process.env['AFK_HOME'];
+      const savedTraceDisabled = process.env['AFK_TRACE_DISABLED'];
+      const savedAllowProjectMcp = process.env['AFK_ALLOW_PROJECT_MCP'];
+      process.env['AFK_HOME'] = dir;
+      // Leave AFK_TRACE_DISABLED unset so a real trace writer is created.
+      delete process.env['AFK_TRACE_DISABLED'];
+      process.env['AFK_ALLOW_PROJECT_MCP'] = '1';
+      writeFileSync(
+        join(dir, '.mcp.json'),
+        JSON.stringify({
+          mcpServers: {
+            testsrv: {
+              type: 'stdio',
+              command: process.execPath,
+              args: [MCP_FIXTURE],
+            },
+          },
+        }),
+        'utf-8',
+      );
+
+      const emitted: Array<{ phase: string; serverCount?: number }> = [];
+      const spy = vi.spyOn(traceEmit, 'emitSessionPhase').mockImplementation(
+        async (_writer, payload) => {
+          if (payload.phase === 'mcp_connect_start' || payload.phase === 'mcp_connect_done') {
+            emitted.push({
+              phase: payload.phase,
+              serverCount: payload.metadata?.['serverCount'] as number | undefined,
+            });
+          }
+        },
+      );
+
+      let scheduler: CronScheduler | undefined;
+      try {
+        scheduler = new CronScheduler({
+          telemetryPath,
+          sessionConfig: { cwd: dir, provider: makeToolSurfacingProvider() },
+          sessionFactory: (config) => new AgentSession(config),
+        });
+        scheduler.register({
+          taskId: 'mcp-trace-phases',
+          command: 'hello trace',
+          trigger: 'cron',
+          cronExpression: '* * * * *',
+        });
+
+        await scheduler.tick('mcp-trace-phases');
+
+        expect(emitted).toEqual([
+          { phase: 'mcp_connect_start', serverCount: 1 },
+          { phase: 'mcp_connect_done', serverCount: 1 },
+        ]);
+      } finally {
+        spy.mockRestore();
         await scheduler?.stop();
         if (savedHome === undefined) delete process.env['AFK_HOME'];
         else process.env['AFK_HOME'] = savedHome;
