@@ -43,7 +43,7 @@ import { providerForModel, AnthropicDirectProvider, OpenAICompatibleProvider } f
 import { detectAuthMode } from './agent/providers/anthropic-direct/auth.js';
 import { loadConfig, loadCredential } from './cli/config.js';
 import { getEnvConfigPath } from './paths.js';
-import { assembleSystemPrompt, pendingBriefContext } from './agent/routing-directive.js';
+import { assembleSystemPrompt } from './agent/routing-directive.js';
 import { resolveModelId } from './agent/session/model-resolution.js';
 import { getDefaultSubagentModel, getMaxOutputTokens, getApiKeyForModel, loadSystemPrompt, composeSystemPrompt } from './cli/shared-helpers.js';
 import { topLevelSurfaceAllowedTools } from './agent/tools/top-level-allowlist.js';
@@ -358,7 +358,7 @@ async function main() {
         const rawPromptInner = layeredBasePrompt;
         const telegramAutoRoutingInner = config.autoRouting?.telegram ?? false;
         const systemPromptInner = typeof rawPromptInner === 'string'
-          ? assembleSystemPrompt(rawPromptInner, telegramAutoRoutingInner, 'telegram', pendingBriefContext())
+          ? assembleSystemPrompt(rawPromptInner, telegramAutoRoutingInner, 'telegram')
           : rawPromptInner;
 
         // permissionMode is intentionally omitted here: AgentSession defaults
@@ -400,7 +400,7 @@ async function main() {
       const rawPrompt = layeredBasePrompt;
       const telegramAutoRouting = config.autoRouting?.telegram ?? false;
       const systemPrompt = typeof rawPrompt === 'string'
-        ? assembleSystemPrompt(rawPrompt, telegramAutoRouting, 'telegram', pendingBriefContext())
+        ? assembleSystemPrompt(rawPrompt, telegramAutoRouting, 'telegram')
         : rawPrompt;
       // Codex branch: same cwd resolution as the Anthropic branch above.
       const codexSessionCwd = sessionCwd;

@@ -1,13 +1,12 @@
 /**
- * Tests for Phase 6 sessionstart gates — cooldown + brief-queue.
+ * Tests for Phase 6 sessionstart gates — cooldown.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  countPendingBriefs,
   evaluateSessionStartGates,
   readLastTickTime,
   DEFAULT_SESSIONSTART_COOLDOWN_MS,
@@ -69,72 +68,25 @@ describe('readLastTickTime', () => {
   });
 });
 
-describe('countPendingBriefs', () => {
-  let dir: string;
-
-  beforeEach(() => {
-    dir = makeTmpDir();
-  });
-
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it('returns 0 when the directory does not exist', () => {
-    expect(countPendingBriefs(join(dir, 'missing'))).toBe(0);
-  });
-
-  it('returns 0 when the directory is empty', () => {
-    expect(countPendingBriefs(dir)).toBe(0);
-  });
-
-  it('counts top-level .md files, ignoring dotfiles and non-md files', () => {
-    writeFileSync(join(dir, 'brief-1.md'), '');
-    writeFileSync(join(dir, 'brief-2.md'), '');
-    writeFileSync(join(dir, '.hidden'), '');
-    writeFileSync(join(dir, 'notes.txt'), '');
-    expect(countPendingBriefs(dir)).toBe(2);
-  });
-
-  it('does NOT count subdirectories (consumed/ and failed/ lifecycle bins)', () => {
-    // Regression: the daemon's briefs dir always holds consumed/ and failed/
-    // subdirs once any brief has been processed. Counting them as pending
-    // briefs would permanently trip the sessionstart gate's briefs_pending
-    // skip even when zero real briefs remain. Only top-level .md files count,
-    // and .md files nested inside those bins must not leak into the count.
-    mkdirSync(join(dir, 'consumed'));
-    mkdirSync(join(dir, 'failed'));
-    writeFileSync(join(dir, 'consumed', 'old-brief.md'), '');
-    expect(countPendingBriefs(dir)).toBe(0);
-
-    writeFileSync(join(dir, 'real-brief.md'), '');
-    expect(countPendingBriefs(dir)).toBe(1);
-  });
-});
-
 describe('evaluateSessionStartGates', () => {
   let dir: string;
   let telemetryPath: string;
-  let briefsDir: string;
 
   beforeEach(() => {
     dir = makeTmpDir();
     telemetryPath = join(dir, 'telemetry.jsonl');
-    briefsDir = join(dir, 'briefs');
-    mkdirSync(briefsDir);
   });
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('fires when no prior telemetry and no briefs', () => {
+  it('fires when no prior telemetry', () => {
     const decision = evaluateSessionStartGates({
       taskId: 't',
       cooldownMs: DEFAULT_SESSIONSTART_COOLDOWN_MS,
       nowMs: Date.now(),
       telemetryPath,
-      briefsDir,
     });
     expect(decision.fire).toBe(true);
     expect(decision.skipReason).toBeUndefined();
@@ -152,7 +104,6 @@ describe('evaluateSessionStartGates', () => {
       cooldownMs: 6 * 60 * 60 * 1000, // 6h
       nowMs,
       telemetryPath,
-      briefsDir,
     });
     expect(decision.fire).toBe(false);
     expect(decision.skipReason).toBe('cooldown');
@@ -172,7 +123,6 @@ describe('evaluateSessionStartGates', () => {
       cooldownMs: 6 * 60 * 60 * 1000,
       nowMs,
       telemetryPath,
-      briefsDir,
     });
     expect(decision.fire).toBe(true);
     expect(decision.lastFiredAtMs).toBe(Date.parse(lastFiredAt));
@@ -189,41 +139,7 @@ describe('evaluateSessionStartGates', () => {
       cooldownMs: 0,
       nowMs,
       telemetryPath,
-      briefsDir,
     });
     expect(decision.fire).toBe(true);
-  });
-
-  it('skips when a brief is pending even after cooldown passes', () => {
-    writeFileSync(join(briefsDir, 'brief-pending.md'), '');
-    const decision = evaluateSessionStartGates({
-      taskId: 't',
-      cooldownMs: DEFAULT_SESSIONSTART_COOLDOWN_MS,
-      nowMs: Date.now(),
-      telemetryPath,
-      briefsDir,
-    });
-    expect(decision.fire).toBe(false);
-    expect(decision.skipReason).toBe('briefs_pending');
-    expect(decision.pendingBriefCount).toBe(1);
-  });
-
-  it('cooldown is checked before brief queue — cooldown miss reported, not briefs', () => {
-    // Both gates would fail; cooldown gate fires first.
-    const nowMs = Date.parse('2026-04-18T12:00:00Z');
-    writeFileSync(
-      telemetryPath,
-      `${JSON.stringify({ taskId: 't', triggeredAt: '2026-04-18T11:00:00Z' })}\n`,
-    );
-    writeFileSync(join(briefsDir, 'brief.md'), '');
-    const decision = evaluateSessionStartGates({
-      taskId: 't',
-      cooldownMs: 6 * 60 * 60 * 1000,
-      nowMs,
-      telemetryPath,
-      briefsDir,
-    });
-    expect(decision.fire).toBe(false);
-    expect(decision.skipReason).toBe('cooldown');
   });
 });

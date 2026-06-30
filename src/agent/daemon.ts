@@ -47,8 +47,6 @@ export interface DaemonOptions {
    * task. Flows into `CronScheduler`.
    */
   cooldownMs?: number;
-  /** Override briefs directory scanned by the sessionstart gate. */
-  briefsDir?: string;
   /** Clock injection (tests). */
   now?: () => number;
   /** Optional callback fired after every telemetry record is written. */
@@ -100,7 +98,6 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
     ...(options.telemetryPath !== undefined ? { telemetryPath: options.telemetryPath } : {}),
     ...(options.sessionFactory !== undefined ? { sessionFactory: options.sessionFactory } : {}),
     ...(options.cooldownMs !== undefined ? { cooldownMs: options.cooldownMs } : {}),
-    ...(options.briefsDir !== undefined ? { briefsDir: options.briefsDir } : {}),
     ...(options.now !== undefined ? { now: options.now } : {}),
     ...(options.onTaskComplete !== undefined ? { onTaskComplete: options.onTaskComplete } : {}),
     ...(options.pullPollIntervalMs !== undefined ? { pullPollIntervalMs: options.pullPollIntervalMs } : {}),
