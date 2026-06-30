@@ -4,7 +4,12 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    setupFiles: ['./src/__test-utils__/stdin-claim-reset.ts'],
+    setupFiles: [
+      './src/__test-utils__/stdin-claim-reset.ts',
+      // Neutralize the developer's ambient AFK_*/provider config so tests
+      // assert framework defaults, not the dev's shell / ~/.afk/config/afk.env.
+      './src/__test-utils__/clean-config-env.ts',
+    ],
     // testTimeout: bumped from vitest default 5000ms to 15000ms.
     // Many CLI/bootstrap tests do `await import('./bootstrap.js')` (directly or
     // via vi.doMock setup) and the transitive import graph can exceed 5s under
