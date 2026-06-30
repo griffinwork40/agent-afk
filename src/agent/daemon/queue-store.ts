@@ -104,6 +104,18 @@ export function enqueue(
  */
 const POISON_SUBDIR = 'poison';
 
+// Invariant: stuckEntryEncounters keys are "<queueDir>/<filename>" strings
+// derived from OS readdir output (not user-supplied). The map grows by at most
+// one entry per distinct permanently-unremovable poison file and shrinks to
+// zero when those files are eventually cleared (by the operator), because a
+// successfully quarantined or unlinked entry never reaches the rate-limit path.
+// For the single-operator CLI use-case the map stays small (bounded by the
+// number of concurrently stuck files, which is expected to be 0 or 1).
+const stuckEntryEncounters: Map<string, number> = new Map();
+
+/** Log only on tick 1 and every STUCK_LOG_INTERVAL ticks thereafter. */
+const STUCK_LOG_INTERVAL = 10;
+
 /**
  * Dequeue the next pending task (FIFO order) and remove it from disk.
  *
@@ -223,17 +235,24 @@ function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown)
     try {
       unlinkSync(src);
     } catch (unlinkErr) {
-      // Even the unlink failed (e.g. queue-dir permission loss). Surface it
-      // instead of swallowing — otherwise the stuck entry re-fails silently on
-      // every tick. The queue is NOT deadlocked (dequeueNext's loop still
-      // reaches valid entries behind it); the next readdir retries this one.
-      const unlinkReason = redactInlineSecrets(
-        unlinkErr instanceof Error ? unlinkErr.message : String(unlinkErr),
-      );
-      // eslint-disable-next-line no-console
-      console.error(
-        `[daemon] pull-queue: could not remove unquarantinable entry ${redactedFilename}; will retry next tick (${unlinkReason})`,
-      );
+      // Even the unlink failed (e.g. queue-dir permission loss). The entry
+      // remains at the FIFO head and will be re-encountered on every poll tick.
+      // Rate-limit the log: emit on the 1st encounter and every STUCK_LOG_INTERVAL
+      // ticks thereafter so the operator is notified without flooding stderr.
+      // The queue is NOT deadlocked (dequeueNext's loop still reaches valid
+      // entries behind it); the next readdir retries this one.
+      const stuckKey = `${queueDir}/${filename}`;
+      const count = (stuckEntryEncounters.get(stuckKey) ?? 0) + 1;
+      stuckEntryEncounters.set(stuckKey, count);
+      if (count === 1 || count % STUCK_LOG_INTERVAL === 0) {
+        const unlinkReason = redactInlineSecrets(
+          unlinkErr instanceof Error ? unlinkErr.message : String(unlinkErr),
+        );
+        // eslint-disable-next-line no-console
+        console.error(
+          `[daemon] pull-queue: could not remove unquarantinable entry ${redactedFilename}; will retry next tick (${unlinkReason}) [seen ${count}x]`,
+        );
+      }
     }
   }
 }
