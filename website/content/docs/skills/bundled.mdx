@@ -1,0 +1,228 @@
+---
+title: "Bundled Skills"
+description: "Skills that ship with agent-afk via the awa-bundled plugin — slash commands, automatic guardrails, and helper conventions."
+---
+
+These skills ship with agent-afk via the built-in `awa-bundled` plugin. They surface as slash commands (type `/skillname`) and appear in `/help`. Except where noted, the model can also invoke them on its own when the situation calls for it. They complement the [core built-in skills](/skills/built-in).
+
+---
+
+## Workflow skills
+
+Skills you reach for to get work done.
+
+### `/review`
+
+```
+/review [diff|pr-url|pr-number|commit-sha|branch|--staged|--head] [--light] [--change-type hotfix|feature|refactor|dep-bump|new-service] [--post github|telegram] [--brief <text>|--spec <path>]
+```
+
+**Purpose:** Parallel code review across security, correctness, API compatibility, test coverage, and performance.
+
+**What it does:** Accepts a diff, PR URL, PR number, commit SHA, branch, staged changes, or patch file and runs two parallel review agents that cover all dimensions. A citation-verification pass removes fabricated or stale findings before synthesis. Emits a MERGE / DO NOT MERGE recommendation with ranked findings. Read-only: it never edits files, commits, pushes, or modifies a PR.
+
+**When to use:** When changes are ready for review before merge and you want a structured multi-dimension analysis.
+
+---
+
+### `/ship`
+
+```
+/ship [--verify] [--draft] [--dry-run]
+```
+
+**Purpose:** Release pipeline for already-done local work — pre-flight, tests, commit, push, and PR in one pass.
+
+**What it does:** Runs a `ground-state` pre-flight, detects and runs the project test suite (aborting on failure), drafts a Conventional Commits message, commits, pushes the feature branch, and opens a PR with a structured verification summary. Pass `--verify` to add an adversarial verifier wave on the diff before the PR goes up. Never pushes to the default branch.
+
+**When to use:** When local changes are done and you want to hand them off to review — "ship this", "push and open a PR", "release this work".
+
+---
+
+### `/refactor`
+
+```
+/refactor <refactor goal> [--scope <glob-or-path>]
+```
+
+**Purpose:** Safe, large-scale structural changes — symbol renames, API migrations, pattern standardizations, layer restructurings.
+
+**What it does:** Enumerates every affected site, groups them into dependency layers, applies changes in parallel per layer with worktree isolation, and verifies behavioral preservation at each layer boundary before proceeding. Exits immediately on the first regression and surfaces the exact site, diff, and behavioral delta. Best for changes touching more than 3 files with dependency ordering.
+
+**When to use:** When a rename, migration, or pattern change touches many files and you need guaranteed behavioral preservation at every step.
+
+---
+
+### `/simplify`
+
+```
+/simplify [target] [--apply] [--all]
+```
+
+**Purpose:** Find and rank incidental complexity, duplication, and dead code — then optionally apply safe reductions.
+
+**What it does:** Dispatches four parallel read-only lenses (clone detection, dead code, complexity hotspots, wrong abstraction) and synthesizes a ranked, behavior-preserving reduction plan. Default mode is read-only — nothing changes until you pass `--apply`. Apply mode gates on a green test suite and delegates multi-site changes to `/refactor`.
+
+**When to use:** When you want to understand what is safe to clean up in a codebase before committing to changes.
+
+---
+
+### `/spec`
+
+```
+/spec <idea or feature request>
+```
+
+**Purpose:** Transform a loose idea into a structured, actionable spec ready for implementation.
+
+**What it does:** Dispatches two parallel agents — one researching the web for prior art and comparable approaches, one inspecting the local working directory for conventions and integration points. Synthesizes a domain-appropriate spec (software, research, design, business, or generic) with an epistemic confidence section, then pauses for your confirmation before anything is built. Bug-shaped inputs (crashes, regressions) are redirected to `/diagnose` instead.
+
+**When to use:** When you have an idea or feature request that needs scoping before you start building.
+
+---
+
+### `/gather`
+
+```
+/gather
+```
+
+**Purpose:** Parallel context-gathering for a code area — structure and test coverage in one wave.
+
+**What it does:** Dispatches exactly two agents simultaneously: a Structure Agent that maps imports, callers, config references, and public interfaces; and a Test Agent that finds test files, coverage, and untested paths. Merges results into a unified context map. Prevents the slower, sequential pattern of reading files one at a time.
+
+**When to use:** When you need to understand a module, feature, or subsystem and would otherwise read three or more files sequentially.
+
+---
+
+### `/research`
+
+```
+/research
+```
+
+**Purpose:** Parallel external and local context-gathering for the current task.
+
+**What it does:** Dispatches two agents simultaneously — one searches the web for prior art, patterns, APIs, and comparable approaches; the other inspects the local working directory for domain-relevant artifacts (code, papers, design files, financial models — adapts to the domain). Returns a merged brief with findings, conflicts, risks, and coverage gaps flagged prominently.
+
+**When to use:** When you need both external context and local grounding before making a decision or starting a task.
+
+---
+
+### `/devils-advocate`
+
+```
+/devils-advocate
+```
+
+**Purpose:** Adversarially critique a proposal by generating structured alternatives before you commit to it.
+
+**What it does:** Dispatches three parallel critics — pragmatist (cheapest path), paranoid (safest path), architect (right abstraction level) — each inventing an independent alternative. A synthesis step ranks all four options (original plus three alternatives) and recommends the top choice. When critics converge, a composition-boundary check fires to catch failures invisible in isolation.
+
+**When to use:** When a plan, fix, decomposition, or named recommendation will drive decisions and you want structured alternative-generation before acting.
+
+---
+
+### `/ground-claim`
+
+```
+/ground-claim <capability question> | mode: runtime-wiring claims: [...]
+```
+
+**Purpose:** Ground capability claims with file-read evidence — no answers from model recall alone.
+
+**What it does:** In default mode, answers meta-capability questions ("what does this repo enable?", "list the available skills") with `path:line` citations from actual file reads, tagging any unverified claim explicitly. In `runtime-wiring` mode, traces actual execution paths — call sites, DI registration, middleware — for a supplied list of claims and returns CONFIRMED / UNVERIFIED / REFUTED verdicts per claim. Any non-CONFIRMED verdict blocks downstream sign-off.
+
+**When to use:** When you need an evidence-backed answer about what a system actually does, or need to verify that a capability is genuinely wired at runtime.
+
+---
+
+### `/automate`
+
+```
+/automate
+```
+
+**Purpose:** Set up a scheduled headless AFK run that pushes a summary to Telegram.
+
+**What it does:** Scouts existing schedules and daemon/service state, designs a self-contained recurring task prompt, creates the job via AFK's native scheduler (`create_schedule`), ensures the daemon survives reboot, and runs a verification pass confirming the Telegram summary actually arrives. Requires Telegram to be configured — prompts you to run `/telegram-setup` first if it isn't.
+
+**When to use:** When you want a recurring task (daily report, nightly check, scheduled workflow) to run headlessly and push results to Telegram.
+
+> **Note:** `automate` is slash-command only — the model will not auto-invoke it. Run `/automate` explicitly.
+
+---
+
+## Automatic guardrails
+
+These skills fire automatically at lifecycle points in multi-step work. You can also invoke them manually.
+
+### `/intent-lock`
+
+```
+/intent-lock
+```
+
+**Purpose:** Resolve ambiguous referents and unverified characterizations before multi-step work begins.
+
+**What it does:** Scans the request for ambiguous referents ("the text", "her draft"), unverified status claims ("the PR is approved"), identity assumptions, and code-vs-runtime dual referents (terms like "session" or "hooks" that name both a project concept and an agent runtime concept). Emits a one-sentence interpretation lock per finding and proceeds — escalating to a blocking question only when the ambiguity gates an irreversible action with multiple plausible reads.
+
+**When to use:** Fires automatically before any multi-step task with ambiguous inputs. Invoke manually when you want to surface and lock interpretations before a complex operation.
+
+---
+
+### `/ground-state`
+
+```
+/ground-state
+```
+
+**Purpose:** Pre-flight reconnaissance wave — git state, project infrastructure, and prior-session memory — before any non-trivial implementation.
+
+**What it does:** Dispatches three parallel read-only agents (state surveyor, infrastructure surveyor, memory surveyor), synthesizes a 6-line ground-truth snapshot, then constructs a Brief Anchor — a path-verified preamble that gets prepended to every subsequent sub-agent brief so they all start from the same verified cwd, branch, and HEAD. Never edits files. Domain-aware: adapts to software, research, design, or business projects.
+
+**When to use:** Fires automatically before multi-step implementations. Invoke manually before any significant work to get a verified snapshot of repo state and avoid stale-worktree errors.
+
+---
+
+### `/shadow-verify`
+
+```
+/shadow-verify
+```
+
+**Purpose:** Adversarial verification of high-stakes sub-agent findings before they drive decisions.
+
+**What it does:** Extracts 2–3 concrete, re-checkable claims from a sub-agent's report and dispatches one independent verifier per claim in parallel. Each verifier re-derives its verdict from scratch using tool calls only — never re-reading the original reasoning — and returns CONFIRMED / REFUTED / UNVERIFIABLE with evidence. Refuted claims surface with a corrected finding; unverifiable claims get a `[needs-human-review]` tag. A composition-boundary check catches echo-chamber confirmations.
+
+**When to use:** Fires automatically after high-stakes investigations (code reviews, audits, refactor plans). Invoke manually whenever a sub-agent asserts a claim with high-confidence language ("confident", "certain", "clearly") that will drive file edits, commits, or external actions.
+
+---
+
+### `/parallelize`
+
+```
+/parallelize
+```
+
+**Purpose:** Transform a sequential plan into a dependency-aware orchestration of parallel sub-agent waves.
+
+**What it does:** Dispatches a planning agent that takes the current plan, identifies which work is sequential versus parallelizable, and rewrites it as a wave-based orchestration plan with embedded test-driven development in implementation lanes. Prevents slow, sequential execution of work that could run in parallel.
+
+**When to use:** After finishing a plan in plan mode — run `/parallelize` before implementation to get a wave-optimized execution plan.
+
+---
+
+## Helper conventions
+
+### `/contract`
+
+```
+/contract
+```
+
+**Purpose:** Reference convention for structured sub-agent I/O schemas — loaded by other skills, not typically invoked directly.
+
+**What it does:** Defines the standard schema for sub-agent dispatches: `goal`, `inputs`, `artifacts`, `non_goals`, `failure_modes`, and optional `domain`. Also defines epistemic confidence fields (`confidence`, `coverage_gaps`, `boundary_flag`, `recommended_action`) that surface coverage gaps during result merging. Other orchestrator skills load this convention via `/contract` in their own prompts.
+
+**When to use:** Referenced automatically by skills like `review`, `refactor`, `shadow-verify`, and others. Invoke manually if you're authoring a custom skill and want to adopt the same structured I/O convention.
