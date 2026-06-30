@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.13.1] - 2026-06-30
+
+### Fixed
+- suspend input + pause stdin before /transcript pager (#342) (28db0e0)
+
+### Changed
+- real-world examples and a Bundled Skills reference page (#340) (bb3a93b)
+
 ## [5.13.0] - 2026-06-29
 
 ### Added
