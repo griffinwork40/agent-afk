@@ -38,9 +38,9 @@ The primary dispatch mechanism is the built-in `agent` tool (also called `Task` 
 
 ```
 agent({
-  prompt: "Read src/auth/session.ts and summarise the session lifecycle in ≤200 words. Cite file:line for each claim.",
+  prompt: "Read the retry logic in src/http/client.ts and explain the backoff strategy in ≤150 words. Cite file:line for each claim.",
   model: "haiku",          // optional — right-size the model
-  max_turns: 10            // optional — bound the budget
+  max_turns: 5             // optional — bound the budget
 })
 ```
 
@@ -104,14 +104,18 @@ For structured multi-agent workflows, the `compose` tool dispatches up to 20 sub
 ```
 compose({
   nodes: [
-    { id: "audit", prompt: "audit the auth module" },
-    { id: "tests", prompt: "read the test suite for auth" },
-    { id: "report", prompt: "write a combined report", dependsOn: ["audit", "tests"] }
+    { id: "security", prompt: "Audit src/api for authz and injection bugs. List each finding with file:line." },
+    { id: "coverage", prompt: "Find untested branches in src/api. List each with file:line." },
+    { id: "report",   prompt: "Combine the security and coverage findings into one prioritised punch-list." }
+  ],
+  edges: [
+    { from: "security", to: "report" },
+    { from: "coverage", to: "report" }
   ]
 })
 ```
 
-`audit` and `tests` run in parallel. `report` starts only after both complete. If any node fails and fail-fast is enabled (the default), downstream nodes are cancelled rather than running with incomplete inputs.
+Dependencies are declared as `edges` (`{ from, to }` — "from must finish before to starts"), not as a field on the node. Here `security` and `coverage` have no incoming edges, so they run in parallel; `report` waits for both. If any node fails and fail-fast is enabled (the default), downstream nodes are cancelled rather than running with incomplete inputs.
 
 **Limits and failure behavior:**
 - Maximum 20 nodes per `compose` call
@@ -153,7 +157,7 @@ Subagents should have explicit budgets. Before dispatching:
 
 - Set `max_turns` on focused investigations (`max_turns: 5` for a quick lookup)
 - Choose the cheapest sufficient model (`haiku` for reads, `sonnet` for multi-file analysis)
-- For wide fan-outs, consider the `/right-size-delegation` skill before dispatching to prevent cascading timeouts
+- For wide fan-outs, dispatch in bounded waves rather than all at once — a burst of parallel children can hit provider rate limits and cascade into timeouts
 
 ## Subagent output
 

@@ -110,7 +110,7 @@ optional; unset fields fall through to env vars or built-in defaults.
   "model": "sonnet",
   "maxTokens": 4096,
   "temperature": 1.0,
-  "systemPrompt": "You are a helpful assistant.",
+  "systemPrompt": "Always run the test suite before declaring a task done. Prefer small, reversible commits.",
   "updatePolicy": "notify",
   "autoResumeOnUsageLimit": true,
   "bgSummaries": false,
@@ -208,7 +208,7 @@ Configures default task and optional worktree pruning for `afk daemon`.
 ```json
 {
   "daemon": {
-    "task": "/forge-friction --auto",
+    "task": "/review --auto",
     "taskId": "default",
     "worktreePrune": {
       "enabled": true,

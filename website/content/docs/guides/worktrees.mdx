@@ -95,7 +95,7 @@ Set `AFK_WORKTREE_BOOT_PRUNE=1` to have the daemon prune stale worktrees at star
 `afk farm` runs the same task across multiple isolated worktrees in parallel, then picks the best result:
 
 ```bash
-afk farm --task "refactor the auth module" --branches 3
+afk farm --task "speed up the slow /search endpoint" --branches 3
 ```
 
 Each branch runs in a separate worktree. At completion, `afk farm` scores the branches, prints a summary table, writes a memory fact about the winner, and optionally sends a Telegram digest.
