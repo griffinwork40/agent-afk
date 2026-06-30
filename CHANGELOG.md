@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.14.0] - 2026-06-30
+
+### Added
+- emit mcp_connect_* trace phases on daemon surface (#248) (#338) (438b466)
+
 ## [5.13.1] - 2026-06-30
 
 ### Fixed
