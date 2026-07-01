@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.15.4] - 2026-07-01
+
+### Fixed
+- close abort TOCTOU so an in-flight child is killed, not orphaned (#349) (ca2d948)
+
 ## [5.15.3] - 2026-07-01
 
 ### Fixed
