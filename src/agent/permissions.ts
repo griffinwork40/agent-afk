@@ -19,7 +19,16 @@ export type ToolPermissionMode = 'allow' | 'deny' | 'ask';
  * Permission rule for a specific tool name.
  */
 export interface ToolPermission {
-  /** Tool name (e.g. `Bash`, `Read`, `Edit`). */
+  /**
+   * Tool name — MUST be the AFK **runtime** name (snake_case): `bash`,
+   * `read_file`, `edit_file`, `write_file`, `grep`, `glob`, `web_scrape`, … —
+   * NOT the Claude Code PascalCase alias (`Bash`, `Read`, `Edit`). Rule keys
+   * are matched verbatim against the runtime tool name the dispatcher passes;
+   * a key that doesn't match falls through to `defaultMode`. With
+   * `defaultMode: 'allow'` a mismatched key therefore FAILS OPEN — the tool you
+   * meant to deny is silently permitted. (MCP tools use their wire name,
+   * `mcp__<server>__<tool>`.)
+   */
   tool: string;
   /** Behavior when the tool is requested. */
   mode: ToolPermissionMode;
@@ -83,11 +92,16 @@ function toPermissionResult(decision: PermissionDecision): PermissionResult {
  *
  * The returned function is safe to pass directly as `AgentConfig.canUseTool`.
  *
+ * ⚠️ Rule keys MUST be AFK **runtime** tool names (snake_case) — see
+ * {@link ToolPermission.tool}. A key that doesn't match the runtime name falls
+ * through to `defaultMode`, so a PascalCase key like `Bash` combined with
+ * `defaultMode: 'allow'` FAILS OPEN (the tool you meant to deny still runs).
+ *
  * ```ts
  * const hook = createCanUseToolHook({
  *   rules: {
  *     defaultMode: 'allow',
- *     tools: { Bash: 'deny' },
+ *     tools: { bash: 'deny', edit_file: 'deny' }, // runtime names, not Bash/Edit
  *   },
  * });
  * const session = new AgentSession({ model: 'sonnet', canUseTool: hook });

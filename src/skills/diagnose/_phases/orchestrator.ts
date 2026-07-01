@@ -28,7 +28,8 @@ import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
 import type { CanUseTool } from '../../../agent/types/sdk-types.js';
 import { researchAgent } from '../../_agents/research-agent.js';
 import { gitInvestigator } from '../../_agents/git-investigator.js';
-import { toAgentDefinition } from '../../_agents/to-definition.js';
+import { vendoredToolAllowlist } from '../../_agents/to-definition.js';
+import { classifyBashCommand } from '../../../agent/tools/readonly-bash.js';
 import type {
   DiagnosisResult,
   Hypothesis,
@@ -50,46 +51,82 @@ const execFile = promisify(execFileCallback);
 // Tool-permission helpers
 // ---------------------------------------------------------------------------
 
+// Invariant: canUseTool gates receive AFK's snake_case *runtime* tool name
+// (read_file, grep, bash, …), NOT the vendored agents' upstream PascalCase
+// allowlist (Read, Grep, Bash, …). vendoredToolAllowlist bridges the two
+// namespaces once at module load; comparing the raw vendored list against the
+// runtime name denies every call. See _agents/to-definition.ts for the mapping.
+//
+// RESEARCH lane (codebase, hypothesis, verifier base): read-only, no shell.
+//   research-agent.allowedTools = [Read, Grep, Glob, WebFetch, WebSearch]
+//                               → {read_file, grep, glob, web_scrape}
+const RESEARCH_READONLY_TOOLS: ReadonlySet<string> = vendoredToolAllowlist(
+  researchAgent.allowedTools,
+);
+// GIT lane: AFK does not wire the SDK `agents` nested-dispatch registry
+// (AgentSessionConfig.agents is a "passed through when SDK V2 supports it"
+// placeholder — never consumed by SubagentManager). So the git lane cannot
+// dispatch git-investigator; instead it IS the investigator and runs git
+// itself. Its allowlist therefore derives from git-investigator's own tool
+// contract, and `bash` is gated read-only (git log/blame/diff pass; commit/
+// push/reset are denied) at call time via classifyBashCommand.
+//   git-investigator.allowedTools = [Bash, Read, Grep, Glob]
+//                                 → {bash, read_file, grep, glob}
+const GIT_LANE_TOOLS: ReadonlySet<string> = vendoredToolAllowlist(
+  gitInvestigator.allowedTools,
+);
+
 /**
- * Create a restrictive canUseTool that only allows read-only tools.
+ * Create a restrictive canUseTool that only allows read-only research tools
+ * (no shell, no writes). Used by the codebase-research and hypothesis lanes.
  */
-function createReadOnlyCanUseTool(): CanUseTool {
+export function createReadOnlyCanUseTool(): CanUseTool {
   return async (toolName: string) => {
-    if (!researchAgent.allowedTools.includes(toolName as never)) {
+    if (!RESEARCH_READONLY_TOOLS.has(toolName)) {
       return {
         behavior: 'deny',
-        message: `Tool ${toolName} not allowed. Allowed tools: ${researchAgent.allowedTools.join(', ')}`,
+        message: `Tool ${toolName} not allowed. Allowed tools: ${[...RESEARCH_READONLY_TOOLS].join(', ')}`,
       };
     }
     return { behavior: 'allow' };
   };
 }
 
-// Orchestrator allowlist — research-agent's read-only base plus Agent for
-// dispatching git-investigator via the SDK's built-in Agent tool. Paired with
-// an `agents: { 'git-investigator': ... }` registry on the same fork config.
-const GIT_ORCHESTRATOR_ALLOWED_TOOLS = [...researchAgent.allowedTools, 'Agent'] as const;
-
 /**
- * Create a canUseTool for the git-orchestrator subagent.
+ * Create a canUseTool for the git-research lane: read-only research tools plus
+ * `bash` restricted to non-mutating git commands (history, blame, diff, log).
+ * Mutating shell (commit, push, reset, checkout, chained/redirected writes) is
+ * denied via classifyBashCommand, which handles `&&`/`;`/`$()` and redirects.
  */
-function createGitOrchestratorCanUseTool(): CanUseTool {
-  return async (toolName: string) => {
-    if (!GIT_ORCHESTRATOR_ALLOWED_TOOLS.includes(toolName as never)) {
+export function createGitLaneCanUseTool(): CanUseTool {
+  return async (toolName: string, input: Record<string, unknown>) => {
+    if (!GIT_LANE_TOOLS.has(toolName)) {
       return {
         behavior: 'deny',
-        message: `Tool ${toolName} not allowed for git orchestrator. Allowed tools: ${GIT_ORCHESTRATOR_ALLOWED_TOOLS.join(', ')}`,
+        message: `Tool ${toolName} not allowed for git research. Allowed tools: ${[...GIT_LANE_TOOLS].join(', ')}`,
       };
+    }
+    if (toolName === 'bash') {
+      const command = typeof input['command'] === 'string' ? input['command'] : '';
+      const verdict = classifyBashCommand(command);
+      if (verdict.mutating) {
+        return {
+          behavior: 'deny',
+          message: `Bash command denied in git research (read-only lane): ${verdict.reason ?? 'mutating command'}`,
+        };
+      }
     }
     return { behavior: 'allow' };
   };
 }
 
 /**
- * Create a canUseTool that allows only reading (no Edit, Write, Bash, commit).
+ * Create a canUseTool for worktree verification: strictly read-only. Denies all
+ * writes, shell, and subagent dispatch (using AFK runtime tool names), then
+ * falls through to the read-only research allowlist.
  */
-function createVerifierCanUseTool(): CanUseTool {
-  const deniedTools = ['Edit', 'Write', 'Bash', 'Agent', 'Task'];
+export function createVerifierCanUseTool(): CanUseTool {
+  const deniedTools = ['edit_file', 'write_file', 'bash', 'agent', 'skill', 'compose'];
 
   return async (toolName: string) => {
     if (deniedTools.includes(toolName)) {
@@ -98,10 +135,10 @@ function createVerifierCanUseTool(): CanUseTool {
         message: `Tool ${toolName} not allowed in worktree verification. Verification is read-only.`,
       };
     }
-    if (!researchAgent.allowedTools.includes(toolName as never)) {
+    if (!RESEARCH_READONLY_TOOLS.has(toolName)) {
       return {
         behavior: 'deny',
-        message: `Tool ${toolName} not allowed. Allowed tools: ${researchAgent.allowedTools.join(', ')}`,
+        message: `Tool ${toolName} not allowed. Allowed tools: ${[...RESEARCH_READONLY_TOOLS].join(', ')}`,
       };
     }
     return { behavior: 'allow' };
@@ -345,21 +382,20 @@ export async function handler(
   // shared triage anchor points so their findings can be cross-referenced
   // in Phase 3 on common axes (location, category, confidence).
   //
-  // Lane override: research-agent.md is the shared vendored system prompt
+  // Lane overrides: research-agent.md is the shared vendored system prompt
   // (byte-pinned in src/skills/_agents/vendored.test.ts) and tells the agent
-  // to dispatch `git-investigator` via the Agent tool on git-flavored
-  // signals. The CODEBASE lane mechanically denies Agent (see
-  // createReadOnlyCanUseTool below), so those dispatch instructions describe
-  // a capability the lane doesn't have. Without an explicit override the
-  // agent falls back to reading `.git/` internals directly — which
-  // research-agent.md itself flags as a contract violation, and which
-  // produces noise like "60 worktrees and 1 stash" when the failure
-  // description happens to mention git terms.
+  // to dispatch `git-investigator` via the Agent tool on git-flavored signals.
+  // Neither AFK lane can do that — AFK doesn't wire the SDK `agents` registry
+  // (see gitHandle fork below) — so BOTH lanes get an explicit override that
+  // has the last word (appended after researchAgent.systemPrompt):
   //
-  // The override is appended AFTER researchAgent.systemPrompt so it has the
-  // last word, and is scoped to the codebase lane only — the git lane has
-  // both the Agent tool and the git-investigator registry, so the upstream
-  // instructions apply correctly there.
+  //  - CODEBASE lane: no shell at all. Without the override the agent falls
+  //    back to reading `.git/` internals directly — which research-agent.md
+  //    itself flags as a contract violation, and which produces noise like
+  //    "60 worktrees and 1 stash" when the failure text mentions git terms.
+  //  - GIT lane: has `bash` (read-only-gated). It must run git commands
+  //    itself (git log/blame/diff/show) instead of trying to dispatch
+  //    git-investigator, which would be denied.
   const codebaseLaneOverride =
     '\n\n## Lane override (codebase research)\n\n' +
     'The Agent tool is not available in this lane. Do not attempt to ' +
@@ -369,8 +405,17 @@ export async function handler(
     'are not codebase findings and surfacing them is the documented ' +
     'anti-pattern. Confine investigation to source code paths via Read, ' +
     'Grep, and Glob.';
+  const gitLaneOverride =
+    '\n\n## Lane override (git research)\n\n' +
+    'Do not dispatch `git-investigator` or any other subagent — the Agent ' +
+    'tool is not available here and those calls will be denied. Investigate ' +
+    'git history yourself by running read-only git commands through the ' +
+    '`bash` tool (e.g. `git log`, `git blame`, `git diff`, `git show`, ' +
+    '`git log -S`). Mutating commands (commit, push, reset, checkout, ' +
+    'rebase, and any redirect or chained write) are denied — keep it ' +
+    'strictly read-only.';
   const codebaseResearchPrompt = `${researchAgent.systemPrompt}${codebaseLaneOverride}\n\n${researchPrompt}\n\nFocus: CODEBASE\n${triageBlock}\nFailure: ${parsedInput.failure}${parsedInput.context ? `\nContext: ${parsedInput.context}` : ''}`;
-  const gitResearchPrompt = `${researchAgent.systemPrompt}\n\n${researchPrompt}\n\nFocus: GIT HISTORY\n${triageBlock}\nFailure: ${parsedInput.failure}${parsedInput.context ? `\nContext: ${parsedInput.context}` : ''}\n\nRepo: ${parsedInput.repoPath}`;
+  const gitResearchPrompt = `${researchAgent.systemPrompt}${gitLaneOverride}\n\n${researchPrompt}\n\nFocus: GIT HISTORY\n${triageBlock}\nFailure: ${parsedInput.failure}${parsedInput.context ? `\nContext: ${parsedInput.context}` : ''}\n\nRepo: ${parsedInput.repoPath}`;
 
   // `parentId: ctx.callId` (when present) anchors the synthesized `Agent(...)`
   // entry under THIS skill's tool-lane entry in the live overlay AND in the
@@ -393,23 +438,20 @@ export async function handler(
     ...(skillCallId ? { parentId: skillCallId } : {}),
   });
 
-  // Restriction to git-investigator comes from the single-entry `agents`
-  // registry below — the SDK exposes it via the built-in Agent tool. The
-  // `Agent(git-investigator)` syntax in upstream's frontmatter is plugin
-  // parser syntax, not SDK syntax; here we set the registry directly.
+  // The git lane runs read-only git commands itself (createGitLaneCanUseTool +
+  // GIT_LANE_TOOLS). AFK does not consume the SDK `agents` nested-dispatch
+  // registry (AgentSessionConfig.agents is a "passed through when SDK V2
+  // supports it" placeholder), so — unlike upstream, where research-agent
+  // dispatches git-investigator via the Agent tool — this lane cannot fork a
+  // nested investigator. It IS the investigator: it inherits git-investigator's
+  // tool contract with `bash` gated to non-mutating git operations.
   const gitHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },
     config: {
       model: subagentModel,
       systemPrompt: gitResearchPrompt,
       cwd: parsedInput.repoPath,
-      agents: {
-        'git-investigator': {
-          ...toAgentDefinition(gitInvestigator),
-          model: subagentModel,
-        },
-      },
-      canUseTool: createGitOrchestratorCanUseTool(),
+      canUseTool: createGitLaneCanUseTool(),
     },
     idPrefix: 'diagnose-git-research',
     agentType: 'diagnose-git-research',

@@ -48,6 +48,12 @@ export {
   autoVerifyHypotheses,
 } from './_phases/verifier.js';
 
+export {
+  createReadOnlyCanUseTool,
+  createGitLaneCanUseTool,
+  createVerifierCanUseTool,
+} from './_phases/orchestrator.js';
+
 import { handler } from './_phases/orchestrator.js';
 import { registerSkill, type SkillMetadata } from '../index.js';
 

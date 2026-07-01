@@ -200,10 +200,19 @@ export interface AgentConfig {
    */
   mcpManager?: import('../mcp/index.js').McpManager;
 
-  /** Subagent definitions. Passed through when SDK V2 supports it. */
+  /**
+   * Subagent definitions. NOT currently consumed by AFK's harness — reserved
+   * for future SDK V2 support. AFK's SubagentManager forks via the `agent`/
+   * `skill`/`compose` tools, not this registry, so populating `agents` is a
+   * silent no-op today; do not rely on it for nested dispatch. See
+   * skills/_agents/to-definition.ts (toAgentDefinition).
+   */
   agents?: Record<string, AgentDefinition>;
 
-  /** Main agent name when using agents. Passed through when SDK V2 supports it. */
+  /**
+   * Main agent name when using `agents`. NOT currently consumed (reserved for
+   * future SDK V2 support); has no effect today.
+   */
   agent?: string;
 
   /**
@@ -247,10 +256,17 @@ export interface AgentConfig {
    */
   env?: Record<string, string>;
 
-  /** Enable file checkpointing for rewind. Passed through when SDK V2 supports it. */
+  /**
+   * Enable file checkpointing for rewind. NOT currently consumed by any
+   * provider (reserved for future SDK V2 support); has no effect today.
+   */
   enableFileCheckpointing?: boolean;
 
-  /** Path to the Claude Code executable. Uses the SDK's built-in CLI if not specified. */
+  /**
+   * Path to a Claude Code executable. NOT currently consumed — AFK runs its own
+   * provider harness and never spawns a Claude Code CLI. Reserved for future
+   * SDK V2 support; has no effect today.
+   */
   pathToClaudeCodeExecutable?: string;
 
   /** Continue the most recent persisted session in the current working directory */
