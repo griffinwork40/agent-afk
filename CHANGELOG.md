@@ -11,6 +11,13 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.15.5] - 2026-07-01
+
+### Fixed
+- keep the typing indicator alive for the whole turn (#352) (819ad6c)
+- correct stale commit geometry (#351) (002bcd1)
+- normalize canUseTool gates to AFK runtime tool names (#350) (0d1fca6)
+
 ## [5.15.4] - 2026-07-01
 
 ### Fixed
