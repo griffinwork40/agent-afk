@@ -552,4 +552,67 @@ describe('provider-turn interrupt on incomplete exit (stale-buffer guard)', () =
     await streamResponse(ctx, session, 'go');
     expect((session as { interrupt: ReturnType<typeof vi.fn> }).interrupt).not.toHaveBeenCalled();
   });
+
+  it('suspends the watchdog while a foreground tool is in flight, then fires past MAX_TOOL_INFLIGHT_MS', async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseHang: () => void = () => {};
+      const hang = new Promise<void>((resolve) => { releaseHang = resolve; });
+      const session = makeSession(async function* () {
+        // A foreground tool STARTS (tool_use_detail) then the parent stream goes
+        // silent for the whole tool run — exactly a long bash / nested `afk chat`.
+        // No tool_result arrives, so the tool stays "in flight" and the watchdog
+        // must SUSPEND rather than fire at NEXT_EVENT_TIMEOUT_MS.
+        yield { type: 'chunk' as const, chunk: { type: 'tool_use_detail' as const, toolUseId: 't1', toolName: 'bash', toolInput: 'afk chat' } };
+        await hang;
+      });
+      (session as { interrupt: ReturnType<typeof vi.fn> }).interrupt = vi.fn(async () => { releaseHang(); });
+      const { ctx } = makeCtx();
+
+      const p = streamResponse(ctx, session, 'go');
+      let settled = false;
+      void p.then(() => { settled = true; }, () => { settled = true; });
+
+      await vi.advanceTimersByTimeAsync(1);        // flush tool_use_detail → tool in flight
+      await vi.advanceTimersByTimeAsync(180_001);  // past NEXT_EVENT_TIMEOUT_MS
+      await vi.advanceTimersByTimeAsync(180_001);  // still in flight → suspended, no timeout
+      expect(settled).toBe(false);
+      expect((session as { interrupt: ReturnType<typeof vi.fn> }).interrupt).not.toHaveBeenCalled();
+
+      // Past MAX_TOOL_INFLIGHT_MS (660s) the tool is treated as genuinely wedged
+      // and the watchdog is finally allowed to fire.
+      const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+      await vi.advanceTimersByTimeAsync(660_001);
+      await rejection;
+      expect((session as { interrupt: ReturnType<typeof vi.fn> }).interrupt).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it('resumes the watchdog after a tool_result clears the in-flight set', async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseHang: () => void = () => {};
+      const hang = new Promise<void>((resolve) => { releaseHang = resolve; });
+      const session = makeSession(async function* () {
+        // Tool starts AND finishes (tool_result), so the in-flight set is empty
+        // again — subsequent silence is a genuinely stuck turn and MUST time out.
+        yield { type: 'chunk' as const, chunk: { type: 'tool_use_detail' as const, toolUseId: 't1', toolName: 'bash', toolInput: 'x' } };
+        yield { type: 'chunk' as const, chunk: { type: 'tool_result' as const, toolUseId: 't1', content: 'ok' } };
+        await hang;
+      });
+      (session as { interrupt: ReturnType<typeof vi.fn> }).interrupt = vi.fn(async () => { releaseHang(); });
+      const { ctx } = makeCtx();
+
+      const p = streamResponse(ctx, session, 'go');
+      const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+      await vi.advanceTimersByTimeAsync(1);        // flush tool_use_detail + tool_result
+      await vi.advanceTimersByTimeAsync(180_001);  // silence, no tool in flight → fires
+      await rejection;
+      expect((session as { interrupt: ReturnType<typeof vi.fn> }).interrupt).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 15_000);
 });
