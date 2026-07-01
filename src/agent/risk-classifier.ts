@@ -195,6 +195,65 @@ function classifyFilePath(filePath: string, ctx: RiskContext): RiskLevel {
 }
 
 // ---------------------------------------------------------------------------
+// MCP destructive-verb table
+// ---------------------------------------------------------------------------
+
+// Invariant: an MCP tool name is `mcp__<server>__<tool>` (3 segments) by the
+// bridge convention, but a server MAY expose a 2-segment `mcp__<tool>` name.
+// classifyRisk scans EVERY word token after the `mcp__` prefix (server segment
+// included) for a destructive verb, matching on `_`/`-` word boundaries — never
+// a raw substring. Two failure modes this guards against, both surfaced in the
+// review of PR #339:
+//   1. UNDER-GATING (the security hole this table exists to close): extracting
+//      only the 3rd+ segment (`.slice(2)`) made a 2-segment `mcp__deploy` yield
+//      an empty sub-name, so the verb scan never fired and an irreversible op
+//      ran unattended at 'medium'. Scanning the full post-prefix suffix
+//      (`.slice(1)`) closes this — `mcp__deploy` now matches the `deploy` verb.
+//   2. FALSE POSITIVES from substring matching: `.includes('run')` gated
+//      `mcp__test__runner` and `.includes('exec')` gated `mcp__server__executor`
+//      to 'high'. Token matching on `_`/`-` boundaries keeps `run`/`execute` as
+//      whole-word verbs while letting `runner`/`executor` through as 'medium'.
+// Token (not substring) matching is REQUIRED once the server segment is scanned:
+// the `postgres` server name contains `post` (a verb), so substring matching
+// would wrongly gate every `mcp__postgres__*` tool 'high'. The tradeoff is that a
+// verb concatenated WITHOUT a separator (`mcp__db__dropall`) is not caught — but
+// real MCP tools use snake_case/kebab-case (`drop_all`), so this is a narrow gap.
+// Scanning the server segment too can over-gate a benign tool whose SERVER is
+// named after a verb (e.g. `mcp__deploy__status` → 'high'). That is deliberate
+// safe-side error: over-gating merely asks the operator to approve; under-gating
+// runs a destructive op unattended. A future per-server allowlist can refine it.
+const DESTRUCTIVE_VERBS: ReadonlySet<string> = new Set([
+  // data / storage mutation
+  'delete', 'drop', 'remove', 'destroy', 'truncate', 'purge', 'wipe',
+  'write', 'create', 'update', 'insert', 'upsert', 'patch', 'rename',
+  // execution
+  'exec', 'execute', 'run', 'eval',
+  // messaging / publishing
+  'send', 'push', 'publish', 'deploy', 'post',
+  // repo / vcs
+  'merge', 'rollback', 'reset',
+  // infra lifecycle
+  'terminate', 'provision', 'scale', 'disable',
+  // financial
+  'charge', 'refund',
+  // auth / access
+  'revoke',
+]);
+
+/**
+ * Lowercase word tokens of an MCP tool's sub-name (everything after the `mcp__`
+ * prefix), split on `_`/`-`/`__` boundaries. The server segment is intentionally
+ * included: a 2-segment name has no server, and the verb may live in either
+ * position. Empty tokens (from `__` separators or leading/trailing delimiters)
+ * are dropped so they never spuriously match a verb. `tool` must already be
+ * lowercased by the caller.
+ */
+function mcpSubNameTokens(tool: string): string[] {
+  const suffix = tool.split('__').slice(1).join('__');
+  return suffix.split(/[_-]+/).filter(Boolean);
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -243,39 +302,25 @@ export function classifyRisk(
   }
 
   // ---- MCP tools ----------------------------------------------------------
-  // Invariant: any tool whose name begins with `mcp__` is an externally-
-  // contributed function from a third-party server (postgres, filesystem,
-  // GitHub, etc.). The classifier has NO visibility into what that tool does,
-  // so it cannot distinguish a safe MCP read from a destructive mutation
-  // (e.g. `mcp__postgres__drop_table`, `mcp__fs__delete`). Failing open here
+  // Any `mcp__*` tool is an externally-contributed function from a third-party
+  // server (postgres, filesystem, GitHub, …). The classifier has NO visibility
+  // into what it does, so it cannot tell a safe MCP read from a destructive
+  // mutation (`mcp__postgres__drop_table`, `mcp__fs__delete`). Failing open
   // (returning 'safe') would let an unattended run silently execute arbitrary
-  // external side-effects — exactly the scenario AFK gate exists to prevent.
+  // external side-effects — exactly what the AFK gate exists to prevent.
   //
-  // Policy (conservative default, operator-upgradable):
-  //   - Mutation-patterned names (`*delete*`, `*drop*`, `*remove*`, `*write*`,
-  //     `*create*`, `*update*`, `*insert*`, `*exec*`, `*run*`, `*send*`,
-  //     `*push*`, `*publish*`, `*deploy*`) → 'high': irreversible external
-  //     side-effects, gate behind approval.
-  //   - All other MCP tools → 'medium': may have network/quota side-effects,
-  //     but not obviously destructive. Medium is allowed in AFK (gate only
-  //     blocks 'high'), which matches the posture for normal git push / install.
+  // Policy (conservative default, operator-upgradable): a destructive verb in
+  // any post-prefix token → 'high' (gated behind approval); all other MCP tools
+  // → 'medium' (may have network/quota side-effects but not obviously
+  // destructive, and medium is allowed in AFK so autonomous research stays
+  // useful). See DESTRUCTIVE_VERBS / mcpSubNameTokens above for the exact scan
+  // rule and why it covers 2-segment names and matches on word boundaries.
   //
-  // Rationale for not defaulting ALL MCP to 'high': the policy guide says
-  // "medium ops … are ALLOWED — autonomous work has to be useful." A blanket
-  // 'high' on every MCP call would make MCP unusable in AFK, defeating its
-  // value for automation-friendly setups. The sub-name filter catches the
-  // clearly-dangerous verbs; a future per-server allowlist can refine further.
-  if (toolName.startsWith('mcp__') || toolName.startsWith('MCP__')) {
-    const subName = toolName.split('__').slice(2).join('__').toLowerCase();
-    const DESTRUCTIVE_VERBS = [
-      'delete', 'drop', 'remove', 'destroy', 'truncate', 'purge',
-      'write', 'create', 'update', 'insert', 'upsert', 'patch',
-      'exec', 'execute', 'run', 'eval',
-      'send', 'push', 'publish', 'deploy', 'post',
-    ];
-    for (const verb of DESTRUCTIVE_VERBS) {
-      if (subName.includes(verb)) return 'high';
-    }
+  // Prefix test uses the already-lowercased `tool` so mixed-case `Mcp__…` names
+  // are classified too, not silently dropped to the 'safe' default below.
+  if (tool.startsWith('mcp__')) {
+    const tokens = mcpSubNameTokens(tool);
+    if (tokens.some((t) => DESTRUCTIVE_VERBS.has(t))) return 'high';
     return 'medium';
   }
 

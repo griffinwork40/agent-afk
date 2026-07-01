@@ -24,9 +24,10 @@
  *     `/etc`, …), or target the `.git` object store
  *   - schedule mutations: `create_schedule` / `cancel_schedule` — modify the
  *     daemon cron store with potential immediate live-sync side-effects
- *   - MCP tools with destructive verb sub-names (`*delete*`, `*drop*`,
- *     `*write*`, `*create*`, `*update*`, `*exec*`, `*send*`, `*deploy*`, …) —
- *     arbitrary third-party server functions the classifier cannot introspect
+ *   - MCP tools whose sub-name contains a destructive verb (the full list is
+ *     `DESTRUCTIVE_VERBS` in `risk-classifier.ts` — the single source of truth;
+ *     not duplicated here so it cannot drift) — arbitrary third-party server
+ *     functions the classifier cannot introspect
  * `'medium'` ops (normal `git push`/`git commit`, installs, builds, file moves)
  * and `'safe'` ops (reads, tests, lint) are ALLOWED — autonomous work has to be
  * useful, and these are reversible enough to run unattended.
