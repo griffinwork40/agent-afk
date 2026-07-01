@@ -97,6 +97,22 @@ export function detectCaretBlink(env: NodeJS.ProcessEnv = process.env): boolean 
 }
 
 /**
+ * Decide whether the spinner uses the goblin theme (olive frames + goblin verb
+ * pool) while the agent works.
+ *
+ * ON by default; `AFK_GOBLIN_SPINNER=0` opts OUT (the classic dim noir spinner).
+ * Only the literal "0" disables — any other value (or unset) leaves it on.
+ * Purely cosmetic: no timer or layout change, so it is independent of
+ * reduced-motion / capture-mode. Kept here beside the other CLI UX-preference
+ * detectors, read via the same `env`-parameter pattern.
+ *
+ * Reads `process.env` at call time. Pure function with no side effects.
+ */
+export function detectGoblinSpinner(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env['AFK_GOBLIN_SPINNER'] !== '0';
+}
+
+/**
  * Ring the terminal bell (audible BEL, \x07) if the bell is enabled
  * and the stream is a TTY. Non-printing; does not disturb the overlay.
  *

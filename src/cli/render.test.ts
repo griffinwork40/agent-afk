@@ -149,6 +149,79 @@ describe('welcomeBanner', () => {
     expect(out).toContain('/help · /model');
   });
 
+  it('renders the dim product tagline under the wordmark in the hybrid banner', () => {
+    Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
+    const out = strip(welcomeBanner({
+      mode: 'Interactive Mode',
+      model: 'sonnet',
+      version: '5.10.1',
+      cwd: '/tmp/agent-afk',
+    }));
+    // Tagline present (first-run identity), and short enough to survive the
+    // 49-col info column at an 80-col terminal without truncation.
+    expect(out).toContain('the agent harness you can actually change');
+    // The weight-accented wordmark ("Agent " regular + "AFK" bold) must still
+    // strip to the contiguous product name — the accent is a weight step, not
+    // a fragmenting insertion.
+    expect(out).toContain('Agent AFK');
+  });
+
+  describe('responsive mascot layout', () => {
+    // The sprite is rendered with half-block glyphs; their presence is a
+    // reliable proxy for "the goblin is drawn".
+    const hasSprite = (s: string): boolean => /[▀▄]/.test(s);
+
+    it('keeps the mascot sprite on a standard-width terminal', () => {
+      Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
+      const out = strip(welcomeBanner({
+        mode: 'Interactive Mode',
+        model: 'opus_1m',
+        version: '5.11.0',
+        worktree: 'afk/polish-goblin-banner',
+        cwd: '/Users/example/projects/agent-afk',
+      }));
+      expect(hasSprite(out)).toBe(true);
+      expect(out).toContain('Agent AFK');
+    });
+
+    it('drops the mascot and stacks info flush-left on a very narrow terminal', () => {
+      // Below the sprite budget (cols − 2 − 27 − 2 < 24, i.e. cols < 55) the
+      // 27-col goblin would crush every info row into a one-char sliver. The
+      // compact fallback drops the sprite and stacks the info full-width so the
+      // identity signals stay legible instead of ellipsizing to nothing.
+      Object.defineProperty(process.stdout, 'columns', { value: 44, configurable: true });
+      const out = strip(welcomeBanner({
+        mode: 'Interactive Mode',
+        model: 'opus_1m',
+        version: '5.11.0',
+        worktree: 'afk/polish-goblin-banner',
+        cwd: '/Users/example/projects/agent-afk',
+        hintLine: '/help · /model · /exit to quit',
+      }));
+      // No sprite glyphs — the goblin is suppressed at this width.
+      expect(hasSprite(out)).toBe(false);
+      // …but every identity signal still survives, full-width.
+      expect(out).toContain('Agent AFK');
+      expect(out).toContain('the agent harness you can actually change');
+      expect(out).toContain('opus_1m');
+      expect(out).toContain('afk/polish-goblin-banner');
+    });
+
+    it('keeps every compact-banner row within the terminal width', () => {
+      Object.defineProperty(process.stdout, 'columns', { value: 44, configurable: true });
+      const out = strip(welcomeBanner({
+        mode: 'Interactive Mode',
+        model: 'claude-opus-4-very-long-model-name',
+        version: '5.11.0',
+        worktree: 'a-very-long-worktree-branch-name-that-overflows',
+        cwd: '/Users/example/projects/agent-afk/very/deep/path',
+        hintLine: '/help · /model · /resume · Esc to interrupt · /exit to quit',
+      }));
+      const maxLine = Math.max(...out.split('\n').map((l) => stringWidth(l)));
+      expect(maxLine).toBeLessThanOrEqual(44);
+    });
+  });
+
   describe('AFK_BANNER_PLAIN=1 fallback', () => {
     const prevPlain = process.env['AFK_BANNER_PLAIN'];
 
