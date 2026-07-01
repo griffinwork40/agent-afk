@@ -90,7 +90,7 @@ describe('slotForInput', () => {
 
   it('returns undefined for auto sentinel and raw ids', () => {
     expect(slotForInput('auto')).toBeUndefined();
-    expect(slotForInput('claude-sonnet-4-6')).toBeUndefined();
+    expect(slotForInput('claude-sonnet-5')).toBeUndefined();
     expect(slotForInput('gpt-4o-mini')).toBeUndefined();
     expect(slotForInput('')).toBeUndefined();
   });
@@ -110,7 +110,7 @@ describe('resolveModelInput', () => {
   });
 
   it('passes through raw ids, the auto sentinel, and undefined', () => {
-    expect(resolveModelInput('claude-sonnet-4-6')).toBe('claude-sonnet-4-6');
+    expect(resolveModelInput('claude-sonnet-5')).toBe('claude-sonnet-5');
     expect(resolveModelInput('mlx-community/Qwen3-32B-4bit')).toBe('mlx-community/Qwen3-32B-4bit');
     expect(resolveModelInput('auto')).toBe('auto');
     expect(resolveModelInput(undefined)).toBeUndefined();
@@ -259,10 +259,10 @@ describe('parseModelsConfig', () => {
   it('parses bare-string and object forms', () => {
     const out = parseModelsConfig({
       small: 'gpt-4o-mini',
-      medium: { id: 'claude-sonnet-4-6', name: 'balanced' },
+      medium: { id: 'claude-sonnet-5', name: 'balanced' },
     });
     expect(out.small).toEqual({ id: 'gpt-4o-mini' });
-    expect(out.medium).toEqual({ id: 'claude-sonnet-4-6', name: 'balanced' });
+    expect(out.medium).toEqual({ id: 'claude-sonnet-5', name: 'balanced' });
     expect(out.large).toBeUndefined();
   });
 
@@ -317,7 +317,7 @@ describe('Stage 2: per-slot provider credentials', () => {
       baseUrl: 'http://h/v1',
       apiKey: 'k',
     });
-    expect(resolveBinding('claude-sonnet-4-6', bindings)).toEqual({ id: 'claude-sonnet-4-6' });
+    expect(resolveBinding('claude-sonnet-5', bindings)).toEqual({ id: 'claude-sonnet-5' });
   });
 
   it('computeSlotBindings keeps file creds and lets env override baseUrl/apiKey', () => {

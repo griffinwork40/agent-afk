@@ -87,7 +87,7 @@ import {
 import { actorFromDepth } from '../../session/session-identity.js';
 
 const PROVIDER_NAME = 'anthropic-direct';
-const DEFAULT_MODEL = 'claude-sonnet-4-5-20250929';
+const DEFAULT_MODEL = 'claude-sonnet-5';
 
 /** Test/factory hook: lets tests inject a stub Anthropic client.
  *

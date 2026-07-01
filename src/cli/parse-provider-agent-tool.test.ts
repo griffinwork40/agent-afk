@@ -265,7 +265,7 @@ describe('parseProvider — model-based auto-routing (when --provider omitted)',
     // AnthropicDirectProvider fallback in place so executor wiring isn't
     // double-constructed.
     expect(parseProvider(undefined, { model: 'sonnet' })).toBeUndefined();
-    expect(parseProvider(undefined, { model: 'claude-sonnet-4-6' })).toBeUndefined();
+    expect(parseProvider(undefined, { model: 'claude-sonnet-5' })).toBeUndefined();
     expect(parseProvider(undefined, { model: 'opus_1m' })).toBeUndefined();
   });
 

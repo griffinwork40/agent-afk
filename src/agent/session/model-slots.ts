@@ -54,7 +54,7 @@ export type SlotProvider = 'anthropic' | 'openai';
  *     tiers can target different providers + credentials in one process.
  */
 export interface ModelSlotBinding {
-  /** Concrete model id this tier resolves to (e.g. `claude-sonnet-4-6`, `gpt-4o-mini`). */
+  /** Concrete model id this tier resolves to (e.g. `claude-sonnet-5`, `gpt-4o-mini`). */
   id: string;
   /** Optional user-defined alias; resolves (case-insensitively) to this tier. */
   name?: string;
@@ -82,7 +82,7 @@ export type ModelSlots = Record<SlotName, ModelSlotBinding>;
 export const DEFAULT_SLOT_BINDINGS: ModelSlots = {
   local: { id: '' },
   small: { id: 'claude-haiku-4-5-20251001' },
-  medium: { id: 'claude-sonnet-4-6' },
+  medium: { id: 'claude-sonnet-5' },
   large: { id: 'claude-opus-4-8' },
 };
 

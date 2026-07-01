@@ -128,7 +128,7 @@ describe('providerForModel — per-slot baseUrl routing (Tier 3.5)', () => {
   });
 
   it('keeps a claude-* id on anthropic-direct even with a per-slot baseUrl', () => {
-    const slots = makeSlots({ medium: { id: 'claude-sonnet-4-6', baseUrl: 'http://proxy.internal' } });
+    const slots = makeSlots({ medium: { id: 'claude-sonnet-5', baseUrl: 'http://proxy.internal' } });
     expect(providerForModel('medium', { slots })).toBe('anthropic-direct');
   });
 });

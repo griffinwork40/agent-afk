@@ -27,7 +27,7 @@ function makeUsage(overrides: Partial<Usage> = {}): Usage {
 
 describe('deriveCallCostUsd', () => {
   it('returns a number for a known model', () => {
-    const cost = deriveCallCostUsd('claude-sonnet-4-5-20250929', 1000, 500, 0, 0);
+    const cost = deriveCallCostUsd('claude-sonnet-5', 1000, 500, 0, 0);
     expect(typeof cost).toBe('number');
     expect(cost).toBeGreaterThan(0);
   });
@@ -38,9 +38,9 @@ describe('deriveCallCostUsd', () => {
   });
 
   it('computes a correct estimate for sonnet: 1000 in, 500 out', () => {
-    // claude-sonnet-4-5-20250929: $3.00/MTok input, $15.00/MTok output
+    // claude-sonnet-5: $3.00/MTok input, $15.00/MTok output
     const expected = (1000 / 1_000_000) * 3.0 + (500 / 1_000_000) * 15.0;
-    const cost = deriveCallCostUsd('claude-sonnet-4-5-20250929', 1000, 500, 0, 0);
+    const cost = deriveCallCostUsd('claude-sonnet-5', 1000, 500, 0, 0);
     expect(cost).toBeCloseTo(expected, 8);
   });
 
@@ -50,7 +50,7 @@ describe('deriveCallCostUsd', () => {
     const cacheRead = (200 / 1_000_000) * 0.30;
     const output = (100 / 1_000_000) * 15.0;
     const expected = plain + cacheRead + output;
-    const cost = deriveCallCostUsd('claude-sonnet-4-5-20250929', 1000, 100, 200, 0);
+    const cost = deriveCallCostUsd('claude-sonnet-5', 1000, 100, 200, 0);
     expect(cost).toBeCloseTo(expected, 8);
   });
 
@@ -60,7 +60,7 @@ describe('deriveCallCostUsd', () => {
     const cacheWrite = (300 / 1_000_000) * 3.75;
     const output = (50 / 1_000_000) * 15.0;
     const expected = plain + cacheWrite + output;
-    const cost = deriveCallCostUsd('claude-sonnet-4-5-20250929', 1000, 50, 0, 300);
+    const cost = deriveCallCostUsd('claude-sonnet-5', 1000, 50, 0, 300);
     expect(cost).toBeCloseTo(expected, 8);
   });
 
@@ -93,7 +93,7 @@ describe('deriveCallCostUsd', () => {
 describe('toProviderUsage — with model', () => {
   it('populates totalCostUsd when model is known', () => {
     const usage = makeUsage({ input_tokens: 1000, output_tokens: 500 });
-    const out = toProviderUsage(usage, 'end_turn', 'claude-sonnet-4-5-20250929');
+    const out = toProviderUsage(usage, 'end_turn', 'claude-sonnet-5');
     expect(typeof out.totalCostUsd).toBe('number');
     expect(out.totalCostUsd!).toBeGreaterThan(0);
   });
@@ -112,14 +112,14 @@ describe('toProviderUsage — with model', () => {
 
   it('still returns correct token counts with a model', () => {
     const usage = makeUsage({ input_tokens: 1000, output_tokens: 500 });
-    const out = toProviderUsage(usage, 'end_turn', 'claude-sonnet-4-5-20250929');
+    const out = toProviderUsage(usage, 'end_turn', 'claude-sonnet-5');
     expect(out.inputTokens).toBe(1000);
     expect(out.outputTokens).toBe(500);
     expect(out.totalTokens).toBe(1500);
   });
 
   it('returns empty ProviderUsage when usage is null', () => {
-    const out = toProviderUsage(null, 'end_turn', 'claude-sonnet-4-5-20250929');
+    const out = toProviderUsage(null, 'end_turn', 'claude-sonnet-5');
     expect(out.totalCostUsd).toBeUndefined();
     expect(out.inputTokens).toBeUndefined();
   });
@@ -130,12 +130,12 @@ describe('sumProviderUsage — totalCostUsd accumulation', () => {
     const a = toProviderUsage(
       makeUsage({ input_tokens: 500, output_tokens: 200 }),
       'tool_use',
-      'claude-sonnet-4-5-20250929',
+      'claude-sonnet-5',
     );
     const b = toProviderUsage(
       makeUsage({ input_tokens: 600, output_tokens: 300 }),
       'end_turn',
-      'claude-sonnet-4-5-20250929',
+      'claude-sonnet-5',
     );
     const sum = sumProviderUsage(a, b);
     expect(typeof sum.totalCostUsd).toBe('number');
@@ -153,7 +153,7 @@ describe('sumProviderUsage — totalCostUsd accumulation', () => {
     const a = toProviderUsage(
       makeUsage({ input_tokens: 100, output_tokens: 50 }),
       'tool_use',
-      'claude-sonnet-4-5-20250929',
+      'claude-sonnet-5',
     );
     const b = toProviderUsage(makeUsage(), 'end_turn'); // no model
     const sum = sumProviderUsage(a, b);

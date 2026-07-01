@@ -26,7 +26,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_MODEL_LOCAL` | string |  |  | `llama3.2:3b` | Bind the "local" capability tier (cheapest/fastest, user-configured) to a model id. Overrides afk.config.json models.local. Point at a local Ollama, LM Studio, or any OpenAI-compatible shim. |
 | `AFK_MODEL_LOCAL_API_KEY` | string |  |  |  | Per-slot API key for the "local" tier. Overrides global credentials for this tier only. |
 | `AFK_MODEL_LOCAL_BASE_URL` | string |  |  | `http://localhost:11434/v1` | Per-slot endpoint base URL for the "local" tier. Anthropic Messages base or OpenAI-compatible base per the tier provider. |
-| `AFK_MODEL_MEDIUM` | string |  |  | `claude-sonnet-4-6` | Bind the "medium" capability tier (general-use) to a model id/alias. Overrides afk.config.json models.medium. |
+| `AFK_MODEL_MEDIUM` | string |  |  | `claude-sonnet-5` | Bind the "medium" capability tier (general-use) to a model id/alias. Overrides afk.config.json models.medium. |
 | `AFK_MODEL_MEDIUM_API_KEY` | string |  |  |  | Per-slot API key for the "medium" tier (Stage 2). Overrides global credentials for this tier only. |
 | `AFK_MODEL_MEDIUM_BASE_URL` | string |  |  | `http://localhost:8080/v1` | Per-slot endpoint base URL for the "medium" tier (Stage 2). Anthropic Messages base or OpenAI-compatible base per the tier provider. |
 | `AFK_MODEL_SMALL` | string |  |  | `gpt-4o-mini` | Bind the "small" capability tier (cheap/fast) to a model id/alias. Overrides afk.config.json models.small. |

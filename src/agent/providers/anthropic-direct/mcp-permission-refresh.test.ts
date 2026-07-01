@@ -56,7 +56,7 @@ function makeTextStream(text: string): RawMessageStreamEvent[] {
         type: 'message',
         role: 'assistant',
         content: [],
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         stop_reason: null,
         stop_sequence: null,
         usage: {
@@ -102,7 +102,7 @@ function makeToolUseStream(
         type: 'message',
         role: 'assistant',
         content: [],
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         stop_reason: null,
         stop_sequence: null,
         usage: {
@@ -207,7 +207,7 @@ describe('AnthropicDirectProvider — MCP permission allowlist refresh', () => {
       await drainQuery(
         provider.query({
           prompt: singleInput('echo something'),
-          config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test' },
+          config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
         }),
       );
 
@@ -243,7 +243,7 @@ describe('AnthropicDirectProvider — MCP permission allowlist refresh', () => {
       await drainQuery(
         provider.query({
           prompt: singleInput('write a file'),
-          config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test' },
+          config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
         }),
       );
 

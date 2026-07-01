@@ -47,7 +47,7 @@ describe('AgentSession', () => {
       expect(session.sessionId).toBe('mock-session-123');
       expect(metadata).toMatchObject({
         sessionId: 'mock-session-123',
-        model: 'claude-sonnet-4-6',
+        model: 'claude-sonnet-5',
         permissionMode: 'bypassPermissions',
         cwd: '/tmp/mock-cwd',
       });
@@ -59,7 +59,7 @@ describe('AgentSession', () => {
       await session.waitForInitialization();
 
       await expect(session.supportedModels()).resolves.toEqual([
-        { value: 'claude-sonnet-4-6', displayName: 'Mock', description: 'Mock model' },
+        { value: 'claude-sonnet-5', displayName: 'Mock', description: 'Mock model' },
       ]);
       await expect(session.accountInfo()).resolves.toEqual({
         subscriptionType: 'api-key',

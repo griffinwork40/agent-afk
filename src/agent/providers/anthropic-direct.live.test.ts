@@ -24,7 +24,7 @@ describe.skipIf(!SHOULD_RUN)('AnthropicDirectProvider — live API', () => {
       prompt: once(),
       config: {
         apiKey: token,
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         maxOutputTokens: 20,
       },
     });

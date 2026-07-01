@@ -111,7 +111,7 @@ function buildQuery(opts: {
     promptStream: emptyPromptStream,
     toolDispatcher: noopToolDispatcher,
     initialMessages: opts.initialMessages,
-    model: 'claude-sonnet-4-5-20250929',
+    model: 'claude-sonnet-5',
     maxTokens: 4096,
     tools: null,
     userSystem: null,

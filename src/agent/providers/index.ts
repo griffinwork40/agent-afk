@@ -34,7 +34,7 @@ import { env } from '../../config/env.js';
  * model-router sentinel that resolves to itself (no fixed id; the provider
  * selects the model dynamically at run time). The `MODEL_MAP`-derived keys are
  * a defensive fallback: under default bindings a resolved alias like `sonnet`
- * becomes `claude-sonnet-4-6` and routes via the `claude-` prefix below, so
+ * becomes `claude-sonnet-5` and routes via the `claude-` prefix below, so
  * those keys are not normally hit. Kept (and derived from `MODEL_MAP` to avoid
  * drift) so any path that bypasses resolution still locks to Anthropic.
  */

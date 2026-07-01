@@ -299,7 +299,7 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     description: 'Bind the "medium" capability tier (general-use) to a model id/alias. Overrides afk.config.json models.medium.',
     type: 'string',
     required: false,
-    example: 'claude-sonnet-4-6',
+    example: 'claude-sonnet-5',
     category: 'model',
   },
   {

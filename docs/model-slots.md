@@ -87,7 +87,7 @@ An unconfigured install behaves exactly as before this feature:
 | -------- | ------------------------------- | ------------------------- |
 | `local`  | `` (empty — user-configured)    | —                         |
 | `small`  | `claude-haiku-4-5-20251001`     | `haiku`                   |
-| `medium` | `claude-sonnet-4-6`             | `sonnet`, `sonnet_1m`     |
+| `medium` | `claude-sonnet-5`             | `sonnet`, `sonnet_1m`     |
 | `large`  | `claude-opus-4-8`               | `opus`, `opus_1m`         |
 
 ## Selecting a tier

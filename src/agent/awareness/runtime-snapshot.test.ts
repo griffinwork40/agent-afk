@@ -29,7 +29,7 @@ function mkSelf(overrides: Partial<RuntimeSelf> = {}): RuntimeSelf {
     maxDepth: null,
     phaseRole: null,
     cwd: '/Users/me/project',
-    model: { provider: 'anthropic-direct', name: 'claude-sonnet-4-5-20250929' },
+    model: { provider: 'anthropic-direct', name: 'claude-sonnet-5' },
     permissionMode: 'default',
     ...overrides,
   };

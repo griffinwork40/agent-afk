@@ -191,7 +191,7 @@ export interface RunTurnInput {
   tools: AnthropicToolDef[] | null;
   /** Pluggable dispatcher invoked when the model emits tool_use blocks. */
   toolDispatcher: ToolDispatcherLike;
-  /** Model id (e.g. `claude-sonnet-4-5-20250929`). */
+  /** Model id (e.g. `claude-sonnet-5`). */
   model: string;
   /** Max tokens per `messages.create` call. */
   maxTokens: number;
@@ -213,8 +213,8 @@ export interface RunTurnInput {
    *
    * When set, the per-request `anthropic-beta` header is extended with the
    * effort beta string.  The `resolveEffort` helper in `index.ts` defaults
-   * this to `'max'` for `claude-opus-4-{6,7,8}-*` and `claude-sonnet-4-{6,7}-*`
-   * when the caller omits it.
+   * this to `'max'` for `claude-opus-4-{6,7,8}-*`, `claude-sonnet-4-{6,7}-*`,
+   * and `claude-sonnet-5` when the caller omits it.
    */
   effort?: import('../../types/sdk-types.js').EffortLevel;
   /**
@@ -418,7 +418,11 @@ interface ModelPricing {
 
 /** @internal exported only for unit tests */
 export const MODEL_PRICING: ReadonlyMap<string, ModelPricing> = new Map([
-  // Claude 4.5 family
+  // Claude Sonnet 5 (GA 2026-06): standard $3 / $15 per MTok. Introductory
+  // $2 / $10 pricing applies through 2026-08-31; the standard rate is used here
+  // for post-intro durability of long-lived persisted cost reports.
+  ['claude-sonnet-5', { inputPerMTok: 3.0, outputPerMTok: 15.0, cacheWritePerMTok: 3.75, cacheReadPerMTok: 0.30 }],
+  // Claude 4.5 family (kept for backward compat with persisted sessions)
   ['claude-sonnet-4-5-20250929', { inputPerMTok: 3.0, outputPerMTok: 15.0, cacheWritePerMTok: 3.75, cacheReadPerMTok: 0.30 }],
   ['claude-opus-4-5-20250929',   { inputPerMTok: 15.0, outputPerMTok: 75.0, cacheWritePerMTok: 18.75, cacheReadPerMTok: 1.50 }],
   // Haiku 4.5: $1.00 input / $5.00 output per MTok per https://www.anthropic.com/pricing

@@ -27,8 +27,8 @@ import { resolveModelInput } from './session/model-slots.js';
 export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   opus: 128_000,
   opus_1m: 128_000,
-  sonnet: 64_000,
-  sonnet_1m: 64_000,
+  sonnet: 128_000,
+  sonnet_1m: 128_000,
   haiku: 64_000,
   fable: 128_000,
   'claude-opus-4-8': 128_000,
@@ -36,7 +36,8 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // claude-opus-4-8. Kept here as a comment so git blame reveals the removal.
   // (Prior retirement: 'claude-opus-4-6' → 4-7 on 2026-04, then 4-7 → 4-8 on
   // 2026-05-28.)
-  'claude-sonnet-4-6': 64_000,
+  // Claude Sonnet 5 (GA 2026-06): 128k max output (up from 64k on Sonnet 4.6).
+  'claude-sonnet-5': 128_000,
   'claude-haiku-4-5-20251001': 64_000,
   // Claude Fable 5 (Mythos-class, GA 2026-06-09): 128k max output.
   'claude-fable-5': 128_000,

@@ -117,7 +117,7 @@ function anthropicToolUseStream(toolId: string, toolName: string, inputJson: str
         type: 'message',
         role: 'assistant',
         content: [],
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         stop_reason: null,
         stop_sequence: null,
         usage,
@@ -152,7 +152,7 @@ function anthropicTextStream(text: string): unknown[] {
         type: 'message',
         role: 'assistant',
         content: [],
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         stop_reason: null,
         stop_sequence: null,
         usage: {
@@ -210,7 +210,7 @@ const anthropicCase: ProviderContractCase = {
   },
   makeConfig({ permissionMode, parentSessionId, hookRegistry }) {
     return {
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'claude-sonnet-5',
       apiKey: 'sk-ant-oat01-test',
       permissionMode,
       ...(parentSessionId !== undefined ? { parentSessionId } : {}),

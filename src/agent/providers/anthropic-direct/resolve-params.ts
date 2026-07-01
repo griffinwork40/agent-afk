@@ -19,6 +19,15 @@ import { maxOutputTokensFor } from '../../model-limits.js';
 /** Match opus-4.7 and later opus 4.x families that require adaptive thinking + summarized display. */
 const isOpus47Plus = (model: string): boolean => /opus-4-(7|[89])/.test(model);
 
+/**
+ * Models that reject manual `{type:'enabled'}` extended thinking and must be
+ * routed to adaptive thinking instead: the opus-4.7+ family plus Claude
+ * Sonnet 5 (adaptive-only per its model card — "Extended thinking: No /
+ * Adaptive thinking: Yes", the same profile as Opus 4.8).
+ */
+const requiresAdaptiveThinking = (model: string): boolean =>
+  isOpus47Plus(model) || /(claude-)?sonnet-5/.test(model);
+
 const DEFAULT_AUTO_COMPACT_THRESHOLD = 0.9;
 
 /**
@@ -111,11 +120,11 @@ export function resumeHistoryToMessages(history: ResumeHistoryTurn[] | undefined
  * Translate our internal {@link ThinkingConfig} into the Anthropic SDK wire
  * shape, applying model-specific fixups.
  *
- * Fixups for `claude-opus-4-7-*` and `claude-opus-4-8-*` (the `opus-4.7+`
- * family — `isOpus47Plus` matches `4-7`, `4-8`, `4-9`):
+ * Fixups for the adaptive-thinking-only models — the `claude-opus-4-7+`
+ * family and `claude-sonnet-5` (see `requiresAdaptiveThinking`):
  *  - `{type: 'enabled'}` is rejected by the API; auto-route to `'adaptive'`.
- *    Callers that explicitly request `enabled` on Opus 4.7+ get adaptive
- *    behaviour with a console warning so the misconfiguration is visible.
+ *    Callers that explicitly request `enabled` on these models get adaptive
+ *    behaviour so the request still clears the API's validation.
  *  - `display: 'summarized'` is always injected on adaptive/enabled configs.
  *    On 4.7+ the default display mode is `'omitted'` (thinking blocks are
  *    produced server-side but stripped before delivery), so this field is
@@ -138,8 +147,8 @@ export function resolveThinkingParam(
       return { type: 'disabled' };
 
     case 'enabled': {
-      if (typeof model === 'string' && isOpus47Plus(model)) {
-        // Opus 4.7 does not accept {type:'enabled'}; silently promote to adaptive.
+      if (typeof model === 'string' && requiresAdaptiveThinking(model)) {
+        // These models reject {type:'enabled'}; silently promote to adaptive.
         return { type: 'adaptive', display: 'summarized' } as ThinkingConfigParam;
       }
       // Thinking tokens share the `max_tokens` budget, so reserve a slice for
@@ -181,13 +190,15 @@ export function resolveThinkingParam(
  *  1. An explicit `config.effort` always wins — callers can always override
  *     (including on Haiku, which will then fail loudly rather than silently
  *     ignore).
- *  2. For `opus-4-6`, `opus-4-7`, `opus-4-8`, `sonnet-4-6`, and `sonnet-4-7`
- *     (current and recent of each non-Haiku Claude 4 family), default to
+ *  2. For `opus-4-6`, `opus-4-7`, `opus-4-8`, `sonnet-4-6`, `sonnet-4-7`, and
+ *     `sonnet-5` (current and recent non-Haiku Claude models), default to
  *     `'max'` when no effort is supplied. Empirically (scripts/probe-effort-
  *     thinking.mjs on opus-4-7) `max` produces ~10× the thinking-token depth
  *     vs the server default; the same lever applies on sonnet-4-6/opus-4-6.
  *     On opus-4-8 the server default flipped to `high`, so retaining `max`
  *     here preserves the high-thinking-depth experience users had on 4.7.
+ *     Sonnet 5's server default is also `high`; `max` keeps parity with the
+ *     prior Sonnet tier (4.6).
  *  3. Older 4-x variants (4-1, 4-5) and every Haiku reject
  *     `output_config.effort` with HTTP 400 — auto-default is skipped so
  *     non-effort requests on those models stay byte-equal to before.
@@ -208,13 +219,14 @@ export function resolveEffort(
 ): EffortLevel | undefined {
   if (callerEffort !== undefined) return callerEffort;
   const m = model.toLowerCase();
-  // Production-verified allowlist: only `4-6` and `4-7` opus/sonnet variants
-  // accept `output_config.effort` (probed scripts/probe-effort-{all-models,
-  // older}.mjs against the OAuth identity). Earlier minor versions — 4-1,
-  // 4-5 sonnet, 4-5 opus, and every Haiku — return HTTP 400
+  // Allowlist: `4-6`/`4-7`/`4-8` opus & sonnet variants plus Sonnet 5 accept
+  // `output_config.effort` (4.x variants probed via scripts/probe-effort-
+  // {all-models,older}.mjs against the OAuth identity; Sonnet 5 documented to
+  // accept `effort` with a `high` server default). Earlier minor versions —
+  // 4-1, 4-5 sonnet, 4-5 opus, and every Haiku — return HTTP 400
   // "This model does not support the effort parameter." Caller-supplied
   // effort still flows through unchanged so explicit overrides fail loudly
   // rather than silently ignoring, but auto-default is gated tightly.
-  if (/(claude-)?(opus|sonnet)-4-[678]/.test(m)) return 'max';
+  if (/(claude-)?(opus|sonnet)-4-[678]|(claude-)?sonnet-5/.test(m)) return 'max';
   return undefined;
 }
