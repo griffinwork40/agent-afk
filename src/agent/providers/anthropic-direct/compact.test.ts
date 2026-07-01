@@ -244,8 +244,9 @@ async function* fromArr<T>(arr: T[]): AsyncIterable<T> {
 
 /**
  * Build a minimal streaming event sequence that reports `inputTokens` high
- * enough to cross the 90% threshold on a 200k-context-window model.
- * 200_000 * 0.90 = 180_000 — use 181_000 to be safely above.
+ * enough to cross the 90% auto-compaction threshold. The integration tests run
+ * on `claude-sonnet-5`, whose context window is 1M, so cross 90% of 1M:
+ * 1_000_000 * 0.90 = 900_000 — use 901_000 to be safely above.
  */
 function makeHighUsageStream(): RawMessageStreamEvent[] {
   return [
@@ -260,7 +261,7 @@ function makeHighUsageStream(): RawMessageStreamEvent[] {
         stop_reason: null,
         stop_sequence: null,
         usage: {
-          input_tokens: 181_000,
+          input_tokens: 901_000,
           output_tokens: 0,
           cache_creation_input_tokens: 0,
           cache_read_input_tokens: 0,
