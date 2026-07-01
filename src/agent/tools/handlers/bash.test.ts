@@ -247,6 +247,33 @@ describe('bashHandler', () => {
       expect(result.isError).toBeFalsy();
       expect(result.content).toContain('success');
     });
+
+    it('[TOCTOU] kills the child promptly when abort lands after the pre-flight check but before listener registration', async () => {
+      // Regression: an abort firing in the window between the top-of-handler
+      // `signal.aborted` pre-flight check (passes → the child IS spawned) and the
+      // `addEventListener('abort', ...)` registration is never delivered to the
+      // late-added listener (a real AbortSignal does not replay an
+      // already-dispatched 'abort'). Without the post-registration re-check the
+      // child runs to completion and leaks a late result. This fake signal
+      // reproduces that exact race: `aborted` is false at the pre-flight read,
+      // then flips true when the handler registers its listener.
+      let aborted = false;
+      const raceSignal = {
+        get aborted() { return aborted; },
+        addEventListener: (_type: string, _cb: () => void) => { aborted = true; },
+        removeEventListener: () => {},
+      } as unknown as AbortSignal;
+
+      const start = Date.now();
+      const result = await bashHandler({ command: 'sleep 5' }, raceSignal);
+      const elapsed = Date.now() - start;
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toBe('Command aborted');
+      // The fix kills the child immediately; without it, the result would only
+      // arrive after `sleep 5` exits on its own (~5s) via the close handler.
+      expect(elapsed).toBeLessThan(3000);
+    }, 15_000);
   });
 
   describe('ANSI stripping', () => {

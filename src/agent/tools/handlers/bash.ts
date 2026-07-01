@@ -270,6 +270,15 @@ export function createBashHandler(
       settle({ content: 'Command aborted', isError: true });
     };
     signal.addEventListener('abort', abortHandler);
+    // Close the TOCTOU window between the pre-flight `signal.aborted` check (top
+    // of the handler) and this listener registration: an abort that fired in
+    // that gap never invokes `abortHandler` (addEventListener does not replay an
+    // already-dispatched 'abort' event), so the just-spawned child would run to
+    // completion and leak a late result instead of being killed promptly.
+    // settle() is idempotent (guards on `resolved`), so re-firing here is safe.
+    if (signal.aborted) {
+      abortHandler();
+    }
 
     // Normal completion — `close` fires after all stdio streams drain.
     proc.on('close', (code) => {
