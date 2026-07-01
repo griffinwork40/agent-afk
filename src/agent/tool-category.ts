@@ -68,6 +68,12 @@ const WRITE_TOOLS = new Set([
   // READ_ONLY_PHASE_TOOLS) and sequential (not concurrency-safe).
   'config_set',
 ]);
+// These categorization sets intentionally list BOTH the Claude Code / SDK
+// PascalCase tool names (Bash, Agent, Task, Skill, Compose) and AFK's lowercase
+// runtime names (bash, agent, skill, compose). They drive display/categorization
+// only (e.g. TUI lane routing) and match a tool call in EITHER namespace — the
+// PascalCase entries are NOT evidence that AFK dispatches PascalCase tools; AFK
+// dispatches only the lowercase names.
 const SHELL_TOOLS = new Set([
   'Bash', 'BashOutput', 'KillBash',
   'bash',

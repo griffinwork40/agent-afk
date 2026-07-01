@@ -37,6 +37,7 @@ import {
 import { loadSkillPrompts } from './_lib/prompt-loader.js';
 import { getSkill } from './index.js';
 import { researchAgent } from './_agents/research-agent.js';
+import { vendoredToolAllowlist } from './_agents/to-definition.js';
 
 // Utility to create a valid verdict (defaults to plugin-source for back-compat
 // with existing fixture paths under ~/.afk/plugins/).
@@ -384,31 +385,22 @@ describe('AuditFit Skill', () => {
   });
 
   describe('canUseTool restriction', () => {
-    it('creates a restrictive canUseTool callback', async () => {
-      const allowedTools = researchAgent.allowedTools;
-
-      const testCanUseTool = async (toolName: string) => {
-        if (!allowedTools.includes(toolName as never)) {
-          return {
-            behavior: 'deny' as const,
-            message: `Tool ${toolName} not allowed`,
-          };
-        }
-        return { behavior: 'allow' as const };
-      };
-
-      // Test allowed tools
-      for (const tool of allowedTools) {
-        const result = await testCanUseTool(tool);
-        expect(result.behavior).toBe('allow');
+    // The inspector gate compares against the NORMALIZED AFK runtime names, not
+    // the vendored PascalCase list — comparing raw denies every read call at
+    // runtime. This verifies the actual translation the gate relies on.
+    it('normalizes research-agent tools to AFK runtime names (allows reads, excludes writes)', () => {
+      const allowed = vendoredToolAllowlist(researchAgent.allowedTools);
+      // AFK snake_case runtime names the gate will actually see
+      for (const t of ['read_file', 'grep', 'glob', 'web_scrape']) {
+        expect(allowed.has(t), `${t} should be allowed`).toBe(true);
       }
-
-      // Test disallowed tools
-      const disallowedTools = ['Edit', 'Write', 'Bash', 'Agent'];
-      for (const tool of disallowedTools) {
-        const result = await testCanUseTool(tool);
-        expect(result.behavior).toBe('deny');
-        expect((result as { message?: string }).message).toContain(tool);
+      // never grant writes or shell to a read-only inspector
+      for (const t of ['write_file', 'edit_file', 'bash', 'agent']) {
+        expect(allowed.has(t), `${t} should be excluded`).toBe(false);
+      }
+      // the raw PascalCase tokens must NOT leak through as runtime names
+      for (const t of ['Read', 'Grep', 'Glob']) {
+        expect(allowed.has(t), `${t} (PascalCase) must not be a runtime name`).toBe(false);
       }
     });
 

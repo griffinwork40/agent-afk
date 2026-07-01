@@ -24,6 +24,7 @@ import { runWave } from '../../agent/subagent/wave.js';
 import type { IAgentSession } from '../../agent/types.js';
 import type { CanUseTool } from '../../agent/types/sdk-types.js';
 import { researchAgent } from '../_agents/research-agent.js';
+import { vendoredToolAllowlist } from '../_agents/to-definition.js';
 import { getAfkHome, getAgentFrameworkDir, getBriefsDir } from '../../paths.js';
 import {
   discoverUserScope,
@@ -347,11 +348,16 @@ async function handler(
     apiKey,
     ...(ctx?.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
   });
+  // Invariant: the gate receives AFK snake_case runtime tool names (read_file,
+  // grep, …), but researchAgent.allowedTools is upstream PascalCase (Read,
+  // Grep, …). Compare against the normalized AFK names or every read call is
+  // denied. See _agents/to-definition.ts:vendoredToolAllowlist.
+  const inspectorTools = vendoredToolAllowlist(researchAgent.allowedTools);
   const createCanUseTool = (): CanUseTool => async (toolName: string) => {
-    if (!researchAgent.allowedTools.includes(toolName as never)) {
+    if (!inspectorTools.has(toolName)) {
       return {
         behavior: 'deny',
-        message: `Tool ${toolName} not allowed for audit-fit inspectors. Allowed tools: ${researchAgent.allowedTools.join(', ')}`,
+        message: `Tool ${toolName} not allowed for audit-fit inspectors. Allowed tools: ${[...inspectorTools].join(', ')}`,
       };
     }
     return { behavior: 'allow' };

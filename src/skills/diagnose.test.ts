@@ -20,10 +20,12 @@ import {
   type Hypothesis,
   type VerificationResult,
   diagnoseSkill,
+  createReadOnlyCanUseTool,
+  createGitLaneCanUseTool,
+  createVerifierCanUseTool,
 } from './diagnose/index.js';
 import { loadSkillPrompts } from './_lib/prompt-loader.js';
 import { _resetRegistry, getSkill } from './index.js';
-import { researchAgent } from './_agents/research-agent.js';
 
 // Utility to create a valid hypothesis
 function createValidHypothesis(id = 'h1'): z.infer<typeof HypothesisSchema> {
@@ -376,41 +378,53 @@ describe('Diagnose Skill', () => {
     });
   });
 
-  describe('canUseTool restrictions', () => {
-    it('allows read-only tools (Read, Grep, Glob, WebFetch, WebSearch)', () => {
-      const allowedTools = researchAgent.allowedTools;
-      expect(allowedTools).toContain('Read');
-      expect(allowedTools).toContain('Grep');
-      expect(allowedTools).toContain('Glob');
-      expect(allowedTools).toContain('WebFetch');
-      expect(allowedTools).toContain('WebSearch');
-    });
+  describe('canUseTool gates (AFK runtime tool names)', () => {
+    // Regression guard for the tool-name namespace mismatch: the gates receive
+    // AFK's snake_case RUNTIME names (read_file, grep, bash, …), NOT the
+    // vendored agents' upstream PascalCase allowlist (Read, Grep, Bash, …).
+    // These tests exercise the REAL exported gates against runtime names. The
+    // previous version tested a REPLICA against PascalCase, which passed while
+    // every read_file/grep/bash call was denied at runtime (see screenshot in
+    // the diagnose-tool-errors report). Upstream PascalCase fidelity of the
+    // vendored source is covered separately by _agents/vendored.test.ts.
+    const OPTS = { signal: new AbortController().signal, toolUseID: 't' };
 
-    it('denies write/edit tools', () => {
-      const deniedTools = ['Edit', 'Write', 'Bash'];
-      for (const tool of deniedTools) {
-        expect(researchAgent.allowedTools).not.toContain(tool);
+    it('read-only gate ALLOWS AFK read tools (read_file, grep, glob, web_scrape)', async () => {
+      const gate = createReadOnlyCanUseTool();
+      for (const t of ['read_file', 'grep', 'glob', 'web_scrape']) {
+        expect((await gate(t, {}, OPTS)).behavior, `${t} should be allowed`).toBe('allow');
       }
     });
 
-    it('can construct a verifier canUseTool that rejects Edit', () => {
-      const deniedTools = ['Edit', 'Write', 'Bash', 'Agent', 'Task'];
+    it('read-only gate DENIES writes and shell (write_file, edit_file, bash, agent)', async () => {
+      const gate = createReadOnlyCanUseTool();
+      for (const t of ['write_file', 'edit_file', 'bash', 'agent']) {
+        expect((await gate(t, {}, OPTS)).behavior, `${t} should be denied`).toBe('deny');
+      }
+    });
 
-      const testCanUseTool = async (toolName: string) => {
-        if (deniedTools.includes(toolName)) {
-          return { behavior: 'deny' as const };
-        }
-        if (!researchAgent.allowedTools.includes(toolName as never)) {
-          return { behavior: 'deny' as const };
-        }
-        return { behavior: 'allow' as const };
-      };
+    it('git lane ALLOWS read-only git bash + reads, DENIES mutating bash + writes', async () => {
+      const gate = createGitLaneCanUseTool();
+      // read-only git + research reads → allowed
+      expect((await gate('read_file', {}, OPTS)).behavior).toBe('allow');
+      expect((await gate('grep', {}, OPTS)).behavior).toBe('allow');
+      expect((await gate('bash', { command: 'git log --oneline -40' }, OPTS)).behavior).toBe('allow');
+      expect((await gate('bash', { command: 'git blame src/x.ts' }, OPTS)).behavior).toBe('allow');
+      // mutating git / chained shell → denied
+      expect((await gate('bash', { command: 'git commit -m x' }, OPTS)).behavior).toBe('deny');
+      expect((await gate('bash', { command: 'git push' }, OPTS)).behavior).toBe('deny');
+      expect((await gate('bash', { command: 'git log && rm -rf /tmp/x' }, OPTS)).behavior).toBe('deny');
+      // writes / dispatch → denied (not in git-investigator's tool contract)
+      expect((await gate('write_file', {}, OPTS)).behavior).toBe('deny');
+      expect((await gate('agent', {}, OPTS)).behavior).toBe('deny');
+    });
 
-      // Test denial of disallowed tools
-      for (const tool of ['Edit', 'Write', 'Bash']) {
-        testCanUseTool(tool).then((result) => {
-          expect(result.behavior).toBe('deny');
-        });
+    it('verifier gate is read-only: ALLOWS reads, DENIES edit/write/bash/agent', async () => {
+      const gate = createVerifierCanUseTool();
+      expect((await gate('read_file', {}, OPTS)).behavior).toBe('allow');
+      expect((await gate('grep', {}, OPTS)).behavior).toBe('allow');
+      for (const t of ['edit_file', 'write_file', 'bash', 'agent']) {
+        expect((await gate(t, {}, OPTS)).behavior, `${t} should be denied`).toBe('deny');
       }
     });
   });

@@ -1273,6 +1273,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // top-level totalTokens the REPL consumers read. See buildContextUsageFields.
     const { totalTokens, apiUsage } = buildContextUsageFields(last);
     return {
+      // Context-window usage shape: tools/agents are per-entry token stats AFK does not populate (NOT AgentConfig.agents).
       tools: [],
       agents: [],
       isAutoCompactEnabled: false,
