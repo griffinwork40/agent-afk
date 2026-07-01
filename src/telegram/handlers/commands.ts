@@ -6,6 +6,7 @@ import { homedir } from 'os';
 import { isAbsolute, resolve } from 'path';
 import { HookBlockedError } from '../../utils/errors.js';
 import { SessionManager } from '../session-manager.js';
+import { withTypingIndicator } from '../typing-indicator.js';
 import {
   formatError,
   formatClear,
@@ -74,17 +75,20 @@ export async function handleCompact(
 
   try {
     const session = await sessionManager.getSession(chatId);
-    await ctx.sendChatAction('typing').catch(() => {});
-    // Invariant: fire PreCompact before compaction. block -> skip, not error.
     const hookRegistry = session.hookRegistry;
-    if (hookRegistry) {
-      await hookRegistry.dispatch({
-        event: 'PreCompact',
-        sessionId: session.sessionId,
-        trigger: 'manual',
-      });
-    }
-    const result = await session.compact();
+    // Keep the "typing…" indicator alive across the PreCompact hook and the
+    // model-call compaction, which can outlast the ~5s one-shot expiry.
+    // Invariant: fire PreCompact before compaction. block -> skip, not error.
+    const result = await withTypingIndicator(ctx, async () => {
+      if (hookRegistry) {
+        await hookRegistry.dispatch({
+          event: 'PreCompact',
+          sessionId: session.sessionId,
+          trigger: 'manual',
+        });
+      }
+      return session.compact();
+    });
     if (!result.compacted) {
       await ctx.reply(formatCompactNoop(result.reason ?? 'unknown'));
     } else {

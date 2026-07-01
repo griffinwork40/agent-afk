@@ -5,6 +5,7 @@ import { SessionManager } from '../session-manager.js';
 import { formatError, formatClear, formatInternalError, formatCompact, formatCompactNoop, formatQueued, escapeHtml } from '../formatter.js';
 import { isRateLimitError, isNetworkError, isTelegramTransportError } from '../error-utils.js';
 import { streamResponse } from '../streaming.js';
+import { withTypingIndicator } from '../typing-indicator.js';
 // Import StreamTimeoutError from its own module, NOT '../streaming.js': many
 // handler tests vi.mock('../streaming.js'), which would make the class resolve
 // to undefined and turn `instanceof StreamTimeoutError` into a TypeError.
@@ -475,17 +476,20 @@ export class MessageHandler {
     let reEnqueued = false;
     try {
       const session = await this.sessionManager.getSession(chatId);
-      await ctx.sendChatAction('typing').catch(() => {});
-      // Invariant: fire PreCompact before compaction. block -> skip, not error.
       const hookRegistry = session.hookRegistry;
-      if (hookRegistry) {
-        await hookRegistry.dispatch({
-          event: 'PreCompact',
-          sessionId: session.sessionId,
-          trigger: 'manual',
-        });
-      }
-      const result = await session.compact();
+      // Keep the "typing…" indicator alive across the PreCompact hook and the
+      // model-call compaction, which can outlast the ~5s one-shot expiry.
+      // Invariant: fire PreCompact before compaction. block -> skip, not error.
+      const result = await withTypingIndicator(ctx, async () => {
+        if (hookRegistry) {
+          await hookRegistry.dispatch({
+            event: 'PreCompact',
+            sessionId: session.sessionId,
+            trigger: 'manual',
+          });
+        }
+        return session.compact();
+      });
       if (result.reason === 'session-busy') {
         // Session became busy between drain-start and our compact() call (TOCTOU).
         // Re-enqueue so the compact isn't silently dropped with a confusing no-op.
@@ -597,20 +601,23 @@ export class MessageHandler {
     let reEnqueued = false;
     try {
       const session = await this.sessionManager.getSession(chatId);
-      await ctx.sendChatAction('typing').catch(() => {});
       // User text for the stored turn record: joined text blocks (caption) for
       // content-block (photo) messages, the raw string otherwise.
       const userText = typeof content === 'string'
         ? content
         : content.map((b) => (b.type === 'text' ? b.text : '[image]')).join(' ');
-      await streamResponse(ctx, session, content, this.log, {
-        cleanFinal: true,
-        // Record the completed turn into the shared session store so the CLI
-        // can `--resume <name>` this Telegram conversation. Best-effort inside.
-        onComplete: (assistantText, metadata) => {
-          this.sessionManager.recordTelegramTurn(chatId, userText, assistantText, metadata);
-        },
-      });
+      // Keep the "typing…" indicator alive for the whole (often multi-minute)
+      // streamed turn; a one-shot chat action would expire after ~5s.
+      await withTypingIndicator(ctx, () =>
+        streamResponse(ctx, session, content, this.log, {
+          cleanFinal: true,
+          // Record the completed turn into the shared session store so the CLI
+          // can `--resume <name>` this Telegram conversation. Best-effort inside.
+          onComplete: (assistantText, metadata) => {
+            this.sessionManager.recordTelegramTurn(chatId, userText, assistantText, metadata);
+          },
+        }),
+      );
     } catch (error) {
       this.log('Message handling error:', error);
       const busyMsg = (error as Error)?.message ?? '';
