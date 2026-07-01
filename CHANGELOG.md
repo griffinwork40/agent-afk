@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.15.2] - 2026-07-01
+
+### Fixed
+- concatenate injectContext across non-blocking handlers instead of last-wins (#345) (fffb8e1)
+
 ## [5.15.1] - 2026-07-01
 
 ### Fixed
