@@ -171,3 +171,61 @@ describe('quarantinePoisonEntry — inner-catch (branch 2: rename AND unlink fai
     expect(result).toBeNull();
   });
 });
+
+describe('quarantinePoisonEntry — stuck-entry log dedup (issue #252)', () => {
+  it('logs on the 1st encounter but suppresses the 2nd (rate-limit)', () => {
+    // Arm: both rename and unlink fail so the entry is permanently stuck.
+    renameSyncShouldThrow = true;
+    unlinkSyncShouldThrow = true;
+
+    realFs.writeFileSync(join(tmpDir, '0001-q-stuck.json'), 'bad-json');
+
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      // Tick 1 — must log (count === 1).
+      dequeueNext(tmpDir);
+      const callsAfterTick1 = spy.mock.calls.length;
+      expect(callsAfterTick1).toBeGreaterThan(0);
+
+      // Capture the tick-1 log lines so we can compare below.
+      const logsAfterTick1 = spy.mock.calls.map((c) => String(c[0]));
+      expect(logsAfterTick1.some((m) => m.includes('[seen 1x]'))).toBe(true);
+
+      // Tick 2 — same stuck entry, count === 2 (not 1 and not a multiple of 10).
+      // The "could not remove" line must NOT be emitted again.
+      spy.mockClear();
+      dequeueNext(tmpDir);
+      const stuckLogsOnTick2 = spy.mock.calls
+        .map((c) => String(c[0]))
+        .filter((m) => m.includes('could not remove unquarantinable'));
+      expect(stuckLogsOnTick2).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('re-logs on the 10th encounter (every STUCK_LOG_INTERVAL ticks)', () => {
+    renameSyncShouldThrow = true;
+    unlinkSyncShouldThrow = true;
+
+    realFs.writeFileSync(join(tmpDir, '0001-q-stuck.json'), 'bad-json');
+
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      // Simulate 10 ticks. Only ticks 1 and 10 should log the stuck message.
+      let stuckLogCount = 0;
+      for (let tick = 1; tick <= 10; tick++) {
+        spy.mockClear();
+        dequeueNext(tmpDir);
+        const hasStuckLog = spy.mock.calls.some((c) =>
+          String(c[0]).includes('could not remove unquarantinable'),
+        );
+        if (hasStuckLog) stuckLogCount += 1;
+      }
+      // Ticks 1 and 10 log; ticks 2–9 do not → exactly 2 logged occurrences.
+      expect(stuckLogCount).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
