@@ -27,8 +27,8 @@ import { resolveModelInput } from './session/model-slots.js';
 export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   opus: 128_000,
   opus_1m: 128_000,
-  sonnet: 64_000,
-  sonnet_1m: 64_000,
+  sonnet: 128_000,
+  sonnet_1m: 128_000,
   haiku: 64_000,
   fable: 128_000,
   'claude-opus-4-8': 128_000,
@@ -36,7 +36,8 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // claude-opus-4-8. Kept here as a comment so git blame reveals the removal.
   // (Prior retirement: 'claude-opus-4-6' → 4-7 on 2026-04, then 4-7 → 4-8 on
   // 2026-05-28.)
-  'claude-sonnet-4-6': 64_000,
+  // Claude Sonnet 5 (GA 2026-06): 128k max output (up from 64k on Sonnet 4.6).
+  'claude-sonnet-5': 128_000,
   'claude-haiku-4-5-20251001': 64_000,
   // Claude Fable 5 (Mythos-class, GA 2026-06-09): 128k max output.
   'claude-fable-5': 128_000,
@@ -84,15 +85,18 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   // Claude aliases
   opus: 200_000,
   opus_1m: 1_000_000,
-  sonnet: 200_000,
+  // Sonnet 5 ships a 1M-token context window natively (like Fable 5, unlike
+  // opus/haiku whose base window is 200k). The `sonnet` alias, the now-redundant
+  // `sonnet_1m` back-compat alias, and the `claude-sonnet-5` wire id all report 1M.
+  sonnet: 1_000_000,
   sonnet_1m: 1_000_000,
   haiku: 200_000,
-  // Claude Fable 5 ships a 1M-token context window natively (no `_1m` opt-in,
-  // unlike opus/sonnet whose base window is 200k). Keyed by both the `fable`
-  // alias and the `claude-fable-5` wire id so lookups hit either side of the
-  // alias boundary.
+  // Native 1M-context models (no `_1m` opt-in, unlike opus/haiku whose base
+  // window is 200k). Keyed by both the short alias (where one exists) and the
+  // wire id so lookups hit either side of the alias boundary.
   fable: 1_000_000,
   'claude-fable-5': 1_000_000,
+  'claude-sonnet-5': 1_000_000,
   // OpenAI flagship + cost-tier models (windows per OpenAI platform docs
   // as of 2026-Q1). Listed here so the openai-compatible provider's
   // getContextUsage() returns an accurate percentage instead of the

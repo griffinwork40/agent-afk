@@ -52,7 +52,7 @@ describe('session_phase payload schema — acceptance', () => {
       SessionPhasePayloadSchema.parse({
         phase: 'session_init_start',
         model: 'sonnet',
-        resolvedModel: 'claude-sonnet-4-5-20250929',
+        resolvedModel: 'claude-sonnet-5',
       }),
     ).not.toThrow();
   });

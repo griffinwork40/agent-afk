@@ -121,7 +121,7 @@ function makeTextStream(text: string): RawMessageStreamEvent[] {
         type: 'message',
         role: 'assistant',
         content: [],
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         stop_reason: null,
         stop_sequence: null,
         usage: {
@@ -194,7 +194,7 @@ describe('AnthropicDirectProvider — OAuth token refresh retry', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('test'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
     });
 
     // Inject the refresher after construction by accessing the private field via type coercion.
@@ -242,7 +242,7 @@ describe('AnthropicDirectProvider — OAuth token refresh retry', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('test'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
     });
 
     const queryAny = query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } };
@@ -284,7 +284,7 @@ describe('AnthropicDirectProvider — OAuth token refresh retry', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('test'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
     });
 
     const queryAny = query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } };
@@ -321,7 +321,7 @@ describe('AnthropicDirectProvider — OAuth token refresh retry', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('test'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
     });
 
     const queryAny = query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } };
@@ -353,7 +353,7 @@ describe('AnthropicDirectProvider — OAuth token refresh retry', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('test'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
     });
 
     const queryAny = query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } };
@@ -398,7 +398,7 @@ describe('AnthropicDirectProvider — OAuth token refresh retry', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('hello'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
     });
 
     const queryAny = query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } };
@@ -457,7 +457,7 @@ describe('AnthropicDirectProvider — OAuth token refresh retry', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('test'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
     });
 
     const queryAny = query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } };
@@ -511,7 +511,7 @@ describe('AnthropicDirectProvider — OAuth token refresh retry', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: harness.prompt,
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
     });
 
     const queryAny = query as unknown as { retry: { tokenRefresher?: () => Promise<Anthropic | null> } };
@@ -650,7 +650,7 @@ describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('hello'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
     });
 
     // Collect events while also advancing timers to unblock waitForReset.
@@ -675,7 +675,7 @@ describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('hello'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: false },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: false },
     });
 
     const events = await collect(query);
@@ -710,7 +710,7 @@ describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('hello'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
     });
 
     const events: ProviderEvent[] = [];
@@ -768,7 +768,7 @@ describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: prompts.iterable,
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
     });
 
     const it = (query as AsyncIterable<ProviderEvent>)[Symbol.asyncIterator]();
@@ -829,7 +829,7 @@ describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('hello'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
     });
 
     const events = await collect(query);
@@ -849,7 +849,7 @@ describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('hello'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
     });
 
     const events = await collect(query);
@@ -879,7 +879,7 @@ describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('hello'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
     });
 
     const events: ProviderEvent[] = [];
@@ -927,7 +927,7 @@ describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('hello'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: false },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: false },
     });
 
     const events = await collect(query);
@@ -961,7 +961,7 @@ describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('hello'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
     });
 
     const collectPromise = collect(query);
@@ -1004,7 +1004,7 @@ describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('hello'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
     });
 
     const collectPromise = collect(query);
@@ -1069,7 +1069,7 @@ describe('AnthropicDirectQuery — reauth() / forceClientRefresh', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('test'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-old' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-old' },
     });
 
     injectRefresher(query, refresher);
@@ -1099,7 +1099,7 @@ describe('AnthropicDirectQuery — reauth() / forceClientRefresh', () => {
     const query = provider.query({
       prompt: singleInput('test'),
       // api-key mode: the harness intentionally does NOT wire a tokenRefresher.
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-classic' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-classic' },
     });
 
     // Explicitly assert no refresher was wired (sanity check on the fixture).
@@ -1116,7 +1116,7 @@ describe('AnthropicDirectQuery — reauth() / forceClientRefresh', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('test'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
     });
 
     injectRefresher(query, refresher);
@@ -1139,7 +1139,7 @@ describe('AnthropicDirectQuery — reauth() / forceClientRefresh', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('test'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
     });
 
     injectRefresher(query, refresher);
@@ -1167,7 +1167,7 @@ describe('AnthropicDirectQuery — reauth() / forceClientRefresh', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('test'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
     });
 
     injectRefresher(query, refresher);

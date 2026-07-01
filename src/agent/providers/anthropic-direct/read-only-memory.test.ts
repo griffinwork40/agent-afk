@@ -72,7 +72,7 @@ function makeTextStream(text: string): RawMessageStreamEvent[] {
         type: 'message',
         role: 'assistant',
         content: [],
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         stop_reason: null,
         stop_sequence: null,
         usage: {
@@ -122,7 +122,7 @@ function makeToolUseStream(
         type: 'message',
         role: 'assistant',
         content: [],
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         stop_reason: null,
         stop_sequence: null,
         usage: {
@@ -232,7 +232,7 @@ describe('AnthropicDirectProvider — readOnlyMemory option', () => {
     const query = provider.query({
       prompt: singleInput('hello'),
       config: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
       },
     });
@@ -253,7 +253,7 @@ describe('AnthropicDirectProvider — readOnlyMemory option', () => {
     const query = provider.query({
       prompt: singleInput('hello'),
       config: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
       },
     });
@@ -273,7 +273,7 @@ describe('AnthropicDirectProvider — readOnlyMemory option', () => {
     const query = provider.query({
       prompt: singleInput('hello'),
       config: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
       },
     });
@@ -297,7 +297,7 @@ describe('AnthropicDirectProvider — readOnlyMemory option', () => {
     const query = provider.query({
       prompt: singleInput('hello'),
       config: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
       },
     });
@@ -342,7 +342,7 @@ describe('createChildProviderFactory — readOnlyMemory propagation', () => {
     const query = provider.query({
       prompt: singleInput('hello'),
       config: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
       },
     });
@@ -425,7 +425,7 @@ describe('createChildProviderFactory — readOnlyMemory propagation', () => {
     const query = provider.query({
       prompt: singleInput('please remember this'),
       config: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
       },
     });

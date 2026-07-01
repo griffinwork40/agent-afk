@@ -22,7 +22,7 @@ import { InMemoryTraceWriter } from './writer.js';
 function makeSessionMetadata(): SessionMetadata {
   return {
     sessionId: 'test-session',
-    model: 'claude-sonnet-4-5-20250929',
+    model: 'claude-sonnet-5',
     permissionMode: 'default',
   };
 }

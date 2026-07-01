@@ -69,7 +69,7 @@ describe('providerForModel', () => {
 
     it.each([
       'claude-opus-4-8',
-      'claude-sonnet-4-6',
+      'claude-sonnet-5',
       'claude-haiku-4-5-20251001',
       'claude-sonnet-4',
       'claude-fable-5',
@@ -412,7 +412,7 @@ describe('createChildProviderFactory — child provider routing', () => {
     'haiku',
     'fable',
     'claude-opus-4-8',
-    'claude-sonnet-4-6',
+    'claude-sonnet-5',
     'claude-fable-5',
   ])('routes Claude id %s to AnthropicDirectProvider', (model) => {
     const factory = createChildProviderFactory();
@@ -554,7 +554,7 @@ describe('getDefaultSubagentModel — parent-aware fallback', () => {
     'haiku',
     'fable',
     'claude-opus-4-8',
-    'claude-sonnet-4-6',
+    'claude-sonnet-5',
     'claude-fable-5',
   ])('defaults to "sonnet" for Claude parent %s (preserves cost-mgmt intent)', (parent) => {
     expect(getDefaultSubagentModel(parent)).toBe('sonnet');

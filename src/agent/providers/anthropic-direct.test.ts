@@ -174,7 +174,7 @@ function makeTextStream(text: string): RawMessageStreamEvent[] {
         type: 'message',
         role: 'assistant',
         content: [],
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         stop_reason: null,
         stop_sequence: null,
         usage: {
@@ -224,7 +224,7 @@ function makeToolUseStream(
         type: 'message',
         role: 'assistant',
         content: [],
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         stop_reason: null,
         stop_sequence: null,
         usage: {
@@ -282,7 +282,7 @@ describe('AnthropicDirectProvider', () => {
     });
     const query = provider.query({
       prompt: noInputAwaitingClose(closePromise),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
     });
 
     const iter = query[Symbol.asyncIterator]();
@@ -290,7 +290,7 @@ describe('AnthropicDirectProvider', () => {
     expect(first.done).toBe(false);
     expect(first.value?.type).toBe('session.init');
     if (first.value?.type === 'session.init') {
-      expect(first.value.info.model).toBe('claude-sonnet-4-5-20250929');
+      expect(first.value.info.model).toBe('claude-sonnet-5');
       expect(first.value.info.apiKeySource).toBe('oauth');
       expect(first.value.info.version).toBe('anthropic-direct-v1');
       expect(typeof first.value.info.sessionId).toBe('string');
@@ -308,7 +308,7 @@ describe('AnthropicDirectProvider', () => {
     const query = provider.query({
       prompt: singleInput('fresh question'),
       config: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
         resume: 'saved-session-123',
         resumeHistory: [{ user: 'old question', assistant: 'old reply' }],
@@ -341,7 +341,7 @@ describe('AnthropicDirectProvider', () => {
     expect(() =>
       provider.query({
         prompt: singleInput('hi'),
-        config: { model: 'claude-sonnet-4-5-20250929' },
+        config: { model: 'claude-sonnet-5' },
       }),
     ).toThrow(/apiKey/);
   });
@@ -352,6 +352,10 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('ping'),
+      // Non-effort model on purpose: keeps anthropic-beta equal to the base
+      // OAUTH_BETA_HEADER recipe. Effort-tier models (e.g. claude-sonnet-5)
+      // append the `effort-2025-11-24` beta — asserted in auth.test.ts and
+      // resolve-effort.test.ts, not here.
       config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test' },
     });
     const events = await collect(query);
@@ -384,7 +388,7 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('ping'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
     await collect(query);
 
@@ -547,7 +551,7 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('hello'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
     const events = await collect(query);
 
@@ -593,7 +597,7 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider({ tools: dispatcher });
     const query = provider.query({
       prompt: singleInput('weather?'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
     const events = await collect(query);
 
@@ -665,7 +669,7 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider({ tools: dispatcher });
     const query = provider.query({
       prompt: singleInput('weather?'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
     const events = await collect(query);
 
@@ -692,7 +696,7 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('weather?'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
     const events = await collect(query);
 
@@ -725,7 +729,7 @@ describe('AnthropicDirectProvider', () => {
               type: 'message',
               role: 'assistant',
               content: [],
-              model: 'claude-sonnet-4-5-20250929',
+              model: 'claude-sonnet-5',
               stop_reason: null,
               stop_sequence: null,
               usage: {
@@ -747,7 +751,7 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('hang'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
 
     const events: ProviderEvent[] = [];
@@ -776,7 +780,7 @@ describe('AnthropicDirectProvider', () => {
     });
     const query = provider.query({
       prompt: noInputAwaitingClose(closePromise),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
 
     const iter = query[Symbol.asyncIterator]();
@@ -810,7 +814,7 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider({ tools: dispatcher });
     const query = provider.query({
       prompt: singleInput('do stuff'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
     const events = await collect(query);
 
@@ -842,7 +846,7 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('hi'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
     const events = await collect(query);
 
@@ -855,7 +859,7 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('what next?'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
     const events = await collect(query);
 
@@ -874,7 +878,7 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('explain'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
     const events = await collect(query);
 
@@ -901,7 +905,7 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider({ tools: dispatcher });
     const query = provider.query({
       prompt: singleInput('run it'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
     const events = await collect(query);
 
@@ -916,7 +920,7 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('hint'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
     const events = await collect(query);
 
@@ -946,7 +950,7 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider({ tools: dispatcher });
     const query = provider.query({
       prompt: singleInput('check the file'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
     const events = await collect(query);
 
@@ -984,7 +988,7 @@ describe('AnthropicDirectProvider', () => {
           type: 'message',
           role: 'assistant',
           content: [],
-          model: 'claude-sonnet-4-5-20250929',
+          model: 'claude-sonnet-5',
           usage: { input_tokens: 10, output_tokens: 5 },
         },
       } as RawMessageStreamEvent;
@@ -1010,7 +1014,7 @@ describe('AnthropicDirectProvider', () => {
 
     const query = provider.query({
       config: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         apiKey: 'sk-ant-fake',
         plugins: [
           // Pass an invalid plugin path that won't exist
@@ -1050,7 +1054,7 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: harness.prompt,
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
     const drive = drainQuery(query, harness);
 
@@ -1110,7 +1114,7 @@ describe('AnthropicDirectProvider', () => {
     });
     const query = provider.query({
       prompt: noInputAwaitingClose(closePromise),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
     // Drain the synthetic session.init so the iterator is parked on the
     // prompt stream.
@@ -1138,7 +1142,7 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: harness.prompt,
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
     const drive = drainQuery(query, harness);
     await harness.fireTurn(0, 'u1');
@@ -1167,7 +1171,7 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: harness.prompt,
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
     const drive = drainQuery(query, harness);
     for (let i = 0; i < 6; i++) {
@@ -1220,7 +1224,7 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: prompt(),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
     const iter = query[Symbol.asyncIterator]();
 
@@ -1284,7 +1288,7 @@ describe('AnthropicDirectProvider', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: prompt(),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
     });
     const iter = query[Symbol.asyncIterator]();
 
@@ -1330,7 +1334,7 @@ describe('AnthropicDirectProvider', () => {
     installFactory();
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-fake' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-fake' },
       prompt: singleInput('hi'),
     });
     const commands = await query.supportedCommands();
@@ -1359,7 +1363,7 @@ describe('AnthropicDirectProvider', () => {
       const provider = new AnthropicDirectProvider();
       const query = provider.query({
         prompt: singleInput('hi'),
-        config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+        config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
       });
       await collect(query);
 
@@ -1379,7 +1383,7 @@ describe('AnthropicDirectProvider', () => {
       const provider = new AnthropicDirectProvider();
       const query = provider.query({
         prompt: singleInput('hello world'),
-        config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+        config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
       });
       await collect(query);
 
@@ -1398,7 +1402,7 @@ describe('AnthropicDirectProvider', () => {
       const provider = new AnthropicDirectProvider();
       const query = provider.query({
         prompt: singleInput('hi'),
-        config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+        config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
       });
       await collect(query);
 
@@ -1413,7 +1417,7 @@ describe('AnthropicDirectProvider', () => {
       const provider = new AnthropicDirectProvider();
       const query = provider.query({
         prompt: singleInput('hi'),
-        config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+        config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
       });
       await collect(query);
 
@@ -1455,7 +1459,7 @@ describe('AnthropicDirectProvider', () => {
       const provider = new AnthropicDirectProvider({ tools: dispatcher });
       const query = provider.query({
         prompt: singleInput('weather?'),
-        config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+        config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
       });
       await collect(query);
 
@@ -1548,7 +1552,7 @@ describe('AnthropicDirectProvider', () => {
       const provider = new AnthropicDirectProvider({ tools: dispatcher });
       const query = provider.query({
         prompt: singleInput('hello'),
-        config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+        config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
       });
       await collect(query);
 
@@ -1576,7 +1580,7 @@ describe('AnthropicDirectProvider', () => {
       const provider = new AnthropicDirectProvider({ tools: dispatcher });
       const query = provider.query({
         prompt: singleInput('what session am I in?'),
-        config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+        config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
       });
       const events = await collect(query);
 
@@ -1602,7 +1606,7 @@ describe('AnthropicDirectProvider', () => {
       };
       expect(snapshot.self).toBeDefined();
       expect(snapshot.self?.model?.provider).toBe('anthropic-direct');
-      expect(snapshot.self?.model?.name).toBe('claude-sonnet-4-5-20250929');
+      expect(snapshot.self?.model?.name).toBe('claude-sonnet-5');
       expect(snapshot.self?.cwd).toBeDefined();
 
       // Tool-output event surfaced to the harness mirrors the snapshot.
@@ -1636,7 +1640,7 @@ describe('AnthropicDirectProvider', () => {
       const provider = new AnthropicDirectProvider({ tools: dispatcher });
       const query = provider.query({
         prompt: singleInput('list files'),
-        config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-api03-test' },
+        config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
       });
       await collect(query);
 

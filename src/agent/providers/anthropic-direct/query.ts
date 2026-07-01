@@ -80,8 +80,8 @@ import { HookBlockedError } from '../../../utils/errors.js';
  */
 const STARTER_MODELS: ReadonlyArray<{ value: string; displayName: string; description: string }> = [
   {
-    value: 'claude-sonnet-4-5-20250929',
-    displayName: 'Claude Sonnet 4.5',
+    value: 'claude-sonnet-5',
+    displayName: 'Claude Sonnet 5',
     description: 'Latest balanced Claude — recommended default',
   },
   {

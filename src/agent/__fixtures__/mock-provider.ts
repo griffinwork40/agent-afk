@@ -30,7 +30,7 @@ export interface MockQueryHandle extends ProviderQuery {
 
 export function createMockProvider(opts: MockProviderOptions = {}): MockProviderHandle {
   const sessionId = opts.sessionId ?? 'mock-session-123';
-  const model = opts.model ?? 'claude-sonnet-4-6';
+  const model = opts.model ?? 'claude-sonnet-5';
   const queries: MockQueryHandle[] = [];
 
   return {

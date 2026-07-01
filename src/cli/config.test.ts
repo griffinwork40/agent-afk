@@ -99,8 +99,8 @@ describe('Config Loader', () => {
     it('should return correct model IDs', () => {
       expect(getModelId('opus')).toBe('claude-opus-4-8');
       expect(getModelId('opus_1m')).toBe('claude-opus-4-8');
-      expect(getModelId('sonnet')).toBe('claude-sonnet-4-6');
-      expect(getModelId('sonnet_1m')).toBe('claude-sonnet-4-6');
+      expect(getModelId('sonnet')).toBe('claude-sonnet-5');
+      expect(getModelId('sonnet_1m')).toBe('claude-sonnet-5');
       expect(getModelId('haiku')).toBe('claude-haiku-4-5-20251001');
       expect(getModelId('fable')).toBe('claude-fable-5');
     });
@@ -333,7 +333,7 @@ describe('Config Loader', () => {
       });
 
       it('does NOT activate local mode when AFK_LOCAL_BASE_URL is unset', () => {
-        const config = loadConfig({ model: 'claude-sonnet-4-6' });
+        const config = loadConfig({ model: 'claude-sonnet-5' });
         expect(config.baseUrl).toBeUndefined();
         expect(config.apiKey).toBe('test-api-key-12345');
       });
@@ -547,16 +547,16 @@ describe('Config Loader', () => {
       mockConfig({
         models: {
           small: 'gpt-4o-mini',
-          medium: { id: 'claude-sonnet-4-6', name: 'balanced' },
+          medium: { id: 'claude-sonnet-5', name: 'balanced' },
         },
       });
       const config = loadConfig();
       expect(config.models?.small).toEqual({ id: 'gpt-4o-mini' });
-      expect(config.models?.medium).toEqual({ id: 'claude-sonnet-4-6', name: 'balanced' });
+      expect(config.models?.medium).toEqual({ id: 'claude-sonnet-5', name: 'balanced' });
       expect(config.models?.large).toEqual(DEFAULT_SLOT_BINDINGS.large);
       // Installed process-globally → the resolver sees the rebinding + custom name.
       expect(resolveModelInput('small')).toBe('gpt-4o-mini');
-      expect(resolveModelInput('balanced')).toBe('claude-sonnet-4-6');
+      expect(resolveModelInput('balanced')).toBe('claude-sonnet-5');
     });
 
     it('lets AFK_MODEL_* env override the file binding', () => {

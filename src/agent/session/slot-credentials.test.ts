@@ -88,7 +88,7 @@ describe('applySlotCredentials', () => {
   });
 
   it('is a no-op for a raw id that is not a slot alias', () => {
-    const config: SlotCredentialTarget = { model: 'claude-sonnet-4-6' };
+    const config: SlotCredentialTarget = { model: 'claude-sonnet-5' };
     applySlotCredentials(config, slots({ small: { id: 'gpt-4o-mini', apiKey: 'k' } }));
     expect(config.apiKey).toBeUndefined();
     expect(config.baseUrl).toBeUndefined();

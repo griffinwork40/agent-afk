@@ -235,7 +235,7 @@ describe('oneShotCompletion (T21 + T22)', () => {
   it('(T22b) resolves all canonical short aliases (opus/sonnet/haiku)', async () => {
     const cases: Array<[string, string]> = [
       ['opus', 'claude-opus-4-8'],
-      ['sonnet', 'claude-sonnet-4-6'],
+      ['sonnet', 'claude-sonnet-5'],
       ['haiku', 'claude-haiku-4-5-20251001'],
     ];
     for (const [alias, fullId] of cases) {
