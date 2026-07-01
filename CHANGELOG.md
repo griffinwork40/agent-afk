@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.15.1] - 2026-07-01
+
+### Fixed
+- close 2-segment MCP verb-gate bypass from PR #339 review (#347) (c3133ed)
+
 ## [5.15.0] - 2026-07-01
 
 ### Added
