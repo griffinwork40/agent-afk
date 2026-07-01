@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.15.0] - 2026-07-01
+
+### Added
+- swap default sonnet alias to claude-sonnet-5 (#346) (da492d4)
+
+### Fixed
+- classify MCP/browser/schedule/web tools so AFK gate covers them (#198) (#339) (245aee2)
+
 ## [5.14.1] - 2026-07-01
 
 ### Fixed
