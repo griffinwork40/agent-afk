@@ -242,6 +242,75 @@ export function classifyRisk(
     return 'medium';
   }
 
+  // ---- MCP tools ----------------------------------------------------------
+  // Invariant: any tool whose name begins with `mcp__` is an externally-
+  // contributed function from a third-party server (postgres, filesystem,
+  // GitHub, etc.). The classifier has NO visibility into what that tool does,
+  // so it cannot distinguish a safe MCP read from a destructive mutation
+  // (e.g. `mcp__postgres__drop_table`, `mcp__fs__delete`). Failing open here
+  // (returning 'safe') would let an unattended run silently execute arbitrary
+  // external side-effects — exactly the scenario AFK gate exists to prevent.
+  //
+  // Policy (conservative default, operator-upgradable):
+  //   - Mutation-patterned names (`*delete*`, `*drop*`, `*remove*`, `*write*`,
+  //     `*create*`, `*update*`, `*insert*`, `*exec*`, `*run*`, `*send*`,
+  //     `*push*`, `*publish*`, `*deploy*`) → 'high': irreversible external
+  //     side-effects, gate behind approval.
+  //   - All other MCP tools → 'medium': may have network/quota side-effects,
+  //     but not obviously destructive. Medium is allowed in AFK (gate only
+  //     blocks 'high'), which matches the posture for normal git push / install.
+  //
+  // Rationale for not defaulting ALL MCP to 'high': the policy guide says
+  // "medium ops … are ALLOWED — autonomous work has to be useful." A blanket
+  // 'high' on every MCP call would make MCP unusable in AFK, defeating its
+  // value for automation-friendly setups. The sub-name filter catches the
+  // clearly-dangerous verbs; a future per-server allowlist can refine further.
+  if (toolName.startsWith('mcp__') || toolName.startsWith('MCP__')) {
+    const subName = toolName.split('__').slice(2).join('__').toLowerCase();
+    const DESTRUCTIVE_VERBS = [
+      'delete', 'drop', 'remove', 'destroy', 'truncate', 'purge',
+      'write', 'create', 'update', 'insert', 'upsert', 'patch',
+      'exec', 'execute', 'run', 'eval',
+      'send', 'push', 'publish', 'deploy', 'post',
+    ];
+    for (const verb of DESTRUCTIVE_VERBS) {
+      if (subName.includes(verb)) return 'high';
+    }
+    return 'medium';
+  }
+
+  // ---- schedule mutations --------------------------------------------------
+  // Invariant: create_schedule and cancel_schedule modify the daemon's cron
+  // store (schedules.json) and may immediately affect a running daemon via live
+  // sync. These are irreversible in the sense that a wrongly-scheduled task
+  // could run before the operator notices — so they are 'high', gated behind
+  // explicit approval in AFK mode. list_schedules and get_schedule_history are
+  // read-only and fall through to the 'safe' default below.
+  if (tool === 'create_schedule' || tool === 'cancel_schedule') {
+    return 'high';
+  }
+
+  // ---- browser actions -----------------------------------------------------
+  // browser_act and browser_open drive a stateful headed browser session and
+  // can submit forms, click "Delete", trigger purchases, or navigate to
+  // arbitrary URLs — side-effects that survive the session and may be
+  // irreversible. They are 'medium' rather than 'high' because they are
+  // generally recoverable (navigate away, close the tab) and the AFK posture
+  // allows medium ops unattended. browser_screenshot and browser_observe are
+  // read-only; browser_close is a cleanup op — all safe.
+  if (tool === 'browser_act' || tool === 'browser_open') {
+    return 'medium';
+  }
+
+  // ---- web_scrape ----------------------------------------------------------
+  // web_scrape issues outbound HTTP requests (and optionally headless-browser
+  // renders for JS-heavy pages). It may hit rate-limited, metered, or
+  // auth-gated endpoints. 'medium' — notable network side-effect but recoverable
+  // and broadly necessary for autonomous research work in AFK mode.
+  if (tool === 'web_scrape') {
+    return 'medium';
+  }
+
   // ---- unknown tool -------------------------------------------------------
   // Don't gate things we haven't classified — default to safe so the
   // classifier never blocks novel tools without an explicit rule.
