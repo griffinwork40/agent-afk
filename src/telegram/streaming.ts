@@ -28,6 +28,20 @@ const FIRST_EVENT_TIMEOUT_MS = 90_000;
  */
 const NEXT_EVENT_TIMEOUT_MS = 180_000;
 
+/**
+ * Ceiling on how long the inactivity watchdog stays SUSPENDED for in-flight
+ * foreground tool calls (see `inFlightTools`). A long foreground tool — a
+ * nested `afk chat` via bash, a multi-minute build/test — is silent on the
+ * parent stream between its `tool_use_detail` (start) and `tool_result` (end),
+ * so counting that silence as a stuck stream is wrong. The bash tool self-caps
+ * at 600s (src/agent/tools/handlers/bash.ts), so no single foreground tool call
+ * can legitimately exceed this; a tool still in flight past the ceiling is
+ * genuinely wedged and the watchdog is allowed to fire.
+ */
+const MAX_TOOL_INFLIGHT_MS = 660_000;
+/** While suspended for an in-flight tool, re-check the ceiling at this cadence. */
+const TOOL_INFLIGHT_RECHECK_MS = 15_000;
+
 /** Max sub-agent progress lines retained in the bounded live-preview footer. */
 const MAX_SUBAGENT_PREVIEW_LINES = 4;
 
@@ -136,6 +150,14 @@ export async function streamResponse(
   // the lost result" bug.
   let sawTerminalEvent = false;
   let lastActivityAt = Date.now();
+  // In-flight FOREGROUND tool tracking for the watchdog. A parent
+  // `tool_use_detail` chunk adds its toolUseId; the matching `tool_result`
+  // removes it. While non-empty, a tool is legitimately executing (silent on
+  // the parent stream) so the watchdog SUSPENDS instead of firing — bounded by
+  // MAX_TOOL_INFLIGHT_MS from `toolInFlightSince`. A Set keyed by toolUseId
+  // makes a repeated tool_use_detail (e.g. from a stream_retry) idempotent.
+  const inFlightTools = new Set<string>();
+  let toolInFlightSince: number | null = null;
   // Bounded sub-agent progress region (see renderSubagentFooter): a rolling
   // counter + the last few lines, instead of an unbounded per-tool-call append.
   let subagentSteps = 0;
@@ -268,6 +290,19 @@ export async function streamResponse(
         const arm = (): void => {
           const remaining = windowMs - (Date.now() - lastActivityAt);
           if (remaining <= 0) {
+            // A foreground tool call in flight (a long bash / nested `afk chat`)
+            // is silent on the parent stream but is NOT a stuck turn: suspend
+            // the watchdog while any tool runs, bounded by MAX_TOOL_INFLIGHT_MS
+            // measured from when the first tool started, so a genuinely wedged
+            // tool still eventually trips.
+            if (
+              inFlightTools.size > 0 &&
+              toolInFlightSince !== null &&
+              Date.now() - toolInFlightSince < MAX_TOOL_INFLIGHT_MS
+            ) {
+              timeoutId = setTimeout(arm, TOOL_INFLIGHT_RECHECK_MS);
+              return;
+            }
             timeoutId = null;
             timedOut = true;
             reject(
@@ -343,6 +378,17 @@ export async function streamResponse(
           receivedAny = true;
           console.log('📡 First stream event received:', event.type);
           logger?.('First stream event received:', event.type);
+        }
+
+        // Track in-flight FOREGROUND tool calls so arm() can suspend the
+        // watchdog while a long tool (bash / nested afk chat) runs silently
+        // between its tool_use_detail (start) and tool_result (end).
+        if (event.type === 'chunk' && event.chunk.type === 'tool_use_detail') {
+          if (inFlightTools.size === 0) toolInFlightSince = Date.now();
+          inFlightTools.add(event.chunk.toolUseId);
+        } else if (event.type === 'chunk' && event.chunk.type === 'tool_result') {
+          inFlightTools.delete(event.chunk.toolUseId);
+          if (inFlightTools.size === 0) toolInFlightSince = null;
         }
 
         if (event.type === 'chunk' && event.chunk.type === 'content') {
