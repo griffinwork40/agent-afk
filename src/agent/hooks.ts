@@ -26,8 +26,10 @@
  * the context string to the parent session's input stream for the parent's next
  * turn. If the parent is aborting, the injection is skipped. DAG/compose and
  * background paths are not guaranteed to inject (some intentionally leave this
- * channel dark), and multiple `injectContext` values do not merge today: hook
- * dispatch returns the last non-blocking decision.
+ * channel dark). When multiple non-blocking handlers each return `injectContext`,
+ * all non-empty values are concatenated in registration order, joined by `'\n'`,
+ * and returned as a single string — so no injection is silently dropped. A
+ * blocking handler still short-circuits before any accumulation occurs.
  *
  * For `UserPromptSubmit`, `injectContext` works differently: the returned string
  * is prepended to the user's prompt text before `runTurn` is called — allowing
@@ -65,12 +67,16 @@ export interface HookDecision {
    *
    * For **SubagentStop**: queued to the parent session's input stream after
    * dispatch completes; dropped if the parent is aborting. DAG/compose and
-   * background paths may intentionally not inject. Multiple injected contexts do
-   * not merge — the last non-blocking hook decision wins.
+   * background paths may intentionally not inject. When multiple non-blocking
+   * handlers each return `injectContext`, all non-empty values are concatenated
+   * in registration order (joined by `'\n'`) and returned as a single string —
+   * no injection is silently dropped. A blocking handler short-circuits before
+   * any accumulation.
    *
    * For **UserPromptSubmit**: prepended to the user's prompt text before
    * `runTurn` is called. Allows per-turn system notes or policy context to be
-   * injected inline with the human's message.
+   * injected inline with the human's message. Same concatenation merge policy
+   * applies when multiple handlers return `injectContext`.
    *
    * Ignored for all other hook events.
    */
