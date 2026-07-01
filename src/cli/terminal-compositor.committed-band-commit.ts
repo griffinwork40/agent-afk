@@ -166,7 +166,32 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   // reproduce. `capacity` is the number of rows available to DISPLAY committed
   // text above the frame, between the pre-arm content ceiling (anchorRow) and
   // the frame top.
-  const prevTopRow = self.logUpdate.topRow ?? 0;
+  //
+  // External constraint (pre-repaint vs post-repaint geometry ordering):
+  // CupFrameRenderer.render() applies shrink-padding when the frame shrinks
+  // between renders — it prepends blank rows so the erase pass covers the full
+  // prior footprint. The padded newTopRow is stored as logUpdate.topRow, making
+  // it LOWER than the raw content top that measure(currentFrame, bottom).topRow
+  // would return and that Phase-2 repaint() will actually establish (Phase-1
+  // clear() resets previousLineCount=0, so Phase-2 render() never applies shrink
+  // padding and always lands the frame at its real raw position).
+  //
+  // When the committed band exists and was repositioned by
+  // repositionCommittedBand during the preceding setOverlay()+repaint() call,
+  // committedBandBottomRow is adjacent to the real frame top (= real_top - 1).
+  // Use that as a floor to correct the stale padded value: the real frame top
+  // can never be LOWER than committedBandBottomRow + 1 (the band must be above
+  // the frame). Without this correction a stale low prevTopRow causes
+  // decideCommitMode to compute wrong fitsAboveFrame and overflowPriorContiguous,
+  // routing the commit to band-hold when the fits path was correct — and the
+  // band-hold paint then overwrites the repositioned prior-band content without
+  // archiving it to scrollback, permanently losing it (zero hits on the prior
+  // committed block after collapse).
+  const rawLogUpdateTopRow = self.logUpdate.topRow ?? 0;
+  const prevTopRow =
+    self.committedBand.length > 0 && self.committedBandBottomRow > 0
+      ? Math.max(rawLogUpdateTopRow, self.committedBandBottomRow + 1)
+      : rawLogUpdateTopRow;
   const frameTop = prevTopRow > 1 ? prevTopRow : Math.max(1, rows - 1 - extraRows);
   const anchorFloor = Math.max(self.anchorRow ?? 1, 1);
   // The block "fits" when every line can be CUP-painted at a row in
