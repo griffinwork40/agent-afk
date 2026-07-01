@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.14.1] - 2026-07-01
+
+### Fixed
+- dedup repeated quarantine log noise for poison entries (#252) (#341) (28e01e5)
+
+### Changed
+- drop dormant forge/briefs plugin couplings from core (#344) (695c49d)
+- isolate vitest suite from ambient AFK_* config env (#343) (467da83)
+
 ## [5.14.0] - 2026-06-30
 
 ### Added
