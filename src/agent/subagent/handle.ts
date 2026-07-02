@@ -458,15 +458,22 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       this.traceWriter ? { traceWriter: this.traceWriter } : {},
     );
 
-    // Invariant: SubagentStop.injectContext is a framework-generated next-turn
-    // note, not the foreground subagent result and not human-authored text. The
-    // final subagent answer has already returned through the `agent` tool result;
-    // this side-channel queues only supplemental hook context for the parent's
-    // next input-stream read. Abort precedence: if the parent's abortSignal was
-    // provided AND is set, skip injection — the parent's query loop will unwind
-    // before it can consume the message. Matches the abort-graph invariant that
-    // abort is terminal for side effects. Injection failures are logged, not
-    // propagated.
+    // Invariant: SubagentStop.injectContext is a framework-generated note, not
+    // the foreground subagent result and not human-authored text. The final
+    // subagent answer has already returned through the `agent` tool result;
+    // this side-channel carries only supplemental hook context for the parent.
+    //
+    // Delivery MUST ride along with the parent's next real user message
+    // (queueFrameworkContext), never as a standalone input-stream message:
+    // the provider consumes exactly one input-stream message per turn, so a
+    // pushed message that lands after the parent's turn ends displaces the
+    // user's next real message by one queue position — every later send is
+    // then answered by the message before it, and the injected text never
+    // appears in the ledger. `pushUserMessage` remains only as a fallback for
+    // narrow parent refs that predate the queue channel. Abort precedence: if
+    // the parent's abortSignal was provided AND is set, skip injection — the
+    // parent's query loop will unwind before it can consume the message.
+    // Injection failures are logged, not propagated.
     if (decision.injectContext && this.parentInputStreamRef) {
       if (this.parentAbortSignal?.aborted) {
         debugLog(
@@ -474,7 +481,12 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
         );
       } else {
         try {
-          this.parentInputStreamRef.pushUserMessage(decision.injectContext);
+          const ref = this.parentInputStreamRef;
+          if (ref.queueFrameworkContext) {
+            ref.queueFrameworkContext(decision.injectContext);
+          } else {
+            ref.pushUserMessage(decision.injectContext);
+          }
         } catch (err) {
           debugLog(`Failed to inject context from SubagentStop handler: ${String(err)}`);
         }
