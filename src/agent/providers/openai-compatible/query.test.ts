@@ -28,6 +28,7 @@ import { createPlanModeGate } from '../../plan-mode-gate.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import type { ToolHandler } from '../../tools/types.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../anthropic-direct/plan-mode-addendum.js';
+import { AFK_MODE_ADDENDUM_TEXT } from '../anthropic-direct/afk-mode-addendum.js';
 import { computeLineDiff } from '../../../utils/diff.js';
 import type { ToolCall, ToolResult } from '../anthropic-direct/types.js';
 import { setSlotBindings, resetSlotBindings } from '../../session/model-slots.js';
@@ -1159,6 +1160,61 @@ describe('OpenAICompatibleQuery — plan-mode addendum (U2)', () => {
     const args = createCalls[0]!.args as { messages: Array<{ role: string; content: string }> };
     expect(args.messages[0]?.content).toBe('be helpful');
     expect(args.messages[0]?.content).not.toContain(PLAN_MODE_ADDENDUM_TEXT);
+  });
+});
+
+describe('OpenAICompatibleQuery — AFK-mode addendum (U2-afk)', () => {
+  it('appends AFK_MODE_ADDENDUM_TEXT to system message when permissionMode is autonomous', async () => {
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ];
+    const q = buildQueryFromConfig(
+      baseConfig({ permissionMode: 'autonomous', systemPrompt: 'be helpful' }),
+      singleInput('hi'),
+    );
+    await collect(q);
+    expect(createCalls).toHaveLength(1);
+    const args = createCalls[0]!.args as { messages: Array<{ role: string; content: string }> };
+    expect(args.messages[0]?.role).toBe('system');
+    expect(args.messages[0]?.content).toContain('be helpful');
+    expect(args.messages[0]?.content).toContain(AFK_MODE_ADDENDUM_TEXT);
+  });
+
+  it('does not append AFK_MODE_ADDENDUM_TEXT when permissionMode is default', async () => {
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ];
+    const q = buildQueryFromConfig(
+      baseConfig({ systemPrompt: 'be helpful' }),
+      singleInput('hi'),
+    );
+    await collect(q);
+    const args = createCalls[0]!.args as { messages: Array<{ role: string; content: string }> };
+    expect(args.messages[0]?.content).toBe('be helpful');
+    expect(args.messages[0]?.content).not.toContain(AFK_MODE_ADDENDUM_TEXT);
+  });
+
+  it('does not append PLAN_MODE_ADDENDUM_TEXT when permissionMode is autonomous (modes are mutually exclusive)', async () => {
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ];
+    const q = buildQueryFromConfig(
+      baseConfig({ permissionMode: 'autonomous', systemPrompt: 'be helpful' }),
+      singleInput('hi'),
+    );
+    await collect(q);
+    const args = createCalls[0]!.args as { messages: Array<{ role: string; content: string }> };
+    expect(args.messages[0]?.content).not.toContain(PLAN_MODE_ADDENDUM_TEXT);
+    expect(args.messages[0]?.content).toContain(AFK_MODE_ADDENDUM_TEXT);
   });
 });
 
