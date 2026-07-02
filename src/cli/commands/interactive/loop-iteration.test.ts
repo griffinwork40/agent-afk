@@ -21,7 +21,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Hoisted mutable state shared with the mock factories below (vi.mock is
 // hoisted above imports, so any closure it references must be hoisted too).
 const surfaceState = vi.hoisted(() => ({
-  readLineQueue: [] as Array<{ text: string; attachments: unknown[] }>,
+  // `beforeReturn` (optional) runs just before the entry is returned — used
+  // to fire mid-loop side effects (e.g. settling a background job) at a
+  // point where the loop's subsystems are already constructed.
+  readLineQueue: [] as Array<{ text: string; attachments: unknown[]; beforeReturn?: () => void }>,
   readLineCalls: 0,
 }));
 const shellState = vi.hoisted(() => ({
@@ -99,7 +102,9 @@ vi.mock('../../input/input-surface.js', () => {
     setBackgroundHandler(_handler: unknown): void {}
     async readLine(_opts: unknown): Promise<{ text: string; attachments: unknown[] }> {
       surfaceState.readLineCalls += 1;
-      return surfaceState.readLineQueue.shift() ?? { text: '/exit', attachments: [] };
+      const entry = surfaceState.readLineQueue.shift() ?? { text: '/exit', attachments: [] };
+      entry.beforeReturn?.();
+      return { text: entry.text, attachments: entry.attachments };
     }
     toRunTurnRefs(_prompt: string): Record<string, unknown> { return {}; }
     async dispose(): Promise<void> {}
@@ -250,6 +255,71 @@ describe('runReplLoop — shell-passthrough dispatch branch', () => {
     expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
     const firstArg = vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string };
     expect(firstArg.text).toBe('!echo hi');
+  });
+});
+
+describe('runReplLoop — background-subagent result auto-delivery', () => {
+  /** Stub a SubagentHandle whose runInBackground callback we control. */
+  function makeBgHandle(id: string): {
+    handle: import('../../../agent/subagent.js').SubagentHandle;
+    fireTerminal: (r: import('../../../agent/subagent.js').SubagentResult) => void;
+  } {
+    let captured: ((r: import('../../../agent/subagent.js').SubagentResult) => void) | undefined;
+    return {
+      handle: {
+        id,
+        status: 'idle',
+        runInBackground: vi.fn((_p: string, on?: (r: never) => void) => { captured = on as never; }),
+        cancel: vi.fn().mockResolvedValue(undefined),
+        teardown: vi.fn().mockResolvedValue(undefined),
+        run: vi.fn(),
+        runToResult: vi.fn(),
+      } as unknown as import('../../../agent/subagent.js').SubagentHandle,
+      fireTerminal: (r) => captured?.(r),
+    };
+  }
+
+  it('prepends a settled background job result to the next model turn', async () => {
+    const ctx = makeCtx();
+    const registry = ctx.backgroundRegistry;
+    const { handle, fireTerminal } = makeBgHandle('sub-loop-1');
+
+    // Settle the job in the beforeReturn hook of the SECOND readLine call —
+    // by then the loop's footer subsystems (incl. BgResultNotifier) are
+    // constructed and subscribed, matching the real timing (job settles
+    // while the user sits at the prompt).
+    surfaceState.readLineQueue = [
+      { text: 'first turn', attachments: [] },
+      {
+        text: 'second turn',
+        attachments: [],
+        beforeReturn: () => {
+          const job = registry.register({ handle, prompt: 'bg investigation', model: 'sonnet' });
+          void job;
+          fireTerminal({
+            id: 'sub-loop-1',
+            status: 'succeeded',
+            message: { content: 'bg finding: cache is stale', role: 'assistant' },
+          } as never);
+        },
+      },
+      { text: '/exit', attachments: [] },
+    ];
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(2);
+    const firstText = (vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string }).text;
+    const secondText = (vi.mocked(runTurn).mock.calls[1]?.[0] as { text: string }).text;
+    // First turn: no injection (nothing settled yet).
+    expect(firstText).toBe('first turn');
+    // Second turn: envelope prepended, user text preserved at the tail.
+    expect(secondText).toContain('<background-subagent-result');
+    expect(secondText).toContain('bg finding: cache is stale');
+    expect(secondText.trimEnd().endsWith('second turn')).toBe(true);
+    // Human notice rendered at the top of the iteration.
+    const lines = vi.mocked(ctx.replRenderer.writeLine).mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => l.includes('subagent completed'))).toBe(true);
   });
 });
 

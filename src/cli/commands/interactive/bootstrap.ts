@@ -701,6 +701,11 @@ export async function bootstrapSession(
         // before /resume can fire. Optional — early /resume calls before
         // the ledger is wired are a no-op (safe).
         ctx.clearVerdictLedger?.();
+        // Drop buffered background-subagent results from the outgoing
+        // session — cancelAll ran at the swap commit point, but a job that
+        // settled just before it may already sit in the notifier's buffer
+        // and would otherwise inject into the resumed session's first turn.
+        ctx.clearBgResultBuffer?.();
       },
       buildSession: (t) => buildAgentSession({
         ...sharedDeps,

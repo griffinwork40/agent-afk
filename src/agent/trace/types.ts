@@ -257,12 +257,23 @@ export interface BackgroundAgentJoinedPayload {
   jobStatus: 'completed' | 'failed' | 'cancelled';
 }
 
+export interface BackgroundAgentDeliveredPayload {
+  /** Result auto-delivered into the parent conversation by a surface notifier
+   *  (BgResultNotifier) — distinct from an explicit `joined`. */
+  transition: 'delivered';
+  jobId: string;
+  subagentId: string;
+  /** Terminal status at the moment of delivery. */
+  jobStatus: 'completed' | 'failed' | 'cancelled';
+}
+
 export type BackgroundAgentPayload =
   | BackgroundAgentStartedPayload
   | BackgroundAgentCompletedPayload
   | BackgroundAgentFailedPayload
   | BackgroundAgentCancelledPayload
-  | BackgroundAgentJoinedPayload;
+  | BackgroundAgentJoinedPayload
+  | BackgroundAgentDeliveredPayload;
 
 // ---------------------------------------------------------------------------
 // budget — threshold record. Closure handles termination separately.

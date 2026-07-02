@@ -314,9 +314,11 @@ export const agentTool: AnthropicToolDef = {
     'Foreground vs. background: by default (mode="foreground") this tool waits ' +
     'for the subagent to finish and returns its final message. Pass mode="background" ' +
     'to fire-and-forget — the tool returns a jobId immediately so you can keep ' +
-    'working in the same turn. Background results are NOT auto-injected; retrieve ' +
-    'them with the `/bgsub:join <jobId>` slash command (user surface) or by asking ' +
-    'the user to join. Use background mode for long investigations the user does not ' +
+    'working in the same turn. When a background job finishes, its result is ' +
+    'delivered automatically into your context with the next user message, wrapped ' +
+    'in a <background-subagent-result> block; you do not need to poll or join. ' +
+    'The `/bgsub:join <jobId>` slash command remains available for manual replay. ' +
+    'Use background mode for long investigations the user does not ' +
     'need to wait on; use foreground for anything whose result you need to reason ' +
     'about in the same turn.\n\n' +
     'Do not use this tool for: trivial one-file edits, conversational answers, ' +
@@ -351,9 +353,10 @@ export const agentTool: AnthropicToolDef = {
         description:
           'Execution mode. "foreground" (default) waits for the subagent to finish ' +
           'and returns its output. "background" returns a jobId immediately and ' +
-          'leaves the subagent running detached — its result must be joined ' +
-          'explicitly via /bgsub:join and is never auto-injected into this ' +
-          'context. Background jobs are cancelled when the parent session ends.',
+          'leaves the subagent running detached — its result is auto-delivered ' +
+          'into this context with the next user message when it settles ' +
+          '(/bgsub:join remains available for manual replay). Background jobs ' +
+          'are cancelled when the parent session ends.',
       },
       cwd: {
         type: 'string',
