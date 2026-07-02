@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.15.6] - 2026-07-02
+
+### Fixed
+- close forkSubagent cross-provider credential leak (#374) (9294525)
+
+### Changed
+- add docs/mcp.md — MCP config, transports, OAuth, security (#180) (#358) (566513d)
+
 ## [5.15.5] - 2026-07-01
 
 ### Fixed
