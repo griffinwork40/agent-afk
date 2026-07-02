@@ -433,6 +433,12 @@ export function registerChatCommand(program: Command): void {
 
         const rootManager = new SubagentManager({
           apiKey,
+          // Provider source of truth for the fork-time credential fallback:
+          // `apiKey` is `getApiKey()`, which keys off `getModel()` (AFK_MODEL),
+          // so the parent key's provider is `providerForModel(getModel())`.
+          // Passing that keeps the fallback from crossing the provider boundary
+          // (see SubagentManager.parentProvider).
+          parentModel: getModel(),
           ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
           // Propagate the worktree cwd into every forked subagent so their
           // bash/grep run in the isolated tree, not the Node host's

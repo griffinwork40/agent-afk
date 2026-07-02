@@ -13,7 +13,7 @@ import type { ModelProvider } from '../../../agent/provider.js';
 import type { HookRegistry } from '../../../agent/hooks.js';
 import type { TraceWriter } from '../../../agent/trace/index.js';
 import {
-  parseThinking, parseEffort, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getThinking, getEffort,
+  parseThinking, parseEffort, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort,
   getMaxOutputTokens, getDefaultSubagentModel, resolveBaseSystemPrompt, isGrantManager,
 } from '../../shared-helpers.js';
 import { topLevelSurfaceAllowedTools } from '../../../agent/tools/top-level-allowlist.js';
@@ -186,6 +186,11 @@ export async function bootstrapSession(
   const apiKey = getApiKey();
   const rootManager = new SubagentManager({
     apiKey,
+    // Provider source of truth for the fork-time credential fallback: `apiKey`
+    // is `getApiKey()`, which keys off `getModel()` (AFK_MODEL), so the parent
+    // key's provider is `providerForModel(getModel())`. Passing that keeps the
+    // fallback from crossing the provider boundary (see parentProvider).
+    parentModel: getModel(),
     ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
     // Propagate the worktree cwd (when `afk i --worktree` set it) into every
     // forked subagent so their tool handlers' resolveBase + readRoots anchor

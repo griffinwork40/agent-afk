@@ -17,7 +17,7 @@
 import { getSkill } from '../../index.js';
 import { discoverPluginSkillBodies } from '../../../agent/tools/skill-bridge.js';
 import { SubagentManager } from '../../../agent/subagent.js';
-import { getApiKey } from '../../../cli/shared-helpers.js';
+import { getApiKey, getModel } from '../../../cli/shared-helpers.js';
 import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
 
 export type ParallelizeDispatchResult =
@@ -101,6 +101,10 @@ export async function runParallelizeDispatch(
     const manager = new SubagentManager({
       parentAbortSignal: parentSession.abortSignal,
       apiKey: getApiKey(),
+      // `getApiKey()` keys off `getModel()` (AFK_MODEL), so the parent key's
+      // provider is `providerForModel(getModel())` — the source of truth for
+      // the fork-time credential fallback (see SubagentManager.parentProvider).
+      parentModel: getModel(),
       ...(parentSession.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
     });
     try {

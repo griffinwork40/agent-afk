@@ -59,6 +59,7 @@ vi.mock('../agent/tools/skill-bridge.js', () => ({
 
 vi.mock('../cli/shared-helpers.js', () => ({
   getApiKey: () => 'test-api-key',
+  getModel: () => 'sonnet',
 }));
 
 // Mutable registry hit for getSkill('parallelize').

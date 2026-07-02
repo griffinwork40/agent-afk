@@ -250,6 +250,38 @@ describe('SubagentManager', () => {
         }),
       );
     });
+
+    // Reverse direction: an OpenAI operator session (parentModel routes to
+    // openai-compatible, so parentApiKey is an OpenAI key) must NOT hand that
+    // key to an Anthropic-routed child. `parentModel` is the provider source of
+    // truth; without it the key-shape guard could not catch this.
+    it('never hands an OpenAI parent apiKey to an Anthropic-routed child (parentModel gate)', async () => {
+      shared.lastConfig = null;
+      const mgr = new SubagentManager({ apiKey: 'sk-proj-PARENT', parentModel: 'gpt-5.5' });
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet' },
+        idPrefix: 'reverse-leak-check',
+        agentType: 'reverse-leak-check',
+      });
+      const cfg = shared.lastConfig as Record<string, unknown>;
+      expect(cfg['apiKey']).toBeUndefined();
+      expect(cfg['apiKey']).not.toBe('sk-proj-PARENT');
+    });
+
+    it('still lets an OpenAI parent apiKey flow to an OpenAI-routed child (same provider, parentModel set)', async () => {
+      shared.lastConfig = null;
+      const mgr = new SubagentManager({ apiKey: 'sk-proj-PARENT', parentModel: 'gpt-5.5' });
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'gpt-5.5' },
+        idPrefix: 'inherit-check',
+        agentType: 'inherit-check',
+      });
+      expect(shared.lastConfig).toEqual(
+        expect.objectContaining({ apiKey: 'sk-proj-PARENT' }),
+      );
+    });
   });
 
   it('lets explicit child baseUrl override the manager default', async () => {
