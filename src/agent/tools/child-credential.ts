@@ -48,3 +48,43 @@ export function applyParentCredentialFallback(args: {
   if (providerForModel(childModel) === 'openai-compatible') return resolved;
   return isAnthropicCredential(parentApiKey) ? parentApiKey : resolved;
 }
+
+/**
+ * Contract: resolve the effective `apiKey` for a child forked by
+ * `SubagentManager.forkSubagent`, guarding the manager-level
+ * parent-credential fallback against the cross-provider leak.
+ *
+ * The manager's historical fallback was `config.apiKey || parentApiKey` —
+ * provider-blind. That reintroduced the parent's credential even when an
+ * upstream executor (subagent-executor.ts, skill-executor.ts,
+ * compose-executor.ts) had *deliberately* cleared `apiKey` for an
+ * OpenAI-routed child: an Anthropic `sk-ant-…` parent credential reached
+ * the OpenAI-compatible provider, whose auth resolver treats any explicit
+ * config key as Tier-1 (see openai-compatible/auth.ts) — shipping the
+ * Anthropic token as a Bearer to an OpenAI-shaped endpoint (401 at best).
+ *
+ * Rules (in order):
+ *   - explicit non-empty `configApiKey` → returned unchanged (caller wins).
+ *   - OpenAI-routed child + Anthropic-shaped parent credential → `undefined`
+ *     (never leak `sk-ant-…` across the provider boundary; the OpenAI auth
+ *     resolver walks its own env / codex precedence cleanly).
+ *   - otherwise → `parentApiKey` (preserves legitimate inheritance: an
+ *     OpenAI-shaped key from an OpenAI-routed parent flows to OpenAI
+ *     children; Anthropic children keep inheriting the parent credential,
+ *     including non-`sk-ant` keys used by local Anthropic-shim setups).
+ */
+export function applyManagerApiKeyFallback(args: {
+  childModel: string | undefined;
+  configApiKey: string | undefined;
+  parentApiKey: string | undefined;
+}): string | undefined {
+  const { childModel, configApiKey, parentApiKey } = args;
+  if (configApiKey !== undefined && configApiKey.length > 0) return configApiKey;
+  if (
+    providerForModel(childModel) === 'openai-compatible' &&
+    isAnthropicCredential(parentApiKey)
+  ) {
+    return undefined;
+  }
+  return parentApiKey;
+}

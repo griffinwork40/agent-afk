@@ -162,6 +162,96 @@ describe('SubagentManager', () => {
     );
   });
 
+  // Cross-provider credential anti-leak (composition boundary).
+  //
+  // The agent-tool executor deliberately clears `apiKey`/`baseUrl` for
+  // OpenAI-routed children (subagent-executor.ts), but the manager's
+  // fallback used to be provider-blind (`config.apiKey || parentApiKey`) and
+  // reintroduced the parent's Anthropic credential — which the OpenAI auth
+  // resolver then used as its Tier-1 config key (openai-compatible/auth.ts),
+  // shipping `sk-ant-…` as a Bearer to an OpenAI-shaped endpoint. These
+  // tests exercise the REAL manager (only AgentSession is mocked) so the
+  // fallback itself — not a mocked boundary above it — is under test.
+  describe('cross-provider credential anti-leak (forkSubagent fallback)', () => {
+    it('never hands an Anthropic parent apiKey to an OpenAI-routed child', async () => {
+      shared.lastConfig = null;
+      const mgr = new SubagentManager({ apiKey: 'sk-ant-oat01-PARENT' });
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'gpt-5.5' },
+        idPrefix: 'leak-check',
+        agentType: 'leak-check',
+      });
+      const cfg = shared.lastConfig as Record<string, unknown>;
+      expect(cfg['apiKey']).toBeUndefined();
+      expect(cfg['apiKey']).not.toBe('sk-ant-oat01-PARENT');
+    });
+
+    it('never hands the parent Anthropic baseUrl to an OpenAI-routed child', async () => {
+      shared.lastConfig = null;
+      const mgr = new SubagentManager({
+        apiKey: 'sk-ant-oat01-PARENT',
+        baseUrl: 'http://127.0.0.1:8080',
+      });
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'gpt-5.5' },
+        idPrefix: 'leak-check',
+        agentType: 'leak-check',
+      });
+      const cfg = shared.lastConfig as Record<string, unknown>;
+      expect(cfg['baseUrl']).toBeUndefined();
+    });
+
+    it('preserves an explicit child apiKey for an OpenAI-routed child (caller wins)', async () => {
+      shared.lastConfig = null;
+      const mgr = new SubagentManager({ apiKey: 'sk-ant-oat01-PARENT' });
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'gpt-5.5', apiKey: 'sk-proj-EXPLICIT' },
+        idPrefix: 'leak-check',
+        agentType: 'leak-check',
+      });
+      expect(shared.lastConfig).toEqual(
+        expect.objectContaining({ apiKey: 'sk-proj-EXPLICIT' }),
+      );
+    });
+
+    it('lets an OpenAI-shaped parent key flow to an OpenAI-routed child (same-provider inheritance)', async () => {
+      shared.lastConfig = null;
+      const mgr = new SubagentManager({ apiKey: 'sk-proj-PARENT' });
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'gpt-5.5' },
+        idPrefix: 'inherit-check',
+        agentType: 'inherit-check',
+      });
+      expect(shared.lastConfig).toEqual(
+        expect.objectContaining({ apiKey: 'sk-proj-PARENT' }),
+      );
+    });
+
+    it('still inherits the Anthropic parent apiKey + baseUrl for an Anthropic-routed child', async () => {
+      shared.lastConfig = null;
+      const mgr = new SubagentManager({
+        apiKey: 'sk-ant-oat01-PARENT',
+        baseUrl: 'http://127.0.0.1:8080',
+      });
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet' },
+        idPrefix: 'inherit-check',
+        agentType: 'inherit-check',
+      });
+      expect(shared.lastConfig).toEqual(
+        expect.objectContaining({
+          apiKey: 'sk-ant-oat01-PARENT',
+          baseUrl: 'http://127.0.0.1:8080',
+        }),
+      );
+    });
+  });
+
   it('lets explicit child baseUrl override the manager default', async () => {
     shared.lastConfig = null;
     const mgr = new SubagentManager({ baseUrl: 'http://127.0.0.1:8080' });
