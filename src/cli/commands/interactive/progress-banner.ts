@@ -129,7 +129,9 @@ export function formatProgressSummary(event: ProgressEvent, columns?: number): s
  */
 export function formatSubagentCompletion(info: SubagentCompleteInfo, columns?: number): string {
   const icon = info.status === 'succeeded' ? '✓' : info.status === 'failed' ? '✗' : '⊘';
-  const label = info.agentType ?? info.subagentId;
+  // agentType is model-influenceable (dispatch args) — same sanitize rule as
+  // every other LLM-sourced label in this module.
+  const label = sanitizeLabel(info.agentType ?? info.subagentId);
   const parts = [icon, label];
   if (info.durationMs !== undefined) parts.push(`· ${formatDuration(info.durationMs)}`);
   return clampToTerminal(palette.dim(`  ${parts.join(' ')}`), columns);
