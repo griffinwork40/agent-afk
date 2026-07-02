@@ -16,11 +16,12 @@
  * in PR 2/3 as a real-world conformance test.
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 import { McpManager } from './manager.js';
+import { McpClient } from './client.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -167,6 +168,45 @@ describe('McpManager (integration: stdio fixture)', () => {
       expect(caught).toBeInstanceOf(Error);
       expect((caught as Error).message).toMatch(/alwaysLoad/);
       // manager is undefined here; afterEach is a no-op.
+    },
+    { timeout: 10_000 },
+  );
+
+  it(
+    // Issue #247: fromConfig's fatal path (manager.ts ~251-263) must not
+    // orphan a sibling child process that connected fine before the
+    // alwaysLoad server's rejection tore the whole batch down.
+    'disconnects an already-connected sibling server when an alwaysLoad server fails (#247)',
+    async () => {
+      const disconnectSpy = vi.spyOn(McpClient.prototype, 'disconnect');
+      let caught: unknown;
+      try {
+        manager = await McpManager.fromConfig({
+          good: {
+            type: 'stdio',
+            command: process.execPath,
+            args: [FIXTURE],
+          },
+          required: {
+            type: 'stdio',
+            command: '/this/path/does/not/exist-mcp',
+            alwaysLoad: true,
+          },
+        });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toMatch(/alwaysLoad/);
+      // manager stays undefined — fromConfig rejected before returning one.
+      expect(manager).toBeUndefined();
+      // The 'good' server connected successfully before the batch was torn
+      // down; its client must still be disconnected so its child process
+      // is not orphaned. Assert BEFORE mockRestore — restoring clears
+      // recorded calls on this spy.
+      expect(disconnectSpy).toHaveBeenCalled();
+      disconnectSpy.mockRestore();
     },
     { timeout: 10_000 },
   );
