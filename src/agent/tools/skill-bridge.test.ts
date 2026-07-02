@@ -823,6 +823,58 @@ describe('collectSkillEntries — project skill eviction on cwd change (#179)', 
     const manifestB = buildSkillManifest([]);
     expect(manifestB).not.toContain('stale-skill');
   });
+
+  // -------------------------------------------------------------------------
+  // Session-cwd resolution (daemon / Telegram): the host process never
+  // chdir()s — the session's configured cwd is passed explicitly instead.
+  // These cases exercise the opts.cwd path with process.cwd() held constant.
+  // -------------------------------------------------------------------------
+
+  it('resolves project skills against opts.cwd without process.chdir()', () => {
+    writeSkillIn(cwdA, 'proj-a-skill', 'Skill only in project A');
+    writeSkillIn(cwdB, 'proj-b-skill', 'Skill only in project B');
+
+    // Host process cwd stays wherever the test runner lives — never chdir.
+    const entriesA = collectSkillEntries([], { cwd: cwdA });
+    const namesA = entriesA.map((e) => e.name);
+    expect(namesA).toContain('proj-a-skill');
+    expect(namesA).not.toContain('proj-b-skill');
+
+    // A different session cwd in the same process — stale entries evicted.
+    const entriesB = collectSkillEntries([], { cwd: cwdB });
+    const namesB = entriesB.map((e) => e.name);
+    expect(namesB).toContain('proj-b-skill');
+    expect(namesB).not.toContain('proj-a-skill');
+  });
+
+  it('buildSkillManifest forwards opts.cwd to the project scan', () => {
+    writeSkillIn(cwdA, 'session-cwd-skill', 'Visible only via session cwd');
+
+    // Without the override the host cwd has no .afk/skills — skill absent.
+    expect(buildSkillManifest([])).not.toContain('session-cwd-skill');
+    // With the session cwd the same process sees the project skill.
+    expect(buildSkillManifest([], { cwd: cwdA })).toContain('session-cwd-skill');
+    // And a later no-override call evicts it again (no leak into other sessions).
+    expect(buildSkillManifest([])).not.toContain('session-cwd-skill');
+  });
+
+  it('evicts collision-fallback `project:<name>` entries on cwd change', () => {
+    // Same skill name in user scope and project A: user scope scans first and
+    // keeps the bare name, so the project entry registers as `project:<name>`.
+    writeUserSkillIn(tmpAfkHome, 'shared-name', 'User-scope variant');
+    writeSkillIn(cwdA, 'shared-name', 'Project-A variant');
+
+    const entriesA = collectSkillEntries([], { cwd: cwdA });
+    const namesA = entriesA.map((e) => e.name);
+    expect(namesA).toContain('shared-name');
+    expect(namesA).toContain('project:shared-name');
+
+    // Switching to project B must evict the namespaced fallback entry too.
+    const entriesB = collectSkillEntries([], { cwd: cwdB });
+    const namesB = entriesB.map((e) => e.name);
+    expect(namesB).toContain('shared-name');
+    expect(namesB).not.toContain('project:shared-name');
+  });
 });
 
 describe('scanAllPluginRoots', () => {

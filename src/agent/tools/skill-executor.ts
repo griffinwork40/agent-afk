@@ -351,8 +351,13 @@ export class SkillExecutor {
       );
     }
 
-    // 3. Not found — return available skills list.
-    const entries = collectSkillEntries(this.ctx.pluginConfigs);
+    // 3. Not found — return available skills list. Resolve project skills
+    // against the session cwd (worktree / daemon-task / Telegram-chat dir),
+    // not the host process cwd — mirrors the manifest build in the provider.
+    const entries = collectSkillEntries(
+      this.ctx.pluginConfigs,
+      this.currentCwd !== undefined ? { cwd: this.currentCwd } : undefined,
+    );
     const available = entries.map((e) => e.name).join(', ');
     return {
       content: `Skill "${parsed.name}" not found. Available skills: ${available || '(none)'}`,
