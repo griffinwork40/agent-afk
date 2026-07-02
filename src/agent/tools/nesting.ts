@@ -237,6 +237,24 @@ export function buildReadOnlyReconProvider(model: AgentModelInput | undefined): 
  * would have `agent`/`skill` tools, but its skill grandchildren would
  * silently fall back to the bare provider (the same bug the depth-0
  * caller fixes).
+ *
+ * `defaultSubagentModel` is the resolved default-subagent policy
+ * (`getDefaultSubagentModel(parentModel)`) threaded through every depth so
+ * nested skill children inherit the SAME policy the top-level executors use.
+ * When omitted (legacy/test callers), the nested SkillExecutor's
+ * `defaultSubagentModel` stays undefined and its own fallback chain applies.
+ *
+ * Invariant: this parameter closes the "subagent model falls back to
+ * Anthropic sonnet under an OpenAI-routed parent" leak. A nested SkillExecutor
+ * built without it has `defaultSubagentModel: undefined`; that undefined then
+ * flows into the child SubagentExecutor it constructs
+ * (skill-executor.ts buildForkedChildConfig), whose `agent`-tool resolution is
+ * `parsed.model ?? defaultSubagentModel ?? 'sonnet'` — with no `defaultModel`
+ * link, so an unset `defaultSubagentModel` routes straight to Anthropic
+ * `sonnet` even when the whole session is OpenAI-only (→ "missing Anthropic
+ * credentials"). Threading the resolved value here keeps every depth on the
+ * parent's provider. Explicit `agent.model` / SKILL.md `model:` still win —
+ * this only governs the no-model-specified default.
  */
 export function createChildSkillExecutorFactory(
   defaultModel: AgentModelInput,
@@ -248,6 +266,7 @@ export function createChildSkillExecutorFactory(
   cwd?: string,
   resolveApiKeyForModel?: (model: string) => string | undefined,
   surface?: Surface,
+  defaultSubagentModel?: AgentModelInput,
 ): (depth: number, maxDepth: number, signal: AbortSignal) => SkillExecutor {
   const factory: (depth: number, maxDepth: number, signal: AbortSignal) => SkillExecutor = (
     depth,
@@ -257,6 +276,12 @@ export function createChildSkillExecutorFactory(
     new SkillExecutor({
       parentSession: createStubParentSession(signal),
       defaultModel,
+      // Resolved default-subagent policy threaded through every depth so a
+      // nested skill child (and the SubagentExecutor it builds) defaults to the
+      // parent's provider rather than the Anthropic `sonnet` literal. Optional:
+      // when the caller omits it, back-compat fallback chains apply. See the
+      // leak-closure invariant in this factory's jsdoc.
+      ...(defaultSubagentModel !== undefined ? { defaultSubagentModel } : {}),
       apiKey,
       ...(baseUrl !== undefined ? { baseUrl } : {}),
       depth,
