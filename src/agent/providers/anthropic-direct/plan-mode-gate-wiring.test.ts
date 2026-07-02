@@ -24,7 +24,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
-import type { ProviderEvent } from '../provider.js';
+import type { ProviderEvent } from '../../provider.js';
 import { AnthropicDirectProvider, __setAnthropicClientFactory } from './index.js';
 import { createHookRegistry, type HookRegistry } from '../../hooks.js';
 import { createPlanModeGate } from '../../plan-mode-gate.js';

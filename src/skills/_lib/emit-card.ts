@@ -25,5 +25,3 @@ export function emitCard(spec: CardSpec): void {
   if (!sink) return;
   sink({ type: 'panel', spec }, { subagentId: '__main__' });
 }
-
-export type { CardKind, CardSpec } from '../../cli/render.js';
