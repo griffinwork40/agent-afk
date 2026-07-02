@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.15.9] - 2026-07-02
+
+### Fixed
+- approve better-sqlite3 native build script for pnpm 10 (#383) (001b864)
+
 ## [5.15.8] - 2026-07-02
 
 ### Fixed
