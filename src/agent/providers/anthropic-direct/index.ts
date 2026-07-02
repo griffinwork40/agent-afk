@@ -257,7 +257,11 @@ export class AnthropicDirectProvider implements ModelProvider {
 
   constructor(opts: AnthropicDirectProviderOptions = {}) {
     const schemas = [...builtinToolSchemas];
-    if (opts.subagentExecutor) schemas.push(agentTool);
+    // The executor supplies the `agent` tool def so a named-agent registry
+    // can advertise its types in the description (see agents/tool-def.ts).
+    // Optional chaining: test stubs without describeAgentTool fall back to
+    // the static schema.
+    if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);
     if (opts.skillExecutor) schemas.push(skillTool);
     if (opts.composeExecutor) schemas.push(composeTool);
     // Read-only memory child sessions get only `memory_search`; full sessions

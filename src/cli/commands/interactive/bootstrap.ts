@@ -47,6 +47,7 @@ import { setBgsubRegistry, setBgsubSummarizer } from '../../slash/commands/bgsub
 import { SkillExecutor } from '../../../agent/tools/skill-executor.js';
 import { ComposeExecutor } from '../../../agent/tools/compose-executor.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory } from '../../../agent/tools/nesting.js';
+import { loadAgentRegistry } from '../../../agent/agents/index.js';
 import { AnthropicDirectProvider } from '../../../agent/providers/anthropic-direct/index.js';
 import { seedPersistedGrants } from '../../../agent/permissions-store.js';
 import { providerForModel } from '../../../agent/providers/index.js';
@@ -272,6 +273,13 @@ export async function bootstrapSession(
   // depth — root → skill-forked child → skill-forked grandchild. Without
   // this, the dispatch fast-fails with a 163-byte "BackgroundAgentRegistry
   // is not wired" error after ~24ms (no model call).
+  // Named-agent registry: session-static scan (builtin + user ~/.afk/agents
+  // + project .afk/agents & .claude/agents). Enables `agent_type` dispatch
+  // on the `agent` tool at every depth of this REPL session.
+  const agentRegistry = loadAgentRegistry({
+    ...(extras?.cwd !== undefined ? { cwd: extras.cwd } : {}),
+  });
+
   const childSkillExecutorFactory = createChildSkillExecutorFactory(
     sessionModel,
     apiKey,
@@ -295,6 +303,8 @@ export async function bootstrapSession(
     // executors below — closing the leak where a nested subagent silently
     // defaulted to Anthropic `sonnet` under an OpenAI-routed parent.
     getDefaultSubagentModel(sessionModel),
+    // Named-agent registry propagates to nested skill executors.
+    agentRegistry,
   );
 
   // Pass `sessionModel` to `getDefaultSubagentModel` so OpenAI-routed
@@ -326,6 +336,10 @@ export async function bootstrapSession(
     // already carries cwd for depth-1, but the per-call childManager
     // constructed inside SubagentExecutor.execute() needs cwd too.
     ...(extras?.cwd !== undefined ? { cwd: extras.cwd } : {}),
+    // Named-agent dispatch: registry + the session model as the `inherit`
+    // anchor for named-agent model resolution.
+    agentRegistry,
+    parentModel: sessionModel,
   });
 
   const skillExecutor = new SkillExecutor({
@@ -337,6 +351,8 @@ export async function bootstrapSession(
     apiKey,
     childProviderFactory,
     childSkillExecutorFactory,
+    // Named-agent registry for skill-forked orchestrator children.
+    agentRegistry,
     // Background dispatch: a plugin skill's subagent calling `agent` with
     // `mode:"background"` is the SKILL.md "Dispatch N sub-agents in parallel"
     // idiom — `/research`, `/diagnose`, `/shadow-verify`, etc. The registry
