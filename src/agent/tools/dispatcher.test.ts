@@ -852,6 +852,108 @@ describe('SessionToolDispatcher', () => {
       expect(results[0]!.content).toBe('slow');
       expect(results[1]!.content).toBe('fast');
     });
+
+    describe('maxConcurrentSafeCalls (bounded concurrency)', () => {
+      // A safe handler that records concurrency: increments a live counter on
+      // entry, tracks the peak, decrements on exit. `peak` is the maximum
+      // number that were ever in flight simultaneously.
+      function makeConcurrencyProbe() {
+        const state = { inFlight: 0, peak: 0 };
+        const handler: ToolHandler = async () => {
+          state.inFlight += 1;
+          state.peak = Math.max(state.peak, state.inFlight);
+          await new Promise((r) => setTimeout(r, 20));
+          state.inFlight -= 1;
+          return { content: 'ok' };
+        };
+        return { state, handler };
+      }
+
+      it('caps simultaneous in-flight safe calls at the configured limit', async () => {
+        const { state, handler } = makeConcurrencyProbe();
+        const dispatcher = makeDispatcher({
+          handlers: new Map([['read_file', handler]]),
+          permissions: { allowedTools: ['read_file'] },
+          maxConcurrentSafeCalls: 2,
+        });
+
+        const calls = Array.from({ length: 6 }, (_, i) =>
+          makeBatchCall('read_file', `read-${i}`),
+        );
+        const results = await dispatcher.executeBatch(calls);
+
+        expect(results).toHaveLength(6);
+        expect(results.every((r) => r.content === 'ok')).toBe(true);
+        // Never more than 2 running at once, despite 6 safe calls in the batch.
+        expect(state.peak).toBe(2);
+      });
+
+      it('runs the whole batch concurrently when the cap exceeds batch width', async () => {
+        const { state, handler } = makeConcurrencyProbe();
+        const dispatcher = makeDispatcher({
+          handlers: new Map([['read_file', handler]]),
+          permissions: { allowedTools: ['read_file'] },
+          maxConcurrentSafeCalls: 10,
+        });
+
+        const calls = Array.from({ length: 4 }, (_, i) =>
+          makeBatchCall('read_file', `read-${i}`),
+        );
+        await dispatcher.executeBatch(calls);
+
+        // Cap (10) > batch width (4): all four run at once, like allSettled.
+        expect(state.peak).toBe(4);
+      });
+
+      it('preserves result order when draining a batch wider than the cap', async () => {
+        // Descending delays: without index-keyed write-back, a naive pool
+        // would return results in completion order (fastest first).
+        const mk = (ms: number, content: string): ToolHandler => async () => {
+          await new Promise((r) => setTimeout(r, ms));
+          return { content };
+        };
+        const dispatcher = makeDispatcher({
+          handlers: new Map([
+            ['read_file', mk(40, 'a')],
+            ['glob', mk(30, 'b')],
+            ['grep', mk(20, 'c')],
+            ['list_directory', mk(10, 'd')],
+          ]),
+          permissions: { allowedTools: ['read_file', 'glob', 'grep', 'list_directory'] },
+          maxConcurrentSafeCalls: 2,
+        });
+
+        const results = await dispatcher.executeBatch([
+          makeBatchCall('read_file'),
+          makeBatchCall('glob'),
+          makeBatchCall('grep'),
+          makeBatchCall('list_directory'),
+        ]);
+
+        expect(results.map((r) => r.content)).toEqual(['a', 'b', 'c', 'd']);
+      });
+
+      it('degrades to sequential (not deadlock) when the cap is below 1', async () => {
+        // A non-positive/non-finite cap falls back to the default in the
+        // constructor, so behaviour stays parallel — assert it does not hang
+        // and every call still resolves.
+        const { state, handler } = makeConcurrencyProbe();
+        const dispatcher = makeDispatcher({
+          handlers: new Map([['read_file', handler]]),
+          permissions: { allowedTools: ['read_file'] },
+          maxConcurrentSafeCalls: 0,
+        });
+
+        const calls = Array.from({ length: 3 }, (_, i) =>
+          makeBatchCall('read_file', `read-${i}`),
+        );
+        const results = await dispatcher.executeBatch(calls);
+
+        expect(results.map((r) => r.content)).toEqual(['ok', 'ok', 'ok']);
+        // Default cap (8) applies → all 3 run at once.
+        expect(state.peak).toBe(3);
+      });
+    });
   });
 
   describe('compose tool routing (L4)', () => {

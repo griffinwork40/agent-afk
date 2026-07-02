@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.15.10] - 2026-07-02
+
+### Fixed
+- bound foreground safe-batch tool concurrency (#376) (cb9fe2a)
+
 ## [5.15.9] - 2026-07-02
 
 ### Fixed
