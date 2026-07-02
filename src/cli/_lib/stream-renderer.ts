@@ -708,6 +708,12 @@ export class StreamRenderer {
       this.resizeUnsub = null;
     }
 
+    // Defensive eviction of any live progress entry. finalizeOrchestrator
+    // already clears this on the 'done' path; this covers turns that reach
+    // dispose without a 'done' event (error aborts, interrupts) so the
+    // overlay flushes below never repaint a stale progress banner.
+    this.lastProgressByTask.clear();
+
     // CommitCoordinator.flushAll() is the single async owner at turn end.
     // It drains all scheduled commit batches in fixed anchor order:
     //   1. before-content (orchestrator tool-lane entries that precede prose)

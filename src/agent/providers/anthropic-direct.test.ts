@@ -825,18 +825,20 @@ describe('AnthropicDirectProvider', () => {
 
     const first = progressEvents[0]!;
     expect(first.progress.taskId).toBeTruthy();
-    expect(first.progress.description).toBe('Tool-use loop');
+    expect(first.progress.description).toBe('Working');
     expect(first.progress.toolUses).toBe(1);
     expect(first.progress.lastToolName).toBe('read_file');
     expect(first.progress.totalTokens).toBeGreaterThanOrEqual(0);
     expect(first.progress.durationMs).toBeGreaterThanOrEqual(0);
-    expect(first.progress.summary).toContain('Iteration 1');
+    expect(first.progress.summary).toContain('round 1');
+    expect(first.progress.summary).toContain('read_file');
     expect(first.sessionId).toBeTruthy();
 
     const second = progressEvents[1]!;
     expect(second.progress.toolUses).toBe(2);
     expect(second.progress.lastToolName).toBe('write_file');
-    expect(second.progress.summary).toContain('Iteration 2');
+    expect(second.progress.summary).toContain('round 2');
+    expect(second.progress.summary).toContain('write_file');
     expect(second.progress.taskId).toBe(first.progress.taskId);
   });
 

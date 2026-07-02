@@ -30,7 +30,7 @@ import {
 import { stripCommandTags, extractSkillTag } from '../slash/_lib/command-tags.js';
 import { styleForCategory, SUBAGENT_TOOLS, DAG_TOOLS } from '../tool-category.js';
 import { formatThinkingParagraph } from '../commands/interactive/thinking-paragraph.js';
-import { formatProgressBanner } from '../commands/interactive/progress-banner.js';
+import { deriveProgressActivity, formatProgressBanner } from '../commands/interactive/progress-banner.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import {
   emitPanel,
@@ -407,8 +407,13 @@ export function setComposedOverlay(ctx: OrchestratorCtx): void {
   }
   if (ctx.toolLane.hasPending()) parts.push(ctx.toolLane.getOverlay());
   const bannerLines: string[] = [];
+  // Grounded activity: the model's in-flight thinking clause (current
+  // uncommitted phase only — peekPhase clears at each seal boundary, so a
+  // stale clause never outlives the phase that produced it). Falls back to
+  // the event's own tool-derived summary inside formatProgressBanner.
+  const activity = deriveProgressActivity(ctx.thinkingLane.peekPhase());
   for (const progress of ctx.lastProgressByTask.values()) {
-    bannerLines.push(...formatProgressBanner(progress));
+    bannerLines.push(...formatProgressBanner(progress, undefined, activity));
   }
   if (bannerLines.length > 0) parts.push(bannerLines.join('\n'));
   ctx.compositor.setOverlay(parts.join('\n'));

@@ -16,6 +16,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   handleOrchestratorEvent,
+  setComposedOverlay,
   type OrchestratorCtx,
 } from './stream-renderer-orchestrator.js';
 import { freshSourceState, type SourceState } from './stream-renderer-source.js';
@@ -992,6 +993,41 @@ describe('handleOrchestratorEvent — progress arm (duplicate banner regression)
     expect(bannerCount).toBe(1);
     expect(lastOverlay).toContain('Iteration 15: used memory_update');
     expect(lastOverlay).not.toContain('Iteration 6: used bash');
+  });
+
+  /**
+   * Stale-banner regression: the tool-use loop ends ('done' event →
+   * finalizeOrchestrator) but the renderer keeps painting overlay frames for
+   * the post-loop prose stream. Before the fix, nothing evicted the map at
+   * loop exit — the LAST progress entry survived and the OverlayComposer
+   * (which redraws every slot on any markDirty) kept repainting a frozen
+   * "current activity" banner as if live throughout final prose streaming.
+   *
+   * Expect: after 'done', lastProgressByTask is empty, so any subsequent
+   * overlay composition renders zero banner lines.
+   */
+  it("clears lastProgressByTask when the turn finalizes ('done' event)", () => {
+    const setOverlay = vi.fn<(overlay: string) => void>();
+    const compositor = {
+      setOverlay,
+      commitAbove: vi.fn(),
+      setSpinner: vi.fn(),
+    } as unknown as OrchestratorCtx['compositor'];
+
+    const ctx = makeCtx(new ToolLane(), { isTTY: true, compositor });
+    const source: SourceState = freshSourceState('__main__');
+    const fire = (e: OutputEvent) => handleOrchestratorEvent(e, source, ctx);
+
+    fire(progressEvent('task-live', 'round 4: bash git show'));
+    expect(ctx.lastProgressByTask.size).toBe(1);
+
+    fire({ type: 'done' } as OutputEvent);
+
+    expect(ctx.lastProgressByTask.size).toBe(0);
+    // A post-done overlay composition must not resurrect the banner.
+    setComposedOverlay(ctx);
+    const lastOverlay = setOverlay.mock.calls.at(-1)?.[0] ?? '';
+    expect(lastOverlay).not.toContain('round 4: bash git show');
   });
 });
 
