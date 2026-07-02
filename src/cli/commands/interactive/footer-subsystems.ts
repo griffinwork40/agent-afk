@@ -194,6 +194,10 @@ export function setupFooterSubsystems(
   // registry-driven subsystems); unsubscribed by the orchestrator's finally
   // via dispose() so a swapped/late-settling job can't touch a dead buffer.
   const bgResultNotifier = new BgResultNotifier(ctx.backgroundRegistry);
+  // Expose buffer reset to the /resume swap path (mirrors clearVerdictLedger):
+  // jobs settled under the outgoing session must not inject into the resumed
+  // session's first turn.
+  ctx.clearBgResultBuffer = () => bgResultNotifier.reset();
 
   return {
     contextPane,

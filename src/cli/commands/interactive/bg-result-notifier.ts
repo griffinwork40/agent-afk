@@ -94,6 +94,13 @@ function extractOutput(job: BackgroundJob): string {
  * Truncate `text` to `maxBytes` of UTF-8, appending a marker naming the
  * job so the model knows how to retrieve the full result. Byte-accurate
  * (not char-accurate) so multi-byte content can't overshoot the cap.
+ *
+ * Invariant: called on ALREADY-ESCAPED text so the cap bounds the final
+ * injected size. Escape-then-truncate matters: escaping expands `<` to
+ * `&lt;` (4×), so truncating pre-escape text would let adversarial output
+ * (e.g. 16KB of `<`) balloon to ~64KB post-escape and bypass the cap.
+ * Truncation may cut an entity mid-sequence (`&am`); harmless in model
+ * context.
  */
 function truncateBytes(text: string, maxBytes: number, jobId: string): string {
   if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
@@ -115,7 +122,9 @@ function truncateBytes(text: string, maxBytes: number, jobId: string): string {
 export function buildBgResultInjection(job: BackgroundJob): string {
   const duration =
     job.endedAt !== undefined ? formatDuration(job.endedAt - job.startedAt) : 'unknown';
-  const output = truncateBytes(extractOutput(job), MAX_INJECTION_BYTES, job.jobId);
+  // Escape BEFORE truncating so the byte cap bounds the final injected
+  // size — see truncateBytes' invariant for the expansion-bypass rationale.
+  const output = truncateBytes(escapeXml(extractOutput(job)), MAX_INJECTION_BYTES, job.jobId);
   const lines: string[] = [];
   lines.push(
     `<background-subagent-result jobId="${job.jobId}" status="${job.status}" ` +
@@ -123,7 +132,7 @@ export function buildBgResultInjection(job: BackgroundJob): string {
   );
   lines.push(`<task>${escapeXml(job.label)}</task>`);
   lines.push('<output>');
-  lines.push(escapeXml(output));
+  lines.push(output);
   lines.push('</output>');
   lines.push('</background-subagent-result>');
   return lines.join('\n');
@@ -192,6 +201,17 @@ export class BgResultNotifier {
     const out = this.pendingNotifications;
     this.pendingNotifications = [];
     return out;
+  }
+
+  /**
+   * Drop all buffered injections and notifications without delivering
+   * them. Called on mid-session /resume swap: jobs that settled under the
+   * outgoing session must not leak their results into the resumed
+   * session's first turn (mirrors the verdict-ledger reset semantics).
+   */
+  reset(): void {
+    this.pendingInjections = [];
+    this.pendingNotifications = [];
   }
 
   /** Unsubscribe from the registry. Idempotent. */

@@ -149,6 +149,29 @@ describe('BgResultNotifier', () => {
     expect(Buffer.byteLength(injection, 'utf8')).toBeLessThan(MAX_INJECTION_BYTES + 1024);
   });
 
+  it('cap bounds the POST-escape size — escape expansion cannot bypass it', () => {
+    const { handle, fireTerminal } = makeBgHandle('sub-f2');
+    registry.register({ handle, prompt: 'adversarial', model: 'sonnet' });
+    // 16KB of '<' expands 4× to ~64KB as '&lt;' — escape-then-truncate must
+    // still cap the final envelope near MAX_INJECTION_BYTES, not 4× it.
+    fireTerminal(succeed('sub-f2', '<'.repeat(MAX_INJECTION_BYTES)));
+
+    const injection = notifier.drainInjections();
+    expect(Buffer.byteLength(injection, 'utf8')).toBeLessThan(MAX_INJECTION_BYTES + 1024);
+    // Envelope framing survives: exactly one real closing tag.
+    expect(injection.match(/<\/background-subagent-result>/g)).toHaveLength(1);
+  });
+
+  it('reset() drops buffered injections and notifications (resume-swap leak guard)', () => {
+    const { handle, fireTerminal } = makeBgHandle('sub-r');
+    registry.register({ handle, prompt: 'settles pre-swap', model: 'sonnet' });
+    fireTerminal(succeed('sub-r', 'stale result'));
+
+    notifier.reset();
+    expect(notifier.drainInjections()).toBe('');
+    expect(notifier.drainNotifications()).toHaveLength(0);
+  });
+
   it('multiple settled jobs drain as concatenated envelopes in settle order', () => {
     const a = makeBgHandle('sub-g1');
     const b = makeBgHandle('sub-g2');
