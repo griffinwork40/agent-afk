@@ -35,6 +35,8 @@ import type { Surface } from './awareness/types.js';
 import { appendRoutingDecision } from './routing-telemetry.js';
 import { getCurrentSink } from './_lib/skill-sink-channel.js';
 import { buildPhaseRestrictedProvider, type PhaseRole } from './tools/nesting.js';
+import { applyManagerApiKeyFallback } from './tools/child-credential.js';
+import { providerForModel } from './providers/index.js';
 import {
   SubagentHandleImpl,
   type SubagentHandle,
@@ -417,8 +419,30 @@ export class SubagentManager {
       resume,
       forkSession: resume ? true : options.config.forkSession,
       abortSignal: childController.signal,
-      apiKey: options.config.apiKey || this.parentApiKey,
-      baseUrl: options.config.baseUrl ?? this.parentBaseUrl,
+      // Invariant (cross-provider credential anti-leak): the parent-credential
+      // fallback below must never hand an Anthropic `sk-ant-…` credential to an
+      // OpenAI-routed child. Upstream executors (subagent-executor.ts,
+      // skill-executor.ts, compose-executor.ts) deliberately clear `apiKey` /
+      // `baseUrl` for OpenAI children; a provider-blind `|| this.parentApiKey`
+      // here silently undid that decision — the OpenAI auth resolver treats any
+      // explicit config key as Tier-1 (openai-compatible/auth.ts), so the
+      // Anthropic token went out as a Bearer to an OpenAI-shaped endpoint.
+      // `applyManagerApiKeyFallback` preserves explicit caller keys and
+      // legitimate same-provider inheritance; only the leaking combination
+      // (OpenAI child + Anthropic-shaped parent key) resolves to undefined.
+      apiKey: applyManagerApiKeyFallback({
+        childModel: options.config.model,
+        configApiKey: options.config.apiKey,
+        parentApiKey: this.parentApiKey,
+      }),
+      // Same guard for the Anthropic-semantic `baseUrl`: an OpenAI-routed
+      // child resolves its endpoint from `openaiBaseUrl` / env, never from the
+      // parent's Anthropic base URL. Explicit caller values still win.
+      baseUrl:
+        options.config.baseUrl ??
+        (providerForModel(options.config.model) === 'openai-compatible'
+          ? undefined
+          : this.parentBaseUrl),
       // External constraint: a forked sub-agent has no human relationship of its
       // own — it returns findings (including Blocked/Asking) to its PARENT, which
       // owns the operator surface. Mark every fork non-interactive by default so
