@@ -14,7 +14,7 @@
 // Barrel import triggers self-registration side-effects for built-in skills.
 import '../../skills/all.js';
 
-import { listSkills, getSkill, registerSkill, isSkillVisible } from '../../skills/index.js';
+import { listSkills, getSkill, registerSkill, isSkillVisible, evictSkillsByOrigin } from '../../skills/index.js';
 import { loadSkillPrompts } from '../../skills/_lib/prompt-loader.js';
 import { scanSkillsFromDir } from '../../skills/user-skills.js';
 import { scanLocalPlugins } from '../plugins-scanner.js';
@@ -118,6 +118,16 @@ export function collectSkillEntries(
   //    `project:<name>`. Both lose the bare slot to an already-registered
   //    builtin (origin undefined) via the resolveSkillKey collision logic.
   scanSkillsFromDir(getSkillsDir(), 'user');
+  // Invariant: evict stale project-origin skills before rescanning the
+  // project dir. In a long-lived process (daemon, Telegram bot) the cwd may
+  // have changed since the previous call, and any skills registered for the
+  // old cwd must not persist into the new project context. User-origin and
+  // built-in skills are deliberately excluded from eviction — they are
+  // cwd-agnostic and must survive across project boundaries. The eviction
+  // cost is O(registry size) and bounded by the number of registered skills
+  // (typically <100), so it is negligible relative to the disk scan that
+  // follows.
+  evictSkillsByOrigin('project');
   scanSkillsFromDir(getProjectSkillsDir(), 'project');
   // Imported skills from trusted source binaries (Claude Code, Codex) opted
   // into via `importFrom`. Scanned AFTER native scopes so a native skill keeps
