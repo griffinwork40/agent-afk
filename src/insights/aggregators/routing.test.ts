@@ -66,6 +66,20 @@ function composeStarted(nodeCount: number, edgeCount: number): string {
   });
 }
 
+function composeCompleted(nodeCount: number, edgeCount: number): string {
+  return JSON.stringify({
+    ts: new Date().toISOString(),
+    event: 'compose.completed',
+    surface: 'afk',
+    node_count: nodeCount,
+    edge_count: edgeCount,
+    succeeded: nodeCount,
+    failed: 0,
+    skipped: 0,
+    duration_ms: 1234,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -171,9 +185,40 @@ describe('aggregateRoutingDecisions', () => {
     expect(result.avgComposeEdges).toBeCloseTo(4); // (3+5)/2
   });
 
+  it('compose.started + compose.completed for one call → counted once (no double-count)', () => {
+    // Regression: production emits BOTH events per compose call. Counting both
+    // would report 2 calls for 1 real call. compose.started is the sole call
+    // signal; compose.completed still counts as a routing event.
+    writeRouting([
+      composeStarted(5, 4),
+      composeCompleted(5, 4),
+    ]);
+
+    const result = aggregateRoutingDecisions({ days: 30, afkHome: tmpRoot });
+    expect(result.composeCallCount).toBe(1);
+    expect(result.avgComposeNodes).toBeCloseTo(5);
+    expect(result.avgComposeEdges).toBeCloseTo(4);
+    expect(result.totalRoutingEvents).toBe(2);
+  });
+
   it('malformed line → skipped, no throw', () => {
     writeRouting([
       '{ not valid json }',
+      skillDispatched('fork'),
+    ]);
+
+    const result = aggregateRoutingDecisions({ days: 30, afkHome: tmpRoot });
+    expect(result.skillDispatchModes['fork']).toBe(1);
+  });
+
+  it('valid-JSON non-object lines (null, number, string, array) → skipped, no throw', () => {
+    // Regression: these parse cleanly and escape the parse catch. Without the
+    // null/object guard, a bare `null` line crashes on the first field access.
+    writeRouting([
+      'null',
+      '42',
+      '"just a string"',
+      '[1, 2, 3]',
       skillDispatched('fork'),
     ]);
 

@@ -94,23 +94,33 @@ export function aggregateTraces(options: InsightsOptions): TraceAggregates {
     const tracePath = join(witnessRoot, sessionId, 'trace.jsonl');
     if (!existsSync(tracePath)) continue;
 
+    // Read the trace file once and reuse it for both the window check and
+    // aggregation below (this file was previously read twice per session).
+    let raw: string | null = null;
+    try {
+      raw = readFileSync(tracePath, 'utf-8');
+    } catch {
+      raw = null; // unreadable — fall through to the mtime-based window check
+    }
+
     // Determine whether this session falls within the window.
     // We parse the first event's ts field, falling back to file mtime.
     let sessionStartMs: number | null = null;
-    try {
-      const raw = readFileSync(tracePath, 'utf-8');
-      const firstLine = raw.split('\n')[0]?.trim();
-      if (firstLine) {
-        const parsed = JSON.parse(firstLine) as Record<string, unknown>;
-        if (typeof parsed['ts'] === 'string') {
-          const ts = Date.parse(parsed['ts']);
-          if (!Number.isNaN(ts)) {
-            sessionStartMs = ts;
+    if (raw !== null) {
+      try {
+        const firstLine = raw.split('\n')[0]?.trim();
+        if (firstLine) {
+          const parsed = JSON.parse(firstLine) as Record<string, unknown>;
+          if (typeof parsed['ts'] === 'string') {
+            const ts = Date.parse(parsed['ts']);
+            if (!Number.isNaN(ts)) {
+              sessionStartMs = ts;
+            }
           }
         }
+      } catch {
+        // fall through to mtime
       }
-    } catch {
-      // fall through to mtime
     }
 
     // Fallback: use trace.jsonl mtime
@@ -129,12 +139,10 @@ export function aggregateTraces(options: InsightsOptions): TraceAggregates {
     // Process this session's trace file.
     agg.totalTracedSessions += 1;
 
-    let lines: string[];
-    try {
-      lines = readFileSync(tracePath, 'utf-8').split('\n');
-    } catch {
-      continue;
+    if (raw === null) {
+      continue; // file was unreadable above — nothing to aggregate
     }
+    const lines = raw.split('\n');
 
     for (const line of lines) {
       const trimmed = line.trim();

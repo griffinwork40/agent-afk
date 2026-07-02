@@ -106,12 +106,17 @@ export function aggregateDaemonTelemetry(options: InsightsOptions): DaemonAggreg
     const trimmed = line.trim();
     if (!trimmed) continue;
 
-    let record: Record<string, unknown>;
+    let parsed: unknown;
     try {
-      record = JSON.parse(trimmed) as Record<string, unknown>;
+      parsed = JSON.parse(trimmed);
     } catch {
       continue; // malformed line — skip
     }
+    // A valid-JSON-but-non-object line (bare `null`, a number, a string, an
+    // array) parses cleanly and escapes the catch above. Skip it before any
+    // property access so `null['triggeredAt']` can never throw.
+    if (parsed === null || typeof parsed !== 'object') continue;
+    const record = parsed as Record<string, unknown>;
 
     // Filter by triggeredAt (ISO string → epoch ms)
     const triggeredAtRaw = record['triggeredAt'];

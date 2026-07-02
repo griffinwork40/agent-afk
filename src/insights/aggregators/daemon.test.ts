@@ -175,6 +175,23 @@ describe('aggregateDaemonTelemetry', () => {
     expect(result.successCount).toBe(1);
   });
 
+  it('valid-JSON non-object lines (null, number, string, array) → skipped, no throw', () => {
+    // Regression: these parse cleanly (unlike syntactically-broken JSON) and
+    // escape the parse catch. Without the null/object guard, a bare `null`
+    // line crashes the aggregator on the first property access.
+    writeTelemetry([
+      'null',
+      '42',
+      '"just a string"',
+      '[1, 2, 3]',
+      makeRecord({ status: 'success' }),
+    ]);
+
+    const result = aggregateDaemonTelemetry({ days: 30, afkHome: tmpRoot });
+    expect(result.totalRuns).toBe(1);
+    expect(result.successCount).toBe(1);
+  });
+
   it('byTaskId breakdown accumulated per task', () => {
     writeTelemetry([
       makeRecord({ taskId: 'task-A', status: 'success' }),

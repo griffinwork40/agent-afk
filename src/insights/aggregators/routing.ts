@@ -70,12 +70,17 @@ export function aggregateRoutingDecisions(options: InsightsOptions): RoutingAggr
     const trimmed = line.trim();
     if (!trimmed) continue;
 
-    let record: Record<string, unknown>;
+    let parsed: unknown;
     try {
-      record = JSON.parse(trimmed) as Record<string, unknown>;
+      parsed = JSON.parse(trimmed);
     } catch {
       continue; // malformed line — skip
     }
+    // A valid-JSON-but-non-object line (bare `null`, a number, a string, an
+    // array) parses cleanly and escapes the catch above. Skip it before any
+    // property access so `null['event']` can never throw.
+    if (parsed === null || typeof parsed !== 'object') continue;
+    const record = parsed as Record<string, unknown>;
 
     const event = typeof record['event'] === 'string' ? record['event'] : null;
     if (!event) continue;
@@ -105,7 +110,12 @@ export function aggregateRoutingDecisions(options: InsightsOptions): RoutingAggr
 
     // compose.* events — compose call stats
     else if (event.startsWith('compose.')) {
-      if (event === 'compose.started' || event === 'compose.completed') {
+      // Count each compose call exactly once. Production emits BOTH
+      // `compose.started` (always, once per call) and `compose.completed`
+      // (on completion), each carrying node_count/edge_count — counting both
+      // would report ~2x the real call count. `compose.started` is the
+      // authoritative per-call signal.
+      if (event === 'compose.started') {
         agg.composeCallCount += 1;
         const nodeCount = typeof record['node_count'] === 'number' ? record['node_count'] : 0;
         const edgeCount = typeof record['edge_count'] === 'number' ? record['edge_count'] : 0;
