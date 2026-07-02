@@ -51,6 +51,15 @@ describe('loadAgentRegistry', () => {
     ]);
   });
 
+  it('strips vendored frontmatter from builtin prompts (body-only system prompt)', () => {
+    const registry = loadAgentRegistry({ cwd: join(tmp, 'proj'), warn: () => {} });
+    for (const name of ['research-agent', 'git-investigator']) {
+      const prompt = registry.get(name)?.definition.prompt ?? '';
+      expect(prompt.startsWith('---')).toBe(false);
+      expect(prompt.length).toBeGreaterThan(0);
+    }
+  });
+
   it('scans user scope (~/.afk/agents) recursively', () => {
     const userDir = join(tmp, 'afk-home', 'agents', 'review');
     writeAgent(userDir, 'security.md', 'security-reviewer');

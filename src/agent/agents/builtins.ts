@@ -19,7 +19,21 @@
 
 import { researchAgent } from '../../skills/_agents/research-agent.js';
 import { gitInvestigator } from '../../skills/_agents/git-investigator.js';
+import { parseAgentMarkdown } from './parser.js';
 import type { RegisteredAgent } from './types.js';
+
+/**
+ * A vendored agent module's `systemPrompt` is the RAW upstream markdown —
+ * frontmatter included (byte-equality with upstream is enforced, so the
+ * wrapper cannot pre-strip it). A system prompt should be the body only:
+ * parse and take the body, falling back to the raw text if the vendored
+ * format ever changes shape. Tools/description stay sourced from the
+ * wrapper constants (the vendored contract diagnose already relies on),
+ * NOT from the file's frontmatter.
+ */
+function vendoredPromptBody(raw: string): string {
+  return parseAgentMarkdown(raw)?.definition.prompt ?? raw;
+}
 
 const GENERAL_PURPOSE_PROMPT = `You are a general-purpose sub-agent for complex, multi-step tasks that require both exploration and action.
 
@@ -50,7 +64,7 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
       source: 'builtin',
       definition: {
         description: researchAgent.description,
-        prompt: researchAgent.systemPrompt,
+        prompt: vendoredPromptBody(researchAgent.systemPrompt),
         tools: [...researchAgent.allowedTools],
       },
     },
@@ -59,7 +73,7 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
       source: 'builtin',
       definition: {
         description: gitInvestigator.description,
-        prompt: gitInvestigator.systemPrompt,
+        prompt: vendoredPromptBody(gitInvestigator.systemPrompt),
         tools: [...gitInvestigator.allowedTools],
         model: gitInvestigator.model,
       },
