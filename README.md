@@ -146,6 +146,8 @@ afk chat "refactor this" --model gpt-5.5
 
 See [`docs/model-slots.md`](docs/model-slots.md) for the full configuration reference.
 
+MCP servers (tool-providing plugins over stdio/HTTP) — see [`docs/mcp.md`](docs/mcp.md) for config, transports, OAuth, and security notes.
+
 ## Useful commands
 
 ```bash

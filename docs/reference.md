@@ -90,7 +90,7 @@ The interactive REPL registers slash commands directly in TypeScript (`src/cli/s
 - `/history` — print prior turns
 - `/model` — show or switch active model
 - `/tools` — list registered tools
-- `/mcp` — show MCP server status
+- `/mcp` — show MCP server status ([full docs](mcp.md))
 - `/limits` — show rate-limit / budget state
 - `/debug` — toggle verbose debug output
 
