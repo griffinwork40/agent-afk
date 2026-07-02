@@ -23,7 +23,10 @@ interface SessionState {
 interface MockSessionTracker {
   state: SessionState;
   sendMessage: ReturnType<typeof vi.fn>;
+  /** Standalone messages pushed via `pushUserMessage` (live-steering channel). */
   getMockInputStreamMessages: () => string[];
+  /** Hook context queued via `queueFrameworkContext` (rides with the next real message). */
+  getMockQueuedFrameworkContext: () => string[];
 }
 
 const shared = vi.hoisted(() => ({
@@ -40,6 +43,7 @@ vi.mock('./session.js', () => {
     public interrupt = vi.fn(async () => undefined);
     public close = vi.fn(async () => undefined);
     private mockInputStreamMessages: string[] = [];
+    private mockQueuedFrameworkContext: string[] = [];
 
     constructor(config: Record<string, unknown>) {
       shared.lastConfig = config;
@@ -62,6 +66,7 @@ vi.mock('./session.js', () => {
         state: this.state,
         sendMessage: this.sendMessage,
         getMockInputStreamMessages: () => this.mockInputStreamMessages,
+        getMockQueuedFrameworkContext: () => this.mockQueuedFrameworkContext,
       });
     }
 
@@ -70,15 +75,25 @@ vi.mock('./session.js', () => {
     }
 
     getInputStreamRef() {
+      // Mirrors the real AgentSession ref: both channels exposed. The handle
+      // must route hook injectContext to `queueFrameworkContext` (rides with
+      // the next real message) and never to `pushUserMessage` (own turn).
       return {
         pushUserMessage: (content: string) => {
           this.mockInputStreamMessages.push(content);
+        },
+        queueFrameworkContext: (text: string) => {
+          this.mockQueuedFrameworkContext.push(text);
         },
       };
     }
 
     getMockInputStreamMessages(): string[] {
       return this.mockInputStreamMessages;
+    }
+
+    getMockQueuedFrameworkContext(): string[] {
+      return this.mockQueuedFrameworkContext;
     }
   }
   return { AgentSession: MockAgentSession };
@@ -259,10 +274,13 @@ describe('SubagentManager — hook integration', () => {
     await childHandle.run('audit the module');
     await childHandle.cancel();
 
-    const messages = parentSession.getMockInputStreamMessages();
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatch(/^\[framework-generated context: shadow-verify nudge\]/);
-    expect(messages[0]).toContain('/shadow-verify');
+    const queued = parentSession.getMockQueuedFrameworkContext();
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatch(/^\[framework-generated context: shadow-verify nudge\]/);
+    expect(queued[0]).toContain('/shadow-verify');
+    // Never delivered as a standalone input-stream message — that channel
+    // makes the nudge its own turn and displaces the user's next real message.
+    expect(parentSession.getMockInputStreamMessages()).toEqual([]);
   });
 
   it('resolves the registry from the PARENT session when manager + config omit it (production wiring)', async () => {
@@ -307,9 +325,10 @@ describe('SubagentManager — hook integration', () => {
     await childHandle.run('audit the module');
     await childHandle.cancel();
 
-    const messages = parentSession.getMockInputStreamMessages();
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatch(/^\[framework-generated context: shadow-verify nudge\]/);
+    const queued = parentSession.getMockQueuedFrameworkContext();
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatch(/^\[framework-generated context: shadow-verify nudge\]/);
+    expect(parentSession.getMockInputStreamMessages()).toEqual([]);
   });
 
   it('stays silent when neither config, manager, nor parent supplies a registry', async () => {
@@ -343,6 +362,7 @@ describe('SubagentManager — hook integration', () => {
     await childHandle.run('audit the module');
     await childHandle.cancel();
 
+    expect(parentSession.getMockQueuedFrameworkContext()).toEqual([]);
     expect(parentSession.getMockInputStreamMessages()).toEqual([]);
   });
 
@@ -397,6 +417,7 @@ describe('SubagentManager — hook integration', () => {
     await childHandle.cancel();
 
     // agentType='diagnose' is on the VERIFIED_ORCHESTRATORS list, so no nudge.
+    expect(parentSession.getMockQueuedFrameworkContext()).toEqual([]);
     expect(parentSession.getMockInputStreamMessages()).toEqual([]);
   });
 
@@ -549,9 +570,10 @@ describe('SubagentManager — hook integration', () => {
 
     await childHandle.cancel();
 
-    // After cancel, the child's SubagentStop should have injected context into parent.
-    const messages = parentSession.getMockInputStreamMessages();
-    expect(messages).toContain('verify: output looks suspicious');
+    // After cancel, the child's SubagentStop should have queued context on the parent.
+    const queued = parentSession.getMockQueuedFrameworkContext();
+    expect(queued).toContain('verify: output looks suspicious');
+    expect(parentSession.getMockInputStreamMessages()).toEqual([]);
   });
 
   it('SubagentStop without injectContext does not queue message to parent', async () => {
@@ -579,8 +601,8 @@ describe('SubagentManager — hook integration', () => {
 
     await childHandle.cancel();
 
-    const messages = parentSession.getMockInputStreamMessages();
-    expect(messages).toEqual([]);
+    expect(parentSession.getMockQueuedFrameworkContext()).toEqual([]);
+    expect(parentSession.getMockInputStreamMessages()).toEqual([]);
   });
 
   it('SubagentStop injectContext is NOT injected when parent is aborting', async () => {
@@ -625,8 +647,8 @@ describe('SubagentManager — hook integration', () => {
     await childHandle.cancel();
 
     // injectContext is suppressed because parent.abortSignal is set.
-    const messages = parentSession.getMockInputStreamMessages();
-    expect(messages).toEqual([]);
+    expect(parentSession.getMockQueuedFrameworkContext()).toEqual([]);
+    expect(parentSession.getMockInputStreamMessages()).toEqual([]);
   });
 
   it('SubagentStop injectContext still fires when no parent abortSignal is provided (opt-in check)', async () => {
@@ -660,8 +682,8 @@ describe('SubagentManager — hook integration', () => {
 
     await childHandle.cancel();
 
-    const messages = parentSession.getMockInputStreamMessages();
-    expect(messages).toContain('verify: no abort signal, proceed');
+    const queued = parentSession.getMockQueuedFrameworkContext();
+    expect(queued).toContain('verify: no abort signal, proceed');
   });
 
   it('multiple concurrent subagent cancels inject contexts in order', async () => {
@@ -701,10 +723,39 @@ describe('SubagentManager — hook integration', () => {
     await child1.cancel();
     await child2.cancel();
 
-    const messages = parentSession.getMockInputStreamMessages();
-    expect(messages).toHaveLength(2);
-    expect(messages[0]).toContain(child1.id);
-    expect(messages[1]).toContain(child2.id);
+    const queued = parentSession.getMockQueuedFrameworkContext();
+    expect(queued).toHaveLength(2);
+    expect(queued[0]).toContain(child1.id);
+    expect(queued[1]).toContain(child2.id);
+  });
+
+  it('falls back to pushUserMessage when the parent ref lacks queueFrameworkContext', async () => {
+    // Narrow stubs (older callers, minimal test doubles) may expose only the
+    // push channel. Delivery must degrade to the legacy behavior rather than
+    // silently dropping the context.
+    const registry = createHookRegistry();
+    registry.register('SubagentStop', () => ({
+      injectContext: 'verify: legacy channel delivery',
+    }));
+
+    const pushed: string[] = [];
+    const mgr = new SubagentManager({ hookRegistry: registry });
+    const handle = await mgr.forkSubagent({
+      parent: {
+        sessionId: 'root-legacy-ref',
+        getInputStreamRef: () => ({
+          pushUserMessage: (content: string) => {
+            pushed.push(content);
+          },
+        }),
+      },
+      config: { model: 'sonnet' },
+      idPrefix: 'child',
+    });
+
+    await handle.cancel();
+
+    expect(pushed).toEqual(['verify: legacy channel delivery']);
   });
 });
 
@@ -915,8 +966,8 @@ describe('SubagentHandle.teardown()', () => {
     await childHandle.run('audit');
     await childHandle.teardown();
 
-    const messages = parentSession.getMockInputStreamMessages();
-    expect(messages).toContain('post-teardown note');
+    const queued = parentSession.getMockQueuedFrameworkContext();
+    expect(queued).toContain('post-teardown note');
   });
 
   it('teardown() closes the underlying session', async () => {

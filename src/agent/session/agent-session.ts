@@ -94,6 +94,12 @@ export class AgentSession implements IAgentSession {
   private providerIterator!: AsyncIterator<ProviderEvent>;
   private conversationHistory: Message[] = [];
   private turnCount = 0;
+  /**
+   * Hook-generated context (e.g. SubagentStop `injectContext`) waiting to be
+   * prepended to the next outbound user message. Never delivered as its own
+   * input-stream message — see `queueFrameworkContext`.
+   */
+  private pendingFrameworkContext: string[] = [];
   private lastResponseMetadata: ResponseMetadata | null = null;
   private initPromise: Promise<void> | null = null;
   private inputStream!: QueryInputStream;
@@ -585,11 +591,19 @@ export class AgentSession implements IAgentSession {
   private async *sendMessageStreamInternal(content: string | ContentBlockParam[]): AsyncIterableIterator<OutputEvent> {
     if (this.initPromise) await this.initPromise;
 
-    const historySummary = typeof content === 'string' ? content : this.summarizeContentBlocks(content);
+    // Fold queued hook context into THIS message so it rides along with the
+    // user's text instead of becoming a turn of its own — see
+    // `queueFrameworkContext` for the displacement bug this prevents.
+    const effectiveContent = this.withPendingFrameworkContext(content);
+
+    const historySummary =
+      typeof effectiveContent === 'string'
+        ? effectiveContent
+        : this.summarizeContentBlocks(effectiveContent);
 
     const userMessage: Message = { role: 'user', content: historySummary, timestamp: new Date() };
     this.conversationHistory.push(userMessage);
-    this.inputStream.pushUserMessage(content);
+    this.inputStream.pushUserMessage(effectiveContent);
 
     // Durable ledger: initialization is deferred to here (not the
     // constructor) because the provider-issued session id only exists after
@@ -1048,8 +1062,44 @@ export class AgentSession implements IAgentSession {
     );
   }
 
-  getInputStreamRef(): Pick<InputStreamRef, 'pushUserMessage'> {
-    return { pushUserMessage: (content: string) => this.inputStream.pushUserMessage(content) };
+  /**
+   * Queue hook-generated framework context (e.g. SubagentStop `injectContext`)
+   * for delivery WITH the next real outbound user message.
+   *
+   * Contract: the provider consumes exactly one input-stream message per turn,
+   * so delivering hook context via `pushUserMessage` makes it a turn of its
+   * own — and a push that lands after the current turn ends displaces the
+   * user's next real message by one queue position (every later send is then
+   * answered by the message before it). Holding the context here and
+   * prepending it in `sendMessageStreamInternal` keeps one send = one turn,
+   * keeps the model's view identical to the ledger/transcript, and lets
+   * undelivered context expire with the session.
+   */
+  queueFrameworkContext(text: string): void {
+    const trimmed = text.trim();
+    if (trimmed.length === 0) return;
+    this.pendingFrameworkContext.push(trimmed);
+    debugLog(
+      `AgentSession: queued framework context (${trimmed.length} chars) for the next user message`,
+    );
+  }
+
+  /** Drain queued framework context, prepending it to the outbound content (FIFO). */
+  private withPendingFrameworkContext(
+    content: string | ContentBlockParam[],
+  ): string | ContentBlockParam[] {
+    if (this.pendingFrameworkContext.length === 0) return content;
+    const prefix = this.pendingFrameworkContext.join('\n\n');
+    this.pendingFrameworkContext = [];
+    if (typeof content === 'string') return `${prefix}\n\n${content}`;
+    return [{ type: 'text', text: prefix }, ...content];
+  }
+
+  getInputStreamRef(): Pick<InputStreamRef, 'pushUserMessage' | 'queueFrameworkContext'> {
+    return {
+      pushUserMessage: (content: string) => this.inputStream.pushUserMessage(content),
+      queueFrameworkContext: (text: string) => this.queueFrameworkContext(text),
+    };
   }
 
   getHistory(): readonly Message[] {
