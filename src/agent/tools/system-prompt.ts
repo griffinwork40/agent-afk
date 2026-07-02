@@ -119,3 +119,33 @@ On your first turn, decide whether to call memory_search based on the request:
 - Search at most once per session for general context. Search again only if new information surfaces a specific topic worth querying.
 
 Use FTS5 syntax: "exact phrase", term1 AND term2, prefix*.`;
+
+/**
+ * Resolve the tool-usage system prompt for a session — the single source of
+ * truth shared by BOTH providers (anthropic-direct AND openai-compatible) so
+ * the fragment set can never drift between them. (This function exists because
+ * the fragment set previously drifted: one provider hand-rolled the
+ * concatenation inline and fell behind when the compound gained the
+ * background-subagent fragment.)
+ *
+ * - skill-dispatch sub-agents → base conventions only. The slash-command
+ *   routing, bash-passthrough, and background-subagent guidance are all
+ *   interactive-only and would mislead a dispatched skill (which receives a
+ *   "Run the <name> skill" directive, not a `<command-name>` tag or any
+ *   REPL-delivered envelope).
+ * - every other session → the full compound (base + slash-command routing +
+ *   bash-passthrough + background-subagent result delivery).
+ */
+export function resolveToolSystemPrompt(isSkillDispatch: boolean | undefined): string {
+  return isSkillDispatch ? TOOL_SYSTEM_PROMPT_BASE : TOOL_SYSTEM_PROMPT;
+}
+
+/**
+ * Resolve the memory system prompt for a session. Read-only child sessions
+ * (subagents / skills that have only `memory_search`, never `memory_update` or
+ * `procedure_write`) get the slimmed variant that omits write guidance for
+ * tools they do not have. Shared by both providers to prevent drift.
+ */
+export function resolveMemorySystemPrompt(readOnly: boolean | undefined): string {
+  return readOnly ? MEMORY_SYSTEM_PROMPT_READONLY : MEMORY_SYSTEM_PROMPT;
+}
