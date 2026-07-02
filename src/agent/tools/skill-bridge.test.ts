@@ -722,6 +722,109 @@ describe('collectSkillEntries — disk-scan regression (user + project skills)',
   });
 });
 
+// ---------------------------------------------------------------------------
+// Regression: #179 — project-origin skills must be evicted when cwd changes.
+//
+// Simulates a long-lived daemon serving project A, then project B: the project
+// scan in collectSkillEntries() must remove stale project-A entries before
+// registering project-B entries. User-origin and built-in skills must survive.
+// ---------------------------------------------------------------------------
+describe('collectSkillEntries — project skill eviction on cwd change (#179)', () => {
+  let tmpAfkHome: string;
+  let cwdA: string;
+  let cwdB: string;
+  let origCwd: string;
+
+  beforeEach(() => {
+    _resetRegistry();
+    vi.unstubAllEnvs();
+
+    tmpAfkHome = mkdtempSync('/tmp/skill-bridge-evict-afkhome-');
+    cwdA = mkdtempSync('/tmp/skill-bridge-evict-cwdA-');
+    cwdB = mkdtempSync('/tmp/skill-bridge-evict-cwdB-');
+    origCwd = process.cwd();
+
+    vi.stubEnv('AFK_HOME', tmpAfkHome);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    process.chdir(origCwd);
+    try { rmSync(tmpAfkHome, { recursive: true }); } catch { /* non-fatal */ }
+    try { rmSync(cwdA, { recursive: true }); } catch { /* non-fatal */ }
+    try { rmSync(cwdB, { recursive: true }); } catch { /* non-fatal */ }
+  });
+
+  function writeSkillIn(baseDir: string, name: string, description: string): void {
+    const dir = join(baseDir, '.afk', 'skills', name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: ${description}\n---\n# Body\n`,
+    );
+  }
+
+  function writeUserSkillIn(afkHome: string, name: string, description: string): void {
+    const dir = join(afkHome, 'skills', name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: ${description}\n---\n# Body\n`,
+    );
+  }
+
+  it('evicts project-A skills after switching to project B', () => {
+    writeSkillIn(cwdA, 'proj-a-skill', 'Skill only in project A');
+    writeSkillIn(cwdB, 'proj-b-skill', 'Skill only in project B');
+
+    // First call: cwd = project A
+    process.chdir(cwdA);
+    const entriesA = collectSkillEntries([]);
+    const namesA = entriesA.map((e) => e.name);
+    expect(namesA).toContain('proj-a-skill');
+    expect(namesA).not.toContain('proj-b-skill');
+
+    // Second call: cwd = project B — proj-a-skill must be gone
+    process.chdir(cwdB);
+    const entriesB = collectSkillEntries([]);
+    const namesB = entriesB.map((e) => e.name);
+    expect(namesB).toContain('proj-b-skill');
+    expect(namesB).not.toContain('proj-a-skill');
+  });
+
+  it('user-origin skills survive the cwd change', () => {
+    writeUserSkillIn(tmpAfkHome, 'global-user-skill', 'Always present');
+    writeSkillIn(cwdA, 'proj-a-only', 'Project A only');
+    writeSkillIn(cwdB, 'proj-b-only', 'Project B only');
+
+    // First call: cwd = project A
+    process.chdir(cwdA);
+    const entriesA = collectSkillEntries([]);
+    expect(entriesA.map((e) => e.name)).toContain('global-user-skill');
+
+    // Second call: cwd = project B — user skill must still be present
+    process.chdir(cwdB);
+    const entriesB = collectSkillEntries([]);
+    const namesB = entriesB.map((e) => e.name);
+    expect(namesB).toContain('global-user-skill');
+    expect(namesB).toContain('proj-b-only');
+    expect(namesB).not.toContain('proj-a-only');
+  });
+
+  it('evicted project entries are fully absent from the manifest', () => {
+    writeSkillIn(cwdA, 'stale-skill', 'Stale from project A');
+
+    process.chdir(cwdA);
+    const manifestA = buildSkillManifest([]);
+    expect(manifestA).toContain('stale-skill');
+
+    // Switch to project B (no skills)
+    process.chdir(cwdB);
+    const manifestB = buildSkillManifest([]);
+    expect(manifestB).not.toContain('stale-skill');
+  });
+});
+
 describe('scanAllPluginRoots', () => {
   it('returns well-formed local plugin configs', () => {
     _resetPluginScanCache();

@@ -295,6 +295,11 @@ export async function bootstrapSession(
     getApiKeyForModel,
     // Surface: REPL skill executor children inherit origin 'cli'.
     'cli',
+    // Resolved default-subagent model threaded into nested skill executors so
+    // skill→skill / skill→agent chains inherit the SAME policy as the top-level
+    // executors below — closing the leak where a nested subagent silently
+    // defaulted to Anthropic `sonnet` under an OpenAI-routed parent.
+    getDefaultSubagentModel(sessionModel),
   );
 
   // Pass `sessionModel` to `getDefaultSubagentModel` so OpenAI-routed

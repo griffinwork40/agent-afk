@@ -492,6 +492,12 @@ export function registerChatCommand(program: Command): void {
           getApiKeyForModel,
           // Surface: chat skill executor children inherit origin 'cli'.
           'cli',
+          // Resolved default-subagent model threaded into nested skill
+          // executors so skill→skill / skill→agent chains inherit the SAME
+          // policy as the top-level executors — closing the leak where a
+          // nested subagent silently defaulted to Anthropic `sonnet` under an
+          // OpenAI-routed parent.
+          getDefaultSubagentModel(options.model),
         );
 
         // Pass `options.model` so `getDefaultSubagentModel` can fall back

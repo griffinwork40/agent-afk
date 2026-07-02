@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.15.8] - 2026-07-02
+
+### Fixed
+- thread defaultSubagentModel through nested skill executors (#381) (35e922b)
+
+## [5.15.7] - 2026-07-02
+
+### Fixed
+- evict project-origin skills when cwd changes (#179) (#356) (89c358b)
+
 ## [5.15.6] - 2026-07-02
 
 ### Fixed

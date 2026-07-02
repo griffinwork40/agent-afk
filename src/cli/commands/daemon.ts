@@ -115,6 +115,11 @@ export function buildDaemonSessionFactory(
       getApiKeyForModel,
       // Surface: daemon skill executor children inherit origin 'daemon'.
       'daemon',
+      // Resolved default-subagent model threaded into nested skill executors
+      // so skill→skill / skill→agent chains inherit the SAME policy as the
+      // top-level executors — closing the leak where a nested subagent
+      // silently defaulted to Anthropic `sonnet` under an OpenAI-routed parent.
+      getDefaultSubagentModel(opts.model),
     );
 
     const subagentExecutor = new SubagentExecutor({

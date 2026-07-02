@@ -281,6 +281,12 @@ async function main() {
           getApiKeyForModel,
           // Surface: Telegram skill executor children inherit origin 'telegram'.
           'telegram',
+          // Resolved default-subagent model threaded into nested skill
+          // executors so skill→skill / skill→agent chains inherit the SAME
+          // policy as the top-level executors — closing the leak where a
+          // nested subagent silently defaulted to Anthropic `sonnet` under an
+          // OpenAI-routed parent.
+          getDefaultSubagentModel(sessionConfig.model),
         );
 
         // Pass `sessionConfig.model` to `getDefaultSubagentModel` for
