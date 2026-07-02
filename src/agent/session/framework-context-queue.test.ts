@@ -133,4 +133,16 @@ describe('AgentSession framework-context queue', () => {
     expect(capturedTurns[0]!.content).toBe(`${NUDGE}\n\nnext real message`);
     await session.close();
   });
+
+  it('drops queued context when reset starts a fresh conversation', async () => {
+    const session = new AgentSession(config);
+    session.queueFrameworkContext(NUDGE);
+
+    await session.reset();
+    await drain(session.sendMessageStream('fresh message'));
+
+    expect(capturedTurns).toHaveLength(1);
+    expect(capturedTurns[0]!.content).toBe('fresh message');
+    await session.close();
+  });
 });

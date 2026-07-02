@@ -304,6 +304,7 @@ export class AgentSession implements IAgentSession {
     this.subagentCompletedCount = 0;
     this.subagentRunningTokens = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
     this.subagentRunningCostUsd = 0;
+    this.pendingFrameworkContext = [];
 
     const iterable = this.providerQuery as AsyncIterable<ProviderEvent>;
     this.providerIterator = iterable[Symbol.asyncIterator]();
