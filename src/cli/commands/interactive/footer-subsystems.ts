@@ -4,6 +4,7 @@ import { createVerdictLedger } from './verdict-ledger.js';
 import { BackgroundStatusBar } from '../../background-status-bar.js';
 import { LoopStageBar } from './loop-stage.js';
 import { ShellPassthrough } from './shell-passthrough.js';
+import { BgResultNotifier } from './bg-result-notifier.js';
 import { setShellPassthrough } from '../../slash/commands/sh.js';
 import type { TurnState } from './repl-loop-shared.js';
 
@@ -19,6 +20,7 @@ export interface FooterSubsystems {
   loopStageBar: LoopStageBar;
   verdictLedger: ReturnType<typeof createVerdictLedger>;
   shellPassthrough: ShellPassthrough;
+  bgResultNotifier: BgResultNotifier;
 }
 
 /**
@@ -186,11 +188,19 @@ export function setupFooterSubsystems(
   // instead of the exit-cycle. Cleared in the orchestrator's finally.
   turnState.tryAbortShellForeground = () => shellPassthrough.abortActiveForeground();
 
+  // Background-subagent auto-delivery — buffers settled jobs' results for
+  // next-turn injection + one-line completion notices, mirroring the
+  // ShellPassthrough drain contract. Subscribed here (with the other
+  // registry-driven subsystems); unsubscribed by the orchestrator's finally
+  // via dispose() so a swapped/late-settling job can't touch a dead buffer.
+  const bgResultNotifier = new BgResultNotifier(ctx.backgroundRegistry);
+
   return {
     contextPane,
     bgStatusBar,
     loopStageBar,
     verdictLedger,
     shellPassthrough,
+    bgResultNotifier,
   };
 }
