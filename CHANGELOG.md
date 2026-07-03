@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.17.0] - 2026-07-03
+
+### Added
+- grounded progress banner — real activity instead of mechanism noise (#373) (f475744)
+
 ## [5.16.0] - 2026-07-03
 
 ### Added
