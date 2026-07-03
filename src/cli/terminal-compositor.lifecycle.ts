@@ -73,6 +73,10 @@ export interface LifecycleHost {
   // Read by disarm() to flush genuinely-unpainted committed-band rows to
   // scrollback before teardown. See committedBandPaintedRows on the class.
   readonly committedBandPaintedRows: number;
+  // F2: set by the SIGWINCH-immediate handler; cleared by the next debounced
+  // repaint once repositionCommittedBand re-establishes real geometry. See the
+  // field doc on the class (terminal-compositor.ts).
+  bandGeometryStale: boolean;
 }
 
 /**
@@ -300,6 +304,17 @@ export async function arm(self: LifecycleHost & KeyDispatchHost): Promise<void> 
     // for a redundant vacated-gap erase, never a stale paint). The old
     // on-screen band copy is cleared via pendingResizeErase above on EXPAND,
     // or scrolled by the terminal on SHRINK.
+    //
+    // F2 (fail-safe commit mode on stale geometry): mark the band's row
+    // geometry stale ALONGSIDE the logUpdate reset above — a commit that
+    // lands in the window between this immediate handler and the next
+    // debounced repaint (below) must not trust committedBandBottomRow as a
+    // floor for prevTopRow (see the field doc on bandGeometryStale,
+    // terminal-compositor.ts, and the prevTopRow site in
+    // terminal-compositor.committed-band-commit.ts). Cleared by
+    // repositionCommittedBand once it re-pins the band against real
+    // post-resize geometry.
+    self.bandGeometryStale = true;
   });
 
   // Intentionally NOT calling `updateAutocomplete()` here. The compositor's
