@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.15.13] - 2026-07-03
+
+### Fixed
+- deliver SubagentStop injectContext with the next user message, not as its own turn (#359) (c2d5078)
+
 ## [5.15.12] - 2026-07-03
 
 ### Added
