@@ -11,6 +11,13 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.19.2] - 2026-07-03
+
+### Fixed
+- bound forked-child tool-use loop to prevent parent hang (#394) (a645cab)
+- bound subagent fan-out in compose/DAG layers and runWave (#385) (52f8a7c)
+- fire SubagentStop for naturally-completing background subagents (#388) (d9832e7)
+
 ## [5.19.1] - 2026-07-03
 
 ### Fixed
