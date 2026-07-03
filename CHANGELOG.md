@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.19.3] - 2026-07-03
+
+### Fixed
+- expand ${PLUGIN_ROOT:-fallback} idiom in load-mode substitution (#401) (a13ff98)
+
 ## [5.19.2] - 2026-07-03
 
 ### Fixed
