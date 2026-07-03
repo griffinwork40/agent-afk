@@ -970,6 +970,151 @@ describe('SubagentHandle.teardown()', () => {
     expect(queued).toContain('post-teardown note');
   });
 
+  // ----------------------------------------------------------------------
+  // In-turn injectContext delivery (deferInjectContextToCaller).
+  //
+  // Exactly-once crux: when teardown() is asked to defer delivery to the
+  // caller, the produced injectContext is recorded on
+  // getLastStopInjectContext() for the caller to append to the tool_result,
+  // and the queue push is SUPPRESSED. Without the flag, delivery still rides
+  // the queue (the compose/DAG + cancel/fail-fast paths keep this behavior).
+  // ----------------------------------------------------------------------
+  it('teardown({ deferInjectContextToCaller: true }) records the note and does NOT queue (deliver-once)', async () => {
+    const registry = createHookRegistry();
+    registry.register('SubagentStop', () => ({
+      injectContext: 'defer: in-turn nudge',
+    }));
+
+    const parentMgr = new SubagentManager({ hookRegistry: registry });
+    const parentHandle = await parentMgr.forkSubagent({
+      parent: { sessionId: 'root-defer' },
+      config: { model: 'sonnet' },
+      idPrefix: 'parent',
+    });
+    const parentSession = shared.sessions[shared.sessions.length - 1]!;
+
+    const childMgr = new SubagentManager({ hookRegistry: registry });
+    const childHandle = await childMgr.forkSubagent({
+      parent: {
+        sessionId: parentHandle.session.sessionId,
+        getInputStreamRef: parentHandle.session.getInputStreamRef.bind(parentHandle.session),
+      },
+      config: { model: 'sonnet' },
+      idPrefix: 'child',
+    });
+
+    await childHandle.run('audit');
+    await childHandle.teardown({ deferInjectContextToCaller: true });
+
+    // Recorded for the caller to deliver in-turn…
+    expect(childHandle.getLastStopInjectContext()).toBe('defer: in-turn nudge');
+    // …and NEITHER queue channel fired (suppressed — deliver-once).
+    expect(parentSession.getMockQueuedFrameworkContext()).toEqual([]);
+    expect(parentSession.getMockInputStreamMessages()).toEqual([]);
+  });
+
+  it('teardown() WITHOUT the defer flag still queues and leaves getLastStopInjectContext undefined', async () => {
+    const registry = createHookRegistry();
+    registry.register('SubagentStop', () => ({
+      injectContext: 'queue: default channel',
+    }));
+
+    const parentMgr = new SubagentManager({ hookRegistry: registry });
+    const parentHandle = await parentMgr.forkSubagent({
+      parent: { sessionId: 'root-default-queue' },
+      config: { model: 'sonnet' },
+      idPrefix: 'parent',
+    });
+    const parentSession = shared.sessions[shared.sessions.length - 1]!;
+
+    const childMgr = new SubagentManager({ hookRegistry: registry });
+    const childHandle = await childMgr.forkSubagent({
+      parent: {
+        sessionId: parentHandle.session.sessionId,
+        getInputStreamRef: parentHandle.session.getInputStreamRef.bind(parentHandle.session),
+      },
+      config: { model: 'sonnet' },
+      idPrefix: 'child',
+    });
+
+    await childHandle.run('audit');
+    await childHandle.teardown();
+
+    // Default path: queued, and nothing recorded for the caller.
+    expect(parentSession.getMockQueuedFrameworkContext()).toContain('queue: default channel');
+    expect(childHandle.getLastStopInjectContext()).toBeUndefined();
+  });
+
+  it('deferInjectContextToCaller: parent abort suppresses BOTH channels (nothing recorded, nothing queued)', async () => {
+    // Abort precedence is checked before the defer branch — an aborting parent
+    // will unwind before it could consume the note, so neither the caller nor
+    // the queue receives it.
+    const registry = createHookRegistry();
+    registry.register('SubagentStop', () => ({
+      injectContext: 'defer: should be suppressed by abort',
+    }));
+
+    const parentAbortController = new AbortController();
+    const parentMgr = new SubagentManager({
+      hookRegistry: registry,
+      parentAbortSignal: parentAbortController.signal,
+    });
+    const parentHandle = await parentMgr.forkSubagent({
+      parent: { sessionId: 'root-defer-abort' },
+      config: { model: 'sonnet' },
+      idPrefix: 'parent',
+    });
+    const parentSession = shared.sessions[shared.sessions.length - 1]!;
+
+    const childMgr = new SubagentManager({ hookRegistry: registry });
+    const childHandle = await childMgr.forkSubagent({
+      parent: {
+        sessionId: parentHandle.session.sessionId,
+        getInputStreamRef: parentHandle.session.getInputStreamRef.bind(parentHandle.session),
+        abortSignal: parentHandle.session.abortSignal,
+      },
+      config: { model: 'sonnet' },
+      idPrefix: 'child',
+    });
+
+    await childHandle.run('audit');
+    parentAbortController.abort('parent-abort');
+    await childHandle.teardown({ deferInjectContextToCaller: true });
+
+    expect(childHandle.getLastStopInjectContext()).toBeUndefined();
+    expect(parentSession.getMockQueuedFrameworkContext()).toEqual([]);
+    expect(parentSession.getMockInputStreamMessages()).toEqual([]);
+  });
+
+  it('deferInjectContextToCaller with no injectContext produced: getter stays undefined, no queue', async () => {
+    const registry = createHookRegistry();
+    registry.register('SubagentStop', () => ({})); // no injectContext
+
+    const parentMgr = new SubagentManager({ hookRegistry: registry });
+    const parentHandle = await parentMgr.forkSubagent({
+      parent: { sessionId: 'root-defer-none' },
+      config: { model: 'sonnet' },
+      idPrefix: 'parent',
+    });
+    const parentSession = shared.sessions[shared.sessions.length - 1]!;
+
+    const childMgr = new SubagentManager({ hookRegistry: registry });
+    const childHandle = await childMgr.forkSubagent({
+      parent: {
+        sessionId: parentHandle.session.sessionId,
+        getInputStreamRef: parentHandle.session.getInputStreamRef.bind(parentHandle.session),
+      },
+      config: { model: 'sonnet' },
+      idPrefix: 'child',
+    });
+
+    await childHandle.run('audit');
+    await childHandle.teardown({ deferInjectContextToCaller: true });
+
+    expect(childHandle.getLastStopInjectContext()).toBeUndefined();
+    expect(parentSession.getMockQueuedFrameworkContext()).toEqual([]);
+  });
+
   it('teardown() closes the underlying session', async () => {
     const registry = createHookRegistry();
     const mgr = new SubagentManager({ hookRegistry: registry });

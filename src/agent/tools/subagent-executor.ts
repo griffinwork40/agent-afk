@@ -827,6 +827,23 @@ export class SubagentExecutor implements SubagentControl {
     });
     this.promotionTriggers.set(handle.id, { fire: firePromotion, ready: jobReady });
 
+    // In-turn SubagentStop delivery.
+    //
+    // Invariant (delivery order — externally governed by the SDK tool-use
+    // protocol): SubagentStop fires from `handle.teardown()` in the `finally`
+    // below, which runs BEFORE this async execute() resolves and its
+    // tool_result is assembled/sent. So a foreground `agent` fork can carry the
+    // stop hook's `injectContext` (e.g. the shadow-verify nudge) in-turn — as
+    // part of the SAME tool_result the parent sees — instead of via the
+    // deferred queue channel. We therefore hoist the completion ToolResult into
+    // `toolResult` (rather than returning inside the try) and, after teardown
+    // records the note, append it to `toolResult.content`. Exactly-once:
+    // `teardown({ deferInjectContextToCaller: true })` suppresses the queue
+    // push for this stop, so the note rides the tool_result OR the queue, never
+    // both. The promoted / error-rethrow / abort paths leave `toolResult`
+    // unset, so no append happens on them (queue/registry semantics preserved).
+    let toolResult: ToolResult | undefined;
+
     // Start the run but don't await it directly — race it against the
     // promotion signal. The same `runPromise` is handed to the registry on
     // promotion (it must NOT be re-run via runInBackground; see adoptRunning).
@@ -914,7 +931,10 @@ export class SubagentExecutor implements SubagentControl {
             ? JSON.stringify([...new Set(trace.toolCalls.map(tc => tc.name))])
             : undefined,
         });
-        return { content };
+        // Assign (don't return) so the finally can append the in-turn
+        // SubagentStop injectContext after teardown. See `toolResult` above.
+        toolResult = { content };
+        return toolResult;
       }
 
       const errorMessage =
@@ -953,10 +973,13 @@ export class SubagentExecutor implements SubagentControl {
         partialOutput: result.partialOutput,
         subagentId: handle.id,
       });
-      return {
+      // Assign (don't return) so the finally can append the in-turn
+      // SubagentStop injectContext after teardown. See `toolResult` above.
+      toolResult = {
         content: JSON.stringify(payload),
         isError: true,
       };
+      return toolResult;
     } catch (err) {
       // Defense in depth: an unexpected throw (e.g. timeout that surfaces
       // as a rejection rather than a `failed` status) should still emit
@@ -985,7 +1008,23 @@ export class SubagentExecutor implements SubagentControl {
       if (!promoted) {
         call.signal.removeEventListener('abort', abortListener);
         await childManager?.teardownAll();
-        await handle.teardown();
+        // Defer the SubagentStop injectContext to this caller so it rides the
+        // tool_result in-turn instead of the deferred queue. teardown() fires
+        // SubagentStop; with deferInjectContextToCaller the queue push is
+        // suppressed and the note (if any) is readable below.
+        await handle.teardown({ deferInjectContextToCaller: true });
+        // In-turn append: only when this foreground run produced a completion
+        // ToolResult (success or structured failure). The error-rethrow path
+        // leaves toolResult unset — nothing to append to, note is dropped for
+        // that stop by design (the throw is the parent's signal). Attribution:
+        // the note is appended to THIS subagent's own result, so a parent
+        // batching multiple `agent` calls sees each nudge next to its result.
+        // Optional-chain: real SubagentHandleImpl always defines this; the
+        // `?.()` tolerates narrow handle doubles (returns undefined = no note).
+        const injectContext = handle.getLastStopInjectContext?.();
+        if (toolResult !== undefined && injectContext !== undefined && injectContext.length > 0) {
+          toolResult.content = `${toolResult.content}\n\n${injectContext}`;
+        }
       }
     }
   }

@@ -34,6 +34,8 @@ function mockHandle(
     status: string;
     message: { role: string; content: string; timestamp: Date };
     error: Error;
+    /** In-turn SubagentStop note the executor appends to the tool_result. */
+    injectContext: string;
   }>,
 ): Partial<SubagentHandle> {
   return {
@@ -51,6 +53,9 @@ function mockHandle(
     } as SubagentResult),
     cancel: vi.fn().mockResolvedValue(undefined),
     teardown: vi.fn().mockResolvedValue(undefined),
+    // Defaults to undefined (no note) so existing tests see unchanged content.
+    // The in-turn-delivery suite overrides this to assert the append.
+    getLastStopInjectContext: vi.fn().mockReturnValue(overrides?.injectContext),
   };
 }
 
@@ -1788,6 +1793,126 @@ describe('SubagentExecutor', () => {
       expect(exec.hasPromotableForeground()).toBe(false);
       expect(await exec.promoteActiveForeground()).toEqual([]);
       expect(handle.teardown).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // In-turn SubagentStop injectContext delivery.
+  //
+  // A foreground `agent` fork whose SubagentStop returns injectContext (e.g.
+  // the shadow-verify nudge) must deliver that note in the SAME turn — appended
+  // to the returned tool_result — and NOT via the parent's deferred input-stream
+  // queue. The executor coordinates this by calling
+  // `teardown({ deferInjectContextToCaller: true })` (which suppresses the queue
+  // push and records the note) and then appending `getLastStopInjectContext()`
+  // to the completion ToolResult in its finally.
+  // -------------------------------------------------------------------------
+  describe('in-turn SubagentStop injectContext delivery', () => {
+    it('appends the injectContext to the returned tool_result (success path)', async () => {
+      const nudge = '[framework-generated context: shadow-verify nudge]';
+      const handle = mockHandle({
+        message: { role: 'assistant', content: 'subagent findings', timestamp: new Date() },
+        injectContext: nudge,
+      });
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      const result = await executor.execute(makeCall());
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toBe(`subagent findings\n\n${nudge}`);
+    });
+
+    it('calls teardown with deferInjectContextToCaller: true (suppresses queue push)', async () => {
+      const handle = mockHandle({ injectContext: 'note' });
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      await executor.execute(makeCall());
+
+      // Deliver-once: the executor must ask the handle to DEFER queue delivery
+      // to the caller, so the note rides the tool_result exclusively.
+      expect(handle.teardown).toHaveBeenCalledWith({ deferInjectContextToCaller: true });
+    });
+
+    it('does NOT push to the parent input-stream / queue when delivering in-turn (deliver-once)', async () => {
+      // Full deliver-once assertion at the executor seam: with a real-shaped
+      // parent input-stream ref, neither channel is touched — the executor
+      // reads the note off the handle (deferred) instead.
+      const nudge = 'inline nudge body';
+      const queueSpy = vi.fn();
+      const pushSpy = vi.fn();
+      const handle = mockHandle({
+        message: { role: 'assistant', content: 'body', timestamp: new Date() },
+        injectContext: nudge,
+      });
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      const exec = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: {
+          sessionId: 'parent',
+          getInputStreamRef: () => ({ pushUserMessage: pushSpy, queueFrameworkContext: queueSpy }),
+          abortSignal: new AbortController().signal,
+        } as any,
+        defaultConfig: mockConfig,
+        depth: 0,
+      });
+
+      const result = await exec.execute(makeCall());
+
+      expect(result.content).toBe(`body\n\n${nudge}`);
+      // The mock handle does not fire the real SubagentStop → queue path, but
+      // the executor must never itself push to either channel for this path.
+      expect(queueSpy).not.toHaveBeenCalled();
+      expect(pushSpy).not.toHaveBeenCalled();
+    });
+
+    it('leaves content unchanged when no injectContext is produced (no stray separators)', async () => {
+      const handle = mockHandle({
+        message: { role: 'assistant', content: 'plain body', timestamp: new Date() },
+        // no injectContext → getLastStopInjectContext returns undefined
+      });
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      const result = await executor.execute(makeCall());
+
+      expect(result.content).toBe('plain body');
+      expect(result.content).not.toContain('\n\n');
+    });
+
+    it('does not append when getLastStopInjectContext returns empty string', async () => {
+      const handle = mockHandle({
+        message: { role: 'assistant', content: 'body', timestamp: new Date() },
+        injectContext: '',
+      });
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      const result = await executor.execute(makeCall());
+
+      expect(result.content).toBe('body');
+    });
+
+    it('appends the injectContext to the structured failure payload (failure path)', async () => {
+      const nudge = 'verify: this failure';
+      const handle = mockHandle({ status: 'failed', injectContext: nudge });
+      (handle as any).id = 'child-fail-inject';
+      (handle.runToResult as any).mockResolvedValue({
+        id: 'child-fail-inject',
+        status: 'failed',
+        error: new Error('kaboom'),
+        message: undefined,
+      });
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      const result = await executor.execute(makeCall());
+
+      expect(result.isError).toBe(true);
+      // The JSON payload is followed by the appended nudge, separated by \n\n.
+      // The JSON prefix must still parse on its own.
+      const [jsonPart, ...rest] = result.content.split('\n\n');
+      expect(rest.join('\n\n')).toBe(nudge);
+      const payload = JSON.parse(jsonPart!);
+      expect(payload.status).toBe('failed');
+      expect(payload.error).toBe('kaboom');
     });
   });
 });

@@ -54,8 +54,25 @@ export interface SubagentHandle<T = unknown> {
    * explicit "work is done, tear down quietly" lifecycle endpoint used after
    * a successful `run()` / `runToResult()`. Idempotent; composes with
    * `cancel()` via the shared `stopDispatched` guard.
+   *
+   * @param options.deferInjectContextToCaller — when true, a non-empty
+   *   `SubagentStop.injectContext` produced by this teardown is NOT pushed to
+   *   the parent's input-stream/queue channel. Instead it is recorded and made
+   *   readable via {@link getLastStopInjectContext} so the caller can deliver
+   *   it in-turn (e.g. appended to the foreground `agent`/`skill` tool_result).
+   *   The abort-precedence guard still applies: when the parent is aborting,
+   *   nothing is recorded (the parent will unwind before it could consume it).
+   *   Delivery is exactly-once — deferring here suppresses the queue push.
    */
-  teardown(): Promise<void>;
+  teardown(options?: { deferInjectContextToCaller?: boolean }): Promise<void>;
+  /**
+   * The `SubagentStop.injectContext` captured by the most recent teardown that
+   * was invoked with `deferInjectContextToCaller: true`. `undefined` when no
+   * context was produced, when delivery went through the queue channel, or
+   * when suppressed by the abort-precedence guard. Read once after `teardown`
+   * resolves; the caller owns delivery of the returned string.
+   */
+  getLastStopInjectContext(): string | undefined;
 }
 
 /**
@@ -81,6 +98,16 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
   private latestTerminalStatus: SubagentStatus | undefined;
   /** Guard so teardown-side SubagentStop fires exactly once per handle. */
   private stopDispatched = false;
+  /**
+   * The `SubagentStop.injectContext` captured for in-turn delivery by the
+   * caller — set only when {@link dispatchStopAndRelease} ran with
+   * `deferInjectContextToCaller: true` and the hook produced a non-empty
+   * context that was NOT suppressed by the abort-precedence guard. When set,
+   * the queue push is skipped, so this and the queue are mutually exclusive
+   * (exactly-once delivery). Read by the caller via
+   * {@link getLastStopInjectContext} after `teardown()` resolves.
+   */
+  private lastStopInjectContext: string | undefined;
   /** Optional sink for streaming progress events. Never mutated after construction. */
   private readonly progressSink: SubagentProgressSink | undefined;
   /** Optional parent session ID for context injection tracing. */
@@ -400,7 +427,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     }
   }
 
-  async teardown(): Promise<void> {
+  async teardown(options?: { deferInjectContextToCaller?: boolean }): Promise<void> {
     // Idempotent — once the stop hook has fired (via either path), teardown
     // is a no-op. Intentional: `handle.status` stays truthful for succeeded
     // runs; no abort-graph notification, no currentStatus mutation.
@@ -421,8 +448,12 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     try {
       await this.session.close();
     } finally {
-      await this.dispatchStopAndRelease(reportedStatus);
+      await this.dispatchStopAndRelease(reportedStatus, options);
     }
+  }
+
+  getLastStopInjectContext(): string | undefined {
+    return this.lastStopInjectContext;
   }
 
   /**
@@ -430,8 +461,16 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
    * map. Shared by `cancel()` and `teardown()` — the only difference between
    * those is pre-work (abort-graph notification, currentStatus mutation).
    * Guarded by `stopDispatched` so concurrent paths fire the hook exactly once.
+   *
+   * @param options.deferInjectContextToCaller — see {@link teardown}. When
+   *   true, a produced (non-suppressed) `injectContext` is recorded on
+   *   {@link lastStopInjectContext} for the caller to deliver in-turn INSTEAD
+   *   of pushing it to the parent's input-stream/queue channel.
    */
-  private async dispatchStopAndRelease(reportedStatus: SubagentStatus): Promise<void> {
+  private async dispatchStopAndRelease(
+    reportedStatus: SubagentStatus,
+    options?: { deferInjectContextToCaller?: boolean },
+  ): Promise<void> {
     if (this.stopDispatched) {
       // The other path already fired the hook. onTerminal() is idempotent on
       // the manager's active-map delete, so calling it again is safe — but we
@@ -463,23 +502,40 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     // subagent answer has already returned through the `agent` tool result;
     // this side-channel carries only supplemental hook context for the parent.
     //
-    // Delivery MUST ride along with the parent's next real user message
-    // (queueFrameworkContext), never as a standalone input-stream message:
-    // the provider consumes exactly one input-stream message per turn, so a
-    // pushed message that lands after the parent's turn ends displaces the
-    // user's next real message by one queue position — every later send is
-    // then answered by the message before it, and the injected text never
-    // appears in the ledger. `pushUserMessage` remains only as a fallback for
-    // narrow parent refs that predate the queue channel. Abort precedence: if
-    // the parent's abortSignal was provided AND is set, skip injection — the
-    // parent's query loop will unwind before it can consume the message.
+    // Delivery MUST reach the parent through EXACTLY ONE channel and MUST be
+    // gated by abort precedence — a single ordered decision, checked here in
+    // strict order so the two channels can never both fire and never both drop:
+    //
+    //   1. No injectContext produced        → nothing to deliver.
+    //   2. Parent is aborting                → suppress (both channels). The
+    //        parent's query loop unwinds before it could consume the note;
+    //        queuing OR recording it would be a dead letter. Matches the
+    //        abort-graph.ts "abort-signal check is unconditional" invariant.
+    //   3. deferInjectContextToCaller = true → record on lastStopInjectContext
+    //        for the CALLER to deliver in-turn (foreground agent/skill append
+    //        it to the returned tool_result). SKIP the queue push — this is the
+    //        suppression half of exactly-once. No parentInputStreamRef needed:
+    //        the caller owns delivery.
+    //   4. Otherwise (queue channel)         → ride along with the parent's
+    //        next real user message (queueFrameworkContext). Never a standalone
+    //        input-stream message: the provider consumes exactly one
+    //        input-stream message per turn, so a pushed message that lands after
+    //        the parent's turn ends displaces the user's next real message by
+    //        one queue position — every later send is then answered by the
+    //        message before it, and the injected text never appears in the
+    //        ledger. `pushUserMessage` remains only as a fallback for narrow
+    //        parent refs that predate the queue channel.
     // Injection failures are logged, not propagated.
-    if (decision.injectContext && this.parentInputStreamRef) {
+    if (decision.injectContext) {
       if (this.parentAbortSignal?.aborted) {
         debugLog(
           `Skipping SubagentStop injectContext for ${this.id}: parent is aborted`,
         );
-      } else {
+      } else if (options?.deferInjectContextToCaller) {
+        // In-turn delivery: hand the note to the caller (tool_result append)
+        // and deliberately do NOT push to the queue — exactly-once.
+        this.lastStopInjectContext = decision.injectContext;
+      } else if (this.parentInputStreamRef) {
         try {
           const ref = this.parentInputStreamRef;
           if (ref.queueFrameworkContext) {

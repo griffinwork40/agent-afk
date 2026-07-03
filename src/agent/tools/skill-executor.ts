@@ -746,6 +746,14 @@ export class SkillExecutor {
     // every closure-event-dependent improve detector.
     // Mirrors the pattern in subagent-executor.ts:321,533.
     let handle: Awaited<ReturnType<typeof manager.forkSubagent>> | undefined;
+    // In-turn SubagentStop delivery (mirrors subagent-executor.ts foreground
+    // path). SubagentStop fires from `handle.teardown()` in the finally, which
+    // runs before this execute() resolves — so the stop hook's injectContext
+    // (e.g. the shadow-verify nudge) can ride THIS skill's tool_result in-turn
+    // instead of the deferred queue. Hoist the completion ToolResult into
+    // `toolResult` and append the note after teardown. Exactly-once:
+    // `deferInjectContextToCaller` suppresses the queue push for this stop.
+    let toolResult: ToolResult | undefined;
     try {
       // `parentId: call.id` anchors the synthesized `Agent(<label>)` entry as
       // a child of THIS skill's tool-lane entry rather than at root. Mirrors
@@ -774,8 +782,11 @@ export class SkillExecutor {
           : `Run the ${skill.name} skill now, following the instructions in your system prompt.`;
       const result = await handle.runToResult(userMessage);
 
+      // Assign (don't return) so the finally can append the in-turn
+      // SubagentStop injectContext after teardown. See `toolResult` above.
       if (result.status === 'succeeded' && result.message) {
-        return { content: result.message.content };
+        toolResult = { content: result.message.content };
+        return toolResult;
       }
 
       // When the subagent was cancelled mid-flight but produced text before
@@ -787,11 +798,13 @@ export class SkillExecutor {
         result.partialOutput.length > 0
       ) {
         const marker = '[skill cancelled mid-flight — partial output preserved below]';
-        return { content: `${marker}\n\n${result.partialOutput}` };
+        toolResult = { content: `${marker}\n\n${result.partialOutput}` };
+        return toolResult;
       }
 
       const errorMessage = result.error?.message ?? 'Forked skill failed with no output';
-      return { content: errorMessage, isError: true };
+      toolResult = { content: errorMessage, isError: true };
+      return toolResult;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return { content: `Forked skill execution error: ${message}`, isError: true };
@@ -800,7 +813,16 @@ export class SkillExecutor {
       // grandchildren) → outer manager (any siblings that never ran).
       // Guard against `forkSubagent` having thrown before assignment —
       // see subagent.ts:316-320 for the construction-failure throw path.
-      if (handle) await handle.teardown().catch(debugLog);
+      // deferInjectContextToCaller: the stop-hook note rides the tool_result
+      // in-turn (appended below) and the queue push is suppressed.
+      if (handle) await handle.teardown({ deferInjectContextToCaller: true }).catch(debugLog);
+      // In-turn append: only when this run produced a completion ToolResult.
+      // The catch path leaves toolResult unset — nothing to append to, note
+      // dropped for that stop by design (the error string is the signal).
+      const injectContext = handle?.getLastStopInjectContext?.();
+      if (toolResult !== undefined && injectContext !== undefined && injectContext.length > 0) {
+        toolResult.content = `${toolResult.content}\n\n${injectContext}`;
+      }
       await childManager?.teardownAll();
       await manager.teardownAll();
     }
@@ -1053,6 +1075,10 @@ export class SkillExecutor {
     // event + `session_sealed`. `manager.teardownAll()` misses completed
     // handles per subagent.ts:412-414.
     let handle: Awaited<ReturnType<typeof manager.forkSubagent>> | undefined;
+    // In-turn SubagentStop delivery — same pattern as executeForkedRegistrySkill
+    // and subagent-executor.ts foreground path. See those for the ordering
+    // invariant and exactly-once rationale.
+    let toolResult: ToolResult | undefined;
     try {
       // `parentId: call.id` anchors the synthesized `Agent(<label>)` entry as
       // a child of THIS skill's tool-lane entry rather than at root. Mirrors
@@ -1079,8 +1105,11 @@ export class SkillExecutor {
           : `Run the ${skillName} skill now, following the instructions in your system prompt.`;
       const result = await handle.runToResult(userMessage);
 
+      // Assign (don't return) so the finally can append the in-turn
+      // SubagentStop injectContext after teardown. See `toolResult` above.
       if (result.status === 'succeeded' && result.message) {
-        return { content: result.message.content };
+        toolResult = { content: result.message.content };
+        return toolResult;
       }
 
       // When the subagent was cancelled mid-flight but produced text before
@@ -1092,16 +1121,24 @@ export class SkillExecutor {
         result.partialOutput.length > 0
       ) {
         const marker = '[skill cancelled mid-flight — partial output preserved below]';
-        return { content: `${marker}\n\n${result.partialOutput}` };
+        toolResult = { content: `${marker}\n\n${result.partialOutput}` };
+        return toolResult;
       }
 
       const errorMessage = result.error?.message ?? 'Plugin skill failed with no output';
-      return { content: errorMessage, isError: true };
+      toolResult = { content: errorMessage, isError: true };
+      return toolResult;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return { content: `Plugin skill execution error: ${message}`, isError: true };
     } finally {
-      if (handle) await handle.teardown().catch(debugLog);
+      // deferInjectContextToCaller: the stop-hook note rides the tool_result
+      // in-turn (appended below) and the queue push is suppressed.
+      if (handle) await handle.teardown({ deferInjectContextToCaller: true }).catch(debugLog);
+      const injectContext = handle?.getLastStopInjectContext?.();
+      if (toolResult !== undefined && injectContext !== undefined && injectContext.length > 0) {
+        toolResult.content = `${toolResult.content}\n\n${injectContext}`;
+      }
       await childManager?.teardownAll();
       await manager.teardownAll();
     }
