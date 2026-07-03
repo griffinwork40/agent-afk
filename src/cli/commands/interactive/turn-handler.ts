@@ -350,6 +350,21 @@ export async function runTurn(
         // already initiated in the handler, the stream's async iterator
         // terminates naturally (no throw), and the post-stream block detects
         // softStopRequested to render the notice and suppress recordTurn.
+        //
+        // History consistency: breaking mid-tool-use (e.g. after
+        // cancelActiveForeground() resolves a stuck subagent's tool_result)
+        // can leave the provider's running history terminating in an assistant
+        // `tool_use` whose `tool_result` was never appended — anthropic-direct
+        // pushes the assistant turn (loop.ts) BEFORE yielding tool output and
+        // appends the tool_result only after. That transient orphan is healed
+        // before the NEXT request: repairOrphanToolUses (anthropic-direct
+        // query.ts) runs before every new-user-turn append and synthesizes
+        // is_error tool_result placeholders, and the abort-path rollback in
+        // loop.ts covers the throw case — so the following turn never 400s with
+        // "tool_use ids ... without tool_result blocks". The OpenAI-compatible
+        // provider appends assistant{tool_calls} + results together (one
+        // synchronous block after the yield loop), so it has no orphan window.
+        // See PR #400 review + query/repair-orphan-tool-uses.ts.
         if (softStopRequested || pauseInterruptRequested) {
           break;
         }
