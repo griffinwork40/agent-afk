@@ -226,6 +226,38 @@ describe('SubagentHandle streaming', () => {
       await expect(handle.run('p')).rejects.toThrow(/produced no terminal message/);
     });
 
+    it('returns a capped partial result (not a throw) when the tool-use cap fires with no message', async () => {
+      // Anti-hang contract: a forked child that hits its tool-use-iteration cap
+      // ends the turn with a `tool_use_loop_capped` done and no assistant
+      // message. A pure tool-only runaway also streams no text, so the child
+      // must NOT be reported as a failed subagent — it returns a capped partial
+      // result (status 'succeeded') carrying a cap marker. Regression guard for
+      // the #394 Codex P2 finding.
+      const events: OutputEvent[] = [
+        { type: 'done', metadata: { stopReason: 'tool_use_loop_capped' } },
+      ];
+      const session = createDeterministicMockSession(events, {
+        role: 'assistant',
+        content: 'unused',
+        timestamp: new Date(),
+      });
+      const handle = new SubagentHandleImpl(
+        'subagent-capped-test',
+        session,
+        controller,
+        abortGraph,
+        undefined,
+        5000,
+        undefined,
+        vi.fn(),
+      );
+
+      const msg = await handle.run('p');
+      expect(msg.role).toBe('assistant');
+      expect(String(msg.content)).toMatch(/capped/i);
+      expect(handle.status).toBe('succeeded');
+    });
+
     it('throws error event even when partial streamed content exists', async () => {
       const streamError = new Error('upstream stream failure');
       const events: OutputEvent[] = [
