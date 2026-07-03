@@ -34,9 +34,10 @@ const execFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
 const VALID_SCOPES = ['interactive', 'diagnose', 'all'] as const;
 type Scope = (typeof VALID_SCOPES)[number];
 
+// 'stale-clean' is intentionally absent: the sweep engine preserves + warns
+// on stale-clean (commits ahead of base) rather than removing.
 const PRUNABLE_VERDICTS = new Set([
   'empty',
-  'stale-clean',
   'orphaned-dir',
   'orphaned-registration',
   'dead-owner',

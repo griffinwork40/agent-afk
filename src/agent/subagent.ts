@@ -34,6 +34,7 @@ import type { AbortOrigin, TraceWriter } from './trace/index.js';
 import type { Surface } from './awareness/types.js';
 import { appendRoutingDecision } from './routing-telemetry.js';
 import { getCurrentSink } from './_lib/skill-sink-channel.js';
+import { touchWorktreeOccupancy } from './worktree-occupancy.js';
 import { buildPhaseRestrictedProvider, type PhaseRole } from './tools/nesting.js';
 import { applyManagerApiKeyFallback } from './tools/child-credential.js';
 import { providerForModel, type BundledProviderName } from './providers/index.js';
@@ -540,6 +541,18 @@ export class SubagentManager {
         ? { provider: buildPhaseRestrictedProvider('read-only', options.config.model) }
         : {}),
     };
+
+    // Occupancy touch: subagents never write presence files (top-level-only
+    // by design — presence.ts), so the worktree sweep's live-session guard
+    // cannot see a fork occupying a worktree. Refresh the worktree's meta
+    // (pid + createdAt) instead, resetting the sweep's age clock and PID
+    // liveness. Fire-and-forget: the helper swallows all errors and no-ops
+    // for cwds outside `.afk-worktrees/`, so it can never delay or fail the
+    // fork. Single wiring point — agent/skill/compose/farm dispatches all
+    // converge here, whether cwd came per-call or via manager inheritance.
+    if (childConfig.cwd !== undefined) {
+      void touchWorktreeOccupancy(childConfig.cwd);
+    }
 
     let session: AgentSession;
     try {

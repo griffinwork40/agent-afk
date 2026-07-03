@@ -366,7 +366,9 @@ export const agentTool: AnthropicToolDef = {
           'worktree). When provided, the child\'s file/shell tools (bash, grep, ' +
           'glob, read_file, write_file, edit_file) anchor at this path instead. ' +
           'Use to dispatch a subagent into a pre-existing git worktree you ' +
-          'created with `bash: git worktree add <path>` so the subagent can ' +
+          'created with the `worktree` tool (action "create" — preferred over ' +
+          'raw `git worktree add`, which produces unmanaged ghost worktrees ' +
+          'the background sweep may reap) so the subagent can ' +
           'work in isolation from the parent. Must be absolute (no relative ' +
           'paths) and must not contain `..` segments. Existence is not checked ' +
           'at dispatch time — a non-existent path surfaces as an error on the ' +
@@ -588,6 +590,70 @@ export const cancelScheduleTool: AnthropicToolDef = {
       },
     },
     required: ['taskId'],
+  },
+};
+
+export const worktreeTool: AnthropicToolDef = {
+  name: 'worktree',
+  category: 'other',
+  concurrencySafe: false,
+  riskClass: 'caution',
+  description:
+    'Manage afk-managed git worktrees under `<repoRoot>/.afk-worktrees/`. This is the sanctioned ' +
+    'lifecycle for agent-created worktrees — prefer it over raw `git worktree` bash commands, because ' +
+    'it writes the `.afk-worktree-meta.json` the background sweep engine uses to know a worktree is ' +
+    'owned and alive. Worktrees created via bare `bash: git worktree add` have no meta and are ' +
+    'eventually reaped as ghosts (or leak forever if created outside `.afk-worktrees/`).\n\n' +
+    'Actions:\n' +
+    '- `create` — new worktree + branch under `.afk-worktrees/<name>` with proper meta. `base` picks ' +
+    'the start ref (default HEAD). Returns { path, branch, base }. Pass the returned path as `cwd` ' +
+    'when dispatching subagents into it.\n' +
+    '- `keep` — lock the worktree (`git worktree lock`) so the sweep engine NEVER removes it, ' +
+    'regardless of age or cleanliness. Use this to save a worktree holding work in progress that ' +
+    'must survive across sessions. Provide a `reason` naming why.\n' +
+    '- `release` — unlock a previously kept worktree, returning it to normal sweep lifecycle.\n' +
+    '- `list` — dry-run sweep report: every afk-managed worktree with its verdict ' +
+    '(active | empty | stale-clean | stale-dirty | locked | dead-owner | orphaned-*), owner, and age ' +
+    'in days. Verdicts empty/dead-owner/orphaned-* are removal candidates on the next sweep.\n' +
+    '- `remove` — remove a worktree checkout you no longer need (branch ref is always preserved). ' +
+    'Refuses dirty trees, locked trees, and trees with commits ahead of base unless `force: true`. ' +
+    'Never removes the main worktree or paths outside `.afk-worktrees/`.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      action: {
+        type: 'string',
+        enum: ['create', 'keep', 'release', 'list', 'remove'],
+        description: 'The lifecycle operation to perform.',
+      },
+      name: {
+        type: 'string',
+        description:
+          'create only: worktree slug (kebab-case; sanitized). Becomes `.afk-worktrees/<name>` and ' +
+          'branch `afk/<name>` (prefix configurable via AFK_WORKTREE_BRANCH_PREFIX).',
+      },
+      base: {
+        type: 'string',
+        description: 'create only: git ref to base the new branch on. Default: HEAD.',
+      },
+      path: {
+        type: 'string',
+        description:
+          'keep/release/remove: the worktree to operate on. Absolute path, or a bare slug resolved ' +
+          'against `.afk-worktrees/`.',
+      },
+      reason: {
+        type: 'string',
+        description: 'keep only: why this worktree must survive (stored as the git lock reason).',
+      },
+      force: {
+        type: 'boolean',
+        description:
+          'remove only: also remove when dirty or with commits ahead of base. Default false. ' +
+          'The branch ref is preserved either way.',
+      },
+    },
+    required: ['action'],
   },
 };
 
@@ -1091,6 +1157,7 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   listSchedulesTool,
   getScheduleHistoryTool,
   cancelScheduleTool,
+  worktreeTool,
   terminalFontSizeTool,
   configGetTool,
   configSetTool,
