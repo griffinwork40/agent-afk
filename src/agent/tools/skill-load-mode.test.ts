@@ -230,6 +230,41 @@ describe('context: load — plugin skills', () => {
     expect(result.content).not.toContain('${PLUGIN_ROOT}');
     expect(mockFork).not.toHaveBeenCalled();
   });
+
+  it('expands the ${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}} portability idiom to pluginPath when context: load', async () => {
+    // Regression: the previous /\$\{?PLUGIN_ROOT\}?/g regex matched only
+    // `${PLUGIN_ROOT` of the Claude-Code fallback idiom and left `:-${CLAUDE_
+    // PLUGIN_ROOT}}` dangling, producing a broken path. Skills using the
+    // portable `${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}` form (forge-gate-check,
+    // distill, forge-l2-eval, ceiling-test) failed their python3 invocations
+    // in load mode as a result.
+    const mockFork = spyNoFork();
+    const executor = makeExecutor();
+    const PLUGIN_PATH = '/home/user/.afk/plugins/my-plugin';
+    setPluginBodies(executor, [
+      [
+        'plugin-root-fallback',
+        {
+          body: 'python3 ${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/foo.py and "${PLUGIN_ROOT:-/tmp/x}/bin/bar"',
+          pluginPath: PLUGIN_PATH,
+          context: 'load',
+        },
+      ],
+    ]);
+
+    const result = await executor.execute(makeCall({ name: 'plugin-root-fallback' }));
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain(`python3 ${PLUGIN_PATH}/scripts/foo.py`);
+    expect(result.content).toContain(`"${PLUGIN_PATH}/bin/bar"`);
+    // The whole `${PLUGIN_ROOT:-...}` fallback (incl. the nested ${...})
+    // collapses to pluginPath — nothing of the placeholder or fallback survives.
+    expect(result.content).not.toContain('$PLUGIN_ROOT');
+    expect(result.content).not.toContain('${PLUGIN_ROOT');
+    expect(result.content).not.toContain('CLAUDE_PLUGIN_ROOT');
+    expect(result.content).not.toContain(':-');
+    expect(mockFork).not.toHaveBeenCalled();
+  });
 });
 
 describe('context: load — SKILL.md frontmatter parsing (end-to-end)', () => {

@@ -339,8 +339,15 @@ export class SkillExecutor {
       }
       // Default: in-context LOAD (2026-06 load-by-default flip). No readOnly —
       // loaded skills execute in the caller's context, not a restrictable child.
+      // Expand PLUGIN_ROOT so shell commands in the body resolve to the plugin
+      // dir. Handles `$PLUGIN_ROOT`, `${PLUGIN_ROOT}`, and the Claude-Code
+      // portability idiom `${PLUGIN_ROOT:-<default>}` (default may hold one
+      // nested `${...}`, e.g. `${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}`) — in AFK
+      // PLUGIN_ROOT is always known so the whole reference collapses to
+      // pluginPath. (Fork skills instead get PLUGIN_ROOT as a shell env var via
+      // executePluginSkill, so the shell expands the `:-` fallback natively.)
       const bodyWithRoot = pluginSkill.body.replace(
-        /\$\{?PLUGIN_ROOT\}?/g,
+        /\$\{PLUGIN_ROOT(?::-(?:[^{}]|\$\{[^{}]*\})*)?\}|\$PLUGIN_ROOT\b/g,
         () => pluginSkill.pluginPath,
       );
       return this.executeLoadedPluginSkill(
