@@ -188,6 +188,25 @@ export interface SubagentControl {
    * background-job cap was hit) are omitted from the returned array.
    */
   promoteActiveForeground(): Promise<PromotedSubagentInfo[]>;
+  /**
+   * True iff at least one foreground subagent dispatched by this executor is
+   * currently in flight. Unlike {@link hasPromotableForeground} this does NOT
+   * require a `BackgroundAgentRegistry` — cancellation is always available. The
+   * keyboard layer reads this to decide whether a soft-stop (ESC / first Ctrl+C)
+   * must cancel in-flight subagents to unblock a turn suspended on a subagent
+   * `await`.
+   */
+  hasActiveForeground(): boolean;
+  /**
+   * Cancel every in-flight foreground subagent dispatched by this executor.
+   * Each cancellation resolves the subagent's suspended `runToResult` (as a
+   * failed result carrying any streamed partial output), which lets the parent
+   * turn's tool-use loop unblock and observe the pending soft-stop so the turn
+   * ends cleanly instead of hanging for the subagent's entire lifetime (up to
+   * the 2h usage-limit cap). Returns the number of subagents cancelled; a no-op
+   * returning 0 when none are in flight.
+   */
+  cancelActiveForeground(): Promise<number>;
 }
 
 interface AgentInput {
@@ -454,8 +473,33 @@ export class SubagentExecutor implements SubagentControl {
     { fire: () => void; ready: Promise<PromotedSubagentInfo | null> }
   >();
 
+  // In-flight foreground handles keyed by `handle.id`. Tracked separately from
+  // promotionTriggers because cancellation must work with NO background
+  // registry wired: a soft-stop (ESC / Ctrl+C) cancels these to unblock a
+  // parent turn parked on a subagent `await`. Populated alongside the promotion
+  // trigger in execute()'s foreground branch and cleared in the same finally.
+  private readonly activeForegroundHandles = new Map<string, { cancel: () => Promise<void> }>();
+
   hasPromotableForeground(): boolean {
     return this.ctx.backgroundRegistry !== undefined && this.promotionTriggers.size > 0;
+  }
+
+  hasActiveForeground(): boolean {
+    return this.activeForegroundHandles.size > 0;
+  }
+
+  async cancelActiveForeground(): Promise<number> {
+    // Snapshot first: cancel() resolves the run, whose finally removes the entry
+    // from the map while we iterate. handle.cancel() is idempotent and aborts
+    // the child session; its runToResult settles (buildResultFromError with any
+    // partialOutput), the Promise.race in execute() picks the 'result' branch,
+    // and the parent receives a structured failure tool_result — unblocking the
+    // suspended turn. We do NOT delete entries here; the run's own finally does
+    // so idempotently.
+    const handles = [...this.activeForegroundHandles.values()];
+    if (handles.length === 0) return 0;
+    await Promise.all(handles.map((h) => h.cancel().catch(() => { /* best-effort */ })));
+    return handles.length;
   }
 
   async promoteActiveForeground(): Promise<PromotedSubagentInfo[]> {
@@ -826,6 +870,9 @@ export class SubagentExecutor implements SubagentControl {
       resolveJob = resolve;
     });
     this.promotionTriggers.set(handle.id, { fire: firePromotion, ready: jobReady });
+    // Registry-independent cancel handle (soft-stop path). Removed in the same
+    // finally as the promotion trigger below.
+    this.activeForegroundHandles.set(handle.id, handle);
 
     // In-turn SubagentStop delivery.
     //
@@ -1000,6 +1047,7 @@ export class SubagentExecutor implements SubagentControl {
       throw err;
     } finally {
       this.promotionTriggers.delete(handle.id);
+      this.activeForegroundHandles.delete(handle.id);
       // Safety net: if the run won the race (or threw) before a fired
       // promotion could be honored, resolve the trigger so a concurrent
       // promoteActiveForeground() await never hangs. Idempotent — a no-op

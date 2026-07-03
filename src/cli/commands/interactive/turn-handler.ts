@@ -254,6 +254,24 @@ export async function runTurn(
             console.error('  ' + palette.error('soft-stop session.interrupt() failed:'), err);
           }
         });
+        // A turn suspended on a subagent `await` (the parent tool-use loop is
+        // parked awaiting the subagent tool_result) cannot be halted by
+        // session.interrupt() alone — the parent stream is not what's blocked.
+        // Cancel any in-flight foreground subagent so its runToResult resolves,
+        // the tool_result flows back, and the for-await loop wakes to observe
+        // softStopRequested and stop cleanly — returning the user to the prompt
+        // with context intact. Without this, ESC / Ctrl+C are dead for the
+        // entire subagent run (up to the 2h usage-limit cap): the "stuck
+        // mid-subagent, have to fork the session" bug. Fire-and-forget; the
+        // cancel resolves the await that unblocks the loop.
+        const ctrl = h.subagentControl;
+        if (ctrl?.hasActiveForeground()) {
+          void ctrl.cancelActiveForeground().catch((err) => {
+            if (isDebugEnabled()) {
+              console.error('  ' + palette.error('soft-stop cancelActiveForeground() failed:'), err);
+            }
+          });
+        }
       });
     }
 
