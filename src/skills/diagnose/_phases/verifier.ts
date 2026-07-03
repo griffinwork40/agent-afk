@@ -14,6 +14,7 @@ import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import { env } from '../../../config/env.js';
 import { shouldAutoVerify } from '../../_lib/confidence-gate.js';
+import { cwdIsMissing, isSpawnEnoent } from '../../../utils/spawn-cwd-error.js';
 import type {
   Verification,
   Hypothesis,
@@ -223,6 +224,21 @@ export async function runReproducerBaseline(
       killed?: boolean;
       signal?: string;
     };
+    // Spawn ENOENT masquerade: a dead `cwd` (deleted worktree) rejects with
+    // code:'ENOENT' (string) — which would otherwise coerce below into
+    // { skipped:false, exitCode:null, stdout:'', stderr:'' } and masquerade
+    // as "reproducer ran and produced nothing". Surface it as a typed skip
+    // instead (statSync runs on the error path only — no TOCTOU).
+    if (isSpawnEnoent(err) && cwdIsMissing(cwd)) {
+      return {
+        skipped: true,
+        reason: `cwd does not exist: ${cwd} (deleted worktree?)`,
+        exitCode: null,
+        stdout: '',
+        stderr: '',
+        timedOut: false,
+      };
+    }
     const timedOut = e.killed === true || e.signal === 'SIGTERM';
     const exitCode = typeof e.code === 'number' ? e.code : null;
     return {

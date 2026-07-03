@@ -23,6 +23,7 @@ import { collectSkillEntries, discoverPluginSkillBodies, type PluginSkillBody } 
 import type { SdkPluginConfig } from '../types/sdk-types.js';
 import {
   DEFAULT_MAX_NESTING_DEPTH,
+  DEFAULT_FORK_SKILLS,
   DEFAULT_READ_ONLY_SKILLS,
   RECON_ALLOWED_TOOLS,
   buildReadOnlyReconProvider,
@@ -318,7 +319,22 @@ export class SkillExecutor {
     //    `context: fork`. See docs/skill-load-mode.md.)
     const pluginSkill = this.getPluginSkillBody(parsed.name);
     if (pluginSkill) {
-      if (pluginSkill.context === 'fork') {
+      // Fork enforcement is name-keyed as well as frontmatter-keyed: first-
+      // registrant-wins registration lets a user/project copy shadow a
+      // bundled skill, and a stale copy missing `context: fork` would
+      // silently degrade an isolation-critical skill to load mode (no
+      // structured output envelope, no read-only child enforcement). A name
+      // in DEFAULT_FORK_SKILLS forces the fork path for ANY copy; the warn
+      // below makes the override observable so a deliberate local load-mode
+      // edit is never silently ignored.
+      const forcedFork =
+        pluginSkill.context !== 'fork' && DEFAULT_FORK_SKILLS.has(parsed.name);
+      if (forcedFork) {
+        console.warn(
+          `[skill] "${parsed.name}" (${pluginSkill.pluginPath}) lacks \`context: fork\` in its frontmatter but is fork-enforced by name (DEFAULT_FORK_SKILLS) — running in fork mode. Add \`context: fork\` to its SKILL.md to silence this warning.`,
+        );
+      }
+      if (pluginSkill.context === 'fork' || forcedFork) {
         // Read-only enforcement: a plugin skill is read-only when its SKILL.md
         // frontmatter declares `read-only: true` (surfaced as `pluginSkill.readOnly`)
         // OR its name is in DEFAULT_READ_ONLY_SKILLS (name-keyed so any copy of

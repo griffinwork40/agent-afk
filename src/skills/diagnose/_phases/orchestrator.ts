@@ -30,6 +30,7 @@ import { researchAgent } from '../../_agents/research-agent.js';
 import { gitInvestigator } from '../../_agents/git-investigator.js';
 import { vendoredToolAllowlist } from '../../_agents/to-definition.js';
 import { classifyBashCommand } from '../../../agent/tools/readonly-bash.js';
+import { describeSpawnCwdError } from '../../../utils/spawn-cwd-error.js';
 import type {
   DiagnosisResult,
   Hypothesis,
@@ -263,12 +264,15 @@ async function testHypothesisInWorktree(
 
     return verificationResult.output;
   } catch (error) {
+    // Spawn ENOENT masquerade: `git worktree add` with a dead `cwd: repoPath`
+    // rejects as `spawn git ENOENT` — naming git, not the missing repo dir.
+    // Translate post-failure (statSync on error path only — no TOCTOU).
     return {
       hypothesis_id: hypothesis.id,
       predicted_pass: false,
       regressions: [],
       confidence: 0,
-      verification_log: `Error during verification: ${error instanceof Error ? error.message : String(error)}`,
+      verification_log: `Error during verification: ${describeSpawnCwdError(error, repoPath)}`,
     };
   } finally {
     // Tear down the verifier handle (fires SubagentStop with the real
