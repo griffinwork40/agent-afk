@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.15.12] - 2026-07-03
+
+### Added
+- auto-deliver background subagent results into the next turn (#372) (0c92c7c)
+
+### Fixed
+- close AFK-mode coverage gaps + clip afk-push rawBody fallback (#200) (#357) (ad5e64a)
+
 ## [5.15.11] - 2026-07-03
 
 ### Fixed
