@@ -257,6 +257,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
   ): Promise<Message> {
     let finalMessage: Message | undefined;
     let streamError: Error | undefined;
+    let stopReason: string | undefined;
 
     // Reset partial-content accumulator before each run. Surviving across the
     // throw boundary is the whole point — the local `streamedContent` of the
@@ -311,6 +312,12 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
         streamError = event.error;
         break;
       } else if (event.type === 'done') {
+        // Capture the turn's stop reason so the post-loop fallback can tell a
+        // tool-use-cap termination (which yields a `done` with no assistant
+        // message) apart from a genuinely empty stream.
+        if (typeof event.metadata?.stopReason === 'string') {
+          stopReason = event.metadata.stopReason;
+        }
         if (typeof event.metadata?.usage === 'object' && event.metadata.usage !== null) {
           const u = event.metadata.usage as Record<string, unknown>;
           this.currentTrace.usage = {
@@ -328,6 +335,23 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     if (finalMessage) return finalMessage;
     if (this.lastStreamedContent.length > 0) {
       return { role: 'assistant', content: this.lastStreamedContent, timestamp: new Date() };
+    }
+    // Anti-hang contract (see SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS in
+    // subagent.ts): a forked child that exhausts its tool-use-iteration cap ends
+    // the turn with a `tool_use_loop_capped` done and NO assistant message. A
+    // pure tool-only runaway also streams no text, so both fallbacks above miss.
+    // Surface the cap as a terminal "capped" message instead of throwing, so
+    // `runToResult` reports a capped *partial* result (status 'succeeded')
+    // rather than an opaque subagent failure — the behavior the cap default
+    // already documents.
+    if (stopReason === 'tool_use_loop_capped') {
+      return {
+        role: 'assistant',
+        content:
+          `[subagent ${this.id} reached its tool-use iteration cap before ` +
+          `producing a final message; returning a capped partial result]`,
+        timestamp: new Date(),
+      };
     }
     throw new Error(`Subagent ${this.id} produced no terminal message`);
   }

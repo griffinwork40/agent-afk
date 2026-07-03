@@ -1006,6 +1006,9 @@ export class AnthropicDirectProvider implements ModelProvider {
       ...(config.autoResumeOnUsageLimit !== undefined
         ? { autoResumeOnUsageLimit: config.autoResumeOnUsageLimit }
         : {}),
+      ...(config.maxToolUseIterations !== undefined
+        ? { maxToolUseIterations: config.maxToolUseIterations }
+        : {}),
       ...(cwdDependentsFactory !== undefined ? { cwdDependentsFactory } : {}),
       // Path-approval half of the live `/bypass` toggle: keep the provider's
       // `_currentPermissionMode` (read by getGrants().allowAll) in sync with

@@ -683,6 +683,47 @@ describe('AnthropicDirectProvider', () => {
     }
   });
 
+  it('caps the tool-use loop at config.maxToolUseIterations (config → provider → loop)', async () => {
+    // End-to-end plumbing guard: AgentConfig.maxToolUseIterations must thread
+    // through AnthropicDirectProvider.query() → AnthropicDirectQueryOptions →
+    // the constructor → runInput → the loop's `maxIterations`. The mock model
+    // emits tool_use on every round, so the ONLY thing that can terminate the
+    // turn is the iteration cap — this is the guard a forked subagent relies on
+    // to avoid hanging its parent (see SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS).
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      return fromArray(
+        makeToolUseStream(`toolu_${callIdx}`, 'get_weather', '{"city":"SF"}'),
+      );
+    });
+
+    const dispatcher: ToolDispatcher = {
+      async execute(): Promise<ToolResult> {
+        return { content: 'sunny' };
+      },
+    };
+
+    const provider = new AnthropicDirectProvider({ tools: dispatcher });
+    const query = provider.query({
+      prompt: singleInput('weather?'),
+      config: {
+        model: 'claude-sonnet-5',
+        apiKey: 'sk-ant-api03-test',
+        maxToolUseIterations: 2,
+      },
+    });
+    const events = await collect(query);
+
+    // Stopped after exactly 2 tool-use rounds, not left to spin unbounded.
+    expect(messagesCreateMock).toHaveBeenCalledTimes(2);
+    const completed = events.find((e) => e.type === 'turn.completed');
+    expect(completed).toBeDefined();
+    if (completed?.type === 'turn.completed') {
+      expect(completed.usage.stopReason).toBe('tool_use_loop_capped');
+    }
+  });
+
   it('default SessionToolDispatcher rejects unknown tools with isError', async () => {
     let callIdx = 0;
     messagesCreateMock.mockImplementation(() => {

@@ -133,6 +133,13 @@ export interface AnthropicDirectQueryOptions {
    * across all turns (see `isCacheEnabled({baseUrl})`).
    */
   baseUrl?: string;
+  /**
+   * Hard cap on tool-use loop iterations within a single user turn, forwarded
+   * to `runTurn` as `RunTurnInput.maxToolUseIterations`. Unset/`0` means no cap
+   * (the top-level default); subagent forks pass a non-zero ceiling so a
+   * runaway child cannot spin unboundedly while the parent awaits its result.
+   */
+  maxToolUseIterations?: number;
   /** Witness-layer trace writer threaded into each per-turn run. */
   traceWriter?: import('../../trace/index.js').TraceWriter;
   /**
@@ -212,6 +219,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private readonly thinking?: import('@anthropic-ai/sdk/resources').ThinkingConfigParam;
   private readonly effort?: import('../../types/sdk-types.js').EffortLevel;
   private readonly baseUrl?: string;
+  private readonly maxToolUseIterations?: number;
   private readonly traceWriter?: import('../../trace/index.js').TraceWriter;
 
   /**
@@ -257,6 +265,8 @@ export class AnthropicDirectQuery implements ProviderQuery {
     this.thinking = opts.thinking;
     if (opts.effort !== undefined) this.effort = opts.effort;
     if (opts.baseUrl !== undefined) this.baseUrl = opts.baseUrl;
+    if (opts.maxToolUseIterations !== undefined)
+      this.maxToolUseIterations = opts.maxToolUseIterations;
     this.traceWriter = opts.traceWriter;
     this.cwdDependentsFactory = opts.cwdDependentsFactory;
     this.onPermissionMode = opts.onPermissionMode;
@@ -375,6 +385,9 @@ export class AnthropicDirectQuery implements ProviderQuery {
           ...(this.thinking !== undefined ? { thinking: this.thinking } : {}),
           ...(this.effort !== undefined ? { effort: this.effort } : {}),
           ...(this.baseUrl !== undefined ? { baseUrl: this.baseUrl } : {}),
+          ...(this.maxToolUseIterations !== undefined
+            ? { maxToolUseIterations: this.maxToolUseIterations }
+            : {}),
           ...(this.traceWriter ? { traceWriter: this.traceWriter } : {}),
           onUsageProgress: (usage) => { this.state.lastUsage = usage; },
         };

@@ -55,6 +55,21 @@ export const DENY_ELICITATION: NonNullable<AgentConfig['onElicitation']> = async
   _options: { signal: AbortSignal },
 ): Promise<ElicitationResult> => ({ action: 'decline' });
 
+/**
+ * Default tool-use-iteration ceiling applied to every forked subagent.
+ *
+ * A subagent runs exactly one conversation turn (one `sendMessageStream`), so
+ * this bounds the tool-use loop WITHIN that turn. anthropic-direct otherwise
+ * defaults to `0` (unbounded — see DEFAULT_MAX_TOOL_USE_ITERATIONS), which lets
+ * a runaway child spin indefinitely while its parent is suspended at
+ * `await runToResult`. `50` matches openai-compatible's built-in cap so both
+ * providers bound child loops identically. Hitting the cap surfaces as a
+ * `tool_use_loop_capped` done (not an error), returning the child's partial
+ * work. Callers may override per-fork via `config.maxToolUseIterations` (e.g.
+ * `0` to opt a trusted deep-investigation child back into unbounded mode).
+ */
+export const SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS = 50;
+
 export interface ForkParent {
   sessionId?: string;
   /**
@@ -474,6 +489,17 @@ export class SubagentManager {
       // no attribution. A caller may opt a fork back in with
       // `isNonInteractive: false`.
       isNonInteractive: options.config.isNonInteractive ?? true,
+      // External constraint (anti-hang): a forked child's tool-use loop is
+      // otherwise unbounded on anthropic-direct (DEFAULT_MAX_TOOL_USE_ITERATIONS
+      // = 0 = no cap), so a runaway child could spin forever while the parent is
+      // suspended at `await runToResult`. Give every fork a positive default
+      // ceiling (parity with openai-compatible's built-in 50-round cap); the
+      // caller's explicit `options.config.maxToolUseIterations` (already carried
+      // by the `...options.config` spread above) wins when set, including `0` to
+      // opt back into unbounded. Hitting the cap surfaces as a
+      // `tool_use_loop_capped` done, returning the child's partial work.
+      maxToolUseIterations:
+        options.config.maxToolUseIterations ?? SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS,
       // Awareness metadata: surface parent identity + phase role into the
       // child's config so the get_runtime_state tool's `self` view can report
       // the topology fields. Caller-supplied values on options.config win on
