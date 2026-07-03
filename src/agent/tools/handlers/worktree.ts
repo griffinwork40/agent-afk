@@ -32,6 +32,7 @@ import { join, resolve, isAbsolute, dirname, sep } from 'node:path';
 import type { ToolHandler } from '../types.js';
 import { runSweep } from '../../worktree-sweep.js';
 import type { ExecFileFn } from '../../worktree-sweep.js';
+import { env } from '../../../config/env.js';
 
 const defaultExecFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
 
@@ -223,7 +224,7 @@ export function createWorktreeHandler(
           if (existing) {
             return { content: `Worktree already exists at ${worktreePath}`, isError: true };
           }
-          const prefix = process.env['AFK_WORKTREE_BRANCH_PREFIX'] ?? 'afk/';
+          const prefix = env.AFK_WORKTREE_BRANCH_PREFIX ?? 'afk/';
           const branch = `${prefix}${slug}`;
           const baseRef = typeof obj['base'] === 'string' && obj['base'] ? obj['base'] : 'HEAD';
           await execFile('git', [
