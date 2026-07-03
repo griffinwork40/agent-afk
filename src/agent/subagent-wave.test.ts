@@ -290,4 +290,38 @@ describe('runWave', () => {
     expect(results[0]?.status).toBe('succeeded');
     expect(events).toHaveLength(1);
   });
+
+  it('bounds in-flight runs to maxConcurrency', async () => {
+    const mgr = new SubagentManager();
+    shared.sessions.length = 0;
+    const handles = await Promise.all(
+      [0, 1, 2, 3, 4].map(() =>
+        mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }),
+      ),
+    );
+
+    // Instrument every mock session's sendMessage to track live concurrency
+    // across the whole wave (each run holds a 30ms window).
+    let live = 0;
+    let peak = 0;
+    for (const s of shared.sessions) {
+      s.sendMessage.mockImplementation(async (content: string): Promise<Message> => {
+        live++;
+        peak = Math.max(peak, live);
+        await new Promise((r) => setTimeout(r, 30));
+        live--;
+        return { role: 'assistant', content: `ok:${content}`, timestamp: new Date() };
+      });
+    }
+
+    const results = await runWave(
+      handles.map((handle, i) => ({ handle, prompt: `p${i}` })),
+      { maxConcurrency: 2 },
+    );
+
+    // All five completed (none dropped) and no more than 2 ran at once.
+    expect(results).toHaveLength(5);
+    expect(results.every((r) => r?.status === 'succeeded')).toBe(true);
+    expect(peak).toBe(2);
+  });
 });

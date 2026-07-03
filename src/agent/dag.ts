@@ -2,13 +2,17 @@
  * Workflow DAG executor — Phase 2.
  *
  * Layer-by-layer Kahn execution: nodes with satisfied dependencies run in
- * parallel per layer, then the next layer starts. No concurrency semaphore
- * — layer boundaries provide natural drain points with zero deadlock risk.
+ * parallel per layer (bounded by {@link DAGRunOptions.maxConcurrency} — each
+ * node may fork an AgentSession), then the next layer starts. Layer boundaries
+ * are the natural drain points; the per-layer limiter is a fresh, per-call pool
+ * (never a shared/tree-wide semaphore), so a node that forks a nested compose
+ * cannot deadlock waiting on its own ancestor's permits.
  *
  * @module agent/dag
  */
 
 import { TimeoutError } from '../utils/errors.js';
+import { settleWithConcurrencyLimit, DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS } from './concurrency-pool.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,6 +49,16 @@ export interface DAGRunOptions {
    * Undefined (default) or non-positive = no timeout, matching prior behavior.
    */
   nodeTimeoutMs?: number;
+  /**
+   * Max nodes executed concurrently within a single layer. Each node typically
+   * forks an `AgentSession` (compose), so an unbounded layer can exhaust memory
+   * or storm the provider rate limit. The layer drains through a bounded pool;
+   * per-node results and their order are unaffected (the post-layer processing
+   * still keys off `ready` order). Default:
+   * {@link DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS}; floored at 1. Injected by
+   * tests to assert the cap.
+   */
+  maxConcurrency?: number;
 }
 
 export interface DAGRunResult {
@@ -146,7 +160,7 @@ export async function runDAG(
 
   validateDAG(graph);
 
-  const { failFast = true, nodeTimeoutMs } = options;
+  const { failFast = true, nodeTimeoutMs, maxConcurrency = DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS } = options;
   const nodeTimeoutEnabled =
     nodeTimeoutMs !== undefined && Number.isFinite(nodeTimeoutMs) && nodeTimeoutMs > 0;
   const adj = buildAdjacency(graph);
@@ -179,8 +193,18 @@ export async function runDAG(
       }
       if (ready.length === 0) break;
 
-      const layerResults = await Promise.allSettled(
-        ready.map(async (id) => {
+      // Bounded per-layer fan-out: at most `maxConcurrency` nodes run at once,
+      // so a wide layer (e.g. a 20-node compose) cannot fork an unbounded burst
+      // of AgentSessions. Within the cap this is identical to the prior
+      // `Promise.allSettled(ready.map(...))` — results stay in `ready` order.
+      // The whole per-node closure (AbortController + abort listener + timeout
+      // arming, below) is the pool `worker`, and the pool invokes it lazily on
+      // dequeue — so a node queued behind the cap does NOT arm its timeout while
+      // waiting (queue-wait is never charged against nodeTimeoutMs).
+      const layerResults = await settleWithConcurrencyLimit(
+        ready,
+        maxConcurrency,
+        async (id) => {
           const node = nodeMap.get(id)!;
           const nodeController = new AbortController();
 
@@ -233,7 +257,7 @@ export async function runDAG(
             if (nodeTimeoutHandle !== undefined) clearTimeout(nodeTimeoutHandle);
             dagController.signal.removeEventListener('abort', forwardNodeAbort);
           }
-        }),
+        },
       );
 
       for (let i = 0; i < layerResults.length; i++) {

@@ -25,6 +25,7 @@
 
 import type { SubagentHandle } from './handle.js';
 import type { SubagentResult } from './result.js';
+import { settleWithConcurrencyLimit, DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS } from '../concurrency-pool.js';
 
 export interface WaveTask<T = unknown> {
   handle: SubagentHandle<T>;
@@ -44,6 +45,12 @@ export interface RunWaveOptions {
    * when the caller wants to reuse handles for additional runs.
    */
   teardown?: boolean;
+  /**
+   * Max subagent runs in flight at once (each is a forked AgentSession).
+   * Bounds a wide wave so it cannot storm memory / the provider rate limit.
+   * Default: {@link DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS}; floored at 1.
+   */
+  maxConcurrency?: number;
 }
 
 /**
@@ -57,14 +64,30 @@ export async function runWave<T = unknown>(
   tasks: ReadonlyArray<WaveTask<T>>,
   options: RunWaveOptions = {},
 ): Promise<SubagentResult<T>[]> {
-  const { failFast = true, teardown = true } = options;
+  const { failFast = true, teardown = true, maxConcurrency = DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS } = options;
   if (tasks.length === 0) return [];
 
   const results = new Array<SubagentResult<T>>(tasks.length);
   const pending = new Set(tasks.map((_, i) => i));
 
-  const promises = tasks.map((task, i) =>
-    task.handle.runToResult(task.prompt).then((result) => {
+  // Bounded fan-out: at most `maxConcurrency` subagent runs are in flight at
+  // once (each is a forked AgentSession). Within the cap this is identical to
+  // the prior unbounded `Promise.all(tasks.map(...))`. `runToResult` absorbs
+  // its own errors into SubagentResult and each index is dispatched exactly
+  // once, so the worker never rejects; `results[i]` is filled in task order.
+  //
+  // fail-fast note: peer-cancellation only targets handles already `running`.
+  // When tasks.length > maxConcurrency, a task still QUEUED behind the cap is
+  // not yet running, so an earlier failure does not cancel it — it runs when
+  // dequeued (a minor efficiency-only difference under fail-fast, never a
+  // correctness one; every result is still populated). At or under the cap
+  // (all current callers) behaviour is unchanged.
+  await settleWithConcurrencyLimit(
+    tasks.map((_, i) => i),
+    maxConcurrency,
+    async (i) => {
+      const task = tasks[i]!;
+      const result = await task.handle.runToResult(task.prompt);
       results[i] = result;
       pending.delete(i);
 
@@ -80,12 +103,8 @@ export async function runWave<T = unknown>(
           }
         }
       }
-    }),
+    },
   );
-
-  // `runToResult` absorbs errors into SubagentResult, so this Promise.all
-  // never rejects in practice — it simply waits for every task to settle.
-  await Promise.all(promises);
 
   if (teardown) {
     await Promise.allSettled(tasks.map((t) => t.handle.teardown()));
