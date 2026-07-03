@@ -125,6 +125,17 @@ export interface AgentConfig {
   maxTurns?: number;
 
   /**
+   * Hard cap on tool-use rounds within a single user turn (anthropic-direct
+   * only; openai-compatible carries its own built-in 50-round cap). Forwarded
+   * to the provider as `RunTurnInput.maxToolUseIterations`. `0` or unset means
+   * no cap — the top-level default. Subagent forks set a non-zero default (see
+   * `SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS` in subagent.ts) so a runaway
+   * child tool-loop cannot hang the parent, which is suspended awaiting the
+   * child's result.
+   */
+  maxToolUseIterations?: number;
+
+  /**
    * Controls Claude's extended-thinking / reasoning behavior. When omitted,
    * the SDK picks the model-appropriate default (adaptive on Opus 4.6+).
    * See the SDK's `ThinkingConfig` union.

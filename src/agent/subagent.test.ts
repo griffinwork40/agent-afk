@@ -76,7 +76,7 @@ vi.mock('./session.js', () => {
   return { AgentSession: MockAgentSession };
 });
 
-import { SubagentManager } from './subagent.js';
+import { SubagentManager, SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS } from './subagent.js';
 
 function lastSessionState(): SessionState {
   return shared.sessions[shared.sessions.length - 1].state;
@@ -160,6 +160,47 @@ describe('SubagentManager', () => {
     expect(shared.lastConfig).toEqual(
       expect.objectContaining({ baseUrl: 'http://127.0.0.1:8080' }),
     );
+  });
+
+  // Anti-hang: every fork gets a positive tool-use-iteration ceiling so a
+  // runaway child cannot spin unbounded on anthropic-direct (whose provider
+  // default is 0 = no cap) while the parent is suspended awaiting its result.
+  it('applies the default tool-use-iteration cap when child config omits it', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager();
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      config: { model: 'sonnet' },
+    });
+    // Pin parity with openai-compatible's built-in 50-round cap.
+    expect(SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS).toBe(50);
+    expect(shared.lastConfig).toEqual(
+      expect.objectContaining({
+        maxToolUseIterations: SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS,
+      }),
+    );
+  });
+
+  it('preserves an explicit maxToolUseIterations override on the child config', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager();
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      config: { model: 'sonnet', maxToolUseIterations: 7 },
+    });
+    expect(shared.lastConfig).toEqual(
+      expect.objectContaining({ maxToolUseIterations: 7 }),
+    );
+  });
+
+  it('preserves an explicit maxToolUseIterations of 0 (opt back into unbounded)', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager();
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      config: { model: 'sonnet', maxToolUseIterations: 0 },
+    });
+    expect((shared.lastConfig as unknown as Record<string, unknown>)['maxToolUseIterations']).toBe(0);
   });
 
   // Cross-provider credential anti-leak (composition boundary).
