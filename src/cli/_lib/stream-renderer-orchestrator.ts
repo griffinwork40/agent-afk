@@ -190,11 +190,31 @@ export function handleOrchestratorEvent(
         // next orchestrator tool_use_detail fires. In-flight roots stay in
         // the lane (`flushCompletedRoots` filters them out).
         if (ctx.isTTY) {
-          // Order: prior completed tool first, THEN the thinking phase that
-          // produced THIS tool — so the inline "◆ thought for Xs" line hugs the
-          // tool it preceded (and sits below the prior tool). commitThinkingPhase
-          // is a no-op when no phase is pending.
-          flushToolLaneToScrollback(ctx);
+          // Invariant (cross-flush run accumulation + append-only ordering):
+          // when the incoming tool would EXTEND a run of the same flat tool
+          // already completed in the lane, skip the eager flush so the run
+          // accumulates and commits as one grouped `toolName ×N` block when it
+          // breaks — UNLESS a thinking phase is pending. A pending thought MUST
+          // break the run: commitThinkingPhase below commits `◆ thought for Xs`
+          // inline, and a held run would otherwise commit AFTER that thought,
+          // reordering it above its own tool group (scrollback is append-only,
+          // so it cannot be fixed post-commit). `thinkingPhaseStartedAt == null`
+          // is exactly "no thought pending" (set only in non-off thinking modes
+          // by the 'thinking' handler below). peekTrailingCompletedRootToolName
+          // returns undefined for NESTING/in-flight trailing roots, so dispatch
+          // tools and parallel blocks are unaffected.
+          const trailingRun = ctx.toolLane.peekTrailingCompletedRootToolName();
+          const holdRun =
+            trailingRun !== undefined &&
+            trailingRun === chunk.toolName &&
+            source.thinkingPhaseStartedAt == null;
+          if (!holdRun) {
+            // Order: prior completed tool first, THEN the thinking phase that
+            // produced THIS tool — so the inline "◆ thought for Xs" line hugs the
+            // tool it preceded (and sits below the prior tool). commitThinkingPhase
+            // is a no-op when no phase is pending.
+            flushToolLaneToScrollback(ctx);
+          }
           commitThinkingPhase(source, ctx);
         }
         // Invariant: skill-nesting gate — when this is a skill-dispatch turn
