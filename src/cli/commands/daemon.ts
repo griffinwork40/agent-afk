@@ -90,6 +90,9 @@ export function buildDaemonSessionFactory(
 
     const rootManager = new SubagentManager({
       ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
+      // Parent model → provider, so the fork-time credential fallback never
+      // crosses the provider boundary (see SubagentManager.parentProvider).
+      parentModel: opts.model,
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
     });

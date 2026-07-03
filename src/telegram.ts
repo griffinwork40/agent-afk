@@ -248,6 +248,9 @@ async function main() {
         // bot is pointed at a worktree via AFK_TELEGRAM_CWD.
         const rootManager = new SubagentManager({
           apiKey: telegramApiKey,
+          // Parent model → provider, so the fork-time credential fallback never
+          // crosses the provider boundary (see SubagentManager.parentProvider).
+          parentModel: sessionConfig.model,
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
           ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
         });

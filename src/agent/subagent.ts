@@ -36,7 +36,7 @@ import { appendRoutingDecision } from './routing-telemetry.js';
 import { getCurrentSink } from './_lib/skill-sink-channel.js';
 import { buildPhaseRestrictedProvider, type PhaseRole } from './tools/nesting.js';
 import { applyManagerApiKeyFallback } from './tools/child-credential.js';
-import { providerForModel } from './providers/index.js';
+import { providerForModel, type BundledProviderName } from './providers/index.js';
 import {
   SubagentHandleImpl,
   type SubagentHandle,
@@ -190,6 +190,18 @@ export interface SubagentManagerOptions {
    */
   baseUrl?: string;
   /**
+   * The model the parent session runs — i.e. the model {@link apiKey} was
+   * resolved for. The manager derives the parent's *provider* from it (via
+   * `providerForModel`) exactly once, and uses that to gate the fork-time
+   * credential fallback: a parent credential is inherited only by a
+   * same-provider child, so an Anthropic key never reaches an OpenAI child and
+   * an OpenAI key never reaches an Anthropic child. When omitted, the fallback
+   * degrades to key-shape inference (forward guard only) — pass this wherever
+   * `apiKey` is provided to get both-direction protection. See
+   * `applyManagerApiKeyFallback` in ./tools/child-credential.ts.
+   */
+  parentModel?: string;
+  /**
    * Working directory inherited by all forked children whose `config.cwd`
    * is unset. Without this, subagents forked from a session running in an
    * `afk interactive -w` worktree fall back to the Node host's
@@ -239,6 +251,10 @@ export class SubagentManager {
   private readonly progressSink: SubagentProgressSink | undefined;
   private readonly parentApiKey: string | undefined;
   private readonly parentBaseUrl: string | undefined;
+  // Derived once from options.parentModel (constructor). Source of truth for
+  // the both-direction cross-provider credential gate in forkSubagent —
+  // avoids guessing the parent's provider from the key's shape at fork time.
+  private readonly parentProvider: BundledProviderName | undefined;
   // Mutable so AgentSession.setCwd can re-anchor forks after a born-named
   // `afk -w` worktree is created mid-session. Read at fork time (forkSubagent),
   // so updating it makes every subsequent fork inherit the new worktree cwd.
@@ -259,6 +275,8 @@ export class SubagentManager {
     this.progressSink = options.progressSink;
     this.parentApiKey = options.apiKey;
     this.parentBaseUrl = options.baseUrl;
+    this.parentProvider =
+      options.parentModel !== undefined ? providerForModel(options.parentModel) : undefined;
     this.parentCwd = options.cwd;
     this.parentTraceWriter = options.traceWriter;
     this.parentSurface = options.surface;
@@ -420,20 +438,23 @@ export class SubagentManager {
       forkSession: resume ? true : options.config.forkSession,
       abortSignal: childController.signal,
       // Invariant (cross-provider credential anti-leak): the parent-credential
-      // fallback below must never hand an Anthropic `sk-ant-…` credential to an
-      // OpenAI-routed child. Upstream executors (subagent-executor.ts,
-      // skill-executor.ts, compose-executor.ts) deliberately clear `apiKey` /
-      // `baseUrl` for OpenAI children; a provider-blind `|| this.parentApiKey`
-      // here silently undid that decision — the OpenAI auth resolver treats any
-      // explicit config key as Tier-1 (openai-compatible/auth.ts), so the
-      // Anthropic token went out as a Bearer to an OpenAI-shaped endpoint.
-      // `applyManagerApiKeyFallback` preserves explicit caller keys and
-      // legitimate same-provider inheritance; only the leaking combination
-      // (OpenAI child + Anthropic-shaped parent key) resolves to undefined.
+      // fallback below must never hand a credential across the provider
+      // boundary — an Anthropic `sk-ant-…` key to an OpenAI child, nor an
+      // OpenAI key to an Anthropic child. Upstream executors
+      // (subagent-executor.ts, skill-executor.ts, compose-executor.ts)
+      // deliberately clear `apiKey` / `baseUrl` for cross-provider children; a
+      // provider-blind `|| this.parentApiKey` here silently undid that (both
+      // auth resolvers treat an explicit config key as Tier-1 — see
+      // openai-compatible/auth.ts — so the wrong token went out as a Bearer to
+      // a foreign endpoint). `applyManagerApiKeyFallback` gates on
+      // `this.parentProvider` (derived once from parentModel): explicit caller
+      // keys and same-provider inheritance are preserved; only cross-provider
+      // combinations resolve to undefined.
       apiKey: applyManagerApiKeyFallback({
         childModel: options.config.model,
         configApiKey: options.config.apiKey,
         parentApiKey: this.parentApiKey,
+        parentProvider: this.parentProvider,
       }),
       // Same guard for the Anthropic-semantic `baseUrl`: an OpenAI-routed
       // child resolves its endpoint from `openaiBaseUrl` / env, never from the
