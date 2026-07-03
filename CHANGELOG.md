@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.16.0] - 2026-07-03
+
+### Added
+- collapse sequential same-tool runs into one grouped ×N row (#379) (ac9c609)
+
+### Changed
+- remove verified dead code across src/ (Tier 1 audit batch) (#382) (d7c4056)
+
 ## [5.15.13] - 2026-07-03
 
 ### Fixed
