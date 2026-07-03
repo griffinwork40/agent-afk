@@ -16,6 +16,7 @@ import { dirname } from 'path';
 import { createHash } from 'node:crypto';
 import { debugLog } from '../../utils/debug.js';
 import { HookBlockedError } from '../../utils/errors.js';
+import { settleWithConcurrencyLimit } from '../concurrency-pool.js';
 import type { HookRegistry, PreToolUseContext, PostToolUseContext, PostToolUseFailureContext } from '../hooks.js';
 import type { AnthropicToolDef } from '../providers/anthropic-direct/types.js';
 import type { ToolDispatcher } from '../providers/anthropic-direct/tool-dispatcher.js';
@@ -134,45 +135,6 @@ function partitionIntoBatches(
  * regress; injectable via SessionToolDispatcherOptions.maxConcurrentSafeCalls.
  */
 export const DEFAULT_MAX_CONCURRENT_SAFE_TOOL_CALLS = 8;
-
-/**
- * Run `worker` over every `items` element with at most `limit` invocations in
- * flight, returning results in `items` order with the same fulfilled/rejected
- * shape as `Promise.allSettled`. Workers are started eagerly up to the cap, so
- * when `limit >= items.length` this is behaviourally identical to
- * `Promise.allSettled(items.map(worker))` — the parallel-timing tests rely on
- * that. `limit` is floored at 1, so a non-positive cap degrades to sequential
- * rather than deadlocking on an empty pool.
- */
-async function settleWithConcurrencyLimit<T, I>(
-  items: readonly I[],
-  limit: number,
-  worker: (item: I) => Promise<T>,
-): Promise<PromiseSettledResult<T>[]> {
-  const results: PromiseSettledResult<T>[] = new Array(items.length);
-  const poolSize = Math.min(Math.max(1, Math.floor(limit)), items.length);
-  let cursor = 0;
-  const runners: Promise<void>[] = [];
-  for (let w = 0; w < poolSize; w++) {
-    runners.push(
-      (async () => {
-        // `cursor < length` test and `cursor++` are not separated by an await,
-        // so each index is claimed by exactly one runner (no double-dispatch,
-        // no skip) despite the shared cursor.
-        while (cursor < items.length) {
-          const i = cursor++;
-          try {
-            results[i] = { status: 'fulfilled', value: await worker(items[i]!) };
-          } catch (reason) {
-            results[i] = { status: 'rejected', reason };
-          }
-        }
-      })(),
-    );
-  }
-  await Promise.all(runners);
-  return results;
-}
 
 export interface SessionToolDispatcherOptions {
   handlers: Map<string, ToolHandler>;
