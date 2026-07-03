@@ -31,12 +31,12 @@ async function resolveRepoRoot(): Promise<string> {
 }
 
 function verdictWouldPrune(v: string): string {
-  if (
-    ['empty', 'stale-clean', 'orphaned-dir', 'orphaned-registration', 'dead-owner'].includes(v)
-  ) {
+  // 'stale-clean' is preserved + warned by the sweep engine (commits ahead
+  // of base), so it renders as 'warn' alongside 'stale-dirty'.
+  if (['empty', 'orphaned-dir', 'orphaned-registration', 'dead-owner'].includes(v)) {
     return chalk.red('yes');
   }
-  if (v === 'stale-dirty') return chalk.yellow('warn');
+  if (v === 'stale-dirty' || v === 'stale-clean') return chalk.yellow('warn');
   return chalk.green('no');
 }
 

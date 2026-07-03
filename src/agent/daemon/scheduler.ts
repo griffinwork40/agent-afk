@@ -436,9 +436,10 @@ export class CronScheduler {
         telemetryPath: this.telemetryPath(),
       });
 
+      // 'stale-clean' is intentionally absent: the sweep engine preserves +
+      // warns on stale-clean (commits ahead of base) rather than removing.
       const prunableVerdicts = new Set([
         'empty',
-        'stale-clean',
         'orphaned-dir',
         'orphaned-registration',
         'dead-owner',

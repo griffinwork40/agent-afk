@@ -261,11 +261,11 @@ describe('empty-detection', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 2. stale-clean-preserves-branch
+// 2. stale-clean-preserves-worktree
 // ---------------------------------------------------------------------------
 
-describe('stale-clean-preserves-branch', () => {
-  it('removes stale clean worktree via worktree remove but does NOT delete branch', async () => {
+describe('stale-clean-preserves-worktree', () => {
+  it('preserves a stale clean worktree with commits ahead and warns instead of removing', async () => {
     const worktreePath = join(afkWorktreesDir, 'afk-stale-clean');
     await fs.mkdir(worktreePath, { recursive: true });
     // 20 days old — past the 14-day clean threshold
@@ -305,15 +305,20 @@ describe('stale-clean-preserves-branch', () => {
     });
 
     expect(result.candidates.some((c) => c.verdict === 'stale-clean')).toBe(true);
-    expect(result.removed).toContain(worktreePath);
+    // Invariant: stale-clean only fires on trees with commits ahead of base
+    // (clean + 0-ahead is always classified `empty` first), so removal here
+    // would exclusively destroy committed-but-unmerged work. The sweep must
+    // preserve the worktree and surface a warning instead.
+    expect(result.removed).not.toContain(worktreePath);
+    expect(
+      result.warnings.some((w) => w.includes('stale-clean') && w.includes(worktreePath)),
+    ).toBe(true);
 
-    // worktree remove --force should be called
+    // No destructive git calls against the stale-clean worktree.
     const removeCalls = mock.calls.filter(
-      (c) => c.args.includes('remove') && c.args.includes('--force'),
+      (c) => c.args.includes('remove') && c.args.includes(worktreePath),
     );
-    expect(removeCalls.length).toBeGreaterThan(0);
-
-    // branch -d should NOT be called (branch preserved for stale-clean)
+    expect(removeCalls).toHaveLength(0);
     const branchDeleteCalls = mock.calls.filter(
       (c) => c.args.includes('branch') && c.args.includes('-d'),
     );

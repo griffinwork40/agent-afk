@@ -619,8 +619,17 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
           }
           result.removed.push(entry.path);
         } else if (verdict === 'stale-clean') {
-          await execFile('git', ['-C', repoRoot, 'worktree', 'remove', '--force', entry.path]);
-          result.removed.push(entry.path);
+          // Invariant: `stale-clean` fires only on trees with commits ahead
+          // of base — a clean tree with zero commits ahead is always caught
+          // by `empty` first. Removing here therefore destroys exclusively
+          // trees holding committed-but-unmerged work (the branch ref
+          // survives, the checkout does not). Preserve + warn instead,
+          // mirroring `stale-dirty`; explicit removal paths (`afk worktree
+          // prune`-adjacent tooling, the model-facing `worktree` tool) are
+          // the sanctioned way to drop these.
+          result.warnings.push(
+            `[WARN] stale-clean worktree preserved (commits ahead of base): ${entry.path}`,
+          );
         } else if (verdict === 'stale-dirty') {
           result.warnings.push(
             `[WARN] stale-dirty worktree preserved (uncommitted changes): ${entry.path}`,
