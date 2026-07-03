@@ -1042,6 +1042,8 @@ describe('runTurn — borrowed-compositor regression (PR 424 / Stage 3e)', () =>
     const subagentControl = {
       hasPromotableForeground: () => true,
       promoteActiveForeground,
+      hasActiveForeground: () => false,
+      cancelActiveForeground: vi.fn().mockResolvedValue(0),
     };
 
     const { h, onTurnComplete } = makeHandles();
@@ -1086,6 +1088,8 @@ describe('runTurn — borrowed-compositor regression (PR 424 / Stage 3e)', () =>
     const subagentControl = {
       hasPromotableForeground: () => false, // nothing running to background
       promoteActiveForeground,
+      hasActiveForeground: () => false,
+      cancelActiveForeground: vi.fn().mockResolvedValue(0),
     };
 
     const { h, onTurnComplete } = makeHandles();
@@ -1288,6 +1292,83 @@ describe('runTurn — ESC soft-stop', () => {
 
     // Core assertion: session.interrupt() was called — stream halted.
     expect(interruptSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression: a turn suspended on a subagent `await` cannot be halted by
+  // session.interrupt() alone. Soft-stop MUST also cancel in-flight foreground
+  // subagents so the suspended parent unblocks and returns to the prompt —
+  // otherwise ESC / Ctrl+C are dead for the whole subagent run (the "stuck
+  // mid-subagent, have to fork the session" bug).
+  it('cancels in-flight foreground subagents on soft-stop', async () => {
+    const events: OutputEvent[] = [
+      { type: 'chunk', chunk: { type: 'content', content: 'partial' } },
+      { type: 'done', metadata: { durationMs: 5 } },
+    ];
+    const session = streamFrom(events);
+
+    const cancelActiveForeground = vi.fn().mockResolvedValue(1);
+    const subagentControl = {
+      hasPromotableForeground: () => false,
+      promoteActiveForeground: vi.fn().mockResolvedValue([]),
+      hasActiveForeground: () => true, // a subagent IS running
+      cancelActiveForeground,
+    };
+
+    let installedHandler: (() => void) | null = null;
+    const setSoftStopHandler = vi.fn((hh: (() => void) | null) => { installedHandler = hh; });
+
+    let callCount = 0;
+    const realStream = session.sendMessageStream;
+    session.sendMessageStream = async function* (payload: unknown) {
+      for await (const event of (realStream as typeof session.sendMessageStream).call(session, payload)) {
+        yield event;
+        callCount++;
+        if (callCount === 1 && installedHandler) installedHandler();
+      }
+    };
+
+    const { h } = makeHandles();
+    const handles: TurnHandles = { ...h, subagentControl, setSoftStopHandler };
+
+    await runTurn({ text: 'q', attachments: [] }, session, makeStats(), handles);
+
+    expect(cancelActiveForeground).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT cancel subagents on soft-stop when none are in flight', async () => {
+    const events: OutputEvent[] = [
+      { type: 'chunk', chunk: { type: 'content', content: 'partial' } },
+      { type: 'done', metadata: { durationMs: 5 } },
+    ];
+    const session = streamFrom(events);
+
+    const cancelActiveForeground = vi.fn().mockResolvedValue(0);
+    const subagentControl = {
+      hasPromotableForeground: () => false,
+      promoteActiveForeground: vi.fn().mockResolvedValue([]),
+      hasActiveForeground: () => false, // nothing running
+      cancelActiveForeground,
+    };
+
+    let installedHandler: (() => void) | null = null;
+    const setSoftStopHandler = vi.fn((hh: (() => void) | null) => { installedHandler = hh; });
+
+    let callCount = 0;
+    const realStream = session.sendMessageStream;
+    session.sendMessageStream = async function* (payload: unknown) {
+      for await (const event of (realStream as typeof session.sendMessageStream).call(session, payload)) {
+        yield event;
+        callCount++;
+        if (callCount === 1 && installedHandler) installedHandler();
+      }
+    };
+
+    const { h } = makeHandles();
+    const handles: TurnHandles = { ...h, subagentControl, setSoftStopHandler };
+
+    await runTurn({ text: 'q', attachments: [] }, session, makeStats(), handles);
+
+    expect(cancelActiveForeground).not.toHaveBeenCalled();
   });
 
   it('does NOT call onTurnComplete when soft-stopped (incomplete turn = no state write)', async () => {

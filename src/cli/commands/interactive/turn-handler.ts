@@ -254,6 +254,24 @@ export async function runTurn(
             console.error('  ' + palette.error('soft-stop session.interrupt() failed:'), err);
           }
         });
+        // A turn suspended on a subagent `await` (the parent tool-use loop is
+        // parked awaiting the subagent tool_result) cannot be halted by
+        // session.interrupt() alone — the parent stream is not what's blocked.
+        // Cancel any in-flight foreground subagent so its runToResult resolves,
+        // the tool_result flows back, and the for-await loop wakes to observe
+        // softStopRequested and stop cleanly — returning the user to the prompt
+        // with context intact. Without this, ESC / Ctrl+C are dead for the
+        // entire subagent run (up to the 2h usage-limit cap): the "stuck
+        // mid-subagent, have to fork the session" bug. Fire-and-forget; the
+        // cancel resolves the await that unblocks the loop.
+        const ctrl = h.subagentControl;
+        if (ctrl?.hasActiveForeground()) {
+          void ctrl.cancelActiveForeground().catch((err) => {
+            if (isDebugEnabled()) {
+              console.error('  ' + palette.error('soft-stop cancelActiveForeground() failed:'), err);
+            }
+          });
+        }
       });
     }
 
@@ -332,6 +350,21 @@ export async function runTurn(
         // already initiated in the handler, the stream's async iterator
         // terminates naturally (no throw), and the post-stream block detects
         // softStopRequested to render the notice and suppress recordTurn.
+        //
+        // History consistency: breaking mid-tool-use (e.g. after
+        // cancelActiveForeground() resolves a stuck subagent's tool_result)
+        // can leave the provider's running history terminating in an assistant
+        // `tool_use` whose `tool_result` was never appended — anthropic-direct
+        // pushes the assistant turn (loop.ts) BEFORE yielding tool output and
+        // appends the tool_result only after. That transient orphan is healed
+        // before the NEXT request: repairOrphanToolUses (anthropic-direct
+        // query.ts) runs before every new-user-turn append and synthesizes
+        // is_error tool_result placeholders, and the abort-path rollback in
+        // loop.ts covers the throw case — so the following turn never 400s with
+        // "tool_use ids ... without tool_result blocks". The OpenAI-compatible
+        // provider appends assistant{tool_calls} + results together (one
+        // synchronous block after the yield loop), so it has no orphan window.
+        // See PR #400 review + query/repair-orphan-tool-uses.ts.
         if (softStopRequested || pauseInterruptRequested) {
           break;
         }

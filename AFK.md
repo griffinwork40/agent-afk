@@ -30,6 +30,21 @@ afk daemon                # cron-based headless runner
 pnpm telegram:start       # Telegram bot
 ```
 
+### Observability / tracing
+
+Every session writes a **witness trace** — the durable, chronological record of what the agent actually did (tool calls with timing + result bytes + ok/err, subagent lifecycle, session phases). This is the first thing to reach for when reconstructing "what happened" in a past run — not the transcript (prose only) and not the service logs (other processes).
+
+```bash
+afk trace show              # pretty-print the latest session's trace (default: "latest")
+afk trace show <session>    # a specific session id
+afk trace show --all        # include low-signal events (latency phases, paired tool starts)
+afk trace show -n 40        # only the last N events
+afk trace show --json       # raw NDJSON, unchanged — pipe to jq
+afk trace list              # sessions that have a trace, most recent first (-n/--max <N>, default 20)
+```
+
+Traces live at `~/.afk/state/witness/<session>/trace.jsonl` (`$AFK_HOME/state/witness/<sessionLabel>/trace.jsonl`). Writer + reader: `src/agent/trace/`; CLI: `src/cli/commands/trace.ts`. Known gaps (do not assume the trace answers these): tool **args** live in `~/.afk/state/sessions/<id>/events.jsonl`, not the witness trace; raw tool **output** is not recorded anywhere durable; a usage-limit **pause** has no event (silent gap); subagent-spawning calls may record `started` without a terminal if the write races the session seal.
+
 ## Architecture
 
 Three layers under `src/`:

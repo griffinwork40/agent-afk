@@ -1915,4 +1915,73 @@ describe('SubagentExecutor', () => {
       expect(payload.error).toBe('kaboom');
     });
   });
+
+  // ── Cancellation (soft-stop via SubagentControl) ──────────────────────────
+  // Unlike promotion, cancellation must work with NO background registry wired:
+  // it is how ESC / Ctrl+C unblocks a parent turn suspended on a subagent
+  // `await` (the "stuck mid-subagent, have to fork the session" bug). These
+  // tests use the default `executor`, which has no backgroundRegistry.
+  describe('cancellation (soft-stop via SubagentControl)', () => {
+    const tick = () => new Promise((r) => setImmediate(r));
+
+    it('hasActiveForeground is false when nothing is in flight', () => {
+      expect(executor.hasActiveForeground()).toBe(false);
+    });
+
+    it('cancelActiveForeground is a no-op returning 0 when nothing is in flight', async () => {
+      expect(await executor.cancelActiveForeground()).toBe(0);
+    });
+
+    it('tracks an in-flight foreground subagent and cancels it WITHOUT a registry', async () => {
+      const { handle, resolveRun } = hangingHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      // Start the foreground run but do NOT await — it hangs until resolveRun.
+      const execPromise = executor.execute(makeCall({ input: { prompt: 'deep investigation' } }));
+      await tick(); // let execute() fork + register the handle
+
+      expect(executor.hasActiveForeground()).toBe(true);
+      // Cancellation is available even though promotion is NOT (no registry).
+      expect(executor.hasPromotableForeground()).toBe(false);
+
+      const cancelled = await executor.cancelActiveForeground();
+      expect(cancelled).toBe(1);
+      expect(handle.cancel).toHaveBeenCalledTimes(1);
+
+      // In production handle.cancel() resolves runToResult; the mock's cancel is
+      // inert, so simulate that resolution to unblock execute() and let its
+      // finally clear the tracking map.
+      resolveRun({
+        id: 'test-handle',
+        status: 'cancelled' as SubagentResult['status'],
+        error: new Error('cancelled'),
+      } as SubagentResult);
+      await execPromise.catch(() => { /* failure payload path returns, no throw */ });
+      expect(executor.hasActiveForeground()).toBe(false);
+    });
+
+    it('cancel-all: cancels every in-flight foreground subagent and returns the count', async () => {
+      const a = hangingHandle();
+      const b = hangingHandle();
+      (a.handle as any).id = 'sub-a';
+      (b.handle as any).id = 'sub-b';
+      const forks = [a.handle, b.handle];
+      let i = 0;
+      mockSubagentMgr.forkSubagent = vi.fn().mockImplementation(() => Promise.resolve(forks[i++]));
+
+      const p1 = executor.execute(makeCall({ id: 'call-a', input: { prompt: 'first' } }));
+      const p2 = executor.execute(makeCall({ id: 'call-b', input: { prompt: 'second' } }));
+      await tick();
+
+      expect(executor.hasActiveForeground()).toBe(true);
+      expect(await executor.cancelActiveForeground()).toBe(2);
+      expect(a.handle.cancel).toHaveBeenCalledTimes(1);
+      expect(b.handle.cancel).toHaveBeenCalledTimes(1);
+
+      a.resolveRun({ id: 'sub-a', status: 'cancelled' as SubagentResult['status'], error: new Error('x') } as SubagentResult);
+      b.resolveRun({ id: 'sub-b', status: 'cancelled' as SubagentResult['status'], error: new Error('x') } as SubagentResult);
+      await Promise.allSettled([p1, p2]);
+      expect(executor.hasActiveForeground()).toBe(false);
+    });
+  });
 });
