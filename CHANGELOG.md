@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.19.0] - 2026-07-03
+
+### Added
+- lifecycle tool + sweep fix for agent-managed worktrees (#390) (eaa561d)
+
 ## [5.18.0] - 2026-07-03
 
 ### Added
