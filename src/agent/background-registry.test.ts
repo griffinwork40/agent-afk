@@ -32,6 +32,8 @@ interface StubHandle extends SubagentHandle {
   /** Captured by `runInBackground` — invoke to trigger terminal-state. */
   __fireTerminal: (result: SubagentResult) => void;
   __cancelCalled: number;
+  /** Number of times `teardown()` was invoked (registry natural-completion seam). */
+  __teardownCalled: number;
   /** Captured onProgress callback, if any. */
   __onProgress?: (event: import('./types/session-types.js').OutputEvent) => void;
   /** Fire a progress event through the captured onProgress callback. */
@@ -45,6 +47,7 @@ function createStubHandle(id: string): StubHandle {
     id,
     status: 'idle' as SubagentStatus,
     __cancelCalled: 0,
+    __teardownCalled: 0,
     runInBackground(
       _prompt: string,
       onResult?: (r: SubagentResult) => void,
@@ -72,7 +75,12 @@ function createStubHandle(id: string): StubHandle {
     },
     async run() { throw new Error('not implemented'); },
     async runToResult() { throw new Error('not implemented'); },
-    async teardown() { /* no-op */ },
+    // Count invocations so tests can assert the registry's natural-completion
+    // path reaches teardown (which is where SubagentStop fires on the real
+    // handle). The real `stopDispatched` idempotency guard lives in
+    // SubagentHandleImpl, not this stub, so exactly-once hook semantics are
+    // asserted end-to-end in hooks-integration.test.ts.
+    async teardown() { (stub.__teardownCalled as number)++; },
   };
   return stub as StubHandle;
 }
@@ -319,6 +327,7 @@ describe('BackgroundAgentRegistry', () => {
         id: 'hang-1',
         status: 'idle' as SubagentStatus,
         __cancelCalled: 0,
+        __teardownCalled: 0,
         runInBackground(_prompt: string, onResult?: (r: SubagentResult) => void) {
           captured = onResult;
           // Intentionally never called: simulates a detached job that ignores abort.
@@ -331,7 +340,7 @@ describe('BackgroundAgentRegistry', () => {
         },
         async run() { throw new Error('not implemented'); },
         async runToResult() { throw new Error('not implemented'); },
-        async teardown() { /* no-op */ },
+        async teardown() { (hangingHandle.__teardownCalled as number)++; },
         __fireTerminal(_result: SubagentResult) {
           // never used in this test
         },
@@ -578,6 +587,138 @@ describe('BackgroundAgentRegistry', () => {
       h2.__fireTerminal(successResult('sub-ee-7b', 'done'));
 
       expect(listener).toHaveBeenCalledTimes(1); // still 1, not 2
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // SubagentStop lifecycle seam — a naturally-completing background job must
+  // tear its handle down so `SubagentStop` fires, matching the guarantee
+  // foreground jobs get from SubagentExecutor's finally block. Regression test
+  // for the bug where markTerminal() settled + emitted telemetry but never
+  // called handle.teardown(), so background SubagentStop handlers never ran.
+  //
+  // These assert the WIRING (teardown is reached on natural completion). The
+  // exactly-once hook semantics — which depend on SubagentHandleImpl's
+  // `stopDispatched` guard, not on this stub — are proven end-to-end in
+  // hooks-integration.test.ts.
+  // ---------------------------------------------------------------------------
+  describe('SubagentStop teardown seam', () => {
+    it('natural completion (succeeded) tears the handle down exactly once', async () => {
+      const handle = createStubHandle('stop-1');
+      const job = registry.register({ handle, prompt: 'work', model: 'sonnet' });
+
+      expect(handle.__teardownCalled).toBe(0); // not yet — still running
+
+      handle.__fireTerminal(successResult('stop-1', 'answer'));
+
+      // Terminal state is observable synchronously (settle + emit happen before
+      // the trailing `await handle.teardown()`), so join resolves immediately.
+      const result = await registry.join(job.jobId);
+      expect(result.status).toBe('succeeded');
+
+      // The async teardown resolves on a later microtask; flush before asserting.
+      await Promise.resolve();
+      expect(handle.__teardownCalled).toBe(1);
+    });
+
+    it('natural completion (failed) also tears the handle down', async () => {
+      const handle = createStubHandle('stop-2');
+      const job = registry.register({ handle, prompt: 'work', model: 'sonnet' });
+
+      handle.__fireTerminal(failureResult('stop-2', 'boom'));
+
+      const result = await registry.join(job.jobId);
+      expect(result.status).toBe('failed');
+
+      await Promise.resolve();
+      expect(handle.__teardownCalled).toBe(1);
+    });
+
+    it('teardown runs AFTER settle + witness emit (synchronous observability preserved)', () => {
+      // Firing terminal synchronously must leave the job observable as
+      // terminal *before* the async teardown suspends — the ordering invariant
+      // that keeps every synchronous assertion in this file valid.
+      const handle = createStubHandle('stop-3');
+      const settled: string[] = [];
+      registry.on('settled', (j) => settled.push(j.status));
+
+      const job = registry.register({ handle, prompt: 'work', model: 'sonnet' });
+      handle.__fireTerminal(successResult('stop-3', 'answer'));
+
+      // No await yet: settle + emit already ran synchronously inside __fireTerminal.
+      expect(settled).toEqual(['completed']);
+      expect(registry.get(job.jobId)?.status).toBe('completed');
+    });
+
+    it('complete-then-cancel: teardown reached on completion; later cancelJob is a no-op', async () => {
+      const handle = createStubHandle('stop-4');
+      const job = registry.register({ handle, prompt: 'work', model: 'sonnet' });
+
+      // Natural completion first — reaches teardown (fires SubagentStop on a
+      // real handle) and settles the job.
+      handle.__fireTerminal(successResult('stop-4', 'answer'));
+      await registry.join(job.jobId);
+      await Promise.resolve();
+      expect(handle.__teardownCalled).toBe(1);
+      expect(registry.get(job.jobId)?.status).toBe('completed');
+
+      // A subsequent cancelJob on the already-terminal job returns false and
+      // does NOT re-cancel or re-tear-down: the registry short-circuits on
+      // non-running status, so SubagentStop cannot double-fire.
+      const cancelled = await registry.cancelJob(job.jobId);
+      expect(cancelled).toBe(false);
+      expect(handle.__cancelCalled).toBe(0);
+      expect(handle.__teardownCalled).toBe(1); // still exactly one
+    });
+
+    it('cancelJob before completion: markTerminal short-circuits, no double teardown', async () => {
+      // On the cancel path the real handle fires SubagentStop from cancel()
+      // itself (setting stopDispatched) before the synthesized cancelled result
+      // re-enters markTerminal — so the trailing teardown there is a guaranteed
+      // no-op. The stub can't model the shared guard, but it CAN prove the
+      // registry never invokes teardown twice for one job.
+      const handle = createStubHandle('stop-5');
+      const job = registry.register({ handle, prompt: 'work', model: 'sonnet' });
+
+      await registry.cancelJob(job.jobId);
+      await Promise.resolve();
+
+      expect(handle.__cancelCalled).toBe(1);
+      expect(registry.get(job.jobId)?.status).toBe('cancelled');
+      // markTerminal ran once (via the cancelled result the stub's cancel()
+      // fires), so the registry called teardown at most once for this job.
+      expect(handle.__teardownCalled).toBeLessThanOrEqual(1);
+    });
+
+    it('promotion path (adoptRunning): natural completion tears the handle down', async () => {
+      // adoptRunning attaches to an already-in-flight runPromise instead of
+      // calling runInBackground. The terminal callback still routes through
+      // markTerminal, so promoted jobs get the same SubagentStop guarantee.
+      const handle = createStubHandle('stop-promote');
+      let resolveRun!: (r: SubagentResult) => void;
+      const runPromise = new Promise<SubagentResult>((res) => {
+        resolveRun = res;
+      });
+
+      const job = registry.adoptRunning({
+        handle,
+        runPromise,
+        prompt: 'promoted work',
+        model: 'sonnet',
+      });
+      expect(registry.get(job.jobId)?.status).toBe('running');
+      expect(handle.__teardownCalled).toBe(0);
+
+      // Resolve the in-flight run — drives markTerminal via the `.then`.
+      resolveRun(successResult('stop-promote', 'promoted answer'));
+
+      const result = await registry.join(job.jobId);
+      expect(result.status).toBe('succeeded');
+
+      // Flush the adoptRunning .then → markTerminal → await teardown chain.
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(handle.__teardownCalled).toBe(1);
     });
   });
 

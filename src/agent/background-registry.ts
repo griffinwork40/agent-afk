@@ -224,10 +224,18 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
     // Start detached execution. `runInBackground` swallows the promise; the
     // callback is our terminal-state hook. The onProgress callback pipes every
     // OutputEvent to the writer and also feeds text content to appendTranscript.
+    //
+    // `markTerminal` is async (it awaits `handle.teardown()` to fire
+    // SubagentStop) but the callback is synchronous — `void` + `.catch` mirrors
+    // `runInBackground`'s own naked-void-promise guard so a teardown rejection
+    // never escapes as an unhandled rejection on this detached path.
     args.handle.runInBackground(
       args.prompt,
       (result) => {
-        this.markTerminal(jobId, result, writer, metaRecord);
+        void this.markTerminal(jobId, result, writer, metaRecord).catch(
+          (err: unknown) =>
+            debugLog(`markTerminal (register) rejected for ${jobId}: ${String(err)}`),
+        );
       },
       (event) => {
         writer.write(event);
@@ -271,13 +279,16 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
     // path. `.catch` is defense-in-depth, mirroring `runInBackground`'s naked
     // void-promise guard: if anything unexpected escapes, synthesize a failed
     // terminal so the job never hangs in 'running'.
+    // `markTerminal` is async (awaits `handle.teardown()` for SubagentStop);
+    // await it inside both branches so a teardown rejection surfaces to the
+    // trailing `.catch` rather than leaking as an unhandled rejection. The
+    // promotion path's handle already ran to completion, so teardown here fires
+    // SubagentStop exactly as the native-background path does.
     void args.runPromise
-      .then((result) => {
-        this.markTerminal(jobId, result, writer, metaRecord);
-      })
+      .then((result) => this.markTerminal(jobId, result, writer, metaRecord))
       .catch((err: unknown) => {
         debugLog('adoptRunning: unexpected rejection from in-flight runPromise', err);
-        this.markTerminal(
+        return this.markTerminal(
           jobId,
           buildResultFromError(args.handle.id, 'failed', err, createEmptyTrace()),
           writer,
@@ -520,9 +531,10 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
   }
 
   /**
-   * Terminal-state hook installed in `register()`. Sets final status,
-   * stores the result, fires witness events, and settles the join promise.
-   * Must run exactly once per job — guarded by the running-status check.
+   * Terminal-state hook installed in `register()` / `adoptRunning()`. Sets
+   * final status, stores the result, fires witness events, settles the join
+   * promise, and finally tears the handle down so `SubagentStop` fires. Must
+   * run exactly once per job — guarded by the running-status check.
    *
    * After settling, schedules a TTL eviction (~5 min) so terminal entries
    * don't accumulate indefinitely. The timer is `.unref()`-ed so it won't
@@ -532,15 +544,36 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
    * `cancelJob()` ('explicit') or `cancelAll()` ('cascade') before calling
    * `handle.cancel()`. Defaults to `'explicit'` when not set.
    *
+   * Invariant: the ordered sequence below is governed by two external
+   * constraints and MUST NOT be reordered:
+   *   1. Synchronous observability. `register()`'s `onResult` callback (and
+   *      `adoptRunning()`'s `.then`) invoke this method but do not await it.
+   *      Callers (and every synchronous unit test) observe terminal state
+   *      immediately after firing the callback, so all state that must be
+   *      visible synchronously — status mutation, witness/telemetry emit,
+   *      `job.settle(result)`, log finalize, eviction scheduling — happens
+   *      BEFORE the first `await`. JS runs an async function synchronously up
+   *      to its first suspension point; placing `await handle.teardown()`
+   *      last preserves that guarantee.
+   *   2. Fire-SubagentStop-once. `teardown()` fires `SubagentStop` via the
+   *      handle's `stopDispatched` guard. On the cancel path
+   *      (`cancelJob`/`cancelAll` → `handle.cancel()`), the handle already
+   *      dispatched `SubagentStop` and set `stopDispatched` BEFORE synthesizing
+   *      the cancelled result that re-enters this method — so the trailing
+   *      `teardown()` is a guaranteed no-op there. Only natural completion
+   *      (where `run()`/`runToResult()` called `onTerminal()` but never the
+   *      stop path) reaches `teardown()` with `stopDispatched === false`, so
+   *      the hook fires exactly once for both natural and cancelled endings.
+   *
    * @param writer — persistent JSONL log writer for this job (optional; omitted in legacy paths).
    * @param openMeta — the meta record written at start, used to build the terminal update.
    */
-  private markTerminal(
+  private async markTerminal(
     jobId: string,
     result: SubagentResult,
     writer?: BgJobLogWriter,
     openMeta?: BgJobMeta,
-  ): void {
+  ): Promise<void> {
     const job = this.jobs.get(jobId);
     if (!job || job.status !== 'running') return;
 
@@ -632,6 +665,35 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
       this.jobs.delete(jobId);
     }, TERMINAL_EVICT_TTL_MS);
     timer.unref();
+
+    // Tear the handle down so a naturally-completing background job fires
+    // `SubagentStop` — the same lifecycle guarantee foreground jobs get from
+    // `SubagentExecutor`'s finally block. This MUST be the last step (see the
+    // synchronous-observability invariant above): all state a caller observes
+    // synchronously is already committed by the time we suspend here.
+    //
+    // injectContext for background: `teardown()` routes any `injectContext` a
+    // SubagentStop handler returns through the handle's default channel —
+    // `queueFrameworkContext` on a live `parentInputStreamRef` (so it rides the
+    // parent's next real user message), else a no-op. A background job has no
+    // waiting tool_result to carry the note in-turn, so this default-queue path
+    // is the only correct delivery; if the parent already detached (no live
+    // ref), the note is silently dropped. That trade-off is intentional:
+    // firing the hook + sealing the trace is the primary goal here; inject
+    // delivery is best-effort and secondary for detached background work.
+    //
+    // Idempotent with the cancel path: on `cancelJob`/`cancelAll` the handle
+    // already fired `SubagentStop` (and set `stopDispatched`) before the
+    // cancelled result re-entered this method, so this call is a no-op there.
+    // Errors are swallowed — teardown is a cleanup step and must never turn a
+    // settled job into an unhandled rejection on the detached callback path.
+    try {
+      await job.handle.teardown();
+    } catch (err) {
+      debugLog(
+        `markTerminal: handle.teardown() failed for job ${jobId}: ${String(err)}`,
+      );
+    }
   }
 
   // ---------------------------------------------------------------------------

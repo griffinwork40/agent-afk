@@ -102,6 +102,8 @@ vi.mock('./session.js', () => {
 // Import AFTER the mock so SubagentManager picks up the mock session.
 import { SubagentManager } from './subagent.js';
 import { createDefaultHookRegistry } from './default-hook-registry.js';
+import { BackgroundAgentRegistry } from './background-registry.js';
+import type { SubagentResult } from './subagent.js';
 
 describe('SubagentManager — hook integration', () => {
   it('dispatches SubagentStart before creating the child session', async () => {
@@ -1010,5 +1012,149 @@ describe('SubagentManager.teardownAll()', () => {
     expect(ids).toEqual([h1.id, h2.id].sort());
     // Neither ran, so both report 'cancelled' as fallback.
     expect(events.every((e) => e.status === 'cancelled')).toBe(true);
+  });
+});
+
+describe('BackgroundAgentRegistry — SubagentStop lifecycle (end-to-end)', () => {
+  // These wire a REAL SubagentManager handle (real SubagentHandleImpl, mocked
+  // child session) through the real BackgroundAgentRegistry to prove the
+  // firing + exactly-once semantics the stub-level background-registry tests
+  // cannot: the `stopDispatched` guard lives in SubagentHandleImpl, so only a
+  // real handle exercises it.
+
+  /** Await the registry's terminal settle, then flush the async teardown chain. */
+  async function joinAndFlush(
+    registry: BackgroundAgentRegistry,
+    jobId: string,
+  ): Promise<SubagentResult> {
+    const result = await registry.join(jobId);
+    // markTerminal awaits handle.teardown() after settling; the join resolves
+    // at settle time, so drain a couple of microtasks to let teardown (and its
+    // SubagentStop dispatch) run to completion before assertions.
+    await Promise.resolve();
+    await Promise.resolve();
+    return result;
+  }
+
+  it('naturally-completing background job fires SubagentStop exactly once (status "succeeded")', async () => {
+    const registry = createHookRegistry();
+    const events: HookContext[] = [];
+    registry.register('SubagentStop', (ctx) => {
+      events.push(ctx);
+      return {};
+    });
+
+    const mgr = new SubagentManager({ hookRegistry: registry });
+    const handle = await mgr.forkSubagent({
+      parent: { sessionId: 'p-bg' },
+      config: { model: 'sonnet' },
+      idPrefix: 'research',
+    });
+
+    const bg = new BackgroundAgentRegistry({});
+    const job = bg.register({ handle, prompt: 'inspect', model: 'sonnet' });
+
+    // Before the fix, the run completed and settled but SubagentStop never
+    // fired for a background job. Now it must fire via markTerminal → teardown.
+    await joinAndFlush(bg, job.jobId);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      event: 'SubagentStop',
+      subagentId: handle.id,
+      status: 'succeeded',
+      agentType: 'research',
+    });
+    // Teardown does not clobber status — a succeeded run stays 'succeeded'.
+    expect(handle.status).toBe('succeeded');
+  });
+
+  it('naturally-completing background job seals the child session (close called)', async () => {
+    const registry = createHookRegistry();
+    const mgr = new SubagentManager({ hookRegistry: registry });
+    const handle = await mgr.forkSubagent({
+      parent: { sessionId: 'p-bg' },
+      config: { model: 'sonnet' },
+    });
+    const childSession = shared.sessions[shared.sessions.length - 1]!;
+
+    const bg = new BackgroundAgentRegistry({});
+    const job = bg.register({ handle, prompt: 'inspect', model: 'sonnet' });
+    await joinAndFlush(bg, job.jobId);
+
+    // teardown() → session.close(). The mock exposes close as a vi.fn on the
+    // session instance; assert it was invoked exactly once (no double-close).
+    const closeSpy = (handle.session as unknown as { close: ReturnType<typeof vi.fn> }).close;
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    void childSession;
+  });
+
+  it('idempotency: completing then cancelling the same job fires SubagentStop exactly once', async () => {
+    const registry = createHookRegistry();
+    const events: HookContext[] = [];
+    registry.register('SubagentStop', (ctx) => {
+      events.push(ctx);
+      return {};
+    });
+
+    const mgr = new SubagentManager({ hookRegistry: registry });
+    const handle = await mgr.forkSubagent({
+      parent: { sessionId: 'p-bg' },
+      config: { model: 'sonnet' },
+    });
+
+    const bg = new BackgroundAgentRegistry({});
+    const job = bg.register({ handle, prompt: 'inspect', model: 'sonnet' });
+
+    // Natural completion fires SubagentStop (once) and marks the job terminal.
+    await joinAndFlush(bg, job.jobId);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ status: 'succeeded' });
+
+    // A later cancelJob on the now-terminal job returns false (registry
+    // short-circuits on non-running status) — SubagentStop must NOT fire again.
+    const cancelled = await bg.cancelJob(job.jobId);
+    expect(cancelled).toBe(false);
+    expect(events).toHaveLength(1);
+
+    // Defense-in-depth: even a direct handle.cancel() after teardown is a
+    // no-op via the shared `stopDispatched` guard, so still exactly one event.
+    await handle.cancel();
+    expect(events).toHaveLength(1);
+    expect(handle.status).toBe('succeeded');
+  });
+
+  it('cancelled-before-completion background job fires SubagentStop once with status "cancelled"', async () => {
+    const registry = createHookRegistry();
+    const events: HookContext[] = [];
+    registry.register('SubagentStop', (ctx) => {
+      events.push(ctx);
+      return {};
+    });
+
+    const mgr = new SubagentManager({ hookRegistry: registry });
+    const handle = await mgr.forkSubagent({
+      parent: { sessionId: 'p-bg' },
+      config: { model: 'sonnet' },
+    });
+    // Make the child run hang so cancelJob wins before natural completion.
+    const childSession = shared.sessions[shared.sessions.length - 1]!;
+    (childSession.sendMessage as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise(() => {}), // never resolves
+    );
+
+    const bg = new BackgroundAgentRegistry({});
+    const job = bg.register({ handle, prompt: 'inspect', model: 'sonnet' });
+
+    // cancelJob → handle.cancel() fires SubagentStop (setting stopDispatched)
+    // before the synthesized cancelled result re-enters markTerminal, so the
+    // trailing teardown there is a no-op — the hook fires exactly once.
+    const cancelled = await bg.cancelJob(job.jobId);
+    expect(cancelled).toBe(true);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ status: 'cancelled', subagentId: handle.id });
   });
 });
