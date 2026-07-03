@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.19.1] - 2026-07-03
+
+### Fixed
+- cancel in-flight foreground subagents on soft-stop (ESC/Ctrl-C) (#400) (1e838d1)
+
 ## [5.19.0] - 2026-07-03
 
 ### Added
