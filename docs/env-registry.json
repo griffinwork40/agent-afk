@@ -26,6 +26,15 @@
       "category": "misc"
     },
     {
+      "name": "AFK_BG_AUTO_DELIVER",
+      "description": "Auto-deliver background subagent results into the model context on the next user turn (interactive REPL). On by default. Set to 0, false, off, or no (case-insensitive) to disable, restoring the manual /bgsub:join retrieval flow.",
+      "type": "boolean",
+      "required": false,
+      "default": "1",
+      "example": "0",
+      "category": "misc"
+    },
+    {
       "name": "AFK_BROWSER_ALLOWED_DOMAINS",
       "description": "Comma-separated allowlist of URL host globs. When set, browser_open and any navigation that targets a host outside the list returns status: blocked_by_policy. Unset means no allowlist (permissive). Patterns use simple `*` glob matching against the URL host. Combines with AFK_BROWSER_BLOCKED_DOMAINS — block wins.",
       "type": "string",

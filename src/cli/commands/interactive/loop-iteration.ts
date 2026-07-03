@@ -89,7 +89,7 @@ export async function runInputLoop(
   footer: FooterSubsystems,
   history: ReplHistory,
 ): Promise<void> {
-  const { contextPane, loopStageBar, verdictLedger, shellPassthrough } =
+  const { contextPane, loopStageBar, verdictLedger, shellPassthrough, bgResultNotifier } =
     footer;
 
   // Init metadata (tools/MCP/SDK version) only resolves once the SDK
@@ -171,6 +171,22 @@ export async function runInputLoop(
         const seconds = Math.max(0, Math.round(result.durationMs / 100) / 10);
         ctx.replRenderer.writeLine(
           palette.dim(`  ${glyph} [${job.id}] ${exitPart} · ${seconds}s · `) + job.command,
+        );
+      }
+      // Background-subagent completion notifications — one line per settled
+      // `agent`-tool background job (mode:"background" or Ctrl+B promotion)
+      // since the last prompt. The result itself reaches the model via
+      // `bgResultNotifier.drainInjections()` below; this notice is
+      // human-summary-only, matching the shell-job style above.
+      const bgAgentNotifications = bgResultNotifier.drainNotifications();
+      for (const { job } of bgAgentNotifications) {
+        const glyph = job.status === 'completed' ? '✓' : job.status === 'failed' ? '✗' : '⊘';
+        const seconds = job.endedAt !== undefined
+          ? Math.max(0, Math.round((job.endedAt - job.startedAt) / 100) / 10)
+          : 0;
+        const label = job.label.length > 60 ? `${job.label.slice(0, 60)}…` : job.label;
+        ctx.replRenderer.writeLine(
+          palette.dim(`  ${glyph} [${job.jobId}] subagent ${job.status} · ${seconds}s · `) + label,
         );
       }
       const paneLines = contextPane.renderIfChanged(ctx.stats.sessionId);
@@ -415,6 +431,15 @@ export async function runInputLoop(
       const shellInjection = shellPassthrough.drainInjections();
       if (shellInjection.length > 0) {
         runText = shellInjection + runText;
+      }
+
+      // Prepend any settled background-subagent results so the model sees
+      // them as context for the next user message — same next-turn delivery
+      // contract as shell passthrough above. Drain also emits a `delivered`
+      // witness event per job; /bgsub:join remains available for replay.
+      const bgAgentInjection = bgResultNotifier.drainInjections();
+      if (bgAgentInjection.length > 0) {
+        runText = bgAgentInjection + runText;
       }
 
       // UserPromptSubmit hook — fires before every turn submission.

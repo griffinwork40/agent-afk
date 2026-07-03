@@ -778,6 +778,16 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     example: '0',
     category: 'misc',
   },
+  {
+    name: 'AFK_BG_AUTO_DELIVER',
+    description:
+      'Auto-deliver background subagent results into the model context on the next user turn (interactive REPL). On by default. Set to 0, false, off, or no (case-insensitive) to disable, restoring the manual /bgsub:join retrieval flow.',
+    type: 'boolean',
+    required: false,
+    default: '1',
+    example: '0',
+    category: 'misc',
+  },
 
   // ── UI / output ───────────────────────────────────────────────────────────
   {
@@ -1230,6 +1240,7 @@ export const env = {
   get AFK_AUTO_ROUTING(): string | undefined { return process.env['AFK_AUTO_ROUTING']; },
   get AFK_INTERNAL(): string | undefined { return process.env['AFK_INTERNAL']; },
   get AFK_SHELL_PASSTHROUGH(): string | undefined { return process.env['AFK_SHELL_PASSTHROUGH']; },
+  get AFK_BG_AUTO_DELIVER(): string | undefined { return process.env['AFK_BG_AUTO_DELIVER']; },
 
   // UI / output
   get AFK_BANNER_PLAIN(): string | undefined { return process.env['AFK_BANNER_PLAIN']; },

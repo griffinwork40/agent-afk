@@ -174,12 +174,20 @@ export const BackgroundAgentJoinedPayloadSchema = z.object({
   jobStatus: z.enum(['completed', 'failed', 'cancelled']),
 });
 
+export const BackgroundAgentDeliveredPayloadSchema = z.object({
+  transition: z.literal('delivered'),
+  jobId: z.string(),
+  subagentId: z.string(),
+  jobStatus: z.enum(['completed', 'failed', 'cancelled']),
+});
+
 export const BackgroundAgentPayloadSchema = z.discriminatedUnion('transition', [
   BackgroundAgentStartedPayloadSchema,
   BackgroundAgentCompletedPayloadSchema,
   BackgroundAgentFailedPayloadSchema,
   BackgroundAgentCancelledPayloadSchema,
   BackgroundAgentJoinedPayloadSchema,
+  BackgroundAgentDeliveredPayloadSchema,
 ]);
 
 // ---------------------------------------------------------------------------

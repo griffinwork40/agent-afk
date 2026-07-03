@@ -30,9 +30,12 @@
  * registry. Jobs that were cancelled by abort cascade are still
  * observable for the lifetime of this process.
  *
- * **No silent context injection.** Completed jobs sit in the registry
- * until the caller invokes `join()`. The registry never pushes results
- * into the parent session's conversation.
+ * **Delivery is the surface's job.** The registry never pushes results
+ * into the parent session's conversation itself — it only emits the
+ * `settled` event. The interactive REPL wires a `BgResultNotifier`
+ * (src/cli/commands/interactive/bg-result-notifier.ts) onto that event to
+ * auto-deliver results into the next user turn; surfaces without a
+ * notifier fall back to explicit `join()`.
  *
  * **Memory management.** Terminal jobs are evicted ~5 minutes after they
  * settle via a `setTimeout(...).unref()` so the timer doesn't keep the
@@ -404,6 +407,25 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
     });
     this.emit('joined', this.snapshot(job));
     return result;
+  }
+
+  /**
+   * Record that a terminal job's result was auto-delivered into the parent
+   * conversation by a surface-level notifier (BgResultNotifier). Emits a
+   * `background_agent.delivered` witness event so trace readers can
+   * distinguish auto-delivery from explicit `joined` events. No-op for
+   * unknown (evicted) or still-running jobs. Does not consume the job —
+   * it remains `join()`-able until TTL eviction.
+   */
+  markDelivered(jobId: string): void {
+    const job = this.jobs.get(jobId);
+    if (!job || job.status === 'running') return;
+    void emitBackgroundAgent(this.traceWriter, {
+      transition: 'delivered',
+      jobId,
+      subagentId: job.subagentId,
+      jobStatus: job.status as 'completed' | 'failed' | 'cancelled',
+    });
   }
 
   /**

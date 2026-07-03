@@ -308,6 +308,8 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
           return line('bg-agent', `cancelled (${p.source})  [${p.jobId}]`);
         case 'joined':
           return line('bg-agent', `joined  ${p.jobStatus}  [${p.jobId}]`);
+        case 'delivered':
+          return line('bg-agent', `delivered  ${p.jobStatus}  [${p.jobId}]`);
       }
       return null;
     }

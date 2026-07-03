@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**117 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**118 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -173,6 +173,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | Name | Type | Required | Default | Example | Description |
 |------|------|----------|---------|---------|-------------|
 | `AFK_BANNER_PLAIN` | boolean |  |  | `1` | Suppress the ANSI-colored banner at REPL startup. Useful for non-TTY captures and CI logs. |
+| `AFK_BG_AUTO_DELIVER` | boolean |  | `1` | `0` | Auto-deliver background subagent results into the model context on the next user turn (interactive REPL). On by default. Set to 0, false, off, or no (case-insensitive) to disable, restoring the manual /bgsub:join retrieval flow. |
 | `AFK_DEMO_CLEAN` | boolean |  |  | `1` | Explicit opt-in to capture-mode. When set to 1, suppresses high-frequency repaint drivers (spinner ticker, live thinking-preview) so recorded artifacts contain each state once instead of once per timer tick. |
 | `AFK_DIFF_LINES` | number |  |  | `50` | Maximum number of diff lines shown in the inline diff render during write_file tool calls. Set to 0 for no cap. Non-integer values are silently ignored and the default applies. |
 | `AFK_MEMORY_EVIDENCE_GATE` | boolean |  |  | `1` | Opt-in (set to 1) evidence gate for durable memory writes. When enabled, a codebase fact (memory_update category "convention") stored without an `evidence` citation is recalled as [unverified], and memory_search results carry a verification verdict. User preferences and agent reflections are never gated. Default off — memory behaves identically to legacy when unset. |

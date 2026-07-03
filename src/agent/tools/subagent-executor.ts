@@ -779,8 +779,9 @@ export class SubagentExecutor implements SubagentControl {
         label: job.label,
         message:
           `Background subagent started (jobId=${job.jobId}). ` +
-          `It is running detached and its result will NOT auto-inject into this context. ` +
-          `Retrieve it later via /bgsub:join ${job.jobId} or ask the user to join.`,
+          `It is running detached; its result will be delivered into this context ` +
+          `automatically with the next user message once it finishes. ` +
+          `/bgsub:join ${job.jobId} remains available for manual replay.`,
       };
       return { content: JSON.stringify(payload) };
     }
@@ -867,8 +868,9 @@ export class SubagentExecutor implements SubagentControl {
                 label: job.label,
                 message:
                   `Subagent backgrounded by user (jobId=${job.jobId}). ` +
-                  `It keeps running detached and its result will NOT auto-inject ` +
-                  `into this context. Retrieve it via /bgsub:join ${job.jobId}.`,
+                  `It keeps running detached; its result will be delivered into ` +
+                  `this context automatically with the next user message once it ` +
+                  `finishes. /bgsub:join ${job.jobId} remains available for manual replay.`,
               }),
             };
           } catch (e) {
