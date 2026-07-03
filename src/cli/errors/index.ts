@@ -26,4 +26,4 @@ export function handleCommandError(err: unknown): never {
 
 export { classifyError } from './classifier.js';
 export { presentError } from './presenter.js';
-export type { ClassifiedError, ErrorKind } from './classifier.js';
+export type { ClassifiedError } from './classifier.js';
