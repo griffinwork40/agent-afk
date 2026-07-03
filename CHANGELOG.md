@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.15.11] - 2026-07-03
+
+### Fixed
+- close reverse-direction forkSubagent credential leak (#377) (a30cd61)
+
 ## [5.15.10] - 2026-07-02
 
 ### Fixed
