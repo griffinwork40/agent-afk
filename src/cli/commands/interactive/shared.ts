@@ -364,6 +364,14 @@ export interface InteractiveCtx {
    */
   clearVerdictLedger?: () => void;
   /**
+   * Drops any buffered background-subagent results (BgResultNotifier) so a
+   * mid-session /resume swap can't leak the outgoing session's settled-job
+   * injections into the resumed session's first turn. Same wiring pattern
+   * as `clearVerdictLedger`: owned by the REPL loop's closure, set by
+   * `setupFooterSubsystems`, invoked from the swap's `onSwapped` callback.
+   */
+  clearBgResultBuffer?: () => void;
+  /**
   /**
    * Cursor row (1-based) at the moment `armCompositor` will be invoked,
    * computed by counting `

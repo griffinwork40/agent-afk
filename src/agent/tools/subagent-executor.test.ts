@@ -1452,7 +1452,7 @@ describe('SubagentExecutor', () => {
       expect(payload.jobId).toMatch(/^bg-/);
       expect(payload.subagentId).toBe('sub-1');
       expect(payload.label).toBe('long investigation');
-      expect(payload.message).toMatch(/will NOT auto-inject/);
+      expect(payload.message).toMatch(/delivered into this context/);
 
       // Sanity: the job is observable via the registry; status still running.
       const observed = registry.get(payload.jobId);

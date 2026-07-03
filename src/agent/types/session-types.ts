@@ -257,10 +257,14 @@ export interface IAgentSession {
   getOutputStream(): AsyncIterable<OutputEvent>;
 
   /**
-   * Get a narrow reference to the input stream for pushing user messages.
-   * Used by SubagentStop handlers to inject context into the parent's next turn.
+   * Get a narrow reference to the session's input channels.
+   *
+   * `pushUserMessage` starts a standalone turn (live steering);
+   * `queueFrameworkContext` holds hook-generated context (SubagentStop
+   * `injectContext`) to be prepended to the next real user message so it can
+   * never displace one. See `InputStreamRef` for the full contract.
    */
-  getInputStreamRef(): Pick<InputStreamRef, 'pushUserMessage'>;
+  getInputStreamRef(): Pick<InputStreamRef, 'pushUserMessage' | 'queueFrameworkContext'>;
 
   supportedCommands(): Promise<SlashCommand[]>;
   supportedModels(): Promise<ModelInfo[]>;

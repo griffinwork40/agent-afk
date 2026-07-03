@@ -568,6 +568,10 @@ export class ComposeExecutor {
     manager = new SubagentManager({
       parentAbortSignal: call.signal,
       apiKey: this.ctx.apiKey,
+      // `this.ctx.apiKey` is the parent credential (resolved for
+      // `this.ctx.defaultModel`), so that model is the provider source of truth
+      // for the fork-time credential fallback (see SubagentManager.parentProvider).
+      parentModel: this.ctx.defaultModel,
       progressSink: chainedSink,
       ...(this.ctx.baseUrl !== undefined ? { baseUrl: this.ctx.baseUrl } : {}),
       // Anchor every forked DAG node to the session's worktree (re-anchored via

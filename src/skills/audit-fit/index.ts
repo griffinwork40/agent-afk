@@ -346,6 +346,10 @@ async function handler(
   // land in the parent trace. See skills/index.ts SkillExecutionContext.traceWriter.
   const manager = new SubagentManager({
     apiKey,
+    // `apiKey` is `ctx.apiKey` — resolved by the parent session for
+    // `ctx.defaultModel` — so that model is the provider source of truth for
+    // the fork-time credential fallback (see SubagentManager.parentProvider).
+    ...(ctx?.defaultModel !== undefined ? { parentModel: ctx.defaultModel } : {}),
     ...(ctx?.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
   });
   // Invariant: the gate receives AFK snake_case runtime tool names (read_file,

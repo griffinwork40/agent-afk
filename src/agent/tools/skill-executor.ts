@@ -706,6 +706,10 @@ export class SkillExecutor {
     const manager = new SubagentManager({
       parentAbortSignal: call.signal,
       apiKey: skillChildApiKey,
+      // `skillChildApiKey` was resolved for `skillChildModel`, so that model is
+      // the provider source of truth for the fork-time credential fallback
+      // (see SubagentManager.parentProvider).
+      parentModel: skillChildModel,
       ...(this.ctx.baseUrl !== undefined ? { baseUrl: this.ctx.baseUrl } : {}),
       ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
       progressSink: getCurrentSink(),
@@ -1001,6 +1005,10 @@ export class SkillExecutor {
     const manager = new SubagentManager({
       parentAbortSignal: call.signal,
       apiKey: pluginChildApiKey,
+      // `pluginChildApiKey` was resolved for `pluginChildModel`, so that model
+      // is the provider source of truth for the fork-time credential fallback
+      // (see SubagentManager.parentProvider).
+      parentModel: pluginChildModel,
       ...(this.ctx.baseUrl !== undefined ? { baseUrl: this.ctx.baseUrl } : {}),
       ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
       progressSink: getCurrentSink(),

@@ -122,6 +122,58 @@ function partitionIntoBatches(
   }, []);
 }
 
+/**
+ * Default ceiling on concurrency-safe tool calls run simultaneously within one
+ * batched round (see {@link SessionToolDispatcher.executeBatch}). Safe batches
+ * include agent/skill/compose subagent forks, not just cheap reads; unbounded,
+ * a wide fan-out (a compose layer, or a turn issuing many subagent calls) can
+ * exhaust memory or storm the provider rate limit. This is the engine-level
+ * safety ceiling — 8 sits above typical read-fan-out width so ordinary reads
+ * are never throttled, while bounding a runaway subagent fan-out (cf. the
+ * background-job ceiling of 10). Must stay >= 2 or parallel-timing tests
+ * regress; injectable via SessionToolDispatcherOptions.maxConcurrentSafeCalls.
+ */
+export const DEFAULT_MAX_CONCURRENT_SAFE_TOOL_CALLS = 8;
+
+/**
+ * Run `worker` over every `items` element with at most `limit` invocations in
+ * flight, returning results in `items` order with the same fulfilled/rejected
+ * shape as `Promise.allSettled`. Workers are started eagerly up to the cap, so
+ * when `limit >= items.length` this is behaviourally identical to
+ * `Promise.allSettled(items.map(worker))` — the parallel-timing tests rely on
+ * that. `limit` is floored at 1, so a non-positive cap degrades to sequential
+ * rather than deadlocking on an empty pool.
+ */
+async function settleWithConcurrencyLimit<T, I>(
+  items: readonly I[],
+  limit: number,
+  worker: (item: I) => Promise<T>,
+): Promise<PromiseSettledResult<T>[]> {
+  const results: PromiseSettledResult<T>[] = new Array(items.length);
+  const poolSize = Math.min(Math.max(1, Math.floor(limit)), items.length);
+  let cursor = 0;
+  const runners: Promise<void>[] = [];
+  for (let w = 0; w < poolSize; w++) {
+    runners.push(
+      (async () => {
+        // `cursor < length` test and `cursor++` are not separated by an await,
+        // so each index is claimed by exactly one runner (no double-dispatch,
+        // no skip) despite the shared cursor.
+        while (cursor < items.length) {
+          const i = cursor++;
+          try {
+            results[i] = { status: 'fulfilled', value: await worker(items[i]!) };
+          } catch (reason) {
+            results[i] = { status: 'rejected', reason };
+          }
+        }
+      })(),
+    );
+  }
+  await Promise.all(runners);
+  return results;
+}
+
 export interface SessionToolDispatcherOptions {
   handlers: Map<string, ToolHandler>;
   schemas: AnthropicToolDef[];
@@ -148,6 +200,14 @@ export interface SessionToolDispatcherOptions {
   skillExecutor?: SkillExecutor;
   composeExecutor?: ComposeExecutor;
   concurrencyClassifier?: ConcurrencyClassifier;
+  /**
+   * Ceiling on simultaneously in-flight concurrency-safe tool calls within one
+   * batched round. Defaults to {@link DEFAULT_MAX_CONCURRENT_SAFE_TOOL_CALLS}
+   * (8). A wide safe batch drains through a pool of at most this many at a time;
+   * results and their order are unaffected. Values < 1 (or non-finite) fall
+   * back to the default. Injected by tests to assert the cap.
+   */
+  maxConcurrentSafeCalls?: number;
   /** Session working directory forwarded to every handler invocation. */
   cwd?: string;
   /**
@@ -213,6 +273,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly skillExecutor: SkillExecutor | undefined;
   private readonly composeExecutor: ComposeExecutor | undefined;
   private readonly classifier: ConcurrencyClassifier;
+  /** Ceiling on simultaneously in-flight concurrency-safe calls per batch. */
+  private readonly maxConcurrentSafeCalls: number;
   // Invariant: `resolveBase` is the dispatcher's anchor for relative-path
   // resolution AND the value emitted as `ToolHandlerContext.resolveBase` /
   // `.cwd` on every dispatch. Mutated only via `setResolveBase()` so the
@@ -259,6 +321,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this.skillExecutor = opts.skillExecutor;
     this.composeExecutor = opts.composeExecutor;
     this.classifier = opts.concurrencyClassifier ?? defaultConcurrencyClassifier;
+    this.maxConcurrentSafeCalls =
+      typeof opts.maxConcurrentSafeCalls === 'number' &&
+      Number.isFinite(opts.maxConcurrentSafeCalls) &&
+      opts.maxConcurrentSafeCalls >= 1
+        ? Math.floor(opts.maxConcurrentSafeCalls)
+        : DEFAULT_MAX_CONCURRENT_SAFE_TOOL_CALLS;
     this.resolveBase = opts.cwd;
     this._env = opts.env;
     this.sessionId = opts.sessionId;
@@ -884,8 +952,18 @@ export class SessionToolDispatcher implements ToolDispatcher {
       // when call[0] is stale, and falsely dispatching aborted calls when
       // call[0] is fresh. See the parallel-branch parity below.
       if (batch.isConcurrencySafe) {
-        const settled = await Promise.allSettled(
-          batch.indices.map(async (batchIdx) => {
+        // Bounded concurrency: at most `this.maxConcurrentSafeCalls` of these
+        // safe calls (which include agent/skill/compose subagent forks) run at
+        // once, so a wide fan-out cannot exhaust memory or storm the provider
+        // rate limit. Within the cap this is identical to Promise.allSettled;
+        // results stay keyed by originalIndex, so ordering is completion-order
+        // independent exactly as before. Abort is checked at DISPATCH time (in
+        // the worker), not at admission — a call cleared in phase 1 can abort
+        // while queued behind the cap.
+        const settled = await settleWithConcurrencyLimit(
+          batch.indices,
+          this.maxConcurrentSafeCalls,
+          async (batchIdx) => {
             const { call, originalIndex } = executableCalls[batchIdx]!;
             if (call.signal.aborted) {
               return {
@@ -895,7 +973,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
             }
             const result = await this.executeCore(call);
             return { result, originalIndex };
-          }),
+          },
         );
         for (const outcome of settled) {
           if (outcome.status === 'fulfilled') {
@@ -903,8 +981,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
           } else {
             // Invariant: this branch is unreachable today. `executeCore` wraps
           // its entire body in try/catch and returns an isError ToolResult
-          // rather than propagating — so the Promise passed to allSettled
-          // always fulfills. The rejection path exists as a latent safety net
+          // rather than propagating — so the Promise passed to
+          // settleWithConcurrencyLimit always fulfills. The rejection path
+          // exists as a latent safety net
           // for future refactors that might let executeCore propagate. If that
           // happens, `firePostToolUseFailure` must be called here to preserve
           // the "exactly one of PostToolUse/PostToolUseFailure fires per call"
@@ -912,7 +991,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
           const msg = outcome.reason instanceof Error
               ? outcome.reason.message
               : String(outcome.reason);
-            // Find the original index from the batch — allSettled preserves order
+            // Find the original index from the batch — the pool returns
+            // results in items (batch.indices) order, so indexOf maps back.
             const batchIdx = batch.indices[settled.indexOf(outcome)]!;
             results[executableCalls[batchIdx]!.originalIndex] = {
               content: `Tool execution error: ${msg}`,

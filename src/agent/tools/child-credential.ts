@@ -1,4 +1,4 @@
-import { providerForModel } from '../providers/index.js';
+import { providerForModel, type BundledProviderName } from '../providers/index.js';
 
 /**
  * True iff `key` is an Anthropic-shaped credential — an API key
@@ -47,4 +47,58 @@ export function applyParentCredentialFallback(args: {
   if (resolved !== undefined && resolved.length > 0) return resolved;
   if (providerForModel(childModel) === 'openai-compatible') return resolved;
   return isAnthropicCredential(parentApiKey) ? parentApiKey : resolved;
+}
+
+/**
+ * Contract: resolve the effective `apiKey` for a child forked by
+ * `SubagentManager.forkSubagent`, guarding the manager-level
+ * parent-credential fallback against the cross-provider leak — in BOTH
+ * directions.
+ *
+ * The manager's historical fallback was `config.apiKey || parentApiKey` —
+ * provider-blind. That reintroduced the parent's credential even when an
+ * upstream executor (subagent-executor.ts, skill-executor.ts,
+ * compose-executor.ts) had *deliberately* cleared `apiKey` for a
+ * cross-provider child, shipping the wrong credential to a foreign endpoint:
+ * an Anthropic `sk-ant-…` token to an OpenAI-shaped endpoint, or an OpenAI
+ * `sk-proj-…` token to `api.anthropic.com` (401 at best; both auth resolvers
+ * treat an explicit config key as Tier-1 — see openai-compatible/auth.ts).
+ *
+ * The source of truth is `parentProvider`, which the manager derives ONCE
+ * (in its constructor) from the parent model via `providerForModel` — not a
+ * guess from the key's shape, which is format-fragile (legacy bare `sk-`
+ * OpenAI keys have no distinguishing prefix). Rules (in order):
+ *   - explicit non-empty `configApiKey` → returned unchanged (caller wins).
+ *   - no `parentApiKey` → `undefined` (nothing to inherit).
+ *   - provider-identity gate: inherit `parentApiKey` IFF the child's provider
+ *     (`providerForModel(childModel)`) equals the parent's provider; otherwise
+ *     `undefined` (never cross the provider boundary). This preserves
+ *     legitimate same-provider inheritance — including non-`sk-ant` keys used
+ *     by local Anthropic-shim setups, since those route to `anthropic-direct`.
+ *
+ * Fallback when `parentProvider` is absent (legacy callers / direct
+ * construction that didn't pass `parentModel`): infer `'anthropic-direct'`
+ * from an `sk-ant-` key so the forward guard still holds, and otherwise leave
+ * it unknowable and inherit — exactly the pre-`parentModel` behavior, so no
+ * existing caller regresses. The reverse-direction protection activates only
+ * where the manager supplies `parentProvider`.
+ *
+ * Invariant: `parentProvider` and `providerForModel(childModel)` are both
+ * canonical provider names (`'anthropic-direct'` / `'openai-compatible'`), so
+ * the `===` comparison is exact — the manager only ever supplies a
+ * `providerForModel()` result.
+ */
+export function applyManagerApiKeyFallback(args: {
+  childModel: string | undefined;
+  configApiKey: string | undefined;
+  parentApiKey: string | undefined;
+  parentProvider?: BundledProviderName | undefined;
+}): string | undefined {
+  const { childModel, configApiKey, parentApiKey, parentProvider } = args;
+  if (configApiKey !== undefined && configApiKey.length > 0) return configApiKey;
+  if (parentApiKey === undefined) return undefined;
+  const effectiveParent =
+    parentProvider ?? (isAnthropicCredential(parentApiKey) ? 'anthropic-direct' : undefined);
+  if (effectiveParent === undefined) return parentApiKey;
+  return providerForModel(childModel) === effectiveParent ? parentApiKey : undefined;
 }

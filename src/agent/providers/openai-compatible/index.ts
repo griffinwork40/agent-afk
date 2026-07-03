@@ -46,6 +46,8 @@ import {
   composeTool,
 } from '../../tools/schemas.js';
 import { MemoryStore, createMemoryHandlers, memoryToolSchemas, memorySearchTool } from '../../memory/index.js';
+import { resolveToolSystemPrompt, resolveMemorySystemPrompt } from '../../tools/system-prompt.js';
+import { buildSkillManifest } from '../../tools/skill-bridge.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { buildQueryFromConfig } from './query.js';
 import { oneShotChatCompletion, type OpenAIOneShotInput } from './oneshot.js';
@@ -302,13 +304,28 @@ export class OpenAICompatibleProvider implements ModelProvider {
       ...(config.maxDepth !== undefined ? { maxDepth: config.maxDepth } : {}),
       workspace: runtimeStateSource.getWorkspace(),
     });
+    // Assemble the full provider-side system prompt so non-Anthropic sessions
+    // (this provider backs the REPL when the model is gpt-*/o*/local org/model)
+    // receive the SAME fragments as anthropic-direct — tool conventions, the
+    // interactive slash-command / bash-passthrough / background-subagent
+    // guidance, the memory prompt, and the skill manifest. Previously this
+    // provider sent only `userSystem + env`, so on a non-Anthropic REPL the
+    // model was never told what the `<background-subagent-result>` (and
+    // slash/bash) envelopes mean. The tool/memory fragments are resolved via
+    // the shared helpers in tools/system-prompt.ts so the set cannot drift from
+    // anthropic-direct. Ordering mirrors AnthropicDirectProvider.query():
+    // [toolBase, memoryPrompt, env, manifest?, userSystem?].
+    const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
+    const memoryPrompt = resolveMemorySystemPrompt(this.providerOpts.readOnlyMemory);
+    const manifest = this.providerOpts.skillExecutor ? buildSkillManifest() : '';
     const existingSys =
       typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined;
+    const systemParts = [toolBase, memoryPrompt, envFragment];
+    if (manifest.length > 0) systemParts.push(manifest);
+    if (existingSys !== undefined && existingSys.length > 0) systemParts.push(existingSys);
     const patchedConfig: typeof config = {
       ...config,
-      systemPrompt: existingSys !== undefined
-        ? `${existingSys}\n\n${envFragment}`
-        : envFragment,
+      systemPrompt: systemParts.join('\n\n'),
     };
 
     return buildQueryFromConfig(patchedConfig, args.prompt, buildOpts);

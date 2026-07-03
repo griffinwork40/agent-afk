@@ -28,7 +28,7 @@ export type ExecFileFn = (
   opts?: { cwd?: string },
 ) => Promise<{ stdout: string; stderr: string }>;
 
-export interface WorktreeMeta {
+interface WorktreeMeta {
   owner: 'interactive' | 'diagnose' | string;
   /**
    * PID of the process that created this worktree. Used by the sweep
@@ -46,7 +46,7 @@ export interface WorktreeMeta {
   baseBranch?: string;
 }
 
-export interface WorktreeCandidate {
+interface WorktreeCandidate {
   path: string;
   head?: string;
   branch?: string;
@@ -70,7 +70,7 @@ export interface WorktreeCandidate {
   ownerLiveness: 'alive' | 'dead' | 'unknown';
 }
 
-export type WorktreeVerdict =
+type WorktreeVerdict =
   | 'empty'
   | 'stale-clean'
   | 'stale-dirty'
@@ -127,7 +127,7 @@ export interface SweepOptions {
   readPresence?: () => Promise<PresenceRecord[]>;
 }
 
-export interface SweepCandidateSummary {
+interface SweepCandidateSummary {
   path: string;
   verdict: WorktreeVerdict;
   /** Resolved owner from `.afk-worktree-meta.json`, or 'unknown' when meta is absent. */

@@ -60,7 +60,7 @@ import {
 } from '../../tools/handlers/exit-plan-mode.js';
 import type { PlanExitControls } from '../../types/config-types.js';
 import { builtinToolSchemas, agentTool, skillTool, composeTool } from '../../tools/schemas.js';
-import { TOOL_SYSTEM_PROMPT_BASE, SLASH_COMMAND_ROUTING_PROMPT, BASH_PASSTHROUGH_PROMPT, MEMORY_SYSTEM_PROMPT, MEMORY_SYSTEM_PROMPT_READONLY } from '../../tools/system-prompt.js';
+import { resolveToolSystemPrompt, resolveMemorySystemPrompt } from '../../tools/system-prompt.js';
 import { withMcpToolsAllowed, withCustomToolsAllowed, type ToolPermissionConfig } from '../../tools/permissions.js';
 import type { HookRegistry } from '../../hooks.js';
 import { resolveSessionHookRegistry } from '../../hooks.js';
@@ -798,15 +798,11 @@ export class AnthropicDirectProvider implements ModelProvider {
     // that tag) would push them to ask "which skill?" instead of engaging with
     // their SKILL.md body. The ask_question strip above is the structural
     // backstop for the same failure mode.
-    const toolBase = config.isSkillDispatch
-      ? TOOL_SYSTEM_PROMPT_BASE
-      : `${TOOL_SYSTEM_PROMPT_BASE}\n\n${SLASH_COMMAND_ROUTING_PROMPT}\n\n${BASH_PASSTHROUGH_PROMPT}`;
+    const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
     // Read-only memory child sessions get a slimmed prompt that omits write
     // instructions for memory_update / procedure_write — keeps the model from
     // being told about tools it does not have.
-    const memoryPrompt = this.readOnlyMemory
-      ? MEMORY_SYSTEM_PROMPT_READONLY
-      : MEMORY_SYSTEM_PROMPT;
+    const memoryPrompt = resolveMemorySystemPrompt(this.readOnlyMemory);
     const systemParts = [toolBase, memoryPrompt];
     // Awareness layer (Phase 1 + 2): session identity fragment + workspace line.
     // `formatEnvironmentFragment` always emits `- Working directory: <cwd>`
@@ -878,7 +874,7 @@ export class AnthropicDirectProvider implements ModelProvider {
     // prompt fragment and tool dispatcher when setCwd() is called mid-session.
     // Only wired when we own the dispatcher (not when the caller injected one).
     //
-    // `stableSystemPrefix` = [toolBase, MEMORY_SYSTEM_PROMPT, manifest?, userSystem?].
+    // `stableSystemPrefix` = [toolBase, memoryPrompt, manifest?, userSystem?].
     // The factory inserts the new `# Environment` block at index 2, matching
     // the construction order in `query()` above.
     //

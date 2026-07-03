@@ -11,6 +11,52 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.15.13] - 2026-07-03
+
+### Fixed
+- deliver SubagentStop injectContext with the next user message, not as its own turn (#359) (c2d5078)
+
+## [5.15.12] - 2026-07-03
+
+### Added
+- auto-deliver background subagent results into the next turn (#372) (0c92c7c)
+
+### Fixed
+- close AFK-mode coverage gaps + clip afk-push rawBody fallback (#200) (#357) (ad5e64a)
+
+## [5.15.11] - 2026-07-03
+
+### Fixed
+- close reverse-direction forkSubagent credential leak (#377) (a30cd61)
+
+## [5.15.10] - 2026-07-02
+
+### Fixed
+- bound foreground safe-batch tool concurrency (#376) (cb9fe2a)
+
+## [5.15.9] - 2026-07-02
+
+### Fixed
+- approve better-sqlite3 native build script for pnpm 10 (#383) (001b864)
+
+## [5.15.8] - 2026-07-02
+
+### Fixed
+- thread defaultSubagentModel through nested skill executors (#381) (35e922b)
+
+## [5.15.7] - 2026-07-02
+
+### Fixed
+- evict project-origin skills when cwd changes (#179) (#356) (89c358b)
+
+## [5.15.6] - 2026-07-02
+
+### Fixed
+- close forkSubagent cross-provider credential leak (#374) (9294525)
+
+### Changed
+- add docs/mcp.md — MCP config, transports, OAuth, security (#180) (#358) (566513d)
+
 ## [5.15.5] - 2026-07-01
 
 ### Fixed

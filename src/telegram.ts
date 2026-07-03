@@ -248,6 +248,9 @@ async function main() {
         // bot is pointed at a worktree via AFK_TELEGRAM_CWD.
         const rootManager = new SubagentManager({
           apiKey: telegramApiKey,
+          // Parent model → provider, so the fork-time credential fallback never
+          // crosses the provider boundary (see SubagentManager.parentProvider).
+          parentModel: sessionConfig.model,
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
           ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
         });
@@ -278,6 +281,12 @@ async function main() {
           getApiKeyForModel,
           // Surface: Telegram skill executor children inherit origin 'telegram'.
           'telegram',
+          // Resolved default-subagent model threaded into nested skill
+          // executors so skill→skill / skill→agent chains inherit the SAME
+          // policy as the top-level executors — closing the leak where a
+          // nested subagent silently defaulted to Anthropic `sonnet` under an
+          // OpenAI-routed parent.
+          getDefaultSubagentModel(sessionConfig.model),
         );
 
         // Pass `sessionConfig.model` to `getDefaultSubagentModel` for

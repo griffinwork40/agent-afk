@@ -55,7 +55,7 @@ afk chat "hello"
 
 > **Agent AFK Pro:** Autonomous skill-generation (`/forge`) and the calibrated skill-qualification rubric (`/qualify`) are reserved for Agent AFK Pro and are not part of the open-source build.
 - **Cross-session memory** — Claude remembers preferences, decisions, and procedures across runs. See [Memory](#memory) below.
-- **Background subagent jobs** — dispatch a subagent with `mode:'background'`; `/bgsub` lists running and completed jobs, `/bgsub:join <id>` retrieves the result.
+- **Background subagent jobs** — dispatch a subagent with `mode:'background'`; results auto-deliver into the model's context when they finish. `/bgsub` lists running and completed jobs, `/bgsub:join <id>` replays a result manually.
 
 ## Four surfaces, one session manager
 
@@ -145,6 +145,8 @@ afk chat "refactor this" --model gpt-5.5
 | `large` | `claude-opus-4-8` | Most capable; `opus` alias |
 
 See [`docs/model-slots.md`](docs/model-slots.md) for the full configuration reference.
+
+MCP servers (tool-providing plugins over stdio/HTTP) — see [`docs/mcp.md`](docs/mcp.md) for config, transports, OAuth, and security notes.
 
 ## Useful commands
 

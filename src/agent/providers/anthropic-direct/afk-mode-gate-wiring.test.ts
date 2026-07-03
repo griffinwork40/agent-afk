@@ -1,10 +1,11 @@
 /**
- * Regression test for plan-mode GATE wiring (the enforcement half).
+ * Regression test for AFK-mode GATE wiring (the enforcement half).
  *
- * `plan-mode-system-payload.test.ts` covers the POSTURE half — the system
- * prompt addendum the model sees. This file covers the ENFORCEMENT half: when
- * a session is in `'plan'` permission mode, a write-class tool such as
- * `edit_file` must be REFUSED by the plan-mode gate before its handler runs.
+ * `plan-mode-system-payload.test.ts` and `afk-mode-addendum.test.ts` cover the
+ * POSTURE half — the system-prompt addendum the model sees. This file covers the
+ * ENFORCEMENT half: when a session is in `'autonomous'` (AFK) permission mode,
+ * a high-risk bash command such as `rm -rf x` must be REFUSED by the AFK-mode
+ * gate before its handler runs.
  *
  * The gate is a `PreToolUse` hook. It reaches the per-query
  * `SessionToolDispatcher` only if the provider threads the session's hook
@@ -17,19 +18,25 @@
  * `config.hookRegistry` on the dispatcher path is caught here.
  *
  * Observation point: the `tool.output` ProviderEvent. A gate block surfaces as
- * `isError: true` with a "plan mode … refused" / "blocked by PreToolUse hook"
- * message; an un-gated call instead runs the real `edit_file` handler.
+ * `isError: true` with an "AFK mode" / "blocked by PreToolUse hook" message;
+ * an un-gated call instead runs the real `bash` handler (which would execute
+ * the command).
+ *
+ * Key difference from plan-mode gate wiring: the AFK gate applies TREE-WIDE
+ * (no subagent self-skip for safety ceiling), and only `'autonomous'` mode
+ * triggers it (not `'plan'` or `'default'`).
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
-import type { ProviderEvent } from '../../provider.js';
+import type { ProviderEvent } from '../provider.js';
 import { AnthropicDirectProvider, __setAnthropicClientFactory } from './index.js';
 import { createHookRegistry, type HookRegistry } from '../../hooks.js';
-import { createPlanModeGate } from '../../plan-mode-gate.js';
+import { createAfkModeGate } from '../../afk-mode-gate.js';
+import type { ElicitationResult } from '../../types/sdk-types.js';
 
-// --- Mock Anthropic Messages-API plumbing (mirrors plan-mode-system-payload.test.ts) ---
+// --- Mock Anthropic Messages-API plumbing (mirrors plan-mode-gate-wiring.test.ts) ---
 
 const messagesCreateMock = vi.fn();
 
@@ -146,18 +153,30 @@ function makeTextStream(text: string): RawMessageStreamEvent[] {
   ];
 }
 
-/** Registry carrying ONLY the plan-mode gate, in the requested mode. */
-function planGateRegistry(mode: 'plan' | 'default'): HookRegistry {
+/**
+ * Registry carrying ONLY the AFK-mode gate in the requested mode. The gate's
+ * `route` is stubbed to DECLINE so high-risk ops immediately degrade to the
+ * legacy hard block — this isolates the "gate fires and blocks" assertion from
+ * the elicitation round-trip path tested in `afk-mode-gate.test.ts`.
+ */
+function afkGateRegistry(mode: 'autonomous' | 'default'): HookRegistry {
   const registry = createHookRegistry();
-  registry.register('PreToolUse', createPlanModeGate(() => mode));
+  registry.register(
+    'PreToolUse',
+    createAfkModeGate(
+      () => mode,
+      undefined,
+      undefined,
+      // Stub the elicitation route to DECLINE immediately so a high-risk op
+      // degrades to a hard block without waiting for any operator response.
+      { route: async (): Promise<ElicitationResult> => ({ action: 'decline' }) },
+    ),
+    { longRunning: true },
+  );
   return registry;
 }
 
-const EDIT_FILE_INPUT = JSON.stringify({
-  file_path: '/tmp/afk-plan-mode-gate-wiring-nonexistent.txt',
-  old_string: 'a',
-  new_string: 'b',
-});
+const BASH_RM_INPUT = JSON.stringify({ command: 'rm -rf x' });
 
 function toolOutputOf(events: ProviderEvent[]): { content: string; isError?: boolean } {
   const ev = events.find((e) => e.type === 'tool.output');
@@ -167,7 +186,7 @@ function toolOutputOf(events: ProviderEvent[]): { content: string; isError?: boo
   return { content: ev.content, ...(ev.isError !== undefined ? { isError: ev.isError } : {}) };
 }
 
-describe('AnthropicDirectProvider — plan-mode gate reaches the dispatcher via config.hookRegistry', () => {
+describe('AnthropicDirectProvider — AFK-mode gate reaches the dispatcher via config.hookRegistry', () => {
   beforeEach(() => {
     messagesCreateMock.mockReset();
     __setAnthropicClientFactory(null);
@@ -176,26 +195,26 @@ describe('AnthropicDirectProvider — plan-mode gate reaches the dispatcher via 
     messagesCreateMock.mockImplementation(() => {
       callIdx += 1;
       if (callIdx === 1) {
-        return fromArray(makeToolUseStream('toolu_edit', 'edit_file', EDIT_FILE_INPUT));
+        return fromArray(makeToolUseStream('toolu_bash', 'bash', BASH_RM_INPUT));
       }
       return fromArray(makeTextStream('done'));
     });
   });
 
-  it('BLOCKS edit_file for a top-level session in plan mode', async () => {
+  it('BLOCKS bash rm -rf for a top-level session in autonomous (AFK) mode', async () => {
     // Provider constructed WITHOUT a hookRegistry — exactly how bootstrap.ts,
     // chat.ts, daemon.ts, and telegram.ts build it. The gate must still fire
     // because the session-scoped registry is supplied on the query config.
     const provider = new AnthropicDirectProvider({
-      permissions: { allowedTools: ['edit_file'] },
+      permissions: { allowedTools: ['bash'] },
     });
     const query = provider.query({
-      prompt: singleInput('edit the file'),
+      prompt: singleInput('remove the build dir'),
       config: {
         model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
-        permissionMode: 'plan',
-        hookRegistry: planGateRegistry('plan'),
+        permissionMode: 'autonomous',
+        hookRegistry: afkGateRegistry('autonomous'),
       },
     });
 
@@ -203,25 +222,22 @@ describe('AnthropicDirectProvider — plan-mode gate reaches the dispatcher via 
     const out = toolOutputOf(events);
 
     expect(out.isError).toBe(true);
-    expect(out.content).toContain('plan mode');
-    expect(out.content).toContain('edit_file');
+    expect(out.content).toContain('AFK mode');
+    expect(out.content).toContain('bash');
   });
 
-  it('does NOT block edit_file for a forked subagent in plan mode (parentSessionId self-skip)', async () => {
-    // A subagent inherits the parent registry but its tool calls are task
-    // output, not main-conversation mutations — the gate self-skips when
-    // parentSessionId is set. This guards against the fix over-blocking.
+  it('does NOT block bash rm -rf when the session is in default mode', async () => {
+    // In default mode the AFK gate is a no-op — only 'autonomous' triggers it.
     const provider = new AnthropicDirectProvider({
-      permissions: { allowedTools: ['edit_file'] },
+      permissions: { allowedTools: ['bash'] },
     });
     const query = provider.query({
-      prompt: singleInput('edit the file'),
+      prompt: singleInput('remove the build dir'),
       config: {
         model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
-        permissionMode: 'plan',
-        parentSessionId: 'parent-session-123',
-        hookRegistry: planGateRegistry('plan'),
+        permissionMode: 'default',
+        hookRegistry: afkGateRegistry('default'),
       },
     });
 
@@ -229,29 +245,8 @@ describe('AnthropicDirectProvider — plan-mode gate reaches the dispatcher via 
     const out = toolOutputOf(events);
 
     // The gate did not fire — whatever the handler returned, it is NOT the
-    // plan-mode refusal.
-    expect(out.content).not.toContain('plan mode');
-    expect(out.content).not.toContain('blocked by PreToolUse hook');
-  });
-
-  it('does NOT block edit_file when the session is in default mode', async () => {
-    const provider = new AnthropicDirectProvider({
-      permissions: { allowedTools: ['edit_file'] },
-    });
-    const query = provider.query({
-      prompt: singleInput('edit the file'),
-      config: {
-        model: 'claude-sonnet-5',
-        apiKey: 'sk-ant-oat01-test',
-        permissionMode: 'default',
-        hookRegistry: planGateRegistry('default'),
-      },
-    });
-
-    const events = await collect(query);
-    const out = toolOutputOf(events);
-
-    expect(out.content).not.toContain('plan mode');
+    // AFK-mode refusal.
+    expect(out.content).not.toContain('AFK mode');
     expect(out.content).not.toContain('blocked by PreToolUse hook');
   });
 });

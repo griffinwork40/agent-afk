@@ -69,4 +69,3 @@ export function registerAll(): void {
   registerMarketplaceCommands();
 }
 
-export { registry } from './registry-exports.js';

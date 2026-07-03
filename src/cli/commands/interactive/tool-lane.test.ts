@@ -2645,3 +2645,51 @@ describe('ToolLane.flushCompletedRoots', () => {
     expect(lane.hasPending()).toBe(false);
   });
 });
+
+describe('ToolLane.peekTrailingCompletedRootToolName — cross-flush run gate', () => {
+  it('returns undefined for an empty lane', () => {
+    const lane = new ToolLane();
+    expect(lane.peekTrailingCompletedRootToolName()).toBeUndefined();
+  });
+
+  it('returns the toolName of the trailing completed flat root', () => {
+    const lane = new ToolLane();
+    lane.addStart('b1', 'Bash', '"echo a"');
+    lane.addResult('b1', makeResult('a'));
+    expect(lane.peekTrailingCompletedRootToolName()).toBe('Bash');
+  });
+
+  it('returns undefined when the trailing flat root is still in-flight', () => {
+    const lane = new ToolLane();
+    lane.addStart('b1', 'Bash', '"echo a"');
+    lane.addResult('b1', makeResult('a'));
+    lane.addStart('b2', 'Bash', '"echo b"'); // registered, no result yet
+    expect(lane.peekTrailingCompletedRootToolName()).toBeUndefined();
+  });
+
+  it('returns undefined when the trailing root is a NESTING tool (own commit path)', () => {
+    const lane = new ToolLane();
+    lane.addStart('a1', 'Agent', '(researcher)');
+    lane.addResult('a1', makeResult('done'));
+    expect(lane.peekTrailingCompletedRootToolName()).toBeUndefined();
+  });
+
+  it('skips nested (agentContext) children to report the trailing ROOT tool', () => {
+    const lane = new ToolLane();
+    lane.addStart('b1', 'Bash', '"echo a"');
+    lane.addResult('b1', makeResult('a'));
+    // A completed child bound to an agent context — must be skipped (not a root).
+    lane.addStartWithAgentContext('child-1', 'Read', '("x.ts")', 'some-agent');
+    lane.addResult('child-1', makeResult('1 line'));
+    expect(lane.peekTrailingCompletedRootToolName()).toBe('Bash');
+  });
+
+  it('reports the MOST-RECENT completed flat root when several tool names differ', () => {
+    const lane = new ToolLane();
+    lane.addStart('b1', 'Bash', '"a"');
+    lane.addResult('b1', makeResult('a'));
+    lane.addStart('r1', 'Read', '("x.ts")');
+    lane.addResult('r1', makeResult('1 line'));
+    expect(lane.peekTrailingCompletedRootToolName()).toBe('Read');
+  });
+});

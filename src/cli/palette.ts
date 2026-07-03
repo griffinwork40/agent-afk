@@ -76,5 +76,3 @@ export const palette = {
   /** Diff hunk header — dim grey, used for `@@ -a,b +c,d @@` lines. Structural scaffolding, not user-side, so it lives in the meta family. */
   diffHunk: chalk.blackBright,
 } as const;
-
-export type Palette = typeof palette;
