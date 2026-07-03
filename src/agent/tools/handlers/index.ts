@@ -24,6 +24,7 @@ import {
   cancelScheduleHandler,
 } from './schedules.js';
 import { createTerminalFontSizeHandler, terminalFontSizeHandler } from './terminal-font-size.js';
+import { createWorktreeHandler } from './worktree.js';
 import { configGetHandler, configSetHandler } from './config-ops.js';
 // below for trivial re-enable.
 import { askQuestionHandler } from './ask-question.js';
@@ -61,6 +62,7 @@ export function createBuiltinHandlers(
   const glob = cwd !== undefined ? createGlobHandler(cwd) : globHandler;
   const grep = cwd !== undefined ? createGrepHandler(cwd) : grepHandler;
   const terminalFontSize = createTerminalFontSizeHandler();
+  const worktree = createWorktreeHandler(cwd);
   return new Map<string, ToolHandler>([
     ['bash', bash],
     ['read_file', readFileHandler],
@@ -75,6 +77,7 @@ export function createBuiltinHandlers(
     ['list_schedules', listSchedulesHandler],
     ['get_schedule_history', getScheduleHistoryHandler],
     ['cancel_schedule', cancelScheduleHandler],
+    ['worktree', worktree],
     ['terminal_font_size', terminalFontSize],
     ['config_get', configGetHandler],
     ['config_set', configSetHandler],
@@ -102,6 +105,7 @@ export {
   getScheduleHistoryHandler,
   cancelScheduleHandler,
   terminalFontSizeHandler,
+  createWorktreeHandler,
   configGetHandler,
   configSetHandler,
   askQuestionHandler,
