@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.18.0] - 2026-07-03
+
+### Added
+- deliver SubagentStop injectContext in-turn via the subagent tool_result (#387) (a407d35)
+
 ## [5.17.0] - 2026-07-03
 
 ### Added
