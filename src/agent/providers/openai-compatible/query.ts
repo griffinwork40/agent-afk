@@ -594,13 +594,29 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       yield* this.dispatchAndAppend(result.state, controller.signal, vision);
 
       {
-        const lastToolName = finalizedToolCalls(result.state).at(-1)?.name;
+        const lastCall = finalizedToolCalls(result.state).at(-1);
+        const lastToolName = lastCall?.name;
+        // Semantic summary — mirror anthropic-direct/loop.ts: tool name +
+        // most informative argument via summarizeToolInput, so the progress
+        // banner carries real signal instead of a bare iteration counter.
+        // AccumulatedToolCall carries UNPARSED argumentsRaw (the streamed
+        // JSON fragments joined); parse best-effort — a malformed payload
+        // (mid-stream abort, shim quirks) degrades to the bare tool name.
+        let lastCallInput: unknown;
+        try {
+          lastCallInput = lastCall ? JSON.parse(lastCall.argumentsRaw || '{}') : undefined;
+        } catch {
+          lastCallInput = undefined;
+        }
+        const lastToolHeadline = lastCall
+          ? `${lastCall.name}${summarizeToolInput(lastCall.name, lastCallInput)}`
+          : 'unknown';
         yield {
           type: 'progress',
           progress: {
             taskId,
-            description: 'Tool-use loop',
-            summary: `Iteration ${iter + 1}: used ${lastToolName ?? 'unknown'}`,
+            description: 'Working',
+            summary: `round ${iter + 1}: ${lastToolHeadline}`,
             lastToolName,
             totalTokens: accumulatedUsage.totalTokens ?? 0,
             toolUses: iter + 1,

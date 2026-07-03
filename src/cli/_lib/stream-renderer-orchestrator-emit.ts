@@ -130,6 +130,15 @@ export function finalizeOrchestrator(
   source: SourceState,
   ctx: OrchestratorCtx,
 ): void {
+  // Evict the live progress entry: the tool-use loop is over, so its banner
+  // must stop rendering. Without this the entry persists (the only other
+  // mutation site is the 'progress' case's clear()+set()) and — because the
+  // OverlayComposer redraws EVERY slot on ANY markDirty — the stale banner
+  // provably repaints on every post-loop prose chunk, presenting a frozen
+  // "current activity" as live. Cleared BEFORE the overlay-refreshing
+  // commits scheduled below so their flush() paints a banner-free frame.
+  ctx.lastProgressByTask.clear();
+
   if (!ctx.streamingMarkdown.current && source.contentBuffer.trim()) {
     // Non-TTY path: no streaming renderer active. Emit accumulated content
     // directly. This path is unchanged — no coordinator needed here.

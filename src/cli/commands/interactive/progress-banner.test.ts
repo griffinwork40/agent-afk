@@ -18,6 +18,7 @@ import { describe, it, expect } from 'vitest';
 import chalk from 'chalk';
 import { displayWidth, stripAnsi } from '../../display.js';
 import {
+  deriveProgressActivity,
   formatProgressBanner,
   formatProgressSummary,
   formatSubagentCompletion,
@@ -106,6 +107,99 @@ describe('progress-banner — terminal width clamping', () => {
       const lines = formatProgressBanner(mkEvent({ description: LONG }), Infinity);
       // With Infinity, the full description should be present (no truncation).
       expect(stripAnsi(lines[0]!)).toContain(LONG);
+    });
+  });
+
+  describe('formatProgressBanner — sanitization (LLM-sourced fields)', () => {
+    it('strips ANSI escapes injected via description', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'evil\x1b[2Jtask' }),
+        Infinity,
+      );
+      // stripAnsi in the assertion would mask the bug — assert on the RAW
+      // string: the injected CSI must not survive into the rendered output.
+      expect(lines[0]!).not.toContain('\x1b[2J');
+      // sanitizeLabel strips the complete CSI sequence (no residual space).
+      expect(stripAnsi(lines[0]!)).toContain('eviltask');
+    });
+
+    it('strips control bytes injected via summary', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'task', summary: 'sum\x07mary\x0d' }),
+        Infinity,
+      );
+      expect(lines[1]!).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
+      expect(stripAnsi(lines[1]!)).toContain('sum mary');
+    });
+
+    it('collapses newlines in the activity clause to a single line', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'task' }),
+        Infinity,
+        'line one\nline two',
+      );
+      expect(lines).toHaveLength(2);
+      expect(lines[1]!).not.toContain('\n');
+      expect(stripAnsi(lines[1]!)).toContain('line one line two');
+    });
+  });
+
+  describe('formatProgressBanner — activity precedence', () => {
+    it('prefers activity over summary on the detail line', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'task', summary: 'round 3: bash ls' }),
+        Infinity,
+        'Now checking the config loader',
+      );
+      expect(lines).toHaveLength(2);
+      expect(stripAnsi(lines[1]!)).toContain('Now checking the config loader');
+      expect(stripAnsi(lines[1]!)).not.toContain('round 3: bash ls');
+    });
+
+    it('falls back to summary when activity is undefined', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'task', summary: 'round 3: bash ls' }),
+        Infinity,
+      );
+      expect(lines).toHaveLength(2);
+      expect(stripAnsi(lines[1]!)).toContain('round 3: bash ls');
+    });
+
+    it('falls back to summary when activity is whitespace-only', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'task', summary: 'round 3: bash ls' }),
+        Infinity,
+        '   ',
+      );
+      expect(stripAnsi(lines[1]!)).toContain('round 3: bash ls');
+    });
+
+    it('renders single-line description form when neither activity nor summary exists', () => {
+      const lines = formatProgressBanner(mkEvent({ description: 'task' }), Infinity);
+      expect(lines).toHaveLength(1);
+    });
+  });
+
+  describe('deriveProgressActivity', () => {
+    it('returns undefined for an empty buffer', () => {
+      expect(deriveProgressActivity('', 80)).toBeUndefined();
+    });
+
+    it('returns undefined for a whitespace-only buffer', () => {
+      expect(deriveProgressActivity('   \n  ', 80)).toBeUndefined();
+    });
+
+    it('extracts the latest in-flight clause after a sentence boundary', () => {
+      const buffer = 'First I read the file. Now checking the dispatcher wiring';
+      expect(deriveProgressActivity(buffer, 120)).toBe('Now checking the dispatcher wiring');
+    });
+
+    it('truncates overlong clauses with an ellipsis', () => {
+      const clause = 'B'.repeat(500);
+      const out = deriveProgressActivity(clause, 60);
+      expect(out).toBeDefined();
+      expect(out!.length).toBeLessThanOrEqual(60 - 10);
+      expect(out).toMatch(/…$/);
     });
   });
 

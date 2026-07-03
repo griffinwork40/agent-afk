@@ -13,6 +13,7 @@ import type { IAgentSession, OutputEvent, SubagentProgressMeta, ResponseMetadata
 import { runWithSink } from '../agent/_lib/skill-sink-channel.js';
 import { env } from '../config/env.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
+import { sanitizeLabel } from '../cli/commands/interactive/tool-lane-format-sanitize.js';
 
 /** Minimum interval (ms) between Telegram edit requests to avoid rate limits */
 const EDIT_THROTTLE_MS = 300;
@@ -429,11 +430,18 @@ export async function streamResponse(
           // snapshot, so a later stream_retry rolls back only the new round.
           inContentRun = false;
           const { description, summary, lastToolName } = event.progress;
-          const line = lastToolName
-            ? `\n◦ ${description} (${lastToolName})`
-            : `\n◦ ${description}`;
+          // These fields are model-controlled (path/command/URL text from
+          // summarizeToolInput) and markdownToTelegramHtml does not strip
+          // ANSI/C1/control bytes, so scrub them here to match the CLI
+          // banner's field-scoped hardening (tool-lane-format-sanitize.ts).
+          const safeDescription = sanitizeLabel(description);
+          const safeToolName = lastToolName ? sanitizeLabel(lastToolName) : lastToolName;
+          const safeSummary = summary ? sanitizeLabel(summary) : summary;
+          const line = safeToolName
+            ? `\n◦ ${safeDescription} (${safeToolName})`
+            : `\n◦ ${safeDescription}`;
           accumulated += line;
-          if (summary) accumulated += `\n  ${summary}`;
+          if (safeSummary) accumulated += `\n  ${safeSummary}`;
           await sendOrEdit(livePreview());
         }
         // Lane D — post-turn prompt suggestion appended to the message.

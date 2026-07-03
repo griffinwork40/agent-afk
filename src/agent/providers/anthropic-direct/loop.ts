@@ -695,12 +695,21 @@ export async function* runTurn(
     iterations += 1;
 
     const lastTool = turnResult.toolUseBlocks[turnResult.toolUseBlocks.length - 1];
+    // Semantic summary: name the tool AND its most informative argument
+    // (path / command / query via summarizeToolInput) so the progress banner
+    // carries real signal — `bash git show f7f0a37…` instead of the old
+    // `Iteration 11: used bash`, which conveyed nothing after round 2.
+    // `description` stays STABLE across ticks for this taskId (the banner
+    // dedupes line 0 on commit); the per-tick signal lives in `summary`.
+    const lastToolHeadline = lastTool
+      ? `${lastTool.name}${summarizeToolInput(lastTool.name, lastTool.input)}`
+      : 'unknown';
     yield {
       type: 'progress',
       progress: {
         taskId,
-        description: 'Tool-use loop',
-        summary: `Iteration ${iterations}: used ${lastTool?.name ?? 'unknown'}`,
+        description: 'Working',
+        summary: `round ${iterations}: ${lastToolHeadline}`,
         lastToolName: lastTool?.name,
         totalTokens: accumulatedUsage.totalTokens ?? 0,
         toolUses: iterations,
