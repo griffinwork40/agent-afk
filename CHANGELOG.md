@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.20.3] - 2026-07-04
+
+### Fixed
+- stop double-rendering finished subagents in the REPL overlay (#405) (71a6bdc)
+
 ## [5.20.2] - 2026-07-04
 
 ### Fixed
