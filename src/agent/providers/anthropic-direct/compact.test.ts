@@ -245,7 +245,8 @@ async function* fromArr<T>(arr: T[]): AsyncIterable<T> {
 /**
  * Build a minimal streaming event sequence that reports `inputTokens` high
  * enough to cross the 90% auto-compaction threshold. The integration tests run
- * on `claude-sonnet-5`, whose base context window is 200k, so cross 90% of 200k:
+ * on `claude-sonnet-5`: its context window is 1M, but the DEFAULT auto-compaction
+ * *budget* is 200k (see autoCompactLimitFor), so cross 90% of the 200k budget:
  * 200_000 * 0.90 = 180_000 — use 181_000 to be safely above.
  */
 function makeHighUsageStream(): RawMessageStreamEvent[] {
