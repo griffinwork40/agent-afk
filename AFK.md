@@ -18,6 +18,10 @@ pnpm lint                                          # tsc --noEmit (strict)
 pnpm audit:sdk                                     # regenerate docs/sdk-dependency.md
 pnpm audit:sdk:check                               # CI gate: fail on unlocked SDK symbols
 pnpm audit:sdk:update-lock                         # add new symbols → .sdk-dependency.lock.json (edit `reason` before commit)
+
+pnpm audit:env:check                               # CI gate: no raw process.env reads outside src/config/env.ts
+pnpm scan:env:check                                # CI gate: docs/env-registry.{json,md} in sync with src/config/env.ts
+pnpm release                                       # release pipeline (scripts/release.mjs; --dry via release:dry)
 ```
 
 ### Running
@@ -47,7 +51,7 @@ Traces live at `~/.afk/state/witness/<session>/trace.jsonl` (`$AFK_HOME/state/wi
 
 ## Architecture
 
-Three layers under `src/`:
+Key layers under `src/`:
 
 | Path | Purpose |
 |------|---------|
@@ -58,6 +62,13 @@ Three layers under `src/`:
 | `src/telegram/` | Telegraf bot, per-chat session management, allowlist via `AFK_TELEGRAM_ALLOWED_CHAT_IDS`. |
 | `src/skills/` | Headless mirrors of plugin orchestration skills. Each has `prompts/` (markdown) loaded by `src/skills/_lib/prompt-loader.ts`. |
 | `src/skills/_agents/` | Vendored agent definitions. Drift detection: `vendored.test.ts`. |
+| `src/browser/` | Playwright-backed browser-control tools (open/observe/act/screenshot) + witness capture and domain-policy sanitization. |
+| `src/web/` | `web_scrape` pipeline: fetch → Readability → markdown extraction, with headless-render fallback and Exa search. |
+| `src/config/` | `env.ts` is the **sole** `process.env` read-point (typed lazy getters + `ENV_REGISTRY`); config mutation + settable-key gating. |
+| `src/service/` | macOS LaunchAgent install/manage for always-on telegram bot / daemon (`launchd.ts`). |
+| `src/improve/` | Self-improvement pipeline: telemetry scan → eval-gen → eval-run → propose. |
+| `src/bundled-plugins/` | Plugins shipped with the package (copied at install; `tests/copy-bundled-plugins.test.ts`). |
+| `website/` | Next.js docs site (separate package, npm-locked; CI typechecks + builds it). |
 
 Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/session/stream-consumer.ts`. **No model SDK is imported for runtime use outside `src/agent/providers/`** — the rest of the tree imports only the SDK's `ContentBlockParam` *type*, with one legacy runtime `Anthropic` import in `src/cli/interactive.ts` as a known exception.
 
@@ -108,6 +119,7 @@ The base system prompt is **layered**: the framework prompt (`prompts/system-pro
 - `AgentSession` constructor is **synchronous**; SDK lifecycle runs async via `initSdkLifecycle()` and surfaces through the provider event stream.
 - DAG executor (`src/agent/dag.ts`, 266 LOC) is fully implemented: layer-by-layer Kahn execution, per-node `AbortController`s, fail-fast with transitive skip, node-level timeouts.
 - **SDK dependency tracking**: every import from `@anthropic-ai/sdk` is in `.sdk-dependency.lock.json`. CI fails on unlocked new symbols. After adding an SDK import, run `pnpm audit:sdk:update-lock` and edit the new entry's `reason` field before commit.
+- **Env-var access**: never read `process.env` directly — use the typed `env` object from `src/config/env.ts` and register new vars in `ENV_REGISTRY` there (CI-gated by `pnpm audit:env:check` + `pnpm scan:env:check`).
 - Build copies `*.md` prompt files from `src/` into `dist/` via `scripts/copy-prompts.js` — required for built skills to find their prompts.
 - Vendored agents under `src/skills/_agents/` must stay byte-equal to upstream — drift detection enforces it.
 
