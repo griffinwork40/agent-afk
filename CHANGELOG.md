@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.19.4] - 2026-07-04
+
+### Fixed
+- reflow committed band at paint-time width; fail-safe commits on stale resize geometry (#386) (f75d8a4)
+
 ## [5.19.3] - 2026-07-03
 
 ### Fixed
