@@ -7,6 +7,7 @@
 
 import type { CommittedBandHost } from './terminal-compositor.committed-band-commit.js';
 import { eraseAndPaintRow } from './terminal-compositor.types.js';
+import { withAutowrapDisabled } from './terminal-compositor.band-reflow.js';
 
 /**
  * Physically erase the pre-resize on-screen footprint snapshotted by the
@@ -73,7 +74,14 @@ export function repositionCommittedBand(
   if (self.commitInFlight || !self.logUpdate) return;
   const floor = Math.max(self.anchorRow ?? 1, 1);
   const targetBottom = desiredTopRow - 1;
-  if (self.committedBand.length === 0) return;
+  if (self.committedBand.length === 0) {
+    // F2: an empty band has nothing for a stale committedBandBottomRow to
+    // corrupt (commitAbove's floor-usage already requires
+    // `committedBandBottomRow > 0` alongside a non-empty band), so this
+    // repaint cycle's geometry is safe to trust again.
+    self.bandGeometryStale = false;
+    return;
+  }
   // On upward growth (targetBottom < committedBandBottomRow) the band must be
   // re-pinned above the NEW frame top: preserveRowsBeforeFrameRender either
   // left the whole band in place (it fits) or already scrolled the overflow
@@ -82,7 +90,15 @@ export function repositionCommittedBand(
   // computes. (Banner case keeps the legacy scroll-and-shift, which lands the
   // band at targetBottom too.) The paint is always above the frame top, so it
   // never overwrites the live frame.
-  if (targetBottom < floor) return;
+  if (targetBottom < floor) return; // F2: band exists but has NO room above the
+  // current floor — do NOT clear bandGeometryStale here: committedBandBottomRow
+  // is left at its old (possibly stale) value below, so a later commit must
+  // keep distrusting it as a floor until a repaint actually re-establishes it.
+  // F2: past this point `targetBottom`/`floor` are fresh values derived from
+  // THIS repaint's real desiredTopRow/anchorRow, so whatever `fit` computes
+  // (a real re-pin below, or "already correct, nothing moved") reflects
+  // CURRENT geometry — safe to trust committedBandBottomRow again from here.
+  self.bandGeometryStale = false;
   const maxFit = targetBottom - floor + 1;
   const fit = Math.min(self.committedBand.length, maxFit);
   if (fit <= 0) return;
@@ -107,11 +123,19 @@ export function repositionCommittedBand(
   // Re-park the cursor where CupFrameRenderer.render() left it (the frame's
   // bottom content row) so the band write does not displace it.
   out += `\x1b[${Math.max(1, targetBottomRow)};1H`;
-  try {
-    self.stdout.write(out);
-  } catch {
-    /* terminal closed mid-repaint — next render's lifecycle tears us down */
-  }
+  // Belt-and-braces (see withAutowrapDisabled doc): F1's reflow already
+  // guarantees `paint`'s rows fit the CURRENT width by construction, but a
+  // ±1-column displayWidth() disagreement with the real terminal on an
+  // ambiguous-width glyph could still let one row overrun by a cell. With
+  // DECAWM off that can only clip the row, never spawn a phantom row that
+  // desyncs `committedBandTopRow`/`committedBandBottomRow` from the screen.
+  withAutowrapDisabled(self.stdout, () => {
+    try {
+      self.stdout.write(out);
+    } catch {
+      /* terminal closed mid-repaint — next render's lifecycle tears us down */
+    }
+  });
   self.committedBandTopRow = newTop;
   self.committedBandBottomRow = targetBottom;
   // `fit` rows (the band's bottom suffix) are now materialized on screen — this
