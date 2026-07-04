@@ -626,11 +626,29 @@ function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boo
   const displayText = self.input.buffer;
   const expandedText = Paste.expandPastePlaceholders(self, displayText);
   const attachments = [...self.attachments];
-  self.pendingSubmissions.push(
+  const payload: SubmissionPayload =
     expandedText === displayText
       ? { text: expandedText, attachments }
-      : { text: expandedText, displayText, attachments },
-  );
+      : { text: expandedText, displayText, attachments };
+  // Invariant: during the ESC soft-stop window — `softStopped` is set by
+  // handleEscape and cleared only at the post-soft-stop `→ idle` transition
+  // (setInputMode, terminal-compositor.input-mode.ts) — Enter must NOT
+  // accumulate a type-ahead backlog. That window is the async turn-teardown
+  // gap: for a subagent turn, cancelActiveForeground() (subagent-executor.ts)
+  // resolves the parent `await` only after the child settles — seconds for a
+  // deep/wide wave — and the compositor lingers in 'streaming' the whole time.
+  // Each Enter would otherwise push onto the FIFO, which drains ONE payload per
+  // turn (the `→ idle` flush), stranding the user one turn behind: the "it
+  // doesn't send, then I keep sending characters to catch up" report. So during
+  // a soft-stop we keep only the LATEST message (last-wins) — the user's most
+  // recent post-stop intent runs as exactly one next turn, no backlog. Normal
+  // mid-turn type-ahead (softStopped === false) still accumulates: sequential-
+  // turn delivery is the intended contract there (the "NO ESC" regression tests).
+  if (self.softStopped) {
+    self.pendingSubmissions = [payload];
+  } else {
+    self.pendingSubmissions.push(payload);
+  }
   self.queued = true; // maintained mirror: pendingSubmissions is now non-empty
   // Clear the compose window for the next message. Mirrors the idle-mode
   // submit reset above so dropdown chrome / paste side-table / attachments
