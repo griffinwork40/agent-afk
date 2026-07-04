@@ -84,6 +84,7 @@ import type { ToolResult } from '../anthropic-direct/types.js';
 import { contextWindowTokensUsed, buildContextUsageFields } from '../shared/auto-compact.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../shared/plan-mode-addendum.js';
 import { AFK_MODE_ADDENDUM_TEXT } from '../shared/afk-mode-addendum.js';
+import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
 import { sleepWithAbort } from '../shared/sleep-with-abort.js';
 import { summarizeToolInput } from '../shared/tool-input-summary.js';
 
@@ -414,6 +415,24 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     this.closedPromise = new Promise<'__closed__'>((resolve) => {
       this.closeResolve = () => resolve('__closed__');
     });
+  }
+
+  /**
+   * The OpenAI tool catalog to advertise for THIS turn. The plan-exit tool is
+   * registered RESIDENT (see index.ts buildDispatcher) but is only actionable in
+   * plan mode, so drop it from the advertised list on non-plan turns — mirroring
+   * the anthropic-direct per-turn filter and composeSystem()'s live gating of the
+   * plan-mode addendum. This is what makes `exit_plan_mode` become callable the
+   * instant plan mode is entered mid-session, with no query rebuild. Returns
+   * `undefined` when the catalog is empty/absent, matching the callers' guards.
+   */
+  private activeOpenAITools(): OpenAIFunctionTool[] | undefined {
+    if (!this.openAITools) return undefined;
+    if (this.currentPermissionMode === 'plan') return this.openAITools;
+    const filtered = this.openAITools.filter(
+      (t) => t.function.name !== EXIT_PLAN_MODE_TOOL_NAME,
+    );
+    return filtered.length > 0 ? filtered : undefined;
   }
 
   async *[Symbol.asyncIterator](): AsyncIterator<ProviderEvent> {
@@ -774,7 +793,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       // Responses API path. `messages` (built + plan-mode-adjusted above) is
       // converted to the Responses input shape; the system prompt becomes
       // `instructions`, tool calls/results become function_call/_output items.
-      const req = buildResponsesRequest(messages, this.openAITools);
+      const req = buildResponsesRequest(messages, this.activeOpenAITools());
       const requestBody: Record<string, unknown> = {
         model: this.currentModel,
         input: req.input,
@@ -913,10 +932,12 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         this.currentModel,
         this.opts.config.maxOutputTokens,
       ));
-      // Only attach `tools` when the dispatcher actually has any — empty
-      // arrays make some providers reject the request.
-      if (this.openAITools && this.openAITools.length > 0) {
-        requestBody['tools'] = this.openAITools;
+      // Only attach `tools` when there are any to advertise THIS turn — empty
+      // arrays make some providers reject the request. `activeOpenAITools()`
+      // drops the plan-exit tool on non-plan turns (resident-but-gated).
+      const activeTools = this.activeOpenAITools();
+      if (activeTools && activeTools.length > 0) {
+        requestBody['tools'] = activeTools;
       }
       // Forward reasoning effort for o-series models on Chat Completions.
       // Uses the `reasoning_effort` field per OpenAI's Chat Completions API spec.

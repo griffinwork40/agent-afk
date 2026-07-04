@@ -405,10 +405,15 @@ export class OpenAICompatibleProvider implements ModelProvider {
         handlers.set(t.schema.name, t.handler);
       }
     }
-    // Plan-exit tool: registered per-query ONLY while in plan mode and only when
-    // the session supplied control callbacks (top-level sessions). Mirrors
+    // Plan-exit tool: registered RESIDENT whenever the session supplied control
+    // callbacks (top-level sessions only). NOT gated on the construction-time
+    // `permissionMode` — the dispatcher is built once per query() and is not
+    // rebuilt by setPermissionMode, so a mode-gated registration left the tool
+    // unwired for the "enter plan mode after launch" flow ("Unknown tool
+    // exit_plan_mode"). Callability is gated per-turn on the LIVE mode instead:
+    // query.ts drops it from the advertised tools on non-plan turns. Mirrors
     // AnthropicDirectProvider.buildDispatcher; schema appended below to match.
-    const planExitControls = permissionMode === 'plan' ? opts.planExitControls : undefined;
+    const planExitControls = opts.planExitControls;
     if (planExitControls) {
       handlers.set(EXIT_PLAN_MODE_TOOL_NAME, createExitPlanModeHandler(planExitControls));
     }
@@ -441,7 +446,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
       handlers,
       // Constraint (semantic invariant): MCP schemas appended AFTER builtins
       // so builtin tool names always take precedence in any overlap. Plan-exit
-      // schema appended last, only while the tool is active (plan mode).
+      // schema appended last, RESIDENT whenever planExitControls is present
+      // (top-level); query.ts drops it from the advertised tools on non-plan
+      // turns so the model sees it only when it is actionable.
       schemas: [...baseSchemas, ...mcpSchemas, ...(planExitControls ? [exitPlanModeTool] : [])],
       // Session hook registry via the one canonical resolver (query-scoped
       // config registry wins over any constructor-provided one). Mirrors

@@ -89,6 +89,22 @@ export class AgentSession implements IAgentSession {
    * (AFK is not restorable by a bare flip) so restore falls back to 'default'.
    */
   private _prePlanPermissionMode: PermissionMode | undefined;
+  /**
+   * Ring-gesture memory for the Shift+Tab permission cycle
+   * (`default → plan → bypassPermissions`, see `cli/permission-mode-cycle.ts`).
+   * `plan`'s only ring-predecessor is `default`, so cycling from a privileged
+   * working mode (e.g. bypass) INTO plan necessarily passes through a TRANSIENT
+   * `default` hop: bypass → default → plan. Without this, {@link setPermissionMode}
+   * would capture that transient `default` as the pre-plan mode and an approved
+   * exit would drop the user to `default` instead of restoring their real working
+   * mode. So on a `<privileged> → default` transition we stash the mode left
+   * behind here; the very next `default → plan` transition restores it as the
+   * pre-plan mode. Cleared at every turn boundary (see `sendMessageStreamInternal`)
+   * so it survives ONLY an uninterrupted Shift+Tab gesture — a genuine rest in
+   * `default` (which submits a turn) clears it, keeping the restore safe: it never
+   * escalates back to bypass after the user actually worked in `default`.
+   */
+  private _modeBeforeDefault: PermissionMode | undefined;
   private currentState: SessionState = 'idle';
   private providerQuery!: ProviderQuery;
   private providerIterator!: AsyncIterator<ProviderEvent>;
@@ -592,6 +608,13 @@ export class AgentSession implements IAgentSession {
   private async *sendMessageStreamInternal(content: string | ContentBlockParam[]): AsyncIterableIterator<OutputEvent> {
     if (this.initPromise) await this.initPromise;
 
+    // End any in-flight Shift+Tab ring gesture: submitting a turn means the
+    // user actually RESTED in the current mode, so a transient-default stash
+    // from `setPermissionMode` must not survive into a later `default → plan`
+    // (which would wrongly restore bypass after real work in default). See
+    // {@link _modeBeforeDefault}.
+    this._modeBeforeDefault = undefined;
+
     // Fold queued hook context into THIS message so it rides along with the
     // user's text instead of becoming a turn of its own — see
     // `queueFrameworkContext` for the displacement bug this prevents.
@@ -856,11 +879,30 @@ export class AgentSession implements IAgentSession {
     // the real pre-plan mode with 'plan'. 'autonomous' (AFK) is reset to
     // undefined — it carries dedicated enter/exit machinery (toggleAfkMode) and
     // is not safe to re-enter by a bare flip — so restore falls back to 'default'.
+    const current = this.stateManager.getSessionMetadata().permissionMode;
     if (mode === 'plan') {
-      const current = this.stateManager.getSessionMetadata().permissionMode;
       if (current !== 'plan') {
-        this._prePlanPermissionMode = current === 'autonomous' ? undefined : current;
+        // Ring-gesture rescue: the Shift+Tab cycle reaches plan only via a
+        // TRANSIENT `default` hop off a privileged mode (bypass → default → plan).
+        // When we're entering plan FROM that transient default, restore the mode
+        // stashed on the hop instead of the default itself. `_modeBeforeDefault`
+        // is turn-scoped, so this only fires for an uninterrupted gesture.
+        const effectivePrev =
+          current === 'default' && this._modeBeforeDefault !== undefined
+            ? this._modeBeforeDefault
+            : current;
+        this._prePlanPermissionMode = effectivePrev === 'autonomous' ? undefined : effectivePrev;
       }
+    } else if (mode === 'default') {
+      // Stash the privileged mode being left so the NEXT `default → plan` press
+      // in the same Shift+Tab gesture can see past this transient default. Only
+      // privileged non-plan modes are worth restoring; default/plan are not.
+      this._modeBeforeDefault =
+        current !== 'default' && current !== 'plan' ? current : undefined;
+    } else {
+      // Landing on a concrete working mode (bypass / acceptEdits / …) ends any
+      // in-flight ring gesture toward plan — drop the transient-default memory.
+      this._modeBeforeDefault = undefined;
     }
     await this.providerQuery.setPermissionMode(mode);
     this.stateManager.setSessionMetadata((prev) => ({ ...prev, permissionMode: mode }));
