@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.20.2] - 2026-07-04
+
+### Fixed
+- make SKILL.md context: authoritative; drop DEFAULT_FORK_SKILLS (#404) (023cf51)
+
 ## [5.20.1] - 2026-07-04
 
 ### Fixed
