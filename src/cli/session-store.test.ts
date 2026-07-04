@@ -17,9 +17,14 @@ import {
   forkStoredSession,
 } from './session-store.js';
 import { createSessionStats, recordTurn } from './slash/session-stats.js';
+import { useUnsetAfkHome } from '../__test-utils__/unset-afk-home.js';
 
 let tmpHome: string;
 let originalHome: string | undefined;
+
+// This suite asserts the unset-AFK_HOME fallback (store under $HOME/.afk) —
+// drop the global sentinel AFK_HOME per test; HOME is redirected below.
+useUnsetAfkHome();
 
 beforeEach(() => {
   originalHome = process.env['HOME'];
