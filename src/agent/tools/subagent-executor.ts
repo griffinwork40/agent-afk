@@ -682,9 +682,13 @@ export class SubagentExecutor implements SubagentControl {
     const effectiveReadOnlyBash =
       this.ctx.readOnlyBash === true || resolvedAccess?.bashReadOnly === true;
     if (resolvedAccess !== undefined && resolvedAccess.droppedTokens.length > 0) {
-      debugLog(
-        `[subagent-executor] agent_type ${JSON.stringify(namedAgent?.name)}: ` +
-          `unknown tool token(s) dropped fail-closed: ${resolvedAccess.droppedTokens.join(', ')}`,
+      // Fail-closed token drops silently NARROW the child's tool surface, so a
+      // misconfigured agent file must be visible by default — not only under
+      // AFK_DEBUG. Route through the same stderr sink the agent registry uses
+      // for its load-time warnings (loadAgentRegistry's default `warn`).
+      process.stderr.write(
+        `[afk] agents: agent_type ${JSON.stringify(namedAgent?.name)}: ` +
+          `unknown tool token(s) dropped fail-closed: ${resolvedAccess.droppedTokens.join(', ')}\n`,
       );
     }
 

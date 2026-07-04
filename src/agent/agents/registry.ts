@@ -14,8 +14,10 @@
  *
  * Directories are scanned recursively for `*.md` files. Identity comes from
  * the frontmatter `name` field, not the filename (Claude Code parity). A
- * duplicate name within one scope keeps the first file found and warns; a
- * duplicate across scopes shadows silently by design (higher scope wins).
+ * duplicate name within one directory keeps the first file found and warns; a
+ * name defined in both project directories (.claude/agents and .afk/agents)
+ * warns on override (.afk wins); a duplicate across different scopes
+ * (user/project/config) shadows silently by design (higher scope wins).
  *
  * Loading is synchronous and session-static — called once at bootstrap
  * (mirrors the plugins scan), then threaded by reference through executor
@@ -81,16 +83,23 @@ function collectMarkdownFiles(dir: string, depth = 0): string[] {
 
 /**
  * Scan one directory scope and merge its agents into `registry`.
- * Same-scope duplicates keep the first file (sorted order) and warn;
+ * Same-directory duplicates keep the first file (sorted order) and warn;
  * cross-scope duplicates shadow the lower scope silently (by design).
+ *
+ * `crossDirSeen`, when supplied, is shared across the directories of a single
+ * scope tier (the project tier spans .claude/agents + .afk/agents). It only
+ * drives a warning when a name appears in more than one of those dirs — the
+ * later directory still wins (registry.set overwrites), so precedence is
+ * unchanged; the warning just makes the otherwise-silent override visible.
  */
 function scanScope(
   registry: Map<string, RegisteredAgent>,
   dir: string,
   source: AgentSource,
   warn: (message: string) => void,
+  crossDirSeen?: Map<string, string>,
 ): void {
-  const seenInScope = new Map<string, string>(); // name → filePath
+  const seenInScope = new Map<string, string>(); // name → filePath (this directory)
   for (const filePath of collectMarkdownFiles(dir)) {
     let content: string;
     try {
@@ -111,6 +120,20 @@ function scanScope(
       continue;
     }
     seenInScope.set(parsed.name, filePath);
+
+    // Cross-directory override within the same tier (e.g. the same name in
+    // both .claude/agents and .afk/agents — both 'project' scope). The later
+    // directory wins by design; warn so the shadow is not silent.
+    if (crossDirSeen !== undefined) {
+      const priorInTier = crossDirSeen.get(parsed.name);
+      if (priorInTier !== undefined) {
+        warn(
+          `[afk] agents: duplicate agent name ${JSON.stringify(parsed.name)} in ${source} scope — ` +
+            `${filePath} overrides ${priorInTier}`,
+        );
+      }
+      crossDirSeen.set(parsed.name, filePath);
+    }
 
     registry.set(parsed.name, {
       name: parsed.name,
@@ -145,9 +168,13 @@ export function loadAgentRegistry(options: LoadAgentRegistryOptions = {}): Agent
 
   // user scope
   scanScope(registry, join(getAfkHome(), 'agents'), 'user', warn);
-  // project scope: Claude Code compat first so AFK-native wins within the tier
-  scanScope(registry, join(cwd, '.claude', 'agents'), 'project', warn);
-  scanScope(registry, join(cwd, '.afk', 'agents'), 'project', warn);
+  // project scope: Claude Code compat first so AFK-native wins within the tier.
+  // Share one tracker across the two project dirs so a name defined in BOTH
+  // .claude/agents and .afk/agents warns on override (each dir still keeps its
+  // own same-directory keep-first policy; .afk continues to win the tier).
+  const projectSeen = new Map<string, string>();
+  scanScope(registry, join(cwd, '.claude', 'agents'), 'project', warn, projectSeen);
+  scanScope(registry, join(cwd, '.afk', 'agents'), 'project', warn, projectSeen);
 
   // config scope (programmatic, highest)
   if (options.configAgents !== undefined) {

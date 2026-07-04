@@ -99,6 +99,28 @@ describe('loadAgentRegistry', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('duplicate agent name'));
   });
 
+  it('warns when a name is defined in both project dirs (.claude + .afk); .afk still wins', () => {
+    const warn = vi.fn();
+    const proj = join(tmp, 'proj');
+    writeAgent(join(proj, '.claude', 'agents'), 'dup.md', 'both-dirs');
+    writeAgent(join(proj, '.afk', 'agents'), 'dup.md', 'both-dirs');
+    const registry = loadAgentRegistry({ cwd: proj, warn });
+    // Precedence unchanged: .afk wins the project tier.
+    expect(registry.get('both-dirs')?.filePath).toBe(join(proj, '.afk', 'agents', 'dup.md'));
+    // ...but the cross-directory override is no longer silent.
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('overrides'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('duplicate agent name'));
+  });
+
+  it('does not warn on override when a project name lives in only one project dir', () => {
+    const warn = vi.fn();
+    const proj = join(tmp, 'proj');
+    writeAgent(join(proj, '.claude', 'agents'), 'cc.md', 'cc-only-agent');
+    writeAgent(join(proj, '.afk', 'agents'), 'afk.md', 'afk-only-agent');
+    loadAgentRegistry({ cwd: proj, warn });
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('overrides'));
+  });
+
   it('skips malformed files without failing the scan', () => {
     const warn = vi.fn();
     const dir = join(tmp, 'proj', '.afk', 'agents');

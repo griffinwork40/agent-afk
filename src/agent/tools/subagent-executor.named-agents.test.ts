@@ -133,6 +133,31 @@ describe('SubagentExecutor named-agent dispatch', () => {
     expect(forkSubagent).not.toHaveBeenCalled();
   });
 
+  it('surfaces fail-closed dropped tool tokens on stderr (default-visible, not AFK_DEBUG-gated)', async () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      const executor = makeExecutor({
+        agentRegistry: makeRegistry([
+          {
+            name: 'misconfigured',
+            source: 'user',
+            definition: {
+              description: 'declares an unknown tool token',
+              prompt: 'p',
+              tools: ['Read', 'NotARealToolToken'],
+            },
+          },
+        ]),
+      });
+      await executor.execute(makeCall({ prompt: 'x', agent_type: 'misconfigured' }));
+      const emitted = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+      expect(emitted).toContain('dropped fail-closed');
+      expect(emitted).toContain('misconfigured');
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
   it('reports (none) when no registry is wired', async () => {
     const executor = makeExecutor({ agentRegistry: undefined });
     const result = await executor.execute(

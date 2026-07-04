@@ -203,9 +203,16 @@ export interface AgentConfig {
   /**
    * Programmatic named-agent definitions, merged into the session's
    * named-agent registry at the HIGHEST precedence (above project/user file
-   * scopes — the analog of Claude Code's `--agents` CLI tier). Consumed by
-   * surfaces that pass it to `loadAgentRegistry({ configAgents })`; the
-   * registry powers the `agent` tool's `agent_type` dispatch (see
+   * scopes — the analog of Claude Code's `--agents` CLI tier).
+   *
+   * NOT wired into any built-in surface today: the one-shot chat, daemon,
+   * REPL, and Telegram bootstraps all call `loadAgentRegistry({ cwd })`
+   * WITHOUT `configAgents`, and no config-file field populates this — so it
+   * is a no-op unless a programmatic embedder builds the registry itself via
+   * `loadAgentRegistry({ configAgents })`. File-scope agents (`.afk/agents/`,
+   * `.claude/agents/`, `~/.afk/agents/`) are the supported path today.
+   *
+   * The registry powers the `agent` tool's `agent_type` dispatch (see
    * `src/agent/agents/`). Keys are agent names; values follow the
    * {@link AgentDefinition} shape (`prompt` = system prompt, `tools`/
    * `disallowedTools` in Claude Code or AFK tool vocabulary, `model`,
