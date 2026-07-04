@@ -457,6 +457,23 @@ export interface InteractiveCtx {
 export interface CompletionWriter {
   fn: (line: string) => void;
   idleFn: (line: string) => void;
+  /**
+   * Turn-scoped guard: when true, the REPL's SubagentStop-hook completion
+   * line (`✓ <agentType> · <duration>` via {@link emitSubagentCompletion})
+   * is dropped because a foreground turn's live overlay owns subagent
+   * rendering — the ToolLane already commits the `→ Agent(…) Done` tree to
+   * scrollback (Channel A). Emitting the compact line here (Channel B) would
+   * double-render the node AND its uncoordinated `commitAbove` races the
+   * OverlayComposer's `setOverlay`, corrupting the compositor's frame
+   * row-accounting (ghost `◉` markers + swallowed committed lines).
+   *
+   * Set true by `turn-handler.ts`'s `armAndWire` (only when a compositor is
+   * armed — TTY) and reset false in its finally block, bracketing exactly the
+   * window where the overlay is live. Left false between turns and on non-TTY
+   * / one-shot `chat` (which uses its own console writer), so background-job
+   * completions and the `chat` surface still surface the line.
+   */
+  suppressSubagentCompletion?: boolean;
 }
 
 export interface TurnHandles {

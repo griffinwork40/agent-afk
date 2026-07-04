@@ -1,5 +1,6 @@
 import type { SubagentCompleteInfo } from '../../../agent/default-hook-registry.js';
 import type { ProgressEvent } from '../../../agent/types.js';
+import type { CompletionWriter } from './shared.js';
 import { extractLatestThinkingClause } from '../../_lib/stream-renderer-subagent-helpers.js';
 import { truncateDisplayWidth } from '../../display.js';
 import { formatDuration, formatTokens } from '../../format-utils.js';
@@ -135,4 +136,31 @@ export function formatSubagentCompletion(info: SubagentCompleteInfo, columns?: n
   const parts = [icon, label];
   if (info.durationMs !== undefined) parts.push(`· ${formatDuration(info.durationMs)}`);
   return clampToTerminal(palette.dim(`  ${parts.join(' ')}`), columns);
+}
+
+/**
+ * Emit the REPL's SubagentStop completion line (Channel B) through the shared
+ * {@link CompletionWriter}, unless the writer has flagged it suppressed for the
+ * current foreground turn.
+ *
+ * History: the SubagentStop hook fires per subagent (any dispatch path —
+ * parallel `agent` calls, `compose`/DAG nodes, skill children), independently
+ * of the parent turn's SDK-event cadence. In the interactive REPL the ToolLane
+ * (Channel A) already renders each foreground subagent as a `→ Agent(…) Done`
+ * tree, so this compact line is a redundant SECOND representation — and because
+ * it lands via an uncoordinated `commitAbove` while the OverlayComposer is
+ * concurrently repainting a tall multi-root overlay, the two writers desync the
+ * compositor's frame row-accounting (stacked ghost `◉` markers + committed
+ * lines overwritten). Parallel dispatch (`compose`, devils-advocate) maximizes
+ * the interleaving because sibling nodes finish on independent schedules.
+ *
+ * `suppressSubagentCompletion` is bracketed by turn-handler around exactly the
+ * window a live overlay owns the surface, so between-turn background-job
+ * completions and the non-TTY one-shot `chat` surface (which uses its own
+ * console writer, not this callback) are unaffected. Extracted from the inline
+ * bootstrap closure so the gate is unit-testable — see progress-banner.test.ts.
+ */
+export function emitSubagentCompletion(writer: CompletionWriter, info: SubagentCompleteInfo): void {
+  if (writer.suppressSubagentCompletion) return;
+  writer.fn(formatSubagentCompletion(info));
 }
