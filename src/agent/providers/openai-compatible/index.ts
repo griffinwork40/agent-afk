@@ -16,6 +16,8 @@ import path from 'path';
 import { appendFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { getSessionGrantsPath } from '../../../paths.js';
+import { env } from '../../../config/env.js';
+import { resolveEffectiveOpenAIBaseUrl } from './base-url.js';
 import type {
   ModelProvider,
   ProviderQuery,
@@ -257,11 +259,19 @@ export class OpenAICompatibleProvider implements ModelProvider {
       onPermissionMode?: (mode: string) => void;
       mcpManager?: import('../../mcp/index.js').McpManager;
     } = {};
-    // Per-slot / per-session baseURL (`config.openaiBaseUrl`, set by
-    // applySlotCredentials) wins over the construction-time global
-    // (`providerOpts.baseURL`, from AFK_OPENAI_BASE_URL) so a tier bound to its
-    // own endpoint overrides the process default. See model-slots Stage 2.
-    const effectiveBaseURL = config.openaiBaseUrl ?? this.providerOpts.baseURL;
+    // Effective baseURL precedence (see resolveEffectiveOpenAIBaseUrl):
+    //   per-session config.openaiBaseUrl (set by applySlotCredentials / loadConfig)
+    //   > construction-time providerOpts.baseURL
+    //   > global AFK_OPENAI_BASE_URL (normalized) > SDK default (api.openai.com).
+    // The env tier is the safety net: a deep child/grandchild dispatched through the
+    // skill/subagent/compose executors inherits a child config that does not thread
+    // `openaiBaseUrl`, so without it an OpenAI-routed subagent would POST to
+    // api.openai.com and a non-OpenAI key be rejected as "Incorrect API key".
+    const effectiveBaseURL = resolveEffectiveOpenAIBaseUrl(
+      config.openaiBaseUrl,
+      this.providerOpts.baseURL,
+      env.AFK_OPENAI_BASE_URL,
+    );
     if (effectiveBaseURL !== undefined) buildOpts.baseURL = effectiveBaseURL;
     buildOpts.toolDispatcher = dispatcher;
     // Path-approval half of the live `/bypass` toggle: keep the provider's
