@@ -37,7 +37,7 @@ import {
 } from '../../../agent/_lib/trusted-skill-events.js';
 import { formatTrustedSkillCompletion, formatTrustedSkillInFlight } from '../../trusted-skill-badge.js';
 import type { TrustedSkillResult } from '../../../agent/trusted-skill-result.js';
-import { formatSubagentCompletion } from './progress-banner.js';
+import { emitSubagentCompletion } from './progress-banner.js';
 import { ContextSampler } from '../../context-sampler.js';
 import { SubagentManager } from '../../../agent/subagent.js';
 import { SubagentExecutor } from '../../../agent/tools/subagent-executor.js';
@@ -578,7 +578,7 @@ export async function bootstrapSession(
   // path-approval hook fails open until then (mirroring `setAllowDirDispatcher`
   // wiring order).
   const hookRegistryBundle = createDefaultHookRegistry(
-    (info) => { completionWriter.fn(formatSubagentCompletion(info)); },
+    (info) => { emitSubagentCompletion(completionWriter, info); },
     'cli',
     sharedMemoryStore,
     () => stats.permissionMode,

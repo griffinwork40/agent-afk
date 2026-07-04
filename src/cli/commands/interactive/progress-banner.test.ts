@@ -22,8 +22,11 @@ import {
   formatProgressBanner,
   formatProgressSummary,
   formatSubagentCompletion,
+  emitSubagentCompletion,
 } from './progress-banner.js';
 import type { ProgressEvent } from '../../../agent/types.js';
+import type { CompletionWriter } from './shared.js';
+import type { SubagentCompleteInfo } from '../../../agent/default-hook-registry.js';
 
 // Force color output so ANSI sequences are present in the rendered strings and
 // the ANSI-aware truncation path is exercised (not just plain-text slicing).
@@ -275,6 +278,73 @@ describe('progress-banner — terminal width clamping', () => {
         Infinity,
       );
       expect(stripAnsi(line)).toContain(LONG);
+    });
+  });
+
+  // Regression: the compositor/scrollback overlap on parallel subagent
+  // completion (`compose`/devils-advocate). The SubagentStop hook fires
+  // Channel B (`✓ <node> · <time>`) independently of the parent turn's SDK
+  // events; in the REPL the ToolLane (Channel A) already renders each
+  // foreground subagent, so Channel B must be suppressed WHILE the live
+  // overlay owns the surface — otherwise its uncoordinated commitAbove races
+  // the OverlayComposer and corrupts the compositor's row-accounting (ghost
+  // ◉ markers + swallowed committed lines). Previously UNCOVERED: no test
+  // combined concurrent subagent completions with a live-overlay commit gate.
+  describe('emitSubagentCompletion — turn-scoped suppression gate', () => {
+    function makeWriter(): { writer: CompletionWriter; committed: string[] } {
+      const committed: string[] = [];
+      const writer: CompletionWriter = {
+        fn: (line) => committed.push(line),
+        idleFn: (line) => committed.push(line),
+      };
+      return { writer, committed };
+    }
+    const info = (id: string): SubagentCompleteInfo => ({
+      subagentId: id,
+      status: 'succeeded',
+      durationMs: 28_000,
+      agentType: id,
+    });
+
+    it('emits the completion line when NOT suppressed (between turns / chat)', () => {
+      const { writer, committed } = makeWriter();
+      emitSubagentCompletion(writer, info('da-paranoid'));
+      expect(committed).toHaveLength(1);
+      expect(stripAnsi(committed[0]!)).toContain('da-paranoid');
+    });
+
+    it('drops the completion line when suppressed (live foreground overlay)', () => {
+      const { writer, committed } = makeWriter();
+      writer.suppressSubagentCompletion = true;
+      emitSubagentCompletion(writer, info('da-pragmatist'));
+      expect(committed).toHaveLength(0);
+    });
+
+    it('suppresses every concurrent sibling while the overlay is live (no double-render)', () => {
+      // The screenshot case: 3 parallel critics finishing on independent
+      // schedules. With the overlay live, NONE of the ✓ lines commit — the
+      // ToolLane tree is the sole completion record, so no interleaved
+      // commitAbove perturbs the frame geometry.
+      const { writer, committed } = makeWriter();
+      writer.suppressSubagentCompletion = true;
+      for (const id of ['da-paranoid', 'da-pragmatist', 'da-architect']) {
+        emitSubagentCompletion(writer, info(id));
+      }
+      expect(committed).toHaveLength(0);
+
+      // Once the turn ends and suppression clears, a late (backgrounded)
+      // completion surfaces again — Channel B is only muted, never removed.
+      writer.suppressSubagentCompletion = false;
+      emitSubagentCompletion(writer, info('bg-late'));
+      expect(committed).toHaveLength(1);
+      expect(stripAnsi(committed[0]!)).toContain('bg-late');
+    });
+
+    it('treats an undefined flag as not-suppressed (default behavior preserved)', () => {
+      const { writer, committed } = makeWriter();
+      expect(writer.suppressSubagentCompletion).toBeUndefined();
+      emitSubagentCompletion(writer, info('sa-default'));
+      expect(committed).toHaveLength(1);
     });
   });
 });
