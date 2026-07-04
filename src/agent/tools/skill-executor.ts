@@ -156,6 +156,14 @@ export interface SkillExecutorContext {
    * Optional: surfaces without a worktree (telegram) leave this unset.
    */
   cwd?: string;
+  /**
+   * Session-wide named-agent registry, forwarded to the child
+   * {@link SubagentExecutor}s this executor constructs so skill-forked
+   * children (the primary orchestrators — review waves, shadow verifiers)
+   * can dispatch `agent_type`-named sub-agents. Same reference at every
+   * depth; see {@link SubagentExecutorContext.agentRegistry}.
+   */
+  agentRegistry?: import('../agents/index.js').AgentRegistry;
 }
 
 interface SkillInput {
@@ -647,6 +655,12 @@ export class SkillExecutor {
       // allowedTools/readOnlyBash and falls back to CHILD_ALLOWED_TOOLS.
       ...(effectiveAllowed !== undefined ? { allowedTools: effectiveAllowed } : {}),
       ...(effectiveReadOnlyBash ? { readOnlyBash: true as const } : {}),
+      // Named-agent registry: the skill-forked child is the primary
+      // orchestrator shape (review waves, verifiers) — it must be able to
+      // dispatch `agent_type`-named sub-agents. The child's model becomes
+      // the grandchildren's `inherit` anchor.
+      ...(this.ctx.agentRegistry !== undefined ? { agentRegistry: this.ctx.agentRegistry } : {}),
+      ...(childConfig.model !== undefined ? { parentModel: childConfig.model } : {}),
     });
     const childSkillExecutor = this.ctx.childSkillExecutorFactory
       ? this.ctx.childSkillExecutorFactory(depth + 1, maxDepth, signal)

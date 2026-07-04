@@ -156,7 +156,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this.memoryStore = opts.memoryStore ?? new MemoryStore();
 
     const schemas: AnthropicToolDef[] = [...builtinToolSchemas];
-    if (opts.subagentExecutor) schemas.push(agentTool);
+    // Executor-supplied `agent` def advertises named agent types when a
+    // registry is wired — parity with anthropic-direct (see agents/tool-def.ts).
+    if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);
     if (opts.skillExecutor) schemas.push(skillTool);
     if (opts.composeExecutor) schemas.push(composeTool);
     if (opts.readOnlyMemory === true) {

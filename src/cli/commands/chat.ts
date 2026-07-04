@@ -24,6 +24,7 @@ import { SkillExecutor } from '../../agent/tools/skill-executor.js';
 import { ComposeExecutor } from '../../agent/tools/compose-executor.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory } from '../../agent/tools/nesting.js';
+import { loadAgentRegistry } from '../../agent/agents/index.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import { createDefaultTraceWriter } from '../../agent/trace/factory.js';
 import { receiptPathsFor } from '../../agent/trace/receipt.js';
@@ -476,6 +477,13 @@ export function registerChatCommand(program: Command): void {
         // and `skill` tools, see anthropic-direct/index.ts:108–110) and
         // any SKILL.md instruction to "dispatch sub-agents via the Agent
         // tool" becomes unimplementable.
+        // Named-agent registry: session-static scan (builtin + user
+        // ~/.afk/agents + project .afk/agents & .claude/agents). Enables
+        // `agent_type` dispatch on the `agent` tool at every depth.
+        const agentRegistry = loadAgentRegistry({
+          ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
+        });
+
         const childSkillExecutorFactory = createChildSkillExecutorFactory(
           options.model,
           apiKey,
@@ -498,6 +506,8 @@ export function registerChatCommand(program: Command): void {
           // nested subagent silently defaulted to Anthropic `sonnet` under an
           // OpenAI-routed parent.
           getDefaultSubagentModel(options.model),
+          // Named-agent registry propagates to nested skill executors.
+          agentRegistry,
         );
 
         // Pass `options.model` so `getDefaultSubagentModel` can fall back
@@ -527,6 +537,10 @@ export function registerChatCommand(program: Command): void {
           // Worktree isolation for depth ≥ 2 `agent` dispatch. See
           // bootstrap.ts for the same wiring.
           ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
+          // Named-agent dispatch: registry + the session model as the
+          // `inherit` anchor for named-agent model resolution.
+          agentRegistry,
+          parentModel: options.model,
         });
 
         const skillExecutor = new SkillExecutor({
@@ -538,6 +552,8 @@ export function registerChatCommand(program: Command): void {
           apiKey,
           childProviderFactory,
           childSkillExecutorFactory,
+          // Named-agent registry for skill-forked orchestrator children.
+          agentRegistry,
           ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
           // Per-model credential resolver — mirrors bootstrap.ts wiring.
           resolveApiKeyForModel: getApiKeyForModel,

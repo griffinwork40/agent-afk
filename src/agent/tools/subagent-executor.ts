@@ -18,12 +18,16 @@ import type { AgentConfig } from '../types/config-types.js';
 import { providerForModel } from '../providers/index.js';
 import { applyParentCredentialFallback } from './child-credential.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
-import type { ToolCall, ToolResult } from './types.js';
+import type { AnthropicToolDef, ToolCall, ToolResult } from './types.js';
 import {
+  CHILD_ALLOWED_TOOLS,
   DEFAULT_MAX_NESTING_DEPTH,
+  buildSkillRestrictedProvider,
   createStubParentSession,
   type ChildProviderFactoryArgs,
 } from './nesting.js';
+import { buildAgentToolDef, resolveAgentToolAccess } from '../agents/index.js';
+import type { AgentRegistry, RegisteredAgent } from '../agents/index.js';
 import type { SkillExecutor } from './skill-executor.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { debugLog } from '../../utils/debug.js';
@@ -149,6 +153,26 @@ export interface SubagentExecutorContext {
    * Set together with `allowedTools` for read-only skill fan-out propagation.
    */
   readOnlyBash?: boolean;
+  /**
+   * Session-wide named-agent registry (see `agent/agents/`). When present,
+   * the `agent` tool accepts an `agent_type` (alias `subagent_type`) input
+   * that dispatches the named definition: its body becomes the child's
+   * system prompt, its resolved tool allowlist is mechanically enforced at
+   * the child provider's permission gate, and its `model`/`maxTurns` act as
+   * defaults under explicit per-call values. Threaded by reference through
+   * nested executors so depth ≥ 2 dispatches resolve the same registry.
+   * When absent, `agent_type` inputs fail with an "available: (none)" error
+   * and the legacy dispatch path is byte-identical.
+   */
+  agentRegistry?: AgentRegistry;
+  /**
+   * The dispatching session's own model. Used to resolve a named agent's
+   * `model: inherit` (and the omitted-model default for NAMED dispatches,
+   * Claude Code parity). Distinct from `defaultSubagentModel`, which is the
+   * cost-policy default for UNNAMED dispatches and stays authoritative for
+   * them. When unset, `inherit` falls back to the policy default chain.
+   */
+  parentModel?: AgentModelInput;
 }
 
 export type AgentExecutionMode = 'foreground' | 'background';
@@ -213,7 +237,19 @@ interface AgentInput {
   prompt: string;
   model?: string;
   max_turns?: number;
+  /**
+   * True when the caller supplied `max_turns` explicitly. Distinguishes the
+   * parse-time default (10) from a deliberate value so a named agent's
+   * `maxTurns` frontmatter can act as the default without being able to
+   * override an explicit per-call budget.
+   */
+  max_turns_explicit: boolean;
   id_prefix?: string;
+  /**
+   * Named agent type to dispatch (`agent_type`, alias `subagent_type`).
+   * Resolved against {@link SubagentExecutorContext.agentRegistry}.
+   */
+  agent_type?: string;
   /** Execution mode. Defaults to 'foreground' (existing await-and-return semantic). */
   mode: AgentExecutionMode;
   /**
@@ -268,6 +304,7 @@ function parseAgentInput(input: unknown): AgentInput {
   }
 
   let max_turns = 10;
+  let max_turns_explicit = false;
   const maxTurnsValue = agentInput['max_turns'];
   if (maxTurnsValue !== undefined) {
     if (typeof maxTurnsValue !== 'number') {
@@ -275,6 +312,20 @@ function parseAgentInput(input: unknown): AgentInput {
     }
     // Clamp to [1, 50]
     max_turns = Math.max(1, Math.min(50, Math.floor(maxTurnsValue)));
+    max_turns_explicit = true;
+  }
+
+  // agent_type: canonical param; `subagent_type` accepted as an alias for
+  // Claude Code-ported prompts (bundled SKILL.mds already write it). When
+  // both are present the canonical name wins.
+  let agent_type: string | undefined;
+  const agentTypeValue = agentInput['agent_type'] ?? agentInput['subagent_type'];
+  if (agentTypeValue !== undefined) {
+    if (typeof agentTypeValue !== 'string') {
+      throw new Error('Agent tool agent_type must be a string');
+    }
+    const trimmed = agentTypeValue.trim();
+    if (trimmed.length > 0) agent_type = trimmed;
   }
 
   let id_prefix = 'agent-tool';
@@ -337,7 +388,16 @@ function parseAgentInput(input: unknown): AgentInput {
     cwd = cwdValue;
   }
 
-  return { prompt, model, max_turns, id_prefix, mode, ...(cwd !== undefined ? { cwd } : {}) };
+  return {
+    prompt,
+    model,
+    max_turns,
+    max_turns_explicit,
+    id_prefix,
+    mode,
+    ...(agent_type !== undefined ? { agent_type } : {}),
+    ...(cwd !== undefined ? { cwd } : {}),
+  };
 }
 
 /**
@@ -456,6 +516,19 @@ export class SubagentExecutor implements SubagentControl {
   }
 
   /**
+   * The `agent` tool definition this executor's owning provider should
+   * advertise. With a non-empty named-agent registry, the definition gains
+   * the `agent_type` input property and an "Available agent types" listing
+   * (Claude Code advertises subagent types in its Task tool the same way).
+   * Without one, returns the static schema byte-identical to the legacy
+   * surface. Providers call this via optional chaining so stubbed executors
+   * in tests fall back to the static def.
+   */
+  describeAgentTool(): AnthropicToolDef {
+    return buildAgentToolDef(this.ctx.agentRegistry);
+  }
+
+  /**
    * In-flight foreground subagents that can be promoted to background, keyed
    * by `handle.id`. Each entry is registered by the foreground branch of
    * {@link execute} immediately before its run-vs-promotion race and removed
@@ -567,6 +640,24 @@ export class SubagentExecutor implements SubagentControl {
       };
     }
 
+    // Named-agent resolution. A miss fails fast with the available list
+    // (mirrors skill-executor.ts's "Skill not found. Available skills: …")
+    // rather than silently dispatching an unrestricted generic child under
+    // a name the caller believed carried constraints.
+    let namedAgent: RegisteredAgent | undefined;
+    if (parsed.agent_type !== undefined) {
+      namedAgent = this.ctx.agentRegistry?.get(parsed.agent_type);
+      if (namedAgent === undefined) {
+        const available = [...(this.ctx.agentRegistry?.keys() ?? [])].sort().join(', ');
+        return {
+          content:
+            `Agent type "${parsed.agent_type}" not found. ` +
+            `Available agent types: ${available.length > 0 ? available : '(none)'}`,
+          isError: true,
+        };
+      }
+    }
+
     // Build child config.
     //
     // Invariant: `ctx.depth` is required (see SubagentExecutorContext.depth
@@ -594,8 +685,64 @@ export class SubagentExecutor implements SubagentControl {
     // `resolveOpenAIAuth()` to return the Anthropic key as if it were a config
     // OpenAI key (tier 1 wins) — the OpenAI API then 401s. Clearing them lets
     // the OpenAI auth resolver walk its env / codex precedence cleanly.
-    const childModel: string = parsed.model ?? this.ctx.defaultSubagentModel ?? 'sonnet';
+    // Model resolution.
+    //   Unnamed dispatch (legacy, unchanged): call-site > policy default > 'sonnet'.
+    //   Named dispatch (Claude Code parity): call-site > definition model
+    //   ('inherit' → dispatching session's model) > inherit-by-default
+    //   (omitted model also means inherit) > policy default > 'sonnet'.
+    // `parentModel` is optional ctx wiring; when absent, inherit falls
+    // through to the policy chain rather than guessing.
+    let namedDefaultModel: string | undefined;
+    if (namedAgent !== undefined) {
+      const defModel = namedAgent.definition.model;
+      namedDefaultModel =
+        defModel !== undefined && defModel !== 'inherit'
+          ? defModel
+          : this.ctx.parentModel;
+    }
+    const childModel: string =
+      parsed.model ?? namedDefaultModel ?? this.ctx.defaultSubagentModel ?? 'sonnet';
     const childIsOpenAI = providerForModel(childModel) === 'openai-compatible';
+
+    // Named-agent tool access: resolve the definition's declared surface into
+    // runtime terms, then compose with any cage this executor already sits in
+    // (a read-only skill's fan-out). Composition is fail-closed:
+    //   allowlist  = def ∩ cage   (when both exist; either alone otherwise)
+    //   bash gate  = def ∨ cage
+    // — mirroring skill-executor.ts buildForkedChildConfig's intersection
+    // semantics, so a named dispatch can never widen an existing cage.
+    const resolvedAccess =
+      namedAgent !== undefined
+        ? resolveAgentToolAccess(namedAgent, CHILD_ALLOWED_TOOLS)
+        : undefined;
+    let effectiveAllowedTools: string[] | undefined = this.ctx.allowedTools;
+    if (resolvedAccess?.allowedTools !== undefined) {
+      const cage = this.ctx.allowedTools;
+      effectiveAllowedTools =
+        cage !== undefined
+          ? resolvedAccess.allowedTools.filter((t) => cage.includes(t))
+          : resolvedAccess.allowedTools;
+    }
+    const effectiveReadOnlyBash =
+      this.ctx.readOnlyBash === true || resolvedAccess?.bashReadOnly === true;
+    if (resolvedAccess !== undefined && resolvedAccess.droppedTokens.length > 0) {
+      // Fail-closed token drops silently NARROW the child's tool surface, so a
+      // misconfigured agent file must be visible by default — not only under
+      // AFK_DEBUG. Route through the same stderr sink the agent registry uses
+      // for its load-time warnings (loadAgentRegistry's default `warn`).
+      process.stderr.write(
+        `[afk] agents: agent_type ${JSON.stringify(namedAgent?.name)}: ` +
+          `unknown tool token(s) dropped fail-closed: ${resolvedAccess.droppedTokens.join(', ')}\n`,
+      );
+    }
+
+    // Turn budget: explicit per-call max_turns wins; otherwise a named
+    // agent's maxTurns frontmatter (clamped to the same [1, 50] envelope);
+    // otherwise the parse-time default.
+    const effectiveMaxTurns =
+      !parsed.max_turns_explicit && namedAgent?.definition.maxTurns !== undefined
+        ? Math.max(1, Math.min(50, Math.floor(namedAgent.definition.maxTurns)))
+        : parsed.max_turns;
 
     // Resolve the child's API key by its own model/provider. The resolver is
     // now available directly from the agent layer (resolveCredentialForModel),
@@ -622,9 +769,12 @@ export class SubagentExecutor implements SubagentControl {
     const childConfig: AgentConfig = {
       model: childModel,
       apiKey: childIsOpenAI ? undefined : resolvedChildApiKey,
-      systemPrompt: this.ctx.defaultConfig.systemPrompt,
+      // A named agent's markdown body IS the child's system prompt (Claude
+      // Code parity: subagents receive the definition prompt, not the parent
+      // surface's full prompt). Unnamed dispatches keep the raw base prompt.
+      systemPrompt: namedAgent !== undefined ? namedAgent.definition.prompt : this.ctx.defaultConfig.systemPrompt,
       baseUrl: childIsOpenAI ? undefined : this.ctx.defaultConfig.baseUrl,
-      maxTurns: parsed.max_turns,
+      maxTurns: effectiveMaxTurns,
       // Awareness metadata (Phase 1, get_runtime_state):
       // Thread depth + maxDepth into the child's AgentConfig so the
       // `self` view of the child's get_runtime_state snapshot reflects
@@ -685,8 +835,17 @@ export class SubagentExecutor implements SubagentControl {
         // Propagate read-only constraints so depth ≥ 2 forks (this depth-1
         // child calling the `agent` tool) keep the same tool allowlist and
         // bash gate that the originating read-only skill imposed.
+        //
+        // Deliberately the CAGE (ctx) values, not the named-agent effective
+        // values: a named definition constrains the child it dispatches, not
+        // that child's own descendants (Claude Code parity — nested spawns
+        // resolve their own agent types). The cage, by contrast, cascades.
         ...(this.ctx.allowedTools !== undefined ? { allowedTools: this.ctx.allowedTools } : {}),
         ...(this.ctx.readOnlyBash ? { readOnlyBash: true } : {}),
+        // Named-agent registry + the child's model (for grandchild `inherit`
+        // resolution) thread through every depth.
+        ...(this.ctx.agentRegistry !== undefined ? { agentRegistry: this.ctx.agentRegistry } : {}),
+        parentModel: childModel,
       });
       const childSkillExecutor = this.ctx.childSkillExecutorFactory
         ? this.ctx.childSkillExecutorFactory(depth + 1, maxDepth, call.signal)
@@ -700,16 +859,30 @@ export class SubagentExecutor implements SubagentControl {
         childExecutor,
         ...(childSkillExecutor !== undefined ? { childSkillExecutor } : {}),
         ...(childConfig.model !== undefined ? { model: childConfig.model } : {}),
-        // Read-only propagation: when this executor is itself a read-only
-        // skill's child (e.g. ground-state fanning out via `agent`), forward
-        // the allowlist and bash gate so the grandchild provider stays gated.
-        // Mirrors skill-executor.ts:522 for the `agent` tool fan-out path.
-        ...(this.ctx.allowedTools !== undefined ? { allowedTools: this.ctx.allowedTools } : {}),
-        ...(this.ctx.readOnlyBash ? { readOnlyBash: true } : {}),
+        // Effective tool access for the dispatched child: the pre-existing
+        // cage (read-only skill fan-out), intersected with the named agent's
+        // resolved allowlist when one is in play (computed above). The
+        // dispatcher both enforces this at the permission gate AND filters
+        // the advertised schema to match (dispatcher.ts toolDefs), so a
+        // research-agent child never even sees bash/write_file/agent.
+        ...(effectiveAllowedTools !== undefined ? { allowedTools: effectiveAllowedTools } : {}),
+        ...(effectiveReadOnlyBash ? { readOnlyBash: true } : {}),
       });
+    } else if (effectiveAllowedTools !== undefined || effectiveReadOnlyBash) {
+      // Restricted dispatch at the depth cap (or with no factory wired):
+      // without an explicit provider the fork would inherit the default
+      // UNRESTRICTED provider and the named agent's contract would silently
+      // fail open. Build a minimal restricted provider instead — no nested
+      // executors (at the cap the child cannot fan out anyway). Mirrors the
+      // cap-path fix in skill-executor.ts buildForkedChildConfig.
+      childConfig.provider = buildSkillRestrictedProvider(
+        effectiveAllowedTools ?? [...CHILD_ALLOWED_TOOLS],
+        childConfig.model,
+        effectiveReadOnlyBash,
+      );
     }
 
-    let handle: Awaited<ReturnType<typeof this.ctx.subagentManager.forkSubagent>>;
+    let handle: Awaited<ReturnType<SubagentManager['forkSubagent']>>;
     try {
       handle = await this.ctx.subagentManager.forkSubagent({
         parent: this.ctx.parentSession,
@@ -726,9 +899,14 @@ export class SubagentExecutor implements SubagentControl {
         // flag that passes embedded newlines through). Strip ANSI escapes
         // and collapse interior newlines BEFORE slicing, so the rendered
         // line cannot be split mid-glyph or injected with control codes.
-        agentType: (parsed.id_prefix && parsed.id_prefix !== 'agent-tool')
-          ? stripEscapeSequences(parsed.id_prefix).replace(/[\r\n]+/g, ' ').trim() || 'agent'
-          : stripEscapeSequences(parsed.prompt).replace(/[\r\n]+/g, ' ').slice(0, 40).trim() || 'agent',
+        // Named dispatches render as Agent(<type>) — the registry name is
+        // trusted display input (already validated at registration). Unnamed
+        // dispatches keep the id_prefix / prompt-slice derivation.
+        agentType: namedAgent !== undefined
+          ? namedAgent.name
+          : (parsed.id_prefix && parsed.id_prefix !== 'agent-tool')
+            ? stripEscapeSequences(parsed.id_prefix).replace(/[\r\n]+/g, ' ').trim() || 'agent'
+            : stripEscapeSequences(parsed.prompt).replace(/[\r\n]+/g, ' ').slice(0, 40).trim() || 'agent',
         // A forked sub-agent has no human relationship of its own: it returns
         // findings (including Blocked/Asking) to its PARENT, which owns the
         // operator surface. Deny MCP elicitation for BOTH foreground and

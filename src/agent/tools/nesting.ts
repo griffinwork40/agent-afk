@@ -22,6 +22,7 @@ import { SkillExecutor } from './skill-executor.js';
 import type { SubagentExecutor } from './subagent-executor.js';
 import type { TraceWriter } from '../trace/index.js';
 import type { BackgroundAgentRegistry } from '../background-registry.js';
+import type { AgentRegistry } from '../agents/types.js';
 
 export const DEFAULT_MAX_NESTING_DEPTH = 3;
 
@@ -290,6 +291,7 @@ export function createChildSkillExecutorFactory(
   resolveApiKeyForModel?: (model: string) => string | undefined,
   surface?: Surface,
   defaultSubagentModel?: AgentModelInput,
+  agentRegistry?: AgentRegistry,
 ): (depth: number, maxDepth: number, signal: AbortSignal) => SkillExecutor {
   const factory: (depth: number, maxDepth: number, signal: AbortSignal) => SkillExecutor = (
     depth,
@@ -339,6 +341,9 @@ export function createChildSkillExecutorFactory(
       // SubagentExecutor threads surface into its recursive child executor
       // (subagent-executor.ts:626).
       ...(surface !== undefined ? { surface } : {}),
+      // Named-agent registry propagates so nested skill children can
+      // dispatch `agent_type`-named sub-agents at any depth.
+      ...(agentRegistry !== undefined ? { agentRegistry } : {}),
     });
   return factory;
 }
@@ -371,14 +376,18 @@ export type PhaseRole = 'read-only' | 'read-write';
 export function buildSkillRestrictedProvider(
   allowedTools: string[],
   model: AgentModelInput | undefined,
+  readOnlyBash = false,
 ): ModelProvider {
   // Materialise once per fork so runtime array mutations don't bleed across siblings.
   const permissions = { allowedTools: [...allowedTools] };
   const route = providerForModel(typeof model === 'string' ? model : undefined);
+  // readOnlyBash: forwarded when the restricted surface additionally gates
+  // mutating shell (named agents with `bash: read-only`, cage cap paths).
+  // Default false preserves the original skill-tools call sites unchanged.
   if (route === 'openai-compatible') {
-    return new OpenAICompatibleProvider({ permissions });
+    return new OpenAICompatibleProvider({ permissions, ...(readOnlyBash ? { readOnlyBash: true } : {}) });
   }
-  return new AnthropicDirectProvider({ permissions });
+  return new AnthropicDirectProvider({ permissions, ...(readOnlyBash ? { readOnlyBash: true } : {}) });
 }
 
 /**
