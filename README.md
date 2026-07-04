@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/griffinwork40-agent-afk-badge.png)](https://mseep.ai/app/griffinwork40-agent-afk)
+
 # Agent AFK
 
 > **Claude Code decides how the agent behaves. Agent AFK lets you edit the rules.**
