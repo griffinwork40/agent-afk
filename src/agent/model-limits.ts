@@ -85,18 +85,21 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   // Claude aliases
   opus: 200_000,
   opus_1m: 1_000_000,
-  // Sonnet 5 ships a 1M-token context window natively (like Fable 5, unlike
-  // opus/haiku whose base window is 200k). The `sonnet` alias, the now-redundant
-  // `sonnet_1m` back-compat alias, and the `claude-sonnet-5` wire id all report 1M.
-  sonnet: 1_000_000,
+  // Base `sonnet` uses the standard 200k Claude window; `sonnet_1m` is the
+  // explicit 1M opt-in (parallel to opus/opus_1m). Both resolve to the same
+  // `claude-sonnet-5` wire id — the `_1m` suffix only widens the client-side
+  // context accounting (status-line % + the auto-compaction trigger point).
+  sonnet: 200_000,
   sonnet_1m: 1_000_000,
   haiku: 200_000,
-  // Native 1M-context models (no `_1m` opt-in, unlike opus/haiku whose base
-  // window is 200k). Keyed by both the short alias (where one exists) and the
-  // wire id so lookups hit either side of the alias boundary.
+  // Native 1M-context models (no `_1m` opt-in, unlike opus/sonnet/haiku whose
+  // base window is 200k). Keyed by both the short alias (where one exists) and
+  // the wire id so lookups hit either side of the alias boundary.
   fable: 1_000_000,
   'claude-fable-5': 1_000_000,
-  'claude-sonnet-5': 1_000_000,
+  // Sonnet 5's base wire id sits at the standard 200k; the 1M opt-in is the
+  // `sonnet_1m` alias above (which short-circuits before this lookup).
+  'claude-sonnet-5': 200_000,
   // OpenAI flagship + cost-tier models (windows per OpenAI platform docs
   // as of 2026-Q1). Listed here so the openai-compatible provider's
   // getContextUsage() returns an accurate percentage instead of the

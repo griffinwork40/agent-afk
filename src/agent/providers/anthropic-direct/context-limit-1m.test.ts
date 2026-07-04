@@ -74,17 +74,17 @@ describe('getContextUsage — 1M-context aliases', () => {
     expect(usage.maxTokens).toBe(200_000);
   });
 
-  it('reports the 1M window for sonnet (Sonnet 5 is natively 1M, no _1m opt-in)', async () => {
+  it('reports the 200k base window for sonnet (1M is the sonnet_1m opt-in)', async () => {
     const query = makeQuery({ model: 'claude-sonnet-5', requestedModel: 'sonnet' });
     const usage = await query.getContextUsage();
-    expect(usage.maxTokens).toBe(1_000_000);
+    expect(usage.maxTokens).toBe(200_000);
   });
 
-  it('setModel preserves the alias: switching to opus_1m widens the window', async () => {
-    const query = makeQuery({ model: 'claude-opus-4-8', requestedModel: 'opus' });
+  it('setModel preserves the alias: switching to sonnet_1m widens the window', async () => {
+    const query = makeQuery({ model: 'claude-sonnet-5', requestedModel: 'sonnet' });
     expect((await query.getContextUsage()).maxTokens).toBe(200_000);
 
-    await query.setModel('opus_1m');
+    await query.setModel('sonnet_1m');
     expect((await query.getContextUsage()).maxTokens).toBe(1_000_000);
   });
 
