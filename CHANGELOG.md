@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.19.5] - 2026-07-04
+
+### Fixed
+- name dead-cwd spawn failures and fork-enforce bundled skills by name (#399) (1ee5d81)
+
+### Changed
+- update AFK.md with new commands and architecture details (d31cfc6)
+
 ## [5.19.4] - 2026-07-04
 
 ### Fixed
