@@ -205,58 +205,7 @@ describe('context: load — plugin skills', () => {
     expect(mockFork).toHaveBeenCalledOnce();
   });
 
-  it('forces FORK by name for a DEFAULT_FORK_SKILLS skill whose frontmatter lacks context: fork', async () => {
-    // Regression: first-registrant-wins registration lets a user/project
-    // copy shadow a bundled fork-mode skill. A stale copy missing
-    // `context: fork` previously degraded to load mode — instruction text
-    // instead of the structured envelope (broke diagnose's shadow-verify
-    // parsing) and bypassed name-keyed read-only enforcement.
-    const mockFork = vi.fn().mockResolvedValue({
-      runToResult: vi.fn().mockResolvedValue({ status: 'succeeded', message: { content: 'forced-fork' } }),
-      teardown: vi.fn().mockResolvedValue(undefined),
-    });
-    vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockImplementation(mockFork);
-    vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    const executor = makeExecutor();
-    // 'shadow-verify' is in DEFAULT_FORK_SKILLS; this copy has NO context field.
-    setPluginBodies(executor, [
-      ['shadow-verify', { body: 'stale private copy', pluginPath: '/fake/private-plugin' }],
-    ]);
-
-    const result = await executor.execute(makeCall({ name: 'shadow-verify' }));
-
-    expect(result.content).toBe('forced-fork');
-    expect(mockFork).toHaveBeenCalledOnce();
-    // The override must be observable — never a silent frontmatter override.
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('fork-enforced by name'),
-    );
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('shadow-verify'));
-  });
-
-  it('does NOT warn when a DEFAULT_FORK_SKILLS skill already declares context: fork', async () => {
-    const mockFork = vi.fn().mockResolvedValue({
-      runToResult: vi.fn().mockResolvedValue({ status: 'succeeded', message: { content: 'ok' } }),
-      teardown: vi.fn().mockResolvedValue(undefined),
-    });
-    vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockImplementation(mockFork);
-    vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    const executor = makeExecutor();
-    setPluginBodies(executor, [
-      ['shadow-verify', { body: 'proper copy', pluginPath: '/fake', context: 'fork' }],
-    ]);
-
-    await executor.execute(makeCall({ name: 'shadow-verify' }));
-
-    expect(mockFork).toHaveBeenCalledOnce();
-    expect(warnSpy).not.toHaveBeenCalled();
-  });
-
-  it('a plugin skill NOT in DEFAULT_FORK_SKILLS still loads in-context by default', async () => {
+  it('a plugin skill without context: fork loads in-context by default', async () => {
     const mockFork = spyNoFork();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const executor = makeExecutor();
@@ -267,6 +216,49 @@ describe('context: load — plugin skills', () => {
     const result = await executor.execute(makeCall({ name: 'ordinary-skill' }));
 
     expect(result.content).toContain('ordinary body');
+    expect(result.content).toContain('loaded into your current context');
+    expect(mockFork).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('SKILL.md context is authoritative: a shadowing copy of a bundled fork skill lacking context: fork LOADS (no name-keyed fork override)', async () => {
+    // Regression guard for the removal of DEFAULT_FORK_SKILLS. A user/project
+    // copy that shadows a bundled fork-mode skill (here 'shadow-verify') and
+    // OMITS `context: fork` now loads in-context — the SKILL.md `context:`
+    // field is the single source of truth. There is no name-keyed force-fork:
+    // that override could hijack an unrelated same-named third-party skill and
+    // was a no-op for the correctly-configured bundled copies (which declare
+    // `context: fork` themselves).
+    const mockFork = spyNoFork();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const executor = makeExecutor();
+    setPluginBodies(executor, [
+      ['shadow-verify', { body: 'shadowing copy without context', pluginPath: '/fake/private-plugin' }],
+    ]);
+
+    const result = await executor.execute(makeCall({ name: 'shadow-verify' }));
+
+    expect(result.content).toContain('shadowing copy without context');
+    expect(result.content).toContain('loaded into your current context');
+    expect(mockFork).not.toHaveBeenCalled();
+    // No name-keyed override means no override warning either.
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('respects an explicit context: load even for a name that shadows a bundled skill', async () => {
+    // A third-party plugin skill sharing a bundled skill's name (here 'review')
+    // that explicitly declares `context: load` must load in-context, never be
+    // hijacked into fork mode against the author's declared intent.
+    const mockFork = spyNoFork();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const executor = makeExecutor();
+    setPluginBodies(executor, [
+      ['review', { body: 'third-party review body', pluginPath: '/fake/third-party', context: 'load' }],
+    ]);
+
+    const result = await executor.execute(makeCall({ name: 'review' }));
+
+    expect(result.content).toContain('third-party review body');
     expect(result.content).toContain('loaded into your current context');
     expect(mockFork).not.toHaveBeenCalled();
     expect(warnSpy).not.toHaveBeenCalled();
