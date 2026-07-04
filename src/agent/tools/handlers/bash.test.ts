@@ -543,6 +543,22 @@ describe('bashHandler', () => {
         await fs.rm(tmpB, { recursive: true, force: true });
       }
     });
+
+    it('names the dead working directory when cwd was deleted (ENOENT masquerade)', async () => {
+      // Spawn with a deleted cwd rejects as `spawn /bin/sh ENOENT` — naming
+      // the shell, not the missing directory. The handler must translate
+      // this into an actionable error so agents stop retrying blindly
+      // (production incident: 4 consecutive identical retries after a
+      // worktree was reaped mid-session).
+      const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'bash-cwd-dead-'));
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+      const handler = createBashHandler('default', tmpRoot);
+      const result = await handler({ command: 'echo alive' }, createSignal());
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('working directory does not exist');
+      expect(result.content).toContain(tmpRoot);
+      expect(result.content).toContain('deleted worktree?');
+    });
   });
 
   describe('concurrent execution', () => {

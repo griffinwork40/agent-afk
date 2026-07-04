@@ -131,6 +131,29 @@ export const RECON_ALLOWED_TOOLS: readonly string[] = [
 // prose). Add a name here only for skills that are genuinely read-only recon.
 export const DEFAULT_READ_ONLY_SKILLS: ReadonlySet<string> = new Set(['ground-state']);
 
+// Skills forced to FORK execution by NAME, independent of their SKILL.md
+// frontmatter. Same rationale as DEFAULT_READ_ONLY_SKILLS: first-registrant-
+// wins registration means a user/project copy of a bundled skill can shadow
+// it, and a stale copy missing `context: fork` silently degrades to load
+// mode — the caller gets instruction text instead of the structured envelope
+// (e.g. diagnose's auto-verify parses shadow-verify's JSON), and name-keyed
+// read-only enforcement is bypassed because it only runs on the forked path.
+// Seeded with every bundled skill that declares `context: fork`
+// (src/bundled-plugins/awa-bundled/skills/*). When this set forces a fork on
+// a copy whose frontmatter lacked `context: fork`, the executor emits a
+// warning naming the skill so a deliberate local load-mode edit is never
+// silently overridden.
+export const DEFAULT_FORK_SKILLS: ReadonlySet<string> = new Set([
+  'shadow-verify',
+  'review',
+  'research',
+  'ground-state',
+  'spec',
+  'ship',
+  'simplify',
+  'refactor',
+]);
+
 /**
  * Bootstrap-time options captured by closure into the factory returned by
  * {@link createChildProviderFactory}. Held at factory-construction (not
