@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.20.1] - 2026-07-04
+
+### Fixed
+- report a clean git tree as dirty:false, not null (#389) (78c4083)
+
 ## [5.20.0] - 2026-07-04
 
 ### Added
