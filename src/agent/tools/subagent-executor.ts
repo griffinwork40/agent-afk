@@ -52,7 +52,7 @@ export interface SubagentExecutorContext {
    * recursive skill invocation or nested DAG spawning. ComposeExecutor follows
    * the same convention; see `ComposeExecutorContext.systemPrompt`.
    */
-  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl'>;
+  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl'>;
   /**
    * User-facing surface of the session that owns this executor (cli/telegram/
    * daemon). Set at top-level wiring sites; inherited by nested child executors.
@@ -879,6 +879,7 @@ export class SubagentExecutor implements SubagentControl {
         effectiveAllowedTools ?? [...CHILD_ALLOWED_TOOLS],
         childConfig.model,
         effectiveReadOnlyBash,
+        this.ctx.defaultConfig.openaiBaseUrl,
       );
     }
 

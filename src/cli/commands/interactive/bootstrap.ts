@@ -310,6 +310,8 @@ export async function bootstrapSession(
     getDefaultSubagentModel(sessionModel),
     // Named-agent registry propagates to nested skill executors.
     agentRegistry,
+    // OpenAI endpoint → nested restricted/depth-cap provider builders.
+    cliConfig.openaiBaseUrl,
   );
 
   // Pass `sessionModel` to `getDefaultSubagentModel` so OpenAI-routed
@@ -326,6 +328,7 @@ export async function bootstrapSession(
       apiKey,
       systemPrompt: basePrompt,
       ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
+      ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
     },
     defaultSubagentModel: getDefaultSubagentModel(sessionModel),
     childProviderFactory,
@@ -367,6 +370,7 @@ export async function bootstrapSession(
     // Sibling to the SubagentExecutor wiring above.
     backgroundRegistry,
     ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
+    ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
     // Per-model credential resolver — mirrors SubagentExecutor wiring above.
     resolveApiKeyForModel: getApiKeyForModel,
     // Witness layer: without this, skill-forked subagents (every /review,

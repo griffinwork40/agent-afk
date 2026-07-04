@@ -85,6 +85,14 @@ export interface SkillExecutorContext {
    * instead of falling back to api.anthropic.com.
    */
   baseUrl?: string;
+  /**
+   * OpenAI-compatible endpoint forwarded to child skill subagents, so an
+   * OpenAI-routed child built via the restricted/depth-cap provider builders
+   * (buildReadOnlyReconProvider / buildSkillRestrictedProvider) points at the
+   * configured endpoint instead of defaulting to api.openai.com. Sourced from
+   * `cliConfig.openaiBaseUrl` (env `AFK_OPENAI_BASE_URL`); the OpenAI peer of `baseUrl`.
+   */
+  openaiBaseUrl?: string;
   pluginConfigs?: SdkPluginConfig[];
   depth?: number;
   maxDepth?: number;
@@ -582,11 +590,16 @@ export class SkillExecutor {
         // is a safe read-only superset and — crucially — the mutating-bash gate
         // is preserved. This closes the cap-path readOnlyBash fail-open for a
         // `read-only: true` + `tools: bash` skill forked at the depth cap.
-        childConfig.provider = buildReadOnlyReconProvider(childConfig.model);
+        childConfig.provider = buildReadOnlyReconProvider(childConfig.model, this.ctx.openaiBaseUrl);
       } else if (effectiveAllowed !== undefined) {
         // Non-readOnly tools: allowlist at the cap. Restrict to the declared
         // tools (no readOnlyBash — the skill did not declare read-only).
-        childConfig.provider = buildSkillRestrictedProvider(effectiveAllowed, childConfig.model);
+        childConfig.provider = buildSkillRestrictedProvider(
+          effectiveAllowed,
+          childConfig.model,
+          effectiveReadOnlyBash,
+          this.ctx.openaiBaseUrl,
+        );
       }
       return { childConfig, childManager: undefined };
     }

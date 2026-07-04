@@ -2186,6 +2186,8 @@ describe('SkillExecutor', () => {
       expect(buildRestrictedSpy).toHaveBeenCalledWith(
         ['read_file', 'grep', 'glob', 'list_directory'],
         'sonnet',
+        false,
+        undefined,
       );
     });
 
@@ -2237,7 +2239,7 @@ describe('SkillExecutor', () => {
       expect(result.isError).toBeUndefined();
       // readOnly wins: the recon provider (which keeps readOnlyBash) is used, and
       // the bare restricted provider that would drop the bash gate is NOT.
-      expect(reconSpy).toHaveBeenCalledWith('sonnet');
+      expect(reconSpy).toHaveBeenCalledWith('sonnet', undefined);
       expect(restrictedSpy).not.toHaveBeenCalled();
     });
 
@@ -2314,6 +2316,8 @@ describe('SkillExecutor', () => {
       expect(buildRestrictedSpy).toHaveBeenCalledWith(
         ['read_file', 'grep'],
         'sonnet',
+        false,
+        undefined,
       );
     });
   });

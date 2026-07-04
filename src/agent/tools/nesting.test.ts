@@ -3,6 +3,7 @@ import {
   CHILD_ALLOWED_TOOLS,
   RECON_ALLOWED_TOOLS,
   DEFAULT_READ_ONLY_SKILLS,
+  buildReadOnlyReconProvider,
   buildSkillRestrictedProvider,
 } from './nesting.js';
 import { checkToolPermission } from './permissions.js';
@@ -175,5 +176,40 @@ describe('DEFAULT_READ_ONLY_SKILLS', () => {
 
   it('does not contain an arbitrary skill name', () => {
     expect(DEFAULT_READ_ONLY_SKILLS.has('mint')).toBe(false);
+  });
+});
+
+describe('restricted builders thread openaiBaseUrl into the OpenAI client baseURL', () => {
+  // Regression: a deep OpenAI-routed subagent built via these restricted/depth-cap
+  // builders must point at the configured endpoint, not default to api.openai.com
+  // (where a non-OpenAI key 401s as "Incorrect API key provided"). Complements the
+  // query-time fallback in openai-compatible/base-url.ts. Mirrors the providerOpts
+  // baseURL introspection in providers/routing.test.ts.
+  const bakedBaseURL = (provider: unknown): string | undefined =>
+    (provider as { providerOpts: { baseURL?: string } }).providerOpts.baseURL;
+
+  it('buildReadOnlyReconProvider bakes openaiBaseUrl into an OpenAI-routed child', () => {
+    const provider = buildReadOnlyReconProvider('gpt-4o', 'https://opencode.ai/zen/go/v1');
+    expect(bakedBaseURL(provider)).toBe('https://opencode.ai/zen/go/v1');
+  });
+
+  it('buildReadOnlyReconProvider leaves baseURL unset when no openaiBaseUrl is given', () => {
+    const provider = buildReadOnlyReconProvider('gpt-4o');
+    expect(bakedBaseURL(provider)).toBeUndefined();
+  });
+
+  it('buildSkillRestrictedProvider bakes openaiBaseUrl into an OpenAI-routed child', () => {
+    const provider = buildSkillRestrictedProvider(
+      ['read_file'],
+      'gpt-4o',
+      false,
+      'https://opencode.ai/zen/go/v1',
+    );
+    expect(bakedBaseURL(provider)).toBe('https://opencode.ai/zen/go/v1');
+  });
+
+  it('buildSkillRestrictedProvider leaves baseURL unset when no openaiBaseUrl is given', () => {
+    const provider = buildSkillRestrictedProvider(['read_file'], 'gpt-4o');
+    expect(bakedBaseURL(provider)).toBeUndefined();
   });
 });
