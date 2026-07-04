@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CLAUDE_FABLE_5_ID,
+  coerceSlotBindingInput,
   computeSlotBindings,
   DEFAULT_SLOT_BINDINGS,
   DIRECT_MODEL_ALIASES,
@@ -333,5 +334,39 @@ describe('Stage 2: per-slot provider credentials', () => {
       baseUrl: 'http://env/v1',
       apiKey: 'env-key',
     });
+  });
+});
+
+describe('coerceSlotBindingInput', () => {
+  it('accepts a minimal object with just an id', () => {
+    expect(coerceSlotBindingInput({ id: 'glm-5.2' })).toEqual({ ok: true, value: { id: 'glm-5.2' } });
+  });
+  it('accepts a full object and normalizes provider aliases', () => {
+    expect(coerceSlotBindingInput({ id: 'glm-5.2', provider: 'openai-compatible', baseUrl: 'https://x/v1' })).toEqual(
+      { ok: true, value: { id: 'glm-5.2', provider: 'openai', baseUrl: 'https://x/v1' } },
+    );
+  });
+  it('rejects a non-object', () => {
+    expect(coerceSlotBindingInput('glm-5.2').ok).toBe(false);
+    expect(coerceSlotBindingInput(null).ok).toBe(false);
+    expect(coerceSlotBindingInput(['glm-5.2']).ok).toBe(false);
+  });
+  it('rejects a missing id', () => {
+    expect(coerceSlotBindingInput({}).ok).toBe(false);
+    expect(coerceSlotBindingInput({ provider: 'openai' }).ok).toBe(false);
+  });
+  it('rejects an unrecognized provider', () => {
+    const res = coerceSlotBindingInput({ id: 'glm-5.2', provider: 'opencode-go' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/provider/);
+  });
+  it('rejects a per-slot apiKey (camelCase and snake_case)', () => {
+    expect(coerceSlotBindingInput({ id: 'glm-5.2', apiKey: 'sk-secret' }).ok).toBe(false);
+    expect(coerceSlotBindingInput({ id: 'glm-5.2', api_key: 'sk-secret' }).ok).toBe(false);
+  });
+  it('rejects snake_case base_url with a helpful message', () => {
+    const res = coerceSlotBindingInput({ id: 'glm-5.2', base_url: 'https://x/v1' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/baseUrl/);
   });
 });

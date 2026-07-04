@@ -204,6 +204,37 @@ describe('config mutation engine', () => {
     });
   });
 
+  describe('config: setConfigValue — models.* model-slot object form', () => {
+    it('writes a full slot-binding object and round-trips it via getConfigValue', () => {
+      const binding = { id: 'glm-5.2', provider: 'openai', baseUrl: 'https://x/v1' };
+      const r = setConfigValue('models.large', binding, { filePath: jsonFile });
+      expect(r.value).toEqual(binding);
+      expect(JSON.parse(readFileSync(jsonFile, 'utf-8'))).toEqual({ models: { large: binding } });
+      expect(getConfigValue('models.large', { filePath: jsonFile }).value).toEqual(binding);
+    });
+
+    it('still accepts a bare string id', () => {
+      const r = setConfigValue('models.large', 'glm-5.2', { filePath: jsonFile });
+      expect(r.value).toBe('glm-5.2');
+      expect(JSON.parse(readFileSync(jsonFile, 'utf-8'))).toEqual({ models: { large: 'glm-5.2' } });
+    });
+
+    it('overwriting a pre-existing string-form slot with an object leaves no stray keys', () => {
+      setConfigValue('models.large', 'old-id', { filePath: jsonFile });
+      const binding = { id: 'glm-5.2', provider: 'openai', baseUrl: 'https://x/v1' };
+      setConfigValue('models.large', binding, { filePath: jsonFile });
+      const obj = JSON.parse(readFileSync(jsonFile, 'utf-8'));
+      expect(obj).toEqual({ models: { large: binding } });
+      expect(Object.keys(obj.models.large).sort()).toEqual(['baseUrl', 'id', 'provider']);
+    });
+
+    it('rejects an object carrying apiKey', () => {
+      expect(() =>
+        setConfigValue('models.large', { id: 'glm-5.2', apiKey: 'sk-secret' }, { filePath: jsonFile }),
+      ).toThrow(ConfigValidationError);
+    });
+  });
+
   describe('config: unset / get / list', () => {
     it('unsets and prunes empty parents', () => {
       setConfigValue('telegram.notify.mode', 'primary', { filePath: jsonFile, allowHumanOnly: true });

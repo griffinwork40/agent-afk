@@ -356,3 +356,49 @@ function parseBinding(value: unknown): ModelSlotBinding | undefined {
   }
   return undefined;
 }
+
+/**
+ * Strict WRITER-path validation for a model-slot binding supplied to the config
+ * mutation engine (config_set tool / `afk config set`). Unlike {@link parseBinding}
+ * — which leniently ignores malformed fields when LOADING afk.config.json — this
+ * surfaces actionable errors so a bad `config set models.large {...}` is rejected
+ * rather than silently written. Rejects a per-slot `apiKey` (a credential — belongs
+ * in afk.env via `afk config env set AFK_MODEL_<TIER>_API_KEY`, not the plaintext JSON).
+ */
+export function coerceSlotBindingInput(
+  raw: unknown,
+): { ok: true; value: ModelSlotBinding } | { ok: false; error: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, error: 'model binding must be an object with at least an "id"' };
+  }
+  const obj = raw as Record<string, unknown>;
+  if ('apiKey' in obj || 'api_key' in obj) {
+    return {
+      ok: false,
+      error:
+        'per-slot API keys are credentials; set AFK_MODEL_<TIER>_API_KEY via `afk config env set` instead of afk.config.json',
+    };
+  }
+  const id = parseStringField(obj['id']);
+  if (!id) return { ok: false, error: 'model binding requires a non-empty "id"' };
+  const binding: ModelSlotBinding = { id };
+  const name = parseStringField(obj['name']);
+  if (name) binding.name = name;
+  if (obj['provider'] !== undefined && obj['provider'] !== '') {
+    const provider = normalizeSlotProvider(obj['provider']);
+    if (!provider) {
+      return {
+        ok: false,
+        error:
+          'model binding "provider" must be one of: anthropic, openai (aliases: anthropic-direct, openai-compatible)',
+      };
+    }
+    binding.provider = provider;
+  }
+  const baseUrl = parseStringField(obj['baseUrl']);
+  if (baseUrl) binding.baseUrl = baseUrl;
+  if (!baseUrl && parseStringField(obj['base_url'])) {
+    return { ok: false, error: 'use camelCase "baseUrl", not "base_url"' };
+  }
+  return { ok: true, value: binding };
+}

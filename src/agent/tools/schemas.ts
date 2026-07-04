@@ -766,7 +766,8 @@ export const configSetTool: AnthropicToolDef = {
       value: {
         description:
           'Required for action "set". A string, number, or boolean (config keys also accept arrays where ' +
-          'the schema expects one, e.g. telegram.notify.targets). Coerced to the key\'s declared type.',
+          'the schema expects one, e.g. telegram.notify.targets). Coerced to the key\'s declared type. ' +
+          'Model-slot keys (models.local/small/medium/large) also accept a { id, provider, baseUrl } object.',
       },
     },
     required: ['target', 'key'],
