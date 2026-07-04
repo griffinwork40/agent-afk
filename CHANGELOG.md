@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.20.0] - 2026-07-04
+
+### Added
+- named agent definitions with agent_type dispatch on the agent tool (#384) (c9f6040)
+
 ## [5.19.5] - 2026-07-04
 
 ### Fixed
