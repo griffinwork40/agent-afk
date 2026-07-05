@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.22.0] - 2026-07-05
+
+### Added
+- plugin-contributed agent scope + scoped nested dispatch (#423) (249c27c)
+
 ## [5.21.1] - 2026-07-05
 
 ### Fixed
