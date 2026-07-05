@@ -804,12 +804,17 @@ export class AnthropicDirectProvider implements ModelProvider {
         ? baseToolDefs.filter((t) => t.name !== 'ask_question')
         : baseToolDefs;
 
+    const cwd = config.cwd || process.cwd();
+
     // Build skill manifest for system prompt injection. The manifest lists
     // available skills so the model knows what the `skill` tool can invoke.
     // Let collectSkillEntries() own the full scan (project + user + bundled).
-    const manifest = this.skillExecutor ? buildSkillManifest() : '';
-
-    const cwd = config.cwd || process.cwd();
+    // Pass the session cwd so project skills (<cwd>/.afk/skills/) resolve
+    // against the session's working directory, not the host process's —
+    // they diverge on long-lived hosts (daemon, Telegram bot).
+    const manifest = this.skillExecutor
+      ? buildSkillManifest(undefined, { cwd })
+      : '';
     // Invariant: SLASH_COMMAND_ROUTING_PROMPT is omitted for skill-dispatch
     // sub-agents. Those sessions receive a "Run the <name> skill" directive
     // with no <command-name> tag, so the routing instruction (which keys off

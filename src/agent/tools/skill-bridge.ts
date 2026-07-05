@@ -61,8 +61,9 @@ export interface SkillManifestEntry {
  */
 export function buildSkillManifest(
   pluginConfigs?: SdkPluginConfig[],
+  opts?: CollectSkillEntriesOptions,
 ): string {
-  const entries = collectSkillEntries(pluginConfigs);
+  const entries = collectSkillEntries(pluginConfigs, opts);
   if (entries.length === 0) return '';
 
   const lines: string[] = [];
@@ -85,10 +86,28 @@ export function buildSkillManifest(
 }
 
 /**
+ * Options for {@link collectSkillEntries} / {@link buildSkillManifest}.
+ */
+export interface CollectSkillEntriesOptions {
+  /**
+   * Session working directory to resolve `<cwd>/.afk/skills/` against.
+   *
+   * Long-lived hosts (daemon, Telegram bot) run sessions whose configured
+   * cwd differs from the Node host's `process.cwd()` — and the host process
+   * never chdir()s, so without this override those sessions would resolve
+   * project skills against the directory the *process* was launched from,
+   * not the project the *session* is working in. Defaults to
+   * `process.cwd()` for standalone/REPL callers, where the two coincide.
+   */
+  cwd?: string;
+}
+
+/**
  * Collect all skill entries from registry + plugins.
  */
 export function collectSkillEntries(
   pluginConfigs?: SdkPluginConfig[],
+  opts?: CollectSkillEntriesOptions,
 ): SkillManifestEntry[] {
   const entries: SkillManifestEntry[] = [];
   const seen = new Set<string>();
@@ -119,16 +138,17 @@ export function collectSkillEntries(
   //    builtin (origin undefined) via the resolveSkillKey collision logic.
   scanSkillsFromDir(getSkillsDir(), 'user');
   // Invariant: evict stale project-origin skills before rescanning the
-  // project dir. In a long-lived process (daemon, Telegram bot) the cwd may
-  // have changed since the previous call, and any skills registered for the
-  // old cwd must not persist into the new project context. User-origin and
-  // built-in skills are deliberately excluded from eviction — they are
-  // cwd-agnostic and must survive across project boundaries. The eviction
-  // cost is O(registry size) and bounded by the number of registered skills
-  // (typically <100), so it is negligible relative to the disk scan that
-  // follows.
+  // project dir. The effective project scan root can change between calls —
+  // via process.chdir() (REPL worktree auto-naming) or via a different
+  // session cwd (daemon task, Telegram chat after /cd) — and any skills
+  // registered for the old root must not persist into the new project
+  // context. User-origin and built-in skills are deliberately excluded from
+  // eviction — they are cwd-agnostic and must survive across project
+  // boundaries. The eviction cost is O(registry size) and bounded by the
+  // number of registered skills (typically <100), so it is negligible
+  // relative to the disk scan that follows.
   evictSkillsByOrigin('project');
-  scanSkillsFromDir(getProjectSkillsDir(), 'project');
+  scanSkillsFromDir(getProjectSkillsDir(opts?.cwd), 'project');
   // Imported skills from trusted source binaries (Claude Code, Codex) opted
   // into via `importFrom`. Scanned AFTER native scopes so a native skill keeps
   // the bare name on collision; an imported same-name skill falls back to
