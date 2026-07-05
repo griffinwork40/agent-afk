@@ -418,12 +418,18 @@ export class AnthropicDirectProvider implements ModelProvider {
       }
     }
     const mcpSchemas = this._mcpToolsCache ?? [];
-    // Plan-exit tool: the model-callable `exit_plan_mode`, registered per-query
-    // ONLY while in plan mode and only when the session supplied control
-    // callbacks (top-level sessions). Mirrors the `get_runtime_state` per-query
-    // registration above; the schema is appended to the dispatcher's list to
-    // match so the model sees the tool exactly when it is callable.
-    const planExitControls = permissionMode === 'plan' ? opts?.planExitControls : undefined;
+    // Plan-exit tool: the model-callable `exit_plan_mode`, registered RESIDENT
+    // whenever the session supplied control callbacks (top-level sessions only —
+    // subagents never get planExitControls). NOT gated on the construction-time
+    // `permissionMode`: the dispatcher is built once per query() and is NOT
+    // rebuilt by setPermissionMode, so a mode-gated registration here left the
+    // tool permanently unwired for the common "enter plan mode AFTER launch"
+    // flow (Shift+Tab / `/plan`), and the model got "Unknown tool exit_plan_mode".
+    // Callability is instead gated per-turn on the LIVE mode: query.ts filters
+    // this tool out of the advertised tool list on non-plan turns, so the model
+    // is offered it exactly when it is actionable — and it becomes callable the
+    // instant plan mode is entered mid-session, with no query rebuild.
+    const planExitControls = opts?.planExitControls;
     if (planExitControls) {
       handlers.set(EXIT_PLAN_MODE_TOOL_NAME, createExitPlanModeHandler(planExitControls));
     }
@@ -436,7 +442,9 @@ export class AnthropicDirectProvider implements ModelProvider {
       allowAll: pathContainmentBypassed(permissionMode),
       // Constraint (semantic invariant): MCP schemas appended AFTER builtins
       // so builtin tool names always take precedence in any overlap. The
-      // plan-exit schema is appended last, only while the tool is active.
+      // plan-exit schema is appended last, RESIDENT whenever planExitControls is
+      // present (top-level); query.ts filters it out of the advertised tool list
+      // on non-plan turns so the model sees it only when it is actionable.
       schemas: [
         ...this.schemas,
         ...mcpSchemas,
@@ -988,6 +996,9 @@ export class AnthropicDirectProvider implements ModelProvider {
             traceWriter: config.traceWriter,
             runtimeStateSource,
             hookRegistry: config.hookRegistry,
+            // Carry the resident plan-exit handler across a cwd rebuild — omitting
+            // this previously dropped `exit_plan_mode` after a `/cd` while planning.
+            planExitControls: config.planExitControls,
           });
           return { userSystem: newUserSystem, dispatcher: newDispatcher };
         };
