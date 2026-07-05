@@ -123,6 +123,14 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
    * managed to produce instead of just the error.
    */
   private lastStreamedContent: string = '';
+  /**
+   * The provider's terminal stop reason captured from the most recent run's
+   * `done` event (e.g. `'end_turn'`, `'tool_use_loop_capped'`). Persisted as
+   * an instance field so `runToResult` can attach it to the built
+   * {@link SubagentResult}, letting callers distinguish a capped partial from
+   * a genuine completion. Reset at the start of each run.
+   */
+  private lastStopReason: string | undefined;
 
   /** @internal — positional argument order is not part of any public contract. */
   constructor(
@@ -257,12 +265,12 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
   ): Promise<Message> {
     let finalMessage: Message | undefined;
     let streamError: Error | undefined;
-    let stopReason: string | undefined;
 
     // Reset partial-content accumulator before each run. Surviving across the
     // throw boundary is the whole point — the local `streamedContent` of the
     // previous version got dropped on the floor when the iterator threw.
     this.lastStreamedContent = '';
+    this.lastStopReason = undefined;
     this.currentTrace = createEmptyTrace();
 
     const activeSink = sinkOverride ?? this.progressSink ?? getCurrentSink();
@@ -314,9 +322,10 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       } else if (event.type === 'done') {
         // Capture the turn's stop reason so the post-loop fallback can tell a
         // tool-use-cap termination (which yields a `done` with no assistant
-        // message) apart from a genuinely empty stream.
+        // message) apart from a genuinely empty stream — and so `runToResult`
+        // can surface it on the SubagentResult (persisted on the handle).
         if (typeof event.metadata?.stopReason === 'string') {
-          stopReason = event.metadata.stopReason;
+          this.lastStopReason = event.metadata.stopReason;
         }
         if (typeof event.metadata?.usage === 'object' && event.metadata.usage !== null) {
           const u = event.metadata.usage as Record<string, unknown>;
@@ -344,7 +353,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     // `runToResult` reports a capped *partial* result (status 'succeeded')
     // rather than an opaque subagent failure — the behavior the cap default
     // already documents.
-    if (stopReason === 'tool_use_loop_capped') {
+    if (this.lastStopReason === 'tool_use_loop_capped') {
       return {
         role: 'assistant',
         content:
@@ -359,9 +368,22 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
   async runToResult(prompt: string, sinkOverride?: SubagentProgressSink): Promise<SubagentResult<T>> {
     try {
       const message = await this.run(prompt, sinkOverride);
-      return buildResultFromMessage(this.id, this.currentStatus, message, this.outputSchema, this.currentTrace);
+      return buildResultFromMessage(
+        this.id,
+        this.currentStatus,
+        message,
+        this.outputSchema,
+        this.currentTrace,
+        this.lastStopReason,
+      );
     } catch (err) {
-      const result = buildResultFromError<T>(this.id, this.currentStatus, err, this.currentTrace);
+      const result = buildResultFromError<T>(
+        this.id,
+        this.currentStatus,
+        err,
+        this.currentTrace,
+        this.lastStopReason,
+      );
       // Preserve any assistant text streamed before the failure so the parent
       // receives partial findings rather than just an opaque error. The
       // raw string fragment is the best we have when a structured parse
