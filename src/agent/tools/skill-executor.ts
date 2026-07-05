@@ -1106,7 +1106,10 @@ export class SkillExecutor {
 
   private getPluginSkillBody(name: string): PluginSkillBody | undefined {
     if (!this.pluginBodies) {
-      this.pluginBodies = discoverPluginSkillBodies(this.ctx.pluginConfigs);
+      this.pluginBodies = discoverPluginSkillBodies(
+        this.ctx.pluginConfigs,
+        this.currentCwd !== undefined ? { cwd: this.currentCwd } : undefined,
+      );
     }
     return this.pluginBodies.get(name);
   }

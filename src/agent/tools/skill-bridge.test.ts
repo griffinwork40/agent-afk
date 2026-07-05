@@ -908,3 +908,111 @@ describe('scanAllPluginRoots', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regression: project-scoped plugins must resolve against the session cwd,
+// not process.cwd(). Same bug class as the skills-cwd fix (#179 follow-up).
+// ---------------------------------------------------------------------------
+describe('scanAllPluginRoots — project plugin session-cwd resolution', () => {
+  let tmpAfkHome: string;
+  let cwdA: string;
+  let cwdB: string;
+  let origCwd: string;
+
+  beforeEach(() => {
+    _resetPluginScanCache();
+    vi.unstubAllEnvs();
+
+    tmpAfkHome = mkdtempSync('/tmp/plugin-roots-evict-afkhome-');
+    cwdA = mkdtempSync('/tmp/plugin-roots-evict-cwdA-');
+    cwdB = mkdtempSync('/tmp/plugin-roots-evict-cwdB-');
+    origCwd = process.cwd();
+
+    vi.stubEnv('AFK_HOME', tmpAfkHome);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    process.chdir(origCwd);
+    try { rmSync(tmpAfkHome, { recursive: true }); } catch { /* non-fatal */ }
+    try { rmSync(cwdA, { recursive: true }); } catch { /* non-fatal */ }
+    try { rmSync(cwdB, { recursive: true }); } catch { /* non-fatal */ }
+  });
+
+  function writePluginIn(baseDir: string, pluginName: string, _description: string): void {
+    const pluginDir = join(baseDir, '.afk', 'plugins', pluginName);
+    mkdirSync(join(pluginDir, '.claude-plugin'), { recursive: true });
+    writeFileSync(
+      join(pluginDir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: pluginName, version: '0.0.0' }),
+    );
+  }
+
+  it('scanAllPluginRoots resolves project plugins against opts.cwd', () => {
+    writePluginIn(cwdA, 'proj-a-plugin', 'Plugin only in project A');
+
+    _resetPluginScanCache();
+    const rootsA = scanAllPluginRoots({ cwd: cwdA });
+    const pathsA = rootsA.map((r) => r.path);
+    expect(pathsA.some((p) => p.includes('proj-a-plugin'))).toBe(true);
+
+    _resetPluginScanCache();
+    const rootsB = scanAllPluginRoots({ cwd: cwdB });
+    const pathsB = rootsB.map((r) => r.path);
+    expect(pathsB.some((p) => p.includes('proj-a-plugin'))).toBe(false);
+  });
+});
+
+describe('discoverPluginSkillBodies — project plugin session-cwd resolution', () => {
+  let tmpAfkHome: string;
+  let cwdA: string;
+  let cwdB: string;
+  let origCwd: string;
+
+  beforeEach(() => {
+    _resetPluginScanCache();
+    vi.unstubAllEnvs();
+
+    tmpAfkHome = mkdtempSync('/tmp/plugin-bodies-evict-afkhome-');
+    cwdA = mkdtempSync('/tmp/plugin-bodies-evict-cwdA-');
+    cwdB = mkdtempSync('/tmp/plugin-bodies-evict-cwdB-');
+    origCwd = process.cwd();
+
+    vi.stubEnv('AFK_HOME', tmpAfkHome);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    process.chdir(origCwd);
+    try { rmSync(tmpAfkHome, { recursive: true }); } catch { /* non-fatal */ }
+    try { rmSync(cwdA, { recursive: true }); } catch { /* non-fatal */ }
+    try { rmSync(cwdB, { recursive: true }); } catch { /* non-fatal */ }
+  });
+
+  function writePluginSkillIn(baseDir: string, skillName: string, body: string): void {
+    const pluginDir = join(baseDir, '.afk', 'plugins', `${skillName}-plugin`);
+    const skillDir = join(pluginDir, 'skills', skillName);
+    mkdirSync(skillDir, { recursive: true });
+    mkdirSync(join(pluginDir, '.claude-plugin'), { recursive: true });
+    writeFileSync(
+      join(pluginDir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: `${skillName}-plugin`, version: '0.0.0' }),
+    );
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      `---\nname: ${skillName}\ndescription: Plugin skill ${skillName}\n---\n${body}\n`,
+    );
+  }
+
+  it('discoverPluginSkillBodies forwards opts.cwd to project scan', () => {
+    writePluginSkillIn(cwdA, 'session-cwd-plugin-skill', 'Plugin skill body');
+
+    _resetPluginScanCache();
+    const bodiesWithoutCwd = discoverPluginSkillBodies();
+    expect(bodiesWithoutCwd.has('session-cwd-plugin-skill')).toBe(false);
+
+    _resetPluginScanCache();
+    const bodiesWithCwd = discoverPluginSkillBodies(undefined, { cwd: cwdA });
+    expect(bodiesWithCwd.has('session-cwd-plugin-skill')).toBe(true);
+  });
+});

@@ -185,7 +185,7 @@ export function collectSkillEntries(
   //    Plugin frontmatter MAY carry `audience: internal` to opt into the
   //    same tier gate — extractPluginSkills() surfaces it as `audience`,
   //    defaulting to 'public' when absent.
-  const plugins = pluginConfigs ?? scanAllPluginRoots();
+  const plugins = pluginConfigs ?? scanAllPluginRoots(opts);
   for (const plugin of plugins) {
     if (plugin.type !== 'local') continue;
     const skills = extractPluginSkills(plugin.path);
@@ -250,6 +250,7 @@ export interface PluginSkillBody {
  */
 export function discoverPluginSkillBodies(
   pluginConfigs?: SdkPluginConfig[],
+  opts?: CollectSkillEntriesOptions,
 ): Map<string, PluginSkillBody> {
   // Invariant: no audience filter — dispatch is always available; only surfacing is gated.
   // Do NOT add isSkillVisible() here; see this comment before 'fixing' it.
@@ -257,7 +258,7 @@ export function discoverPluginSkillBodies(
   // Imported plugin roots are resolved inline in the fallback so the
   // loadImportFromConfig() + existsSync work only runs when no pluginConfigs
   // were supplied (a caller passing pluginConfigs skips it entirely).
-  const plugins = pluginConfigs ?? scanAllPluginRoots();
+  const plugins = pluginConfigs ?? scanAllPluginRoots(opts);
 
   for (const plugin of plugins) {
     if (plugin.type !== 'local') continue;
@@ -285,9 +286,9 @@ export function discoverPluginSkillBodies(
  * collection, plugin-body discovery, and boot-time entrypoint loading so the
  * three never drift apart.
  */
-export function scanAllPluginRoots(): SdkPluginConfig[] {
+export function scanAllPluginRoots(opts?: CollectSkillEntriesOptions): SdkPluginConfig[] {
   return [
-    ...scanLocalPlugins(getProjectPluginsDir()),
+    ...scanLocalPlugins(getProjectPluginsDir(opts?.cwd)),
     ...scanLocalPlugins(),
     ...scanLocalPlugins(getBundledPluginsDir()),
     ...resolveImportedRoots(loadImportFromConfig()).pluginRoots.flatMap((root) =>
