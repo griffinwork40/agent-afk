@@ -399,8 +399,15 @@ describe('Config Loader', () => {
     });
 
     it('falls back to ~/.afk/AFK.md when cwd/AFK.md is absent', () => {
-      // Use homedir-based path since AFK_HOME is not set in tests
-      const homeAfkMd = join(process.env['HOME'] ?? process.env['USERPROFILE'] ?? '', '.afk', 'AFK.md');
+      // Mirror getAfkHome() precedence: the global test setup
+      // (redirect-paths-env.ts) points AFK_HOME at a tmp sentinel, so the
+      // user-scope AFK.md resolves under it; fall back to $HOME/.afk only
+      // if the redirect is opted out.
+      const homeAfkMd = join(
+        process.env['AFK_HOME'] ??
+          join(process.env['HOME'] ?? process.env['USERPROFILE'] ?? '', '.afk'),
+        'AFK.md',
+      );
       mockedExistsSync().mockImplementation((p) => {
         const s = String(p);
         if (s.endsWith('AFK.md')) return s === homeAfkMd;

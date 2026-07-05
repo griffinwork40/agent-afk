@@ -42,6 +42,9 @@ export interface InputModeHost {
   /** Once-only ESC soft-stop guard. */
   softStopped: boolean;
 
+  /** Queue-length snapshot at ESC time; coalesce boundary for post-ESC Enters. */
+  softStopQueueBase: number;
+
   /** Hard-abort flag (Ctrl+C in streaming mode). */
   canceled: boolean;
 
@@ -173,6 +176,7 @@ export function setInputMode(self: InputModeHost, mode: CompositorInputMode): vo
     self.canceled = false;
     self.backgrounded = false;
     self.softStopped = false;
+    self.softStopQueueBase = 0;
     // Reset autocomplete at the idle→streaming transition so any
     // open dropdown rows are not rendered into the first streaming
     // frame. Mirrors the reset in the idle Enter handler above.
@@ -210,6 +214,7 @@ export function setInputMode(self: InputModeHost, mode: CompositorInputMode): vo
   // keeps an EMPTY-buffer ESC from leaving it armed into the idle period.
   if (mode === 'idle' && self.softStopped) {
     self.softStopped = false;
+    self.softStopQueueBase = 0;
     // No early return: fall through so a queued buffer flushes via the branch
     // below when onSubmit is installed (readLine→idle), or — at the
     // dispose→idle transition where onSubmit is still null — stays queued for

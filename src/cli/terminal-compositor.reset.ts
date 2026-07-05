@@ -32,6 +32,7 @@ export interface ResetStateHost {
   canceled: boolean;
   backgrounded: boolean;
   softStopped: boolean;
+  softStopQueueBase: number;
   paused: boolean;
   activeGhost: string | null;
   anchorRow: number | undefined;
@@ -64,6 +65,7 @@ export function resetState(self: ResetStateHost): void {
   self.canceled = false;
   self.backgrounded = false;
   self.softStopped = false;
+  self.softStopQueueBase = 0;
   self.paused = false;
   // Clear active ghost — stale suggestions must not survive a disarm/rearm
   // cycle. The engine itself is NOT disposed here (only in disarm) since

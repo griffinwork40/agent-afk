@@ -74,7 +74,10 @@ describe('getContextUsage — 1M-context aliases', () => {
     expect(usage.maxTokens).toBe(200_000);
   });
 
-  it('reports the 1M window for sonnet (Sonnet 5 is natively 1M, no _1m opt-in)', async () => {
+  it('reports the true 1M window for base sonnet (Sonnet 5 is natively 1M)', async () => {
+    // getContextUsage reports the model's real window. Base `sonnet` compacts
+    // early via a working budget (see autoCompactLimitFor), but the status-line
+    // window it reports here is the full 1M.
     const query = makeQuery({ model: 'claude-sonnet-5', requestedModel: 'sonnet' });
     const usage = await query.getContextUsage();
     expect(usage.maxTokens).toBe(1_000_000);
