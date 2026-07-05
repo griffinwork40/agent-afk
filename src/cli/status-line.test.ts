@@ -945,3 +945,78 @@ describe('StatusLine narrow-terminal priority drop', () => {
     status.stop();
   });
 });
+
+describe('StatusLine cwd/branch worktree dedupe', () => {
+  let stream: MockStream;
+
+  beforeEach(() => {
+    stream = mockStream({ isTTY: true, rows: 24 });
+  });
+
+  it('renders one merged ⎇ segment when branch matches the cwd basename (afk worktree pattern)', () => {
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({
+      model: 'sonnet',
+      cwd: '/Users/x/proj/.afk-worktrees/afk-20260705-142358-47b3ec',
+      branch: 'afk/20260705-142358-47b3ec',
+    });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    // The branch spelling appears (once, via the merged ⎇ segment)…
+    expect(out).toContain('⎇ afk/20260705-142358-47b3ec');
+    // …and the cwd spelling (slash → dash) does not: the cwd part was omitted.
+    expect(out).not.toContain('afk-20260705-142358-47b3ec');
+    // The shared slug renders exactly once across the whole line.
+    const slug = '20260705-142358-47b3ec';
+    expect(out.indexOf(slug)).toBe(out.lastIndexOf(slug));
+    status.stop();
+  });
+
+  it('keeps the merged segment on a narrow terminal (promoted to never-drop)', () => {
+    stream.columns = 32;
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({
+      model: 'sonnet',
+      cwd: '/Users/x/proj/.afk-worktrees/afk-20260705-142358-47b3ec',
+      branch: 'afk/20260705-142358-47b3ec',
+      cost: 0.05,
+      tokens: 1200,
+    });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    // Droppables shed first; the merged location segment survives because it
+    // is never-drop (contrast: the plain droppable branch is shed at this
+    // width in the 'drops the branch before the model' test above).
+    expect(out).toContain('afk/20260705-142358-47b3ec');
+    expect(out).not.toContain('tok');
+    status.stop();
+  });
+
+  it('preserves the #PR suffix inside the merged segment', () => {
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({
+      model: 'sonnet',
+      cwd: '/Users/x/proj/.afk-worktrees/afk-20260705-142358-47b3ec',
+      branch: 'afk/20260705-142358-47b3ec',
+      pr: 7,
+    });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('⎇ afk/20260705-142358-47b3ec #7');
+    status.stop();
+  });
+
+  it('renders cwd and branch separately when they do not match', () => {
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', cwd: '/tmp/proj', branch: 'feat/x' });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('proj');
+    expect(out).toContain('⎇ feat/x');
+    status.stop();
+  });
+});

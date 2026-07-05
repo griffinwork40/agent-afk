@@ -12,6 +12,7 @@
  *   status.stop();   // before exit
  */
 
+import { basename } from 'node:path';
 import type { PermissionMode } from '../agent/types/sdk-types.js';
 import { truncateDisplayWidth, displayWidth } from './display.js';
 import { palette } from './palette.js';
@@ -351,13 +352,15 @@ export class StatusLine {
   }
 
   private formatLine(f: StatusLineFields): string {
-    // Invariant: parts are built in semantic order (cwd, branch, model, plan,
+    // Invariant: parts are built in semantic order (cwd/branch, model, plan,
     // context, cost, tokens), tagged with droppability priority so narrow
     // terminals can shed lower-priority fields before resorting to right-edge
     // truncation that arbitrarily loses model info. Drop order (drop-first →
     // drop-last): tokens → cost → context bar → branch. The branch drops LAST
     // among droppables because it is identity ("which branch am I on?"), like
-    // cwd. Never drop: cwd, model, plan.
+    // cwd. Never drop: cwd, model, plan. Exception: when cwd and branch are
+    // deduped into one merged segment (see worktreeDedupe below), that merged
+    // segment is ALSO never-drop — it's the sole surviving location signal.
     interface Part {
       text: string;
       droppablePriority?: number; // undefined = never drop, higher = drop first
@@ -366,23 +369,50 @@ export class StatusLine {
     let parts: Part[] = [];
     const maxW = Math.max(4, (this.stream.columns ?? 80) - 2);
 
-    // Cwd leads the line so it survives right-edge truncation. Cap its share
-    // of the budget at ~40% so a deep path can't shove the model/cost/context
-    // pieces off the right edge before the truncator ever sees them.
-    if (f.cwd) {
-      const cwdBudget = Math.max(8, Math.floor(maxW * 0.4));
-      const formatted = formatCwd(f.cwd, { maxWidth: cwdBudget });
-      if (formatted) parts.push({ text: palette.dim(formatted) }); // never drop
-    }
+    // afk-worktree cwd/branch dedupe: `.afk-worktrees/<slug>` directories are
+    // named by replacing `/` with `-` in the branch that seeded them (see
+    // createWorktreeAt, commands/interactive/worktree.ts), so for that
+    // pattern cwd and branch carry the SAME identity string twice — e.g. dir
+    // `afk-20260705-142358-47b3ec` vs branch `afk/20260705-142358-47b3ec`.
+    // Comparison runs on EVERY repaint (uncached, not memoized): cwd is fixed
+    // per-session but the branch comes from GitStatusSampler, an async
+    // sampler whose cached value can change mid-session (e.g. a manual
+    // checkout inside the worktree), so a cached compare could go stale.
+    // Uses the RAW cwd (f.cwd is the unformatted session cwd — formatCwd()
+    // only shortens it below, for display), not the tildified/collapsed
+    // formatCwd() output, so display shortening never breaks the match.
+    const worktreeDedupe =
+      f.cwd !== undefined &&
+      f.branch !== undefined &&
+      f.branch.replaceAll('/', '-') === basename(f.cwd);
 
-    // Git branch (+ open PR) sits next to the cwd — both answer "where am I?".
-    // The branch name is capped at 30 cols so a long branch can't dominate the
-    // line; the whole segment is droppable (lowest priority ⇒ dropped last).
-    if (f.branch) {
-      const branchText = truncateDisplayWidth(f.branch, 30);
-      let gitText = `${palette.dim('⎇')} ${palette.fileRef(branchText)}`;
+    if (worktreeDedupe) {
+      // Matched: cwd is pure duplication of the branch identity, so it's
+      // omitted entirely and the branch segment (+ PR suffix) alone carries
+      // "where am I?" — promoted to never-drop since nothing else says so.
+      const branchText = truncateDisplayWidth(f.branch!, 30);
+      let gitText = `${palette.dim('⎇')} ${palette.dim(branchText)}`;
       if (f.pr !== undefined) gitText += ` ${palette.meta(`#${f.pr}`)}`;
-      parts.push({ text: gitText, droppablePriority: 1 }); // drop last among droppables
+      parts.push({ text: gitText }); // never drop
+    } else {
+      // Cwd leads the line so it survives right-edge truncation. Cap its share
+      // of the budget at ~40% so a deep path can't shove the model/cost/context
+      // pieces off the right edge before the truncator ever sees them.
+      if (f.cwd) {
+        const cwdBudget = Math.max(8, Math.floor(maxW * 0.4));
+        const formatted = formatCwd(f.cwd, { maxWidth: cwdBudget });
+        if (formatted) parts.push({ text: palette.dim(formatted) }); // never drop
+      }
+
+      // Git branch (+ open PR) sits next to the cwd — both answer "where am I?".
+      // The branch name is capped at 30 cols so a long branch can't dominate the
+      // line; the whole segment is droppable (lowest priority ⇒ dropped last).
+      if (f.branch) {
+        const branchText = truncateDisplayWidth(f.branch, 30);
+        let gitText = `${palette.dim('⎇')} ${palette.dim(branchText)}`;
+        if (f.pr !== undefined) gitText += ` ${palette.meta(`#${f.pr}`)}`;
+        parts.push({ text: gitText, droppablePriority: 1 }); // drop last among droppables
+      }
     }
 
     // Trusted-skill in-flight indicator no longer renders on the status line;
