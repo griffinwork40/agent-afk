@@ -37,6 +37,7 @@ import {
   detectAuthMode,
 } from './auth.js';
 import { oneShotCompletion, type OneShotInput } from './oneshot.js';
+import { makeTracingFetch } from './tracing-fetch.js';
 import { refreshClaudeCodeOauthToken } from '../../auth/keychain.js';
 import { AnthropicDirectQuery } from './query.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
@@ -95,7 +96,7 @@ const DEFAULT_MODEL = 'claude-sonnet-5';
  * `buildClientOptions` when the local-server path is active).
  */
 export type AnthropicClientFactory = (
-  opts: ({ authToken: string } | { apiKey: string }) & { baseURL?: string },
+  opts: ({ authToken: string } | { apiKey: string }) & { baseURL?: string; fetch?: typeof fetch },
 ) => Anthropic;
 
 let clientFactory: AnthropicClientFactory | null = null;
@@ -635,7 +636,17 @@ export class AnthropicDirectProvider implements ModelProvider {
       );
     }
     const authMode = detectAuthMode(token);
-    const clientOpts = buildClientOptions(token, authMode, config.baseUrl);
+    const clientOpts = buildClientOptions(
+      token,
+      authMode,
+      config.baseUrl,
+      // Observability: route SDK HTTP through a wrapper that records 429/503/529
+      // throttling into the witness trace, so the SDK's otherwise-silent
+      // retry-after backoff is legible in `afk trace show`. Skipped in
+      // local-shim mode (not Anthropic's billing surface) and when no trace
+      // writer is attached.
+      !localMode && config.traceWriter ? makeTracingFetch(config.traceWriter) : undefined,
+    );
     const factory = this.providerFactory ?? clientFactory;
     const client = factory ? factory(clientOpts) : new Anthropic(clientOpts);
     // In local-server mode, suppress the OAuth CLI-mimicry system-prefix
@@ -861,7 +872,15 @@ export class AnthropicDirectProvider implements ModelProvider {
       tokenRefresher = async (): Promise<Anthropic | null> => {
         const freshToken = await refreshClaudeCodeOauthToken();
         if (!freshToken) return null;
-        const opts = buildClientOptions(freshToken, 'oauth', config.baseUrl);
+        const opts = buildClientOptions(
+          freshToken,
+          'oauth',
+          config.baseUrl,
+          // Preserve throttle observability across an OAuth account swap — the
+          // rebuilt client must keep the tracing-fetch wrapper. localMode is
+          // false in this branch (see the guard above).
+          config.traceWriter ? makeTracingFetch(config.traceWriter) : undefined,
+        );
         return factory ? factory(opts) : new Anthropic(opts);
       };
     }

@@ -563,7 +563,8 @@ export type SessionPhaseName =
   | 'mcp_server_done'
   | 'loop_start'
   | 'loop_end'
-  | 'model_ttfb';
+  | 'model_ttfb'
+  | 'rate_limit';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */
