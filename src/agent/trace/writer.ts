@@ -215,11 +215,17 @@ export class NdjsonTraceWriter implements TraceWriter {
         payload,
       };
       await this.appendLine(persisted);
+      // Flip the flag immediately after the append: the record is now in
+      // the kernel buffer and will survive process exit (the OS flushes
+      // on termination). Setting this before fsync closes the race where
+      // the process exits between appendLine() and sync() — the exit
+      // handler would see sealRecordPersisted === false and write a
+      // second seal record, producing a false crash signal.
+      this.sealRecordPersisted = true;
       // Contract: the seal record must be durably on disk before we
       // hand control back. Otherwise a crash here yields a file that
       // *looks* sealed-clean but isn't.
       if (this.fh) await this.fh.sync();
-      this.sealRecordPersisted = true;
     });
     await this.closeHandle();
   }
