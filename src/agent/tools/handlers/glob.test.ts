@@ -328,3 +328,126 @@ describe('globHandler cwd containment', () => {
     expect(result.content).toContain('root.ts');
   });
 });
+
+describe('glob handler — default directory pruning (#436)', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'glob-prune-'));
+    // A normal source file that should always be found.
+    await fs.mkdir(path.join(tempDir, 'src'), { recursive: true });
+    await fs.writeFile(path.join(tempDir, 'src', 'a.ts'), '');
+    // Files inside default-pruned dirs that should be skipped by default.
+    await fs.mkdir(path.join(tempDir, 'node_modules', 'pkg'), { recursive: true });
+    await fs.writeFile(path.join(tempDir, 'node_modules', 'pkg', 'b.ts'), '');
+    await fs.mkdir(path.join(tempDir, '.git'), { recursive: true });
+    await fs.writeFile(path.join(tempDir, '.git', 'config'), '');
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('PRUNE: **/*.ts from root skips node_modules and .git', async () => {
+    const result = await globHandler(
+      { pattern: '**/*.ts', path: tempDir },
+      new AbortController().signal,
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('src/a.ts');
+    expect(result.content).not.toContain('node_modules/');
+    expect(result.content).not.toContain('.git/');
+  });
+
+  it('PRUNE: **/* from root skips node_modules and .git contents', async () => {
+    const result = await globHandler(
+      { pattern: '**/*', path: tempDir },
+      new AbortController().signal,
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('src/a.ts');
+    // Nothing under the pruned dirs should surface.
+    expect(result.content).not.toContain('node_modules/pkg/b.ts');
+    expect(result.content).not.toContain('.git/config');
+  });
+
+  it('OPT-IN: naming node_modules literally searches it', async () => {
+    const result = await globHandler(
+      { pattern: 'node_modules/**/*.ts', path: tempDir },
+      new AbortController().signal,
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('node_modules/pkg/b.ts');
+  });
+
+  it('OPT-IN: node_modules/** returns node_modules contents', async () => {
+    const result = await globHandler(
+      { pattern: 'node_modules/**', path: tempDir },
+      new AbortController().signal,
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('node_modules/pkg/b.ts');
+  });
+
+  it('never prunes the search root even if its basename is a pruned name', async () => {
+    // Point the search root AT a node_modules dir; its own contents must be
+    // searchable (the root is walked directly, never pruned as a child).
+    const nmRoot = path.join(tempDir, 'node_modules');
+    const result = await globHandler(
+      { pattern: '**/*.ts', path: nmRoot },
+      new AbortController().signal,
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('pkg/b.ts');
+  });
+});
+
+describe('glob handler — multi-** matcher correctness (#436)', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'glob-globstar-'));
+    // Build a/x/b/y/c.txt to exercise a two-globstar pattern.
+    await fs.mkdir(path.join(tempDir, 'a', 'x', 'b', 'y'), { recursive: true });
+    await fs.writeFile(path.join(tempDir, 'a', 'x', 'b', 'y', 'c.txt'), '');
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('matches a/**/b/**/c.txt against a/x/b/y/c.txt', async () => {
+    const result = await globHandler(
+      { pattern: 'a/**/b/**/c.txt', path: tempDir },
+      new AbortController().signal,
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('a/x/b/y/c.txt');
+  });
+
+  it('does NOT match a/**/b/**/c.txt when the "b" segment is absent', async () => {
+    // Rebuild the tree without a "b" directory: a/x/y/z/c.txt.
+    await fs.rm(path.join(tempDir, 'a'), { recursive: true, force: true });
+    await fs.mkdir(path.join(tempDir, 'a', 'x', 'y', 'z'), { recursive: true });
+    await fs.writeFile(path.join(tempDir, 'a', 'x', 'y', 'z', 'c.txt'), '');
+
+    const result = await globHandler(
+      { pattern: 'a/**/b/**/c.txt', path: tempDir },
+      new AbortController().signal,
+    );
+
+    // No file matches; the handler reports the "no files matched" message.
+    // (Note: that message echoes the pattern, which itself contains the
+    // substring "c.txt" — so assert the concrete file path is absent, not
+    // the bare filename.)
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('No files matched');
+    expect(result.content).not.toContain('a/x/y/z/c.txt');
+  });
+});

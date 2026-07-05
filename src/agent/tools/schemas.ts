@@ -134,7 +134,8 @@ export const globTool: AnthropicToolDef = {
   description:
     'Find files matching a glob pattern. Returns matching file paths, capped at 500 results. ' +
     'Use for discovering files before reading them. Patterns follow standard glob syntax ' +
-    '(e.g., "src/**/*.ts", "*.json").',
+    '(e.g., "src/**/*.ts", "*.json"). Skips node_modules/.git/.hg/.svn by default; ' +
+    'name such a directory literally in the pattern (e.g. "node_modules/**/*.js") to search it.',
   input_schema: {
     type: 'object',
     properties: {
