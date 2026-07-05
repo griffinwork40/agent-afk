@@ -1530,6 +1530,59 @@ describe('SkillExecutor', () => {
       expect(ctorOpts?.defaultConfig).toMatchObject({ baseUrl: LOCAL_BASE_URL });
     });
 
+    it('propagates openaiBaseUrl into the SubagentExecutor defaultConfig for grandchild sessions (depth ≥ 1)', async () => {
+      // Regression test (PR #413 review): buildForkedChildConfig threaded
+      // baseUrl (anthropic) but DROPPED openaiBaseUrl from the SubagentExecutor
+      // defaultConfig. Because subagent-executor.ts's depth-cap restricted-
+      // provider fallback reads `defaultConfig.openaiBaseUrl`, an OpenAI-routed
+      // great-grandchild dispatched at the cap from inside a forked skill
+      // silently reverted to api.openai.com (where a non-OpenAI key 401s).
+      // Mirrors the baseUrl peer test directly above.
+      captureForkConfig();
+      vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({
+        'system.md': 'fake prompt',
+      });
+      registerSkill({
+        name: 'openai-baseurl-propagation-skill',
+        description: 'test',
+        context: 'fork',
+        handler: vi.fn(),
+      });
+
+      const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
+      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
+        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+          capturedCtorArgs.push(args);
+          return new OriginalSubagentExecutor(...args);
+        },
+      );
+
+      const OPENAI_BASE_URL = 'https://opencode.ai/zen/go/v1';
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        openaiBaseUrl: OPENAI_BASE_URL,
+        childProviderFactory: vi.fn().mockReturnValue({ name: 'sentinel' }) as never,
+      });
+
+      await executor.execute(makeCall({ name: 'openai-baseurl-propagation-skill' }));
+
+      // The SubagentExecutor constructed inside buildForkedChildConfig must
+      // carry openaiBaseUrl in its defaultConfig so an OpenAI-routed grandchild
+      // agent-tool dispatch at the depth cap hits the configured endpoint, not
+      // api.openai.com.
+      expect(capturedCtorArgs.length).toBeGreaterThan(0);
+      const firstCtorCall = capturedCtorArgs[0];
+      expect(firstCtorCall).toBeDefined();
+      const ctorOpts = firstCtorCall?.[0];
+      expect(ctorOpts?.defaultConfig).toMatchObject({ openaiBaseUrl: OPENAI_BASE_URL });
+    });
+
     it('propagates backgroundRegistry into the SubagentExecutor for skill-forked subagents', async () => {
       // Regression test for: when a `/research`-style plugin skill's
       // subagent called `agent` with `mode:"background"` (the SKILL.md
@@ -2186,6 +2239,8 @@ describe('SkillExecutor', () => {
       expect(buildRestrictedSpy).toHaveBeenCalledWith(
         ['read_file', 'grep', 'glob', 'list_directory'],
         'sonnet',
+        false,
+        undefined,
       );
     });
 
@@ -2237,7 +2292,7 @@ describe('SkillExecutor', () => {
       expect(result.isError).toBeUndefined();
       // readOnly wins: the recon provider (which keeps readOnlyBash) is used, and
       // the bare restricted provider that would drop the bash gate is NOT.
-      expect(reconSpy).toHaveBeenCalledWith('sonnet');
+      expect(reconSpy).toHaveBeenCalledWith('sonnet', undefined);
       expect(restrictedSpy).not.toHaveBeenCalled();
     });
 
@@ -2314,6 +2369,8 @@ describe('SkillExecutor', () => {
       expect(buildRestrictedSpy).toHaveBeenCalledWith(
         ['read_file', 'grep'],
         'sonnet',
+        false,
+        undefined,
       );
     });
   });

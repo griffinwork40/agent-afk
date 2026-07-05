@@ -85,6 +85,14 @@ export interface SkillExecutorContext {
    * instead of falling back to api.anthropic.com.
    */
   baseUrl?: string;
+  /**
+   * OpenAI-compatible endpoint forwarded to child skill subagents, so an
+   * OpenAI-routed child built via the restricted/depth-cap provider builders
+   * (buildReadOnlyReconProvider / buildSkillRestrictedProvider) points at the
+   * configured endpoint instead of defaulting to api.openai.com. Sourced from
+   * `cliConfig.openaiBaseUrl` (env `AFK_OPENAI_BASE_URL`); the OpenAI peer of `baseUrl`.
+   */
+  openaiBaseUrl?: string;
   pluginConfigs?: SdkPluginConfig[];
   depth?: number;
   maxDepth?: number;
@@ -104,7 +112,7 @@ export interface SkillExecutorContext {
    * skill child can in turn dispatch sibling skills. Mirrors
    * {@link SubagentExecutorContext.childSkillExecutorFactory}.
    */
-  childSkillExecutorFactory?: (depth: number, maxDepth: number, signal: AbortSignal) => SkillExecutor;
+  childSkillExecutorFactory?: (depth: number, maxDepth: number, signal: AbortSignal, inheritedCwd?: string) => SkillExecutor;
   /**
    * Witness-layer trace writer. When provided, the per-call
    * {@link SubagentManager} that wraps each skill fork is constructed with
@@ -582,11 +590,16 @@ export class SkillExecutor {
         // is a safe read-only superset and — crucially — the mutating-bash gate
         // is preserved. This closes the cap-path readOnlyBash fail-open for a
         // `read-only: true` + `tools: bash` skill forked at the depth cap.
-        childConfig.provider = buildReadOnlyReconProvider(childConfig.model);
+        childConfig.provider = buildReadOnlyReconProvider(childConfig.model, this.ctx.openaiBaseUrl);
       } else if (effectiveAllowed !== undefined) {
         // Non-readOnly tools: allowlist at the cap. Restrict to the declared
         // tools (no readOnlyBash — the skill did not declare read-only).
-        childConfig.provider = buildSkillRestrictedProvider(effectiveAllowed, childConfig.model);
+        childConfig.provider = buildSkillRestrictedProvider(
+          effectiveAllowed,
+          childConfig.model,
+          effectiveReadOnlyBash,
+          this.ctx.openaiBaseUrl,
+        );
       }
       return { childConfig, childManager: undefined };
     }
@@ -607,6 +620,13 @@ export class SkillExecutor {
         model: childConfig.model,
         apiKey: this.ctx.apiKey,
         ...(this.ctx.baseUrl !== undefined ? { baseUrl: this.ctx.baseUrl } : {}),
+        // OpenAI endpoint peer of `baseUrl`. Without it, when this skill-forked
+        // grandchild SubagentExecutor dispatches an `agent` at the depth cap,
+        // its restricted-provider fallback (subagent-executor.ts
+        // buildSkillRestrictedProvider, which reads `defaultConfig.openaiBaseUrl`)
+        // gets no baseURL and an OpenAI-routed great-grandchild POSTs to
+        // api.openai.com. Mirrors the CLI SubagentExecutor wiring (chat/daemon/bootstrap).
+        ...(this.ctx.openaiBaseUrl !== undefined ? { openaiBaseUrl: this.ctx.openaiBaseUrl } : {}),
       } as AgentConfig,
       // Inherit origin from the skill executor; `depth + 1` makes grandchild
       // `agent`-dispatch rows carry actor:'subagent'.
@@ -650,7 +670,7 @@ export class SkillExecutor {
       ...(childConfig.model !== undefined ? { parentModel: childConfig.model } : {}),
     });
     const childSkillExecutor = this.ctx.childSkillExecutorFactory
-      ? this.ctx.childSkillExecutorFactory(depth + 1, maxDepth, signal)
+      ? this.ctx.childSkillExecutorFactory(depth + 1, maxDepth, signal, this.currentCwd)
       : undefined;
     // Pass `model` so the factory routes between AnthropicDirect /
     // OpenAICompatible per `providerForModel(model)`. Without this, every
