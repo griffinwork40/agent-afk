@@ -72,6 +72,19 @@ function sanitizeSlug(name: string): string {
     .slice(0, 80);
 }
 
+function resolveCreateBaseRef(base: unknown): string | { error: string } {
+  if (base === undefined || base === null || base === '') {
+    return 'HEAD';
+  }
+  if (typeof base !== 'string') {
+    return { error: 'Invalid input: base must be a string when provided' };
+  }
+  if (base.startsWith('-')) {
+    return { error: 'Invalid input: base must be a git ref, not an option' };
+  }
+  return base;
+}
+
 /** True when `child` is `parent` or nested inside it. */
 function isPathWithin(child: string, parent: string): boolean {
   const c = resolve(child);
@@ -226,7 +239,10 @@ export function createWorktreeHandler(
           }
           const prefix = env.AFK_WORKTREE_BRANCH_PREFIX ?? 'afk/';
           const branch = `${prefix}${slug}`;
-          const baseRef = typeof obj['base'] === 'string' && obj['base'] ? obj['base'] : 'HEAD';
+          const baseRef = resolveCreateBaseRef(obj['base']);
+          if (typeof baseRef !== 'string') {
+            return { content: baseRef.error, isError: true };
+          }
           await execFile('git', [
             '-C', ctx.repoRoot, 'worktree', 'add', '-b', branch, worktreePath, baseRef,
           ]);
