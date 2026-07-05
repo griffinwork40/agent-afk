@@ -130,6 +130,43 @@ describe('resolveAgentToolAccess — nested-dispatch scope', () => {
     expect(resolved.nestedAgentTypes).toBeUndefined();
   });
 
+  it('treats an EMPTY paren group Agent() as deny-all (nestedAgentTypes [], not undefined)', () => {
+    // Regression guard (fail-open → fail-closed): `Agent()` grants the dispatch
+    // tool but names zero types. It MUST resolve to [] (deny-all), NOT undefined
+    // (unrestricted) — the opposite of a safe default. The distinction is what
+    // the executor gate keys on: [] rejects every nested dispatch.
+    const resolved = resolveAgentToolAccess(agent({ tools: ['Read', 'Agent()'] }), POOL);
+    expect(resolved.allowedTools).toEqual(['read_file', 'agent']);
+    expect(resolved.nestedAgentTypes).toEqual([]);
+    expect(resolved.nestedAgentTypes).not.toBeUndefined();
+  });
+
+  it('treats Task() (empty parens) as deny-all too', () => {
+    const resolved = resolveAgentToolAccess(agent({ tools: ['Task()'] }), POOL);
+    expect(resolved.allowedTools).toEqual(['agent']);
+    expect(resolved.nestedAgentTypes).toEqual([]);
+  });
+
+  it('treats a whitespace-only paren group Agent(   ) as deny-all', () => {
+    const resolved = resolveAgentToolAccess(agent({ tools: ['Agent(   )'] }), POOL);
+    expect(resolved.allowedTools).toEqual(['agent']);
+    expect(resolved.nestedAgentTypes).toEqual([]);
+  });
+
+  it('lets a bare token win over an empty paren group (unrestricted, not deny-all)', () => {
+    // Widest grant governs: bare `Agent` beats `Agent()` → undefined, not [].
+    const resolved = resolveAgentToolAccess(agent({ tools: ['Agent()', 'Agent'] }), POOL);
+    expect(resolved.allowedTools).toEqual(['agent']);
+    expect(resolved.nestedAgentTypes).toBeUndefined();
+  });
+
+  it('lets a scoped name win over an empty paren group (named, not deny-all)', () => {
+    // A real name anywhere makes the grant a named restriction, not deny-all.
+    const resolved = resolveAgentToolAccess(agent({ tools: ['Agent()', 'Agent(worker)'] }), POOL);
+    expect(resolved.allowedTools).toEqual(['agent']);
+    expect(resolved.nestedAgentTypes).toEqual(['worker']);
+  });
+
   it('treats Task the same as Agent for scope capture', () => {
     const resolved = resolveAgentToolAccess(agent({ tools: ['Task(worker)'] }), POOL);
     expect(resolved.allowedTools).toEqual(['agent']);

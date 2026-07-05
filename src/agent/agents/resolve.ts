@@ -20,7 +20,10 @@
  *   executor gates the child's `agent_type` against it, so AFK enforces the
  *   paren scope that Claude Code parses but silently ignores inside a subagent
  *   definition. A bare `Agent`/`Task` (no parens) grants unrestricted nesting
- *   (`nestedAgentTypes: undefined`).
+ *   (`nestedAgentTypes: undefined`); an EMPTY paren group `Agent()` is a
+ *   deny-all (`nestedAgentTypes: []`) — the dispatch tool is granted but zero
+ *   child types are permitted, so every nested dispatch is rejected
+ *   (fail-closed, the opposite of the bare-token default).
  * - `mcp__*` tokens pass through verbatim (forward-compat: child providers
  *   currently receive no MCP manager, so these grant nothing today).
  * - Unknown tokens are dropped fail-closed and reported in `droppedTokens`.
@@ -137,18 +140,28 @@ function splitTopLevel(joined: string): string[] {
 
 /**
  * Extract the nested-dispatch scope declared by `Agent(x, y)` / `Task(x)`
- * tokens in a raw tools list. Returns the permitted child agent-type names, or
- * `undefined` when nesting is unrestricted (a bare `Agent`/`Task` token) or
- * not requested (no dispatch token). Paren groups may arrive whole or split by
- * a naive comma tokenizer — rejoined via {@link splitTopLevel} before parsing.
+ * tokens in a raw tools list. Paren groups may arrive whole or split by a naive
+ * comma tokenizer — rejoined via {@link splitTopLevel} before parsing.
+ *
+ * Returns:
+ * - a NON-EMPTY list — the permitted child agent-type names (scoped grant).
+ * - `[]` (deny-all) — an EMPTY paren group with no bare token, e.g. `Agent()`:
+ *   the author opted into the dispatch tool but named zero permitted types, so
+ *   the executor gate must reject EVERY nested dispatch. Fail-CLOSED.
+ * - `undefined` — nesting is unrestricted (a bare `Agent`/`Task` token) or not
+ *   requested (no dispatch token at all).
  *
  * Semantics: a bare `Agent`/`Task` anywhere in the list wins as "unrestricted"
  * (returns undefined) even if a scoped group is also present — the widest grant
- * governs. Only scoped groups with no bare token produce a restriction.
+ * governs. A scoped group with ≥1 name produces a named restriction; an empty
+ * paren group with no bare token produces the deny-all `[]`. The `[]` vs
+ * `undefined` distinction is load-bearing: `[]` is a decision (dispatch
+ * nothing), `undefined` is the absence of a restriction (dispatch anything).
  */
 function extractNestedAgentScope(raw: readonly string[]): string[] | undefined {
   const tokens = splitTopLevel(raw.join(','));
   let sawBare = false;
+  let sawParenGroup = false;
   const scoped = new Set<string>();
   for (const token of tokens) {
     const t = token.trim();
@@ -160,6 +173,7 @@ function extractNestedAgentScope(raw: readonly string[]): string[] | undefined {
       sawBare = true;
       continue;
     }
+    sawParenGroup = true;
     const inner = t.slice(parenIdx + 1).replace(/\)\s*$/, '');
     for (const name of inner.split(',')) {
       const n = name.trim();
@@ -167,7 +181,13 @@ function extractNestedAgentScope(raw: readonly string[]): string[] | undefined {
     }
   }
   if (sawBare) return undefined; // widest grant wins: unrestricted nesting
-  return scoped.size > 0 ? [...scoped] : undefined;
+  if (scoped.size > 0) return [...scoped]; // restricted to the named types
+  // An empty paren group with no bare token (e.g. `Agent()`) is an explicit
+  // deny-all: dispatch tool granted, zero child types permitted. Return [] so
+  // the executor gate rejects every nested dispatch — fail-closed. Distinct
+  // from `undefined` below (no dispatch token → nesting simply not requested).
+  if (sawParenGroup) return [];
+  return undefined;
 }
 
 /**

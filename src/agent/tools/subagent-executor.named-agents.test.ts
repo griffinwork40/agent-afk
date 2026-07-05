@@ -316,6 +316,27 @@ describe('SubagentExecutor named-agent dispatch', () => {
       expect(forkSubagent).not.toHaveBeenCalled();
     });
 
+    it('rejects EVERY dispatch under an empty deny-all allowlist ([] from Agent())', async () => {
+      // An `Agent()` grant resolves to nestedAgentTypes [] → nestedAgentAllowlist [].
+      // Presence (not length) gates, so even a registered, in-registry agent_type
+      // is rejected — the fail-closed default the medium finding fixed.
+      const executor = makeExecutor({ nestedAgentAllowlist: [] });
+      const result = await executor.execute(
+        makeCall({ prompt: 'go', agent_type: 'research-agent' }),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('not permitted to dispatch any nested agents');
+      expect(forkSubagent).not.toHaveBeenCalled();
+    });
+
+    it('rejects a bare dispatch under an empty deny-all allowlist', async () => {
+      const executor = makeExecutor({ nestedAgentAllowlist: [] });
+      const result = await executor.execute(makeCall({ prompt: 'go' }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('not permitted to dispatch any nested agents');
+      expect(forkSubagent).not.toHaveBeenCalled();
+    });
+
     it('does not restrict dispatch when no allowlist is set (top-level executor)', async () => {
       const executor = makeExecutor();
       const result = await executor.execute(

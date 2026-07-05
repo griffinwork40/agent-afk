@@ -159,7 +159,9 @@ export interface SubagentExecutorContext {
    * research-agent's `Agent(git-investigator)`, surfaced by resolve.ts as
    * `nestedAgentTypes`). When present, {@link SubagentExecutor.execute} rejects
    * any `agent_type` not in the list — and any bare/no-type dispatch — before a
-   * fork happens. `undefined` = no restriction (top-level executors, or an
+   * fork happens. An EMPTY array `[]` is a deny-all (from an `Agent()` grant):
+   * the check is on presence, not length, so `[]` matches nothing and rejects
+   * every dispatch. `undefined` = no restriction (top-level executors, or an
    * inherit-all / bare-`Agent` agent).
    *
    * Why this is the safety boundary: a dispatched child's own grandchild
@@ -681,20 +683,26 @@ export class SubagentExecutor implements SubagentControl {
     // `Agent(git-investigator)`), it may dispatch ONLY those agent types.
     // Reject any out-of-scope type AND any bare/no-type dispatch (which would
     // otherwise fork an unrestricted general-purpose grandchild inheriting the
-    // parent's unrestricted cage — the escalation this gate closes). Top-level
-    // executors and inherit-all/bare-`Agent` agents leave the allowlist unset,
-    // so their dispatch is unchanged.
+    // parent's unrestricted cage — the escalation this gate closes). An empty
+    // allowlist (`[]`, from an `Agent()` deny-all grant) matches nothing and so
+    // rejects every dispatch. Top-level executors and inherit-all/bare-`Agent`
+    // agents leave the allowlist unset (`undefined`), so their dispatch is
+    // unchanged. The guard is on presence, not length — see nestedAgentAllowlist.
     const nestedScope = this.ctx.nestedAgentAllowlist;
     if (nestedScope !== undefined) {
       const requested = parsed.agent_type;
       if (requested === undefined || !nestedScope.includes(requested)) {
         return {
           content:
-            `This agent may only dispatch the following agent type(s): ${nestedScope.join(', ')}. ` +
-            (requested === undefined
-              ? 'A bare dispatch with no agent_type is not permitted here — ' +
-                'set agent_type to one of the allowed types, or complete the task with your own tools.'
-              : `agent_type "${requested}" is out of scope.`),
+            nestedScope.length === 0
+              ? 'This agent is not permitted to dispatch any nested agents ' +
+                '(its definition granted the dispatch tool but named zero allowed ' +
+                'types, e.g. `Agent()`). Complete the task with your own tools.'
+              : `This agent may only dispatch the following agent type(s): ${nestedScope.join(', ')}. ` +
+                (requested === undefined
+                  ? 'A bare dispatch with no agent_type is not permitted here — ' +
+                    'set agent_type to one of the allowed types, or complete the task with your own tools.'
+                  : `agent_type "${requested}" is out of scope.`),
           isError: true,
         };
       }
