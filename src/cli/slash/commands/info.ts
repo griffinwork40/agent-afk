@@ -1,6 +1,6 @@
 /**
  * Information / introspection commands:
- *   /cost /tokens /history /reset /model /tools /mcp /debug
+ *   /cost /tokens /history /model /tools /mcp /debug
  *
  * These all read from SessionStats or session metadata and format for
  * display. `/model` mutates state by calling `session.setModel()`.
@@ -188,30 +188,6 @@ const historyCmd: SlashCommand = {
       out.line(`      ${palette.brand('◆')} ${palette.dim(asstPreview)}`);
     });
     out.line();
-    return 'continue';
-  },
-};
-
-const resetCmd: SlashCommand = {
-  name: '/reset',
-  summary: 'Clear screen, history, and session stats',
-  async handler(ctx) {
-    const { stats, ui, out } = ctx;
-    try {
-      await ctx.session.current.sendMessage('/clear');
-    } catch {
-      // best-effort
-    }
-    stats.totalTurns = 0;
-    stats.totalCostUsd = 0;
-    stats.totalTokens = 0;
-    stats.totalDurationMs = 0;
-    stats.turnCosts.length = 0;
-    stats.turnTokens.length = 0;
-    stats.turns.length = 0;
-    stats.sessionStartTime = Date.now();
-    ui.clearScreen();
-    out.success('Session reset.');
     return 'continue';
   },
 };
@@ -450,5 +426,5 @@ const debugCmd: SlashCommand = {
 };
 
 export const infoCommands: SlashCommand[] = [
-  costCmd, tokensCmd, historyCmd, resetCmd, modelCmd, toolsCmd, mcpCmd, limitsCmd, debugCmd,
+  costCmd, tokensCmd, historyCmd, modelCmd, toolsCmd, mcpCmd, limitsCmd, debugCmd,
 ];
