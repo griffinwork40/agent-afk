@@ -229,7 +229,13 @@ export interface CliOptions {
   model: AgentModelInput;
   maxTurns: string;
   thinking?: string;
-  thinkingUi: ThinkingUiMode;
+  /**
+   * `--thinking-ui` display mode. Optional at the CLI layer: the Commander
+   * option carries no static default, so this is `undefined` until the action
+   * handler resolves the flag > `AFK_THINKING_UI` env > `interactive.thinkingUi`
+   * config > `'live'` precedence (see `resolveThinkingUi`) and assigns it back.
+   */
+  thinkingUi?: ThinkingUiMode;
   effort?: string;
   maxOutputTokens?: string;
   resume?: string;

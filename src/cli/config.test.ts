@@ -707,6 +707,57 @@ describe('loadConfig() — interactive.suggestGhost JSON integration', () => {
   });
 });
 
+describe('loadConfig() — interactive.thinkingUi JSON integration', () => {
+  const mockedExistsSync = () => vi.mocked(fs.existsSync);
+  const mockedReadFileSync = () => vi.mocked(fs.readFileSync);
+
+  beforeEach(() => {
+    _resetConfigCache();
+    mockedExistsSync().mockImplementation(realFsModule.__realExistsSync);
+    mockedReadFileSync().mockImplementation(realFsModule.__realReadFileSync);
+  });
+
+  afterEach(() => {
+    mockedExistsSync().mockImplementation(realFsModule.__realExistsSync);
+    mockedReadFileSync().mockImplementation(realFsModule.__realReadFileSync);
+    _resetConfigCache();
+  });
+
+  const withConfigJson = (json: unknown) => {
+    mockedExistsSync().mockImplementation((p) => {
+      if (String(p).endsWith('afk.config.json')) return true;
+      return realFsModule.__realExistsSync(p as fs.PathLike);
+    });
+    mockedReadFileSync().mockImplementation((p, ...args) => {
+      if (String(p).endsWith('afk.config.json')) {
+        return JSON.stringify(json);
+      }
+      return (realFsModule.__realReadFileSync as Function)(p, ...args);
+    });
+  };
+
+  it.each(['summary', 'live', 'digest', 'off'] as const)(
+    'surfaces valid interactive.thinkingUi=%s from JSON config',
+    (mode) => {
+      withConfigJson({ interactive: { thinkingUi: mode } });
+      const config = loadConfig();
+      expect(config.interactive?.thinkingUi).toBe(mode);
+    },
+  );
+
+  it('ignores an invalid interactive.thinkingUi value (leaves it undefined)', () => {
+    withConfigJson({ interactive: { thinkingUi: 'verbose' } });
+    const config = loadConfig();
+    expect(config.interactive?.thinkingUi).toBeUndefined();
+  });
+
+  it('leaves interactive.thinkingUi undefined when not set in JSON', () => {
+    withConfigJson({ interactive: { worktreeAutoname: true } });
+    const config = loadConfig();
+    expect(config.interactive?.thinkingUi).toBeUndefined();
+  });
+});
+
 describe('loadConfig() — permissionMode default (new-install bypass)', () => {
   const mockedExistsSync = () => vi.mocked(fs.existsSync);
   const mockedReadFileSync = () => vi.mocked(fs.readFileSync);

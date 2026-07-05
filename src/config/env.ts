@@ -401,6 +401,19 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_THINKING_UI',
+    description:
+      'Default thinking-display mode for the interactive REPL: summary | live | digest | off. ' +
+      'Display-only — controls how extended-thinking blocks render, never whether thinking runs (cost/latency unaffected). ' +
+      'Overridden per-launch by --thinking-ui and mutable mid-session via /thinking. ' +
+      'Precedence: --thinking-ui flag > this env > interactive.thinkingUi config > live. Invalid values are ignored.',
+    type: 'string',
+    required: false,
+    default: 'live',
+    example: 'digest',
+    category: 'misc',
+  },
+  {
     name: 'AFK_TIMEOUT_MS',
     description: 'Per-turn timeout in milliseconds. Provider/SDK default if unset.',
     type: 'number',
@@ -1176,6 +1189,7 @@ export const env = {
   get AFK_TASK_BUDGET(): string | undefined { return process.env['AFK_TASK_BUDGET']; },
   get AFK_TEMPERATURE(): string | undefined { return process.env['AFK_TEMPERATURE']; },
   get AFK_THINKING(): string | undefined { return process.env['AFK_THINKING']; },
+  get AFK_THINKING_UI(): string | undefined { return process.env['AFK_THINKING_UI']; },
   get AFK_TIMEOUT_MS(): string | undefined { return process.env['AFK_TIMEOUT_MS']; },
   get CLAUDE_MODEL(): string | undefined { return process.env['CLAUDE_MODEL']; },
 
