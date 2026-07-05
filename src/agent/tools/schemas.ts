@@ -18,7 +18,11 @@ export const bashTool: AnthropicToolDef = {
     'Execute a shell command and return its stdout and stderr. ' +
     'Use for running programs, installing packages, git operations, and any task that requires a shell. ' +
     'Commands run in the user\'s default shell. Long-running commands should use timeout_ms. ' +
-    'Output is capped at ~100KB; excess is truncated with a notice.',
+    'Output is capped at ~100KB; excess is truncated with a notice. ' +
+    'For reading or writing files — especially anything sensitive — prefer the typed file tools ' +
+    '(read_file, write_file, edit_file): they support per-call user approval, and interpreter ' +
+    'one-liners (python -c, node -e, sh -c, ...) that reference credential paths (SSH keys, cloud ' +
+    'credentials, /etc/shadow) are blocked by the path-approval policy on interactive surfaces.',
   input_schema: {
     type: 'object',
     properties: {
