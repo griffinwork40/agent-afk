@@ -88,7 +88,7 @@ const INTERPRETER_DENYLIST =
 /**
  * Credential-path fragments that survive runtime home-dir assembly. Kept in
  * sync with the sensitive roots in `deriveRestrictedSubstrings`, but expressed
- * as trailing fragments (plus the canonical private-key filenames) so they
+ * as trailing fragments (plus private-key filenames and the browser-profile root) so they
  * match even when an interpreter assembles the home prefix at runtime
  * (`os.environ['HOME']+'/.ssh'`, `expanduser('~/.ssh')`) — the exact case
  * check 2's literal `~`/`$HOME` normalization cannot see. Word-boundary
@@ -98,8 +98,8 @@ const INTERPRETER_DENYLIST =
  * secret; the secret companion `/etc/shadow` IS covered. This is the calibration
  * that lets benign one-liners through while still catching credential access.
  */
-const SENSITIVE_PATH_SIGNAL =
-  /\.ssh\b|\bid_rsa\b|\bid_ed25519\b|\.gnupg\b|\.aws\b|\.config\/gh\b|\.netrc\b|\.password-store\b|\/etc\/shadow\b|\/etc\/sudoers\b/i;
+export const SENSITIVE_PATH_SIGNAL =
+  /\.ssh\b|\bid_rsa\b|\bid_ed25519\b|\.gnupg\b|\.aws\b|\.config\/gh\b|\.netrc\b|\.password-store\b|Library\/Application Support\b|\/etc\/shadow\b|\/etc\/sudoers\b/i;
 
 export interface BashRestrictionHookOptions {
   /**
@@ -284,7 +284,7 @@ function referencesSensitivePath(
  * Each is included only when the user's resolveBase is NOT already inside it
  * (so a user working in `~/.ssh` doesn't self-block).
  */
-function deriveRestrictedSubstrings(grants: {
+export function deriveRestrictedSubstrings(grants: {
   resolveBase: string | undefined;
   readRoots: string[];
   writeRoots: string[];

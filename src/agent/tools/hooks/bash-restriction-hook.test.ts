@@ -17,7 +17,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { createBashRestrictionHook } from './bash-restriction-hook.js';
+import {
+  createBashRestrictionHook,
+  deriveRestrictedSubstrings,
+  SENSITIVE_PATH_SIGNAL,
+} from './bash-restriction-hook.js';
 import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
 import type { PreToolUseContext } from '../../hooks.js';
 import { homedir } from 'os';
@@ -64,6 +68,20 @@ describe('createBashRestrictionHook — interpreter denylist (scoped to credenti
     // by expanduser at runtime — but the `.ssh` / `id_rsa` fragments do.
     expect(
       hook(ctx('python3 -c "import os; open(os.path.expanduser(\'~/.ssh/id_rsa\'))"')).decision,
+    ).toBe('block');
+  });
+
+  it('blocks an interpreter one-liner assembling a Library/Application Support path', () => {
+    // ~/Library/Application Support holds Chrome "Login Data" (saved passwords)
+    // and Cookies (session tokens) — a deriveRestrictedSubstrings root. The
+    // quote-prefixed `~` is NOT normalized, so check 2's literal scan misses it;
+    // only the SENSITIVE_PATH_SIGNAL fragment (check 1) catches this.
+    expect(
+      hook(
+        ctx(
+          'python3 -c "import os; open(os.path.expanduser(\'~/Library/Application Support/Google/Chrome/Default/Login Data\'))"',
+        ),
+      ).decision,
     ).toBe('block');
   });
 
@@ -322,5 +340,26 @@ describe('createBashRestrictionHook — wiring failsafes', () => {
   it('does NOT block on non-bash tools', () => {
     const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
     expect(hook({ event: 'PreToolUse', toolName: 'read_file', input: { file_path: '/etc/passwd' } }).decision).not.toBe('block');
+  });
+});
+
+describe('SENSITIVE_PATH_SIGNAL stays in sync with deriveRestrictedSubstrings', () => {
+  // Invariant: every restricted root check 2 protects must ALSO be matchable by
+  // check 1's lexical signal — otherwise an interpreter one-liner that assembles
+  // that root at runtime (a quote-prefixed `~`, which normalizeHomeRefs leaves
+  // alone) slips past BOTH checks. This test fails if a candidate is added to
+  // deriveRestrictedSubstrings without a corresponding SENSITIVE_PATH_SIGNAL
+  // fragment — the exact drift that once left ~/Library/Application Support
+  // (Chrome saved passwords / cookies) reachable via `python -c`.
+  const allCandidates = deriveRestrictedSubstrings({
+    resolveBase: undefined,
+    readRoots: [],
+    writeRoots: [],
+  });
+
+  it('covers every deriveRestrictedSubstrings candidate root', () => {
+    expect(allCandidates.length).toBeGreaterThan(0);
+    const uncovered = allCandidates.filter((c) => !SENSITIVE_PATH_SIGNAL.test(c));
+    expect(uncovered).toEqual([]);
   });
 });
