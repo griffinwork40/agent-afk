@@ -293,8 +293,15 @@ function classifyCandidate(
   // Has dirty working tree past dirty threshold
   if (candidate.isDirty && candidate.ageMs > dirtyThresholdMs) return 'stale-dirty';
 
-  // Clean (committed work, no dirty files) past clean threshold
-  if (!candidate.isDirty && candidate.ageMs > cleanThresholdMs) return 'stale-clean';
+  // Clean committed work past clean threshold. Clean zero-ahead worktrees are
+  // handled by `empty` once old enough; before then they stay active.
+  if (
+    !candidate.isDirty &&
+    candidate.commitsAhead > 0 &&
+    candidate.ageMs > cleanThresholdMs
+  ) {
+    return 'stale-clean';
+  }
 
   return 'active';
 }
