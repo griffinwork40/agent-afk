@@ -15,9 +15,12 @@
  *   declared pool), then `tools` resolves against the remainder. A tool in
  *   both lists is removed.
  * - `Task`/`Agent` map to AFK's `agent` tool (opt-in nesting; Claude Code
- *   v2.1.172+ allows nested spawns the same way). `Agent(worker, …)` paren
- *   groups are accepted and the paren content ignored — CC ignores it inside
- *   subagent definitions too.
+ *   v2.1.172+ allows nested spawns the same way). A SCOPED `Agent(worker, …)`
+ *   grant is additionally captured as `nestedAgentTypes` — the dispatch
+ *   executor gates the child's `agent_type` against it, so AFK enforces the
+ *   paren scope that Claude Code parses but silently ignores inside a subagent
+ *   definition. A bare `Agent`/`Task` (no parens) grants unrestricted nesting
+ *   (`nestedAgentTypes: undefined`).
  * - `mcp__*` tokens pass through verbatim (forward-compat: child providers
  *   currently receive no MCP manager, so these grant nothing today).
  * - Unknown tokens are dropped fail-closed and reported in `droppedTokens`.
@@ -105,6 +108,69 @@ function normalizeList(raw: readonly string[]): { names: string[]; dropped: stri
 }
 
 /**
+ * Split a comma-joined token string on TOP-LEVEL commas only (commas outside
+ * parentheses), so a paren group that a naive tokenizer split across fragments
+ * (`Agent(a, b)` → `['Agent(a', 'b)']`) is reconstructed as one token before
+ * scope extraction. Depth never goes negative on unbalanced input.
+ */
+function splitTopLevel(joined: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of joined) {
+    if (ch === '(') {
+      depth++;
+      cur += ch;
+    } else if (ch === ')') {
+      depth = Math.max(0, depth - 1);
+      cur += ch;
+    } else if (ch === ',' && depth === 0) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur.length > 0) out.push(cur);
+  return out;
+}
+
+/**
+ * Extract the nested-dispatch scope declared by `Agent(x, y)` / `Task(x)`
+ * tokens in a raw tools list. Returns the permitted child agent-type names, or
+ * `undefined` when nesting is unrestricted (a bare `Agent`/`Task` token) or
+ * not requested (no dispatch token). Paren groups may arrive whole or split by
+ * a naive comma tokenizer — rejoined via {@link splitTopLevel} before parsing.
+ *
+ * Semantics: a bare `Agent`/`Task` anywhere in the list wins as "unrestricted"
+ * (returns undefined) even if a scoped group is also present — the widest grant
+ * governs. Only scoped groups with no bare token produce a restriction.
+ */
+function extractNestedAgentScope(raw: readonly string[]): string[] | undefined {
+  const tokens = splitTopLevel(raw.join(','));
+  let sawBare = false;
+  const scoped = new Set<string>();
+  for (const token of tokens) {
+    const t = token.trim();
+    if (t.length === 0) continue;
+    const parenIdx = t.indexOf('(');
+    const base = (parenIdx === -1 ? t : t.slice(0, parenIdx)).trim().toLowerCase();
+    if (base !== 'agent' && base !== 'task') continue;
+    if (parenIdx === -1) {
+      sawBare = true;
+      continue;
+    }
+    const inner = t.slice(parenIdx + 1).replace(/\)\s*$/, '');
+    for (const name of inner.split(',')) {
+      const n = name.trim();
+      if (n.length > 0) scoped.add(n);
+    }
+  }
+  if (sawBare) return undefined; // widest grant wins: unrestricted nesting
+  return scoped.size > 0 ? [...scoped] : undefined;
+}
+
+/**
  * Resolve the effective tool access for a registered agent.
  *
  * @param agent The registered agent whose `tools`/`disallowedTools` to resolve.
@@ -142,5 +208,17 @@ export function resolveAgentToolAccess(
   const pool = allowed?.names ?? [...inheritPool];
   const effective = pool.filter((name) => !deniedSet.has(name));
 
-  return { allowedTools: effective, bashReadOnly, droppedTokens: dropped };
+  // Nested-dispatch scope: only meaningful when the `agent` tool survives into
+  // the effective surface (a scope on an agent that can't dispatch is inert).
+  const nested =
+    tools !== undefined && effective.includes('agent')
+      ? extractNestedAgentScope(tools)
+      : undefined;
+
+  return {
+    allowedTools: effective,
+    bashReadOnly,
+    droppedTokens: dropped,
+    ...(nested !== undefined ? { nestedAgentTypes: nested } : {}),
+  };
 }

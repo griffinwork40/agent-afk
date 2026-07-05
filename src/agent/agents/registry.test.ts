@@ -41,13 +41,17 @@ describe('loadAgentRegistry', () => {
     expect(registry.get('git-investigator')?.bashReadOnly).toBe(true);
     expect(registry.get('general-purpose')?.source).toBe('builtin');
     expect(registry.get('Explore')?.source).toBe('builtin');
-    // research-agent keeps its vendored tool contract
+    // research-agent keeps its vendored read-only contract PLUS the scoped
+    // git-investigator dispatch grant (matches the vendored prompt frontmatter;
+    // resolve.ts turns Agent(git-investigator) into nestedAgentTypes and the
+    // executor restricts research-agent to dispatching only git-investigator).
     expect(registry.get('research-agent')?.definition.tools).toEqual([
       'Read',
       'Grep',
       'Glob',
       'WebFetch',
       'WebSearch',
+      'Agent(git-investigator)',
     ]);
   });
 

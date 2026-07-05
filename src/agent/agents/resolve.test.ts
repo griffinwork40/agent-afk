@@ -48,7 +48,7 @@ describe('resolveAgentToolAccess', () => {
     expect(resolved.allowedTools).toEqual(['agent', 'skill', 'read_file']);
   });
 
-  it('strips Agent(...) paren groups and ignores their fragments silently', () => {
+  it('maps Agent(...) to the agent tool and captures the paren scope', () => {
     const resolved = resolveAgentToolAccess(
       // parseToolsField comma-splits `Agent(worker, researcher)` into fragments
       agent({ tools: ['Agent(worker', 'researcher)', 'Read'] }),
@@ -56,6 +56,8 @@ describe('resolveAgentToolAccess', () => {
     );
     expect(resolved.allowedTools).toEqual(['agent', 'read_file']);
     expect(resolved.droppedTokens).toEqual([]); // fragments are not fail-closed noise
+    // The paren content is no longer ignored — it becomes the nested-dispatch scope.
+    expect(resolved.nestedAgentTypes).toEqual(['worker', 'researcher']);
   });
 
   it('drops unknown tokens fail-closed and reports them', () => {
@@ -109,5 +111,59 @@ describe('resolveAgentToolAccess', () => {
   it('carries bashReadOnly from the registration', () => {
     expect(resolveAgentToolAccess(agent({ bashReadOnly: true }), POOL).bashReadOnly).toBe(true);
     expect(resolveAgentToolAccess(agent({}), POOL).bashReadOnly).toBe(false);
+  });
+});
+
+describe('resolveAgentToolAccess — nested-dispatch scope', () => {
+  it('captures a single scoped Agent(x) grant as nestedAgentTypes', () => {
+    const resolved = resolveAgentToolAccess(
+      agent({ tools: ['Read', 'Grep', 'Agent(git-investigator)'] }),
+      POOL,
+    );
+    expect(resolved.allowedTools).toEqual(['read_file', 'grep', 'agent']);
+    expect(resolved.nestedAgentTypes).toEqual(['git-investigator']);
+  });
+
+  it('treats a bare Agent grant as unrestricted (nestedAgentTypes undefined)', () => {
+    const resolved = resolveAgentToolAccess(agent({ tools: ['Read', 'Agent'] }), POOL);
+    expect(resolved.allowedTools).toEqual(['read_file', 'agent']);
+    expect(resolved.nestedAgentTypes).toBeUndefined();
+  });
+
+  it('treats Task the same as Agent for scope capture', () => {
+    const resolved = resolveAgentToolAccess(agent({ tools: ['Task(worker)'] }), POOL);
+    expect(resolved.allowedTools).toEqual(['agent']);
+    expect(resolved.nestedAgentTypes).toEqual(['worker']);
+  });
+
+  it('lets the widest grant win: a bare token alongside a scoped one is unrestricted', () => {
+    const resolved = resolveAgentToolAccess(
+      agent({ tools: ['Agent', 'Task(only-this)'] }),
+      POOL,
+    );
+    expect(resolved.allowedTools).toEqual(['agent']);
+    expect(resolved.nestedAgentTypes).toBeUndefined();
+  });
+
+  it('leaves nestedAgentTypes undefined when no dispatch tool is granted', () => {
+    const resolved = resolveAgentToolAccess(agent({ tools: ['Read', 'Grep'] }), POOL);
+    expect(resolved.nestedAgentTypes).toBeUndefined();
+  });
+
+  it('drops the scope when the agent tool is denied out of the effective surface', () => {
+    // Scoped grant present, but disallowedTools removes `agent` — a scope on an
+    // agent that cannot dispatch is inert, so it is not surfaced.
+    const resolved = resolveAgentToolAccess(
+      agent({ tools: ['Read', 'Agent(git-investigator)'], disallowedTools: ['Agent'] }),
+      POOL,
+    );
+    expect(resolved.allowedTools).toEqual(['read_file']);
+    expect(resolved.nestedAgentTypes).toBeUndefined();
+  });
+
+  it('leaves nestedAgentTypes undefined for inherit-all (no tools field)', () => {
+    const resolved = resolveAgentToolAccess(agent({}), POOL);
+    expect(resolved.allowedTools).toBeUndefined();
+    expect(resolved.nestedAgentTypes).toBeUndefined();
   });
 });

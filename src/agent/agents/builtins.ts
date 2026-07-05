@@ -65,7 +65,19 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
       definition: {
         description: researchAgent.description,
         prompt: vendoredPromptBody(researchAgent.systemPrompt),
-        tools: [...researchAgent.allowedTools],
+        // The scoped `Agent(git-investigator)` grant matches the vendored
+        // prompt's frontmatter intent (`tools: …, Agent(git-investigator)`)
+        // and lets research-agent nest a git-investigator when a finding needs
+        // git archaeology — the capability the prompt already instructs it to
+        // use. Added HERE (registry entry) rather than in the shared
+        // `researchAgent.allowedTools` const, because that const is also the
+        // read-only leaf surface diagnose (RESEARCH_READONLY_TOOLS) and
+        // audit-fit (inspectorTools) build their gates from — they must NOT
+        // gain a dispatch tool. resolve.ts captures the paren scope as
+        // `nestedAgentTypes`, and the subagent executor mechanically restricts
+        // research-agent to dispatching ONLY git-investigator (no bare/other
+        // dispatch), so the read-only contract can't be escalated.
+        tools: [...researchAgent.allowedTools, 'Agent(git-investigator)'],
       },
     },
     {
