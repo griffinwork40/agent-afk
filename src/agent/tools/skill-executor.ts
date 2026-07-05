@@ -759,97 +759,20 @@ export class SkillExecutor {
       readOnly,
     );
 
-    // Invariant: `handle` is declared OUTSIDE the try so finally can call
-    // `handle.teardown()` — the only path that runs `session.close()` →
-    // `dispatchSessionEndOnce()` → `emitClosure()` + `sealTraceWriter()`.
-    // `manager.teardownAll()` is NOT sufficient: per subagent.ts:412-414
-    // (its own JSDoc), `teardownAll()` iterates `this.active.values()` but
-    // a handle that completed a run has already self-removed via the
-    // `onTerminal` closure (subagent.ts:340-343). Without an explicit
-    // `handle.teardown()` the child's traceWriter never seals, blinding
-    // every closure-event-dependent improve detector.
-    // Mirrors the pattern in subagent-executor.ts:321,533.
-    let handle: Awaited<ReturnType<typeof manager.forkSubagent>> | undefined;
-    // In-turn SubagentStop delivery (mirrors subagent-executor.ts foreground
-    // path). SubagentStop fires from `handle.teardown()` in the finally, which
-    // runs before this execute() resolves — so the stop hook's injectContext
-    // (e.g. the shadow-verify nudge) can ride THIS skill's tool_result in-turn
-    // instead of the deferred queue. Hoist the completion ToolResult into
-    // `toolResult` and append the note after teardown. Exactly-once:
-    // `deferInjectContextToCaller` suppresses the queue push for this stop.
-    let toolResult: ToolResult | undefined;
-    try {
-      // `parentId: call.id` anchors the synthesized `Agent(<label>)` entry as
-      // a child of THIS skill's tool-lane entry rather than at root. Mirrors
-      // `ComposeExecutor` (see compose-executor.ts:227-232). Path 2 of
-      // `StreamRenderer.process()`'s parentId resolver fires because
-      // `toolLane.hasEntry(call.id)` is true — the parent already registered
-      // the skill entry when it processed the `tool_use_detail` chunk before
-      // dispatching this executor. Paired with `'skill'` in `NESTING_TOOLS`
-      // (tool-category.ts) so the renderer recurses into the children block.
-      handle = await manager.forkSubagent({
-        parent: this.ctx.parentSession,
-        config: childConfig,
-        idPrefix: `skill-fork-${skill.name}`,
-        parentId: call.id,
-        agentType: skill.name,
-      });
-
-      // Invariant: name the skill explicitly. A bare "Run the skill." is
-      // ambiguous — combined with the injected skill manifest and the
-      // memory-search-on-turn-1 guidance, the sub-agent can resolve the
-      // ambiguity by asking the operator "which skill?" instead of executing
-      // its own SKILL.md body. Naming the skill removes that ambiguity.
-      const userMessage =
-        args && args.length > 0
-          ? args
-          : `Run the ${skill.name} skill now, following the instructions in your system prompt.`;
-      const result = await handle.runToResult(userMessage);
-
-      // Assign (don't return) so the finally can append the in-turn
-      // SubagentStop injectContext after teardown. See `toolResult` above.
-      if (result.status === 'succeeded' && result.message) {
-        toolResult = { content: result.message.content };
-        return toolResult;
-      }
-
-      // When the subagent was cancelled mid-flight but produced text before
-      // cancellation, surface the partial output to the model with a clear
-      // marker rather than discarding it. The model can decide what to do.
-      if (
-        result.status === 'cancelled' &&
-        typeof result.partialOutput === 'string' &&
-        result.partialOutput.length > 0
-      ) {
-        const marker = '[skill cancelled mid-flight — partial output preserved below]';
-        toolResult = { content: `${marker}\n\n${result.partialOutput}` };
-        return toolResult;
-      }
-
-      const errorMessage = result.error?.message ?? 'Forked skill failed with no output';
-      toolResult = { content: errorMessage, isError: true };
-      return toolResult;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return { content: `Forked skill execution error: ${message}`, isError: true };
-    } finally {
-      // Order: per-handle teardown (seals child trace) → child manager (any
-      // grandchildren) → outer manager (any siblings that never ran).
-      // Guard against `forkSubagent` having thrown before assignment —
-      // see subagent.ts:316-320 for the construction-failure throw path.
-      // deferInjectContextToCaller: the stop-hook note rides the tool_result
-      // in-turn (appended below) and the queue push is suppressed.
-      if (handle) await handle.teardown({ deferInjectContextToCaller: true }).catch(debugLog);
-      // In-turn append: only when this run produced a completion ToolResult.
-      // The catch path leaves toolResult unset — nothing to append to, note
-      // dropped for that stop by design (the error string is the signal).
-      const injectContext = handle?.getLastStopInjectContext?.();
-      if (toolResult !== undefined && injectContext !== undefined && injectContext.length > 0) {
-        toolResult.content = `${toolResult.content}\n\n${injectContext}`;
-      }
-      await childManager?.teardownAll();
-      await manager.teardownAll();
-    }
+    // Fork → run → teardown skeleton is shared with executePluginSkill via
+    // runForkedSkillToResult (the setup above — model/credential resolution,
+    // buildForkedChildConfig — is what differs between the two paths).
+    return this.runForkedSkillToResult({
+      manager,
+      childManager,
+      childConfig,
+      label: skill.name,
+      idPrefix: `skill-fork-${skill.name}`,
+      parentId: call.id,
+      args,
+      noOutputError: 'Forked skill failed with no output',
+      errorPrefix: 'Forked skill execution error',
+    });
   }
 
   /**
@@ -1094,51 +1017,100 @@ export class SkillExecutor {
       allowedTools,
     );
 
-    // Invariant: same trace-sealing rule as executeForkedRegistrySkill above.
-    // `handle.teardown()` is the only path to `session.close()` → closure
-    // event + `session_sealed`. `manager.teardownAll()` misses completed
-    // handles per subagent.ts:412-414.
+    // Fork → run → teardown skeleton is shared with executeForkedRegistrySkill
+    // via runForkedSkillToResult (the setup above — model/credential
+    // resolution, PLUGIN_ROOT + $ARGUMENT substitution — is plugin-specific).
+    return this.runForkedSkillToResult({
+      manager,
+      childManager,
+      childConfig,
+      label: skillName,
+      idPrefix: `skill-${skillName}`,
+      parentId: call.id,
+      args,
+      noOutputError: 'Plugin skill failed with no output',
+      errorPrefix: 'Plugin skill execution error',
+    });
+  }
+
+  /**
+   * Shared fork → run → teardown driver for the two forked-skill dispatch
+   * paths (executeForkedRegistrySkill + executePluginSkill). Their SETUP
+   * differs (model/credential resolution, buildForkedChildConfig arity, plugin
+   * PLUGIN_ROOT + $ARGUMENT substitution) and stays per-caller; the identical
+   * run/teardown skeleton lives here so it has one source of truth.
+   *
+   * Invariant: `handle` is declared OUTSIDE the try so the finally can call
+   * `handle.teardown()` — the only path that runs `session.close()` →
+   * `dispatchSessionEndOnce()` → `emitClosure()` + `sealTraceWriter()`.
+   * `manager.teardownAll()` alone is NOT sufficient: a handle that completed a
+   * run has already self-removed from `active` (subagent.ts:340-343,412-414),
+   * so without an explicit `handle.teardown()` the child's traceWriter never
+   * seals — blinding every closure-event-dependent improve detector.
+   *
+   * Invariant: in-turn SubagentStop delivery. SubagentStop fires from
+   * `handle.teardown()` in the finally, before this resolves, so the stop
+   * hook's injectContext (e.g. the shadow-verify nudge) rides THIS skill's
+   * tool_result in-turn instead of the deferred queue. The completion
+   * ToolResult is hoisted into `toolResult` and the note appended after
+   * teardown. Exactly-once: `deferInjectContextToCaller` suppresses the queue
+   * push for this stop.
+   */
+  private async runForkedSkillToResult(params: {
+    manager: SubagentManager;
+    childManager: SubagentManager | undefined;
+    childConfig: AgentConfig;
+    label: string;
+    idPrefix: string;
+    parentId: string;
+    args: string | undefined;
+    noOutputError: string;
+    errorPrefix: string;
+  }): Promise<ToolResult> {
+    const {
+      manager,
+      childManager,
+      childConfig,
+      label,
+      idPrefix,
+      parentId,
+      args,
+      noOutputError,
+      errorPrefix,
+    } = params;
     let handle: Awaited<ReturnType<typeof manager.forkSubagent>> | undefined;
-    // In-turn SubagentStop delivery — same pattern as executeForkedRegistrySkill
-    // and subagent-executor.ts foreground path. See those for the ordering
-    // invariant and exactly-once rationale.
     let toolResult: ToolResult | undefined;
     try {
-      // `parentId: call.id` anchors the synthesized `Agent(<label>)` entry as
-      // a child of THIS skill's tool-lane entry rather than at root. Mirrors
-      // `ComposeExecutor` (see compose-executor.ts:227-232). Path 2 of
-      // `StreamRenderer.process()`'s parentId resolver fires because
-      // `toolLane.hasEntry(call.id)` is true — the parent already registered
-      // the skill entry when it processed the `tool_use_detail` chunk before
-      // dispatching this executor. Paired with `'skill'` in `NESTING_TOOLS`
-      // (tool-category.ts) so the renderer recurses into the children block.
+      // `parentId` (the skill's call.id) anchors the synthesized `Agent(<label>)`
+      // entry as a child of THIS skill's tool-lane entry rather than at root.
+      // Mirrors `ComposeExecutor` (compose-executor.ts:227-232); paired with
+      // `'skill'` in NESTING_TOOLS so the renderer recurses into the children.
       handle = await manager.forkSubagent({
         parent: this.ctx.parentSession,
         config: childConfig,
-        idPrefix: `skill-${skillName}`,
-        parentId: call.id,
-        agentType: skillName,
+        idPrefix,
+        parentId,
+        agentType: label,
       });
 
-      // Invariant: name the skill explicitly. See executeForkedRegistrySkill —
-      // a bare "Run the skill." lets the sub-agent ask the operator "which
-      // skill?" instead of executing its own SKILL.md body.
+      // Invariant: name the skill explicitly. A bare "Run the skill." is
+      // ambiguous — the sub-agent could ask the operator "which skill?" instead
+      // of executing its own SKILL.md body. Naming it removes that ambiguity.
       const userMessage =
         args && args.length > 0
           ? args
-          : `Run the ${skillName} skill now, following the instructions in your system prompt.`;
+          : `Run the ${label} skill now, following the instructions in your system prompt.`;
       const result = await handle.runToResult(userMessage);
 
       // Assign (don't return) so the finally can append the in-turn
-      // SubagentStop injectContext after teardown. See `toolResult` above.
+      // SubagentStop injectContext after teardown.
       if (result.status === 'succeeded' && result.message) {
         toolResult = { content: result.message.content };
         return toolResult;
       }
 
-      // When the subagent was cancelled mid-flight but produced text before
-      // cancellation, surface the partial output to the model with a clear
-      // marker rather than discarding it. The model can decide what to do.
+      // Cancelled mid-flight but produced text: surface the partial output with
+      // a clear marker rather than discarding it.
       if (
         result.status === 'cancelled' &&
         typeof result.partialOutput === 'string' &&
@@ -1149,16 +1121,20 @@ export class SkillExecutor {
         return toolResult;
       }
 
-      const errorMessage = result.error?.message ?? 'Plugin skill failed with no output';
+      const errorMessage = result.error?.message ?? noOutputError;
       toolResult = { content: errorMessage, isError: true };
       return toolResult;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return { content: `Plugin skill execution error: ${message}`, isError: true };
+      return { content: `${errorPrefix}: ${message}`, isError: true };
     } finally {
-      // deferInjectContextToCaller: the stop-hook note rides the tool_result
-      // in-turn (appended below) and the queue push is suppressed.
+      // Order: per-handle teardown (seals child trace) → child manager (any
+      // grandchildren) → outer manager (any siblings that never ran). Guard
+      // against `forkSubagent` throwing before assignment (subagent.ts:316-320).
       if (handle) await handle.teardown({ deferInjectContextToCaller: true }).catch(debugLog);
+      // In-turn append: only when this run produced a completion ToolResult.
+      // The catch path leaves toolResult unset — nothing to append to, note
+      // dropped for that stop by design (the error string is the signal).
       const injectContext = handle?.getLastStopInjectContext?.();
       if (toolResult !== undefined && injectContext !== undefined && injectContext.length > 0) {
         toolResult.content = `${toolResult.content}\n\n${injectContext}`;

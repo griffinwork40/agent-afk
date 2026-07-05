@@ -699,100 +699,13 @@ export class SessionToolDispatcher implements ToolDispatcher {
     const repeatBlock = this.checkRepeatCircuitBreaker(call);
     if (repeatBlock) return repeatBlock;
 
-    // 3. Agent tool — provider-level dispatch
-    if (call.name === 'agent') {
-      if (!this.subagentExecutor) {
-        return {
-          content: 'Agent tool is not available in this session configuration',
-          isError: true,
-        };
-      }
-      let result: ToolResult;
-      let agentThrew = false;
-      let agentErrMsg = '';
-      try {
-        result = await this.subagentExecutor.execute(call);
-      } catch (err) {
-        agentThrew = true;
-        agentErrMsg = err instanceof Error ? err.message : String(err);
-        result = { content: `Agent tool error: ${agentErrMsg}`, isError: true };
-      }
-      // PostToolUse hook fires for agent calls too.
-      // Fire-and-forget: mirrors executeCore() — hook latency must not block
-      // the tool result from being returned to the model on the critical path.
-      if (agentThrew) {
-        this.firePostToolUseFailure(call.name, agentErrMsg, call.signal, call.input);
-      } else {
-        this.firePostToolUse(call.name, result.content, call.signal, call.input);
-      }
-      return result;
-    }
-
-    // 3b. Skill tool — provider-level dispatch
-    if (call.name === 'skill') {
-      if (!this.skillExecutor) {
-        return {
-          content: 'Skill tool is not available in this session configuration',
-          isError: true,
-        };
-      }
-      let result: ToolResult;
-      let skillThrew = false;
-      let skillErrMsg = '';
-      try {
-        result = await this.skillExecutor.execute(call);
-      } catch (err) {
-        skillThrew = true;
-        skillErrMsg = err instanceof Error ? err.message : String(err);
-        result = { content: `Skill tool error: ${skillErrMsg}`, isError: true };
-      }
-      // Fire-and-forget: mirrors executeCore() — hook + trace-write latency
-      // must not add to per-tool round-trip time on the single-call path.
-      if (skillThrew) {
-        this.firePostToolUseFailure(call.name, skillErrMsg, call.signal, call.input);
-      } else {
-        this.firePostToolUse(call.name, result.content, call.signal, call.input);
-      }
-      return result;
-    }
-
-    // 3c. Compose tool — DAG-based parallel subagent dispatch
-    if (call.name === 'compose') {
-      const result = await this.executeCompose(call);
-      this.firePostToolUse(call.name, result.content, call.signal, call.input);
-      return result;
-    }
-
-    // 4. Handler lookup
-    const handler = this.handlers.get(call.name);
-    if (!handler) {
-      return {
-        content: `Unknown tool "${call.name}". Available tools: ${[...this.handlers.keys()].join(', ')}`,
-        isError: true,
-      };
-    }
-
-    // 5. Execute handler
-    let result: ToolResult;
-    let handlerThrew = false;
-    let handlerErrMsg = '';
-    try {
-      result = await handler(call.input, call.signal, this.callHandlerContext(call));
-    } catch (err) {
-      handlerThrew = true;
-      handlerErrMsg = err instanceof Error ? err.message : String(err);
-      result = { content: `Tool execution error: ${handlerErrMsg}`, isError: true };
-    }
-
-    // 6. PostToolUse on success; PostToolUseFailure on thrown handler.
-    // Invariant: exactly one of the two fires per execution — never both.
-    if (handlerThrew) {
-      this.firePostToolUseFailure(call.name, handlerErrMsg, call.signal, call.input);
-    } else {
-      this.firePostToolUse(call.name, result.content, call.signal, call.input);
-    }
-
-    return result;
+    // 3. Agent routing + handler dispatch + PostToolUse. Delegates to
+    // executeCore() — the shared core executeBatch() already calls per-tool
+    // (see lines ~936/972). execute() previously inlined a verbatim copy of
+    // that body (agent/skill/compose special-cases + handler lookup +
+    // PostToolUse firing); the duplicate only added drift risk with no
+    // behavioral difference, so the single-call path now delegates too.
+    return this.executeCore(call);
   }
 
   /**
