@@ -140,6 +140,27 @@ describe('/worktree slash command', () => {
     expect(rowsForThis.every((l) => !l.includes('→'))).toBe(true);
   });
 
+  it('list renders stale-clean as a warning', async () => {
+    const wtPath = join(tmpRoot, 'wt-stale-clean');
+    await fs.mkdir(wtPath, { recursive: true });
+
+    mockRunSweep.mockResolvedValue({
+      candidates: [{ path: wtPath, verdict: 'stale-clean', owner: 'interactive', ageMs: 99_000_000 }],
+      removed: [],
+      warnings: [],
+      dryRun: true,
+    });
+
+    const { ctx, lines } = makeCtx();
+    await worktreeCmd.handler(ctx, 'list');
+
+    const tail = wtPath.slice(-44);
+    const row = lines.find((l) => l.includes(tail.slice(-20)));
+    expect(row).toContain('stale-clean');
+    expect(row).toContain('warn');
+    expect(row).not.toContain('no');
+  });
+
   it('prune without --apply runs as dry-run', async () => {
     mockRunSweep.mockResolvedValue({
       candidates: [
