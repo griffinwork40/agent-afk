@@ -39,7 +39,7 @@ const PINNED_HASHES = {
   // `afk service install daemon`). Mirrors the awa-dev upstream (→ framework);
   // vendored byte-equal, so no INTENTIONAL_DIFFS entry is needed. Drift row is
   // wired in UPSTREAM_PATHS below (skips until example-plugin is co-located).
-  automate: '40de5b802991e4be6dcf41305ed02885d0f0bde9b2877bfc1f33dfe9fe634d0f',
+  automate: '93380f58316e607f6b95b27a9c2375f0a5403f3a42eb695d0490b50225d8838c',
   contract: '748eaf01deda592913f463b23c81a6be3a89ae3b316f31f531a8488dc5bc1a7c',
   // Hash re-bumped during PR #187 review: the Merge section now routes the
   // second convergence condition (≥2 critics agree on the same alternative) to
@@ -73,8 +73,8 @@ const PINNED_HASHES = {
   // refactor is bundled-only (no upstream example-plugin counterpart); verbatim
   // copy of the user-scope /refactor at ~/.afk/skills/.
   refactor: '9cb84710ddf2cf63e1a648460a64656d3f4a9aae8e21753b031556070740c51e',
-  research: '10692d77e392cedce928f66cb5dec27dbc2066f48cfc33047820f56506da762a',
-  review: '9b06e0743832df2fce20905b5de6ba424193ce6d683fc9c4f338940433569087',
+  research: 'abe79d75a5f3c74696ef002293dbe8714e446f8955de97089d1005f1e70bc269',
+  review: 'f313e3779af068a623692473abab2300938db8da3ebf3e2998d47fcb21ee9627',
   // Hash bumped 2026-06-09 (PR #52): records the confidence-trigger enhancement
   // landed in this branch's commit 1e35850 — adds high-confidence language
   // ("confident", "certain", "clearly", ≥80%) as a verification trigger in its
@@ -89,7 +89,7 @@ const PINNED_HASHES = {
   // new UNVERIFIED-COMPOSITION / UNVERIFIED-ECHO-CHAMBER verdict states — prose-
   // consistency fix only; no behavior change to the composition-axis guard.
   'shadow-verify':
-    '9a9f7f2d0482f4258036e4b204113f37f3b44e1b390d6ddaaf97f13e7b4cd858',
+    '1a0a6e75a09c9f366ddfa8c15f6a1150f6f3fcb6c30aebbf30f6df8d1463d30e',
   // Hash bumped 2026-06: Phase 4 (commit) + Phase 8 (PR) switched from the
   // `--body "$(cat <<'EOF' … EOF)"` heredoc-in-command-substitution antipattern
   // to the file-based form (`git commit -F` / `gh pr create --body-file`). The
@@ -102,7 +102,7 @@ const PINNED_HASHES = {
   ship: 'e778f20e30cb24edd04e2fa25b939c21db2b49b95ad0e0076be0e49dae8a34a3',
   // simplify is bundled-only (no upstream example-plugin counterpart).
   simplify:
-    'f9c9e93b1263ed782b5703b6f30fd981908b0af1fa219d0124405a318ff2756e',
+    'ce720df16e81eff5e6022db38067d376f2177e08a9783fc377e04cf520c7bf3c',
   spec: '167e7cbb84de5b716efa11bb9f20a6e4b940f6f9a6d1812a7fbd735dae4f67dd',
 } as const;
 
