@@ -43,6 +43,11 @@ const PRUNABLE_VERDICTS = new Set([
   'dead-owner',
 ]);
 
+const WARNING_VERDICTS = new Set([
+  'stale-clean',
+  'stale-dirty',
+]);
+
 async function resolveRepoRoot(): Promise<string> {
   const result = await execFile('git', ['rev-parse', '--git-common-dir']);
   const raw = result.stdout.trim();
@@ -63,7 +68,7 @@ function formatAge(ageMs: number): string {
 
 function verdictColor(verdict: string, text: string): string {
   if (PRUNABLE_VERDICTS.has(verdict)) return palette.error(text);
-  if (verdict === 'stale-dirty') return palette.warning(text);
+  if (WARNING_VERDICTS.has(verdict)) return palette.warning(text);
   if (verdict === 'locked') return palette.dim(text);
   return palette.dim(text);
 }
@@ -166,7 +171,7 @@ async function renderList(
     const verdict = c.verdict.padEnd(22);
     const wouldPrune = PRUNABLE_VERDICTS.has(c.verdict)
       ? palette.error('yes')
-      : c.verdict === 'stale-dirty'
+      : WARNING_VERDICTS.has(c.verdict)
         ? palette.warning('warn')
         : palette.dim('no');
     const verdictColored = verdictColor(c.verdict, verdict);
