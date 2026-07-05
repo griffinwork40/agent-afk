@@ -1607,3 +1607,75 @@ describe('empty-verdict liveness gate (#380)', () => {
     expect(removeCalls).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 15. stale-clean liveness guard (Codex P2 on PR #432)
+// ---------------------------------------------------------------------------
+
+describe('stale-clean liveness guard (Codex review, PR #432)', () => {
+  it('does not classify an old, zero-ahead, clean worktree occupied by a live session as stale-clean', async () => {
+    // Regression: Codex flagged that the #380 empty-verdict liveness guard
+    // above only skips the `empty` verdict for non-'alive'-owned candidates —
+    // a live-owned candidate that is also older than maxAgeDaysClean falls
+    // through to the next checks. Against the commit Codex reviewed
+    // (033e4ff51f), `stale-clean` tested only `!isDirty && ageMs >
+    // cleanThresholdMs` with no commits-ahead guard, so a live session's
+    // clean, 0-commits-ahead worktree past the clean threshold would
+    // misclassify as `stale-clean` and emit a misleading "commits ahead of
+    // base" warning instead of staying `active`. `stale-clean` has since
+    // required `commitsAhead > 0` (#429), which independently closes this
+    // gap — but that fix was never pinned against the specific live-session +
+    // old-age combination Codex called out. This test locks that combination
+    // down so a future regression on either guard trips here.
+    const worktreePath = join(afkWorktreesDir, 'afk-stale-clean-live-session');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        createdAt: new Date(Date.now() - 86_400_000 * 20).toISOString(), // 20 days old, past 14-day clean threshold
+        baseSha: 'base123',
+        baseBranch: 'main',
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot, head: 'base123' });
+    const wtBlock = worktreeBlock({
+      path: worktreePath,
+      head: 'base123',
+      branch: 'refs/heads/afk/stale-clean-live-session',
+    });
+    const porcelainOut = `${mainBlock}\n\n${wtBlock}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' }; // clean
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        return { stdout: '0\n', stderr: '' }; // 0 commits ahead
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      maxAgeDaysClean: 14,
+      telemetryPath: telemetryFile,
+      readPresence: async () => [{ pid: process.pid, cwd: worktreePath } as unknown as PresenceRecord],
+    });
+
+    const candidate = result.candidates.find((c) => c.path === worktreePath);
+    expect(candidate?.verdict).toBe('active');
+    expect(candidate?.verdict).not.toBe('stale-clean');
+    expect(result.removed).not.toContain(worktreePath);
+    expect(
+      result.warnings.some((w) => w.includes('stale-clean') && w.includes(worktreePath)),
+    ).toBe(false);
+  });
+});
