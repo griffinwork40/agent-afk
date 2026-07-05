@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.23.2] - 2026-07-05
+
+### Fixed
+- patient 429 retry-after handling + surface stopReason on SubagentResult (#427) (d535c79)
+
 ## [5.23.1] - 2026-07-05
 
 ### Fixed
