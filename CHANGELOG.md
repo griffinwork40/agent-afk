@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.20.5] - 2026-07-05
+
+### Fixed
+- surface silent 429/503/529 backoff in trace; fix transient rate-limit 429 misclassification (#414) (5dbc55b)
+
 ## [5.20.4] - 2026-07-05
 
 ### Fixed
