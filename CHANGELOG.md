@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.21.1] - 2026-07-05
+
+### Fixed
+- resolve project plugins against session cwd (#179 follow-up) (#418) (7317aa4)
+
+### Changed
+- remove /reset slash command; fix stale /clear docs (#425) (ea1950c)
+
 ## [5.21.0] - 2026-07-05
 
 ### Added
