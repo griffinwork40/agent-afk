@@ -41,13 +41,17 @@ describe('loadAgentRegistry', () => {
     expect(registry.get('git-investigator')?.bashReadOnly).toBe(true);
     expect(registry.get('general-purpose')?.source).toBe('builtin');
     expect(registry.get('Explore')?.source).toBe('builtin');
-    // research-agent keeps its vendored tool contract
+    // research-agent keeps its vendored read-only contract PLUS the scoped
+    // git-investigator dispatch grant (matches the vendored prompt frontmatter;
+    // resolve.ts turns Agent(git-investigator) into nestedAgentTypes and the
+    // executor restricts research-agent to dispatching only git-investigator).
     expect(registry.get('research-agent')?.definition.tools).toEqual([
       'Read',
       'Grep',
       'Glob',
       'WebFetch',
       'WebSearch',
+      'Agent(git-investigator)',
     ]);
   });
 
@@ -151,5 +155,87 @@ describe('loadAgentRegistry', () => {
     expect(registry.size).toBeGreaterThanOrEqual(4); // builtins only
     // no read-failure warnings for absent dirs
     expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('cannot read'));
+  });
+
+  describe('pluginAgents scope', () => {
+    it('merges pluginAgents into the registry with their plugin source', () => {
+      const registry = loadAgentRegistry({
+        cwd: join(tmp, 'proj'),
+        warn: () => {},
+        pluginAgents: [
+          {
+            name: 'demo:helper',
+            source: 'plugin:demo',
+            definition: { description: 'd', prompt: 'p' },
+            filePath: '/x/agents/helper.md',
+          },
+        ],
+      });
+      expect(registry.get('demo:helper')?.source).toBe('plugin:demo');
+      expect(registry.get('demo:helper')?.filePath).toBe('/x/agents/helper.md');
+    });
+
+    it('namespaced plugin agents coexist with bare builtins (no shadow)', () => {
+      const registry = loadAgentRegistry({
+        cwd: join(tmp, 'proj'),
+        warn: () => {},
+        pluginAgents: [
+          {
+            name: 'demo:research-agent',
+            source: 'plugin:demo',
+            definition: { description: 'd', prompt: 'p' },
+          },
+        ],
+      });
+      expect(registry.get('research-agent')?.source).toBe('builtin');
+      expect(registry.get('demo:research-agent')?.source).toBe('plugin:demo');
+    });
+
+    it('plugin agents shadow builtins by name (plugin > builtin)', () => {
+      const registry = loadAgentRegistry({
+        cwd: join(tmp, 'proj'),
+        warn: () => {},
+        pluginAgents: [
+          {
+            name: 'research-agent',
+            source: 'plugin:x',
+            definition: { description: 'plugin override', prompt: 'p' },
+          },
+        ],
+      });
+      expect(registry.get('research-agent')?.source).toBe('plugin:x');
+    });
+
+    it('user scope shadows a plugin agent of the same name (user > plugin)', () => {
+      writeAgent(join(tmp, 'afk-home', 'agents'), 's.md', 'shared-name');
+      const registry = loadAgentRegistry({
+        cwd: join(tmp, 'proj'),
+        warn: () => {},
+        pluginAgents: [
+          {
+            name: 'shared-name',
+            source: 'plugin:x',
+            definition: { description: 'plugin', prompt: 'p' },
+          },
+        ],
+      });
+      expect(registry.get('shared-name')?.source).toBe('user');
+    });
+
+    it('config scope shadows a plugin agent of the same name (config > plugin)', () => {
+      const registry = loadAgentRegistry({
+        cwd: join(tmp, 'proj'),
+        warn: () => {},
+        pluginAgents: [
+          {
+            name: 'p:dupe',
+            source: 'plugin:p',
+            definition: { description: 'plugin', prompt: 'p' },
+          },
+        ],
+        configAgents: { 'p:dupe': { description: 'config', prompt: 'c' } },
+      });
+      expect(registry.get('p:dupe')?.source).toBe('config');
+    });
   });
 });

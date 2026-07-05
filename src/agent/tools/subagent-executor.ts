@@ -154,6 +154,26 @@ export interface SubagentExecutorContext {
    */
   readOnlyBash?: boolean;
   /**
+   * Nested-dispatch allowlist for the agent that OWNS this executor. Set when
+   * the dispatching agent declared a scoped `Agent(x)` grant (e.g.
+   * research-agent's `Agent(git-investigator)`, surfaced by resolve.ts as
+   * `nestedAgentTypes`). When present, {@link SubagentExecutor.execute} rejects
+   * any `agent_type` not in the list — and any bare/no-type dispatch — before a
+   * fork happens. An EMPTY array `[]` is a deny-all (from an `Agent()` grant):
+   * the check is on presence, not length, so `[]` matches nothing and rejects
+   * every dispatch. `undefined` = no restriction (top-level executors, or an
+   * inherit-all / bare-`Agent` agent).
+   *
+   * Why this is the safety boundary: a dispatched child's own grandchild
+   * executor inherits the parent CAGE ({@link allowedTools}), NOT the child's
+   * definition (see the childExecutor wiring below). At top level that cage is
+   * unrestricted, so a read-only agent granted the `agent` tool could otherwise
+   * spawn an unrestricted `general-purpose` (or bare) grandchild with full
+   * bash/write. This allowlist scopes the child to exactly the leaf agents its
+   * definition named — each of which is self-caged by its own definition.
+   */
+  nestedAgentAllowlist?: readonly string[];
+  /**
    * Session-wide named-agent registry (see `agent/agents/`). When present,
    * the `agent` tool accepts an `agent_type` (alias `subagent_type`) input
    * that dispatches the named definition: its body becomes the child's
@@ -658,6 +678,36 @@ export class SubagentExecutor implements SubagentControl {
       }
     }
 
+    // Nested-dispatch scope gate. When THIS executor belongs to an agent that
+    // declared a scoped `Agent(x)` grant (e.g. research-agent's
+    // `Agent(git-investigator)`), it may dispatch ONLY those agent types.
+    // Reject any out-of-scope type AND any bare/no-type dispatch (which would
+    // otherwise fork an unrestricted general-purpose grandchild inheriting the
+    // parent's unrestricted cage — the escalation this gate closes). An empty
+    // allowlist (`[]`, from an `Agent()` deny-all grant) matches nothing and so
+    // rejects every dispatch. Top-level executors and inherit-all/bare-`Agent`
+    // agents leave the allowlist unset (`undefined`), so their dispatch is
+    // unchanged. The guard is on presence, not length — see nestedAgentAllowlist.
+    const nestedScope = this.ctx.nestedAgentAllowlist;
+    if (nestedScope !== undefined) {
+      const requested = parsed.agent_type;
+      if (requested === undefined || !nestedScope.includes(requested)) {
+        return {
+          content:
+            nestedScope.length === 0
+              ? 'This agent is not permitted to dispatch any nested agents ' +
+                '(its definition granted the dispatch tool but named zero allowed ' +
+                'types, e.g. `Agent()`). Complete the task with your own tools.'
+              : `This agent may only dispatch the following agent type(s): ${nestedScope.join(', ')}. ` +
+                (requested === undefined
+                  ? 'A bare dispatch with no agent_type is not permitted here — ' +
+                    'set agent_type to one of the allowed types, or complete the task with your own tools.'
+                  : `agent_type "${requested}" is out of scope.`),
+          isError: true,
+        };
+      }
+    }
+
     // Build child config.
     //
     // Invariant: `ctx.depth` is required (see SubagentExecutorContext.depth
@@ -845,6 +895,14 @@ export class SubagentExecutor implements SubagentControl {
         // Named-agent registry + the child's model (for grandchild `inherit`
         // resolution) thread through every depth.
         ...(this.ctx.agentRegistry !== undefined ? { agentRegistry: this.ctx.agentRegistry } : {}),
+        // Scope the dispatched agent's OWN nested dispatches to the leaf types
+        // its definition named (resolve.ts `nestedAgentTypes`). This is what
+        // lets research-agent dispatch git-investigator and NOTHING else — the
+        // gate at execute() top reads this from its ctx. Unset ⇒ unrestricted
+        // (top-level, inherit-all, or bare-`Agent` agents).
+        ...(resolvedAccess?.nestedAgentTypes !== undefined
+          ? { nestedAgentAllowlist: resolvedAccess.nestedAgentTypes }
+          : {}),
         parentModel: childModel,
       });
       const childSkillExecutor = this.ctx.childSkillExecutorFactory

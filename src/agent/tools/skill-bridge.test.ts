@@ -22,6 +22,7 @@ import {
   buildSkillManifest,
   collectSkillEntries,
   discoverPluginSkillBodies,
+  discoverPluginAgents,
   scanAllPluginRoots,
 } from './skill-bridge.js';
 import { registerSkill, _resetRegistry } from '../../skills/index.js';
@@ -562,6 +563,134 @@ describe('discoverPluginSkillBodies', () => {
     const entry = bodies.get('full-skill');
     expect(entry).toBeDefined();
     expect(entry?.allowedTools).toBeUndefined();
+  });
+});
+
+describe('discoverPluginAgents', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync('/tmp/plugin-agents-test-');
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(tmpDir, { recursive: true });
+    } catch {
+      // Non-fatal cleanup.
+    }
+  });
+
+  function writeManifest(pluginPath: string, name: string): void {
+    const dir = join(pluginPath, '.claude-plugin');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'plugin.json'), JSON.stringify({ name, version: '1.0.0' }));
+  }
+
+  function writeAgentFile(pluginPath: string, file: string, name: string, extra = ''): void {
+    const dir = join(pluginPath, 'agents');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, file),
+      `---\nname: ${name}\ndescription: A test agent\n${extra}---\nAgent body for ${name}.\n`,
+    );
+  }
+
+  it('namespaces discovered agents as <plugin>:<agent> with plugin source', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    writeManifest(pluginA, 'demo');
+    writeAgentFile(pluginA, 'researcher.md', 'research-agent');
+
+    const agents = discoverPluginAgents([{ type: 'local', path: pluginA }]);
+    expect(agents).toHaveLength(1);
+    expect(agents[0]?.name).toBe('demo:research-agent');
+    expect(agents[0]?.source).toBe('plugin:demo');
+    expect(agents[0]?.definition.description).toBe('A test agent');
+    expect(agents[0]?.definition.prompt).toContain('Agent body for research-agent.');
+    expect(agents[0]?.filePath).toBe(join(pluginA, 'agents', 'researcher.md'));
+  });
+
+  it('takes identity from frontmatter name, not filename (CC parity)', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    writeManifest(pluginA, 'demo');
+    writeAgentFile(pluginA, 'anything.md', 'git-investigator');
+    const agents = discoverPluginAgents([{ type: 'local', path: pluginA }]);
+    expect(agents[0]?.name).toBe('demo:git-investigator');
+  });
+
+  it('scans agents/ recursively (subfolders)', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    writeManifest(pluginA, 'demo');
+    const sub = join(pluginA, 'agents', 'review');
+    mkdirSync(sub, { recursive: true });
+    writeFileSync(join(sub, 'sec.md'), '---\nname: security\ndescription: d\n---\nbody\n');
+    const agents = discoverPluginAgents([{ type: 'local', path: pluginA }]);
+    expect(agents.map((a) => a.name)).toContain('demo:security');
+  });
+
+  it('carries bash: read-only through as bashReadOnly', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    writeManifest(pluginA, 'demo');
+    writeAgentFile(pluginA, 'git.md', 'git-investigator', 'tools: Bash, Read\nbash: read-only\n');
+    const agents = discoverPluginAgents([{ type: 'local', path: pluginA }]);
+    expect(agents[0]?.bashReadOnly).toBe(true);
+  });
+
+  it('first-wins on qualified-name collisions', () => {
+    const a = join(tmpDir, 'a');
+    const b = join(tmpDir, 'b');
+    writeManifest(a, 'dup');
+    writeManifest(b, 'dup');
+    writeAgentFile(a, 'x.md', 'shared');
+    writeAgentFile(b, 'x.md', 'shared');
+    const agents = discoverPluginAgents([
+      { type: 'local', path: a },
+      { type: 'local', path: b },
+    ]);
+    const shared = agents.filter((ag) => ag.name === 'dup:shared');
+    expect(shared).toHaveLength(1);
+    expect(shared[0]?.filePath).toBe(join(a, 'agents', 'x.md'));
+  });
+
+  it('supports agents-only plugins (no skills/ dir)', () => {
+    const pluginA = join(tmpDir, 'agents-only');
+    writeManifest(pluginA, 'agentsonly');
+    writeAgentFile(pluginA, 'a.md', 'solo');
+    const agents = discoverPluginAgents([{ type: 'local', path: pluginA }]);
+    expect(agents.map((a) => a.name)).toEqual(['agentsonly:solo']);
+  });
+
+  it('skips a plugin with no readable manifest name', () => {
+    const pluginA = join(tmpDir, 'no-manifest');
+    // No .claude-plugin/plugin.json written — its agents have no stable id.
+    writeAgentFile(pluginA, 'a.md', 'orphan');
+    const agents = discoverPluginAgents([{ type: 'local', path: pluginA }]);
+    expect(agents).toHaveLength(0);
+  });
+
+  it('skips malformed agent files without failing the scan', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    writeManifest(pluginA, 'demo');
+    const dir = join(pluginA, 'agents');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'broken.md'), 'no frontmatter at all');
+    writeAgentFile(pluginA, 'ok.md', 'works');
+    const agents = discoverPluginAgents([{ type: 'local', path: pluginA }]);
+    expect(agents.map((a) => a.name)).toEqual(['demo:works']);
+  });
+
+  it('returns empty for a plugin with no agents/ dir', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    writeManifest(pluginA, 'demo');
+    const agents = discoverPluginAgents([{ type: 'local', path: pluginA }]);
+    expect(agents).toHaveLength(0);
+  });
+
+  it('ignores non-local plugin configs', () => {
+    const agents = discoverPluginAgents([
+      { type: 'git', path: join(tmpDir, 'nope') } as never,
+    ]);
+    expect(agents).toHaveLength(0);
   });
 });
 

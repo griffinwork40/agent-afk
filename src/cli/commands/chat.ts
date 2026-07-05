@@ -22,7 +22,7 @@ import { SubagentManager } from '../../agent/subagent.js';
 import { SubagentExecutor } from '../../agent/tools/subagent-executor.js';
 import { SkillExecutor } from '../../agent/tools/skill-executor.js';
 import { ComposeExecutor } from '../../agent/tools/compose-executor.js';
-import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
+import { ensurePluginEntrypointsLoaded, discoverPluginAgents } from '../../agent/tools/skill-bridge.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory } from '../../agent/tools/nesting.js';
 import { loadAgentRegistry } from '../../agent/agents/index.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
@@ -482,6 +482,7 @@ export function registerChatCommand(program: Command): void {
         // `agent_type` dispatch on the `agent` tool at every depth.
         const agentRegistry = loadAgentRegistry({
           ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
+          pluginAgents: discoverPluginAgents(),
         });
 
         const childSkillExecutorFactory = createChildSkillExecutorFactory(

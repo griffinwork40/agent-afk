@@ -54,6 +54,7 @@ import { SkillExecutor } from './agent/tools/skill-executor.js';
 import { ComposeExecutor } from './agent/tools/compose-executor.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory } from './agent/tools/nesting.js';
 import { loadAgentRegistry } from './agent/agents/index.js';
+import { discoverPluginAgents } from './agent/tools/skill-bridge.js';
 import { attachMcpCleanup, loadTelegramMcpManager } from './telegram/mcp-session.js';
 
 // Capture version once at module load. Used by checkVersionDrift on each stats tick.
@@ -271,6 +272,7 @@ async function main() {
         // dispatch (builtin + user + project scopes, anchored at the bot cwd).
         const agentRegistry = loadAgentRegistry({
           ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
+          pluginAgents: discoverPluginAgents(),
         });
 
         // Shared child-skill-executor factory — both SubagentExecutor and

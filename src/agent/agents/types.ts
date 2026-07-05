@@ -80,4 +80,20 @@ export interface ResolvedAgentToolAccess {
    * (e.g. `NotebookEdit`). Surfaced in warnings so authors see the gap.
    */
   droppedTokens: string[];
+  /**
+   * Child agent types this agent may dispatch via the `agent` tool, extracted
+   * from a scoped `Agent(x, y)` grant. Three states:
+   * - a NON-EMPTY list — the child may dispatch only these named types.
+   * - `[]` (deny-all) — an empty paren group `Agent()`: dispatch tool granted,
+   *   zero types permitted, so EVERY nested dispatch is rejected (fail-closed).
+   * - `undefined` — unrestricted (bare `Agent`/`Task`) or no dispatch tool.
+   *
+   * Any non-`undefined` value (including `[]`) is enforced by the subagent
+   * executor: the child rejects any `agent_type` outside the list — and any
+   * bare/no-type dispatch — closing the escalation where a read-only agent,
+   * once granted `agent`, could spawn an unrestricted `general-purpose`
+   * grandchild (the grandchild inherits the parent CAGE, which is unrestricted
+   * at top level).
+   */
+  nestedAgentTypes?: string[];
 }

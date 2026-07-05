@@ -4,13 +4,19 @@
  * Scopes and precedence (ascending — later shadows earlier on the same name):
  *
  *   builtin                          (programmatic; see builtins.ts)
+ *   plugin   <plugin>/agents/        (installed plugins; namespaced <plugin>:<agent>)
  *   user     ~/.afk/agents/          (all projects on this machine)
  *   project  <cwd>/.claude/agents/   (Claude Code compat, read-only)
  *   project  <cwd>/.afk/agents/      (AFK-native project scope)
  *   config   AgentSessionConfig.agents (programmatic per-session injection)
  *
- * Plugin `agents/` directories are a planned scope (between builtin and
- * user); the plugin scanner does not surface them yet.
+ * Plugin agents are discovered by `discoverPluginAgents` (skill-bridge.ts) and
+ * passed in via {@link LoadAgentRegistryOptions.pluginAgents}; they merge just
+ * above the builtins. Because they are namespaced `<plugin>:<agent>` they never
+ * collide with a bare builtin name (e.g. the plugin agent
+ * `example-plugin:research-agent` coexists with the builtin `research-agent`),
+ * so bundled skills that dispatch bare `subagent_type: "research-agent"` keep
+ * resolving to the builtin.
  *
  * Directories are scanned recursively for `*.md` files. Identity comes from
  * the frontmatter `name` field, not the filename (Claude Code parity). A
@@ -52,6 +58,14 @@ export interface LoadAgentRegistryOptions {
    */
   configAgents?: Record<string, AgentDefinition>;
   /**
+   * Agents contributed by installed plugins, pre-scanned + namespaced
+   * `<plugin>:<agent>` by `discoverPluginAgents` (skill-bridge.ts). Merged just
+   * above the builtins (lowest file scope, Claude Code parity). Kept as a
+   * caller-supplied array — not scanned here — so this module stays free of the
+   * plugin-scanner import and the registry load stays a pure merge.
+   */
+  pluginAgents?: RegisteredAgent[];
+  /**
    * Diagnostic sink for scan warnings (malformed files, duplicate names,
    * unknown frontmatter). Defaults to stderr, matching the plugin skill
    * scanner's convention. Pass a no-op to silence.
@@ -59,8 +73,13 @@ export interface LoadAgentRegistryOptions {
   warn?: (message: string) => void;
 }
 
-/** Recursively collect `*.md` file paths under `dir`. Missing dir → []. */
-function collectMarkdownFiles(dir: string, depth = 0): string[] {
+/**
+ * Recursively collect `*.md` file paths under `dir`. Missing dir → []. Skips
+ * dotfiles/dirs, caps recursion at {@link MAX_SCAN_DEPTH}, returns sorted for
+ * deterministic same-scope ordering. Exported so the plugin-agent scanner
+ * (`discoverPluginAgents`) reuses the exact same traversal semantics.
+ */
+export function collectMarkdownFiles(dir: string, depth = 0): string[] {
   if (depth > MAX_SCAN_DEPTH) return [];
   let entries;
   try {
@@ -165,6 +184,15 @@ export function loadAgentRegistry(options: LoadAgentRegistryOptions = {}): Agent
   const warn = options.warn ?? ((message: string) => process.stderr.write(message + '\n'));
 
   const registry = new Map<string, RegisteredAgent>(builtinAgents());
+
+  // plugin scope (namespaced <plugin>:<agent>; between builtin and user).
+  // Pre-scanned + first-wins-deduped by discoverPluginAgents, so this is a
+  // straight merge: later user/project/config scopes still shadow by name.
+  if (options.pluginAgents !== undefined) {
+    for (const agent of options.pluginAgents) {
+      registry.set(agent.name, agent);
+    }
+  }
 
   // user scope
   scanScope(registry, join(getAfkHome(), 'agents'), 'user', warn);

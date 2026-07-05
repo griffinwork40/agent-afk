@@ -29,7 +29,7 @@ import { SubagentManager } from '../../agent/subagent.js';
 import { SubagentExecutor } from '../../agent/tools/subagent-executor.js';
 import { SkillExecutor } from '../../agent/tools/skill-executor.js';
 import { ComposeExecutor } from '../../agent/tools/compose-executor.js';
-import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
+import { ensurePluginEntrypointsLoaded, discoverPluginAgents } from '../../agent/tools/skill-bridge.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory, createStubParentSession } from '../../agent/tools/nesting.js';
 import { loadAgentRegistry } from '../../agent/agents/index.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
@@ -106,6 +106,7 @@ export function buildDaemonSessionFactory(
     // dispatch for daemon-run tasks (builtin + user + project scopes).
     const agentRegistry = loadAgentRegistry({
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      pluginAgents: discoverPluginAgents(),
     });
 
     const childSkillExecutorFactory = createChildSkillExecutorFactory(

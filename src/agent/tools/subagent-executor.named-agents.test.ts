@@ -89,6 +89,19 @@ const INHERIT_AGENT: RegisteredAgent = {
   },
 };
 
+// Mirrors the real builtin research-agent's scoped nesting grant
+// (`Agent(git-investigator)`): read-only leaf tools PLUS a single scoped
+// dispatch. Used to exercise the nested-dispatch scope gate end-to-end.
+const RESEARCH_NESTER: RegisteredAgent = {
+  name: 'research-nester',
+  source: 'builtin',
+  definition: {
+    description: 'research that may nest git-investigator',
+    prompt: 'You may dispatch git-investigator.',
+    tools: ['Read', 'Grep', 'Glob', 'Agent(git-investigator)'],
+  },
+};
+
 describe('SubagentExecutor named-agent dispatch', () => {
   let forkSubagent: ReturnType<typeof vi.fn>;
   let factoryCalls: Array<Record<string, unknown>>;
@@ -270,6 +283,95 @@ describe('SubagentExecutor named-agent dispatch', () => {
     expect(forkArgs.config.systemPrompt).toBe('BASE PROMPT');
     expect(factoryCalls[0]?.['allowedTools']).toBeUndefined();
     expect(forkArgs.agentType).toBe('plain dispatch');
+  });
+
+  describe('nested-dispatch scope gate', () => {
+    it('allows an in-scope agent_type dispatch', async () => {
+      const executor = makeExecutor({ nestedAgentAllowlist: ['git-investigator'] });
+      const result = await executor.execute(
+        makeCall({ prompt: 'go', agent_type: 'git-investigator' }),
+      );
+      expect(result.isError).toBeFalsy();
+      expect(forkSubagent).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects an out-of-scope agent_type without forking', async () => {
+      const executor = makeExecutor({ nestedAgentAllowlist: ['git-investigator'] });
+      // research-agent IS in the registry (resolves fine) but is out of scope.
+      const result = await executor.execute(
+        makeCall({ prompt: 'go', agent_type: 'research-agent' }),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('may only dispatch');
+      expect(result.content).toContain('git-investigator');
+      expect(result.content).toContain('out of scope');
+      expect(forkSubagent).not.toHaveBeenCalled();
+    });
+
+    it('rejects a bare dispatch (no agent_type) without forking', async () => {
+      const executor = makeExecutor({ nestedAgentAllowlist: ['git-investigator'] });
+      const result = await executor.execute(makeCall({ prompt: 'go' }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('bare dispatch');
+      expect(forkSubagent).not.toHaveBeenCalled();
+    });
+
+    it('rejects EVERY dispatch under an empty deny-all allowlist ([] from Agent())', async () => {
+      // An `Agent()` grant resolves to nestedAgentTypes [] → nestedAgentAllowlist [].
+      // Presence (not length) gates, so even a registered, in-registry agent_type
+      // is rejected — the fail-closed default the medium finding fixed.
+      const executor = makeExecutor({ nestedAgentAllowlist: [] });
+      const result = await executor.execute(
+        makeCall({ prompt: 'go', agent_type: 'research-agent' }),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('not permitted to dispatch any nested agents');
+      expect(forkSubagent).not.toHaveBeenCalled();
+    });
+
+    it('rejects a bare dispatch under an empty deny-all allowlist', async () => {
+      const executor = makeExecutor({ nestedAgentAllowlist: [] });
+      const result = await executor.execute(makeCall({ prompt: 'go' }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('not permitted to dispatch any nested agents');
+      expect(forkSubagent).not.toHaveBeenCalled();
+    });
+
+    it('does not restrict dispatch when no allowlist is set (top-level executor)', async () => {
+      const executor = makeExecutor();
+      const result = await executor.execute(
+        makeCall({ prompt: 'go', agent_type: 'research-agent' }),
+      );
+      expect(result.isError).toBeFalsy();
+      expect(forkSubagent).toHaveBeenCalledTimes(1);
+    });
+
+    it('grants the agent tool to a scoped agent (research-nester can dispatch)', async () => {
+      const executor = makeExecutor({
+        agentRegistry: makeRegistry([RESEARCH_NESTER, GIT]),
+      });
+      await executor.execute(makeCall({ prompt: 'go', agent_type: 'research-nester' }));
+      // The dispatch grant reaches the child provider — `agent` is present.
+      expect(factoryCalls[0]?.['allowedTools']).toEqual(['read_file', 'grep', 'glob', 'agent']);
+    });
+
+    it('threads the scope into the dispatched agent\'s own executor (end-to-end)', async () => {
+      const executor = makeExecutor({
+        agentRegistry: makeRegistry([RESEARCH_NESTER, GIT]),
+      });
+      await executor.execute(makeCall({ prompt: 'go', agent_type: 'research-nester' }));
+      // The child provider factory received research-nester's OWN executor.
+      const childExecutor = factoryCalls[0]?.['childExecutor'] as SubagentExecutor | undefined;
+      expect(childExecutor).toBeDefined();
+      // When research-nester attempts a BARE dispatch, its threaded scope gates
+      // it — proving the escalation path (unrestricted grandchild) is closed.
+      // The gate returns before any real fork, so this is safe against the
+      // child's real (non-mocked) SubagentManager.
+      const nested = await childExecutor!.execute(makeCall({ prompt: 'escalate' }));
+      expect(nested.isError).toBe(true);
+      expect(nested.content).toContain('may only dispatch');
+      expect(nested.content).toContain('git-investigator');
+    });
   });
 
   describe('describeAgentTool', () => {
