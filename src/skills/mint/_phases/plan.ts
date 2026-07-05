@@ -5,7 +5,7 @@
 
 import { SubagentManager } from '../../../agent/subagent.js';
 import { describeFailure } from '../../../agent/subagent/result.js';
-import { getApiKey } from '../../../cli/shared-helpers.js';
+import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 
@@ -35,7 +35,7 @@ export async function runPlanPhase(
     config: {
       model: defaultSubagentModel,
       systemPrompt: planPrompt,
-      apiKey: getApiKey(),
+      apiKey: resolveCredentialForModel(defaultSubagentModel),
     },
     idPrefix: 'mint-plan',
     agentType: 'mint-plan',

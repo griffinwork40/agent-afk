@@ -6,7 +6,7 @@
 import { z } from 'zod';
 import { SubagentManager } from '../../../agent/subagent.js';
 import { describeFailure } from '../../../agent/subagent/result.js';
-import { getApiKey } from '../../../cli/shared-helpers.js';
+import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
 import { emitCard } from '../../_lib/emit-card.js';
 import type { BuildResult } from './build.js';
@@ -48,7 +48,7 @@ async function forkVerifyMode(
     config: {
       model: defaultSubagentModel,
       systemPrompt: verifyPrompt,
-      apiKey: getApiKey(),
+      apiKey: resolveCredentialForModel(defaultSubagentModel),
     },
     idPrefix: `mint-verify-${mode}`,
     agentType: `mint-verify-${mode}`,
