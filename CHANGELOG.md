@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.23.1] - 2026-07-05
+
+### Fixed
+- scope the bash interpreter-eval guard to credential-adjacent payloads (#424) (8eb2622)
+
 ## [5.23.0] - 2026-07-05
 
 ### Added
