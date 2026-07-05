@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**118 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**119 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -180,6 +180,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_SHELL_PASSTHROUGH` | boolean |  | `1` | `0` | Enable the interactive REPL `!cmd` / `!&cmd` shell-passthrough feature. On by default. Set to 0, false, off, or no (case-insensitive) to disable, so inputs beginning with ! are sent to the model as literal text instead of being executed as shell commands. Equivalent to the --no-shell-passthrough flag. |
 | `AFK_SHOW_DIFFS` | boolean |  |  |  | Show inline diffs in the tool-lane output for edit/write tool calls. 1 = on, 0 = off. |
 | `AFK_SPINNER_TIPS` | boolean |  |  |  | Show rotating tips in the loading spinner during long calls. 1 = on, 0 = off. |
+| `AFK_THINKING_UI` | string |  | `live` | `digest` | Default thinking-display mode for the interactive REPL: summary \| live \| digest \| off. Display-only — controls how extended-thinking blocks render, never whether thinking runs (cost/latency unaffected). Overridden per-launch by --thinking-ui and mutable mid-session via /thinking. Precedence: --thinking-ui flag > this env > interactive.thinkingUi config > live. Invalid values are ignored. |
 | `AFK_USER_CARD_MAX_ROWS` | number |  |  | `24` | Maximum number of visual rows emitted by renderUserCard before collapsing the remainder into a dim "…(N lines collapsed)" summary row. Defaults to 24. Non-integer or non-positive values are silently ignored and the default applies. |
 | `AFK_WRITE_DENYLIST` | string |  |  | `**/.env,**/secrets/**` | Comma-separated list of additional path globs that the write_file tool refuses to write to. |
 | `AFK_WRITE_DIFF` | boolean |  |  |  | Show a diff preview before each write_file tool call. Defaults provider-controlled when unset. |
