@@ -35,6 +35,7 @@ import type { Surface } from './awareness/types.js';
 import { appendRoutingDecision } from './routing-telemetry.js';
 import { getCurrentSink } from './_lib/skill-sink-channel.js';
 import { touchWorktreeOccupancy } from './worktree-occupancy.js';
+import { resolveWorktreeMainRoot } from './worktree-read-root.js';
 import { buildPhaseRestrictedProvider, type PhaseRole } from './tools/nesting.js';
 import { applyManagerApiKeyFallback } from './tools/child-credential.js';
 import { providerForModel, type BundledProviderName } from './providers/index.js';
@@ -275,6 +276,12 @@ export class SubagentManager {
   // `afk -w` worktree is created mid-session. Read at fork time (forkSubagent),
   // so updating it makes every subsequent fork inherit the new worktree cwd.
   private parentCwd: string | undefined;
+  // Per-cwd cache of the resolved main-repo root for worktree children (see
+  // `resolveWorktreeMainRoot`). Forks overwhelmingly share one cwd, so this
+  // collapses N git subprocesses to one per distinct cwd for the whole
+  // manager lifetime. `undefined` value = resolved-and-there-is-none, so the
+  // Map's `.has()` distinguishes "not yet resolved" from "resolved to none".
+  private readonly worktreeMainRootCache = new Map<string, string | undefined>();
   private readonly parentTraceWriter: TraceWriter | undefined;
   private readonly parentSurface: Surface | undefined;
   private readonly abortGraph: AbortGraph;
@@ -364,6 +371,23 @@ export class SubagentManager {
   }
 
   /**
+   * Resolve (and memoize) the main-repo root for a worktree `cwd`. Returns the
+   * main repository root when `cwd` is inside a linked git worktree distinct
+   * from the main worktree, else undefined. Best-effort — never throws.
+   *
+   * Cached per cwd so a fan-out of subagents sharing one worktree pays a single
+   * `git rev-parse`, not one per fork.
+   */
+  private async resolveMainRootForCwd(cwd: string): Promise<string | undefined> {
+    if (this.worktreeMainRootCache.has(cwd)) {
+      return this.worktreeMainRootCache.get(cwd);
+    }
+    const mainRoot = await resolveWorktreeMainRoot(cwd);
+    this.worktreeMainRootCache.set(cwd, mainRoot);
+    return mainRoot;
+  }
+
+  /**
    * Abort the entire managed tree.
    *
    * @param reason   Forwarded to every cascade victim's AbortController. Read
@@ -448,6 +472,24 @@ export class SubagentManager {
     this.abortGraph.register(id, childController);
     this.abortGraph.linkChild(this.rootId, id);
 
+    // Worktree read-root grant: when the child runs in a linked git worktree
+    // and the caller did not pin its own read roots, add the MAIN repo root as
+    // a READ root (never a write root — writes stay confined to the worktree).
+    // Without this, a subagent is confined to `[cwd]` and cannot read main-repo
+    // absolute paths that pervade its context (system prompt, skill prompts,
+    // parent messages), yet it cannot approve them interactively either — the
+    // path-approval hook auto-denies forked children. See ./worktree-read-root.
+    // A caller that pins `readRoots` (e.g. `afk farm`, which deliberately
+    // confines each branch worker) is left untouched.
+    const effectiveChildCwd = options.config.cwd ?? this.parentCwd;
+    let worktreeReadRoots: string[] | undefined;
+    if (options.config.readRoots === undefined && effectiveChildCwd !== undefined) {
+      const mainRoot = await this.resolveMainRootForCwd(effectiveChildCwd);
+      if (mainRoot !== undefined && mainRoot !== effectiveChildCwd) {
+        worktreeReadRoots = [effectiveChildCwd, mainRoot];
+      }
+    }
+
     const childConfig: AgentConfig = {
       ...options.config,
       resume,
@@ -520,6 +562,11 @@ export class SubagentManager {
       ...(options.config.cwd === undefined && this.parentCwd !== undefined
         ? { cwd: this.parentCwd }
         : {}),
+      // Worktree read-root grant (see the computation above the literal). Only
+      // set when the child runs in a linked worktree AND the caller left
+      // readRoots unset; otherwise the `...options.config` spread's readRoots
+      // (or the provider's `[cwd]` default) stands.
+      ...(worktreeReadRoots !== undefined ? { readRoots: worktreeReadRoots } : {}),
       // Invariant: a forked child's trace origin comes from its inherited
       // parent surface, not from any actor-role value (see session-identity.ts).
       // Inherit traceWriter + surface from the manager so every worker session
