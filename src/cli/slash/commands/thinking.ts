@@ -10,6 +10,7 @@
  *   /thinking           — show the current mode
  *   /thinking live       — stream thinking preview + finalize summary (default)
  *   /thinking summary    — collapsed one-line summary on finalize, no live preview
+ *   /thinking digest     — live preview + persist a capped reasoning paragraph to scrollback per phase
  *   /thinking off        — suppress thinking entirely
  *
  * Mutates `ctx.stats.thinkingUi`, which the REPL loop reads at the top of each
@@ -21,26 +22,28 @@ import type { ThinkingUiMode } from '../types.js';
 import type { SlashCommand } from '../types.js';
 import { palette } from '../../palette.js';
 
-const VALID_MODES: readonly ThinkingUiMode[] = ['summary', 'live', 'off'];
+const VALID_MODES: readonly ThinkingUiMode[] = ['summary', 'live', 'digest', 'off'];
 
 const MODE_DESCRIPTIONS: Record<ThinkingUiMode, string> = {
   live: 'streaming preview + finalize summary',
   summary: 'collapsed one-line summary on finalize',
+  digest: 'live preview + reasoning paragraph persisted to scrollback per phase',
   off: 'suppressed entirely',
 };
 
 export const thinkingCmd: SlashCommand = {
   name: '/thinking',
   aliases: ['/thinking-ui'],
-  usage: '/thinking [summary|live|off]',
+  usage: '/thinking [summary|live|digest|off]',
   summary: 'Toggle how thinking blocks are rendered mid-session',
   hint:
     'Switch thinking display: `live` (streaming preview + summary, default), ' +
-    '`summary` (one-line collapse only), or `off` (hidden). ' +
+    '`summary` (one-line collapse only), `digest` (live preview + persists a capped ' +
+    'reasoning paragraph to scrollback per phase — good for AFK review), or `off` (hidden). ' +
     'This is a display-only toggle — extended thinking still runs; cost and latency are unaffected. ' +
     'Takes effect on the next turn — same semantics as `/model`. ' +
     'Run without args to see the current mode.',
-  flags: ['summary', 'live', 'off'],
+  flags: ['summary', 'live', 'digest', 'off'],
   async handler(ctx, args) {
     const target = args.trim().toLowerCase() as ThinkingUiMode;
 

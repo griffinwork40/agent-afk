@@ -42,7 +42,7 @@ export interface LifecycleContext {
   toolLane: ToolLane;
   streamingMarkdownRef: { current: StreamingMarkdownRenderer | null };
   lastProgressByTask: Map<string, ProgressEvent>;
-  thinkingMode: 'off' | 'summary' | 'live';
+  thinkingMode: 'off' | 'summary' | 'live' | 'digest';
   out: Writer;
   isTTY: boolean;
   sources: Map<string, SourceState>;
@@ -84,7 +84,7 @@ export function registerOverlaySlots(
       // gating on hasBufferedContent() alone would keep re-painting the
       // already-collapsed thinking into the idle overlay between turns.
       if (
-        ctx.thinkingMode !== 'live' ||
+        (ctx.thinkingMode !== 'live' && ctx.thinkingMode !== 'digest') ||
         !ctx.thinkingLane.isActive() ||
         !ctx.thinkingLane.hasBufferedContent()
       ) {

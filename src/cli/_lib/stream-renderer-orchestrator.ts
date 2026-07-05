@@ -68,11 +68,13 @@ export interface OrchestratorCtx {
    * `'off'` suppresses thinking entirely (no buffer, no overlay, no summary).
    * `'summary'` buffers and emits a collapsed summary on finalize.
    * `'live'` shows a streaming preview overlay and the finalize summary.
+   * `'digest'` shows the live streaming overlay (like `'live'`) AND commits a
+   * capped reasoning paragraph to scrollback above the summary at each phase seal.
    */
   // Optional: omitted callers (tests, non-TTY surfaces) behave as 'summary' —
   // the consuming checks are `=== 'off'` / `!== 'off'` / `=== 'live'`, all of
   // which treat undefined as the documented summary default.
-  thinkingMode?: 'off' | 'summary' | 'live';
+  thinkingMode?: 'off' | 'summary' | 'live' | 'digest';
   /** Lazy holder so callers can swap StreamingMarkdownRenderer in/out. */
   streamingMarkdown: { current: StreamingMarkdownRenderer | null };
   /**
@@ -332,11 +334,11 @@ export function handleOrchestratorEvent(
           source.thinkingPhaseStartedAt = Date.now();
         }
         ctx.thinkingLane.push(chunk.content);
-        // Only repaint the overlay in 'live' mode — summary mode buffers
-        // silently and has nothing overlay-visible to push (the stage rail
-        // moved to a footer bar and is repainted via onStageChange in
-        // stream-renderer.ts, not through setComposedOverlay).
-        if (ctx.isTTY && ctx.thinkingMode === 'live') setComposedOverlay(ctx);
+        // Repaint the overlay in 'live' and 'digest' modes — both stream the
+        // live preview. ('summary' buffers silently, with nothing overlay-visible
+        // to push; the stage rail moved to a footer bar and is repainted via
+        // onStageChange in stream-renderer.ts, not through setComposedOverlay.)
+        if (ctx.isTTY && (ctx.thinkingMode === 'live' || ctx.thinkingMode === 'digest')) setComposedOverlay(ctx);
       }
       return;
     }
@@ -404,8 +406,8 @@ export function setComposedOverlay(ctx: OrchestratorCtx): void {
   }
 
   // Live thinking preview — rendered above the tool lane so the user sees
-  // the model's current reasoning while it streams. Only in 'live' mode;
-  // 'summary' mode buffers silently and emits a single line at turn-end.
+  // the model's current reasoning while it streams. In 'live' and 'digest'
+  // modes; 'summary' buffers silently and emits a single line at turn-end.
   //
   // Rendered as a wrapped, soft-capped paragraph (`◆ thinking` header +
   // indented body, ~5 visible lines, `⋯ +N chars earlier` footer when the
@@ -419,7 +421,7 @@ export function setComposedOverlay(ctx: OrchestratorCtx): void {
   // block in that file for why parallel subagents stay on the single-line
   // tail treatment instead of the paragraph format.
   const parts: string[] = [];
-  if (ctx.thinkingMode === 'live' && ctx.thinkingLane.hasBufferedContent()) {
+  if ((ctx.thinkingMode === 'live' || ctx.thinkingMode === 'digest') && ctx.thinkingLane.hasBufferedContent()) {
     const paragraph = formatThinkingParagraph(ctx.thinkingLane.peek(), {
       cols: getTerminalWidth(),
     });
