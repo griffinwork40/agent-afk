@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.23.0] - 2026-07-05
+
+### Added
+- add `digest` thinking-display mode (live preview + persisted reasoning) (#426) (6740847)
+
 ## [5.22.0] - 2026-07-05
 
 ### Added
