@@ -194,6 +194,12 @@ export async function runTurn(
     if (completionWriter && armedCompositor) {
       const c = armedCompositor;
       completionWriter.fn = (line) => c.commitAbove(line);
+      // A live overlay now owns subagent rendering (the ToolLane commits the
+      // → Agent(…) Done tree). Suppress the redundant SubagentStop completion
+      // line so its uncoordinated commitAbove can't race the OverlayComposer
+      // and corrupt the compositor's row-accounting (ghost markers + swallowed
+      // committed lines). Reset in the finally below. See CompletionWriter.
+      completionWriter.suppressSubagentCompletion = true;
     }
     h.setActiveCompositor?.(armedCompositor);
     // Publish a notifier so the SIGINT handler can toggle the live
@@ -754,7 +760,14 @@ export async function runTurn(
     // For the legacy own-compositor / non-TTY path, `idleFn` stays
     // `console.log` (set at bootstrap and never mutated) — the reset
     // is identical to the old behavior.
-    if (completionWriter) completionWriter.fn = completionWriter.idleFn;
+    if (completionWriter) {
+      completionWriter.fn = completionWriter.idleFn;
+      // Turn over: the live overlay is gone, so a subagent that completes
+      // between turns (e.g. a backgrounded job) has no ToolLane tree and no
+      // overlay to race — let its completion line surface again. Pairs with
+      // the armAndWire set above.
+      completionWriter.suppressSubagentCompletion = false;
+    }
     // setActiveCompositor's "active turn" flag is still cleared. For
     // the legacy renderer-own-compositor path, the renderer just
     // disposed its compositor — the SIGINT handler must fall back to

@@ -54,8 +54,9 @@ import {
 } from './cache-policy.js';
 import { buildPlanModeAddendumBlock } from './plan-mode-addendum.js';
 import { buildAfkModeAddendumBlock } from './afk-mode-addendum.js';
+import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
 import { collectSupportedCommands } from '../shared/supported-commands.js';
-import { contextLimitFor } from '../../model-limits.js';
+import { contextLimitFor, autoCompactLimitFor } from '../../model-limits.js';
 import { resolveModelId } from '../../session/model-resolution.js';
 import type { ToolDispatcher } from './tool-dispatcher.js';
 import type {
@@ -375,7 +376,18 @@ export class AnthropicDirectQuery implements ProviderQuery {
           client: this.retry.client as unknown as AnthropicClientLike,
           messages: this.state.messages,
           system,
-          tools: this.tools,
+          // Advertise the plan-exit tool only on LIVE plan turns. The dispatcher
+          // registers it RESIDENT (handler + base schema) for top-level sessions;
+          // here we drop it from the advertised tool list whenever the live mode
+          // is not 'plan'. This mirrors composeSystem() gating the plan addendum
+          // on the same live field — so the tool appears exactly when the model
+          // is being steered to call it, and becomes callable the instant plan
+          // mode is entered mid-session, with no query rebuild. No-op when
+          // `this.tools` doesn't carry it (non-top-level sessions).
+          tools:
+            this.state.currentPermissionMode === 'plan'
+              ? this.tools
+              : (this.tools?.filter((t) => t.name !== EXIT_PLAN_MODE_TOOL_NAME) ?? null),
           toolDispatcher: this.state.toolDispatcher,
           model: this.state.currentModel,
           maxTokens: this.maxTokens,
@@ -477,16 +489,19 @@ export class AnthropicDirectQuery implements ProviderQuery {
           const usage = this.state.lastUsage;
           // requestedModel (not the wire currentModel) so 1M aliases use their
           // true window — opus_1m resolves to the same wire id as opus but must
-          // compact at ~90% of 1M, not 200k.
-          const contextLimit = contextLimitFor(this.state.requestedModel);
-          if (usage !== null && contextLimit > 0) {
+          // compact at ~90% of 1M, not 200k. autoCompactLimitFor additionally
+          // caps the DEFAULT `sonnet` at a 200k working budget: its 1M window is
+          // truthful, but base sessions compact early for cost/latency, while the
+          // `sonnet_1m` opt-in bypasses the cap. See model-limits.ts.
+          const compactionLimit = autoCompactLimitFor(this.state.requestedModel);
+          if (usage !== null && compactionLimit > 0) {
             // Use the context-window footprint (input + cache_read +
             // cache_creation + output for the last round), NOT input+output
             // alone — Anthropic's input_tokens excludes cache, so the cached
             // conversation prefix (often the bulk of the window) must be
             // counted or compaction never fires before the window overflows.
             const usedTokens = contextWindowTokensUsed(usage);
-            if (shouldAutoCompact(usedTokens, contextLimit, this.state.autoCompactThreshold)) {
+            if (shouldAutoCompact(usedTokens, compactionLimit, this.state.autoCompactThreshold)) {
               // Fire-and-await: compact() is async but we hold the turn
               // boundary here (generator suspended at promptIterator.next()
               // on the next iteration). Awaiting inline keeps the ordering

@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'child_process';
 import { gatherWorkspace } from './workspace-source.js';
 import * as os from 'os';
 import * as fs from 'fs';
@@ -105,5 +106,55 @@ describe('gatherWorkspace (mocked spawnSync)', () => {
     // even if it is, headSha will be non-null — so we only assert structure).
     expect(typeof ws.branch === 'string' || ws.branch === null).toBe(true);
     expect(typeof ws.headSha === 'string' || ws.headSha === null).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Clean vs dirty temp repo — regression guard for the clean-repo null bug.
+//
+// A CLEAN working tree emits empty `git status --porcelain` (exit 0). The
+// gatherWorkspace happy-path test above cannot catch this: its dirty/dirtyCount
+// assertions are guarded behind `if (ws.dirty !== null && ...)`, so a buggy
+// null value skips the assertion (vacuous pass). These tests construct a real
+// repo and assert dirty/dirtyCount UNCONDITIONALLY, so a regression to
+// dirty:null on a clean tree fails loudly.
+// ---------------------------------------------------------------------------
+
+describe('gatherWorkspace (clean vs dirty temp repo)', () => {
+  let repo: string;
+
+  beforeEach(() => {
+    repo = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-ws-clean-'));
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: repo, stdio: 'pipe' });
+    };
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'Test');
+    // Never prompt for a GPG passphrase in CI.
+    git('config', 'commit.gpgsign', 'false');
+    fs.writeFileSync(path.join(repo, 'file.txt'), 'hello\n');
+    git('add', 'file.txt');
+    git('commit', '-q', '-m', 'init');
+  });
+
+  afterEach(() => {
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  it('reports a CLEAN repo as dirty:false / dirtyCount:0 (not null)', () => {
+    const ws = gatherWorkspace(repo);
+    expect(ws.headSha).not.toBeNull();
+    // The regression: empty porcelain output must be read as "clean", never
+    // conflated with a failed status call.
+    expect(ws.dirty).toBe(false);
+    expect(ws.dirtyCount).toBe(0);
+  });
+
+  it('reports a DIRTY repo as dirty:true with a positive count', () => {
+    fs.writeFileSync(path.join(repo, 'untracked.txt'), 'x\n');
+    const ws = gatherWorkspace(repo);
+    expect(ws.dirty).toBe(true);
+    expect(ws.dirtyCount).toBeGreaterThan(0);
   });
 });

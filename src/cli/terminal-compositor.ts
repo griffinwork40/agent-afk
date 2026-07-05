@@ -81,6 +81,14 @@ export class TerminalCompositor {
    * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
    */
   softStopped = false;
+  /**
+   * Snapshot of `pendingSubmissions.length` at ESC soft-stop time. Post-ESC
+   * Enters truncate the queue back to this base before pushing, so pre-ESC
+   * payloads are preserved (handleEscape contract) while post-ESC type-ahead
+   * coalesces to last-wins. Reset alongside `softStopped`.
+   * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
+   */
+  softStopQueueBase = 0;
   /** @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost). */
   onBackground?: () => void;
   /**

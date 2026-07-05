@@ -216,6 +216,12 @@ export class RetryLayer {
           pendingErrorEvent = event;
           break;
         }
+        // `rate-limit-transient` (a standard API rate-limit 429, distinct from
+        // OAuth subscription exhaustion) intentionally does NOT break into the
+        // wait/pause path below. The SDK has already auto-retried it honoring
+        // `retry-after`; a still-failing 429 here is surfaced as an error via
+        // the `yield event` below rather than parked in a 2-hour
+        // subscription-reset poll. See classifyUsageLimitError.
       }
       yield event;
     }

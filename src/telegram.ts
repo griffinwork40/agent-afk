@@ -53,6 +53,7 @@ import { SubagentExecutor } from './agent/tools/subagent-executor.js';
 import { SkillExecutor } from './agent/tools/skill-executor.js';
 import { ComposeExecutor } from './agent/tools/compose-executor.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory } from './agent/tools/nesting.js';
+import { loadAgentRegistry } from './agent/agents/index.js';
 import { attachMcpCleanup, loadTelegramMcpManager } from './telegram/mcp-session.js';
 
 // Capture version once at module load. Used by checkVersionDrift on each stats tick.
@@ -266,6 +267,12 @@ async function main() {
 
         const childProviderFactory = createChildProviderFactory();
 
+        // Named-agent registry: session-static scan enabling `agent_type`
+        // dispatch (builtin + user + project scopes, anchored at the bot cwd).
+        const agentRegistry = loadAgentRegistry({
+          ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
+        });
+
         // Shared child-skill-executor factory — both SubagentExecutor and
         // SkillExecutor need it for plugin skill children to nest properly.
         // See skill-executor.ts:buildForkedChildConfig for the wiring rationale.
@@ -287,6 +294,8 @@ async function main() {
           // nested subagent silently defaulted to Anthropic `sonnet` under an
           // OpenAI-routed parent.
           getDefaultSubagentModel(sessionConfig.model),
+          // Named-agent registry propagates to nested skill executors.
+          agentRegistry,
         );
 
         // Pass `sessionConfig.model` to `getDefaultSubagentModel` for
@@ -311,6 +320,9 @@ async function main() {
           resolveApiKeyForModel: getApiKeyForModel,
           // Top-level Telegram wiring → explicit depth 0. See SubagentExecutorContext.depth.
           depth: 0,
+          // Named-agent dispatch: registry + `inherit` anchor.
+          agentRegistry,
+          parentModel: sessionConfig.model,
         });
 
         const skillExecutor = new SkillExecutor({
@@ -321,6 +333,8 @@ async function main() {
           defaultSubagentModel: getDefaultSubagentModel(sessionConfig.model),
           apiKey: telegramApiKey,
           childProviderFactory,
+          // Named-agent registry for skill-forked orchestrator children.
+          agentRegistry,
           childSkillExecutorFactory,
           // Per-model credential resolver — mirrors bootstrap.ts / chat.ts.
           resolveApiKeyForModel: getApiKeyForModel,

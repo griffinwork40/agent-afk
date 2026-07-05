@@ -7,9 +7,15 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, rmSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { useUnsetAfkHome } from '../../__test-utils__/unset-afk-home.js';
 
 let tmpHome: string;
 let originalHome: string | undefined;
+
+// This suite asserts the unset-AFK_HOME fallback ($HOME/.afk) — drop the
+// global sentinel AFK_HOME for each test; HOME is redirected to a tmp dir
+// in beforeEach below, satisfying the helper's safety contract.
+useUnsetAfkHome();
 
 beforeEach(() => {
   originalHome = process.env['HOME'];

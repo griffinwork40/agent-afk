@@ -11,6 +11,73 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.20.7] - 2026-07-05
+
+### Fixed
+- make exit_plan_mode live-mode-gated + restore working mode across the Shift+Tab ring (#410) (99468d8)
+
+## [5.20.6] - 2026-07-05
+
+### Added
+- add /thinking slash command for mid-session thinking-UI toggle (#415) (49eb8c8)
+
+### Fixed
+- thread openaiBaseUrl into restricted provider builders so deep OpenAI subagents keep their endpoint (#413) (26cd2e1)
+- gate exit backstop on persisted seal record, not optimistic sealed flag (#171) (#402) (d6dbb5f)
+
+### Changed
+- collapse duplicated dispatch + skill-fork logic (#408) (2159df2)
+- changed several bundled skills to load mode (dfdb8d5)
+- Bump version from 1.0.0 to 1.0.1 (e8d57ee)
+- Change context from 'fork' to 'load' in SKILL.md (5d0a595)
+
+## [5.20.5] - 2026-07-05
+
+### Fixed
+- surface silent 429/503/529 backoff in trace; fix transient rate-limit 429 misclassification (#414) (5dbc55b)
+
+## [5.20.4] - 2026-07-05
+
+### Fixed
+- coalesce post-ESC type-ahead so soft-stop doesn't strand input one turn behind (#403) (937772e)
+
+### Changed
+- isolate vitest state writes from real ~/.afk (#411) (9f6b634)
+- bound default-sonnet cost via auto-compaction budget (keep truthful 1M); split openai-compatible/query.ts (#407) (37a878d)
+
+## [5.20.3] - 2026-07-04
+
+### Fixed
+- stop double-rendering finished subagents in the REPL overlay (#405) (71a6bdc)
+
+## [5.20.2] - 2026-07-04
+
+### Fixed
+- make SKILL.md context: authoritative; drop DEFAULT_FORK_SKILLS (#404) (023cf51)
+
+## [5.20.1] - 2026-07-04
+
+### Fixed
+- report a clean git tree as dirty:false, not null (#389) (78c4083)
+
+## [5.20.0] - 2026-07-04
+
+### Added
+- named agent definitions with agent_type dispatch on the agent tool (#384) (c9f6040)
+
+## [5.19.5] - 2026-07-04
+
+### Fixed
+- name dead-cwd spawn failures and fork-enforce bundled skills by name (#399) (1ee5d81)
+
+### Changed
+- update AFK.md with new commands and architecture details (d31cfc6)
+
+## [5.19.4] - 2026-07-04
+
+### Fixed
+- reflow committed band at paint-time width; fail-safe commits on stale resize geometry (#386) (f75d8a4)
+
 ## [5.19.3] - 2026-07-03
 
 ### Fixed

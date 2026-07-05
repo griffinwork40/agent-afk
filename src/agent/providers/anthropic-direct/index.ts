@@ -37,6 +37,7 @@ import {
   detectAuthMode,
 } from './auth.js';
 import { oneShotCompletion, type OneShotInput } from './oneshot.js';
+import { makeTracingFetch } from './tracing-fetch.js';
 import { refreshClaudeCodeOauthToken } from '../../auth/keychain.js';
 import { AnthropicDirectQuery } from './query.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
@@ -95,7 +96,7 @@ const DEFAULT_MODEL = 'claude-sonnet-5';
  * `buildClientOptions` when the local-server path is active).
  */
 export type AnthropicClientFactory = (
-  opts: ({ authToken: string } | { apiKey: string }) & { baseURL?: string },
+  opts: ({ authToken: string } | { apiKey: string }) & { baseURL?: string; fetch?: typeof fetch },
 ) => Anthropic;
 
 let clientFactory: AnthropicClientFactory | null = null;
@@ -257,7 +258,11 @@ export class AnthropicDirectProvider implements ModelProvider {
 
   constructor(opts: AnthropicDirectProviderOptions = {}) {
     const schemas = [...builtinToolSchemas];
-    if (opts.subagentExecutor) schemas.push(agentTool);
+    // The executor supplies the `agent` tool def so a named-agent registry
+    // can advertise its types in the description (see agents/tool-def.ts).
+    // Optional chaining: test stubs without describeAgentTool fall back to
+    // the static schema.
+    if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);
     if (opts.skillExecutor) schemas.push(skillTool);
     if (opts.composeExecutor) schemas.push(composeTool);
     // Read-only memory child sessions get only `memory_search`; full sessions
@@ -413,12 +418,18 @@ export class AnthropicDirectProvider implements ModelProvider {
       }
     }
     const mcpSchemas = this._mcpToolsCache ?? [];
-    // Plan-exit tool: the model-callable `exit_plan_mode`, registered per-query
-    // ONLY while in plan mode and only when the session supplied control
-    // callbacks (top-level sessions). Mirrors the `get_runtime_state` per-query
-    // registration above; the schema is appended to the dispatcher's list to
-    // match so the model sees the tool exactly when it is callable.
-    const planExitControls = permissionMode === 'plan' ? opts?.planExitControls : undefined;
+    // Plan-exit tool: the model-callable `exit_plan_mode`, registered RESIDENT
+    // whenever the session supplied control callbacks (top-level sessions only —
+    // subagents never get planExitControls). NOT gated on the construction-time
+    // `permissionMode`: the dispatcher is built once per query() and is NOT
+    // rebuilt by setPermissionMode, so a mode-gated registration here left the
+    // tool permanently unwired for the common "enter plan mode AFTER launch"
+    // flow (Shift+Tab / `/plan`), and the model got "Unknown tool exit_plan_mode".
+    // Callability is instead gated per-turn on the LIVE mode: query.ts filters
+    // this tool out of the advertised tool list on non-plan turns, so the model
+    // is offered it exactly when it is actionable — and it becomes callable the
+    // instant plan mode is entered mid-session, with no query rebuild.
+    const planExitControls = opts?.planExitControls;
     if (planExitControls) {
       handlers.set(EXIT_PLAN_MODE_TOOL_NAME, createExitPlanModeHandler(planExitControls));
     }
@@ -431,7 +442,9 @@ export class AnthropicDirectProvider implements ModelProvider {
       allowAll: pathContainmentBypassed(permissionMode),
       // Constraint (semantic invariant): MCP schemas appended AFTER builtins
       // so builtin tool names always take precedence in any overlap. The
-      // plan-exit schema is appended last, only while the tool is active.
+      // plan-exit schema is appended last, RESIDENT whenever planExitControls is
+      // present (top-level); query.ts filters it out of the advertised tool list
+      // on non-plan turns so the model sees it only when it is actionable.
       schemas: [
         ...this.schemas,
         ...mcpSchemas,
@@ -631,7 +644,17 @@ export class AnthropicDirectProvider implements ModelProvider {
       );
     }
     const authMode = detectAuthMode(token);
-    const clientOpts = buildClientOptions(token, authMode, config.baseUrl);
+    const clientOpts = buildClientOptions(
+      token,
+      authMode,
+      config.baseUrl,
+      // Observability: route SDK HTTP through a wrapper that records 429/503/529
+      // throttling into the witness trace, so the SDK's otherwise-silent
+      // retry-after backoff is legible in `afk trace show`. Skipped in
+      // local-shim mode (not Anthropic's billing surface) and when no trace
+      // writer is attached.
+      !localMode && config.traceWriter ? makeTracingFetch(config.traceWriter) : undefined,
+    );
     const factory = this.providerFactory ?? clientFactory;
     const client = factory ? factory(clientOpts) : new Anthropic(clientOpts);
     // In local-server mode, suppress the OAuth CLI-mimicry system-prefix
@@ -857,7 +880,15 @@ export class AnthropicDirectProvider implements ModelProvider {
       tokenRefresher = async (): Promise<Anthropic | null> => {
         const freshToken = await refreshClaudeCodeOauthToken();
         if (!freshToken) return null;
-        const opts = buildClientOptions(freshToken, 'oauth', config.baseUrl);
+        const opts = buildClientOptions(
+          freshToken,
+          'oauth',
+          config.baseUrl,
+          // Preserve throttle observability across an OAuth account swap — the
+          // rebuilt client must keep the tracing-fetch wrapper. localMode is
+          // false in this branch (see the guard above).
+          config.traceWriter ? makeTracingFetch(config.traceWriter) : undefined,
+        );
         return factory ? factory(opts) : new Anthropic(opts);
       };
     }
@@ -965,6 +996,9 @@ export class AnthropicDirectProvider implements ModelProvider {
             traceWriter: config.traceWriter,
             runtimeStateSource,
             hookRegistry: config.hookRegistry,
+            // Carry the resident plan-exit handler across a cwd rebuild — omitting
+            // this previously dropped `exit_plan_mode` after a `/cd` while planning.
+            planExitControls: config.planExitControls,
           });
           return { userSystem: newUserSystem, dispatcher: newDispatcher };
         };

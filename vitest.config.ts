@@ -6,6 +6,10 @@ export default defineConfig({
     environment: 'node',
     setupFiles: [
       './src/__test-utils__/stdin-claim-reset.ts',
+      // Redirect the AFK paths tier (AFK_HOME) to a per-file temp sentinel so
+      // no test can write into the real ~/.afk. Runs at setup-module eval time
+      // (before the test file's module eval) so per-suite overrides still win.
+      './src/__test-utils__/redirect-paths-env.ts',
       // Neutralize the developer's ambient AFK_*/provider config so tests
       // assert framework defaults, not the dev's shell / ~/.afk/config/afk.env.
       './src/__test-utils__/clean-config-env.ts',

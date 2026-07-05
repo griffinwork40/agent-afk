@@ -364,8 +364,25 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
     }
 
     case 'session_phase': {
-      if (!ctx.showAll) return null; // latency waterfall — low signal by default
       const p = event.payload;
+      // `rate_limit` is HIGH-signal: it explains an otherwise-invisible stall
+      // (the SDK's silent 429/503/529 retry-after backoff surfaces only as an
+      // abnormally long model_ttfb). Render it in the DEFAULT view — unlike the
+      // other phases, which are low-signal latency-waterfall markers shown only
+      // with --all. Placed before the showAll gate below on purpose.
+      if (p.phase === 'rate_limit') {
+        const md = p.metadata ?? {};
+        const reason = md['reason'];
+        const status = md['status'];
+        const source = md['source'];
+        const wait =
+          p.durationMs !== undefined ? `  retry-after ${fmtDuration(p.durationMs)}` : '';
+        const statusBit = status !== undefined ? `  ${status}` : '';
+        const srcBit = source !== undefined ? `  (${source})` : '';
+        const head = reason !== undefined ? String(reason) : 'throttled';
+        return line('throttle', `${head}${statusBit}${wait}${srcBit}`);
+      }
+      if (!ctx.showAll) return null; // latency waterfall — low signal by default
       const dur = p.durationMs !== undefined ? `  ${fmtDuration(p.durationMs)}` : '';
       // Prefer the operator alias (session_init_start); fall back to the
       // resolved wire id (model_ttfb carries only that).
@@ -402,6 +419,8 @@ interface TraceSummary {
   subagents: number;
   claims: number;
   blocks: number;
+  /** Count of rate_limit events (429/503/529 backoff). */
+  throttles: number;
   sealStatus: string | null;
   finalCostUsd: number | null;
   /** Operator-typed model for the root session (from session_init_start). */
@@ -416,6 +435,7 @@ function summarize(events: TraceEvent[]): TraceSummary {
   let subagents = 0;
   let claims = 0;
   let blocks = 0;
+  let throttles = 0;
   let sealStatus: string | null = null;
   let finalCostUsd: number | null = null;
   let model: string | null = null;
@@ -430,6 +450,7 @@ function summarize(events: TraceEvent[]): TraceSummary {
         }
         break;
       case 'session_phase':
+        if (e.payload.phase === 'rate_limit') throttles++;
         // Root-session model provenance lives on session_init_start (the
         // earliest, always-emitted phase). First occurrence wins.
         if (e.payload.phase === 'session_init_start') {
@@ -467,6 +488,7 @@ function summarize(events: TraceEvent[]): TraceSummary {
     subagents,
     claims,
     blocks,
+    throttles,
     sealStatus,
     finalCostUsd,
     model,
@@ -510,6 +532,7 @@ export function formatTrace(
       ? `sealed (${summary.sealStatus})`
       : 'unsealed (live or crashed)';
   const costPart = summary.finalCostUsd !== null ? ` · ${fmtUsd(summary.finalCostUsd)}` : '';
+  const throttlePart = summary.throttles > 0 ? ` · ${summary.throttles} throttled` : '';
 
   const out: string[] = [];
   out.push(`Trace  ${sessionId}`);
@@ -524,7 +547,7 @@ export function formatTrace(
   out.push(
     `       ${status} · ${summary.total} events · ${summary.toolCalls} tool calls` +
       ` (${summary.toolErrors} err) · ${summary.subagents} subagents · ${summary.claims} claims` +
-      ` · ${summary.blocks} blocks${costPart}`,
+      ` · ${summary.blocks} blocks${throttlePart}${costPart}`,
   );
   out.push('');
 

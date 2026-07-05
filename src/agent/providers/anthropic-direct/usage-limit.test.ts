@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { classifyUsageLimitError, waitForReset, waitForHotSwap } from './usage-limit.js';
+import { classifyUsageLimitError, parseRetryAfterMs, waitForReset, waitForHotSwap } from './usage-limit.js';
 
 // ---------------------------------------------------------------------------
 // classifyUsageLimitError
@@ -12,6 +12,18 @@ import { classifyUsageLimitError, waitForReset, waitForHotSwap } from './usage-l
 function makeError(status: number, message: string): Error {
   const e = new Error(message);
   (e as Error & { status: number }).status = status;
+  return e;
+}
+
+function makeErrorWithHeaders(
+  status: number,
+  message: string,
+  headers: Record<string, string> | Headers,
+): Error {
+  const e = new Error(message);
+  const w = e as Error & { status: number; headers: unknown };
+  w.status = status;
+  w.headers = headers;
   return e;
 }
 
@@ -57,6 +69,75 @@ describe('classifyUsageLimitError', () => {
   it('returns null for 400 without both keywords', () => {
     expect(classifyUsageLimitError(makeError(400, 'invalid_request_error: something else'))).toBeNull();
     expect(classifyUsageLimitError(makeError(400, 'credit balance issue'))).toBeNull();
+  });
+
+  // A standard API-tier rate-limit 429 must NOT be treated as OAuth
+  // subscription exhaustion (which would park the turn in a 2-hour poll).
+  it('returns rate-limit-transient for a 429 with a retry-after header and no |ts', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', { 'retry-after': '30' });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('rate-limit-transient');
+    if (result?.kind === 'rate-limit-transient') {
+      expect(result.retryAfterMs).toBe(30_000);
+    }
+  });
+
+  it('prefers oauth-limit (|ts) over the retry-after header', () => {
+    const unixTs = 1700000000;
+    const err = makeErrorWithHeaders(429, `usage limit|${unixTs}`, { 'retry-after': '30' });
+    expect(classifyUsageLimitError(err)?.kind).toBe('oauth-limit');
+  });
+
+  it('still returns oauth-limit-no-ts for a 429 with no timestamp and no retry-after header', () => {
+    expect(classifyUsageLimitError(makeError(429, 'Claude AI usage limit reached'))?.kind).toBe(
+      'oauth-limit-no-ts',
+    );
+  });
+
+  it('reads retry-after from a web Headers object', () => {
+    const err = makeErrorWithHeaders(429, '429', new Headers({ 'retry-after': '5' }));
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('rate-limit-transient');
+    if (result?.kind === 'rate-limit-transient') {
+      expect(result.retryAfterMs).toBe(5_000);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseRetryAfterMs
+// ---------------------------------------------------------------------------
+
+describe('parseRetryAfterMs', () => {
+  it('returns undefined for non-objects and missing/empty headers', () => {
+    expect(parseRetryAfterMs(null)).toBeUndefined();
+    expect(parseRetryAfterMs('nope')).toBeUndefined();
+    expect(parseRetryAfterMs({})).toBeUndefined();
+    expect(parseRetryAfterMs({ headers: {} })).toBeUndefined();
+  });
+
+  it('prefers retry-after-ms (milliseconds)', () => {
+    expect(parseRetryAfterMs({ headers: { 'retry-after-ms': '1500' } })).toBe(1500);
+  });
+
+  it('parses retry-after seconds into milliseconds', () => {
+    expect(parseRetryAfterMs({ headers: { 'retry-after': '2' } })).toBe(2000);
+  });
+
+  it('reads from a web Headers object via .get', () => {
+    expect(parseRetryAfterMs({ headers: new Headers({ 'retry-after': '3' }) })).toBe(3000);
+  });
+
+  it('parses an HTTP-date retry-after into a forward delta', () => {
+    const future = new Date(Date.now() + 10_000).toUTCString();
+    const ms = parseRetryAfterMs({ headers: { 'retry-after': future } });
+    expect(ms).toBeGreaterThan(0);
+    expect(ms).toBeLessThanOrEqual(10_000);
+  });
+
+  it('ignores a past HTTP-date', () => {
+    const past = new Date(Date.now() - 10_000).toUTCString();
+    expect(parseRetryAfterMs({ headers: { 'retry-after': past } })).toBeUndefined();
   });
 });
 

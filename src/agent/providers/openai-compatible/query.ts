@@ -26,7 +26,6 @@
 import OpenAI from 'openai';
 import { randomUUID } from 'node:crypto';
 import type { AgentConfig } from '../../types/config-types.js';
-import type { EffortLevel } from '../../types/sdk-types.js';
 import { emitToolCall, emitSessionPhase } from '../../trace/emit.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
 import type { TraceWriter } from '../../trace/index.js';
@@ -45,7 +44,7 @@ import type {
   ProviderUsage,
 } from '../../provider.js';
 import { sumProviderUsage } from '../../usage.js';
-import { contextLimitFor, maxOutputTokensFor } from '../../model-limits.js';
+import { contextLimitFor } from '../../model-limits.js';
 import { resolveModelId } from '../../session/model-resolution.js';
 import { extractRawToolInput } from '../../facets/raw-input.js';
 import { collectSupportedCommands } from '../shared/supported-commands.js';
@@ -84,8 +83,31 @@ import type { ToolResult } from '../anthropic-direct/types.js';
 import { contextWindowTokensUsed, buildContextUsageFields } from '../shared/auto-compact.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../shared/plan-mode-addendum.js';
 import { AFK_MODE_ADDENDUM_TEXT } from '../shared/afk-mode-addendum.js';
+import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
 import { sleepWithAbort } from '../shared/sleep-with-abort.js';
 import { summarizeToolInput } from '../shared/tool-input-summary.js';
+import {
+  MAX_CONNECTION_RETRIES,
+  MAX_STREAM_RETRIES,
+  isRetryableConnectionError,
+  isRetryableStreamError,
+  computeBackoffDelay,
+} from './query/retry.js';
+import {
+  resolveEffectiveMaxOutputTokens,
+  resolveStreamingMaxTokens,
+  normalizePermissionMode,
+  resolveReasoningEffort,
+} from './query/model-params.js';
+import { resolveClientFactory } from './query/client.js';
+
+// Re-exported from the extracted query/ submodules so existing import sites
+// (sibling tests + index.ts) keep resolving these from './query.js'.
+export { __setRetryBaseDelay } from './query/retry.js';
+export { __setOpenAIClientFactory } from './query/client.js';
+export type { OpenAIClientFactory } from './query/client.js';
+export { isOSeriesModel, mapEffortForOpenAI } from './query/model-params.js';
+export { resolveReasoningEffort };
 
 const PROVIDER_NAME = 'openai-compatible';
 
@@ -96,137 +118,6 @@ const PROVIDER_NAME = 'openai-compatible';
  * two providers behave identically on this edge case.
  */
 const MAX_TOOL_ITERATIONS = 50;
-
-// ── Retry / backoff constants ──────────────────────────────────────────────
-// Mirrors the Anthropic provider's connection-phase + mid-stream retry pattern
-// (see `anthropic-direct/loop.ts:createWithRetry` and the overload-retry block
-// in `runTurn`). The Anthropic `RetryLayer` class is too coupled to OAuth /
-// keychain hot-swap to share; the core retry pattern (bounded exponential
-// backoff on retryable HTTP status codes) is simple enough to implement here
-// directly. See issue #126.
-
-/**
- * HTTP status codes that warrant a retry with backoff. 429 (rate limit) and
- * 5xx server errors are transient by nature — the same request sent again
- * after a short wait is likely to succeed. 400/401/403/404 are deterministic
- * client errors and must NOT be retried (they would just burn quota).
- */
-const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 529]);
-
-/** Max connection-phase retries per iteration (matches Anthropic's budget). */
-const MAX_CONNECTION_RETRIES = 3;
-
-/** Max mid-stream retries per iteration (matches Anthropic's OVERLOAD_MAX_RETRIES). */
-const MAX_STREAM_RETRIES = 3;
-
-/** Base delay for exponential backoff: 2s → 4s → 8s (shorter than Anthropic's 5s because OpenAI-compatible shims are often local). */
-let RETRY_BASE_DELAY_MS = 2_000;
-
-/**
- * Test injection hook for retry base delay. Set to 0 in tests to avoid real
- * waits. Pass `null` to restore the production default (2000ms).
- */
-export function __setRetryBaseDelay(ms: number | null): void {
-  RETRY_BASE_DELAY_MS = ms ?? 2_000;
-}
-
-/**
- * Extract an HTTP status code from an error thrown by the OpenAI SDK (or a
- * compatible shim). The SDK throws `APIError` instances with a `status` field;
- * network errors and generic throws have no status and are treated as
- * retryable (transient network blip) only when they carry no explicit code.
- */
-function getErrorStatus(err: unknown): number | undefined {
-  if (err === null || typeof err !== 'object') return undefined;
-  const e = err as { status?: unknown };
-  return typeof e.status === 'number' ? e.status : undefined;
-}
-
-/**
- * Connection-phase retryability: the HTTP call itself failed before any
- * streaming began. Only retry on known transient status codes — errors with
- * no status (network drops, DNS failures, wrong baseURL) are deterministic
- * and must surface immediately to avoid wasting time on misconfigurations.
- * Mirrors the Anthropic provider's `isTransientServerError` which also
- * requires an explicit status.
- */
-function isRetryableConnectionError(err: unknown): boolean {
-  const status = getErrorStatus(err);
-  if (status === undefined) return false;
-  return RETRYABLE_STATUS_CODES.has(status);
-}
-
-/**
- * Mid-stream retryability: the stream was established but the server sent an
- * error event mid-flight. OpenAI-compatible APIs surface this as an `APIError`
- * thrown from the async iterator. Same status-code set as connection-phase —
- * only retry on explicit transient codes, not on status-less errors.
- */
-function isRetryableStreamError(err: unknown): boolean {
-  const status = getErrorStatus(err);
-  if (status === undefined) return false;
-  return RETRYABLE_STATUS_CODES.has(status);
-}
-
-/**
- * Test injection hook for the OpenAI client. Set to a factory to swap in a
- * mock client; pass `null` to restore the real constructor. Not part of the
- * stable surface — tests reach into this module directly.
- */
-export type OpenAIClientFactory = (opts: {
-  apiKey: string;
-  baseURL?: string;
-  defaultHeaders?: Record<string, string>;
-}) => OpenAI;
-let clientFactory: OpenAIClientFactory | null = null;
-export function __setOpenAIClientFactory(factory: OpenAIClientFactory | null): void {
-  clientFactory = factory;
-}
-
-/**
- * Resolve the effective output-token cap (a plain number).
- *
- * Honours `config.maxOutputTokens` when finite+positive, otherwise falls back
- * to the model's output ceiling (matching Anthropic's resolveMaxTokens).  Uses
- * maxOutputTokensFor (output ceiling), not contextLimitFor (context window),
- * because the cap bounds *output*, not the full context window.
- *
- * Field-name selection (`max_tokens` vs `max_completion_tokens` vs
- * `max_output_tokens`) is the caller's concern — it differs by wire mode:
- * Chat Completions uses {@link resolveStreamingMaxTokens}; the Responses API
- * uses `max_output_tokens` directly.
- */
-function resolveEffectiveMaxOutputTokens(
-  model: string,
-  configMaxOutput: number | undefined,
-): number {
-  const ceiling = maxOutputTokensFor(model);
-  return typeof configMaxOutput === 'number' && Number.isFinite(configMaxOutput) && configMaxOutput > 0
-    ? Math.floor(configMaxOutput)
-    : ceiling;
-}
-
-/**
- * Resolve the **Chat Completions** streaming output-token cap.
- *
- * Mirrors the o-series field-selection logic in `oneshot.ts:91–96`:
- * o-series reasoning models (o1/o3/o4…) reject `max_tokens` and require
- * `max_completion_tokens`; everything else (chat models, local shims)
- * wants `max_tokens`.  (The Responses API is different again — it uses
- * `max_output_tokens` — so this helper is Chat-Completions-only.)
- *
- * Always returns an object containing the resolved cap; uses the model's
- * output ceiling as a fallback so the field is always present on the wire.
- */
-function resolveStreamingMaxTokens(
-  model: string,
-  configMaxOutput: number | undefined,
-): Record<string, number> {
-  const effectiveMax = resolveEffectiveMaxOutputTokens(model, configMaxOutput);
-  return isOSeriesModel(model)
-    ? { max_completion_tokens: effectiveMax }
-    : { max_tokens: effectiveMax };
-}
 
 /** Construction options. */
 export interface OpenAICompatibleQueryOptions {
@@ -275,53 +166,6 @@ export interface OpenAICompatibleQueryOptions {
    * stalls or crashes the session.
    */
   traceWriter?: TraceWriter;
-}
-
-function normalizePermissionMode(mode: string | undefined): string {
-  return mode ?? 'default';
-}
-
-/**
- * Detect OpenAI o-series reasoning models (o1, o3, o4, and their variants).
- * Strips any `provider/` prefix (OpenRouter-style ids) before matching.
- * Mirrors the detection in `oneshot.ts` for the `max_completion_tokens` switch.
- */
-export function isOSeriesModel(model: string): boolean {
-  const bareModel = model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model;
-  return /^o[0-9]/.test(bareModel);
-}
-
-/**
- * Map AFK's `EffortLevel` to OpenAI's `reasoning_effort` values.
- * OpenAI accepts `low`, `medium`, `high`. AFK's `xhigh` and `max` are
- * Anthropic-specific and map to `high` for OpenAI.
- */
-export function mapEffortForOpenAI(effort: EffortLevel): 'low' | 'medium' | 'high' {
-  switch (effort) {
-    case 'low':
-      return 'low';
-    case 'medium':
-      return 'medium';
-    case 'high':
-    case 'xhigh':
-    case 'max':
-      return 'high';
-  }
-}
-
-/**
- * Resolve the `reasoning_effort` to send for a given model + effort config.
- * Returns `undefined` when effort should not be forwarded (non-o-series model
- * or no effort configured). Callers attach the result to the request body
- * under `reasoning_effort` (Chat Completions) or `reasoning.effort` (Responses).
- */
-export function resolveReasoningEffort(
-  effort: EffortLevel | undefined,
-  model: string,
-): 'low' | 'medium' | 'high' | undefined {
-  if (effort === undefined) return undefined;
-  if (!isOSeriesModel(model)) return undefined;
-  return mapEffortForOpenAI(effort);
 }
 
 /** Internal record used to drive the per-turn iteration loop. */
@@ -401,7 +245,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     if (opts.auth.apiKey === null) {
       this.client = null as unknown as OpenAI;
     } else {
-      const ctor = clientFactory ?? defaultClientFactory;
+      const ctor = resolveClientFactory();
       const clientOpts: { apiKey: string; baseURL?: string; defaultHeaders?: Record<string, string> } = {
         apiKey: opts.auth.apiKey,
       };
@@ -414,6 +258,24 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     this.closedPromise = new Promise<'__closed__'>((resolve) => {
       this.closeResolve = () => resolve('__closed__');
     });
+  }
+
+  /**
+   * The OpenAI tool catalog to advertise for THIS turn. The plan-exit tool is
+   * registered RESIDENT (see index.ts buildDispatcher) but is only actionable in
+   * plan mode, so drop it from the advertised list on non-plan turns — mirroring
+   * the anthropic-direct per-turn filter and composeSystem()'s live gating of the
+   * plan-mode addendum. This is what makes `exit_plan_mode` become callable the
+   * instant plan mode is entered mid-session, with no query rebuild. Returns
+   * `undefined` when the catalog is empty/absent, matching the callers' guards.
+   */
+  private activeOpenAITools(): OpenAIFunctionTool[] | undefined {
+    if (!this.openAITools) return undefined;
+    if (this.currentPermissionMode === 'plan') return this.openAITools;
+    const filtered = this.openAITools.filter(
+      (t) => t.function.name !== EXIT_PLAN_MODE_TOOL_NAME,
+    );
+    return filtered.length > 0 ? filtered : undefined;
   }
 
   async *[Symbol.asyncIterator](): AsyncIterator<ProviderEvent> {
@@ -774,7 +636,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       // Responses API path. `messages` (built + plan-mode-adjusted above) is
       // converted to the Responses input shape; the system prompt becomes
       // `instructions`, tool calls/results become function_call/_output items.
-      const req = buildResponsesRequest(messages, this.openAITools);
+      const req = buildResponsesRequest(messages, this.activeOpenAITools());
       const requestBody: Record<string, unknown> = {
         model: this.currentModel,
         input: req.input,
@@ -832,7 +694,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
           } catch (err) {
             if (controller.signal.aborted) return null;
             if (isRetryableConnectionError(err) && attempt < MAX_CONNECTION_RETRIES) {
-              const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+              const delay = computeBackoffDelay(attempt);
               await sleepWithAbort(delay, controller.signal);
               if (controller.signal.aborted) return null;
               continue;
@@ -875,7 +737,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
             streamRetries++;
             yield { type: 'stream.retry', sessionId: this.initSessionId };
             await sleepWithAbort(
-              RETRY_BASE_DELAY_MS * Math.pow(2, streamRetries - 1),
+              computeBackoffDelay(streamRetries - 1),
               controller.signal,
             );
             if (controller.signal.aborted) return null;
@@ -913,10 +775,12 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         this.currentModel,
         this.opts.config.maxOutputTokens,
       ));
-      // Only attach `tools` when the dispatcher actually has any — empty
-      // arrays make some providers reject the request.
-      if (this.openAITools && this.openAITools.length > 0) {
-        requestBody['tools'] = this.openAITools;
+      // Only attach `tools` when there are any to advertise THIS turn — empty
+      // arrays make some providers reject the request. `activeOpenAITools()`
+      // drops the plan-exit tool on non-plan turns (resident-but-gated).
+      const activeTools = this.activeOpenAITools();
+      if (activeTools && activeTools.length > 0) {
+        requestBody['tools'] = activeTools;
       }
       // Forward reasoning effort for o-series models on Chat Completions.
       // Uses the `reasoning_effort` field per OpenAI's Chat Completions API spec.
@@ -946,7 +810,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
           } catch (err) {
             if (controller.signal.aborted) return null;
             if (isRetryableConnectionError(err) && attempt < MAX_CONNECTION_RETRIES) {
-              const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+              const delay = computeBackoffDelay(attempt);
               await sleepWithAbort(delay, controller.signal);
               if (controller.signal.aborted) return null;
               continue;
@@ -990,7 +854,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
             streamRetries++;
             yield { type: 'stream.retry', sessionId: this.initSessionId };
             await sleepWithAbort(
-              RETRY_BASE_DELAY_MS * Math.pow(2, streamRetries - 1),
+              computeBackoffDelay(streamRetries - 1),
               controller.signal,
             );
             if (controller.signal.aborted) return null;
@@ -1333,17 +1197,6 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     this.closeResolve?.();
     debugLog(`🟢 ${PROVIDER_NAME}: closed`);
   }
-}
-
-function defaultClientFactory(opts: {
-  apiKey: string;
-  baseURL?: string;
-  defaultHeaders?: Record<string, string>;
-}): OpenAI {
-  const clientOpts: ConstructorParameters<typeof OpenAI>[0] = { apiKey: opts.apiKey };
-  if (opts.baseURL !== undefined) clientOpts.baseURL = opts.baseURL;
-  if (opts.defaultHeaders !== undefined) clientOpts.defaultHeaders = opts.defaultHeaders;
-  return new OpenAI(clientOpts);
 }
 
 /**

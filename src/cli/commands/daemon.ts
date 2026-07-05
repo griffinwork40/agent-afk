@@ -31,6 +31,7 @@ import { SkillExecutor } from '../../agent/tools/skill-executor.js';
 import { ComposeExecutor } from '../../agent/tools/compose-executor.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory, createStubParentSession } from '../../agent/tools/nesting.js';
+import { loadAgentRegistry } from '../../agent/agents/index.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import { BUILTIN_TOOL_NAMES } from '../../agent/tools/schemas.js';
 import { MEMORY_TOOL_NAMES } from '../../agent/memory/index.js';
@@ -101,6 +102,12 @@ export function buildDaemonSessionFactory(
       opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {},
     );
 
+    // Named-agent registry: session-static scan enabling `agent_type`
+    // dispatch for daemon-run tasks (builtin + user + project scopes).
+    const agentRegistry = loadAgentRegistry({
+      ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+    });
+
     const childSkillExecutorFactory = createChildSkillExecutorFactory(
       opts.model,
       opts.apiKey,
@@ -120,6 +127,10 @@ export function buildDaemonSessionFactory(
       // top-level executors — closing the leak where a nested subagent
       // silently defaulted to Anthropic `sonnet` under an OpenAI-routed parent.
       getDefaultSubagentModel(opts.model),
+      // Named-agent registry propagates to nested skill executors.
+      agentRegistry,
+      // OpenAI endpoint → nested restricted/depth-cap provider builders.
+      opts.openaiBaseUrl,
     );
 
     const subagentExecutor = new SubagentExecutor({
@@ -130,6 +141,7 @@ export function buildDaemonSessionFactory(
       defaultConfig: {
         ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
         ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
+        ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
       },
       defaultSubagentModel: getDefaultSubagentModel(opts.model),
       childProviderFactory,
@@ -138,6 +150,9 @@ export function buildDaemonSessionFactory(
       resolveApiKeyForModel: getApiKeyForModel,
       depth: 0,
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      // Named-agent dispatch: registry + `inherit` anchor.
+      agentRegistry,
+      parentModel: opts.model,
     });
 
     const skillExecutor = new SkillExecutor({
@@ -149,9 +164,12 @@ export function buildDaemonSessionFactory(
       ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
       childProviderFactory,
       childSkillExecutorFactory,
+      // Named-agent registry for skill-forked orchestrator children.
+      agentRegistry,
       // Per-model credential resolver — mirrors bootstrap.ts / chat.ts.
       resolveApiKeyForModel: getApiKeyForModel,
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
+      ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
     });
 
