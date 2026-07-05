@@ -787,6 +787,23 @@ describe('handleOrchestratorEvent — stage rail single-paint invariant', () => 
     expect(overlay).not.toContain('◆ model');
   });
 
+  it('thinking-digest streams the live overlay while thinking (like live)', () => {
+    // digest shows the live preview overlay exactly like 'live'; the ONLY
+    // difference is that digest ALSO commits the reasoning paragraph to
+    // scrollback on phase seal (covered by the emit tests). Here we assert the
+    // live paragraph reaches the overlay in digest mode.
+    const toolLane = new ToolLane();
+    const { ctx, setOverlay } = makeStageCtx(toolLane);
+    ctx.thinkingMode = 'digest';
+    const source: SourceState = freshSourceState('__main__');
+
+    handleOrchestratorEvent(thinkingEvt('reasoning step'), source, ctx);
+
+    expect(setOverlay).toHaveBeenCalledTimes(1);
+    const overlay = strip(setOverlay.mock.calls[0]?.[0] ?? '');
+    expect(overlay).toContain('reasoning step');
+  });
+
   // ── Test that catches the FOLLOW-ON regression introduced by removing  ─
   // ── the pre-switch repaint (would fail without the case-arm fix)      ─
 
@@ -1175,7 +1192,7 @@ describe('handleOrchestratorEvent — cross-flush tool grouping (run accumulatio
   }
   function makeCaptureCtx(
     toolLane: ToolLane,
-    opts: { thinkingMode?: 'off' | 'summary' | 'live' } = {},
+    opts: { thinkingMode?: 'off' | 'summary' | 'live' | 'digest' } = {},
   ): { ctx: OrchestratorCtx; commitAboveCalls: string[] } {
     const commitAboveCalls: string[] = [];
     const compositor = {
@@ -1256,5 +1273,32 @@ describe('handleOrchestratorEvent — cross-flush tool grouping (run accumulatio
     const scrollback = commitAboveCalls.join('\n');
     expect(scrollback).not.toContain('×2');            // b1/b2 rendered individually
     expect(scrollback.toLowerCase()).toContain('thought for'); // thought committed between them
+  });
+
+  it('digest mode persists the reasoning paragraph above the stat line on phase seal', () => {
+    const toolLane = new ToolLane();
+    const { ctx, commitAboveCalls } = makeCaptureCtx(toolLane, { thinkingMode: 'digest' });
+    const source = freshSourceState('__main__');
+
+    handleOrchestratorEvent(thinkingEvent('Planning the read order DIGEST_PROOF next'), source, ctx);
+    handleOrchestratorEvent(namedToolStart('r1', 'Read'), source, ctx); // tool boundary seals the phase
+
+    const scrollback = commitAboveCalls.join('\n');
+    expect(scrollback).toContain('DIGEST_PROOF');              // actual reasoning persisted
+    expect(scrollback).toContain('◆ thinking');                // under the paragraph header
+    expect(scrollback.toLowerCase()).toContain('thought for'); // stat line still emitted
+  });
+
+  it('summary mode commits only the stat line, never the reasoning text', () => {
+    const toolLane = new ToolLane();
+    const { ctx, commitAboveCalls } = makeCaptureCtx(toolLane, { thinkingMode: 'summary' });
+    const source = freshSourceState('__main__');
+
+    handleOrchestratorEvent(thinkingEvent('secret reasoning DIGEST_PROOF must not persist'), source, ctx);
+    handleOrchestratorEvent(namedToolStart('r1', 'Read'), source, ctx);
+
+    const scrollback = commitAboveCalls.join('\n');
+    expect(scrollback).not.toContain('DIGEST_PROOF');          // reasoning NOT persisted in summary mode
+    expect(scrollback.toLowerCase()).toContain('thought for');
   });
 });

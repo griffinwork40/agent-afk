@@ -59,10 +59,10 @@ export function setInteractiveUpdateNotices(
 }
 
 function parseThinkingUiMode(raw: string): ThinkingUiMode {
-  if (raw === 'summary' || raw === 'live' || raw === 'off') {
+  if (raw === 'summary' || raw === 'live' || raw === 'digest' || raw === 'off') {
     return raw;
   }
-  throw new Error(`Invalid --thinking-ui value: ${raw}. Expected summary|live|off`);
+  throw new Error(`Invalid --thinking-ui value: ${raw}. Expected summary|live|digest|off`);
 }
 
 /**
@@ -161,7 +161,7 @@ export function registerInteractiveCommand(program: Command): void {
     )
     .option('--max-turns <number>', 'Maximum conversation turns', '100')
     .option('--thinking <mode>', "Thinking mode: 'adaptive' | 'disabled' | 'enabled:<N>'", 'enabled:max')
-    .option('--thinking-ui <mode>', 'Thinking display mode: summary|live|off', parseThinkingUiMode, 'live')
+    .option('--thinking-ui <mode>', 'Thinking display mode: summary|live|digest|off', parseThinkingUiMode, 'live')
     .option('--effort <level>', 'Effort level: low|medium|high|xhigh|max')
     .option('--max-output-tokens <n|max>', "Per-response output cap ('max' = model ceiling). Env: AFK_MAX_OUTPUT_TOKENS")
     .option('--resume <id>', 'Resume a persisted SDK session by id')

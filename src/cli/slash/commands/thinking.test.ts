@@ -82,6 +82,15 @@ describe('/thinking slash command', () => {
     expect(lines.some((l) => l.startsWith('SUCCESS:') && l.includes('off'))).toBe(true);
   });
 
+  it('switches to digest and mutates stats', async () => {
+    const stats = makeStats({ thinkingUi: 'live' });
+    const { ctx, lines } = makeCtx(stats);
+    const result = await thinkingCmd.handler(ctx, 'digest');
+    expect(result).toBe('continue');
+    expect(stats.thinkingUi).toBe('digest');
+    expect(lines.some((l) => l.startsWith('SUCCESS:') && l.includes('digest'))).toBe(true);
+  });
+
   it('switches back to live from summary', async () => {
     const stats = makeStats({ thinkingUi: 'summary' });
     const { ctx, lines } = makeCtx(stats);
@@ -111,7 +120,7 @@ describe('/thinking slash command', () => {
   it('exposes metadata for autocomplete', () => {
     expect(thinkingCmd.name).toBe('/thinking');
     expect(thinkingCmd.aliases).toContain('/thinking-ui');
-    expect(thinkingCmd.flags).toEqual(['summary', 'live', 'off']);
+    expect(thinkingCmd.flags).toEqual(['summary', 'live', 'digest', 'off']);
     expect(thinkingCmd.summary).toBeTruthy();
     expect(thinkingCmd.hint).toBeTruthy();
   });
