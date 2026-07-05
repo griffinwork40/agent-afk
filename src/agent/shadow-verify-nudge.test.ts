@@ -9,12 +9,16 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { SubagentStopContext } from './hooks.js';
-import { shadowVerifyNudge } from './shadow-verify-nudge.js';
+import { createShadowVerifyNudge, shadowVerifyNudge } from './shadow-verify-nudge.js';
 
-function stopCtx(lastMessage: string | undefined, agentType?: string): SubagentStopContext {
+function stopCtx(
+  lastMessage: string | undefined,
+  agentType?: string,
+  subagentId = 'test-id',
+): SubagentStopContext {
   return {
     event: 'SubagentStop',
-    subagentId: 'test-id',
+    subagentId,
     status: 'succeeded',
     lastMessage,
     agentType,
@@ -116,5 +120,81 @@ describe('shadowVerifyNudge', () => {
       'lorem ipsum '.repeat(60);
     const result = shadowVerifyNudge(stopCtx(output, 'research'));
     expect(result.injectContext).toBeDefined();
+  });
+
+  // --- #355 regression guards: self-trigger on verifier output ---
+
+  it('returns {} for verdict-table verifier output (CONFIRMED/REFUTED rows)', () => {
+    const verdictTable =
+      'Verification wave complete. Verdict table:\n\n' +
+      '| Claim | Result | Evidence |\n' +
+      '|-------|--------|----------|\n' +
+      '| The sweep never deletes branches | CONFIRMED | worktree-sweep.ts:607 |\n' +
+      '| The failure is swallowed silently | CONFIRMED | .catch(() => {}) at :618 |\n' +
+      '| 210 branches are orphaned fallout | REFUTED | some predate the sweep |\n\n' +
+      'Recommend acting only on the confirmed claims. ' +
+      'lorem ipsum '.repeat(40);
+    expect(shadowVerifyNudge(stopCtx(verdictTable, 'sv-claim1'))).toEqual({});
+  });
+
+  it('returns {} for a | Claim | table header even without repeated verdict tokens', () => {
+    const table =
+      'Findings below.\n| Claim | Status |\n|---|---|\n| module is broken | holds |\n' +
+      'Recommend removing the unused helpers; found 3 critical severity bugs. ' +
+      'lorem ipsum '.repeat(50);
+    expect(shadowVerifyNudge(stopCtx(table))).toEqual({});
+  });
+
+  it.each([['verify-claim1'], ['sv-verifier'], ['skill-fork-verify']])(
+    'suppresses when id prefix carries a verify token (%s)',
+    (agentType) => {
+      const decisionHeavy =
+        'Verdict: the auth module is broken. Recommend removing several unused helpers. ' +
+        'I found 4 critical severity bugs. ' +
+        'lorem ipsum '.repeat(70);
+      expect(shadowVerifyNudge(stopCtx(decisionHeavy, agentType))).toEqual({});
+    },
+  );
+
+  it('still nudges for look-alike prefix verification-x (hyphen-boundary match)', () => {
+    const decisionHeavy =
+      'Verdict: the auth module is broken. Recommend removing several unused helpers. ' +
+      'I found 4 critical severity bugs. ' +
+      'lorem ipsum '.repeat(70);
+    expect(shadowVerifyNudge(stopCtx(decisionHeavy, 'verification-x')).injectContext).toBeDefined();
+  });
+
+  describe('createShadowVerifyNudge dedup latch', () => {
+    const decisionHeavy =
+      'Verdict: the auth module is broken. Recommend removing several unused helpers. ' +
+      'I found 4 critical severity bugs. ' +
+      'lorem ipsum '.repeat(70);
+
+    it('injects at most once per turn across a parallel wave', () => {
+      const nudge = createShadowVerifyNudge();
+      expect(nudge(stopCtx(decisionHeavy, 'research', 'child-1')).injectContext).toBeDefined();
+      expect(nudge(stopCtx(decisionHeavy, 'research', 'child-2'))).toEqual({});
+      expect(nudge(stopCtx(decisionHeavy, 'research', 'child-3'))).toEqual({});
+    });
+
+    it('re-arms after a Stop (next turn) but never re-fires for the same child', () => {
+      const nudge = createShadowVerifyNudge();
+      expect(nudge(stopCtx(decisionHeavy, 'research', 'child-1')).injectContext).toBeDefined();
+      nudge({ event: 'Stop' });
+      // Same child again (duplicate SubagentStop delivery) — stays silent.
+      expect(nudge(stopCtx(decisionHeavy, 'research', 'child-1'))).toEqual({});
+      // A genuinely new child on the new turn nudges again.
+      expect(nudge(stopCtx(decisionHeavy, 'research', 'child-2')).injectContext).toBeDefined();
+    });
+
+    it('a suppressed (verifier-looking) child does not consume the turn latch', () => {
+      const nudge = createShadowVerifyNudge();
+      const verdictTable =
+        '| Claim | Result |\n|---|---|\n| x | CONFIRMED |\n| y | REFUTED |\n' +
+        'Recommend acting only on confirmed claims. ' +
+        'lorem ipsum '.repeat(50);
+      expect(nudge(stopCtx(verdictTable, 'sv-1', 'verifier-child'))).toEqual({});
+      expect(nudge(stopCtx(decisionHeavy, 'research', 'real-child')).injectContext).toBeDefined();
+    });
   });
 });

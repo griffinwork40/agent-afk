@@ -7,7 +7,7 @@
  */
 
 import { createHookRegistry, type HookRegistry } from './hooks.js';
-import { shadowVerifyNudge } from './shadow-verify-nudge.js';
+import { createShadowVerifyNudge } from './shadow-verify-nudge.js';
 import { MemoryStore, createMemorySessionEndHook } from './memory/index.js';
 import { createPlanModeGate } from './plan-mode-gate.js';
 import { createAfkModeGate } from './afk-mode-gate.js';
@@ -84,7 +84,12 @@ export function createDefaultHookRegistry(
   getCwd?: () => string | undefined,
 ): DefaultHookRegistryResult {
   const registry = createHookRegistry();
+  // Session-scoped instance: the nudge latches once-per-turn (reset on 'Stop')
+  // and once-per-child, so a parallel verifier wave can't spam the parent with
+  // identical nudges across consecutive turns (#355).
+  const shadowVerifyNudge = createShadowVerifyNudge();
   registry.register('SubagentStop', shadowVerifyNudge);
+  registry.register('Stop', shadowVerifyNudge);
   const store = memoryStore ?? new MemoryStore();
   if (getPermissionMode !== undefined) {
     registry.register('PreToolUse', createPlanModeGate(getPermissionMode));
