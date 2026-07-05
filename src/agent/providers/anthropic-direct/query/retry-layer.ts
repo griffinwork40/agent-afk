@@ -40,6 +40,8 @@ import { runTurn } from '../loop.js';
 import { buildRequestHeaders } from '../auth.js';
 import { classifyUsageLimitError, waitForReset, waitForHotSwap } from '../usage-limit.js';
 import { loadClaudeCodeOauthToken, parseAccountIdentifier } from '../../../../cli/keychain.js';
+import { sleepWithAbort } from '../../shared/sleep-with-abort.js';
+import { emitSessionPhase } from '../../../trace/emit.js';
 import type {
   AnthropicClientLike,
   AuthMode,
@@ -47,6 +49,20 @@ import type {
 } from '../types.js';
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+
+// Transient rate-limit (429 + retry-after header, no `|ts`) replay budget.
+// The SDK has already auto-retried twice by the time the error surfaces here,
+// but on account-level RPM/ITPM collisions (e.g. several daemon cron sessions
+// firing at once) two quick retries are not enough — the correct behavior is
+// to honor `retry-after` patiently and replay the turn, instead of dying in
+// seconds. Bounded per turn so a persistent limit still surfaces as an error.
+export const RATE_LIMIT_TRANSIENT_MAX_RETRIES = 3;
+/** Cap on a single retry-after wait — a server hint beyond this surfaces the error path sooner. */
+export const RATE_LIMIT_RETRY_MAX_WAIT_MS = 120_000;
+/** Fallback wait when the classification carries no usable `retryAfterMs`. */
+const RATE_LIMIT_RETRY_DEFAULT_WAIT_MS = 5_000;
+/** Small random jitter added to each wait so concurrent sessions de-synchronize. */
+const RATE_LIMIT_RETRY_JITTER_MS = 1_000;
 
 // Invariant: a 429 with no reset timestamp gives no deadline to wait on, so the
 // no-ts path poll-retries the turn on this fixed cadence to probe whether the
@@ -194,6 +210,11 @@ export class RetryLayer {
    *     (and wake immediately on a hot-swap) until the limit lifts, the user
    *     aborts, or the 2h cap is hit. Stays in the `paused` state across failed
    *     probes and emits `resumed` only once the limit genuinely lifts.
+   *
+   * Additionally handles `rate-limit-transient` (429 + `retry-after` header,
+   * no `|ts`): wait out the server's backoff hint (clamped + jittered) and
+   * silently replay the turn, up to {@link RATE_LIMIT_TRANSIENT_MAX_RETRIES}
+   * attempts per turn, after which the error surfaces as before.
    */
   private async *turnWithUsageLimitRetry(
     runInput: RunTurnInput,
@@ -202,28 +223,85 @@ export class RetryLayer {
     let pendingErrorEvent: ProviderEvent | null = null;
     let resetsAt: Date | null = null;
     let noTimestamp = false;
+    // Per-turn transient 429 replay budget. Local to this generator, so each
+    // user turn gets a fresh RATE_LIMIT_TRANSIENT_MAX_RETRIES attempts.
+    let rateLimitRetries = 0;
 
-    for await (const event of this.turnWithAuthRetry(runInput, isClosed)) {
-      if (event.type === 'error') {
-        const c = classifyUsageLimitError(event.error);
-        if (c && c.kind === 'oauth-limit') {
-          resetsAt = c.resetsAt;
-          pendingErrorEvent = event;
-          break;
+    for (;;) {
+      let transientRetryAfterMs: number | undefined;
+      let sawTransient = false;
+
+      for await (const event of this.turnWithAuthRetry(runInput, isClosed)) {
+        if (event.type === 'error') {
+          const c = classifyUsageLimitError(event.error);
+          if (c && c.kind === 'oauth-limit') {
+            resetsAt = c.resetsAt;
+            pendingErrorEvent = event;
+            break;
+          }
+          if (c && c.kind === 'oauth-limit-no-ts') {
+            noTimestamp = true;
+            pendingErrorEvent = event;
+            break;
+          }
+          // `rate-limit-transient` (a standard API rate-limit 429, distinct
+          // from OAuth subscription exhaustion) does NOT enter the pause/
+          // wait paths below. The SDK has already auto-retried it twice, but
+          // on account-level RPM/ITPM collisions (several daemon sessions
+          // firing at once) that is not enough: honor `retry-after` here and
+          // replay the turn, bounded at RATE_LIMIT_TRANSIENT_MAX_RETRIES per
+          // turn. Once the budget is exhausted this branch stops matching
+          // and the error surfaces via `yield event` below — never parked in
+          // a 2-hour subscription-reset poll. See classifyUsageLimitError.
+          if (
+            c &&
+            c.kind === 'rate-limit-transient' &&
+            rateLimitRetries < RATE_LIMIT_TRANSIENT_MAX_RETRIES
+          ) {
+            sawTransient = true;
+            transientRetryAfterMs = c.retryAfterMs;
+            break;
+          }
         }
-        if (c && c.kind === 'oauth-limit-no-ts') {
-          noTimestamp = true;
-          pendingErrorEvent = event;
-          break;
-        }
-        // `rate-limit-transient` (a standard API rate-limit 429, distinct from
-        // OAuth subscription exhaustion) intentionally does NOT break into the
-        // wait/pause path below. The SDK has already auto-retried it honoring
-        // `retry-after`; a still-failing 429 here is surfaced as an error via
-        // the `yield event` below rather than parked in a 2-hour
-        // subscription-reset poll. See classifyUsageLimitError.
+        yield event;
       }
-      yield event;
+
+      if (!sawTransient) break;
+
+      rateLimitRetries += 1;
+      if (isClosed() || runInput.signal.aborted) return;
+
+      // Honor the server's backoff hint, clamped so a pathological header
+      // cannot park the turn indefinitely; add jitter so concurrent sessions
+      // hitting the same account limit de-synchronize their replays.
+      const baseWaitMs = Math.min(
+        transientRetryAfterMs ?? RATE_LIMIT_RETRY_DEFAULT_WAIT_MS,
+        RATE_LIMIT_RETRY_MAX_WAIT_MS,
+      );
+      const waitMs = baseWaitMs + Math.floor(Math.random() * RATE_LIMIT_RETRY_JITTER_MS);
+      // Witness layer: record the backoff so the replayed round is legible in
+      // the trace (mirrors loop.ts's mid-stream overload phase). Fire-and-
+      // forget; trace latency must never stall the retry.
+      void emitSessionPhase(runInput.traceWriter, {
+        phase: 'rate_limit',
+        metadata: {
+          reason: 'retry-after',
+          source: 'retry-layer',
+          attempt: rateLimitRetries,
+          waitMs,
+        },
+      });
+      await sleepWithAbort(waitMs, runInput.signal);
+      if (isClosed() || runInput.signal.aborted) return;
+
+      // Rotate the request id before replaying (mirrors the oauth-limit
+      // resume paths). Same client, same token — only the headers refresh.
+      runInput.headers = buildRequestHeaders(
+        this._authMode,
+        this.initSessionId,
+        randomUUID(),
+      );
+      // Loop: replay the turn.
     }
 
     if (!pendingErrorEvent) {

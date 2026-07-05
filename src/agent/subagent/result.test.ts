@@ -116,3 +116,37 @@ describe('buildResultFromMessage — signal wiring', () => {
     });
   });
 });
+
+describe('buildResultFromMessage — stopReason wiring', () => {
+  it('attaches stopReason when provided (no outputSchema)', () => {
+    const result = buildResultFromMessage(
+      'h',
+      'succeeded',
+      makeMessage('capped partial'),
+      undefined,
+      undefined,
+      'tool_use_loop_capped',
+    );
+    expect(result.stopReason).toBe('tool_use_loop_capped');
+  });
+
+  it('leaves stopReason absent when not provided', () => {
+    const result = buildResultFromMessage('i', 'succeeded', makeMessage('done'), undefined);
+    expect(result.stopReason).toBeUndefined();
+    expect('stopReason' in result).toBe(false);
+  });
+
+  it('carries stopReason through the schema-failure path', () => {
+    const OutputSchema = z.object({ answer: z.string() });
+    const result = buildResultFromMessage(
+      'j',
+      'succeeded',
+      makeMessage(fenced({ wrong_key: 42 })),
+      OutputSchema,
+      undefined,
+      'end_turn',
+    );
+    expect(result.status).toBe('failed');
+    expect(result.stopReason).toBe('end_turn');
+  });
+});

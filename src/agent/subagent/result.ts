@@ -101,6 +101,16 @@ export interface SubagentResult<T = unknown> {
    * message contained a valid SIGNAL block; absent otherwise.
    */
   signal?: Signal;
+  /**
+   * The provider's terminal stop reason for the subagent's final turn, when
+   * known (e.g. `'end_turn'`, `'max_tokens'`). In particular,
+   * `'tool_use_loop_capped'` means the tool-use iteration cap fired before the
+   * child produced a final message — `message` may then be a synthetic
+   * capped-partial marker rather than a real answer, so callers can use this
+   * field to distinguish a capped partial from a genuine completion. Absent
+   * when the provider reported no stop reason.
+   */
+  stopReason?: string;
 }
 
 /**
@@ -113,18 +123,34 @@ export function buildResultFromMessage<T>(
   message: Message,
   outputSchema: ZodType<T> | undefined,
   trace?: SubagentTrace,
+  stopReason?: string,
 ): SubagentResult<T> {
   const sig = parseSignal(message.content);
   const signal = sig.ok ? sig.signal : undefined;
 
   if (!outputSchema) {
-    return { id, status, message, trace, ...(signal !== undefined && { signal }) };
+    return {
+      id,
+      status,
+      message,
+      trace,
+      ...(signal !== undefined && { signal }),
+      ...(stopReason !== undefined && { stopReason }),
+    };
   }
 
   const candidate = extractStructuredOutput(message.content);
   const parsed = outputSchema.safeParse(candidate);
   if (parsed.success) {
-    return { id, status, message, output: parsed.data, trace, ...(signal !== undefined && { signal }) };
+    return {
+      id,
+      status,
+      message,
+      output: parsed.data,
+      trace,
+      ...(signal !== undefined && { signal }),
+      ...(stopReason !== undefined && { stopReason }),
+    };
   }
 
   return {
@@ -137,6 +163,7 @@ export function buildResultFromMessage<T>(
     schemaError: parsed.error,
     trace,
     ...(signal !== undefined && { signal }),
+    ...(stopReason !== undefined && { stopReason }),
   };
 }
 
@@ -148,9 +175,10 @@ export function buildResultFromError<T>(
   status: SubagentStatus,
   err: unknown,
   trace?: SubagentTrace,
+  stopReason?: string,
 ): SubagentResult<T> {
   const error = err instanceof Error ? err : new Error(String(err));
-  return { id, status, error, trace };
+  return { id, status, error, trace, ...(stopReason !== undefined && { stopReason }) };
 }
 
 /**
