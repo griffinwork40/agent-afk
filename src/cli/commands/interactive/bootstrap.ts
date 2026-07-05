@@ -52,7 +52,7 @@ import { AnthropicDirectProvider } from '../../../agent/providers/anthropic-dire
 import { seedPersistedGrants } from '../../../agent/permissions-store.js';
 import { providerForModel } from '../../../agent/providers/index.js';
 import { createMemoizedProviderFactory } from './provider-factory.js';
-import { ensurePluginEntrypointsLoaded } from '../../../agent/tools/skill-bridge.js';
+import { ensurePluginEntrypointsLoaded, discoverPluginAgents } from '../../../agent/tools/skill-bridge.js';
 import { McpManager, loadMcpConfig, getMcpConfigPath } from '../../../agent/mcp/index.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../../config/import-sources.js';
 import { env } from '../../../config/env.js';
@@ -283,6 +283,7 @@ export async function bootstrapSession(
   // on the `agent` tool at every depth of this REPL session.
   const agentRegistry = loadAgentRegistry({
     ...(extras?.cwd !== undefined ? { cwd: extras.cwd } : {}),
+    pluginAgents: discoverPluginAgents(),
   });
 
   const childSkillExecutorFactory = createChildSkillExecutorFactory(

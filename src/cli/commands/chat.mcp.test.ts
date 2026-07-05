@@ -105,6 +105,7 @@ vi.mock('../../agent/tools/compose-executor.js', () => ({
 // filesystem for plugin roots, which is out of scope here.
 vi.mock('../../agent/tools/skill-bridge.js', () => ({
   ensurePluginEntrypointsLoaded: vi.fn(async () => {}),
+  discoverPluginAgents: vi.fn(() => []),
 }));
 
 vi.mock('../../agent/tools/nesting.js', () => ({
