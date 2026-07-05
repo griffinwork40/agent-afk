@@ -620,6 +620,13 @@ export class SkillExecutor {
         model: childConfig.model,
         apiKey: this.ctx.apiKey,
         ...(this.ctx.baseUrl !== undefined ? { baseUrl: this.ctx.baseUrl } : {}),
+        // OpenAI endpoint peer of `baseUrl`. Without it, when this skill-forked
+        // grandchild SubagentExecutor dispatches an `agent` at the depth cap,
+        // its restricted-provider fallback (subagent-executor.ts
+        // buildSkillRestrictedProvider, which reads `defaultConfig.openaiBaseUrl`)
+        // gets no baseURL and an OpenAI-routed great-grandchild POSTs to
+        // api.openai.com. Mirrors the CLI SubagentExecutor wiring (chat/daemon/bootstrap).
+        ...(this.ctx.openaiBaseUrl !== undefined ? { openaiBaseUrl: this.ctx.openaiBaseUrl } : {}),
       } as AgentConfig,
       // Inherit origin from the skill executor; `depth + 1` makes grandchild
       // `agent`-dispatch rows carry actor:'subagent'.
