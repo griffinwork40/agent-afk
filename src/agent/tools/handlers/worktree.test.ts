@@ -150,6 +150,19 @@ describe('worktree handler — create', () => {
     const result = await handler({ action: 'create', name: '///' }, SIGNAL);
     expect(result.isError).toBe(true);
   });
+
+  it('rejects a flag-like base ref before git worktree add', async () => {
+    const mock = makeMock(standardResponder(block(repoRoot)));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler(
+      { action: 'create', name: 'safe-name', base: '--upload-pack=evil' },
+      SIGNAL,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('base must be a git ref');
+    expect(mock.calls.some((c) => c.args.includes('add'))).toBe(false);
+  });
 });
 
 describe('worktree handler — keep / release', () => {
