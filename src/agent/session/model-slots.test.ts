@@ -341,9 +341,14 @@ describe('coerceSlotBindingInput', () => {
   it('accepts a minimal object with just an id', () => {
     expect(coerceSlotBindingInput({ id: 'glm-5.2' })).toEqual({ ok: true, value: { id: 'glm-5.2' } });
   });
-  it('accepts a full object and normalizes provider aliases', () => {
-    expect(coerceSlotBindingInput({ id: 'glm-5.2', provider: 'openai-compatible', baseUrl: 'https://x/v1' })).toEqual(
-      { ok: true, value: { id: 'glm-5.2', provider: 'openai', baseUrl: 'https://x/v1' } },
+  it('accepts an object with id + provider and normalizes provider aliases', () => {
+    expect(coerceSlotBindingInput({ id: 'glm-5.2', provider: 'openai-compatible' })).toEqual(
+      { ok: true, value: { id: 'glm-5.2', provider: 'openai' } },
+    );
+  });
+  it('accepts an object with id + provider + name', () => {
+    expect(coerceSlotBindingInput({ id: 'glm-5.2', provider: 'openai', name: 'fast' })).toEqual(
+      { ok: true, value: { id: 'glm-5.2', provider: 'openai', name: 'fast' } },
     );
   });
   it('rejects a non-object', () => {
@@ -364,9 +369,27 @@ describe('coerceSlotBindingInput', () => {
     expect(coerceSlotBindingInput({ id: 'glm-5.2', apiKey: 'sk-secret' }).ok).toBe(false);
     expect(coerceSlotBindingInput({ id: 'glm-5.2', api_key: 'sk-secret' }).ok).toBe(false);
   });
-  it('rejects snake_case base_url with a helpful message', () => {
-    const res = coerceSlotBindingInput({ id: 'glm-5.2', base_url: 'https://x/v1' });
+  it('rejects a per-slot baseUrl (camelCase and snake_case) as an endpoint-redirect credential vector', () => {
+    const res = coerceSlotBindingInput({ id: 'glm-5.2', baseUrl: 'https://attacker.example/v1' });
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.error).toMatch(/baseUrl/);
+    if (!res.ok) expect(res.error).toMatch(/AFK_MODEL_.*BASE_URL/);
+    const resSnake = coerceSlotBindingInput({ id: 'glm-5.2', base_url: 'https://attacker.example/v1' });
+    expect(resSnake.ok).toBe(false);
+    if (!resSnake.ok) expect(resSnake.error).toMatch(/AFK_MODEL_.*BASE_URL/);
+  });
+  it('rejects control characters in id and name', () => {
+    const resId = coerceSlotBindingInput({ id: 'glm\r\n-5.2' });
+    expect(resId.ok).toBe(false);
+    if (!resId.ok) expect(resId.error).toMatch(/control characters/);
+    const resName = coerceSlotBindingInput({ id: 'glm-5.2', name: 'evil\ntier' });
+    expect(resName.ok).toBe(false);
+    if (!resName.ok) expect(resName.error).toMatch(/control characters/);
+  });
+  it('rejects names that shadow built-in aliases (slot keys, legacy aliases, auto, direct aliases)', () => {
+    for (const reserved of ['local', 'small', 'medium', 'large', 'haiku', 'sonnet', 'opus', 'auto', 'fable']) {
+      const res = coerceSlotBindingInput({ id: 'glm-5.2', name: reserved });
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toMatch(/shadow a built-in alias/);
+    }
   });
 });

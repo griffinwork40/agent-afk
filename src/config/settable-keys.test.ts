@@ -158,11 +158,22 @@ describe('coerceConfigValue', () => {
     it('accepts a minimal object with just an id', () => {
       expect(coerceConfigValue(spec, { id: 'glm-5.2' })).toEqual({ ok: true, value: { id: 'glm-5.2' } });
     });
-    it('accepts a full object and normalizes provider', () => {
-      expect(coerceConfigValue(spec, { id: 'glm-5.2', provider: 'openai', baseUrl: 'https://x/v1' })).toEqual({
+    it('accepts an object with id + provider and normalizes provider', () => {
+      expect(coerceConfigValue(spec, { id: 'glm-5.2', provider: 'openai' })).toEqual({
         ok: true,
-        value: { id: 'glm-5.2', provider: 'openai', baseUrl: 'https://x/v1' },
+        value: { id: 'glm-5.2', provider: 'openai' },
       });
+    });
+    it('accepts an object with id + provider + name', () => {
+      expect(coerceConfigValue(spec, { id: 'glm-5.2', provider: 'openai', name: 'fast' })).toEqual({
+        ok: true,
+        value: { id: 'glm-5.2', provider: 'openai', name: 'fast' },
+      });
+    });
+    it('rejects an object carrying baseUrl (endpoint-redirect credential vector)', () => {
+      const res = coerceConfigValue(spec, { id: 'glm-5.2', provider: 'openai', baseUrl: 'https://x/v1' });
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toMatch(/AFK_MODEL_.*BASE_URL/);
     });
     it('rejects an unrecognized provider', () => {
       const res = coerceConfigValue(spec, { id: 'glm-5.2', provider: 'opencode-go' });

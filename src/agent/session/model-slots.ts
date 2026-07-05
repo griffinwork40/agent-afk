@@ -334,6 +334,30 @@ function parseStringField(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+/**
+ * Reject control characters (CRLF, NUL, tab, DEL, etc.) in binding string
+ * fields — mirrors the env-var path's newline rejection in `coerceEnvValue`.
+ * `parseStringField` itself stays lenient (it is shared with the loader path,
+ * which intentionally ignores rather than throws on malformed input).
+ */
+function hasControlChars(value: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  return /[\x00-\x1f\x7f]/.test(value);
+}
+
+/**
+ * Names an agent-assigned binding `name` may not shadow — the built-in slot
+ * keys, legacy tier aliases, the `auto` sentinel, and direct model aliases.
+ * Without this check an agent could set `models.small.name = "large"` to route
+ * an operator-typed "large" to the cheap tier.
+ */
+const RESERVED_NAMES: ReadonlySet<string> = new Set([
+  ...SLOT_NAMES,
+  ...Object.keys(LEGACY_ALIAS_TO_SLOT),
+  AUTO_SENTINEL,
+  ...Object.keys(DIRECT_MODEL_ALIASES),
+]);
+
 function parseBinding(value: unknown): ModelSlotBinding | undefined {
   if (typeof value === 'string') {
     const id = value.trim();
@@ -362,8 +386,22 @@ function parseBinding(value: unknown): ModelSlotBinding | undefined {
  * mutation engine (config_set tool / `afk config set`). Unlike {@link parseBinding}
  * — which leniently ignores malformed fields when LOADING afk.config.json — this
  * surfaces actionable errors so a bad `config set models.large {...}` is rejected
- * rather than silently written. Rejects a per-slot `apiKey` (a credential — belongs
- * in afk.env via `afk config env set AFK_MODEL_<TIER>_API_KEY`, not the plaintext JSON).
+ * rather than silently written.
+ *
+ * Rejects two credential-sensitivity fields from the plaintext-JSON agent-writable path:
+ *   1. `apiKey` — a secret; belongs in afk.env via `afk config env set AFK_MODEL_<TIER>_API_KEY`.
+ *   2. `baseUrl` — an endpoint redirect that carries the paired API key + the full
+ *      conversation to wherever it points; belongs in afk.env via `afk config env set
+ *      AFK_MODEL_<TIER>_BASE_URL` (human-gated, same rule as the `*_BASE_URL` suffix
+ *      protection in {@link ../../config/settable-keys.ts}).
+ *
+ * Without these rejections an agent could silently rewrite runtime credentials or
+ * endpoints into plaintext afk.config.json, bypassing the deliberately human-gated
+ * env-var surface.
+ *
+ * Contract: {@link parseBinding} (the LOADER) still reads `baseUrl`/`apiKey` from
+ * afk.config.json so hand-edited files and env-var overrides remain functional at
+ * runtime — only the agent-writable WRITE path is gated.
  */
 export function coerceSlotBindingInput(
   raw: unknown,
@@ -379,11 +417,32 @@ export function coerceSlotBindingInput(
         'per-slot API keys are credentials; set AFK_MODEL_<TIER>_API_KEY via `afk config env set` instead of afk.config.json',
     };
   }
+  if ('baseUrl' in obj || 'base_url' in obj) {
+    return {
+      ok: false,
+      error:
+        'per-slot baseUrl is an endpoint-redirect credential vector; set AFK_MODEL_<TIER>_BASE_URL via `afk config env set` instead of afk.config.json',
+    };
+  }
   const id = parseStringField(obj['id']);
   if (!id) return { ok: false, error: 'model binding requires a non-empty "id"' };
+  if (hasControlChars(id)) {
+    return { ok: false, error: 'model binding "id" must not contain control characters' };
+  }
   const binding: ModelSlotBinding = { id };
   const name = parseStringField(obj['name']);
-  if (name) binding.name = name;
+  if (name) {
+    if (hasControlChars(name)) {
+      return { ok: false, error: 'model binding "name" must not contain control characters' };
+    }
+    if (RESERVED_NAMES.has(name.trim().toLowerCase())) {
+      return {
+        ok: false,
+        error: `model binding "name" must not shadow a built-in alias ("${name}")`,
+      };
+    }
+    binding.name = name;
+  }
   if (obj['provider'] !== undefined && obj['provider'] !== '') {
     const provider = normalizeSlotProvider(obj['provider']);
     if (!provider) {
@@ -394,11 +453,6 @@ export function coerceSlotBindingInput(
       };
     }
     binding.provider = provider;
-  }
-  const baseUrl = parseStringField(obj['baseUrl']);
-  if (baseUrl) binding.baseUrl = baseUrl;
-  if (!baseUrl && parseStringField(obj['base_url'])) {
-    return { ok: false, error: 'use camelCase "baseUrl", not "base_url"' };
   }
   return { ok: true, value: binding };
 }
