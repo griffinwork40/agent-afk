@@ -37,6 +37,7 @@ export const thinkingCmd: SlashCommand = {
   hint:
     'Switch thinking display: `live` (streaming preview + summary, default), ' +
     '`summary` (one-line collapse only), or `off` (hidden). ' +
+    'This is a display-only toggle — extended thinking still runs; cost and latency are unaffected. ' +
     'Takes effect on the next turn — same semantics as `/model`. ' +
     'Run without args to see the current mode.',
   flags: ['summary', 'live', 'off'],
@@ -63,7 +64,7 @@ export const thinkingCmd: SlashCommand = {
     ctx.stats.thinkingUi = target;
     ctx.out.success(
       `Thinking display set to ${palette.brand(target)} (${MODE_DESCRIPTIONS[target]}). ` +
-      `Takes effect on the next turn.`,
+      `Takes effect on the next turn. (display only — thinking still runs; cost and latency are unaffected.)`,
     );
     return 'continue';
   },
