@@ -6,7 +6,7 @@ import type { AgentModelInput } from '../../../agent/types.js';
 import type { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import type { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
 import type { SubagentControl } from '../../../agent/tools/subagent-executor.js';
-import type { SlashContext, SessionStats, ResumeSwapResult } from '../../slash/types.js';
+import type { SlashContext, SessionStats, ResumeSwapResult, ThinkingUiMode } from '../../slash/types.js';
 import type { StoredSession } from '../../session-store.js';
 import type { StatusLine } from '../../status-line.js';
 import type { ReplRenderer } from './repl-renderer.js';
@@ -212,7 +212,12 @@ function truncate(s: string, max: number): string {
   return codePoints.slice(0, max - 1).join('') + '…';
 }
 
-export type ThinkingUiMode = 'summary' | 'live' | 'off';
+/**
+ * Canonical definition lives in `slash/types.ts` (neutral layer) to avoid the
+ * upward import that would result from defining it here. Re-exported for
+ * backward compat — existing imports from this module continue to work.
+ */
+export type { ThinkingUiMode } from '../../slash/types.js';
 
 export interface CliOptions {
   /**

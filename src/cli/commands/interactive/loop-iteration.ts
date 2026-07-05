@@ -580,7 +580,7 @@ export async function runInputLoop(
         // transitions.  The bar is a per-session singleton; the callback is
         // safe to call on non-TTY (LoopStageBar.repaint() TTY-gates itself).
         ...(loopStageBar ? { onStageChange: (stage) => loopStageBar!.repaint(stage) } : {}),
-      }, ctx.options.thinkingUi, ctx.completionWriter,
+      }, ctx.stats.thinkingUi ?? ctx.options.thinkingUi, ctx.completionWriter,
         // Surface refs threaded into the per-turn StreamRenderer for the
         // legacy non-borrow path (non-TTY, when surface.getCompositor()
         // is null and the renderer constructs its own compositor). In

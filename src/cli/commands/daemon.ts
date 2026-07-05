@@ -129,6 +129,8 @@ export function buildDaemonSessionFactory(
       getDefaultSubagentModel(opts.model),
       // Named-agent registry propagates to nested skill executors.
       agentRegistry,
+      // OpenAI endpoint → nested restricted/depth-cap provider builders.
+      opts.openaiBaseUrl,
     );
 
     const subagentExecutor = new SubagentExecutor({
@@ -139,6 +141,7 @@ export function buildDaemonSessionFactory(
       defaultConfig: {
         ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
         ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
+        ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
       },
       defaultSubagentModel: getDefaultSubagentModel(opts.model),
       childProviderFactory,
@@ -166,6 +169,7 @@ export function buildDaemonSessionFactory(
       // Per-model credential resolver — mirrors bootstrap.ts / chat.ts.
       resolveApiKeyForModel: getApiKeyForModel,
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
+      ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
     });
 

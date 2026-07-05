@@ -310,6 +310,8 @@ export async function bootstrapSession(
     getDefaultSubagentModel(sessionModel),
     // Named-agent registry propagates to nested skill executors.
     agentRegistry,
+    // OpenAI endpoint → nested restricted/depth-cap provider builders.
+    cliConfig.openaiBaseUrl,
   );
 
   // Pass `sessionModel` to `getDefaultSubagentModel` so OpenAI-routed
@@ -326,6 +328,7 @@ export async function bootstrapSession(
       apiKey,
       systemPrompt: basePrompt,
       ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
+      ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
     },
     defaultSubagentModel: getDefaultSubagentModel(sessionModel),
     childProviderFactory,
@@ -367,6 +370,7 @@ export async function bootstrapSession(
     // Sibling to the SubagentExecutor wiring above.
     backgroundRegistry,
     ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
+    ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
     // Per-model credential resolver — mirrors SubagentExecutor wiring above.
     resolveApiKeyForModel: getApiKeyForModel,
     // Witness layer: without this, skill-forked subagents (every /review,
@@ -542,6 +546,10 @@ export async function bootstrapSession(
   if (initialPermissionMode !== undefined) {
     stats.permissionMode = initialPermissionMode;
   }
+  // Seed thinking-UI mode from the CLI flag so `/thinking` has a live value
+  // to mutate. `createSessionStats()` already defaults to 'live'; this
+  // overrides with the user's explicit `--thinking-ui` choice (if any).
+  stats.thinkingUi = options.thinkingUi;
   // Stamp the effective working directory on stats so the status line can
   // render it. We capture the same cwd the provider will see: the explicit
   // `extras.cwd` override (e.g. from `--worktree`) when present, else

@@ -58,19 +58,29 @@ export function detectAuthMode(token: string): AuthMode {
  * option. Used by the local-server path (`AFK_LOCAL_BASE_URL`) to point
  * Messages traffic at a self-hosted Anthropic-compatible shim. The SDK
  * appends `/v1/messages` to whatever is passed.
+ *
+ * `fetchImpl`, when provided, is forwarded as the SDK's `fetch` client option
+ * so every HTTP request (including the SDK's own internal retries) flows
+ * through it. Used to inject an observability wrapper (see
+ * {@link makeTracingFetch}) that records 429/503/529 throttling into the
+ * witness trace — otherwise the SDK's silent retry-after backoff is invisible.
  */
 export function buildClientOptions(
   token: string,
   mode: AuthMode,
   baseUrl?: string,
-): ({ authToken: string } | { apiKey: string }) & { baseURL?: string } {
+  fetchImpl?: typeof fetch,
+): ({ authToken: string } | { apiKey: string }) & { baseURL?: string; fetch?: typeof fetch } {
   const base = mode === 'oauth'
     ? { authToken: token }
     : { apiKey: token };
-  if (typeof baseUrl === 'string' && baseUrl.length > 0) {
-    return { ...base, baseURL: baseUrl };
+  const withBase = typeof baseUrl === 'string' && baseUrl.length > 0
+    ? { ...base, baseURL: baseUrl }
+    : base;
+  if (fetchImpl) {
+    return { ...withBase, fetch: fetchImpl };
   }
-  return base;
+  return withBase;
 }
 
 /**

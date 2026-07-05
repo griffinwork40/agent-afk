@@ -11,6 +11,20 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.20.5] - 2026-07-05
+
+### Fixed
+- surface silent 429/503/529 backoff in trace; fix transient rate-limit 429 misclassification (#414) (5dbc55b)
+
+## [5.20.4] - 2026-07-05
+
+### Fixed
+- coalesce post-ESC type-ahead so soft-stop doesn't strand input one turn behind (#403) (937772e)
+
+### Changed
+- isolate vitest state writes from real ~/.afk (#411) (9f6b634)
+- bound default-sonnet cost via auto-compaction budget (keep truthful 1M); split openai-compatible/query.ts (#407) (37a878d)
+
 ## [5.20.3] - 2026-07-04
 
 ### Fixed

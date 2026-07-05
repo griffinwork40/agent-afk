@@ -130,6 +130,49 @@ describe('formatTrace — default human view', () => {
   });
 });
 
+describe('formatTrace — rate_limit is high-signal (shown by default)', () => {
+  // Regression: a rate_limit event is a session_phase, and session_phase is
+  // hidden by default (latency waterfall). But throttling is the whole reason a
+  // stuck turn is stuck, so it must appear WITHOUT --all — otherwise the
+  // observability it provides is invisible to an operator who doesn't already
+  // know to enable low-signal output.
+  const events: EventObj[] = [
+    { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'session_phase', payload: { phase: 'model_ttfb', durationMs: 300 } },
+    { ts: '2026-06-05T12:30:01.000Z', seq: 1, kind: 'session_phase', payload: { phase: 'rate_limit', durationMs: 30000, metadata: { status: 429, reason: 'rate-limit', source: 'sdk-fetch', retryAfterMs: 30000 } } },
+    { ts: '2026-06-05T12:35:00.000Z', seq: 2, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+  ];
+  const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+
+  it('renders the rate_limit event in the DEFAULT view (no --all)', () => {
+    expect(out).toContain('throttle');
+    expect(out).toContain('rate-limit');
+    expect(out).toContain('429');
+    expect(out).toContain('retry-after 30.0s');
+    expect(out).toContain('(sdk-fetch)');
+  });
+
+  it('still hides the low-signal model_ttfb phase by default', () => {
+    expect(out).not.toContain('model_ttfb');
+  });
+
+  it('surfaces a throttled count in the summary header', () => {
+    expect(out).toContain('1 throttled');
+  });
+
+  it('omits the throttled count when there are none', () => {
+    const clean = formatTrace(
+      's',
+      '/p',
+      parseTrace(
+        toJsonl([
+          { ts: '2026-06-05T12:35:00.000Z', seq: 0, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+        ]),
+      ),
+    );
+    expect(clean).not.toContain('throttled');
+  });
+});
+
 describe('formatTrace — closure stop_reason rendering', () => {
   const seal: EventObj = {
     ts: '2026-06-05T12:35:00.500Z',

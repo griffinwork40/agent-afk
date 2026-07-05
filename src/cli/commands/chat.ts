@@ -508,6 +508,8 @@ export function registerChatCommand(program: Command): void {
           getDefaultSubagentModel(options.model),
           // Named-agent registry propagates to nested skill executors.
           agentRegistry,
+          // OpenAI endpoint → nested restricted/depth-cap provider builders.
+          cliConfig.openaiBaseUrl,
         );
 
         // Pass `options.model` so `getDefaultSubagentModel` can fall back
@@ -525,6 +527,7 @@ export function registerChatCommand(program: Command): void {
             apiKey,
             systemPrompt: basePrompt,
             ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
+            ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
           },
           defaultSubagentModel: getDefaultSubagentModel(options.model),
           childProviderFactory,
@@ -555,6 +558,7 @@ export function registerChatCommand(program: Command): void {
           // Named-agent registry for skill-forked orchestrator children.
           agentRegistry,
           ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
+          ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
           // Per-model credential resolver — mirrors bootstrap.ts wiring.
           resolveApiKeyForModel: getApiKeyForModel,
           // See bootstrap.ts SkillExecutor wiring for rationale: without

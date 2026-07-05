@@ -345,6 +345,15 @@ export async function* runTurn(
 
     if (retryOverload) {
       overloadRetries += 1;
+      // Witness layer: record the mid-stream overload backoff so a re-driven
+      // round is legible in the trace. The tracing-fetch wrapper cannot see
+      // this one — a mid-stream `overloaded_error` arrives in the SSE body of
+      // an HTTP 200 response, so it never trips the wrapper's status check.
+      // Fire-and-forget; trace latency must never stall the retry.
+      void emitSessionPhase(input.traceWriter, {
+        phase: 'rate_limit',
+        metadata: { reason: 'overloaded', source: 'mid-stream', attempt: overloadRetries },
+      });
       // Tell surfaces to discard the current round's already-streamed text:
       // the re-driven request below re-streams the round from scratch, so
       // without a reset the partial text visibly duplicates. Emitted before
