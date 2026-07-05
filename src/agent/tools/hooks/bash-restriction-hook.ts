@@ -1,6 +1,7 @@
 /**
- * PreToolUse hook that blocks bash invocations referencing restricted paths
- * or evaluating arbitrary code via interpreter `-c`/`-e` flags.
+ * PreToolUse hook that blocks bash invocations referencing restricted paths,
+ * plus interpreter `-c`/`-e` one-liners that reference those same sensitive
+ * paths.
  *
  * # Invariant — threat model (load-bearing)
  *
@@ -12,13 +13,10 @@
  *   - Brace expansion:          `cat /etc/{passwd,shadow}`
  *   - Process substitution:     `cat <(echo /etc/passwd)`
  *   - File descriptor tricks:   `exec 3</etc/passwd; cat <&3`
- *   - Interpreter scripts:      `python -c "open('/etc/passwd').read()"`
+ *   - String-split obfuscation: `python -c "open('~/.s'+'sh/id_rsa')"`
  *
- * The interpreter denylist below closes the most obvious adjacent bypass
- * (interpreter scripts). The rest are accepted as residual risk for the
- * accidental-prevention threat model.
- *
- * For adversarial containment, run agent-afk inside an OS-level sandbox:
+ * These are accepted as residual risk for the accidental-prevention threat
+ * model. For adversarial containment, run agent-afk inside an OS-level sandbox:
  *   - macOS:  `sandbox-exec` (note: deprecated in newer Xcode releases)
  *   - Linux:  Landlock or seccomp via systemd, bubblewrap, firejail
  *   - Docker: drop --cap-add and mount only the workspace
@@ -26,17 +24,38 @@
  * # What this hook does
  *
  * 1. Reads the bash `command` string from the tool input.
- * 2. If the command matches the interpreter denylist (`python -c`, `node -e`,
- *    `ruby -e`, `osascript -e`, `sh -c`, `bash -c`, `zsh -c`, `fish -c`) AND an
- *    interactive approval path exists (a grant manager is wired — REPL or
- *    Telegram), block with redirect guidance. Headless surfaces (afk chat,
- *    daemon, threads, subagents of headless sessions) fail OPEN by default,
- *    because the "use typed file tools" advice is only actionable where a
- *    human can approve the prompt; opt back in with
- *    AFK_FORCE_BASH_INTERPRETER_GUARD=1.
- * 3. If the command contains a literal substring referencing a restricted
- *    root (any path NOT inside the session's grant lists), block with
- *    redirect guidance pointing the model at typed file tools.
+ * 2. INTERPRETER-EVAL GUARD (check 1): if the command is an interpreter
+ *    one-liner (`python -c`, `node -e`, `ruby -e`, `sh -c`, ...) AND the
+ *    payload references a sensitive path — a grant-filtered restricted root, or
+ *    a credential fragment like `.ssh` / `id_rsa` / `.aws` / `/etc/shadow` that
+ *    an interpreter can assemble at runtime (see `SENSITIVE_PATH_SIGNAL`) — AND
+ *    an interactive approval path exists (a grant manager is wired — REPL or
+ *    Telegram), block with redirect guidance. This is deliberately NARROW:
+ *    pure-computation one-liners (`python -c 'print(2**64)'`, `node -e
+ *    'console.log(1)'`) are NOT blocked — they touch no sensitive path, so the
+ *    block was pure friction with no safety value. The guard exists to close
+ *    the one thing check 2's literal-substring scan cannot see: an interpreter
+ *    building a credential path at runtime (`open(expanduser('~/.ssh/id_rsa'))`).
+ *    Headless surfaces (afk chat, daemon, threads, subagents of headless
+ *    sessions) fail OPEN by default, because the "use typed file tools" advice
+ *    is only actionable where a human can approve the prompt; opt back in with
+ *    AFK_FORCE_BASH_INTERPRETER_GUARD=1, or lift it entirely with
+ *    AFK_DISABLE_BASH_INTERPRETER_GUARD=1.
+ * 3. RESTRICTED-ROOT SUBSTRING GUARD (check 2): if the command contains a
+ *    literal substring referencing a restricted root (any sensitive path NOT
+ *    inside the session's grant lists), block with redirect guidance pointing
+ *    the model at typed file tools.
+ *
+ * # History (why check 1 is scoped, not blanket)
+ *
+ * Check 1 previously hard-blocked EVERY interpreter `-c`/`-e` one-liner
+ * regardless of payload. That over-broad default was the single highest-
+ * frequency source of self-inflicted agent friction (harmless computation
+ * one-liners blocked constantly), which predictably drove operators to disable
+ * the guard wholesale via AFK_DISABLE_BASH_INTERPRETER_GUARD=1 — silencing its
+ * genuine, narrow value. Scoping check 1 to credential-adjacent payloads keeps
+ * the protection live by no longer crying wolf. The pinned expectations live in
+ * `bash-restriction-hook.test.ts`.
  *
  * The block reason is **structured** — the model sees "use read_file /
  * write_file / edit_file, they support per-call approval" — so it routes
@@ -57,18 +76,30 @@ import type { HookContext, HookDecision } from '../../hooks.js';
  * and scripting languages. Anchored with `\b` so a path containing the
  * literal `python3` (e.g. `/usr/local/bin/python3-config`) does not match.
  *
- * Note: this is a hard-block — no elicitation — because:
- *   (a) the user cannot reasonably audit an arbitrary shell-script string
- *       inside a prompt; clicking [Allow] would be a reflex, not a
- *       considered decision (the architect's "training-wheels" critique);
- *   (b) the model can almost always re-route via typed tools instead.
- *
- * If the user genuinely needs to run an interpreter script, they can do it
- * outside the agent. The agent's escape hatch is to ask the user explicitly,
- * not to evaluate code on the user's behalf.
+ * This regex only identifies that a command IS an interpreter one-liner; it is
+ * necessary but NOT sufficient to block. Check 1 blocks only when this matches
+ * AND `referencesSensitivePath()` is also true (see the factory below and the
+ * module header) — so `python -c 'print(2**64)'` passes while
+ * `python -c "open(expanduser('~/.ssh/id_rsa'))"` is caught.
  */
 const INTERPRETER_DENYLIST =
   /\b(python|python3|node|ruby|perl|osascript|sh|bash|zsh|fish|lua)\s+-[cCeE](\s|$)/;
+
+/**
+ * Credential-path fragments that survive runtime home-dir assembly. Kept in
+ * sync with the sensitive roots in `deriveRestrictedSubstrings`, but expressed
+ * as trailing fragments (plus the canonical private-key filenames) so they
+ * match even when an interpreter assembles the home prefix at runtime
+ * (`os.environ['HOME']+'/.ssh'`, `expanduser('~/.ssh')`) — the exact case
+ * check 2's literal `~`/`$HOME` normalization cannot see. Word-boundary
+ * anchored to curb false positives (`.awstats`, `foo.sshconfig` do not match).
+ *
+ * `/etc/passwd` is deliberately ABSENT — it is world-readable and carries no
+ * secret; the secret companion `/etc/shadow` IS covered. This is the calibration
+ * that lets benign one-liners through while still catching credential access.
+ */
+const SENSITIVE_PATH_SIGNAL =
+  /\.ssh\b|\bid_rsa\b|\bid_ed25519\b|\.gnupg\b|\.aws\b|\.config\/gh\b|\.netrc\b|\.password-store\b|\/etc\/shadow\b|\/etc\/sudoers\b/i;
 
 export interface BashRestrictionHookOptions {
   /**
@@ -125,41 +156,61 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     const grantManager = opts.getGrantManager();
     const interactiveSurface = grantManager !== undefined;
 
-    // 1. Interpreter denylist — hard block.
+    // Precompute the sensitive-path view ONCE — both checks below consume it.
+    // `normalized` resolves the obvious `~` / `$HOME` shell idioms to the real
+    // home dir (NOT a parser — variable-assembled paths are out of scope; see
+    // module header). `restrictedSubstrings` is the grant-filtered set of
+    // sensitive roots; it is empty when no grant manager is wired (headless),
+    // so check 2 fails open there and check 1 falls back to the lexical signal.
+    const home = homedir();
+    const normalized = normalizeHomeRefs(command, home);
+    const restrictedSubstrings = grantManager
+      ? deriveRestrictedSubstrings(grantManager.getGrants())
+      : [];
+
+    // 1. Interpreter-eval guard — hard block, SCOPED to credential-adjacent
+    // one-liners.
     //
-    // Invariant: the interpreter guard fires ONLY where redirection is
-    // actionable. The block reason tells the model to "use typed file tools,
-    // which support per-call approval" — advice that only works on an
-    // interactive surface, where a human can approve the prompt. On headless
-    // surfaces there is no approval path, so hard-blocking `python -c` / `sh -c`
-    // there merely breaks legitimate automation with no recourse (the day-one
-    // regression this gate fixes). We therefore require `interactiveSurface`
-    // (a wired grant manager), matching the restricted-root substring check
-    // below which also fails open on headless. Overrides:
+    // Invariant: the interpreter guard fires ONLY where (a) redirection is
+    // actionable and (b) the eval payload actually references a sensitive path.
+    // (a) The block reason tells the model to "use typed file tools, which
+    // support per-call approval" — advice that only works on an interactive
+    // surface (a wired grant manager), so we require `interactiveSurface`,
+    // matching check 2 which also fails open on headless.
+    // (b) `referencesSensitivePath` scopes the block so pure-computation
+    // one-liners pass — that scoping is the calibration; see the module header
+    // History note. Overrides:
     //   - AFK_DISABLE_BASH_INTERPRETER_GUARD=1 (`disableInterpreterGuard`)
     //     forces it OFF even on interactive surfaces — and wins over force;
     //   - AFK_FORCE_BASH_INTERPRETER_GUARD=1 (`forceInterpreterGuard`) forces
-    //     it ON even on headless surfaces.
+    //     it ON even on headless surfaces (where `restrictedSubstrings` is
+    //     empty, so only the lexical SENSITIVE_PATH_SIGNAL applies).
     const interpreterGuardActive =
       !opts.disableInterpreterGuard &&
       (interactiveSurface || opts.forceInterpreterGuard === true);
-    if (interpreterGuardActive && INTERPRETER_DENYLIST.test(command)) {
+    if (
+      interpreterGuardActive &&
+      INTERPRETER_DENYLIST.test(command) &&
+      referencesSensitivePath(normalized, command, restrictedSubstrings)
+    ) {
       return {
         decision: 'block',
         reason:
-          'Interpreter-with-eval flags (python -c, node -e, ruby -e, sh -c, ...) are blocked by ' +
-          'the path-approval policy. Use the typed file tools (read_file, write_file, edit_file) ' +
-          'which support per-call user approval, or ask the user to run the script themselves. ' +
-          'To lift this block — e.g. headless automation that legitimately runs interpreter ' +
-          'one-liners — set AFK_DISABLE_BASH_INTERPRETER_GUARD=1, or disable all of path-approval ' +
-          'with AFK_DISABLE_PATH_APPROVAL=1.',
+          'Interpreter one-liner (python -c, node -e, sh -c, ...) referencing a sensitive path ' +
+          '(SSH keys, cloud credentials, GPG, /etc/shadow, ...) is blocked by the path-approval ' +
+          'policy — an interpreter can assemble a path the shell-substring check cannot see. Use ' +
+          'the typed file tools (read_file, write_file, edit_file), which support per-call user ' +
+          'approval, or ask the user to run the script themselves. To lift this block — e.g. ' +
+          'headless automation that legitimately reads such paths — set ' +
+          'AFK_DISABLE_BASH_INTERPRETER_GUARD=1, or disable all of path-approval with ' +
+          'AFK_DISABLE_PATH_APPROVAL=1.',
       };
     }
 
     // 2. Restricted-root substring check.
     // Only fires when a grant manager is wired (during the bootstrap race and
     // on headless surfaces we fail open). The check is intentionally crude:
-    // literal `command.includes` against every "restricted directory" we can
+    // literal `normalized.includes` against every "restricted directory" we can
     // derive. False positives (echo "see ~/.ssh/config") block the bash call
     // and ask the model to explain what it was doing, which is acceptable for
     // the accidental threat model.
@@ -172,17 +223,7 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     // for stricter headless containment use an OS-level sandbox, or opt the
     // interpreter guard back in with AFK_FORCE_BASH_INTERPRETER_GUARD=1.
     if (!grantManager) return {};
-    const grants = grantManager.getGrants();
-    const restrictedSubstrings = deriveRestrictedSubstrings(grants);
     if (restrictedSubstrings.length === 0) return {};
-
-    // Normalize `~` and `$HOME` in the command to the real home dir for the
-    // substring match. This catches the obvious-shell-idiom case without
-    // pretending to be a real parser.
-    const home = homedir();
-    const normalized = command
-      .replace(/\$HOME/g, home)
-      .replace(/(^|[\s/=:])~(?=$|[/\s])/g, `$1${home}`);
 
     for (const sub of restrictedSubstrings) {
       if (normalized.includes(sub)) {
@@ -200,6 +241,35 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
 
     return {};
   };
+}
+
+/**
+ * Normalize the obvious `~` and `$HOME` shell idioms to the real home dir so
+ * the substring checks catch the non-adversarial accident case. NOT a parser —
+ * variable-assembled paths (`H=$HOME; …$H/…`) are intentionally out of scope
+ * (see module-header threat model). Shared by both checks.
+ */
+function normalizeHomeRefs(command: string, home: string): string {
+  return command
+    .replace(/\$HOME/g, home)
+    .replace(/(^|[\s/=:])~(?=$|[/\s])/g, `$1${home}`);
+}
+
+/**
+ * True when a command references a sensitive location the path-approval policy
+ * protects — via either the grant-filtered restricted substrings (literal /
+ * `~` / `$HOME` forms, same as check 2) or the lexical credential-fragment
+ * signal (which catches interpreter-assembled paths the literal scan misses).
+ * Used to scope the interpreter-eval guard (check 1) so it fires only on
+ * credential-adjacent one-liners, not on every `-c`/`-e` invocation.
+ */
+function referencesSensitivePath(
+  normalized: string,
+  rawCommand: string,
+  restrictedSubstrings: string[],
+): boolean {
+  if (restrictedSubstrings.some((sub) => normalized.includes(sub))) return true;
+  return SENSITIVE_PATH_SIGNAL.test(rawCommand);
 }
 
 /**

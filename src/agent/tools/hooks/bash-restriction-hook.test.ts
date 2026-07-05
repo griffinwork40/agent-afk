@@ -1,13 +1,18 @@
 /**
  * Tests for `createBashRestrictionHook` — pre-tool-use gate that hard-blocks
- * bash invocations referencing restricted paths or evaluating interpreter
- * code.
+ * bash invocations referencing restricted paths, plus interpreter `-c`/`-e`
+ * one-liners whose payload references those same sensitive paths.
  *
  * Threat-model invariant pinned by these tests:
  *   - Substring match catches the cat /restricted/path case we observed.
- *   - The interpreter denylist catches python -c, node -e, ruby -e, sh -c.
- *   - Variable-assembled bypasses are EXPLICITLY out of scope — see
- *     `bash-restriction-hook.ts` module header. The "documented bypass"
+ *   - The interpreter guard is SCOPED to credential-adjacent payloads: it
+ *     catches `python -c`/`node -e`/`sh -c` one-liners that reference a
+ *     sensitive path (`.ssh`, `id_rsa`, `.aws`, `/etc/shadow`, or a
+ *     home path assembled at runtime), but NOT pure-computation one-liners
+ *     (`python -c "1+1"`) — those touch no secret, so blocking them was pure
+ *     friction. See the module-header History note.
+ *   - Variable-assembled / string-split bypasses are EXPLICITLY out of scope —
+ *     see `bash-restriction-hook.ts` module header. The "documented bypass"
  *     test pins that behavior.
  */
 
@@ -32,41 +37,67 @@ function ctx(command: unknown): PreToolUseContext {
   return { event: 'PreToolUse', toolName: 'bash', input: { command } };
 }
 
-describe('createBashRestrictionHook — interpreter denylist', () => {
+describe('createBashRestrictionHook — interpreter denylist (scoped to credential-adjacent payloads)', () => {
   const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
 
-  it('blocks python -c', () => {
-    const decision = hook(ctx('python -c "import os; print(os.uname())"'));
+  // --- BLOCKS: interpreter one-liners that reference a sensitive path ---
+
+  it('blocks python -c that reads an SSH key', () => {
+    const decision = hook(ctx('python -c "print(open(\'~/.ssh/id_rsa\').read())"'));
     expect(decision.decision).toBe('block');
     expect(decision.reason).toContain('Interpreter');
   });
 
-  it('blocks python3 -c', () => {
-    expect(hook(ctx('python3 -c "1+1"')).decision).toBe('block');
+  it('blocks node -e that references cloud credentials', () => {
+    expect(
+      hook(ctx('node -e "require(\'fs\').readFileSync(process.env.HOME + \'/.aws/credentials\')"'))
+        .decision,
+    ).toBe('block');
   });
 
-  it('blocks node -e', () => {
-    expect(hook(ctx('node -e "console.log(1)"')).decision).toBe('block');
+  it('blocks sh -c that cats an SSH key', () => {
+    expect(hook(ctx('sh -c "cat ~/.ssh/id_ed25519"')).decision).toBe('block');
   });
 
-  it('blocks ruby -e', () => {
-    expect(hook(ctx('ruby -e "puts 1"')).decision).toBe('block');
+  it('blocks a home path the interpreter assembles at runtime (the gap check 2 cannot see)', () => {
+    // check 2's literal-substring scan never sees this — the home dir is built
+    // by expanduser at runtime — but the `.ssh` / `id_rsa` fragments do.
+    expect(
+      hook(ctx('python3 -c "import os; open(os.path.expanduser(\'~/.ssh/id_rsa\'))"')).decision,
+    ).toBe('block');
   });
 
-  it('blocks osascript -e', () => {
-    expect(hook(ctx('osascript -e \'tell app "Finder" to quit\'')).decision).toBe('block');
-  });
-
-  it('blocks sh -c, bash -c, zsh -c, fish -c', () => {
-    expect(hook(ctx('sh -c "rm x"')).decision).toBe('block');
-    expect(hook(ctx('bash -c "rm x"')).decision).toBe('block');
-    expect(hook(ctx('zsh -c "rm x"')).decision).toBe('block');
-    expect(hook(ctx('fish -c "rm x"')).decision).toBe('block');
+  it('DOES block interpreter reads of /etc/shadow', () => {
+    expect(hook(ctx('sh -c "cat /etc/shadow"')).decision).toBe('block');
   });
 
   it('block message names typed file tools as the proper escape', () => {
-    const decision = hook(ctx('python -c "open(\\"/etc/passwd\\").read()"'));
+    const decision = hook(ctx('python -c "open(\'~/.ssh/id_rsa\').read()"'));
     expect(decision.reason).toMatch(/read_file|write_file|edit_file/);
+  });
+
+  // --- PASSES: pure-computation one-liners touch no sensitive path (the calibration) ---
+
+  it('does NOT block pure-computation python -c', () => {
+    // Previously blocked as blanket friction; now allowed — no secret is touched.
+    expect(hook(ctx('python -c "1+1"')).decision).not.toBe('block');
+    expect(hook(ctx('python3 -c "print(2**64)"')).decision).not.toBe('block');
+  });
+
+  it('does NOT block pure-computation node -e / ruby -e', () => {
+    expect(hook(ctx('node -e "console.log(1)"')).decision).not.toBe('block');
+    expect(hook(ctx('ruby -e "puts 1"')).decision).not.toBe('block');
+  });
+
+  it('does NOT block sh -c / bash -c / zsh -c that touch no sensitive path', () => {
+    expect(hook(ctx('sh -c "rm x"')).decision).not.toBe('block');
+    expect(hook(ctx('bash -c "echo hi"')).decision).not.toBe('block');
+    expect(hook(ctx('zsh -c "ls"')).decision).not.toBe('block');
+  });
+
+  it('does NOT block interpreter reads of world-readable /etc/passwd (no secret)', () => {
+    // /etc/passwd is world-readable and carries no secret; /etc/shadow does.
+    expect(hook(ctx('python -c "print(open(\'/etc/passwd\').read())"')).decision).not.toBe('block');
   });
 
   it('does NOT block paths that just CONTAIN the interpreter name', () => {
@@ -82,14 +113,19 @@ describe('createBashRestrictionHook — interpreter denylist', () => {
 });
 
 describe('createBashRestrictionHook — interpreter guard opt-out (AFK_DISABLE_BASH_INTERPRETER_GUARD)', () => {
-  it('skips the interpreter denylist when disableInterpreterGuard is true', () => {
+  it('skips the interpreter guard when disableInterpreterGuard is true', () => {
     const hook = createBashRestrictionHook({
       getGrantManager: mockGrants,
       disableInterpreterGuard: true,
     });
-    expect(hook(ctx('python -c "1+1"')).decision).not.toBe('block');
-    expect(hook(ctx('sh -c "echo hi"')).decision).not.toBe('block');
-    expect(hook(ctx('node -e "console.log(1)"')).decision).not.toBe('block');
+    // Even credential-adjacent one-liners (which WOULD block by default, and
+    // which check 2 misses because the path is quote-tilde / runtime-assembled)
+    // pass once the interpreter guard is disabled.
+    expect(hook(ctx('python -c "open(\'~/.ssh/id_rsa\').read()"')).decision).not.toBe('block');
+    expect(
+      hook(ctx('node -e "require(\'fs\').readFileSync(process.env.HOME + \'/.aws/credentials\')"'))
+        .decision,
+    ).not.toBe('block');
   });
 
   it('opting out does NOT weaken the restricted-root substring check', () => {
@@ -106,37 +142,55 @@ describe('createBashRestrictionHook — interpreter guard opt-out (AFK_DISABLE_B
 
   it('guard is active by default when the option is omitted', () => {
     const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
-    expect(hook(ctx('python -c "1+1"')).decision).toBe('block');
+    expect(hook(ctx('python -c "open(\'~/.ssh/id_rsa\').read()"')).decision).toBe('block');
   });
 });
 
 describe('createBashRestrictionHook — interpreter guard interactivity gate (H2)', () => {
-  // The interpreter denylist hard-blocks only on INTERACTIVE surfaces (a wired
-  // grant manager), where the model can be redirected to the prompt-able typed
-  // file tools. On HEADLESS surfaces (no grant manager) it fails open by
-  // default so legitimate automation (`python -c`, `sh -c`) is not hard-blocked
-  // with no recourse — the day-one regression this gate fixes.
+  // The interpreter guard hard-blocks credential-adjacent one-liners only on
+  // INTERACTIVE surfaces (a wired grant manager), where the model can be
+  // redirected to the prompt-able typed file tools. On HEADLESS surfaces (no
+  // grant manager) it fails open by default so legitimate automation is not
+  // hard-blocked with no recourse — the day-one regression this gate fixes.
+  //
+  // `cred` is credential-adjacent (matches SENSITIVE_PATH_SIGNAL) AND uses a
+  // quote-prefixed `~` that check 2's literal scan does NOT normalize, so the
+  // interpreter guard (check 1) is the sole decider — isolating this behavior.
+  const cred = 'python -c "open(\'~/.ssh/id_rsa\').read()"';
 
-  it('does NOT block interpreter eval on a headless surface (no grant manager wired)', () => {
+  it('does NOT block a credential-adjacent eval on a headless surface (no grant manager wired)', () => {
     const hook = createBashRestrictionHook({ getGrantManager: () => undefined });
-    expect(hook(ctx('python -c "1+1"')).decision).not.toBe('block');
-    expect(hook(ctx('sh -c "echo hi"')).decision).not.toBe('block');
-    expect(hook(ctx('node -e "console.log(1)"')).decision).not.toBe('block');
+    expect(hook(ctx(cred)).decision).not.toBe('block');
   });
 
-  it('DOES block interpreter eval on an interactive surface (grant manager wired)', () => {
+  it('DOES block a credential-adjacent eval on an interactive surface (grant manager wired)', () => {
     const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
-    expect(hook(ctx('python -c "1+1"')).decision).toBe('block');
+    expect(hook(ctx(cred)).decision).toBe('block');
   });
 
-  it('forceInterpreterGuard re-enables the denylist on headless surfaces', () => {
+  it('never blocks a pure-computation eval, interactive or headless', () => {
+    const interactive = createBashRestrictionHook({ getGrantManager: mockGrants });
+    const headless = createBashRestrictionHook({ getGrantManager: () => undefined });
+    expect(interactive(ctx('python -c "1+1"')).decision).not.toBe('block');
+    expect(headless(ctx('python -c "1+1"')).decision).not.toBe('block');
+  });
+
+  it('forceInterpreterGuard re-enables the guard on headless surfaces', () => {
     const hook = createBashRestrictionHook({
       getGrantManager: () => undefined,
       forceInterpreterGuard: true,
     });
-    const decision = hook(ctx('python -c "1+1"'));
+    const decision = hook(ctx(cred));
     expect(decision.decision).toBe('block');
     expect(decision.reason).toContain('Interpreter');
+  });
+
+  it('forceInterpreterGuard still does NOT block pure computation on headless', () => {
+    const hook = createBashRestrictionHook({
+      getGrantManager: () => undefined,
+      forceInterpreterGuard: true,
+    });
+    expect(hook(ctx('python -c "1+1"')).decision).not.toBe('block');
   });
 
   it('disableInterpreterGuard wins over forceInterpreterGuard (explicit OFF beats opt-in ON)', () => {
@@ -145,7 +199,7 @@ describe('createBashRestrictionHook — interpreter guard interactivity gate (H2
       disableInterpreterGuard: true,
       forceInterpreterGuard: true,
     });
-    expect(hook(ctx('python -c "1+1"')).decision).not.toBe('block');
+    expect(hook(ctx(cred)).decision).not.toBe('block');
   });
 
   it('forcing the guard on headless does not change the substring check (stays open)', () => {
@@ -154,7 +208,7 @@ describe('createBashRestrictionHook — interpreter guard interactivity gate (H2
       forceInterpreterGuard: true,
     });
     // A plain restricted-path cat (no interpreter) stays open on headless —
-    // forceInterpreterGuard only governs the interpreter denylist.
+    // forceInterpreterGuard only governs the interpreter guard.
     expect(hook(ctx(`cat ${homedir()}/.ssh/id_rsa`)).decision).not.toBe('block');
   });
 });
