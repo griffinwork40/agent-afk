@@ -767,7 +767,8 @@ export const configSetTool: AnthropicToolDef = {
         description:
           'Required for action "set". A string, number, or boolean (config keys also accept arrays where ' +
           'the schema expects one, e.g. telegram.notify.targets). Coerced to the key\'s declared type. ' +
-          'Model-slot keys (models.local/small/medium/large) also accept a { id, provider, baseUrl } object.',
+          'Model-slot keys (models.local/small/medium/large) also accept a { id, provider, name } object; ' +
+          'baseUrl/apiKey are human-gated — set them per-tier via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here.',
       },
     },
     required: ['target', 'key'],

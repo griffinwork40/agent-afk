@@ -196,10 +196,10 @@ export interface ConfigKeySpec {
  */
 export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'model', tier: 'agent', type: 'string', description: 'Default model id / alias.' },
-  { path: 'models.local', tier: 'agent', type: 'model-slot', description: 'Local-tier model id (OpenAI-compatible shim: Ollama, LM Studio, vLLM, MLX). Accepts a bare id string or a { id, provider, baseUrl } object.' },
-  { path: 'models.small', tier: 'agent', type: 'model-slot', description: 'Small-tier model id. Accepts a bare id string or a { id, provider, baseUrl } object.' },
-  { path: 'models.medium', tier: 'agent', type: 'model-slot', description: 'Medium-tier model id. Accepts a bare id string or a { id, provider, baseUrl } object.' },
-  { path: 'models.large', tier: 'agent', type: 'model-slot', description: 'Large-tier model id. Accepts a bare id string or a { id, provider, baseUrl } object.' },
+  { path: 'models.local', tier: 'agent', type: 'model-slot', description: 'Local-tier model id (OpenAI-compatible shim: Ollama, LM Studio, vLLM, MLX). Accepts a bare id string or a { id, provider, name } object (baseUrl/apiKey are human-gated: set them via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here).' },
+  { path: 'models.small', tier: 'agent', type: 'model-slot', description: 'Small-tier model id. Accepts a bare id string or a { id, provider, name } object (baseUrl/apiKey are human-gated: set them via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here).' },
+  { path: 'models.medium', tier: 'agent', type: 'model-slot', description: 'Medium-tier model id. Accepts a bare id string or a { id, provider, name } object (baseUrl/apiKey are human-gated: set them via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here).' },
+  { path: 'models.large', tier: 'agent', type: 'model-slot', description: 'Large-tier model id. Accepts a bare id string or a { id, provider, name } object (baseUrl/apiKey are human-gated: set them via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here).' },
   { path: 'maxTokens', tier: 'agent', type: 'number', clamp: { min: 1, max: 1_000_000, integer: true }, description: 'Max tokens per turn.' },
   { path: 'temperature', tier: 'agent', type: 'number', clamp: { min: 0, max: 2 }, description: 'Sampling temperature.' },
   { path: 'autoRouting.interactive', tier: 'agent', type: 'boolean', description: 'Auto-route model in the REPL.' },
