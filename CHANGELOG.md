@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.20.7] - 2026-07-05
+
+### Fixed
+- make exit_plan_mode live-mode-gated + restore working mode across the Shift+Tab ring (#410) (99468d8)
+
 ## [5.20.6] - 2026-07-05
 
 ### Added
