@@ -324,6 +324,54 @@ describe('stale-clean-preserves-worktree', () => {
     );
     expect(branchDeleteCalls).toHaveLength(0);
   });
+
+  it('does not classify fresh zero-ahead clean worktrees as stale-clean when clean threshold is zero', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-fresh-zero-ahead');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+        baseSha: 'base123',
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot, head: 'base123' });
+    const wtBlock = worktreeBlock({
+      path: worktreePath,
+      head: 'base123',
+      branch: 'refs/heads/afk/fresh-zero-ahead',
+    });
+    const porcelainOut = `${mainBlock}\n\n${wtBlock}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' };
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        return { stdout: '0\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      maxAgeDaysClean: 0,
+      telemetryPath: telemetryFile,
+    });
+
+    const candidate = result.candidates.find((c) => c.path === worktreePath);
+    expect(candidate?.verdict).toBe('active');
+    expect(result.removed).not.toContain(worktreePath);
+    expect(result.warnings.some((w) => w.includes('stale-clean'))).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
