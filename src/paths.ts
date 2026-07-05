@@ -122,8 +122,8 @@ export function getProjectSkillsDir(cwd: string = process.cwd()): string {
   return join(getProjectAfkDir(cwd), 'skills');
 }
 
-export function getProjectPluginsDir(): string {
-  return join(getProjectAfkDir(), 'plugins');
+export function getProjectPluginsDir(cwd: string = process.cwd()): string {
+  return join(getProjectAfkDir(cwd), 'plugins');
 }
 
 /**

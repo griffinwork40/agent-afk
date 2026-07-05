@@ -263,9 +263,22 @@ export class SkillExecutor {
     this.currentCwd = ctx.cwd;
   }
 
-  /** Re-anchor the cwd used for skill-forked sub-agents after a cwd change. */
+  /**
+   * Re-anchor the cwd used for skill-forked sub-agents after a cwd change.
+   *
+   * Invariant: also drops the lazily-populated `pluginBodies` cache. That
+   * cache is keyed implicitly by whatever `currentCwd` was at first
+   * population (see `getPluginSkillBody()`); without clearing it here, a
+   * plugin skill dispatched after this cwd change would keep resolving the
+   * OLD cwd's plugin bodies (returning stale content for a same-named
+   * skill, or a false "not found" for a skill that only exists at the new
+   * cwd) even though `currentCwd` itself is correctly updated below. The
+   * next `getPluginSkillBody()` call re-populates via a fresh
+   * `discoverPluginSkillBodies()` scan against the new `currentCwd`.
+   */
   setCwd(cwd: string): void {
     this.currentCwd = cwd;
+    this.pluginBodies = null;
   }
 
   /**
@@ -1171,7 +1184,10 @@ export class SkillExecutor {
 
   private getPluginSkillBody(name: string): PluginSkillBody | undefined {
     if (!this.pluginBodies) {
-      this.pluginBodies = discoverPluginSkillBodies(this.ctx.pluginConfigs);
+      this.pluginBodies = discoverPluginSkillBodies(
+        this.ctx.pluginConfigs,
+        this.currentCwd !== undefined ? { cwd: this.currentCwd } : undefined,
+      );
     }
     return this.pluginBodies.get(name);
   }
