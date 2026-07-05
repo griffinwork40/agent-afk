@@ -1801,6 +1801,134 @@ describe('TerminalCompositor', () => {
         submitTurn('gamma');
       });
 
+      it('coalesces MULTIPLE messages Entered during ONE soft-stop window (last-wins, no backlog)', async () => {
+        // The residual regression the Bug-B fix (see block comment above) did NOT
+        // cover: it assumed the synchronous interrupt closes the streaming window
+        // at the source. For a SUBAGENT turn that assumption fails —
+        // cancelActiveForeground() (subagent-executor.ts) resolves the parent
+        // await only after the child settles, so the compositor lingers in
+        // 'streaming' for seconds. A user who sees no turn start types several
+        // messages + Enter; pre-fix each pushed onto the FIFO, which drains ONE
+        // per turn → the "it doesn't send, then I keep sending characters to catch
+        // up" report. Post-fix, only the LATEST message survives the window.
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
+        await c.arm();
+        c.setInputMode('idle');
+        c.setInputMode('streaming'); // turn arm
+
+        // ESC once (soft-stop), then THREE messages Entered during the teardown
+        // window (softStopped stays true until the post-soft-stop → idle transition).
+        stdin.emit('keypress', undefined, { name: 'escape' });
+        for (const msg of ['first', 'second', 'third']) {
+          for (const ch of msg) stdin.emit('keypress', ch, { name: ch, sequence: ch });
+          stdin.emit('keypress', undefined, { name: 'return' });
+        }
+        // Last-wins: the FIFO holds only the most recent message, not a backlog of 3.
+        expect(c.getPendingCount()).toBe(1);
+        expect(c.getBuffer()).toEqual({ text: '', queued: true });
+
+        // dispose → idle: softStopped cleared, no drain (onSubmit null).
+        c.setInputMode('idle');
+        expect(c.getPendingCount()).toBe(1);
+
+        // readLine drains the single surviving payload as exactly ONE next turn.
+        const onSubmit = vi.fn();
+        c.setOnSubmit(onSubmit);
+        c.setInputMode('idle');
+        expect(onSubmit).toHaveBeenCalledTimes(1);
+        expect(onSubmit).toHaveBeenCalledWith({ text: 'third', attachments: [] });
+      });
+
+      it('normal multi-message type-ahead (NO ESC) still accumulates every message (blast-radius guard)', async () => {
+        // The last-wins coalesce fires ONLY under softStopped. Ordinary mid-turn
+        // type-ahead must still queue every message for sequential-turn delivery —
+        // coalescing here would silently drop queued turns the user intended.
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
+        await c.arm();
+        c.setInputMode('idle');
+        c.setInputMode('streaming'); // turn arm, no ESC → softStopped stays false
+
+        for (const msg of ['one', 'two', 'three']) {
+          for (const ch of msg) stdin.emit('keypress', ch, { name: ch, sequence: ch });
+          stdin.emit('keypress', undefined, { name: 'return' });
+        }
+        // All three accumulate — the sequential-turn delivery contract is preserved.
+        expect(c.getPendingCount()).toBe(3);
+      });
+
+      it('pre-ESC queued message survives a post-ESC Enter (coalesce preserves pre-ESC queue)', async () => {
+        // Regression guard for the HIGH review finding: the array-wide
+        // `pendingSubmissions = [payload]` reassignment silently dropped any
+        // message committed via Enter BEFORE pressing ESC — violating the
+        // handleEscape contract ("Already-queued messages: left untouched").
+        // The fix snapshots the queue length at ESC time (softStopQueueBase)
+        // and truncates back to that base before pushing, so pre-ESC payloads
+        // drain as their own turns while post-ESC type-ahead still coalesces.
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
+        await c.arm();
+        c.setInputMode('idle');
+        c.setInputMode('streaming'); // turn arm
+
+        // 1. Enter "msg1" while streaming (no ESC yet) → push, queue=[msg1].
+        for (const ch of 'msg1') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+        stdin.emit('keypress', undefined, { name: 'return' });
+        expect(c.getPendingCount()).toBe(1);
+
+        // 2. ESC → softStopped=true, softStopQueueBase=1, queue untouched.
+        stdin.emit('keypress', undefined, { name: 'escape' });
+
+        // 3. Enter "msg2" during linger → truncate-to-base(1) + push → queue=[msg1, msg2].
+        for (const ch of 'msg2') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+        stdin.emit('keypress', undefined, { name: 'return' });
+        expect(c.getPendingCount()).toBe(2); // pre-ESC msg1 is NOT dropped
+
+        // 4. dispose → idle: softStopped cleared, no drain (onSubmit null).
+        c.setInputMode('idle');
+        expect(c.getPendingCount()).toBe(2);
+
+        // 5. readLine drains the FIFO oldest-first: msg1 as the first turn, msg2 as the second.
+        const onSubmit = vi.fn();
+        c.setOnSubmit(onSubmit);
+        c.setInputMode('idle'); // drain #1 → msg1
+        expect(onSubmit).toHaveBeenCalledTimes(1);
+        expect(onSubmit).toHaveBeenCalledWith({ text: 'msg1', attachments: [] });
+        c.setInputMode('idle'); // drain #2 → msg2
+        expect(onSubmit).toHaveBeenCalledTimes(2);
+        expect(onSubmit).toHaveBeenNthCalledWith(2, { text: 'msg2', attachments: [] });
+      });
+
+      it('pre-ESC queued message survives MULTIPLE post-ESC Enters (coalesce replaces only post-ESC entries)', async () => {
+        // Same contract as above, but with several post-ESC Enters: the pre-ESC
+        // payload must survive while the post-ESC ones coalesce to last-wins.
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
+        await c.arm();
+        c.setInputMode('idle');
+        c.setInputMode('streaming'); // turn arm
+
+        for (const ch of 'pre') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+        stdin.emit('keypress', undefined, { name: 'return' });
+        expect(c.getPendingCount()).toBe(1);
+
+        stdin.emit('keypress', undefined, { name: 'escape' });
+
+        for (const msg of ['post1', 'post2', 'post3']) {
+          for (const ch of msg) stdin.emit('keypress', ch, { name: ch, sequence: ch });
+          stdin.emit('keypress', undefined, { name: 'return' });
+        }
+        // pre-ESC "pre" survives (base=1); three post-ESC Enters coalesce to
+        // last-wins ("post3") → total queue = 2, NOT 1 (pre not dropped) and NOT 4.
+        expect(c.getPendingCount()).toBe(2);
+
+        c.setInputMode('idle'); // dispose → no drain (onSubmit null)
+
+        const onSubmit = vi.fn();
+        c.setOnSubmit(onSubmit);
+        c.setInputMode('idle'); // drain #1 → "pre"
+        expect(onSubmit).toHaveBeenCalledWith({ text: 'pre', attachments: [] });
+        c.setInputMode('idle'); // drain #2 → "post3" (last-wins)
+        expect(onSubmit).toHaveBeenNthCalledWith(2, { text: 'post3', attachments: [] });
+      });
+
       it('still auto-flushes normal mid-turn type-ahead (NO ESC) — no regression', async () => {
         const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
         await c.arm();
