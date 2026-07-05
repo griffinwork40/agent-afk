@@ -94,7 +94,7 @@ export interface SubagentExecutorContext {
    */
   defaultSubagentModel?: AgentModelInput;
   childProviderFactory?: (args: ChildProviderFactoryArgs) => ModelProvider;
-  childSkillExecutorFactory?: (depth: number, maxDepth: number, signal: AbortSignal) => SkillExecutor;
+  childSkillExecutorFactory?: (depth: number, maxDepth: number, signal: AbortSignal, inheritedCwd?: string) => SkillExecutor;
   /**
    * Nesting depth this executor sits at. **Required** — pass explicit `0`
    * at top-level wiring sites (CLI, telegram, threads) and `parent.depth + 1`
@@ -848,7 +848,7 @@ export class SubagentExecutor implements SubagentControl {
         parentModel: childModel,
       });
       const childSkillExecutor = this.ctx.childSkillExecutorFactory
-        ? this.ctx.childSkillExecutorFactory(depth + 1, maxDepth, call.signal)
+        ? this.ctx.childSkillExecutorFactory(depth + 1, maxDepth, call.signal, this.currentCwd)
         : undefined;
       // Pass `model` so the factory routes between AnthropicDirect /
       // OpenAICompatible per `providerForModel(model)`. Without this, every

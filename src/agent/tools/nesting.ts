@@ -285,13 +285,22 @@ export function createChildSkillExecutorFactory(
   // child's restricted/depth-cap provider builders point at the configured
   // endpoint. Trailing optional — legacy positional callers stay valid.
   openaiBaseUrl?: string,
-): (depth: number, maxDepth: number, signal: AbortSignal) => SkillExecutor {
-  const factory: (depth: number, maxDepth: number, signal: AbortSignal) => SkillExecutor = (
+): (depth: number, maxDepth: number, signal: AbortSignal, inheritedCwd?: string) => SkillExecutor {
+  const factory: (depth: number, maxDepth: number, signal: AbortSignal, inheritedCwd?: string) => SkillExecutor = (
     depth,
     maxDepth,
     signal,
-  ) =>
-    new SkillExecutor({
+    inheritedCwd,
+  ) => {
+    // Invariant: the closure-captured `cwd` is frozen at bootstrap. For
+    // born-named `afk -w` worktrees it is `undefined` (the worktree is
+    // created on turn 1 via worktree-autoname, after bootstrap). A later
+    // `setCwd` re-anchors the live SkillExecutor / SubagentExecutor but
+    // NOT this closure. The `inheritedCwd` parameter (passed by the
+    // depth-1 caller) carries the live value so grandchild SkillExecutors
+    // anchor to the worktree, not the host's process.cwd().
+    const effectiveCwd = inheritedCwd ?? cwd;
+    return new SkillExecutor({
       parentSession: createStubParentSession(signal),
       defaultModel,
       // Resolved default-subagent policy threaded through every depth so a
@@ -326,7 +335,16 @@ export function createChildSkillExecutorFactory(
       // worktree. Mirrors traceWriter / backgroundRegistry propagation.
       // Without this, a depth ≥ 2 skill dispatch silently loses worktree
       // isolation even though the depth-0 wiring was correct.
-      ...(cwd !== undefined ? { cwd } : {}),
+      //
+      // Invariant: prefer `inheritedCwd` (passed by the depth-1 caller's
+      // live `this.currentCwd`) over the closure-captured `cwd`. The
+      // closure value is frozen at bootstrap; for born-named `afk -w`
+      // worktrees it is `undefined` and a later `setCwd` re-anchors the
+      // live executors but NOT this closure. The `inheritedCwd` parameter
+      // (threaded from skill-executor.ts:652 / subagent-executor.ts:850)
+      // carries the live value so grandchild SkillExecutors anchor to the
+      // worktree, not the host's process.cwd().
+      ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
       // Per-model credential resolver: propagates so every depth in the
       // skill chain resolves credentials by child model rather than the
       // pre-captured parent apiKey. Optional — backward compat fallback to
@@ -341,6 +359,7 @@ export function createChildSkillExecutorFactory(
       // dispatch `agent_type`-named sub-agents at any depth.
       ...(agentRegistry !== undefined ? { agentRegistry } : {}),
     });
+  };
   return factory;
 }
 

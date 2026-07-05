@@ -112,7 +112,7 @@ export interface SkillExecutorContext {
    * skill child can in turn dispatch sibling skills. Mirrors
    * {@link SubagentExecutorContext.childSkillExecutorFactory}.
    */
-  childSkillExecutorFactory?: (depth: number, maxDepth: number, signal: AbortSignal) => SkillExecutor;
+  childSkillExecutorFactory?: (depth: number, maxDepth: number, signal: AbortSignal, inheritedCwd?: string) => SkillExecutor;
   /**
    * Witness-layer trace writer. When provided, the per-call
    * {@link SubagentManager} that wraps each skill fork is constructed with
@@ -663,7 +663,7 @@ export class SkillExecutor {
       ...(childConfig.model !== undefined ? { parentModel: childConfig.model } : {}),
     });
     const childSkillExecutor = this.ctx.childSkillExecutorFactory
-      ? this.ctx.childSkillExecutorFactory(depth + 1, maxDepth, signal)
+      ? this.ctx.childSkillExecutorFactory(depth + 1, maxDepth, signal, this.currentCwd)
       : undefined;
     // Pass `model` so the factory routes between AnthropicDirect /
     // OpenAICompatible per `providerForModel(model)`. Without this, every
