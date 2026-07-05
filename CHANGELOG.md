@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.20.8] - 2026-07-05
+
+### Fixed
+- grant main-repo read root to worktree subagents (#416) (205612e)
+- resolve project skills against the session cwd (#179) (#375) (4919343)
+
 ## [5.20.7] - 2026-07-05
 
 ### Fixed
