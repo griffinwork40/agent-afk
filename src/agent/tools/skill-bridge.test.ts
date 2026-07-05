@@ -1014,5 +1014,16 @@ describe('discoverPluginSkillBodies — project plugin session-cwd resolution', 
     _resetPluginScanCache();
     const bodiesWithCwd = discoverPluginSkillBodies(undefined, { cwd: cwdA });
     expect(bodiesWithCwd.has('session-cwd-plugin-skill')).toBe(true);
+
+    // And switching to project B must not leak project A's plugin skill,
+    // while project B's own plugin skill becomes visible (cwd-A -> cwd-B
+    // switch — mirrors the scanAllPluginRoots eviction test above, which
+    // this test previously didn't exercise).
+    writePluginSkillIn(cwdB, 'other-cwd-plugin-skill', 'Plugin skill body B');
+
+    _resetPluginScanCache();
+    const bodiesWithCwdB = discoverPluginSkillBodies(undefined, { cwd: cwdB });
+    expect(bodiesWithCwdB.has('other-cwd-plugin-skill')).toBe(true);
+    expect(bodiesWithCwdB.has('session-cwd-plugin-skill')).toBe(false);
   });
 });

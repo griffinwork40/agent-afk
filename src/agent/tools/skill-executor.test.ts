@@ -988,6 +988,48 @@ describe('SkillExecutor', () => {
     });
   });
 
+  describe('getPluginSkillBody — cwd cache invalidation (regression)', () => {
+    // Regression: PR #418 threaded cwd into the FIRST population of the
+    // lazy `pluginBodies` cache but did not invalidate it on setCwd(), so a
+    // plugin skill dispatched after a mid-session cwd change (REPL worktree
+    // auto-naming, `worktree-autoname.ts`) would keep returning a stale
+    // project-A plugin body even though the session has moved to project B.
+    it('setCwd() clears the cached pluginBodies map so the next lookup re-resolves under the new cwd', () => {
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'parent-cwd-invalidate',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        cwd: '/tmp/launch/dir',
+      });
+
+      // Simulate a prior plugin-skill dispatch that already populated the
+      // lazy cache (same cache-injection idiom used elsewhere in this file,
+      // e.g. the `pluginBodies` assignments in the fork-dispatch tests below)
+      // — bypasses the real disk scan so this stays a pure unit test of the
+      // invalidation contract itself.
+      (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
+        new Map([
+          [
+            'stale-plugin',
+            { body: 'stale body from project A', pluginPath: '/tmp/launch/dir/.afk/plugins/stale', context: 'load' },
+          ],
+        ]);
+
+      executor.setCwd('/tmp/launch/dir/.afk-worktrees/afk-xyz');
+
+      // Before the fix, setCwd() only reassigned `currentCwd` and left the
+      // stale Map in place, so a plugin skill dispatched post-cwd-change
+      // would keep resolving project A's body (or wrongly report the new
+      // project's own plugin skill as "not found").
+      expect(
+        (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies,
+      ).toBeNull();
+    });
+  });
+
   describe('resolveApiKeyForModel — per-model credential resolution (skill fork path)', () => {
     // Regression: "Anthropic child starves when parent is OpenAI-routed."
     // Same root cause as subagent-executor.test.ts's block — the skill-dispatch
