@@ -23,6 +23,7 @@ export function createSessionStats(model: AgentModelInput): SessionStats {
     turns: [],
     model,
     permissionMode: 'default',
+    thinkingUi: 'live',
   };
 }
 
@@ -53,6 +54,8 @@ export function resetStats(stats: SessionStats): void {
   delete stats.name;
   // Preserve `permissionMode` (user-controlled state — the plan/AFK gates read
   // it live; `/clear` should not silently drop the operator out of AFK mode).
+  // Preserve `thinkingUi` for the same reason — the `/thinking` user setting
+  // should survive a `/clear` just as `/model`'s choice does.
 }
 
 /**
