@@ -128,7 +128,9 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
    * `done` event (e.g. `'end_turn'`, `'tool_use_loop_capped'`). Persisted as
    * an instance field so `runToResult` can attach it to the built
    * {@link SubagentResult}, letting callers distinguish a capped partial from
-   * a genuine completion. Reset at the start of each run.
+   * a genuine completion. Reset at the start of `run()` (before the
+   * `cancelled` short-circuit) so a re-invoked or cancelled handle never
+   * surfaces a prior run's stop reason on the error result.
    */
   private lastStopReason: string | undefined;
 
@@ -169,6 +171,13 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
 
   async run(prompt: string, sinkOverride?: SubagentProgressSink): Promise<Message> {
     if (this.currentStatus === 'running') throw new Error(`Subagent ${this.id} is already running`);
+    // Invariant: reset the captured stop reason here — after the `running`
+    // guard, before the `cancelled` short-circuit — so a re-invoked or
+    // cancelled handle never surfaces a PRIOR run's stopReason on the error
+    // result built by `runToResult`'s catch. Past the `running` guard
+    // `currentStatus` is never `running` (and there is no `await` before it is
+    // set below), so no in-flight run owns this value for us to clobber.
+    this.lastStopReason = undefined;
     if (this.currentStatus === 'cancelled') throw new Error(`Subagent ${this.id} is cancelled`);
 
     this.currentStatus = 'running';
@@ -270,7 +279,6 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     // throw boundary is the whole point — the local `streamedContent` of the
     // previous version got dropped on the floor when the iterator threw.
     this.lastStreamedContent = '';
-    this.lastStopReason = undefined;
     this.currentTrace = createEmptyTrace();
 
     const activeSink = sinkOverride ?? this.progressSink ?? getCurrentSink();
