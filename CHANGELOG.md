@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.21.0] - 2026-07-05
+
+### Added
+- accept per-slot model binding objects in config_set (#409) (6c6c81f)
+
+### Changed
+- bump @types/node from 22.19.19 to 26.1.0 in /website (#422) (0f5d4e8)
+- bump next from 16.2.9 to 16.2.10 in /website (#421) (438ca42)
+- bump @types/react from 19.2.16 to 19.2.17 in /website (#420) (20e0bd7)
+- bump the fumadocs group in /website with 2 updates (#419) (fcd018d)
+
 ## [5.20.8] - 2026-07-05
 
 ### Fixed
