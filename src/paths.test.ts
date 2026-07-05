@@ -37,9 +37,15 @@ import {
   getBrowserProfileStateDir,
   getBrowserStorageStatePath,
 } from './paths.js';
+import { useUnsetAfkHome } from './__test-utils__/unset-afk-home.js';
 
 let tmpHome: string;
 let originalHome: string | undefined;
+
+// This suite asserts the unset-AFK_HOME fallback ($HOME/.afk) — drop the
+// global sentinel AFK_HOME per test; HOME is redirected to a tmp dir below.
+// Cases that exercise AFK_HOME explicitly set/delete it themselves.
+useUnsetAfkHome();
 
 beforeEach(() => {
   originalHome = process.env['HOME'];

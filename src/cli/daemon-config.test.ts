@@ -18,11 +18,17 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { loadConfig, _resetConfigCache } from './config.js';
+import { useUnsetAfkHome } from '../__test-utils__/unset-afk-home.js';
 
 vi.mock('dotenv', () => ({
   default: { config: () => ({ parsed: {} }) },
   config: () => ({ parsed: {} }),
 }));
+
+// This suite writes afk.config.json under $HOME/.afk/config and expects
+// loadConfig() to find it via the unset-AFK_HOME fallback — drop the global
+// sentinel AFK_HOME per test; HOME is redirected to a tmp dir below.
+useUnsetAfkHome();
 
 let tmpHome: string;
 let originalHome: string | undefined;

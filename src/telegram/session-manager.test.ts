@@ -9,6 +9,7 @@ import { findSession, listSessions, loadSession } from '../cli/session-store';
 import { promises as fs, existsSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { useUnsetAfkHome } from '../__test-utils__/unset-afk-home.js';
 
 // Mock agent session
 class MockAgentSession implements IAgentSession {
@@ -530,6 +531,11 @@ describe('SessionManager', () => {
 });
 
 describe('SessionManager — recordTelegramTurn (shared session store)', () => {
+  // saveSession()/findSession() resolve the store via the unset-AFK_HOME
+  // fallback ($HOME/.afk) — drop the global sentinel AFK_HOME per test;
+  // HOME is redirected to a tmp dir in this describe's beforeEach.
+  useUnsetAfkHome();
+
   // Mock carrying a readonly SDK sessionId so we can exercise both the
   // metadata-supplied and live-session-captured sessionId paths.
   class MockSessionWithId implements IAgentSession {
@@ -627,6 +633,10 @@ describe('SessionManager — recordTelegramTurn (shared session store)', () => {
 });
 
 describe('SessionManager — session naming (/name)', () => {
+  // Same unset-fallback contract as the recordTelegramTurn suite above:
+  // the shared session store must resolve under this suite's tmp HOME.
+  useUnsetAfkHome();
+
   class MockSessionWithId implements IAgentSession {
     state: SessionState = 'idle';
     constructor(readonly sessionId?: string) {}
