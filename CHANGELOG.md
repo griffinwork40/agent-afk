@@ -11,6 +11,21 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.20.6] - 2026-07-05
+
+### Added
+- add /thinking slash command for mid-session thinking-UI toggle (#415) (49eb8c8)
+
+### Fixed
+- thread openaiBaseUrl into restricted provider builders so deep OpenAI subagents keep their endpoint (#413) (26cd2e1)
+- gate exit backstop on persisted seal record, not optimistic sealed flag (#171) (#402) (d6dbb5f)
+
+### Changed
+- collapse duplicated dispatch + skill-fork logic (#408) (2159df2)
+- changed several bundled skills to load mode (dfdb8d5)
+- Bump version from 1.0.0 to 1.0.1 (e8d57ee)
+- Change context from 'fork' to 'load' in SKILL.md (5d0a595)
+
 ## [5.20.5] - 2026-07-05
 
 ### Fixed
