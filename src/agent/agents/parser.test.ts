@@ -98,6 +98,36 @@ prompt`;
     expect(parsed?.bashReadOnly).toBe(true);
   });
 
+  it('parses maxToolUseIterations frontmatter (camelCase + kebab alias)', () => {
+    const camel = parseAgentMarkdown(`---
+name: capped
+description: capped rounds
+maxToolUseIterations: 12
+---
+prompt`);
+    expect(camel?.definition.maxToolUseIterations).toBe(12);
+
+    const kebab = parseAgentMarkdown(`---
+name: capped2
+description: capped rounds
+max-tool-use-iterations: 8
+---
+prompt`);
+    expect(kebab?.definition.maxToolUseIterations).toBe(8);
+  });
+
+  it('ignores non-positive maxToolUseIterations with a warning', () => {
+    const warn = vi.fn();
+    const parsed = parseAgentMarkdown(`---
+name: bad
+description: bad cap
+maxToolUseIterations: 0
+---
+prompt`, warn);
+    expect(parsed?.definition.maxToolUseIterations).toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+  });
+
   it('records recognized long-tail fields as ignoredKeys and warns on unknown keys', () => {
     const warn = vi.fn();
     const doc = `---

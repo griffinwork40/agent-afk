@@ -129,10 +129,11 @@ describe('agentTool', () => {
     expect(agentTool.input_schema.required).toEqual(['prompt']);
   });
 
-  it('has optional model, max_turns, and id_prefix parameters', () => {
+  it('has optional model, max_turns, max_tool_use_iterations, and id_prefix parameters', () => {
     expect(agentTool.input_schema.properties).toHaveProperty('prompt');
     expect(agentTool.input_schema.properties).toHaveProperty('model');
     expect(agentTool.input_schema.properties).toHaveProperty('max_turns');
+    expect(agentTool.input_schema.properties).toHaveProperty('max_tool_use_iterations');
     expect(agentTool.input_schema.properties).toHaveProperty('id_prefix');
   });
 

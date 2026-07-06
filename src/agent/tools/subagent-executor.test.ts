@@ -140,33 +140,49 @@ describe('SubagentExecutor', () => {
       expect(result.content).toContain('object');
     });
 
-    it('clamps max_turns to 1-50 range', async () => {
+    it('passes max_turns through with no upper ceiling; floors ≤0 to 0 (unlimited)', async () => {
       const handle = mockHandle();
       mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
 
-      // Test clamping high
+      // No ceiling: a high explicit value passes through verbatim (was clamped
+      // to 50 before uncapped-by-default).
       await executor.execute(
         makeCall({ input: { prompt: 'test', max_turns: 100 } }),
       );
       expect(mockSubagentMgr.forkSubagent).toHaveBeenCalledWith(
         expect.objectContaining({
-          config: expect.objectContaining({ maxTurns: 50 }),
+          config: expect.objectContaining({ maxTurns: 100 }),
         }),
       );
 
-      // Test clamping low
+      // Negatives floor to 0 = unlimited (AgentSession treats falsy maxTurns as
+      // no cap), not 1.
       (mockSubagentMgr.forkSubagent as ReturnType<typeof vi.fn>).mockClear();
       await executor.execute(
         makeCall({ input: { prompt: 'test', max_turns: -5 } }),
       );
       expect(mockSubagentMgr.forkSubagent).toHaveBeenCalledWith(
         expect.objectContaining({
-          config: expect.objectContaining({ maxTurns: 1 }),
+          config: expect.objectContaining({ maxTurns: 0 }),
         }),
       );
     });
 
-    it('uses defaults for optional fields', async () => {
+    it('passes max_tool_use_iterations through with no upper ceiling', async () => {
+      const handle = mockHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      await executor.execute(
+        makeCall({ input: { prompt: 'test', max_tool_use_iterations: 200 } }),
+      );
+      expect(mockSubagentMgr.forkSubagent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({ maxToolUseIterations: 200 }),
+        }),
+      );
+    });
+
+    it('uses defaults for optional fields (turns + tool-use rounds unlimited)', async () => {
       const handle = mockHandle();
       mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
 
@@ -175,11 +191,14 @@ describe('SubagentExecutor', () => {
       // apiKey is now resolved by the agent-layer credential resolver
       // (resolveCredentialForModel), not forwarded verbatim from defaultConfig.
       // The mock returns 'resolved-test-credential' for Anthropic-routed models.
+      // maxTurns / maxToolUseIterations both default to 0 = unlimited on the
+      // agent-tool dispatch path (uncapped by default; opt into a cap).
       expect(mockSubagentMgr.forkSubagent).toHaveBeenCalledWith(
         expect.objectContaining({
           idPrefix: 'agent-tool',
           config: expect.objectContaining({
-            maxTurns: 10,
+            maxTurns: 0,
+            maxToolUseIterations: 0,
             model: 'sonnet',
             apiKey: 'resolved-test-credential',
             systemPrompt: 'test system prompt',

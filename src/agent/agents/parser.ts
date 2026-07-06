@@ -120,6 +120,7 @@ export function parseAgentMarkdown(
   let description: string | undefined;
   let model: string | undefined;
   let maxTurns: number | undefined;
+  let maxToolUseIterations: number | undefined;
   let bashReadOnly: boolean | undefined;
   let tools: string[] | undefined;
   let disallowedTools: string[] | undefined;
@@ -173,6 +174,13 @@ export function parseAgentMarkdown(
         else warn(`invalid ${key} value ${JSON.stringify(inline.trim())} — ignored`);
         break;
       }
+      case 'maxtooluseiterations':
+      case 'max-tool-use-iterations': {
+        const parsed = Number.parseInt(stripQuotes(inline), 10);
+        if (Number.isFinite(parsed) && parsed > 0) maxToolUseIterations = parsed;
+        else warn(`invalid ${key} value ${JSON.stringify(inline.trim())} — ignored`);
+        break;
+      }
       case 'bash': {
         // AFK extension: `bash: read-only` gates the child's shell to
         // non-mutating commands (classifyBashCommand) when bash is granted.
@@ -213,6 +221,7 @@ export function parseAgentMarkdown(
     ...(disallowedTools !== undefined && disallowedTools.length > 0 ? { disallowedTools } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(maxTurns !== undefined ? { maxTurns } : {}),
+    ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),
   };
 
   return {

@@ -353,14 +353,14 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     if (this.lastStreamedContent.length > 0) {
       return { role: 'assistant', content: this.lastStreamedContent, timestamp: new Date() };
     }
-    // Anti-hang contract (see SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS in
-    // subagent.ts): a forked child that exhausts its tool-use-iteration cap ends
-    // the turn with a `tool_use_loop_capped` done and NO assistant message. A
-    // pure tool-only runaway also streams no text, so both fallbacks above miss.
-    // Surface the cap as a terminal "capped" message instead of throwing, so
-    // `runToResult` reports a capped *partial* result (status 'succeeded')
-    // rather than an opaque subagent failure — the behavior the cap default
-    // already documents.
+    // Anti-hang fallback (see SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS in
+    // subagent.ts): a child that hits its tool-use cap normally returns a real
+    // summary — the provider runs a tools-stripped wind-down round on the cap
+    // (see loop.ts) whose text lands as `finalMessage`/`lastStreamedContent`
+    // above. This branch is the RARE fallback for when that wind-down produced
+    // no text at all: surface the cap as a terminal "capped" message instead of
+    // throwing, so `runToResult` reports a capped *partial* result (status
+    // 'succeeded') rather than an opaque subagent failure.
     if (this.lastStopReason === 'tool_use_loop_capped') {
       return {
         role: 'assistant',

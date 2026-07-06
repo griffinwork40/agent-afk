@@ -165,13 +165,26 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     );
   }
 
-  // Turn budget: explicit per-call max_turns wins; otherwise a named
-  // agent's maxTurns frontmatter (clamped to the same [1, 50] envelope);
-  // otherwise the parse-time default.
+  // Turn budget: explicit per-call max_turns wins; otherwise a named agent's
+  // maxTurns frontmatter (floored to ≥1); otherwise the parse-time default
+  // (0 = unlimited). No upper ceiling — uncapped by default, opt into a cap
+  // via the call-site param or an agent definition's frontmatter.
   const effectiveMaxTurns =
     !parsed.max_turns_explicit && namedAgent?.definition.maxTurns !== undefined
-      ? Math.max(1, Math.min(50, Math.floor(namedAgent.definition.maxTurns)))
+      ? Math.max(1, Math.floor(namedAgent.definition.maxTurns))
       : parsed.max_turns;
+
+  // Tool-use-round budget: same precedence as turns (explicit call-site >
+  // named-agent frontmatter > parse default 0 = unlimited). Set explicitly on
+  // the child config so this agent-tool dispatch path does NOT fall through to
+  // SubagentManager's SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS (50) — that
+  // remains the anti-hang default for skill/compose internal forks, which do
+  // not build config here.
+  const effectiveMaxToolUseIterations =
+    !parsed.max_tool_use_iterations_explicit &&
+    namedAgent?.definition.maxToolUseIterations !== undefined
+      ? Math.max(1, Math.floor(namedAgent.definition.maxToolUseIterations))
+      : parsed.max_tool_use_iterations ?? 0;
 
   // Resolve the child's API key by its own model/provider. The resolver is
   // now available directly from the agent layer (resolveCredentialForModel),
@@ -204,6 +217,9 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     systemPrompt: namedAgent !== undefined ? namedAgent.definition.prompt : defaultConfig.systemPrompt,
     baseUrl: childIsOpenAI ? undefined : defaultConfig.baseUrl,
     maxTurns: effectiveMaxTurns,
+    // Always set (default 0 = unlimited) so forkSubagent's `?? 50` fallback is
+    // bypassed for agent-tool dispatches — see effectiveMaxToolUseIterations.
+    maxToolUseIterations: effectiveMaxToolUseIterations,
     // Awareness metadata (Phase 1, get_runtime_state):
     // Thread depth + maxDepth into the child's AgentConfig so the
     // `self` view of the child's get_runtime_state snapshot reflects

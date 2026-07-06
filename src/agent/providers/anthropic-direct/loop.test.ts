@@ -342,14 +342,25 @@ describe('loop.ts runTurn', () => {
     expect(completed).toBeUndefined();
   });
 
-  // covers lines 324-331: maxToolUseIterations cap
-  it('caps tool-use iterations when maxToolUseIterations is set', async () => {
+  // covers the tool-use cap + wind-down: after `maxToolUseIterations` tool
+  // rounds the loop runs ONE tools-stripped round so the model can synthesize a
+  // final answer, then completes with stopReason 'tool_use_loop_capped' — no
+  // silent mid-round stop.
+  it('caps tool-use iterations, then runs a tools-stripped wind-down round', async () => {
     let callIdx = 0;
-    const client = makeClient(() => {
-      callIdx += 1;
-      // Always return tool_use — would loop forever without the cap
-      return fromArray(makeToolUseStream(`toolu_${callIdx}`, 'read_file', '{}'));
-    });
+    const createCalls: Array<{ tools?: unknown }> = [];
+    const client = {
+      messages: {
+        create: vi.fn((params: { tools?: unknown }) => {
+          createCalls.push(params);
+          callIdx += 1;
+          // Rounds 1-2 keep requesting tools; the 3rd call is the wind-down
+          // round (tools stripped) where a real model answers in text.
+          if (callIdx >= 3) return fromArray(makeTextStream('Final answer from gathered context.'));
+          return fromArray(makeToolUseStream(`toolu_${callIdx}`, 'read_file', '{}'));
+        }),
+      },
+    } as unknown as AnthropicClientLike;
     const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'ok' }));
     const messages: MessageParam[] = [{ role: 'user', content: 'do stuff' }];
     const abortController = new AbortController();
@@ -366,15 +377,28 @@ describe('loop.ts runTurn', () => {
         headers: {},
         signal: abortController.signal,
         ctx,
-        maxToolUseIterations: 2, // Cap at 2 iterations
+        maxToolUseIterations: 2, // Cap at 2 tool rounds
       }),
     );
 
-    // Should have exactly 2 tool-use rounds
+    // Exactly 2 tool-use rounds emit progress; the wind-down round does not.
     const progressEvents = events.filter((e) => e.type === 'progress');
     expect(progressEvents.length).toBe(2);
 
-    // Final turn.completed should have stopReason='tool_use_loop_capped'
+    // A 3rd model call happened (the wind-down) and it was sent WITHOUT tools,
+    // while the first round WAS sent with tools.
+    expect(callIdx).toBe(3);
+    expect((createCalls[0] as { tools?: unknown[] }).tools?.length ?? 0).toBeGreaterThan(0);
+    expect((createCalls[2] as { tools?: unknown }).tools).toBeUndefined();
+
+    // The model's wind-down answer is surfaced as an assistant.message ...
+    const assistantMsg = events.find((e) => e.type === 'assistant.message');
+    expect(assistantMsg).toBeDefined();
+    if (assistantMsg?.type === 'assistant.message') {
+      expect(assistantMsg.text).toContain('Final answer');
+    }
+
+    // ... and the turn still reports it was cut short by the cap.
     const completed = events.find((e) => e.type === 'turn.completed');
     expect(completed).toBeDefined();
     if (completed?.type === 'turn.completed') {
@@ -855,11 +879,12 @@ describe('loop.ts runTurn', () => {
   // (`{ ...accumulatedUsage, stopReason: 'tool_use_loop_capped' }`) — easy
   // to refactor and accidentally drop durationMs. Pin both fields together.
   it('emits turn.completed with usage.durationMs even when iteration cap hits', async () => {
-    // Build a stream where the model keeps emitting tool_use → looped
-    // dispatch → another tool_use, exhausting maxToolUseIterations=1.
+    // maxToolUseIterations=1: round 1 is tool_use (cap hit → wind-down); the
+    // 2nd call is the tools-stripped wind-down round that answers in text.
     let callCount = 0;
     const client = makeClient(() => {
       callCount += 1;
+      if (callCount >= 2) return fromArray(makeTextStream('Wind-down summary.'));
       return fromArray(makeToolUseStream(`tu_${callCount}`, 'first_tool', '{}'));
     });
     const dispatcher = makeDispatcher(() => Promise.resolve({ content: 'tool output' }));

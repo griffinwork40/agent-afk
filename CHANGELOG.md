@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Changed
+- `agent` tool subagents are now uncapped by default and settable per dispatch: `max_turns` defaults to unlimited (was default 10, hard-clamped to `[1,50]`) — pass a positive integer to cap. Added a `max_tool_use_iterations` param and a matching `maxToolUseIterations` agent-frontmatter field (both default unlimited on the agent-tool path). Skill/compose internal forks keep the 50-round anti-hang default; openai-compatible models retain a provider-internal 50-round cap regardless.
+
+### Fixed
+- Hitting the tool-use iteration cap no longer ends a turn silently (which read as a hang / empty subagent result). The anthropic-direct loop now runs one final tools-stripped "wind-down" round so the model synthesizes a real answer from what it gathered, and the closure classifier maps the capped stop reason to `iteration_cap` instead of silently sealing it as a clean `model_end_turn`.
+
 ## [5.23.2] - 2026-07-05
 
 ### Fixed
