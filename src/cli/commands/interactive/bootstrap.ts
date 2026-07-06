@@ -547,10 +547,15 @@ export async function bootstrapSession(
   if (initialPermissionMode !== undefined) {
     stats.permissionMode = initialPermissionMode;
   }
-  // Seed thinking-UI mode from the CLI flag so `/thinking` has a live value
-  // to mutate. `createSessionStats()` already defaults to 'live'; this
-  // overrides with the user's explicit `--thinking-ui` choice (if any).
-  stats.thinkingUi = options.thinkingUi;
+  // Seed thinking-UI mode so `/thinking` has a live value to mutate.
+  // `options.thinkingUi` was already resolved by the interactive action handler
+  // via `resolveThinkingUi` (--thinking-ui flag > AFK_THINKING_UI env >
+  // interactive.thinkingUi config > 'live'), so this seeds the persistent
+  // default. `createSessionStats()` pre-seeds 'live' for any path that reaches
+  // bootstrap without that resolution (e.g. tests constructing options directly).
+  if (options.thinkingUi !== undefined) {
+    stats.thinkingUi = options.thinkingUi;
+  }
   // Stamp the effective working directory on stats so the status line can
   // render it. We capture the same cwd the provider will see: the explicit
   // `extras.cwd` override (e.g. from `--worktree`) when present, else

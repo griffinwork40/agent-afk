@@ -1465,3 +1465,217 @@ describe('dead-owner — live-session protection', () => {
     expect(after.removed).not.toContain(worktreePath);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 13. branch-delete short-name (#371)
+// ---------------------------------------------------------------------------
+
+describe('branch-delete short-name (#371)', () => {
+  it('strips refs/heads/ before invoking git branch -d on an empty-verdict sweep', async () => {
+    // Regression: `git worktree list --porcelain` reports `branch` as a
+    // fully-qualified ref (refs/heads/afk/foo), but `git branch -d` wants
+    // the short name (afk/foo). Passing the qualified ref always fails
+    // ("branch 'refs/heads/afk/foo' not found"), silently swallowed by
+    // `.catch(() => {})`, leaving the branch behind forever.
+    const worktreePath = join(afkWorktreesDir, 'afk-branch-shortname-wt');
+    await fs.mkdir(worktreePath, { recursive: true });
+
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        createdAt: new Date(Date.now() - 86_400_000 * 2).toISOString(), // 2 days old
+        baseSha: 'base123',
+        baseBranch: 'main',
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot, head: 'base123' });
+    const wtBlock = worktreeBlock({
+      path: worktreePath,
+      head: 'base123',
+      branch: 'refs/heads/afk/foo',
+    });
+    const porcelainOut = `${mainBlock}\n\n${wtBlock}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' }; // clean
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        return { stdout: '0\n', stderr: '' }; // no commits ahead
+      }
+      if (args.includes('worktree') && args.includes('remove')) {
+        return { stdout: '', stderr: '' };
+      }
+      if (args.includes('branch') && args.includes('-d')) {
+        return { stdout: '', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    expect(result.candidates.find((c) => c.path === worktreePath)?.verdict).toBe('empty');
+    expect(result.removed).toContain(worktreePath);
+
+    const branchDeleteCalls = mock.calls.filter(
+      (c) => c.file === 'git' && c.args.includes('branch') && c.args.includes('-d'),
+    );
+    expect(branchDeleteCalls).toHaveLength(1);
+    expect(branchDeleteCalls[0]?.args).toContain('afk/foo');
+    expect(branchDeleteCalls[0]?.args).not.toContain('refs/heads/afk/foo');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 14. empty-verdict liveness gate (#380)
+// ---------------------------------------------------------------------------
+
+describe('empty-verdict liveness gate (#380)', () => {
+  it('does NOT classify an otherwise-empty worktree as empty while a live session occupies it', async () => {
+    // Regression: the `empty` verdict never checked ownerLiveness, so the
+    // live-session presence guard (which forces ownerLiveness to 'alive'
+    // when a live session's cwd is inside the worktree) only ever protected
+    // the `dead-owner` verdict. A live session's clean, 0-commits-ahead
+    // worktree older than MIN_EMPTY_AGE_MS still classified as `empty` and
+    // got reaped mid-session.
+    const worktreePath = join(afkWorktreesDir, 'afk-empty-live-session-wt');
+    await fs.mkdir(worktreePath, { recursive: true });
+
+    // No `pid` in meta -> ownerLiveness starts 'unknown'. Absent the
+    // live-session guard, this worktree is squarely 'empty'-eligible: clean,
+    // 0 commits ahead, and well past MIN_EMPTY_AGE_MS (1h).
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        createdAt: new Date(Date.now() - 86_400_000 * 2).toISOString(), // 2 days old
+        baseSha: 'base123',
+        baseBranch: 'main',
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot, head: 'base123' });
+    const wtBlock = worktreeBlock({
+      path: worktreePath,
+      head: 'base123',
+      branch: 'refs/heads/afk/empty-live-session-wt',
+    });
+    const porcelainOut = `${mainBlock}\n\n${wtBlock}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' }; // clean
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        return { stdout: '0\n', stderr: '' }; // no commits ahead
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+      readPresence: async () => [{ pid: process.pid, cwd: worktreePath } as unknown as PresenceRecord],
+    });
+
+    const candidate = result.candidates.find((c) => c.path === worktreePath);
+    expect(candidate?.verdict).not.toBe('empty');
+    expect(candidate?.verdict).toBe('active');
+    expect(result.removed).not.toContain(worktreePath);
+
+    // No destructive git calls fired against this worktree.
+    const removeCalls = mock.calls.filter(
+      (c) => c.args.includes('remove') && c.args.includes('--force') && c.args.includes(worktreePath),
+    );
+    expect(removeCalls).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 15. stale-clean liveness guard (Codex P2 on PR #432)
+// ---------------------------------------------------------------------------
+
+describe('stale-clean liveness guard (Codex review, PR #432)', () => {
+  it('does not classify an old, zero-ahead, clean worktree occupied by a live session as stale-clean', async () => {
+    // Regression: Codex flagged that the #380 empty-verdict liveness guard
+    // above only skips the `empty` verdict for non-'alive'-owned candidates —
+    // a live-owned candidate that is also older than maxAgeDaysClean falls
+    // through to the next checks. Against the commit Codex reviewed
+    // (033e4ff51f), `stale-clean` tested only `!isDirty && ageMs >
+    // cleanThresholdMs` with no commits-ahead guard, so a live session's
+    // clean, 0-commits-ahead worktree past the clean threshold would
+    // misclassify as `stale-clean` and emit a misleading "commits ahead of
+    // base" warning instead of staying `active`. `stale-clean` has since
+    // required `commitsAhead > 0` (#429), which independently closes this
+    // gap — but that fix was never pinned against the specific live-session +
+    // old-age combination Codex called out. This test locks that combination
+    // down so a future regression on either guard trips here.
+    const worktreePath = join(afkWorktreesDir, 'afk-stale-clean-live-session');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        createdAt: new Date(Date.now() - 86_400_000 * 20).toISOString(), // 20 days old, past 14-day clean threshold
+        baseSha: 'base123',
+        baseBranch: 'main',
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot, head: 'base123' });
+    const wtBlock = worktreeBlock({
+      path: worktreePath,
+      head: 'base123',
+      branch: 'refs/heads/afk/stale-clean-live-session',
+    });
+    const porcelainOut = `${mainBlock}\n\n${wtBlock}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' }; // clean
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        return { stdout: '0\n', stderr: '' }; // 0 commits ahead
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      maxAgeDaysClean: 14,
+      telemetryPath: telemetryFile,
+      readPresence: async () => [{ pid: process.pid, cwd: worktreePath } as unknown as PresenceRecord],
+    });
+
+    const candidate = result.candidates.find((c) => c.path === worktreePath);
+    expect(candidate?.verdict).toBe('active');
+    expect(candidate?.verdict).not.toBe('stale-clean');
+    expect(result.removed).not.toContain(worktreePath);
+    expect(
+      result.warnings.some((w) => w.includes('stale-clean') && w.includes(worktreePath)),
+    ).toBe(false);
+  });
+});

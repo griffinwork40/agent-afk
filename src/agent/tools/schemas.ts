@@ -346,7 +346,23 @@ export const agentTool: AnthropicToolDef = {
       },
       max_turns: {
         type: 'number',
-        description: 'Maximum conversation turns (default 10, max 50).',
+        description:
+          'Maximum conversation turns. Default 0 = unlimited (no ceiling) — ' +
+          'omit to let the subagent run to natural completion. Set a positive ' +
+          'integer to cap turns. A named agent (agent_type) may also set its own ' +
+          'default via `maxTurns` frontmatter; an explicit value here overrides it.',
+      },
+      max_tool_use_iterations: {
+        type: 'number',
+        description:
+          "Maximum tool-use rounds within the subagent's single turn — the " +
+          'anti-hang ceiling on a tool-call loop. Default 0 = unlimited. Set a ' +
+          'positive integer to bound a runaway loop. When the cap is hit the ' +
+          'subagent gets one final tools-stripped round to summarize what it ' +
+          'gathered (no silent mid-loop stop). A named agent may set its own ' +
+          'default via `maxToolUseIterations` frontmatter (explicit value here wins). ' +
+          'Note: openai-compatible models keep a provider-internal 50-round cap ' +
+          'regardless of this value.',
       },
       id_prefix: {
         type: 'string',

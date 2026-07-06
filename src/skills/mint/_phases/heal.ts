@@ -8,7 +8,7 @@ import { getSkill } from '../../index.js';
 import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
 import { SubagentManager } from '../../../agent/subagent.js';
 import { describeFailure } from '../../../agent/subagent/result.js';
-import { getApiKey } from '../../../cli/shared-helpers.js';
+import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
 import type { VerifyResult } from './verify.js';
 import type { BuildResult } from './build.js';
@@ -103,7 +103,7 @@ export async function runHealPhase(
       config: {
         model: defaultSubagentModel,
         systemPrompt: healPrompt,
-        apiKey: getApiKey(),
+        apiKey: resolveCredentialForModel(defaultSubagentModel),
       },
       idPrefix: 'mint-heal',
       agentType: 'mint-heal',

@@ -213,6 +213,17 @@ function isPathWithin(child: string, parent: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
+/**
+ * `git worktree list --porcelain` reports `branch` as a fully-qualified ref
+ * (e.g. `refs/heads/afk/foo`), but `git branch -d` expects the short branch
+ * name (`afk/foo`) — passing the qualified ref makes the delete always fail
+ * with "branch 'refs/heads/afk/foo' not found" (#371). Strip the prefix
+ * before every `git branch -d` invocation.
+ */
+function shortBranchName(branch: string): string {
+  return branch.replace(/^refs\/heads\//, '');
+}
+
 // ---------------------------------------------------------------------------
 // Section 2 — Porcelain parser
 // ---------------------------------------------------------------------------
@@ -281,8 +292,14 @@ function classifyCandidate(
   // No commits ahead, no dirty files, and old enough to not be a freshly-
   // created worktree mid-setup → empty. The age guard closes the race where
   // a worktree created seconds before the cron fires would be reaped on its
-  // first tick before the user has a chance to do anything in it.
+  // first tick before the user has a chance to do anything in it. Gated on
+  // ownerLiveness !== 'alive' the same way dead-owner is (#380) — without
+  // this, the live-session presence guard (which forces ownerLiveness to
+  // 'alive' when a live session's cwd is inside the worktree) only ever
+  // protected the dead-owner path, so a live session's clean, 0-commits-
+  // ahead worktree older than MIN_EMPTY_AGE_MS still got reaped mid-session.
   if (
+    candidate.ownerLiveness !== 'alive' &&
     candidate.commitsAhead === 0 &&
     !candidate.isDirty &&
     candidate.ageMs >= MIN_EMPTY_AGE_MS
@@ -611,7 +628,7 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
         if (verdict === 'empty') {
           await execFile('git', ['-C', repoRoot, 'worktree', 'remove', '--force', entry.path]);
           if (entry.branch) {
-            await execFile('git', ['-C', repoRoot, 'branch', '-d', entry.branch]).catch(() => {});
+            await execFile('git', ['-C', repoRoot, 'branch', '-d', shortBranchName(entry.branch)]).catch(() => {});
           }
           result.removed.push(entry.path);
         } else if (verdict === 'dead-owner') {
@@ -622,7 +639,7 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
           // elsewhere — git refuses, we move on).
           await execFile('git', ['-C', repoRoot, 'worktree', 'remove', '--force', entry.path]);
           if (entry.branch) {
-            await execFile('git', ['-C', repoRoot, 'branch', '-d', entry.branch]).catch(() => {});
+            await execFile('git', ['-C', repoRoot, 'branch', '-d', shortBranchName(entry.branch)]).catch(() => {});
           }
           result.removed.push(entry.path);
         } else if (verdict === 'stale-clean') {

@@ -127,4 +127,36 @@ describe('SessionToolDispatcher audit log — sessionId schema symmetry', () => 
       expect(Object.keys(e).sort()).toEqual(expectedKeys);
     }
   });
+
+  // Regression: the audit append must fire only when a root is NEWLY added.
+  // Before the dedup fix, addReadRoot/addWriteRoot appended unconditionally, so
+  // repeated per-tool-call grants of an already-granted path (e.g. the cwd)
+  // ballooned session-grants.jsonl ~196x (1,143 unique grants → 224k rows).
+  it('does not re-append when the same read root is granted repeatedly', () => {
+    const dispatcher = makeDispatcher();
+    dispatcher.addReadRoot('/dup/read', 'tool');
+    dispatcher.addReadRoot('/dup/read', 'tool');
+    dispatcher.addReadRoot('/dup/read', 'tool');
+    const entries = readAuditEntries().filter((e) => e['path'] === '/dup/read');
+    expect(entries.length).toBe(1);
+    expect(entries[0]!['action']).toBe('grant-read');
+  });
+
+  it('does not re-append when the same write root is granted repeatedly', () => {
+    const dispatcher = makeDispatcher();
+    dispatcher.addWriteRoot('/dup/write', 'tool');
+    dispatcher.addWriteRoot('/dup/write', 'tool');
+    const entries = readAuditEntries().filter((e) => e['path'] === '/dup/write');
+    expect(entries.length).toBe(1);
+    expect(entries[0]!['action']).toBe('grant-write');
+  });
+
+  it('still audits a read→write upgrade as a new grant-write', () => {
+    const dispatcher = makeDispatcher();
+    dispatcher.addReadRoot('/upgrade/path', 'tool'); // grant-read (new to readRoots)
+    dispatcher.addWriteRoot('/upgrade/path', 'tool'); // grant-write (new to writeRoots)
+    dispatcher.addWriteRoot('/upgrade/path', 'tool'); // no-op — already a write root
+    const entries = readAuditEntries().filter((e) => e['path'] === '/upgrade/path');
+    expect(entries.map((e) => e['action'])).toEqual(['grant-read', 'grant-write']);
+  });
 });
