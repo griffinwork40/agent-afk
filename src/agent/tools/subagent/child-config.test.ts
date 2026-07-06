@@ -38,6 +38,8 @@ function parsed(overrides?: Partial<AgentInput>): AgentInput {
     prompt: 'do the thing',
     max_turns: 10,
     max_turns_explicit: false,
+    max_tool_use_iterations: 0,
+    max_tool_use_iterations_explicit: false,
     id_prefix: 'agent-tool',
     mode: 'foreground',
     ...overrides,
@@ -118,7 +120,9 @@ describe('buildChildConfig', () => {
       expect(childConfig.maxTurns).toBe(30);
     });
 
-    it('passes a named agent maxTurns above 50 through — no upper ceiling', () => {
+    it('preserves a named agent maxTurns above the former cap unchanged (999 stays 999)', () => {
+      // #448 removed the old upper clamp — effectiveMaxTurns floors to ≥1 but
+      // imposes no ceiling (child-config.ts effectiveMaxTurns).
       const { childConfig } = buildChildConfig(
         baseArgs({ namedAgent: namedAgent({ maxTurns: 999 }) }),
       );

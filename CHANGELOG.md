@@ -12,12 +12,38 @@ auto-release workflow to deduplicate commits across successive runs.
 ## [Unreleased]
 
 ### Changed
-- `agent` tool subagents are now uncapped by default and settable per dispatch: `max_turns` defaults to unlimited (was default 10, hard-clamped to `[1,50]`) — pass a positive integer to cap. Added a `max_tool_use_iterations` param and a matching `maxToolUseIterations` agent-frontmatter field (both default unlimited on the agent-tool path). Skill/compose internal forks keep the 50-round anti-hang default.
 - The tool-round cap (`max_tool_use_iterations`) and its graceful wind-down now apply uniformly to **both** providers. openai-compatible previously ignored the setting and hard-capped every turn at 50 rounds; it now honors `maxToolUseIterations` like anthropic-direct. Consequence: **top-level openai-compatible sessions are now uncapped by default** (aligned with anthropic-direct) — the 50-round anti-hang default still applies to subagent forks of either provider. The shared cap/wind-down policy (constants + `resolveMaxToolIterations`/`shouldWindDown`) now lives in `providers/shared/tool-loop-cap.ts`, so the two providers can no longer drift.
 
 ### Fixed
-- Hitting the tool-use iteration cap no longer ends a turn silently (which read as a hang / empty subagent result). The anthropic-direct loop now runs one final tools-stripped "wind-down" round so the model synthesizes a real answer from what it gathered, and the closure classifier maps the capped stop reason to `iteration_cap` instead of silently sealing it as a clean `model_end_turn`.
 - openai-compatible now runs the same tools-stripped "wind-down" round as anthropic-direct when the tool-round cap fires (previously it fell through to a possibly-empty final message with no cap signal), and stamps `tool_use_loop_capped` so the closure classifier reports `iteration_cap` for openai-compatible turns too.
+
+## [5.24.0] - 2026-07-06
+
+### Changed
+- `agent` tool subagents are now uncapped by default and settable per dispatch: `max_turns` defaults to unlimited (was default 10, hard-clamped to `[1,50]`) — pass a positive integer to cap. Added a `max_tool_use_iterations` param and a matching `maxToolUseIterations` agent-frontmatter field (both default unlimited on the agent-tool path). Skill/compose internal forks keep the 50-round anti-hang default; openai-compatible models retain a provider-internal 50-round cap regardless.
+
+### Fixed
+- Hitting the tool-use iteration cap no longer ends a turn silently (which read as a hang / empty subagent result). The anthropic-direct loop now runs one final tools-stripped "wind-down" round so the model synthesizes a real answer from what it gathered, and the closure classifier maps the capped stop reason to `iteration_cap` instead of silently sealing it as a clean `model_end_turn`.
+
+### Added
+- uncap turn/tool-use budgets by default; graceful wind-down on cap (#448) (1ba29e7)
+- persist thinking-ui default via AFK_THINKING_UI + interactive.thinkingUi (#445) (7a1f403)
+
+### Fixed
+- audit grant only on state change to stop session-grants.jsonl bloat (#449) (ed95705)
+- warn for stale-clean worktrees (#450) (3223077)
+- delete swept branches + stop reaping live-session worktrees (#371, #380) (77f6e72)
+- resolve subagent credential per child model, not ambient (#378) (#431) (7e6b90c)
+- stop glob from descending node_modules/.git; add multi-** tests (#436) (#442) (97a6b40)
+- stop shadow-verify nudge self-triggering on verifier verdict output (#355) (#433) (7d81612)
+- reject flag-like worktree base refs (#428) (fcfc830)
+- warn for stale-clean worktrees (#430) (0c61247)
+- require commits ahead for stale-clean worktrees (#429) (1987415)
+
+### Changed
+- fix stale budget-contract expectations + tool/memory schema mocks (cbb4c32)
+- add direct unit tests for extracted subagent/ modules (#446) (947739f)
+- extract execute() into subagent/ modules (#443) (070ded6)
 
 ## [5.23.2] - 2026-07-05
 

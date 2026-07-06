@@ -120,6 +120,14 @@ describe('footer-ghost regression (real StatusLine + LoopStageBar, extraRows=1)'
     const { statusLine, loopStageBar } = wireFooter(stdout);
     expect(statusLine.getExtraRows()).toBe(1); // sanity: rail reserved its row
 
+    // Drive the bar to a mid-turn stage so the FULL 5-cell rail is the
+    // expected row content — the idle 'observing' stage now collapses to a
+    // single `· idle` cell (formatStageRail), which would defeat the
+    // 'observe' + 'update' rail-finder probes below. redraw() (the self-heal
+    // under test) re-asserts the stored currentStage, so the probes see the
+    // same full rail after the scroll.
+    loopStageBar.repaint('acting');
+
     const c = new TerminalCompositor({
       stdout,
       stdin,
