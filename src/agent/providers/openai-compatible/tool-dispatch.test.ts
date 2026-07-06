@@ -692,41 +692,99 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
     }
   });
 
-  it('does not loop forever — caps at MAX_TOOL_ITERATIONS', async () => {
-    // Generate 60 tool-call turns followed by a stop turn — but cap should stop us at 50.
-    const fixture = makeDispatcher();
-    const toolCallTurn = (id: string): ScriptedTurn => ({
-      chunks: [
-        {
-          choices: [
-            {
-              delta: {
-                tool_calls: [
-                  { index: 0, id, type: 'function', function: { name: 'echo', arguments: '{}' } },
-                ],
-              },
+  // Shared helper: a turn where the model emits one tool_call and stops on
+  // `tool_calls` (so the loop dispatches + iterates).
+  const toolCallTurn = (id: string): ScriptedTurn => ({
+    chunks: [
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                { index: 0, id, type: 'function', function: { name: 'echo', arguments: '{}' } },
+              ],
             },
-          ],
-        },
-        { choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+          },
+        ],
+      },
+      { choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ],
+  });
+
+  it('caps tool rounds at an explicit maxToolUseIterations, then runs a tools-stripped wind-down round', async () => {
+    // Explicit cap of 3 → 3 tool rounds, then ONE tools-stripped wind-down round
+    // where the model answers in text (no silent stop). Mirrors anthropic-direct's
+    // graceful cap; the shared policy lives in shared/tool-loop-cap.ts.
+    const fixture = makeDispatcher();
+    const windDownTurn: ScriptedTurn = {
+      chunks: [
+        { choices: [{ delta: { content: 'Final answer from gathered context.' } }] },
+        { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
       ],
-    });
-    scriptedTurns = Array.from({ length: 60 }, (_, i) => toolCallTurn(`c${i}`));
+    };
+    // 3 tool rounds + 1 wind-down text round.
+    scriptedTurns = [toolCallTurn('c0'), toolCallTurn('c1'), toolCallTurn('c2'), windDownTurn];
 
     const q = new OpenAICompatibleQuery({
       auth: { apiKey: 'sk', source: 'config' },
       model: 'gpt-4o-mini',
       synthesizedSessionId: 'sid',
       promptStream: singleInput('go'),
-      config: baseConfig(),
+      config: baseConfig({ maxToolUseIterations: 3 }),
       toolDispatcher: fixture.dispatcher,
     });
     const events = await collect(q);
 
-    // Should have stopped after 50 iterations, not 60.
-    expect(createCalls.length).toBeLessThanOrEqual(50);
-    // Turn must still terminate with turn.completed (graceful cap).
-    expect(events.at(-1)?.type).toBe('turn.completed');
+    // 3 tool-use rounds + 1 tools-stripped wind-down round = 4 model calls.
+    expect(createCalls.length).toBe(4);
+    // The first (tool) round advertised tools; the wind-down round (last) did not.
+    expect(createCalls[0]!.args.tools?.length ?? 0).toBeGreaterThan(0);
+    expect(createCalls[3]!.args.tools).toBeUndefined();
+    // The wind-down produced a real final assistant message (not a silent stop).
+    const assistantMsg = events.find((e) => e.type === 'assistant.message');
+    expect(assistantMsg?.type === 'assistant.message' ? assistantMsg.text : '').toContain(
+      'Final answer',
+    );
+    // Terminal turn.completed carries the capped stop reason → closure iteration_cap.
+    const completed = events.at(-1);
+    expect(completed?.type).toBe('turn.completed');
+    if (completed?.type === 'turn.completed') {
+      expect(completed.usage.stopReason).toBe('tool_use_loop_capped');
+    }
+  });
+
+  it('runs uncapped at top level — past the former hard-coded 50-round limit (no maxToolUseIterations)', async () => {
+    // Decision (a): with no config cap, top-level openai-compatible is uncapped
+    // (matches anthropic-direct's DEFAULT_MAX_TOOL_USE_ITERATIONS=0), NOT the old
+    // hard-coded 50. 52 tool rounds + a natural stop must all run, with no
+    // wind-down and no `tool_use_loop_capped`.
+    const fixture = makeDispatcher();
+    const stopTurn: ScriptedTurn = {
+      chunks: [
+        { choices: [{ delta: { content: 'done' } }] },
+        { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+      ],
+    };
+    scriptedTurns = [...Array.from({ length: 52 }, (_, i) => toolCallTurn(`c${i}`)), stopTurn];
+
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk', source: 'config' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('go'),
+      config: baseConfig(), // no maxToolUseIterations → unlimited
+      toolDispatcher: fixture.dispatcher,
+    });
+    const events = await collect(q);
+
+    // 52 tool rounds + 1 natural-stop round = 53 model calls — the old cap would
+    // have stopped at 50.
+    expect(createCalls.length).toBe(53);
+    const completed = events.at(-1);
+    expect(completed?.type).toBe('turn.completed');
+    if (completed?.type === 'turn.completed') {
+      expect(completed.usage.stopReason).not.toBe('tool_use_loop_capped');
+    }
   });
 });
 

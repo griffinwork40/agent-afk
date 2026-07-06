@@ -14,7 +14,8 @@
  *     `closedPromise` so `close()` unblocks a "waiting for next turn" state
  *   - each user turn opens a new AbortController; `interrupt()` aborts it
  *   - `runTurn` iterates model→tools→model until the model stops calling tools
- *     (or `MAX_TOOL_ITERATIONS` is hit, matching anthropic-direct/loop.ts)
+ *     (or the tool-round cap fires — see shared/tool-loop-cap.ts — after which
+ *     one tools-stripped wind-down round runs, matching anthropic-direct/loop.ts)
  *
  * Things deliberately deferred:
  *   - File checkpointing / rewindFiles (deferred — `canRewind: false`)
@@ -87,6 +88,12 @@ import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js
 import { sleepWithAbort } from '../shared/sleep-with-abort.js';
 import { summarizeToolInput } from '../shared/tool-input-summary.js';
 import {
+  TOOL_USE_LOOP_CAPPED,
+  WIND_DOWN_NOTE,
+  resolveMaxToolIterations,
+  shouldWindDown,
+} from '../shared/tool-loop-cap.js';
+import {
   MAX_CONNECTION_RETRIES,
   MAX_STREAM_RETRIES,
   isRetryableConnectionError,
@@ -110,14 +117,6 @@ export { isOSeriesModel, mapEffortForOpenAI } from './query/model-params.js';
 export { resolveReasoningEffort };
 
 const PROVIDER_NAME = 'openai-compatible';
-
-/**
- * Hard cap on tool-call iterations within a single user turn. Mirrors
- * `anthropic-direct/loop.ts:MAX_ITERATIONS` (50 there) — a runaway model
- * shouldn't be able to call tools forever. Picked the same value so the
- * two providers behave identically on this edge case.
- */
-const MAX_TOOL_ITERATIONS = 50;
 
 /** Construction options. */
 export interface OpenAICompatibleQueryOptions {
@@ -408,14 +407,23 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // doesn't expose reasoning), in which case the field is omitted entirely.
     let finalReasoningText = '';
 
-    for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+    const maxIterations = resolveMaxToolIterations(this.opts.config.maxToolUseIterations);
+    // Set once the tool-round cap fires; the loop then runs ONE tools-stripped
+    // "wind-down" round (runIteration's `windDown` arg) so the model synthesizes
+    // a final answer instead of stopping silently — a silent stop reads as a
+    // hang. `0` (the top-level default) means no cap. Shared with anthropic-direct
+    // via shared/tool-loop-cap.ts so the two providers cannot drift apart.
+    let capReached = false;
+    let round = 0;
+
+    for (;;) {
       if (controller.signal.aborted) {
         if (this.abortController === controller) this.abortController = null;
         yield* this.finishTurn(accumulatedUsage, turnStartTime);
         return;
       }
 
-      const result = yield* this.runIteration(controller, vision);
+      const result = yield* this.runIteration(controller, vision, capReached);
       if (result === null) {
         // runIteration bailed: either an abort/close (no event was yielded) or
         // a real stream error (an `error` event was already yielded). Mirror
@@ -448,12 +456,21 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       finalReasoningText = result.state.reasoningText;
 
       if (!result.needsToolDispatch) {
-        // Normal text-only completion — fall through to emit terminal events.
+        // Model answered in text: a normal completion, or — when capReached —
+        // the wind-down round's synthesized final answer. Emit terminal events.
+        break;
+      }
+
+      if (capReached) {
+        // Pathological: the wind-down round (tools stripped) still asked for a
+        // tool. With none advertised this is only reachable if the model
+        // fabricates a call. Honor the cap with a hard stop; do NOT dispatch.
         break;
       }
 
       // Tool-call path: dispatch, append history, loop.
       yield* this.dispatchAndAppend(result.state, controller.signal, vision);
+      round += 1;
 
       {
         const lastCall = finalizedToolCalls(result.state).at(-1);
@@ -478,10 +495,10 @@ export class OpenAICompatibleQuery implements ProviderQuery {
           progress: {
             taskId,
             description: 'Working',
-            summary: `round ${iter + 1}: ${lastToolHeadline}`,
+            summary: `round ${round}: ${lastToolHeadline}`,
             lastToolName,
             totalTokens: accumulatedUsage.totalTokens ?? 0,
-            toolUses: iter + 1,
+            toolUses: round,
             durationMs: Date.now() - turnStartTime,
           },
           sessionId: this.initSessionId,
@@ -492,6 +509,15 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         if (this.abortController === controller) this.abortController = null;
         yield* this.finishTurn(accumulatedUsage, turnStartTime);
         return;
+      }
+
+      if (shouldWindDown(round, maxIterations)) {
+        // Cap reached. Run ONE more round with tools stripped + the budget note
+        // (runIteration(windDown=true)) so the model produces a real final
+        // answer instead of a silent stop. `capReached` fires this at most once;
+        // the guard above hard-stops if the wind-down round still asks for a tool.
+        capReached = true;
+        continue;
       }
     }
 
@@ -513,7 +539,15 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       text: finalAssistantText,
       sessionId: this.initSessionId,
     };
-    yield* this.finishTurn(accumulatedUsage, turnStartTime);
+    // If the turn was cut short by the tool-round cap, preserve that signal for
+    // closure classification (session/closure-reason.ts → `iteration_cap`) and
+    // telemetry, even though the wind-down round itself ended naturally.
+    yield* this.finishTurn(
+      capReached
+        ? { ...accumulatedUsage, stopReason: TOOL_USE_LOOP_CAPPED }
+        : accumulatedUsage,
+      turnStartTime,
+    );
   }
 
   /**
@@ -587,6 +621,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   private async *runIteration(
     controller: AbortController,
     vision: boolean,
+    windDown = false,
   ): AsyncGenerator<ProviderEvent, IterationResult | null> {
     const messages = buildMessages({
       config: this.opts.config,
@@ -612,6 +647,17 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       }
     }
 
+    // Wind-down round: strip tools (with none advertised the model MUST answer
+    // in text — it cannot emit another tool call) and append the shared budget
+    // note to this REQUEST ONLY. `messages` is rebuilt from `priorTurns` each
+    // iteration, so the note never persists into stored history. Mirrors
+    // anthropic-direct/loop.ts's tools-stripped wind-down; see
+    // shared/tool-loop-cap.ts for the shared contract.
+    if (windDown) {
+      messages.push({ role: 'user', content: WIND_DOWN_NOTE });
+    }
+    const activeTools = windDown ? undefined : this.activeOpenAITools();
+
     if (this.wireMode === 'responses') {
       const isChatGptBackend = this.opts.auth.source === 'chatgpt-oauth';
 
@@ -636,7 +682,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       // Responses API path. `messages` (built + plan-mode-adjusted above) is
       // converted to the Responses input shape; the system prompt becomes
       // `instructions`, tool calls/results become function_call/_output items.
-      const req = buildResponsesRequest(messages, this.activeOpenAITools());
+      const req = buildResponsesRequest(messages, activeTools);
       const requestBody: Record<string, unknown> = {
         model: this.currentModel,
         input: req.input,
@@ -777,8 +823,8 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       ));
       // Only attach `tools` when there are any to advertise THIS turn — empty
       // arrays make some providers reject the request. `activeOpenAITools()`
-      // drops the plan-exit tool on non-plan turns (resident-but-gated).
-      const activeTools = this.activeOpenAITools();
+      // drops the plan-exit tool on non-plan turns (resident-but-gated); on a
+      // wind-down round `activeTools` is undefined (tools stripped, see above).
       if (activeTools && activeTools.length > 0) {
         requestBody['tools'] = activeTools;
       }

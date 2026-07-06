@@ -12,10 +12,12 @@ auto-release workflow to deduplicate commits across successive runs.
 ## [Unreleased]
 
 ### Changed
-- `agent` tool subagents are now uncapped by default and settable per dispatch: `max_turns` defaults to unlimited (was default 10, hard-clamped to `[1,50]`) — pass a positive integer to cap. Added a `max_tool_use_iterations` param and a matching `maxToolUseIterations` agent-frontmatter field (both default unlimited on the agent-tool path). Skill/compose internal forks keep the 50-round anti-hang default; openai-compatible models retain a provider-internal 50-round cap regardless.
+- `agent` tool subagents are now uncapped by default and settable per dispatch: `max_turns` defaults to unlimited (was default 10, hard-clamped to `[1,50]`) — pass a positive integer to cap. Added a `max_tool_use_iterations` param and a matching `maxToolUseIterations` agent-frontmatter field (both default unlimited on the agent-tool path). Skill/compose internal forks keep the 50-round anti-hang default.
+- The tool-round cap (`max_tool_use_iterations`) and its graceful wind-down now apply uniformly to **both** providers. openai-compatible previously ignored the setting and hard-capped every turn at 50 rounds; it now honors `maxToolUseIterations` like anthropic-direct. Consequence: **top-level openai-compatible sessions are now uncapped by default** (aligned with anthropic-direct) — the 50-round anti-hang default still applies to subagent forks of either provider. The shared cap/wind-down policy (constants + `resolveMaxToolIterations`/`shouldWindDown`) now lives in `providers/shared/tool-loop-cap.ts`, so the two providers can no longer drift.
 
 ### Fixed
 - Hitting the tool-use iteration cap no longer ends a turn silently (which read as a hang / empty subagent result). The anthropic-direct loop now runs one final tools-stripped "wind-down" round so the model synthesizes a real answer from what it gathered, and the closure classifier maps the capped stop reason to `iteration_cap` instead of silently sealing it as a clean `model_end_turn`.
+- openai-compatible now runs the same tools-stripped "wind-down" round as anthropic-direct when the tool-round cap fires (previously it fell through to a possibly-empty final message with no cap signal), and stamps `tool_use_loop_capped` so the closure classifier reports `iteration_cap` for openai-compatible turns too.
 
 ## [5.23.2] - 2026-07-05
 

@@ -361,8 +361,8 @@ export const agentTool: AnthropicToolDef = {
           'subagent gets one final tools-stripped round to summarize what it ' +
           'gathered (no silent mid-loop stop). A named agent may set its own ' +
           'default via `maxToolUseIterations` frontmatter (explicit value here wins). ' +
-          'Note: openai-compatible models keep a provider-internal 50-round cap ' +
-          'regardless of this value.',
+          'Honored uniformly by both the anthropic-direct and openai-compatible ' +
+          'providers.',
       },
       id_prefix: {
         type: 'string',
