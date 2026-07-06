@@ -27,6 +27,7 @@ import { renderMultiSelector, renderSelector, CUSTOM_ANSWER_SENTINEL } from './i
 import { ringBellIfEnabled } from './_lib/capture-mode.js';
 import { sanitizeSchemaString } from './_lib/sanitize.js';
 import { palette } from './palette.js';
+import { validateNumberField, validateTextField } from './elicitation/field-validation.js';
 
 // DoS caps for MCP-controlled schema content. A malicious server can otherwise
 // send `properties` with 10k+ fields or an enum with 1M+ values; both would
@@ -530,16 +531,13 @@ async function runOverlayTextOrNumber(
 
     const help = `enter to submit · esc to cancel${boundsHint}`;
     const validate = (raw: string): string | null => {
-      const trimmed = raw.trim();
-      if (trimmed === '') {
-        if (allowSkip) return null;
-        return 'Please enter a number (or esc to cancel).';
-      }
-      const n = Number(trimmed);
-      if (!Number.isFinite(n)) return 'Please enter a valid number.';
-      if (minVal !== undefined && n < minVal) return `Value must be \u2265 ${minVal}.`;
-      if (maxVal !== undefined && n > maxVal) return `Value must be \u2264 ${maxVal}.`;
-      return null;
+      const r = validateNumberField(raw.trim(), {
+        allowSkip,
+        min: minVal,
+        max: maxVal,
+        emptyError: 'Please enter a number (or esc to cancel).',
+      });
+      return r.ok ? null : r.error;
     };
 
     const result = await readTextOverlay({ header, help, validate, signal });
@@ -554,17 +552,13 @@ async function runOverlayTextOrNumber(
   const minLen = request.minLength;
   const maxLen = request.maxLength;
   const validate = (raw: string): string | null => {
-    if (raw === '') {
-      if (allowSkip) return null;
-      return 'Please enter a response (or esc to cancel).';
-    }
-    if (minLen !== undefined && raw.length < minLen) {
-      return `Response must be at least ${minLen} characters.`;
-    }
-    if (maxLen !== undefined && raw.length > maxLen) {
-      return `Response must be at most ${maxLen} characters.`;
-    }
-    return null;
+    const r = validateTextField(raw, {
+      allowSkip,
+      minLength: minLen,
+      maxLength: maxLen,
+      emptyError: 'Please enter a response (or esc to cancel).',
+    });
+    return r.ok ? null : r.error;
   };
 
   const result = await readTextOverlay({ header, validate, signal });
@@ -895,25 +889,18 @@ async function renderAgentQuestion(
       }
       if (signal.aborted) return CANCEL;
       if (input === ':cancel') return CANCEL;
-      if (input === '' && request.allowSkip) return SKIP;
-      if (input === '' && !request.allowSkip) {
-        writer.line(palette.warning('  Please enter a number (or :cancel to skip).'));
+      const r = validateNumberField(input, {
+        allowSkip: request.allowSkip === true,
+        min: minVal,
+        max: maxVal,
+        emptyError: 'Please enter a number (or :cancel to skip).',
+      });
+      if (!r.ok) {
+        writer.line(palette.warning('  ' + r.error));
         continue;
       }
-      const n = Number(input);
-      if (!isFinite(n)) {
-        writer.line(palette.warning('  Please enter a valid number.'));
-        continue;
-      }
-      if (minVal !== undefined && n < minVal) {
-        writer.line(palette.warning(`  Value must be \u2265 ${minVal}.`));
-        continue;
-      }
-      if (maxVal !== undefined && n > maxVal) {
-        writer.line(palette.warning(`  Value must be \u2264 ${maxVal}.`));
-        continue;
-      }
-      return { action: 'accept', content: { value: n } };
+      if (r.skip) return SKIP;
+      return { action: 'accept', content: { value: r.value } };
     }
   }
 
@@ -930,19 +917,17 @@ async function renderAgentQuestion(
     }
     if (signal.aborted) return CANCEL;
     if (input === ':cancel') return CANCEL;
-    if (input === '' && request.allowSkip) return SKIP;
-    if (input === '') {
-      writer.line(palette.warning('  Please enter a response (or type :cancel to skip).'));
+    const r = validateTextField(input, {
+      allowSkip: request.allowSkip === true,
+      minLength: minLen,
+      maxLength: maxLen,
+      emptyError: 'Please enter a response (or type :cancel to skip).',
+    });
+    if (!r.ok) {
+      writer.line(palette.warning('  ' + r.error));
       continue;
     }
-    if (minLen !== undefined && input.length < minLen) {
-      writer.line(palette.warning(`  Response must be at least ${minLen} characters.`));
-      continue;
-    }
-    if (maxLen !== undefined && input.length > maxLen) {
-      writer.line(palette.warning(`  Response must be at most ${maxLen} characters.`));
-      continue;
-    }
+    if (r.skip) return SKIP;
     return { action: 'accept', content: { value: input } };
   }
 }
