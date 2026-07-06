@@ -973,7 +973,13 @@ describe('StatusLine cwd/branch worktree dedupe', () => {
     status.stop();
   });
 
-  it('keeps the merged segment on a narrow terminal (promoted to never-drop)', () => {
+  it('sheds the merged location segment before truncating the model on a narrow terminal', () => {
+    // Regression guard for the dedupe model-truncation bug: the merged segment
+    // is drop-last among droppables (droppablePriority 1), NOT never-drop. If
+    // it were never-drop it would stack with the never-drop model, blow maxW at
+    // this width, and the final blind truncation would shear the model 'sonnet'
+    // off the right edge — violating formatLine's "never drop: model" invariant.
+    // So at this pathological width the location sheds and the MODEL survives.
     stream.columns = 32;
     const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
     status.start();
@@ -986,10 +992,13 @@ describe('StatusLine cwd/branch worktree dedupe', () => {
       tokens: 1200,
     });
     const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
-    // Droppables shed first; the merged location segment survives because it
-    // is never-drop (contrast: the plain droppable branch is shed at this
-    // width in the 'drops the branch before the model' test above).
-    expect(out).toContain('afk/20260705-142358-47b3ec');
+    // The model — the never-drop identity — is preserved…
+    expect(out).toContain('sonnet');
+    // …at this width the merged location segment had to shed to make room, so
+    // the full worktree identity does not survive (it drops, like the plain
+    // branch does in the else-branch at the same width).
+    expect(out).not.toContain('afk/20260705-142358-47b3ec');
+    // Lowest-priority droppables (tokens) still shed first.
     expect(out).not.toContain('tok');
     status.stop();
   });

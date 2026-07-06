@@ -358,9 +358,12 @@ export class StatusLine {
     // truncation that arbitrarily loses model info. Drop order (drop-first →
     // drop-last): tokens → cost → context bar → branch. The branch drops LAST
     // among droppables because it is identity ("which branch am I on?"), like
-    // cwd. Never drop: cwd, model, plan. Exception: when cwd and branch are
-    // deduped into one merged segment (see worktreeDedupe below), that merged
-    // segment is ALSO never-drop — it's the sole surviving location signal.
+    // cwd. Never drop: cwd, model, plan. When cwd and branch are deduped into
+    // one merged segment (see worktreeDedupe below), that segment inherits the
+    // branch's droppablePriority 1 (drop-last among droppables), NOT never-drop:
+    // a never-drop location there would stack with the never-drop model and
+    // force right-edge truncation to lose model info on a narrow terminal, so
+    // the location sheds before the model is ever truncated.
     interface Part {
       text: string;
       droppablePriority?: number; // undefined = never drop, higher = drop first
@@ -405,11 +408,17 @@ export class StatusLine {
     if (worktreeDedupe) {
       // Matched: cwd is pure duplication of the branch identity, so it's
       // omitted entirely and the branch segment (+ PR suffix) alone carries
-      // "where am I?" — promoted to never-drop since nothing else says so.
+      // "where am I?". It takes droppablePriority 1 — drop-LAST among
+      // droppables, identical to the plain branch in the else-branch — and is
+      // deliberately NOT never-drop: the model is the never-drop identity the
+      // top-of-method invariant protects, and a never-drop location here would
+      // stack with the never-drop model and blow maxW on a narrow terminal,
+      // forcing the final blind truncation to shear the model off the right
+      // edge. Drop-last means the location sheds before the model is ever cut.
       const branchText = truncateDisplayWidth(f.branch!, 30);
       let gitText = `${palette.dim('⎇')} ${palette.dim(branchText)}`;
       if (f.pr !== undefined) gitText += ` ${palette.meta(`#${f.pr}`)}`;
-      parts.push({ text: gitText }); // never drop
+      parts.push({ text: gitText, droppablePriority: 1 }); // drop last among droppables — matches the plain branch; keeps the model never-drop
     } else {
       // Cwd leads the line so it survives right-edge truncation. Cap its share
       // of the budget at ~40% so a deep path can't shove the model/cost/context
