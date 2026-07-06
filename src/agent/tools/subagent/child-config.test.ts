@@ -118,11 +118,11 @@ describe('buildChildConfig', () => {
       expect(childConfig.maxTurns).toBe(30);
     });
 
-    it('clamps a named agent maxTurns above 50 down to 50', () => {
+    it('passes a named agent maxTurns above 50 through — no upper ceiling', () => {
       const { childConfig } = buildChildConfig(
         baseArgs({ namedAgent: namedAgent({ maxTurns: 999 }) }),
       );
-      expect(childConfig.maxTurns).toBe(50);
+      expect(childConfig.maxTurns).toBe(999);
     });
 
     it('clamps a named agent maxTurns below 1 up to 1', () => {

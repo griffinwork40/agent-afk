@@ -92,9 +92,9 @@ describe('parseAgentInput', () => {
   });
 
   describe('max_turns', () => {
-    it('defaults to 10 and marks it non-explicit when omitted', () => {
+    it('defaults to 0 (unlimited) and marks it non-explicit when omitted', () => {
       const result = parseAgentInput({ prompt: 'p' });
-      expect(result.max_turns).toBe(10);
+      expect(result.max_turns).toBe(0);
       expect(result.max_turns_explicit).toBe(false);
     });
 
@@ -104,37 +104,37 @@ describe('parseAgentInput', () => {
       expect(result.max_turns_explicit).toBe(true);
     });
 
-    it('clamps values above 50 down to 50', () => {
+    it('passes values above 50 through — no upper ceiling (uncapped by default)', () => {
       const result = parseAgentInput({ prompt: 'p', max_turns: 100 });
-      expect(result.max_turns).toBe(50);
+      expect(result.max_turns).toBe(100);
       expect(result.max_turns_explicit).toBe(true);
     });
 
-    it('clamps the exact upper boundary (50 stays 50)', () => {
+    it('keeps 50 as 50', () => {
       expect(parseAgentInput({ prompt: 'p', max_turns: 50 }).max_turns).toBe(50);
     });
 
-    it('clamps values below 1 up to 1', () => {
+    it('floors negatives to 0 (unlimited), not 1', () => {
       const result = parseAgentInput({ prompt: 'p', max_turns: -5 });
-      expect(result.max_turns).toBe(1);
+      expect(result.max_turns).toBe(0);
     });
 
-    it('clamps zero up to 1', () => {
-      expect(parseAgentInput({ prompt: 'p', max_turns: 0 }).max_turns).toBe(1);
+    it('keeps zero as 0 (unlimited)', () => {
+      expect(parseAgentInput({ prompt: 'p', max_turns: 0 }).max_turns).toBe(0);
     });
 
-    it('clamps the exact lower boundary (1 stays 1)', () => {
+    it('keeps the exact lower boundary (1 stays 1)', () => {
       expect(parseAgentInput({ prompt: 'p', max_turns: 1 }).max_turns).toBe(1);
     });
 
-    it('floors fractional values before clamping', () => {
-      // Math.floor(3.9) === 3, within range → 3.
+    it('floors fractional values', () => {
+      // Math.floor(3.9) === 3.
       expect(parseAgentInput({ prompt: 'p', max_turns: 3.9 }).max_turns).toBe(3);
     });
 
-    it('floors a fractional value that also needs clamping (0.5 → 0 → 1)', () => {
-      // Math.floor(0.5) === 0, then clamp up to 1.
-      expect(parseAgentInput({ prompt: 'p', max_turns: 0.5 }).max_turns).toBe(1);
+    it('floors a fractional value to 0 (0.5 → 0 = unlimited)', () => {
+      // Math.floor(0.5) === 0, then Math.max(0, 0) === 0.
+      expect(parseAgentInput({ prompt: 'p', max_turns: 0.5 }).max_turns).toBe(0);
     });
 
     it('throws when max_turns is not a number (string)', () => {
@@ -340,6 +340,8 @@ describe('parseAgentInput', () => {
         model: 'sonnet',
         max_turns: 25,
         max_turns_explicit: true,
+        max_tool_use_iterations: 0,
+        max_tool_use_iterations_explicit: false,
         id_prefix: 'diagnose',
         agent_type: 'research-agent',
         mode: 'background',
@@ -353,8 +355,10 @@ describe('parseAgentInput', () => {
       const expected: AgentInput = {
         prompt: 'minimal',
         model: undefined,
-        max_turns: 10,
+        max_turns: 0,
         max_turns_explicit: false,
+        max_tool_use_iterations: 0,
+        max_tool_use_iterations_explicit: false,
         id_prefix: 'agent-tool',
         mode: 'foreground',
       };
