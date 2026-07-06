@@ -559,10 +559,14 @@ export class AnthropicDirectProvider implements ModelProvider {
   addReadRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
     this.ensureSharedRoots();
     const p = path.resolve(absPath);
+    // Invariant: audit only on state change — a repeat grant of an
+    // already-present root must not emit a duplicate ledger record (see
+    // SessionToolDispatcher.addReadRoot; the unconditional append caused a
+    // 196x blow-up of session-grants.jsonl).
     if (!this._sharedReadRoots!.includes(p)) {
       this._sharedReadRoots!.push(p);
+      this.appendProviderAuditLog({ action: 'grant-read', path: p, source, sessionId });
     }
-    this.appendProviderAuditLog({ action: 'grant-read', path: p, source, sessionId });
   }
 
   addWriteRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
@@ -573,8 +577,8 @@ export class AnthropicDirectProvider implements ModelProvider {
     }
     if (!this._sharedWriteRoots!.includes(p)) {
       this._sharedWriteRoots!.push(p);
+      this.appendProviderAuditLog({ action: 'grant-write', path: p, source, sessionId });
     }
-    this.appendProviderAuditLog({ action: 'grant-write', path: p, source, sessionId });
   }
 
   revokeRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {

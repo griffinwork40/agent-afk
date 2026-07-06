@@ -254,10 +254,12 @@ export function allowedPathsForMode(
  * `persist` elicitation choice actually deliver "future sessions inherit it".
  *
  * No-op when the file is absent or empty. `addReadRoot`/`addWriteRoot` are
- * idempotent, so re-seeding (or overlap with the cwd root) is harmless. A
- * write-mode grant is added to BOTH lists: `allowedPathsForMode('read')`
- * includes write grants (read ⊆ write), and the write loop additionally pushes
- * them into the write roots.
+ * idempotent in BOTH state and audit: they append to `session-grants.jsonl`
+ * only when a root is newly added, so re-seeding within a live process (or
+ * overlap with the cwd root) is truly harmless — a fresh process still audits
+ * each restored root once at seed. A write-mode grant is added to BOTH lists:
+ * `allowedPathsForMode('read')` includes write grants (read ⊆ write), and the
+ * write loop additionally pushes them into the write roots.
  *
  * The param is a structural subset of the `GrantManager` interface so this
  * module (agent layer) needn't import it from the CLI layer.
