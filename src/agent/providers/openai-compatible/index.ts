@@ -522,16 +522,22 @@ export class OpenAICompatibleProvider implements ModelProvider {
   addReadRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
     this.ensureSharedRoots();
     const p = path.resolve(absPath);
-    if (!this._sharedReadRoots!.includes(p)) this._sharedReadRoots!.push(p);
-    this.appendProviderAuditLog({ action: 'grant-read', path: p, source, sessionId });
+    // Invariant: audit only on state change (see dispatcher.addReadRoot) —
+    // repeat grants of an already-present root must not duplicate the ledger.
+    if (!this._sharedReadRoots!.includes(p)) {
+      this._sharedReadRoots!.push(p);
+      this.appendProviderAuditLog({ action: 'grant-read', path: p, source, sessionId });
+    }
   }
 
   addWriteRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
     this.ensureSharedRoots();
     const p = path.resolve(absPath);
     if (!this._sharedReadRoots!.includes(p)) this._sharedReadRoots!.push(p);
-    if (!this._sharedWriteRoots!.includes(p)) this._sharedWriteRoots!.push(p);
-    this.appendProviderAuditLog({ action: 'grant-write', path: p, source, sessionId });
+    if (!this._sharedWriteRoots!.includes(p)) {
+      this._sharedWriteRoots!.push(p);
+      this.appendProviderAuditLog({ action: 'grant-write', path: p, source, sessionId });
+    }
   }
 
   revokeRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {

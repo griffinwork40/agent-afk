@@ -345,17 +345,26 @@ export class SessionToolDispatcher implements ToolDispatcher {
   /**
    * Grant read access to `absPath`. No-op if already present.
    * `resolveBase` is always implicitly readable and need not be added.
+   *
+   * Invariant: the audit append fires ONLY when `p` is newly added. Re-granting
+   * an already-granted path is a state no-op and must not emit a duplicate
+   * ledger record — the previous unconditional append let per-tool-call
+   * re-grants of the same root balloon `session-grants.jsonl` ~196x (1,143
+   * unique grants → 224k rows before this fix).
    */
   addReadRoot(absPath: string, source: 'slash' | 'tool' = 'slash'): void {
     const p = path.resolve(absPath);
     if (!this._readRoots.includes(p)) {
       this._readRoots.push(p);
+      this.appendAuditLog({ action: 'grant-read', path: p, source });
     }
-    this.appendAuditLog({ action: 'grant-read', path: p, source });
   }
 
   /**
    * Grant read + write access to `absPath`. Ensures path is in BOTH lists.
+   * Audits `grant-write` only when `p` is newly added to `_writeRoots`, so a
+   * read→write upgrade still records (new to writeRoots) while a repeat
+   * write-grant is silent. See `addReadRoot` for the dedup rationale.
    */
   addWriteRoot(absPath: string, source: 'slash' | 'tool' = 'slash'): void {
     const p = path.resolve(absPath);
@@ -364,8 +373,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
     }
     if (!this._writeRoots.includes(p)) {
       this._writeRoots.push(p);
+      this.appendAuditLog({ action: 'grant-write', path: p, source });
     }
-    this.appendAuditLog({ action: 'grant-write', path: p, source });
   }
 
   /**
