@@ -18,6 +18,7 @@
 
 import OpenAI from 'openai';
 import { resolveOpenAIAuth } from './auth.js';
+import { isOSeriesModel } from '../../model-capabilities.js';
 
 /** Test injection hook — supplants the real `OpenAI` constructor. */
 export type OneShotOpenAIClientFactory = (opts: { apiKey: string; baseURL?: string }) => OpenAI;
@@ -88,10 +89,11 @@ export async function oneShotChatCompletion(input: OpenAIOneShotInput): Promise<
   const factory = clientFactory ?? oneShotClientFactory;
   const client = factory ? factory(clientOpts) : new OpenAI(clientOpts);
 
-  // o-series reasoning models reject `max_tokens`; everything else (and local
-  // shims) want it. Strip any `provider/` prefix (OpenRouter-style ids) first.
-  const bareModel = model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model;
-  const tokenLimit = /^o[0-9]/.test(bareModel)
+  // o-series reasoning models reject `max_tokens` and require
+  // `max_completion_tokens`; everything else (chat models + local shims) wants
+  // `max_tokens`. Classification (incl. `provider/`-prefix strip) is shared —
+  // see `isOSeriesModel` in model-capabilities.ts.
+  const tokenLimit = isOSeriesModel(model)
     ? { max_completion_tokens: maxTokens }
     : { max_tokens: maxTokens };
 
