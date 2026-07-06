@@ -1,0 +1,66 @@
+{
+  "id": "afk-dark",
+  "name": "AFK Dark",
+  "author": "agent-afk",
+  "description": "Ported 1:1 from the agent-afk Cursor/VS Code and Ghostty themes. GitHub-Dark structural skeleton with the AFK warm-orange accent (#E67E4C).",
+  "editorTheme": {
+    "dark": "github-dark"
+  },
+  "variants": {
+    "dark": {
+      "colors": {
+        "background": "#0D1117",
+        "foreground": "#C9D1D9",
+        "card": "#161B22",
+        "cardForeground": "#C9D1D9",
+        "popover": "#161B22",
+        "popoverForeground": "#C9D1D9",
+        "primary": "#E67E4C",
+        "primaryForeground": "#0D1117",
+        "secondary": "#21262D",
+        "secondaryForeground": "#C9D1D9",
+        "muted": "#161B22",
+        "mutedForeground": "#7D8590",
+        "accent": "#21262D",
+        "accentForeground": "#E67E4C",
+        "destructive": "#F85149",
+        "border": "#21262D",
+        "input": "#30363D",
+        "ring": "#E67E4C",
+        "sidebar": "#0D1117",
+        "sidebarForeground": "#C9D1D9",
+        "sidebarPrimary": "#E67E4C",
+        "sidebarPrimaryForeground": "#0D1117",
+        "sidebarAccent": "#21262D",
+        "sidebarAccentForeground": "#C9D1D9",
+        "sidebarBorder": "#21262D",
+        "sidebarRing": "#E67E4C"
+      },
+      "terminal": {
+        "background": "#0D1117",
+        "foreground": "#C9D1D9",
+        "cursor": "#E67E4C",
+        "cursorAccent": "#0D1117",
+        "selection": "#2A2D35",
+        "ansi": [
+          "#161B22",
+          "#F85149",
+          "#9CB04A",
+          "#E5C07B",
+          "#5BA8FF",
+          "#9F7CE0",
+          "#56B5A8",
+          "#C9D1D9",
+          "#484F58",
+          "#F85149",
+          "#A8E060",
+          "#E67E4C",
+          "#5BA8FF",
+          "#F08AC4",
+          "#5FE0C0",
+          "#ECEFF4"
+        ]
+      }
+    }
+  }
+}
