@@ -26,7 +26,7 @@
 import OpenAI from 'openai';
 import { randomUUID } from 'node:crypto';
 import type { AgentConfig } from '../../types/config-types.js';
-import { emitToolCall, emitSessionPhase } from '../../trace/emit.js';
+import { emitSessionPhase } from '../../trace/emit.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
 import type { TraceWriter } from '../../trace/index.js';
 import type {
@@ -46,7 +46,6 @@ import type {
 import { sumProviderUsage } from '../../usage.js';
 import { contextLimitFor } from '../../model-limits.js';
 import { resolveModelId } from '../../session/model-resolution.js';
-import { extractRawToolInput } from '../../facets/raw-input.js';
 import { collectSupportedCommands } from '../shared/supported-commands.js';
 import { debugLog } from '../../../utils/debug.js';
 import {
@@ -68,10 +67,6 @@ import {
 } from './translate.js';
 import {
   toolDefsToOpenAIFunctions,
-  accumulatedToolCallsToToolCalls,
-  assistantMessageWithToolCalls,
-  toolResultsToMessages,
-  toolImageFollowupMessage,
   type OpenAIFunctionTool,
 } from './loop.js';
 import { translateResponsesEvent, type ResponsesStreamEvent } from './responses-translate.js';
@@ -79,13 +74,13 @@ import { buildResponsesRequest } from './responses-messages.js';
 import { resolveWireMode, envFlagEnabled, isClaudeFamilyModel, DEFAULT_RESPONSES_INSTRUCTIONS, type WireMode } from './responses-config.js';
 import { env } from '../../../config/env.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
-import type { ToolResult } from '../anthropic-direct/types.js';
 import { contextWindowTokensUsed, buildContextUsageFields } from '../shared/auto-compact.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../shared/plan-mode-addendum.js';
 import { AFK_MODE_ADDENDUM_TEXT } from '../shared/afk-mode-addendum.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
 import { sleepWithAbort } from '../shared/sleep-with-abort.js';
 import { summarizeToolInput } from '../shared/tool-input-summary.js';
+import { dispatchAndAppendToolCalls } from './query/dispatch-append.js';
 import {
   MAX_CONNECTION_RETRIES,
   MAX_STREAM_RETRIES,
@@ -882,196 +877,23 @@ export class OpenAICompatibleQuery implements ProviderQuery {
 
   /**
    * After an iteration produced tool calls: emit `tool.use.start` per call,
-   * dispatch through the shared dispatcher (which runs PreToolUse hooks +
-   * permission checks + the actual handler + PostToolUse hooks), then emit
-   * `tool.output` per result, then append the assistant{tool_calls} +
-   * tool{result} messages to running history for the next iteration.
+   * dispatch through the shared dispatcher, emit outputs, and append the
+   * assistant/tool-result messages to running history for the next iteration.
    */
   private async *dispatchAndAppend(
     state: StreamState,
     signal: AbortSignal,
     vision: boolean,
   ): AsyncGenerator<ProviderEvent> {
-    if (!this.toolDispatcher) {
-      // Shouldn't reach here — runIteration won't return needsToolDispatch=true
-      // when we have no dispatcher because we don't send `tools[]` — but
-      // belt-and-braces against a misbehaving model.
-      return;
-    }
-
-    const accumulated = finalizedToolCalls(state);
-    // Invariant: every dispatched tool call MUST carry a non-empty id, and the
-    // SAME id must appear on BOTH the assistant turn's `tool_calls[]` and each
-    // matching tool-result message's `tool_call_id` — OpenAI rejects a
-    // tool_call_id with no corresponding assistant tool_calls[] entry (HTTP
-    // 400). Local OpenAI-shim runners (MLX, llama.cpp) sometimes stream
-    // tool_calls with an empty or absent id. Mint one synthetic id HERE, once,
-    // so both downstream builders observe the same value:
-    // accumulatedToolCallsToToolCalls (→ tool-result tool_call_id) and
-    // assistantMessageWithToolCalls (→ assistant tool_calls[].id) below.
-    // Generating it independently in each builder would desync the pair and
-    // reintroduce the 400.
-    for (const c of accumulated) {
-      if (c.id.length === 0) c.id = randomUUID();
-    }
-    const { calls, parseErrors } = accumulatedToolCallsToToolCalls(accumulated, signal);
-
-    // Witness layer: per-call start timestamps keyed by toolUseId so the
-    // completed trace event carries an accurate durationMs. Mirrors
-    // anthropic-direct/loop.ts:524-525. Lives within this dispatchAndAppend
-    // invocation only — the next tool-use round starts fresh.
-    const startTimes = new Map<string, number>();
-
-    // Emit tool.use.start BEFORE dispatching, matching anthropic-direct.
-    // Witness layer: tool_call.started fires here too — BEFORE dispatch so
-    // even a crashing tool leaves evidence that it was attempted. Mirrors
-    // anthropic-direct/loop.ts:535-543.
-    for (const call of calls) {
-      const now = Date.now();
-      startTimes.set(call.id, now);
-      // Fire-and-forget — emitToolCall swallows writer errors internally.
-      void emitToolCall(this.traceWriter, {
-        phase: 'started',
-        toolUseId: call.id,
-        name: call.name,
-        inputBytes: Buffer.byteLength(JSON.stringify(call.input ?? {}), 'utf8'),
-      });
-      yield {
-        type: 'tool.use.start',
-        toolUseId: call.id,
-        toolName: call.name,
-        toolInput: summarizeToolInput(call.name, call.input),
-        toolInputRaw: extractRawToolInput(call.input),
-        sessionId: this.initSessionId,
-      };
-    }
-
-    // Build results — start with synthetic errors for any JSON parse failures.
-    const results: { call: typeof calls[number]; result: ToolResult }[] = [];
-
-    if (signal.aborted) {
-      // Aborted before dispatch — synthesize aborted results and emit outputs.
-      for (const call of calls) {
-        const result: ToolResult = { content: 'Tool call aborted', isError: true };
-        results.push({ call, result });
-        yield {
-          type: 'tool.output',
-          toolUseId: call.id,
-          toolName: call.name,
-          content: result.content,
-          isError: true,
-          sessionId: this.initSessionId,
-        };
-      }
-    } else {
-      // Real dispatch — batch when available, sequential fallback.
-      let dispatcherResults: ToolResult[];
-      try {
-        if (this.toolDispatcher.executeBatch) {
-          dispatcherResults = await this.toolDispatcher.executeBatch(calls);
-        } else {
-          dispatcherResults = [];
-          for (const call of calls) {
-            if (signal.aborted) {
-              dispatcherResults.push({ content: 'Tool call aborted', isError: true });
-              continue;
-            }
-            try {
-              dispatcherResults.push(await this.toolDispatcher.execute(call));
-            } catch (err) {
-              const message = err instanceof Error ? err.message : String(err);
-              dispatcherResults.push({
-                content: `Tool execution threw: ${message}`,
-                isError: true,
-              });
-            }
-          }
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        dispatcherResults = calls.map(() => ({
-          content: `Tool batch execution failed: ${message}`,
-          isError: true,
-        }));
-      }
-
-      for (let i = 0; i < calls.length; i++) {
-        const call = calls[i]!;
-        let result = dispatcherResults[i]!;
-        // Layer parse-error diagnostics in front of the dispatcher result —
-        // the model needs to know its arguments were malformed.
-        const parseErr = parseErrors.get(call.id);
-        if (parseErr !== undefined) {
-          result = {
-            content: `${parseErr}\n--\n${result.content}`,
-            isError: true,
-            ...(result.truncated === true ? { truncated: true } : {}),
-          };
-        }
-        results.push({ call, result });
-
-        // Witness layer: tool_call.completed pairs with the .started event
-        // emitted above. Mirrors anthropic-direct/loop.ts:605-624.
-        // Fire-and-forget to keep the loop iteration cheap.
-        const startedAt = startTimes.get(call.id);
-        const durationMs = typeof startedAt === 'number' ? Date.now() - startedAt : 0;
-        const truncated = result.truncated === true || result.content.includes('[output truncated');
-        void emitToolCall(this.traceWriter, {
-          phase: 'completed',
-          toolUseId: call.id,
-          name: call.name,
-          resultBytes: Buffer.byteLength(result.content, 'utf8'),
-          isError: result.isError === true,
-          truncated,
-          durationMs,
-          ...(result.circuitBreaker === true ? { circuitBreaker: true } : {}),
-          ...(result.failureClass ? { failureClass: result.failureClass } : {}),
-        });
-
-        yield {
-          type: 'tool.output',
-          toolUseId: call.id,
-          toolName: call.name,
-          content: result.content,
-          ...(result.isError === true ? { isError: true } : {}),
-          ...(result.truncated === true ? { truncated: true } : {}),
-          sessionId: this.initSessionId,
-        };
-        if (result.render?.diff) {
-          yield {
-            type: 'tool.diff',
-            toolUseId: call.id,
-            diff: result.render.diff,
-            sessionId: this.initSessionId,
-          };
-        }
-      }
-    }
-
-    // Append the assistant turn (with tool_calls) and the tool-result
-    // messages to running history so the next iteration's request includes
-    // them. OpenAI is strict about this order: assistant{tool_calls} must
-    // precede the tool{} messages, and each tool{} must reference a
-    // tool_call_id that exists in the assistant turn.
-    //
-    // `state.reasoningText` is threaded in so DeepSeek-R1-class thinking-mode
-    // providers see the reasoning trace echoed back on the assistant turn —
-    // omitting it on those providers yields a 400 ("The `reasoning_content`
-    // in the thinking mode must be passed back to the API"). Empty text is
-    // a no-op for non-thinking providers (the field is omitted entirely).
-    this.priorTurns.push(
-      assistantMessageWithToolCalls(state.assistantText, accumulated, state.reasoningText) as unknown as OpenAIMessage,
-    );
-    for (const m of toolResultsToMessages(results)) {
-      this.priorTurns.push(m as unknown as OpenAIMessage);
-    }
-    // Tool-result images (e.g. browser_screenshot) can't ride the `role:'tool'`
-    // message (OpenAI carries only text there). On vision-capable models they
-    // surface as a follow-up `role:'user'` image message pushed AFTER the tool
-    // messages so the alternation stays valid. Undefined (no push) when the
-    // model lacks vision or no result carried an image. See issue #127.
-    const imageFollowup = toolImageFollowupMessage(results, { vision });
-    if (imageFollowup) this.priorTurns.push(imageFollowup);
+    yield* dispatchAndAppendToolCalls({
+      state,
+      signal,
+      vision,
+      toolDispatcher: this.toolDispatcher,
+      traceWriter: this.traceWriter,
+      priorTurns: this.priorTurns,
+      sessionId: this.initSessionId,
+    });
   }
 
   // ---- ProviderQuery surface ------------------------------------------------
