@@ -92,9 +92,11 @@ describe('parseAgentInput', () => {
   });
 
   describe('max_turns', () => {
-    it('defaults to 10 and marks it non-explicit when omitted', () => {
+    it('defaults to 0 (unlimited) and marks it non-explicit when omitted', () => {
+      // #448: uncapped by default. 0 = no ceiling (matches AgentSession's
+      // falsy-maxTurns = no-cap check in assertCanSend).
       const result = parseAgentInput({ prompt: 'p' });
-      expect(result.max_turns).toBe(10);
+      expect(result.max_turns).toBe(0);
       expect(result.max_turns_explicit).toBe(false);
     });
 
@@ -104,42 +106,80 @@ describe('parseAgentInput', () => {
       expect(result.max_turns_explicit).toBe(true);
     });
 
-    it('clamps values above 50 down to 50', () => {
+    it('preserves a large value with no upper ceiling (100 stays 100)', () => {
+      // #448 removed the old "clamp to 50" cap — the caller (or a named
+      // agent's frontmatter) owns any ceiling it wants.
       const result = parseAgentInput({ prompt: 'p', max_turns: 100 });
-      expect(result.max_turns).toBe(50);
+      expect(result.max_turns).toBe(100);
       expect(result.max_turns_explicit).toBe(true);
     });
 
-    it('clamps the exact upper boundary (50 stays 50)', () => {
+    it('preserves the former upper-boundary value unchanged (50 stays 50)', () => {
       expect(parseAgentInput({ prompt: 'p', max_turns: 50 }).max_turns).toBe(50);
     });
 
-    it('clamps values below 1 up to 1', () => {
+    it('clamps negatives up to 0 (unlimited)', () => {
+      // Math.max(0, Math.floor(-5)) === 0.
       const result = parseAgentInput({ prompt: 'p', max_turns: -5 });
-      expect(result.max_turns).toBe(1);
+      expect(result.max_turns).toBe(0);
     });
 
-    it('clamps zero up to 1', () => {
-      expect(parseAgentInput({ prompt: 'p', max_turns: 0 }).max_turns).toBe(1);
+    it('keeps zero as zero (unlimited)', () => {
+      expect(parseAgentInput({ prompt: 'p', max_turns: 0 }).max_turns).toBe(0);
     });
 
-    it('clamps the exact lower boundary (1 stays 1)', () => {
+    it('preserves the value 1 unchanged', () => {
       expect(parseAgentInput({ prompt: 'p', max_turns: 1 }).max_turns).toBe(1);
     });
 
-    it('floors fractional values before clamping', () => {
-      // Math.floor(3.9) === 3, within range → 3.
+    it('floors fractional values', () => {
+      // Math.floor(3.9) === 3.
       expect(parseAgentInput({ prompt: 'p', max_turns: 3.9 }).max_turns).toBe(3);
     });
 
-    it('floors a fractional value that also needs clamping (0.5 → 0 → 1)', () => {
-      // Math.floor(0.5) === 0, then clamp up to 1.
-      expect(parseAgentInput({ prompt: 'p', max_turns: 0.5 }).max_turns).toBe(1);
+    it('floors a small fractional value down to 0 (0.5 → 0, unlimited)', () => {
+      // Math.floor(0.5) === 0, then Math.max(0, 0) === 0.
+      expect(parseAgentInput({ prompt: 'p', max_turns: 0.5 }).max_turns).toBe(0);
     });
 
     it('throws when max_turns is not a number (string)', () => {
       expect(() => parseAgentInput({ prompt: 'p', max_turns: '10' })).toThrow(
         /max_turns must be a number/,
+      );
+    });
+  });
+
+  describe('max_tool_use_iterations', () => {
+    it('defaults to 0 (unlimited) and marks it non-explicit when omitted', () => {
+      const result = parseAgentInput({ prompt: 'p' });
+      expect(result.max_tool_use_iterations).toBe(0);
+      expect(result.max_tool_use_iterations_explicit).toBe(false);
+    });
+
+    it('marks max_tool_use_iterations_explicit true when supplied', () => {
+      const result = parseAgentInput({ prompt: 'p', max_tool_use_iterations: 8 });
+      expect(result.max_tool_use_iterations).toBe(8);
+      expect(result.max_tool_use_iterations_explicit).toBe(true);
+    });
+
+    it('preserves a large value with no upper ceiling (200 stays 200)', () => {
+      const result = parseAgentInput({ prompt: 'p', max_tool_use_iterations: 200 });
+      expect(result.max_tool_use_iterations).toBe(200);
+      expect(result.max_tool_use_iterations_explicit).toBe(true);
+    });
+
+    it('clamps negatives up to 0 (unlimited)', () => {
+      // Math.max(0, Math.floor(-3)) === 0.
+      expect(parseAgentInput({ prompt: 'p', max_tool_use_iterations: -3 }).max_tool_use_iterations).toBe(0);
+    });
+
+    it('floors fractional values', () => {
+      expect(parseAgentInput({ prompt: 'p', max_tool_use_iterations: 4.9 }).max_tool_use_iterations).toBe(4);
+    });
+
+    it('throws when max_tool_use_iterations is not a number (string)', () => {
+      expect(() => parseAgentInput({ prompt: 'p', max_tool_use_iterations: '5' })).toThrow(
+        /max_tool_use_iterations must be a number/,
       );
     });
   });
@@ -329,6 +369,7 @@ describe('parseAgentInput', () => {
         prompt: 'investigate the failing test',
         model: 'sonnet',
         max_turns: 25,
+        max_tool_use_iterations: 12,
         id_prefix: 'diagnose',
         subagent_type: 'research-agent',
         mode: 'background',
@@ -340,6 +381,8 @@ describe('parseAgentInput', () => {
         model: 'sonnet',
         max_turns: 25,
         max_turns_explicit: true,
+        max_tool_use_iterations: 12,
+        max_tool_use_iterations_explicit: true,
         id_prefix: 'diagnose',
         agent_type: 'research-agent',
         mode: 'background',
@@ -353,8 +396,11 @@ describe('parseAgentInput', () => {
       const expected: AgentInput = {
         prompt: 'minimal',
         model: undefined,
-        max_turns: 10,
+        // #448: turn/tool-use budgets are uncapped (0) and non-explicit by default.
+        max_turns: 0,
         max_turns_explicit: false,
+        max_tool_use_iterations: 0,
+        max_tool_use_iterations_explicit: false,
         id_prefix: 'agent-tool',
         mode: 'foreground',
       };

@@ -99,6 +99,12 @@ vi.mock('../../agent/memory/index.js', () => {
     MemoryStore: vi.fn(() => ({ close })),
     injectHotMemory: (config: unknown) => config,
     MEMORY_TOOL_NAMES: [],
+    // The (unmocked) openai-compatible provider imports these from
+    // memory/index.js at module load; empty/no-op stubs keep the mocked memory
+    // tool universe empty.
+    memoryToolSchemas: [],
+    memorySearchTool: { name: 'memory_search', input_schema: { type: 'object' as const } },
+    createMemoryHandlers: () => new Map(),
   };
 });
 
@@ -127,8 +133,19 @@ vi.mock('../../agent/providers/anthropic-direct/index.js', () => ({
   AnthropicDirectProvider: vi.fn().mockImplementation(() => ({})),
 }));
 
+// The dispatcher (pulled in transitively via the anthropic-direct provider)
+// imports builtinToolSchemas/agentTool/skillTool/composeTool from here to build
+// its concurrency-safe tool set. These tests don't assert on the tool universe,
+// so stub each with the minimum AnthropicToolDef shape the dispatcher reads
+// (name + input_schema); omitting concurrencySafe keeps the safe-tool set empty,
+// matching BUILTIN_TOOL_NAMES: []. Objects are inlined because vi.mock factories
+// are hoisted above module-scope declarations.
 vi.mock('../../agent/tools/schemas.js', () => ({
   BUILTIN_TOOL_NAMES: [],
+  builtinToolSchemas: [],
+  agentTool: { name: 'agent', input_schema: { type: 'object' as const } },
+  skillTool: { name: 'skill', input_schema: { type: 'object' as const } },
+  composeTool: { name: 'compose', input_schema: { type: 'object' as const } },
 }));
 
 vi.mock('../../agent/trace/factory.js', () => ({
