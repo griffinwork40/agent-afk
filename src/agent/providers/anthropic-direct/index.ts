@@ -75,17 +75,17 @@ import { MemoryStore, createMemoryHandlers, memoryToolSchemas, memorySearchTool 
 import { dumpIfEnabled } from '../../session/prompt-dump.js';
 import { getSessionGrantsPath } from '../../../paths.js';
 import { env } from '../../../config/env.js';
+import { resolveQueryToken } from './query/token-resolution.js';
 import {
   getRuntimeStateTool,
   createGetRuntimeStateHandler,
   wrapDispatcherWithRuntimeState,
   buildRuntimeStateSource,
   formatEnvironmentFragment,
-  writePresenceFile,
-  removePresenceFileSync,
   type RuntimeStateSource,
 } from '../../awareness/index.js';
-import { actorFromDepth } from '../../session/session-identity.js';
+import { registerPresenceLifecycle } from './query/presence-lifecycle.js';
+import { createCwdDependentsFactory } from './query/cwd-dependents.js';
 
 const PROVIDER_NAME = 'anthropic-direct';
 const DEFAULT_MODEL = 'claude-sonnet-5';
@@ -629,19 +629,7 @@ export class AnthropicDirectProvider implements ModelProvider {
 
   query(args: ProviderQueryArgs): ProviderQuery {
     const config = args.config;
-    // Local-server mode (active when `config.baseUrl` is set) intentionally
-    // does NOT fall back to `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`.
-    // Sending real Anthropic credentials to a self-hosted shim is a footgun;
-    // a placeholder `'local'` token keeps the SDK happy (it just needs *some*
-    // string) without leaking real keys.
-    const localMode = typeof config.baseUrl === 'string' && config.baseUrl.length > 0;
-    const token = localMode
-      ? (config.apiKey && config.apiKey.length > 0
-          ? config.apiKey
-          : (env.AFK_LOCAL_API_KEY || 'local'))
-      : (config.apiKey && config.apiKey.length > 0
-          ? config.apiKey
-          : (env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_OAUTH_TOKEN || ''));
+    const { localMode, token } = resolveQueryToken(config);
     if (!token || token.length === 0) {
       throw new Error(
         `${PROVIDER_NAME} provider requires config.apiKey (resolved from ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN)`,
@@ -732,36 +720,17 @@ export class AnthropicDirectProvider implements ModelProvider {
           : { active: [], backgroundJobs: [] },
     });
 
-    // Phase 2 — Presence file lifecycle (top-level sessions only).
-    // Guard: only write once per provider instance (not once per turn).
-    // Top-level = depth is 0 or undefined (parentSessionId absent).
-    const isTopLevel =
-      (config.depth === undefined || config.depth === 0) &&
-      config.parentSessionId === undefined;
-    if (isTopLevel && config.sessionId !== undefined && this._presenceSessionId === null) {
-      this._presenceSessionId = config.sessionId;
-      const sessionId = config.sessionId;
-      const workspace = runtimeStateSource.getWorkspace();
-      // Fire-and-forget — presence is best-effort.
-      void writePresenceFile({
-        sessionId,
-        surface: this.surface,
-        // Presence is written only under the top-level gate above, so depth is
-        // 0/undefined here ⇒ 'main'. Derived (not hardcoded) to stay correct
-        // if that gate is ever changed.
-        actor: actorFromDepth(config.depth),
-        cwd: config.cwd ?? process.cwd(),
-        startedAt: new Date().toISOString(),
-        model: { provider: PROVIDER_NAME, name: model },
-        workspace,
-        pid: process.pid,
-      });
-      // Sync cleanup on process exit (cannot await in exit handler).
-      process.once('exit', () => { removePresenceFileSync(sessionId); });
-      // Best-effort cleanup on signals — fires before 'exit'.
-      process.once('SIGINT', () => { removePresenceFileSync(sessionId); process.exit(130); });
-      process.once('SIGTERM', () => { removePresenceFileSync(sessionId); process.exit(143); });
-    }
+    this._presenceSessionId = registerPresenceLifecycle({
+      depth: config.depth,
+      parentSessionId: config.parentSessionId,
+      sessionId: config.sessionId,
+      currentPresenceSessionId: this._presenceSessionId,
+      runtimeStateSource,
+      surface: this.surface,
+      cwd: config.cwd,
+      providerName: PROVIDER_NAME,
+      model,
+    });
 
     queryDispatcher = this.externalTools
       ? wrapDispatcherWithRuntimeState(this.externalTools, runtimeStateSource)
@@ -905,112 +874,23 @@ export class AnthropicDirectProvider implements ModelProvider {
     const resumedSessionId = config.sessionId ?? config.resume;
     const initialMessages = resumeHistoryToMessages(config.resumeHistory);
 
-    // cwdDependentsFactory: closure that rebuilds the cwd-sensitive system
-    // prompt fragment and tool dispatcher when setCwd() is called mid-session.
-    // Only wired when we own the dispatcher (not when the caller injected one).
-    //
-    // `stableSystemPrefix` = [toolBase, memoryPrompt, manifest?, userSystem?].
-    // The factory inserts the new `# Environment` block at index 2, matching
-    // the construction order in `query()` above.
-    //
-    // Order of operations (matters): migrate shared roots BEFORE building the
-    // new dispatcher. The new dispatcher receives `readRoots` / `writeRoots`
-    // by reference; the in-place swap below propagates to (a) the new
-    // dispatcher's `_readRoots`/`_writeRoots`, and (b) any other dispatcher
-    // (including the in-flight one currently routing turn-1 tool calls) that
-    // shares these arrays. Without this migration, containment checks under
-    // `read_file`/`glob`/`grep`/`_cwd-utils.resolveAndContain` reject paths
-    // anchored at the post-rename cwd because only the pre-rename cwd is in
-    // the roots — the symptom observed in the worktree-autoname race.
-    //
-    // `_initialResolveBase` is deliberately NOT updated: it is the per-session
-    // /allow-dir non-revocable anchor (`revokeRoot` equality check) and the
-    // value asserted by concurrent-session-isolation tests. Renames update
-    // `_currentCwd` (the rolling cwd) but leave the initial anchor alone.
     const cwdDependentsFactory = this.externalTools
       ? undefined
-      : (newCwd: string): { userSystem: string; dispatcher: import('./tool-dispatcher.js').ToolDispatcher } => {
-          // 1. In-place migration of shared roots: swap `oldCwd → newCwd` so
-          //    /allow-dir grants accumulated during the old-cwd window survive
-          //    intact, and so all dispatchers sharing these arrays see the
-          //    new path immediately.
-          const oldCwd = this._currentCwd;
-          if (this._sharedReadRoots && oldCwd !== undefined && oldCwd !== newCwd) {
-            const rIdx = this._sharedReadRoots.indexOf(oldCwd);
-            if (rIdx !== -1) {
-              this._sharedReadRoots[rIdx] = newCwd;
-            } else if (!this._sharedReadRoots.includes(newCwd)) {
-              this._sharedReadRoots.push(newCwd);
-            }
-          }
-          if (this._sharedWriteRoots && oldCwd !== undefined && oldCwd !== newCwd) {
-            const wIdx = this._sharedWriteRoots.indexOf(oldCwd);
-            if (wIdx !== -1) {
-              this._sharedWriteRoots[wIdx] = newCwd;
-            } else if (!this._sharedWriteRoots.includes(newCwd)) {
-              this._sharedWriteRoots.push(newCwd);
-            }
-          }
-          this._currentCwd = newCwd;
-
-          // 1b. Re-anchor the forked sub-agent / skill / compose executors so
-          //     child tool calls (the `agent`, skill, and compose tools) land in
-          //     the new worktree instead of the host's process.cwd(). Without
-          //     this, a born-named `afk -w` worktree leaves the executors frozen
-          //     on the launch dir.
-          this.subagentExecutor?.setCwd(newCwd);
-          this.skillExecutor?.setCwd(newCwd);
-          this.composeExecutor?.setCwd(newCwd);
-
-          // 2. Rebuild system-prompt fragment with the new `# Environment` line.
-          //    Build a fresh copy each invocation — splice mutates in place.
-          //    Awareness identity fields (sessionId/surface/depth/maxDepth)
-          //    are stable across cwd swaps, so we reuse the config snapshot.
-          const newSystemParts = [
-            stableSystemPrefix[0]!,
-            stableSystemPrefix[1]!,
-            formatEnvironmentFragment({
-              cwd: newCwd,
-              ...(config.sessionId !== undefined ? { sessionId: config.sessionId } : {}),
-              surface: this.surface,
-              ...(config.depth !== undefined ? { depth: config.depth } : {}),
-              ...(config.maxDepth !== undefined ? { maxDepth: config.maxDepth } : {}),
-              // Workspace is stable across cwd swaps (captured at session start).
-              workspace: runtimeStateSource.getWorkspace(),
-            }),
-            ...stableSystemPrefix.slice(2),
-          ];
-          const newUserSystem = newSystemParts.join('\n\n');
-
-          // 3. Build the new dispatcher. Its bash/grep/glob handlers close over
-          //    `newCwd` so future fall-through reads (where context is absent)
-          //    use the new path. The shared root arrays are passed by reference
-          //    so any future grant survives across both old and new dispatchers.
-          //    The same `runtimeStateSource` from the outer query() scope is
-          //    forwarded so the new dispatcher's handler map still contains
-          //    `get_runtime_state`. The source's `getEnabledToolNames` closure
-          //    will continue to reference the original `queryDispatcher` — an
-          //    accepted minor staleness window for Phase 1 (worktree rename
-          //    rarely coincides with mid-session MCP tool refresh).
-          // Use the LIVE permission mode (not the captured construction-time
-          // `permissionMode`) so a `/cd` after a `/bypass` toggle rebuilds the
-          // dispatcher with the current allowAll, never reverting the toggle.
-          const newDispatcher = this.buildDispatcher(this._currentPermissionMode, {
-            cwd: newCwd,
-            readRoots: this._sharedReadRoots,
-            writeRoots: this._sharedWriteRoots,
-            ...(config.env !== undefined ? { env: config.env } : {}),
-            sessionId: config.sessionId,
-            parentSessionId: config.parentSessionId,
-            traceWriter: config.traceWriter,
-            runtimeStateSource,
-            hookRegistry: config.hookRegistry,
-            // Carry the resident plan-exit handler across a cwd rebuild — omitting
-            // this previously dropped `exit_plan_mode` after a `/cd` while planning.
-            planExitControls: config.planExitControls,
-          });
-          return { userSystem: newUserSystem, dispatcher: newDispatcher };
-        };
+      : createCwdDependentsFactory({
+          stableSystemPrefix,
+          config,
+          surface: this.surface,
+          runtimeStateSource,
+          getCurrentCwd: () => this._currentCwd,
+          setCurrentCwd: (newCwd) => { this._currentCwd = newCwd; },
+          getCurrentPermissionMode: () => this._currentPermissionMode,
+          sharedReadRoots: this._sharedReadRoots,
+          sharedWriteRoots: this._sharedWriteRoots,
+          subagentExecutor: this.subagentExecutor,
+          skillExecutor: this.skillExecutor,
+          composeExecutor: this.composeExecutor,
+          buildDispatcher: (mode, opts) => this.buildDispatcher(mode, opts),
+        });
 
     const resolvedEffort = resolveEffort(config.effort, model);
     return new AnthropicDirectQuery({
