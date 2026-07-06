@@ -86,6 +86,7 @@ const INHERIT_AGENT: RegisteredAgent = {
     prompt: 'inherit prompt',
     model: 'inherit',
     maxTurns: 4,
+    maxToolUseIterations: 7,
   },
 };
 
@@ -254,6 +255,18 @@ describe('SubagentExecutor named-agent dispatch', () => {
       makeCall({ prompt: 'go', agent_type: 'inheritor', max_turns: 22 }),
     );
     expect(forkSubagent.mock.calls[0]?.[0].config.maxTurns).toBe(22);
+  });
+
+  it('maxToolUseIterations: def value applies as default; explicit call-site wins', async () => {
+    const executor = makeExecutor();
+    await executor.execute(makeCall({ prompt: 'go', agent_type: 'inheritor' }));
+    expect(forkSubagent.mock.calls[0]?.[0].config.maxToolUseIterations).toBe(7);
+
+    forkSubagent.mockClear();
+    await executor.execute(
+      makeCall({ prompt: 'go', agent_type: 'inheritor', max_tool_use_iterations: 30 }),
+    );
+    expect(forkSubagent.mock.calls[0]?.[0].config.maxToolUseIterations).toBe(30);
   });
 
   it('intersects the definition allowlist with an existing cage', async () => {

@@ -15,14 +15,24 @@ export type AgentExecutionMode = 'foreground' | 'background';
 export interface AgentInput {
   prompt: string;
   model?: string;
+  /** Conversation-turn cap. `0` (the default) means unlimited — no ceiling. */
   max_turns?: number;
   /**
    * True when the caller supplied `max_turns` explicitly. Distinguishes the
-   * parse-time default (10) from a deliberate value so a named agent's
-   * `maxTurns` frontmatter can act as the default without being able to
-   * override an explicit per-call budget.
+   * parse-time default (0 = unlimited) from a deliberate value so a named
+   * agent's `maxTurns` frontmatter can act as the default without being able
+   * to override an explicit per-call budget.
    */
   max_turns_explicit: boolean;
+  /**
+   * Tool-use-round cap within the child's single turn (anti-hang ceiling).
+   * `0` (the default) means unlimited on this dispatch path. A positive value
+   * caps rounds; openai-compatible models keep a provider-internal 50-round
+   * cap regardless.
+   */
+  max_tool_use_iterations?: number;
+  /** True when the caller supplied `max_tool_use_iterations` explicitly. */
+  max_tool_use_iterations_explicit: boolean;
   id_prefix?: string;
   /**
    * Named agent type to dispatch (`agent_type`, alias `subagent_type`).
@@ -82,16 +92,34 @@ export function parseAgentInput(input: unknown): AgentInput {
     model = modelValue;
   }
 
-  let max_turns = 10;
+  // Turn budget: default 0 = unlimited (matches AgentSession's falsy-maxTurns
+  // = no-cap check in assertCanSend). A positive value caps conversation
+  // turns; 0/negatives mean unlimited. No upper ceiling — the caller, or a
+  // named agent's `maxTurns` frontmatter, owns any cap it wants.
+  let max_turns = 0;
   let max_turns_explicit = false;
   const maxTurnsValue = agentInput['max_turns'];
   if (maxTurnsValue !== undefined) {
     if (typeof maxTurnsValue !== 'number') {
       throw new Error('Agent tool max_turns must be a number');
     }
-    // Clamp to [1, 50]
-    max_turns = Math.max(1, Math.min(50, Math.floor(maxTurnsValue)));
+    max_turns = Math.max(0, Math.floor(maxTurnsValue));
     max_turns_explicit = true;
+  }
+
+  // Tool-use-round budget within the single child turn (anti-hang ceiling).
+  // Default 0 = unlimited on the agent-tool path; a positive value caps
+  // rounds. openai-compatible children keep a provider-internal 50-round cap
+  // regardless of this value (see config-types.ts maxToolUseIterations).
+  let max_tool_use_iterations = 0;
+  let max_tool_use_iterations_explicit = false;
+  const maxToolIterValue = agentInput['max_tool_use_iterations'];
+  if (maxToolIterValue !== undefined) {
+    if (typeof maxToolIterValue !== 'number') {
+      throw new Error('Agent tool max_tool_use_iterations must be a number');
+    }
+    max_tool_use_iterations = Math.max(0, Math.floor(maxToolIterValue));
+    max_tool_use_iterations_explicit = true;
   }
 
   // agent_type: canonical param; `subagent_type` accepted as an alias for
@@ -172,6 +200,8 @@ export function parseAgentInput(input: unknown): AgentInput {
     model,
     max_turns,
     max_turns_explicit,
+    max_tool_use_iterations,
+    max_tool_use_iterations_explicit,
     id_prefix,
     mode,
     ...(agent_type !== undefined ? { agent_type } : {}),

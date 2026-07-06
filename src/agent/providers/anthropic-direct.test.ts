@@ -686,13 +686,15 @@ describe('AnthropicDirectProvider', () => {
   it('caps the tool-use loop at config.maxToolUseIterations (config → provider → loop)', async () => {
     // End-to-end plumbing guard: AgentConfig.maxToolUseIterations must thread
     // through AnthropicDirectProvider.query() → AnthropicDirectQueryOptions →
-    // the constructor → runInput → the loop's `maxIterations`. The mock model
-    // emits tool_use on every round, so the ONLY thing that can terminate the
-    // turn is the iteration cap — this is the guard a forked subagent relies on
+    // the constructor → runInput → the loop's `maxIterations`. After the cap the
+    // loop runs one tools-stripped wind-down round (rounds 1-2 request tools;
+    // round 3 answers in text), so the turn ends with a real final message AND
+    // stopReason 'tool_use_loop_capped' — the guard a forked subagent relies on
     // to avoid hanging its parent (see SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS).
     let callIdx = 0;
     messagesCreateMock.mockImplementation(() => {
       callIdx += 1;
+      if (callIdx >= 3) return fromArray(makeTextStream('Summary of findings.'));
       return fromArray(
         makeToolUseStream(`toolu_${callIdx}`, 'get_weather', '{"city":"SF"}'),
       );
@@ -715,8 +717,8 @@ describe('AnthropicDirectProvider', () => {
     });
     const events = await collect(query);
 
-    // Stopped after exactly 2 tool-use rounds, not left to spin unbounded.
-    expect(messagesCreateMock).toHaveBeenCalledTimes(2);
+    // 2 tool-use rounds + 1 tools-stripped wind-down round, not left to spin.
+    expect(messagesCreateMock).toHaveBeenCalledTimes(3);
     const completed = events.find((e) => e.type === 'turn.completed');
     expect(completed).toBeDefined();
     if (completed?.type === 'turn.completed') {
