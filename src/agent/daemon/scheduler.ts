@@ -544,6 +544,21 @@ export class CronScheduler {
       throw err;
     }
 
+    // Opt-in top-level tool-use-round ceiling (AFK_MAX_TOOL_USE_ITERATIONS).
+    // Parsed inline from the already-imported `env` rather than via the CLI
+    // `getMaxToolUseIterations()` helper to avoid an agent→cli layering
+    // dependency (scheduler lives in src/agent/). Mirrors the lenient contract
+    // of `parseMaxToolUseIterations` in cli/shared-helpers.ts: unset/non-numeric/
+    // <=0 → undefined = unlimited (no behavior change); positive → floored int.
+    // Placed BEFORE the `...sessionConfig` spread so an explicit
+    // sessionConfig.maxToolUseIterations still wins (escape-hatch parity with
+    // permissionMode/surface). The production path also re-applies the same
+    // env fallback in the daemon.ts factory; both resolve to the same value.
+    const rawMaxToolIters = env.AFK_MAX_TOOL_USE_ITERATIONS;
+    const parsedMaxToolIters =
+      rawMaxToolIters !== undefined && Number.isFinite(Number(rawMaxToolIters)) && Number(rawMaxToolIters) > 0
+        ? Math.floor(Number(rawMaxToolIters))
+        : undefined;
     const config: AgentConfig = {
       model: 'sonnet',
       // Daemon-spawned sessions run autonomously and require tool use without
@@ -571,6 +586,9 @@ export class CronScheduler {
       // permissionMode).
       ...(trace ? { traceWriter: trace.writer } : {}),
       ...(mcpManager !== undefined ? { mcpManager } : {}),
+      // Opt-in top-level tool-round ceiling default; overridable by an explicit
+      // sessionConfig.maxToolUseIterations via the spread below.
+      ...(parsedMaxToolIters !== undefined ? { maxToolUseIterations: parsedMaxToolIters } : {}),
       // sessionConfig may override permissionMode if the operator explicitly
       // wants a different mode for daemon tasks (intentional escape hatch).
       ...this.options.sessionConfig,

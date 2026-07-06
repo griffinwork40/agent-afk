@@ -125,13 +125,22 @@ export interface AgentConfig {
   maxTurns?: number;
 
   /**
-   * Hard cap on tool-use rounds within a single user turn (anthropic-direct
-   * only; openai-compatible carries its own built-in 50-round cap). Forwarded
-   * to the provider as `RunTurnInput.maxToolUseIterations`. `0` or unset means
-   * no cap — the top-level default. Subagent forks set a non-zero default (see
+   * Hard cap on tool-use rounds within a single user turn. Honored uniformly by
+   * both providers (anthropic-direct and openai-compatible) via the shared
+   * policy in `providers/shared/tool-loop-cap.ts`; when it fires, the provider
+   * runs one tools-stripped "wind-down" round so the model still returns a real
+   * answer. `0` or unset means no cap — the top-level default for both
+   * providers. Subagent forks set a non-zero default (see
    * `SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS` in subagent.ts) so a runaway
    * child tool-loop cannot hang the parent, which is suspended awaiting the
    * child's result.
+   *
+   * Top-level sessions leave this unset by default (unlimited). An operator can
+   * opt into a top-level ceiling with the `AFK_MAX_TOOL_USE_ITERATIONS` env var
+   * (`getMaxToolUseIterations()` in cli/shared-helpers.ts): unset/`<=0` →
+   * unlimited (no change); a positive integer fills this field at every
+   * top-level session surface via `explicit ?? getMaxToolUseIterations()`, so an
+   * explicit config value still wins. The env var never touches subagent forks.
    */
   maxToolUseIterations?: number;
 

@@ -88,6 +88,7 @@ vi.mock('../shared-helpers.js', () => ({
   getMaxBudgetUsd: vi.fn(() => undefined),
   getTaskBudget: vi.fn(() => undefined),
   getMaxOutputTokens: vi.fn(() => undefined),
+  getMaxToolUseIterations: vi.fn(() => undefined),
   getDefaultSubagentModel: vi.fn(() => 'sonnet'),
   loadSystemPrompt: vi.fn(() => undefined),
   loadConfigSystemPrompt: vi.fn(() => undefined),

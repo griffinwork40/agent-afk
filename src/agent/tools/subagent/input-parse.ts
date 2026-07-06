@@ -27,8 +27,8 @@ export interface AgentInput {
   /**
    * Tool-use-round cap within the child's single turn (anti-hang ceiling).
    * `0` (the default) means unlimited on this dispatch path. A positive value
-   * caps rounds; openai-compatible models keep a provider-internal 50-round
-   * cap regardless.
+   * caps rounds; honored uniformly by both providers (see
+   * shared/tool-loop-cap.ts).
    */
   max_tool_use_iterations?: number;
   /** True when the caller supplied `max_tool_use_iterations` explicitly. */
@@ -109,8 +109,8 @@ export function parseAgentInput(input: unknown): AgentInput {
 
   // Tool-use-round budget within the single child turn (anti-hang ceiling).
   // Default 0 = unlimited on the agent-tool path; a positive value caps
-  // rounds. openai-compatible children keep a provider-internal 50-round cap
-  // regardless of this value (see config-types.ts maxToolUseIterations).
+  // rounds. Honored uniformly by both providers (see config-types.ts
+  // maxToolUseIterations and providers/shared/tool-loop-cap.ts).
   let max_tool_use_iterations = 0;
   let max_tool_use_iterations_explicit = false;
   const maxToolIterValue = agentInput['max_tool_use_iterations'];

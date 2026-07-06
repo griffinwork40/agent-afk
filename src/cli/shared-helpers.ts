@@ -338,6 +338,36 @@ export function getMaxOutputTokens(): number | undefined {
   return parseMaxOutputTokens(env.AFK_MAX_OUTPUT_TOKENS);
 }
 
+/**
+ * Parse `AFK_MAX_TOOL_USE_ITERATIONS` — the opt-in top-level tool-use-round
+ * ceiling. Lenient by design (this is an operator escape-hatch, not a CLI flag):
+ * `undefined`, empty, non-numeric, or a value `<= 0` all resolve to `undefined`,
+ * meaning "no top-level cap" — identical to leaving `AgentConfig.maxToolUseIterations`
+ * unset (see `resolveMaxToolIterations` in `providers/shared/tool-loop-cap.ts`,
+ * where both `undefined` and `0` mean unlimited). A positive value is floored to
+ * an integer. Returning `undefined` (not `0`) on the unset path keeps the field
+ * ABSENT from the config so there is zero behavior change when the var is unset.
+ */
+export function parseMaxToolUseIterations(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return Math.floor(parsed);
+}
+
+/**
+ * Read the opt-in top-level tool-use-round ceiling from environment. Feeds the
+ * top-level `AgentConfig.maxToolUseIterations` default at every top-level session
+ * surface (chat, interactive, telegram, daemon, scheduler) via
+ * `explicit ?? getMaxToolUseIterations()`, so an explicit config value always
+ * wins. Returns `undefined` when unset/`<=0` (unlimited — no behavior change).
+ * Subagent forks are unaffected: they set their own non-zero default in
+ * `subagent.ts` / `child-config.ts` and never read this.
+ */
+export function getMaxToolUseIterations(): number | undefined {
+  return parseMaxToolUseIterations(env.AFK_MAX_TOOL_USE_ITERATIONS);
+}
+
 const VALID_PROVIDERS: readonly string[] = [
   'anthropic',
   'anthropic-direct',

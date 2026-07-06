@@ -53,14 +53,17 @@ import { extractRawToolInput } from '../../facets/raw-input.js';
 import { env } from '../../../config/env.js';
 import { sleepWithAbort } from '../shared/sleep-with-abort.js';
 import { summarizeToolInput } from '../shared/tool-input-summary.js';
+import {
+  TOOL_USE_LOOP_CAPPED,
+  WIND_DOWN_NOTE,
+  resolveMaxToolIterations,
+  shouldWindDown,
+} from '../shared/tool-loop-cap.js';
 
-/**
- * Default cap on tool-use rounds within a single user turn. `0` means "no
- * cap" — the loop terminates only when the model stops emitting tool_use
- * blocks, the abort signal fires, or the SDK errors. Set
- * `RunTurnInput.maxToolUseIterations` to a positive value for a hard ceiling.
- */
-export const DEFAULT_MAX_TOOL_USE_ITERATIONS = 0;
+// Re-exported from the provider-neutral `shared/tool-loop-cap.ts` (single
+// source of truth shared with openai-compatible). Kept exported here so
+// existing importers (loop.test.ts) resolve unchanged.
+export { DEFAULT_MAX_TOOL_USE_ITERATIONS } from '../shared/tool-loop-cap.js';
 
 /**
  * Project an internal {@link AnthropicToolDef} to the wire-safe shape the
@@ -162,8 +165,7 @@ async function createWithRetry(
 export async function* runTurn(
   input: RunTurnInput,
 ): AsyncGenerator<ProviderEvent, void, void> {
-  const maxIterations =
-    input.maxToolUseIterations ?? DEFAULT_MAX_TOOL_USE_ITERATIONS;
+  const maxIterations = resolveMaxToolIterations(input.maxToolUseIterations);
   let accumulatedUsage: ProviderUsage = { stopReason: null };
   let iterations = 0;
   // Set once the tool-use iteration cap is reached. The loop then runs ONE
@@ -512,7 +514,7 @@ export async function* runTurn(
         // still delivering the model's synthesized final message above.
         usage: withTurnDuration(
           capReached
-            ? { ...accumulatedUsage, stopReason: 'tool_use_loop_capped' }
+            ? { ...accumulatedUsage, stopReason: TOOL_USE_LOOP_CAPPED }
             : accumulatedUsage,
         ),
         sessionId: input.ctx.sessionId,
@@ -750,12 +752,12 @@ export async function* runTurn(
       // Honor the cap with a hard stop rather than looping unbounded.
       yield {
         type: 'turn.completed',
-        usage: withTurnDuration({ ...accumulatedUsage, stopReason: 'tool_use_loop_capped' }),
+        usage: withTurnDuration({ ...accumulatedUsage, stopReason: TOOL_USE_LOOP_CAPPED }),
         sessionId: input.ctx.sessionId,
       };
       return;
     }
-    if (maxIterations > 0 && iterations >= maxIterations) {
+    if (shouldWindDown(iterations, maxIterations)) {
       // Cap reached. Instead of cutting the turn off HERE — which ends it with
       // no final assistant message and reads as a silent hang — run ONE more
       // round with tools stripped (params build above) so the model can
@@ -765,13 +767,7 @@ export async function* runTurn(
       // hard-stops if the wind-down round pathologically emits another tool_use.
       const lastMsg = input.messages[input.messages.length - 1];
       if (lastMsg !== undefined && lastMsg.role === 'user' && Array.isArray(lastMsg.content)) {
-        lastMsg.content.push({
-          type: 'text',
-          text:
-            'You have reached your tool-use budget for this turn. Do not request ' +
-            'any more tools — give your final answer now using only the ' +
-            'information already gathered.',
-        });
+        lastMsg.content.push({ type: 'text', text: WIND_DOWN_NOTE });
       }
       capReached = true;
       continue;

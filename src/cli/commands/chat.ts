@@ -12,7 +12,7 @@ import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import { unconfiguredSlotError } from '../../agent/session/model-slots.js';
 import { formatDuration, formatCost, formatTokens } from '../format-utils.js';
-import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getDefaultSubagentModel, resolveBaseSystemPrompt } from '../shared-helpers.js';
+import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getMaxToolUseIterations, getDefaultSubagentModel, resolveBaseSystemPrompt } from '../shared-helpers.js';
 import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
 import { loadConfig } from '../config.js';
 import { assembleSystemPrompt } from '../../agent/routing-directive.js';
@@ -311,6 +311,11 @@ export function registerChatCommand(program: Command): void {
         let maxBudgetUsd: number | undefined;
         let taskBudget: number | undefined;
         let maxOutputTokens: number | undefined;
+        // Opt-in top-level tool-use-round ceiling. No CLI flag exists, so there
+        // is no explicit value to prefer here — this is purely the env default
+        // (unset/<=0 → undefined → unlimited, i.e. no behavior change). Rides on
+        // AgentConfig and hits both providers via resolveMaxToolIterations().
+        let maxToolUseIterations: number | undefined;
         let provider;
         try {
           thinking = parseThinking(options.thinking) ?? getThinking();
@@ -318,6 +323,7 @@ export function registerChatCommand(program: Command): void {
           maxBudgetUsd = parseBudget(options.maxBudgetUsd) ?? getMaxBudgetUsd();
           taskBudget = parseBudget(options.taskBudget) ?? getTaskBudget();
           maxOutputTokens = parseMaxOutputTokens(options.maxOutputTokens) ?? getMaxOutputTokens();
+          maxToolUseIterations = getMaxToolUseIterations();
           // Will be wired with subagentExecutor below if anthropic-direct
           provider = undefined;
         } catch (err) {
@@ -701,6 +707,7 @@ export function registerChatCommand(program: Command): void {
           ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
           ...(taskBudget !== undefined ? { taskBudget } : {}),
           ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+          ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),
           ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
           ...(trace ? { traceWriter: trace.writer } : {}),
           ...(cliConfig.autoResumeOnUsageLimit !== undefined

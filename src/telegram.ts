@@ -45,7 +45,7 @@ import { loadConfig, loadCredential } from './cli/config.js';
 import { getEnvConfigPath } from './paths.js';
 import { assembleSystemPrompt } from './agent/routing-directive.js';
 import { resolveModelId } from './agent/session/model-resolution.js';
-import { getDefaultSubagentModel, getMaxOutputTokens, getApiKeyForModel, loadSystemPrompt, composeSystemPrompt } from './cli/shared-helpers.js';
+import { getDefaultSubagentModel, getMaxOutputTokens, getMaxToolUseIterations, getApiKeyForModel, loadSystemPrompt, composeSystemPrompt } from './cli/shared-helpers.js';
 import { topLevelSurfaceAllowedTools } from './agent/tools/top-level-allowlist.js';
 import type { AgentConfig, AgentModelInput } from './agent/types.js';
 import { SubagentManager } from './agent/subagent.js';
@@ -217,6 +217,12 @@ async function main() {
       const isCodex =
         sessionProviderName === 'openai-compatible' || sessionProviderName === 'openai-codex';
       const maxOutputTokens = isCodex ? undefined : getMaxOutputTokens();
+      // Opt-in top-level tool-use-round ceiling (AFK_MAX_TOOL_USE_ITERATIONS).
+      // Unlike maxOutputTokens (Anthropic-only here), this applies to BOTH
+      // providers via resolveMaxToolIterations(), so it is NOT gated by isCodex.
+      // undefined = unlimited (no behavior change). No per-chat override exists,
+      // so this is the env default only.
+      const maxToolUseIterations = getMaxToolUseIterations();
 
       // System-prompt layering (mirrors chat.ts / bootstrap.ts): the framework
       // base is unconditional; the operator overlay (per-chat sessionConfig
@@ -404,6 +410,7 @@ async function main() {
           ...(systemPromptInner !== undefined ? { systemPrompt: systemPromptInner } : {}),
           maxTurns: 100,
           ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+          ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
           // Pipe cwd through to tool handlers so bash/grep honor the
           // configured worktree (AFK_TELEGRAM_CWD or sessionConfig.cwd).
@@ -462,6 +469,7 @@ async function main() {
         ...(systemPrompt !== undefined ? { systemPrompt } : {}),
         maxTurns: 100,
         ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+        ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),
         ...(codexSessionCwd !== undefined && codexSessionCwd.length > 0
           ? { cwd: codexSessionCwd }
           : {}),
