@@ -141,10 +141,18 @@ export function resolveBaseSystemPrompt(): { prompt: string | undefined; source:
  * Callers that explicitly want the Anthropic credential surface (e.g., the
  * `doctor` and `status` diagnostic surfaces) should call `loadCredential()`
  * directly instead.
+ *
+ * Resolves against `getModel()` — not a raw re-read of `AFK_MODEL` /
+ * `CLAUDE_MODEL` — so the credential always matches the same model string the
+ * session actually runs with, including the `'sonnet'` default when both env
+ * vars are unset. Re-reading the raw env pair here previously let this
+ * resolve `undefined` (routing via the `AFK_OPENAI_BASE_URL` Tier-4 hint to
+ * `openai-compatible`) while `getModel()` returned the `'sonnet'` default
+ * (`anthropic-direct`) — an undefined-vs-defaulted divergence that paired an
+ * anthropic-routed model with an OpenAI credential and 401'd.
  */
 export function getApiKey(): string | undefined {
-  const model = env.AFK_MODEL ?? env.CLAUDE_MODEL;
-  return getApiKeyForModel(model);
+  return getApiKeyForModel(getModel());
 }
 
 /**
