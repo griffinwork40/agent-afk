@@ -21,7 +21,7 @@ import {
 import { loadConfig } from '../config.js';
 import type { AgentConfig, ThinkingConfig, EffortLevel, AgentModelInput } from '../../agent/types.js';
 import type { ScheduledTask } from '../../agent/daemon/triggers.js';
-import { parseThinking, parseEffort, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, parseProvider, getDefaultSubagentModel } from '../shared-helpers.js';
+import { parseThinking, parseEffort, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, parseProvider, getDefaultSubagentModel, getMaxToolUseIterations } from '../shared-helpers.js';
 import { loadSchedules, toScheduledTask } from '../../agent/daemon/schedule-store.js';
 import { AgentSession } from '../../agent/session.js';
 import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
@@ -214,6 +214,13 @@ export function buildDaemonSessionFactory(
       ...(mcpManager !== undefined ? { mcpManager } : {}),
     });
 
+    // Opt-in top-level tool-use-round ceiling. Explicit caller config wins;
+    // AFK_MAX_TOOL_USE_ITERATIONS is the fallback (undefined/<=0 → unlimited, no
+    // behavior change). Resolved after `...config` so an explicit value on the
+    // caller's config takes precedence over the env default. This is the
+    // production chokepoint the scheduler routes every task through, so it also
+    // caps scheduler/cron-spawned top-level sessions.
+    const daemonMaxToolUseIterations = config.maxToolUseIterations ?? getMaxToolUseIterations();
     return new AgentSession(injectHotMemory({
       ...config,
       provider,
@@ -226,6 +233,9 @@ export function buildDaemonSessionFactory(
       // `...config` for the same reason as `isNonInteractive`: every daemon +
       // scheduler/cron session routes through here → 'daemon'.
       surface: 'daemon',
+      ...(daemonMaxToolUseIterations !== undefined
+        ? { maxToolUseIterations: daemonMaxToolUseIterations }
+        : {}),
     }));
   };
 }

@@ -310,6 +310,15 @@
       "category": "model"
     },
     {
+      "name": "AFK_MAX_TOOL_USE_ITERATIONS",
+      "description": "Opt-in ceiling on tool-use rounds per turn for TOP-LEVEL (non-subagent) sessions, on both providers. Mirrors the maxToolUseIterations config key / max_tool_use_iterations tool param. Unset, non-numeric, or <=0 means unlimited (the default — zero behavior change): a top-level turn ends only when the model stops calling tools, the abort signal fires, the provider errors, or the dollar budget trips. A positive integer N makes top-level turns wind down gracefully after N tool rounds (one tools-stripped final round). An explicit config/CLI value wins over this env default. Does NOT affect subagent forks — they keep their own non-zero anti-hang default (SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS) regardless of this var.",
+      "type": "number",
+      "required": false,
+      "default": "0",
+      "example": "150",
+      "category": "model"
+    },
+    {
       "name": "AFK_MEMORY_EVIDENCE_GATE",
       "description": "Opt-in (set to 1) evidence gate for durable memory writes. When enabled, a codebase fact (memory_update category \"convention\") stored without an `evidence` citation is recalled as [unverified], and memory_search results carry a verification verdict. User preferences and agent reflections are never gated. Default off — memory behaves identically to legacy when unset.",
       "type": "boolean",

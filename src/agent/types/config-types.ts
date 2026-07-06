@@ -134,6 +134,13 @@ export interface AgentConfig {
    * `SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS` in subagent.ts) so a runaway
    * child tool-loop cannot hang the parent, which is suspended awaiting the
    * child's result.
+   *
+   * Top-level sessions leave this unset by default (unlimited). An operator can
+   * opt into a top-level ceiling with the `AFK_MAX_TOOL_USE_ITERATIONS` env var
+   * (`getMaxToolUseIterations()` in cli/shared-helpers.ts): unset/`<=0` →
+   * unlimited (no change); a positive integer fills this field at every
+   * top-level session surface via `explicit ?? getMaxToolUseIterations()`, so an
+   * explicit config value still wins. The env var never touches subagent forks.
    */
   maxToolUseIterations?: number;
 

@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**119 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**120 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -19,6 +19,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_MAX_BUDGET_USD` | number |  | `5.00` | `10.00` | Cumulative USD budget ceiling for the session. Aborts the turn when the running cost crosses this. |
 | `AFK_MAX_OUTPUT_TOKENS` | number |  |  | `8192` | Cap on output tokens per turn. Falls back to provider default when unset. |
 | `AFK_MAX_TOKENS` | number |  | `4096` | `8192` | Cap on total tokens per turn (input + output). Default 4096. |
+| `AFK_MAX_TOOL_USE_ITERATIONS` | number |  | `0` | `150` | Opt-in ceiling on tool-use rounds per turn for TOP-LEVEL (non-subagent) sessions, on both providers. Mirrors the maxToolUseIterations config key / max_tool_use_iterations tool param. Unset, non-numeric, or <=0 means unlimited (the default — zero behavior change): a top-level turn ends only when the model stops calling tools, the abort signal fires, the provider errors, or the dollar budget trips. A positive integer N makes top-level turns wind down gracefully after N tool rounds (one tools-stripped final round). An explicit config/CLI value wins over this env default. Does NOT affect subagent forks — they keep their own non-zero anti-hang default (SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS) regardless of this var. |
 | `AFK_MODEL` | string |  | `sonnet` | `claude-opus-4-5` | Default model for agent turns. Accepts slot names (local, small, medium, large), legacy aliases (opus, sonnet, haiku), the fixed-id fable alias (Claude Fable 5), or full model IDs. |
 | `AFK_MODEL_LARGE` | string |  |  | `claude-opus-4-8` | Bind the "large" capability tier (most capable) to a model id/alias. Overrides afk.config.json models.large. |
 | `AFK_MODEL_LARGE_API_KEY` | string |  |  |  | Per-slot API key for the "large" tier (Stage 2). Overrides global credentials for this tier only. |

@@ -203,6 +203,34 @@ describe('SubagentManager', () => {
     expect((shared.lastConfig as unknown as Record<string, unknown>)['maxToolUseIterations']).toBe(0);
   });
 
+  // Isolation: AFK_MAX_TOOL_USE_ITERATIONS is a TOP-LEVEL-only escape hatch. The
+  // fork path (subagent.ts) never reads it — it defaults to
+  // SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS (50). Setting the env var must NOT
+  // change a fork's default, or the top-level opt-in would silently leak into
+  // every subagent and shrink their anti-hang ceiling.
+  it('ignores AFK_MAX_TOOL_USE_ITERATIONS on the fork path (subagent default unchanged)', async () => {
+    const original = process.env['AFK_MAX_TOOL_USE_ITERATIONS'];
+    process.env['AFK_MAX_TOOL_USE_ITERATIONS'] = '3';
+    try {
+      shared.lastConfig = null;
+      const mgr = new SubagentManager();
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet' }, // omit → should get the SUBAGENT default, not env's 3
+      });
+      expect(shared.lastConfig).toEqual(
+        expect.objectContaining({
+          maxToolUseIterations: SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS,
+        }),
+      );
+      // Explicit proof it did NOT pick up the env value.
+      expect((shared.lastConfig as unknown as Record<string, unknown>)['maxToolUseIterations']).not.toBe(3);
+    } finally {
+      if (original !== undefined) process.env['AFK_MAX_TOOL_USE_ITERATIONS'] = original;
+      else delete process.env['AFK_MAX_TOOL_USE_ITERATIONS'];
+    }
+  });
+
   // Cross-provider credential anti-leak (composition boundary).
   //
   // The agent-tool executor deliberately clears `apiKey`/`baseUrl` for

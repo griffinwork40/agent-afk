@@ -14,7 +14,7 @@ import type { HookRegistry } from '../../../agent/hooks.js';
 import type { TraceWriter } from '../../../agent/trace/index.js';
 import {
   parseThinking, parseEffort, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort,
-  getMaxOutputTokens, getDefaultSubagentModel, resolveBaseSystemPrompt, isGrantManager,
+  getMaxOutputTokens, getMaxToolUseIterations, getDefaultSubagentModel, resolveBaseSystemPrompt, isGrantManager,
 } from '../../shared-helpers.js';
 import { topLevelSurfaceAllowedTools } from '../../../agent/tools/top-level-allowlist.js';
 import { loadConfig } from '../../config.js';
@@ -78,6 +78,13 @@ interface BuildAgentSessionDeps {
   effort: EffortLevel | undefined;
   maxOutputTokens: number | undefined;
   /**
+   * Opt-in top-level tool-use-round ceiling (from AFK_MAX_TOOL_USE_ITERATIONS).
+   * `undefined` = unlimited (no behavior change). Flows to
+   * `AgentConfig.maxToolUseIterations` and hits both providers via
+   * `resolveMaxToolIterations()`. Top-level only — subagent forks set their own.
+   */
+  maxToolUseIterations: number | undefined;
+  /**
    * Fully-wired provider factory. Passed as `config.providerFactory` so the
    * ProviderRouter builds a wired provider (with executors, memoryStore,
    * mcpManager) on every turn — enabling cross-family /model swaps without
@@ -120,6 +127,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
     ...(deps.thinking !== undefined ? { thinking: deps.thinking } : {}),
     ...(deps.effort !== undefined ? { effort: deps.effort } : {}),
     ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
+    ...(deps.maxToolUseIterations !== undefined ? { maxToolUseIterations: deps.maxToolUseIterations } : {}),
     ...deps.resumeConfig,
     ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}),
     ...(deps.traceWriter !== undefined ? { traceWriter: deps.traceWriter } : {}),
@@ -166,6 +174,9 @@ export async function bootstrapSession(
   thinking = parseThinking(options.thinking) ?? getThinking();
   effort = parseEffort(options.effort) ?? getEffort();
   maxOutputTokens = parseMaxOutputTokens(options.maxOutputTokens) ?? getMaxOutputTokens();
+  // Opt-in top-level tool-use-round ceiling. No CLI flag exists, so this is the
+  // env default only (unset/<=0 → undefined → unlimited; no behavior change).
+  const maxToolUseIterations = getMaxToolUseIterations();
 
   // System-prompt layering: the framework base (`prompts/system-prompt.md`)
   // is unconditional; the operator overlay (env → afk.config.json → AFK.md)
@@ -612,6 +623,7 @@ export async function bootstrapSession(
     thinking,
     effort,
     maxOutputTokens,
+    maxToolUseIterations,
     ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
     providerFactory,
     hookRegistry,

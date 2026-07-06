@@ -11,6 +11,9 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Added
+- New opt-in `AFK_MAX_TOOL_USE_ITERATIONS` env var sets a **top-level** tool-use-round ceiling for both providers (mirrors the `maxToolUseIterations` config key / `max_tool_use_iterations` tool param). Unset/`<=0` = unlimited (the default — zero behavior change); a positive integer N winds top-level turns down gracefully after N rounds. An explicit config value wins over the env default. Subagent forks are unaffected — they keep their own 50-round anti-hang default regardless of the var. Restores an operator brake for runaway top-level tool loops without reintroducing a default cap or provider drift.
+
 ### Changed
 - The tool-round cap (`max_tool_use_iterations`) and its graceful wind-down now apply uniformly to **both** providers. openai-compatible previously ignored the setting and hard-capped every turn at 50 rounds; it now honors `maxToolUseIterations` like anthropic-direct. Consequence: **top-level openai-compatible sessions are now uncapped by default** (aligned with anthropic-direct) — the 50-round anti-hang default still applies to subagent forks of either provider. The shared cap/wind-down policy (constants + `resolveMaxToolIterations`/`shouldWindDown`) now lives in `providers/shared/tool-loop-cap.ts`, so the two providers can no longer drift.
 
