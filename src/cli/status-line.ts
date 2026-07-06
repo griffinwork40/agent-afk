@@ -12,7 +12,7 @@
  *   status.stop();   // before exit
  */
 
-import { basename } from 'node:path';
+import { basename, dirname } from 'node:path';
 import type { PermissionMode } from '../agent/types/sdk-types.js';
 import { truncateDisplayWidth, displayWidth } from './display.js';
 import { palette } from './palette.js';
@@ -369,11 +369,25 @@ export class StatusLine {
     let parts: Part[] = [];
     const maxW = Math.max(4, (this.stream.columns ?? 80) - 2);
 
-    // afk-worktree cwd/branch dedupe: `.afk-worktrees/<slug>` directories are
-    // named by replacing `/` with `-` in the branch that seeded them (see
-    // createWorktreeAt, commands/interactive/worktree.ts), so for that
-    // pattern cwd and branch carry the SAME identity string twice — e.g. dir
-    // `afk-20260705-142358-47b3ec` vs branch `afk/20260705-142358-47b3ec`.
+    // Invariant: afk-worktree cwd/branch dedupe. `.afk-worktrees/<slug>`
+    // directories are named by replacing `/` with `-` in the branch that
+    // seeded them (see createWorktreeAt, commands/interactive/worktree.ts),
+    // so for that pattern cwd and branch carry the SAME identity string
+    // twice — e.g. dir `afk-20260705-142358-47b3ec` vs branch
+    // `afk/20260705-142358-47b3ec`. Three conditions must ALL hold before the
+    // cwd is suppressed:
+    //   1. the cwd's PARENT directory is literally `.afk-worktrees` — a
+    //      positive worktree signal. Without it, a plain checkout whose
+    //      basename merely coincides with its branch (cwd `/repos/feature-foo`
+    //      on branch `feature/foo`) would have its repository path hidden even
+    //      though no worktree is involved.
+    //   2. the slash-normalized branch equals the cwd basename (the identity
+    //      match itself).
+    //   3. the branch fits the 30-col cap uncut. When it would truncate,
+    //      merging would leave a truncated branch as the SOLE location signal
+    //      (cwd is gone), which is strictly worse than the un-deduped line —
+    //      so we fall through to the else branch and keep cwd as a second
+    //      signal.
     // Comparison runs on EVERY repaint (uncached, not memoized): cwd is fixed
     // per-session but the branch comes from GitStatusSampler, an async
     // sampler whose cached value can change mid-session (e.g. a manual
@@ -384,7 +398,9 @@ export class StatusLine {
     const worktreeDedupe =
       f.cwd !== undefined &&
       f.branch !== undefined &&
-      f.branch.replaceAll('/', '-') === basename(f.cwd);
+      basename(dirname(f.cwd)) === '.afk-worktrees' &&
+      f.branch.replaceAll('/', '-') === basename(f.cwd) &&
+      displayWidth(f.branch) <= 30;
 
     if (worktreeDedupe) {
       // Matched: cwd is pure duplication of the branch identity, so it's
