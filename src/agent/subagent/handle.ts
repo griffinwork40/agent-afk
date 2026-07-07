@@ -194,10 +194,16 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       this.lastDurationMs = Date.now() - startTime;
       this.currentStatus = 'succeeded';
       this.latestTerminalStatus = 'succeeded';
-      // Witness layer: subagent_lifecycle.succeeded fires before onTerminal()
-      // so the trace records the terminal transition even if the manager
-      // tears the handle down immediately after. Fire-and-forget.
-      void emitSubagentLifecycle(this.traceWriter, {
+      // Witness layer: subagent_lifecycle.succeeded MUST be awaited before
+      // onTerminal(). onTerminal() may trigger the owning session's immediate
+      // teardown, which calls writer.seal(); once sealed, writer.write() throws
+      // and emitSubagentLifecycle swallows it, silently dropping this terminal
+      // record (the "lost terminal trace event" orphan bug). Awaiting here
+      // guarantees the succeeded event is enqueued+persisted on the writer's
+      // FIFO queue BEFORE any seal can run. Safe: write() is a bounded FS append
+      // and emitSubagentLifecycle already swallows errors, so the await cannot
+      // introduce a new failure mode or an unbounded hang.
+      await emitSubagentLifecycle(this.traceWriter, {
         transition: 'succeeded',
         subagentId: this.id,
         durationMs: this.lastDurationMs,
@@ -239,8 +245,12 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
         // externally. The trace and the result-object status must agree so
         // downstream consumers (operator dashboard, future ActiveWorkRegistry)
         // can correctly attribute cascade terminations vs. genuine failures.
+        // Awaited (not fire-and-forget) for the same reason as the success
+        // path: onTerminal() below may seal the owning session's trace, and a
+        // seal that lands before this write is enqueued would drop the terminal
+        // record. Awaiting guarantees the event is persisted first.
         if (this.controller.signal.aborted) {
-          void emitSubagentLifecycle(this.traceWriter, {
+          await emitSubagentLifecycle(this.traceWriter, {
             transition: 'cancelled',
             subagentId: this.id,
             source: 'cascade',
@@ -248,7 +258,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
           this.currentStatus = 'cancelled';
           this.latestTerminalStatus = 'cancelled';
         } else {
-          void emitSubagentLifecycle(this.traceWriter, {
+          await emitSubagentLifecycle(this.traceWriter, {
             transition: 'failed',
             subagentId: this.id,
             errorClass: err instanceof Error ? err.constructor.name : 'Unknown',
