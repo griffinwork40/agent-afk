@@ -9,6 +9,7 @@
 
 import type { EffortLevel } from '../../../types/sdk-types.js';
 import { maxOutputTokensFor } from '../../../model-limits.js';
+import { isOSeriesModel } from '../../../model-capabilities.js';
 
 /**
  * Resolve the effective output-token cap (a plain number).
@@ -60,14 +61,11 @@ export function normalizePermissionMode(mode: string | undefined): string {
 }
 
 /**
- * Detect OpenAI o-series reasoning models (o1, o3, o4, and their variants).
- * Strips any `provider/` prefix (OpenRouter-style ids) before matching.
- * Mirrors the detection in `oneshot.ts` for the `max_completion_tokens` switch.
+ * Re-exported for backward compatibility — `query.ts` re-exports it and older
+ * call sites import it from here. Canonical definition (incl. o5+/`oN` and
+ * `provider/`-prefix handling) now lives in `model-capabilities.ts`.
  */
-export function isOSeriesModel(model: string): boolean {
-  const bareModel = model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model;
-  return /^o[0-9]/.test(bareModel);
-}
+export { isOSeriesModel };
 
 /**
  * Map AFK's `EffortLevel` to OpenAI's `reasoning_effort` values.

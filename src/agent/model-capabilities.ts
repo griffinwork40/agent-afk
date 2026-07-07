@@ -124,3 +124,29 @@ export function supportsVision(model: string | undefined): boolean {
   if (VISION_MODEL_IDS.has(lowered)) return true;
   return VISION_MODEL_PATTERNS.some((re) => re.test(resolved));
 }
+
+/**
+ * Detect OpenAI o-series reasoning models — o1, o3, o4, and any future `oN`.
+ *
+ * Single source of truth for o-series classification, consumed by the provider
+ * router (`providers/index.ts`), context/output token sizing
+ * (`model-limits.ts`), and the openai-compatible provider's request shaping
+ * (`query/model-params.ts` — which re-exports it under the same name for
+ * backward compatibility — and `oneshot.ts`).
+ *
+ * Robustness the enumerated `startsWith('o1'|'o3'|'o4')` copies lacked:
+ *   - matches ANY `o<digit>` prefix, so o5/o6/… are covered without edits;
+ *   - strips a leading `provider/` segment (OpenRouter-style ids) so
+ *     `openai/o3` and `openrouter/o1-mini` classify correctly;
+ *   - case-insensitive.
+ *
+ * Note: unlike `supportsVision`, this does NOT resolve slot aliases — o-series
+ * ids arrive as concrete strings (there is no `o3` alias), so it stays a pure
+ * string predicate with no `resolveModelInput` dependency.
+ */
+export function isOSeriesModel(model: string | undefined): boolean {
+  if (!model) return false;
+  const trimmed = model.trim();
+  const bare = trimmed.includes('/') ? trimmed.slice(trimmed.lastIndexOf('/') + 1) : trimmed;
+  return /^o[0-9]/i.test(bare);
+}
