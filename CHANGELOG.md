@@ -11,8 +11,13 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.25.2] - 2026-07-07
+
 ### Fixed
 - `agent`-tool and `compose` subagents are now visible in the witness trace (`afk trace show`). Three gaps closed: (1) `forkSubagent` resolves the trace writer as per-fork config → manager-level writer, so the `subagent_lifecycle` started/succeeded/failed/cancelled events and the handle's writer no longer silently drop when inheritance came from the manager; (2) the REPL/chat/Telegram root managers and compose executors now carry the session trace writer; (3) the writer chains through nested child managers (depth ≥ 2 `agent` forks), mirroring the existing `cwd` chain. Previously a raw `agent` dispatch produced zero trace events between `tool_call started` and `completed` — a stuck child was indistinguishable from a never-started one.
+
+### Fixed
+- make agent-tool and compose forks visible in the witness trace (#466)do (a41a7d3)
 
 ## [5.25.1] - 2026-07-07
 
