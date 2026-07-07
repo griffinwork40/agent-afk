@@ -11,9 +11,19 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.25.1] - 2026-07-07
+
 ### Fixed
 - Forked subagents no longer hang their parent indefinitely: every fork now gets a bounded wall-clock budget by default — 20 min foreground (`SUBAGENT_DEFAULT_TIMEOUT_MS`), 60 min background (`SUBAGENT_BACKGROUND_TIMEOUT_MS`) — instead of the unbounded session default. On expiry the child's controller aborts (cascading to descendants) and the parent receives a legible timeout error. Explicit `timeoutMs` wins; `0` restores unbounded.
 - Forked subagents now **fail fast on OAuth usage-limit pauses** (`autoResumeOnUsageLimit` defaults to `false` for forks) instead of silently polling for reset — up to 2 h — while the parent looked frozen. The classified usage-limit error surfaces to the parent, which decides whether to retry, reroute, or surface the pause. Callers may opt a child back in with an explicit `autoResumeOnUsageLimit: true`.
+
+### Fixed
+- bound fork wall-clock budget + fail fast on usage-limit pauses (#465) (1516e65)
+- preserve empty-fence <i> label when the safety net strips emphasis (#456) (64ddd04)
+- thread openaiBaseUrl so OpenAI Telegram sessions reach the configured endpoint (#459) (e674621)
+
+### Changed
+- consolidate o-series detection into one predicate (#457) (db71f16)
 
 ## [5.25.0] - 2026-07-07
 
