@@ -108,6 +108,7 @@ export const SubagentSucceededPayloadSchema = z.object({
   turnCount: z.number().int().nonnegative(),
   totalCostUsd: z.number().nonnegative().optional(),
   outputBytes: z.number().int().nonnegative(),
+  stopReason: z.string().optional(),
 });
 
 export const SubagentFailedPayloadSchema = z.object({

@@ -22,6 +22,7 @@ import {
   buildResultFromMessage,
   buildResultFromError,
   createEmptyTrace,
+  STREAM_INCOMPLETE,
   type SubagentResult,
   type SubagentStatus,
   type SubagentTrace,
@@ -202,6 +203,11 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
         durationMs: this.lastDurationMs,
         turnCount: this.currentTrace.turnCount,
         outputBytes: Buffer.byteLength(this.lastMessage, 'utf8'),
+        // Record the terminal stop reason so trace forensics can distinguish a
+        // clean completion from a capped/truncated partial (tool_use_loop_capped
+        // / stream_incomplete) WITHOUT recomputing marker byte-lengths. Absent
+        // when the provider reported no stop reason (a plain clean end).
+        ...(this.lastStopReason !== undefined && { stopReason: this.lastStopReason }),
       });
       // Propagate usage and cost to the parent session's rollup accumulators.
       // Fire synchronously before onTerminal() so the session_sealed event
@@ -351,6 +357,15 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     if (streamError) throw streamError;
     if (finalMessage) return finalMessage;
     if (this.lastStreamedContent.length > 0) {
+      // The stream ended with partial assistant text but no terminal `message`
+      // event: the child was cut off mid-output (an abort, an early/abnormal
+      // provider-stream close, or a provider that ended without a final
+      // message). Mark the run non-clean so `runToResult` surfaces it as an
+      // incomplete partial (via `stopReason`) instead of a silent success —
+      // consumers prepend a parent-visible marker (annotateIfIncomplete). Use
+      // `??=` so a real terminal stopReason (if one somehow arrived) is never
+      // clobbered; reaching here implies none did.
+      this.lastStopReason ??= STREAM_INCOMPLETE;
       return { role: 'assistant', content: this.lastStreamedContent, timestamp: new Date() };
     }
     // Anti-hang fallback (see SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS in
