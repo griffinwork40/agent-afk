@@ -54,3 +54,55 @@ describe('non-empty fence not preceded by a blank line', () => {
     expect(out).toContain('(empty code block)');
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// Regression: the same "two empty blocks sandwiching the body" bug reappeared
+// for a fence NESTED IN A LIST ITEM (indented to align under the list marker,
+// e.g. "3. run:\n   ```\n   cmd\n   ```"). Root cause: isInOpenCodeFence's
+// parity regex was anchored at column 0 (`^```), so it was BLIND to indented
+// fences, while findBlockBoundary's closing-fence regex tolerated leading
+// `[ \t]*`. That asymmetry made findBlockBoundary read even parity at an
+// indented OPENER and commit there. Only reproduces under chunked streaming
+// (single-push keeps the fence intact via the trailing blank line), which is
+// why the flush-left cases above never caught it.
+// Fix: isInOpenCodeFence now tolerates the same leading `[ \t]*` indentation.
+// ──────────────────────────────────────────────────────────────────────────
+describe('non-empty fence nested in a list item (indented)', () => {
+  const item = '3. Only if they open it themselves: you already have `ngrok` installed →';
+
+  it('findBlockBoundary defers past an indented opener to the indented closer', () => {
+    const text = `${item}\n   \`\`\`\n   ngrok http 3000\n   \`\`\`\n`;
+    expect(findBlockBoundary(text)).toBe(text.length);
+  });
+
+  it('renders the command body, not "(empty code block)" (single push)', () => {
+    const out = renderNonTTY([`${item}\n   \`\`\`\n   ngrok http 3000\n   \`\`\`\n\nShare it.`]);
+    expect(out).toContain('ngrok http 3000');
+    expect(out).not.toContain('(empty code block)');
+  });
+
+  it('renders the command body, not "(empty code block)" (chunked after opener)', () => {
+    // The exact streaming split that produced the reported screenshot: the
+    // opener arrives in one chunk, the body + closer in the next.
+    const out = renderNonTTY([
+      `${item}\n   \`\`\`\n`,
+      '   ngrok http 3000\n   ```\n\nShare it.',
+    ]);
+    expect(out).toContain('ngrok http 3000');
+    expect(out).not.toContain('(empty code block)');
+  });
+
+  it('renders the command body, not "(empty code block)" (chunked before closer)', () => {
+    const out = renderNonTTY([
+      `${item}\n   \`\`\`\n   ngrok http 3000\n`,
+      '   ```\n\nShare it.',
+    ]);
+    expect(out).toContain('ngrok http 3000');
+    expect(out).not.toContain('(empty code block)');
+  });
+
+  it('a genuinely empty INDENTED fence still loud-fails with the placeholder', () => {
+    const out = renderNonTTY([`${item}\n   \`\`\`\n   \`\`\`\n`]);
+    expect(out).toContain('(empty code block)');
+  });
+});

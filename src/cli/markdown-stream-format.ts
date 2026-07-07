@@ -118,19 +118,28 @@ export function hasMarkdownContent(text: string): boolean {
  * Detect if we're in the middle of a fenced code block (unclosed fence).
  *
  * Rules:
- * - Count only line-anchored fences (`^``` ` or `^~~~`) to avoid flipping
- *   parity on inline backtick sequences (e.g. regex literals in code, prose
- *   mentioning fences).
+ * - Count only line-anchored fences (`^[ \t]*``` ` or `^[ \t]*~~~`) to avoid
+ *   flipping parity on inline backtick sequences (e.g. regex literals in code,
+ *   prose mentioning fences). Leading whitespace is tolerated so a fence
+ *   nested inside a list item (indented to align under the list marker, e.g.
+ *   "3. run:\n   ```\n   cmd\n   ```") is still counted. This MUST match the
+ *   leading-`[ \t]*` tolerance of findBlockBoundary's closing-fence regex —
+ *   an asymmetry there (findBlockBoundary sees the indented fence, this parity
+ *   check did not) made findBlockBoundary mistake an indented OPENER for a
+ *   closer and commit at it, orphaning the fence into TWO "(empty code block)"
+ *   placeholders sandwiching the body. Zero whitespace still matches, so
+ *   flush-left fences behave exactly as before.
  * - ``` and ~~~ are independent fence families: each has its own parity check
  *   so a ~~~ opener is not closed by a ``` closer.
  * - Language tags (e.g. ```TypeScript, ```C++, ```YAML) are matched by
  *   allowing any non-newline characters after the fence marker.
  */
 export function isInOpenCodeFence(text: string): boolean {
-  // Line-anchored backtick fences (any language tag — not just lowercase alpha)
-  const backtickFences = (text.match(/^```[^\n]*$/gm) ?? []).length;
-  // Line-anchored tilde fences (any language tag)
-  const tildeFences = (text.match(/^~~~[^\n]*$/gm) ?? []).length;
+  // Line-anchored backtick fences (any language tag — not just lowercase alpha),
+  // tolerating leading indentation for list-nested fences.
+  const backtickFences = (text.match(/^[ \t]*```[^\n]*$/gm) ?? []).length;
+  // Line-anchored tilde fences (any language tag), same indentation tolerance.
+  const tildeFences = (text.match(/^[ \t]*~~~[^\n]*$/gm) ?? []).length;
   // Odd count for either family means an unclosed fence
   return backtickFences % 2 === 1 || tildeFences % 2 === 1;
 }
