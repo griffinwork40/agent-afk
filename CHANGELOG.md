@@ -11,6 +11,8 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.25.0] - 2026-07-07
+
 ### Added
 - New opt-in `AFK_MAX_TOOL_USE_ITERATIONS` env var sets a **top-level** tool-use-round ceiling for both providers (mirrors the `maxToolUseIterations` config key / `max_tool_use_iterations` tool param). Unset/`<=0` = unlimited (the default — zero behavior change); a positive integer N winds top-level turns down gracefully after N rounds. An explicit config value wins over the env default. Subagent forks are unaffected — they keep their own 50-round anti-hang default regardless of the var. Restores an operator brake for runaway top-level tool loops without reintroducing a default cap or provider drift.
 
@@ -19,6 +21,19 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ### Fixed
 - openai-compatible now runs the same tools-stripped "wind-down" round as anthropic-direct when the tool-round cap fires (previously it fell through to a possibly-empty final message with no cap signal), and stamps `tool_use_loop_capped` so the closure classifier reports `iteration_cap` for openai-compatible turns too.
+
+### Added
+- extend tool-loop cap + graceful wind-down to openai-compatible (follow-up to #448) (#454) (b0e85c7)
+
+### Fixed
+- align getApiKey() default-model resolution with getModel() (#455) (667951e)
+
+### Changed
+- Add AFK Dark theme for Terax (#460) (c9bb8f4)
+- calm REPL chrome (glyph mode marker, idle rail, cwd/branch dedupe) (#447) (d1bd410)
+- extract runIteration concerns into query/ modules (#453) (a04e781)
+- extract query() concerns into query/ modules (#452) (1c16f81)
+- dedupe elicitation validators into field-validation module (#451) (a7f2457)
 
 ## [5.24.0] - 2026-07-06
 
