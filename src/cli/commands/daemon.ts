@@ -96,6 +96,10 @@ export function buildDaemonSessionFactory(
       parentModel: opts.model,
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      // Origin attribution: the daemon is a `daemon` entrypoint. Thread the
+      // surface so forked `agent`-tool children inherit origin 'daemon' (not
+      // 'unknown') via forkSubagent's parentSurface fill. Mirrors farm.ts.
+      surface: 'daemon',
     });
 
     const childProviderFactory = createChildProviderFactory(

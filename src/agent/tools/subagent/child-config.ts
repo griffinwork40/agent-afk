@@ -271,6 +271,12 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
       // agent-tool dispatches never set config.traceWriter. Mirrors the
       // cwd chaining above; see BuildChildConfigArgs.traceWriter.
       ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}),
+      // Origin attribution: thread the surface into the nested manager so
+      // depth-2+ `agent` forks inherit the owning surface's origin
+      // ('cli'/'telegram'/'daemon', not 'unknown') via forkSubagent's
+      // parentSurface fill. Mirrors the traceWriter/cwd chaining above and the
+      // recursive child executor ctx below (which already forwards args.surface).
+      ...(args.surface !== undefined ? { surface: args.surface } : {}),
     });
     childParentSession = createStubParentSession(signal) as ChildParentSession;
     const childExecutor = createChildExecutor({

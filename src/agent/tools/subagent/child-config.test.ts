@@ -355,6 +355,49 @@ describe('buildChildConfig', () => {
       expect(capturedCtx!.traceWriter).toBeUndefined();
     });
 
+    // Regression (PR #466 follow-up): `agent`-tool + compose forks became
+    // trace-visible but were attributed origin:'unknown' because the surface
+    // was never threaded into the fork managers. The nested manager must
+    // inherit the owning surface like traceWriter/cwd, so depth-2+ forks report
+    // the real origin via forkSubagent's parentSurface fill. See
+    // session-identity.ts:deriveOrigin.
+    it('forwards surface to the child manager and the recursive executor ctx', () => {
+      let capturedCtx: SubagentExecutorContext | undefined;
+      const childProviderFactory = vi.fn(() => mockProvider());
+      const createChildExecutor = vi.fn((ctx: SubagentExecutorContext) => {
+        capturedCtx = ctx;
+        return stubChildExecutor();
+      });
+      const { childManager } = buildChildConfig(
+        baseArgs({
+          depth: 0,
+          maxDepth: 3,
+          surface: 'cli',
+          childProviderFactory,
+          createChildExecutor,
+        }),
+      );
+      const mgr = childManager as unknown as { parentSurface: string | undefined };
+      expect(mgr.parentSurface).toBe('cli');
+      expect(capturedCtx).toBeDefined();
+      expect(capturedCtx!.surface).toBe('cli');
+    });
+
+    it('omits surface from the child manager and executor ctx when unset', () => {
+      let capturedCtx: SubagentExecutorContext | undefined;
+      const childProviderFactory = vi.fn(() => mockProvider());
+      const createChildExecutor = vi.fn((ctx: SubagentExecutorContext) => {
+        capturedCtx = ctx;
+        return stubChildExecutor();
+      });
+      const { childManager } = buildChildConfig(
+        baseArgs({ depth: 0, maxDepth: 3, childProviderFactory, createChildExecutor }),
+      );
+      const mgr = childManager as unknown as { parentSurface: unknown };
+      expect(mgr.parentSurface).toBeUndefined();
+      expect(capturedCtx!.surface).toBeUndefined();
+    });
+
     it('skips nesting (no child manager, no provider) at the depth cap', () => {
       const childProviderFactory = vi.fn(() => mockProvider());
       const { childConfig, childManager, childParentSession } = buildChildConfig(

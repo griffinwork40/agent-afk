@@ -591,6 +591,11 @@ export class ComposeExecutor {
       // subagent_lifecycle events into the session trace (compose nodes never
       // set config.traceWriter). See ComposeExecutorContext.traceWriter.
       ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
+      // Origin attribution: thread the surface into the manager so every DAG
+      // node fork inherits the owning surface's origin ('cli'/'telegram'/
+      // 'daemon', not 'unknown') via forkSubagent's parentSurface fill.
+      // this.ctx.surface already drives routing telemetry (deriveOrigin).
+      ...(this.ctx.surface !== undefined ? { surface: this.ctx.surface } : {}),
     });
 
     const startedAt = Date.now();
