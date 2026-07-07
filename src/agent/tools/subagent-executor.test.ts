@@ -1436,6 +1436,41 @@ describe('SubagentExecutor', () => {
       expect(mockSubagentMgr.forkSubagent).not.toHaveBeenCalled();
     });
 
+    it('mode: "background" widens the fork wall-clock budget to SUBAGENT_BACKGROUND_TIMEOUT_MS', async () => {
+      const { SUBAGENT_BACKGROUND_TIMEOUT_MS } = await import('../subagent.js');
+      const registry = new BackgroundAgentRegistry({});
+      const { handle } = bgHandle();
+      const forkSpy = vi.fn().mockResolvedValue(handle);
+      mockSubagentMgr.forkSubagent = forkSpy;
+
+      const ctxWithBg: SubagentExecutorContext = {
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        backgroundRegistry: registry,
+        depth: 0,
+      };
+      const bgExecutor = new SubagentExecutor(ctxWithBg);
+      await bgExecutor.execute(
+        makeCall({ input: { prompt: 'long investigation', mode: 'background' } }),
+      );
+
+      expect(forkSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({ timeoutMs: SUBAGENT_BACKGROUND_TIMEOUT_MS }),
+        }),
+      );
+    });
+
+    it('foreground dispatch leaves timeoutMs unset so the manager fork default governs', async () => {
+      const forkSpy = mockSubagentMgr.forkSubagent as ReturnType<typeof vi.fn>;
+      await executor.execute(makeCall({ input: { prompt: 'quick check' } }));
+
+      expect(forkSpy).toHaveBeenCalledTimes(1);
+      const forkArg = forkSpy.mock.calls[0]![0] as { config: AgentConfig };
+      expect(forkArg.config.timeoutMs).toBeUndefined();
+    });
+
     it('mode: "background" with no registry: returns error and tears down the orphan handle', async () => {
       const { handle, teardownMock } = bgHandle();
       mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);

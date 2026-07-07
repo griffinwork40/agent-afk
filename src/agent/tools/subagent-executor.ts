@@ -8,7 +8,7 @@
  * @module agent/tools/subagent-executor
  */
 
-import { SubagentManager } from '../subagent.js';
+import { SubagentManager, SUBAGENT_BACKGROUND_TIMEOUT_MS } from '../subagent.js';
 import { BackgroundAgentRegistry } from '../background-registry.js';
 import type { ModelProvider } from '../provider.js';
 import type { AgentModelInput, IAgentSession } from '../types.js';
@@ -484,6 +484,16 @@ export class SubagentExecutor implements SubagentControl {
       ...(this.ctx.parentModel !== undefined ? { parentModel: this.ctx.parentModel } : {}),
       createChildExecutor: (childCtx) => new SubagentExecutor(childCtx),
     });
+
+    // Background dispatches get a wider wall-clock budget than the foreground
+    // default the manager applies (SUBAGENT_DEFAULT_TIMEOUT_MS): they don't
+    // park the parent turn, and the tool description invites "long
+    // investigations". Still bounded — a wedged detached child must not burn
+    // tokens forever. Guarded so an explicit caller-supplied budget (via
+    // AgentConfig.timeoutMs on SDK-level dispatch paths) always wins.
+    if (parsed.mode === 'background' && childConfig.timeoutMs === undefined) {
+      childConfig.timeoutMs = SUBAGENT_BACKGROUND_TIMEOUT_MS;
+    }
 
     let handle: Awaited<ReturnType<SubagentManager['forkSubagent']>>;
     try {

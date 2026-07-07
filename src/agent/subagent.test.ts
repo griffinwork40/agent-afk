@@ -76,7 +76,12 @@ vi.mock('./session.js', () => {
   return { AgentSession: MockAgentSession };
 });
 
-import { SubagentManager, SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS } from './subagent.js';
+import {
+  SubagentManager,
+  SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS,
+  SUBAGENT_DEFAULT_TIMEOUT_MS,
+  SUBAGENT_BACKGROUND_TIMEOUT_MS,
+} from './subagent.js';
 
 function lastSessionState(): SessionState {
   return shared.sessions[shared.sessions.length - 1].state;
@@ -201,6 +206,31 @@ describe('SubagentManager', () => {
       config: { model: 'sonnet', maxToolUseIterations: 0 },
     });
     expect((shared.lastConfig as unknown as Record<string, unknown>)['maxToolUseIterations']).toBe(0);
+  });
+
+  // Anti-hang (sibling of the iteration cap): a fork that hits an OAuth
+  // usage-limit 429 must FAIL FAST with the classified error, not silently
+  // auto-pause and poll for reset (up to 2h in retry-layer.ts) while its
+  // parent looks frozen. A fork has no human to wait for — the parent decides
+  // what happens next.
+  it('defaults autoResumeOnUsageLimit to false on the child config', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager();
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      config: { model: 'sonnet' },
+    });
+    expect((shared.lastConfig as unknown as Record<string, unknown>)['autoResumeOnUsageLimit']).toBe(false);
+  });
+
+  it('preserves an explicit autoResumeOnUsageLimit: true (unattended flows opt back in)', async () => {
+    shared.lastConfig = null;
+    const mgr = new SubagentManager();
+    await mgr.forkSubagent({
+      parent: { sessionId: 'p' },
+      config: { model: 'sonnet', autoResumeOnUsageLimit: true },
+    });
+    expect((shared.lastConfig as unknown as Record<string, unknown>)['autoResumeOnUsageLimit']).toBe(true);
   });
 
   // Isolation: AFK_MAX_TOOL_USE_ITERATIONS is a TOP-LEVEL-only escape hatch. The
@@ -667,6 +697,59 @@ describe('SubagentManager', () => {
 
       await expect(h.run('slow')).rejects.toThrow(/timed out/);
       expect(signal.aborted).toBe(true);
+    });
+
+    // Anti-hang: forks default to a BOUNDED wall-clock budget. The session
+    // default (DEFAULT_SESSION_TIMEOUT_MS = 0 = unbounded) is correct for
+    // top-level sessions but let a stalled child — provider throttling, a
+    // wedged stream, a slow-grinding tool loop — park its parent at
+    // `await runToResult` indefinitely (observed in production: 4 parallel
+    // children spun 29 minutes under a 429 cascade until manually cancelled).
+    it('pins the fork budget defaults (20 min foreground / 60 min background)', () => {
+      expect(SUBAGENT_DEFAULT_TIMEOUT_MS).toBe(20 * 60_000);
+      expect(SUBAGENT_BACKGROUND_TIMEOUT_MS).toBe(60 * 60_000);
+    });
+
+    it('applies SUBAGENT_DEFAULT_TIMEOUT_MS when child config omits timeoutMs', async () => {
+      vi.useFakeTimers();
+      try {
+        const mgr = new SubagentManager();
+        const h = await mgr.forkSubagent({
+          parent: { sessionId: 'p' },
+          config: { model: 'sonnet' }, // no timeoutMs → fork default applies
+        });
+        // Child never replies within the budget.
+        lastSessionState().replyDelayMs = SUBAGENT_DEFAULT_TIMEOUT_MS + 60_000;
+        const signal = lastSessionAbortSignal();
+
+        const run = h.run('slow');
+        const rejection = expect(run).rejects.toThrow(/timed out after 1200000ms/);
+        await vi.advanceTimersByTimeAsync(SUBAGENT_DEFAULT_TIMEOUT_MS);
+        await rejection;
+        expect(signal.aborted).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('preserves an explicit timeoutMs of 0 (opt back into unbounded)', async () => {
+      vi.useFakeTimers();
+      try {
+        const mgr = new SubagentManager();
+        const h = await mgr.forkSubagent({
+          parent: { sessionId: 'p' },
+          config: { model: 'sonnet', timeoutMs: 0 },
+        });
+        // Reply lands AFTER the would-be default budget — must still succeed.
+        lastSessionState().replyDelayMs = SUBAGENT_DEFAULT_TIMEOUT_MS + 60_000;
+
+        const run = h.run('slow');
+        await vi.advanceTimersByTimeAsync(SUBAGENT_DEFAULT_TIMEOUT_MS + 61_000);
+        const msg = await run;
+        expect(msg.content).toBe('ok:slow');
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
