@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.25.3] - 2026-07-07
+
+### Fixed
+- tolerate indented fences in isInOpenCodeFence parity check (#464) (ec31016)
+
 ## [5.25.2] - 2026-07-07
 
 ### Fixed
