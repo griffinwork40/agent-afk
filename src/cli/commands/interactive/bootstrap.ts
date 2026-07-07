@@ -195,6 +195,19 @@ export async function bootstrapSession(
   // sessionRef is populated after the session is constructed below.
   const sessionRef: SessionRef = { current: null! };
 
+  // Witness layer: open trace BEFORE the root SubagentManager and the
+  // executor so (a) the manager inherits the writer — the `agent`-tool path
+  // relies on manager-level inheritance for its forks' lifecycle events
+  // (see forkSubagent's effectiveTraceWriter) — and (b) the
+  // BackgroundAgentRegistry can be constructed with the writer in hand.
+  // The trace path is logged after `bootstrapSession` returns (caller-side
+  // banner), so we open the file here but defer the log line until later
+  // to preserve startup-message ordering.
+  const traceSessionLabel = resumeTarget?.stored?.sessionId;
+  const trace = createDefaultTraceWriter(
+    traceSessionLabel ? { sessionLabel: traceSessionLabel } : {},
+  );
+
   const apiKey = getApiKey();
   const rootManager = new SubagentManager({
     apiKey,
@@ -211,17 +224,12 @@ export async function bootstrapSession(
     // repo and the `read_file` handler returns parent-repo contents instead
     // of the worktree's. Mirrors `chat.ts:163` for the one-shot path.
     ...(extras?.cwd !== undefined ? { cwd: extras.cwd } : {}),
+    // Witness layer: manager-level writer so `agent`-tool forks (which never
+    // set config.traceWriter) still emit subagent_lifecycle events and hand
+    // the writer to their handles. Skill forks already thread it via
+    // SkillExecutorContext; this closes the same gap for raw agent dispatch.
+    ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
   });
-
-  // Witness layer: open trace BEFORE the executor so the
-  // BackgroundAgentRegistry can be constructed with the writer in hand.
-  // The trace path is logged after `bootstrapSession` returns (caller-side
-  // banner), so we open the file here but defer the log line until later
-  // to preserve startup-message ordering.
-  const traceSessionLabel = resumeTarget?.stored?.sessionId;
-  const trace = createDefaultTraceWriter(
-    traceSessionLabel ? { sessionLabel: traceSessionLabel } : {},
-  );
   // Witness layer: trace writer is now live — emit the bootstrap_start marker.
   // (Total bootstrap span is reported by bootstrap_done, measured from the
   // function-entry timestamp captured above.)
@@ -360,6 +368,10 @@ export async function bootstrapSession(
     // anchor for named-agent model resolution.
     agentRegistry,
     parentModel: sessionModel,
+    // Witness layer: thread the writer so depth ≥ 2 `agent` forks (nested
+    // child managers built inside execute()) stay visible in the trace.
+    // Depth-1 forks are covered by rootManager's traceWriter above.
+    ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
   });
 
   const skillExecutor = new SkillExecutor({
@@ -415,6 +427,8 @@ export async function bootstrapSession(
     // Session identity for routing-decision rows (REPL → cli).
     surface: 'cli',
     depth: 0,
+    // Witness layer: DAG nodes emit subagent_lifecycle into the session trace.
+    ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
   });
 
   const sharedMemoryStore = new MemoryStore();

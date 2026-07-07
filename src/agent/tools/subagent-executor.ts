@@ -23,6 +23,7 @@ import type { AgentRegistry, RegisteredAgent } from '../agents/index.js';
 import type { SkillExecutor } from './skill-executor.js';
 import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
 import type { Surface } from '../awareness/types.js';
+import type { TraceWriter } from '../trace/index.js';
 import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from '../session/session-identity.js';
 import { parseAgentInput, type AgentInput, type AgentExecutionMode } from './subagent/input-parse.js';
 import { emitTelemetry, truncate } from './subagent/failure-payload.js';
@@ -137,6 +138,17 @@ export interface SubagentExecutorContext {
    * applies.
    */
   cwd?: string;
+  /**
+   * Witness-layer trace writer inherited from the owning surface. Forwarded
+   * into the per-call child {@link SubagentManager} built by
+   * `buildChildConfig` so depth ≥ 2 `agent` forks (a depth-1 subagent calling
+   * the `agent` tool) emit `subagent_lifecycle` events into the same trace
+   * file as the root session. Depth-1 forks are covered separately by the
+   * root manager's own manager-level writer (bootstrap/chat/telegram wiring);
+   * this field closes the same gap for the nested managers, mirroring how
+   * `cwd` chains through every depth.
+   */
+  traceWriter?: TraceWriter;
   /**
    * Tool allowlist to propagate to grandchild providers when this executor
    * is itself a read-only skill's child. Forwarded into `childProviderFactory`
@@ -482,6 +494,7 @@ export class SubagentExecutor implements SubagentControl {
       ...(this.ctx.readOnlyBash !== undefined ? { readOnlyBash: this.ctx.readOnlyBash } : {}),
       ...(this.ctx.agentRegistry !== undefined ? { agentRegistry: this.ctx.agentRegistry } : {}),
       ...(this.ctx.parentModel !== undefined ? { parentModel: this.ctx.parentModel } : {}),
+      ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
       createChildExecutor: (childCtx) => new SubagentExecutor(childCtx),
     });
 

@@ -1252,6 +1252,54 @@ describe('SubagentExecutor', () => {
       expect(capturedChildExecutorCtx!.cwd).toBe('/tmp/wt/feat-x');
     });
 
+    // Witness-trace propagation through the `agent` tool's recursive nesting —
+    // same shape as the cwd chain above. Without ctx.traceWriter, the per-call
+    // childManager had no writer and depth-2+ `agent` forks emitted zero
+    // subagent_lifecycle events (invisible in `afk trace show`).
+    it('forwards ctx.traceWriter to childManager and recursive child executor (depth ≥ 2 visibility)', async () => {
+      let capturedChildExecutorCtx: SubagentExecutorContext | undefined;
+
+      const handle = mockHandle();
+      const manager = {
+        forkSubagent: vi.fn().mockResolvedValue(handle),
+        teardownAll: vi.fn().mockResolvedValue(undefined),
+      };
+      const traceWriter = {
+        write: vi.fn(async () => undefined),
+        getTracePath: () => 'in-memory://trace',
+      };
+
+      const factory = vi.fn().mockImplementation(({ childExecutor }: { childExecutor: SubagentExecutor }) => {
+        capturedChildExecutorCtx = (childExecutor as any).ctx as SubagentExecutorContext;
+        return { name: 'p', query: vi.fn() };
+      });
+
+      const exec = new SubagentExecutor({
+        subagentManager: manager as any,
+        parentSession: {
+          sessionId: 'root',
+          getInputStreamRef: vi.fn(),
+          abortSignal: new AbortController().signal,
+        },
+        defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+        childProviderFactory: factory,
+        depth: 0,
+        maxDepth: DEFAULT_MAX_NESTING_DEPTH,
+        traceWriter: traceWriter as never,
+      });
+
+      await exec.execute(makeCall());
+
+      expect(capturedChildExecutorCtx).toBeDefined();
+      // (1) childManager carries the writer so depth-2 forks emit lifecycle events.
+      const childManager = capturedChildExecutorCtx!.subagentManager as unknown as {
+        parentTraceWriter: unknown;
+      };
+      expect(childManager.parentTraceWriter).toBe(traceWriter);
+      // (2) the recursive executor received it, so the chain holds depth-3+.
+      expect(capturedChildExecutorCtx!.traceWriter).toBe(traceWriter);
+    });
+
     // setCwd re-anchors mid-session (born-named `afk -w` worktree on turn 1):
     //   (1) the root manager (depth-1 forks) is re-anchored via manager.setCwd
     //   (2) the depth-2+ childManager built in execute() uses the new cwd

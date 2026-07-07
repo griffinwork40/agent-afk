@@ -477,6 +477,18 @@ export class SubagentManager {
     const registry =
       options.config.hookRegistry ?? this.hookRegistry ?? options.parent.hookRegistry;
 
+    // Witness-writer resolution: explicit per-fork config wins, then the
+    // manager-level writer (constructed at the surface bootstrap). This is
+    // the SINGLE resolved value used by every witness touchpoint in this
+    // fork path — SubagentStart dispatch, the child handle, and the
+    // subagent_lifecycle 'started' emit below. Before this, those three
+    // read `options.config.traceWriter` directly, so a fork relying on
+    // manager-level inheritance (the `agent`-tool path — its executors
+    // never set config.traceWriter) produced a child whose entire lifetime
+    // was invisible in `afk trace show` even though childConfig inherited
+    // the writer for the session's own events.
+    const effectiveTraceWriter = options.config.traceWriter ?? this.parentTraceWriter;
+
     // SubagentStart fires BEFORE session creation so a block truly prevents
     // the child from existing. Abort precedence is honored via rootController.
     if (registry) {
@@ -489,7 +501,7 @@ export class SubagentManager {
         },
         {
           signal: this.rootController.signal,
-          ...(options.config.traceWriter ? { traceWriter: options.config.traceWriter } : {}),
+          ...(effectiveTraceWriter ? { traceWriter: effectiveTraceWriter } : {}),
         },
       );
     }
@@ -716,8 +728,11 @@ export class SubagentManager {
       // traceWriter: child shares the parent's writer so its SubagentStop
       // hook decision lands in the same trace file. Contract:
       // docs/philosophy/afk-contract.md — "a child sub-agent inherits its
-      // parent's witness." Inheritance is config-driven via childConfig.
-      options.config.traceWriter,
+      // parent's witness." Resolved once above (per-fork config →
+      // manager-level writer) so the handle's terminal lifecycle emits
+      // pair with the 'started' emit below even when inheritance came
+      // from the manager rather than the per-fork config.
+      effectiveTraceWriter,
       // onSubagentSucceeded: propagate completion data to the parent
       // session's session_sealed rollup accumulators.
       this.onSubagentSucceededCb,
@@ -736,7 +751,7 @@ export class SubagentManager {
     const modelString = typeof options.config.model === 'string'
       ? options.config.model
       : JSON.stringify(options.config.model);
-    void emitSubagentLifecycle(options.config.traceWriter, {
+    void emitSubagentLifecycle(effectiveTraceWriter, {
       transition: 'started',
       subagentId: id,
       parentId: options.parent.sessionId ?? this.rootId,

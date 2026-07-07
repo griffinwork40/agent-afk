@@ -264,6 +264,10 @@ async function main() {
           parentModel: sessionConfig.model,
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
           ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
+          // Witness layer: manager-level writer so `agent`-tool forks (which
+          // never set config.traceWriter) emit subagent_lifecycle events and
+          // hand the writer to their handles. Mirrors bootstrap.ts / chat.ts.
+          ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
         });
 
         const deferredParent = {
@@ -341,6 +345,9 @@ async function main() {
           // Named-agent dispatch: registry + `inherit` anchor.
           agentRegistry,
           parentModel: sessionConfig.model,
+          // Witness layer: thread the writer so depth ≥ 2 `agent` forks stay
+          // visible in the trace. Mirrors bootstrap.ts / chat.ts.
+          ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
         });
 
         const skillExecutor = new SkillExecutor({
@@ -378,6 +385,8 @@ async function main() {
           // Session identity for routing-decision rows (Telegram → telegram).
           surface: 'telegram',
           depth: 0,
+          // Witness layer: DAG nodes emit subagent_lifecycle into the session trace.
+          ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
         });
 
         const allowedTools = topLevelSurfaceAllowedTools(mcpManager?.getMcpToolWireNames() ?? []);
