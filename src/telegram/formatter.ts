@@ -152,22 +152,28 @@ export function markdownToTelegramHtml(text: string): string {
   // 8. Headers: drop # prefix, keep text
   out = out.replace(/^#{1,6}\s+/gm, '');
 
-  // 9. Restore code spans and fenced blocks after ALL inline transforms.
-  // External constraint: restore must happen last so no inline regex re-scans
-  // the restored HTML content. Inline code before fenced to prevent nested substitution.
-  out = out.replace(/\x02CODE(\d+)\x03/g, (_m, i: string) => codeSpans[Number(i)] ?? _m);
-  // 10. Restore fenced code blocks
-  out = out.replace(/\x02FENCED(\d+)\x03/g, (_m, i: string) => fencedBlocks[Number(i)] ?? _m);
-
-  // 11. Safety net: interleaved/overlapping emphasis markers (e.g. "**a _b** c_")
+  // 9. Safety net: interleaved/overlapping emphasis markers (e.g. "**a _b** c_")
   // can yield improperly-NESTED tags like "<b>a <i>b</b> c</i>", which Telegram
   // rejects with HTTP 400 "can't parse entities" — failing or degrading the send.
   // Code/pre/link tags are emitted as atomic, always-balanced units, so any
   // imbalance is necessarily from emphasis (<b>/<i>/<s>); drop just those to
   // recover guaranteed-valid, readable HTML instead of breaking the message.
+  //
+  // Invariant: this MUST precede the code/fenced restore below. While they are
+  // still placeholders, the balance check and strip see only real emphasis/link
+  // tags — never the restored content. That matters because an empty fence is
+  // emitted as a <i>(empty … block)</i> placeholder; restoring it first would
+  // expose that <i> to the strip and silently de-italicise the label whenever an
+  // unrelated mis-nested emphasis run in the same message trips the net.
   if (!telegramHtmlTagsBalanced(out)) {
     out = out.replace(/<\/?[bis]>/g, '');
   }
+
+  // 10. Restore code spans, then fenced blocks, AFTER the safety net — so no regex
+  // re-scans the restored HTML content and the empty-fence <i> label survives the
+  // strip above. Inline code before fenced to prevent nested substitution.
+  out = out.replace(/\x02CODE(\d+)\x03/g, (_m, i: string) => codeSpans[Number(i)] ?? _m);
+  out = out.replace(/\x02FENCED(\d+)\x03/g, (_m, i: string) => fencedBlocks[Number(i)] ?? _m);
 
   return out;
 }
