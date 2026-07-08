@@ -35,6 +35,7 @@ import { gitInvestigator } from '../../_agents/git-investigator.js';
 import { vendoredToolAllowlist } from '../../_agents/to-definition.js';
 import { classifyBashCommand } from '../../../agent/tools/readonly-bash.js';
 import { describeSpawnCwdError } from '../../../utils/spawn-cwd-error.js';
+import { TimeoutError } from '../../../utils/errors.js';
 import type {
   DiagnosisResult,
   Hypothesis,
@@ -267,12 +268,19 @@ async function testHypothesisInWorktree(
     const verificationResult = await verifierHandle.runToResult(userPrompt);
 
     if (verificationResult.status !== 'succeeded' || !verificationResult.output) {
+      // A verifier that exhausts VERIFIER_TIMEOUT_MS surfaces here: runToResult
+      // catches the withTimeout rejection internally and returns a failed result
+      // carrying the TimeoutError, rather than throwing into the catch below.
+      // Flag it so the surfaced verification_results distinguish an out-of-time
+      // verifier from one that genuinely falsified the hypothesis — both
+      // otherwise share this exact {predicted_pass:false, confidence:0} shape.
       return {
         hypothesis_id: hypothesis.id,
         predicted_pass: false,
         regressions: [],
         confidence: 0,
         verification_log: `Verification failed: ${describeFailure(verificationResult)}`,
+        timed_out: verificationResult.error instanceof TimeoutError,
       };
     }
 
@@ -287,6 +295,10 @@ async function testHypothesisInWorktree(
       regressions: [],
       confidence: 0,
       verification_log: `Error during verification: ${describeSpawnCwdError(error, repoPath)}`,
+      // Defensive: a timeout normally surfaces via the runToResult-failed path
+      // above (it does not throw), but flag it here too so no timeout escapes
+      // unlabelled if the abort cascade ever rejects into this catch.
+      timed_out: error instanceof TimeoutError,
     };
   } finally {
     // Tear down the verifier handle (fires SubagentStop with the real
@@ -682,6 +694,7 @@ export async function handler(
             verification_log: `Verification worker rejected: ${
               settled.reason instanceof Error ? settled.reason.message : String(settled.reason)
             }`,
+            timed_out: settled.reason instanceof TimeoutError,
           },
   );
 

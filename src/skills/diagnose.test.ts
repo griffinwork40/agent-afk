@@ -169,6 +169,23 @@ describe('Diagnose Skill', () => {
       const result = VerificationResultSchema.safeParse(valid);
       expect(result.success).toBe(true);
     });
+
+    it('treats timed_out as optional (absent === not a timeout)', () => {
+      // The verifier subagent reports substantive verdicts only and never emits
+      // timed_out; a plain failure result must parse without it.
+      const withoutFlag = createValidVerificationResult('h1', false);
+      expect(withoutFlag).not.toHaveProperty('timed_out');
+      expect(VerificationResultSchema.safeParse(withoutFlag).success).toBe(true);
+    });
+
+    it('accepts an explicit timed_out flag for wall-clock-exhausted verifiers', () => {
+      // The orchestrator sets timed_out:true when a fork fails with a
+      // TimeoutError, distinguishing it from a genuine falsification.
+      const timedOut = { ...createValidVerificationResult('h1', false), timed_out: true };
+      const parsed = VerificationResultSchema.safeParse(timedOut);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) expect(parsed.data.timed_out).toBe(true);
+    });
   });
 
   describe('DiagnosisResultSchema', () => {
