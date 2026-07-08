@@ -455,6 +455,10 @@ export function registerChatCommand(program: Command): void {
           // never set config.traceWriter) emit subagent_lifecycle events and
           // hand the writer to their handles. Mirrors bootstrap.ts.
           ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
+          // Origin attribution: `afk chat` is a `cli` entrypoint. Thread the
+          // surface so forked `agent`-tool children inherit origin 'cli' (not
+          // 'unknown') via forkSubagent's parentSurface fill. Mirrors farm.ts.
+          surface: 'cli',
         });
 
         // Pass openaiBaseUrl so OpenAI-routed children point at the

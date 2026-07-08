@@ -268,6 +268,10 @@ async function main() {
           // never set config.traceWriter) emit subagent_lifecycle events and
           // hand the writer to their handles. Mirrors bootstrap.ts / chat.ts.
           ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
+          // Origin attribution: thread the surface so forked `agent`-tool
+          // children inherit origin 'telegram' (not 'unknown') via
+          // forkSubagent's parentSurface fill. Mirrors farm.ts.
+          surface: 'telegram',
         });
 
         const deferredParent = {

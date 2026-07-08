@@ -229,6 +229,11 @@ export async function bootstrapSession(
     // the writer to their handles. Skill forks already thread it via
     // SkillExecutorContext; this closes the same gap for raw agent dispatch.
     ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
+    // Origin attribution: the REPL is a `cli` entrypoint. Threading the surface
+    // into the manager makes forked `agent`-tool children inherit origin 'cli'
+    // (not 'unknown') via forkSubagent's parentSurface fill — mirrors the
+    // traceWriter/cwd inheritance above and farm.ts. See session-identity.ts.
+    surface: 'cli',
   });
   // Witness layer: trace writer is now live — emit the bootstrap_start marker.
   // (Total bootstrap span is reported by bootstrap_done, measured from the
