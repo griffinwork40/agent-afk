@@ -52,6 +52,15 @@ import {
 
 const execFile = promisify(execFileCallback);
 
+// Wall-clock ceiling for a single hypothesis verifier fork. Verification is
+// strictly read-only (createVerifierCanUseTool denies bash/edit/write) — static
+// code-reading of one hypothesis — so it needs far less than the 20-min default
+// subagent ceiling (SUBAGENT_DEFAULT_TIMEOUT_MS). Non-converging verifiers that
+// ran to the 20-min wall (~100k+ tokens each) were a primary driver of the
+// usage-limit burn; 10 min stays generous for read-only work. Per-fork only —
+// this does NOT touch the shared dispatch primitive (that budget is separate).
+const VERIFIER_TIMEOUT_MS = 10 * 60_000;
+
 // ---------------------------------------------------------------------------
 // Tool-permission helpers
 // ---------------------------------------------------------------------------
@@ -237,6 +246,7 @@ async function testHypothesisInWorktree(
         model: subagentModel,
         systemPrompt: `${verifyPrompt}\n\nYou are testing in an isolated worktree at: ${worktreePath}`,
         canUseTool: createVerifierCanUseTool(),
+        timeoutMs: VERIFIER_TIMEOUT_MS,
       },
       idPrefix: `diagnose-verifier-${hypothesis.id}`,
       agentType: `diagnose-verifier-${hypothesis.id}`,
