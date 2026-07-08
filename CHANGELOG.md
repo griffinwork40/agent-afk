@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.25.5] - 2026-07-08
+
+### Fixed
+- fix wrap overflow + bound and label the diagnose verifier fan-out (#470) (227a99e)
+
 ## [5.25.4] - 2026-07-08
 
 ### Fixed
