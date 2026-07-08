@@ -714,4 +714,21 @@ describe('grepHandler cwd containment', () => {
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain('hello');
   });
+
+  describe('spawn-cwd error enrichment (#441)', () => {
+    it('names the dead working directory when the spawn cwd was deleted (ENOENT masquerade)', async () => {
+      // Parity with the bash handler: spawning grep with a deleted cwd rejects
+      // as `spawn grep ENOENT` — naming the binary, not the missing dir — so an
+      // agent retries blindly after its worktree was reaped mid-session. The
+      // handler must translate this into an actionable message.
+      const deadCwd = mkdtempSync(join(tmpdir(), 'grep-cwd-dead-'));
+      rmSync(deadCwd, { recursive: true, force: true });
+      const handler = createGrepHandler(deadCwd);
+      const result = await handler({ pattern: 'x', path: deadCwd }, createSignal());
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('working directory does not exist');
+      expect(result.content).toContain(deadCwd);
+      expect(result.content).toContain('deleted worktree?');
+    });
+  });
 });

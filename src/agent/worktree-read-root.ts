@@ -51,6 +51,7 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
+import { debugLog } from '../utils/debug.js';
 
 const execFilePromise = promisify(execFileCb);
 
@@ -104,8 +105,16 @@ export async function resolveWorktreeMainRoot(
     if (mainRoot === topLevel) return undefined;
 
     return mainRoot;
-  } catch {
-    // Not a git repo, git missing, or any other failure — best-effort.
+  } catch (err) {
+    // Not a git repo, git missing, or any other failure — best-effort. But this
+    // silent return re-confines a forked child to `[worktree]` (the #416
+    // symptom returns) with no signal, so surface the degradation under
+    // AFK_DEBUG=1 — otherwise a subagent that unexpectedly loses main-repo read
+    // access is undiagnosable (#441).
+    debugLog(
+      `[worktree-read-root] git rev-parse failed for cwd=${cwd}; child confined ` +
+        `to worktree only — ${err instanceof Error ? err.message : String(err)}`,
+    );
     return undefined;
   }
 }

@@ -102,6 +102,26 @@ describe('resolveWorktreeMainRoot', () => {
     await expect(resolveWorktreeMainRoot(WORKTREE, exec)).resolves.toBeUndefined();
   });
 
+  it('logs the confinement degradation under AFK_DEBUG when git fails (#441)', async () => {
+    // The silent return re-confines a forked child to its worktree with no
+    // signal; under AFK_DEBUG=1 the degradation must be observable so an
+    // unexpectedly-confined subagent is diagnosable.
+    const prev = process.env['AFK_DEBUG'];
+    process.env['AFK_DEBUG'] = '1';
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const root = await resolveWorktreeMainRoot(WORKTREE, failingGit());
+      expect(root).toBeUndefined();
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[worktree-read-root]'),
+      );
+    } finally {
+      logSpy.mockRestore();
+      if (prev === undefined) delete process.env['AFK_DEBUG'];
+      else process.env['AFK_DEBUG'] = prev;
+    }
+  });
+
   it('returns undefined on empty git output', async () => {
     const exec = fakeGit('\n');
     const root = await resolveWorktreeMainRoot(WORKTREE, exec);

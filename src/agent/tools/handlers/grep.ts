@@ -23,6 +23,7 @@ import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { appendRoutingDecision } from '../../routing-telemetry.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
+import { describeSpawnCwdError, isSpawnEnoent } from '../../../utils/spawn-cwd-error.js';
 
 /**
  * Input shape for the grep tool (validated at runtime).
@@ -302,7 +303,25 @@ export function createGrepHandler(cwd?: string): ToolHandler {
     });
 
     proc.on('error', (err) => {
-      settle({ content: `Failed to execute grep: ${err.message}`, isError: true });
+      // Spawn ENOENT masquerade: a dead working directory (e.g. a git worktree
+      // reaped mid-session) surfaces as `spawn grep ENOENT` — naming the binary,
+      // not the missing dir — so an agent retries blindly. Translate it into an
+      // actionable message via statSync on the error path only (no TOCTOU, no
+      // happy-path cost). Parity with the bash handler (#441).
+      const effectiveCwd = context?.resolveBase ?? context?.cwd ?? cwd;
+      let message: string;
+      if (effectiveCwd === undefined && isSpawnEnoent(err)) {
+        // No explicit cwd was passed, so spawn inherited process.cwd(); that
+        // directory itself can be deleted (same masquerade) — report as such.
+        try {
+          message = describeSpawnCwdError(err, process.cwd());
+        } catch {
+          message = `working directory does not exist (process cwd deleted — deleted worktree?) — underlying: ${err.message}`;
+        }
+      } else {
+        message = describeSpawnCwdError(err, effectiveCwd);
+      }
+      settle({ content: `Failed to execute grep: ${message}`, isError: true });
     });
   });
   };

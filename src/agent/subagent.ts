@@ -398,6 +398,12 @@ export class SubagentManager {
    */
   setCwd(cwd: string): void {
     this.parentCwd = cwd;
+    // Invalidate any memoized main-root for this exact path. A worktree can be
+    // deleted and recreated at the SAME path mid-session (sweep + re-create),
+    // which would otherwise hand every subsequent fork a stale mainRoot from
+    // the cache (#441). setCwd is rare (born-named worktree creation on turn 1),
+    // so forcing one re-resolution on the next fork costs nothing.
+    this.worktreeMainRootCache.delete(cwd);
   }
 
   /**
