@@ -730,5 +730,31 @@ describe('grepHandler cwd containment', () => {
       expect(result.content).toContain(deadCwd);
       expect(result.content).toContain('deleted worktree?');
     });
+
+    it('spawns under context.resolveBase and names IT (not the stale factory cwd) when the re-anchored worktree was deleted (#441 Codex follow-up)', async () => {
+      // Divergence guard: after an in-flight setResolveBase re-anchor, the live
+      // anchor is context.resolveBase while the handler's factory `cwd` is stale.
+      // grep must spawn under — and diagnose against — the SAME effectiveCwd
+      // (context-first, bash parity). Pre-fix, spawn used the (live) factory cwd
+      // and grep merely errored on the missing path arg; the deleted resolveBase
+      // was never surfaced.
+      const liveFactoryCwd = mkdtempSync(join(tmpdir(), 'grep-factory-live-'));
+      const deadResolveBase = mkdtempSync(join(tmpdir(), 'grep-resolvebase-dead-'));
+      rmSync(deadResolveBase, { recursive: true, force: true });
+      try {
+        const handler = createGrepHandler(liveFactoryCwd);
+        const result = await handler(
+          { pattern: 'x', path: '.' },
+          createSignal(),
+          { resolveBase: deadResolveBase } as ToolHandlerContext,
+        );
+        expect(result.isError).toBe(true);
+        expect(result.content).toContain('working directory does not exist');
+        expect(result.content).toContain(deadResolveBase);
+        expect(result.content).toContain('deleted worktree?');
+      } finally {
+        rmSync(liveFactoryCwd, { recursive: true, force: true });
+      }
+    });
   });
 });
