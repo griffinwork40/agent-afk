@@ -37,6 +37,7 @@ import type { RegisteredAgent } from '../../agents/index.js';
 import type { AgentRegistry } from '../../agents/index.js';
 import type { SkillExecutor } from '../skill-executor.js';
 import type { Surface } from '../../awareness/types.js';
+import type { TraceWriter } from '../../trace/index.js';
 import type { SubagentExecutor, SubagentExecutorContext } from '../subagent-executor.js';
 import type { AgentInput } from './input-parse.js';
 
@@ -69,6 +70,16 @@ export interface BuildChildConfigArgs {
   readOnlyBash?: boolean;
   agentRegistry?: AgentRegistry;
   parentModel?: AgentModelInput;
+  /**
+   * Witness-layer trace writer inherited from the dispatching executor.
+   * Applied at TWO points so nested `agent` forks stay visible in
+   * `afk trace show`:
+   *   1. the depth-2+ child {@link SubagentManager} (manager-level
+   *      inheritance → subagent_lifecycle events for grandchild forks), and
+   *   2. the recursive child executor's ctx (so the chain holds to maxDepth,
+   *      mirroring `cwd`).
+   */
+  traceWriter?: TraceWriter;
   /**
    * Construct the recursive child executor. Injected by the owning
    * `SubagentExecutor.execute()` as `(ctx) => new SubagentExecutor(ctx)` so
@@ -255,6 +266,11 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     childManager = new SubagentManager({
       parentAbortSignal: signal,
       ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
+      // Witness layer: without this, depth-2+ `agent` forks emit no
+      // subagent_lifecycle events — the nested manager had no writer and
+      // agent-tool dispatches never set config.traceWriter. Mirrors the
+      // cwd chaining above; see BuildChildConfigArgs.traceWriter.
+      ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}),
     });
     childParentSession = createStubParentSession(signal) as ChildParentSession;
     const childExecutor = createChildExecutor({
@@ -278,6 +294,9 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
       // ITS own childManager for depth-3+ forks, also receives cwd. The
       // chain holds for arbitrary depth up to maxDepth.
       ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
+      // Forward the trace writer for the same reason — the child executor's
+      // own childManager (depth-3+) needs it. See BuildChildConfigArgs.
+      ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}),
       // Propagate read-only constraints so depth ≥ 2 forks (this depth-1
       // child calling the `agent` tool) keep the same tool allowlist and
       // bash gate that the originating read-only skill imposed.

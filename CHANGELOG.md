@@ -11,6 +11,43 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.25.4] - 2026-07-08
+
+### Fixed
+- Messages typed during the ESC soft-stop settle window now **merge** into one next turn instead of last-wins replacement. The #403 coalescing kept only the latest post-ESC message, so a real instruction followed by a "." liveness poke silently dropped the instruction — the "it didn't send" report, round 2. All post-ESC messages now join (newline-separated, attachments concatenated) and run as exactly one next turn; the no-backlog invariant and the pre-ESC queue-preservation contract are unchanged.
+
+### Fixed
+- merge post-ESC type-ahead instead of last-wins so soft-stop never drops a typed message (#467) (064ea20)
+
+## [5.25.3] - 2026-07-07
+
+### Fixed
+- tolerate indented fences in isInOpenCodeFence parity check (#464) (ec31016)
+
+## [5.25.2] - 2026-07-07
+
+### Fixed
+- `agent`-tool and `compose` subagents are now visible in the witness trace (`afk trace show`). Three gaps closed: (1) `forkSubagent` resolves the trace writer as per-fork config → manager-level writer, so the `subagent_lifecycle` started/succeeded/failed/cancelled events and the handle's writer no longer silently drop when inheritance came from the manager; (2) the REPL/chat/Telegram root managers and compose executors now carry the session trace writer; (3) the writer chains through nested child managers (depth ≥ 2 `agent` forks), mirroring the existing `cwd` chain. Previously a raw `agent` dispatch produced zero trace events between `tool_call started` and `completed` — a stuck child was indistinguishable from a never-started one.
+
+### Fixed
+- make agent-tool and compose forks visible in the witness trace (#466)do (a41a7d3)
+
+## [5.25.1] - 2026-07-07
+
+### Fixed
+- Forked subagents no longer hang their parent indefinitely: every fork now gets a bounded wall-clock budget by default — 20 min foreground (`SUBAGENT_DEFAULT_TIMEOUT_MS`), 60 min background (`SUBAGENT_BACKGROUND_TIMEOUT_MS`) — instead of the unbounded session default. On expiry the child's controller aborts (cascading to descendants) and the parent receives a legible timeout error. Explicit `timeoutMs` wins; `0` restores unbounded.
+- Forked subagents now **fail fast on OAuth usage-limit pauses** (`autoResumeOnUsageLimit` defaults to `false` for forks) instead of silently polling for reset — up to 2 h — while the parent looked frozen. The classified usage-limit error surfaces to the parent, which decides whether to retry, reroute, or surface the pause. Callers may opt a child back in with an explicit `autoResumeOnUsageLimit: true`.
+
+### Fixed
+- bound fork wall-clock budget + fail fast on usage-limit pauses (#465) (1516e65)
+- preserve empty-fence <i> label when the safety net strips emphasis (#456) (64ddd04)
+- thread openaiBaseUrl so OpenAI Telegram sessions reach the configured endpoint (#459) (e674621)
+
+### Changed
+- consolidate o-series detection into one predicate (#457) (db71f16)
+
+## [5.25.0] - 2026-07-07
+
 ### Added
 - New opt-in `AFK_MAX_TOOL_USE_ITERATIONS` env var sets a **top-level** tool-use-round ceiling for both providers (mirrors the `maxToolUseIterations` config key / `max_tool_use_iterations` tool param). Unset/`<=0` = unlimited (the default — zero behavior change); a positive integer N winds top-level turns down gracefully after N rounds. An explicit config value wins over the env default. Subagent forks are unaffected — they keep their own 50-round anti-hang default regardless of the var. Restores an operator brake for runaway top-level tool loops without reintroducing a default cap or provider drift.
 
@@ -19,6 +56,19 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ### Fixed
 - openai-compatible now runs the same tools-stripped "wind-down" round as anthropic-direct when the tool-round cap fires (previously it fell through to a possibly-empty final message with no cap signal), and stamps `tool_use_loop_capped` so the closure classifier reports `iteration_cap` for openai-compatible turns too.
+
+### Added
+- extend tool-loop cap + graceful wind-down to openai-compatible (follow-up to #448) (#454) (b0e85c7)
+
+### Fixed
+- align getApiKey() default-model resolution with getModel() (#455) (667951e)
+
+### Changed
+- Add AFK Dark theme for Terax (#460) (c9bb8f4)
+- calm REPL chrome (glyph mode marker, idle rail, cwd/branch dedupe) (#447) (d1bd410)
+- extract runIteration concerns into query/ modules (#453) (a04e781)
+- extract query() concerns into query/ modules (#452) (1c16f81)
+- dedupe elicitation validators into field-validation module (#451) (a7f2457)
 
 ## [5.24.0] - 2026-07-06
 

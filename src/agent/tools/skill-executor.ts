@@ -664,6 +664,10 @@ export class SkillExecutor {
       // Forward cwd so the grandchild executor's own childManager (when it
       // recursively constructs one for great-grandchild forks) is also cwd-anchored.
       ...(this.currentCwd !== undefined ? { cwd: this.currentCwd } : {}),
+      // Witness layer: forward the trace writer so the grandchild executor's
+      // own childManager (depth-2+ `agent` forks under this skill child) emits
+      // subagent_lifecycle events into the session trace. Mirrors cwd above.
+      ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
       // Invariant: background dispatch requires the registry to be present
       // in every SubagentExecutor in the chain — root → skill-forked child →
       // skill-forked grandchild. Without forwarding, a plugin skill's

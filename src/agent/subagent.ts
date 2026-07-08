@@ -24,7 +24,7 @@ import type { ZodType } from 'zod';
 import { AbortGraph, type ChildAbortedListener } from './abort-graph.js';
 import type { HookRegistry } from './hooks.js';
 import { AgentSession } from './session.js';
-import { DEFAULT_SESSION_TIMEOUT_MS } from './timeout.js';
+
 import type { AgentConfig, IAgentSession } from './types.js';
 import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js';
 import type { SubagentProgressSink } from './types/session-types.js';
@@ -70,6 +70,36 @@ export const DENY_ELICITATION: NonNullable<AgentConfig['onElicitation']> = async
  * `0` to opt a trusted deep-investigation child back into unbounded mode).
  */
 export const SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS = 50;
+
+/**
+ * Default wall-clock budget applied to every forked subagent turn.
+ *
+ * `DEFAULT_SESSION_TIMEOUT_MS` is `0` (unbounded), which is correct for
+ * top-level sessions — a human owns them — but not for forks: a child stalled
+ * by provider throttling, a wedged stream, or a slow-grinding tool loop parks
+ * its parent at `await runToResult` indefinitely (observed 2026-07-07: four
+ * parallel children spun 29 minutes under a 429 cascade until the operator
+ * manually cancelled). The tool-iteration cap above bounds ROUNDS but not
+ * TIME — throttled rounds can each take minutes. 20 minutes is ~2× the
+ * longest healthy child observed in production traces (~10 min review
+ * agents). On expiry `withTimeout` aborts the child's controller, cascading
+ * through the AbortGraph to its descendants, and the parent receives a
+ * legible TimeoutError tool_result instead of hanging. Callers may override
+ * per-fork via `config.timeoutMs` (`0` restores unbounded).
+ */
+export const SUBAGENT_DEFAULT_TIMEOUT_MS = 20 * 60_000;
+
+/**
+ * Wall-clock budget for BACKGROUND-mode agent dispatches (fire-and-forget
+ * jobs whose results auto-deliver later). Background children don't park
+ * their parent, so the anti-hang pressure is lower — but an unbounded
+ * detached child is still a zombie token-burner when it wedges. 60 minutes
+ * keeps documented "long investigations" viable at 3× the foreground budget
+ * while guaranteeing every fork terminates. Applied by SubagentExecutor
+ * before forking (background mode is executor-level knowledge the manager
+ * doesn't have); explicit `config.timeoutMs` wins, `0` = unbounded.
+ */
+export const SUBAGENT_BACKGROUND_TIMEOUT_MS = 60 * 60_000;
 
 export interface ForkParent {
   sessionId?: string;
@@ -447,6 +477,18 @@ export class SubagentManager {
     const registry =
       options.config.hookRegistry ?? this.hookRegistry ?? options.parent.hookRegistry;
 
+    // Witness-writer resolution: explicit per-fork config wins, then the
+    // manager-level writer (constructed at the surface bootstrap). This is
+    // the SINGLE resolved value used by every witness touchpoint in this
+    // fork path — SubagentStart dispatch, the child handle, and the
+    // subagent_lifecycle 'started' emit below. Before this, those three
+    // read `options.config.traceWriter` directly, so a fork relying on
+    // manager-level inheritance (the `agent`-tool path — its executors
+    // never set config.traceWriter) produced a child whose entire lifetime
+    // was invisible in `afk trace show` even though childConfig inherited
+    // the writer for the session's own events.
+    const effectiveTraceWriter = options.config.traceWriter ?? this.parentTraceWriter;
+
     // SubagentStart fires BEFORE session creation so a block truly prevents
     // the child from existing. Abort precedence is honored via rootController.
     if (registry) {
@@ -459,7 +501,7 @@ export class SubagentManager {
         },
         {
           signal: this.rootController.signal,
-          ...(options.config.traceWriter ? { traceWriter: options.config.traceWriter } : {}),
+          ...(effectiveTraceWriter ? { traceWriter: effectiveTraceWriter } : {}),
         },
       );
     }
@@ -542,6 +584,17 @@ export class SubagentManager {
       // `tool_use_loop_capped` done, returning the child's partial work.
       maxToolUseIterations:
         options.config.maxToolUseIterations ?? SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS,
+      // External constraint (anti-hang, sibling of the cap above): a fork that
+      // hits an OAuth usage-limit 429 otherwise auto-pauses and silently polls
+      // for reset — up to two hours (retry-layer.ts) — with no subagent-level
+      // pause UI, so the parent just looks frozen. A fork has no human to wait
+      // for: fail fast with the classified usage-limit error (the provider
+      // still emits the `paused` event first, then surfaces the error), and
+      // let the PARENT decide whether to retry, reroute to another model, or
+      // surface the pause to its own operator. Callers may opt a child back
+      // into auto-resume with an explicit `autoResumeOnUsageLimit: true`
+      // (e.g. unattended daemon flows that prefer waiting over failing).
+      autoResumeOnUsageLimit: options.config.autoResumeOnUsageLimit ?? false,
       // Awareness metadata: surface parent identity + phase role into the
       // child's config so the get_runtime_state tool's `self` view can report
       // the topology fields. Caller-supplied values on options.config win on
@@ -653,7 +706,9 @@ export class SubagentManager {
       childController,
       this.abortGraph,
       options.outputSchema,
-      options.config.timeoutMs ?? DEFAULT_SESSION_TIMEOUT_MS,
+      // Wall-clock budget for the child's turn (see SUBAGENT_DEFAULT_TIMEOUT_MS
+      // above). Explicit caller values win, including `0` for unbounded.
+      options.config.timeoutMs ?? SUBAGENT_DEFAULT_TIMEOUT_MS,
       registry,
       () => {
         this.active.delete(id);
@@ -673,8 +728,11 @@ export class SubagentManager {
       // traceWriter: child shares the parent's writer so its SubagentStop
       // hook decision lands in the same trace file. Contract:
       // docs/philosophy/afk-contract.md — "a child sub-agent inherits its
-      // parent's witness." Inheritance is config-driven via childConfig.
-      options.config.traceWriter,
+      // parent's witness." Resolved once above (per-fork config →
+      // manager-level writer) so the handle's terminal lifecycle emits
+      // pair with the 'started' emit below even when inheritance came
+      // from the manager rather than the per-fork config.
+      effectiveTraceWriter,
       // onSubagentSucceeded: propagate completion data to the parent
       // session's session_sealed rollup accumulators.
       this.onSubagentSucceededCb,
@@ -693,7 +751,7 @@ export class SubagentManager {
     const modelString = typeof options.config.model === 'string'
       ? options.config.model
       : JSON.stringify(options.config.model);
-    void emitSubagentLifecycle(options.config.traceWriter, {
+    void emitSubagentLifecycle(effectiveTraceWriter, {
       transition: 'started',
       subagentId: id,
       parentId: options.parent.sessionId ?? this.rootId,
