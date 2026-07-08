@@ -1801,7 +1801,7 @@ describe('TerminalCompositor', () => {
         submitTurn('gamma');
       });
 
-      it('coalesces MULTIPLE messages Entered during ONE soft-stop window (last-wins, no backlog)', async () => {
+      it('coalesces MULTIPLE messages Entered during ONE soft-stop window (merged, no backlog)', async () => {
         // The residual regression the Bug-B fix (see block comment above) did NOT
         // cover: it assumed the synchronous interrupt closes the streaming window
         // at the source. For a SUBAGENT turn that assumption fails —
@@ -1810,7 +1810,9 @@ describe('TerminalCompositor', () => {
         // 'streaming' for seconds. A user who sees no turn start types several
         // messages + Enter; pre-fix each pushed onto the FIFO, which drains ONE
         // per turn → the "it doesn't send, then I keep sending characters to catch
-        // up" report. Post-fix, only the LATEST message survives the window.
+        // up" report. Post-fix, all window messages MERGE into one payload —
+        // last-wins (the original #403 shape) silently dropped the earlier
+        // messages, which users experienced as "it didn't send" all over again.
         const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
         await c.arm();
         c.setInputMode('idle');
@@ -1823,7 +1825,8 @@ describe('TerminalCompositor', () => {
           for (const ch of msg) stdin.emit('keypress', ch, { name: ch, sequence: ch });
           stdin.emit('keypress', undefined, { name: 'return' });
         }
-        // Last-wins: the FIFO holds only the most recent message, not a backlog of 3.
+        // Merged: the FIFO holds ONE payload carrying all three messages,
+        // not a backlog of 3 — and not just the last one.
         expect(c.getPendingCount()).toBe(1);
         expect(c.getBuffer()).toEqual({ text: '', queued: true });
 
@@ -1831,16 +1834,44 @@ describe('TerminalCompositor', () => {
         c.setInputMode('idle');
         expect(c.getPendingCount()).toBe(1);
 
-        // readLine drains the single surviving payload as exactly ONE next turn.
+        // readLine drains the single merged payload as exactly ONE next turn.
         const onSubmit = vi.fn();
         c.setOnSubmit(onSubmit);
         c.setInputMode('idle');
         expect(onSubmit).toHaveBeenCalledTimes(1);
-        expect(onSubmit).toHaveBeenCalledWith({ text: 'third', attachments: [] });
+        expect(onSubmit).toHaveBeenCalledWith({ text: 'first\nsecond\nthird', attachments: [] });
+      });
+
+      it('a "." poke after a real post-ESC message does NOT drop the message (merge, not last-wins)', async () => {
+        // The exact field signature (v5.25.0 postmortem): during a slow
+        // subagent-cancel settle the user types a real instruction + Enter,
+        // sees nothing happen, and pokes with "." + Enter to test liveness.
+        // Under last-wins the "." REPLACED the instruction — silently lost,
+        // user had to retype: "it didn't send" round 2. Under merge, both
+        // survive as one turn.
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
+        await c.arm();
+        c.setInputMode('idle');
+        c.setInputMode('streaming'); // turn arm
+
+        stdin.emit('keypress', undefined, { name: 'escape' });
+        for (const ch of 'fix the bug') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+        stdin.emit('keypress', undefined, { name: 'return' });
+        stdin.emit('keypress', '.', { name: '.', sequence: '.' });
+        stdin.emit('keypress', undefined, { name: 'return' });
+
+        expect(c.getPendingCount()).toBe(1);
+        c.setInputMode('idle'); // dispose → no drain (onSubmit null)
+
+        const onSubmit = vi.fn();
+        c.setOnSubmit(onSubmit);
+        c.setInputMode('idle');
+        expect(onSubmit).toHaveBeenCalledTimes(1);
+        expect(onSubmit).toHaveBeenCalledWith({ text: 'fix the bug\n.', attachments: [] });
       });
 
       it('normal multi-message type-ahead (NO ESC) still accumulates every message (blast-radius guard)', async () => {
-        // The last-wins coalesce fires ONLY under softStopped. Ordinary mid-turn
+        // The merge coalesce fires ONLY under softStopped. Ordinary mid-turn
         // type-ahead must still queue every message for sequential-turn delivery —
         // coalescing here would silently drop queued turns the user intended.
         const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
@@ -1899,7 +1930,7 @@ describe('TerminalCompositor', () => {
 
       it('pre-ESC queued message survives MULTIPLE post-ESC Enters (coalesce replaces only post-ESC entries)', async () => {
         // Same contract as above, but with several post-ESC Enters: the pre-ESC
-        // payload must survive while the post-ESC ones coalesce to last-wins.
+        // payload must survive while the post-ESC ones coalesce into one merged payload.
         const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
         await c.arm();
         c.setInputMode('idle');
@@ -1915,8 +1946,8 @@ describe('TerminalCompositor', () => {
           for (const ch of msg) stdin.emit('keypress', ch, { name: ch, sequence: ch });
           stdin.emit('keypress', undefined, { name: 'return' });
         }
-        // pre-ESC "pre" survives (base=1); three post-ESC Enters coalesce to
-        // last-wins ("post3") → total queue = 2, NOT 1 (pre not dropped) and NOT 4.
+        // pre-ESC "pre" survives (base=1); three post-ESC Enters coalesce into
+        // ONE merged payload → total queue = 2, NOT 1 (pre not dropped) and NOT 4.
         expect(c.getPendingCount()).toBe(2);
 
         c.setInputMode('idle'); // dispose → no drain (onSubmit null)
@@ -1925,8 +1956,8 @@ describe('TerminalCompositor', () => {
         c.setOnSubmit(onSubmit);
         c.setInputMode('idle'); // drain #1 → "pre"
         expect(onSubmit).toHaveBeenCalledWith({ text: 'pre', attachments: [] });
-        c.setInputMode('idle'); // drain #2 → "post3" (last-wins)
-        expect(onSubmit).toHaveBeenNthCalledWith(2, { text: 'post3', attachments: [] });
+        c.setInputMode('idle'); // drain #2 → merged post-ESC intent (nothing dropped)
+        expect(onSubmit).toHaveBeenNthCalledWith(2, { text: 'post1\npost2\npost3', attachments: [] });
       });
 
       it('still auto-flushes normal mid-turn type-ahead (NO ESC) — no regression', async () => {

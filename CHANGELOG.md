@@ -13,6 +13,23 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ### Fixed
 - Witness-trace `origin` attribution for forked subagents: `agent`-tool and `compose` child (and grandchild) sessions were made trace-visible in #466 but recorded `origin: "unknown"` instead of the owning surface, because the session `surface` was never threaded into the fork managers (only `traceWriter`/`cwd` were). The REPL/chat/Telegram/daemon root managers, the nested depth-2+ child manager, and the compose executor's manager now carry the surface, so forked children inherit the correct `origin` (`cli`/`telegram`/`daemon`) via `forkSubagent`'s `parentSurface` fill — mirroring the existing `farm.ts` pattern. Follow-up to Codex review on #466. (Skill-forked subagents share the same latent gap and are tracked separately.)
+## [5.25.5] - 2026-07-08
+
+### Fixed
+- fix wrap overflow + bound and label the diagnose verifier fan-out (#470) (227a99e)
+
+## [5.25.4] - 2026-07-08
+
+### Fixed
+- Messages typed during the ESC soft-stop settle window now **merge** into one next turn instead of last-wins replacement. The #403 coalescing kept only the latest post-ESC message, so a real instruction followed by a "." liveness poke silently dropped the instruction — the "it didn't send" report, round 2. All post-ESC messages now join (newline-separated, attachments concatenated) and run as exactly one next turn; the no-backlog invariant and the pre-ESC queue-preservation contract are unchanged.
+
+### Fixed
+- merge post-ESC type-ahead instead of last-wins so soft-stop never drops a typed message (#467) (064ea20)
+
+## [5.25.3] - 2026-07-07
+
+### Fixed
+- tolerate indented fences in isInOpenCodeFence parity check (#464) (ec31016)
 
 ## [5.25.2] - 2026-07-07
 
