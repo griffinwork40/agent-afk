@@ -76,6 +76,7 @@ export const GOBLIN_SPINNER_VERBS: string[] = [
   "Fiddling",
   "Muttering",
   "Lurking",
+  "Hacking",
 ];
 
 export const COMPLETION_VERBS: Record<string, string> = {
