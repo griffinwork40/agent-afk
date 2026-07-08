@@ -11,8 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.25.4] - 2026-07-08
+
 ### Fixed
 - Messages typed during the ESC soft-stop settle window now **merge** into one next turn instead of last-wins replacement. The #403 coalescing kept only the latest post-ESC message, so a real instruction followed by a "." liveness poke silently dropped the instruction — the "it didn't send" report, round 2. All post-ESC messages now join (newline-separated, attachments concatenated) and run as exactly one next turn; the no-backlog invariant and the pre-ESC queue-preservation contract are unchanged.
+
+### Fixed
+- merge post-ESC type-ahead instead of last-wins so soft-stop never drops a typed message (#467) (064ea20)
+
 ## [5.25.3] - 2026-07-07
 
 ### Fixed
