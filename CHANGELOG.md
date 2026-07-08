@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.25.7] - 2026-07-08
+
+### Fixed
+- surface capped/truncated partials to the parent instead of silent success (#461) (9cfddd0)
+
+### Changed
+- negative coverage for flag-like/path-traversal base refs (#398) (#458) (badf06f)
+
 ## [5.25.6] - 2026-07-08
 
 ### Fixed
