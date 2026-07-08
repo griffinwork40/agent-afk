@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.25.8] - 2026-07-08
+
+### Changed
+- generalize o-series predicate to reasoning-model contract (#463) (fad5e64)
+
 ## [5.25.7] - 2026-07-08
 
 ### Fixed
