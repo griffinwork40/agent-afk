@@ -23,6 +23,10 @@ import type { SkillExecutionContext } from '../../index.js';
 import { SubagentManager } from '../../../agent/subagent.js';
 import type { SubagentHandle } from '../../../agent/subagent/handle.js';
 import { runWave } from '../../../agent/subagent/wave.js';
+import {
+  settleWithConcurrencyLimit,
+  DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS,
+} from '../../../agent/concurrency-pool.js';
 import { describeFailure } from '../../../agent/subagent/result.js';
 import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
 import type { CanUseTool } from '../../../agent/types/sdk-types.js';
@@ -628,21 +632,48 @@ export async function handler(
     };
   }
 
-  const verificationPromises = hypotheses_to_test.map((hypothesis) =>
-    testHypothesisInWorktree(
-      hypothesis,
-      reproduceCommand,
-      parsedInput.repoPath,
-      parentSessionId,
-      verifyPrompt,
-      manager,
-      skillCallId,
-      baseline,
-      subagentModel,
-    ),
+  // Invariant: every subagent fan-out site drains the shared bounded pool, so
+  // no single site can storm memory / the 429 ceiling with unbounded parallel
+  // forks. This verifier wave previously used a raw `Promise.all` — the one
+  // fan-out that bypassed the pool the research wave above (runWave) already
+  // uses. Each verifier forks a full AgentSession that runs tests in an
+  // isolated worktree (the heaviest lane here), so route it through
+  // settleWithConcurrencyLimit too. `testHypothesisInWorktree` never throws
+  // (its try/catch/finally converts every failure into a VerificationResult),
+  // so in practice every settled entry is 'fulfilled'; the 'rejected' arm is a
+  // defensive fallback that preserves array shape + order for the winner
+  // selection below. (Cap is the shared default; per-wave tuning of
+  // concurrency/timeout is a separate cost-budget change, not this one.)
+  const settledVerifications = await settleWithConcurrencyLimit(
+    hypotheses_to_test,
+    DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS,
+    (hypothesis) =>
+      testHypothesisInWorktree(
+        hypothesis,
+        reproduceCommand,
+        parsedInput.repoPath,
+        parentSessionId,
+        verifyPrompt,
+        manager,
+        skillCallId,
+        baseline,
+        subagentModel,
+      ),
   );
-
-  const verificationResults = await Promise.all(verificationPromises);
+  const verificationResults: VerificationResult[] = settledVerifications.map(
+    (settled, i) =>
+      settled.status === 'fulfilled'
+        ? settled.value
+        : {
+            hypothesis_id: hypotheses_to_test[i]!.id,
+            predicted_pass: false,
+            regressions: [],
+            confidence: 0,
+            verification_log: `Verification worker rejected: ${
+              settled.reason instanceof Error ? settled.reason.message : String(settled.reason)
+            }`,
+          },
+  );
 
   // Phase 5: Select winner. Among hypotheses whose predicted_pass is true with
   // no regressions, take the highest-confidence one (tiebreak); fall back
