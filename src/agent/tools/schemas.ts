@@ -18,7 +18,11 @@ export const bashTool: AnthropicToolDef = {
     'Execute a shell command and return its stdout and stderr. ' +
     'Use for running programs, installing packages, git operations, and any task that requires a shell. ' +
     'Commands run in the user\'s default shell. Long-running commands should use timeout_ms. ' +
-    'Output is capped at ~100KB; excess is truncated with a notice.',
+    'Output is capped at ~100KB; excess is truncated with a notice. ' +
+    'For reading or writing files — especially anything sensitive — prefer the typed file tools ' +
+    '(read_file, write_file, edit_file): they support per-call user approval, and interpreter ' +
+    'one-liners (python -c, node -e, sh -c, ...) that reference credential paths (SSH keys, cloud ' +
+    'credentials, /etc/shadow) are blocked by the path-approval policy on interactive surfaces.',
   input_schema: {
     type: 'object',
     properties: {
@@ -130,7 +134,8 @@ export const globTool: AnthropicToolDef = {
   description:
     'Find files matching a glob pattern. Returns matching file paths, capped at 500 results. ' +
     'Use for discovering files before reading them. Patterns follow standard glob syntax ' +
-    '(e.g., "src/**/*.ts", "*.json").',
+    '(e.g., "src/**/*.ts", "*.json"). Skips node_modules/.git/.hg/.svn by default; ' +
+    'name such a directory literally in the pattern (e.g. "node_modules/**/*.js") to search it.',
   input_schema: {
     type: 'object',
     properties: {
@@ -314,9 +319,11 @@ export const agentTool: AnthropicToolDef = {
     'Foreground vs. background: by default (mode="foreground") this tool waits ' +
     'for the subagent to finish and returns its final message. Pass mode="background" ' +
     'to fire-and-forget — the tool returns a jobId immediately so you can keep ' +
-    'working in the same turn. Background results are NOT auto-injected; retrieve ' +
-    'them with the `/bgsub:join <jobId>` slash command (user surface) or by asking ' +
-    'the user to join. Use background mode for long investigations the user does not ' +
+    'working in the same turn. When a background job finishes, its result is ' +
+    'delivered automatically into your context with the next user message, wrapped ' +
+    'in a <background-subagent-result> block; you do not need to poll or join. ' +
+    'The `/bgsub:join <jobId>` slash command remains available for manual replay. ' +
+    'Use background mode for long investigations the user does not ' +
     'need to wait on; use foreground for anything whose result you need to reason ' +
     'about in the same turn.\n\n' +
     'Do not use this tool for: trivial one-file edits, conversational answers, ' +
@@ -339,7 +346,23 @@ export const agentTool: AnthropicToolDef = {
       },
       max_turns: {
         type: 'number',
-        description: 'Maximum conversation turns (default 10, max 50).',
+        description:
+          'Maximum conversation turns. Default 0 = unlimited (no ceiling) — ' +
+          'omit to let the subagent run to natural completion. Set a positive ' +
+          'integer to cap turns. A named agent (agent_type) may also set its own ' +
+          'default via `maxTurns` frontmatter; an explicit value here overrides it.',
+      },
+      max_tool_use_iterations: {
+        type: 'number',
+        description:
+          "Maximum tool-use rounds within the subagent's single turn — the " +
+          'anti-hang ceiling on a tool-call loop. Default 0 = unlimited. Set a ' +
+          'positive integer to bound a runaway loop. When the cap is hit the ' +
+          'subagent gets one final tools-stripped round to summarize what it ' +
+          'gathered (no silent mid-loop stop). A named agent may set its own ' +
+          'default via `maxToolUseIterations` frontmatter (explicit value here wins). ' +
+          'Honored uniformly by both the anthropic-direct and openai-compatible ' +
+          'providers.',
       },
       id_prefix: {
         type: 'string',
@@ -351,9 +374,10 @@ export const agentTool: AnthropicToolDef = {
         description:
           'Execution mode. "foreground" (default) waits for the subagent to finish ' +
           'and returns its output. "background" returns a jobId immediately and ' +
-          'leaves the subagent running detached — its result must be joined ' +
-          'explicitly via /bgsub:join and is never auto-injected into this ' +
-          'context. Background jobs are cancelled when the parent session ends.',
+          'leaves the subagent running detached — its result is auto-delivered ' +
+          'into this context with the next user message when it settles ' +
+          '(/bgsub:join remains available for manual replay). Background jobs ' +
+          'are cancelled when the parent session ends.',
       },
       cwd: {
         type: 'string',
@@ -363,7 +387,9 @@ export const agentTool: AnthropicToolDef = {
           'worktree). When provided, the child\'s file/shell tools (bash, grep, ' +
           'glob, read_file, write_file, edit_file) anchor at this path instead. ' +
           'Use to dispatch a subagent into a pre-existing git worktree you ' +
-          'created with `bash: git worktree add <path>` so the subagent can ' +
+          'created with the `worktree` tool (action "create" — preferred over ' +
+          'raw `git worktree add`, which produces unmanaged ghost worktrees ' +
+          'the background sweep may reap) so the subagent can ' +
           'work in isolation from the parent. Must be absolute (no relative ' +
           'paths) and must not contain `..` segments. Existence is not checked ' +
           'at dispatch time — a non-existent path surfaces as an error on the ' +
@@ -588,6 +614,70 @@ export const cancelScheduleTool: AnthropicToolDef = {
   },
 };
 
+export const worktreeTool: AnthropicToolDef = {
+  name: 'worktree',
+  category: 'other',
+  concurrencySafe: false,
+  riskClass: 'caution',
+  description:
+    'Manage afk-managed git worktrees under `<repoRoot>/.afk-worktrees/`. This is the sanctioned ' +
+    'lifecycle for agent-created worktrees — prefer it over raw `git worktree` bash commands, because ' +
+    'it writes the `.afk-worktree-meta.json` the background sweep engine uses to know a worktree is ' +
+    'owned and alive. Worktrees created via bare `bash: git worktree add` have no meta and are ' +
+    'eventually reaped as ghosts (or leak forever if created outside `.afk-worktrees/`).\n\n' +
+    'Actions:\n' +
+    '- `create` — new worktree + branch under `.afk-worktrees/<name>` with proper meta. `base` picks ' +
+    'the start ref (default HEAD). Returns { path, branch, base }. Pass the returned path as `cwd` ' +
+    'when dispatching subagents into it.\n' +
+    '- `keep` — lock the worktree (`git worktree lock`) so the sweep engine NEVER removes it, ' +
+    'regardless of age or cleanliness. Use this to save a worktree holding work in progress that ' +
+    'must survive across sessions. Provide a `reason` naming why.\n' +
+    '- `release` — unlock a previously kept worktree, returning it to normal sweep lifecycle.\n' +
+    '- `list` — dry-run sweep report: every afk-managed worktree with its verdict ' +
+    '(active | empty | stale-clean | stale-dirty | locked | dead-owner | orphaned-*), owner, and age ' +
+    'in days. Verdicts empty/dead-owner/orphaned-* are removal candidates on the next sweep.\n' +
+    '- `remove` — remove a worktree checkout you no longer need (branch ref is always preserved). ' +
+    'Refuses dirty trees, locked trees, and trees with commits ahead of base unless `force: true`. ' +
+    'Never removes the main worktree or paths outside `.afk-worktrees/`.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      action: {
+        type: 'string',
+        enum: ['create', 'keep', 'release', 'list', 'remove'],
+        description: 'The lifecycle operation to perform.',
+      },
+      name: {
+        type: 'string',
+        description:
+          'create only: worktree slug (kebab-case; sanitized). Becomes `.afk-worktrees/<name>` and ' +
+          'branch `afk/<name>` (prefix configurable via AFK_WORKTREE_BRANCH_PREFIX).',
+      },
+      base: {
+        type: 'string',
+        description: 'create only: git ref to base the new branch on. Default: HEAD.',
+      },
+      path: {
+        type: 'string',
+        description:
+          'keep/release/remove: the worktree to operate on. Absolute path, or a bare slug resolved ' +
+          'against `.afk-worktrees/`.',
+      },
+      reason: {
+        type: 'string',
+        description: 'keep only: why this worktree must survive (stored as the git lock reason).',
+      },
+      force: {
+        type: 'boolean',
+        description:
+          'remove only: also remove when dirty or with commits ahead of base. Default false. ' +
+          'The branch ref is preserved either way.',
+      },
+    },
+    required: ['action'],
+  },
+};
+
 export const terminalFontSizeTool: AnthropicToolDef = {
   name: 'terminal_font_size',
   category: 'write',
@@ -697,7 +787,9 @@ export const configSetTool: AnthropicToolDef = {
       value: {
         description:
           'Required for action "set". A string, number, or boolean (config keys also accept arrays where ' +
-          'the schema expects one, e.g. telegram.notify.targets). Coerced to the key\'s declared type.',
+          'the schema expects one, e.g. telegram.notify.targets). Coerced to the key\'s declared type. ' +
+          'Model-slot keys (models.local/small/medium/large) also accept a { id, provider, name } object; ' +
+          'baseUrl/apiKey are human-gated — set them per-tier via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here.',
       },
     },
     required: ['target', 'key'],
@@ -1088,6 +1180,7 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   listSchedulesTool,
   getScheduleHistoryTool,
   cancelScheduleTool,
+  worktreeTool,
   terminalFontSizeTool,
   configGetTool,
   configSetTool,

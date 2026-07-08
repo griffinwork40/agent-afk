@@ -13,6 +13,7 @@
 
 import { getSkill } from '../../skills/index.js';
 import { SubagentManager } from '../subagent.js';
+import { annotateIfIncomplete } from '../subagent/result.js';
 import type { AgentModelInput, IAgentSession } from '../types.js';
 import type { ModelProvider } from '../provider.js';
 import type { ToolCall, ToolResult } from './types.js';
@@ -85,6 +86,14 @@ export interface SkillExecutorContext {
    * instead of falling back to api.anthropic.com.
    */
   baseUrl?: string;
+  /**
+   * OpenAI-compatible endpoint forwarded to child skill subagents, so an
+   * OpenAI-routed child built via the restricted/depth-cap provider builders
+   * (buildReadOnlyReconProvider / buildSkillRestrictedProvider) points at the
+   * configured endpoint instead of defaulting to api.openai.com. Sourced from
+   * `cliConfig.openaiBaseUrl` (env `AFK_OPENAI_BASE_URL`); the OpenAI peer of `baseUrl`.
+   */
+  openaiBaseUrl?: string;
   pluginConfigs?: SdkPluginConfig[];
   depth?: number;
   maxDepth?: number;
@@ -104,7 +113,7 @@ export interface SkillExecutorContext {
    * skill child can in turn dispatch sibling skills. Mirrors
    * {@link SubagentExecutorContext.childSkillExecutorFactory}.
    */
-  childSkillExecutorFactory?: (depth: number, maxDepth: number, signal: AbortSignal) => SkillExecutor;
+  childSkillExecutorFactory?: (depth: number, maxDepth: number, signal: AbortSignal, inheritedCwd?: string) => SkillExecutor;
   /**
    * Witness-layer trace writer. When provided, the per-call
    * {@link SubagentManager} that wraps each skill fork is constructed with
@@ -155,6 +164,14 @@ export interface SkillExecutorContext {
    * Optional: surfaces without a worktree (telegram) leave this unset.
    */
   cwd?: string;
+  /**
+   * Session-wide named-agent registry, forwarded to the child
+   * {@link SubagentExecutor}s this executor constructs so skill-forked
+   * children (the primary orchestrators — review waves, shadow verifiers)
+   * can dispatch `agent_type`-named sub-agents. Same reference at every
+   * depth; see {@link SubagentExecutorContext.agentRegistry}.
+   */
+  agentRegistry?: import('../agents/index.js').AgentRegistry;
 }
 
 interface SkillInput {
@@ -247,9 +264,22 @@ export class SkillExecutor {
     this.currentCwd = ctx.cwd;
   }
 
-  /** Re-anchor the cwd used for skill-forked sub-agents after a cwd change. */
+  /**
+   * Re-anchor the cwd used for skill-forked sub-agents after a cwd change.
+   *
+   * Invariant: also drops the lazily-populated `pluginBodies` cache. That
+   * cache is keyed implicitly by whatever `currentCwd` was at first
+   * population (see `getPluginSkillBody()`); without clearing it here, a
+   * plugin skill dispatched after this cwd change would keep resolving the
+   * OLD cwd's plugin bodies (returning stale content for a same-named
+   * skill, or a false "not found" for a skill that only exists at the new
+   * cwd) even though `currentCwd` itself is correctly updated below. The
+   * next `getPluginSkillBody()` call re-populates via a fresh
+   * `discoverPluginSkillBodies()` scan against the new `currentCwd`.
+   */
   setCwd(cwd: string): void {
     this.currentCwd = cwd;
+    this.pluginBodies = null;
   }
 
   /**
@@ -312,10 +342,13 @@ export class SkillExecutor {
 
     // 2. Try plugin skills (SKILL.md body). Default is in-context LOAD; a
     //    plugin skill forks a subagent ONLY when its frontmatter explicitly
-    //    declares `context: fork`. (History: the default was fork until
-    //    2026-06; flipped to load so authored skills act in-context by
-    //    default. Isolation-critical bundled skills are pinned to
-    //    `context: fork`. See docs/skill-load-mode.md.)
+    //    declares `context: fork`. The SKILL.md `context:` field is the single
+    //    source of truth — there is no name-keyed override, so a `context: load`
+    //    or absent field always loads, even for a copy that shadows a bundled
+    //    skill. (History: the default was fork until 2026-06; flipped to load
+    //    so authored skills act in-context by default. Isolation-critical
+    //    bundled skills are pinned to `context: fork` in their own SKILL.md.
+    //    See docs/skill-load-mode.md.)
     const pluginSkill = this.getPluginSkillBody(parsed.name);
     if (pluginSkill) {
       if (pluginSkill.context === 'fork') {
@@ -339,8 +372,15 @@ export class SkillExecutor {
       }
       // Default: in-context LOAD (2026-06 load-by-default flip). No readOnly —
       // loaded skills execute in the caller's context, not a restrictable child.
+      // Expand PLUGIN_ROOT so shell commands in the body resolve to the plugin
+      // dir. Handles `$PLUGIN_ROOT`, `${PLUGIN_ROOT}`, and the Claude-Code
+      // portability idiom `${PLUGIN_ROOT:-<default>}` (default may hold one
+      // nested `${...}`, e.g. `${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}`) — in AFK
+      // PLUGIN_ROOT is always known so the whole reference collapses to
+      // pluginPath. (Fork skills instead get PLUGIN_ROOT as a shell env var via
+      // executePluginSkill, so the shell expands the `:-` fallback natively.)
       const bodyWithRoot = pluginSkill.body.replace(
-        /\$\{?PLUGIN_ROOT\}?/g,
+        /\$\{PLUGIN_ROOT(?::-(?:[^{}]|\$\{[^{}]*\})*)?\}|\$PLUGIN_ROOT\b/g,
         () => pluginSkill.pluginPath,
       );
       return this.executeLoadedPluginSkill(
@@ -351,8 +391,13 @@ export class SkillExecutor {
       );
     }
 
-    // 3. Not found — return available skills list.
-    const entries = collectSkillEntries(this.ctx.pluginConfigs);
+    // 3. Not found — return available skills list. Resolve project skills
+    // against the session cwd (worktree / daemon-task / Telegram-chat dir),
+    // not the host process cwd — mirrors the manifest build in the provider.
+    const entries = collectSkillEntries(
+      this.ctx.pluginConfigs,
+      this.currentCwd !== undefined ? { cwd: this.currentCwd } : undefined,
+    );
     const available = entries.map((e) => e.name).join(', ');
     return {
       content: `Skill "${parsed.name}" not found. Available skills: ${available || '(none)'}`,
@@ -564,11 +609,16 @@ export class SkillExecutor {
         // is a safe read-only superset and — crucially — the mutating-bash gate
         // is preserved. This closes the cap-path readOnlyBash fail-open for a
         // `read-only: true` + `tools: bash` skill forked at the depth cap.
-        childConfig.provider = buildReadOnlyReconProvider(childConfig.model);
+        childConfig.provider = buildReadOnlyReconProvider(childConfig.model, this.ctx.openaiBaseUrl);
       } else if (effectiveAllowed !== undefined) {
         // Non-readOnly tools: allowlist at the cap. Restrict to the declared
         // tools (no readOnlyBash — the skill did not declare read-only).
-        childConfig.provider = buildSkillRestrictedProvider(effectiveAllowed, childConfig.model);
+        childConfig.provider = buildSkillRestrictedProvider(
+          effectiveAllowed,
+          childConfig.model,
+          effectiveReadOnlyBash,
+          this.ctx.openaiBaseUrl,
+        );
       }
       return { childConfig, childManager: undefined };
     }
@@ -589,6 +639,13 @@ export class SkillExecutor {
         model: childConfig.model,
         apiKey: this.ctx.apiKey,
         ...(this.ctx.baseUrl !== undefined ? { baseUrl: this.ctx.baseUrl } : {}),
+        // OpenAI endpoint peer of `baseUrl`. Without it, when this skill-forked
+        // grandchild SubagentExecutor dispatches an `agent` at the depth cap,
+        // its restricted-provider fallback (subagent-executor.ts
+        // buildSkillRestrictedProvider, which reads `defaultConfig.openaiBaseUrl`)
+        // gets no baseURL and an OpenAI-routed great-grandchild POSTs to
+        // api.openai.com. Mirrors the CLI SubagentExecutor wiring (chat/daemon/bootstrap).
+        ...(this.ctx.openaiBaseUrl !== undefined ? { openaiBaseUrl: this.ctx.openaiBaseUrl } : {}),
       } as AgentConfig,
       // Inherit origin from the skill executor; `depth + 1` makes grandchild
       // `agent`-dispatch rows carry actor:'subagent'.
@@ -607,6 +664,10 @@ export class SkillExecutor {
       // Forward cwd so the grandchild executor's own childManager (when it
       // recursively constructs one for great-grandchild forks) is also cwd-anchored.
       ...(this.currentCwd !== undefined ? { cwd: this.currentCwd } : {}),
+      // Witness layer: forward the trace writer so the grandchild executor's
+      // own childManager (depth-2+ `agent` forks under this skill child) emits
+      // subagent_lifecycle events into the session trace. Mirrors cwd above.
+      ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
       // Invariant: background dispatch requires the registry to be present
       // in every SubagentExecutor in the chain — root → skill-forked child →
       // skill-forked grandchild. Without forwarding, a plugin skill's
@@ -624,9 +685,15 @@ export class SkillExecutor {
       // allowedTools/readOnlyBash and falls back to CHILD_ALLOWED_TOOLS.
       ...(effectiveAllowed !== undefined ? { allowedTools: effectiveAllowed } : {}),
       ...(effectiveReadOnlyBash ? { readOnlyBash: true as const } : {}),
+      // Named-agent registry: the skill-forked child is the primary
+      // orchestrator shape (review waves, verifiers) — it must be able to
+      // dispatch `agent_type`-named sub-agents. The child's model becomes
+      // the grandchildren's `inherit` anchor.
+      ...(this.ctx.agentRegistry !== undefined ? { agentRegistry: this.ctx.agentRegistry } : {}),
+      ...(childConfig.model !== undefined ? { parentModel: childConfig.model } : {}),
     });
     const childSkillExecutor = this.ctx.childSkillExecutorFactory
-      ? this.ctx.childSkillExecutorFactory(depth + 1, maxDepth, signal)
+      ? this.ctx.childSkillExecutorFactory(depth + 1, maxDepth, signal, this.currentCwd)
       : undefined;
     // Pass `model` so the factory routes between AnthropicDirect /
     // OpenAICompatible per `providerForModel(model)`. Without this, every
@@ -735,75 +802,20 @@ export class SkillExecutor {
       readOnly,
     );
 
-    // Invariant: `handle` is declared OUTSIDE the try so finally can call
-    // `handle.teardown()` — the only path that runs `session.close()` →
-    // `dispatchSessionEndOnce()` → `emitClosure()` + `sealTraceWriter()`.
-    // `manager.teardownAll()` is NOT sufficient: per subagent.ts:412-414
-    // (its own JSDoc), `teardownAll()` iterates `this.active.values()` but
-    // a handle that completed a run has already self-removed via the
-    // `onTerminal` closure (subagent.ts:340-343). Without an explicit
-    // `handle.teardown()` the child's traceWriter never seals, blinding
-    // every closure-event-dependent improve detector.
-    // Mirrors the pattern in subagent-executor.ts:321,533.
-    let handle: Awaited<ReturnType<typeof manager.forkSubagent>> | undefined;
-    try {
-      // `parentId: call.id` anchors the synthesized `Agent(<label>)` entry as
-      // a child of THIS skill's tool-lane entry rather than at root. Mirrors
-      // `ComposeExecutor` (see compose-executor.ts:227-232). Path 2 of
-      // `StreamRenderer.process()`'s parentId resolver fires because
-      // `toolLane.hasEntry(call.id)` is true — the parent already registered
-      // the skill entry when it processed the `tool_use_detail` chunk before
-      // dispatching this executor. Paired with `'skill'` in `NESTING_TOOLS`
-      // (tool-category.ts) so the renderer recurses into the children block.
-      handle = await manager.forkSubagent({
-        parent: this.ctx.parentSession,
-        config: childConfig,
-        idPrefix: `skill-fork-${skill.name}`,
-        parentId: call.id,
-        agentType: skill.name,
-      });
-
-      // Invariant: name the skill explicitly. A bare "Run the skill." is
-      // ambiguous — combined with the injected skill manifest and the
-      // memory-search-on-turn-1 guidance, the sub-agent can resolve the
-      // ambiguity by asking the operator "which skill?" instead of executing
-      // its own SKILL.md body. Naming the skill removes that ambiguity.
-      const userMessage =
-        args && args.length > 0
-          ? args
-          : `Run the ${skill.name} skill now, following the instructions in your system prompt.`;
-      const result = await handle.runToResult(userMessage);
-
-      if (result.status === 'succeeded' && result.message) {
-        return { content: result.message.content };
-      }
-
-      // When the subagent was cancelled mid-flight but produced text before
-      // cancellation, surface the partial output to the model with a clear
-      // marker rather than discarding it. The model can decide what to do.
-      if (
-        result.status === 'cancelled' &&
-        typeof result.partialOutput === 'string' &&
-        result.partialOutput.length > 0
-      ) {
-        const marker = '[skill cancelled mid-flight — partial output preserved below]';
-        return { content: `${marker}\n\n${result.partialOutput}` };
-      }
-
-      const errorMessage = result.error?.message ?? 'Forked skill failed with no output';
-      return { content: errorMessage, isError: true };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return { content: `Forked skill execution error: ${message}`, isError: true };
-    } finally {
-      // Order: per-handle teardown (seals child trace) → child manager (any
-      // grandchildren) → outer manager (any siblings that never ran).
-      // Guard against `forkSubagent` having thrown before assignment —
-      // see subagent.ts:316-320 for the construction-failure throw path.
-      if (handle) await handle.teardown().catch(debugLog);
-      await childManager?.teardownAll();
-      await manager.teardownAll();
-    }
+    // Fork → run → teardown skeleton is shared with executePluginSkill via
+    // runForkedSkillToResult (the setup above — model/credential resolution,
+    // buildForkedChildConfig — is what differs between the two paths).
+    return this.runForkedSkillToResult({
+      manager,
+      childManager,
+      childConfig,
+      label: skill.name,
+      idPrefix: `skill-fork-${skill.name}`,
+      parentId: call.id,
+      args,
+      noOutputError: 'Forked skill failed with no output',
+      errorPrefix: 'Forked skill execution error',
+    });
   }
 
   /**
@@ -1048,60 +1060,133 @@ export class SkillExecutor {
       allowedTools,
     );
 
-    // Invariant: same trace-sealing rule as executeForkedRegistrySkill above.
-    // `handle.teardown()` is the only path to `session.close()` → closure
-    // event + `session_sealed`. `manager.teardownAll()` misses completed
-    // handles per subagent.ts:412-414.
+    // Fork → run → teardown skeleton is shared with executeForkedRegistrySkill
+    // via runForkedSkillToResult (the setup above — model/credential
+    // resolution, PLUGIN_ROOT + $ARGUMENT substitution — is plugin-specific).
+    return this.runForkedSkillToResult({
+      manager,
+      childManager,
+      childConfig,
+      label: skillName,
+      idPrefix: `skill-${skillName}`,
+      parentId: call.id,
+      args,
+      noOutputError: 'Plugin skill failed with no output',
+      errorPrefix: 'Plugin skill execution error',
+    });
+  }
+
+  /**
+   * Shared fork → run → teardown driver for the two forked-skill dispatch
+   * paths (executeForkedRegistrySkill + executePluginSkill). Their SETUP
+   * differs (model/credential resolution, buildForkedChildConfig arity, plugin
+   * PLUGIN_ROOT + $ARGUMENT substitution) and stays per-caller; the identical
+   * run/teardown skeleton lives here so it has one source of truth.
+   *
+   * Invariant: `handle` is declared OUTSIDE the try so the finally can call
+   * `handle.teardown()` — the only path that runs `session.close()` →
+   * `dispatchSessionEndOnce()` → `emitClosure()` + `sealTraceWriter()`.
+   * `manager.teardownAll()` alone is NOT sufficient: a handle that completed a
+   * run has already self-removed from `active` (subagent.ts:340-343,412-414),
+   * so without an explicit `handle.teardown()` the child's traceWriter never
+   * seals — blinding every closure-event-dependent improve detector.
+   *
+   * Invariant: in-turn SubagentStop delivery. SubagentStop fires from
+   * `handle.teardown()` in the finally, before this resolves, so the stop
+   * hook's injectContext (e.g. the shadow-verify nudge) rides THIS skill's
+   * tool_result in-turn instead of the deferred queue. The completion
+   * ToolResult is hoisted into `toolResult` and the note appended after
+   * teardown. Exactly-once: `deferInjectContextToCaller` suppresses the queue
+   * push for this stop.
+   */
+  private async runForkedSkillToResult(params: {
+    manager: SubagentManager;
+    childManager: SubagentManager | undefined;
+    childConfig: AgentConfig;
+    label: string;
+    idPrefix: string;
+    parentId: string;
+    args: string | undefined;
+    noOutputError: string;
+    errorPrefix: string;
+  }): Promise<ToolResult> {
+    const {
+      manager,
+      childManager,
+      childConfig,
+      label,
+      idPrefix,
+      parentId,
+      args,
+      noOutputError,
+      errorPrefix,
+    } = params;
     let handle: Awaited<ReturnType<typeof manager.forkSubagent>> | undefined;
+    let toolResult: ToolResult | undefined;
     try {
-      // `parentId: call.id` anchors the synthesized `Agent(<label>)` entry as
-      // a child of THIS skill's tool-lane entry rather than at root. Mirrors
-      // `ComposeExecutor` (see compose-executor.ts:227-232). Path 2 of
-      // `StreamRenderer.process()`'s parentId resolver fires because
-      // `toolLane.hasEntry(call.id)` is true — the parent already registered
-      // the skill entry when it processed the `tool_use_detail` chunk before
-      // dispatching this executor. Paired with `'skill'` in `NESTING_TOOLS`
-      // (tool-category.ts) so the renderer recurses into the children block.
+      // `parentId` (the skill's call.id) anchors the synthesized `Agent(<label>)`
+      // entry as a child of THIS skill's tool-lane entry rather than at root.
+      // Mirrors `ComposeExecutor` (compose-executor.ts:227-232); paired with
+      // `'skill'` in NESTING_TOOLS so the renderer recurses into the children.
       handle = await manager.forkSubagent({
         parent: this.ctx.parentSession,
         config: childConfig,
-        idPrefix: `skill-${skillName}`,
-        parentId: call.id,
-        agentType: skillName,
+        idPrefix,
+        parentId,
+        agentType: label,
       });
 
-      // Invariant: name the skill explicitly. See executeForkedRegistrySkill —
-      // a bare "Run the skill." lets the sub-agent ask the operator "which
-      // skill?" instead of executing its own SKILL.md body.
+      // Invariant: name the skill explicitly. A bare "Run the skill." is
+      // ambiguous — the sub-agent could ask the operator "which skill?" instead
+      // of executing its own SKILL.md body. Naming it removes that ambiguity.
       const userMessage =
         args && args.length > 0
           ? args
-          : `Run the ${skillName} skill now, following the instructions in your system prompt.`;
+          : `Run the ${label} skill now, following the instructions in your system prompt.`;
       const result = await handle.runToResult(userMessage);
 
+      // Assign (don't return) so the finally can append the in-turn
+      // SubagentStop injectContext after teardown.
       if (result.status === 'succeeded' && result.message) {
-        return { content: result.message.content };
+        // A `succeeded` result can still be an incomplete partial (capped or
+        // stream-truncated). annotateIfIncomplete prepends a parent-visible
+        // marker in that case and is a no-op for clean completions.
+        toolResult = {
+          content: annotateIfIncomplete(result.message.content, result.stopReason),
+        };
+        return toolResult;
       }
 
-      // When the subagent was cancelled mid-flight but produced text before
-      // cancellation, surface the partial output to the model with a clear
-      // marker rather than discarding it. The model can decide what to do.
+      // Cancelled mid-flight but produced text: surface the partial output with
+      // a clear marker rather than discarding it.
       if (
         result.status === 'cancelled' &&
         typeof result.partialOutput === 'string' &&
         result.partialOutput.length > 0
       ) {
         const marker = '[skill cancelled mid-flight — partial output preserved below]';
-        return { content: `${marker}\n\n${result.partialOutput}` };
+        toolResult = { content: `${marker}\n\n${result.partialOutput}` };
+        return toolResult;
       }
 
-      const errorMessage = result.error?.message ?? 'Plugin skill failed with no output';
-      return { content: errorMessage, isError: true };
+      const errorMessage = result.error?.message ?? noOutputError;
+      toolResult = { content: errorMessage, isError: true };
+      return toolResult;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return { content: `Plugin skill execution error: ${message}`, isError: true };
+      return { content: `${errorPrefix}: ${message}`, isError: true };
     } finally {
-      if (handle) await handle.teardown().catch(debugLog);
+      // Order: per-handle teardown (seals child trace) → child manager (any
+      // grandchildren) → outer manager (any siblings that never ran). Guard
+      // against `forkSubagent` throwing before assignment (subagent.ts:316-320).
+      if (handle) await handle.teardown({ deferInjectContextToCaller: true }).catch(debugLog);
+      // In-turn append: only when this run produced a completion ToolResult.
+      // The catch path leaves toolResult unset — nothing to append to, note
+      // dropped for that stop by design (the error string is the signal).
+      const injectContext = handle?.getLastStopInjectContext?.();
+      if (toolResult !== undefined && injectContext !== undefined && injectContext.length > 0) {
+        toolResult.content = `${toolResult.content}\n\n${injectContext}`;
+      }
       await childManager?.teardownAll();
       await manager.teardownAll();
     }
@@ -1109,7 +1194,10 @@ export class SkillExecutor {
 
   private getPluginSkillBody(name: string): PluginSkillBody | undefined {
     if (!this.pluginBodies) {
-      this.pluginBodies = discoverPluginSkillBodies(this.ctx.pluginConfigs);
+      this.pluginBodies = discoverPluginSkillBodies(
+        this.ctx.pluginConfigs,
+        this.currentCwd !== undefined ? { cwd: this.currentCwd } : undefined,
+      );
     }
     return this.pluginBodies.get(name);
   }

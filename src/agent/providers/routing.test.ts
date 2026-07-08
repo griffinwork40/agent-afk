@@ -23,12 +23,17 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { providerForModel, resolveProvider } from './index.js';
-import { createChildProviderFactory } from '../tools/nesting.js';
+import {
+  createChildProviderFactory,
+  createChildSkillExecutorFactory,
+  type ChildProviderFactoryArgs,
+} from '../tools/nesting.js';
 import { AnthropicDirectProvider } from './anthropic-direct/index.js';
 import { OpenAICompatibleProvider } from './openai-compatible/index.js';
 import { getDefaultSubagentModel } from '../../cli/shared-helpers.js';
 import type { SubagentExecutor } from '../tools/subagent-executor.js';
 import type { SkillExecutor } from '../tools/skill-executor.js';
+import type { ModelProvider } from '../provider.js';
 
 describe('providerForModel', () => {
   // Scrub env vars that `providerForModel` now consults internally.
@@ -501,6 +506,84 @@ describe('createChildProviderFactory — child provider routing', () => {
     expect(
       factory({ childExecutor, childSkillExecutor, model: 'gpt-4o' }),
     ).toBeInstanceOf(OpenAICompatibleProvider);
+  });
+});
+
+/**
+ * createChildSkillExecutorFactory's trailing `openaiBaseUrl` positional arg
+ * (nesting.ts) must be threaded onto every nested SkillExecutor's ctx —
+ * `ctx.openaiBaseUrl` is what `buildForkedChildConfig` later forwards into
+ * `buildReadOnlyReconProvider` / `buildSkillRestrictedProvider` (depth-cap
+ * fallback, see nesting.test.ts) and into the grandchild SubagentExecutor's
+ * `defaultConfig` (see skill-executor.test.ts's openaiBaseUrl propagation
+ * test). This closes the gap at the factory→ctx handoff itself, mirroring
+ * nesting.model-fallback.test.ts's coverage of the sibling
+ * `defaultSubagentModel` parameter on the same factory.
+ */
+describe('createChildSkillExecutorFactory — openaiBaseUrl threading', () => {
+  const stubProviderFactory = (_args: ChildProviderFactoryArgs): ModelProvider =>
+    ({}) as ModelProvider;
+
+  it('threads openaiBaseUrl into the constructed SkillExecutor ctx', () => {
+    const factory = createChildSkillExecutorFactory(
+      'gpt-4o', // 1 defaultModel
+      undefined, // 2 apiKey
+      stubProviderFactory, // 3 childProviderFactory
+      undefined, // 4 baseUrl
+      undefined, // 5 traceWriter
+      undefined, // 6 backgroundRegistry
+      undefined, // 7 cwd
+      undefined, // 8 resolveApiKeyForModel
+      'cli', // 9 surface
+      undefined, // 10 defaultSubagentModel
+      undefined, // 11 agentRegistry
+      'http://localhost:8080/v1', // 12 openaiBaseUrl
+    );
+    const skillExecutor = factory(1, 3, new AbortController().signal);
+    expect(
+      (skillExecutor as unknown as { ctx: { openaiBaseUrl?: string } }).ctx.openaiBaseUrl,
+    ).toBe('http://localhost:8080/v1');
+  });
+
+  it('recursively propagates openaiBaseUrl to grandchild SkillExecutors (skill→skill→skill)', () => {
+    const factory = createChildSkillExecutorFactory(
+      'gpt-4o',
+      undefined,
+      stubProviderFactory,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'cli',
+      undefined,
+      undefined,
+      'http://localhost:8080/v1',
+    );
+    const child = factory(1, 3, new AbortController().signal);
+    const recursiveFactory = (
+      child as unknown as {
+        ctx: {
+          childSkillExecutorFactory: (
+            depth: number,
+            maxDepth: number,
+            signal: AbortSignal,
+          ) => SkillExecutor;
+        };
+      }
+    ).ctx.childSkillExecutorFactory;
+    const grandchild = recursiveFactory(2, 3, new AbortController().signal);
+    expect(
+      (grandchild as unknown as { ctx: { openaiBaseUrl?: string } }).ctx.openaiBaseUrl,
+    ).toBe('http://localhost:8080/v1');
+  });
+
+  it('omits openaiBaseUrl when the caller does not supply it (back-compat)', () => {
+    const factory = createChildSkillExecutorFactory('sonnet', undefined, stubProviderFactory);
+    const skillExecutor = factory(1, 3, new AbortController().signal);
+    expect(
+      (skillExecutor as unknown as { ctx: { openaiBaseUrl?: string } }).ctx.openaiBaseUrl,
+    ).toBeUndefined();
   });
 });
 

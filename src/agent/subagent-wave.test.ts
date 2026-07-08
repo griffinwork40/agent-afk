@@ -290,4 +290,105 @@ describe('runWave', () => {
     expect(results[0]?.status).toBe('succeeded');
     expect(events).toHaveLength(1);
   });
+
+  it('bounds in-flight runs to maxConcurrency', async () => {
+    const mgr = new SubagentManager();
+    shared.sessions.length = 0;
+    const handles = await Promise.all(
+      [0, 1, 2, 3, 4].map(() =>
+        mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }),
+      ),
+    );
+
+    // Instrument every mock session's sendMessage to track live concurrency
+    // across the whole wave (each run holds a 30ms window).
+    let live = 0;
+    let peak = 0;
+    for (const s of shared.sessions) {
+      s.sendMessage.mockImplementation(async (content: string): Promise<Message> => {
+        live++;
+        peak = Math.max(peak, live);
+        await new Promise((r) => setTimeout(r, 30));
+        live--;
+        return { role: 'assistant', content: `ok:${content}`, timestamp: new Date() };
+      });
+    }
+
+    const results = await runWave(
+      handles.map((handle, i) => ({ handle, prompt: `p${i}` })),
+      { maxConcurrency: 2 },
+    );
+
+    // All five completed (none dropped) and no more than 2 ran at once.
+    expect(results).toHaveLength(5);
+    expect(results.every((r) => r?.status === 'succeeded')).toBe(true);
+    expect(peak).toBe(2);
+  });
+
+  it('fail-fast skips still-QUEUED peers behind maxConcurrency — no wasted provider call', async () => {
+    const mgr = new SubagentManager();
+    shared.sessions.length = 0;
+    const h0 = await mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } });
+    const h1 = await mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } });
+    const h2 = await mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } });
+
+    // Task 0 fails immediately. With maxConcurrency: 1, tasks 1 and 2 never
+    // start until a worker frees up — they are QUEUED, not running, when
+    // task 0's failure trips fail-fast.
+    shared.sessions[0]!.sendMessage.mockRejectedValueOnce(new Error('immediate-fail'));
+
+    const results = await runWave(
+      [
+        { handle: h0, prompt: 'a' },
+        { handle: h1, prompt: 'b' },
+        { handle: h2, prompt: 'c' },
+      ],
+      { failFast: true, maxConcurrency: 1 },
+    );
+
+    expect(results[0]?.status).toBe('failed');
+    expect(results[1]?.status).toBe('cancelled');
+    expect(results[2]?.status).toBe('cancelled');
+
+    // The fix: queued tasks are skipped entirely, so their mock sendMessage
+    // is never invoked — no provider call was spent on doomed work.
+    expect(shared.sessions[1]!.sendMessage).not.toHaveBeenCalled();
+    expect(shared.sessions[2]!.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('fail-fast skips queued peers while a running peer is still cancelled (maxConcurrency: 2)', async () => {
+    const mgr = new SubagentManager();
+    shared.sessions.length = 0;
+    const handles = await Promise.all(
+      [0, 1, 2, 3].map(() =>
+        mgr.forkSubagent({ parent: { sessionId: 'p' }, config: { model: 'sonnet' } }),
+      ),
+    );
+
+    // With maxConcurrency: 2, tasks 0 and 1 start immediately; tasks 2 and 3
+    // are QUEUED. Task 0 fails fast while task 1 is still running slowly.
+    shared.sessions[0]!.sendMessage.mockRejectedValueOnce(new Error('fast-fail'));
+    shared.sessions[1]!.state.replyDelayMs = 200;
+
+    const start = Date.now();
+    const results = await runWave(
+      handles.map((handle, i) => ({ handle, prompt: `p${i}` })),
+      { failFast: true, maxConcurrency: 2 },
+    );
+    const elapsed = Date.now() - start;
+
+    expect(results[0]?.status).toBe('failed');
+    expect(results[1]?.status).toBe('cancelled');
+    expect(results[2]?.status).toBe('cancelled');
+    expect(results[3]?.status).toBe('cancelled');
+
+    // Running peer (task 1) was cancelled via interrupt; queued peers (2, 3)
+    // never had a provider call dispatched at all.
+    expect(shared.sessions[1]!.interrupt).toHaveBeenCalled();
+    expect(shared.sessions[2]!.sendMessage).not.toHaveBeenCalled();
+    expect(shared.sessions[3]!.sendMessage).not.toHaveBeenCalled();
+
+    // The wave should finish well under the slow peer's 200ms reply delay.
+    expect(elapsed).toBeLessThan(150);
+  });
 });

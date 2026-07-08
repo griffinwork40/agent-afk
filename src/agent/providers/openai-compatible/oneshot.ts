@@ -18,6 +18,7 @@
 
 import OpenAI from 'openai';
 import { resolveOpenAIAuth } from './auth.js';
+import { isReasoningModel } from '../../model-capabilities.js';
 
 /** Test injection hook — supplants the real `OpenAI` constructor. */
 export type OneShotOpenAIClientFactory = (opts: { apiKey: string; baseURL?: string }) => OpenAI;
@@ -69,11 +70,11 @@ export interface OpenAIOneShotInput {
  * Token-limit field: chat models AND local OpenAI-shim runners (MLX,
  * llama.cpp, vLLM, ollama) accept `max_tokens` — and some shims reject the
  * newer `max_completion_tokens` — so `max_tokens` stays the default. The
- * reasoning o-series (o1/o3/o4…) is the inverse: it rejects `max_tokens` with a
- * 400 and requires `max_completion_tokens`. We switch the field only for those,
- * keyed off the bare model id, so an o-series `AFK_SUGGEST_MODEL` override (or
- * an o-series session model inherited as the suggest model) does not 400 on
- * every keystroke.
+ * reasoning models (o-series ∪ gpt-5.x) are the inverse: they reject
+ * `max_tokens` with a 400 and require `max_completion_tokens`. We switch the
+ * field only for those, keyed off the bare model id, so a reasoning-model
+ * `AFK_SUGGEST_MODEL` override (or a reasoning session model inherited as the
+ * suggest model) does not 400 on every keystroke.
  */
 export async function oneShotChatCompletion(input: OpenAIOneShotInput): Promise<string> {
   const { apiKey, baseURL, model, system, user, maxTokens = 64, signal, clientFactory } = input;
@@ -88,10 +89,11 @@ export async function oneShotChatCompletion(input: OpenAIOneShotInput): Promise<
   const factory = clientFactory ?? oneShotClientFactory;
   const client = factory ? factory(clientOpts) : new OpenAI(clientOpts);
 
-  // o-series reasoning models reject `max_tokens`; everything else (and local
-  // shims) want it. Strip any `provider/` prefix (OpenRouter-style ids) first.
-  const bareModel = model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model;
-  const tokenLimit = /^o[0-9]/.test(bareModel)
+  // Reasoning models (o-series ∪ gpt-5.x) reject `max_tokens` and require
+  // `max_completion_tokens`; everything else (chat models + local shims) wants
+  // `max_tokens`. Classification (incl. `provider/`-prefix strip) is shared —
+  // see `isReasoningModel` in model-capabilities.ts.
+  const tokenLimit = isReasoningModel(model)
     ? { max_completion_tokens: maxTokens }
     : { max_tokens: maxTokens };
 

@@ -16,6 +16,7 @@ import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { appendRoutingDecision } from '../../routing-telemetry.js';
 import { detectTestResult } from './test-runner-detector.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
+import { describeSpawnCwdError, isSpawnEnoent } from '../../../utils/spawn-cwd-error.js';
 
 /**
  * Input shape for the bash tool (validated at runtime).
@@ -328,7 +329,25 @@ export function createBashHandler(
     });
 
     proc.on('error', (err) => {
-      settle({ content: `Failed to execute: ${err.message}`, isError: true });
+      // Spawn ENOENT masquerade: a dead working directory (deleted worktree)
+      // surfaces as `spawn /bin/sh ENOENT` — naming the shell, not the dir.
+      // Translate post-failure via statSync (error path only — no TOCTOU).
+      // When no explicit cwd was passed, spawn inherited the process cwd;
+      // process.cwd() itself throws when that directory has been deleted,
+      // which is the same masquerade — report it as such.
+      const effectiveCwd = context?.resolveBase ?? context?.cwd ?? cwd;
+      let message: string;
+      if (effectiveCwd === undefined && isSpawnEnoent(err)) {
+        try {
+          const inherited = process.cwd();
+          message = describeSpawnCwdError(err, inherited);
+        } catch {
+          message = `working directory does not exist (process cwd deleted — deleted worktree?) — underlying: ${err.message}`;
+        }
+      } else {
+        message = describeSpawnCwdError(err, effectiveCwd);
+      }
+      settle({ content: `Failed to execute: ${message}`, isError: true });
     });
   });
   };

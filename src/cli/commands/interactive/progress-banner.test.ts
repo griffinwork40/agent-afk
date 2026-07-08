@@ -18,11 +18,15 @@ import { describe, it, expect } from 'vitest';
 import chalk from 'chalk';
 import { displayWidth, stripAnsi } from '../../display.js';
 import {
+  deriveProgressActivity,
   formatProgressBanner,
   formatProgressSummary,
   formatSubagentCompletion,
+  emitSubagentCompletion,
 } from './progress-banner.js';
 import type { ProgressEvent } from '../../../agent/types.js';
+import type { CompletionWriter } from './shared.js';
+import type { SubagentCompleteInfo } from '../../../agent/default-hook-registry.js';
 
 // Force color output so ANSI sequences are present in the rendered strings and
 // the ANSI-aware truncation path is exercised (not just plain-text slicing).
@@ -109,6 +113,99 @@ describe('progress-banner — terminal width clamping', () => {
     });
   });
 
+  describe('formatProgressBanner — sanitization (LLM-sourced fields)', () => {
+    it('strips ANSI escapes injected via description', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'evil\x1b[2Jtask' }),
+        Infinity,
+      );
+      // stripAnsi in the assertion would mask the bug — assert on the RAW
+      // string: the injected CSI must not survive into the rendered output.
+      expect(lines[0]!).not.toContain('\x1b[2J');
+      // sanitizeLabel strips the complete CSI sequence (no residual space).
+      expect(stripAnsi(lines[0]!)).toContain('eviltask');
+    });
+
+    it('strips control bytes injected via summary', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'task', summary: 'sum\x07mary\x0d' }),
+        Infinity,
+      );
+      expect(lines[1]!).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
+      expect(stripAnsi(lines[1]!)).toContain('sum mary');
+    });
+
+    it('collapses newlines in the activity clause to a single line', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'task' }),
+        Infinity,
+        'line one\nline two',
+      );
+      expect(lines).toHaveLength(2);
+      expect(lines[1]!).not.toContain('\n');
+      expect(stripAnsi(lines[1]!)).toContain('line one line two');
+    });
+  });
+
+  describe('formatProgressBanner — activity precedence', () => {
+    it('prefers activity over summary on the detail line', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'task', summary: 'round 3: bash ls' }),
+        Infinity,
+        'Now checking the config loader',
+      );
+      expect(lines).toHaveLength(2);
+      expect(stripAnsi(lines[1]!)).toContain('Now checking the config loader');
+      expect(stripAnsi(lines[1]!)).not.toContain('round 3: bash ls');
+    });
+
+    it('falls back to summary when activity is undefined', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'task', summary: 'round 3: bash ls' }),
+        Infinity,
+      );
+      expect(lines).toHaveLength(2);
+      expect(stripAnsi(lines[1]!)).toContain('round 3: bash ls');
+    });
+
+    it('falls back to summary when activity is whitespace-only', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'task', summary: 'round 3: bash ls' }),
+        Infinity,
+        '   ',
+      );
+      expect(stripAnsi(lines[1]!)).toContain('round 3: bash ls');
+    });
+
+    it('renders single-line description form when neither activity nor summary exists', () => {
+      const lines = formatProgressBanner(mkEvent({ description: 'task' }), Infinity);
+      expect(lines).toHaveLength(1);
+    });
+  });
+
+  describe('deriveProgressActivity', () => {
+    it('returns undefined for an empty buffer', () => {
+      expect(deriveProgressActivity('', 80)).toBeUndefined();
+    });
+
+    it('returns undefined for a whitespace-only buffer', () => {
+      expect(deriveProgressActivity('   \n  ', 80)).toBeUndefined();
+    });
+
+    it('extracts the latest in-flight clause after a sentence boundary', () => {
+      const buffer = 'First I read the file. Now checking the dispatcher wiring';
+      expect(deriveProgressActivity(buffer, 120)).toBe('Now checking the dispatcher wiring');
+    });
+
+    it('truncates overlong clauses with an ellipsis', () => {
+      const clause = 'B'.repeat(500);
+      const out = deriveProgressActivity(clause, 60);
+      expect(out).toBeDefined();
+      expect(out!.length).toBeLessThanOrEqual(60 - 10);
+      expect(out).toMatch(/…$/);
+    });
+  });
+
   describe('formatProgressSummary', () => {
     it('clamps the summary line to the provided column width', () => {
       const cols = 60;
@@ -181,6 +278,73 @@ describe('progress-banner — terminal width clamping', () => {
         Infinity,
       );
       expect(stripAnsi(line)).toContain(LONG);
+    });
+  });
+
+  // Regression: the compositor/scrollback overlap on parallel subagent
+  // completion (`compose`/devils-advocate). The SubagentStop hook fires
+  // Channel B (`✓ <node> · <time>`) independently of the parent turn's SDK
+  // events; in the REPL the ToolLane (Channel A) already renders each
+  // foreground subagent, so Channel B must be suppressed WHILE the live
+  // overlay owns the surface — otherwise its uncoordinated commitAbove races
+  // the OverlayComposer and corrupts the compositor's row-accounting (ghost
+  // ◉ markers + swallowed committed lines). Previously UNCOVERED: no test
+  // combined concurrent subagent completions with a live-overlay commit gate.
+  describe('emitSubagentCompletion — turn-scoped suppression gate', () => {
+    function makeWriter(): { writer: CompletionWriter; committed: string[] } {
+      const committed: string[] = [];
+      const writer: CompletionWriter = {
+        fn: (line) => committed.push(line),
+        idleFn: (line) => committed.push(line),
+      };
+      return { writer, committed };
+    }
+    const info = (id: string): SubagentCompleteInfo => ({
+      subagentId: id,
+      status: 'succeeded',
+      durationMs: 28_000,
+      agentType: id,
+    });
+
+    it('emits the completion line when NOT suppressed (between turns / chat)', () => {
+      const { writer, committed } = makeWriter();
+      emitSubagentCompletion(writer, info('da-paranoid'));
+      expect(committed).toHaveLength(1);
+      expect(stripAnsi(committed[0]!)).toContain('da-paranoid');
+    });
+
+    it('drops the completion line when suppressed (live foreground overlay)', () => {
+      const { writer, committed } = makeWriter();
+      writer.suppressSubagentCompletion = true;
+      emitSubagentCompletion(writer, info('da-pragmatist'));
+      expect(committed).toHaveLength(0);
+    });
+
+    it('suppresses every concurrent sibling while the overlay is live (no double-render)', () => {
+      // The screenshot case: 3 parallel critics finishing on independent
+      // schedules. With the overlay live, NONE of the ✓ lines commit — the
+      // ToolLane tree is the sole completion record, so no interleaved
+      // commitAbove perturbs the frame geometry.
+      const { writer, committed } = makeWriter();
+      writer.suppressSubagentCompletion = true;
+      for (const id of ['da-paranoid', 'da-pragmatist', 'da-architect']) {
+        emitSubagentCompletion(writer, info(id));
+      }
+      expect(committed).toHaveLength(0);
+
+      // Once the turn ends and suppression clears, a late (backgrounded)
+      // completion surfaces again — Channel B is only muted, never removed.
+      writer.suppressSubagentCompletion = false;
+      emitSubagentCompletion(writer, info('bg-late'));
+      expect(committed).toHaveLength(1);
+      expect(stripAnsi(committed[0]!)).toContain('bg-late');
+    });
+
+    it('treats an undefined flag as not-suppressed (default behavior preserved)', () => {
+      const { writer, committed } = makeWriter();
+      expect(writer.suppressSubagentCompletion).toBeUndefined();
+      emitSubagentCompletion(writer, info('sa-default'));
+      expect(committed).toHaveLength(1);
     });
   });
 });

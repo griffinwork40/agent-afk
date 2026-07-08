@@ -11,6 +11,284 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.25.8] - 2026-07-08
+
+### Changed
+- generalize o-series predicate to reasoning-model contract (#463) (fad5e64)
+
+## [5.25.7] - 2026-07-08
+
+### Fixed
+- surface capped/truncated partials to the parent instead of silent success (#461) (9cfddd0)
+
+### Changed
+- negative coverage for flag-like/path-traversal base refs (#398) (#458) (badf06f)
+
+## [5.25.6] - 2026-07-08
+
+### Fixed
+- Witness-trace `origin` attribution for forked subagents: `agent`-tool and `compose` child (and grandchild) sessions were made trace-visible in #466 but recorded `origin: "unknown"` instead of the owning surface, because the session `surface` was never threaded into the fork managers (only `traceWriter`/`cwd` were). The REPL/chat/Telegram/daemon root managers, the nested depth-2+ child manager, and the compose executor's manager now carry the surface, so forked children inherit the correct `origin` (`cli`/`telegram`/`daemon`) via `forkSubagent`'s `parentSurface` fill — mirroring the existing `farm.ts` pattern. Follow-up to Codex review on #466. (Skill-forked subagents share the same latent gap and are tracked separately.)
+
+### Fixed
+- thread session surface into fork managers so forked subagents get correct trace origin (#468) (b86fdb5)
+
+## [5.25.5] - 2026-07-08
+
+### Fixed
+- fix wrap overflow + bound and label the diagnose verifier fan-out (#470) (227a99e)
+
+## [5.25.4] - 2026-07-08
+
+### Fixed
+- Messages typed during the ESC soft-stop settle window now **merge** into one next turn instead of last-wins replacement. The #403 coalescing kept only the latest post-ESC message, so a real instruction followed by a "." liveness poke silently dropped the instruction — the "it didn't send" report, round 2. All post-ESC messages now join (newline-separated, attachments concatenated) and run as exactly one next turn; the no-backlog invariant and the pre-ESC queue-preservation contract are unchanged.
+
+### Fixed
+- merge post-ESC type-ahead instead of last-wins so soft-stop never drops a typed message (#467) (064ea20)
+
+## [5.25.3] - 2026-07-07
+
+### Fixed
+- tolerate indented fences in isInOpenCodeFence parity check (#464) (ec31016)
+
+## [5.25.2] - 2026-07-07
+
+### Fixed
+- `agent`-tool and `compose` subagents are now visible in the witness trace (`afk trace show`). Three gaps closed: (1) `forkSubagent` resolves the trace writer as per-fork config → manager-level writer, so the `subagent_lifecycle` started/succeeded/failed/cancelled events and the handle's writer no longer silently drop when inheritance came from the manager; (2) the REPL/chat/Telegram root managers and compose executors now carry the session trace writer; (3) the writer chains through nested child managers (depth ≥ 2 `agent` forks), mirroring the existing `cwd` chain. Previously a raw `agent` dispatch produced zero trace events between `tool_call started` and `completed` — a stuck child was indistinguishable from a never-started one.
+
+### Fixed
+- make agent-tool and compose forks visible in the witness trace (#466)do (a41a7d3)
+
+## [5.25.1] - 2026-07-07
+
+### Fixed
+- Forked subagents no longer hang their parent indefinitely: every fork now gets a bounded wall-clock budget by default — 20 min foreground (`SUBAGENT_DEFAULT_TIMEOUT_MS`), 60 min background (`SUBAGENT_BACKGROUND_TIMEOUT_MS`) — instead of the unbounded session default. On expiry the child's controller aborts (cascading to descendants) and the parent receives a legible timeout error. Explicit `timeoutMs` wins; `0` restores unbounded.
+- Forked subagents now **fail fast on OAuth usage-limit pauses** (`autoResumeOnUsageLimit` defaults to `false` for forks) instead of silently polling for reset — up to 2 h — while the parent looked frozen. The classified usage-limit error surfaces to the parent, which decides whether to retry, reroute, or surface the pause. Callers may opt a child back in with an explicit `autoResumeOnUsageLimit: true`.
+
+### Fixed
+- bound fork wall-clock budget + fail fast on usage-limit pauses (#465) (1516e65)
+- preserve empty-fence <i> label when the safety net strips emphasis (#456) (64ddd04)
+- thread openaiBaseUrl so OpenAI Telegram sessions reach the configured endpoint (#459) (e674621)
+
+### Changed
+- consolidate o-series detection into one predicate (#457) (db71f16)
+
+## [5.25.0] - 2026-07-07
+
+### Added
+- New opt-in `AFK_MAX_TOOL_USE_ITERATIONS` env var sets a **top-level** tool-use-round ceiling for both providers (mirrors the `maxToolUseIterations` config key / `max_tool_use_iterations` tool param). Unset/`<=0` = unlimited (the default — zero behavior change); a positive integer N winds top-level turns down gracefully after N rounds. An explicit config value wins over the env default. Subagent forks are unaffected — they keep their own 50-round anti-hang default regardless of the var. Restores an operator brake for runaway top-level tool loops without reintroducing a default cap or provider drift.
+
+### Changed
+- The tool-round cap (`max_tool_use_iterations`) and its graceful wind-down now apply uniformly to **both** providers. openai-compatible previously ignored the setting and hard-capped every turn at 50 rounds; it now honors `maxToolUseIterations` like anthropic-direct. Consequence: **top-level openai-compatible sessions are now uncapped by default** (aligned with anthropic-direct) — the 50-round anti-hang default still applies to subagent forks of either provider. The shared cap/wind-down policy (constants + `resolveMaxToolIterations`/`shouldWindDown`) now lives in `providers/shared/tool-loop-cap.ts`, so the two providers can no longer drift.
+
+### Fixed
+- openai-compatible now runs the same tools-stripped "wind-down" round as anthropic-direct when the tool-round cap fires (previously it fell through to a possibly-empty final message with no cap signal), and stamps `tool_use_loop_capped` so the closure classifier reports `iteration_cap` for openai-compatible turns too.
+
+### Added
+- extend tool-loop cap + graceful wind-down to openai-compatible (follow-up to #448) (#454) (b0e85c7)
+
+### Fixed
+- align getApiKey() default-model resolution with getModel() (#455) (667951e)
+
+### Changed
+- Add AFK Dark theme for Terax (#460) (c9bb8f4)
+- calm REPL chrome (glyph mode marker, idle rail, cwd/branch dedupe) (#447) (d1bd410)
+- extract runIteration concerns into query/ modules (#453) (a04e781)
+- extract query() concerns into query/ modules (#452) (1c16f81)
+- dedupe elicitation validators into field-validation module (#451) (a7f2457)
+
+## [5.24.0] - 2026-07-06
+
+### Changed
+- `agent` tool subagents are now uncapped by default and settable per dispatch: `max_turns` defaults to unlimited (was default 10, hard-clamped to `[1,50]`) — pass a positive integer to cap. Added a `max_tool_use_iterations` param and a matching `maxToolUseIterations` agent-frontmatter field (both default unlimited on the agent-tool path). Skill/compose internal forks keep the 50-round anti-hang default; openai-compatible models retain a provider-internal 50-round cap regardless.
+
+### Fixed
+- Hitting the tool-use iteration cap no longer ends a turn silently (which read as a hang / empty subagent result). The anthropic-direct loop now runs one final tools-stripped "wind-down" round so the model synthesizes a real answer from what it gathered, and the closure classifier maps the capped stop reason to `iteration_cap` instead of silently sealing it as a clean `model_end_turn`.
+
+### Added
+- uncap turn/tool-use budgets by default; graceful wind-down on cap (#448) (1ba29e7)
+- persist thinking-ui default via AFK_THINKING_UI + interactive.thinkingUi (#445) (7a1f403)
+
+### Fixed
+- audit grant only on state change to stop session-grants.jsonl bloat (#449) (ed95705)
+- warn for stale-clean worktrees (#450) (3223077)
+- delete swept branches + stop reaping live-session worktrees (#371, #380) (77f6e72)
+- resolve subagent credential per child model, not ambient (#378) (#431) (7e6b90c)
+- stop glob from descending node_modules/.git; add multi-** tests (#436) (#442) (97a6b40)
+- stop shadow-verify nudge self-triggering on verifier verdict output (#355) (#433) (7d81612)
+- reject flag-like worktree base refs (#428) (fcfc830)
+- warn for stale-clean worktrees (#430) (0c61247)
+- require commits ahead for stale-clean worktrees (#429) (1987415)
+
+### Changed
+- fix stale budget-contract expectations + tool/memory schema mocks (cbb4c32)
+- add direct unit tests for extracted subagent/ modules (#446) (947739f)
+- extract execute() into subagent/ modules (#443) (070ded6)
+
+## [5.23.2] - 2026-07-05
+
+### Fixed
+- patient 429 retry-after handling + surface stopReason on SubagentResult (#427) (d535c79)
+
+## [5.23.1] - 2026-07-05
+
+### Fixed
+- scope the bash interpreter-eval guard to credential-adjacent payloads (#424) (8eb2622)
+
+## [5.23.0] - 2026-07-05
+
+### Added
+- add `digest` thinking-display mode (live preview + persisted reasoning) (#426) (6740847)
+
+## [5.22.0] - 2026-07-05
+
+### Added
+- plugin-contributed agent scope + scoped nested dispatch (#423) (249c27c)
+
+## [5.21.1] - 2026-07-05
+
+### Fixed
+- resolve project plugins against session cwd (#179 follow-up) (#418) (7317aa4)
+
+### Changed
+- remove /reset slash command; fix stale /clear docs (#425) (ea1950c)
+
+## [5.21.0] - 2026-07-05
+
+### Added
+- accept per-slot model binding objects in config_set (#409) (6c6c81f)
+
+### Changed
+- bump @types/node from 22.19.19 to 26.1.0 in /website (#422) (0f5d4e8)
+- bump next from 16.2.9 to 16.2.10 in /website (#421) (438ca42)
+- bump @types/react from 19.2.16 to 19.2.17 in /website (#420) (20e0bd7)
+- bump the fumadocs group in /website with 2 updates (#419) (fcd018d)
+
+## [5.20.8] - 2026-07-05
+
+### Fixed
+- grant main-repo read root to worktree subagents (#416) (205612e)
+- resolve project skills against the session cwd (#179) (#375) (4919343)
+
+## [5.20.7] - 2026-07-05
+
+### Fixed
+- make exit_plan_mode live-mode-gated + restore working mode across the Shift+Tab ring (#410) (99468d8)
+
+## [5.20.6] - 2026-07-05
+
+### Added
+- add /thinking slash command for mid-session thinking-UI toggle (#415) (49eb8c8)
+
+### Fixed
+- thread openaiBaseUrl into restricted provider builders so deep OpenAI subagents keep their endpoint (#413) (26cd2e1)
+- gate exit backstop on persisted seal record, not optimistic sealed flag (#171) (#402) (d6dbb5f)
+
+### Changed
+- collapse duplicated dispatch + skill-fork logic (#408) (2159df2)
+- changed several bundled skills to load mode (dfdb8d5)
+- Bump version from 1.0.0 to 1.0.1 (e8d57ee)
+- Change context from 'fork' to 'load' in SKILL.md (5d0a595)
+
+## [5.20.5] - 2026-07-05
+
+### Fixed
+- surface silent 429/503/529 backoff in trace; fix transient rate-limit 429 misclassification (#414) (5dbc55b)
+
+## [5.20.4] - 2026-07-05
+
+### Fixed
+- coalesce post-ESC type-ahead so soft-stop doesn't strand input one turn behind (#403) (937772e)
+
+### Changed
+- isolate vitest state writes from real ~/.afk (#411) (9f6b634)
+- bound default-sonnet cost via auto-compaction budget (keep truthful 1M); split openai-compatible/query.ts (#407) (37a878d)
+
+## [5.20.3] - 2026-07-04
+
+### Fixed
+- stop double-rendering finished subagents in the REPL overlay (#405) (71a6bdc)
+
+## [5.20.2] - 2026-07-04
+
+### Fixed
+- make SKILL.md context: authoritative; drop DEFAULT_FORK_SKILLS (#404) (023cf51)
+
+## [5.20.1] - 2026-07-04
+
+### Fixed
+- report a clean git tree as dirty:false, not null (#389) (78c4083)
+
+## [5.20.0] - 2026-07-04
+
+### Added
+- named agent definitions with agent_type dispatch on the agent tool (#384) (c9f6040)
+
+## [5.19.5] - 2026-07-04
+
+### Fixed
+- name dead-cwd spawn failures and fork-enforce bundled skills by name (#399) (1ee5d81)
+
+### Changed
+- update AFK.md with new commands and architecture details (d31cfc6)
+
+## [5.19.4] - 2026-07-04
+
+### Fixed
+- reflow committed band at paint-time width; fail-safe commits on stale resize geometry (#386) (f75d8a4)
+
+## [5.19.3] - 2026-07-03
+
+### Fixed
+- expand ${PLUGIN_ROOT:-fallback} idiom in load-mode substitution (#401) (a13ff98)
+
+## [5.19.2] - 2026-07-03
+
+### Fixed
+- bound forked-child tool-use loop to prevent parent hang (#394) (a645cab)
+- bound subagent fan-out in compose/DAG layers and runWave (#385) (52f8a7c)
+- fire SubagentStop for naturally-completing background subagents (#388) (d9832e7)
+
+## [5.19.1] - 2026-07-03
+
+### Fixed
+- cancel in-flight foreground subagents on soft-stop (ESC/Ctrl-C) (#400) (1e838d1)
+
+## [5.19.0] - 2026-07-03
+
+### Added
+- lifecycle tool + sweep fix for agent-managed worktrees (#390) (eaa561d)
+
+## [5.18.0] - 2026-07-03
+
+### Added
+- deliver SubagentStop injectContext in-turn via the subagent tool_result (#387) (a407d35)
+
+## [5.17.0] - 2026-07-03
+
+### Added
+- grounded progress banner — real activity instead of mechanism noise (#373) (f475744)
+
+## [5.16.0] - 2026-07-03
+
+### Added
+- collapse sequential same-tool runs into one grouped ×N row (#379) (ac9c609)
+
+### Changed
+- remove verified dead code across src/ (Tier 1 audit batch) (#382) (d7c4056)
+
+## [5.15.13] - 2026-07-03
+
+### Fixed
+- deliver SubagentStop injectContext with the next user message, not as its own turn (#359) (c2d5078)
+
+## [5.15.12] - 2026-07-03
+
+### Added
+- auto-deliver background subagent results into the next turn (#372) (0c92c7c)
+
+### Fixed
+- close AFK-mode coverage gaps + clip afk-push rawBody fallback (#200) (#357) (ad5e64a)
+
 ## [5.15.11] - 2026-07-03
 
 ### Fixed

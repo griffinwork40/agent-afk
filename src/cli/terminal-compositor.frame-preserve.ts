@@ -10,6 +10,7 @@
 
 import type { FrameHost } from './terminal-compositor.frame.js';
 import { eraseAndPaintRow } from './terminal-compositor.types.js';
+import { withAutowrapDisabled } from './terminal-compositor.band-reflow.js';
 
 /**
  * Preserve rows that the next compositor frame is about to cover.
@@ -105,11 +106,19 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
       for (let i = 0; i < bandLen; i++) {
         out += eraseAndPaintRow(1 + i, self.committedBand[i]);
       }
-      try {
-        self.stdout.write(out);
-      } catch {
-        /* terminal closed mid-render — next render's lifecycle tears us down */
-      }
+      // Belt-and-braces DECAWM bracket (see withAutowrapDisabled doc): the band
+      // rows painted here were re-wrapped at the current width by repaint()'s
+      // reflowCommittedBandToWidth call before this function ran; disabling
+      // autowrap defends against a residual ±1-column displayWidth()
+      // measurement gap on ambiguous-width glyphs, which can otherwise
+      // fabricate an unaccounted phantom row.
+      withAutowrapDisabled(self.stdout, () => {
+        try {
+          self.stdout.write(out);
+        } catch {
+          /* terminal closed mid-render — next render's lifecycle tears us down */
+        }
+      });
       evictRowsToScrollback(self, overflow);
       // Survivors physically shifted to [1, room] by the scroll.
       self.committedBand = self.committedBand.slice(overflow);
@@ -135,11 +144,14 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     for (let i = 0; i < bandLen; i++) {
       out += eraseAndPaintRow(1 + i, self.committedBand[i]);
     }
-    try {
-      self.stdout.write(out);
-    } catch {
-      /* terminal closed mid-render — next render's lifecycle tears us down */
-    }
+    // Belt-and-braces DECAWM bracket — see the identical comment above.
+    withAutowrapDisabled(self.stdout, () => {
+      try {
+        self.stdout.write(out);
+      } catch {
+        /* terminal closed mid-render — next render's lifecycle tears us down */
+      }
+    });
     evictRowsToScrollback(self, growOverflow);
     // Survivors physically shifted to [1, growRoom] by the scroll — already
     // hugging the new frame top (growRoom === desiredTopRow - 1). Record that so a
@@ -210,11 +222,15 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     for (let i = 0; i < bandLenBanner; i++) {
       out += eraseAndPaintRow(floorBanner + i, self.committedBand[i]);
     }
-    try {
-      self.stdout.write(out);
-    } catch {
-      /* terminal closed mid-render — next render's lifecycle tears us down */
-    }
+    // Belt-and-braces DECAWM bracket — see the identical comment earlier in
+    // this file (the !hasBanner pending-overflow eviction).
+    withAutowrapDisabled(self.stdout, () => {
+      try {
+        self.stdout.write(out);
+      } catch {
+        /* terminal closed mid-render — next render's lifecycle tears us down */
+      }
+    });
     evictRowsToScrollback(self, overflow);
     // Survivors physically shifted to [floor, floor+room-1] by the scroll.
     self.committedBand = self.committedBand.slice(overflow);

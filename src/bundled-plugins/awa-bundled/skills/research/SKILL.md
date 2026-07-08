@@ -1,7 +1,7 @@
 ---
 name: research
 description: "Dispatches two sub-agents in parallel to gather external and local context for the current task."
-context: fork
+context: load
 ---
 
 ## Sub-agent contract

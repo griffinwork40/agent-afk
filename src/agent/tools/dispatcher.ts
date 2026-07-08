@@ -16,6 +16,7 @@ import { dirname } from 'path';
 import { createHash } from 'node:crypto';
 import { debugLog } from '../../utils/debug.js';
 import { HookBlockedError } from '../../utils/errors.js';
+import { settleWithConcurrencyLimit } from '../concurrency-pool.js';
 import type { HookRegistry, PreToolUseContext, PostToolUseContext, PostToolUseFailureContext } from '../hooks.js';
 import type { AnthropicToolDef } from '../providers/anthropic-direct/types.js';
 import type { ToolDispatcher } from '../providers/anthropic-direct/tool-dispatcher.js';
@@ -134,45 +135,6 @@ function partitionIntoBatches(
  * regress; injectable via SessionToolDispatcherOptions.maxConcurrentSafeCalls.
  */
 export const DEFAULT_MAX_CONCURRENT_SAFE_TOOL_CALLS = 8;
-
-/**
- * Run `worker` over every `items` element with at most `limit` invocations in
- * flight, returning results in `items` order with the same fulfilled/rejected
- * shape as `Promise.allSettled`. Workers are started eagerly up to the cap, so
- * when `limit >= items.length` this is behaviourally identical to
- * `Promise.allSettled(items.map(worker))` — the parallel-timing tests rely on
- * that. `limit` is floored at 1, so a non-positive cap degrades to sequential
- * rather than deadlocking on an empty pool.
- */
-async function settleWithConcurrencyLimit<T, I>(
-  items: readonly I[],
-  limit: number,
-  worker: (item: I) => Promise<T>,
-): Promise<PromiseSettledResult<T>[]> {
-  const results: PromiseSettledResult<T>[] = new Array(items.length);
-  const poolSize = Math.min(Math.max(1, Math.floor(limit)), items.length);
-  let cursor = 0;
-  const runners: Promise<void>[] = [];
-  for (let w = 0; w < poolSize; w++) {
-    runners.push(
-      (async () => {
-        // `cursor < length` test and `cursor++` are not separated by an await,
-        // so each index is claimed by exactly one runner (no double-dispatch,
-        // no skip) despite the shared cursor.
-        while (cursor < items.length) {
-          const i = cursor++;
-          try {
-            results[i] = { status: 'fulfilled', value: await worker(items[i]!) };
-          } catch (reason) {
-            results[i] = { status: 'rejected', reason };
-          }
-        }
-      })(),
-    );
-  }
-  await Promise.all(runners);
-  return results;
-}
 
 export interface SessionToolDispatcherOptions {
   handlers: Map<string, ToolHandler>;
@@ -383,17 +345,26 @@ export class SessionToolDispatcher implements ToolDispatcher {
   /**
    * Grant read access to `absPath`. No-op if already present.
    * `resolveBase` is always implicitly readable and need not be added.
+   *
+   * Invariant: the audit append fires ONLY when `p` is newly added. Re-granting
+   * an already-granted path is a state no-op and must not emit a duplicate
+   * ledger record — the previous unconditional append let per-tool-call
+   * re-grants of the same root balloon `session-grants.jsonl` ~196x (1,143
+   * unique grants → 224k rows before this fix).
    */
   addReadRoot(absPath: string, source: 'slash' | 'tool' = 'slash'): void {
     const p = path.resolve(absPath);
     if (!this._readRoots.includes(p)) {
       this._readRoots.push(p);
+      this.appendAuditLog({ action: 'grant-read', path: p, source });
     }
-    this.appendAuditLog({ action: 'grant-read', path: p, source });
   }
 
   /**
    * Grant read + write access to `absPath`. Ensures path is in BOTH lists.
+   * Audits `grant-write` only when `p` is newly added to `_writeRoots`, so a
+   * read→write upgrade still records (new to writeRoots) while a repeat
+   * write-grant is silent. See `addReadRoot` for the dedup rationale.
    */
   addWriteRoot(absPath: string, source: 'slash' | 'tool' = 'slash'): void {
     const p = path.resolve(absPath);
@@ -402,8 +373,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
     }
     if (!this._writeRoots.includes(p)) {
       this._writeRoots.push(p);
+      this.appendAuditLog({ action: 'grant-write', path: p, source });
     }
-    this.appendAuditLog({ action: 'grant-write', path: p, source });
   }
 
   /**
@@ -737,100 +708,13 @@ export class SessionToolDispatcher implements ToolDispatcher {
     const repeatBlock = this.checkRepeatCircuitBreaker(call);
     if (repeatBlock) return repeatBlock;
 
-    // 3. Agent tool — provider-level dispatch
-    if (call.name === 'agent') {
-      if (!this.subagentExecutor) {
-        return {
-          content: 'Agent tool is not available in this session configuration',
-          isError: true,
-        };
-      }
-      let result: ToolResult;
-      let agentThrew = false;
-      let agentErrMsg = '';
-      try {
-        result = await this.subagentExecutor.execute(call);
-      } catch (err) {
-        agentThrew = true;
-        agentErrMsg = err instanceof Error ? err.message : String(err);
-        result = { content: `Agent tool error: ${agentErrMsg}`, isError: true };
-      }
-      // PostToolUse hook fires for agent calls too.
-      // Fire-and-forget: mirrors executeCore() — hook latency must not block
-      // the tool result from being returned to the model on the critical path.
-      if (agentThrew) {
-        this.firePostToolUseFailure(call.name, agentErrMsg, call.signal, call.input);
-      } else {
-        this.firePostToolUse(call.name, result.content, call.signal, call.input);
-      }
-      return result;
-    }
-
-    // 3b. Skill tool — provider-level dispatch
-    if (call.name === 'skill') {
-      if (!this.skillExecutor) {
-        return {
-          content: 'Skill tool is not available in this session configuration',
-          isError: true,
-        };
-      }
-      let result: ToolResult;
-      let skillThrew = false;
-      let skillErrMsg = '';
-      try {
-        result = await this.skillExecutor.execute(call);
-      } catch (err) {
-        skillThrew = true;
-        skillErrMsg = err instanceof Error ? err.message : String(err);
-        result = { content: `Skill tool error: ${skillErrMsg}`, isError: true };
-      }
-      // Fire-and-forget: mirrors executeCore() — hook + trace-write latency
-      // must not add to per-tool round-trip time on the single-call path.
-      if (skillThrew) {
-        this.firePostToolUseFailure(call.name, skillErrMsg, call.signal, call.input);
-      } else {
-        this.firePostToolUse(call.name, result.content, call.signal, call.input);
-      }
-      return result;
-    }
-
-    // 3c. Compose tool — DAG-based parallel subagent dispatch
-    if (call.name === 'compose') {
-      const result = await this.executeCompose(call);
-      this.firePostToolUse(call.name, result.content, call.signal, call.input);
-      return result;
-    }
-
-    // 4. Handler lookup
-    const handler = this.handlers.get(call.name);
-    if (!handler) {
-      return {
-        content: `Unknown tool "${call.name}". Available tools: ${[...this.handlers.keys()].join(', ')}`,
-        isError: true,
-      };
-    }
-
-    // 5. Execute handler
-    let result: ToolResult;
-    let handlerThrew = false;
-    let handlerErrMsg = '';
-    try {
-      result = await handler(call.input, call.signal, this.callHandlerContext(call));
-    } catch (err) {
-      handlerThrew = true;
-      handlerErrMsg = err instanceof Error ? err.message : String(err);
-      result = { content: `Tool execution error: ${handlerErrMsg}`, isError: true };
-    }
-
-    // 6. PostToolUse on success; PostToolUseFailure on thrown handler.
-    // Invariant: exactly one of the two fires per execution — never both.
-    if (handlerThrew) {
-      this.firePostToolUseFailure(call.name, handlerErrMsg, call.signal, call.input);
-    } else {
-      this.firePostToolUse(call.name, result.content, call.signal, call.input);
-    }
-
-    return result;
+    // 3. Agent routing + handler dispatch + PostToolUse. Delegates to
+    // executeCore() — the shared core executeBatch() already calls per-tool
+    // (see lines ~936/972). execute() previously inlined a verbatim copy of
+    // that body (agent/skill/compose special-cases + handler lookup +
+    // PostToolUse firing); the duplicate only added drift risk with no
+    // behavioral difference, so the single-call path now delegates too.
+    return this.executeCore(call);
   }
 
   /**

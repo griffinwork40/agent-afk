@@ -100,16 +100,30 @@ export function getPluginsDir(): string {
 // Project-scope paths (cwd-relative)
 // ---------------------------------------------------------------------------
 
-export function getProjectAfkDir(): string {
-  return join(process.cwd(), '.afk');
+/**
+ * Project-scoped `.afk/` root: `<cwd>/.afk`.
+ *
+ * Takes an explicit `cwd` because long-lived hosts (daemon, Telegram bot) and
+ * the REPL's worktree mode track a *session* working directory that diverges
+ * from the Node host's `process.cwd()` — project-scope artifacts must resolve
+ * against the session's cwd, not the host's. The default keeps parity with
+ * call sites that genuinely mean the host process cwd (mirrors
+ * `getProjectPlansDir` below).
+ */
+export function getProjectAfkDir(cwd: string = process.cwd()): string {
+  return join(cwd, '.afk');
 }
 
-export function getProjectSkillsDir(): string {
-  return join(getProjectAfkDir(), 'skills');
+/**
+ * Project-scoped skills directory: `<cwd>/.afk/skills/`.
+ * See {@link getProjectAfkDir} for why `cwd` is a parameter.
+ */
+export function getProjectSkillsDir(cwd: string = process.cwd()): string {
+  return join(getProjectAfkDir(cwd), 'skills');
 }
 
-export function getProjectPluginsDir(): string {
-  return join(getProjectAfkDir(), 'plugins');
+export function getProjectPluginsDir(cwd: string = process.cwd()): string {
+  return join(getProjectAfkDir(cwd), 'plugins');
 }
 
 /**

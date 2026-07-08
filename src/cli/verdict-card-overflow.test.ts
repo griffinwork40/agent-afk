@@ -88,8 +88,8 @@ const STREAMING_FRAME = ['  \u25e6 generating\u2026', '~/x \u00b7 opus_1m \u00b7
 // The idle prompt the REPL returns to AFTER the card commits: loop-stage bar +
 // ledger + prompt + status.
 const IDLE_PROMPT = [
-  '  \u25e6 Tool-use loop',
-  '    Iteration 3: used read_file \u00b7 3 tools \u00b7 4.4k tok',
+  '  \u25e6 Working',
+  '    round 3: read_file /tmp/x.ts \u00b7 3 tools \u00b7 4.4k tok',
   'afk > observe  model  choose  act  update',
   'ledger  done   (1 turn)',
   '~/x \u00b7 opus_1m \u00b7 3%',

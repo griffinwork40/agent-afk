@@ -16,6 +16,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   handleOrchestratorEvent,
+  setComposedOverlay,
   type OrchestratorCtx,
 } from './stream-renderer-orchestrator.js';
 import { freshSourceState, type SourceState } from './stream-renderer-source.js';
@@ -542,10 +543,16 @@ describe('handleOrchestratorEvent — tool-use-loop scrollback (no content emiss
     return { ctx, setOverlay, commitAbove };
   }
 
-  it('eager-flushes completed root tools on the NEXT tool_use_detail', () => {
+  it('eager-flushes a completed root tool on the NEXT (different) tool_use_detail', () => {
     // The core regression test: simulate a tool-use loop with no content
-    // chunks. After tool B starts, tool A (now completed) must be in
-    // scrollback — not stuck in the live overlay waiting for content.
+    // chunks. After a DIFFERENT tool starts, the prior completed tool must be
+    // in scrollback — not stuck in the live overlay waiting for content.
+    //
+    // Note: the next tool here is a DIFFERENT tool (edit_file) so the
+    // cross-flush run-accumulation gate does not hold it. Consecutive
+    // SAME-tool calls intentionally accumulate into one grouped `×N` row —
+    // that behavior is pinned by the 'cross-flush tool grouping' describe
+    // block below.
     const toolLane = new ToolLane();
     const { ctx, commitAbove } = makeLoopCtx(toolLane);
     const source: SourceState = freshSourceState('__main__');
@@ -558,15 +565,16 @@ describe('handleOrchestratorEvent — tool-use-loop scrollback (no content emiss
     // flush trigger is on the NEXT tool_use_detail, not on tool_result).
     expect(commitAbove).not.toHaveBeenCalled();
 
-    // Iteration 2: bash B starts. THIS is the flush trigger.
-    handleOrchestratorEvent(bashStart('bash-B', '"pwd"'), source, ctx);
+    // Iteration 2: a DIFFERENT tool (edit_file) starts. THIS is the flush
+    // trigger — a tool-name change never holds.
+    handleOrchestratorEvent(editStart('edit-B'), source, ctx);
 
     // bash-A must now be in scrollback.
     const scrollback = commitAbove.mock.calls.map((c) => strip(c[0])).join('\n');
     expect(scrollback).toContain('ls');
     expect(toolLane.hasEntry('bash-A')).toBe(false);
-    // bash-B must still be live (not committed — it just started).
-    expect(toolLane.hasEntry('bash-B')).toBe(true);
+    // edit-B must still be live (not committed — it just started).
+    expect(toolLane.hasEntry('edit-B')).toBe(true);
   });
 
   it('preserves tool_diff sidecar visibility — diff lands BEFORE the eager flush', () => {
@@ -777,6 +785,23 @@ describe('handleOrchestratorEvent — stage rail single-paint invariant', () => 
     // Stage labels are NOT in the overlay — they moved to the footer bar.
     expect(overlay).not.toContain('◇ observe');
     expect(overlay).not.toContain('◆ model');
+  });
+
+  it('thinking-digest streams the live overlay while thinking (like live)', () => {
+    // digest shows the live preview overlay exactly like 'live'; the ONLY
+    // difference is that digest ALSO commits the reasoning paragraph to
+    // scrollback on phase seal (covered by the emit tests). Here we assert the
+    // live paragraph reaches the overlay in digest mode.
+    const toolLane = new ToolLane();
+    const { ctx, setOverlay } = makeStageCtx(toolLane);
+    ctx.thinkingMode = 'digest';
+    const source: SourceState = freshSourceState('__main__');
+
+    handleOrchestratorEvent(thinkingEvt('reasoning step'), source, ctx);
+
+    expect(setOverlay).toHaveBeenCalledTimes(1);
+    const overlay = strip(setOverlay.mock.calls[0]?.[0] ?? '');
+    expect(overlay).toContain('reasoning step');
   });
 
   // ── Test that catches the FOLLOW-ON regression introduced by removing  ─
@@ -993,6 +1018,41 @@ describe('handleOrchestratorEvent — progress arm (duplicate banner regression)
     expect(lastOverlay).toContain('Iteration 15: used memory_update');
     expect(lastOverlay).not.toContain('Iteration 6: used bash');
   });
+
+  /**
+   * Stale-banner regression: the tool-use loop ends ('done' event →
+   * finalizeOrchestrator) but the renderer keeps painting overlay frames for
+   * the post-loop prose stream. Before the fix, nothing evicted the map at
+   * loop exit — the LAST progress entry survived and the OverlayComposer
+   * (which redraws every slot on any markDirty) kept repainting a frozen
+   * "current activity" banner as if live throughout final prose streaming.
+   *
+   * Expect: after 'done', lastProgressByTask is empty, so any subsequent
+   * overlay composition renders zero banner lines.
+   */
+  it("clears lastProgressByTask when the turn finalizes ('done' event)", () => {
+    const setOverlay = vi.fn<(overlay: string) => void>();
+    const compositor = {
+      setOverlay,
+      commitAbove: vi.fn(),
+      setSpinner: vi.fn(),
+    } as unknown as OrchestratorCtx['compositor'];
+
+    const ctx = makeCtx(new ToolLane(), { isTTY: true, compositor });
+    const source: SourceState = freshSourceState('__main__');
+    const fire = (e: OutputEvent) => handleOrchestratorEvent(e, source, ctx);
+
+    fire(progressEvent('task-live', 'round 4: bash git show'));
+    expect(ctx.lastProgressByTask.size).toBe(1);
+
+    fire({ type: 'done' } as OutputEvent);
+
+    expect(ctx.lastProgressByTask.size).toBe(0);
+    // A post-done overlay composition must not resurrect the banner.
+    setComposedOverlay(ctx);
+    const lastOverlay = setOverlay.mock.calls.at(-1)?.[0] ?? '';
+    expect(lastOverlay).not.toContain('round 4: bash git show');
+  });
 });
 
 // ─── Skill-nesting gate ──────────────────────────────────────────────────────
@@ -1117,5 +1177,128 @@ describe('handleOrchestratorEvent — skill-nesting gate', () => {
     const entries = (toolLane as unknown as PrivateLane).entries;
     const composeEntry = entries.get('compose-tu-1');
     expect(composeEntry?.agentContext).toBe('skill-tu-4');
+  });
+});
+
+describe('handleOrchestratorEvent — cross-flush tool grouping (run accumulation)', () => {
+  function namedToolStart(id: string, toolName: string): OutputEvent {
+    return {
+      type: 'chunk',
+      chunk: { type: 'tool_use_detail', toolUseId: id, toolName, toolInput: '"cmd"' },
+    };
+  }
+  function thinkingEvent(content: string): OutputEvent {
+    return { type: 'chunk', chunk: { type: 'thinking', content } };
+  }
+  function makeCaptureCtx(
+    toolLane: ToolLane,
+    opts: { thinkingMode?: 'off' | 'summary' | 'live' | 'digest' } = {},
+  ): { ctx: OrchestratorCtx; commitAboveCalls: string[] } {
+    const commitAboveCalls: string[] = [];
+    const compositor = {
+      commitAbove(text: string) { commitAboveCalls.push(text); },
+      setOverlay: vi.fn(),
+      setSpinner: vi.fn(),
+    } as unknown as OrchestratorCtx['compositor'];
+    const { writer } = makeWriter();
+    const ctx: OrchestratorCtx = {
+      out: writer,
+      isTTY: true,
+      compositor,
+      toolLane,
+      thinkingLane: new ThinkingLane(),
+      thinkingMode: opts.thinkingMode ?? 'off',
+      streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
+    };
+    return { ctx, commitAboveCalls };
+  }
+
+  it('collapses a run of ≥2 sequential same-tool calls (no thinking) into one grouped ×N block', () => {
+    const toolLane = new ToolLane();
+    const { ctx, commitAboveCalls } = makeCaptureCtx(toolLane);
+    const source = freshSourceState('__main__');
+
+    // 3 sequential Bash calls, each completing before the next — no thinking.
+    for (const id of ['b1', 'b2', 'b3']) {
+      handleOrchestratorEvent(namedToolStart(id, 'Bash'), source, ctx);
+      handleOrchestratorEvent(toolResultEvent(id), source, ctx);
+    }
+    // A different tool breaks the run → the held Bash run flushes as a group.
+    handleOrchestratorEvent(namedToolStart('r1', 'Read'), source, ctx);
+
+    const scrollback = commitAboveCalls.join('\n');
+    expect(scrollback).toContain('×3');
+  });
+
+  it('collapses at exactly 2 — root grouping has no threshold-3 gate', () => {
+    const toolLane = new ToolLane();
+    const { ctx, commitAboveCalls } = makeCaptureCtx(toolLane);
+    const source = freshSourceState('__main__');
+    for (const id of ['b1', 'b2']) {
+      handleOrchestratorEvent(namedToolStart(id, 'Bash'), source, ctx);
+      handleOrchestratorEvent(toolResultEvent(id), source, ctx);
+    }
+    handleOrchestratorEvent(namedToolStart('r1', 'Read'), source, ctx);
+    expect(commitAboveCalls.join('\n')).toContain('×2');
+  });
+
+  it('does NOT collapse distinct sequential tools', () => {
+    const toolLane = new ToolLane();
+    const { ctx, commitAboveCalls } = makeCaptureCtx(toolLane);
+    const source = freshSourceState('__main__');
+    handleOrchestratorEvent(namedToolStart('b1', 'Bash'), source, ctx);
+    handleOrchestratorEvent(toolResultEvent('b1'), source, ctx);
+    handleOrchestratorEvent(namedToolStart('r1', 'Read'), source, ctx);
+    handleOrchestratorEvent(toolResultEvent('r1'), source, ctx);
+    handleOrchestratorEvent(namedToolStart('g1', 'Glob'), source, ctx); // break
+    expect(commitAboveCalls.join('\n')).not.toContain('×');
+  });
+
+  it('a thinking phase between same-tool calls breaks the run (append-only ordering)', () => {
+    const toolLane = new ToolLane();
+    const { ctx, commitAboveCalls } = makeCaptureCtx(toolLane, { thinkingMode: 'summary' });
+    const source = freshSourceState('__main__');
+
+    handleOrchestratorEvent(namedToolStart('b1', 'Bash'), source, ctx);
+    handleOrchestratorEvent(toolResultEvent('b1'), source, ctx);
+    // Model thinks before the next same-tool call → an inline "thought for Xs"
+    // line commits here, so the run MUST break (else the thought would reorder
+    // above the group).
+    handleOrchestratorEvent(thinkingEvent('deliberating about the next step'), source, ctx);
+    handleOrchestratorEvent(namedToolStart('b2', 'Bash'), source, ctx);
+    handleOrchestratorEvent(toolResultEvent('b2'), source, ctx);
+    handleOrchestratorEvent(namedToolStart('r1', 'Read'), source, ctx); // break
+
+    const scrollback = commitAboveCalls.join('\n');
+    expect(scrollback).not.toContain('×2');            // b1/b2 rendered individually
+    expect(scrollback.toLowerCase()).toContain('thought for'); // thought committed between them
+  });
+
+  it('digest mode persists the reasoning paragraph above the stat line on phase seal', () => {
+    const toolLane = new ToolLane();
+    const { ctx, commitAboveCalls } = makeCaptureCtx(toolLane, { thinkingMode: 'digest' });
+    const source = freshSourceState('__main__');
+
+    handleOrchestratorEvent(thinkingEvent('Planning the read order DIGEST_PROOF next'), source, ctx);
+    handleOrchestratorEvent(namedToolStart('r1', 'Read'), source, ctx); // tool boundary seals the phase
+
+    const scrollback = commitAboveCalls.join('\n');
+    expect(scrollback).toContain('DIGEST_PROOF');              // actual reasoning persisted
+    expect(scrollback).toContain('◆ thinking');                // under the paragraph header
+    expect(scrollback.toLowerCase()).toContain('thought for'); // stat line still emitted
+  });
+
+  it('summary mode commits only the stat line, never the reasoning text', () => {
+    const toolLane = new ToolLane();
+    const { ctx, commitAboveCalls } = makeCaptureCtx(toolLane, { thinkingMode: 'summary' });
+    const source = freshSourceState('__main__');
+
+    handleOrchestratorEvent(thinkingEvent('secret reasoning DIGEST_PROOF must not persist'), source, ctx);
+    handleOrchestratorEvent(namedToolStart('r1', 'Read'), source, ctx);
+
+    const scrollback = commitAboveCalls.join('\n');
+    expect(scrollback).not.toContain('DIGEST_PROOF');          // reasoning NOT persisted in summary mode
+    expect(scrollback.toLowerCase()).toContain('thought for');
   });
 });

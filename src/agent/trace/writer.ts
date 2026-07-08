@@ -125,6 +125,19 @@ export interface NdjsonTraceWriterOptions {
 // `process.exit()`, and normal event-loop drain — i.e. every *catchable*
 // termination. SIGKILL is uncatchable and a trace killed that way stays
 // genuinely unsealed (nothing in-process can help).
+//
+// History (#171, follow-up to #168): the backstop originally gated on the
+// same `sealed` flag that `seal()` flips. `seal()` sets `sealed = true`
+// *synchronously* before its durable append is queued — the append itself
+// runs later, on the writer's serialized write queue. If the process began
+// exiting in that window (e.g. a `process.exit()` call racing the queue),
+// the exit handler saw `sealed === true` and returned early, and the queued
+// append never ran (the event loop is dead inside an 'exit' handler) — the
+// trace was left with no `session_sealed` record at all. The fix: gate the
+// backstop on `sealRecordPersisted`, a flag that only flips once a terminal
+// record has actually landed on disk (from either write path), and have
+// both write paths check it immediately before writing so exactly one
+// terminal record survives regardless of which path wins the race.
 // ---------------------------------------------------------------------------
 const liveTraceWriters = new Set<NdjsonTraceWriter>();
 let exitBackstopInstalled = false;
@@ -144,6 +157,17 @@ export class NdjsonTraceWriter implements TraceWriter {
   private readonly tracePath: string;
   private seq = 0;
   private sealed = false;
+  /**
+   * Invariant (#171): flips to `true` only once a terminal `session_sealed`
+   * record has actually been appended to disk — by whichever of `seal()`'s
+   * queued task or `sealOnProcessExit()`'s synchronous append wins the race.
+   * `sealed` (above) flips optimistically the instant `seal()` is called, in
+   * the same synchronous tick, so it cannot tell the exit backstop whether
+   * the record actually landed. `sealOnProcessExit()` and the queued seal
+   * task both gate on `sealRecordPersisted` immediately before writing so at
+   * most one of them appends — the loser sees `true` and skips.
+   */
+  private sealRecordPersisted = false;
   private fh: FileHandle | null = null;
   /** Single-tail queue: each enqueued task awaits the previous one,
    *  guaranteeing ordered serialization of writes and inits. */
@@ -177,6 +201,13 @@ export class NdjsonTraceWriter implements TraceWriter {
     this.sealed = true;
     await this.enqueue(async () => {
       await this.ensureOpen();
+      // Guard against `sealOnProcessExit()` having already won the race
+      // (see the `sealRecordPersisted` field comment and the module-level
+      // History note on #171). `ensureOpen()`'s await is the only point
+      // where this queued task can be interleaved with the synchronous
+      // exit handler, so checking immediately after it — right before the
+      // write — is sufficient to guarantee exactly one terminal record.
+      if (this.sealRecordPersisted) return;
       const persisted: TraceEvent = {
         ts: new Date().toISOString(),
         seq: this.seq++,
@@ -184,6 +215,13 @@ export class NdjsonTraceWriter implements TraceWriter {
         payload,
       };
       await this.appendLine(persisted);
+      // Flip the flag immediately after the append: the record is now in
+      // the kernel buffer and will survive process exit (the OS flushes
+      // on termination). Setting this before fsync closes the race where
+      // the process exits between appendLine() and sync() — the exit
+      // handler would see sealRecordPersisted === false and write a
+      // second seal record, producing a false crash signal.
+      this.sealRecordPersisted = true;
       // Contract: the seal record must be durably on disk before we
       // hand control back. Otherwise a crash here yields a file that
       // *looks* sealed-clean but isn't.
@@ -245,16 +283,26 @@ export class NdjsonTraceWriter implements TraceWriter {
   }
 
   /**
-   * Synchronous terminal seal for the process-exit backstop — see the
-   * module-level comment above the class. Appends a `session_sealed`
+   * Contract: synchronous terminal seal for the process-exit backstop (see
+   * the module-level comment above the class). Appends a `session_sealed`
    * record with `status: 'failed'` and `incomplete: true` iff this writer
-   * emitted at least one event but never sealed. No-op once sealed (the
-   * normal `seal()` already ran) or when nothing was written (no orphaned
-   * file to seal). Runs inside a `process.on('exit')` handler, so it MUST
-   * be fully synchronous and MUST NOT throw.
+   * emitted at least one event but never durably persisted a terminal
+   * record. No-op once a seal record has actually landed on disk (the
+   * normal `seal()` already completed its append) or when nothing was
+   * written (no orphaned file to seal). Runs inside a `process.on('exit')`
+   * handler, so it MUST be fully synchronous and MUST NOT throw.
+   *
+   * Gates on `sealRecordPersisted` (#171), not `sealed`. `sealed` flips
+   * the instant `seal()` is *called*, before its durable append is
+   * queued — an interrupted `seal()` (process exits while the append is
+   * still sitting on the write queue) would otherwise make this guard see
+   * `sealed === true` and skip, orphaning the trace with no
+   * `session_sealed` record at all. `sealRecordPersisted` only flips once
+   * a record has actually been written, so an interrupted `seal()` still
+   * falls through to this backstop.
    */
   sealOnProcessExit(): void {
-    if (this.sealed || this.seq === 0) return;
+    if (this.sealRecordPersisted || this.seq === 0) return;
     this.sealed = true;
     liveTraceWriters.delete(this);
     try {
@@ -274,6 +322,10 @@ export class NdjsonTraceWriter implements TraceWriter {
       // exit handler. O_APPEND keeps this ordered even though the async file
       // handle may still be open — the OS closes it as the process dies.
       appendFileSync(this.tracePath, `${JSON.stringify(persisted)}\n`);
+      // Mark persisted only after the append call returns successfully, so
+      // a thrown/caught write error below leaves the flag `false` and a
+      // still-queued `seal()` task gets a chance to write the real record.
+      this.sealRecordPersisted = true;
     } catch {
       /* exit handler: swallow — a broken seal must never block process exit */
     }

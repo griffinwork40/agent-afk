@@ -29,6 +29,10 @@ import type {
   PickerController,
 } from './terminal-compositor.types.js';
 import { preserveRowsBeforeFrameRender } from './terminal-compositor.frame-preserve.js';
+import {
+  reflowCommittedBandToWidth,
+  type BandReflowCache,
+} from './terminal-compositor.band-reflow.js';
 
 /**
  * Narrowest TerminalCompositor state slice the frame-composition functions
@@ -69,6 +73,8 @@ export interface FrameHost {
   committedBandTopRow: number;
   committedBandBottomRow: number;
   committedBandPaintedRows: number;
+  /** Memoization for reflowCommittedBandToWidth — see the field doc on the class. */
+  bandReflowCache: BandReflowCache | null;
   hasCommitted: boolean;
   anchorRow: number | undefined;
   lastKnownRows: number;
@@ -97,6 +103,14 @@ export function repaint(self: FrameHost): void {
   // expand vs shrink.
   self.flushResizeGhostErase();
   self.lastKnownRows = self.stdout.rows ?? 24;
+  // F1 (retained-logical-source re-wrap): re-wrap the retained band at the
+  // CURRENT width before EITHER downstream consumer reads it this repaint —
+  // preserveRowsBeforeFrameRender's eviction paints (called below and from
+  // repaintPickerFrame) and repositionCommittedBand's re-pin (same two call
+  // sites) both read `self.committedBand` verbatim. Placed above the picker
+  // short-circuit so both paths see fresh-width rows; a steady-width repeat
+  // repaint is a cache hit (see reflowCommittedBandToWidth) and costs nothing.
+  reflowCommittedBandToWidth(self, self.stdout.columns ?? 80);
   // Picker-mode short-circuit. The picker rents the input region
   // (dropdown + hint + input line all suppressed) and supplies its
   // own rows via `renderRows()`. Overlay/spinner/tip/attachment

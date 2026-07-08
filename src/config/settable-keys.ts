@@ -21,6 +21,7 @@
  */
 
 import { getEnvVarMeta, type EnvVarMeta } from './env.js';
+import { coerceSlotBindingInput, type ModelSlotBinding } from '../agent/session/model-slots.js';
 
 // ── Env-var classification ───────────────────────────────────────────────────
 
@@ -168,7 +169,7 @@ export function coerceEnvValue(meta: EnvVarMeta, raw: string): CoerceResult {
 // ── Config-key (afk.config.json) classification + validation ──────────────────
 
 export type ConfigKeyTier = 'agent' | 'human';
-export type ConfigKeyType = 'string' | 'number' | 'boolean' | 'enum' | 'number-array';
+export type ConfigKeyType = 'string' | 'number' | 'boolean' | 'enum' | 'number-array' | 'model-slot';
 
 export interface ConfigKeySpec {
   /** Dotted path, e.g. `models.large` or `telegram.notify.mode`. */
@@ -195,10 +196,10 @@ export interface ConfigKeySpec {
  */
 export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'model', tier: 'agent', type: 'string', description: 'Default model id / alias.' },
-  { path: 'models.local', tier: 'agent', type: 'string', description: 'Local-tier model id (OpenAI-compatible shim: Ollama, LM Studio, vLLM, MLX).' },
-  { path: 'models.small', tier: 'agent', type: 'string', description: 'Small-tier model id.' },
-  { path: 'models.medium', tier: 'agent', type: 'string', description: 'Medium-tier model id.' },
-  { path: 'models.large', tier: 'agent', type: 'string', description: 'Large-tier model id.' },
+  { path: 'models.local', tier: 'agent', type: 'model-slot', description: 'Local-tier model id (OpenAI-compatible shim: Ollama, LM Studio, vLLM, MLX). Accepts a bare id string or a { id, provider, name } object (baseUrl/apiKey are human-gated: set them via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here).' },
+  { path: 'models.small', tier: 'agent', type: 'model-slot', description: 'Small-tier model id. Accepts a bare id string or a { id, provider, name } object (baseUrl/apiKey are human-gated: set them via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here).' },
+  { path: 'models.medium', tier: 'agent', type: 'model-slot', description: 'Medium-tier model id. Accepts a bare id string or a { id, provider, name } object (baseUrl/apiKey are human-gated: set them via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here).' },
+  { path: 'models.large', tier: 'agent', type: 'model-slot', description: 'Large-tier model id. Accepts a bare id string or a { id, provider, name } object (baseUrl/apiKey are human-gated: set them via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here).' },
   { path: 'maxTokens', tier: 'agent', type: 'number', clamp: { min: 1, max: 1_000_000, integer: true }, description: 'Max tokens per turn.' },
   { path: 'temperature', tier: 'agent', type: 'number', clamp: { min: 0, max: 2 }, description: 'Sampling temperature.' },
   { path: 'autoRouting.interactive', tier: 'agent', type: 'boolean', description: 'Auto-route model in the REPL.' },
@@ -211,6 +212,7 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'telegram.verifyDone', tier: 'human', type: 'boolean', description: 'Opt-in AFK "Done" verification gate (human-tier: a self-honesty check on the agent\'s own completion reporting — the agent must not be able to disable it on its own config, same rationale as enableShellHooks/permissionMode).' },
   { path: 'interactive.worktreeAutoname', tier: 'agent', type: 'boolean', description: 'Auto-name worktrees.' },
   { path: 'interactive.suggestGhost', tier: 'agent', type: 'boolean', description: 'Ghost-text suggestions in the REPL.' },
+  { path: 'interactive.thinkingUi', tier: 'agent', type: 'enum', enumValues: ['summary', 'live', 'digest', 'off'], description: 'Default REPL thinking-display mode.' },
   { path: 'updatePolicy', tier: 'human', type: 'enum', enumValues: ['notify', 'auto', 'off'], description: 'Self-update policy (human-tier: auto self-update is scope-widening).' },
   { path: 'autoResumeOnUsageLimit', tier: 'agent', type: 'boolean', description: 'Auto-resume after a usage-limit pause.' },
   { path: 'bgSummaries', tier: 'agent', type: 'boolean', description: 'Background summarisation.' },
@@ -247,7 +249,7 @@ export function classifyConfigKey(path: string): ConfigKeyClass {
 }
 
 export type ConfigCoerceResult =
-  | { ok: true; value: string | number | boolean | number[] }
+  | { ok: true; value: string | number | boolean | number[] | ModelSlotBinding }
   | { ok: false; error: string };
 
 /**
@@ -303,6 +305,15 @@ export function coerceConfigValue(spec: ConfigKeySpec, raw: unknown): ConfigCoer
         nums.push(n);
       }
       return { ok: true, value: nums };
+    }
+    case 'model-slot': {
+      if (typeof raw === 'string') {
+        if (raw.trim().length === 0) return { ok: false, error: `${spec.path} must not be empty` };
+        return { ok: true, value: raw.trim() };
+      }
+      const res = coerceSlotBindingInput(raw);
+      if (!res.ok) return { ok: false, error: `${spec.path}: ${res.error}` };
+      return { ok: true, value: res.value };
     }
     case 'string':
     default: {

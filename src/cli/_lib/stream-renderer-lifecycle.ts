@@ -14,7 +14,7 @@ import { OverlayComposer } from './overlay-composer.js';
 import { createStageTracker } from '../commands/interactive/loop-stage.js';
 import { formatDuration } from '../format-utils.js';
 import { formatThinkingParagraph } from '../commands/interactive/thinking-paragraph.js';
-import { formatProgressBanner } from '../commands/interactive/progress-banner.js';
+import { deriveProgressActivity, formatProgressBanner } from '../commands/interactive/progress-banner.js';
 import { palette } from '../palette.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import { isDebugEnabled } from '../../utils/debug.js';
@@ -42,7 +42,7 @@ export interface LifecycleContext {
   toolLane: ToolLane;
   streamingMarkdownRef: { current: StreamingMarkdownRenderer | null };
   lastProgressByTask: Map<string, ProgressEvent>;
-  thinkingMode: 'off' | 'summary' | 'live';
+  thinkingMode: 'off' | 'summary' | 'live' | 'digest';
   out: Writer;
   isTTY: boolean;
   sources: Map<string, SourceState>;
@@ -84,7 +84,7 @@ export function registerOverlaySlots(
       // gating on hasBufferedContent() alone would keep re-painting the
       // already-collapsed thinking into the idle overlay between turns.
       if (
-        ctx.thinkingMode !== 'live' ||
+        (ctx.thinkingMode !== 'live' && ctx.thinkingMode !== 'digest') ||
         !ctx.thinkingLane.isActive() ||
         !ctx.thinkingLane.hasBufferedContent()
       ) {
@@ -123,8 +123,13 @@ export function registerOverlaySlots(
     key: 'progress-banner',
     render: () => {
       const bannerLines: string[] = [];
+      // Grounded activity: the model's in-flight thinking clause (current
+      // uncommitted phase only — peekPhase clears at each seal boundary, so
+      // a stale clause never outlives the phase that produced it). Falls
+      // back to the event's tool-derived summary inside formatProgressBanner.
+      const activity = deriveProgressActivity(ctx.thinkingLane.peekPhase());
       for (const progress of ctx.lastProgressByTask.values()) {
-        bannerLines.push(...formatProgressBanner(progress));
+        bannerLines.push(...formatProgressBanner(progress, undefined, activity));
       }
       return bannerLines.length > 0 ? bannerLines.join('\n') : '';
     },

@@ -6,7 +6,7 @@
 import { z } from 'zod';
 import { SubagentManager } from '../../../agent/subagent.js';
 import { describeFailure } from '../../../agent/subagent/result.js';
-import { getApiKey } from '../../../cli/shared-helpers.js';
+import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 import { emitCard } from '../../_lib/emit-card.js';
@@ -55,7 +55,7 @@ export async function runBuildPhase(
     config: {
       model: defaultSubagentModel,
       systemPrompt: buildPrompt,
-      apiKey: getApiKey(),
+      apiKey: resolveCredentialForModel(defaultSubagentModel),
     },
     idPrefix: 'mint-build',
     agentType: 'mint-build',

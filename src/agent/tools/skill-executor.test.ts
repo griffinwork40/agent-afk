@@ -988,6 +988,48 @@ describe('SkillExecutor', () => {
     });
   });
 
+  describe('getPluginSkillBody — cwd cache invalidation (regression)', () => {
+    // Regression: PR #418 threaded cwd into the FIRST population of the
+    // lazy `pluginBodies` cache but did not invalidate it on setCwd(), so a
+    // plugin skill dispatched after a mid-session cwd change (REPL worktree
+    // auto-naming, `worktree-autoname.ts`) would keep returning a stale
+    // project-A plugin body even though the session has moved to project B.
+    it('setCwd() clears the cached pluginBodies map so the next lookup re-resolves under the new cwd', () => {
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'parent-cwd-invalidate',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        cwd: '/tmp/launch/dir',
+      });
+
+      // Simulate a prior plugin-skill dispatch that already populated the
+      // lazy cache (same cache-injection idiom used elsewhere in this file,
+      // e.g. the `pluginBodies` assignments in the fork-dispatch tests below)
+      // — bypasses the real disk scan so this stays a pure unit test of the
+      // invalidation contract itself.
+      (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
+        new Map([
+          [
+            'stale-plugin',
+            { body: 'stale body from project A', pluginPath: '/tmp/launch/dir/.afk/plugins/stale', context: 'load' },
+          ],
+        ]);
+
+      executor.setCwd('/tmp/launch/dir/.afk-worktrees/afk-xyz');
+
+      // Before the fix, setCwd() only reassigned `currentCwd` and left the
+      // stale Map in place, so a plugin skill dispatched post-cwd-change
+      // would keep resolving project A's body (or wrongly report the new
+      // project's own plugin skill as "not found").
+      expect(
+        (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies,
+      ).toBeNull();
+    });
+  });
+
   describe('resolveApiKeyForModel — per-model credential resolution (skill fork path)', () => {
     // Regression: "Anthropic child starves when parent is OpenAI-routed."
     // Same root cause as subagent-executor.test.ts's block — the skill-dispatch
@@ -1528,6 +1570,59 @@ describe('SkillExecutor', () => {
       expect(firstCtorCall).toBeDefined();
       const ctorOpts = firstCtorCall?.[0];
       expect(ctorOpts?.defaultConfig).toMatchObject({ baseUrl: LOCAL_BASE_URL });
+    });
+
+    it('propagates openaiBaseUrl into the SubagentExecutor defaultConfig for grandchild sessions (depth ≥ 1)', async () => {
+      // Regression test (PR #413 review): buildForkedChildConfig threaded
+      // baseUrl (anthropic) but DROPPED openaiBaseUrl from the SubagentExecutor
+      // defaultConfig. Because subagent-executor.ts's depth-cap restricted-
+      // provider fallback reads `defaultConfig.openaiBaseUrl`, an OpenAI-routed
+      // great-grandchild dispatched at the cap from inside a forked skill
+      // silently reverted to api.openai.com (where a non-OpenAI key 401s).
+      // Mirrors the baseUrl peer test directly above.
+      captureForkConfig();
+      vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({
+        'system.md': 'fake prompt',
+      });
+      registerSkill({
+        name: 'openai-baseurl-propagation-skill',
+        description: 'test',
+        context: 'fork',
+        handler: vi.fn(),
+      });
+
+      const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
+      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
+        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+          capturedCtorArgs.push(args);
+          return new OriginalSubagentExecutor(...args);
+        },
+      );
+
+      const OPENAI_BASE_URL = 'https://opencode.ai/zen/go/v1';
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        openaiBaseUrl: OPENAI_BASE_URL,
+        childProviderFactory: vi.fn().mockReturnValue({ name: 'sentinel' }) as never,
+      });
+
+      await executor.execute(makeCall({ name: 'openai-baseurl-propagation-skill' }));
+
+      // The SubagentExecutor constructed inside buildForkedChildConfig must
+      // carry openaiBaseUrl in its defaultConfig so an OpenAI-routed grandchild
+      // agent-tool dispatch at the depth cap hits the configured endpoint, not
+      // api.openai.com.
+      expect(capturedCtorArgs.length).toBeGreaterThan(0);
+      const firstCtorCall = capturedCtorArgs[0];
+      expect(firstCtorCall).toBeDefined();
+      const ctorOpts = firstCtorCall?.[0];
+      expect(ctorOpts?.defaultConfig).toMatchObject({ openaiBaseUrl: OPENAI_BASE_URL });
     });
 
     it('propagates backgroundRegistry into the SubagentExecutor for skill-forked subagents', async () => {
@@ -2186,6 +2281,8 @@ describe('SkillExecutor', () => {
       expect(buildRestrictedSpy).toHaveBeenCalledWith(
         ['read_file', 'grep', 'glob', 'list_directory'],
         'sonnet',
+        false,
+        undefined,
       );
     });
 
@@ -2237,7 +2334,7 @@ describe('SkillExecutor', () => {
       expect(result.isError).toBeUndefined();
       // readOnly wins: the recon provider (which keeps readOnlyBash) is used, and
       // the bare restricted provider that would drop the bash gate is NOT.
-      expect(reconSpy).toHaveBeenCalledWith('sonnet');
+      expect(reconSpy).toHaveBeenCalledWith('sonnet', undefined);
       expect(restrictedSpy).not.toHaveBeenCalled();
     });
 
@@ -2314,6 +2411,8 @@ describe('SkillExecutor', () => {
       expect(buildRestrictedSpy).toHaveBeenCalledWith(
         ['read_file', 'grep'],
         'sonnet',
+        false,
+        undefined,
       );
     });
   });

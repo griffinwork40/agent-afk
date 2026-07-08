@@ -181,6 +181,16 @@ export interface CliConfig {
      * `undefined` = not set (default-on). `false` = disable all ghost text.
      */
     suggestGhost?: boolean;
+    /**
+     * Persistent default for how the interactive REPL renders extended-thinking
+     * blocks: `'summary' | 'live' | 'digest' | 'off'`. Display-only — never
+     * changes whether thinking runs (cost/latency unaffected).
+     *
+     * Env override: `AFK_THINKING_UI`. CLI override: `--thinking-ui`.
+     * Precedence: CLI flag > env > this config value > `'live'`.
+     * Runtime-mutable per session via the `/thinking` slash command.
+     */
+    thinkingUi?: 'summary' | 'live' | 'digest' | 'off';
   };
   updatePolicy: 'notify' | 'auto' | 'off';
   /**
@@ -308,6 +318,7 @@ interface ConfigFileSchema {
     worktreeBranchPrefix?: string;
     worktreeBase?: string;
     suggestGhost?: boolean;
+    thinkingUi?: 'summary' | 'live' | 'digest' | 'off';
   };
   updatePolicy?: 'notify' | 'auto' | 'off';
   autoResumeOnUsageLimit?: boolean;
@@ -797,6 +808,16 @@ function loadJsonConfig(): {
           }
           if (typeof json.interactive.suggestGhost === 'boolean') {
             interactive.suggestGhost = json.interactive.suggestGhost;
+          }
+          // Display-only enum; silently ignore anything outside the allowlist
+          // rather than throwing — a stray value shouldn't fail config load.
+          if (
+            json.interactive.thinkingUi === 'summary' ||
+            json.interactive.thinkingUi === 'live' ||
+            json.interactive.thinkingUi === 'digest' ||
+            json.interactive.thinkingUi === 'off'
+          ) {
+            interactive.thinkingUi = json.interactive.thinkingUi;
           }
           if (Object.keys(interactive).length > 0) {
             config.interactive = interactive;

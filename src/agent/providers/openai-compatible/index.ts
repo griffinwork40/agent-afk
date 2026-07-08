@@ -46,6 +46,8 @@ import {
   composeTool,
 } from '../../tools/schemas.js';
 import { MemoryStore, createMemoryHandlers, memoryToolSchemas, memorySearchTool } from '../../memory/index.js';
+import { resolveToolSystemPrompt, resolveMemorySystemPrompt } from '../../tools/system-prompt.js';
+import { buildSkillManifest } from '../../tools/skill-bridge.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { buildQueryFromConfig } from './query.js';
 import { oneShotChatCompletion, type OpenAIOneShotInput } from './oneshot.js';
@@ -154,7 +156,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this.memoryStore = opts.memoryStore ?? new MemoryStore();
 
     const schemas: AnthropicToolDef[] = [...builtinToolSchemas];
-    if (opts.subagentExecutor) schemas.push(agentTool);
+    // Executor-supplied `agent` def advertises named agent types when a
+    // registry is wired — parity with anthropic-direct (see agents/tool-def.ts).
+    if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);
     if (opts.skillExecutor) schemas.push(skillTool);
     if (opts.composeExecutor) schemas.push(composeTool);
     if (opts.readOnlyMemory === true) {
@@ -302,13 +306,28 @@ export class OpenAICompatibleProvider implements ModelProvider {
       ...(config.maxDepth !== undefined ? { maxDepth: config.maxDepth } : {}),
       workspace: runtimeStateSource.getWorkspace(),
     });
+    // Assemble the full provider-side system prompt so non-Anthropic sessions
+    // (this provider backs the REPL when the model is gpt-*/o*/local org/model)
+    // receive the SAME fragments as anthropic-direct — tool conventions, the
+    // interactive slash-command / bash-passthrough / background-subagent
+    // guidance, the memory prompt, and the skill manifest. Previously this
+    // provider sent only `userSystem + env`, so on a non-Anthropic REPL the
+    // model was never told what the `<background-subagent-result>` (and
+    // slash/bash) envelopes mean. The tool/memory fragments are resolved via
+    // the shared helpers in tools/system-prompt.ts so the set cannot drift from
+    // anthropic-direct. Ordering mirrors AnthropicDirectProvider.query():
+    // [toolBase, memoryPrompt, env, manifest?, userSystem?].
+    const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
+    const memoryPrompt = resolveMemorySystemPrompt(this.providerOpts.readOnlyMemory);
+    const manifest = this.providerOpts.skillExecutor ? buildSkillManifest() : '';
     const existingSys =
       typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined;
+    const systemParts = [toolBase, memoryPrompt, envFragment];
+    if (manifest.length > 0) systemParts.push(manifest);
+    if (existingSys !== undefined && existingSys.length > 0) systemParts.push(existingSys);
     const patchedConfig: typeof config = {
       ...config,
-      systemPrompt: existingSys !== undefined
-        ? `${existingSys}\n\n${envFragment}`
-        : envFragment,
+      systemPrompt: systemParts.join('\n\n'),
     };
 
     return buildQueryFromConfig(patchedConfig, args.prompt, buildOpts);
@@ -386,10 +405,15 @@ export class OpenAICompatibleProvider implements ModelProvider {
         handlers.set(t.schema.name, t.handler);
       }
     }
-    // Plan-exit tool: registered per-query ONLY while in plan mode and only when
-    // the session supplied control callbacks (top-level sessions). Mirrors
+    // Plan-exit tool: registered RESIDENT whenever the session supplied control
+    // callbacks (top-level sessions only). NOT gated on the construction-time
+    // `permissionMode` — the dispatcher is built once per query() and is not
+    // rebuilt by setPermissionMode, so a mode-gated registration left the tool
+    // unwired for the "enter plan mode after launch" flow ("Unknown tool
+    // exit_plan_mode"). Callability is gated per-turn on the LIVE mode instead:
+    // query.ts drops it from the advertised tools on non-plan turns. Mirrors
     // AnthropicDirectProvider.buildDispatcher; schema appended below to match.
-    const planExitControls = permissionMode === 'plan' ? opts.planExitControls : undefined;
+    const planExitControls = opts.planExitControls;
     if (planExitControls) {
       handlers.set(EXIT_PLAN_MODE_TOOL_NAME, createExitPlanModeHandler(planExitControls));
     }
@@ -422,7 +446,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
       handlers,
       // Constraint (semantic invariant): MCP schemas appended AFTER builtins
       // so builtin tool names always take precedence in any overlap. Plan-exit
-      // schema appended last, only while the tool is active (plan mode).
+      // schema appended last, RESIDENT whenever planExitControls is present
+      // (top-level); query.ts drops it from the advertised tools on non-plan
+      // turns so the model sees it only when it is actionable.
       schemas: [...baseSchemas, ...mcpSchemas, ...(planExitControls ? [exitPlanModeTool] : [])],
       // Session hook registry via the one canonical resolver (query-scoped
       // config registry wins over any constructor-provided one). Mirrors
@@ -496,16 +522,22 @@ export class OpenAICompatibleProvider implements ModelProvider {
   addReadRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
     this.ensureSharedRoots();
     const p = path.resolve(absPath);
-    if (!this._sharedReadRoots!.includes(p)) this._sharedReadRoots!.push(p);
-    this.appendProviderAuditLog({ action: 'grant-read', path: p, source, sessionId });
+    // Invariant: audit only on state change (see dispatcher.addReadRoot) —
+    // repeat grants of an already-present root must not duplicate the ledger.
+    if (!this._sharedReadRoots!.includes(p)) {
+      this._sharedReadRoots!.push(p);
+      this.appendProviderAuditLog({ action: 'grant-read', path: p, source, sessionId });
+    }
   }
 
   addWriteRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
     this.ensureSharedRoots();
     const p = path.resolve(absPath);
     if (!this._sharedReadRoots!.includes(p)) this._sharedReadRoots!.push(p);
-    if (!this._sharedWriteRoots!.includes(p)) this._sharedWriteRoots!.push(p);
-    this.appendProviderAuditLog({ action: 'grant-write', path: p, source, sessionId });
+    if (!this._sharedWriteRoots!.includes(p)) {
+      this._sharedWriteRoots!.push(p);
+      this.appendProviderAuditLog({ action: 'grant-write', path: p, source, sessionId });
+    }
   }
 
   revokeRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {

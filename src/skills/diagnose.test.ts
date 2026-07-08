@@ -169,6 +169,23 @@ describe('Diagnose Skill', () => {
       const result = VerificationResultSchema.safeParse(valid);
       expect(result.success).toBe(true);
     });
+
+    it('treats timed_out as optional (absent === not a timeout)', () => {
+      // The verifier subagent reports substantive verdicts only and never emits
+      // timed_out; a plain failure result must parse without it.
+      const withoutFlag = createValidVerificationResult('h1', false);
+      expect(withoutFlag).not.toHaveProperty('timed_out');
+      expect(VerificationResultSchema.safeParse(withoutFlag).success).toBe(true);
+    });
+
+    it('accepts an explicit timed_out flag for wall-clock-exhausted verifiers', () => {
+      // The orchestrator sets timed_out:true when a fork fails with a
+      // TimeoutError, distinguishing it from a genuine falsification.
+      const timedOut = { ...createValidVerificationResult('h1', false), timed_out: true };
+      const parsed = VerificationResultSchema.safeParse(timedOut);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) expect(parsed.data.timed_out).toBe(true);
+    });
   });
 
   describe('DiagnosisResultSchema', () => {
@@ -970,6 +987,50 @@ describe('runReproducerBaseline', () => {
     const result = await runReproducerBaseline('npm test', CWD, exec as never);
 
     expect(result.skipped).toBe(false);
+  });
+
+  it('skips with a named reason on spawn ENOENT when the cwd does not exist (dead worktree)', async () => {
+    // Regression: spawn with a deleted cwd rejects with code:'ENOENT'
+    // (string) + syscall:'spawn /bin/sh' — previously coerced through the
+    // non-zero-exit path into { skipped:false, exitCode:null, stdout:'',
+    // stderr:'' }, masquerading as "reproducer ran and produced nothing".
+    const exec: FakeExec = async () => {
+      throw Object.assign(new Error('spawn /bin/sh ENOENT'), {
+        code: 'ENOENT',
+        errno: -2,
+        syscall: 'spawn /bin/sh',
+        path: '/bin/sh',
+        stdout: '',
+        stderr: '',
+      });
+    };
+    // CWD ('/fake/repo') does not exist on disk — the dead-worktree case.
+    const result = await runReproducerBaseline('npm test', CWD, exec as never);
+
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toContain('cwd does not exist');
+    expect(result.reason).toContain(CWD);
+    expect(result.exitCode).toBeNull();
+  });
+
+  it('does NOT skip on spawn ENOENT when the cwd exists (genuinely missing binary)', async () => {
+    const { tmpdir } = await import('node:os');
+    const exec: FakeExec = async () => {
+      throw Object.assign(new Error('spawn not-a-binary ENOENT'), {
+        code: 'ENOENT',
+        errno: -2,
+        syscall: 'spawn not-a-binary',
+        path: 'not-a-binary',
+        stdout: '',
+        stderr: '',
+      });
+    };
+    const result = await runReproducerBaseline('npm test', tmpdir(), exec as never);
+
+    // Live cwd → not a dead-worktree masquerade; falls through to the
+    // string-code coercion (exitCode null, not skipped).
+    expect(result.skipped).toBe(false);
+    expect(result.exitCode).toBeNull();
   });
 });
 

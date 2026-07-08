@@ -22,6 +22,7 @@ import { SkillExecutor } from './skill-executor.js';
 import type { SubagentExecutor } from './subagent-executor.js';
 import type { TraceWriter } from '../trace/index.js';
 import type { BackgroundAgentRegistry } from '../background-registry.js';
+import type { AgentRegistry } from '../agents/types.js';
 
 export const DEFAULT_MAX_NESTING_DEPTH = 3;
 
@@ -214,13 +215,25 @@ export function createChildProviderFactory(
  * Routed by `providerForModel(model)` exactly like
  * {@link createChildProviderFactory} and {@link buildPhaseRestrictedProvider}.
  */
-export function buildReadOnlyReconProvider(model: AgentModelInput | undefined): ModelProvider {
+export function buildReadOnlyReconProvider(
+  model: AgentModelInput | undefined,
+  // Endpoint for an OpenAI-routed child. Mirrors createChildProviderFactory's
+  // openaiBaseUrl: without it, a read-only recon child at the depth cap builds
+  // an OpenAICompatibleProvider with no baseURL and POSTs to api.openai.com
+  // (defense-in-depth with openai-compatible/base-url.ts's query-time fallback).
+  openaiBaseUrl?: string,
+): ModelProvider {
   // Materialize the allowlist per call so test/runtime mutation of the shared
   // array doesn't bleed across siblings (mirrors buildPhaseRestrictedProvider).
   const permissions = { allowedTools: [...RECON_ALLOWED_TOOLS] };
   const route = providerForModel(typeof model === 'string' ? model : undefined);
   if (route === 'openai-compatible') {
-    return new OpenAICompatibleProvider({ permissions, readOnlyBash: true, readOnlyMemory: true });
+    return new OpenAICompatibleProvider({
+      permissions,
+      readOnlyBash: true,
+      readOnlyMemory: true,
+      ...(openaiBaseUrl !== undefined ? { baseURL: openaiBaseUrl } : {}),
+    });
   }
   return new AnthropicDirectProvider({ permissions, readOnlyBash: true, readOnlyMemory: true });
 }
@@ -267,13 +280,27 @@ export function createChildSkillExecutorFactory(
   resolveApiKeyForModel?: (model: string) => string | undefined,
   surface?: Surface,
   defaultSubagentModel?: AgentModelInput,
-): (depth: number, maxDepth: number, signal: AbortSignal) => SkillExecutor {
-  const factory: (depth: number, maxDepth: number, signal: AbortSignal) => SkillExecutor = (
+  agentRegistry?: AgentRegistry,
+  // OpenAI-compatible endpoint, propagated to every depth so a nested skill
+  // child's restricted/depth-cap provider builders point at the configured
+  // endpoint. Trailing optional — legacy positional callers stay valid.
+  openaiBaseUrl?: string,
+): (depth: number, maxDepth: number, signal: AbortSignal, inheritedCwd?: string) => SkillExecutor {
+  const factory: (depth: number, maxDepth: number, signal: AbortSignal, inheritedCwd?: string) => SkillExecutor = (
     depth,
     maxDepth,
     signal,
-  ) =>
-    new SkillExecutor({
+    inheritedCwd,
+  ) => {
+    // Invariant: the closure-captured `cwd` is frozen at bootstrap. For
+    // born-named `afk -w` worktrees it is `undefined` (the worktree is
+    // created on turn 1 via worktree-autoname, after bootstrap). A later
+    // `setCwd` re-anchors the live SkillExecutor / SubagentExecutor but
+    // NOT this closure. The `inheritedCwd` parameter (passed by the
+    // depth-1 caller) carries the live value so grandchild SkillExecutors
+    // anchor to the worktree, not the host's process.cwd().
+    const effectiveCwd = inheritedCwd ?? cwd;
+    return new SkillExecutor({
       parentSession: createStubParentSession(signal),
       defaultModel,
       // Resolved default-subagent policy threaded through every depth so a
@@ -284,6 +311,9 @@ export function createChildSkillExecutorFactory(
       ...(defaultSubagentModel !== undefined ? { defaultSubagentModel } : {}),
       apiKey,
       ...(baseUrl !== undefined ? { baseUrl } : {}),
+      // Endpoint threads through every depth (factory closes over openaiBaseUrl,
+      // so the recursive childSkillExecutorFactory below carries it too).
+      ...(openaiBaseUrl !== undefined ? { openaiBaseUrl } : {}),
       depth,
       maxDepth,
       childProviderFactory,
@@ -305,7 +335,16 @@ export function createChildSkillExecutorFactory(
       // worktree. Mirrors traceWriter / backgroundRegistry propagation.
       // Without this, a depth ≥ 2 skill dispatch silently loses worktree
       // isolation even though the depth-0 wiring was correct.
-      ...(cwd !== undefined ? { cwd } : {}),
+      //
+      // Invariant: prefer `inheritedCwd` (passed by the depth-1 caller's
+      // live `this.currentCwd`) over the closure-captured `cwd`. The
+      // closure value is frozen at bootstrap; for born-named `afk -w`
+      // worktrees it is `undefined` and a later `setCwd` re-anchors the
+      // live executors but NOT this closure. The `inheritedCwd` parameter
+      // (threaded from skill-executor.ts:652 / subagent-executor.ts:850)
+      // carries the live value so grandchild SkillExecutors anchor to the
+      // worktree, not the host's process.cwd().
+      ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
       // Per-model credential resolver: propagates so every depth in the
       // skill chain resolves credentials by child model rather than the
       // pre-captured parent apiKey. Optional — backward compat fallback to
@@ -316,7 +355,11 @@ export function createChildSkillExecutorFactory(
       // SubagentExecutor threads surface into its recursive child executor
       // (subagent-executor.ts:626).
       ...(surface !== undefined ? { surface } : {}),
+      // Named-agent registry propagates so nested skill children can
+      // dispatch `agent_type`-named sub-agents at any depth.
+      ...(agentRegistry !== undefined ? { agentRegistry } : {}),
     });
+  };
   return factory;
 }
 
@@ -348,14 +391,25 @@ export type PhaseRole = 'read-only' | 'read-write';
 export function buildSkillRestrictedProvider(
   allowedTools: string[],
   model: AgentModelInput | undefined,
+  readOnlyBash = false,
+  // Endpoint for an OpenAI-routed child — see buildReadOnlyReconProvider. Trailing
+  // optional so existing positional callers are unaffected.
+  openaiBaseUrl?: string,
 ): ModelProvider {
   // Materialise once per fork so runtime array mutations don't bleed across siblings.
   const permissions = { allowedTools: [...allowedTools] };
   const route = providerForModel(typeof model === 'string' ? model : undefined);
+  // readOnlyBash: forwarded when the restricted surface additionally gates
+  // mutating shell (named agents with `bash: read-only`, cage cap paths).
+  // Default false preserves the original skill-tools call sites unchanged.
   if (route === 'openai-compatible') {
-    return new OpenAICompatibleProvider({ permissions });
+    return new OpenAICompatibleProvider({
+      permissions,
+      ...(readOnlyBash ? { readOnlyBash: true } : {}),
+      ...(openaiBaseUrl !== undefined ? { baseURL: openaiBaseUrl } : {}),
+    });
   }
-  return new AnthropicDirectProvider({ permissions });
+  return new AnthropicDirectProvider({ permissions, ...(readOnlyBash ? { readOnlyBash: true } : {}) });
 }
 
 /**

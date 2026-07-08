@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
-import { supportsVision } from './model-capabilities.js';
+import { supportsVision, isOSeriesModel, isReasoningModel } from './model-capabilities.js';
 import { resetSlotBindings } from './session/model-slots.js';
 
 describe('supportsVision', () => {
@@ -77,5 +77,83 @@ describe('supportsVision', () => {
     process.env['AFK_VISION_MODELS'] = '!gpt-4o-mini';
     expect(supportsVision('gpt-4o-mini')).toBe(false);
     expect(supportsVision('gpt-4o')).toBe(true); // unrelated vision model unaffected
+  });
+});
+
+describe('isOSeriesModel', () => {
+  it('matches the known o-series families (o1/o3/o4) and their variants', () => {
+    for (const m of ['o1', 'o1-mini', 'o1-preview', 'o3', 'o3-mini', 'o4-mini', 'o4-mini-2025-04-16']) {
+      expect(isOSeriesModel(m)).toBe(true);
+    }
+  });
+
+  // Regression: the pre-consolidation copies (providers/index.ts,
+  // model-limits.ts) used enumerated startsWith('o1'|'o3'|'o4') and silently
+  // misclassified any future oN. This case would have failed against them.
+  it('matches future o5+/oN prefixes (the gap the enumerated copies had)', () => {
+    for (const m of ['o5', 'o5-mini', 'o6', 'o9-turbo']) {
+      expect(isOSeriesModel(m)).toBe(true);
+    }
+  });
+
+  it('strips a provider/ prefix (OpenRouter-style ids)', () => {
+    expect(isOSeriesModel('openai/o3')).toBe(true);
+    expect(isOSeriesModel('openrouter/o1-mini')).toBe(true);
+  });
+
+  it('is case-insensitive and tolerates surrounding whitespace', () => {
+    expect(isOSeriesModel('O3')).toBe(true);
+    expect(isOSeriesModel('  o1-mini  ')).toBe(true);
+  });
+
+  it('does NOT match non-o-series ids (gpt/claude/codex/local/empty)', () => {
+    for (const m of ['gpt-4o', 'gpt-4o-mini', 'claude-sonnet-4', 'codex', 'ollama', 'mixtral-8x7b', '', undefined]) {
+      expect(isOSeriesModel(m)).toBe(false);
+    }
+  });
+});
+
+describe('isReasoningModel', () => {
+  // isReasoningModel is a superset of isOSeriesModel — every o-series id is a
+  // reasoning model, but so are the gpt-5.x ids that replace them.
+
+  it('matches all o-series models (delegates to isOSeriesModel)', () => {
+    for (const m of ['o1', 'o1-mini', 'o3', 'o3-mini', 'o4-mini', 'o5']) {
+      expect(isReasoningModel(m), m).toBe(true);
+    }
+  });
+
+  it('matches gpt-5.x reasoning models (the non-o-series families)', () => {
+    for (const m of ['gpt-5', 'gpt-5.1', 'gpt-5.5', 'gpt-5-mini', 'gpt-5-codex']) {
+      expect(isReasoningModel(m), m).toBe(true);
+    }
+  });
+
+  it('strips provider/ prefix for gpt-5.x ids', () => {
+    expect(isReasoningModel('openai/gpt-5')).toBe(true);
+    expect(isReasoningModel('openrouter/gpt-5.5')).toBe(true);
+  });
+
+  it('is case-insensitive and tolerates whitespace', () => {
+    expect(isReasoningModel('GPT-5')).toBe(true);
+    expect(isReasoningModel('  gpt-5.1  ')).toBe(true);
+  });
+
+  it('does NOT match classic chat models (gpt-4o, gpt-4.1, claude, local)', () => {
+    for (const m of ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'claude-sonnet-4', 'codex', 'ollama', 'mixtral-8x7b', '', undefined]) {
+      expect(isReasoningModel(m), m).toBe(false);
+    }
+  });
+
+  it('is a strict superset of isOSeriesModel', () => {
+    // Every o-series id must also be a reasoning model.
+    const oSeriesIds = ['o1', 'o1-mini', 'o3', 'o3-mini', 'o4-mini', 'openai/o3'];
+    for (const m of oSeriesIds) {
+      expect(isOSeriesModel(m)).toBe(true);
+      expect(isReasoningModel(m)).toBe(true);
+    }
+    // But gpt-5.x is reasoning without being o-series.
+    expect(isOSeriesModel('gpt-5')).toBe(false);
+    expect(isReasoningModel('gpt-5')).toBe(true);
   });
 });

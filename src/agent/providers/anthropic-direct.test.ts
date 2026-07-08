@@ -683,6 +683,49 @@ describe('AnthropicDirectProvider', () => {
     }
   });
 
+  it('caps the tool-use loop at config.maxToolUseIterations (config → provider → loop)', async () => {
+    // End-to-end plumbing guard: AgentConfig.maxToolUseIterations must thread
+    // through AnthropicDirectProvider.query() → AnthropicDirectQueryOptions →
+    // the constructor → runInput → the loop's `maxIterations`. After the cap the
+    // loop runs one tools-stripped wind-down round (rounds 1-2 request tools;
+    // round 3 answers in text), so the turn ends with a real final message AND
+    // stopReason 'tool_use_loop_capped' — the guard a forked subagent relies on
+    // to avoid hanging its parent (see SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS).
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      if (callIdx >= 3) return fromArray(makeTextStream('Summary of findings.'));
+      return fromArray(
+        makeToolUseStream(`toolu_${callIdx}`, 'get_weather', '{"city":"SF"}'),
+      );
+    });
+
+    const dispatcher: ToolDispatcher = {
+      async execute(): Promise<ToolResult> {
+        return { content: 'sunny' };
+      },
+    };
+
+    const provider = new AnthropicDirectProvider({ tools: dispatcher });
+    const query = provider.query({
+      prompt: singleInput('weather?'),
+      config: {
+        model: 'claude-sonnet-5',
+        apiKey: 'sk-ant-api03-test',
+        maxToolUseIterations: 2,
+      },
+    });
+    const events = await collect(query);
+
+    // 2 tool-use rounds + 1 tools-stripped wind-down round, not left to spin.
+    expect(messagesCreateMock).toHaveBeenCalledTimes(3);
+    const completed = events.find((e) => e.type === 'turn.completed');
+    expect(completed).toBeDefined();
+    if (completed?.type === 'turn.completed') {
+      expect(completed.usage.stopReason).toBe('tool_use_loop_capped');
+    }
+  });
+
   it('default SessionToolDispatcher rejects unknown tools with isError', async () => {
     let callIdx = 0;
     messagesCreateMock.mockImplementation(() => {
@@ -825,18 +868,20 @@ describe('AnthropicDirectProvider', () => {
 
     const first = progressEvents[0]!;
     expect(first.progress.taskId).toBeTruthy();
-    expect(first.progress.description).toBe('Tool-use loop');
+    expect(first.progress.description).toBe('Working');
     expect(first.progress.toolUses).toBe(1);
     expect(first.progress.lastToolName).toBe('read_file');
     expect(first.progress.totalTokens).toBeGreaterThanOrEqual(0);
     expect(first.progress.durationMs).toBeGreaterThanOrEqual(0);
-    expect(first.progress.summary).toContain('Iteration 1');
+    expect(first.progress.summary).toContain('round 1');
+    expect(first.progress.summary).toContain('read_file');
     expect(first.sessionId).toBeTruthy();
 
     const second = progressEvents[1]!;
     expect(second.progress.toolUses).toBe(2);
     expect(second.progress.lastToolName).toBe('write_file');
-    expect(second.progress.summary).toContain('Iteration 2');
+    expect(second.progress.summary).toContain('round 2');
+    expect(second.progress.summary).toContain('write_file');
     expect(second.progress.taskId).toBe(first.progress.taskId);
   });
 

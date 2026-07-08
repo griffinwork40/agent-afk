@@ -100,7 +100,7 @@ describe('slash commands — registration', () => {
     const names = list().map((c) => c.name);
     for (const expected of [
       '/exit', '/clear', '/compact', '/help',
-      '/cost', '/tokens', '/history', '/reset', '/model', '/tools', '/mcp', '/limits',
+      '/cost', '/tokens', '/history', '/model', '/tools', '/mcp', '/limits',
       '/plan', '/todo',
       '/skills', '/reload-plugins', '/agents',
     ]) {
@@ -787,23 +787,5 @@ describe('/exit', () => {
     const res = await dispatch('/exit', ctx);
     expect(res.handled).toBe(true);
     expect(res.result).toBe('exit');
-  });
-});
-
-describe('/reset', () => {
-  beforeEach(() => { resetRegistry(); registerAll(); });
-
-  it('clears stats and calls /clear on the session', async () => {
-    const sess = fakeSession();
-    const stats = makeStats();
-    stats.totalTurns = 5;
-    stats.totalCostUsd = 0.25;
-    stats.turns.push({ user: 'x', assistant: 'y', timestamp: Date.now() });
-    const { ctx } = makeCtx({ session: { current: sess } as unknown as SlashContext['session'], stats });
-    await dispatch('/reset', ctx);
-    expect(sess.sendMessage).toHaveBeenCalledWith('/clear');
-    expect(ctx.stats.totalTurns).toBe(0);
-    expect(ctx.stats.totalCostUsd).toBe(0);
-    expect(ctx.stats.turns).toHaveLength(0);
   });
 });

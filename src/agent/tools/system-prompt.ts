@@ -54,11 +54,21 @@ Attributes on the opening tag:
 The \`<command>\` child contains the literal command the user typed (XML-escaped). The \`<output>\` child contains ANSI-stripped, XML-escaped captured stdout/stderr.`;
 
 /**
- * Full tool system prompt — base conventions + slash-command routing +
- * bash-passthrough. Backwards-compat export; consumers that want only the
- * base (e.g. skill sub-agents) should use \`TOOL_SYSTEM_PROMPT_BASE\` directly.
+ * Background-subagent result-delivery explanation — interactive-only, like
+ * BASH_PASSTHROUGH_PROMPT. Describes the \`<background-subagent-result>\`
+ * envelope the BgResultNotifier prepends to the next user message when a
+ * job dispatched with \`mode: "background"\` (or promoted via Ctrl+B)
+ * settles. NOT sent to skill-dispatch sub-agents.
  */
-export const TOOL_SYSTEM_PROMPT = `${TOOL_SYSTEM_PROMPT_BASE}\n\n${SLASH_COMMAND_ROUTING_PROMPT}\n\n${BASH_PASSTHROUGH_PROMPT}`;
+export const BG_SUBAGENT_RESULT_PROMPT = `When a user message contains a \`<background-subagent-result>\` block, it is the completed output of a background subagent you previously dispatched with the \`agent\` tool (\`mode: "background"\`) or that the user backgrounded with Ctrl+B. It was delivered automatically — no join was needed. Attributes: \`jobId\`, \`status\` (\`completed\`/\`failed\`), \`model\`, \`duration\`. The \`<task>\` child echoes the dispatch prompt's first 80 chars; \`<output>\` carries the subagent's final message (XML-escaped, truncated at 16KB with a marker naming \`/bgsub:join <jobId>\` for the full text). Treat the output as the subagent's compressed findings — reason over it as you would a foreground \`agent\` result.`;
+
+/**
+ * Full tool system prompt — base conventions + slash-command routing +
+ * bash-passthrough + background-subagent result delivery. Backwards-compat
+ * export; consumers that want only the base (e.g. skill sub-agents) should
+ * use \`TOOL_SYSTEM_PROMPT_BASE\` directly.
+ */
+export const TOOL_SYSTEM_PROMPT = `${TOOL_SYSTEM_PROMPT_BASE}\n\n${SLASH_COMMAND_ROUTING_PROMPT}\n\n${BASH_PASSTHROUGH_PROMPT}\n\n${BG_SUBAGENT_RESULT_PROMPT}`;
 
 export const MEMORY_SYSTEM_PROMPT = `# Cross-Session Memory
 
@@ -109,3 +119,33 @@ On your first turn, decide whether to call memory_search based on the request:
 - Search at most once per session for general context. Search again only if new information surfaces a specific topic worth querying.
 
 Use FTS5 syntax: "exact phrase", term1 AND term2, prefix*.`;
+
+/**
+ * Resolve the tool-usage system prompt for a session — the single source of
+ * truth shared by BOTH providers (anthropic-direct AND openai-compatible) so
+ * the fragment set can never drift between them. (This function exists because
+ * the fragment set previously drifted: one provider hand-rolled the
+ * concatenation inline and fell behind when the compound gained the
+ * background-subagent fragment.)
+ *
+ * - skill-dispatch sub-agents → base conventions only. The slash-command
+ *   routing, bash-passthrough, and background-subagent guidance are all
+ *   interactive-only and would mislead a dispatched skill (which receives a
+ *   "Run the <name> skill" directive, not a `<command-name>` tag or any
+ *   REPL-delivered envelope).
+ * - every other session → the full compound (base + slash-command routing +
+ *   bash-passthrough + background-subagent result delivery).
+ */
+export function resolveToolSystemPrompt(isSkillDispatch: boolean | undefined): string {
+  return isSkillDispatch ? TOOL_SYSTEM_PROMPT_BASE : TOOL_SYSTEM_PROMPT;
+}
+
+/**
+ * Resolve the memory system prompt for a session. Read-only child sessions
+ * (subagents / skills that have only `memory_search`, never `memory_update` or
+ * `procedure_write`) get the slimmed variant that omits write guidance for
+ * tools they do not have. Shared by both providers to prevent drift.
+ */
+export function resolveMemorySystemPrompt(readOnly: boolean | undefined): string {
+  return readOnly ? MEMORY_SYSTEM_PROMPT_READONLY : MEMORY_SYSTEM_PROMPT;
+}

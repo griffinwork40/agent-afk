@@ -53,14 +53,17 @@ import { extractRawToolInput } from '../../facets/raw-input.js';
 import { env } from '../../../config/env.js';
 import { sleepWithAbort } from '../shared/sleep-with-abort.js';
 import { summarizeToolInput } from '../shared/tool-input-summary.js';
+import {
+  TOOL_USE_LOOP_CAPPED,
+  WIND_DOWN_NOTE,
+  resolveMaxToolIterations,
+  shouldWindDown,
+} from '../shared/tool-loop-cap.js';
 
-/**
- * Default cap on tool-use rounds within a single user turn. `0` means "no
- * cap" — the loop terminates only when the model stops emitting tool_use
- * blocks, the abort signal fires, or the SDK errors. Set
- * `RunTurnInput.maxToolUseIterations` to a positive value for a hard ceiling.
- */
-export const DEFAULT_MAX_TOOL_USE_ITERATIONS = 0;
+// Re-exported from the provider-neutral `shared/tool-loop-cap.ts` (single
+// source of truth shared with openai-compatible). Kept exported here so
+// existing importers (loop.test.ts) resolve unchanged.
+export { DEFAULT_MAX_TOOL_USE_ITERATIONS } from '../shared/tool-loop-cap.js';
 
 /**
  * Project an internal {@link AnthropicToolDef} to the wire-safe shape the
@@ -162,10 +165,16 @@ async function createWithRetry(
 export async function* runTurn(
   input: RunTurnInput,
 ): AsyncGenerator<ProviderEvent, void, void> {
-  const maxIterations =
-    input.maxToolUseIterations ?? DEFAULT_MAX_TOOL_USE_ITERATIONS;
+  const maxIterations = resolveMaxToolIterations(input.maxToolUseIterations);
   let accumulatedUsage: ProviderUsage = { stopReason: null };
   let iterations = 0;
+  // Set once the tool-use iteration cap is reached. The loop then runs ONE
+  // final "wind-down" round with tools stripped (see the params build and the
+  // cap-exit block below) so the model produces a real answer from what it
+  // gathered instead of being cut off mid-round — a silent stop with no final
+  // message is indistinguishable from a hang (same failure mode the `refusal`
+  // branch guards against).
+  let capReached = false;
   // Mid-stream overload retry budget. Spent as a 529/overloaded_error is
   // observed *during* stream consumption (where createWithRetry can't reach),
   // and reset to 0 after every clean round so each tool-use round gets its own
@@ -222,7 +231,10 @@ export async function* runTurn(
       messages: messagesForRequest,
       stream: true,
       ...(input.system !== null ? { system: input.system } : {}),
-      ...(input.tools !== null && input.tools.length > 0
+      // Wind-down round (capReached): omit tools so the model MUST answer in
+      // text — with no tools advertised it cannot emit another tool_use — which
+      // turns a capped turn into a final summary rather than a silent stop.
+      ...(input.tools !== null && input.tools.length > 0 && !capReached
         ? { tools: input.tools.map(toWireTool) }
         : {}),
       ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
@@ -345,6 +357,15 @@ export async function* runTurn(
 
     if (retryOverload) {
       overloadRetries += 1;
+      // Witness layer: record the mid-stream overload backoff so a re-driven
+      // round is legible in the trace. The tracing-fetch wrapper cannot see
+      // this one — a mid-stream `overloaded_error` arrives in the SSE body of
+      // an HTTP 200 response, so it never trips the wrapper's status check.
+      // Fire-and-forget; trace latency must never stall the retry.
+      void emitSessionPhase(input.traceWriter, {
+        phase: 'rate_limit',
+        metadata: { reason: 'overloaded', source: 'mid-stream', attempt: overloadRetries },
+      });
       // Tell surfaces to discard the current round's already-streamed text:
       // the re-driven request below re-streams the round from scratch, so
       // without a reset the partial text visibly duplicates. Emitted before
@@ -487,7 +508,15 @@ export async function* runTurn(
       }
       yield {
         type: 'turn.completed',
-        usage: withTurnDuration(accumulatedUsage),
+        // On the wind-down round (capReached) the model ends naturally with
+        // `end_turn`, but the turn as a whole WAS cut short by the tool-use cap
+        // — preserve that signal for closure classification + telemetry while
+        // still delivering the model's synthesized final message above.
+        usage: withTurnDuration(
+          capReached
+            ? { ...accumulatedUsage, stopReason: TOOL_USE_LOOP_CAPPED }
+            : accumulatedUsage,
+        ),
         sessionId: input.ctx.sessionId,
       };
       return;
@@ -695,12 +724,21 @@ export async function* runTurn(
     iterations += 1;
 
     const lastTool = turnResult.toolUseBlocks[turnResult.toolUseBlocks.length - 1];
+    // Semantic summary: name the tool AND its most informative argument
+    // (path / command / query via summarizeToolInput) so the progress banner
+    // carries real signal — `bash git show f7f0a37…` instead of the old
+    // `Iteration 11: used bash`, which conveyed nothing after round 2.
+    // `description` stays STABLE across ticks for this taskId (the banner
+    // dedupes line 0 on commit); the per-tick signal lives in `summary`.
+    const lastToolHeadline = lastTool
+      ? `${lastTool.name}${summarizeToolInput(lastTool.name, lastTool.input)}`
+      : 'unknown';
     yield {
       type: 'progress',
       progress: {
         taskId,
-        description: 'Tool-use loop',
-        summary: `Iteration ${iterations}: used ${lastTool?.name ?? 'unknown'}`,
+        description: 'Working',
+        summary: `round ${iterations}: ${lastToolHeadline}`,
         lastToolName: lastTool?.name,
         totalTokens: accumulatedUsage.totalTokens ?? 0,
         toolUses: iterations,
@@ -708,13 +746,31 @@ export async function* runTurn(
       },
       sessionId: input.ctx.sessionId,
     };
-    if (maxIterations > 0 && iterations >= maxIterations) {
+    if (capReached) {
+      // The wind-down round (tools stripped) still came back as `tool_use` —
+      // only reachable if the model emits a tool call against an empty toolset.
+      // Honor the cap with a hard stop rather than looping unbounded.
       yield {
         type: 'turn.completed',
-        usage: withTurnDuration({ ...accumulatedUsage, stopReason: 'tool_use_loop_capped' }),
+        usage: withTurnDuration({ ...accumulatedUsage, stopReason: TOOL_USE_LOOP_CAPPED }),
         sessionId: input.ctx.sessionId,
       };
       return;
+    }
+    if (shouldWindDown(iterations, maxIterations)) {
+      // Cap reached. Instead of cutting the turn off HERE — which ends it with
+      // no final assistant message and reads as a silent hang — run ONE more
+      // round with tools stripped (params build above) so the model can
+      // synthesize a final answer from what it gathered. Append a brief note to
+      // the tool_result turn just pushed so the model knows why its tools are
+      // gone. `capReached` guarantees this fires at most once; the guard above
+      // hard-stops if the wind-down round pathologically emits another tool_use.
+      const lastMsg = input.messages[input.messages.length - 1];
+      if (lastMsg !== undefined && lastMsg.role === 'user' && Array.isArray(lastMsg.content)) {
+        lastMsg.content.push({ type: 'text', text: WIND_DOWN_NOTE });
+      }
+      capReached = true;
+      continue;
     }
   }
   } finally {

@@ -26,6 +26,15 @@
       "category": "misc"
     },
     {
+      "name": "AFK_BG_AUTO_DELIVER",
+      "description": "Auto-deliver background subagent results into the model context on the next user turn (interactive REPL). On by default. Set to 0, false, off, or no (case-insensitive) to disable, restoring the manual /bgsub:join retrieval flow.",
+      "type": "boolean",
+      "required": false,
+      "default": "1",
+      "example": "0",
+      "category": "misc"
+    },
+    {
       "name": "AFK_BROWSER_ALLOWED_DOMAINS",
       "description": "Comma-separated allowlist of URL host globs. When set, browser_open and any navigation that targets a host outside the list returns status: blocked_by_policy. Unset means no allowlist (permissive). Patterns use simple `*` glob matching against the URL host. Combines with AFK_BROWSER_BLOCKED_DOMAINS — block wins.",
       "type": "string",
@@ -306,6 +315,15 @@
       "required": false,
       "default": "4096",
       "example": "8192",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MAX_TOOL_USE_ITERATIONS",
+      "description": "Opt-in ceiling on tool-use rounds per turn for TOP-LEVEL (non-subagent) sessions, on both providers. Mirrors the maxToolUseIterations config key / max_tool_use_iterations tool param. Unset, non-numeric, or <=0 means unlimited (the default — zero behavior change): a top-level turn ends only when the model stops calling tools, the abort signal fires, the provider errors, or the dollar budget trips. A positive integer N makes top-level turns wind down gracefully after N tool rounds (one tools-stripped final round). An explicit config/CLI value wins over this env default. Does NOT affect subagent forks — they keep their own non-zero anti-hang default (SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS) regardless of this var.",
+      "type": "number",
+      "required": false,
+      "default": "0",
+      "example": "150",
       "category": "model"
     },
     {
@@ -642,6 +660,15 @@
       "default": "adaptive",
       "example": "adaptive",
       "category": "model"
+    },
+    {
+      "name": "AFK_THINKING_UI",
+      "description": "Default thinking-display mode for the interactive REPL: summary | live | digest | off. Display-only — controls how extended-thinking blocks render, never whether thinking runs (cost/latency unaffected). Overridden per-launch by --thinking-ui and mutable mid-session via /thinking. Precedence: --thinking-ui flag > this env > interactive.thinkingUi config > live. Invalid values are ignored.",
+      "type": "string",
+      "required": false,
+      "default": "live",
+      "example": "digest",
+      "category": "misc"
     },
     {
       "name": "AFK_TIMEOUT_MS",

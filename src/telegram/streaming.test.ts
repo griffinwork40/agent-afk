@@ -112,6 +112,43 @@ describe('streamResponse', () => {
     expect(joined).toContain('12 matches in 4 files');
   });
 
+  it('sanitizes control/ANSI sequences in model-controlled progress fields before sending to Telegram', async () => {
+    // Regression: progress.description/summary/lastToolName are populated
+    // from model-controlled tool input (summarizeToolInput) and interpolated
+    // raw into the Telegram message. markdownToTelegramHtml only strips
+    // \x02/\x03 sentinels + HTML-escapes & < > — it does not strip ANSI/C1
+    // control bytes. Verify the streaming handler scrubs them itself.
+    const { ctx, replies, edits } = makeCtx();
+    const session = makeSession(async function* () {
+      yield* yieldEvents(
+        {
+          type: 'progress',
+          progress: {
+            taskId: 't1',
+            description: 'grep \x1b[2Jsrc/\x9b malicious',
+            summary: 'grep \x1b[2Jsrc/\x9b malicious',
+            lastToolName: 'Grep\x1b[2J\x9b',
+            totalTokens: 100,
+            toolUses: 2,
+            durationMs: 300,
+          },
+        },
+        { type: 'done', metadata: undefined },
+      );
+    });
+
+    await streamResponse(ctx, session, 'go');
+    const joined = [...replies, ...edits].join('\n');
+
+    // Visible text survives sanitization.
+    expect(joined).toContain('grep');
+    expect(joined).toContain('src/');
+
+    // Raw escape/control bytes must not reach the Telegram message.
+    expect(joined).not.toContain('\x1b');
+    expect(joined).not.toContain('\x9b');
+  });
+
   it('appends prompt_suggestion as a final 💡 line', async () => {
     const { ctx, replies, edits } = makeCtx();
     const session = makeSession(async function* () {

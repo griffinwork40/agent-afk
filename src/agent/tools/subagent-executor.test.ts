@@ -34,6 +34,8 @@ function mockHandle(
     status: string;
     message: { role: string; content: string; timestamp: Date };
     error: Error;
+    /** In-turn SubagentStop note the executor appends to the tool_result. */
+    injectContext: string;
   }>,
 ): Partial<SubagentHandle> {
   return {
@@ -51,6 +53,9 @@ function mockHandle(
     } as SubagentResult),
     cancel: vi.fn().mockResolvedValue(undefined),
     teardown: vi.fn().mockResolvedValue(undefined),
+    // Defaults to undefined (no note) so existing tests see unchanged content.
+    // The in-turn-delivery suite overrides this to assert the append.
+    getLastStopInjectContext: vi.fn().mockReturnValue(overrides?.injectContext),
   };
 }
 
@@ -135,33 +140,49 @@ describe('SubagentExecutor', () => {
       expect(result.content).toContain('object');
     });
 
-    it('clamps max_turns to 1-50 range', async () => {
+    it('passes max_turns through with no upper ceiling; floors ≤0 to 0 (unlimited)', async () => {
       const handle = mockHandle();
       mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
 
-      // Test clamping high
+      // No ceiling: a high explicit value passes through verbatim (was clamped
+      // to 50 before uncapped-by-default).
       await executor.execute(
         makeCall({ input: { prompt: 'test', max_turns: 100 } }),
       );
       expect(mockSubagentMgr.forkSubagent).toHaveBeenCalledWith(
         expect.objectContaining({
-          config: expect.objectContaining({ maxTurns: 50 }),
+          config: expect.objectContaining({ maxTurns: 100 }),
         }),
       );
 
-      // Test clamping low
+      // Negatives floor to 0 = unlimited (AgentSession treats falsy maxTurns as
+      // no cap), not 1.
       (mockSubagentMgr.forkSubagent as ReturnType<typeof vi.fn>).mockClear();
       await executor.execute(
         makeCall({ input: { prompt: 'test', max_turns: -5 } }),
       );
       expect(mockSubagentMgr.forkSubagent).toHaveBeenCalledWith(
         expect.objectContaining({
-          config: expect.objectContaining({ maxTurns: 1 }),
+          config: expect.objectContaining({ maxTurns: 0 }),
         }),
       );
     });
 
-    it('uses defaults for optional fields', async () => {
+    it('passes max_tool_use_iterations through with no upper ceiling', async () => {
+      const handle = mockHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      await executor.execute(
+        makeCall({ input: { prompt: 'test', max_tool_use_iterations: 200 } }),
+      );
+      expect(mockSubagentMgr.forkSubagent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({ maxToolUseIterations: 200 }),
+        }),
+      );
+    });
+
+    it('uses defaults for optional fields (turns + tool-use rounds unlimited)', async () => {
       const handle = mockHandle();
       mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
 
@@ -170,11 +191,14 @@ describe('SubagentExecutor', () => {
       // apiKey is now resolved by the agent-layer credential resolver
       // (resolveCredentialForModel), not forwarded verbatim from defaultConfig.
       // The mock returns 'resolved-test-credential' for Anthropic-routed models.
+      // maxTurns / maxToolUseIterations both default to 0 = unlimited on the
+      // agent-tool dispatch path (uncapped by default; opt into a cap).
       expect(mockSubagentMgr.forkSubagent).toHaveBeenCalledWith(
         expect.objectContaining({
           idPrefix: 'agent-tool',
           config: expect.objectContaining({
-            maxTurns: 10,
+            maxTurns: 0,
+            maxToolUseIterations: 0,
             model: 'sonnet',
             apiKey: 'resolved-test-credential',
             systemPrompt: 'test system prompt',
@@ -1228,6 +1252,54 @@ describe('SubagentExecutor', () => {
       expect(capturedChildExecutorCtx!.cwd).toBe('/tmp/wt/feat-x');
     });
 
+    // Witness-trace propagation through the `agent` tool's recursive nesting —
+    // same shape as the cwd chain above. Without ctx.traceWriter, the per-call
+    // childManager had no writer and depth-2+ `agent` forks emitted zero
+    // subagent_lifecycle events (invisible in `afk trace show`).
+    it('forwards ctx.traceWriter to childManager and recursive child executor (depth ≥ 2 visibility)', async () => {
+      let capturedChildExecutorCtx: SubagentExecutorContext | undefined;
+
+      const handle = mockHandle();
+      const manager = {
+        forkSubagent: vi.fn().mockResolvedValue(handle),
+        teardownAll: vi.fn().mockResolvedValue(undefined),
+      };
+      const traceWriter = {
+        write: vi.fn(async () => undefined),
+        getTracePath: () => 'in-memory://trace',
+      };
+
+      const factory = vi.fn().mockImplementation(({ childExecutor }: { childExecutor: SubagentExecutor }) => {
+        capturedChildExecutorCtx = (childExecutor as any).ctx as SubagentExecutorContext;
+        return { name: 'p', query: vi.fn() };
+      });
+
+      const exec = new SubagentExecutor({
+        subagentManager: manager as any,
+        parentSession: {
+          sessionId: 'root',
+          getInputStreamRef: vi.fn(),
+          abortSignal: new AbortController().signal,
+        },
+        defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+        childProviderFactory: factory,
+        depth: 0,
+        maxDepth: DEFAULT_MAX_NESTING_DEPTH,
+        traceWriter: traceWriter as never,
+      });
+
+      await exec.execute(makeCall());
+
+      expect(capturedChildExecutorCtx).toBeDefined();
+      // (1) childManager carries the writer so depth-2 forks emit lifecycle events.
+      const childManager = capturedChildExecutorCtx!.subagentManager as unknown as {
+        parentTraceWriter: unknown;
+      };
+      expect(childManager.parentTraceWriter).toBe(traceWriter);
+      // (2) the recursive executor received it, so the chain holds depth-3+.
+      expect(capturedChildExecutorCtx!.traceWriter).toBe(traceWriter);
+    });
+
     // setCwd re-anchors mid-session (born-named `afk -w` worktree on turn 1):
     //   (1) the root manager (depth-1 forks) is re-anchored via manager.setCwd
     //   (2) the depth-2+ childManager built in execute() uses the new cwd
@@ -1412,6 +1484,41 @@ describe('SubagentExecutor', () => {
       expect(mockSubagentMgr.forkSubagent).not.toHaveBeenCalled();
     });
 
+    it('mode: "background" widens the fork wall-clock budget to SUBAGENT_BACKGROUND_TIMEOUT_MS', async () => {
+      const { SUBAGENT_BACKGROUND_TIMEOUT_MS } = await import('../subagent.js');
+      const registry = new BackgroundAgentRegistry({});
+      const { handle } = bgHandle();
+      const forkSpy = vi.fn().mockResolvedValue(handle);
+      mockSubagentMgr.forkSubagent = forkSpy;
+
+      const ctxWithBg: SubagentExecutorContext = {
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        backgroundRegistry: registry,
+        depth: 0,
+      };
+      const bgExecutor = new SubagentExecutor(ctxWithBg);
+      await bgExecutor.execute(
+        makeCall({ input: { prompt: 'long investigation', mode: 'background' } }),
+      );
+
+      expect(forkSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({ timeoutMs: SUBAGENT_BACKGROUND_TIMEOUT_MS }),
+        }),
+      );
+    });
+
+    it('foreground dispatch leaves timeoutMs unset so the manager fork default governs', async () => {
+      const forkSpy = mockSubagentMgr.forkSubagent as ReturnType<typeof vi.fn>;
+      await executor.execute(makeCall({ input: { prompt: 'quick check' } }));
+
+      expect(forkSpy).toHaveBeenCalledTimes(1);
+      const forkArg = forkSpy.mock.calls[0]![0] as { config: AgentConfig };
+      expect(forkArg.config.timeoutMs).toBeUndefined();
+    });
+
     it('mode: "background" with no registry: returns error and tears down the orphan handle', async () => {
       const { handle, teardownMock } = bgHandle();
       mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
@@ -1452,7 +1559,7 @@ describe('SubagentExecutor', () => {
       expect(payload.jobId).toMatch(/^bg-/);
       expect(payload.subagentId).toBe('sub-1');
       expect(payload.label).toBe('long investigation');
-      expect(payload.message).toMatch(/will NOT auto-inject/);
+      expect(payload.message).toMatch(/delivered into this context/);
 
       // Sanity: the job is observable via the registry; status still running.
       const observed = registry.get(payload.jobId);
@@ -1788,6 +1895,195 @@ describe('SubagentExecutor', () => {
       expect(exec.hasPromotableForeground()).toBe(false);
       expect(await exec.promoteActiveForeground()).toEqual([]);
       expect(handle.teardown).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // In-turn SubagentStop injectContext delivery.
+  //
+  // A foreground `agent` fork whose SubagentStop returns injectContext (e.g.
+  // the shadow-verify nudge) must deliver that note in the SAME turn — appended
+  // to the returned tool_result — and NOT via the parent's deferred input-stream
+  // queue. The executor coordinates this by calling
+  // `teardown({ deferInjectContextToCaller: true })` (which suppresses the queue
+  // push and records the note) and then appending `getLastStopInjectContext()`
+  // to the completion ToolResult in its finally.
+  // -------------------------------------------------------------------------
+  describe('in-turn SubagentStop injectContext delivery', () => {
+    it('appends the injectContext to the returned tool_result (success path)', async () => {
+      const nudge = '[framework-generated context: shadow-verify nudge]';
+      const handle = mockHandle({
+        message: { role: 'assistant', content: 'subagent findings', timestamp: new Date() },
+        injectContext: nudge,
+      });
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      const result = await executor.execute(makeCall());
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toBe(`subagent findings\n\n${nudge}`);
+    });
+
+    it('calls teardown with deferInjectContextToCaller: true (suppresses queue push)', async () => {
+      const handle = mockHandle({ injectContext: 'note' });
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      await executor.execute(makeCall());
+
+      // Deliver-once: the executor must ask the handle to DEFER queue delivery
+      // to the caller, so the note rides the tool_result exclusively.
+      expect(handle.teardown).toHaveBeenCalledWith({ deferInjectContextToCaller: true });
+    });
+
+    it('does NOT push to the parent input-stream / queue when delivering in-turn (deliver-once)', async () => {
+      // Full deliver-once assertion at the executor seam: with a real-shaped
+      // parent input-stream ref, neither channel is touched — the executor
+      // reads the note off the handle (deferred) instead.
+      const nudge = 'inline nudge body';
+      const queueSpy = vi.fn();
+      const pushSpy = vi.fn();
+      const handle = mockHandle({
+        message: { role: 'assistant', content: 'body', timestamp: new Date() },
+        injectContext: nudge,
+      });
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      const exec = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: {
+          sessionId: 'parent',
+          getInputStreamRef: () => ({ pushUserMessage: pushSpy, queueFrameworkContext: queueSpy }),
+          abortSignal: new AbortController().signal,
+        } as any,
+        defaultConfig: mockConfig,
+        depth: 0,
+      });
+
+      const result = await exec.execute(makeCall());
+
+      expect(result.content).toBe(`body\n\n${nudge}`);
+      // The mock handle does not fire the real SubagentStop → queue path, but
+      // the executor must never itself push to either channel for this path.
+      expect(queueSpy).not.toHaveBeenCalled();
+      expect(pushSpy).not.toHaveBeenCalled();
+    });
+
+    it('leaves content unchanged when no injectContext is produced (no stray separators)', async () => {
+      const handle = mockHandle({
+        message: { role: 'assistant', content: 'plain body', timestamp: new Date() },
+        // no injectContext → getLastStopInjectContext returns undefined
+      });
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      const result = await executor.execute(makeCall());
+
+      expect(result.content).toBe('plain body');
+      expect(result.content).not.toContain('\n\n');
+    });
+
+    it('does not append when getLastStopInjectContext returns empty string', async () => {
+      const handle = mockHandle({
+        message: { role: 'assistant', content: 'body', timestamp: new Date() },
+        injectContext: '',
+      });
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      const result = await executor.execute(makeCall());
+
+      expect(result.content).toBe('body');
+    });
+
+    it('appends the injectContext to the structured failure payload (failure path)', async () => {
+      const nudge = 'verify: this failure';
+      const handle = mockHandle({ status: 'failed', injectContext: nudge });
+      (handle as any).id = 'child-fail-inject';
+      (handle.runToResult as any).mockResolvedValue({
+        id: 'child-fail-inject',
+        status: 'failed',
+        error: new Error('kaboom'),
+        message: undefined,
+      });
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      const result = await executor.execute(makeCall());
+
+      expect(result.isError).toBe(true);
+      // The JSON payload is followed by the appended nudge, separated by \n\n.
+      // The JSON prefix must still parse on its own.
+      const [jsonPart, ...rest] = result.content.split('\n\n');
+      expect(rest.join('\n\n')).toBe(nudge);
+      const payload = JSON.parse(jsonPart!);
+      expect(payload.status).toBe('failed');
+      expect(payload.error).toBe('kaboom');
+    });
+  });
+
+  // ── Cancellation (soft-stop via SubagentControl) ──────────────────────────
+  // Unlike promotion, cancellation must work with NO background registry wired:
+  // it is how ESC / Ctrl+C unblocks a parent turn suspended on a subagent
+  // `await` (the "stuck mid-subagent, have to fork the session" bug). These
+  // tests use the default `executor`, which has no backgroundRegistry.
+  describe('cancellation (soft-stop via SubagentControl)', () => {
+    const tick = () => new Promise((r) => setImmediate(r));
+
+    it('hasActiveForeground is false when nothing is in flight', () => {
+      expect(executor.hasActiveForeground()).toBe(false);
+    });
+
+    it('cancelActiveForeground is a no-op returning 0 when nothing is in flight', async () => {
+      expect(await executor.cancelActiveForeground()).toBe(0);
+    });
+
+    it('tracks an in-flight foreground subagent and cancels it WITHOUT a registry', async () => {
+      const { handle, resolveRun } = hangingHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      // Start the foreground run but do NOT await — it hangs until resolveRun.
+      const execPromise = executor.execute(makeCall({ input: { prompt: 'deep investigation' } }));
+      await tick(); // let execute() fork + register the handle
+
+      expect(executor.hasActiveForeground()).toBe(true);
+      // Cancellation is available even though promotion is NOT (no registry).
+      expect(executor.hasPromotableForeground()).toBe(false);
+
+      const cancelled = await executor.cancelActiveForeground();
+      expect(cancelled).toBe(1);
+      expect(handle.cancel).toHaveBeenCalledTimes(1);
+
+      // In production handle.cancel() resolves runToResult; the mock's cancel is
+      // inert, so simulate that resolution to unblock execute() and let its
+      // finally clear the tracking map.
+      resolveRun({
+        id: 'test-handle',
+        status: 'cancelled' as SubagentResult['status'],
+        error: new Error('cancelled'),
+      } as SubagentResult);
+      await execPromise.catch(() => { /* failure payload path returns, no throw */ });
+      expect(executor.hasActiveForeground()).toBe(false);
+    });
+
+    it('cancel-all: cancels every in-flight foreground subagent and returns the count', async () => {
+      const a = hangingHandle();
+      const b = hangingHandle();
+      (a.handle as any).id = 'sub-a';
+      (b.handle as any).id = 'sub-b';
+      const forks = [a.handle, b.handle];
+      let i = 0;
+      mockSubagentMgr.forkSubagent = vi.fn().mockImplementation(() => Promise.resolve(forks[i++]));
+
+      const p1 = executor.execute(makeCall({ id: 'call-a', input: { prompt: 'first' } }));
+      const p2 = executor.execute(makeCall({ id: 'call-b', input: { prompt: 'second' } }));
+      await tick();
+
+      expect(executor.hasActiveForeground()).toBe(true);
+      expect(await executor.cancelActiveForeground()).toBe(2);
+      expect(a.handle.cancel).toHaveBeenCalledTimes(1);
+      expect(b.handle.cancel).toHaveBeenCalledTimes(1);
+
+      a.resolveRun({ id: 'sub-a', status: 'cancelled' as SubagentResult['status'], error: new Error('x') } as SubagentResult);
+      b.resolveRun({ id: 'sub-b', status: 'cancelled' as SubagentResult['status'], error: new Error('x') } as SubagentResult);
+      await Promise.allSettled([p1, p2]);
+      expect(executor.hasActiveForeground()).toBe(false);
     });
   });
 });

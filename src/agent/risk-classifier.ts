@@ -335,6 +335,28 @@ export function classifyRisk(
     return 'high';
   }
 
+  // ---- worktree lifecycle --------------------------------------------------
+  // Invariant: the `worktree` tool mutates git worktree state under
+  // .afk-worktrees/. `remove` with `force: true` is the only irreversible
+  // action — it discards uncommitted working-tree changes and commits-ahead
+  // trees that the non-forced path refuses (the branch ref always survives, but
+  // working-tree edits do not), so it is 'high' and gated behind approval.
+  // `list` is a dry-run sweep report (read-only) → 'safe'. Every other action
+  // (create/keep/release, and non-forced remove — which refuses dirty, locked,
+  // and commits-ahead trees) is reversible → 'medium', allowed unattended like
+  // other afk-managed writes. Without this branch the tool fell through to the
+  // 'safe' default below, so `remove --force` ran unattended with no approval.
+  if (tool === 'worktree') {
+    const obj =
+      typeof input === 'object' && input !== null
+        ? (input as Record<string, unknown>)
+        : {};
+    const action = typeof obj['action'] === 'string' ? obj['action'] : '';
+    if (action === 'list') return 'safe';
+    if (action === 'remove' && obj['force'] === true) return 'high';
+    return 'medium';
+  }
+
   // ---- browser actions -----------------------------------------------------
   // browser_act and browser_open drive a stateful headed browser session and
   // can submit forms, click "Delete", trigger purchases, or navigate to

@@ -627,6 +627,19 @@ function make400CreditExhaustedError(): Error {
   return err;
 }
 
+/**
+ * Build a transient rate-limit 429: a `retry-after` header and NO `|<unix-ts>`
+ * in the message (rate-limit-transient classification).
+ */
+function make429TransientError(retryAfterSec = 2): Error {
+  const err = new Error('rate_limit_error: Number of requests has exceeded your per-minute rate limit');
+  (err as Error & { status: number }).status = 429;
+  (err as Error & { headers: Record<string, string> }).headers = {
+    'retry-after': String(retryAfterSec),
+  };
+  return err;
+}
+
 describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
   beforeEach(() => {
     messagesCreateMock.mockReset();
@@ -999,6 +1012,98 @@ describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
       callIdx += 1;
       if (callIdx <= 2) throw make429NoTsError();
       return fromArray(makeTextStream('resumed on third attempt'));
+    });
+
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('hello'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
+    });
+
+    const collectPromise = collect(query);
+    await vi.runAllTimersAsync();
+    const events = await collectPromise;
+
+    const types = events.map((e) => e.type);
+    expect(events.filter((e) => e.type === 'paused')).toHaveLength(1);
+    expect(events.filter((e) => e.type === 'resumed')).toHaveLength(1);
+    expect(types).toContain('turn.completed');
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
+    expect(messagesCreateMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('rate-limit-transient: 429 + retry-after → silent wait → replay succeeds (no paused, no error)', async () => {
+    // Regression guard: a transient 429 (retry-after header, no |ts) used to
+    // surface as a fatal error the instant the SDK's own retries ran out —
+    // killing headless daemon cron tasks in seconds on account-rate-limit
+    // collisions. The retry layer must now honor retry-after and replay.
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      if (callIdx === 1) throw make429TransientError(2);
+      return fromArray(makeTextStream('recovered after transient 429'));
+    });
+
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('hello'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
+    });
+
+    const collectPromise = collect(query);
+    await vi.runAllTimersAsync(); // advance past the retry-after wait + jitter
+    const events = await collectPromise;
+
+    const types = events.map((e) => e.type);
+    // Transient retry is silent — no paused/resumed pair (this is not a
+    // subscription pause), no surfaced error, and the turn completes.
+    expect(types).not.toContain('paused');
+    expect(types).not.toContain('resumed');
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
+    expect(types).toContain('turn.completed');
+    expect(messagesCreateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('rate-limit-transient: budget exhaustion → error surfaces after 3 replays (4 calls total)', async () => {
+    // Every call rate-limits. The layer replays RATE_LIMIT_TRANSIENT_MAX_RETRIES
+    // (3) times, then surfaces the error instead of waiting forever.
+    messagesCreateMock.mockImplementation(() => {
+      throw make429TransientError(1);
+    });
+
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('hello'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
+    });
+
+    const collectPromise = collect(query);
+    await vi.runAllTimersAsync();
+    const events = await collectPromise;
+
+    const types = events.map((e) => e.type);
+    expect(types).not.toContain('paused');
+    expect(types).not.toContain('resumed');
+    const errors = events.filter((e) => e.type === 'error');
+    expect(errors).toHaveLength(1);
+    if (errors[0]?.type === 'error') {
+      expect((errors[0].error as Error & { status?: number }).status).toBe(429);
+    }
+    // 1 initial + 3 replays = 4 API calls.
+    expect(messagesCreateMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('rate-limit-transient does not disturb the oauth-limit path: 429+ts after a transient retry still pauses/resumes', async () => {
+    // Interleave the two kinds: call 1 is a transient 429 (retry-after), call 2
+    // is a subscription 429 with |ts, call 3 succeeds. The transient retry
+    // must be silent; the oauth-limit must still produce the paused → resumed
+    // lifecycle exactly as before.
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      if (callIdx === 1) throw make429TransientError(1);
+      if (callIdx === 2) throw make429UsageLimitError(5 * 60 * 1_000);
+      return fromArray(makeTextStream('resumed after oauth limit'));
     });
 
     const provider = new AnthropicDirectProvider();

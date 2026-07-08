@@ -399,8 +399,15 @@ describe('Config Loader', () => {
     });
 
     it('falls back to ~/.afk/AFK.md when cwd/AFK.md is absent', () => {
-      // Use homedir-based path since AFK_HOME is not set in tests
-      const homeAfkMd = join(process.env['HOME'] ?? process.env['USERPROFILE'] ?? '', '.afk', 'AFK.md');
+      // Mirror getAfkHome() precedence: the global test setup
+      // (redirect-paths-env.ts) points AFK_HOME at a tmp sentinel, so the
+      // user-scope AFK.md resolves under it; fall back to $HOME/.afk only
+      // if the redirect is opted out.
+      const homeAfkMd = join(
+        process.env['AFK_HOME'] ??
+          join(process.env['HOME'] ?? process.env['USERPROFILE'] ?? '', '.afk'),
+        'AFK.md',
+      );
       mockedExistsSync().mockImplementation((p) => {
         const s = String(p);
         if (s.endsWith('AFK.md')) return s === homeAfkMd;
@@ -697,6 +704,57 @@ describe('loadConfig() — interactive.suggestGhost JSON integration', () => {
     });
     const config = loadConfig();
     expect(config.interactive?.suggestGhost).toBeUndefined();
+  });
+});
+
+describe('loadConfig() — interactive.thinkingUi JSON integration', () => {
+  const mockedExistsSync = () => vi.mocked(fs.existsSync);
+  const mockedReadFileSync = () => vi.mocked(fs.readFileSync);
+
+  beforeEach(() => {
+    _resetConfigCache();
+    mockedExistsSync().mockImplementation(realFsModule.__realExistsSync);
+    mockedReadFileSync().mockImplementation(realFsModule.__realReadFileSync);
+  });
+
+  afterEach(() => {
+    mockedExistsSync().mockImplementation(realFsModule.__realExistsSync);
+    mockedReadFileSync().mockImplementation(realFsModule.__realReadFileSync);
+    _resetConfigCache();
+  });
+
+  const withConfigJson = (json: unknown) => {
+    mockedExistsSync().mockImplementation((p) => {
+      if (String(p).endsWith('afk.config.json')) return true;
+      return realFsModule.__realExistsSync(p as fs.PathLike);
+    });
+    mockedReadFileSync().mockImplementation((p, ...args) => {
+      if (String(p).endsWith('afk.config.json')) {
+        return JSON.stringify(json);
+      }
+      return (realFsModule.__realReadFileSync as Function)(p, ...args);
+    });
+  };
+
+  it.each(['summary', 'live', 'digest', 'off'] as const)(
+    'surfaces valid interactive.thinkingUi=%s from JSON config',
+    (mode) => {
+      withConfigJson({ interactive: { thinkingUi: mode } });
+      const config = loadConfig();
+      expect(config.interactive?.thinkingUi).toBe(mode);
+    },
+  );
+
+  it('ignores an invalid interactive.thinkingUi value (leaves it undefined)', () => {
+    withConfigJson({ interactive: { thinkingUi: 'verbose' } });
+    const config = loadConfig();
+    expect(config.interactive?.thinkingUi).toBeUndefined();
+  });
+
+  it('leaves interactive.thinkingUi undefined when not set in JSON', () => {
+    withConfigJson({ interactive: { worktreeAutoname: true } });
+    const config = loadConfig();
+    expect(config.interactive?.thinkingUi).toBeUndefined();
   });
 });
 

@@ -1,5 +1,15 @@
 # Rendering Architecture — Desired State
 
+> **SUPERSEDED (2026-07-02).** All five root-cause fixes this target model
+> called for have landed (checkpoints 2a–2e; see `commit-coordinator.ts`,
+> `stream-renderer-lifecycle.ts:169-207`, `stream-renderer-source.ts:37`,
+> `tool-lane-render-grouping.ts:54-79`). Two items were deliberately built
+> differently and are NOT gaps: the entry state machine exists as enforced
+> field-mutation invariants rather than a formal enum type, and the property
+> tests are bounded hand-rolled loops (n≤30), not fast-check generators. Do
+> not implement against this doc. For the resize/reflow layer added 2026-07,
+> see `docs/tui-resize-reflow.md`.
+
 > Phase 0 target model. Addresses every "Required properties" bullet from the handoff brief.
 
 ---

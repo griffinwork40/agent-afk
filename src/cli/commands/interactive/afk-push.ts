@@ -36,6 +36,17 @@ import type { TerminalState, TerminalKind } from './terminal-state.js';
  *  low enough to bound notification flood if the model loops. */
 export const MAX_PUSHES_PER_SESSION = 20;
 
+/**
+ * Maximum length (in characters) of the rawBody fallback used when no
+ * structured terminal-state fields parsed. Caps the Telegram payload so an
+ * oversized model body cannot carry unbounded prose into the push channel.
+ * Any excess is replaced with a `[truncated]` sentinel.
+ *
+ * The structured-field path is always preferred; this limit only applies to
+ * the last-resort rawBody fallback (see {@link formatTerminalStateForTelegram}).
+ */
+export const MAX_RAW_BODY_FALLBACK_CHARS = 500;
+
 const KIND_LABEL: Record<TerminalKind, string> = {
   done: '✅ Done',
   blocked: '⛔ Blocked',
@@ -127,8 +138,15 @@ export function formatTerminalStateForTelegram(
   }
   // Fallback: nothing structured parsed, but the parser found a verdict block.
   // Use the model's own terminal-state body (not tool output) as a last resort.
+  // Clip to MAX_RAW_BODY_FALLBACK_CHARS so an oversized model body cannot carry
+  // unbounded prose into the Telegram push channel.
   if (lines.length === 0 && state.rawBody.trim().length > 0) {
-    lines.push(state.rawBody.trim());
+    const raw = state.rawBody.trim();
+    lines.push(
+      raw.length > MAX_RAW_BODY_FALLBACK_CHARS
+        ? `${raw.slice(0, MAX_RAW_BODY_FALLBACK_CHARS)}… [truncated]`
+        : raw,
+    );
   }
   if (downgraded) {
     lines.push(

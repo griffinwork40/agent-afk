@@ -2,7 +2,7 @@
 name: review
 description: "Dispatches parallel dimension agents across a diff, PR (URL or number), commit SHA, branch, staged changes, or patch file — covering security, correctness, api-compat, test-coverage, and perf-observability — synthesizes findings by severity, and emits a merge recommendation. Use when changes are ready for review before merge. Read-only: this skill analyzes and reports only — it never edits files, commits, pushes, comments on a PR, or modifies the PR description."
 argument-hint: "[diff|pr-url|pr-number|commit-sha|branch|--staged|--head] [--light] [--change-type hotfix|feature|refactor|dep-bump|new-service] [--post github|telegram] [--brief <text>|--spec <path>]"
-context: fork
+context: load
 ---
 
 ## Read-only — hard constraint

@@ -40,6 +40,15 @@ export interface CommitModeInput {
    * Drives the EXACT `overflowHasPending` signal (see decideCommitMode).
    */
   committedBandPaintedRows: number;
+  /**
+   * F2 (fail-safe commit mode on stale geometry): true when a resize landed
+   * and no repaint has yet re-established real frame geometry (set by the
+   * SIGWINCH-immediate handler, cleared by repositionCommittedBand — see
+   * TerminalCompositor.bandGeometryStale). While true, `committedBandBottomRow`
+   * is a PRE-resize row number in a coordinate space the current commit's
+   * `frameTop` no longer shares — see `overflowPriorContiguous` below.
+   */
+  geometryStale: boolean;
 }
 
 /** The routing decision + the geometry the caller's phases consume. */
@@ -145,15 +154,41 @@ export function decideCommitMode(input: CommitModeInput): CommitMode {
     committedBand,
     committedBandBottomRow,
     committedBandPaintedRows,
+    geometryStale,
   } = input;
 
-  const fitsAboveFrame = prevTopRow > 1 && lineCount <= frameTop - anchorFloor;
+  // F2 (fail-safe commit mode on stale geometry): `!geometryStale` extends the
+  // existing BLOCKER-1 guard (`prevTopRow > 1`) from "frame top is literally
+  // unknown" to "frame top is potentially WRONG" — when geometryStale, `frameTop`
+  // may have been derived from the committedBandBottomRow+1 floor using a
+  // committedBandBottomRow that describes the PRE-resize screen, a coordinate
+  // space the post-resize frame does not share. Forcing fitsAboveFrame false
+  // routes the commit through the same safe band-hold deferral BLOCKER-1 uses,
+  // instead of merge-then-cap silently truncating content that was never
+  // actually scrolled into real terminal scrollback (see
+  // terminal-compositor.resize-stale-width.repro.test.ts's H2 case).
+  const fitsAboveFrame = prevTopRow > 1 && !geometryStale && lineCount <= frameTop - anchorFloor;
 
   const room = Math.max(0, frameTop - anchorFloor);
   const overflowTargetBottom = Math.max(1, rows - 1 - extraRows);
   const maxBandModel = Math.max(0, overflowTargetBottom - anchorFloor);
+  // Invariant (committedBand is always frame-adjacent by construction): the
+  // class-level invariant on `committedBand` guarantees it holds ONLY the
+  // contiguous on-screen run immediately above wherever the live frame
+  // currently sits — that logical fact does not change across a resize, only
+  // the ROW NUMBERS describing it do. When geometryStale, `committedBandBottomRow
+  // === frameTop - 1` is comparing a pre-resize row number against a frameTop
+  // that is itself a fallback (fitsAboveFrame is forced false above, so frameTop
+  // took the `rows-1-extraRows` branch) — an exact-match test that can never
+  // pass by construction. Trust the invariant directly instead: a non-empty,
+  // anchor-safe band is mergeable regardless of the stale row arithmetic, so it
+  // rides into the band-hold model as PENDING content rather than being treated
+  // as "not contiguous" and silently left to be overwritten by the next frame
+  // render with no scrollback copy ever having been made.
   const overflowPriorContiguous =
-    committedBand.length > 0 && anchorRow <= 1 && committedBandBottomRow === frameTop - 1;
+    committedBand.length > 0 &&
+    anchorRow <= 1 &&
+    (geometryStale || committedBandBottomRow === frameTop - 1);
   const overflowRun = overflowPriorContiguous ? [...committedBand, ...textLines] : textLines;
   const overflowHasPending =
     overflowPriorContiguous && committedBand.length > committedBandPaintedRows;

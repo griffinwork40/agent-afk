@@ -23,6 +23,10 @@ import type { SkillExecutionContext } from '../../index.js';
 import { SubagentManager } from '../../../agent/subagent.js';
 import type { SubagentHandle } from '../../../agent/subagent/handle.js';
 import { runWave } from '../../../agent/subagent/wave.js';
+import {
+  settleWithConcurrencyLimit,
+  DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS,
+} from '../../../agent/concurrency-pool.js';
 import { describeFailure } from '../../../agent/subagent/result.js';
 import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
 import type { CanUseTool } from '../../../agent/types/sdk-types.js';
@@ -30,6 +34,8 @@ import { researchAgent } from '../../_agents/research-agent.js';
 import { gitInvestigator } from '../../_agents/git-investigator.js';
 import { vendoredToolAllowlist } from '../../_agents/to-definition.js';
 import { classifyBashCommand } from '../../../agent/tools/readonly-bash.js';
+import { describeSpawnCwdError } from '../../../utils/spawn-cwd-error.js';
+import { TimeoutError } from '../../../utils/errors.js';
 import type {
   DiagnosisResult,
   Hypothesis,
@@ -46,6 +52,15 @@ import {
 } from './verifier.js';
 
 const execFile = promisify(execFileCallback);
+
+// Wall-clock ceiling for a single hypothesis verifier fork. Verification is
+// strictly read-only (createVerifierCanUseTool denies bash/edit/write) — static
+// code-reading of one hypothesis — so it needs far less than the 20-min default
+// subagent ceiling (SUBAGENT_DEFAULT_TIMEOUT_MS). Non-converging verifiers that
+// ran to the 20-min wall (~100k+ tokens each) were a primary driver of the
+// usage-limit burn; 10 min stays generous for read-only work. Per-fork only —
+// this does NOT touch the shared dispatch primitive (that budget is separate).
+const VERIFIER_TIMEOUT_MS = 10 * 60_000;
 
 // ---------------------------------------------------------------------------
 // Tool-permission helpers
@@ -232,6 +247,7 @@ async function testHypothesisInWorktree(
         model: subagentModel,
         systemPrompt: `${verifyPrompt}\n\nYou are testing in an isolated worktree at: ${worktreePath}`,
         canUseTool: createVerifierCanUseTool(),
+        timeoutMs: VERIFIER_TIMEOUT_MS,
       },
       idPrefix: `diagnose-verifier-${hypothesis.id}`,
       agentType: `diagnose-verifier-${hypothesis.id}`,
@@ -252,23 +268,37 @@ async function testHypothesisInWorktree(
     const verificationResult = await verifierHandle.runToResult(userPrompt);
 
     if (verificationResult.status !== 'succeeded' || !verificationResult.output) {
+      // A verifier that exhausts VERIFIER_TIMEOUT_MS surfaces here: runToResult
+      // catches the withTimeout rejection internally and returns a failed result
+      // carrying the TimeoutError, rather than throwing into the catch below.
+      // Flag it so the surfaced verification_results distinguish an out-of-time
+      // verifier from one that genuinely falsified the hypothesis — both
+      // otherwise share this exact {predicted_pass:false, confidence:0} shape.
       return {
         hypothesis_id: hypothesis.id,
         predicted_pass: false,
         regressions: [],
         confidence: 0,
         verification_log: `Verification failed: ${describeFailure(verificationResult)}`,
+        timed_out: verificationResult.error instanceof TimeoutError,
       };
     }
 
     return verificationResult.output;
   } catch (error) {
+    // Spawn ENOENT masquerade: `git worktree add` with a dead `cwd: repoPath`
+    // rejects as `spawn git ENOENT` — naming git, not the missing repo dir.
+    // Translate post-failure (statSync on error path only — no TOCTOU).
     return {
       hypothesis_id: hypothesis.id,
       predicted_pass: false,
       regressions: [],
       confidence: 0,
-      verification_log: `Error during verification: ${error instanceof Error ? error.message : String(error)}`,
+      verification_log: `Error during verification: ${describeSpawnCwdError(error, repoPath)}`,
+      // Defensive: a timeout normally surfaces via the runToResult-failed path
+      // above (it does not throw), but flag it here too so no timeout escapes
+      // unlabelled if the abort cascade ever rejects into this catch.
+      timed_out: error instanceof TimeoutError,
     };
   } finally {
     // Tear down the verifier handle (fires SubagentStop with the real
@@ -624,21 +654,49 @@ export async function handler(
     };
   }
 
-  const verificationPromises = hypotheses_to_test.map((hypothesis) =>
-    testHypothesisInWorktree(
-      hypothesis,
-      reproduceCommand,
-      parsedInput.repoPath,
-      parentSessionId,
-      verifyPrompt,
-      manager,
-      skillCallId,
-      baseline,
-      subagentModel,
-    ),
+  // Invariant: every subagent fan-out site drains the shared bounded pool, so
+  // no single site can storm memory / the 429 ceiling with unbounded parallel
+  // forks. This verifier wave previously used a raw `Promise.all` — the one
+  // fan-out that bypassed the pool the research wave above (runWave) already
+  // uses. Each verifier forks a full AgentSession that runs tests in an
+  // isolated worktree (the heaviest lane here), so route it through
+  // settleWithConcurrencyLimit too. `testHypothesisInWorktree` never throws
+  // (its try/catch/finally converts every failure into a VerificationResult),
+  // so in practice every settled entry is 'fulfilled'; the 'rejected' arm is a
+  // defensive fallback that preserves array shape + order for the winner
+  // selection below. (Cap is the shared default; per-wave tuning of
+  // concurrency/timeout is a separate cost-budget change, not this one.)
+  const settledVerifications = await settleWithConcurrencyLimit(
+    hypotheses_to_test,
+    DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS,
+    (hypothesis) =>
+      testHypothesisInWorktree(
+        hypothesis,
+        reproduceCommand,
+        parsedInput.repoPath,
+        parentSessionId,
+        verifyPrompt,
+        manager,
+        skillCallId,
+        baseline,
+        subagentModel,
+      ),
   );
-
-  const verificationResults = await Promise.all(verificationPromises);
+  const verificationResults: VerificationResult[] = settledVerifications.map(
+    (settled, i) =>
+      settled.status === 'fulfilled'
+        ? settled.value
+        : {
+            hypothesis_id: hypotheses_to_test[i]!.id,
+            predicted_pass: false,
+            regressions: [],
+            confidence: 0,
+            verification_log: `Verification worker rejected: ${
+              settled.reason instanceof Error ? settled.reason.message : String(settled.reason)
+            }`,
+            timed_out: settled.reason instanceof TimeoutError,
+          },
+  );
 
   // Phase 5: Select winner. Among hypotheses whose predicted_pass is true with
   // no regressions, take the highest-confidence one (tiebreak); fall back

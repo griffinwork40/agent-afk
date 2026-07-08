@@ -1280,6 +1280,7 @@ describe('finalizeOrchestrator — thinking summary routing', () => {
       thinkingLane,
       thinkingMode: 'summary' as const,
       streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
     };
     const source = freshSourceState(undefined);
     // Per-phase model: phases commit inline DURING the turn; finalize seals a
@@ -1311,6 +1312,7 @@ describe('finalizeOrchestrator — thinking summary routing', () => {
       thinkingLane,
       thinkingMode: 'summary' as const,
       streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
     };
     const source = freshSourceState(undefined);
 
@@ -1340,6 +1342,7 @@ describe('finalizeOrchestrator — thinking summary routing', () => {
       thinkingLane,
       thinkingMode: 'summary' as const,
       streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
     };
     const source = freshSourceState(undefined);
     // Trailing phase in flight → finalize seals it; compositor is null so the
@@ -1395,6 +1398,7 @@ describe('finalizeOrchestrator — thinking summary routing', () => {
       thinkingLane,
       thinkingMode: 'summary' as const,
       streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       coordinator: coordinator as any,
     };
@@ -1469,6 +1473,7 @@ describe('finalizeOrchestrator — thinking summary routing', () => {
       thinkingLane,
       thinkingMode: 'summary' as const,
       streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
       coordinator,
     };
     const source = freshSourceState(undefined);

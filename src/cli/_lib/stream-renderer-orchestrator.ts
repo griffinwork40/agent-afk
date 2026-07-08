@@ -30,7 +30,7 @@ import {
 import { stripCommandTags, extractSkillTag } from '../slash/_lib/command-tags.js';
 import { styleForCategory, SUBAGENT_TOOLS, DAG_TOOLS } from '../tool-category.js';
 import { formatThinkingParagraph } from '../commands/interactive/thinking-paragraph.js';
-import { formatProgressBanner } from '../commands/interactive/progress-banner.js';
+import { deriveProgressActivity, formatProgressBanner } from '../commands/interactive/progress-banner.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import {
   emitPanel,
@@ -68,11 +68,13 @@ export interface OrchestratorCtx {
    * `'off'` suppresses thinking entirely (no buffer, no overlay, no summary).
    * `'summary'` buffers and emits a collapsed summary on finalize.
    * `'live'` shows a streaming preview overlay and the finalize summary.
+   * `'digest'` shows the live streaming overlay (like `'live'`) AND commits a
+   * capped reasoning paragraph to scrollback above the summary at each phase seal.
    */
   // Optional: omitted callers (tests, non-TTY surfaces) behave as 'summary' —
   // the consuming checks are `=== 'off'` / `!== 'off'` / `=== 'live'`, all of
   // which treat undefined as the documented summary default.
-  thinkingMode?: 'off' | 'summary' | 'live';
+  thinkingMode?: 'off' | 'summary' | 'live' | 'digest';
   /** Lazy holder so callers can swap StreamingMarkdownRenderer in/out. */
   streamingMarkdown: { current: StreamingMarkdownRenderer | null };
   /**
@@ -190,11 +192,31 @@ export function handleOrchestratorEvent(
         // next orchestrator tool_use_detail fires. In-flight roots stay in
         // the lane (`flushCompletedRoots` filters them out).
         if (ctx.isTTY) {
-          // Order: prior completed tool first, THEN the thinking phase that
-          // produced THIS tool — so the inline "◆ thought for Xs" line hugs the
-          // tool it preceded (and sits below the prior tool). commitThinkingPhase
-          // is a no-op when no phase is pending.
-          flushToolLaneToScrollback(ctx);
+          // Invariant (cross-flush run accumulation + append-only ordering):
+          // when the incoming tool would EXTEND a run of the same flat tool
+          // already completed in the lane, skip the eager flush so the run
+          // accumulates and commits as one grouped `toolName ×N` block when it
+          // breaks — UNLESS a thinking phase is pending. A pending thought MUST
+          // break the run: commitThinkingPhase below commits `◆ thought for Xs`
+          // inline, and a held run would otherwise commit AFTER that thought,
+          // reordering it above its own tool group (scrollback is append-only,
+          // so it cannot be fixed post-commit). `thinkingPhaseStartedAt == null`
+          // is exactly "no thought pending" (set only in non-off thinking modes
+          // by the 'thinking' handler below). peekTrailingCompletedRootToolName
+          // returns undefined for NESTING/in-flight trailing roots, so dispatch
+          // tools and parallel blocks are unaffected.
+          const trailingRun = ctx.toolLane.peekTrailingCompletedRootToolName();
+          const holdRun =
+            trailingRun !== undefined &&
+            trailingRun === chunk.toolName &&
+            source.thinkingPhaseStartedAt == null;
+          if (!holdRun) {
+            // Order: prior completed tool first, THEN the thinking phase that
+            // produced THIS tool — so the inline "◆ thought for Xs" line hugs the
+            // tool it preceded (and sits below the prior tool). commitThinkingPhase
+            // is a no-op when no phase is pending.
+            flushToolLaneToScrollback(ctx);
+          }
           commitThinkingPhase(source, ctx);
         }
         // Invariant: skill-nesting gate — when this is a skill-dispatch turn
@@ -312,11 +334,11 @@ export function handleOrchestratorEvent(
           source.thinkingPhaseStartedAt = Date.now();
         }
         ctx.thinkingLane.push(chunk.content);
-        // Only repaint the overlay in 'live' mode — summary mode buffers
-        // silently and has nothing overlay-visible to push (the stage rail
-        // moved to a footer bar and is repainted via onStageChange in
-        // stream-renderer.ts, not through setComposedOverlay).
-        if (ctx.isTTY && ctx.thinkingMode === 'live') setComposedOverlay(ctx);
+        // Repaint the overlay in 'live' and 'digest' modes — both stream the
+        // live preview. ('summary' buffers silently, with nothing overlay-visible
+        // to push; the stage rail moved to a footer bar and is repainted via
+        // onStageChange in stream-renderer.ts, not through setComposedOverlay.)
+        if (ctx.isTTY && (ctx.thinkingMode === 'live' || ctx.thinkingMode === 'digest')) setComposedOverlay(ctx);
       }
       return;
     }
@@ -384,8 +406,8 @@ export function setComposedOverlay(ctx: OrchestratorCtx): void {
   }
 
   // Live thinking preview — rendered above the tool lane so the user sees
-  // the model's current reasoning while it streams. Only in 'live' mode;
-  // 'summary' mode buffers silently and emits a single line at turn-end.
+  // the model's current reasoning while it streams. In 'live' and 'digest'
+  // modes; 'summary' buffers silently and emits a single line at turn-end.
   //
   // Rendered as a wrapped, soft-capped paragraph (`◆ thinking` header +
   // indented body, ~5 visible lines, `⋯ +N chars earlier` footer when the
@@ -399,7 +421,7 @@ export function setComposedOverlay(ctx: OrchestratorCtx): void {
   // block in that file for why parallel subagents stay on the single-line
   // tail treatment instead of the paragraph format.
   const parts: string[] = [];
-  if (ctx.thinkingMode === 'live' && ctx.thinkingLane.hasBufferedContent()) {
+  if ((ctx.thinkingMode === 'live' || ctx.thinkingMode === 'digest') && ctx.thinkingLane.hasBufferedContent()) {
     const paragraph = formatThinkingParagraph(ctx.thinkingLane.peek(), {
       cols: getTerminalWidth(),
     });
@@ -407,8 +429,13 @@ export function setComposedOverlay(ctx: OrchestratorCtx): void {
   }
   if (ctx.toolLane.hasPending()) parts.push(ctx.toolLane.getOverlay());
   const bannerLines: string[] = [];
+  // Grounded activity: the model's in-flight thinking clause (current
+  // uncommitted phase only — peekPhase clears at each seal boundary, so a
+  // stale clause never outlives the phase that produced it). Falls back to
+  // the event's own tool-derived summary inside formatProgressBanner.
+  const activity = deriveProgressActivity(ctx.thinkingLane.peekPhase());
   for (const progress of ctx.lastProgressByTask.values()) {
-    bannerLines.push(...formatProgressBanner(progress));
+    bannerLines.push(...formatProgressBanner(progress, undefined, activity));
   }
   if (bannerLines.length > 0) parts.push(bannerLines.join('\n'));
   ctx.compositor.setOverlay(parts.join('\n'));

@@ -217,6 +217,23 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_MAX_TOOL_USE_ITERATIONS',
+    description:
+      'Opt-in ceiling on tool-use rounds per turn for TOP-LEVEL (non-subagent) sessions, on both ' +
+      'providers. Mirrors the maxToolUseIterations config key / max_tool_use_iterations tool param. ' +
+      'Unset, non-numeric, or <=0 means unlimited (the default — zero behavior change): a top-level ' +
+      'turn ends only when the model stops calling tools, the abort signal fires, the provider ' +
+      'errors, or the dollar budget trips. A positive integer N makes top-level turns wind down ' +
+      'gracefully after N tool rounds (one tools-stripped final round). An explicit config/CLI ' +
+      'value wins over this env default. Does NOT affect subagent forks — they keep their own ' +
+      'non-zero anti-hang default (SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS) regardless of this var.',
+    type: 'number',
+    required: false,
+    default: '0',
+    example: '150',
+    category: 'model',
+  },
+  {
     name: 'AFK_MEMORY_EVIDENCE_GATE',
     description:
       'Opt-in (set to 1) evidence gate for durable memory writes. When enabled, a codebase ' +
@@ -399,6 +416,19 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     default: 'adaptive',
     example: 'adaptive',
     category: 'model',
+  },
+  {
+    name: 'AFK_THINKING_UI',
+    description:
+      'Default thinking-display mode for the interactive REPL: summary | live | digest | off. ' +
+      'Display-only — controls how extended-thinking blocks render, never whether thinking runs (cost/latency unaffected). ' +
+      'Overridden per-launch by --thinking-ui and mutable mid-session via /thinking. ' +
+      'Precedence: --thinking-ui flag > this env > interactive.thinkingUi config > live. Invalid values are ignored.',
+    type: 'string',
+    required: false,
+    default: 'live',
+    example: 'digest',
+    category: 'misc',
   },
   {
     name: 'AFK_TIMEOUT_MS',
@@ -772,6 +802,16 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     name: 'AFK_SHELL_PASSTHROUGH',
     description:
       'Enable the interactive REPL `!cmd` / `!&cmd` shell-passthrough feature. On by default. Set to 0, false, off, or no (case-insensitive) to disable, so inputs beginning with ! are sent to the model as literal text instead of being executed as shell commands. Equivalent to the --no-shell-passthrough flag.',
+    type: 'boolean',
+    required: false,
+    default: '1',
+    example: '0',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_BG_AUTO_DELIVER',
+    description:
+      'Auto-deliver background subagent results into the model context on the next user turn (interactive REPL). On by default. Set to 0, false, off, or no (case-insensitive) to disable, restoring the manual /bgsub:join retrieval flow.',
     type: 'boolean',
     required: false,
     default: '1',
@@ -1152,6 +1192,7 @@ export const env = {
   get AFK_MAX_BUDGET_USD(): string | undefined { return process.env['AFK_MAX_BUDGET_USD']; },
   get AFK_MAX_OUTPUT_TOKENS(): string | undefined { return process.env['AFK_MAX_OUTPUT_TOKENS']; },
   get AFK_MAX_TOKENS(): string | undefined { return process.env['AFK_MAX_TOKENS']; },
+  get AFK_MAX_TOOL_USE_ITERATIONS(): string | undefined { return process.env['AFK_MAX_TOOL_USE_ITERATIONS']; },
   get AFK_MEMORY_EVIDENCE_GATE(): string | undefined { return process.env['AFK_MEMORY_EVIDENCE_GATE']; },
   get AFK_MODEL(): string | undefined { return process.env['AFK_MODEL']; },
   get AFK_MODEL_LARGE(): string | undefined { return process.env['AFK_MODEL_LARGE']; },
@@ -1174,6 +1215,7 @@ export const env = {
   get AFK_TASK_BUDGET(): string | undefined { return process.env['AFK_TASK_BUDGET']; },
   get AFK_TEMPERATURE(): string | undefined { return process.env['AFK_TEMPERATURE']; },
   get AFK_THINKING(): string | undefined { return process.env['AFK_THINKING']; },
+  get AFK_THINKING_UI(): string | undefined { return process.env['AFK_THINKING_UI']; },
   get AFK_TIMEOUT_MS(): string | undefined { return process.env['AFK_TIMEOUT_MS']; },
   get CLAUDE_MODEL(): string | undefined { return process.env['CLAUDE_MODEL']; },
 
@@ -1238,6 +1280,7 @@ export const env = {
   get AFK_AUTO_ROUTING(): string | undefined { return process.env['AFK_AUTO_ROUTING']; },
   get AFK_INTERNAL(): string | undefined { return process.env['AFK_INTERNAL']; },
   get AFK_SHELL_PASSTHROUGH(): string | undefined { return process.env['AFK_SHELL_PASSTHROUGH']; },
+  get AFK_BG_AUTO_DELIVER(): string | undefined { return process.env['AFK_BG_AUTO_DELIVER']; },
 
   // UI / output
   get AFK_BANNER_PLAIN(): string | undefined { return process.env['AFK_BANNER_PLAIN']; },

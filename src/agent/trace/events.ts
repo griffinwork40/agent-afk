@@ -108,6 +108,7 @@ export const SubagentSucceededPayloadSchema = z.object({
   turnCount: z.number().int().nonnegative(),
   totalCostUsd: z.number().nonnegative().optional(),
   outputBytes: z.number().int().nonnegative(),
+  stopReason: z.string().optional(),
 });
 
 export const SubagentFailedPayloadSchema = z.object({
@@ -174,12 +175,20 @@ export const BackgroundAgentJoinedPayloadSchema = z.object({
   jobStatus: z.enum(['completed', 'failed', 'cancelled']),
 });
 
+export const BackgroundAgentDeliveredPayloadSchema = z.object({
+  transition: z.literal('delivered'),
+  jobId: z.string(),
+  subagentId: z.string(),
+  jobStatus: z.enum(['completed', 'failed', 'cancelled']),
+});
+
 export const BackgroundAgentPayloadSchema = z.discriminatedUnion('transition', [
   BackgroundAgentStartedPayloadSchema,
   BackgroundAgentCompletedPayloadSchema,
   BackgroundAgentFailedPayloadSchema,
   BackgroundAgentCancelledPayloadSchema,
   BackgroundAgentJoinedPayloadSchema,
+  BackgroundAgentDeliveredPayloadSchema,
 ]);
 
 // ---------------------------------------------------------------------------
@@ -375,6 +384,7 @@ export const SessionPhaseNameSchema = z.enum([
   'loop_start',
   'loop_end',
   'model_ttfb',
+  'rate_limit',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

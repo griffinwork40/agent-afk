@@ -22,6 +22,7 @@ import { upsertEnvVar } from '../utils/envFile.js';
 import { getEnvConfigPath } from '../paths.js';
 import { env } from '../config/env.js';
 import { withStdinClaim } from '../cli/input/stdin-claim.js';
+import { promptSecret } from '../utils/prompt-secret.js';
 
 const TELEGRAM_API = 'https://api.telegram.org';
 
@@ -225,48 +226,6 @@ function prompt(question: string): Promise<string> {
       });
     }),
   );
-}
-
-/**
- * Prompt for a secret value without echoing characters to the terminal.
- *
- * Requires an interactive TTY — non-interactive callers must supply secrets
- * via environment variables (`TELEGRAM_BOT_TOKEN`) or the config file, not
- * stdin. Falling back to plain readline `prompt()` would echo every keystroke
- * to stdout, silently regressing the masking guarantee.
- */
-function promptSecret(question: string): Promise<string> {
-  if (!process.stdin.isTTY) {
-    console.error(chalk.red(`Cannot securely prompt for secret on a non-TTY stdin: "${question.trim()}"`));
-    console.error(chalk.gray('  Supply TELEGRAM_BOT_TOKEN via environment variable or ~/.afk/config/afk.env instead.'));
-    process.exit(1);
-  }
-  return new Promise((resolve) => {
-    process.stdout.write(question);
-    const chars: string[] = [];
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.setEncoding('utf-8');
-    const onData = (ch: string) => {
-      if (ch === '\r' || ch === '\n' || ch === '\u0004' /* Ctrl-D */) {
-        process.stdin.setRawMode(false);
-        process.stdin.pause();
-        process.stdin.removeListener('data', onData);
-        process.stdout.write('\n');
-        resolve(chars.join('').trim());
-      } else if (ch === '\u0003' /* Ctrl-C */) {
-        process.stdin.setRawMode(false);
-        process.stdin.pause();
-        process.stdout.write('\n');
-        process.exit(1);
-      } else if (ch === '\u007f' /* Backspace */) {
-        chars.pop();
-      } else {
-        chars.push(ch);
-      }
-    };
-    process.stdin.on('data', onData);
-  });
 }
 
 /**

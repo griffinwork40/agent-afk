@@ -1,0 +1,210 @@
+/**
+ * Agent tool input parsing.
+ *
+ * Extracted from `subagent-executor.ts` `execute()`: the `AgentInput` shape and
+ * the `parseAgentInput` validator. Pure — no dependency on the executor
+ * instance or its context.
+ *
+ * @module agent/tools/subagent/input-parse
+ */
+
+import { isAbsolute } from 'node:path';
+
+export type AgentExecutionMode = 'foreground' | 'background';
+
+export interface AgentInput {
+  prompt: string;
+  model?: string;
+  /** Conversation-turn cap. `0` (the default) means unlimited — no ceiling. */
+  max_turns?: number;
+  /**
+   * True when the caller supplied `max_turns` explicitly. Distinguishes the
+   * parse-time default (0 = unlimited) from a deliberate value so a named
+   * agent's `maxTurns` frontmatter can act as the default without being able
+   * to override an explicit per-call budget.
+   */
+  max_turns_explicit: boolean;
+  /**
+   * Tool-use-round cap within the child's single turn (anti-hang ceiling).
+   * `0` (the default) means unlimited on this dispatch path. A positive value
+   * caps rounds; honored uniformly by both providers (see
+   * shared/tool-loop-cap.ts).
+   */
+  max_tool_use_iterations?: number;
+  /** True when the caller supplied `max_tool_use_iterations` explicitly. */
+  max_tool_use_iterations_explicit: boolean;
+  id_prefix?: string;
+  /**
+   * Named agent type to dispatch (`agent_type`, alias `subagent_type`).
+   * Resolved against {@link SubagentExecutorContext.agentRegistry}.
+   */
+  agent_type?: string;
+  /** Execution mode. Defaults to 'foreground' (existing await-and-return semantic). */
+  mode: AgentExecutionMode;
+  /**
+   * Optional working directory the subagent runs in. When omitted, the child
+   * inherits the parent's cwd (`SubagentManager.parentCwd`) so `afk -w`
+   * worktree isolation extends transparently. When provided, must be an
+   * absolute path with no `..` segments — the executor threads it into
+   * `AgentConfig.cwd`, which `SubagentManager.forkSubagent` applies in
+   * preference to the parent fallback (see `src/agent/subagent.ts:291-297`).
+   *
+   * Validation is format-only at parse time (existence/git-worktree status
+   * is not checked) — a non-existent path surfaces as an ENOENT on the
+   * child's first cwd-relative tool call, which the parent sees as a
+   * structured failure. Mirrors the existing AgentConfig.cwd contract
+   * used by `afk interactive -w` and the diagnose/farm orchestrators.
+   *
+   * Caveat: this field affects only the dispatched child's cwd. Depth-2+
+   * forks (the child itself calling `agent`) inherit through
+   * `SubagentExecutorContext.cwd` set at orchestrator construction —
+   * passing `cwd` here does NOT auto-propagate to recursive subagents.
+   * Each level must specify `cwd` explicitly to operate in a worktree.
+   */
+  cwd?: string;
+}
+
+/**
+ * Validate and parse Agent tool input.
+ * @throws if input is invalid
+ */
+export function parseAgentInput(input: unknown): AgentInput {
+  if (typeof input !== 'object' || input === null) {
+    throw new Error('Agent tool input must be an object');
+  }
+
+  const agentInput = input as Record<string, unknown>;
+
+  const prompt = agentInput['prompt'];
+  if (typeof prompt !== 'string') {
+    throw new Error('Agent tool input must have a "prompt" field of type string');
+  }
+  if (prompt.trim().length === 0) {
+    throw new Error('Agent tool prompt cannot be empty');
+  }
+
+  let model: string | undefined;
+  const modelValue = agentInput['model'];
+  if (modelValue !== undefined) {
+    if (typeof modelValue !== 'string') {
+      throw new Error('Agent tool model must be a string');
+    }
+    model = modelValue;
+  }
+
+  // Turn budget: default 0 = unlimited (matches AgentSession's falsy-maxTurns
+  // = no-cap check in assertCanSend). A positive value caps conversation
+  // turns; 0/negatives mean unlimited. No upper ceiling — the caller, or a
+  // named agent's `maxTurns` frontmatter, owns any cap it wants.
+  let max_turns = 0;
+  let max_turns_explicit = false;
+  const maxTurnsValue = agentInput['max_turns'];
+  if (maxTurnsValue !== undefined) {
+    if (typeof maxTurnsValue !== 'number') {
+      throw new Error('Agent tool max_turns must be a number');
+    }
+    max_turns = Math.max(0, Math.floor(maxTurnsValue));
+    max_turns_explicit = true;
+  }
+
+  // Tool-use-round budget within the single child turn (anti-hang ceiling).
+  // Default 0 = unlimited on the agent-tool path; a positive value caps
+  // rounds. Honored uniformly by both providers (see config-types.ts
+  // maxToolUseIterations and providers/shared/tool-loop-cap.ts).
+  let max_tool_use_iterations = 0;
+  let max_tool_use_iterations_explicit = false;
+  const maxToolIterValue = agentInput['max_tool_use_iterations'];
+  if (maxToolIterValue !== undefined) {
+    if (typeof maxToolIterValue !== 'number') {
+      throw new Error('Agent tool max_tool_use_iterations must be a number');
+    }
+    max_tool_use_iterations = Math.max(0, Math.floor(maxToolIterValue));
+    max_tool_use_iterations_explicit = true;
+  }
+
+  // agent_type: canonical param; `subagent_type` accepted as an alias for
+  // Claude Code-ported prompts (bundled SKILL.mds already write it). When
+  // both are present the canonical name wins.
+  let agent_type: string | undefined;
+  const agentTypeValue = agentInput['agent_type'] ?? agentInput['subagent_type'];
+  if (agentTypeValue !== undefined) {
+    if (typeof agentTypeValue !== 'string') {
+      throw new Error('Agent tool agent_type must be a string');
+    }
+    const trimmed = agentTypeValue.trim();
+    if (trimmed.length > 0) agent_type = trimmed;
+  }
+
+  let id_prefix = 'agent-tool';
+  const idPrefixValue = agentInput['id_prefix'];
+  if (idPrefixValue !== undefined) {
+    if (typeof idPrefixValue !== 'string') {
+      throw new Error('Agent tool id_prefix must be a string');
+    }
+    id_prefix = idPrefixValue;
+  }
+
+  // mode: default 'foreground'. Unknown strings reject loudly rather than
+  // silently coercing — a typo like "back" would be silently downgraded
+  // to a foreground run, exactly the surprise this feature is built to
+  // avoid.
+  let mode: AgentExecutionMode = 'foreground';
+  const modeValue = agentInput['mode'];
+  if (modeValue !== undefined) {
+    if (modeValue !== 'foreground' && modeValue !== 'background') {
+      throw new Error(
+        `Agent tool mode must be "foreground" or "background", got: ${JSON.stringify(modeValue)}`,
+      );
+    }
+    mode = modeValue;
+  }
+
+  // cwd: optional absolute path. Format-only validation here — existence is
+  // not checked because the call site is sync and any ENOENT surfaces
+  // cleanly through the child's first tool call. Rules:
+  //   1. Must be a non-empty string when present.
+  //   2. Must be absolute (`path.isAbsolute`) — relative paths would otherwise
+  //      resolve against `process.cwd()` and silently land somewhere
+  //      unrelated to the caller's intent.
+  //   3. Must not contain `..` as a path segment. `path.resolve` would
+  //      silently collapse them; rejecting forces the caller to write
+  //      what they mean. Splits on both `/` and `\\` so the check holds
+  //      on Windows too.
+  let cwd: string | undefined;
+  const cwdValue = agentInput['cwd'];
+  if (cwdValue !== undefined) {
+    if (typeof cwdValue !== 'string') {
+      throw new Error(
+        `Agent tool cwd must be a string, got: ${JSON.stringify(cwdValue)}`,
+      );
+    }
+    if (cwdValue.length === 0) {
+      throw new Error('Agent tool cwd must be a non-empty string');
+    }
+    if (!isAbsolute(cwdValue)) {
+      throw new Error(
+        `Agent tool cwd must be an absolute path, got: ${JSON.stringify(cwdValue)}`,
+      );
+    }
+    const segments = cwdValue.split(/[/\\]/);
+    if (segments.includes('..')) {
+      throw new Error(
+        `Agent tool cwd must not contain '..' segments, got: ${JSON.stringify(cwdValue)}`,
+      );
+    }
+    cwd = cwdValue;
+  }
+
+  return {
+    prompt,
+    model,
+    max_turns,
+    max_turns_explicit,
+    max_tool_use_iterations,
+    max_tool_use_iterations_explicit,
+    id_prefix,
+    mode,
+    ...(agent_type !== undefined ? { agent_type } : {}),
+    ...(cwd !== undefined ? { cwd } : {}),
+  };
+}

@@ -24,7 +24,7 @@ import type { ZodType } from 'zod';
 import { AbortGraph, type ChildAbortedListener } from './abort-graph.js';
 import type { HookRegistry } from './hooks.js';
 import { AgentSession } from './session.js';
-import { DEFAULT_SESSION_TIMEOUT_MS } from './timeout.js';
+
 import type { AgentConfig, IAgentSession } from './types.js';
 import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js';
 import type { SubagentProgressSink } from './types/session-types.js';
@@ -34,6 +34,8 @@ import type { AbortOrigin, TraceWriter } from './trace/index.js';
 import type { Surface } from './awareness/types.js';
 import { appendRoutingDecision } from './routing-telemetry.js';
 import { getCurrentSink } from './_lib/skill-sink-channel.js';
+import { touchWorktreeOccupancy } from './worktree-occupancy.js';
+import { resolveWorktreeMainRoot } from './worktree-read-root.js';
 import { buildPhaseRestrictedProvider, type PhaseRole } from './tools/nesting.js';
 import { applyManagerApiKeyFallback } from './tools/child-credential.js';
 import { providerForModel, type BundledProviderName } from './providers/index.js';
@@ -53,6 +55,51 @@ export const DENY_ELICITATION: NonNullable<AgentConfig['onElicitation']> = async
   _request: ElicitationRequest,
   _options: { signal: AbortSignal },
 ): Promise<ElicitationResult> => ({ action: 'decline' });
+
+/**
+ * Default tool-use-iteration ceiling applied to every forked subagent.
+ *
+ * A subagent runs exactly one conversation turn (one `sendMessageStream`), so
+ * this bounds the tool-use loop WITHIN that turn. anthropic-direct otherwise
+ * defaults to `0` (unbounded — see DEFAULT_MAX_TOOL_USE_ITERATIONS), which lets
+ * a runaway child spin indefinitely while its parent is suspended at
+ * `await runToResult`. `50` matches openai-compatible's built-in cap so both
+ * providers bound child loops identically. Hitting the cap surfaces as a
+ * `tool_use_loop_capped` done (not an error), returning the child's partial
+ * work. Callers may override per-fork via `config.maxToolUseIterations` (e.g.
+ * `0` to opt a trusted deep-investigation child back into unbounded mode).
+ */
+export const SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS = 50;
+
+/**
+ * Default wall-clock budget applied to every forked subagent turn.
+ *
+ * `DEFAULT_SESSION_TIMEOUT_MS` is `0` (unbounded), which is correct for
+ * top-level sessions — a human owns them — but not for forks: a child stalled
+ * by provider throttling, a wedged stream, or a slow-grinding tool loop parks
+ * its parent at `await runToResult` indefinitely (observed 2026-07-07: four
+ * parallel children spun 29 minutes under a 429 cascade until the operator
+ * manually cancelled). The tool-iteration cap above bounds ROUNDS but not
+ * TIME — throttled rounds can each take minutes. 20 minutes is ~2× the
+ * longest healthy child observed in production traces (~10 min review
+ * agents). On expiry `withTimeout` aborts the child's controller, cascading
+ * through the AbortGraph to its descendants, and the parent receives a
+ * legible TimeoutError tool_result instead of hanging. Callers may override
+ * per-fork via `config.timeoutMs` (`0` restores unbounded).
+ */
+export const SUBAGENT_DEFAULT_TIMEOUT_MS = 20 * 60_000;
+
+/**
+ * Wall-clock budget for BACKGROUND-mode agent dispatches (fire-and-forget
+ * jobs whose results auto-deliver later). Background children don't park
+ * their parent, so the anti-hang pressure is lower — but an unbounded
+ * detached child is still a zombie token-burner when it wedges. 60 minutes
+ * keeps documented "long investigations" viable at 3× the foreground budget
+ * while guaranteeing every fork terminates. Applied by SubagentExecutor
+ * before forking (background mode is executor-level knowledge the manager
+ * doesn't have); explicit `config.timeoutMs` wins, `0` = unbounded.
+ */
+export const SUBAGENT_BACKGROUND_TIMEOUT_MS = 60 * 60_000;
 
 export interface ForkParent {
   sessionId?: string;
@@ -259,6 +306,12 @@ export class SubagentManager {
   // `afk -w` worktree is created mid-session. Read at fork time (forkSubagent),
   // so updating it makes every subsequent fork inherit the new worktree cwd.
   private parentCwd: string | undefined;
+  // Per-cwd cache of the resolved main-repo root for worktree children (see
+  // `resolveWorktreeMainRoot`). Forks overwhelmingly share one cwd, so this
+  // collapses N git subprocesses to one per distinct cwd for the whole
+  // manager lifetime. `undefined` value = resolved-and-there-is-none, so the
+  // Map's `.has()` distinguishes "not yet resolved" from "resolved to none".
+  private readonly worktreeMainRootCache = new Map<string, string | undefined>();
   private readonly parentTraceWriter: TraceWriter | undefined;
   private readonly parentSurface: Surface | undefined;
   private readonly abortGraph: AbortGraph;
@@ -348,6 +401,23 @@ export class SubagentManager {
   }
 
   /**
+   * Resolve (and memoize) the main-repo root for a worktree `cwd`. Returns the
+   * main repository root when `cwd` is inside a linked git worktree distinct
+   * from the main worktree, else undefined. Best-effort — never throws.
+   *
+   * Cached per cwd so a fan-out of subagents sharing one worktree pays a single
+   * `git rev-parse`, not one per fork.
+   */
+  private async resolveMainRootForCwd(cwd: string): Promise<string | undefined> {
+    if (this.worktreeMainRootCache.has(cwd)) {
+      return this.worktreeMainRootCache.get(cwd);
+    }
+    const mainRoot = await resolveWorktreeMainRoot(cwd);
+    this.worktreeMainRootCache.set(cwd, mainRoot);
+    return mainRoot;
+  }
+
+  /**
    * Abort the entire managed tree.
    *
    * @param reason   Forwarded to every cascade victim's AbortController. Read
@@ -407,6 +477,18 @@ export class SubagentManager {
     const registry =
       options.config.hookRegistry ?? this.hookRegistry ?? options.parent.hookRegistry;
 
+    // Witness-writer resolution: explicit per-fork config wins, then the
+    // manager-level writer (constructed at the surface bootstrap). This is
+    // the SINGLE resolved value used by every witness touchpoint in this
+    // fork path — SubagentStart dispatch, the child handle, and the
+    // subagent_lifecycle 'started' emit below. Before this, those three
+    // read `options.config.traceWriter` directly, so a fork relying on
+    // manager-level inheritance (the `agent`-tool path — its executors
+    // never set config.traceWriter) produced a child whose entire lifetime
+    // was invisible in `afk trace show` even though childConfig inherited
+    // the writer for the session's own events.
+    const effectiveTraceWriter = options.config.traceWriter ?? this.parentTraceWriter;
+
     // SubagentStart fires BEFORE session creation so a block truly prevents
     // the child from existing. Abort precedence is honored via rootController.
     if (registry) {
@@ -419,7 +501,7 @@ export class SubagentManager {
         },
         {
           signal: this.rootController.signal,
-          ...(options.config.traceWriter ? { traceWriter: options.config.traceWriter } : {}),
+          ...(effectiveTraceWriter ? { traceWriter: effectiveTraceWriter } : {}),
         },
       );
     }
@@ -431,6 +513,24 @@ export class SubagentManager {
     // The try/catch below disposes the node on any synchronous construction error.
     this.abortGraph.register(id, childController);
     this.abortGraph.linkChild(this.rootId, id);
+
+    // Worktree read-root grant: when the child runs in a linked git worktree
+    // and the caller did not pin its own read roots, add the MAIN repo root as
+    // a READ root (never a write root — writes stay confined to the worktree).
+    // Without this, a subagent is confined to `[cwd]` and cannot read main-repo
+    // absolute paths that pervade its context (system prompt, skill prompts,
+    // parent messages), yet it cannot approve them interactively either — the
+    // path-approval hook auto-denies forked children. See ./worktree-read-root.
+    // A caller that pins `readRoots` (e.g. `afk farm`, which deliberately
+    // confines each branch worker) is left untouched.
+    const effectiveChildCwd = options.config.cwd ?? this.parentCwd;
+    let worktreeReadRoots: string[] | undefined;
+    if (options.config.readRoots === undefined && effectiveChildCwd !== undefined) {
+      const mainRoot = await this.resolveMainRootForCwd(effectiveChildCwd);
+      if (mainRoot !== undefined && mainRoot !== effectiveChildCwd) {
+        worktreeReadRoots = [effectiveChildCwd, mainRoot];
+      }
+    }
 
     const childConfig: AgentConfig = {
       ...options.config,
@@ -473,6 +573,28 @@ export class SubagentManager {
       // no attribution. A caller may opt a fork back in with
       // `isNonInteractive: false`.
       isNonInteractive: options.config.isNonInteractive ?? true,
+      // External constraint (anti-hang): a forked child's tool-use loop is
+      // otherwise unbounded on anthropic-direct (DEFAULT_MAX_TOOL_USE_ITERATIONS
+      // = 0 = no cap), so a runaway child could spin forever while the parent is
+      // suspended at `await runToResult`. Give every fork a positive default
+      // ceiling (parity with openai-compatible's built-in 50-round cap); the
+      // caller's explicit `options.config.maxToolUseIterations` (already carried
+      // by the `...options.config` spread above) wins when set, including `0` to
+      // opt back into unbounded. Hitting the cap surfaces as a
+      // `tool_use_loop_capped` done, returning the child's partial work.
+      maxToolUseIterations:
+        options.config.maxToolUseIterations ?? SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS,
+      // External constraint (anti-hang, sibling of the cap above): a fork that
+      // hits an OAuth usage-limit 429 otherwise auto-pauses and silently polls
+      // for reset — up to two hours (retry-layer.ts) — with no subagent-level
+      // pause UI, so the parent just looks frozen. A fork has no human to wait
+      // for: fail fast with the classified usage-limit error (the provider
+      // still emits the `paused` event first, then surfaces the error), and
+      // let the PARENT decide whether to retry, reroute to another model, or
+      // surface the pause to its own operator. Callers may opt a child back
+      // into auto-resume with an explicit `autoResumeOnUsageLimit: true`
+      // (e.g. unattended daemon flows that prefer waiting over failing).
+      autoResumeOnUsageLimit: options.config.autoResumeOnUsageLimit ?? false,
       // Awareness metadata: surface parent identity + phase role into the
       // child's config so the get_runtime_state tool's `self` view can report
       // the topology fields. Caller-supplied values on options.config win on
@@ -493,6 +615,11 @@ export class SubagentManager {
       ...(options.config.cwd === undefined && this.parentCwd !== undefined
         ? { cwd: this.parentCwd }
         : {}),
+      // Worktree read-root grant (see the computation above the literal). Only
+      // set when the child runs in a linked worktree AND the caller left
+      // readRoots unset; otherwise the `...options.config` spread's readRoots
+      // (or the provider's `[cwd]` default) stands.
+      ...(worktreeReadRoots !== undefined ? { readRoots: worktreeReadRoots } : {}),
       // Invariant: a forked child's trace origin comes from its inherited
       // parent surface, not from any actor-role value (see session-identity.ts).
       // Inherit traceWriter + surface from the manager so every worker session
@@ -541,6 +668,18 @@ export class SubagentManager {
         : {}),
     };
 
+    // Occupancy touch: subagents never write presence files (top-level-only
+    // by design — presence.ts), so the worktree sweep's live-session guard
+    // cannot see a fork occupying a worktree. Refresh the worktree's meta
+    // (pid + createdAt) instead, resetting the sweep's age clock and PID
+    // liveness. Fire-and-forget: the helper swallows all errors and no-ops
+    // for cwds outside `.afk-worktrees/`, so it can never delay or fail the
+    // fork. Single wiring point — agent/skill/compose/farm dispatches all
+    // converge here, whether cwd came per-call or via manager inheritance.
+    if (childConfig.cwd !== undefined) {
+      void touchWorktreeOccupancy(childConfig.cwd);
+    }
+
     let session: AgentSession;
     try {
       session = new AgentSession(childConfig);
@@ -567,7 +706,9 @@ export class SubagentManager {
       childController,
       this.abortGraph,
       options.outputSchema,
-      options.config.timeoutMs ?? DEFAULT_SESSION_TIMEOUT_MS,
+      // Wall-clock budget for the child's turn (see SUBAGENT_DEFAULT_TIMEOUT_MS
+      // above). Explicit caller values win, including `0` for unbounded.
+      options.config.timeoutMs ?? SUBAGENT_DEFAULT_TIMEOUT_MS,
       registry,
       () => {
         this.active.delete(id);
@@ -587,8 +728,11 @@ export class SubagentManager {
       // traceWriter: child shares the parent's writer so its SubagentStop
       // hook decision lands in the same trace file. Contract:
       // docs/philosophy/afk-contract.md — "a child sub-agent inherits its
-      // parent's witness." Inheritance is config-driven via childConfig.
-      options.config.traceWriter,
+      // parent's witness." Resolved once above (per-fork config →
+      // manager-level writer) so the handle's terminal lifecycle emits
+      // pair with the 'started' emit below even when inheritance came
+      // from the manager rather than the per-fork config.
+      effectiveTraceWriter,
       // onSubagentSucceeded: propagate completion data to the parent
       // session's session_sealed rollup accumulators.
       this.onSubagentSucceededCb,
@@ -607,7 +751,7 @@ export class SubagentManager {
     const modelString = typeof options.config.model === 'string'
       ? options.config.model
       : JSON.stringify(options.config.model);
-    void emitSubagentLifecycle(options.config.traceWriter, {
+    void emitSubagentLifecycle(effectiveTraceWriter, {
       transition: 'started',
       subagentId: id,
       parentId: options.parent.sessionId ?? this.rootId,

@@ -177,6 +177,13 @@ export interface SubagentSucceededPayload {
   turnCount: number;
   totalCostUsd?: number;
   outputBytes: number;
+  /**
+   * Terminal stop reason for the subagent's final turn, when known. Present so
+   * a trace reader can distinguish a clean completion from a capped/truncated
+   * partial (`tool_use_loop_capped` / `stream_incomplete`) that was surfaced
+   * with `succeeded` status. Absent when the provider reported no stop reason.
+   */
+  stopReason?: string;
 }
 
 export interface SubagentFailedPayload {
@@ -257,12 +264,23 @@ export interface BackgroundAgentJoinedPayload {
   jobStatus: 'completed' | 'failed' | 'cancelled';
 }
 
+export interface BackgroundAgentDeliveredPayload {
+  /** Result auto-delivered into the parent conversation by a surface notifier
+   *  (BgResultNotifier) — distinct from an explicit `joined`. */
+  transition: 'delivered';
+  jobId: string;
+  subagentId: string;
+  /** Terminal status at the moment of delivery. */
+  jobStatus: 'completed' | 'failed' | 'cancelled';
+}
+
 export type BackgroundAgentPayload =
   | BackgroundAgentStartedPayload
   | BackgroundAgentCompletedPayload
   | BackgroundAgentFailedPayload
   | BackgroundAgentCancelledPayload
-  | BackgroundAgentJoinedPayload;
+  | BackgroundAgentJoinedPayload
+  | BackgroundAgentDeliveredPayload;
 
 // ---------------------------------------------------------------------------
 // budget — threshold record. Closure handles termination separately.
@@ -552,7 +570,8 @@ export type SessionPhaseName =
   | 'mcp_server_done'
   | 'loop_start'
   | 'loop_end'
-  | 'model_ttfb';
+  | 'model_ttfb'
+  | 'rate_limit';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

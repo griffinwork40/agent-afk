@@ -14,7 +14,7 @@ import type { HookRegistry } from '../../../agent/hooks.js';
 import type { TraceWriter } from '../../../agent/trace/index.js';
 import {
   parseThinking, parseEffort, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort,
-  getMaxOutputTokens, getDefaultSubagentModel, resolveBaseSystemPrompt, isGrantManager,
+  getMaxOutputTokens, getMaxToolUseIterations, getDefaultSubagentModel, resolveBaseSystemPrompt, isGrantManager,
 } from '../../shared-helpers.js';
 import { topLevelSurfaceAllowedTools } from '../../../agent/tools/top-level-allowlist.js';
 import { loadConfig } from '../../config.js';
@@ -37,7 +37,7 @@ import {
 } from '../../../agent/_lib/trusted-skill-events.js';
 import { formatTrustedSkillCompletion, formatTrustedSkillInFlight } from '../../trusted-skill-badge.js';
 import type { TrustedSkillResult } from '../../../agent/trusted-skill-result.js';
-import { formatSubagentCompletion } from './progress-banner.js';
+import { emitSubagentCompletion } from './progress-banner.js';
 import { ContextSampler } from '../../context-sampler.js';
 import { SubagentManager } from '../../../agent/subagent.js';
 import { SubagentExecutor } from '../../../agent/tools/subagent-executor.js';
@@ -47,11 +47,12 @@ import { setBgsubRegistry, setBgsubSummarizer } from '../../slash/commands/bgsub
 import { SkillExecutor } from '../../../agent/tools/skill-executor.js';
 import { ComposeExecutor } from '../../../agent/tools/compose-executor.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory } from '../../../agent/tools/nesting.js';
+import { loadAgentRegistry } from '../../../agent/agents/index.js';
 import { AnthropicDirectProvider } from '../../../agent/providers/anthropic-direct/index.js';
 import { seedPersistedGrants } from '../../../agent/permissions-store.js';
 import { providerForModel } from '../../../agent/providers/index.js';
 import { createMemoizedProviderFactory } from './provider-factory.js';
-import { ensurePluginEntrypointsLoaded } from '../../../agent/tools/skill-bridge.js';
+import { ensurePluginEntrypointsLoaded, discoverPluginAgents } from '../../../agent/tools/skill-bridge.js';
 import { McpManager, loadMcpConfig, getMcpConfigPath } from '../../../agent/mcp/index.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../../config/import-sources.js';
 import { env } from '../../../config/env.js';
@@ -76,6 +77,13 @@ interface BuildAgentSessionDeps {
   thinking: ThinkingConfig | undefined;
   effort: EffortLevel | undefined;
   maxOutputTokens: number | undefined;
+  /**
+   * Opt-in top-level tool-use-round ceiling (from AFK_MAX_TOOL_USE_ITERATIONS).
+   * `undefined` = unlimited (no behavior change). Flows to
+   * `AgentConfig.maxToolUseIterations` and hits both providers via
+   * `resolveMaxToolIterations()`. Top-level only — subagent forks set their own.
+   */
+  maxToolUseIterations: number | undefined;
   /**
    * Fully-wired provider factory. Passed as `config.providerFactory` so the
    * ProviderRouter builds a wired provider (with executors, memoryStore,
@@ -119,6 +127,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
     ...(deps.thinking !== undefined ? { thinking: deps.thinking } : {}),
     ...(deps.effort !== undefined ? { effort: deps.effort } : {}),
     ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
+    ...(deps.maxToolUseIterations !== undefined ? { maxToolUseIterations: deps.maxToolUseIterations } : {}),
     ...deps.resumeConfig,
     ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}),
     ...(deps.traceWriter !== undefined ? { traceWriter: deps.traceWriter } : {}),
@@ -165,6 +174,9 @@ export async function bootstrapSession(
   thinking = parseThinking(options.thinking) ?? getThinking();
   effort = parseEffort(options.effort) ?? getEffort();
   maxOutputTokens = parseMaxOutputTokens(options.maxOutputTokens) ?? getMaxOutputTokens();
+  // Opt-in top-level tool-use-round ceiling. No CLI flag exists, so this is the
+  // env default only (unset/<=0 → undefined → unlimited; no behavior change).
+  const maxToolUseIterations = getMaxToolUseIterations();
 
   // System-prompt layering: the framework base (`prompts/system-prompt.md`)
   // is unconditional; the operator overlay (env → afk.config.json → AFK.md)
@@ -183,6 +195,19 @@ export async function bootstrapSession(
   // sessionRef is populated after the session is constructed below.
   const sessionRef: SessionRef = { current: null! };
 
+  // Witness layer: open trace BEFORE the root SubagentManager and the
+  // executor so (a) the manager inherits the writer — the `agent`-tool path
+  // relies on manager-level inheritance for its forks' lifecycle events
+  // (see forkSubagent's effectiveTraceWriter) — and (b) the
+  // BackgroundAgentRegistry can be constructed with the writer in hand.
+  // The trace path is logged after `bootstrapSession` returns (caller-side
+  // banner), so we open the file here but defer the log line until later
+  // to preserve startup-message ordering.
+  const traceSessionLabel = resumeTarget?.stored?.sessionId;
+  const trace = createDefaultTraceWriter(
+    traceSessionLabel ? { sessionLabel: traceSessionLabel } : {},
+  );
+
   const apiKey = getApiKey();
   const rootManager = new SubagentManager({
     apiKey,
@@ -199,17 +224,17 @@ export async function bootstrapSession(
     // repo and the `read_file` handler returns parent-repo contents instead
     // of the worktree's. Mirrors `chat.ts:163` for the one-shot path.
     ...(extras?.cwd !== undefined ? { cwd: extras.cwd } : {}),
+    // Witness layer: manager-level writer so `agent`-tool forks (which never
+    // set config.traceWriter) still emit subagent_lifecycle events and hand
+    // the writer to their handles. Skill forks already thread it via
+    // SkillExecutorContext; this closes the same gap for raw agent dispatch.
+    ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
+    // Origin attribution: the REPL is a `cli` entrypoint. Threading the surface
+    // into the manager makes forked `agent`-tool children inherit origin 'cli'
+    // (not 'unknown') via forkSubagent's parentSurface fill — mirrors the
+    // traceWriter/cwd inheritance above and farm.ts. See session-identity.ts.
+    surface: 'cli',
   });
-
-  // Witness layer: open trace BEFORE the executor so the
-  // BackgroundAgentRegistry can be constructed with the writer in hand.
-  // The trace path is logged after `bootstrapSession` returns (caller-side
-  // banner), so we open the file here but defer the log line until later
-  // to preserve startup-message ordering.
-  const traceSessionLabel = resumeTarget?.stored?.sessionId;
-  const trace = createDefaultTraceWriter(
-    traceSessionLabel ? { sessionLabel: traceSessionLabel } : {},
-  );
   // Witness layer: trace writer is now live — emit the bootstrap_start marker.
   // (Total bootstrap span is reported by bootstrap_done, measured from the
   // function-entry timestamp captured above.)
@@ -277,6 +302,14 @@ export async function bootstrapSession(
   // depth — root → skill-forked child → skill-forked grandchild. Without
   // this, the dispatch fast-fails with a 163-byte "BackgroundAgentRegistry
   // is not wired" error after ~24ms (no model call).
+  // Named-agent registry: session-static scan (builtin + user ~/.afk/agents
+  // + project .afk/agents & .claude/agents). Enables `agent_type` dispatch
+  // on the `agent` tool at every depth of this REPL session.
+  const agentRegistry = loadAgentRegistry({
+    ...(extras?.cwd !== undefined ? { cwd: extras.cwd } : {}),
+    pluginAgents: discoverPluginAgents(),
+  });
+
   const childSkillExecutorFactory = createChildSkillExecutorFactory(
     sessionModel,
     apiKey,
@@ -300,6 +333,10 @@ export async function bootstrapSession(
     // executors below — closing the leak where a nested subagent silently
     // defaulted to Anthropic `sonnet` under an OpenAI-routed parent.
     getDefaultSubagentModel(sessionModel),
+    // Named-agent registry propagates to nested skill executors.
+    agentRegistry,
+    // OpenAI endpoint → nested restricted/depth-cap provider builders.
+    cliConfig.openaiBaseUrl,
   );
 
   // Pass `sessionModel` to `getDefaultSubagentModel` so OpenAI-routed
@@ -316,6 +353,7 @@ export async function bootstrapSession(
       apiKey,
       systemPrompt: basePrompt,
       ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
+      ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
     },
     defaultSubagentModel: getDefaultSubagentModel(sessionModel),
     childProviderFactory,
@@ -331,6 +369,14 @@ export async function bootstrapSession(
     // already carries cwd for depth-1, but the per-call childManager
     // constructed inside SubagentExecutor.execute() needs cwd too.
     ...(extras?.cwd !== undefined ? { cwd: extras.cwd } : {}),
+    // Named-agent dispatch: registry + the session model as the `inherit`
+    // anchor for named-agent model resolution.
+    agentRegistry,
+    parentModel: sessionModel,
+    // Witness layer: thread the writer so depth ≥ 2 `agent` forks (nested
+    // child managers built inside execute()) stay visible in the trace.
+    // Depth-1 forks are covered by rootManager's traceWriter above.
+    ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
   });
 
   const skillExecutor = new SkillExecutor({
@@ -342,6 +388,8 @@ export async function bootstrapSession(
     apiKey,
     childProviderFactory,
     childSkillExecutorFactory,
+    // Named-agent registry for skill-forked orchestrator children.
+    agentRegistry,
     // Background dispatch: a plugin skill's subagent calling `agent` with
     // `mode:"background"` is the SKILL.md "Dispatch N sub-agents in parallel"
     // idiom — `/research`, `/diagnose`, `/shadow-verify`, etc. The registry
@@ -351,6 +399,7 @@ export async function bootstrapSession(
     // Sibling to the SubagentExecutor wiring above.
     backgroundRegistry,
     ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
+    ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
     // Per-model credential resolver — mirrors SubagentExecutor wiring above.
     resolveApiKeyForModel: getApiKeyForModel,
     // Witness layer: without this, skill-forked subagents (every /review,
@@ -383,6 +432,8 @@ export async function bootstrapSession(
     // Session identity for routing-decision rows (REPL → cli).
     surface: 'cli',
     depth: 0,
+    // Witness layer: DAG nodes emit subagent_lifecycle into the session trace.
+    ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
   });
 
   const sharedMemoryStore = new MemoryStore();
@@ -526,6 +577,15 @@ export async function bootstrapSession(
   if (initialPermissionMode !== undefined) {
     stats.permissionMode = initialPermissionMode;
   }
+  // Seed thinking-UI mode so `/thinking` has a live value to mutate.
+  // `options.thinkingUi` was already resolved by the interactive action handler
+  // via `resolveThinkingUi` (--thinking-ui flag > AFK_THINKING_UI env >
+  // interactive.thinkingUi config > 'live'), so this seeds the persistent
+  // default. `createSessionStats()` pre-seeds 'live' for any path that reaches
+  // bootstrap without that resolution (e.g. tests constructing options directly).
+  if (options.thinkingUi !== undefined) {
+    stats.thinkingUi = options.thinkingUi;
+  }
   // Stamp the effective working directory on stats so the status line can
   // render it. We capture the same cwd the provider will see: the explicit
   // `extras.cwd` override (e.g. from `--worktree`) when present, else
@@ -562,7 +622,7 @@ export async function bootstrapSession(
   // path-approval hook fails open until then (mirroring `setAllowDirDispatcher`
   // wiring order).
   const hookRegistryBundle = createDefaultHookRegistry(
-    (info) => { completionWriter.fn(formatSubagentCompletion(info)); },
+    (info) => { emitSubagentCompletion(completionWriter, info); },
     'cli',
     sharedMemoryStore,
     () => stats.permissionMode,
@@ -582,6 +642,7 @@ export async function bootstrapSession(
     thinking,
     effort,
     maxOutputTokens,
+    maxToolUseIterations,
     ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
     providerFactory,
     hookRegistry,
@@ -711,6 +772,11 @@ export async function bootstrapSession(
         // before /resume can fire. Optional — early /resume calls before
         // the ledger is wired are a no-op (safe).
         ctx.clearVerdictLedger?.();
+        // Drop buffered background-subagent results from the outgoing
+        // session — cancelAll ran at the swap commit point, but a job that
+        // settled just before it may already sit in the notifier's buffer
+        // and would otherwise inject into the resumed session's first turn.
+        ctx.clearBgResultBuffer?.();
       },
       buildSession: (t) => buildAgentSession({
         ...sharedDeps,
