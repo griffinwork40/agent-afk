@@ -25,7 +25,13 @@ export function renderTextBlock(text: string, contentWidth: number): string {
   if (isMarkdown) {
     return renderMarkdownToTerminal(text, { maxWidth: contentWidth });
   } else {
-    return wrapToWidth(text, contentWidth);
+    // breakLongWords: this output is painted as raw lines by the compositor,
+    // which then hard-wraps at paint time. A soft wrap here leaves a long
+    // unbreakable token (file path, URL) overflowing contentWidth, so the
+    // compositor's row-count math and resize reflow disagree with the stored
+    // line — the persistent-wrap / fucky-on-resize bug. Break here so no
+    // emitted line ever exceeds contentWidth.
+    return wrapToWidth(text, contentWidth, { breakLongWords: true });
   }
 }
 
@@ -58,7 +64,10 @@ export function formatPendingBuffer(
     pendingRender = renderTextBlock(buffer, contentWidth);
   }
 
-  return wrapToWidth(pendingRender, contentWidth);
+  // breakLongWords: same contract as formatBlockForCommit — a long unbreakable
+  // token must not overflow contentWidth, or the live overlay paints past the
+  // right edge and the compositor's row accounting drifts.
+  return wrapToWidth(pendingRender, contentWidth, { breakLongWords: true });
 }
 
 /**
@@ -89,7 +98,16 @@ export function formatBlockForCommit(
   // while leaving table/code lines untouched (they already fit contentWidth).
   // Wrapping after indent (to contentWidth) would re-split structural lines
   // like table borders mid-row.
-  const wrapped = wrapToWidth(rendered, contentWidth);
+  //
+  // breakLongWords: a single unbreakable token wider than contentWidth (a bare
+  // file path or URL — which afk prints constantly) is broken at the column
+  // boundary instead of overflowing. Without it, the committed line exceeds
+  // contentWidth; the compositor then hard-wraps it at a DIFFERENT width at
+  // paint time (committed-band-commit.ts) and band-reflow re-splits the stored
+  // over-wide line on resize — the persistent-wrap / fucky-on-resize bug.
+  // Tables/code that already fit are unaffected (breakLongWords only splits
+  // tokens strictly wider than contentWidth).
+  const wrapped = wrapToWidth(rendered, contentWidth, { breakLongWords: true });
   const indented = applyIndent(wrapped, indentStr);
   // Strip BOTH leading and trailing blank lines. The caller (`commitBlock`)
   // re-adds exactly one trailing blank via `commitAbove(trimmed + '\n\n')`, so

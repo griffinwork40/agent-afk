@@ -72,6 +72,14 @@ export const VerificationResultSchema = z.object({
   regressions: z.array(z.string()),
   confidence: z.number().min(0).max(1),
   verification_log: z.string(),
+  // Distinguishes a verifier that exhausted its wall-clock budget
+  // (VERIFIER_TIMEOUT_MS) from one that genuinely falsified the hypothesis:
+  // both otherwise collapse to `predicted_pass: false, confidence: 0`, so a
+  // consumer reading only those two fields cannot tell "ran out of time" apart
+  // from "disproven". Optional because the verifier subagent never emits it (it
+  // reports substantive verdicts only), so absent/undefined means "not a
+  // timeout"; the orchestrator sets `true` when a fork fails with a TimeoutError.
+  timed_out: z.boolean().optional(),
 });
 
 export type VerificationResult = z.infer<typeof VerificationResultSchema>;
