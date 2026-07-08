@@ -16,6 +16,7 @@
 
 import type { ClaudeModel } from './types.js';
 import { resolveModelInput } from './session/model-slots.js';
+import { isOSeriesModel } from './model-capabilities.js';
 
 /**
  * Keys cover both short aliases (`opus`, `sonnet`, `haiku`, `*_1m`) and the
@@ -147,7 +148,7 @@ function routesToOpenAICompatible(model: string): boolean {
   // are served exclusively by local OpenAI-shim runners.
   if (lowered.includes('/')) return true;
   if (lowered.startsWith('gpt-') || lowered.startsWith('gpt_')) return true;
-  if (lowered.startsWith('o1') || lowered.startsWith('o3') || lowered.startsWith('o4')) return true;
+  if (isOSeriesModel(lowered)) return true;
   if (lowered.startsWith('codex-') || lowered.startsWith('codex_') || lowered === 'codex') return true;
   return false;
 }

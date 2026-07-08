@@ -451,6 +451,10 @@ export function registerChatCommand(program: Command): void {
           // bash/grep run in the isolated tree, not the Node host's
           // process.cwd().
           ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
+          // Witness layer: manager-level writer so `agent`-tool forks (which
+          // never set config.traceWriter) emit subagent_lifecycle events and
+          // hand the writer to their handles. Mirrors bootstrap.ts.
+          ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
         });
 
         // Pass openaiBaseUrl so OpenAI-routed children point at the
@@ -551,6 +555,9 @@ export function registerChatCommand(program: Command): void {
           // `inherit` anchor for named-agent model resolution.
           agentRegistry,
           parentModel: options.model,
+          // Witness layer: thread the writer so depth ≥ 2 `agent` forks stay
+          // visible in the trace. Mirrors bootstrap.ts.
+          ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
         });
 
         const skillExecutor = new SkillExecutor({
@@ -595,6 +602,8 @@ export function registerChatCommand(program: Command): void {
           // Session identity for routing-decision rows (afk chat → cli).
           surface: 'cli',
           depth: 0,
+          // Witness layer: DAG nodes emit subagent_lifecycle into the session trace.
+          ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
         });
 
         sharedMemoryStore = new MemoryStore();

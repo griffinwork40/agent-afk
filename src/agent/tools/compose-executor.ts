@@ -17,6 +17,7 @@ import { providerForModel } from '../providers/index.js';
 import type { DAGEdge, DAGRunResult } from '../dag.js';
 import type { AgentModelInput, IAgentSession } from '../types.js';
 import type { Surface } from '../awareness/types.js';
+import type { TraceWriter } from '../trace/index.js';
 import type { ToolCall, ToolResult } from './types.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { deriveOrigin, actorFromDepth } from '../session/session-identity.js';
@@ -98,6 +99,14 @@ export interface ComposeExecutorContext {
    * behavior).
    */
   cwd?: string;
+  /**
+   * Witness-layer trace writer inherited from the owning surface. Seeded into
+   * the per-call {@link SubagentManager} so every compose DAG node emits
+   * `subagent_lifecycle` events into the session trace. Without it, compose
+   * nodes are invisible in `afk trace show` — same gap as the raw `agent`
+   * tool path; see SubagentExecutorContext.traceWriter.
+   */
+  traceWriter?: TraceWriter;
   /**
    * User-facing surface of the session that owns this executor
    * (cli/telegram/daemon). Recorded as `origin` on compose routing-decision
@@ -578,6 +587,10 @@ export class ComposeExecutor {
       // setCwd). Without this the manager's parentCwd is undefined and nodes
       // fall back to the host's process.cwd() (subagent.ts fork fallback).
       ...(this.currentCwd !== undefined ? { cwd: this.currentCwd } : {}),
+      // Witness layer: manager-level writer so every DAG node fork emits
+      // subagent_lifecycle events into the session trace (compose nodes never
+      // set config.traceWriter). See ComposeExecutorContext.traceWriter.
+      ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
     });
 
     const startedAt = Date.now();
