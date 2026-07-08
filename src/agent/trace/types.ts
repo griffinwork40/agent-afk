@@ -177,6 +177,13 @@ export interface SubagentSucceededPayload {
   turnCount: number;
   totalCostUsd?: number;
   outputBytes: number;
+  /**
+   * Terminal stop reason for the subagent's final turn, when known. Present so
+   * a trace reader can distinguish a clean completion from a capped/truncated
+   * partial (`tool_use_loop_capped` / `stream_incomplete`) that was surfaced
+   * with `succeeded` status. Absent when the provider reported no stop reason.
+   */
+  stopReason?: string;
 }
 
 export interface SubagentFailedPayload {

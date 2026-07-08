@@ -34,6 +34,7 @@ import type {
   BackgroundAgentRegistry,
   BackgroundJob,
 } from '../../../agent/background-registry.js';
+import { annotateIfIncomplete } from '../../../agent/subagent/result.js';
 import { env } from '../../../config/env.js';
 import { formatDuration } from '../../format-utils.js';
 
@@ -85,7 +86,9 @@ function extractOutput(job: BackgroundJob): string {
     return `Subagent failed — ${errText}${partial}`;
   }
   const raw = result.message?.content;
-  if (typeof raw === 'string') return raw;
+  // A `completed` background job can still carry an incomplete partial (capped
+  // or stream-truncated); mark it so the injected result isn't read as final.
+  if (typeof raw === 'string') return annotateIfIncomplete(raw, result.stopReason);
   if (raw !== undefined) return JSON.stringify(raw);
   return '';
 }

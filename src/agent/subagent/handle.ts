@@ -22,6 +22,7 @@ import {
   buildResultFromMessage,
   buildResultFromError,
   createEmptyTrace,
+  STREAM_INCOMPLETE,
   type SubagentResult,
   type SubagentStatus,
   type SubagentTrace,
@@ -193,15 +194,26 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       this.lastDurationMs = Date.now() - startTime;
       this.currentStatus = 'succeeded';
       this.latestTerminalStatus = 'succeeded';
-      // Witness layer: subagent_lifecycle.succeeded fires before onTerminal()
-      // so the trace records the terminal transition even if the manager
-      // tears the handle down immediately after. Fire-and-forget.
-      void emitSubagentLifecycle(this.traceWriter, {
+      // Witness layer: subagent_lifecycle.succeeded MUST be awaited before
+      // onTerminal(). onTerminal() may trigger the owning session's immediate
+      // teardown, which calls writer.seal(); once sealed, writer.write() throws
+      // and emitSubagentLifecycle swallows it, silently dropping this terminal
+      // record (the "lost terminal trace event" orphan bug). Awaiting here
+      // guarantees the succeeded event is enqueued+persisted on the writer's
+      // FIFO queue BEFORE any seal can run. Safe: write() is a bounded FS append
+      // and emitSubagentLifecycle already swallows errors, so the await cannot
+      // introduce a new failure mode or an unbounded hang.
+      await emitSubagentLifecycle(this.traceWriter, {
         transition: 'succeeded',
         subagentId: this.id,
         durationMs: this.lastDurationMs,
         turnCount: this.currentTrace.turnCount,
         outputBytes: Buffer.byteLength(this.lastMessage, 'utf8'),
+        // Record the terminal stop reason so trace forensics can distinguish a
+        // clean completion from a capped/truncated partial (tool_use_loop_capped
+        // / stream_incomplete) WITHOUT recomputing marker byte-lengths. Absent
+        // when the provider reported no stop reason (a plain clean end).
+        ...(this.lastStopReason !== undefined && { stopReason: this.lastStopReason }),
       });
       // Propagate usage and cost to the parent session's rollup accumulators.
       // Fire synchronously before onTerminal() so the session_sealed event
@@ -233,8 +245,12 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
         // externally. The trace and the result-object status must agree so
         // downstream consumers (operator dashboard, future ActiveWorkRegistry)
         // can correctly attribute cascade terminations vs. genuine failures.
+        // Awaited (not fire-and-forget) for the same reason as the success
+        // path: onTerminal() below may seal the owning session's trace, and a
+        // seal that lands before this write is enqueued would drop the terminal
+        // record. Awaiting guarantees the event is persisted first.
         if (this.controller.signal.aborted) {
-          void emitSubagentLifecycle(this.traceWriter, {
+          await emitSubagentLifecycle(this.traceWriter, {
             transition: 'cancelled',
             subagentId: this.id,
             source: 'cascade',
@@ -242,7 +258,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
           this.currentStatus = 'cancelled';
           this.latestTerminalStatus = 'cancelled';
         } else {
-          void emitSubagentLifecycle(this.traceWriter, {
+          await emitSubagentLifecycle(this.traceWriter, {
             transition: 'failed',
             subagentId: this.id,
             errorClass: err instanceof Error ? err.constructor.name : 'Unknown',
@@ -351,6 +367,15 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     if (streamError) throw streamError;
     if (finalMessage) return finalMessage;
     if (this.lastStreamedContent.length > 0) {
+      // The stream ended with partial assistant text but no terminal `message`
+      // event: the child was cut off mid-output (an abort, an early/abnormal
+      // provider-stream close, or a provider that ended without a final
+      // message). Mark the run non-clean so `runToResult` surfaces it as an
+      // incomplete partial (via `stopReason`) instead of a silent success —
+      // consumers prepend a parent-visible marker (annotateIfIncomplete). Use
+      // `??=` so a real terminal stopReason (if one somehow arrived) is never
+      // clobbered; reaching here implies none did.
+      this.lastStopReason ??= STREAM_INCOMPLETE;
       return { role: 'assistant', content: this.lastStreamedContent, timestamp: new Date() };
     }
     // Anti-hang fallback (see SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS in

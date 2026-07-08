@@ -19,6 +19,7 @@
 
 import type { BackgroundAgentRegistry } from '../../background-registry.js';
 import type { SubagentManager } from '../../subagent.js';
+import { annotateIfIncomplete } from '../../subagent/result.js';
 import { debugLog } from '../../../utils/debug.js';
 import type { TraceOrigin, TraceActor } from '../../session/session-identity.js';
 import type { ToolResult } from '../types.js';
@@ -231,7 +232,9 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
       });
       // Assign (don't return) so the finally can append the in-turn
       // SubagentStop injectContext after teardown. See `toolResult` above.
-      toolResult = { content };
+      // annotateIfIncomplete marks capped/stream-truncated partials so the
+      // parent model doesn't treat them as a final answer (no-op if clean).
+      toolResult = { content: annotateIfIncomplete(content, result.stopReason) };
       return toolResult;
     }
 

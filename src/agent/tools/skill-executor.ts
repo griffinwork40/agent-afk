@@ -13,6 +13,7 @@
 
 import { getSkill } from '../../skills/index.js';
 import { SubagentManager } from '../subagent.js';
+import { annotateIfIncomplete } from '../subagent/result.js';
 import type { AgentModelInput, IAgentSession } from '../types.js';
 import type { ModelProvider } from '../provider.js';
 import type { ToolCall, ToolResult } from './types.js';
@@ -1147,7 +1148,12 @@ export class SkillExecutor {
       // Assign (don't return) so the finally can append the in-turn
       // SubagentStop injectContext after teardown.
       if (result.status === 'succeeded' && result.message) {
-        toolResult = { content: result.message.content };
+        // A `succeeded` result can still be an incomplete partial (capped or
+        // stream-truncated). annotateIfIncomplete prepends a parent-visible
+        // marker in that case and is a no-op for clean completions.
+        toolResult = {
+          content: annotateIfIncomplete(result.message.content, result.stopReason),
+        };
         return toolResult;
       }
 
