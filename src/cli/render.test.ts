@@ -7,6 +7,8 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import stringWidth from 'string-width';
 import {
   statusPanel,
@@ -164,6 +166,76 @@ describe('welcomeBanner', () => {
     // strip to the contiguous product name — the accent is a weight step, not
     // a fragmenting insertion.
     expect(out).toContain('Agent AFK');
+  });
+
+  describe('block-art AFK logo + footer links', () => {
+    // The gradient-shaded "AFK" logo leaves a run of full blocks that the plain
+    // text name caption never would. (Gradient color itself is not asserted —
+    // these tests strip ANSI to stay chalk-level-independent, as elsewhere.)
+    const hasBlockArt = (s: string): boolean => /█{3,}/.test(s);
+
+    it('renders the block-art AFK logo on a wide terminal, keeping the readable name as a caption', () => {
+      Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
+      const out = strip(welcomeBanner({
+        mode: 'Interactive Mode',
+        model: 'opus_1m',
+        version: '5.25.8',
+        cwd: '/tmp/agent-afk',
+      }));
+      expect(hasBlockArt(out)).toBe(true);
+      // Readable identity survives the block art (grep / screen-reader / tests).
+      expect(out).toContain('Agent AFK');
+      expect(out).toContain('v5.25.8');
+      expect(out).toContain('the agent harness you can actually change');
+    });
+
+    it('keeps the compact AFK logo (no text fallback) even when the mascot is dropped on a narrow terminal', () => {
+      // The "AFK" acronym logo is only ~14 cols, so — unlike the retired full
+      // "AGENT AFK" header — it survives narrow terminals that drop the goblin,
+      // rather than degrading to a plain text wordmark.
+      Object.defineProperty(process.stdout, 'columns', { value: 48, configurable: true });
+      const out = strip(welcomeBanner({
+        mode: 'Interactive Mode',
+        model: 'opus_1m',
+        version: '5.25.8',
+        cwd: '/tmp/agent-afk',
+      }));
+      expect(hasBlockArt(out)).toBe(true);
+      // No goblin at this width, but the readable name is still present.
+      expect(/[▀▄]/.test(out)).toBe(false);
+      expect(out).toContain('Agent AFK');
+    });
+
+    it('surfaces the docs + github links in the footer', () => {
+      Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
+      const out = strip(welcomeBanner({
+        mode: 'Interactive Mode',
+        model: 'opus_1m',
+        version: '5.25.8',
+        cwd: '/tmp/agent-afk',
+      }));
+      expect(out).toContain('docs.agentafk.com');
+      expect(out).toContain('github.com/griffinwork40/agent-afk');
+    });
+
+    it('keeps the banner links in sync with package.json (drift guard)', () => {
+      const pkgPath = fileURLToPath(new URL('../../package.json', import.meta.url));
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as {
+        homepage: string;
+        repository: { url: string };
+      };
+      Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
+      const out = strip(welcomeBanner({ mode: 'Interactive Mode', model: 'opus_1m', cwd: '/tmp' }));
+      // Display forms: scheme stripped from homepage; `git+`/scheme/`.git`
+      // stripped from repository.url.
+      const docsDisplay = pkg.homepage.replace(/^https?:\/\//, '').replace(/\/$/, '');
+      const repoDisplay = pkg.repository.url
+        .replace(/^git\+/, '')
+        .replace(/^https?:\/\//, '')
+        .replace(/\.git$/, '');
+      expect(out).toContain(docsDisplay);
+      expect(out).toContain(repoDisplay);
+    });
   });
 
   describe('responsive mascot layout', () => {
