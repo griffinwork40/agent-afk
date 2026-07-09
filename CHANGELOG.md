@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.25.9] - 2026-07-09
+
+### Fixed
+- #441 robustness cluster — grep cwd-error enrichment, subagent cache invalidation, worktree-root debug log (#471) (fe19cb5)
+
 ## [5.25.8] - 2026-07-08
 
 ### Changed
