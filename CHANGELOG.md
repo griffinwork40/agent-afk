@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.25.10] - 2026-07-09
+
+### Fixed
+- space out ⚡ glyph and bp tag in bypass prompt caret (#472) (32ea78d)
+
 ## [5.25.9] - 2026-07-09
 
 ### Fixed
