@@ -2,7 +2,7 @@
  * Tests for buildPrompt (repl-loop-shared.ts).
  *
  * The caret carries the brand plus a compact echo of the non-default
- * permission mode (` ●` / ` ◐` / ` ⚡bp`) — never the worded chip, which lives
+ * permission mode (` ●` / ` ◐` / ` ⚡ bp`) — never the worded chip, which lives
  * on the status line. The echo must stay at the caret because the status
  * row is painted outside the scroll region and never enters scrollback: the
  * prompt is the only mode signal that survives into the linear transcript.

@@ -70,13 +70,13 @@ export function buildPrompt(mode: PermissionMode): string {
   // the security-sensitive mode, and an ASCII token is what lets a post-hoc
   // `grep` of a piped transcript locate the windows where permissions were off
   // (a bare glyph is not reliably searchable). A post-hoc transcript scan
-  // should grep the COMPOUND token `⚡bp` (not a bare `bp`), because bare `bp`
+  // should grep the spaced token `⚡ bp` (not a bare `bp`), because bare `bp`
   // also matches unrelated substrings like "subprocess".
   const base = palette.brand('afk');
   const marker =
     mode === 'plan' ? palette.warning(' ●') :
     mode === 'autonomous' ? palette.info(' ◐') :
-    mode === 'bypassPermissions' ? palette.bypass(' ⚡bp') :
+    mode === 'bypassPermissions' ? palette.bypass(' ⚡ bp') :
     '';
   return base + marker + palette.dim('  › ');
 }
