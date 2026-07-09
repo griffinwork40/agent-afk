@@ -64,6 +64,12 @@ import {
 } from './session-setup.js';
 import { SessionStateManager } from './session-state.js';
 import { transformProviderEvent, type TransformDeps } from './stream-consumer.js';
+import { getSessionGrantsPath } from '../../paths.js';
+import {
+  capJsonlBySize,
+  SESSION_GRANTS_MAX_BYTES,
+  SESSION_GRANTS_KEEP_TAIL_LINES,
+} from '../log-retention.js';
 
 
 export class AgentSession implements IAgentSession {
@@ -234,6 +240,19 @@ export class AgentSession implements IAgentSession {
     });
 
     this.initSdkLifecycle();
+
+    // Bound the write-only session-grants audit log at session start. Top-level
+    // sessions only: subagents share the parent's path, so re-running per fork
+    // is redundant and widens the rewrite-collision window. Fire-and-forget +
+    // silent-fail — best-effort housekeeping that must never delay or break
+    // construction. Runs at bootstrap rather than inline at the (concurrent)
+    // append sites; see src/agent/log-retention.ts for why.
+    if (this.config.parentSessionId === undefined) {
+      void capJsonlBySize(getSessionGrantsPath(), {
+        maxBytes: SESSION_GRANTS_MAX_BYTES,
+        keepTailLines: SESSION_GRANTS_KEEP_TAIL_LINES,
+      });
+    }
   }
 
   /**
