@@ -23,6 +23,7 @@ import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { appendRoutingDecision } from '../../routing-telemetry.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
+import { describeSpawnCwdError, isSpawnEnoent } from '../../../utils/spawn-cwd-error.js';
 
 /**
  * Input shape for the grep tool (validated at runtime).
@@ -151,9 +152,17 @@ export function createGrepHandler(cwd?: string): ToolHandler {
 
     args.push(pattern, path);
 
-    // Scope the spawned grep to the session's worktree. spawn treats
-    // `cwd: undefined` as inherit from process.cwd().
-    const proc = spawn('grep', args, cwd !== undefined ? { cwd } : {});
+    // Effective cwd priority (parity with the bash handler, #441):
+    //   1. context?.resolveBase — permission anchor (updated in place on an
+    //      in-flight setResolveBase re-anchor)
+    //   2. context?.cwd — per-call override (back-compat)
+    //   3. factory-level `cwd` — session worktree isolation (createGrepHandler)
+    // Computed ONCE so the spawn cwd and the ENOENT diagnosis below cannot
+    // disagree: a stale factory `cwd` would otherwise make the diagnosis stat a
+    // different dir than spawn used, reverting to a raw `spawn grep ENOENT`
+    // (Codex P2 on #471). spawn treats `cwd: undefined` as inherit process.cwd().
+    const effectiveCwd = context?.resolveBase ?? context?.cwd ?? cwd;
+    const proc = spawn('grep', args, effectiveCwd !== undefined ? { cwd: effectiveCwd } : {});
 
     let stdout = '';
     let stderr = '';
@@ -302,7 +311,26 @@ export function createGrepHandler(cwd?: string): ToolHandler {
     });
 
     proc.on('error', (err) => {
-      settle({ content: `Failed to execute grep: ${err.message}`, isError: true });
+      // Spawn ENOENT masquerade: a dead working directory (e.g. a git worktree
+      // reaped mid-session) surfaces as `spawn grep ENOENT` — naming the binary,
+      // not the missing dir — so an agent retries blindly. Translate it into an
+      // actionable message via statSync on the error path only (no TOCTOU, no
+      // happy-path cost). Diagnoses against the SAME hoisted `effectiveCwd` that
+      // spawn used above, so the two can never stat different dirs (bash parity,
+      // #441).
+      let message: string;
+      if (effectiveCwd === undefined && isSpawnEnoent(err)) {
+        // No explicit cwd was passed, so spawn inherited process.cwd(); that
+        // directory itself can be deleted (same masquerade) — report as such.
+        try {
+          message = describeSpawnCwdError(err, process.cwd());
+        } catch {
+          message = `working directory does not exist (process cwd deleted — deleted worktree?) — underlying: ${err.message}`;
+        }
+      } else {
+        message = describeSpawnCwdError(err, effectiveCwd);
+      }
+      settle({ content: `Failed to execute grep: ${message}`, isError: true });
     });
   });
   };
