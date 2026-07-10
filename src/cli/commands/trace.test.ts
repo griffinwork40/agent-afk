@@ -27,7 +27,7 @@ import {
   listTraces,
   resolveLatestSession,
 } from './trace.js';
-import { getTraceDir } from '../../paths.js';
+import { getTraceDir, getSessionLedgerDir, getSessionLedgerPath } from '../../paths.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -333,5 +333,48 @@ describe('witness discovery', () => {
 
   it('throws a helpful error for a missing session', async () => {
     await expect(loadTrace('does-not-exist-xyz')).rejects.toThrow(/No trace found/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ledger fallback: fresh sessions label the witness dir with a random UUID
+// (not the session id), so loadTrace(sessionId) must recover the real label
+// from the session ledger's `meta.traceLabel`.
+// ---------------------------------------------------------------------------
+
+async function writeLedger(sessionId: string, records: EventObj[]): Promise<void> {
+  await mkdir(getSessionLedgerDir(sessionId), { recursive: true });
+  await writeFile(getSessionLedgerPath(sessionId), toJsonl(records), 'utf8');
+}
+
+describe('loadTrace ledger fallback', () => {
+  it('resolves a trace whose witness label differs from the session id', async () => {
+    // Trace lives under a random-UUID label; nothing under <witness>/<sessionId>/.
+    await writeTrace('random-label-abc123', sampleEvents());
+    await writeLedger('sess-fresh-a', [
+      { v: 1, ts: 1000, kind: 'meta', sessionId: 'sess-fresh-a', model: 'sonnet', traceLabel: 'random-label-abc123' },
+      { v: 1, ts: 1001, kind: 'user', text: 'hi' },
+    ]);
+
+    const loaded = await loadTrace('sess-fresh-a');
+    expect(loaded.sessionId).toBe('sess-fresh-a');
+    expect(loaded.tracePath).toContain('random-label-abc123');
+    expect(loaded.events).toHaveLength(10);
+  });
+
+  it('reports tracing-disabled when the ledger meta records traceLabel: null', async () => {
+    await writeLedger('sess-notrace', [
+      { v: 1, ts: 1000, kind: 'meta', sessionId: 'sess-notrace', model: 'sonnet', traceLabel: null },
+    ]);
+
+    await expect(loadTrace('sess-notrace')).rejects.toThrow(/tracing disabled/);
+  });
+
+  it('falls through to "No trace found" when the ledger meta predates the field', async () => {
+    await writeLedger('sess-legacy', [
+      { v: 1, ts: 1000, kind: 'meta', sessionId: 'sess-legacy', model: 'sonnet' },
+    ]);
+
+    await expect(loadTrace('sess-legacy')).rejects.toThrow(/No trace found/);
   });
 });

@@ -63,7 +63,15 @@ export class TelegramBot {
 
   constructor(options: BotOptions) {
     this.options = options;
-    this.bot = new Telegraf(options.botToken);
+    // Disable Telegraf's default handlerTimeout (90_000ms). It wraps the ENTIRE
+    // update handler — a full agent turn — in a p-timeout, so any turn over 90s
+    // total (sub-agents, web_scrape, long bash) rejects to `bot.catch` as a
+    // generic "unexpected error" even though the AgentSession keeps running
+    // (p-timeout does not abort the underlying promise). src/telegram/streaming.ts
+    // is the real timeout authority: an inter-event, tool-in-flight-aware,
+    // usage-limit-pause-aware watchdog that throws a handled StreamTimeoutError.
+    // p-timeout short-circuits on Infinity, handing it sole timeout control.
+    this.bot = new Telegraf(options.botToken, { handlerTimeout: Infinity });
     this.sessionManager = new SessionManager(options);
     this.messageHandler = new MessageHandler(
       this.bot,

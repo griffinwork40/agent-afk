@@ -24,6 +24,14 @@ auto-release workflow to deduplicate commits across successive runs.
   responses. Routing and the reasoning/vision request contract already covered
   `gpt-5.6` via the `/^gpt-5/` patterns; this closes the maintained-table gaps
   and adds regression coverage.
+## [5.25.11] - 2026-07-10
+
+### Fixed
+- Telegram: don't guillotine long agent turns at 90s — disable Telegraf's default `handlerTimeout` so the purpose-built `streaming.ts` inactivity watchdog is the sole timeout authority; fixes the spurious "❌ An unexpected error occurred. Please try again." shown while a turn (sub-agents, web_scrape, long tool calls) was still running and would complete
+
+### Fixed
+- make witness traces correlatable to sessions via ledger meta (#476) (4a7833f)
+- disable Telegraf 90s handlerTimeout so long turns aren't guillotined (#475) (1e80771)
 
 ## [5.25.10] - 2026-07-09
 

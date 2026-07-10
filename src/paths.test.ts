@@ -36,6 +36,8 @@ import {
   getBrowserStateRoot,
   getBrowserProfileStateDir,
   getBrowserStorageStatePath,
+  getTraceDir,
+  sessionLabelFromTracePath,
 } from './paths.js';
 import { useUnsetAfkHome } from './__test-utils__/unset-afk-home.js';
 
@@ -353,6 +355,36 @@ describe('getAfkHome — AFK_HOME validation (F1)', () => {
   it('returns the value when AFK_HOME is a valid absolute non-root path', () => {
     vi.stubEnv('AFK_HOME', '/tmp/afk-test');
     expect(getAfkHome()).toBe('/tmp/afk-test');
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('sessionLabelFromTracePath — inverse of getTraceDir', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('recovers the witness label from a trace.jsonl path', () => {
+    expect(
+      sessionLabelFromTracePath('/home/u/.afk/state/witness/label-xyz-123/trace.jsonl'),
+    ).toBe('label-xyz-123');
+  });
+
+  it('is the inverse of getTraceDir for a valid label', () => {
+    vi.stubEnv('AFK_HOME', '/tmp/afk-label-test');
+    const p = join(getTraceDir('default-uuid-1'), 'trace.jsonl');
+    expect(sessionLabelFromTracePath(p)).toBe('default-uuid-1');
+  });
+
+  it('returns null for the in-memory writer sentinel', () => {
+    expect(sessionLabelFromTracePath('in-memory://trace')).toBeNull();
+  });
+
+  it('returns null for nullish or empty input', () => {
+    expect(sessionLabelFromTracePath(undefined)).toBeNull();
+    expect(sessionLabelFromTracePath(null)).toBeNull();
+    expect(sessionLabelFromTracePath('')).toBeNull();
   });
 });
 
