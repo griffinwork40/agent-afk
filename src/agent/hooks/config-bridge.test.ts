@@ -369,9 +369,11 @@ describe('createDefaultHookRegistry integration', () => {
 
   it('createDefaultHookRegistry without hookConfig → 0 config hooks registered', () => {
     const { registry } = createDefaultHookRegistry();
-    // Built-in handlers exist for SubagentStop and SessionEnd, but NO PreToolUse
-    // config hooks since we passed no hookConfig (path-approval disabled above).
-    expect(registry.count('PreToolUse')).toBe(0);
+    // Built-in handlers exist for SubagentStop and SessionEnd, plus exactly ONE
+    // built-in PreToolUse handler (the ask-question gate, registered
+    // unconditionally). No further PreToolUse hooks since we passed no
+    // hookConfig (path-approval disabled above).
+    expect(registry.count('PreToolUse')).toBe(1);
   });
 
   it('createDefaultHookRegistry with hookConfig → config hooks ARE registered', () => {
@@ -396,8 +398,8 @@ describe('createDefaultHookRegistry integration', () => {
       hookConfig,
       { cwd: projectCwd },
     );
-    // 1 config hook for PreToolUse
-    expect(registry.count('PreToolUse')).toBe(1);
+    // 1 built-in (ask-question gate) + 1 config hook for PreToolUse
+    expect(registry.count('PreToolUse')).toBe(2);
   });
 
   it('built-in SubagentStop handler still present when hookConfig is provided', () => {

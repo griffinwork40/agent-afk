@@ -92,6 +92,17 @@ class ElicitationRouter {
     this.handler = null;
   }
 
+  /**
+   * Whether an elicitation handler is currently installed. Deterministic
+   * probe used by the ask-question PreToolUse gate (`ask-question-gate.ts`):
+   * handler presence is the ground truth for "an interactive operator surface
+   * (REPL/Telegram) is attached to this process". Read at call time — a
+   * handler installed later is observed by subsequent probes.
+   */
+  hasHandler(): boolean {
+    return this.handler !== null;
+  }
+
   /** Number of requests currently waiting in (or executing from) the queue. */
   pendingCount(): number {
     return this.queueDepth;

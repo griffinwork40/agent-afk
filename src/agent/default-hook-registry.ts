@@ -8,6 +8,7 @@
 
 import { createHookRegistry, type HookRegistry } from './hooks.js';
 import { createShadowVerifyNudge } from './shadow-verify-nudge.js';
+import { createAskQuestionGate } from './ask-question-gate.js';
 import { MemoryStore, createMemorySessionEndHook } from './memory/index.js';
 import { createPlanModeGate } from './plan-mode-gate.js';
 import { createAfkModeGate } from './afk-mode-gate.js';
@@ -90,6 +91,12 @@ export function createDefaultHookRegistry(
   const shadowVerifyNudge = createShadowVerifyNudge();
   registry.register('SubagentStop', shadowVerifyNudge);
   registry.register('Stop', shadowVerifyNudge);
+  // Ask-question gate: on surfaces with no elicitation handler (daemon,
+  // scheduler, one-shot chat) a question can never be answered — block it
+  // pre-flight with proceed-on-assumption guidance instead of letting the
+  // router park-and-decline after the round-trip. No-op on REPL/Telegram
+  // (handler installed; probed at call time). See ask-question-gate.ts.
+  registry.register('PreToolUse', createAskQuestionGate());
   const store = memoryStore ?? new MemoryStore();
   if (getPermissionMode !== undefined) {
     registry.register('PreToolUse', createPlanModeGate(getPermissionMode));
