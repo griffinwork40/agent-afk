@@ -50,7 +50,7 @@ const PINNED_HASHES = {
   // as the agent-driven /diagnose (context: fork) that replaced the retired
   // vendored TS orchestrator (src/skills/diagnose/). Hash bumps need no parallel
   // PR — document the change in the commit message instead.
-  diagnose: '9a54f97470dce8adec5f1456f881aebe1bb550ee6f201ab9d63cccfd8a316096',
+  diagnose: '999ba8306f264d06a04676ab477cbf939637370afeb982cbc41814345eec4159',
   // gather + parallelize carry a bundled-only `context: load` frontmatter line
   // (2026-06 skill-execution-mode work). `context` is an agent-afk-specific
   // field; Claude Code upstream skills are natively inline/progressive-disclosure,
