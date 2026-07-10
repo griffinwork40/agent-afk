@@ -200,7 +200,7 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'models.small', tier: 'agent', type: 'model-slot', description: 'Small-tier model id. Accepts a bare id string or a { id, provider, name } object (baseUrl/apiKey are human-gated: set them via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here).' },
   { path: 'models.medium', tier: 'agent', type: 'model-slot', description: 'Medium-tier model id. Accepts a bare id string or a { id, provider, name } object (baseUrl/apiKey are human-gated: set them via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here).' },
   { path: 'models.large', tier: 'agent', type: 'model-slot', description: 'Large-tier model id. Accepts a bare id string or a { id, provider, name } object (baseUrl/apiKey are human-gated: set them via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here).' },
-  { path: 'maxTokens', tier: 'agent', type: 'number', clamp: { min: 1, max: 1_000_000, integer: true }, description: 'Max tokens per turn.' },
+  { path: 'maxTokens', tier: 'agent', type: 'number', clamp: { min: 1, max: 1_000_000, integer: true }, description: 'Deprecated and inert: not read by the generation path. Use AFK_MAX_OUTPUT_TOKENS or --max-output-tokens to cap per-response output.' },
   { path: 'temperature', tier: 'agent', type: 'number', clamp: { min: 0, max: 2 }, description: 'Sampling temperature.' },
   { path: 'autoRouting.interactive', tier: 'agent', type: 'boolean', description: 'Auto-route model in the REPL.' },
   { path: 'autoRouting.chat', tier: 'agent', type: 'boolean', description: 'Auto-route model for chat.' },
