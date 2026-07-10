@@ -66,6 +66,20 @@ export interface DefaultHookRegistryResult {
 let warnedPathApprovalDisabled = false;
 
 /**
+ * Distinct hooks-config loader warnings already surfaced this process. The
+ * loader records non-fatal problems (parse/schema errors, and the orphan
+ * root-settings notice for a misplaced `$AFK_HOME/settings.json`) on
+ * `LoadedHooksConfig.warnings`, documented as "the caller should surface" —
+ * but no caller did, so a misplaced root file stayed silent and the owner
+ * could believe those hooks were active. We surface them here (the single
+ * chokepoint every surface routes through), deduped per distinct message so
+ * repeated session construction (daemon ticks, per-chat Telegram sessions)
+ * doesn't re-spam the same process-global notice while a genuinely new
+ * warning from a later session still surfaces.
+ */
+const surfacedConfigWarnings = new Set<string>();
+
+/**
  * Test-only: reset the once-per-process warning flag so Vitest files that
  * exercise the AFK_DISABLE_PATH_APPROVAL=1 warn path don't bleed state into
  * each other (module scope persists across files in a single worker).
@@ -73,6 +87,7 @@ let warnedPathApprovalDisabled = false;
  */
 export function _resetWarningForTests(): void {
   warnedPathApprovalDisabled = false;
+  surfacedConfigWarnings.clear();
 }
 
 export function createDefaultHookRegistry(
@@ -234,6 +249,17 @@ export function createDefaultHookRegistry(
   // handlers always run first. Config hooks are optional — when no
   // hookConfig is provided (the common case) this is a no-op.
   if (hookConfig !== undefined) {
+    // Surface loader warnings (parse/schema errors, orphan root-settings
+    // notice) that were computed but previously dropped on the floor — see
+    // surfacedConfigWarnings above. Emit before registration so problems are
+    // visible even when the config has zero registrable hooks (the orphan
+    // case). Mirrors the bridge's skipped-hook `[hooks]` console.warn channel.
+    for (const warning of hookConfig.warnings) {
+      if (surfacedConfigWarnings.has(warning)) continue;
+      surfacedConfigWarnings.add(warning);
+      // eslint-disable-next-line no-console
+      console.warn(`[hooks] ${warning}`);
+    }
     loadAndRegisterConfigHooks(registry, hookConfig, {
       cwd: agentOptions?.cwd,
       sessionId: agentOptions?.sessionId,
