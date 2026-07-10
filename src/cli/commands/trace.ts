@@ -29,6 +29,7 @@ import { join } from 'node:path';
 
 import { handleCommandError } from '../errors/index.js';
 import { getAfkStateDir, getTraceDir } from '../../paths.js';
+import { readLedger } from '../../agent/session-ledger.js';
 import type { TraceEvent } from '../../agent/trace/index.js';
 
 // ---------------------------------------------------------------------------
@@ -154,21 +155,78 @@ export async function loadTrace(
   }
 
   // getTraceDir validates the id shape and throws on an unsafe value.
-  const tracePath = join(getTraceDir(sessionId), 'trace.jsonl');
-  let content: string;
-  try {
-    content = await readFile(tracePath, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+  let tracePath = join(getTraceDir(sessionId), 'trace.jsonl');
+  let content = await readTraceFile(tracePath);
+
+  // Fresh sessions label the witness dir with a random UUID, not the session id
+  // (only resumed sessions reuse the id) — so a direct <witness>/<id>/ lookup
+  // misses them. The session ledger's `meta` record carries the real label;
+  // consult it before giving up.
+  if (content === null) {
+    const resolved = await traceLabelFromLedger(sessionId);
+    if (resolved.kind === 'disabled') {
       throw new Error(
-        `No trace found for session "${sessionId}" at ${tracePath}. ` +
-          `See \`afk trace list\` for available sessions.`,
+        `Session "${sessionId}" ran with tracing disabled — its ledger records ` +
+          `traceLabel: null, so no witness trace was written ` +
+          `(tracing is off when AFK_TRACE_DISABLED=1).`,
       );
     }
-    throw err;
+    if (resolved.kind === 'label' && resolved.label !== sessionId) {
+      try {
+        const relabeled = join(getTraceDir(resolved.label), 'trace.jsonl');
+        const viaLedger = await readTraceFile(relabeled);
+        if (viaLedger !== null) {
+          tracePath = relabeled;
+          content = viaLedger;
+        }
+      } catch {
+        // Unsafe/garbage label in the ledger — fall through to the not-found error.
+      }
+    }
+  }
+
+  if (content === null) {
+    throw new Error(
+      `No trace found for session "${sessionId}" at ${tracePath}. ` +
+        `See \`afk trace list\` for available sessions.`,
+    );
   }
 
   return { sessionId, tracePath, ...parseTrace(content) };
+}
+
+/** Read a `trace.jsonl`, returning `null` on ENOENT (other errors rethrow). */
+async function readTraceFile(tracePath: string): Promise<string | null> {
+  try {
+    return await readFile(tracePath, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+/**
+ * Recover a session's witness label from its ledger `meta` record.
+ *   - `{ kind: 'label', label }` — meta recorded a non-empty `traceLabel`.
+ *   - `{ kind: 'disabled' }`     — meta recorded `traceLabel: null` (tracing off).
+ *   - `{ kind: 'none' }`         — no ledger, no meta, or a pre-field ledger.
+ */
+async function traceLabelFromLedger(
+  sessionId: string,
+): Promise<{ kind: 'label'; label: string } | { kind: 'disabled' } | { kind: 'none' }> {
+  try {
+    for await (const rec of readLedger(sessionId)) {
+      if (rec.kind !== 'meta') continue;
+      if (typeof rec.traceLabel === 'string' && rec.traceLabel.length > 0) {
+        return { kind: 'label', label: rec.traceLabel };
+      }
+      if (rec.traceLabel === null) return { kind: 'disabled' };
+      return { kind: 'none' }; // meta present but written before the field existed
+    }
+  } catch {
+    // Ledger unreadable — treat as no signal and fall back to the direct lookup.
+  }
+  return { kind: 'none' };
 }
 
 // ---------------------------------------------------------------------------

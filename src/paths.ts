@@ -35,7 +35,7 @@
  */
 
 import { existsSync, mkdirSync, renameSync, cpSync, rmSync } from 'fs';
-import { join, dirname, isAbsolute } from 'path';
+import { join, dirname, basename, isAbsolute } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
 import { env } from './config/env.js';
@@ -307,6 +307,22 @@ export function validateSessionId(sessionId: string): void {
 export function getTraceDir(sessionId: string): string {
   validateSessionId(sessionId);
   return join(getAfkStateDir(), 'witness', sessionId);
+}
+
+/**
+ * Inverse of {@link getTraceDir}: recover the witness `sessionLabel` from a
+ * trace-file path (`.../witness/<label>/trace.jsonl`).
+ *
+ * Returns `null` for the in-memory writer sentinel (`in-memory://trace`) and
+ * for an absent path, so a caller recording the label can store an explicit
+ * "no trace" marker rather than a bogus directory name. Used to stamp the
+ * witness label into the session ledger's `meta` record — the trace writer
+ * exposes only `getTracePath()` (its label is a random UUID it doesn't surface
+ * directly), so the label is derived from that path.
+ */
+export function sessionLabelFromTracePath(tracePath: string | undefined | null): string | null {
+  if (!tracePath || tracePath.startsWith('in-memory:')) return null;
+  return basename(dirname(tracePath));
 }
 
 /**

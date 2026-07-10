@@ -38,8 +38,21 @@ import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js
 export type LedgerRecord = { v: 1; ts: number } & LedgerPayload;
 
 export type LedgerPayload =
-  /** Session-level metadata, written once when the ledger opens. */
-  | { kind: 'meta'; sessionId: string; model: string; cwd?: string; surface?: string }
+  /** Session-level metadata, written once when the ledger opens.
+   *  `traceLabel` is the witness-trace directory name (`state/witness/<label>/`)
+   *  for this session, letting a reader correlate the id-keyed ledger to the
+   *  trace — whose label is a random UUID for fresh sessions, decoupled from
+   *  the session id. `null` means no trace was wired (tracing disabled/failed),
+   *  making that state explicit rather than a silently-absent directory.
+   *  Optional for back-compat with ledgers written before this field existed. */
+  | {
+      kind: 'meta';
+      sessionId: string;
+      model: string;
+      cwd?: string;
+      surface?: string;
+      traceLabel?: string | null;
+    }
   /** A user turn entering the session (summary text, never raw blocks). */
   | { kind: 'user'; text: string }
   /** A complete assistant message. */

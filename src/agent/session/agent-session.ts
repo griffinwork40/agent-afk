@@ -51,6 +51,7 @@ import type {
 } from '../types.js';
 import { QueryInputStream } from './input-iterable.js';
 import { SessionLedgerWriter } from '../session-ledger.js';
+import { sessionLabelFromTracePath } from '../../paths.js';
 import type { ElicitationRequest } from '../types/sdk-types.js';
 import { env } from '../../config/env.js';
 import { resolveModelId } from './model-resolution.js';
@@ -695,6 +696,11 @@ export class AgentSession implements IAgentSession {
       sessionId: id,
       model: meta.model ?? String(this.config.model),
       ...(meta.cwd !== undefined ? { cwd: meta.cwd } : {}),
+      // Correlate this id-keyed ledger to its witness trace: fresh sessions
+      // label the trace dir with a random UUID (not the session id), so the
+      // ledger is the durable id→label bridge. `null` when tracing is
+      // disabled/unwired, so absence is explicit rather than silent.
+      traceLabel: sessionLabelFromTracePath(this.config.traceWriter?.getTracePath()),
     });
   }
 
