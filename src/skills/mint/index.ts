@@ -173,6 +173,12 @@ async function runPhasesAfterSpec(
   // stream-renderer.ts:262-280, and skills/index.ts SkillExecutionContext.callId).
   skillCallId?: string,
   defaultSubagentModel: AgentModelInput = 'sonnet',
+  // Forwarded to the heal phase, which dispatches the agent-driven `/diagnose`
+  // skill (bundled-plugin SKILL.md, context: fork). Threaded from the mint
+  // handler's SkillExecutionContext (`ctx.dispatchSkill`). Optional so the
+  // resume/autoApprove paths and tests without a dispatch context degrade
+  // gracefully — heal then self-diagnoses from the verification issues.
+  dispatchSkill?: (name: string, args?: string) => Promise<string>,
 ): Promise<MintResult> {
   if (!parentSession.sessionId) {
     throw new Error('runPhasesAfterSpec requires parentSession.sessionId');
@@ -275,6 +281,7 @@ async function runPhasesAfterSpec(
         parentSession,
         skillCallId,
         defaultSubagentModel,
+        dispatchSkill,
       );
       state.healIterations = healResult.newHealIterations;
       state.verifyResults = healResult.newVerifyResults;
@@ -346,7 +353,7 @@ async function handler(
         'mint: no paused spec found for this session to continue. Run /mint <idea> first, then /mint --continue approved.',
       );
     }
-    const result = await runPhasesAfterSpec(resumeState, parentSession, skillCallId, defaultSubagentModel);
+    const result = await runPhasesAfterSpec(resumeState, parentSession, skillCallId, defaultSubagentModel, ctx?.dispatchSkill);
     return finalizeAfterSpec(parentSessionId, result);
   }
 
@@ -386,7 +393,7 @@ async function handler(
     return pausedResult;
   }
 
-  const result = await runPhasesAfterSpec(state, parentSession, skillCallId, defaultSubagentModel);
+  const result = await runPhasesAfterSpec(state, parentSession, skillCallId, defaultSubagentModel, ctx?.dispatchSkill);
   return finalizeAfterSpec(parentSessionId, result);
 }
 
