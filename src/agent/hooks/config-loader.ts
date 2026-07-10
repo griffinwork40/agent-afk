@@ -28,7 +28,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { getJsonConfigPath, getSettingsPath, getProjectSettingsPath } from '../../paths.js';
+import { getAfkHome, getJsonConfigPath, getSettingsPath, getProjectSettingsPath } from '../../paths.js';
 import type { HarnessHookEvent } from '../hooks.js';
 import { HOOK_HANDLER_TIMEOUT_MS } from '../hook-registry.js';
 
@@ -329,6 +329,24 @@ export function loadHooksConfig(opts: LoadHooksConfigOptions = {}): LoadedHooksC
     seenPaths.add(layer.path);
     return true;
   });
+
+  // Misplacement guard: a settings file at the AFK-home ROOT
+  // (`~/.afk/settings.json`) is NOT a config source — the user-global
+  // supplemental layer lives at `~/.afk/config/settings.json` (layer 1).
+  // A root-level file is otherwise a silent no-op (found in the wild holding
+  // a dead SubagentStop hook shim the owner believed was active), so surface
+  // the misplacement through the warnings channel instead of ignoring it.
+  try {
+    const orphanSettings = join(getAfkHome(), 'settings.json');
+    if (!seenPaths.has(orphanSettings) && existsSync(orphanSettings)) {
+      allWarnings.push(
+        `found ${orphanSettings} but AFK does not read settings from the AFK-home root; ` +
+          `user-global hooks/settings belong in ${getSettingsPath()} — the root file is ignored`,
+      );
+    }
+  } catch {
+    // Probe failure must never affect config loading.
+  }
 
   // First pass (user-global layers only): determine trust flags before
   // deciding which project-local hooks to admit.
