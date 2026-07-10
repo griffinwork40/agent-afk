@@ -1311,6 +1311,174 @@ describe('SkillExecutor', () => {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // In-turn SubagentStop injectContext append (skill-executor.ts:
+  // runForkedSkillToResult finally, ~1178-1192).
+  //
+  // When a forked skill's SubagentStop hook produces injectContext (e.g. the
+  // shadow-verify nudge), that note must be delivered IN-TURN — appended to
+  // THIS skill's tool_result content — not via the parent's deferred
+  // input-stream queue. The driver coordinates this by calling
+  // `teardown({ deferInjectContextToCaller: true })` (suppresses the queue
+  // push and records the note) and then, in its finally, appending
+  // `handle.getLastStopInjectContext()` to the completion ToolResult it
+  // hoisted into `toolResult`. Follow-up to #387; #391.
+  //
+  // Mirrors `subagent-executor.test.ts` ("in-turn SubagentStop injectContext
+  // delivery") — the `agent` tool's analogous append lives in
+  // subagent/foreground-promotion.ts. Keep the two suites in symmetry: the
+  // skill path differs only in that its failure payload is a plain error
+  // string (not the subagent JSON envelope), and its catch-path leaves
+  // `toolResult` unset so the note is intentionally dropped for that stop.
+  // -------------------------------------------------------------------------
+  describe('in-turn SubagentStop injectContext append', () => {
+    // Fork a `context: 'fork'` registry skill (→ executeForkedRegistrySkill →
+    // runForkedSkillToResult) with a handle whose SubagentStop note is
+    // whatever `injectContext` we pass. `injectContext: undefined` (the
+    // default) means the handle still exposes `getLastStopInjectContext` but
+    // it returns undefined — exercising the "no note" branch without removing
+    // the getter (which would instead hit the `?.` short-circuit).
+    function setupForkedSkillWithInject(
+      skillName: string,
+      runResult: unknown,
+      injectContext: string | undefined,
+    ) {
+      registerSkill({
+        name: skillName,
+        description: 'test',
+        context: 'fork',
+        handler: vi.fn(),
+      });
+      vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({
+        'system.md': 'fake-system-prompt',
+      });
+      const teardown = vi.fn().mockResolvedValue(undefined);
+      const getLastStopInjectContext = vi.fn().mockReturnValue(injectContext);
+      vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockResolvedValue({
+        runToResult: vi.fn().mockResolvedValue(runResult),
+        teardown,
+        getLastStopInjectContext,
+      } as never);
+      vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'parent-inject',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+      });
+      return { executor, teardown, getLastStopInjectContext };
+    }
+
+    // CORE ASSERTION: succeeded run + non-empty SubagentStop note ⇒ the
+    // returned tool_result.content ENDS WITH `\n\n<injectContext>` appended
+    // to the skill's own output.
+    it('appends the injectContext to the returned tool_result (success path)', async () => {
+      const nudge = '[framework-generated context: shadow-verify nudge]';
+      const { executor, teardown, getLastStopInjectContext } = setupForkedSkillWithInject(
+        'inject-success',
+        { status: 'succeeded', message: { content: 'skill findings' } },
+        nudge,
+      );
+
+      const result = await executor.execute(makeCall({ name: 'inject-success' }));
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toBe(`skill findings\n\n${nudge}`);
+      expect(result.content.endsWith(`\n\n${nudge}`)).toBe(true);
+      // Delivered exactly once, via the caller-deferred channel.
+      expect(teardown).toHaveBeenCalledWith({ deferInjectContextToCaller: true });
+      expect(getLastStopInjectContext).toHaveBeenCalled();
+    });
+
+    // NEGATIVE: no note produced (getter returns undefined) ⇒ content
+    // unchanged, and no stray `\n\n` separator is introduced.
+    it('leaves content unchanged when no injectContext is produced', async () => {
+      const { executor } = setupForkedSkillWithInject(
+        'inject-none',
+        { status: 'succeeded', message: { content: 'plain body' } },
+        undefined,
+      );
+
+      const result = await executor.execute(makeCall({ name: 'inject-none' }));
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toBe('plain body');
+      expect(result.content).not.toContain('\n\n');
+    });
+
+    // NEGATIVE: empty-string note ⇒ the `injectContext.length > 0` guard
+    // suppresses the append (no trailing separator).
+    it('does not append when getLastStopInjectContext returns an empty string', async () => {
+      const { executor } = setupForkedSkillWithInject(
+        'inject-empty',
+        { status: 'succeeded', message: { content: 'body only' } },
+        '',
+      );
+
+      const result = await executor.execute(makeCall({ name: 'inject-empty' }));
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toBe('body only');
+      expect(result.content).not.toContain('\n\n');
+    });
+
+    // ERROR PATH (failed result, toolResult IS defined): the driver assigns
+    // `toolResult = { content: errorMessage, isError: true }` before the
+    // finally runs, so the note is still appended to the error string.
+    it('appends the injectContext to the error content on a failed result', async () => {
+      const nudge = 'verify: this failure';
+      const { executor } = setupForkedSkillWithInject(
+        'inject-failed',
+        { status: 'failed', error: { message: 'subagent boom' } },
+        nudge,
+      );
+
+      const result = await executor.execute(makeCall({ name: 'inject-failed' }));
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toBe(`subagent boom\n\n${nudge}`);
+    });
+
+    // CATCH PATH (runToResult throws, toolResult stays undefined): the note is
+    // intentionally dropped for that stop — the error string is the signal.
+    // Pins the documented "nothing to append to" branch in the finally.
+    it('does NOT append when runToResult throws (toolResult never assigned)', async () => {
+      const nudge = 'verify: should not appear';
+      const teardown = vi.fn().mockResolvedValue(undefined);
+      const getLastStopInjectContext = vi.fn().mockReturnValue(nudge);
+      registerSkill({
+        name: 'inject-throw',
+        description: 'test',
+        context: 'fork',
+        handler: vi.fn(),
+      });
+      vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({
+        'system.md': 'fake-system-prompt',
+      });
+      vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockResolvedValue({
+        runToResult: vi.fn().mockRejectedValue(new Error('runtime boom')),
+        teardown,
+        getLastStopInjectContext,
+      } as never);
+      vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'parent-inject',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+      });
+
+      const result = await executor.execute(makeCall({ name: 'inject-throw' }));
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('runtime boom');
+      expect(result.content).not.toContain(nudge);
+    });
+  });
+
   describe('renderer-nesting contract (parentId + agentType)', () => {
     // Pins the contract between SkillExecutor and StreamRenderer.process()'s
     // 3-way parentId resolver. Mirrors ComposeExecutor (compose-executor.ts:
