@@ -11,6 +11,9 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Fixed
+- Telegram: don't guillotine long agent turns at 90s — disable Telegraf's default `handlerTimeout` so the purpose-built `streaming.ts` inactivity watchdog is the sole timeout authority; fixes the spurious "❌ An unexpected error occurred. Please try again." shown while a turn (sub-agents, web_scrape, long tool calls) was still running and would complete
+
 ## [5.25.10] - 2026-07-09
 
 ### Fixed
