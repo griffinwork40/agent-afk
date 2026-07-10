@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.26.2] - 2026-07-10
+
+### Added
+- ask-question PreToolUse gate + orphan root-settings warning (#477) (362d05b)
+
+### Changed
+- retire vendored TS orchestrator for bundled SKILL.md (#480) (88a77db)
+- mark AFK_MAX_TOKENS / maxTokens as deprecated and inert (#482) (f37b0a9)
+
 ## [5.26.1] - 2026-07-10
 
 ### Changed
