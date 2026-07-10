@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.26.5] - 2026-07-10
+
+### Fixed
+- route long/absent-retry-after 429s back to the usage-limit pause path (#483) (34a09c5)
+
 ## [5.26.4] - 2026-07-10
 
 ### Changed
