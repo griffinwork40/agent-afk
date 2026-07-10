@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.27.0] - 2026-07-10
+
+### Added
+- first-class isolation:"worktree" for the agent tool (#487) (7941226)
+
 ## [5.26.5] - 2026-07-10
 
 ### Fixed
