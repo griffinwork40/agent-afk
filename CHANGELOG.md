@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.26.3] - 2026-07-10
+
+### Changed
+- split plugin-skills.ts into flags/listing/reload modules (#366) (#486) (cd37ef1)
+- split loop.test.ts into sibling suites (#370) (#485) (708c4ff)
+
 ## [5.26.2] - 2026-07-10
 
 ### Added
