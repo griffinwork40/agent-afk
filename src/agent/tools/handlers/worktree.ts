@@ -63,6 +63,29 @@ async function resolveRepoContext(
   return { repoRoot, afkWorktreesRoot: join(repoRoot, '.afk-worktrees') };
 }
 
+/**
+ * Detect the package manager from the lockfile present in `repoRoot` and
+ * return its install command. A fresh worktree shares no `node_modules` with
+ * the main checkout, so the caller must install deps before building/testing
+ * — this gives the precise command. Falls back to `pnpm install` when no
+ * lockfile is found (repo convention). Best-effort: never throws.
+ */
+async function detectInstallCommand(repoRoot: string): Promise<string> {
+  const lockfiles: Array<[string, string]> = [
+    ['pnpm-lock.yaml', 'pnpm install'],
+    ['package-lock.json', 'npm install'],
+    ['yarn.lock', 'yarn install'],
+    ['bun.lockb', 'bun install'],
+  ];
+  for (const [file, command] of lockfiles) {
+    try {
+      await fs.access(join(repoRoot, file));
+      return command;
+    } catch { /* not this one */ }
+  }
+  return 'pnpm install';
+}
+
 /** Lowercase-kebab sanitization for worktree slugs / branch fragments. */
 function sanitizeSlug(name: string): string {
   return name
@@ -271,8 +294,17 @@ export function createWorktreeHandler(
               'utf-8',
             );
           } catch { /* best-effort */ }
+          // A fresh worktree does NOT share the main checkout's node_modules,
+          // so a naive build/test here fails opaquely. Surface a clear note
+          // with the precise install command so the caller installs first.
+          const installCommand = await detectInstallCommand(ctx.repoRoot);
           return {
-            content: JSON.stringify({ path: worktreePath, branch, base: baseRef }),
+            content: JSON.stringify({
+              path: worktreePath,
+              branch,
+              base: baseRef,
+              note: `Dependencies are NOT installed in this fresh worktree (no shared node_modules). Run \`${installCommand}\` in ${worktreePath} before building or testing, or the build/tests will fail opaquely.`,
+            }),
           };
         }
 

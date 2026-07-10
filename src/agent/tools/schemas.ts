@@ -627,8 +627,10 @@ export const worktreeTool: AnthropicToolDef = {
     'eventually reaped as ghosts (or leak forever if created outside `.afk-worktrees/`).\n\n' +
     'Actions:\n' +
     '- `create` — new worktree + branch under `.afk-worktrees/<name>` with proper meta. `base` picks ' +
-    'the start ref (default HEAD). Returns { path, branch, base }. Pass the returned path as `cwd` ' +
-    'when dispatching subagents into it.\n' +
+    'the start ref (default HEAD). Returns { path, branch, base, note }, where `note` warns that the ' +
+    'fresh worktree has no installed dependencies (no shared node_modules) and gives the install ' +
+    'command to run before building/testing. Pass the returned path as `cwd` when dispatching ' +
+    'subagents into it.\n' +
     '- `keep` — lock the worktree (`git worktree lock`) so the sweep engine NEVER removes it, ' +
     'regardless of age or cleanliness. Use this to save a worktree holding work in progress that ' +
     'must survive across sessions. Provide a `reason` naming why.\n' +

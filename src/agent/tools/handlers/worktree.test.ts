@@ -117,9 +117,14 @@ describe('worktree handler — create', () => {
     const handler = createWorktreeHandler(repoRoot, { execFile: mock });
     const result = await handler({ action: 'create', name: 'My Feature!' }, SIGNAL);
     expect(result.isError).toBeUndefined();
-    const parsed = JSON.parse(String(result.content)) as { path: string; branch: string };
+    const parsed = JSON.parse(String(result.content)) as { path: string; branch: string; note: string };
     expect(parsed.path).toBe(wtPath);
     expect(parsed.branch).toBe('afk/my-feature');
+
+    // Surfaces a deps-not-installed note so the caller installs before build/test (#439).
+    expect(typeof parsed.note).toBe('string');
+    expect(parsed.note).toMatch(/not installed/i);
+    expect(parsed.note).toContain(wtPath);
 
     // git worktree add argv shape
     const addCall = mock.calls.find((c) => c.args.includes('add'));
@@ -183,6 +188,47 @@ describe('worktree handler — create', () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain('base must be a git ref');
     expect(mock.calls.some((c) => c.args.includes('add'))).toBe(false);
+  });
+
+  // #439: the note's install command reflects the lockfile in the repo root.
+  const lockfileCases: Array<[string, string]> = [
+    ['pnpm-lock.yaml', 'pnpm install'],
+    ['package-lock.json', 'npm install'],
+    ['yarn.lock', 'yarn install'],
+    ['bun.lockb', 'bun install'],
+  ];
+  for (const [lockfile, command] of lockfileCases) {
+    it(`note recommends "${command}" when ${lockfile} is present in the repo root`, async () => {
+      await fs.writeFile(join(repoRoot, lockfile), '');
+      const wtPath = join(afkRoot, 'lock-detect');
+      const mock = makeMock(standardResponder(block(repoRoot), (call) => {
+        if (call.args.includes('add')) {
+          return fs.mkdir(wtPath, { recursive: true }).then(() => ({ stdout: '', stderr: '' }));
+        }
+        return undefined;
+      }));
+      const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+      const result = await handler({ action: 'create', name: 'lock-detect' }, SIGNAL);
+      expect(result.isError).toBeUndefined();
+      const parsed = JSON.parse(String(result.content)) as { note: string };
+      expect(parsed.note).toContain(command);
+    });
+  }
+
+  it('note falls back to "pnpm install" when no lockfile is present', async () => {
+    // beforeEach creates repoRoot with no lockfiles.
+    const wtPath = join(afkRoot, 'no-lock');
+    const mock = makeMock(standardResponder(block(repoRoot), (call) => {
+      if (call.args.includes('add')) {
+        return fs.mkdir(wtPath, { recursive: true }).then(() => ({ stdout: '', stderr: '' }));
+      }
+      return undefined;
+    }));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler({ action: 'create', name: 'no-lock' }, SIGNAL);
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(String(result.content)) as { note: string };
+    expect(parsed.note).toContain('pnpm install');
   });
 });
 
