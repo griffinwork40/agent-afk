@@ -109,6 +109,19 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'gpt-4o-mini': 128_000,
   'gpt-4.1': 1_000_000,
   'gpt-4.1-mini': 1_000_000,
+  // OpenAI GPT-5.6 family (GA 2026-07-09). The `gpt-5.6` alias routes to
+  // `gpt-5.6-sol` (flagship); `-terra` is the balanced tier and `-luna` the
+  // high-volume tier. All ship the flagship 5.x ~1.05M-token window (rounded to
+  // 1M here to match the gpt-4.1 / gpt-5.5 convention above). Keyed by the alias
+  // and all three variant ids so getContextUsage() reports an accurate percentage
+  // regardless of which id the user pins. gpt-5.5 is included as the prior
+  // flagship (the ChatGPT/Codex backend baseline) so it stops falling through to
+  // the 262k openai-compatible default.
+  'gpt-5.5': 1_000_000,
+  'gpt-5.6': 1_000_000,
+  'gpt-5.6-sol': 1_000_000,
+  'gpt-5.6-terra': 1_000_000,
+  'gpt-5.6-luna': 1_000_000,
   // OpenAI reasoning models — o-series. All 200k context windows except
   // o1-mini (128k).
   o1: 200_000,

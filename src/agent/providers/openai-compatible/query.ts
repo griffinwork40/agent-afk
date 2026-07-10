@@ -607,8 +607,8 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     }
     return new Error(
       `ChatGPT/Codex backend rejected model "${this.currentModel}" (HTTP 400). A ChatGPT ` +
-        `subscription only serves certain OpenAI models on this backend (gpt-5.5 works; ` +
-        `gpt-5, gpt-5.1, gpt-5.2 and *-codex do not). ` +
+        `subscription only serves certain OpenAI models on this backend (gpt-5.6 and gpt-5.5 ` +
+        `work; gpt-5, gpt-5.1, gpt-5.2 and *-codex do not). ` +
         (detail ? `Backend said: ${detail}` : `No error body was returned.`),
     );
   }
@@ -985,6 +985,23 @@ export class OpenAICompatibleQuery implements ProviderQuery {
 
   async supportedModels(): Promise<ProviderModelInfo[]> {
     return [
+      {
+        value: 'gpt-5.6',
+        displayName: 'GPT-5.6 (Sol)',
+        description: 'OpenAI flagship — alias for gpt-5.6-sol',
+      },
+      { value: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', description: 'Frontier capability' },
+      {
+        value: 'gpt-5.6-terra',
+        displayName: 'GPT-5.6 Terra',
+        description: 'Balanced intelligence/cost',
+      },
+      {
+        value: 'gpt-5.6-luna',
+        displayName: 'GPT-5.6 Luna',
+        description: 'Fast, high-volume workloads',
+      },
+      { value: 'gpt-5.5', displayName: 'GPT-5.5', description: 'Prior flagship (ChatGPT backend)' },
       { value: 'gpt-4o', displayName: 'GPT-4o', description: 'OpenAI flagship multimodal' },
       { value: 'gpt-4o-mini', displayName: 'GPT-4o mini', description: 'Fast/cheap GPT-4o' },
       { value: 'gpt-4.1', displayName: 'GPT-4.1', description: 'Long-context GPT-4' },

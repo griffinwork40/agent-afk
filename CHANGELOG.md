@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Added
+- GPT-5.6 model family support for the openai-compatible provider (reachable via
+  Codex ChatGPT-OAuth or an OpenAI API key): explicit 1M context-window entries
+  for the `gpt-5.6` alias and the `gpt-5.6-sol`/`-terra`/`-luna` variants (plus
+  `gpt-5.5`, previously falling through to the 262k default), `/model` picker
+  listings, and an updated ChatGPT/Codex-backend 400 diagnostic. Routing and the
+  reasoning/vision request contract already covered `gpt-5.6` via the `/^gpt-5/`
+  patterns; this closes the maintained-table gaps and adds regression coverage.
+
 ## [5.25.10] - 2026-07-09
 
 ### Fixed

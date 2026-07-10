@@ -38,4 +38,14 @@ describe('autoCompactLimitFor', () => {
     expect(autoCompactLimitFor('claude-xyz' as unknown as 'opus')).toBe(200_000);
     expect(autoCompactLimitFor('mlx-community/qwen3-32b-4bit')).toBe(128_000);
   });
+
+  it('reports the explicit 1M window for the GPT-5.6 family (alias + all variants)', () => {
+    // These are explicit MODEL_CONTEXT_LIMITS entries, not the 262k
+    // openai-compatible fallback — a regression here means a gpt-5.6 id fell
+    // through and would silently allow context overruns.
+    for (const id of ['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5']) {
+      expect(contextLimitFor(id), id).toBe(1_000_000);
+      expect(autoCompactLimitFor(id), id).toBe(1_000_000);
+    }
+  });
 });
