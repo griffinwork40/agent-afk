@@ -25,51 +25,23 @@
  * @module agent/tools/handlers/worktree
  */
 
-import { execFile as execFileCallback } from 'node:child_process';
-import { promisify } from 'node:util';
-import { promises as fs } from 'node:fs';
-import { join, resolve, isAbsolute, dirname, sep } from 'node:path';
+import { join, resolve, isAbsolute, sep } from 'node:path';
 import type { ToolHandler } from '../types.js';
 import { runSweep } from '../../worktree-sweep.js';
 import type { ExecFileFn } from '../../worktree-sweep.js';
 import { env } from '../../../config/env.js';
-
-const defaultExecFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
+import {
+  defaultExecFile,
+  resolveRepoContext,
+  sanitizeSlug,
+  createManagedWorktree,
+  removeManagedWorktreeGuarded,
+  type RepoContext,
+} from './worktree-managed.js';
 
 /** Injectable deps for tests. */
 export interface WorktreeHandlerDeps {
   execFile?: ExecFileFn;
-}
-
-interface RepoContext {
-  repoRoot: string;
-  afkWorktreesRoot: string;
-}
-
-/**
- * Resolve the repo root from the session cwd via `--git-common-dir` so the
- * answer is the MAIN checkout even when the session itself runs inside a
- * linked worktree (same trick as the `/worktree` slash command).
- */
-async function resolveRepoContext(
-  execFile: ExecFileFn,
-  cwd: string,
-): Promise<RepoContext> {
-  const result = await execFile('git', ['-C', cwd, 'rev-parse', '--git-common-dir']);
-  const raw = result.stdout.trim();
-  if (!raw) throw new Error('Not in a git repository.');
-  const absoluteGitDir = isAbsolute(raw) ? raw : resolve(cwd, raw);
-  const repoRoot = dirname(absoluteGitDir);
-  return { repoRoot, afkWorktreesRoot: join(repoRoot, '.afk-worktrees') };
-}
-
-/** Lowercase-kebab sanitization for worktree slugs / branch fragments. */
-function sanitizeSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/^[-.]+|[-.]+$/g, '')
-    .slice(0, 80);
 }
 
 function resolveCreateBaseRef(base: unknown): string | { error: string } {
@@ -152,36 +124,6 @@ async function resolveManagedWorktree(
   return entry;
 }
 
-async function isDirty(execFile: ExecFileFn, worktreePath: string): Promise<boolean> {
-  try {
-    const status = await execFile('git', ['-C', worktreePath, 'status', '--porcelain']);
-    return status.stdout.trim().length > 0;
-  } catch {
-    return true; // unreadable → treat as dirty (safe fallback)
-  }
-}
-
-async function commitsAhead(
-  execFile: ExecFileFn,
-  repoRoot: string,
-  worktreePath: string,
-): Promise<number> {
-  // Base SHA from meta when available; unknowable without it → report 0 and
-  // rely on the dirty/lock guards (mirrors the sweep engine's fallback).
-  try {
-    const metaRaw = await fs.readFile(join(worktreePath, '.afk-worktree-meta.json'), 'utf-8');
-    const meta = JSON.parse(metaRaw) as { baseSha?: string };
-    if (!meta.baseSha) return 0;
-    const head = await execFile('git', ['-C', worktreePath, 'rev-parse', 'HEAD']);
-    const count = await execFile('git', [
-      '-C', repoRoot, 'rev-list', `${meta.baseSha}..${head.stdout.trim()}`, '--count',
-    ]);
-    return parseInt(count.stdout.trim(), 10) || 0;
-  } catch {
-    return 0;
-  }
-}
-
 /**
  * Build the `worktree` tool handler bound to a session cwd.
  *
@@ -243,36 +185,15 @@ export function createWorktreeHandler(
           if (typeof baseRef !== 'string') {
             return { content: baseRef.error, isError: true };
           }
-          await execFile('git', [
-            '-C', ctx.repoRoot, 'worktree', 'add', '-b', branch, worktreePath, baseRef,
-          ]);
-          // Meta write is what makes this tree a first-class citizen of the
-          // sweep protocol (age from createdAt, PID liveness). Best-effort:
-          // never fail the create over it.
-          let baseSha = '';
-          try {
-            const sha = await execFile('git', ['-C', ctx.repoRoot, 'rev-parse', baseRef]);
-            baseSha = sha.stdout.trim();
-          } catch { /* non-fatal */ }
-          try {
-            await fs.writeFile(
-              join(worktreePath, '.afk-worktree-meta.json'),
-              JSON.stringify(
-                {
-                  owner: 'agent',
-                  pid: process.pid,
-                  createdAt: new Date().toISOString(),
-                  baseSha,
-                  baseBranch: baseRef,
-                },
-                null,
-                2,
-              ),
-              'utf-8',
-            );
-          } catch { /* best-effort */ }
+          const info = await createManagedWorktree({
+            execFile,
+            repoRoot: ctx.repoRoot,
+            worktreePath,
+            branch,
+            baseRef,
+          });
           return {
-            content: JSON.stringify({ path: worktreePath, branch, base: baseRef }),
+            content: JSON.stringify({ path: info.path, branch: info.branch, base: info.baseRef }),
           };
         }
 
@@ -342,28 +263,28 @@ export function createWorktreeHandler(
             };
           }
           const force = obj['force'] === true;
-          if (!force) {
-            if (await isDirty(execFile, entry.path)) {
+          const outcome = await removeManagedWorktreeGuarded({
+            execFile,
+            repoRoot: ctx.repoRoot,
+            worktreePath: entry.path,
+            branch: entry.branch ?? null,
+            force,
+          });
+          if (!outcome.removed) {
+            if (outcome.reason === 'dirty') {
               return {
                 content: `Refused: ${entry.path} has uncommitted changes. Commit/stash them, or pass force: true to discard.`,
                 isError: true,
               };
             }
-            const ahead = await commitsAhead(execFile, ctx.repoRoot, entry.path);
-            if (ahead > 0) {
-              return {
-                content: `Refused: ${entry.path} has ${ahead} commit(s) ahead of its base. The branch ref would survive, but pass force: true to confirm removing the checkout.`,
-                isError: true,
-              };
-            }
+            return {
+              content: `Refused: ${entry.path} has ${outcome.commitsAhead} commit(s) ahead of its base. The branch ref would survive, but pass force: true to confirm removing the checkout.`,
+              isError: true,
+            };
           }
-          const args = ['-C', ctx.repoRoot, 'worktree', 'remove'];
-          if (force) args.push('--force');
-          args.push(entry.path);
-          await execFile('git', args);
           // Branch intentionally left intact — removal drops the checkout only.
           return {
-            content: JSON.stringify({ path: entry.path, removed: true, branchPreserved: entry.branch ?? null }),
+            content: JSON.stringify({ path: entry.path, removed: true, branchPreserved: outcome.branchPreserved }),
           };
         }
       }

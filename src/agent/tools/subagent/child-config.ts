@@ -99,6 +99,13 @@ export interface BuildChildConfigResult {
    * the run was promoted — the registry then owns the detached lifetime.
    */
   childManager: SubagentManager | undefined;
+  /**
+   * Whether the dispatched child can mutate the filesystem (write/edit files
+   * or run mutating bash). The executor reads this to decide whether
+   * `isolation:"worktree"` is meaningful — a read-only child has nothing to
+   * isolate, so its worktree is skipped with a debug note.
+   */
+  childWriteCapable: boolean;
 }
 
 /**
@@ -165,6 +172,20 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
   }
   const effectiveReadOnlyBash =
     args.readOnlyBash === true || resolvedAccess?.bashReadOnly === true;
+
+  // Write-capability — read by the executor to decide whether
+  // isolation:"worktree" is meaningful. A child can mutate the tree when it
+  // can write/edit files OR run non-read-only bash. An unrestricted allowlist
+  // (undefined) is full access → write-capable; a read-only agent
+  // (research-agent, recon fan-out) is not, so its isolation is skipped.
+  const canWriteFiles =
+    effectiveAllowedTools === undefined ||
+    effectiveAllowedTools.includes('write_file') ||
+    effectiveAllowedTools.includes('edit_file');
+  const canMutateViaBash =
+    (effectiveAllowedTools === undefined || effectiveAllowedTools.includes('bash')) &&
+    effectiveReadOnlyBash !== true;
+  const childWriteCapable = canWriteFiles || canMutateViaBash;
   if (resolvedAccess !== undefined && resolvedAccess.droppedTokens.length > 0) {
     // Fail-closed token drops silently NARROW the child's tool surface, so a
     // misconfigured agent file must be visible by default — not only under
@@ -362,5 +383,5 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     );
   }
 
-  return { childConfig, childParentSession, childManager };
+  return { childConfig, childParentSession, childManager, childWriteCapable };
 }
