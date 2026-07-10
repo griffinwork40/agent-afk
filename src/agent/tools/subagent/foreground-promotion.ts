@@ -25,6 +25,7 @@ import type { TraceOrigin, TraceActor } from '../../session/session-identity.js'
 import type { ToolResult } from '../types.js';
 import type { PromotedSubagentInfo } from '../subagent-executor.js';
 import { emitTelemetry, truncate, measurePartial, buildFailurePayload } from './failure-payload.js';
+import { appendInjectContext } from './inject-context.js';
 
 type ForkedHandle = Awaited<ReturnType<SubagentManager['forkSubagent']>>;
 
@@ -324,9 +325,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
       // Optional-chain: real SubagentHandleImpl always defines this; the
       // `?.()` tolerates narrow handle doubles (returns undefined = no note).
       const injectContext = handle.getLastStopInjectContext?.();
-      if (toolResult !== undefined && injectContext !== undefined && injectContext.length > 0) {
-        toolResult.content = `${toolResult.content}\n\n${injectContext}`;
-      }
+      appendInjectContext(toolResult, injectContext);
     }
   }
 }

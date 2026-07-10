@@ -14,6 +14,7 @@
 import { getSkill } from '../../skills/index.js';
 import { SubagentManager } from '../subagent.js';
 import { annotateIfIncomplete } from '../subagent/result.js';
+import { appendInjectContext } from './subagent/inject-context.js';
 import type { AgentModelInput, IAgentSession } from '../types.js';
 import type { ModelProvider } from '../provider.js';
 import type { ToolCall, ToolResult } from './types.js';
@@ -1184,9 +1185,7 @@ export class SkillExecutor {
       // The catch path leaves toolResult unset — nothing to append to, note
       // dropped for that stop by design (the error string is the signal).
       const injectContext = handle?.getLastStopInjectContext?.();
-      if (toolResult !== undefined && injectContext !== undefined && injectContext.length > 0) {
-        toolResult.content = `${toolResult.content}\n\n${injectContext}`;
-      }
+      appendInjectContext(toolResult, injectContext);
       await childManager?.teardownAll();
       await manager.teardownAll();
     }
