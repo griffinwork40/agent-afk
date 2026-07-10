@@ -30,6 +30,8 @@ import { emitTelemetry, truncate } from './subagent/failure-payload.js';
 import { buildChildConfig } from './subagent/child-config.js';
 import { runBackgroundBranch } from './subagent/background-branch.js';
 import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
+import { createIsolatedWorktree } from './handlers/worktree-managed.js';
+import { debugLog } from '../../utils/debug.js';
 
 export { DEFAULT_MAX_NESTING_DEPTH, type ChildProviderFactoryArgs } from './nesting.js';
 export type { AgentExecutionMode };
@@ -265,6 +267,11 @@ export class SubagentExecutor implements SubagentControl {
   // Read when building the depth-2+ child manager/executor below.
   private currentCwd: string | undefined;
 
+  // Monotonic per-executor counter for collision-free isolated-worktree slugs
+  // (`afk/iso-<idPrefix>-<counter>-<rand>`). Combined with a random suffix so
+  // concurrent `agent` calls in one turn never target the same tree.
+  private isolationCounter = 0;
+
   constructor(private readonly ctx: SubagentExecutorContext) {
     this.currentCwd = ctx.cwd;
   }
@@ -471,7 +478,7 @@ export class SubagentExecutor implements SubagentControl {
     // Build the child config + nested-dispatch wiring. All context this needs
     // is passed explicitly; the recursive child executor is injected as a
     // factory so child-config.ts never imports this class at runtime.
-    const { childConfig, childParentSession, childManager } = buildChildConfig({
+    const { childConfig, childParentSession, childManager, childWriteCapable } = buildChildConfig({
       parsed,
       namedAgent,
       depth,
@@ -497,6 +504,45 @@ export class SubagentExecutor implements SubagentControl {
       ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
       createChildExecutor: (childCtx) => new SubagentExecutor(childCtx),
     });
+
+    // isolation:"worktree" — fork the child inside a fresh managed git worktree
+    // so its writes/tests never collide with siblings sharing the parent tree.
+    // Skipped (no-op) for read-only children, which have nothing to isolate.
+    // Torn down in the foreground finally — a dirty / commits-ahead tree is
+    // preserved and locked, never destroyed. Forbidden with mode:'background'
+    // at parse time (a detached child would outlive the teardown that reclaims
+    // its worktree — proposal Open Q1). Only the direct child's cwd is
+    // isolated; deeper (grandchild) fan-out anchors at the parent tree for now.
+    let isolationTeardown: { repoRoot: string; worktreePath: string } | undefined;
+    if (parsed.isolation === 'worktree') {
+      if (!childWriteCapable) {
+        debugLog(
+          `[isolation] skipped worktree for read-only dispatch ` +
+            `(agent_type=${parsed.agent_type ?? 'generic'}) — nothing to isolate`,
+        );
+      } else {
+        const anchorCwd = this.currentCwd ?? process.cwd();
+        try {
+          const iso = await createIsolatedWorktree({
+            cwd: anchorCwd,
+            slugHint: `iso-${parsed.id_prefix}-${++this.isolationCounter}-${Math.random().toString(36).slice(2, 8)}`,
+          });
+          childConfig.cwd = iso.path;
+          isolationTeardown = { repoRoot: iso.repoRoot, worktreePath: iso.path };
+        } catch (err) {
+          // Fail loud: never silently fall back to the shared tree — that
+          // reintroduces the cross-contamination bug isolation exists to
+          // prevent (parallel siblings clobbering each other's edits/tests).
+          const message = err instanceof Error ? err.message : String(err);
+          return {
+            content:
+              `Failed to create isolated worktree for the subagent: ${message}. ` +
+              `isolation:"worktree" requires the dispatching session to run inside a git repository.`,
+            isError: true,
+          };
+        }
+      }
+    }
 
     // Background dispatches get a wider wall-clock budget than the foreground
     // default the manager applies (SUBAGENT_DEFAULT_TIMEOUT_MS): they don't
@@ -595,6 +641,7 @@ export class SubagentExecutor implements SubagentControl {
       registry: this.ctx.backgroundRegistry,
       promotionTriggers: this.promotionTriggers,
       activeForegroundHandles: this.activeForegroundHandles,
+      ...(isolationTeardown !== undefined ? { isolationTeardown } : {}),
     });
   }
 }

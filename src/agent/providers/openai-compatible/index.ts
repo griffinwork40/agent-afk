@@ -12,10 +12,6 @@
  * @module agent/providers/openai-compatible
  */
 
-import path from 'path';
-import { appendFileSync, mkdirSync } from 'fs';
-import { dirname } from 'path';
-import { getSessionGrantsPath } from '../../../paths.js';
 import type {
   ModelProvider,
   ProviderQuery,
@@ -31,6 +27,7 @@ import { withMcpToolsAllowed, withCustomToolsAllowed, type ToolPermissionConfig 
 import type { CanUseTool } from '../../types/sdk-types.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
+import { PathGrantManager } from '../../tools/grant-manager.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
 import { createBuiltinHandlers } from '../../tools/handlers/index.js';
 import {
@@ -519,76 +516,34 @@ export class OpenAICompatibleProvider implements ModelProvider {
   // which provider is active. Without this, grant/revoke actions on OpenAI
   // sessions previously wrote no audit entries — a forensic blind spot.
 
+  /**
+   * Shared grant-state machine (issues #361/#362) — same hook bindings as
+   * `AnthropicDirectProvider.grantManager`: lazy `ensureSharedRoots` init,
+   * INITIAL resolveBase as the non-revocable anchor, mode-derived `allowAll`,
+   * per-call sessionId threading. See grant-manager.ts.
+   */
+  private readonly grantManager = new PathGrantManager({
+    getReadRoots: () => this._sharedReadRoots,
+    getWriteRoots: () => this._sharedWriteRoots,
+    ensureInitialized: () => this.ensureSharedRoots(),
+    getProtectedRoot: () => this._initialResolveBase,
+    getAllowAll: () => pathContainmentBypassed(this._currentPermissionMode),
+  });
+
   addReadRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
-    this.ensureSharedRoots();
-    const p = path.resolve(absPath);
-    // Invariant: audit only on state change (see dispatcher.addReadRoot) —
-    // repeat grants of an already-present root must not duplicate the ledger.
-    if (!this._sharedReadRoots!.includes(p)) {
-      this._sharedReadRoots!.push(p);
-      this.appendProviderAuditLog({ action: 'grant-read', path: p, source, sessionId });
-    }
+    this.grantManager.addReadRoot(absPath, source, sessionId);
   }
 
   addWriteRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
-    this.ensureSharedRoots();
-    const p = path.resolve(absPath);
-    if (!this._sharedReadRoots!.includes(p)) this._sharedReadRoots!.push(p);
-    if (!this._sharedWriteRoots!.includes(p)) {
-      this._sharedWriteRoots!.push(p);
-      this.appendProviderAuditLog({ action: 'grant-write', path: p, source, sessionId });
-    }
+    this.grantManager.addWriteRoot(absPath, source, sessionId);
   }
 
   revokeRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
-    if (!this._sharedReadRoots) return;
-    const p = path.resolve(absPath);
-    if (this._initialResolveBase && p === this._initialResolveBase) return;
-    const rIdx = this._sharedReadRoots.indexOf(p);
-    if (rIdx !== -1) this._sharedReadRoots.splice(rIdx, 1);
-    if (this._sharedWriteRoots) {
-      const wIdx = this._sharedWriteRoots.indexOf(p);
-      if (wIdx !== -1) this._sharedWriteRoots.splice(wIdx, 1);
-    }
-    this.appendProviderAuditLog({ action: 'revoke', path: p, source, sessionId });
+    this.grantManager.revokeRoot(absPath, source, sessionId);
   }
 
   getGrants(): { resolveBase: string | undefined; readRoots: string[]; writeRoots: string[]; allowAll: boolean } {
-    return {
-      resolveBase: this._initialResolveBase,
-      readRoots: this._sharedReadRoots?.slice() ?? [],
-      writeRoots: this._sharedWriteRoots?.slice() ?? [],
-      allowAll: pathContainmentBypassed(this._currentPermissionMode),
-    };
-  }
-
-  /**
-   * Best-effort append to `session-grants.jsonl`. Mirrors
-   * `AnthropicDirectProvider.appendProviderAuditLog` (index.ts:269-289 of
-   * anthropic-direct). Inlined rather than extracted to keep the providers
-   * independently revertable; consolidate when a third provider needs the
-   * same logic.
-   */
-  private appendProviderAuditLog(entry: {
-    action: 'grant-read' | 'grant-write' | 'revoke';
-    path: string;
-    source: 'slash' | 'tool';
-    sessionId?: string;
-  }): void {
-    try {
-      const logPath = getSessionGrantsPath();
-      mkdirSync(dirname(logPath), { recursive: true });
-      const line = JSON.stringify({
-        timestamp: new Date().toISOString(),
-        sessionId: entry.sessionId ?? null,
-        action: entry.action,
-        path: entry.path,
-        source: entry.source,
-      });
-      appendFileSync(logPath, line + '\n');
-    } catch {
-      // Audit log is best-effort.
-    }
+    return this.grantManager.getGrants();
   }
 
   close(): void {
