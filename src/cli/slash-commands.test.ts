@@ -114,8 +114,10 @@ describe('slash commands — registration', () => {
 
   it('registers public built-in TS skills as immediate handlers at bootstrap', () => {
     const names = list().map((c) => c.name);
-    // Public-tier skills must be visible by default.
-    for (const skill of ['/mint', '/diagnose']) {
+    // Public-tier skills must be visible by default. (/diagnose is no longer a
+    // vendored TS skill — it ships as the awa-bundled plugin SKILL.md, resolved
+    // by the plugin scanner rather than registerAll().)
+    for (const skill of ['/mint']) {
       expect(names).toContain(skill);
     }
     // Internal-tier skills (audit-fit) MUST be hidden without
@@ -533,9 +535,10 @@ describe('plugin-skills bridge', () => {
   });
 
   it('registerPluginSkills() installs a forward handler for non-colliding plugin skills', async () => {
-    // `mint` and `diagnose` collide with vendored skills, so the bare slash
-    // forms still resolve to the vendored handlers. The plugin variants live
-    // under their namespaced fallback (e.g. `/plugin:mint`).
+    // `mint` collides with a vendored TS skill, so the bare /mint resolves to
+    // the vendored handler and the plugin variant lives under `/plugin:mint`.
+    // `diagnose` is NOT vendored anymore (it's the bundled-plugin SKILL.md), so
+    // the plugin `diagnose` here is non-colliding and registers at bare /diagnose.
     const sess = fakeSession({
       supportedCommands: vi.fn().mockResolvedValue([
         { name: 'mint', description: 'One-prompt feature delivery', argumentHint: '<idea>' },
@@ -546,12 +549,15 @@ describe('plugin-skills bridge', () => {
     const count = await registerPluginSkills(sess as unknown as Parameters<typeof registerPluginSkills>[0]);
     expect(count).toBe(3);
     const names = list().map((c) => c.name);
-    // Bare /mint and /diagnose are vendored — still in the registry, not overwritten.
+    // Bare /mint is vendored — still owns the bare slot, not overwritten.
     expect(names).toContain('/mint');
+    // /diagnose no longer collides (not a vendored skill), so the plugin form
+    // registers at its bare name.
     expect(names).toContain('/diagnose');
-    // Colliding plugin variants live under namespaced fallbacks.
+    // The colliding plugin variant (mint) lives under a namespaced fallback;
+    // diagnose does NOT collide, so there is no /plugin:diagnose fallback.
     expect(names).toContain('/plugin:mint');
-    expect(names).toContain('/plugin:diagnose');
+    expect(names).not.toContain('/plugin:diagnose');
     // Non-colliding plugin skill registers at its bare name.
     expect(names).toContain('/unique-plugin-skill');
   });
@@ -589,14 +595,16 @@ describe('plugin-skills bridge', () => {
     const { ctx, lines } = makeCtx();
     await dispatch('/skills', ctx);
     const joined = lines.join('\n');
-    // Vendored mains still appear with their slash forms.
+    // Vendored main /mint still appears; /diagnose now appears as the
+    // (non-colliding) plugin skill's bare form.
     expect(joined).toContain('/mint');
     expect(joined).toContain('/diagnose');
-    // Shadowed plugin collisions surface inline as compact "↳ also:" references
-    // to the namespaced fallback form — visible by default, not hidden.
+    // The shadowed mint collision surfaces inline as a compact "↳ also:"
+    // reference to its namespaced fallback. diagnose no longer collides, so
+    // there is no /plugin:diagnose alt.
     expect(joined).toContain('↳ also:');
     expect(joined).toContain('/plugin:mint');
-    expect(joined).toContain('/plugin:diagnose');
+    expect(joined).not.toContain('/plugin:diagnose');
     // The old raw "(plugin alt)" badge + duplicated alt description are gone.
     expect(joined).not.toContain('plugin alt');
   });
@@ -709,14 +717,16 @@ describe('autoRegisterPluginPassthroughs (post-init wiring)', () => {
     expect(sess.supportedCommands).toHaveBeenCalledTimes(1);
     expect(sess.supportedAgents).toHaveBeenCalledTimes(1);
 
-    // Vendored bare slashes remain in the registry (mint/diagnose collide with
-    // the vendored TS skills). Plugin variants register under namespaced
-    // fallbacks so they stay reachable without overwriting the winners.
+    // /mint collides with the vendored TS skill, so bare /mint stays the
+    // vendored winner and the plugin variant registers under /plugin:mint.
+    // /diagnose is no longer vendored (bundled-plugin SKILL.md), so the plugin
+    // diagnose is non-colliding and registers at bare /diagnose — no
+    // /plugin:diagnose fallback.
     const names = list().map((c) => c.name);
     expect(names).toContain('/mint');
     expect(names).toContain('/diagnose');
     expect(names).toContain('/plugin:mint');
-    expect(names).toContain('/plugin:diagnose');
+    expect(names).not.toContain('/plugin:diagnose');
 
     const { ctx } = makeCtx({
       session: { current: sess } as unknown as SlashContext['session'],
