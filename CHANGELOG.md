@@ -11,6 +11,22 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.26.5] - 2026-07-10
+
+### Fixed
+- route long/absent-retry-after 429s back to the usage-limit pause path (#483) (34a09c5)
+
+## [5.26.4] - 2026-07-10
+
+### Changed
+- split elicitation-repl.ts into mode modules (#367) (#484) (c3e39d6)
+
+## [5.26.3] - 2026-07-10
+
+### Changed
+- split plugin-skills.ts into flags/listing/reload modules (#366) (#486) (cd37ef1)
+- split loop.test.ts into sibling suites (#370) (#485) (708c4ff)
+
 ## [5.26.2] - 2026-07-10
 
 ### Added
