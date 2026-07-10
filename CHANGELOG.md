@@ -11,6 +11,8 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.26.0] - 2026-07-10
+
 ### Added
 - GPT-5.6 model family support for the openai-compatible provider (reachable via
   Codex ChatGPT-OAuth or an OpenAI API key): explicit 1M context-window entries
@@ -24,6 +26,10 @@ auto-release workflow to deduplicate commits across successive runs.
   responses. Routing and the reasoning/vision request contract already covered
   `gpt-5.6` via the `/^gpt-5/` patterns; this closes the maintained-table gaps
   and adds regression coverage.
+
+### Added
+- add GPT-5.6 family support to openai-compatible provider (#474) (068d910)
+
 ## [5.25.11] - 2026-07-10
 
 ### Fixed
