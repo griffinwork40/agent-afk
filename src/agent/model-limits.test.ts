@@ -1,14 +1,20 @@
 /**
- * Tests for autoCompactLimitFor — the per-model auto-compaction working budget.
+ * Tests for model-limits.ts: autoCompactLimitFor (per-model auto-compaction
+ * working budget), contextLimitFor (context window), and maxOutputTokensFor
+ * (output ceiling).
  *
  * Base `sonnet` has a truthful 1M window (see MODEL_CONTEXT_LIMITS) but is
  * capped at a 200k compaction budget so long default sessions compact early for
  * cost/latency. The `sonnet_1m` opt-in and every non-sonnet model use their
- * full context window. See src/agent/model-limits.ts.
+ * full context window. The GPT-5.6-family suites additionally guard the
+ * output-cap path — provider-agnostic and shared with openai-compatible — so
+ * new gpt-5.x ids do not silently fall through to the 64k default. See
+ * src/agent/model-limits.ts.
  */
 
 import { describe, it, expect } from 'vitest';
-import { autoCompactLimitFor, contextLimitFor } from './model-limits.js';
+import { autoCompactLimitFor, contextLimitFor, maxOutputTokensFor } from './model-limits.js';
+import { resolveEffectiveMaxOutputTokens } from './providers/openai-compatible/query/model-params.js';
 
 describe('autoCompactLimitFor', () => {
   it('caps the default sonnet alias at the 200k working budget (not its 1M window)', () => {
@@ -47,5 +53,32 @@ describe('autoCompactLimitFor', () => {
       expect(contextLimitFor(id), id).toBe(1_000_000);
       expect(autoCompactLimitFor(id), id).toBe(1_000_000);
     }
+  });
+});
+
+describe('maxOutputTokensFor — GPT-5.6 family output ceiling', () => {
+  const GPT_56_FAMILY = ['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'];
+
+  it('reports the explicit 128k output cap (not the 64k DEFAULT_MAX_OUTPUT fallback)', () => {
+    // maxOutputTokensFor is provider-agnostic and drives the openai-compatible
+    // output cap too. Without explicit MODEL_MAX_OUTPUT_TOKENS entries these ids
+    // fall through to DEFAULT_MAX_OUTPUT (64k) and silently halve the advertised
+    // 128k output budget — the exact regression this asserts against.
+    for (const id of GPT_56_FAMILY) {
+      expect(maxOutputTokensFor(id), id).toBe(128_000);
+    }
+  });
+
+  it('the openai-compatible request path resolves 128k when config.maxOutputTokens is unset', () => {
+    // Mirrors query/model-params.ts:resolveEffectiveMaxOutputTokens, the actual
+    // call site for public OpenAI-compatible requests (Chat Completions +
+    // Responses). Undefined config → model ceiling, not 64k.
+    for (const id of GPT_56_FAMILY) {
+      expect(resolveEffectiveMaxOutputTokens(id, undefined), id).toBe(128_000);
+    }
+  });
+
+  it('still honours an explicit config.maxOutputTokens override', () => {
+    expect(resolveEffectiveMaxOutputTokens('gpt-5.6', 8_000)).toBe(8_000);
   });
 });
