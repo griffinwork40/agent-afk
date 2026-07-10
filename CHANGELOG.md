@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.27.1] - 2026-07-10
+
+### Changed
+- consolidate 3 grant-manager copies into shared module (#361, #362 prep) (#489) (e2b745c)
+- split skill-executor.ts into per-strategy modules (#363) (#491) (2a24d2f)
+
 ## [5.27.0] - 2026-07-10
 
 ### Added
