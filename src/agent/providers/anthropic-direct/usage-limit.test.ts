@@ -132,6 +132,134 @@ describe('classifyUsageLimitError', () => {
     });
     expect(classifyUsageLimitError(pastThreshold)?.kind).toBe('oauth-limit-no-ts');
   });
+
+  // -------------------------------------------------------------------------
+  // #488 — prefer `anthropic-ratelimit-unified-*` headers over the retry-after
+  // magnitude proxy. These are the authoritative signals Claude Code keys on
+  // (verified v2.1.206). The change is additive + presence-gated: the fallback
+  // regression guards above must keep passing unchanged.
+  // -------------------------------------------------------------------------
+
+  it('returns oauth-limit with a header-derived resetsAt for a unified claim + unified-reset', () => {
+    const resetEpochSec = Math.floor(Date.now() / 1000) + 3600; // 1h in the future
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-unified-representative-claim': 'five_hour',
+      'anthropic-ratelimit-unified-reset': String(resetEpochSec),
+    });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('oauth-limit');
+    if (result?.kind === 'oauth-limit') {
+      expect(result.resetsAt.getTime()).toBe(resetEpochSec * 1000);
+    }
+  });
+
+  it('returns oauth-limit-no-ts for a unified claim header with NO unified-reset', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-unified-representative-claim': 'seven_day',
+    });
+    expect(classifyUsageLimitError(err)?.kind).toBe('oauth-limit-no-ts');
+  });
+
+  it('returns oauth-limit-no-ts for unified-status "rejected" with no reset', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-unified-status': 'rejected',
+    });
+    expect(classifyUsageLimitError(err)?.kind).toBe('oauth-limit-no-ts');
+  });
+
+  it('returns oauth-limit-no-ts for a unified-overage-status header (no reset)', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-unified-overage-status': 'active',
+    });
+    expect(classifyUsageLimitError(err)?.kind).toBe('oauth-limit-no-ts');
+  });
+
+  it('ignores a non-finite / non-positive unified-reset and falls to oauth-limit-no-ts', () => {
+    const nonFinite = makeErrorWithHeaders(429, '429', {
+      'anthropic-ratelimit-unified-representative-claim': 'five_hour',
+      'anthropic-ratelimit-unified-reset': 'not-a-number',
+    });
+    expect(classifyUsageLimitError(nonFinite)?.kind).toBe('oauth-limit-no-ts');
+
+    const nonPositive = makeErrorWithHeaders(429, '429', {
+      'anthropic-ratelimit-unified-representative-claim': 'five_hour',
+      'anthropic-ratelimit-unified-reset': '0',
+    });
+    expect(classifyUsageLimitError(nonPositive)?.kind).toBe('oauth-limit-no-ts');
+  });
+
+  it('returns rate-limit-transient for only per-minute headers (no unified headers)', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-requests-remaining': '0',
+      'retry-after': '30',
+    });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('rate-limit-transient');
+    if (result?.kind === 'rate-limit-transient') {
+      expect(result.retryAfterMs).toBe(30_000);
+    }
+  });
+
+  // The authoritative subscription signal must win over retry-after MAGNITUDE:
+  // a 429 with a unified claim AND a short retry-after is a subscription cap,
+  // NOT a transient throttle (this is the core behavioral change of #488).
+  it('prefers a unified subscription header over a short retry-after', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-unified-representative-claim': 'five_hour',
+      'retry-after': '30',
+    });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('oauth-limit-no-ts');
+    expect(result?.kind).not.toBe('rate-limit-transient');
+  });
+
+  // Precedence: the `|<ts>` message parse (step 1) still wins over unified
+  // headers (step 2) when both are present.
+  it('prefers the |ts message parse over unified headers', () => {
+    const unixTs = 1700000000;
+    const err = makeErrorWithHeaders(429, `usage limit|${unixTs}`, {
+      'anthropic-ratelimit-unified-representative-claim': 'five_hour',
+      'anthropic-ratelimit-unified-reset': String(Math.floor(Date.now() / 1000) + 3600),
+    });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('oauth-limit');
+    if (result?.kind === 'oauth-limit') {
+      expect(result.resetsAt.getTime()).toBe(unixTs * 1000);
+    }
+  });
+
+  // Regression guard (fallback / step 4 — no rate-limit headers at all): the
+  // pre-#488 magnitude behavior must be preserved byte-for-byte.
+  it('FALLBACK: short retry-after with no rate-limit headers → rate-limit-transient', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', { 'retry-after': '30' });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('rate-limit-transient');
+    if (result?.kind === 'rate-limit-transient') {
+      expect(result.retryAfterMs).toBe(30_000);
+    }
+  });
+
+  it('FALLBACK: long retry-after with no rate-limit headers → oauth-limit-no-ts', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', { 'retry-after': '3600' });
+    expect(classifyUsageLimitError(err)?.kind).toBe('oauth-limit-no-ts');
+  });
+
+  it('reads unified headers from a web Headers object (not just a plain record)', () => {
+    const resetEpochSec = Math.floor(Date.now() / 1000) + 7200;
+    const err = makeErrorWithHeaders(
+      429,
+      '429',
+      new Headers({
+        'anthropic-ratelimit-unified-representative-claim': 'seven_day_opus',
+        'anthropic-ratelimit-unified-reset': String(resetEpochSec),
+      }),
+    );
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('oauth-limit');
+    if (result?.kind === 'oauth-limit') {
+      expect(result.resetsAt.getTime()).toBe(resetEpochSec * 1000);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

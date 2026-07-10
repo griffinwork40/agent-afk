@@ -25,49 +25,65 @@ export type UsageLimitClassification =
  * Upper bound (ms) on a `retry-after` hint that still counts as a *transient*
  * API-tier rate limit (per-minute RPM/ITPM/OTPM windows that clear in seconds).
  *
- * Invariant: Anthropic returns the SAME `429 rate_limit_error` + `retry-after`
- * shape for BOTH a per-minute API throttle AND an OAuth *subscription* cap — the
- * subscription limit arrives as a bare `rate_limit_error` with a `retry-after`
- * header and no `|<ts>` (see anthropics/claude-code#30930). Header PRESENCE
- * therefore cannot distinguish them; only its MAGNITUDE can. Per-minute
- * throttles clear in ≤ a minute or two; a subscription reset is hours away, so a
- * `retry-after` above this line is treated as subscription exhaustion (pause +
- * hot-swap + auto-resume), not a short silent retry.
+ * Invariant: this magnitude heuristic is now a LAST-RESORT fallback, used only
+ * when a 429 carries NO `anthropic-ratelimit-*` headers at all (see
+ * {@link classifyUsageLimitError}). When those authoritative headers are
+ * present the classifier keys on them directly, mirroring Claude Code. But
+ * Anthropic can still deliver an OAuth *subscription* cap as a bare
+ * `rate_limit_error` with a `retry-after` header and no `|<ts>` and no rate-
+ * limit headers (anthropics/claude-code#30930); in that header-less case
+ * PRESENCE cannot distinguish a throttle from a subscription cap, so MAGNITUDE
+ * is the only remaining signal. Per-minute throttles clear in ≤ a minute or
+ * two; a subscription reset is hours away, so a `retry-after` above this line
+ * is treated as subscription exhaustion (pause + hot-swap + auto-resume), not a
+ * short silent retry.
  */
 export const RATE_LIMIT_TRANSIENT_MAX_RETRY_AFTER_MS = 5 * 60 * 1000;
+
+/**
+ * Defensive read of a single HTTP header off an error's `headers` field.
+ *
+ * The Anthropic SDK's `APIError.headers` has been both a web `Headers` (with
+ * `.get`) and a plain record across versions, so both shapes are handled:
+ * a `.get()` method is preferred, else the record is probed for the exact key
+ * and its upper-cased form. Returns the header value, or `undefined` when the
+ * error is not an object, has no usable `headers`, or the header is absent.
+ *
+ * Shared by {@link parseRetryAfterMs} and {@link classifyUsageLimitError}'s
+ * unified/per-minute header reads so all header access uses one code path.
+ */
+export function getHeader(error: unknown, name: string): string | undefined {
+  if (error === null || typeof error !== 'object') return undefined;
+  const headers = (error as { headers?: unknown }).headers;
+  if (headers === null || headers === undefined) return undefined;
+  const h = headers as { get?: unknown };
+  if (typeof h.get === 'function') {
+    const v = (headers as { get(n: string): string | null }).get(name);
+    return v ?? undefined;
+  }
+  if (typeof headers === 'object') {
+    const rec = headers as Record<string, unknown>;
+    const v = rec[name] ?? rec[name.toUpperCase()];
+    return typeof v === 'string' ? v : undefined;
+  }
+  return undefined;
+}
 
 /**
  * Best-effort parse of a transient-backoff hint from an error's HTTP headers.
  *
  * Reads `retry-after-ms` (milliseconds) first, then `retry-after` (seconds, or
  * an HTTP-date). Returns the delay in ms, or `undefined` when no usable header
- * is present. Header access is defensive: the Anthropic SDK's `APIError.headers`
- * has been both a web `Headers` (with `.get`) and a plain record across
- * versions, so both shapes are handled.
+ * is present. Header access is via the shared {@link getHeader} helper, which
+ * handles both a web `Headers` (with `.get`) and a plain-record shape.
  */
 export function parseRetryAfterMs(error: unknown): number | undefined {
-  if (error === null || typeof error !== 'object') return undefined;
-  const headers = (error as { headers?: unknown }).headers;
-  if (headers === null || headers === undefined) return undefined;
-  const get = (name: string): string | undefined => {
-    const h = headers as { get?: unknown };
-    if (typeof h.get === 'function') {
-      const v = (headers as { get(n: string): string | null }).get(name);
-      return v ?? undefined;
-    }
-    if (typeof headers === 'object') {
-      const rec = headers as Record<string, unknown>;
-      const v = rec[name] ?? rec[name.toUpperCase()];
-      return typeof v === 'string' ? v : undefined;
-    }
-    return undefined;
-  };
-  const ms = get('retry-after-ms');
+  const ms = getHeader(error, 'retry-after-ms');
   if (ms !== undefined) {
     const n = Number(ms);
     if (Number.isFinite(n) && n >= 0) return n;
   }
-  const sec = get('retry-after');
+  const sec = getHeader(error, 'retry-after');
   if (sec !== undefined) {
     const n = Number(sec);
     if (Number.isFinite(n) && n >= 0) return Math.round(n * 1000);
@@ -83,20 +99,37 @@ export function parseRetryAfterMs(error: unknown): number | undefined {
 /**
  * Classify an error as a usage-limit error, or return `null` if it is not one.
  *
- * Recognised patterns:
- *   - HTTP 429 with message containing `|<unix-ts>` — OAuth subscription limit
- *     (the timestamp is when the limit resets).
- *   - HTTP 429 with a SHORT `retry-after`/`retry-after-ms` header
- *     (≤ {@link RATE_LIMIT_TRANSIENT_MAX_RETRY_AFTER_MS}) and no `|<unix-ts>` —
- *     a transient API-tier rate limit (per-minute RPM/ITPM) that clears in
- *     seconds. Kept distinct so callers do not apply the 2-hour subscription-
- *     pause semantics to a throttle that clears in seconds.
- *   - HTTP 429 with a LONG `retry-after` (> the threshold) OR no `retry-after`
- *     header, and no `|<unix-ts>` — OAuth subscription exhaustion with unknown
- *     reset. Anthropic delivers the subscription cap as a bare
- *     `rate_limit_error` + `retry-after` (anthropics/claude-code#30930), so a
- *     long/absent backoff is the signal that separates it from a per-minute
- *     throttle. Routed to the pause + hot-swap + auto-resume path.
+ * Invariant: a 429's classification precedence keys on AUTHORITATIVE signals
+ * first and demotes the `retry-after` MAGNITUDE heuristic to a last-resort
+ * fallback — mirroring Claude Code (verified against v2.1.206), which decides
+ * subscription-cap vs. transient by the presence of `anthropic-ratelimit-
+ * unified-*` headers, never by `retry-after` size. The change is strictly
+ * ADDITIVE and PRESENCE-GATED: when NONE of the `anthropic-ratelimit-*` headers
+ * are present the result is byte-for-byte identical to the pre-existing
+ * fallback (step 4), so there is no behavior change on real 429s that don't
+ * carry the headers. In precedence order for `status === 429`:
+ *   1. Message contains `|<unix-ts>` — OAuth subscription limit; the timestamp
+ *      is the reset. Authoritative when present, so checked first.
+ *   2. Unified subscription headers present (`unified-representative-claim` OR
+ *      `unified-overage-status` present, OR `unified-status === "rejected"`) —
+ *      a subscription cap. If `unified-reset` is present and a finite positive
+ *      number, return `oauth-limit` with `resetsAt = reset * 1000` (the header
+ *      is epoch SECONDS — an authoritative deadline that upgrades the blind
+ *      poll to a real wait); else `oauth-limit-no-ts`.
+ *   3. Per-minute throttle headers present (`anthropic-ratelimit-{requests,
+ *      input-tokens,output-tokens}-*`, e.g. `-remaining`) — a transient API-
+ *      tier rate limit that clears in seconds → `rate-limit-transient` with
+ *      `retryAfterMs` from {@link parseRetryAfterMs}.
+ *   4. No rate-limit headers at all — FALLBACK to the magnitude heuristic: a
+ *      short `retry-after` (≤ {@link RATE_LIMIT_TRANSIENT_MAX_RETRY_AFTER_MS})
+ *      is a per-minute throttle → `rate-limit-transient`; a long or absent
+ *      backoff is subscription-scale → `oauth-limit-no-ts` (pause + hot-swap +
+ *      auto-resume). Anthropic can deliver a subscription cap as a bare
+ *      `rate_limit_error` + `retry-after` with no headers
+ *      (anthropics/claude-code#30930), so magnitude is the only remaining
+ *      signal here.
+ *
+ * Also recognised:
  *   - HTTP 400 + `invalid_request_error` + `credit balance` — API key balance
  *     exhausted.
  */
@@ -105,6 +138,7 @@ export function classifyUsageLimitError(error: Error): UsageLimitClassification 
   const status = (error as Error & { status: number }).status;
 
   if (status === 429) {
+    // Step 1: `|<unix-ts>` message parse — authoritative when present.
     const parts = error.message.split('|');
     if (parts.length >= 2) {
       const ts = parseInt(parts[1]!.trim(), 10);
@@ -112,13 +146,57 @@ export function classifyUsageLimitError(error: Error): UsageLimitClassification 
         return { kind: 'oauth-limit', resetsAt: new Date(ts * 1000) };
       }
     }
+
+    // Step 2: unified subscription headers — the signal Claude Code keys on.
+    // Presence of a representative-claim / overage-status header, or an
+    // explicit rejected status, marks this 429 as a subscription cap.
+    const unifiedClaim = getHeader(error, 'anthropic-ratelimit-unified-representative-claim');
+    const unifiedOverage = getHeader(error, 'anthropic-ratelimit-unified-overage-status');
+    const unifiedStatus = getHeader(error, 'anthropic-ratelimit-unified-status');
+    if (
+      unifiedClaim !== undefined ||
+      unifiedOverage !== undefined ||
+      unifiedStatus === 'rejected'
+    ) {
+      const reset = getHeader(error, 'anthropic-ratelimit-unified-reset');
+      if (reset !== undefined) {
+        const resetSec = Number(reset);
+        if (Number.isFinite(resetSec) && resetSec > 0) {
+          // Header is epoch SECONDS; the authoritative reset deadline.
+          return { kind: 'oauth-limit', resetsAt: new Date(resetSec * 1000) };
+        }
+      }
+      return { kind: 'oauth-limit-no-ts' };
+    }
+
+    // Step 3: per-minute throttle headers — RPM/ITPM/OTPM windows that clear in
+    // seconds. Their presence (any of the requests/token counters) means this
+    // is a transient API-tier rate limit, distinct from a subscription cap.
+    const perMinutePresent =
+      getHeader(error, 'anthropic-ratelimit-requests-remaining') !== undefined ||
+      getHeader(error, 'anthropic-ratelimit-requests-limit') !== undefined ||
+      getHeader(error, 'anthropic-ratelimit-requests-reset') !== undefined ||
+      getHeader(error, 'anthropic-ratelimit-input-tokens-remaining') !== undefined ||
+      getHeader(error, 'anthropic-ratelimit-input-tokens-limit') !== undefined ||
+      getHeader(error, 'anthropic-ratelimit-input-tokens-reset') !== undefined ||
+      getHeader(error, 'anthropic-ratelimit-output-tokens-remaining') !== undefined ||
+      getHeader(error, 'anthropic-ratelimit-output-tokens-limit') !== undefined ||
+      getHeader(error, 'anthropic-ratelimit-output-tokens-reset') !== undefined;
+    if (perMinutePresent) {
+      return { kind: 'rate-limit-transient', retryAfterMs: parseRetryAfterMs(error) };
+    }
+
+    // Step 4: FALLBACK — no `anthropic-ratelimit-*` headers at all. Preserve the
+    // pre-existing magnitude heuristic byte-for-byte so this path is unchanged
+    // for real 429s that carry no rate-limit headers.
+    //
     // Invariant: Anthropic returns the SAME `429 rate_limit_error` + `retry-after`
     // shape for a per-minute API throttle AND an OAuth subscription cap — the
     // subscription limit arrives as a bare `rate_limit_error` with a `retry-after`
-    // header and no `|<ts>` (anthropics/claude-code#30930). Header PRESENCE
-    // therefore cannot tell them apart; only its MAGNITUDE can. A short backoff
-    // (≤ threshold) is a per-minute throttle → transient short retry. A long or
-    // absent backoff is subscription-scale → fall through to oauth-limit-no-ts
+    // header and no `|<ts>` (anthropics/claude-code#30930). With no rate-limit
+    // headers present, PRESENCE cannot tell them apart; only MAGNITUDE can. A
+    // short backoff (≤ threshold) is a per-minute throttle → transient short
+    // retry. A long or absent backoff is subscription-scale → oauth-limit-no-ts
     // (pause + hot-swap + auto-resume), so the operator is notified and an
     // account hot-swap resumes the turn. Treating EVERY retry-after 429 as
     // transient silently lost both the pause notification and the hot-swap
