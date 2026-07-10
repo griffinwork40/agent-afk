@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.26.1] - 2026-07-10
+
+### Changed
+- cover in-turn SubagentStop injectContext append (#391) (#481) (73e8644)
+- extract appendInjectContext helper (#393) (#478) (b0cbbed)
+
 ## [5.26.0] - 2026-07-10
 
 ### Added
