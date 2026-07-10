@@ -224,13 +224,34 @@ export async function createIsolatedWorktree(args: {
   const prefix = env.AFK_WORKTREE_BRANCH_PREFIX ?? 'afk/';
   const branch = `${prefix}${slug}`;
   const baseRef = args.baseRef ?? 'HEAD';
-  const info = await createManagedWorktree({
-    execFile,
-    repoRoot: ctx.repoRoot,
-    worktreePath,
-    branch,
-    baseRef,
-  });
+  // Invariant: isolation:"worktree" fans out SEVERAL parallel dispatches, each
+  // running `git worktree add` against the SAME main repo — which serializes on
+  // the repo/index lock. A burst can transiently fail with a lock error, so we
+  // retry the create EXACTLY ONCE after a short backoff. Retry is scoped to
+  // lock contention ONLY (regex below): a non-lock error — not-a-git-repo,
+  // branch/path already exists, etc. — is deterministic and MUST propagate
+  // immediately (retrying it would just fail again, or worse, mask a real bug).
+  // Note: resolveRepoContext above stays OUTSIDE this retry — it is the non-git
+  // precondition and must fail loud. Only createManagedWorktree is wrapped.
+  const LOCK_CONTENTION =
+    /could not lock|index\.lock|already locked|unable to create .*\.lock|File exists/i;
+  const create = () =>
+    createManagedWorktree({
+      execFile,
+      repoRoot: ctx.repoRoot,
+      worktreePath,
+      branch,
+      baseRef,
+    });
+  let info: ManagedWorktreeInfo;
+  try {
+    info = await create();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!LOCK_CONTENTION.test(message)) throw err; // non-lock → propagate, no retry
+    await new Promise((r) => setTimeout(r, 100)); // brief backoff, then retry once
+    info = await create();
+  }
   return { repoRoot: ctx.repoRoot, ...info };
 }
 

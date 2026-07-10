@@ -151,6 +151,44 @@ describe('createIsolatedWorktree', () => {
       createIsolatedWorktree({ execFile: mock, cwd: '/nowhere', slugHint: 'iso-x-1-y' }),
     ).rejects.toThrow(/not a git repository/);
   });
+
+  it('retries once on a lock error then succeeds (concurrent worktree add contention)', async () => {
+    let addCount = 0;
+    const mock = makeMock((call) => {
+      if (call.args.includes('--git-common-dir')) return { stdout: `${repoRoot}/.git\n`, stderr: '' };
+      if (call.args.includes('add')) {
+        addCount += 1;
+        if (addCount === 1) {
+          // First parallel `worktree add` loses the index-lock race.
+          throw new Error('fatal: could not lock ref; another worktree add is in progress (index.lock)');
+        }
+        const p = call.args[call.args.length - 2] as string; // <path> <baseRef>
+        return fs.mkdir(p, { recursive: true }).then(() => ({ stdout: '', stderr: '' }));
+      }
+      if (call.args.includes('rev-parse')) return { stdout: 'headsha\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+    const iso = await createIsolatedWorktree({ execFile: mock, cwd: repoRoot, slugHint: 'iso-parallel-2-def456' });
+    expect(iso.repoRoot).toBe(repoRoot);
+    expect(iso.path).toBe(join(repoRoot, '.afk-worktrees', 'iso-parallel-2-def456'));
+    expect(iso.branch).toBe('afk/iso-parallel-2-def456');
+    expect(iso.baseRef).toBe('HEAD');
+    // Retried EXACTLY once → `worktree add` invoked twice, second time won.
+    expect(mock.calls.filter((c) => c.args.includes('add'))).toHaveLength(2);
+  });
+
+  it('does NOT retry a non-lock error (deterministic failures propagate immediately)', async () => {
+    const mock = makeMock((call) => {
+      if (call.args.includes('--git-common-dir')) return { stdout: `${repoRoot}/.git\n`, stderr: '' };
+      if (call.args.includes('add')) throw new Error('fatal: something else');
+      return { stdout: '', stderr: '' };
+    });
+    await expect(
+      createIsolatedWorktree({ execFile: mock, cwd: repoRoot, slugHint: 'iso-nonlock-3-ghi789' }),
+    ).rejects.toThrow(/something else/);
+    // No retry → `worktree add` invoked exactly once.
+    expect(mock.calls.filter((c) => c.args.includes('add'))).toHaveLength(1);
+  });
 });
 
 describe('teardownIsolatedWorktree', () => {
