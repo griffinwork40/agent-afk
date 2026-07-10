@@ -11,6 +11,19 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Added
+- GPT-5.6 model family support for the openai-compatible provider (reachable via
+  Codex ChatGPT-OAuth or an OpenAI API key): explicit 1M context-window entries
+  (`MODEL_CONTEXT_LIMITS`) and 128k max-output-token entries
+  (`MODEL_MAX_OUTPUT_TOKENS`) for the `gpt-5.6` alias and the
+  `gpt-5.6-sol`/`-terra`/`-luna` variants (plus `gpt-5.5`, previously falling
+  through to the 262k / 64k defaults), `/model` picker listings, and an updated
+  ChatGPT/Codex-backend 400 diagnostic. Without the output-cap entries these ids
+  hit `DEFAULT_MAX_OUTPUT` (64k) and silently halved their advertised 128k output
+  budget when `config.maxOutputTokens` was unset, truncating long code/research
+  responses. Routing and the reasoning/vision request contract already covered
+  `gpt-5.6` via the `/^gpt-5/` patterns; this closes the maintained-table gaps
+  and adds regression coverage.
 ## [5.25.11] - 2026-07-10
 
 ### Fixed

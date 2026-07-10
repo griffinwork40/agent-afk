@@ -42,6 +42,18 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   'claude-haiku-4-5-20251001': 64_000,
   // Claude Fable 5 (Mythos-class, GA 2026-06-09): 128k max output.
   'claude-fable-5': 128_000,
+  // OpenAI GPT-5.6 family (GA 2026-07-09) + GPT-5.5. maxOutputTokensFor() is
+  // provider-agnostic: the openai-compatible query path
+  // (query/model-params.ts:resolveEffectiveMaxOutputTokens) calls it to bound
+  // output when config.maxOutputTokens is unset. Without these entries the
+  // gpt-5.x ids fall through to DEFAULT_MAX_OUTPUT (64k) and silently cap
+  // responses at half their real 128k output ceiling (per OpenAI API docs:
+  // gpt-5.5 and the gpt-5.6 sol/terra/luna tiers all support 128k max output).
+  'gpt-5.5': 128_000,
+  'gpt-5.6': 128_000,
+  'gpt-5.6-sol': 128_000,
+  'gpt-5.6-terra': 128_000,
+  'gpt-5.6-luna': 128_000,
 } as const;
 
 const DEFAULT_MAX_OUTPUT = 64_000;
@@ -109,6 +121,19 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'gpt-4o-mini': 128_000,
   'gpt-4.1': 1_000_000,
   'gpt-4.1-mini': 1_000_000,
+  // OpenAI GPT-5.6 family (GA 2026-07-09). The `gpt-5.6` alias routes to
+  // `gpt-5.6-sol` (flagship); `-terra` is the balanced tier and `-luna` the
+  // high-volume tier. All ship the flagship 5.x ~1.05M-token window (rounded to
+  // 1M here to match the gpt-4.1 / gpt-5.5 convention above). Keyed by the alias
+  // and all three variant ids so getContextUsage() reports an accurate percentage
+  // regardless of which id the user pins. gpt-5.5 is included as the prior
+  // flagship (the ChatGPT/Codex backend baseline) so it stops falling through to
+  // the 262k openai-compatible default.
+  'gpt-5.5': 1_000_000,
+  'gpt-5.6': 1_000_000,
+  'gpt-5.6-sol': 1_000_000,
+  'gpt-5.6-terra': 1_000_000,
+  'gpt-5.6-luna': 1_000_000,
   // OpenAI reasoning models — o-series. All 200k context windows except
   // o1-mini (128k).
   o1: 200_000,
