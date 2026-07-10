@@ -10,9 +10,6 @@
  * @module agent/tools/dispatcher
  */
 
-import path from 'path';
-import { appendFileSync, mkdirSync } from 'fs';
-import { dirname } from 'path';
 import { createHash } from 'node:crypto';
 import { debugLog } from '../../utils/debug.js';
 import { HookBlockedError } from '../../utils/errors.js';
@@ -29,7 +26,7 @@ import type { ToolHandler, ToolHandlerContext, ConcurrencyClassifier } from './t
 import { checkToolPermission, type ToolPermissionConfig } from './permissions.js';
 import type { CanUseTool, PermissionResult } from '../types/sdk-types.js';
 import { classifyBashCommand } from './readonly-bash.js';
-import { getSessionGrantsPath } from '../../paths.js';
+import { PathGrantManager, type GrantSnapshot } from './grant-manager.js';
 import { emitHookDecision } from '../trace/emit.js';
 import type { TraceWriter } from '../trace/index.js';
 import { builtinToolSchemas, agentTool, skillTool, composeTool } from './schemas.js';
@@ -273,6 +270,15 @@ export class SessionToolDispatcher implements ToolDispatcher {
    */
   private repeatBreaker: { fingerprint: string; count: number } | null = null;
 
+  /**
+   * Shared grant-state machine (issues #361/#362). The hooks bind the
+   * dispatcher's per-consumer behavior: CURRENT `resolveBase` as the
+   * non-revocable anchor (migrates on `setResolveBase`), live `_allowAll`
+   * boolean for the bypass flag, and the construction-bound `sessionId` for
+   * audit entries. See grant-manager.ts for the divergence catalogue.
+   */
+  private readonly grantManager: PathGrantManager;
+
   constructor(opts: SessionToolDispatcherOptions) {
     this.handlers = opts.handlers;
     this.schemas = opts.schemas;
@@ -303,6 +309,17 @@ export class SessionToolDispatcher implements ToolDispatcher {
     const defaultRoots = opts.cwd ? [opts.cwd] : [];
     this._readRoots = opts.readRoots ?? defaultRoots.slice();
     this._writeRoots = opts.writeRoots ?? defaultRoots.slice();
+
+    this.grantManager = new PathGrantManager({
+      getReadRoots: () => this._readRoots,
+      getWriteRoots: () => this._writeRoots,
+      // Dispatcher semantics: the CURRENT resolveBase is the non-revocable
+      // anchor (and the getGrants() display base) — after a setResolveBase
+      // migration the NEW cwd is protected, not the launch dir.
+      getProtectedRoot: () => this.resolveBase,
+      getAllowAll: () => this._allowAll,
+      getDefaultSessionId: () => this.sessionId,
+    });
   }
 
   /**
@@ -339,70 +356,43 @@ export class SessionToolDispatcher implements ToolDispatcher {
   }
 
   // ---------------------------------------------------------------------------
-  // Grant API
+  // Grant API — delegates to the shared PathGrantManager (see grant-manager.ts).
   // ---------------------------------------------------------------------------
 
   /**
    * Grant read access to `absPath`. No-op if already present.
    * `resolveBase` is always implicitly readable and need not be added.
    *
-   * Invariant: the audit append fires ONLY when `p` is newly added. Re-granting
-   * an already-granted path is a state no-op and must not emit a duplicate
-   * ledger record — the previous unconditional append let per-tool-call
-   * re-grants of the same root balloon `session-grants.jsonl` ~196x (1,143
-   * unique grants → 224k rows before this fix).
+   * Invariant: the audit append fires ONLY when the path is newly added —
+   * see {@link PathGrantManager.addReadRoot} for the 196x dedup rationale.
    */
   addReadRoot(absPath: string, source: 'slash' | 'tool' = 'slash'): void {
-    const p = path.resolve(absPath);
-    if (!this._readRoots.includes(p)) {
-      this._readRoots.push(p);
-      this.appendAuditLog({ action: 'grant-read', path: p, source });
-    }
+    this.grantManager.addReadRoot(absPath, source);
   }
 
   /**
    * Grant read + write access to `absPath`. Ensures path is in BOTH lists.
-   * Audits `grant-write` only when `p` is newly added to `_writeRoots`, so a
-   * read→write upgrade still records (new to writeRoots) while a repeat
-   * write-grant is silent. See `addReadRoot` for the dedup rationale.
+   * Audits `grant-write` only when the path is newly added to `_writeRoots` —
+   * see {@link PathGrantManager.addWriteRoot}.
    */
   addWriteRoot(absPath: string, source: 'slash' | 'tool' = 'slash'): void {
-    const p = path.resolve(absPath);
-    if (!this._readRoots.includes(p)) {
-      this._readRoots.push(p);
-    }
-    if (!this._writeRoots.includes(p)) {
-      this._writeRoots.push(p);
-      this.appendAuditLog({ action: 'grant-write', path: p, source });
-    }
+    this.grantManager.addWriteRoot(absPath, source);
   }
 
   /**
-   * Remove `absPath` from both root lists. The initial `resolveBase` is
-   * non-revocable: attempts to revoke it are silently ignored.
+   * Remove `absPath` from both root lists. The CURRENT `resolveBase` is
+   * non-revocable: attempts to revoke it are silently ignored. (Note: after a
+   * `setResolveBase` migration the protected anchor is the NEW cwd — this
+   * differs from the providers, which protect the session's INITIAL
+   * resolveBase; see grant-manager.ts module header, divergence #2.)
    */
   revokeRoot(absPath: string, source: 'slash' | 'tool' = 'slash'): void {
-    const p = path.resolve(absPath);
-    // resolveBase is non-revocable
-    if (p === this.resolveBase) return;
-
-    const rIdx = this._readRoots.indexOf(p);
-    if (rIdx !== -1) this._readRoots.splice(rIdx, 1);
-
-    const wIdx = this._writeRoots.indexOf(p);
-    if (wIdx !== -1) this._writeRoots.splice(wIdx, 1);
-
-    this.appendAuditLog({ action: 'revoke', path: p, source });
+    this.grantManager.revokeRoot(absPath, source);
   }
 
   /** Returns a snapshot of current grant state (for /allow-dir display). */
-  getGrants(): { resolveBase: string | undefined; readRoots: string[]; writeRoots: string[]; allowAll: boolean } {
-    return {
-      resolveBase: this.resolveBase,
-      readRoots: this._readRoots.slice(),
-      writeRoots: this._writeRoots.slice(),
-      allowAll: this._allowAll,
-    };
+  getGrants(): GrantSnapshot {
+    return this.grantManager.getGrants();
   }
 
   /**
@@ -482,31 +472,6 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this.subagentExecutor?.setCwd(newCwd);
     this.skillExecutor?.setCwd(newCwd);
     this.composeExecutor?.setCwd(newCwd);
-  }
-
-  private appendAuditLog(entry: {
-    action: 'grant-read' | 'grant-write' | 'revoke';
-    path: string;
-    source: 'slash' | 'tool';
-  }): void {
-    try {
-      const logPath = getSessionGrantsPath();
-      mkdirSync(dirname(logPath), { recursive: true });
-      // Schema symmetry with AnthropicDirectProvider.appendProviderAuditLog:
-      // coalesce missing sessionId to `null` so consumers see a stable
-      // `{ timestamp, sessionId, action, path, source }` shape from both
-      // emission sites — `sessionId` key is always present.
-      const line = JSON.stringify({
-        timestamp: new Date().toISOString(),
-        sessionId: this.sessionId ?? null,
-        action: entry.action,
-        path: entry.path,
-        source: entry.source,
-      });
-      appendFileSync(logPath, line + '\n');
-    } catch {
-      // Audit log is best-effort — never fail a grant operation due to log I/O.
-    }
   }
 
   // Contract: advertised schema MUST mirror the enforced allowlist.
