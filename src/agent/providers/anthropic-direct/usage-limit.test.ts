@@ -3,7 +3,13 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { classifyUsageLimitError, parseRetryAfterMs, waitForReset, waitForHotSwap } from './usage-limit.js';
+import {
+  classifyUsageLimitError,
+  parseRetryAfterMs,
+  waitForReset,
+  waitForHotSwap,
+  RATE_LIMIT_TRANSIENT_MAX_RETRY_AFTER_MS,
+} from './usage-limit.js';
 
 // ---------------------------------------------------------------------------
 // classifyUsageLimitError
@@ -101,6 +107,30 @@ describe('classifyUsageLimitError', () => {
     if (result?.kind === 'rate-limit-transient') {
       expect(result.retryAfterMs).toBe(5_000);
     }
+  });
+
+  // Regression (2026-07): Anthropic delivers an OAuth *subscription* cap as a
+  // bare `429 rate_limit_error` + a LONG retry-after and no |ts — identical in
+  // shape to a transient throttle except for magnitude (anthropics/claude-
+  // code#30930). It must route to the pause + hot-swap path (oauth-limit-no-ts),
+  // NOT the silent transient-retry path — which emits no `paused` event (so the
+  // operator is never notified) and never watches the keychain for an account
+  // switch (so switching accounts never resumes the turn).
+  it('returns oauth-limit-no-ts for a 429 with a long retry-after and no |ts (subscription cap)', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', { 'retry-after': '3600' });
+    expect(classifyUsageLimitError(err)?.kind).toBe('oauth-limit-no-ts');
+  });
+
+  it('routes a retry-after AT the transient threshold as transient, just PAST it as subscription', () => {
+    const atThreshold = makeErrorWithHeaders(429, '429', {
+      'retry-after-ms': String(RATE_LIMIT_TRANSIENT_MAX_RETRY_AFTER_MS),
+    });
+    expect(classifyUsageLimitError(atThreshold)?.kind).toBe('rate-limit-transient');
+
+    const pastThreshold = makeErrorWithHeaders(429, '429', {
+      'retry-after-ms': String(RATE_LIMIT_TRANSIENT_MAX_RETRY_AFTER_MS + 1),
+    });
+    expect(classifyUsageLimitError(pastThreshold)?.kind).toBe('oauth-limit-no-ts');
   });
 });
 

@@ -22,6 +22,21 @@ export type UsageLimitClassification =
   | { kind: 'credit-exhausted' };
 
 /**
+ * Upper bound (ms) on a `retry-after` hint that still counts as a *transient*
+ * API-tier rate limit (per-minute RPM/ITPM/OTPM windows that clear in seconds).
+ *
+ * Invariant: Anthropic returns the SAME `429 rate_limit_error` + `retry-after`
+ * shape for BOTH a per-minute API throttle AND an OAuth *subscription* cap — the
+ * subscription limit arrives as a bare `rate_limit_error` with a `retry-after`
+ * header and no `|<ts>` (see anthropics/claude-code#30930). Header PRESENCE
+ * therefore cannot distinguish them; only its MAGNITUDE can. Per-minute
+ * throttles clear in ≤ a minute or two; a subscription reset is hours away, so a
+ * `retry-after` above this line is treated as subscription exhaustion (pause +
+ * hot-swap + auto-resume), not a short silent retry.
+ */
+export const RATE_LIMIT_TRANSIENT_MAX_RETRY_AFTER_MS = 5 * 60 * 1000;
+
+/**
  * Best-effort parse of a transient-backoff hint from an error's HTTP headers.
  *
  * Reads `retry-after-ms` (milliseconds) first, then `retry-after` (seconds, or
@@ -71,13 +86,17 @@ export function parseRetryAfterMs(error: unknown): number | undefined {
  * Recognised patterns:
  *   - HTTP 429 with message containing `|<unix-ts>` — OAuth subscription limit
  *     (the timestamp is when the limit resets).
- *   - HTTP 429 with a `retry-after`/`retry-after-ms` header and NO `|<unix-ts>`
- *     — a transient API-tier rate limit (RPM/ITPM), NOT subscription
- *     exhaustion. The header gives a short (seconds) backoff. Kept distinct so
- *     callers do not apply the 2-hour subscription-pause semantics to a
- *     throttle that clears in seconds.
- *   - HTTP 429 without timestamp AND without a retry-after header — OAuth
- *     subscription limit with unknown reset (unchanged fallback).
+ *   - HTTP 429 with a SHORT `retry-after`/`retry-after-ms` header
+ *     (≤ {@link RATE_LIMIT_TRANSIENT_MAX_RETRY_AFTER_MS}) and no `|<unix-ts>` —
+ *     a transient API-tier rate limit (per-minute RPM/ITPM) that clears in
+ *     seconds. Kept distinct so callers do not apply the 2-hour subscription-
+ *     pause semantics to a throttle that clears in seconds.
+ *   - HTTP 429 with a LONG `retry-after` (> the threshold) OR no `retry-after`
+ *     header, and no `|<unix-ts>` — OAuth subscription exhaustion with unknown
+ *     reset. Anthropic delivers the subscription cap as a bare
+ *     `rate_limit_error` + `retry-after` (anthropics/claude-code#30930), so a
+ *     long/absent backoff is the signal that separates it from a per-minute
+ *     throttle. Routed to the pause + hot-swap + auto-resume path.
  *   - HTTP 400 + `invalid_request_error` + `credit balance` — API key balance
  *     exhausted.
  */
@@ -93,15 +112,22 @@ export function classifyUsageLimitError(error: Error): UsageLimitClassification 
         return { kind: 'oauth-limit', resetsAt: new Date(ts * 1000) };
       }
     }
-    // Invariant: OAuth *subscription* exhaustion encodes its reset in the
-    // message `|<unix-ts>` (handled above) — it does not depend on a
-    // `retry-after` header. A standard API-tier rate-limit 429 instead carries
-    // `retry-after` and no timestamp. So "429 + retry-after + no |ts" is a
-    // transient rate limit, and misrouting it into the timestamp-less
-    // subscription path (poll every 60s for up to 2h, labelled "usage limit")
-    // is the bug this branch fixes.
+    // Invariant: Anthropic returns the SAME `429 rate_limit_error` + `retry-after`
+    // shape for a per-minute API throttle AND an OAuth subscription cap — the
+    // subscription limit arrives as a bare `rate_limit_error` with a `retry-after`
+    // header and no `|<ts>` (anthropics/claude-code#30930). Header PRESENCE
+    // therefore cannot tell them apart; only its MAGNITUDE can. A short backoff
+    // (≤ threshold) is a per-minute throttle → transient short retry. A long or
+    // absent backoff is subscription-scale → fall through to oauth-limit-no-ts
+    // (pause + hot-swap + auto-resume), so the operator is notified and an
+    // account hot-swap resumes the turn. Treating EVERY retry-after 429 as
+    // transient silently lost both the pause notification and the hot-swap
+    // watcher — the regression this magnitude gate fixes.
     const retryAfterMs = parseRetryAfterMs(error);
-    if (retryAfterMs !== undefined) {
+    if (
+      retryAfterMs !== undefined &&
+      retryAfterMs <= RATE_LIMIT_TRANSIENT_MAX_RETRY_AFTER_MS
+    ) {
       return { kind: 'rate-limit-transient', retryAfterMs };
     }
     return { kind: 'oauth-limit-no-ts' };
