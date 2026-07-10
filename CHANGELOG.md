@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.26.4] - 2026-07-10
+
+### Changed
+- split elicitation-repl.ts into mode modules (#367) (#484) (c3e39d6)
+
 ## [5.26.3] - 2026-07-10
 
 ### Changed
