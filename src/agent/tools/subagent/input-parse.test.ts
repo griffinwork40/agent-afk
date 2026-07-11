@@ -363,6 +363,50 @@ describe('parseAgentInput', () => {
     });
   });
 
+  describe('isolation', () => {
+    it('defaults to omitted (no field) when absent', () => {
+      const result = parseAgentInput({ prompt: 'p' });
+      expect(result.isolation).toBeUndefined();
+      expect('isolation' in result).toBe(false);
+    });
+
+    it("normalizes 'none' to omitted (no field)", () => {
+      const result = parseAgentInput({ prompt: 'p', isolation: 'none' });
+      expect(result.isolation).toBeUndefined();
+      expect('isolation' in result).toBe(false);
+    });
+
+    it("retains 'worktree'", () => {
+      expect(parseAgentInput({ prompt: 'p', isolation: 'worktree' }).isolation).toBe(
+        'worktree',
+      );
+    });
+
+    it('throws on an unknown isolation value', () => {
+      expect(() => parseAgentInput({ prompt: 'p', isolation: 'container' })).toThrow(
+        /isolation must be "none" or "worktree"/,
+      );
+    });
+
+    it('throws when cwd and isolation:worktree are both supplied (mutually exclusive)', () => {
+      expect(() =>
+        parseAgentInput({ prompt: 'p', cwd: '/tmp/wt/x', isolation: 'worktree' }),
+      ).toThrow(/mutually exclusive/);
+    });
+
+    it("allows cwd together with isolation:'none' (none is a no-op)", () => {
+      const result = parseAgentInput({ prompt: 'p', cwd: '/tmp/wt/x', isolation: 'none' });
+      expect(result.cwd).toBe('/tmp/wt/x');
+      expect('isolation' in result).toBe(false);
+    });
+
+    it('throws when isolation:worktree is combined with mode:background (MVP forbid)', () => {
+      expect(() =>
+        parseAgentInput({ prompt: 'p', isolation: 'worktree', mode: 'background' }),
+      ).toThrow(/not supported with mode:"background"/);
+    });
+  });
+
   describe('full happy path', () => {
     it('parses every field together with expected precedence and defaults', () => {
       const result = parseAgentInput({

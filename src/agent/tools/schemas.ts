@@ -397,6 +397,23 @@ export const agentTool: AnthropicToolDef = {
           'further nested subagents — each `agent` call must specify `cwd` ' +
           'explicitly to operate in a worktree.',
       },
+      isolation: {
+        type: 'string',
+        enum: ['none', 'worktree'],
+        description:
+          'Filesystem isolation for the subagent. "none" (default) runs the ' +
+          "child in the parent's working tree. \"worktree\" creates a fresh " +
+          'afk-managed git worktree + branch under .afk-worktrees/ and runs the ' +
+          'child there, so several parallel write-capable subagents (e.g. ' +
+          'speculative fixes, refactor lanes) never corrupt each other\'s edits ' +
+          'or test runs. The worktree is torn down when the child finishes; a ' +
+          'dirty or commits-ahead tree is preserved and locked instead of ' +
+          'removed, so work in progress is never destroyed (recover it via the ' +
+          '`worktree` tool). Mutually exclusive with `cwd` (the runtime owns the ' +
+          "child's cwd when isolating). Ignored for read-only agents such as " +
+          'research-agent — they have nothing to isolate. Not supported together ' +
+          'with mode:"background" in this release.',
+      },
     },
     required: ['prompt'],
   },

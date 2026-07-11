@@ -11,6 +11,53 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.27.2] - 2026-07-11
+
+### Changed
+- split config.ts into tier modules (#368) — checkpoint (#493) (db9e42c)
+
+## [5.27.1] - 2026-07-10
+
+### Changed
+- consolidate 3 grant-manager copies into shared module (#361, #362 prep) (#489) (e2b745c)
+- split skill-executor.ts into per-strategy modules (#363) (#491) (2a24d2f)
+
+## [5.27.0] - 2026-07-10
+
+### Added
+- first-class isolation:"worktree" for the agent tool (#487) (7941226)
+
+## [5.26.5] - 2026-07-10
+
+### Fixed
+- route long/absent-retry-after 429s back to the usage-limit pause path (#483) (34a09c5)
+
+## [5.26.4] - 2026-07-10
+
+### Changed
+- split elicitation-repl.ts into mode modules (#367) (#484) (c3e39d6)
+
+## [5.26.3] - 2026-07-10
+
+### Changed
+- split plugin-skills.ts into flags/listing/reload modules (#366) (#486) (cd37ef1)
+- split loop.test.ts into sibling suites (#370) (#485) (708c4ff)
+
+## [5.26.2] - 2026-07-10
+
+### Added
+- ask-question PreToolUse gate + orphan root-settings warning (#477) (362d05b)
+
+### Changed
+- retire vendored TS orchestrator for bundled SKILL.md (#480) (88a77db)
+- mark AFK_MAX_TOKENS / maxTokens as deprecated and inert (#482) (f37b0a9)
+
+## [5.26.1] - 2026-07-10
+
+### Changed
+- cover in-turn SubagentStop injectContext append (#391) (#481) (73e8644)
+- extract appendInjectContext helper (#393) (#478) (b0cbbed)
+
 ## [5.26.0] - 2026-07-10
 
 ### Added

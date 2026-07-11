@@ -209,7 +209,7 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'AFK_MAX_TOKENS',
-    description: 'Cap on total tokens per turn (input + output). Default 4096.',
+    description: 'Deprecated and inert: not read by the generation path. Use AFK_MAX_OUTPUT_TOKENS (or --max-output-tokens) to cap per-response output tokens; falls back to the model output ceiling when unset.',
     type: 'number',
     required: false,
     default: '4096',

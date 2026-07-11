@@ -8,6 +8,8 @@
 
 import { createHookRegistry, type HookRegistry } from './hooks.js';
 import { createShadowVerifyNudge } from './shadow-verify-nudge.js';
+import { createAskQuestionGate } from './ask-question-gate.js';
+import { createSafeDestructDetect } from './safe-destruct-detect.js';
 import { MemoryStore, createMemorySessionEndHook } from './memory/index.js';
 import { createPlanModeGate } from './plan-mode-gate.js';
 import { createAfkModeGate } from './afk-mode-gate.js';
@@ -65,6 +67,20 @@ export interface DefaultHookRegistryResult {
 let warnedPathApprovalDisabled = false;
 
 /**
+ * Distinct hooks-config loader warnings already surfaced this process. The
+ * loader records non-fatal problems (parse/schema errors, and the orphan
+ * root-settings notice for a misplaced `$AFK_HOME/settings.json`) on
+ * `LoadedHooksConfig.warnings`, documented as "the caller should surface" —
+ * but no caller did, so a misplaced root file stayed silent and the owner
+ * could believe those hooks were active. We surface them here (the single
+ * chokepoint every surface routes through), deduped per distinct message so
+ * repeated session construction (daemon ticks, per-chat Telegram sessions)
+ * doesn't re-spam the same process-global notice while a genuinely new
+ * warning from a later session still surfaces.
+ */
+const surfacedConfigWarnings = new Set<string>();
+
+/**
  * Test-only: reset the once-per-process warning flag so Vitest files that
  * exercise the AFK_DISABLE_PATH_APPROVAL=1 warn path don't bleed state into
  * each other (module scope persists across files in a single worker).
@@ -72,6 +88,7 @@ let warnedPathApprovalDisabled = false;
  */
 export function _resetWarningForTests(): void {
   warnedPathApprovalDisabled = false;
+  surfacedConfigWarnings.clear();
 }
 
 export function createDefaultHookRegistry(
@@ -90,6 +107,24 @@ export function createDefaultHookRegistry(
   const shadowVerifyNudge = createShadowVerifyNudge();
   registry.register('SubagentStop', shadowVerifyNudge);
   registry.register('Stop', shadowVerifyNudge);
+  // Ask-question gate: on surfaces with no elicitation handler (daemon,
+  // scheduler, one-shot chat) a question can never be answered — block it
+  // pre-flight with proceed-on-assumption guidance instead of letting the
+  // router park-and-decline after the round-trip. No-op on REPL/Telegram
+  // (handler installed; probed at call time). See ask-question-gate.ts.
+  registry.register('PreToolUse', createAskQuestionGate());
+  // Safe-destruct detector (observe-only, ALL surfaces): witness — but never
+  // block — bash commands matching a curated destructive/irreversible pattern
+  // (rm -rf, git reset --hard, DROP DATABASE, dd of=/dev/*, mkfs, terraform
+  // destroy, ...). It emits a `hook_decision` catch-record via the unused
+  // `approve` outcome, so it (a) adds ZERO blocking friction — the interpreter-
+  // eval lesson that started this program — and (b) is filterable as
+  // decision==='approve' and ignored by the mechanical friction detectors. This
+  // is the Wave-1 shadow window whose records calibrate a later block/nudge
+  // slice. Registered unconditionally (no deps, never blocks → safe on headless/
+  // autonomous surfaces too). See safe-destruct-detect.ts and
+  // .afk/plans/friction-substrate-and-gate-migration.md §9.
+  registry.register('PreToolUse', createSafeDestructDetect());
   const store = memoryStore ?? new MemoryStore();
   if (getPermissionMode !== undefined) {
     registry.register('PreToolUse', createPlanModeGate(getPermissionMode));
@@ -227,6 +262,17 @@ export function createDefaultHookRegistry(
   // handlers always run first. Config hooks are optional — when no
   // hookConfig is provided (the common case) this is a no-op.
   if (hookConfig !== undefined) {
+    // Surface loader warnings (parse/schema errors, orphan root-settings
+    // notice) that were computed but previously dropped on the floor — see
+    // surfacedConfigWarnings above. Emit before registration so problems are
+    // visible even when the config has zero registrable hooks (the orphan
+    // case). Mirrors the bridge's skipped-hook `[hooks]` console.warn channel.
+    for (const warning of hookConfig.warnings) {
+      if (surfacedConfigWarnings.has(warning)) continue;
+      surfacedConfigWarnings.add(warning);
+      // eslint-disable-next-line no-console
+      console.warn(`[hooks] ${warning}`);
+    }
     loadAndRegisterConfigHooks(registry, hookConfig, {
       cwd: agentOptions?.cwd,
       sessionId: agentOptions?.sessionId,
