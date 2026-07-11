@@ -2,12 +2,15 @@
  * /resume [id] — list saved sessions, or perform a mid-session swap to a
  * stored one.
  *
- * With no argument: lists recent saves and their metadata.
  * With an id: atomically swaps the current AgentSession for the stored one
  * (tears down the outgoing session, builds a fresh one from the stored
  * config, mutates the shared SessionRef, reseeds stats, and prints a
  * "Resuming…" banner). Falls back to printing the launch command if the
  * requestResume capability is not available in the current context.
+ *
+ * With no argument: opens an arrow-key picker of recent saves on a TTY (the
+ * hint's long-promised interactive path); on non-TTY surfaces (Telegram,
+ * daemon, tests) it prints the read-only table and asks for `/resume <name>`.
  */
 
 import { palette } from '../../palette.js';
@@ -15,8 +18,11 @@ import { divider } from '../../render.js';
 import { findSession, listSessions } from '../../session-store.js';
 import { formatCost } from '../../format-utils.js';
 import { formatResumeCommand } from '../../resume-command.js';
+import { runPicker } from '../../render/picker.js';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
-import type { SlashCommand } from '../types.js';
+import type { SlashCommand, SlashContext } from '../types.js';
+
+type SessionEntry = ReturnType<typeof listSessions>[number];
 
 function fmtWhen(ts: number): string {
   if (typeof ts !== 'number' || !Number.isFinite(ts)) return '      —       ';
@@ -34,6 +40,73 @@ function resolveFromFound(found: NonNullable<ReturnType<typeof findSession>>): R
   };
 }
 
+/** Plain (un-coloured) one-line label for a session, used as a picker option. */
+function pickLabel(e: SessionEntry): string {
+  const model = e.model.padEnd(7);
+  const turns = `${e.totalTurns} turn${e.totalTurns === 1 ? '' : 's'}`.padEnd(9);
+  const origin = e.source === 'telegram' ? 'tg' : '  ';
+  return `${fmtWhen(e.savedAt)}  ${model}  ${turns}  ${origin}  ${e.name ?? e.id}`;
+}
+
+/**
+ * Resume a resolved session: guard against resuming into the live session,
+ * then swap via requestResume, or (when that capability is absent) print the
+ * launch command. Writes all output via ctx.out; never throws.
+ */
+async function resumeFound(
+  ctx: SlashContext,
+  found: NonNullable<ReturnType<typeof findSession>>,
+): Promise<void> {
+  // Prefer the human name over the UUID in all user-facing messages.
+  const label = found.data.name ?? found.id;
+
+  if (typeof ctx.requestResume === 'function') {
+    // Guard against resuming into the live session (PR #355 C2). The swap would
+    // otherwise tear down and rebuild the current session from the last on-disk
+    // snapshot, silently dropping any turn data accumulated since the last
+    // /save. Match on the SDK session id when available (canonical), falling
+    // back to the saved file id.
+    // External constraint: this comparison is the only barrier between /resume
+    // and unintended data loss for users who select their current session.
+    const currentSdkId = ctx.session.current.sessionId;
+    const targetSdkId = found.data.sessionId;
+    const isSameSession =
+      (currentSdkId !== undefined && targetSdkId !== undefined && currentSdkId === targetSdkId) ||
+      (currentSdkId !== undefined && currentSdkId === found.id);
+    if (isSameSession) {
+      ctx.out.warn(`Already on session ${label}.`);
+      return;
+    }
+
+    ctx.out.info(`Resuming session ${label} …`);
+    const result = await ctx.requestResume(resolveFromFound(found));
+    if (result.ok) {
+      ctx.out.success(`Resumed ${label}  (sdk id: ${result.sessionId})`);
+    } else {
+      ctx.out.warn(result.reason);
+    }
+    return;
+  }
+
+  // Fallback: requestResume not available (e.g. daemon, Telegram).
+  // Print the launch command so the user knows how to resume manually.
+  const loaded = found.data;
+  const resumeTarget = loaded.name ?? loaded.sessionId ?? found.id;
+  ctx.out.line();
+  ctx.out.line(palette.bold(`Session ${loaded.name ?? found.id}`));
+  ctx.out.line(divider());
+  ctx.out.line(`  name        ${palette.brand(loaded.name ?? '—')}`);
+  ctx.out.line(`  source      ${palette.brand(loaded.source ?? 'cli')}`);
+  ctx.out.line(`  model       ${palette.brand(loaded.model)}`);
+  ctx.out.line(`  turns       ${palette.meta(String(loaded.totalTurns))}`);
+  ctx.out.line(`  cost        ${palette.meta(formatCost(loaded.totalCostUsd))}`);
+  ctx.out.line(`  sdk id      ${palette.meta(loaded.sessionId ?? '—')}`);
+  ctx.out.line();
+  ctx.out.line(palette.dim('  Resume with:'));
+  ctx.out.line(palette.brand(`    ${formatResumeCommand(resumeTarget, loaded.model)}`));
+  ctx.out.line();
+}
+
 export const resumeCmd: SlashCommand = {
   name: '/resume',
   usage: '/resume [id]',
@@ -47,56 +120,7 @@ export const resumeCmd: SlashCommand = {
         ctx.out.warn(`No saved session: ${target}`);
         return 'continue';
       }
-      // Prefer the human name over the UUID in all user-facing messages.
-      const label = found.data.name ?? found.id;
-
-      if (typeof ctx.requestResume === 'function') {
-        // Guard against resuming into the live session (PR #355 C2).
-        // The 12-step swap would otherwise tear down and rebuild the current
-        // session from the last on-disk snapshot, silently dropping any turn
-        // data accumulated since the last /save. Match on the SDK session id
-        // when available (canonical), falling back to the saved file id.
-        // External constraint: this comparison is the only barrier between
-        // /resume and unintended data loss for users who type their current
-        // session id by accident.
-        const currentSdkId = ctx.session.current.sessionId;
-        const targetSdkId = found.data.sessionId;
-        const isSameSession =
-          (currentSdkId !== undefined && targetSdkId !== undefined && currentSdkId === targetSdkId) ||
-          (currentSdkId !== undefined && currentSdkId === found.id);
-        if (isSameSession) {
-          ctx.out.warn(`Already on session ${label}.`);
-          return 'continue';
-        }
-
-        // Mid-session swap path.
-        ctx.out.info(`Resuming session ${label} …`);
-        const result = await ctx.requestResume(resolveFromFound(found));
-        if (result.ok) {
-          ctx.out.success(`Resumed ${label}  (sdk id: ${result.sessionId})`);
-        } else {
-          ctx.out.warn(result.reason);
-        }
-        return 'continue';
-      }
-
-      // Fallback: requestResume not available (e.g. daemon, Telegram).
-      // Print the launch command so the user knows how to resume manually.
-      const loaded = found.data;
-      const resumeTarget = loaded.name ?? loaded.sessionId ?? found.id;
-      ctx.out.line();
-      ctx.out.line(palette.bold(`Session ${loaded.name ?? found.id}`));
-      ctx.out.line(divider());
-      ctx.out.line(`  name        ${palette.brand(loaded.name ?? '—')}`);
-      ctx.out.line(`  source      ${palette.brand(loaded.source ?? 'cli')}`);
-      ctx.out.line(`  model       ${palette.brand(loaded.model)}`);
-      ctx.out.line(`  turns       ${palette.meta(String(loaded.totalTurns))}`);
-      ctx.out.line(`  cost        ${palette.meta(formatCost(loaded.totalCostUsd))}`);
-      ctx.out.line(`  sdk id      ${palette.meta(loaded.sessionId ?? '—')}`);
-      ctx.out.line();
-      ctx.out.line(palette.dim('  Resume with:'));
-      ctx.out.line(palette.brand(`    ${formatResumeCommand(resumeTarget, loaded.model)}`));
-      ctx.out.line();
+      await resumeFound(ctx, found);
       return 'continue';
     }
 
@@ -109,6 +133,34 @@ export const resumeCmd: SlashCommand = {
     const localEntries = entries.filter((e) => e.cwd === currentCwd);
     const isFiltered = localEntries.length > 0;
     const displayEntries = isFiltered ? localEntries : entries;
+
+    // Interactive picker on a TTY: select a session to resume it directly.
+    const compositor = ctx.getCompositor?.() ?? null;
+    if (compositor) {
+      const shown = displayEntries.slice(0, 20);
+      const options = shown.map(pickLabel);
+      const picked = await runPicker(compositor, {
+        header: [
+          palette.bold(`Resume a session  (${shown.length})`),
+          palette.dim(isFiltered ? 'saved in this directory' : 'all directories (none saved here)'),
+          '',
+        ],
+        options,
+      });
+      const choice = picked?.[0];
+      if (choice) {
+        const idx = options.indexOf(choice);
+        const entry = idx >= 0 ? shown[idx] : undefined;
+        if (entry) {
+          const found = findSession(entry.id);
+          if (found) await resumeFound(ctx, found);
+          else ctx.out.warn(`No saved session: ${entry.name ?? entry.id}`);
+        }
+      }
+      return 'continue';
+    }
+
+    // Non-TTY fallback: read-only table + the manual resume hint.
     const header = isFiltered
       ? palette.bold(`Saved sessions  (${displayEntries.length})`)
       : palette.bold(`Saved sessions — all (none in this directory)`);
