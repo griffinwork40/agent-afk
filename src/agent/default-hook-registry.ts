@@ -9,6 +9,7 @@
 import { createHookRegistry, type HookRegistry } from './hooks.js';
 import { createShadowVerifyNudge } from './shadow-verify-nudge.js';
 import { createAskQuestionGate } from './ask-question-gate.js';
+import { createSafeDestructDetect } from './safe-destruct-detect.js';
 import { MemoryStore, createMemorySessionEndHook } from './memory/index.js';
 import { createPlanModeGate } from './plan-mode-gate.js';
 import { createAfkModeGate } from './afk-mode-gate.js';
@@ -112,6 +113,18 @@ export function createDefaultHookRegistry(
   // router park-and-decline after the round-trip. No-op on REPL/Telegram
   // (handler installed; probed at call time). See ask-question-gate.ts.
   registry.register('PreToolUse', createAskQuestionGate());
+  // Safe-destruct detector (observe-only, ALL surfaces): witness — but never
+  // block — bash commands matching a curated destructive/irreversible pattern
+  // (rm -rf, git reset --hard, DROP DATABASE, dd of=/dev/*, mkfs, terraform
+  // destroy, ...). It emits a `hook_decision` catch-record via the unused
+  // `approve` outcome, so it (a) adds ZERO blocking friction — the interpreter-
+  // eval lesson that started this program — and (b) is filterable as
+  // decision==='approve' and ignored by the mechanical friction detectors. This
+  // is the Wave-1 shadow window whose records calibrate a later block/nudge
+  // slice. Registered unconditionally (no deps, never blocks → safe on headless/
+  // autonomous surfaces too). See safe-destruct-detect.ts and
+  // .afk/plans/friction-substrate-and-gate-migration.md §9.
+  registry.register('PreToolUse', createSafeDestructDetect());
   const store = memoryStore ?? new MemoryStore();
   if (getPermissionMode !== undefined) {
     registry.register('PreToolUse', createPlanModeGate(getPermissionMode));
