@@ -5257,6 +5257,35 @@ describe('TerminalCompositor — picker mode', () => {
     c.disarm();
     resetSlashRegistry();
   });
+
+  it('entering picker mode refreshes lastMeasuredFrameTop instead of leaving it stale from before the picker opened', async () => {
+    // Regression: repaintPickerFrame() measures its own (picker-shaped) frame
+    // top via the same logUpdate.measure() call the non-picker repaint() body
+    // uses to set lastMeasuredFrameTop — but was not writing it back. Since a
+    // picker frame's row count differs from whatever was on screen before the
+    // picker opened, that left lastMeasuredFrameTop describing a frame shape
+    // that no longer exists, for as long as the picker stayed active. This is
+    // NOT a resize, so `bandGeometryStale` (the flag commitAbove's routing
+    // uses to distrust a stale measurement) never catches it — any
+    // commitAbove() landing while the picker is up would trust the stale
+    // value. See commitAbove's routing in terminal-compositor.committed-band-commit.ts.
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+    await c.arm();
+    const internals = c as unknown as { lastMeasuredFrameTop: number };
+    // Simulate a stale measurement left over from whatever repaint last ran
+    // before the picker opened (a real prior frame could plausibly have
+    // measured to any row — a sentinel outside the terminal's row range make
+    // any leftover value unambiguous).
+    internals.lastMeasuredFrameTop = 999;
+    c.enterPickerMode({ renderRows: () => ['only row'], onKey: vi.fn() });
+    // enterPickerMode() synchronously repaints (repaintPickerFrame) — that
+    // repaint must re-measure and overwrite the stale sentinel, not leave it
+    // describing the pre-picker frame.
+    expect(internals.lastMeasuredFrameTop).not.toBe(999);
+    expect(internals.lastMeasuredFrameTop).toBeGreaterThan(0);
+    c.exitPickerMode();
+    c.disarm();
+  });
 });
 
 describe('TerminalCompositor — background-status-bar coexistence', () => {
