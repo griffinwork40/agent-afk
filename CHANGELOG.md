@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.29.1] - 2026-07-11
+
+### Fixed
+- mirror exit_plan_mode's deferred flip onto stats.permissionMode (#495) (#497) (2710e6b)
+
 ## [5.29.0] - 2026-07-11
 
 ### Added
