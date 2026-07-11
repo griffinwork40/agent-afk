@@ -134,6 +134,55 @@ describe('/config slash command', () => {
 });
 
 // ---------------------------------------------------------------------------
+// /config fast-paths (view / set / unknown-arg / non-TTY fallback)
+// ---------------------------------------------------------------------------
+
+describe('/config fast-paths', () => {
+  const configCmd = configDoctorCommands.find((c) => c.name === '/config')!;
+
+  it('/config view renders the read-only dump', async () => {
+    const { ctx, lines } = makeCtx();
+    const result = await configCmd.handler(ctx, 'view');
+    expect(result).toBe('continue');
+    expect(lines.join('\n')).toMatch(/model|provider/i);
+  });
+
+  it('/config set with no value warns about usage', async () => {
+    const { ctx, lines } = makeCtx();
+    await configCmd.handler(ctx, 'set');
+    expect(lines.join('\n')).toMatch(/WARN:.*Usage/i);
+  });
+
+  it('/config set <unknown-key> errors and writes nothing', async () => {
+    const { ctx, lines } = makeCtx();
+    await configCmd.handler(ctx, 'set definitely_not_a_key 1');
+    expect(lines.join('\n')).toMatch(/ERROR:.*[Uu]nknown/);
+  });
+
+  it('/config set <human-tier> refuses (points to the menu/CLI, no write)', async () => {
+    const { ctx, lines } = makeCtx();
+    await configCmd.handler(ctx, 'set permissionMode plan');
+    expect(lines.join('\n')).toMatch(/WARN:.*human-tier/i);
+  });
+
+  it('unknown argument warns and still shows the dump', async () => {
+    const { ctx, lines } = makeCtx();
+    await configCmd.handler(ctx, 'wat');
+    const body = lines.join('\n');
+    expect(body).toMatch(/WARN:.*Unknown argument/i);
+    expect(body).toMatch(/model|provider/i);
+  });
+
+  it('falls back to the read-only view when no compositor is available (non-TTY)', async () => {
+    const { ctx, lines } = makeCtx();
+    // makeCtx() supplies no getCompositor → the interactive branch must fall back.
+    const result = await configCmd.handler(ctx, '');
+    expect(result).toBe('continue');
+    expect(lines.join('\n')).toContain('ANTHROPIC_API_KEY');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // /doctor handler
 // ---------------------------------------------------------------------------
 

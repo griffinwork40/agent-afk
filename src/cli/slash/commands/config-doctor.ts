@@ -1,15 +1,16 @@
 /**
- * /config and /doctor slash commands — read-only REPL equivalents of the
- * top-level `afk config` and `afk doctor` CLI commands.
+ * /config and /doctor slash commands.
  *
- * Both commands are strictly introspective: they never mutate session state
- * and never call process.exit(). Output is written via ctx.out so it works
- * identically on every surface (REPL, Telegram, tests).
+ * /config — interactive settings menu on a TTY (browse + edit config keys via
+ *   arrow keys), with a read-only `view` dump and a scriptable `set` fast-path
+ *   that work on every surface. The interactive editor is composed from the
+ *   existing overlay primitives (see render/config-menu.ts) — no new TUI stack.
+ * /doctor — read-only system health checks (unchanged).
  *
- * Reuse strategy:
- *   /config — calls the same env/provider helpers as config-command.ts.
- *   /doctor — calls runDoctorChecks() from doctor-checks.ts, which is also
- *             used by the refactored CLI action in doctor.ts.
+ * Both remain non-destructive to session state and never call process.exit().
+ * Output is written via ctx.out so it works identically on every surface (REPL,
+ * Telegram, tests). The interactive menu additionally borrows the REPL's live
+ * compositor via ctx.getCompositor(); non-TTY surfaces fall back to the dump.
  */
 
 import { env } from '../../../config/env.js';
@@ -18,80 +19,156 @@ import { divider } from '../../render.js';
 import { providerForModel } from '../../../agent/providers/index.js';
 import { resolveCliPermissionMode } from '../../config.js';
 import { runDoctorChecks } from '../../commands/doctor-checks.js';
-import type { SlashCommand } from '../types.js';
+import { getConfigKeySpec } from '../../../config/settable-keys.js';
+import { setConfigValue, RESTART_NOTE } from '../../../config/mutate.js';
+import { runConfigMenu, overlaysFromCompositor, defaultIo } from '../../render/config-menu.js';
+import type { SlashCommand, SlashContext, Writer } from '../types.js';
 
 // ---------------------------------------------------------------------------
-// /config
+// /config — read-only view (shared by `/config view`, the non-TTY fallback,
+// and unknown-argument handling)
+// ---------------------------------------------------------------------------
+
+/** Render the resolved-configuration dump (model, provider, keys, env vars). */
+function renderConfigView(out: Writer): void {
+  const modelRaw = env.AFK_MODEL ?? env.CLAUDE_MODEL;
+  const model = modelRaw ?? 'sonnet';
+  const provider = providerForModel(modelRaw);
+
+  const anthropicApiKey = env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_OAUTH_TOKEN;
+  const openaiKey = env.OPENAI_API_KEY || env.CODEX_API_KEY;
+  const apiKey = provider === 'anthropic' ? anthropicApiKey : openaiKey;
+
+  out.line();
+  out.line(palette.bold('Configuration'));
+  out.line(divider());
+
+  out.line(`  model       ${palette.info(modelRaw ? model : `${model} (default)`)}`);
+  out.line(`  provider    ${palette.plan(provider)}`);
+
+  if (provider === 'anthropic') {
+    const keyStatus = apiKey
+      ? palette.success('✓ set  (ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN)')
+      : palette.warning('⚠ not set — subprocess falls back to OAuth / keychain');
+    out.line(`  api key     ${keyStatus}`);
+  } else {
+    const openaiSource = env.OPENAI_API_KEY ? 'OPENAI_API_KEY' : 'CODEX_API_KEY';
+    const keyStatus = apiKey
+      ? palette.success(`✓ set  (${openaiSource})`)
+      : palette.warning('⚠ not set — falling back to `codex login` state');
+    out.line(`  api key     ${keyStatus}`);
+  }
+
+  out.line(
+    `  thinking    ${env.AFK_THINKING ? palette.info(env.AFK_THINKING) : palette.dim('(unset — SDK default)')}`,
+  );
+  out.line(
+    `  effort      ${env.AFK_EFFORT ? palette.info(env.AFK_EFFORT) : palette.dim('(unset — SDK default)')}`,
+  );
+  const permissionMode = resolveCliPermissionMode();
+  out.line(
+    `  perm mode   ${permissionMode === 'bypassPermissions'
+      ? palette.warning(`${permissionMode} (bypass — containment off)`)
+      : palette.info(`${permissionMode} (containment on)`)}`,
+  );
+
+  out.line();
+  out.line(palette.bold('Environment variables'));
+  out.line(divider());
+
+  const envRows: Array<[string, string]> = [
+    ['AFK_MODEL', env.AFK_MODEL ?? palette.dim('unset')],
+    ['CLAUDE_MODEL', env.CLAUDE_MODEL ?? palette.dim('unset')],
+    ['ANTHROPIC_API_KEY', env.ANTHROPIC_API_KEY ? palette.success('set') : palette.dim('unset')],
+    ['CLAUDE_CODE_OAUTH_TOKEN', env.CLAUDE_CODE_OAUTH_TOKEN ? palette.success('set') : palette.dim('unset')],
+    ['OPENAI_API_KEY', env.OPENAI_API_KEY ? palette.success('set') : palette.dim('unset')],
+    ['CODEX_API_KEY', env.CODEX_API_KEY ? palette.success('set') : palette.dim('unset')],
+    ['AFK_THINKING', env.AFK_THINKING ?? palette.dim('unset')],
+    ['AFK_EFFORT', env.AFK_EFFORT ?? palette.dim('unset')],
+  ];
+  const keyWidth = Math.max(...envRows.map(([k]) => k.length)) + 2;
+  for (const [k, v] of envRows) {
+    out.line(`  ${palette.meta(k.padEnd(keyWidth))} ${v}`);
+  }
+  out.line();
+}
+
+// ---------------------------------------------------------------------------
+// /config set <key> <value> — scriptable fast-path (agent-tier keys only)
+// ---------------------------------------------------------------------------
+
+/**
+ * Handle `/config set <key> <value>`. Writes agent-tier config keys directly;
+ * refuses human-tier keys (they require the interactive confirm or the CLI) and
+ * unknown keys. Works on every surface (no compositor needed).
+ */
+function handleConfigSet(ctx: SlashContext, rest: string): 'continue' {
+  const trimmed = rest.trim();
+  const sp = trimmed.indexOf(' ');
+  if (sp === -1) {
+    ctx.out.warn('Usage: /config set <key> <value>');
+    return 'continue';
+  }
+  const path = trimmed.slice(0, sp).trim();
+  const value = trimmed.slice(sp + 1).trim();
+
+  const spec = getConfigKeySpec(path);
+  if (!spec) {
+    ctx.out.error(`Unknown config key: ${path}  (type /config to browse settings)`);
+    return 'continue';
+  }
+  if (spec.tier === 'human') {
+    ctx.out.warn(
+      `${path} is human-tier — set it from the interactive menu (/config) or \`afk config set ${path} <value>\`.`,
+    );
+    return 'continue';
+  }
+  try {
+    const r = setConfigValue(path, value);
+    ctx.out.success(`✓ set ${path} = ${String(r.value)} — ${RESTART_NOTE}`);
+  } catch (err) {
+    ctx.out.error(err instanceof Error ? err.message : String(err));
+  }
+  return 'continue';
+}
+
+// ---------------------------------------------------------------------------
+// /config — command
 // ---------------------------------------------------------------------------
 
 const configCmd: SlashCommand = {
   name: '/config',
-  summary: 'View resolved configuration (model, provider, API keys, env vars)',
-  hint: 'When you want to confirm which model and API key the session is using, or check what env vars are active — same as `afk config` but available mid-session.',
-  async handler(ctx) {
-    const { out } = ctx;
+  summary: 'View or edit configuration — interactive settings menu on a TTY',
+  usage: '/config [view | set <key> <value>]',
+  hint: 'Browse and edit config mid-session in an arrow-key settings menu. `/config view` prints the resolved configuration; `/config set <key> <value>` sets one agent-tier key. Changes apply on the next restart — same store as `afk config`.',
+  async handler(ctx, args) {
+    const a = args.trim();
 
-    const modelRaw = env.AFK_MODEL ?? env.CLAUDE_MODEL;
-    const model = modelRaw ?? 'sonnet';
-    const provider = providerForModel(modelRaw);
-
-    const anthropicApiKey = env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_OAUTH_TOKEN;
-    const openaiKey = env.OPENAI_API_KEY || env.CODEX_API_KEY;
-    const apiKey = provider === 'anthropic' ? anthropicApiKey : openaiKey;
-
-    out.line();
-    out.line(palette.bold('Configuration'));
-    out.line(divider());
-
-    out.line(`  model       ${palette.info(modelRaw ? model : `${model} (default)`)}`);
-    out.line(`  provider    ${palette.plan(provider)}`);
-
-    if (provider === 'anthropic') {
-      const keyStatus = apiKey
-        ? palette.success('✓ set  (ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN)')
-        : palette.warning('⚠ not set — subprocess falls back to OAuth / keychain');
-      out.line(`  api key     ${keyStatus}`);
-    } else {
-      const openaiSource = env.OPENAI_API_KEY ? 'OPENAI_API_KEY' : 'CODEX_API_KEY';
-      const keyStatus = apiKey
-        ? palette.success(`✓ set  (${openaiSource})`)
-        : palette.warning('⚠ not set — falling back to `codex login` state');
-      out.line(`  api key     ${keyStatus}`);
+    if (a === 'view') {
+      renderConfigView(ctx.out);
+      return 'continue';
+    }
+    if (a === 'set' || a.startsWith('set ')) {
+      return handleConfigSet(ctx, a === 'set' ? '' : a.slice(4));
+    }
+    if (a.length > 0 && a !== 'edit' && a !== 'menu') {
+      ctx.out.warn(`Unknown argument: ${a}  (usage: /config [view | set <key> <value>])`);
+      renderConfigView(ctx.out);
+      return 'continue';
     }
 
-    out.line(
-      `  thinking    ${env.AFK_THINKING ? palette.info(env.AFK_THINKING) : palette.dim('(unset — SDK default)')}`,
-    );
-    out.line(
-      `  effort      ${env.AFK_EFFORT ? palette.info(env.AFK_EFFORT) : palette.dim('(unset — SDK default)')}`,
-    );
-    const permissionMode = resolveCliPermissionMode();
-    out.line(
-      `  perm mode   ${permissionMode === 'bypassPermissions'
-        ? palette.warning(`${permissionMode} (bypass — containment off)`)
-        : palette.info(`${permissionMode} (containment on)`)}`,
-    );
-
-    out.line();
-    out.line(palette.bold('Environment variables'));
-    out.line(divider());
-
-    const envRows: Array<[string, string]> = [
-      ['AFK_MODEL', env.AFK_MODEL ?? palette.dim('unset')],
-      ['CLAUDE_MODEL', env.CLAUDE_MODEL ?? palette.dim('unset')],
-      ['ANTHROPIC_API_KEY', env.ANTHROPIC_API_KEY ? palette.success('set') : palette.dim('unset')],
-      ['CLAUDE_CODE_OAUTH_TOKEN', env.CLAUDE_CODE_OAUTH_TOKEN ? palette.success('set') : palette.dim('unset')],
-      ['OPENAI_API_KEY', env.OPENAI_API_KEY ? palette.success('set') : palette.dim('unset')],
-      ['CODEX_API_KEY', env.CODEX_API_KEY ? palette.success('set') : palette.dim('unset')],
-      ['AFK_THINKING', env.AFK_THINKING ?? palette.dim('unset')],
-      ['AFK_EFFORT', env.AFK_EFFORT ?? palette.dim('unset')],
-    ];
-    const keyWidth = Math.max(...envRows.map(([k]) => k.length)) + 2;
-    for (const [k, v] of envRows) {
-      out.line(`  ${palette.meta(k.padEnd(keyWidth))} ${v}`);
+    // Interactive menu (no args, or `edit`/`menu`). Requires a live compositor;
+    // non-TTY surfaces (Telegram, daemon, tests) fall back to the read-only view.
+    const compositor = ctx.getCompositor?.() ?? null;
+    if (!compositor) {
+      renderConfigView(ctx.out);
+      ctx.out.line(
+        palette.dim('  Interactive editing needs a TTY. Use `/config set <key> <value>` or `afk config`.'),
+      );
+      return 'continue';
     }
-    out.line();
 
+    await runConfigMenu(overlaysFromCompositor(compositor), defaultIo());
     return 'continue';
   },
 };

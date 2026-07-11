@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { detectTrigger, filterFileCandidates } from './trigger.js';
+import { detectTrigger, filterFileCandidates, filterSlashCandidates } from './trigger.js';
 import { MAX_FILE_MATCHES } from '../multi-line-reader.js';
 import { resetRegistry } from '../slash/registry.js';
 import { registerAll } from '../slash/index.js';
@@ -128,5 +128,33 @@ describe('filterFileCandidates', () => {
 
   it('unreadable scan dir yields no candidates (no throw)', () => {
     expect(filterFileCandidates('/no/such/dir/x', '/nonexistent-cwd')).toEqual([]);
+  });
+});
+
+describe('filterSlashCandidates', () => {
+  it('returns prefix matches for a normal query', () => {
+    const vals = filterSlashCandidates('config').map((c) => c.value);
+    expect(vals).toContain('/config');
+  });
+
+  it('finds commands by subsequence abbreviation (cfg → /config)', () => {
+    const vals = filterSlashCandidates('cfg').map((c) => c.value);
+    expect(vals).toContain('/config');
+  });
+
+  it('ranks prefix matches ahead of subsequence-only matches', () => {
+    const keys = filterSlashCandidates('co').map((c) => c.value.slice(1).toLowerCase());
+    const firstNonPrefix = keys.findIndex((k) => !k.startsWith('co'));
+    // The prefix block is contiguous at the top: once it ends, no later
+    // entry may itself be a prefix match.
+    if (firstNonPrefix !== -1) {
+      expect(keys.slice(firstNonPrefix).every((k) => !k.startsWith('co'))).toBe(true);
+    }
+  });
+
+  it('empty query returns the full command set (unchanged prefix behaviour)', () => {
+    const vals = filterSlashCandidates('').map((c) => c.value);
+    expect(vals.length).toBeGreaterThan(0);
+    expect(vals).toContain('/config');
   });
 });
