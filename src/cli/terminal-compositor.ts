@@ -347,6 +347,18 @@ export class TerminalCompositor {
   committedBandTopRow = 0;
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   committedBandBottomRow = 0;
+  // The real (unpadded) frame top the LAST repaint() established, captured from
+  // CupFrameRenderer.measure(frame, absoluteBottom).topRow — the exact physical
+  // row Phase-2's repaint will reproduce. Unlike logUpdate.topRow (which reports
+  // the transient shrink-PADDED top and reads LOWER than reality right after a
+  // frame shrink), this is the geometry commitAbove's routing must use so
+  // decideCommitMode computes fitsAboveFrame correctly. Using the stale padded
+  // value routes a block that FITS into band-hold, which then overwrites
+  // repositioned prior content without archiving it — the "two boxes + blank
+  // void" streaming-table bug (see committed-band-commit.ts prevTopRow site +
+  // terminal-compositor.commit-geometry.test.ts). 0 until the first repaint.
+  /** @internal Relaxed from `private` for the frame + committed-band modules. */
+  lastMeasuredFrameTop = 0;
   // Invariant: committedBandPaintedRows counts how many of committedBand's rows
   // are MATERIALIZED on the terminal right now — always the BOTTOM
   // committedBandPaintedRows rows (nearest the frame), since every paint site

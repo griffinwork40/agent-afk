@@ -72,6 +72,9 @@ export interface FrameHost {
   committedBand: string[];
   committedBandTopRow: number;
   committedBandBottomRow: number;
+  /** Real unpadded frame top; written here by repaint(), read by commitAbove's
+   *  routing. See the field doc on the class (terminal-compositor.ts). */
+  lastMeasuredFrameTop: number;
   committedBandPaintedRows: number;
   /** Memoization for reflowCommittedBandToWidth — see the field doc on the class. */
   bandReflowCache: BandReflowCache | null;
@@ -270,6 +273,9 @@ export function repaint(self: FrameHost): void {
   const desiredTopRow = self.logUpdate.measure
     ? self.logUpdate.measure(frame, targetBottomRow).topRow
     : Math.max(1, targetBottomRow - frameLines.length + 1);
+  // Record the real (unpadded) frame top for commitAbove's routing. This is the
+  // value Phase-2 will re-establish; logUpdate.topRow (shrink-padded) is not.
+  self.lastMeasuredFrameTop = desiredTopRow;
   preserveRowsBeforeFrameRender(self, desiredTopRow);
   // Capture the renderer's current top BEFORE render(): it is the first row
   // its erase pass will clear, which repositionCommittedBand() uses to detect
