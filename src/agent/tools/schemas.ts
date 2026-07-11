@@ -399,6 +399,12 @@ export const agentTool: AnthropicToolDef = {
           'further nested subagents — each `agent` call must specify `cwd` ' +
           'explicitly to operate in a worktree.',
       },
+      writeRoots: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'Optional extra write roots to pre-grant to the forked child. By default a fork can only write inside its cwd/worktree; out-of-root writes are auto-denied. Each entry must be an absolute path with no `..` segments. Composed WITH (never replaces) the child cwd. Mutually exclusive with isolation:"worktree".',
+      },
       isolation: {
         type: 'string',
         enum: ['none', 'worktree'],

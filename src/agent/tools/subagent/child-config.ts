@@ -266,6 +266,9 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     // resolveBase + read/write roots anchor at this path. When omitted,
     // the parent inheritance chain stays intact.
     ...(parsed.cwd !== undefined ? { cwd: parsed.cwd } : {}),
+    // #435: pass raw writeRoots through; SubagentManager.forkSubagent composes
+    // them with the child's effective cwd so the child never loses its own tree.
+    ...(parsed.writeRoots !== undefined ? { writeRoots: parsed.writeRoots } : {}),
   } as AgentConfig;
 
   // Wire nesting: give the child its own executor + provider so it can
