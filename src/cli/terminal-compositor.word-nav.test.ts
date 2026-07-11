@@ -14,6 +14,15 @@ beforeEach(() => {
   __resetStdinClaimForTests();
 });
 
+// ---------------------------------------------------------------------------
+// Word/line navigation (readline parity) — Option+arrow, Cmd+arrow,
+// Ctrl+A/E/W/U/K, Alt+B/F, Option+Delete, etc.
+//
+// Strategy: seed a known buffer + cursor (via typed chars + `left` arrows),
+// emit the binding under test, then insert a marker char and assert it
+// landed at the expected position in the buffer. Black-box parity with the
+// existing `left/right move cursor within buffer` test on line ~983.
+// ---------------------------------------------------------------------------
 describe('TerminalCompositor — word/line navigation (readline parity)', () => {
   let stdout: MockStdout;
   let stdin: MockStdin;
