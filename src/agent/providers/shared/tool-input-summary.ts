@@ -15,6 +15,18 @@
  */
 
 /**
+ * Backstop cap on the flattened `command`/`cmd` summary length (display
+ * columns are approximated by characters here). This is NOT the primary
+ * width bound — the tool lane and progress banner each truncate to the live
+ * terminal width downstream. The cap only guards the event-stream / telegram
+ * label against a pathological multi-KB one-liner (base64 blob, giant `sed`
+ * script). Set well above a typical terminal width so that on normal displays
+ * the terminal — not this cap — decides where the command is elided; the old
+ * 80-char cap truncated "too early" on wide terminals even for short commands.
+ */
+const COMMAND_SUMMARY_MAX = 160;
+
+/**
  * Best-effort one-line summary of a tool input, appended to the tool-lane
  * label in the interactive REPL.
  *
@@ -41,8 +53,23 @@ export function summarizeToolInput(toolName: string, input: unknown): string {
   if (typeof path === 'string') return ' ' + path;
   const cmd = obj['command'] ?? obj['cmd'];
   if (typeof cmd === 'string') {
-    const firstLine = cmd.split('\n')[0]!;
-    return ' ' + (firstLine.length > 80 ? firstLine.slice(0, 77) + '…' : firstLine);
+    // Flatten multi-line commands to a single line rather than keeping only
+    // the first physical line. Models routinely emit `cd <dir> && …` split
+    // across a `\`-continuation, or multi-statement scripts with the real
+    // work on lines 2+. The old first-line-only slice discarded that work,
+    // rendering a useless `$ bash cd <dir>` (or even `$ bash \`) — the user
+    // could not tell what actually ran. Drop line-continuation backslashes,
+    // then collapse every whitespace run (including newlines) to one space so
+    // the meaningful verb survives into the tool-lane / progress-banner label.
+    // Full fidelity is preserved separately in toolInputRaw for facet
+    // derivation, so this summary is display-only and safe to flatten.
+    const flat = cmd.replace(/\\\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
+    return (
+      ' ' +
+      (flat.length > COMMAND_SUMMARY_MAX
+        ? flat.slice(0, COMMAND_SUMMARY_MAX - 1) + '…'
+        : flat)
+    );
   }
   const query = obj['query'] ?? obj['pattern'] ?? obj['url'] ?? obj['description'];
   if (typeof query === 'string') return ' ' + query;
