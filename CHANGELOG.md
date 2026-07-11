@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.28.3] - 2026-07-11
+
+### Changed
+- extract dispatch-batching + repeat-circuit-breaker from dispatcher.ts (#361) (#496) (045f1de)
+
 ## [5.28.2] - 2026-07-11
 
 ### Fixed
