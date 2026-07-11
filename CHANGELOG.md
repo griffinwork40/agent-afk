@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.29.2] - 2026-07-11
+
+### Fixed
+- keep the update-notifier fresh instead of ≤24h stale (#504) (f9225b5)
+
+### Changed
+- Merge branch 'main' of https://github.com/griffinwork40/agent-afk (589d1b0)
+- removed stale ref to legacy import (7f147e9)
+- split terminal-compositor.test.ts monolith into topic siblings (#369) (#498) (1f89e9e)
+
 ## [5.29.1] - 2026-07-11
 
 ### Fixed
