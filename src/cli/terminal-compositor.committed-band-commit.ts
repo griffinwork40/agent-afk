@@ -37,6 +37,9 @@ export interface CommittedBandHost {
   committedBand: string[];
   committedBandTopRow: number;
   committedBandBottomRow: number;
+  /** Real unpadded frame top from the last repaint's measure() — see the field
+   *  doc on the class. Routing (prevTopRow) trusts this over logUpdate.topRow. */
+  lastMeasuredFrameTop: number;
   /** How many of committedBand's rows (its bottom suffix) are painted on screen. */
   committedBandPaintedRows: number;
   /** Memoization for reflowCommittedBandToWidth — see the field doc on the class. */
@@ -227,10 +230,26 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   // is exactly the "genuinely no known frame top" case BLOCKER-1 already
   // handles safely via band-hold.
   const rawLogUpdateTopRow = self.logUpdate.topRow ?? 0;
-  const prevTopRow =
+  // Prefer the real post-render frame top the last repaint captured via measure()
+  // (lastMeasuredFrameTop). logUpdate.topRow reports the transient shrink-PADDED
+  // top, which reads LOWER than reality after a frame shrink and makes
+  // decideCommitMode compute a wrong (too-small) fitsAboveFrame — routing a block
+  // that FITS into band-hold, which then overwrites repositioned prior content
+  // without archiving it ("two boxes + blank void" streaming-table bug;
+  // terminal-compositor.commit-geometry.test.ts + the History note at
+  // frame.ts:191-198). Take the MAX so prevTopRow can only be RAISED toward the
+  // true top, never lowered — the existing committedBandBottomRow+1 floor is
+  // preserved. Gated on !bandGeometryStale: after a SIGWINCH with no repaint
+  // since, lastMeasuredFrameTop (and the band floor) are PRE-resize values, so
+  // both are excluded and we fall through to rawLogUpdateTopRow — the BLOCKER-1
+  // band-hold safety path. When lastMeasuredFrameTop is 0 (no repaint yet) this
+  // reduces EXACTLY to the prior expression.
+  const measuredFrameTop = self.bandGeometryStale ? 0 : self.lastMeasuredFrameTop;
+  const bandFloor =
     self.committedBand.length > 0 && self.committedBandBottomRow > 0 && !self.bandGeometryStale
-      ? Math.max(rawLogUpdateTopRow, self.committedBandBottomRow + 1)
-      : rawLogUpdateTopRow;
+      ? self.committedBandBottomRow + 1
+      : 0;
+  const prevTopRow = Math.max(rawLogUpdateTopRow, measuredFrameTop, bandFloor);
   const frameTop = prevTopRow > 1 ? prevTopRow : Math.max(1, rows - 1 - extraRows);
   const anchorFloor = Math.max(self.anchorRow ?? 1, 1);
   // The block "fits" when every line can be CUP-painted at a row in
