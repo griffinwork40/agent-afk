@@ -82,7 +82,7 @@ export function categoryOf(path: string): (typeof CATEGORY_ORDER)[number] {
   return 'Session';
 }
 
-export interface MenuCategory {
+interface MenuCategory {
   name: (typeof CATEGORY_ORDER)[number];
   keys: readonly ConfigKeySpec[];
 }
@@ -125,7 +125,7 @@ export function keyRowLabel(spec: ConfigKeySpec, current: unknown, pad: number):
  * Editor shape for a key: a fixed-option picker (boolean/enum) or a free-text
  * overlay (everything else), with a help line describing the accepted input.
  */
-export type EditorPlan =
+type EditorPlan =
   | { kind: 'pick'; options: string[] }
   | { kind: 'text'; help: string };
 
