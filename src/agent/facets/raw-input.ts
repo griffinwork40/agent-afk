@@ -14,8 +14,9 @@
  * `curl -H "Authorization: Bearer …"`, `psql "postgres://user:pass@…"`), and
  * persisting it verbatim to the on-disk session sidecar would defeat the point
  * of this whitelist. derive.ts's only use of `command` is git-commit detection,
- * which runs against the already-truncated summarized `input` (≤80-char first
- * line) instead — so no full command is ever persisted. (Sidecars written
+ * which runs against the already-truncated summarized `input` (a flattened,
+ * ≤160-char one-line summary) instead — so no full command is ever persisted.
+ * (Sidecars written
  * before this fix may still carry `command` in inputRaw; derive.ts reads it
  * there for backward-compat, but nothing writes it anymore.)
  *
