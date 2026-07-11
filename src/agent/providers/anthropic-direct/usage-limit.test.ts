@@ -260,6 +260,92 @@ describe('classifyUsageLimitError', () => {
       expect(result.resetsAt.getTime()).toBe(resetEpochSec * 1000);
     }
   });
+
+  // -------------------------------------------------------------------------
+  // #490 review follow-ups — edge cases the original #488 suite did not cover.
+  // -------------------------------------------------------------------------
+
+  // M1 regression: a `unified-reset` past the ECMAScript Date ceiling must NOT
+  // produce an `oauth-limit` with an Invalid Date (NaN getTime), which would
+  // slip past the downstream `> TWO_HOURS_MS` surface-guard and hang
+  // `waitForReset` on a NaN deadline. It falls to the timestamp-less path.
+  it('falls to oauth-limit-no-ts for a unified-reset beyond the JS Date range', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-unified-representative-claim': 'five_hour',
+      'anthropic-ratelimit-unified-reset': '99999999999999', // ~1e14 s → overflows Date
+    });
+    expect(classifyUsageLimitError(err)?.kind).toBe('oauth-limit-no-ts');
+  });
+
+  // M1 regression, step-1 parity: an out-of-range `|ts` timestamp falls through
+  // the header steps to the fallback (no retry-after → oauth-limit-no-ts),
+  // never an Invalid-Date oauth-limit.
+  it('falls through a |ts timestamp beyond the JS Date range (step 1 guard)', () => {
+    const err = makeError(429, 'usage limit|99999999999999');
+    expect(classifyUsageLimitError(err)?.kind).toBe('oauth-limit-no-ts');
+  });
+
+  // Precedence: when BOTH a unified subscription header and per-minute throttle
+  // headers are present, step 2 (subscription) wins over step 3 (transient).
+  it('prefers the unified subscription header over per-minute throttle headers', () => {
+    const resetEpochSec = Math.floor(Date.now() / 1000) + 3600;
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-unified-representative-claim': 'five_hour',
+      'anthropic-ratelimit-unified-reset': String(resetEpochSec),
+      'anthropic-ratelimit-requests-remaining': '0',
+      'retry-after': '30',
+    });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('oauth-limit');
+    if (result?.kind === 'oauth-limit') {
+      expect(result.resetsAt.getTime()).toBe(resetEpochSec * 1000);
+    }
+  });
+
+  // Step 3 with per-minute headers but no retry-after hint → transient with an
+  // undefined retryAfterMs (retry-layer falls back to its default backoff).
+  it('returns rate-limit-transient with undefined retryAfterMs for per-minute headers and no retry-after', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-requests-remaining': '0',
+    });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('rate-limit-transient');
+    if (result?.kind === 'rate-limit-transient') {
+      expect(result.retryAfterMs).toBeUndefined();
+    }
+  });
+
+  // Characterization (review M2 / #488 design): step 3 is intentionally
+  // magnitude-blind — per-minute headers route to `rate-limit-transient` even
+  // when retry-after exceeds the transient threshold. retry-layer clamps the
+  // wait, so this stays a bounded retry rather than a subscription pause.
+  it('keeps per-minute headers with a long retry-after as rate-limit-transient (magnitude-blind step 3)', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-requests-remaining': '0',
+      'retry-after': '3600',
+    });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('rate-limit-transient');
+    if (result?.kind === 'rate-limit-transient') {
+      expect(result.retryAfterMs).toBe(3_600_000);
+    }
+  });
+
+  // Characterization (review L2): a past `unified-reset` is accepted as-is
+  // (parity with the |ts path); downstream the deadline collapses to ~now →
+  // immediate replay. Guarding future-ness is deliberately left as follow-up.
+  it('accepts a past unified-reset as oauth-limit with a past resetsAt', () => {
+    const pastSec = Math.floor(Date.now() / 1000) - 3600;
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-unified-representative-claim': 'five_hour',
+      'anthropic-ratelimit-unified-reset': String(pastSec),
+    });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('oauth-limit');
+    if (result?.kind === 'oauth-limit') {
+      expect(result.resetsAt.getTime()).toBe(pastSec * 1000);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -96,6 +96,27 @@ export function parseRetryAfterMs(error: unknown): number | undefined {
   return undefined;
 }
 
+/** ECMAScript Date's representable range ceiling in ms (±8.64e15). */
+const MAX_ECMASCRIPT_DATE_MS = 8_640_000_000_000_000;
+
+/**
+ * Contract: convert an epoch-SECONDS reset value to a Date, or `undefined` when
+ * the value is not a usable forward deadline — i.e. not finite, not positive,
+ * or past the ECMAScript Date ceiling. A value beyond that ceiling yields
+ * `new Date(NaN)` (an Invalid Date) whose `getTime()` is NaN; downstream both
+ * the `resetsAt.getTime() - Date.now() > TWO_HOURS_MS` surface-guard and the
+ * `waitForReset` deadline are then NaN comparisons that never fire, hanging the
+ * turn until abort/hot-swap. Rejecting here routes such garbage to the
+ * timestamp-less path instead. Shared by the `|<ts>` message parse (step 1) and
+ * the `unified-reset` header read (step 2) so both are guarded identically.
+ */
+function epochSecondsToResetDate(sec: number): Date | undefined {
+  if (!Number.isFinite(sec) || sec <= 0) return undefined;
+  const ms = sec * 1000;
+  if (ms > MAX_ECMASCRIPT_DATE_MS) return undefined;
+  return new Date(ms);
+}
+
 /**
  * Classify an error as a usage-limit error, or return `null` if it is not one.
  *
@@ -112,10 +133,10 @@ export function parseRetryAfterMs(error: unknown): number | undefined {
  *      is the reset. Authoritative when present, so checked first.
  *   2. Unified subscription headers present (`unified-representative-claim` OR
  *      `unified-overage-status` present, OR `unified-status === "rejected"`) —
- *      a subscription cap. If `unified-reset` is present and a finite positive
- *      number, return `oauth-limit` with `resetsAt = reset * 1000` (the header
- *      is epoch SECONDS — an authoritative deadline that upgrades the blind
- *      poll to a real wait); else `oauth-limit-no-ts`.
+ *      a subscription cap. If `unified-reset` is present and a finite, positive,
+ *      in-range number, return `oauth-limit` with `resetsAt = reset * 1000` (the
+ *      header is epoch SECONDS — an authoritative deadline that upgrades the
+ *      blind poll to a real wait); else `oauth-limit-no-ts`.
  *   3. Per-minute throttle headers present (`anthropic-ratelimit-{requests,
  *      input-tokens,output-tokens}-*`, e.g. `-remaining`) — a transient API-
  *      tier rate limit that clears in seconds → `rate-limit-transient` with
@@ -138,12 +159,13 @@ export function classifyUsageLimitError(error: Error): UsageLimitClassification 
   const status = (error as Error & { status: number }).status;
 
   if (status === 429) {
-    // Step 1: `|<unix-ts>` message parse — authoritative when present.
+    // Step 1: `|<unix-ts>` message parse — authoritative when present. A
+    // non-numeric or out-of-range timestamp falls through to the header steps.
     const parts = error.message.split('|');
     if (parts.length >= 2) {
-      const ts = parseInt(parts[1]!.trim(), 10);
-      if (!isNaN(ts) && ts > 0) {
-        return { kind: 'oauth-limit', resetsAt: new Date(ts * 1000) };
+      const resetsAt = epochSecondsToResetDate(parseInt(parts[1]!.trim(), 10));
+      if (resetsAt !== undefined) {
+        return { kind: 'oauth-limit', resetsAt };
       }
     }
 
@@ -160,10 +182,10 @@ export function classifyUsageLimitError(error: Error): UsageLimitClassification 
     ) {
       const reset = getHeader(error, 'anthropic-ratelimit-unified-reset');
       if (reset !== undefined) {
-        const resetSec = Number(reset);
-        if (Number.isFinite(resetSec) && resetSec > 0) {
-          // Header is epoch SECONDS; the authoritative reset deadline.
-          return { kind: 'oauth-limit', resetsAt: new Date(resetSec * 1000) };
+        // Header is epoch SECONDS; the authoritative reset deadline.
+        const resetsAt = epochSecondsToResetDate(Number(reset));
+        if (resetsAt !== undefined) {
+          return { kind: 'oauth-limit', resetsAt };
         }
       }
       return { kind: 'oauth-limit-no-ts' };
