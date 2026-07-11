@@ -127,7 +127,16 @@ export async function runInputLoop(
   // (user types + Enters mid-turn) was retired in Stage 3e because the
   // persistent compositor now handles that natively (queued buffer →
   // setInputMode('idle') flush via the surface's onSubmit handler).
-  let seedBuffer: { text: string; attachments: readonly ImageAttachment[] } | undefined;
+  //
+  // Pre-seeded from `ctx.initialInput` when the session was launched with a
+  // first-message argument (`afk "prompt"` / `afk /review`): the first loop
+  // iteration takes the same fast-path, so the launch arg is echoed and
+  // dispatched (slash command or model turn) exactly as if the user had typed
+  // it and pressed Enter.
+  let seedBuffer: { text: string; attachments: readonly ImageAttachment[] } | undefined =
+    ctx.initialInput !== undefined
+      ? { text: ctx.initialInput, attachments: [] }
+      : undefined;
 
   // First-use notice for ! shell passthrough: shown once per session on the
   // first `!cmd` dispatch so users who relied on `!literal text` as model
