@@ -78,7 +78,14 @@ import { providerForModel } from '../agent/providers/index.js';
 import { getModel } from './shared-helpers.js';
 import { runAuthWizard } from './auth-wizard.js';
 import { getVersion } from './version.js';
-import { checkForUpdates, printUpdateBanner, triggerAutoUpdate, checkPendingUpdate } from './update-checker.js';
+import {
+  checkForUpdates,
+  coldStartUpdateCheck,
+  hasUpdateCache,
+  printUpdateBanner,
+  triggerAutoUpdate,
+  checkPendingUpdate,
+} from './update-checker.js';
 
 // Re-export shared helpers for tests
 export {
@@ -220,7 +227,15 @@ if (isDirectRun) {
     const config = loadConfig();
     const noCheckArg = process.argv.slice(2).some((a) => a === '--no-update-check');
     const policy = noCheckArg ? ('off' as const) : config.updatePolicy;
-    const updateInfo = checkForUpdates(policy);
+    // Warm cache: the fully synchronous fast path (may spawn a background
+    // refresh if the cache is stale). Cold cache: checkForUpdates() could only
+    // fire a detached fetch and return null, so the banner would never appear
+    // on the very first run — await one short bounded inline fetch instead so
+    // that first run can surface it. Guards (off/CI/NO_UPDATE_NOTIFIER) are
+    // applied inside both functions.
+    const updateInfo = hasUpdateCache()
+      ? checkForUpdates(policy)
+      : await coldStartUpdateCheck(policy);
 
     // Intercept the pending-update message that checkPendingUpdate() would
     // write to stderr, so we can re-emit it AFTER the interactive mode screen

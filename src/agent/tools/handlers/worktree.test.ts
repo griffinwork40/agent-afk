@@ -117,9 +117,14 @@ describe('worktree handler — create', () => {
     const handler = createWorktreeHandler(repoRoot, { execFile: mock });
     const result = await handler({ action: 'create', name: 'My Feature!' }, SIGNAL);
     expect(result.isError).toBeUndefined();
-    const parsed = JSON.parse(String(result.content)) as { path: string; branch: string };
+    const parsed = JSON.parse(String(result.content)) as { path: string; branch: string; note: string };
     expect(parsed.path).toBe(wtPath);
     expect(parsed.branch).toBe('afk/my-feature');
+
+    // Surfaces a deps-not-installed note so the caller installs before build/test (#439).
+    expect(typeof parsed.note).toBe('string');
+    expect(parsed.note).toMatch(/not installed/i);
+    expect(parsed.note).toContain(wtPath);
 
     // git worktree add argv shape
     const addCall = mock.calls.find((c) => c.args.includes('add'));
@@ -183,6 +188,78 @@ describe('worktree handler — create', () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain('base must be a git ref');
     expect(mock.calls.some((c) => c.args.includes('add'))).toBe(false);
+  });
+
+  // #439: the note's install command reflects the lockfile in the created
+  // worktree (populated by `git worktree add` at `base`), not the main checkout.
+  const lockfileCases: Array<[string, string]> = [
+    ['pnpm-lock.yaml', 'pnpm install'],
+    ['package-lock.json', 'npm install'],
+    ['yarn.lock', 'yarn install'],
+    ['bun.lockb', 'bun install'],
+  ];
+  for (const [lockfile, command] of lockfileCases) {
+    it(`note recommends "${command}" when ${lockfile} is present in the created worktree`, async () => {
+      const wtPath = join(afkRoot, 'lock-detect');
+      const mock = makeMock(standardResponder(block(repoRoot), (call) => {
+        if (call.args.includes('add')) {
+          // `git worktree add` checks out `base` into wtPath; simulate that by
+          // creating the dir and writing the worktree's lockfile into it.
+          return fs.mkdir(wtPath, { recursive: true })
+            .then(() => fs.writeFile(join(wtPath, lockfile), ''))
+            .then(() => ({ stdout: '', stderr: '' }));
+        }
+        return undefined;
+      }));
+      const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+      const result = await handler({ action: 'create', name: 'lock-detect' }, SIGNAL);
+      expect(result.isError).toBeUndefined();
+      const parsed = JSON.parse(String(result.content)) as { note: string };
+      expect(parsed.note).toContain(command);
+    });
+  }
+
+  it('note falls back to "pnpm install" when no lockfile is present', async () => {
+    // beforeEach creates repoRoot with no lockfiles, and the created worktree
+    // below has none either → fall back to the repo-convention default.
+    const wtPath = join(afkRoot, 'no-lock');
+    const mock = makeMock(standardResponder(block(repoRoot), (call) => {
+      if (call.args.includes('add')) {
+        return fs.mkdir(wtPath, { recursive: true }).then(() => ({ stdout: '', stderr: '' }));
+      }
+      return undefined;
+    }));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler({ action: 'create', name: 'no-lock' }, SIGNAL);
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(String(result.content)) as { note: string };
+    expect(parsed.note).toContain('pnpm install');
+  });
+
+  it('note reflects the created worktree\'s lockfile, not the repo root\'s (#439 P2)', async () => {
+    // Regression pin for the P2: when `base` checks out a lockfile that
+    // differs from the main checkout, detection must inspect the worktree.
+    // repoRoot has package-lock.json (→ npm); the created worktree has
+    // pnpm-lock.yaml (→ pnpm). The note must recommend the WORKTREE's manager.
+    await fs.writeFile(join(repoRoot, 'package-lock.json'), '');
+    const wtPath = join(afkRoot, 'lock-mismatch');
+    const mock = makeMock(standardResponder(block(repoRoot), (call) => {
+      if (call.args.includes('add')) {
+        return fs.mkdir(wtPath, { recursive: true })
+          .then(() => fs.writeFile(join(wtPath, 'pnpm-lock.yaml'), ''))
+          .then(() => ({ stdout: '', stderr: '' }));
+      }
+      return undefined;
+    }));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler({ action: 'create', name: 'lock-mismatch' }, SIGNAL);
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(String(result.content)) as { note: string };
+    // Recommends the worktree's manager (pnpm), NOT the repo root's (npm).
+    // Match the backtick-wrapped command so `npm install` (a substring of
+    // `pnpm install`) can't cause a false pass/fail.
+    expect(parsed.note).toContain('`pnpm install`');
+    expect(parsed.note).not.toContain('`npm install`');
   });
 });
 

@@ -26,6 +26,7 @@
  */
 
 import { join, resolve, isAbsolute, sep } from 'node:path';
+import { promises as fs } from 'node:fs';
 import type { ToolHandler } from '../types.js';
 import { runSweep } from '../../worktree-sweep.js';
 import type { ExecFileFn } from '../../worktree-sweep.js';
@@ -42,6 +43,32 @@ import {
 /** Injectable deps for tests. */
 export interface WorktreeHandlerDeps {
   execFile?: ExecFileFn;
+}
+
+/**
+ * Detect the package manager from the lockfile present in the freshly created
+ * worktree at `worktreePath` and return its install command. A fresh worktree
+ * shares no `node_modules` with the main checkout, so the caller must install
+ * deps before building/testing — this gives the precise command. Inspecting
+ * the worktree (not the main checkout) matters because `base` may point at a
+ * branch/commit whose lockfile differs from the current checkout. Falls back
+ * to `pnpm install` when no lockfile is found (repo convention). Best-effort:
+ * never throws.
+ */
+async function detectInstallCommand(worktreePath: string): Promise<string> {
+  const lockfiles: Array<[string, string]> = [
+    ['pnpm-lock.yaml', 'pnpm install'],
+    ['package-lock.json', 'npm install'],
+    ['yarn.lock', 'yarn install'],
+    ['bun.lockb', 'bun install'],
+  ];
+  for (const [file, command] of lockfiles) {
+    try {
+      await fs.access(join(worktreePath, file));
+      return command;
+    } catch { /* not this one */ }
+  }
+  return 'pnpm install';
 }
 
 function resolveCreateBaseRef(base: unknown): string | { error: string } {
@@ -192,8 +219,20 @@ export function createWorktreeHandler(
             branch,
             baseRef,
           });
+          // A fresh worktree does NOT share the main checkout's node_modules,
+          // so a naive build/test here fails opaquely. Surface a clear note
+          // with the precise install command so the caller installs first.
+          // Inspect the just-created worktree (info.path, checked out at
+          // baseRef) — NOT ctx.repoRoot — so the recommended manager matches
+          // the lockfile at `base`, not main.
+          const installCommand = await detectInstallCommand(info.path);
           return {
-            content: JSON.stringify({ path: info.path, branch: info.branch, base: info.baseRef }),
+            content: JSON.stringify({
+              path: info.path,
+              branch: info.branch,
+              base: info.baseRef,
+              note: `Dependencies are NOT installed in this fresh worktree (no shared node_modules). Run \`${installCommand}\` in ${info.path} before building or testing, or the build/tests will fail opaquely.`,
+            }),
           };
         }
 

@@ -11,6 +11,51 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.29.3] - 2026-07-11
+
+### Fixed
+- decouple bash/grep output kill-cap from model budget; keep head+tail (#507) (dda24b2)
+
+## [5.29.2] - 2026-07-11
+
+### Fixed
+- keep the update-notifier fresh instead of ≤24h stale (#504) (f9225b5)
+
+### Changed
+- Merge branch 'main' of https://github.com/griffinwork40/agent-afk (589d1b0)
+- removed stale ref to legacy import (7f147e9)
+- split terminal-compositor.test.ts monolith into topic siblings (#369) (#498) (1f89e9e)
+
+## [5.29.1] - 2026-07-11
+
+### Fixed
+- mirror exit_plan_mode's deferred flip onto stats.permissionMode (#495) (#497) (2710e6b)
+
+## [5.29.0] - 2026-07-11
+
+### Added
+- classify usage-limit 429s via anthropic-ratelimit-unified-* headers (#488) (#490) (a43dab4)
+
+## [5.28.3] - 2026-07-11
+
+### Changed
+- extract dispatch-batching + repeat-circuit-breaker from dispatcher.ts (#361) (#496) (045f1de)
+
+## [5.28.2] - 2026-07-11
+
+### Fixed
+- surface deps-not-installed note on create (#479) (21375e9)
+
+## [5.28.1] - 2026-07-11
+
+### Fixed
+- cap session-grants.jsonl growth with atomic size trim (#473) (5a7d3db)
+
+## [5.28.0] - 2026-07-11
+
+### Added
+- observe-only safe-destruct PreToolUse detector (gate-migration wave 1) (#492) (a442571)
+
 ## [5.27.2] - 2026-07-11
 
 ### Changed

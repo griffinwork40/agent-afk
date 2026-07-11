@@ -75,13 +75,12 @@ export interface SubagentToolResult {
   toolUseId: string;
   isError?: boolean;
   /**
-   * `true` when the tool handler reported a byte-cap overflow (e.g. bash
-   * or grep killed mid-stream because output exceeded 100KB). Reflects the
-   * structured `ToolResult.truncated` flag set by the handler — not the
-   * cosmetic 80-char display preview clip. Parent agents can use this to
-   * distinguish "subagent's bash got 100KB of legitimate output" from
-   * "subagent's bash got 100KB then was killed" without substring-scanning
-   * tool output for the `[output truncated …]` sentinel.
+   * `true` when the tool handler reduced its output to fit the model budget
+   * (e.g. bash/grep output larger than ~100KB returned as a head+tail slice,
+   * or a runaway killed at the multi-MB hard cap). Reflects the structured
+   * `ToolResult.truncated` flag set by the handler — not the cosmetic 80-char
+   * display preview clip. Parent agents use this to detect truncated tool
+   * output without substring-scanning for a sentinel.
    */
   truncated?: boolean;
   sizeBytes?: number;

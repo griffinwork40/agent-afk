@@ -18,7 +18,7 @@ export const bashTool: AnthropicToolDef = {
     'Execute a shell command and return its stdout and stderr. ' +
     'Use for running programs, installing packages, git operations, and any task that requires a shell. ' +
     'Commands run in the user\'s default shell. Long-running commands should use timeout_ms. ' +
-    'Output is capped at ~100KB; excess is truncated with a notice. ' +
+    'Output is capped to a ~100KB head+tail view (the start and end are kept, the middle elided with a notice), so the command still runs to completion and you keep the real exit code and the tail (test/build summaries, final errors). For the full body of a verbose command, filter it (`| tail -n`, `--quiet`, narrower flags) or redirect to a file and read slices. Commands emitting extreme output (>8MB) are terminated. ' +
     'For reading or writing files — especially anything sensitive — prefer the typed file tools ' +
     '(read_file, write_file, edit_file): they support per-call user approval, and interpreter ' +
     'one-liners (python -c, node -e, sh -c, ...) that reference credential paths (SSH keys, cloud ' +
@@ -161,7 +161,9 @@ export const grepTool: AnthropicToolDef = {
     'Runs `grep -rn` in basic-regex (BRE) mode by default, where `|` is a LITERAL pipe — not ' +
     'alternation; set extended: true for extended-regex (ERE) alternation. A no-match result on a ' +
     'pattern containing `|` is often a false negative — re-read the returned hint. Output is capped ' +
-    'to prevent overflow. Use for finding symbols, strings, or patterns across the codebase.',
+    'to a ~100KB head+tail view; if a search is truncated, narrow it (a more specific pattern, an ' +
+    '`include` glob, or a subdirectory `path`) rather than re-running the same broad query. ' +
+    'Use for finding symbols, strings, or patterns across the codebase.',
   input_schema: {
     type: 'object',
     properties: {
@@ -644,8 +646,10 @@ export const worktreeTool: AnthropicToolDef = {
     'eventually reaped as ghosts (or leak forever if created outside `.afk-worktrees/`).\n\n' +
     'Actions:\n' +
     '- `create` — new worktree + branch under `.afk-worktrees/<name>` with proper meta. `base` picks ' +
-    'the start ref (default HEAD). Returns { path, branch, base }. Pass the returned path as `cwd` ' +
-    'when dispatching subagents into it.\n' +
+    'the start ref (default HEAD). Returns { path, branch, base, note }, where `note` warns that the ' +
+    'fresh worktree has no installed dependencies (no shared node_modules) and gives the install ' +
+    'command to run before building/testing. Pass the returned path as `cwd` when dispatching ' +
+    'subagents into it.\n' +
     '- `keep` — lock the worktree (`git worktree lock`) so the sweep engine NEVER removes it, ' +
     'regardless of age or cleanliness. Use this to save a worktree holding work in progress that ' +
     'must survive across sessions. Provide a `reason` naming why.\n' +

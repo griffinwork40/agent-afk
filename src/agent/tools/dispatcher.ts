@@ -10,7 +10,6 @@
  * @module agent/tools/dispatcher
  */
 
-import { createHash } from 'node:crypto';
 import { debugLog } from '../../utils/debug.js';
 import { HookBlockedError } from '../../utils/errors.js';
 import { settleWithConcurrencyLimit } from '../concurrency-pool.js';
@@ -29,35 +28,12 @@ import { classifyBashCommand } from './readonly-bash.js';
 import { PathGrantManager, type GrantSnapshot } from './grant-manager.js';
 import { emitHookDecision } from '../trace/emit.js';
 import type { TraceWriter } from '../trace/index.js';
-import { builtinToolSchemas, agentTool, skillTool, composeTool } from './schemas.js';
-import { memoryToolSchemas } from '../memory/memory-tools.js';
-import { getRuntimeStateTool } from '../awareness/index.js';
+import { defaultConcurrencyClassifier, partitionIntoBatches } from './dispatch-batching.js';
+import { repeatCallFingerprint } from './repeat-circuit-breaker.js';
 
-/**
- * Derived at module load from the union of all built-in tool schemas.
- * A tool is concurrency-safe when its schema declares `concurrencySafe: true`.
- * This replaces the former hand-maintained list and stays automatically in sync
- * with schema changes.
- *
- * External constraint: schemas.ts and memory-tools.ts are the single source
- * of truth. Mutations to those files propagate here without any secondary edit.
- */
-const SAFE_TOOLS: ReadonlySet<string> = new Set(
-  [
-    ...builtinToolSchemas,
-    agentTool,
-    skillTool,
-    composeTool,
-    ...memoryToolSchemas,
-    getRuntimeStateTool,
-  ]
-    .filter((s) => s.concurrencySafe === true)
-    .map((s) => s.name),
-);
-
-export function defaultConcurrencyClassifier(toolName: string): boolean {
-  return SAFE_TOOLS.has(toolName);
-}
+// Re-exported for backward compatibility: external importers (dispatcher.test.ts,
+// schema-classification.test.ts) historically import this from './dispatcher.js'.
+export { defaultConcurrencyClassifier } from './dispatch-batching.js';
 
 /**
  * Repeat-loop circuit breaker threshold.
@@ -82,43 +58,6 @@ export const REPEAT_CIRCUIT_BREAKER_THRESHOLD = 8;
  * current tool. Add a name here only if a real false-trip surfaces.
  */
 const REPEAT_BREAKER_EXEMPT_TOOLS: ReadonlySet<string> = new Set<string>();
-
-/**
- * Stable fingerprint of a tool call for repeat detection: sha256 over
- * `name \0 JSON(input)`. Hashing bounds retained state to 64 hex chars
- * regardless of input size. Identical tool_use blocks from the model
- * serialize identically, so byte-identical calls collide as intended.
- */
-function repeatCallFingerprint(call: ToolCall): string {
-  let input: string;
-  try {
-    input = JSON.stringify(call.input) ?? 'null';
-  } catch {
-    input = String(call.input);
-  }
-  return createHash('sha256').update(call.name).update('\u0000').update(input).digest('hex');
-}
-
-interface Batch {
-  isConcurrencySafe: boolean;
-  indices: number[];
-}
-
-function partitionIntoBatches(
-  calls: ToolCall[],
-  classifier: ConcurrencyClassifier,
-): Batch[] {
-  return calls.reduce<Batch[]>((acc, call, i) => {
-    const safe = classifier(call.name, call.input);
-    const last = acc[acc.length - 1];
-    if (last && safe && last.isConcurrencySafe) {
-      last.indices.push(i);
-    } else {
-      acc.push({ isConcurrencySafe: safe, indices: [i] });
-    }
-    return acc;
-  }, []);
-}
 
 /**
  * Default ceiling on concurrency-safe tool calls run simultaneously within one
