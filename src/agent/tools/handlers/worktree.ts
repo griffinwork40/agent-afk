@@ -26,6 +26,7 @@
  */
 
 import { join, resolve, isAbsolute, sep } from 'node:path';
+import { promises as fs } from 'node:fs';
 import type { ToolHandler } from '../types.js';
 import { runSweep } from '../../worktree-sweep.js';
 import type { ExecFileFn } from '../../worktree-sweep.js';
@@ -42,28 +43,6 @@ import {
 /** Injectable deps for tests. */
 export interface WorktreeHandlerDeps {
   execFile?: ExecFileFn;
-}
-
-interface RepoContext {
-  repoRoot: string;
-  afkWorktreesRoot: string;
-}
-
-/**
- * Resolve the repo root from the session cwd via `--git-common-dir` so the
- * answer is the MAIN checkout even when the session itself runs inside a
- * linked worktree (same trick as the `/worktree` slash command).
- */
-async function resolveRepoContext(
-  execFile: ExecFileFn,
-  cwd: string,
-): Promise<RepoContext> {
-  const result = await execFile('git', ['-C', cwd, 'rev-parse', '--git-common-dir']);
-  const raw = result.stdout.trim();
-  if (!raw) throw new Error('Not in a git repository.');
-  const absoluteGitDir = isAbsolute(raw) ? raw : resolve(cwd, raw);
-  const repoRoot = dirname(absoluteGitDir);
-  return { repoRoot, afkWorktreesRoot: join(repoRoot, '.afk-worktrees') };
 }
 
 /**
@@ -90,15 +69,6 @@ async function detectInstallCommand(worktreePath: string): Promise<string> {
     } catch { /* not this one */ }
   }
   return 'pnpm install';
-}
-
-/** Lowercase-kebab sanitization for worktree slugs / branch fragments. */
-function sanitizeSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/^[-.]+|[-.]+$/g, '')
-    .slice(0, 80);
 }
 
 function resolveCreateBaseRef(base: unknown): string | { error: string } {
@@ -242,48 +212,6 @@ export function createWorktreeHandler(
           if (typeof baseRef !== 'string') {
             return { content: baseRef.error, isError: true };
           }
-          await execFile('git', [
-            '-C', ctx.repoRoot, 'worktree', 'add', '-b', branch, worktreePath, baseRef,
-          ]);
-          // Meta write is what makes this tree a first-class citizen of the
-          // sweep protocol (age from createdAt, PID liveness). Best-effort:
-          // never fail the create over it.
-          let baseSha = '';
-          try {
-            const sha = await execFile('git', ['-C', ctx.repoRoot, 'rev-parse', baseRef]);
-            baseSha = sha.stdout.trim();
-          } catch { /* non-fatal */ }
-          try {
-            await fs.writeFile(
-              join(worktreePath, '.afk-worktree-meta.json'),
-              JSON.stringify(
-                {
-                  owner: 'agent',
-                  pid: process.pid,
-                  createdAt: new Date().toISOString(),
-                  baseSha,
-                  baseBranch: baseRef,
-                },
-                null,
-                2,
-              ),
-              'utf-8',
-            );
-          } catch { /* best-effort */ }
-          // A fresh worktree does NOT share the main checkout's node_modules,
-          // so a naive build/test here fails opaquely. Surface a clear note
-          // with the precise install command so the caller installs first.
-          // Inspect the just-checked-out worktreePath (populated by the
-          // `git worktree add` above at baseRef) — NOT ctx.repoRoot — so the
-          // recommended manager matches the lockfile at `base`, not main.
-          const installCommand = await detectInstallCommand(worktreePath);
-          return {
-            content: JSON.stringify({
-              path: worktreePath,
-              branch,
-              base: baseRef,
-              note: `Dependencies are NOT installed in this fresh worktree (no shared node_modules). Run \`${installCommand}\` in ${worktreePath} before building or testing, or the build/tests will fail opaquely.`,
-            }),
           const info = await createManagedWorktree({
             execFile,
             repoRoot: ctx.repoRoot,
@@ -291,8 +219,20 @@ export function createWorktreeHandler(
             branch,
             baseRef,
           });
+          // A fresh worktree does NOT share the main checkout's node_modules,
+          // so a naive build/test here fails opaquely. Surface a clear note
+          // with the precise install command so the caller installs first.
+          // Inspect the just-created worktree (info.path, checked out at
+          // baseRef) — NOT ctx.repoRoot — so the recommended manager matches
+          // the lockfile at `base`, not main.
+          const installCommand = await detectInstallCommand(info.path);
           return {
-            content: JSON.stringify({ path: info.path, branch: info.branch, base: info.baseRef }),
+            content: JSON.stringify({
+              path: info.path,
+              branch: info.branch,
+              base: info.baseRef,
+              note: `Dependencies are NOT installed in this fresh worktree (no shared node_modules). Run \`${installCommand}\` in ${info.path} before building or testing, or the build/tests will fail opaquely.`,
+            }),
           };
         }
 
