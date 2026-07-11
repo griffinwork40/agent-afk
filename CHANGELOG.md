@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.28.2] - 2026-07-11
+
+### Fixed
+- surface deps-not-installed note on create (#479) (21375e9)
+
 ## [5.28.1] - 2026-07-11
 
 ### Fixed
