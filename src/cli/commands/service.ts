@@ -1,75 +1,75 @@
 /**
  * `afk service` command group — install AFK long-running processes as
- * macOS LaunchAgents so they auto-start on login and relaunch on crash.
+ * OS-supervised services so they auto-start on login and relaunch on
+ * crash. Backend is chosen per platform by `serviceManagerFor()`:
+ *   - macOS → launchd LaunchAgents (`~/Library/LaunchAgents/`)
+ *   - Linux → systemd `--user` units (`~/.config/systemd/user/`)
  *
  * Subcommands:
- *   afk service install <name>     — write plist + bootstrap into launchctl
- *   afk service uninstall <name>   — bootout + remove plist
+ *   afk service install <name>     — write config + register with supervisor
+ *   afk service uninstall <name>   — deregister + remove config
  *   afk service status [name]      — show running PID + last exit + log path
  *   afk service list               — show all services and whether installed
+ *   afk service restart <name>     — restart the service
  *
- * `<name>` ∈ { telegram, daemon }. See `src/service/launchd.ts` for the
- * rationale on per-user scope (vs. system-wide LaunchDaemons), WatchPaths
- * auto-restart heuristics, and why launchd runs the entrypoints directly
- * instead of the `afk telegram start` / `afk daemon` CLI wrappers.
+ * `<name>` ∈ { telegram, daemon }. See `src/service/types.ts` for the
+ * backend-neutral contract and `src/service/{launchd,systemd}/` for the
+ * per-OS rationale (per-user scope, auto-restart heuristics, why the
+ * entrypoints are run directly instead of the CLI wrappers).
  *
  * @module cli/commands/service
  */
 
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { execFileSync } from 'child_process';
-import { existsSync } from 'fs';
 import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
 import {
   SERVICE_NAMES,
-  installService,
-  labelFor,
-  plistPath,
-  serviceLogPath,
-  serviceStatus,
-  uninstallService,
+  SUPPORTED_SERVICE_PLATFORMS,
+  serviceManagerFor,
+  type ServiceManager,
   type ServiceName,
-  type ServiceStatusSnapshot,
-} from '../../service/launchd.js';
+  type ServiceStatus,
+} from '../../service/index.js';
 
-function assertMacOS(): void {
-  if (process.platform !== 'darwin') {
+/** Resolve the platform's service backend, or fail with a clear message. */
+function resolveManager(): ServiceManager {
+  const mgr = serviceManagerFor();
+  if (!mgr) {
     throw new Error(
-      `'afk service' uses macOS launchd and is only supported on darwin. Detected: ${process.platform}.`,
+      `'afk service' is not supported on ${process.platform}. Supported: ${SUPPORTED_SERVICE_PLATFORMS}.`,
     );
   }
+  return mgr;
 }
 
 function parseServiceName(input: string): ServiceName {
   const lower = input.toLowerCase();
   if ((SERVICE_NAMES as readonly string[]).includes(lower)) return lower as ServiceName;
-  throw new Error(
-    `Unknown service '${input}'. Supported: ${SERVICE_NAMES.join(', ')}.`,
-  );
+  throw new Error(`Unknown service '${input}'. Supported: ${SERVICE_NAMES.join(', ')}.`);
 }
 
 export function registerServiceCommand(program: Command): void {
   const service = program
     .command('service')
-    .description('Manage AFK background services via macOS launchd (always-on, auto-restart)');
+    .description('Manage AFK background services (launchd on macOS, systemd --user on Linux) — always-on, auto-restart');
 
   service
     .command('install <name>')
-    .description(`Install <${SERVICE_NAMES.join('|')}> as a LaunchAgent that starts on login and relaunches on crash`)
-    .option('--no-watch', 'Disable WatchPaths (no auto-restart on rebuild)')
-    .option('--dry-run', 'Write the plist but do not call launchctl', false)
+    .description(`Install <${SERVICE_NAMES.join('|')}> as an OS service that starts on login and relaunches on crash`)
+    .option('--no-watch', 'Disable auto-restart-on-rebuild (launchd WatchPaths / systemd .path unit)')
+    .option('--dry-run', 'Write the config file but do not register with the supervisor', false)
     .action((nameArg: string, opts: { watch?: boolean; dryRun?: boolean }) => {
       try {
-        assertMacOS();
+        const mgr = resolveManager();
         const name = parseServiceName(nameArg);
-        const result = installService(name, {
+        const result = mgr.install(name, {
           noWatch: opts.watch === false,
-          skipBootstrap: Boolean(opts.dryRun),
+          dryRun: Boolean(opts.dryRun),
         });
         if (result.kind === 'already-installed') {
-          console.log(chalk.yellow(`⚠ ${result.label} already installed at ${result.plistPath}`));
+          console.log(chalk.yellow(`⚠ ${result.label} already installed at ${result.configPath}`));
           console.log(palette.meta(`  Run 'afk service uninstall ${name}' first to reinstall.`));
           process.exit(1);
         }
@@ -78,21 +78,17 @@ export function registerServiceCommand(program: Command): void {
           process.exit(1);
         }
         console.log(chalk.green(`✓ Installed ${result.label}`));
-        console.log(palette.meta(`  Plist:   ${result.plistPath}`));
-        console.log(palette.meta(`  Log:     ${serviceLogPath(name)}`));
-        if (result.watchPathsActive) {
-          console.log(palette.meta(`  WatchPaths: active — service auto-restarts on rebuild.`));
+        console.log(palette.meta(`  Config:  ${result.configPath}  (${mgr.configKind})`));
+        console.log(palette.meta(`  Log:     ${mgr.logPath(name)}`));
+        if (result.autoRestartOnRebuild) {
+          console.log(palette.meta(`  Auto-restart on rebuild: on`));
         } else {
-          console.log(palette.meta(`  WatchPaths: off — manual 'afk service restart' needed after updates.`));
+          console.log(palette.meta(`  Auto-restart on rebuild: off — run 'afk service restart ${name}' after updates.`));
         }
-        if (opts.dryRun) {
-          // M-10: interpolate the real uid so the copy-paste command works
-          // on this machine. `$(id -u)` would only expand inside a shell,
-          // but we're printing a raw string to the terminal.
-          const uid = process.getuid?.() ?? 501;
-          console.log(palette.info(`  (dry-run) launchctl bootstrap was skipped; service is NOT yet running.`));
-          console.log(palette.meta(`  Load manually: launchctl bootstrap gui/${uid} ${result.plistPath}`));
-        } else {
+        for (const note of result.notes ?? []) {
+          console.log(palette.info(`  ${note}`));
+        }
+        if (!opts.dryRun) {
           console.log(palette.meta(`  Status:  afk service status ${name}`));
         }
       } catch (err) {
@@ -102,22 +98,22 @@ export function registerServiceCommand(program: Command): void {
 
   service
     .command('uninstall <name>')
-    .description('Stop the service and remove its LaunchAgent plist')
+    .description('Stop the service and remove its config (LaunchAgent plist / systemd unit)')
     .action((nameArg: string) => {
       try {
-        assertMacOS();
+        const mgr = resolveManager();
         const name = parseServiceName(nameArg);
-        const result = uninstallService(name);
+        const result = mgr.uninstall(name);
         if (result.kind === 'not-installed') {
-          console.log(chalk.yellow(`⚠ ${labelFor(name)} is not installed (no plist at ${result.plistPath})`));
+          console.log(chalk.yellow(`⚠ ${mgr.label(name)} is not installed (no config at ${result.configPath})`));
           return;
         }
         if (result.kind === 'failed') {
           console.error(chalk.red(`✗ Uninstall failed: ${result.reason}`));
           process.exit(1);
         }
-        console.log(chalk.green(`✓ Uninstalled ${labelFor(name)}`));
-        console.log(palette.meta(`  Removed: ${result.plistPath}`));
+        console.log(chalk.green(`✓ Uninstalled ${mgr.label(name)}`));
+        console.log(palette.meta(`  Removed: ${result.configPath}`));
       } catch (err) {
         handleCommandError(err);
       }
@@ -128,14 +124,13 @@ export function registerServiceCommand(program: Command): void {
     .description('Show running PID, last exit status, and log file for one or all services')
     .action((nameArg: string | undefined) => {
       try {
-        assertMacOS();
+        const mgr = resolveManager();
         if (nameArg) {
-          const snapshot = serviceStatus(parseServiceName(nameArg));
-          printStatus(snapshot);
+          printStatus(mgr.status(parseServiceName(nameArg)), mgr.configKind);
           return;
         }
         for (const name of SERVICE_NAMES) {
-          printStatus(serviceStatus(name));
+          printStatus(mgr.status(name), mgr.configKind);
           console.log('');
         }
       } catch (err) {
@@ -148,14 +143,13 @@ export function registerServiceCommand(program: Command): void {
     .description('List recognised service names and whether each is installed')
     .action(() => {
       try {
-        assertMacOS();
-        console.log(chalk.bold('AFK services:'));
+        const mgr = resolveManager();
+        console.log(chalk.bold(`AFK services (${mgr.backend}):`));
         for (const name of SERVICE_NAMES) {
-          const path = plistPath(name);
-          const installed = existsSync(path);
+          const installed = mgr.isInstalled(name);
           const marker = installed ? chalk.green('●') : chalk.dim('○');
           const tag = installed ? palette.meta('installed') : palette.meta('not installed');
-          console.log(`  ${marker} ${name.padEnd(10)}  ${tag}  ${palette.meta(path)}`);
+          console.log(`  ${marker} ${name.padEnd(10)}  ${tag}  ${palette.meta(mgr.configPath(name))}`);
         }
       } catch (err) {
         handleCommandError(err);
@@ -164,54 +158,32 @@ export function registerServiceCommand(program: Command): void {
 
   service
     .command('restart <name>')
-    .description('Restart the service (launchctl kickstart -k)')
+    .description('Restart the service (launchctl kickstart -k / systemctl --user restart)')
     .action((nameArg: string) => {
       try {
-        assertMacOS();
+        const mgr = resolveManager();
         const name = parseServiceName(nameArg);
-        const path = plistPath(name);
-        if (!existsSync(path)) {
-          console.error(chalk.red(`✗ ${labelFor(name)} is not installed. Run 'afk service install ${name}' first.`));
+        const result = mgr.restart(name);
+        if (result.kind === 'not-installed') {
+          console.error(chalk.red(`✗ ${mgr.label(name)} is not installed. Run 'afk service install ${name}' first.`));
           process.exit(1);
         }
-        // We deliberately shell out here rather than wrap in launchd.ts:
-        // restart is a one-line launchctl call and packaging it in
-        // launchd.ts would proliferate I/O surface beyond the install
-        // lifecycle that module is centred on.
-        //
-        // M-5: assert getuid is available rather than silently falling
-        // back to a wrong uid (501). process.getuid is undefined on
-        // Windows; on macOS this can never happen, but we make the
-        // assumption explicit so the stack trace points here rather than
-        // at a confusing launchctl error about a non-existent domain.
-        if (typeof process.getuid !== 'function') {
-          throw new Error(
-            'process.getuid is unavailable — afk service restart requires a POSIX system.',
-          );
-        }
-        const uid = process.getuid();
-        try {
-          execFileSync(
-            'launchctl',
-            ['kickstart', '-k', `gui/${uid}/${labelFor(name)}`],
-            { stdio: ['ignore', 'pipe', 'pipe'], timeout: 8_000 },
-          );
-          console.log(chalk.green(`✓ Restarted ${labelFor(name)}`));
-        } catch (e) {
-          console.error(chalk.red(`✗ Restart failed: ${(e as Error).message}`));
+        if (result.kind === 'failed') {
+          console.error(chalk.red(`✗ Restart failed: ${result.reason}`));
           process.exit(1);
         }
+        console.log(chalk.green(`✓ Restarted ${result.label}`));
       } catch (err) {
         handleCommandError(err);
       }
     });
 }
 
-function printStatus(s: ServiceStatusSnapshot): void {
+function printStatus(s: ServiceStatus, configKind: string): void {
   console.log(chalk.bold(`${s.label}`));
   if (!s.installed) {
     console.log(`  ${chalk.dim('○')} Not installed`);
-    console.log(palette.meta(`  Plist:   ${s.plistPath}`));
+    console.log(palette.meta(`  Config:  ${s.configPath}  (${configKind})`));
     console.log(palette.meta(`  Install: afk service install ${s.name}`));
     return;
   }
@@ -223,6 +195,6 @@ function printStatus(s: ServiceStatusSnapshot): void {
       console.log(palette.meta(`  Last exit status: ${s.lastExitStatus}`));
     }
   }
-  console.log(palette.meta(`  Plist:   ${s.plistPath}`));
+  console.log(palette.meta(`  Config:  ${s.configPath}  (${configKind})`));
   console.log(palette.meta(`  Log:     ${s.logFile}`));
 }
