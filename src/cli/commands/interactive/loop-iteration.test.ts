@@ -215,6 +215,61 @@ describe('runReplLoop — seed-buffer auto-submit fast-path (multi-iteration)', 
   });
 });
 
+describe('runReplLoop — launch-argument seed (afk "prompt" / afk /command)', () => {
+  it('auto-submits a plain-text launch arg as the opening turn without a readLine', async () => {
+    // ctx.initialInput simulates `afk "what does this project do"`. The loop
+    // pre-seeds seedBuffer from it, so iteration 1 takes the fast-path (echo +
+    // runTurn) with NO readLine; iteration 2 reads the (empty) queue → '/exit'.
+    const ctx = makeCtx({ initialInput: 'what does this project do' });
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    // The turn ran once with the launch prompt (not a readLine value).
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
+    const firstArg = vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string };
+    expect(firstArg.text).toBe('what does this project do');
+    // Plain text is NOT routed through the slash dispatcher — only the later
+    // '/exit' read reaches it, never the seed.
+    const dispatchInputs = vi.mocked(slashMod.dispatch).mock.calls.map((c) => c[0]);
+    expect(dispatchInputs).not.toContain('what does this project do');
+    // Only ONE readLine — the exit read; iteration 1 consumed the pre-seed.
+    expect(surfaceState.readLineCalls).toBe(1);
+    // The launch prompt was echoed to the renderer (auto-submit affordance).
+    const echoes = vi.mocked(ctx.replRenderer.writeLine).mock.calls.map((c) => String(c[0]));
+    expect(echoes.some((line) => line.includes('what does this project do'))).toBe(true);
+  });
+
+  it('routes a /slash launch arg through the slash dispatcher on the opening turn', async () => {
+    // ctx.initialInput simulates `afk /review`. The pre-seed fast-path echoes
+    // it and, because it starts with '/', hands it to the slash dispatcher —
+    // exactly as if the user typed `/review` as their first line.
+    const ctx = makeCtx({ initialInput: '/review' });
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    // The launch arg reached the slash dispatcher first, before any readLine.
+    const dispatchInputs = vi.mocked(slashMod.dispatch).mock.calls.map((c) => c[0]);
+    expect(dispatchInputs[0]).toBe('/review');
+    // No readLine was needed to dispatch the seed; readLine #1 is the exit read.
+    expect(surfaceState.readLineCalls).toBe(1);
+  });
+
+  it('a bare launch (no initialInput) reads the first turn from input as before', async () => {
+    // Regression guard: absent initialInput, the loop must NOT auto-submit —
+    // iteration 1 reads from the surface exactly as a plain `afk` launch does.
+    surfaceState.readLineQueue = [
+      { text: 'typed first turn', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+    const ctx = makeCtx();
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
+    const firstArg = vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string };
+    expect(firstArg.text).toBe('typed first turn');
+    // Both lines were read — nothing was pre-seeded.
+    expect(surfaceState.readLineCalls).toBe(2);
+  });
+});
+
 describe('runReplLoop — exit_plan_mode drain mirrors the applied mode onto stats (#495)', () => {
   it('after draining an approved plan-exit seed, stats.permissionMode reflects the flipped mode', async () => {
     // Regression for #495. takePendingPlanExitSeed applies the deferred flip to

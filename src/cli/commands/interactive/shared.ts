@@ -350,6 +350,15 @@ export interface InteractiveCtx {
    */
   firstTurnHook?: (firstMessage: string) => Promise<void>;
   /**
+   * Optional first message seeded from the launch argument — set when the user
+   * runs `afk "prompt"` or `afk /slash args` (the interactive command's
+   * variadic `[input...]` positional). When present, the REPL loop promotes it
+   * into its `seedBuffer` fast-path and auto-submits it as the opening turn,
+   * echoed and dispatched exactly as if typed: a plain prompt runs a turn, a
+   * `/command` routes through the slash dispatcher. Absent for a bare `afk`.
+   */
+  initialInput?: string;
+  /**
    * Returns true while a turn is in flight. Set by `interactive.ts` after
    * building `turnState` so the swap closure can refuse mid-turn swaps.
    * Defaults to false when absent.

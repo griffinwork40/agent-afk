@@ -181,6 +181,11 @@ export function registerInteractiveCommand(program: Command): void {
   program
     .command('interactive', { isDefault: true })
     .description('Start interactive chat session')
+    .argument(
+      '[input...]',
+      'Optional first message — or a /slash-command — auto-submitted as the opening turn. ' +
+        'E.g. `afk "what does this project do"` or `afk /review`. A bare `afk` starts an empty REPL.',
+    )
     .option(
       '-m, --model <model>',
       'Model to use. Short aliases: opus|opus_1m|sonnet|sonnet_1m|haiku. ' +
@@ -218,7 +223,7 @@ export function registerInteractiveCommand(program: Command): void {
       '--mcp-config <path>',
       'Path to an additional MCP config file (highest priority — merges over ~/.afk/config/mcp.json, project-local .mcp.json, and plugin-contributed configs). File format identical to mcp.json.',
     )
-    .action(async (options: CliOptions) => {
+    .action(async (input: string[], options: CliOptions) => {
       if (options.debug) {
         process.env['AFK_DEBUG'] = '1';
       }
@@ -387,6 +392,16 @@ export function registerInteractiveCommand(program: Command): void {
         spinner.fail('Invalid options');
         handleCommandError(err);
       }
+
+      // Seed the opening turn from the launch argument (`afk "prompt"` or
+      // `afk /review foo`). Variadic operands are joined so an unquoted
+      // slash-command's args survive (`/review foo` → "/review foo"); a bare
+      // `afk` yields "" and seeds nothing. The REPL loop promotes a non-empty
+      // seed into its seedBuffer fast-path (see loop-iteration.ts), so a plain
+      // prompt runs a turn and a /command routes through the slash dispatcher —
+      // identical to the user typing it as the first line.
+      const seed = input.join(' ').trim();
+      if (seed) ctx.initialInput = seed;
 
       // First-turn worktree hook — born-named creation. Wired only on the
       // deferred path (set above iff auto-named `-w` + autoname enabled +
