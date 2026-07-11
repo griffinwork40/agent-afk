@@ -947,13 +947,21 @@ export class AgentSession implements IAgentSession {
    * Return and CLEAR the pending plan-exit implement-turn queued by an approved
    * `exit_plan_mode` call, or `undefined` if none is pending. The REPL drains
    * this at the top of each input-loop iteration (post-turn) and, when set,
-   * atomically applies the deferred permission-mode flip then returns the seed
-   * message to be auto-submitted as a fresh user turn. Single-shot: a second call
-   * returns `undefined` until the next approval.
+   * atomically applies the deferred permission-mode flip then returns BOTH the
+   * seed message and the flipped-to mode. Single-shot: a second call returns
+   * `undefined` until the next approval.
    *
    * The mode flip is applied HERE (not in the handler) so the gate stays locked
    * in plan mode for the entire model turn and only opens at this clean
    * post-turn boundary — closing the mid-turn TOCTOU window.
+   *
+   * Invariant (#495): the flip updates the session's OWN mode (metadata +
+   * provider), but the plan-mode gate and the REPL prompt read a SEPARATE mirror
+   * — `stats.permissionMode` — which the session cannot reach. So the applied
+   * `mode` is returned alongside the message; the REPL drain
+   * (`loop-iteration.ts`) mirrors it onto `stats.permissionMode`, exactly as
+   * `togglePlanMode` does for `/plan off`. Returning it (rather than exposing a
+   * getter the caller re-reads) guarantees the mirror equals the applied value.
    *
    * If the deferred flip rejects (e.g. the provider's query handle is closing —
    * the same failure mode `togglePlanMode` guards for `/plan off`), the seed is
@@ -963,7 +971,7 @@ export class AgentSession implements IAgentSession {
    * (which has no try/catch around this drain) and crash it. The model stays in
    * plan mode and can retry `exit_plan_mode`.
    */
-  async takePendingPlanExitSeed(): Promise<string | undefined> {
+  async takePendingPlanExitSeed(): Promise<{ message: string; mode: PermissionMode } | undefined> {
     const seed = this._pendingPlanExitSeed;
     this._pendingPlanExitSeed = undefined;
     if (seed === undefined) return undefined;
@@ -975,7 +983,7 @@ export class AgentSession implements IAgentSession {
       );
       return undefined;
     }
-    return seed.message;
+    return { message: seed.message, mode: seed.mode };
   }
 
   /**
