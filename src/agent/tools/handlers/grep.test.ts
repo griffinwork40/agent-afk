@@ -264,7 +264,9 @@ describe('grepHandler', () => {
 
   describe('output truncation', () => {
     it('truncates output at 100KB', async () => {
-      // Create a file with many matching lines to exceed 100KB
+      // Create a file with many matching lines to exceed 100KB (but well
+      // under the 8MB hard cap, so grep completes and the close path reduces
+      // the output to a head+tail view).
       const largeLine = 'hello ' + 'x'.repeat(1000);
       const lines = Array(120).fill(largeLine).join('\n');
       writeFileSync(join(tempDir, 'large.txt'), lines);
@@ -276,14 +278,14 @@ describe('grepHandler', () => {
 
       expect(result.isError).toBeFalsy();
       expect(result.content.length).toBeLessThanOrEqual(100_000 + 50);
-      expect(result.content).toContain('[output truncated]');
+      expect(result.content).toContain('bytes truncated');
     });
 
-    // Regression: subagents must distinguish "got 100KB of legitimate
-    // matches" from "got 100KB then killed" via a structured flag, not by
-    // substring-scanning content. The bash and grep sentinels diverge
-    // ("exceeded 100KB" vs bare) so any caller doing exact-match string
-    // detection would silently miss one tool's truncated output.
+    // Regression: subagents must distinguish "got a head+tail slice of
+    // legitimate matches" from any other state via the structured `truncated`
+    // flag, not by substring-scanning content. Sentinel wording varies by
+    // path (head+tail elision marker vs hard-cap kill note), so any caller
+    // doing exact-match string detection would silently miss cases.
     it('sets ToolResult.truncated=true when output exceeds 100KB', async () => {
       const largeLine = 'hello ' + 'x'.repeat(1000);
       const lines = Array(120).fill(largeLine).join('\n');
@@ -313,21 +315,15 @@ describe('grepHandler', () => {
     });
 
     // Regression: V8 max-string-length crash (RangeError: Invalid string
-    // length). Pre-fix, `stdout += chunk.toString()` accumulated
-    // unboundedly with the 100KB cap applied only post-close. A grep
-    // emitting >~512MB of matches would overflow V8's max string length
-    // synchronously inside the data callback, crashing the process. The
-    // fix adds a mid-stream byte counter that kills the child and
-    // settles as soon as the threshold is crossed.
-    //
-    // We exercise the guard with ~10MB of matching output — large
-    // enough that the mid-stream cap fires before the close handler
-    // would, while keeping the test fast. The behavior is identical
-    // either way (truncated to 100KB with the truncation marker), but
-    // crossing the threshold this far above 100KB makes it implausible
-    // for the close handler to be the path that fired.
+    // length). The accumulator is bounded at HARD_CAP_BYTES (8MB) and the
+    // child is SIGKILL'd when combined output crosses it — a genuine-runaway
+    // guard (an unconstrained recursive search across `node_modules`). We
+    // exercise it with >8MB of matching output so the mid-stream kill fires
+    // and emits the hard-cap sentinel; the model-facing view is reduced to a
+    // ~100KB head+tail regardless.
     it('handles matching output orders of magnitude above the cap (V8 overflow guard)', async () => {
-      // ~10MB of matching content: 10,000 lines × ~1010 bytes/line.
+      // ~10MB of matching content: 10,000 lines × ~1010 bytes/line — well
+      // past the 8MB hard cap.
       const largeLine = 'hello ' + 'x'.repeat(1000);
       const lines = Array(10_000).fill(largeLine).join('\n');
       writeFileSync(join(tempDir, 'huge.txt'), lines);
@@ -340,42 +336,37 @@ describe('grepHandler', () => {
       const elapsedMs = Date.now() - start;
 
       expect(result.isError).toBeFalsy();
-      expect(result.content.length).toBeLessThanOrEqual(100_000 + 50);
-      expect(result.content).toContain('[output truncated]');
+      // Head+tail model view (≤100KB) plus the short hard-cap kill sentinel.
+      expect(result.content.length).toBeLessThanOrEqual(100_000 + 200);
+      expect(result.content).toContain('was terminated');
       // Structured flag is the load-bearing signal for non-model
       // consumers (subagent traces, hooks). Sentinel string remains for
       // the model's in-band context — both must be set on the mid-stream
       // kill path.
       expect(result.truncated).toBe(true);
-      // Tightened from 15_000 to 5_000: should complete well under 5s
-      // once the mid-stream kill fires (streaming 10MB naturally takes
-      // longer; 5s is generous for CI load but discriminates from no-kill).
+      // Reading 8MB off the pipe is sub-second; 5s is generous for CI load
+      // but discriminates from a "ran the full scan to completion" path.
       expect(elapsedMs).toBeLessThan(5_000);
     }, 30_000);
 
-    // Companion proof-of-kill test: two ~150KB files where either alone
-    // overflows the 100KB cap. If the mid-stream guard fires correctly,
-    // grep is killed after exhausting one file's matches into stdout — the
-    // other file is never opened. If the guard failed and only the
-    // post-close cap fired, grep would have run to completion and both
-    // files' content would have been emitted to stdout.
+    // Companion proof-of-kill test: two files, each on its own larger than
+    // the 8MB hard cap. The mid-stream kill fires while grep is still
+    // emitting matches from whichever file it opened first, so that file's
+    // content is (partially) captured and the other is never reached.
     //
     // F3: assertions are order-agnostic. `grep -r` traversal order is
     // filesystem-dependent — BSD grep on macOS uses readdir() inode order,
-    // not lexical (verified: `ls -i` shows inode order ≠ alphabetical
-    // when files are created in non-creation order, and `grep -rn`
-    // returns matches in inode order). So we cannot rely on first.txt
-    // being read before second.txt. Instead we assert "exactly one of
-    // {hello a, hello b} appears" — preserves the discriminating signal
-    // (kill fired between files) without depending on which file grep
-    // happened to open first.
-    it('mid-stream byte cap: kills grep after one file but before the other (V8 overflow guard)', async () => {
+    // not lexical — so we cannot rely on first.txt being read before
+    // second.txt. Instead we assert "exactly one of {hello a, hello b}
+    // appears" — preserving the discriminating signal (kill fired
+    // mid-traversal) without depending on which file grep opened first.
+    it('mid-stream hard cap: kills grep mid-traversal, capturing only one file (V8 overflow guard)', async () => {
       const aLine = 'hello a' + 'x'.repeat(993); // ~1001 bytes/line
-      const firstContent = Array(150).fill(aLine).join('\n'); // ~150KB
+      const firstContent = Array(9000).fill(aLine).join('\n'); // ~9MB > 8MB cap
       writeFileSync(join(tempDir, 'first.txt'), firstContent);
 
       const bLine = 'hello b' + 'x'.repeat(993);
-      const secondContent = Array(150).fill(bLine).join('\n'); // ~150KB
+      const secondContent = Array(9000).fill(bLine).join('\n'); // ~9MB
       writeFileSync(join(tempDir, 'second.txt'), secondContent);
 
       const start = Date.now();
@@ -386,23 +377,20 @@ describe('grepHandler', () => {
       const elapsedMs = Date.now() - start;
 
       expect(result.isError).toBeFalsy();
-      expect(result.content).toContain('[output truncated]');
+      expect(result.content).toContain('was terminated');
       expect(result.truncated).toBe(true);
 
       const hasA = result.content.includes('hello a');
       const hasB = result.content.includes('hello b');
-      // Exactly one file's content survived in the truncated output —
-      // proves the kill fired between file boundaries. If both were
-      // present, grep read both files to completion and the mid-stream
-      // guard never fired. If neither was present, something else broke
-      // (the truncation marker assertion above would also fail in that case).
+      // Exactly one file's content survived — the kill fired before grep
+      // finished the first file and opened the second. If both appear, the
+      // mid-stream guard never fired; if neither, the sentinel assertion
+      // above would also have failed.
       expect(hasA || hasB).toBe(true);
       expect(hasA && hasB).toBe(false);
-      // Timing proof: a full scan of both 150KB files takes measurably
-      // longer. 2000ms gives ample headroom for slow CI without losing
-      // discrimination from a "waited for full grep exit" failure mode.
-      expect(elapsedMs).toBeLessThan(2_000);
-    }, 20_000);
+      // Killed after ~8MB, well before a full scan of both 9MB files.
+      expect(elapsedMs).toBeLessThan(5_000);
+    }, 30_000);
   });
 
   describe('input validation', () => {

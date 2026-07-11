@@ -18,7 +18,7 @@ export const TOOL_SYSTEM_PROMPT_BASE = `You have access to tools for working wit
 - Quote file paths that contain spaces with double quotes.
 - Do not run destructive shell commands (rm -rf, git reset --hard, etc.) unless the user explicitly asks.
 - Use glob and grep to discover files before reading individual files.
-- When bash output is very long, it may be truncated. If you need the full output, redirect to a file and read it.
+- When bash/grep output is long it is capped to a head+tail view (start and end kept, middle elided) — the command still completes, so you keep the exit code and the tail. If you need the elided middle, filter the command (\`| tail -n\`, \`--quiet\`, a narrower grep pattern/path) or redirect to a file and read slices; don't just re-run the same broad command.
 - Use absolute paths for file operations.
 - Prefer \`agent\` (and \`skill\`) for multi-file investigation, verification, parallel hypotheses, and any work that would otherwise consume large amounts of inline context. The main session is the coordinator; subagents are the investigators.`;
 
