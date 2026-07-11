@@ -25,7 +25,7 @@ describe('formatDoneSummary', () => {
     source.responseMetadata = { durationMs: 2000 } as unknown as typeof source.responseMetadata;
     source.stats.toolUses = 3;
     const summary = formatDoneSummary(source);
-    expect(summary).toMatch(/3 tools/);
+    expect(summary).toMatch(/3 tool calls/);
     expect(summary).toMatch(/2s/);
     // Wall ≈ provider, no surfacing.
     expect(summary).not.toMatch(/wall/);

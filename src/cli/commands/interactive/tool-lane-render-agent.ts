@@ -1,6 +1,7 @@
 import { palette } from '../../palette.js';
 import { styleForToolName } from '../../tool-category.js';
 import { getTerminalWidth } from '../../terminal-size.js';
+import { formatToolCallStat } from '../../format-utils.js';
 import {
   MAX_VISIBLE_CHILDREN,
   formatOutcome,
@@ -54,7 +55,7 @@ function formatAgentSummary(
   // increments source.stats.toolUses (both increment-only paths).
   const stats: string[] = [];
   if (toolChildren.length > MAX_VISIBLE_CHILDREN) {
-    stats.push(`${toolChildren.length} tools`);
+    stats.push(formatToolCallStat(toolChildren.length));
     if (totalLines > 0) stats.push(`${totalLines} lines`);
   }
 

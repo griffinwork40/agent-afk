@@ -1526,6 +1526,64 @@ describe('OpenAICompatibleQuery — progress events (I2)', () => {
     }
   });
 
+  // Regression (PR 508 codex review, P2): a single round that batches multiple
+  // parallel tool_calls must report `toolUses` as the actual number of tool
+  // CALLS — not "1" (the round count). Before the fix `toolUses` carried the
+  // round counter, so 2 parallel calls in round 1 rendered as "1 tool call".
+  it('progress.toolUses reflects actual tool-call count when a round batches parallel calls', async () => {
+    const { dispatcher } = makeDispatcherForPR2();
+    scriptedTurns = [
+      {
+        // Round 1: TWO parallel tool_calls (indices 0 and 1) in one turn.
+        chunks: [
+          {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    { index: 0, id: 'q1', type: 'function', function: { name: 'echo', arguments: '{"msg":"a"}' } },
+                    { index: 1, id: 'q2', type: 'function', function: { name: 'echo', arguments: '{"msg":"b"}' } },
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+            usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+          },
+        ],
+      },
+      {
+        chunks: [
+          {
+            choices: [{ delta: { content: 'all done' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 20, completion_tokens: 2, total_tokens: 22 },
+          },
+        ],
+      },
+    ];
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'test' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('go'),
+      config: baseConfig(),
+      toolDispatcher: dispatcher,
+    });
+    const events = await collect(q);
+    const progressEvents = events.filter((e) => e.type === 'progress');
+    // One progress event (one round), but it dispatched 2 calls.
+    expect(progressEvents).toHaveLength(1);
+    const only = progressEvents[0];
+    if (only?.type === 'progress') {
+      // The fix: toolUses is the cumulative CALL count (2), not the round (1).
+      expect(only.progress.toolUses).toBe(2);
+      // The human-readable summary still names the ROUND, unchanged.
+      expect(only.progress.summary).toContain('round 1');
+    }
+  });
+
   it('includes totalTokens from accumulated usage in progress event', async () => {
     const { dispatcher } = makeDispatcherForPR2();
     scriptedTurns = [
