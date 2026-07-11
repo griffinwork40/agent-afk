@@ -168,6 +168,13 @@ export async function* runTurn(
   const maxIterations = resolveMaxToolIterations(input.maxToolUseIterations);
   let accumulatedUsage: ProviderUsage = { stopReason: null };
   let iterations = 0;
+  // Cumulative count of tool CALLS dispatched across the whole turn — distinct
+  // from `iterations` (the round counter). A single round can batch several
+  // parallel tool_use blocks (turnResult.toolUseBlocks is an array, dispatched
+  // at ~line 547), so rounds ≠ calls. Emitted as the progress event's
+  // `toolUses` so the CLI's formatToolCallStat renders a truthful "N tool calls"
+  // even when a round runs multiple calls (PR 508 codex review, P2).
+  let toolCallCount = 0;
   // Set once the tool-use iteration cap is reached. The loop then runs ONE
   // final "wind-down" round with tools stripped (see the params build and the
   // cap-exit block below) so the model produces a real answer from what it
@@ -538,6 +545,12 @@ export async function* runTurn(
     });
     try {
 
+    // Accumulate the cumulative tool-call tally BEFORE dispatch so the progress
+    // emit below reports calls-so-far including this round's batch. One round
+    // can carry N parallel tool_use blocks, so this advances by the block count,
+    // not by 1.
+    toolCallCount += turnResult.toolUseBlocks.length;
+
     // Build all tool calls and emit start events upfront.
     const calls: ToolCall[] = [];
     // Per-call start timestamps keyed by toolUseId so the completed
@@ -741,7 +754,11 @@ export async function* runTurn(
         summary: `round ${iterations}: ${lastToolHeadline}`,
         lastToolName: lastTool?.name,
         totalTokens: accumulatedUsage.totalTokens ?? 0,
-        toolUses: iterations,
+        // Contract: `toolUses` is the cumulative COUNT OF TOOL CALLS so far in
+        // this turn (not the round number), so downstream formatToolCallStat
+        // renders "N tool calls" truthfully even when a round batched parallel
+        // calls. The `summary` above legitimately names the ROUND — leave it.
+        toolUses: toolCallCount,
         durationMs: Date.now() - loopStartTime,
       },
       sessionId: input.ctx.sessionId,
