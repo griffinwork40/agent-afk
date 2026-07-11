@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.30.2] - 2026-07-11
+
+### Fixed
+- refresh lastMeasuredFrameTop in the picker repaint path too (#513) (0c83bfa)
+
 ## [5.30.1] - 2026-07-11
 
 ### Fixed
