@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.29.3] - 2026-07-11
+
+### Fixed
+- decouple bash/grep output kill-cap from model budget; keep head+tail (#507) (dda24b2)
+
 ## [5.29.2] - 2026-07-11
 
 ### Fixed
