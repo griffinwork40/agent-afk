@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.27.2] - 2026-07-11
+
+### Changed
+- split config.ts into tier modules (#368) — checkpoint (#493) (db9e42c)
+
 ## [5.27.1] - 2026-07-10
 
 ### Changed
