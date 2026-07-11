@@ -854,11 +854,11 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
     }
 
     // Attach the Done summary (as finalizeSubagent does)
-    lane.setAgentResultSummary(agentId, 'Done (4 tools · 2.5s)');
+    lane.setAgentResultSummary(agentId, 'Done (4 tool calls · 2.5s)');
     lane.addResult(agentId, {
       type: 'tool_result',
       toolUseId: 'synthetic',
-      content: 'Done (4 tools · 2.5s)',
+      content: 'Done (4 tool calls · 2.5s)',
       isError: false,
     });
 
@@ -869,7 +869,7 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
     // Find overflow line: matches "… +N" pattern from formatCategoricalOverflow
     const overflowIdx = allLines.findIndex((l) => /….*\+\d+/.test(l));
     // Find result summary line
-    const doneIdx = allLines.findIndex((l) => l.includes('Done (4 tools'));
+    const doneIdx = allLines.findIndex((l) => l.includes('Done (4 tool calls'));
 
     // Both lines must exist
     expect(overflowIdx, 'overflow ellipsis line must exist').toBeGreaterThanOrEqual(0);
@@ -894,7 +894,7 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
     expect(overflowLine.indexOf('├')).toBe(2);
     expect(overflowLine.indexOf('…')).toBe(5);
     expect(doneLine.indexOf('╰')).toBe(2);
-    expect(doneLine.indexOf('Done (4 tools')).toBe(5);
+    expect(doneLine.indexOf('Done (4 tool calls')).toBe(5);
 
     // Assertion 4 (full-topology snapshot): locks the entire overlay shape.
     // Any structural drift — column position, sibling ordering, glyph
@@ -902,12 +902,12 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
     // as a visible inline-snapshot diff instead of slipping past a
     // single-glyph toContain. Populated by `pnpm test -u` on first run.
     expect(stripped).toMatchInlineSnapshot(`
-      "◉ → Agent(overflow-tester) [subagent] — 4 tools
+      "◉ → Agent(overflow-tester) [subagent] — 4 tool calls
       │ ├─ … +1 (1 Read)
       │ ├─ $ Bash("file1.ts") — ✓ result1
       │ ├─ ● Grep("file2.ts") — ✓ result2
       │ ├─ ● Glob("file3.ts") — ✓ result3
-      │ ╰─ Done (4 tools · 2.5s)"
+      │ ╰─ Done (4 tool calls · 2.5s)"
     `);
   });
 
@@ -1551,9 +1551,9 @@ describe('Snapshot pins — tool-lane-render.ts representative outputs', () => {
       lane.addStartWithAgentContext(`sc${i}`, names[i]!, `("snap${i}.ts")`, agentId);
       lane.addResult(`sc${i}`, makeResult(`snap-result-${i}`));
     }
-    lane.setAgentResultSummary(agentId, 'Done (4 tools · 4.0s)');
+    lane.setAgentResultSummary(agentId, 'Done (4 tool calls · 4.0s)');
     lane.addResult(agentId, {
-      type: 'tool_result', toolUseId: 'synthetic', content: 'Done (4 tools · 4.0s)', isError: false,
+      type: 'tool_result', toolUseId: 'synthetic', content: 'Done (4 tool calls · 4.0s)', isError: false,
     });
     expect(stripAnsi(lane.flush().join('\n'))).toMatchSnapshot();
   });

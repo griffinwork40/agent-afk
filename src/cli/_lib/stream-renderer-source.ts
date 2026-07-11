@@ -8,7 +8,7 @@
 
 import type { ResponseMetadata, ToolResultChunk } from '../../agent/types/message-types.js';
 import { ThinkingLane } from '../commands/interactive/thinking-lane.js';
-import { formatDuration, formatTokens } from '../format-utils.js';
+import { formatDuration, formatTokens, formatToolCallStat } from '../format-utils.js';
 
 const ORCHESTRATOR_SOURCE_KEY = '__main__';
 
@@ -109,7 +109,7 @@ function formatDoneSummary(source: SourceState): string {
   // Reads source.stats.toolUses — the increment-only authoritative counter.
   // Never reads progressReportedToolUses (advisory only). Post-2c invariant.
   if (source.stats.toolUses) {
-    stats.push(`${source.stats.toolUses} tool${source.stats.toolUses === 1 ? '' : 's'}`);
+    stats.push(formatToolCallStat(source.stats.toolUses));
   }
   if (source.stats.tokens) stats.push(`${formatTokens(source.stats.tokens)} tok`);
   const durationMs = source.responseMetadata?.['durationMs'];
