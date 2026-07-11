@@ -216,8 +216,10 @@ describe('AgentSession plan-exit seed bridge', () => {
     // Pass the approved mode alongside the seed message (new signature).
     controls!.requestImplementSeed('SEED-MSG', 'default');
 
-    // takePendingPlanExitSeed is now async — it applies the mode flip then returns the message.
-    expect(await session.takePendingPlanExitSeed()).toBe('SEED-MSG');
+    // takePendingPlanExitSeed applies the mode flip then returns BOTH the seed
+    // message AND the flipped-to mode (#495) — the caller mirrors `mode` onto
+    // stats.permissionMode so the gate + prompt unlock.
+    expect(await session.takePendingPlanExitSeed()).toEqual({ message: 'SEED-MSG', mode: 'default' });
     // Single-shot: drained value is cleared.
     expect(await session.takePendingPlanExitSeed()).toBeUndefined();
 

@@ -215,6 +215,41 @@ describe('runReplLoop — seed-buffer auto-submit fast-path (multi-iteration)', 
   });
 });
 
+describe('runReplLoop — exit_plan_mode drain mirrors the applied mode onto stats (#495)', () => {
+  it('after draining an approved plan-exit seed, stats.permissionMode reflects the flipped mode', async () => {
+    // Regression for #495. takePendingPlanExitSeed applies the deferred flip to
+    // the SESSION's mode internally, but the plan-mode gate and the REPL prompt
+    // read ctx.stats.permissionMode (bootstrap wires the gate to
+    // `() => stats.permissionMode`). The drain MUST mirror the returned mode onto
+    // stats — otherwise the gate stays plan-locked and the operator's prompt
+    // never flips, even though exit_plan_mode reported success.
+    const ctx = makeCtx();
+    ctx.stats.permissionMode = 'plan';
+    // Single-shot seed: first drain yields the approved seed + mode, then undefined.
+    let drained = false;
+    (
+      ctx.session.current as unknown as {
+        takePendingPlanExitSeed: () => Promise<{ message: string; mode: string } | undefined>;
+      }
+    ).takePendingPlanExitSeed = vi.fn(async () => {
+      if (drained) return undefined;
+      drained = true;
+      return { message: 'IMPLEMENT-SEED', mode: 'bypassPermissions' };
+    });
+    // Iteration 1 drains the seed + auto-submits (no readLine); iteration 2 reads '/exit'.
+    surfaceState.readLineQueue = [{ text: '/exit', attachments: [] }];
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    // The applied mode is mirrored onto stats — the gate + prompt now see bypass.
+    expect(ctx.stats.permissionMode).toBe('bypassPermissions');
+    // The seed's message was auto-submitted as the implement turn.
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
+    const firstArg = vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string };
+    expect(firstArg.text).toBe('IMPLEMENT-SEED');
+  });
+});
+
 describe('runReplLoop — shell-passthrough dispatch branch', () => {
   it('routes a `!cmd` line to ShellPassthrough.dispatch and does not run a model turn', async () => {
     // Iteration 1: readLine → '!echo hi' → shell dispatch handles it, continue.

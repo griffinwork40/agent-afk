@@ -206,9 +206,16 @@ export async function runInputLoop(
       // seeded save-and-implement handoff. A `/plan off` seed (set directly,
       // same turn) takes precedence if both are somehow present.
       if (seedBuffer === undefined) {
-        const planExitSeed = await ctx.session.current.takePendingPlanExitSeed();
-        if (planExitSeed !== undefined) {
-          seedBuffer = { text: planExitSeed, attachments: [] };
+        const planExit = await ctx.session.current.takePendingPlanExitSeed();
+        if (planExit !== undefined) {
+          // #495: takePendingPlanExitSeed already applied the deferred flip to
+          // the SESSION's mode, but the plan-mode gate and this loop's prompt
+          // read `stats.permissionMode` (bootstrap wires the gate to
+          // `() => stats.permissionMode`). Mirror the applied mode here — exactly
+          // as `togglePlanMode` does for `/plan off` — or the gate stays
+          // plan-locked and the operator's prompt indicator never flips.
+          ctx.stats.permissionMode = planExit.mode;
+          seedBuffer = { text: planExit.message, attachments: [] };
         }
       }
 
