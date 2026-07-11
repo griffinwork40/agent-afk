@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.28.0] - 2026-07-11
+
+### Added
+- observe-only safe-destruct PreToolUse detector (gate-migration wave 1) (#492) (a442571)
+
 ## [5.27.2] - 2026-07-11
 
 ### Changed
