@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.30.0] - 2026-07-11
+
+### Added
+- seed the REPL from a launch argument (`afk "prompt"` / `afk /review`) (#510) (ae561dd)
+
 ## [5.29.3] - 2026-07-11
 
 ### Fixed
