@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.29.0] - 2026-07-11
+
+### Added
+- classify usage-limit 429s via anthropic-ratelimit-unified-* headers (#488) (#490) (a43dab4)
+
 ## [5.28.3] - 2026-07-11
 
 ### Changed
