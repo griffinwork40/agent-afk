@@ -171,6 +171,33 @@ describe('createAfkModeGate', () => {
     expect(result.decision).toBeUndefined();
   });
 
+  it('classifies subagent writes against the per-call cwd when hook registry is shared', async () => {
+    // A forked subagent shares the parent hook registry but runs in a sibling
+    // worktree. The per-call cwd (context.cwd, from the child dispatcher's
+    // resolveBase) must classify the child's in-worktree write as inside its
+    // workspace, while an absolute write escaping into the parent tree stays
+    // blocked — proving the gate reads context.cwd ahead of the static cwd.
+    const { gate } = makeGate('autonomous', '/Users/dev/project');
+
+    const allowed = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: 'src/feature.ts' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/Users/dev/project/.afk-worktrees/fix-201',
+    });
+    expect(allowed.decision).toBeUndefined();
+
+    const blocked = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: '/Users/dev/project/src/feature.ts' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/Users/dev/project/.afk-worktrees/fix-201',
+    });
+    expect(blocked.decision).toBe('block');
+  });
+
   it('getter-at-call-time: gate respects mode changes after construction', async () => {
     const { gate, setMode } = makeGate('autonomous');
     expect(

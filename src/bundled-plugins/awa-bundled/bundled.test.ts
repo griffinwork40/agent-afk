@@ -36,7 +36,7 @@ const __dirname = dirname(__filename);
 // developer to look at both copies.
 const PINNED_HASHES = {
   // automate: afk-native scheduled-run skill (create_schedule + send_telegram +
-  // `afk service install daemon`). Mirrors the awa-dev upstream (→ framework);
+  // `afk service install daemon`). Mirrors the upstream framework plugin;
   // vendored byte-equal, so no INTENTIONAL_DIFFS entry is needed. Drift row is
   // wired in UPSTREAM_PATHS below (skips until example-plugin is co-located).
   automate: '93380f58316e607f6b95b27a9c2375f0a5403f3a42eb695d0490b50225d8838c',

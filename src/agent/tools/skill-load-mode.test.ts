@@ -294,9 +294,8 @@ describe('context: load — plugin skills', () => {
     // Regression: the previous /\$\{?PLUGIN_ROOT\}?/g regex matched only
     // `${PLUGIN_ROOT` of the Claude-Code fallback idiom and left `:-${CLAUDE_
     // PLUGIN_ROOT}}` dangling, producing a broken path. Skills using the
-    // portable `${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}` form (forge-gate-check,
-    // distill, forge-l2-eval, ceiling-test) failed their python3 invocations
-    // in load mode as a result.
+    // portable `${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}` form (several load-mode
+    // plugin skills) failed their python3 invocations in load mode as a result.
     const mockFork = spyNoFork();
     const executor = makeExecutor();
     const PLUGIN_PATH = '/home/user/.afk/plugins/my-plugin';

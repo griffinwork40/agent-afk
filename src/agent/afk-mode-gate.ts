@@ -251,11 +251,20 @@ export function createAfkModeGate(
 
     // Single source of truth for risk. `workspaceRoot` is set to the session
     // cwd so writes that escape it are flagged `high` (classifyRisk's workspace
-    // boundary rule). Prefer the live getCwd() (tracks a mid-session /cwd
-    // change) over the static construction-time cwd; fall back to process.cwd()
-    // when both are unknown. This matters because in AFK the path-approval
-    // prompt is disabled (allowAll), so this gate is the SOLE path-safety layer.
-    const root = getCwd?.() ?? cwd ?? process.cwd();
+    // boundary rule). Resolution order, most-specific first:
+    //   1. context.cwd — the dispatcher's per-call resolve base. Load-bearing
+    //      for forked subagents: they intentionally share the parent hook
+    //      registry, but their dispatcher runs in a sibling worktree, so the
+    //      per-call cwd classifies a child's in-worktree write correctly instead
+    //      of against the parent session's cwd. For the top-level session this
+    //      tracks /cwd in lockstep with getCwd() (updateCwdDependents keeps the
+    //      main dispatcher's resolveBase synced), so the two agree there.
+    //   2. getCwd() — the live session cwd (tracks a mid-session /cwd change),
+    //      preferred over the static construction-time cwd.
+    //   3. the static construction-time cwd, then process.cwd().
+    // This matters because in AFK the path-approval prompt is disabled
+    // (allowAll), so this gate is the SOLE path-safety layer.
+    const root = context.cwd ?? getCwd?.() ?? cwd ?? process.cwd();
     const risk = classifyRisk(toolName, context.input, {
       cwd: root,
       workspaceRoot: root,

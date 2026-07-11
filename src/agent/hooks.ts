@@ -157,6 +157,13 @@ export interface PreToolUseContext {
    * conversation-level affordance) use it to skip subagent tool calls.
    */
   parentSessionId?: string;
+  /**
+   * Effective cwd for this specific tool call, when known. Dispatchers set this
+   * from their current resolve base so shared hook registries can classify
+   * forked subagent calls against the child's worktree rather than the parent
+   * session's construction-time cwd.
+   */
+  cwd?: string;
   toolName: string;
   input?: unknown;
 }
