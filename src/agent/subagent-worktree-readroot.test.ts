@@ -164,3 +164,42 @@ describe('forkSubagent — worktree main-repo read-root grant', () => {
     expect(mockedResolve).not.toHaveBeenCalled();
   });
 });
+
+describe('forkSubagent — explicit write-root pre-grant (#435)', () => {
+  beforeEach(() => {
+    shared.lastConfig = null;
+    mockedResolve.mockReset();
+    mockedResolve.mockResolvedValue(undefined);
+  });
+
+  it('composes config.writeRoots with the child cwd (deduped)', async () => {
+    const mgr = new SubagentManager({ cwd: WORKTREE });
+    await mgr.forkSubagent(
+      forkOpts({ model: 'sonnet', apiKey: 'k', writeRoots: ['/sibling/repo'] }),
+    );
+
+    const cfg = shared.lastConfig as { writeRoots?: string[] } | null;
+    // cwd is always included so the child keeps write access to its own tree.
+    expect(cfg?.writeRoots).toEqual([WORKTREE, '/sibling/repo']);
+  });
+
+  it('dedupes when config.writeRoots already contains the cwd', async () => {
+    const mgr = new SubagentManager({ cwd: WORKTREE });
+    await mgr.forkSubagent(
+      forkOpts({ model: 'sonnet', apiKey: 'k', writeRoots: [WORKTREE, '/sibling'] }),
+    );
+
+    const cfg = shared.lastConfig as { writeRoots?: string[] } | null;
+    // Set dedup: WORKTREE appears once even though both base and writeRoots include it.
+    expect(cfg?.writeRoots).toEqual([WORKTREE, '/sibling']);
+  });
+
+  it('does not override writeRoots when config.writeRoots is absent', async () => {
+    const mgr = new SubagentManager({ cwd: WORKTREE });
+    await mgr.forkSubagent(forkOpts({ model: 'sonnet', apiKey: 'k' }));
+
+    const cfg = shared.lastConfig as { writeRoots?: string[] } | null;
+    // No explicit writeRoots → provider defaults to [cwd].
+    expect(cfg?.writeRoots).toBeUndefined();
+  });
+});

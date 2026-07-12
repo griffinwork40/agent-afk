@@ -538,6 +538,19 @@ export class SubagentManager {
       }
     }
 
+    // Explicit write-root pre-grant (#435): when the caller passed writeRoots on
+    // the agent tool, COMPOSE them with the child's own cwd so the child never
+    // loses write access to its own tree — the provider REPLACES the default
+    // [cwd] write root with config.writeRoots on first init (see
+    // anthropic-direct/index.ts ensureSharedRoots). Unlike the #416 read grant
+    // this is never automatic: writing outside the worktree breaks isolation, so
+    // it requires explicit parent intent.
+    let composedWriteRoots: string[] | undefined;
+    if (options.config.writeRoots !== undefined && options.config.writeRoots.length > 0) {
+      const base = effectiveChildCwd !== undefined ? [effectiveChildCwd] : [];
+      composedWriteRoots = [...new Set([...base, ...options.config.writeRoots])];
+    }
+
     const childConfig: AgentConfig = {
       ...options.config,
       resume,
@@ -626,6 +639,11 @@ export class SubagentManager {
       // readRoots unset; otherwise the `...options.config` spread's readRoots
       // (or the provider's `[cwd]` default) stands.
       ...(worktreeReadRoots !== undefined ? { readRoots: worktreeReadRoots } : {}),
+      // Explicit write-root pre-grant (#435): composed with cwd above. When
+      // writeRoots is absent, composedWriteRoots is undefined and the
+      // `...options.config` spread's writeRoots (or the provider's `[cwd]`
+      // default) stands.
+      ...(composedWriteRoots !== undefined ? { writeRoots: composedWriteRoots } : {}),
       // Invariant: a forked child's trace origin comes from its inherited
       // parent surface, not from any actor-role value (see session-identity.ts).
       // Inherit traceWriter + surface from the manager so every worker session

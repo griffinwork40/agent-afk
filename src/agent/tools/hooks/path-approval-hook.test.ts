@@ -137,6 +137,52 @@ describe('createPathApprovalHook — sub-agent auto-deny (PR1)', () => {
     expect(mgr._events).toHaveLength(0);
   });
 
+  // #435: the deny message must name the concrete remedy (mode-specific).
+  it('mentions writeRoots in the deny reason for a write-mode fork', async () => {
+    const mgr = makeMockGrantManager();
+    const { preToolUse } = createPathApprovalHook({
+      getGrantManager: () => mgr,
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    const decision = await preToolUse({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: '/etc/hosts', content: 'x' },
+      sessionId: 'child-1',
+      parentSessionId: 'parent-1',
+    });
+
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('Sub-agent path access denied');
+    expect(decision.reason).toContain('write');
+    expect(decision.reason).toContain('writeRoots');
+  });
+
+  it('mentions read roots in the deny reason for a read-mode fork', async () => {
+    const mgr = makeMockGrantManager();
+    const { preToolUse } = createPathApprovalHook({
+      getGrantManager: () => mgr,
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    const decision = await preToolUse({
+      event: 'PreToolUse',
+      toolName: 'read_file',
+      input: { file_path: '/etc/hosts' },
+      sessionId: 'child-1',
+      parentSessionId: 'parent-1',
+    });
+
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('Sub-agent path access denied');
+    expect(decision.reason).toContain('read');
+    // Read-mode remedy should NOT mention writeRoots.
+    expect(decision.reason).not.toContain('writeRoots');
+  });
+
   it('leaves inherited in-root access untouched for a sub-agent (no prompt, no block)', async () => {
     const handler = vi.fn(async () => ({ action: 'accept', content: { choice: 'session' } }));
     elicitationRouter.install(handler);

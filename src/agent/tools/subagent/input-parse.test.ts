@@ -363,6 +363,65 @@ describe('parseAgentInput', () => {
     });
   });
 
+  describe('writeRoots', () => {
+    it('is undefined (key omitted) when not supplied', () => {
+      const result = parseAgentInput({ prompt: 'p' });
+      expect(result.writeRoots).toBeUndefined();
+      expect('writeRoots' in result).toBe(false);
+    });
+
+    it('accepts an array of absolute paths', () => {
+      const result = parseAgentInput({ prompt: 'p', writeRoots: ['/abs/a', '/abs/b'] });
+      expect(result.writeRoots).toEqual(['/abs/a', '/abs/b']);
+    });
+
+    it('throws when writeRoots is not an array (string)', () => {
+      expect(() => parseAgentInput({ prompt: 'p', writeRoots: '/abs/a' })).toThrow(
+        /writeRoots must be an array/,
+      );
+    });
+
+    it('throws when an entry is a relative path', () => {
+      expect(() => parseAgentInput({ prompt: 'p', writeRoots: ['relative/path'] })).toThrow(
+        /writeRoots entries must be absolute paths/,
+      );
+    });
+
+    it("throws when an entry contains a '..' segment", () => {
+      expect(() =>
+        parseAgentInput({ prompt: 'p', writeRoots: ['/tmp/../escape'] }),
+      ).toThrow(/writeRoots entries must not contain '\.\.' segments/);
+    });
+
+    it('throws when an entry is an empty string', () => {
+      expect(() => parseAgentInput({ prompt: 'p', writeRoots: [''] })).toThrow(
+        /writeRoots entries must be non-empty strings/,
+      );
+    });
+
+    it('normalizes an empty array to undefined (field absent)', () => {
+      const result = parseAgentInput({ prompt: 'p', writeRoots: [] });
+      expect(result.writeRoots).toBeUndefined();
+      expect('writeRoots' in result).toBe(false);
+    });
+
+    it('throws when writeRoots and isolation:worktree are both supplied (mutually exclusive)', () => {
+      expect(() =>
+        parseAgentInput({ prompt: 'p', writeRoots: ['/abs/a'], isolation: 'worktree' }),
+      ).toThrow(/writeRoots and isolation are mutually exclusive/);
+    });
+
+    it('accepts writeRoots together with cwd (the main use case)', () => {
+      const result = parseAgentInput({
+        prompt: 'p',
+        cwd: '/tmp/wt/x',
+        writeRoots: ['/sibling/repo'],
+      });
+      expect(result.cwd).toBe('/tmp/wt/x');
+      expect(result.writeRoots).toEqual(['/sibling/repo']);
+    });
+  });
+
   describe('isolation', () => {
     it('defaults to omitted (no field) when absent', () => {
       const result = parseAgentInput({ prompt: 'p' });

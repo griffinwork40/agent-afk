@@ -227,12 +227,25 @@ async function preToolUseImpl(
     console.error(
       `[path-approval] surface=${opts.surface} tool=${context.toolName} path=${result.resolved} outcome=subagent-autodeny`,
     );
+    // #435: name the concrete remedy rather than implying a grant mechanism the
+    // fork does not have. A fork cannot elicit, so the recovery actor is always
+    // the PARENT: for writes it can re-dispatch with an explicit writeRoots
+    // grant on the `agent` tool (or do the write itself); for reads it owns the
+    // operator surface and can widen readRoots or re-dispatch with the path in cwd.
+    const remedy =
+      mode === 'write'
+        ? `Writes are confined to this fork's granted write roots by design ` +
+          `(worktree isolation). To allow it, the parent must re-dispatch you via ` +
+          `the \`agent\` tool with \`writeRoots: [${JSON.stringify(result.resolved)}]\`, ` +
+          `or perform the write itself. Return this exact path requirement to your parent.`
+        : `Reads are confined to this fork's granted read roots. Return this exact ` +
+          `path requirement to your parent, which owns the operator surface and can ` +
+          `grant access (widen readRoots or re-dispatch with the path inside cwd).`;
     return {
       decision: 'block',
       reason:
-        `Sub-agents cannot access paths outside the session's granted roots ` +
-        `(${result.resolved}). Report this path requirement to the parent ` +
-        `session, which owns the operator surface and can grant access.`,
+        `Sub-agent path access denied: ${result.resolved} is outside the ` +
+        `session's granted ${mode} roots. ${remedy}`,
     };
   }
 
