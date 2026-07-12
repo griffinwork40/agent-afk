@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.33.0] - 2026-07-12
+
+### Added
+- observe-only release-boundary PreToolUse detector (gate-migration wave 1 slice 2) (#524) (7f5a4fc)
+- cross-provider history compaction (#517) (d44cc30)
+
 ## [5.32.0] - 2026-07-12
 
 ### Added
