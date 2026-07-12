@@ -56,6 +56,10 @@ import {
   DEFAULT_TOOL_FAILURE_MIN_FAILURES,
   DEFAULT_TOOL_FAILURE_MIN_RATE,
 } from './tool-failure-density.js';
+import {
+  detectSubagentReadDenial,
+  DEFAULT_SUBAGENT_READ_DENIAL_MIN_OCCURRENCES,
+} from './subagent-read-denial.js';
 
 /**
  * Shared option bag passed to every detector. Detectors only read the
@@ -68,6 +72,8 @@ export interface DetectorOptions {
   closureAnomalyMinOccurrences?: number;
   /** subagent-block: minimum SubagentStart blocks sharing the same reason. */
   subagentBlockMinOccurrences?: number;
+  /** subagent-read-denial: minimum PreToolUse read-denials sharing the same normalized reason. */
+  subagentReadDenialMinOccurrences?: number;
   /** tool-failure-density: minimum absolute failure count per tool. */
   toolFailureMinFailures?: number;
   /** tool-failure-density: minimum failure rate (failures / total calls) per tool. */
@@ -135,6 +141,19 @@ export const DETECTOR_REGISTRY: readonly DetectorEntry[] = Object.freeze([
       detectToolFailureDensity(sessions, {
         minFailures: opts.toolFailureMinFailures ?? DEFAULT_TOOL_FAILURE_MIN_FAILURES,
         minFailureRate: opts.toolFailureMinRate ?? DEFAULT_TOOL_FAILURE_MIN_RATE,
+      }),
+  },
+  {
+    name: 'subagent-read-denial',
+    description: `Forked sub-agent read auto-denied (PreToolUse block, path outside granted read roots) recurring across ≥N events (default ${DEFAULT_SUBAGENT_READ_DENIAL_MIN_OCCURRENCES})`,
+    // Opt-in like subagent-block: read-denials can fire during legitimate
+    // worktree confinement or active bug-fixing, so surface on demand via
+    // `--only subagent-read-denial` rather than in the default noise floor.
+    enabledByDefault: false,
+    run: (sessions, opts): DetectorResult[] =>
+      detectSubagentReadDenial(sessions, {
+        minOccurrences:
+          opts.subagentReadDenialMinOccurrences ?? DEFAULT_SUBAGENT_READ_DENIAL_MIN_OCCURRENCES,
       }),
   },
 ] satisfies DetectorEntry[]);
