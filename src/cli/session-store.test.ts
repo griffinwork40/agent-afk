@@ -272,6 +272,25 @@ describe('session-store', () => {
       expect(found).toBeDefined();
       expect(found!.id).toBe(id);
     });
+
+    it('preserves the session cwd so the fork resumes in the same directory', () => {
+      const stats = createSessionStats('sonnet');
+      recordTurn(stats, 'q', 'a', { sessionId: 'p' });
+      stats.cwd = '/some/worktree';
+      const { id } = forkStoredSession(stats);
+      const forked = loadSession(id);
+      expect(forked!.cwd).toBe('/some/worktree');
+    });
+
+    it('omits cwd when the session has none', () => {
+      const stats = createSessionStats('sonnet');
+      recordTurn(stats, 'q', 'a', { sessionId: 'p' });
+      expect(stats.cwd).toBeUndefined();
+      const { id } = forkStoredSession(stats);
+      const forked = loadSession(id);
+      expect(forked!.cwd).toBeUndefined();
+      expect('cwd' in (forked as object)).toBe(false);
+    });
   });
 });
 

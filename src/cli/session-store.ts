@@ -186,6 +186,10 @@ export function forkStoredSession(
     totalTokens: stats.totalTokens,
     totalDurationMs: stats.totalDurationMs,
     turns: [...stats.turns],
+    // Preserve the session's cwd so a forked sidecar records where it was
+    // running (e.g. an `afk --worktree` session). Without this, resuming the
+    // fork lands in the launch cwd instead of the worktree. Mirrors saveSession.
+    ...(stats.cwd ? { cwd: stats.cwd } : {}),
     ...(stats.sessionId ? { forkedFrom: stats.sessionId } : {}),
     forkedAt: Date.now(),
   };
