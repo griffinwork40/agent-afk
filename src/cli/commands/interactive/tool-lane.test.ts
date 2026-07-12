@@ -24,6 +24,49 @@ function makeResult(content: string, isError = false): ToolResultChunk {
   };
 }
 
+describe('ToolLane — batch (parallel-wave) badge on root rows', () => {
+  const batchResult = (content: string, batchIndex: number, batchSize: number): ToolResultChunk => ({
+    type: 'tool_result',
+    toolUseId: 'unused',
+    content,
+    isError: false,
+    batchIndex,
+    batchSize,
+  });
+
+  it('flush() badges each root of a parallel safe wave with ∥i/N', () => {
+    const lane = new ToolLane();
+    lane.addStart('r1', 'Read', '("a.ts")');
+    lane.addStart('g1', 'Grep', '("foo")');
+    lane.addResult('r1', batchResult('10 lines', 1, 2));
+    lane.addResult('g1', batchResult('3 matches', 2, 2));
+
+    const joined = stripAnsi(lane.flush().join('\n'));
+    expect(joined).toContain('∥1/2');
+    expect(joined).toContain('∥2/2');
+  });
+
+  it('does NOT badge a singleton batch (batchSize === 1) — the sequential-dispatch case', () => {
+    const lane = new ToolLane();
+    lane.addStart('b1', 'Bash', '("echo hi")');
+    lane.addResult('b1', batchResult('hi', 1, 1));
+
+    expect(stripAnsi(lane.flush().join('\n'))).not.toContain('∥');
+  });
+
+  it('badges the live overlay too, not just committed scrollback', () => {
+    const lane = new ToolLane();
+    lane.addStart('r1', 'Read', '("a.ts")');
+    lane.addStart('g1', 'Grep', '("foo")');
+    lane.addResult('r1', batchResult('10 lines', 1, 2));
+    lane.addResult('g1', batchResult('3 matches', 2, 2));
+
+    const overlay = stripAnsi(lane.getOverlay());
+    expect(overlay).toContain('∥1/2');
+    expect(overlay).toContain('∥2/2');
+  });
+});
+
 describe('ToolLane.addStartWithAgentContext', () => {
   it('creates an entry with the given agentContext (does not consult agentIdStack)', () => {
     const lane = new ToolLane();

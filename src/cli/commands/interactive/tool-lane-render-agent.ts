@@ -9,6 +9,7 @@ import {
   doneGlyph,
   sanitizeLabel,
   shortenPaths,
+  batchBadge,
 } from './tool-lane-format.js';
 import type { ToolEntry, Entry } from './tool-lane-render.js';
 import { getGlyphs, clampLineToTerminal } from './tool-lane-render.js';
@@ -210,7 +211,7 @@ function renderGroupedRootTools(
     if (entries.length === 1) {
       const e = entries[0]!;
       if (e.result) {
-        lines.push('  ' + e.prefix + palette.dim(' — ') + doneGlyph(e.result.isError) + ' ' + formatOutcome(e.result, homeDir, 60, e.toolName));
+        lines.push('  ' + e.prefix + palette.dim(' — ') + doneGlyph(e.result.isError) + ' ' + formatOutcome(e.result, homeDir, 60, e.toolName) + batchBadge(e.result));
         if (e.diff && !e.result.isError) {
           // Root-level scrollback diff: indent 4 spaces so it sits under
           // the outcome line (2 for the row indent, 2 more to clear the

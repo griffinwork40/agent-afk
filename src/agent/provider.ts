@@ -157,6 +157,16 @@ export type ProviderEvent =
        * preview path.
        */
       toolName?: string;
+      /**
+       * Concurrency-batch membership, plumbed from `ToolResult.batchIndex` /
+       * `.batchSize` (set by the dispatcher's `executeBatch`). `batchSize > 1`
+       * means this call ran in a parallel wave; `=== 1` (or absent) means it
+       * ran alone. The interactive tool-lane reads these to badge a parallel
+       * wave distinctly from back-to-back sequential dispatch. Optional: absent
+       * on the single-tool `execute()` path and on providers that don't batch.
+       */
+      batchIndex?: number;
+      batchSize?: number;
     }
   | {
       /**
