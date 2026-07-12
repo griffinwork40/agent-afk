@@ -107,6 +107,8 @@ export function projectOutputEvent(event: OutputEvent): LedgerPayload | null {
     case 'chunk': {
       const chunk = event.chunk;
       if (chunk.type === 'tool_use_detail') {
+        // `toolInput` is redacted at its source (summarizeToolInput) before it
+        // ever reaches this at-rest sink, so no secret-scrub is needed here.
         return {
           kind: 'tool',
           toolName: chunk.toolName,
