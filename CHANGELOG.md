@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.31.2] - 2026-07-12
+
+### Fixed
+- give read/write/edit/list the factory-cwd resolve tier glob/grep have (#434) (#522) (a4be744)
+
 ## [5.31.1] - 2026-07-12
 
 ### Fixed
