@@ -11,6 +11,22 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.30.2] - 2026-07-11
+
+### Fixed
+- refresh lastMeasuredFrameTop in the picker repaint path too (#513) (0c83bfa)
+
+## [5.30.1] - 2026-07-11
+
+### Fixed
+- label subagent tool-call tallies "N tool calls" not "N tools" (#508) (2f1c857)
+- route commitAbove on the real measured frame top, not the shrink-padded one (#505) (60a664b)
+
+## [5.30.0] - 2026-07-11
+
+### Added
+- seed the REPL from a launch argument (`afk "prompt"` / `afk /review`) (#510) (ae561dd)
+
 ## [5.29.3] - 2026-07-11
 
 ### Fixed

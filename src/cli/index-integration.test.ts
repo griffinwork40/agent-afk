@@ -50,6 +50,22 @@ describe('CLI integration', () => {
     expect(program.commands.find((c) => c.name() === 'status')?.aliases()).toContain('s');
   });
 
+  it('interactive declares a variadic [input...] arg so `afk "prompt"` / `afk /cmd` seed the REPL', () => {
+    // The default command must carry an optional variadic positional. Without
+    // it, commander v12 silently DROPS a launch argument (`afk "hi"` starts the
+    // REPL but loses "hi"); with it, the arg is captured and seeded as the
+    // opening turn. This guards the commander-level half of that feature.
+    const program = new Command();
+    registerInteractiveCommand(program);
+    const interactive = program.commands.find((c) => c.name() === 'interactive');
+    expect(interactive).toBeDefined();
+    const args = interactive!.registeredArguments;
+    expect(args).toHaveLength(1);
+    expect(args[0]?.name()).toBe('input');
+    expect(args[0]?.variadic).toBe(true);
+    expect(args[0]?.required).toBe(false);
+  });
+
   it('supports help text configuration and commands are visible in help', () => {
     const program = new Command();
     registerChatCommand(program);

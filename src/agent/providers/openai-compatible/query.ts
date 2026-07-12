@@ -410,6 +410,14 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // via shared/tool-loop-cap.ts so the two providers cannot drift apart.
     let capReached = false;
     let round = 0;
+    // Cumulative count of tool CALLS dispatched across the whole turn — distinct
+    // from `round`. `result.state` is a FRESH StreamState per iteration (see
+    // runIteration → createStreamState), so finalizedToolCalls(result.state)
+    // returns only THIS round's calls; a round can batch several, so we
+    // accumulate. Emitted as the progress event's `toolUses` (below) so the
+    // CLI's formatToolCallStat renders a truthful "N tool calls" (PR 508 codex
+    // review, P2).
+    let toolCallCount = 0;
 
     for (;;) {
       if (controller.signal.aborted) {
@@ -468,7 +476,12 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       round += 1;
 
       {
-        const lastCall = finalizedToolCalls(result.state).at(-1);
+        // `result.state` is per-round (fresh each runIteration), so this array
+        // is THIS round's dispatched calls. Accumulate its length into the
+        // running total — a round can batch multiple parallel calls.
+        const roundCalls = finalizedToolCalls(result.state);
+        toolCallCount += roundCalls.length;
+        const lastCall = roundCalls.at(-1);
         const lastToolName = lastCall?.name;
         // Semantic summary — mirror anthropic-direct/loop.ts: tool name +
         // most informative argument via summarizeToolInput, so the progress
@@ -493,7 +506,12 @@ export class OpenAICompatibleQuery implements ProviderQuery {
             summary: `round ${round}: ${lastToolHeadline}`,
             lastToolName,
             totalTokens: accumulatedUsage.totalTokens ?? 0,
-            toolUses: round,
+            // Contract: `toolUses` is the cumulative COUNT OF TOOL CALLS so far
+            // in this turn (not the round number), so downstream
+            // formatToolCallStat renders "N tool calls" truthfully even when a
+            // round batched parallel calls. The `summary` above legitimately
+            // names the ROUND — leave it.
+            toolUses: toolCallCount,
             durationMs: Date.now() - turnStartTime,
           },
           sessionId: this.initSessionId,

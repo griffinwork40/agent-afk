@@ -144,8 +144,10 @@ program.addHelpText(
   `
 Examples:
   $ afk                          # start interactive REPL
+  $ afk "what does this do?"     # REPL, auto-submits the prompt as the first turn
+  $ afk /review                  # REPL, runs a slash command / skill on launch
   $ afk --model opus             # REPL with specific model
-  $ afk chat "What is 2+2?"     # one-shot message
+  $ afk chat "What is 2+2?"     # one-shot message (prints and exits)
   $ afk status --format json`,
 );
 

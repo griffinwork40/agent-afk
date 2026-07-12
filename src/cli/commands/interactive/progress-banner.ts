@@ -3,7 +3,7 @@ import type { ProgressEvent } from '../../../agent/types.js';
 import type { CompletionWriter } from './shared.js';
 import { extractLatestThinkingClause } from '../../_lib/stream-renderer-subagent-helpers.js';
 import { truncateDisplayWidth } from '../../display.js';
-import { formatDuration, formatTokens } from '../../format-utils.js';
+import { formatDuration, formatTokens, formatToolCallStat } from '../../format-utils.js';
 import { palette } from '../../palette.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 import { styleForToolName } from '../../tool-category.js';
@@ -88,7 +88,7 @@ export function formatProgressBanner(
     const { color, glyph } = styleForToolName(lastToolName);
     stats.push(`via ${color(`${glyph} ${sanitizeLabel(lastToolName)}`)}`);
   }
-  if (toolUses) stats.push(`${toolUses} tool${toolUses === 1 ? '' : 's'}`);
+  if (toolUses) stats.push(formatToolCallStat(toolUses));
   if (totalTokens) stats.push(`${formatTokens(totalTokens)} tok`);
   if (durationMs) stats.push(formatDuration(durationMs));
   stats.push('esc to interrupt · ctrl+b background');
@@ -116,7 +116,7 @@ export function formatProgressBanner(
 export function formatProgressSummary(event: ProgressEvent, columns?: number): string {
   const { description, totalTokens, toolUses, durationMs } = event;
   const stats: string[] = [];
-  if (toolUses) stats.push(`${toolUses} tool${toolUses === 1 ? '' : 's'}`);
+  if (toolUses) stats.push(formatToolCallStat(toolUses));
   if (totalTokens) stats.push(`${formatTokens(totalTokens)} tok`);
   if (durationMs) stats.push(formatDuration(durationMs));
   const statsStr = stats.length > 0 ? ` (${stats.join(' · ')})` : '';
