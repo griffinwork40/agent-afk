@@ -70,16 +70,27 @@ export function _resetRootRealpathCacheForTests(): void {
  *                      back-compat callers that provide no context).
  * @param mode        - `'read'` or `'write'` — affects the error message noun
  *                      only; the containment logic is identical.
+ * @param fallbackBase - Optional session cwd closed over by a handler factory
+ *                      (e.g. `createReadFileHandler(cwd)`). Used as the LAST
+ *                      resolve-base tier — after `context.resolveBase` /
+ *                      `context.cwd`, before `process.cwd()` — so a factory
+ *                      handler invoked WITHOUT a dispatcher context still
+ *                      anchors relative paths to (and confines them within)
+ *                      its session tree instead of the host launch dir. Mirrors
+ *                      the `?? sessionCwd` tier grep/glob already carry. On the
+ *                      dispatcher path it is a no-op: `context.cwd` and the
+ *                      factory cwd are the same value, so `context` wins.
  * @returns The resolved absolute path.
- * @throws  When a `resolveBase` is set and the resolved path falls outside
+ * @throws  When a resolve base is set and the resolved path falls outside
  *          every allowed root.
  */
 export function resolveAndContain(
   inputPath: string,
   context: ToolHandlerContext | undefined,
   mode: 'read' | 'write' = 'read',
+  fallbackBase?: string,
 ): string {
-  const resolveBase = context?.resolveBase ?? context?.cwd;
+  const resolveBase = context?.resolveBase ?? context?.cwd ?? fallbackBase;
 
   // Resolve to absolute, anchoring relative paths against resolveBase.
   const abs = path.isAbsolute(inputPath)
@@ -93,7 +104,16 @@ export function resolveAndContain(
     return abs;
   }
 
-  // No base set — no containment enforcement.
+  // Invariant: `resolveBase === undefined` marks an UNCONFINED session — a
+  // top-level `afk chat`/`interactive` run with no worktree, where `config.cwd`
+  // is deliberately unset (dispatcher does `this.resolveBase = opts.cwd`). We
+  // disable containment here on purpose so such a session can read/write
+  // anywhere (config files, /tmp, absolute paths). Do NOT "fix" this by
+  // defaulting resolveBase to `process.cwd()`: that confines every top-level
+  // session to its launch dir, and — because the emitted `readRoots`/`writeRoots`
+  // are `[]` for a no-cwd session (`[] ?? [base]` stays `[]`) — would reject ALL
+  // paths. Confinement is opt-in via a set cwd (worktree/fork) or an explicit
+  // `fallbackBase`, never a default. See docs/issue #434.
   if (resolveBase === undefined) {
     return abs;
   }
@@ -146,8 +166,9 @@ export function wouldBeRestricted(
   inputPath: string,
   context: ToolHandlerContext | undefined,
   mode: 'read' | 'write' = 'read',
+  fallbackBase?: string,
 ): { restricted: boolean; resolved: string; roots: string[] } {
-  const resolveBase = context?.resolveBase ?? context?.cwd;
+  const resolveBase = context?.resolveBase ?? context?.cwd ?? fallbackBase;
 
   const abs = path.isAbsolute(inputPath)
     ? inputPath
@@ -160,7 +181,8 @@ export function wouldBeRestricted(
   }
 
   if (resolveBase === undefined) {
-    // No containment enforcement — never restricted.
+    // Unconfined session — no containment enforcement, never restricted.
+    // Same load-bearing invariant documented in `resolveAndContain`.
     return { restricted: false, resolved: abs, roots: [] };
   }
 

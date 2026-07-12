@@ -30,7 +30,12 @@ import { resolveAndContain } from './_cwd-utils.js';
  *    2\tnext line
  * ```
  */
-export const readFileHandler: ToolHandler = async (input, _signal, context?: ToolHandlerContext) => {
+const readFileImpl = async (
+  input: unknown,
+  _signal: AbortSignal,
+  context: ToolHandlerContext | undefined,
+  cwd: string | undefined,
+) => {
   // Validate input shape
   if (!input || typeof input !== 'object') {
     return { content: 'Invalid input: expected an object', isError: true };
@@ -57,7 +62,7 @@ export const readFileHandler: ToolHandler = async (input, _signal, context?: Too
 
   let filePath: string;
   try {
-    filePath = resolveAndContain(rawFilePath, context, 'read');
+    filePath = resolveAndContain(rawFilePath, context, 'read', cwd);
   } catch (err) {
     return { content: err instanceof Error ? err.message : String(err), isError: true };
   }
@@ -136,3 +141,20 @@ export const readFileHandler: ToolHandler = async (input, _signal, context?: Too
     return { content: 'Unknown error reading file', isError: true };
   }
 };
+
+/**
+ * Create a `read_file` handler closed over a session-specific base path.
+ *
+ * When invoked without a dispatcher context (or one lacking `resolveBase`/
+ * `cwd`), `cwd` becomes the resolve base — so a handler built for a worktree
+ * session anchors and confines relative paths to that tree instead of the host
+ * `process.cwd()`. `cwd === undefined` preserves the legacy unconfined behavior.
+ * Mirrors `createGlobHandler`/`createGrepHandler` so all six filesystem handlers
+ * share one session-cwd fallback tier. See issue #434.
+ */
+export function createReadFileHandler(cwd?: string): ToolHandler {
+  return (input, signal, context) => readFileImpl(input, signal, context, cwd);
+}
+
+/** Bare `read_file` handler with no session cwd (`createReadFileHandler()`). */
+export const readFileHandler: ToolHandler = createReadFileHandler();

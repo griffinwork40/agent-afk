@@ -241,3 +241,37 @@ describe('symlink containment', () => {
     expect(() => resolveAndContain(outsideFile, c)).toThrow(/outside the allowed/);
   });
 });
+
+describe('fallbackBase — factory-cwd resolve tier (issue #434)', () => {
+  // A context with NO resolveBase/cwd — the out-of-dispatcher invocation shape.
+  const baseless = {
+    cwd: undefined,
+    resolveBase: undefined,
+    readRoots: undefined,
+    writeRoots: undefined,
+  } as ToolHandlerContext;
+
+  it('anchors a relative path to fallbackBase when context carries no base', () => {
+    // Without fallbackBase this resolves against process.cwd(); with it, BASE.
+    expect(resolveAndContain('src/foo.ts', baseless, 'read', BASE)).toBe(INSIDE);
+  });
+
+  it('enforces containment against [fallbackBase] when context carries no base', () => {
+    expect(() => resolveAndContain(OUTSIDE, baseless, 'read', BASE)).toThrow(/outside the allowed/);
+    expect(wouldBeRestricted(OUTSIDE, baseless, 'read', BASE).restricted).toBe(true);
+    expect(wouldBeRestricted(INSIDE, baseless, 'read', BASE).restricted).toBe(false);
+  });
+
+  it('context base wins over fallbackBase (no-op on the dispatcher path)', () => {
+    // context.resolveBase = BASE; a bogus fallbackBase must be ignored.
+    expect(resolveAndContain('src/foo.ts', ctx(), 'read', '/tmp/other')).toBe(INSIDE);
+    expect(wouldBeRestricted(INSIDE, ctx(), 'read', '/tmp/other').restricted).toBe(false);
+  });
+
+  it('undefined fallbackBase preserves the unconfined fall-through (invariant guard)', () => {
+    // No context base AND no fallbackBase → resolveBase undefined → no enforcement.
+    // This is the load-bearing top-level-session invariant; do not "fix" it.
+    expect(resolveAndContain(OUTSIDE, baseless, 'read', undefined)).toBe(OUTSIDE);
+    expect(wouldBeRestricted(OUTSIDE, baseless, 'read', undefined).restricted).toBe(false);
+  });
+});
