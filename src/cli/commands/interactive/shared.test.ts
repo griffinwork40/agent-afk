@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { printResumeBanner, resolveResumeCwd } from './shared.js';
@@ -346,6 +346,13 @@ describe('resolveResumeCwd — resume cwd precedence', () => {
     tmp = mkdtempSync(join(tmpdir(), 'afk-resume-cwd-'));
     // No --worktree override → fall back to the (existing) stored cwd.
     expect(resolveResumeCwd(undefined, tmp)).toBe(tmp);
+  });
+
+  it('falls back (undefined) when the stored cwd exists but is a regular file, not a directory', () => {
+    tmp = mkdtempSync(join(tmpdir(), 'afk-resume-cwd-'));
+    const file = join(tmp, 'not-a-dir');
+    writeFileSync(file, 'x');
+    expect(resolveResumeCwd(undefined, file)).toBeUndefined();
   });
 
   it('falls back (undefined) when the stored cwd no longer exists', () => {

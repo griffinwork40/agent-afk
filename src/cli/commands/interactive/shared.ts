@@ -1,5 +1,5 @@
 import * as readline from 'node:readline';
-import { existsSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import type { HookRegistry } from '../../../agent/hooks.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
 import type { MemoryStore } from '../../../agent/memory/index.js';
@@ -56,15 +56,29 @@ export function reseedStatsFromStored(
 }
 
 /**
+ * True iff `p` exists AND is a directory. A stored cwd that resolved to a
+ * regular file (or a broken symlink) must NOT be used as a working directory,
+ * so we stat rather than existsSync. Any stat error (ENOENT, EACCES, race)
+ * degrades to false, so the caller falls back to process.cwd().
+ */
+function isExistingDir(p: string): boolean {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolve the effective working directory for a (possibly resumed) interactive
  * session. Precedence:
  *   1. An explicit `--worktree` override (`extrasCwd`) ALWAYS wins.
  *   2. Otherwise, fall back to the resumed session's stored cwd — but ONLY when
- *      it still exists on disk. A resumed session should run in the directory
- *      it was saved in (e.g. an `afk --worktree` session later `/fork`'d or
- *      `--resume`'d), not wherever the shell happens to be. A cleaned-up
- *      worktree degrades safely (the stored cwd is ignored, caller falls back
- *      to `process.cwd()`).
+ *      it still exists on disk as a directory. A resumed session should run in
+ *      the directory it was saved in (e.g. an `afk --worktree` session later
+ *      `/fork`'d or `--resume`'d), not wherever the shell happens to be. A
+ *      cleaned-up worktree degrades safely (the stored cwd is ignored, caller
+ *      falls back to `process.cwd()`).
  *
  * Returns `undefined` when neither source applies, so callers keep their
  * existing `?? process.cwd()` fallback. Because it defaults to `extrasCwd` when
@@ -80,7 +94,7 @@ export function resolveResumeCwd(
   storedCwd: string | undefined,
 ): string | undefined {
   if (extrasCwd !== undefined) return extrasCwd;
-  if (storedCwd !== undefined && existsSync(storedCwd)) return storedCwd;
+  if (storedCwd !== undefined && isExistingDir(storedCwd)) return storedCwd;
   return undefined;
 }
 

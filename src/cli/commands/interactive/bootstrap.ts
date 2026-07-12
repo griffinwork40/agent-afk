@@ -1,4 +1,5 @@
 import * as readline from 'node:readline';
+import { resolve } from 'node:path';
 import { elicitationRouter } from '../../../agent/elicitation-router.js';
 import { makeReplElicitationHandler } from '../../elicitation-repl.js';
 import { AgentSession } from '../../../agent/session.js';
@@ -163,13 +164,13 @@ export async function bootstrapSession(
   // was saved in (e.g. an `afk --worktree` session that was later /fork'd or
   // --resume'd), not wherever the shell happens to be. Precedence: an explicit
   // --worktree override (extras.cwd) always wins; otherwise fall back to the
-  // stored cwd IFF it still exists on disk — a cleaned-up worktree degrades
-  // safely to process.cwd(). `effectiveCwd` is threaded through every
-  // cwd-purpose usage below (stats stamp, hook/session cwd, subagent/skill/
-  // compose/MCP cwd) so resumed worktree sessions AND their children anchor
-  // correctly. Defaults to `extras?.cwd` when there is no resume override, so
-  // this is a safe drop-in: behavior only changes for a resume whose stored
-  // cwd still exists.
+  // stored cwd IFF it still exists on disk as a directory — a cleaned-up
+  // worktree degrades safely to process.cwd(). `effectiveCwd` is threaded
+  // through every cwd-purpose usage below (stats stamp, hook/session cwd,
+  // subagent/skill/compose/MCP cwd) so resumed worktree sessions AND their
+  // children anchor correctly. Defaults to `extras?.cwd` when there is no
+  // resume override, so this is a safe drop-in: behavior only changes for a
+  // resume whose stored cwd still exists.
   const effectiveCwd = resolveResumeCwd(extras?.cwd, resumeTarget?.stored?.cwd);
   const sessionModel = resumeTarget?.stored?.model ?? options.model;
   // Fail fast on an unconfigured capability tier (e.g. `afk i -m local` with no
@@ -620,7 +621,7 @@ export async function bootstrapSession(
   if (
     extras?.cwd === undefined &&
     effectiveCwd !== undefined &&
-    effectiveCwd !== process.cwd()
+    resolve(effectiveCwd) !== resolve(process.cwd())
   ) {
     console.log(palette.dim(`  ↪ resuming in ${effectiveCwd}`));
   }
