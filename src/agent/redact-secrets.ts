@@ -30,8 +30,11 @@
  *     (AKIA = long-lived, ASIA = STS, AROA = role, AIDA = user, ...) — below
  *     the generic 32-char floor so they need explicit coverage.
  *   - Generic long opaque tokens           ≥32 contiguous non-whitespace chars
- *     that consist entirely of hex or base64 alphabet characters
- *     (heuristic; avoids redacting prose words or file paths)
+ *     that consist entirely of hex or base64 alphabet characters (heuristic).
+ *     Runs shaped like a filesystem/URL path are excluded — see
+ *     `looksLikeFilesystemPath` — so a long bare `cd <path>` argument is not
+ *     mistaken for a secret. An opaque token fused into a path segment
+ *     (`/tmp/uploads/<token>`) is still redacted (rule 3 of that guard).
  *
  * Explicit patterns run BEFORE the generic length rule so short or
  * dot-separated tokens get redacted regardless of the 32-char floor.
@@ -52,7 +55,47 @@ export function redactSecrets(text: string): string {
     // (AROA), user (AIDA), group (AGPA), instance profile (AIPA), managed
     // policy (ANPA/ANVA), public key (APKA), server cert (ABIA), context (ACCA).
     .replace(/\b(?:AKIA|ASIA|AROA|AIDA|AGPA|AIPA|ANPA|ANVA|APKA|ABIA|ACCA)[A-Z0-9]{16}\b/g, '[REDACTED]')
-    // Generic long hex/base64 secrets (≥32 chars of [A-Za-z0-9+/=_-])
-    // Anchored to word-boundary so paths like /usr/local/bin don't match.
-    .replace(/(?<![/.\w])[A-Za-z0-9+/=_-]{32,}(?![/.\w])/g, '[REDACTED]');
+    // Generic long hex/base64 secrets (≥32 chars of [A-Za-z0-9+/=_-]).
+    // The word-boundary lookaround only guards where a match may START — it
+    // does NOT stop the class from swallowing `/`, so a long bare path argument
+    // (`cd /Users/me/Projects/open_source/agent-afk`) matched as one contiguous
+    // token and was redacted to `[REDACTED]`. The path-shape guard below carves
+    // real paths back out; genuine opaque tokens — including one fused into a
+    // path segment (`/tmp/uploads/<token>`, rule 3) — are still redacted.
+    .replace(/(?<![/.\w])[A-Za-z0-9+/=_-]{32,}(?![/.\w])/g, (m) =>
+      looksLikeFilesystemPath(m) ? m : '[REDACTED]');
+}
+
+/**
+ * True when a generic-rule match is a filesystem/URL path rather than an opaque
+ * secret. The generic token class includes `/`, `_`, `-` — the characters a
+ * path is built from — so a long bare path would otherwise be redacted.
+ *
+ * A run is a path only when ALL hold:
+ *   1. it contains a `/` separator, and
+ *   2. it carries none of base64's exclusive chars (`+`, `=`) — classic base64
+ *      (JWT sigs aside) is a secret, not a path, so a run with `+`/`=` is redacted;
+ *   3. no single `/`-delimited segment is itself a long opaque token — i.e. a
+ *      secret fused into a path segment (`/tmp/uploads/<44-char token>`) is
+ *      redacted, not spared. "Long opaque token" = ≥32 chars, mixing letters
+ *      and digits, with no dotted extension. (The generic-rule class excludes
+ *      `.`, so a matched run never contains one; the dot check is defensive for
+ *      standalone use.)
+ *
+ * base64url tokens (JWTs, most modern API keys) use `-`/`_` and have no `/`, so
+ * they never reach this guard and are redacted by the generic rule; a token
+ * fused into a path is caught by rule 3.
+ *
+ * Accepted residual gap: an unusually long (≥32-char) DOTLESS path segment that
+ * mixes letters and digits — a raw hash directory or a UUID-without-dashes — is
+ * over-redacted (treated as a token). Rare and cosmetic; it fails safe, and the
+ * common case (short word segments, e.g. `/Users/me/Projects/open_source/agent-afk`)
+ * is preserved. The high-value NAMED secrets (sk-ant, Bearer, JWT, AWS) are
+ * covered by the explicit rules that run first, regardless of path context.
+ */
+function looksLikeFilesystemPath(run: string): boolean {
+  if (!run.includes('/') || /[+=]/.test(run)) return false;
+  const isOpaqueTokenSegment = (seg: string): boolean =>
+    seg.length >= 32 && !seg.includes('.') && /[A-Za-z]/.test(seg) && /[0-9]/.test(seg);
+  return !run.split('/').some(isOpaqueTokenSegment);
 }
