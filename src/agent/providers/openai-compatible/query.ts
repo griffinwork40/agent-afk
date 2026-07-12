@@ -17,9 +17,12 @@
  *     (or the tool-round cap fires — see shared/tool-loop-cap.ts — after which
  *     one tools-stripped wind-down round runs, matching anthropic-direct/loop.ts)
  *
+ * History compaction is supported via {@link OpenAICompatibleQuery.compact},
+ * which reuses this session's client to summarize the older transcript through
+ * the provider-neutral core in `shared/compaction.ts` — see `./compact.ts`.
+ *
  * Things deliberately deferred:
  *   - File checkpointing / rewindFiles (deferred — `canRewind: false`)
- *   - Compact (provider opts out by leaving `compact` undefined)
  *
  * @module agent/providers/openai-compatible/query
  */
@@ -43,6 +46,7 @@ import type {
   ProviderMcpServerStatus,
   ProviderAccountInfo,
   ProviderUsage,
+  ProviderCompactResult,
 } from '../../provider.js';
 import { sumProviderUsage } from '../../usage.js';
 import { contextLimitFor } from '../../model-limits.js';
@@ -76,6 +80,9 @@ import { resolveWireMode, envFlagEnabled, isClaudeFamilyModel, DEFAULT_RESPONSES
 import { env } from '../../../config/env.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { contextWindowTokensUsed, buildContextUsageFields } from '../shared/auto-compact.js';
+import { COMPACT_SYSTEM_PROMPT, wrapTranscriptForSummary } from '../shared/compaction.js';
+import { compactOpenAIHistory } from './compact.js';
+import { oneShotChatCompletion } from './oneshot.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../shared/plan-mode-addendum.js';
 import { AFK_MODE_ADDENDUM_TEXT } from '../shared/afk-mode-addendum.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
@@ -969,6 +976,52 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       return;
     }
     this.pendingAbortReason = 'interrupted';
+  }
+
+  /**
+   * Summarize older history into a short preamble, in place. Delegates the
+   * boundary → summarize → splice sequence (with guardrails) to the shared
+   * {@link compactOpenAIHistory} / `runCompactionCore`; the summarization call
+   * reuses THIS session's `client`, so it lands on the same endpoint,
+   * credentials, and headers as the conversation — a custom-baseURL or local
+   * shim session compacts against its own server, never a re-resolved one.
+   *
+   * The compaction model is `AFK_COMPACT_MODEL` when set (it must be an id this
+   * session's endpoint can serve), otherwise the live session model. Cross-
+   * provider summarization (e.g. a Claude model summarizing an OpenAI session)
+   * is intentionally NOT wired here: a mismatched id simply fails the summarize
+   * call, which the core treats as a safe no-op, leaving history untouched.
+   */
+  async compact(): Promise<ProviderCompactResult> {
+    const messagesBefore = this.priorTurns.length;
+    if (this.opts.auth.apiKey === null) {
+      // No usable client was constructed — nothing to compact against.
+      return { compacted: false, reason: 'session-closed', messagesBefore, messagesAfter: messagesBefore };
+    }
+    const compactModel = env.AFK_COMPACT_MODEL ?? this.currentModel;
+    return compactOpenAIHistory({
+      priorTurns: this.priorTurns,
+      summarize: (transcript, signal) =>
+        oneShotChatCompletion({
+          client: this.client,
+          model: compactModel,
+          system: COMPACT_SYSTEM_PROMPT,
+          user: wrapTranscriptForSummary(transcript),
+          maxTokens: 1024,
+          signal,
+        }),
+      isClosed: this.closed,
+      isIdle: this.abortController === null,
+      beginAbort: () => {
+        const controller = new AbortController();
+        this.abortController = controller;
+        return controller;
+      },
+      clearAbort: (controller) => {
+        if (this.abortController === controller) this.abortController = null;
+      },
+      traceWriter: this.traceWriter,
+    });
   }
 
   async setModel(model?: string): Promise<void> {

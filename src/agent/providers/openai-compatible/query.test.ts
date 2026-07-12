@@ -1061,7 +1061,7 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
     q.close();
   });
 
-  it('does not expose `compact` (history mgmt deferred)', () => {
+  it('exposes `compact` and no-ops (history-too-short) on an empty session', async () => {
     const q = new OpenAICompatibleQuery({
       auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
       model: 'gpt-4o-mini',
@@ -1069,7 +1069,12 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
       promptStream: singleInput('x'),
       config: baseConfig(),
     });
-    expect(q.compact).toBeUndefined();
+    expect(typeof q.compact).toBe('function');
+    // No turns have run, so there are no fresh user turns older than the keep
+    // window — compaction is a typed no-op and never calls the summarizer.
+    const result = await q.compact();
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe('history-too-short');
     q.close();
   });
 
