@@ -21,12 +21,14 @@ import {
   SYSTEMCTL_TIMEOUT_MS,
   pathUnitFileName,
   pathUnitPath,
+  restartUnitFileName,
+  restartUnitPath,
   serviceLogPath,
   systemdUserDir,
   unitFileName,
   unitPath,
 } from './paths.js';
-import { renderPathUnit, renderServiceUnit } from './unit.js';
+import { renderPathUnit, renderRestartUnit, renderServiceUnit } from './unit.js';
 
 /** Internal install opts — adds a test seam over the neutral options. */
 export interface SystemdInstallOptions extends ServiceInstallOptions {
@@ -51,6 +53,23 @@ function errorDetail(err: unknown): string {
   const stderr = (err as { stderr?: Buffer | string }).stderr;
   const text = stderr ? stderr.toString().trim() : '';
   return text || (err as Error).message;
+}
+
+/** Candidate absolute paths checked before falling back to a bare lookup. */
+const SYSTEMCTL_CANDIDATES: readonly string[] = ['/usr/bin/systemctl', '/bin/systemctl'];
+
+/**
+ * Resolve an absolute `systemctl` path for baking into the restart oneshot's
+ * `ExecStart=`. Absolute paths are preferred so the unit doesn't depend on
+ * whatever PATH the (possibly minimal) systemd manager environment has;
+ * falls back to the bare command name, which systemd ≥239 resolves via its
+ * own search of `$PATH` at execution time.
+ */
+function resolveSystemctlPath(existsCheck: (p: string) => boolean = existsSync): string {
+  for (const c of SYSTEMCTL_CANDIDATES) {
+    if (existsCheck(c)) return c;
+  }
+  return 'systemctl';
 }
 
 /**
@@ -83,8 +102,23 @@ const LINGER_NOTE =
   "Always-on across logout/reboot needs lingering: run 'loginctl enable-linger' (or 'sudo loginctl enable-linger <user>').";
 
 /**
+ * Remove every unit file written so far during a failed install. Single
+ * rollback path shared by a path/restart-unit write failure and an
+ * `enable --now` failure — without it, `atomicWrite`'s `O_EXCL` means a
+ * later reinstall attempt hits the top-level `existsSync(path)` guard and
+ * reports `already-installed` for a unit systemd never actually loaded,
+ * wedging the operator until a manual `rm`.
+ */
+function rollbackWrittenUnits(paths: readonly string[]): void {
+  for (const p of paths) {
+    rmSync(p, { force: true });
+  }
+}
+
+/**
  * Write the `.service` unit (and, for dev-tree installs, a companion
- * `.path` unit) and register it with `systemctl --user`.
+ * `.path` unit plus its oneshot restart-helper unit) and register it with
+ * `systemctl --user`.
  *
  * Constraint ordering: the unit file MUST exist on disk before
  * `systemctl --user daemon-reload` + `enable --now`, otherwise enable
@@ -128,19 +162,41 @@ export function installSystemdService(name: ServiceName, opts: SystemdInstallOpt
   const serviceWriteErr = atomicWrite(path, unit);
   if (serviceWriteErr) return { kind: 'failed', reason: serviceWriteErr };
 
+  // Every unit file written so far — rolled back in full on any failure
+  // below (restart-unit write, path-unit write, or `systemctl enable`).
+  const writtenUnits: string[] = [path];
+
   let pathUnitActive = false;
   if (watchPaths && watchPaths.length > 0) {
+    // Resolve the restart oneshot BEFORE the `.path` unit so the `.path`
+    // unit's `Unit=` target (written next) can name it.
+    const systemctlPath = resolveSystemctlPath();
+    const restartUnit = renderRestartUnit({
+      description: `AFK ${name} rebuild restart`,
+      systemctlPath,
+      targetUnit: unitFileName(name),
+    });
+    const restartWriteErr = atomicWrite(restartUnitPath(name), restartUnit);
+    if (restartWriteErr) {
+      rollbackWrittenUnits(writtenUnits);
+      return { kind: 'failed', reason: restartWriteErr };
+    }
+    writtenUnits.push(restartUnitPath(name));
+
     const pathUnit = renderPathUnit({
       description: `AFK ${name} rebuild watch`,
       pathModified: watchPaths,
-      unit: unitFileName(name),
+      // Target the restart oneshot, not the service itself: `start` on an
+      // already-active Restart=always service is a no-op, so a rebuild
+      // would never actually be picked up (see renderRestartUnit).
+      unit: restartUnitFileName(name),
     });
     const pathWriteErr = atomicWrite(pathUnitPath(name), pathUnit);
     if (pathWriteErr) {
-      // Roll back the service unit so a half-install doesn't linger.
-      rmSync(path, { force: true });
+      rollbackWrittenUnits(writtenUnits);
       return { kind: 'failed', reason: pathWriteErr };
     }
+    writtenUnits.push(pathUnitPath(name));
     pathUnitActive = true;
   }
 
@@ -164,7 +220,10 @@ export function installSystemdService(name: ServiceName, opts: SystemdInstallOpt
     if (pathUnitActive) {
       systemctlUser(['enable', '--now', pathUnitFileName(name)]);
     }
+    // The restart oneshot is never enabled — it has no [Install] section
+    // and is only ever activated on demand by the `.path` unit.
   } catch (err) {
+    rollbackWrittenUnits(writtenUnits);
     return { kind: 'failed', reason: `systemctl enable failed: ${errorDetail(err)}` };
   }
 
@@ -191,6 +250,8 @@ export function uninstallSystemdService(name: ServiceName): ServiceUninstallOutc
   }
   const pPath = pathUnitPath(name);
   const hadPathUnit = existsSync(pPath);
+  const rPath = restartUnitPath(name);
+  const hadRestartUnit = existsSync(rPath);
 
   // disable failures are usually "not loaded" — non-fatal; keep going so
   // the files get removed either way.
@@ -204,10 +265,13 @@ export function uninstallSystemdService(name: ServiceName): ServiceUninstallOutc
   } catch {
     // ignore
   }
+  // The restart oneshot is never enabled (no [Install] section, only
+  // activated on demand by the .path unit) — no `disable` needed, just rm.
 
   try {
     rmSync(path, { force: true });
     if (hadPathUnit) rmSync(pPath, { force: true });
+    if (hadRestartUnit) rmSync(rPath, { force: true });
   } catch (err) {
     return { kind: 'failed', reason: `Failed to remove unit: ${(err as Error).message}` };
   }

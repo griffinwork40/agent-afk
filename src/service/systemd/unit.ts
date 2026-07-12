@@ -34,18 +34,54 @@ export interface PathUnitOptions {
   unit: string;
 }
 
+/** Inputs for the oneshot restart-helper unit (see `renderRestartUnit`). */
+export interface RestartUnitOptions {
+  description: string;
+  /** Absolute path to `systemctl` (falls back to the bare command; see `install.ts`). */
+  systemctlPath: string;
+  /** The `.service` unit to restart, e.g. `afk-telegram.service`. */
+  targetUnit: string;
+}
+
+/**
+ * Shared escaping for any value embedded in a systemd unit file, used by
+ * both `quoteArg` (ExecStart=) and `escapeEnvValue` (Environment="K=V").
+ *
+ * Order matters and is deliberate:
+ *   1. `\` → `\\`   — backslash FIRST so the escapes added below aren't
+ *      themselves re-escaped by this same replace pass.
+ *   2. `"` → `\"`   — keeps the value safe inside a double-quoted token.
+ *   3. `\n` → `\\n` and `\r` → `\\r` — a raw newline/CR would start a new
+ *      unit-file line and could inject a directive (e.g. a rogue
+ *      `ExecStart=` or `[Section]`); systemd's C-style unquoting
+ *      understands `\n`/`\r` escapes so the value round-trips.
+ *   4. `%` → `%%` LAST — systemd expands `%`-specifiers (`%h`, `%u`, …) at
+ *      load time; escaping earlier could double-escape a literal `%`
+ *      introduced by a prior step (none currently emit one, but ordering
+ *      it last keeps the invariant obviously correct rather than
+ *      incidentally correct). See systemd.service(5) "Specifiers".
+ */
+function escapeUnitValue(s: string): string {
+  return s
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/%/g, '%%');
+}
+
 /**
  * Quote one ExecStart argument. systemd splits ExecStart on whitespace;
  * double-quoted args are unquoted with C-style escapes. Quoting every arg
  * is safe and keeps paths containing spaces intact.
  */
 function quoteArg(s: string): string {
-  return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  return `"${escapeUnitValue(s)}"`;
 }
 
 /** Escape a value for use inside a double-quoted `Environment="K=V"`. */
 function escapeEnvValue(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return escapeUnitValue(s);
 }
 
 /**
@@ -103,5 +139,26 @@ export function renderPathUnit(opts: PathUnitOptions): string {
   lines.push('');
   lines.push('[Install]');
   lines.push('WantedBy=default.target');
+  return lines.join('\n') + '\n';
+}
+
+/**
+ * Render the oneshot restart-helper unit the `.path` unit triggers.
+ *
+ * `start` on an already-active `Restart=always` service is a no-op — the
+ * rebuilt code would never be loaded (unlike launchd's WatchPaths, which
+ * relaunches). So the `.path` unit targets THIS oneshot instead, which
+ * shells out to `systemctl --user restart <targetUnit>` to force an
+ * actual reload. Deliberately has NO `[Install]` section: it must never be
+ * enabled or started at boot, only activated on demand by the path unit.
+ */
+export function renderRestartUnit(opts: RestartUnitOptions): string {
+  const lines: string[] = [];
+  lines.push('[Unit]');
+  lines.push(`Description=${opts.description}`);
+  lines.push('');
+  lines.push('[Service]');
+  lines.push('Type=oneshot');
+  lines.push(`ExecStart=${opts.systemctlPath} --user restart ${opts.targetUnit}`);
   return lines.join('\n') + '\n';
 }

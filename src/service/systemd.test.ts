@@ -38,9 +38,10 @@ import {
   readUnitFile,
   uninstallSystemdService,
 } from './systemd/install.js';
-import { pathUnitPath, unitPath } from './systemd/paths.js';
+import { systemdManager } from './systemd/manager.js';
+import { pathUnitPath, restartUnitPath, unitPath } from './systemd/paths.js';
 import { parseSystemctlShow } from './systemd/status.js';
-import { renderPathUnit, renderServiceUnit } from './systemd/unit.js';
+import { renderPathUnit, renderRestartUnit, renderServiceUnit } from './systemd/unit.js';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Pure: unit-file generation
@@ -97,6 +98,19 @@ describe('renderServiceUnit', () => {
     expect(unit).toContain('"back\\\\slash"');
     expect(unit).toContain('Environment="K=v\\"q\\\\z"');
   });
+
+  it('escapes literal % and embedded newlines (unit-value hardening, item 2)', () => {
+    const unit = renderServiceUnit({
+      description: 'd',
+      execStart: ['/bin/x', '100%done', 'line1\nline2'],
+      workingDirectory: '/',
+      logFile: '/l',
+      environmentVariables: { K: 'a%b\r\nc' },
+    });
+    expect(unit).toContain('"100%%done"');
+    expect(unit).toContain('"line1\\nline2"');
+    expect(unit).toContain('Environment="K=a%%b\\r\\nc"');
+  });
 });
 
 describe('renderPathUnit', () => {
@@ -110,6 +124,22 @@ describe('renderPathUnit', () => {
     expect(unit).toContain('PathModified=/home/u/dev/dist/telegram.mjs');
     expect(unit).toContain('Unit=afk-telegram.service');
     expect(unit).toContain('WantedBy=default.target');
+  });
+});
+
+describe('renderRestartUnit', () => {
+  it('emits a oneshot with no [Install] section that restarts the target unit', () => {
+    const unit = renderRestartUnit({
+      description: 'AFK telegram rebuild restart',
+      systemctlPath: '/usr/bin/systemctl',
+      targetUnit: 'afk-telegram.service',
+    });
+    expect(unit).toContain('[Unit]');
+    expect(unit).toContain('[Service]');
+    expect(unit).toContain('Type=oneshot');
+    expect(unit).toContain('ExecStart=/usr/bin/systemctl --user restart afk-telegram.service');
+    expect(unit).not.toContain('[Install]');
+    expect(unit.endsWith('\n')).toBe(true);
   });
 });
 
@@ -217,9 +247,33 @@ describe('install / uninstall I/O', () => {
     expect(existsSync(pp)).toBe(true);
     const content = readFileSync(pp, 'utf-8');
     expect(content).toContain('[Path]');
-    expect(content).toContain('Unit=afk-telegram.service');
+    // Item 3: the .path unit now triggers the oneshot restart-helper unit,
+    // NOT the service directly (`start` on an already-active
+    // Restart=always unit is a no-op — see renderRestartUnit).
+    expect(content).toContain('Unit=afk-telegram-restart.service');
     const calls = mockExecFileSync.mock.calls.map((c) => (c[1] as string[]).join(' '));
     expect(calls.some((a) => a.includes('--user enable --now afk-telegram.path'))).toBe(true);
+
+    const rp = restartUnitPath('telegram');
+    expect(existsSync(rp)).toBe(true);
+    const restartContent = readFileSync(rp, 'utf-8');
+    expect(restartContent).toContain('Type=oneshot');
+    expect(restartContent).toContain('restart afk-telegram.service');
+  });
+
+  it('rolls back ALL written unit files when `systemctl enable --now` fails (item 1)', () => {
+    telegram.entrypoint = join(homedir(), 'dev', 'agent-afk', 'dist', 'telegram.mjs');
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      if ((args as string[]).join(' ').includes('enable --now afk-telegram.service')) {
+        throw new Error('Failed to connect to bus');
+      }
+      return Buffer.from('');
+    });
+    const result = installSystemdService('telegram', { _entrypointExistsCheck: () => true });
+    expect(result.kind).toBe('failed');
+    expect(existsSync(unitPath('telegram'))).toBe(false);
+    expect(existsSync(pathUnitPath('telegram'))).toBe(false);
+    expect(existsSync(restartUnitPath('telegram'))).toBe(false);
   });
 
   it('uninstall disables the unit, removes the file, daemon-reloads, returns uninstalled', () => {
@@ -246,5 +300,61 @@ describe('install / uninstall I/O', () => {
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, 'hello-unit');
     expect(readUnitFile('telegram')).toBe('hello-unit');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// I/O: systemdManager.restart()
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('systemdManager.restart()', () => {
+  let tmpHome: string;
+  let prevHome: string | undefined;
+  let prevAfkHome: string | undefined;
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), 'afk-systemd-restart-test-'));
+    prevHome = process.env['HOME'];
+    prevAfkHome = process.env['AFK_HOME'];
+    process.env['HOME'] = tmpHome;
+    process.env['AFK_HOME'] = join(tmpHome, '.afk');
+    mockExecFileSync.mockReset();
+    mockExecFileSync.mockReturnValue(Buffer.from(''));
+    telegram.entrypoint = '/fake/dist/telegram.mjs';
+  });
+
+  afterEach(() => {
+    if (prevHome === undefined) delete process.env['HOME'];
+    else process.env['HOME'] = prevHome;
+    if (prevAfkHome === undefined) delete process.env['AFK_HOME'];
+    else process.env['AFK_HOME'] = prevAfkHome;
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  it('returns not-installed when no unit file exists', () => {
+    const result = systemdManager.restart('telegram');
+    expect(result.kind).toBe('not-installed');
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
+
+  it('returns restarted when installed and systemctl succeeds', () => {
+    const p = unitPath('telegram');
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, 'unit');
+    const result = systemdManager.restart('telegram');
+    expect(result.kind).toBe('restarted');
+    const calls = mockExecFileSync.mock.calls.map((c) => (c[1] as string[]).join(' '));
+    expect(calls.some((a) => a.includes('--user restart afk-telegram.service'))).toBe(true);
+  });
+
+  it('returns failed when installed but systemctl throws', () => {
+    const p = unitPath('telegram');
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, 'unit');
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error('Failed to connect to bus');
+    });
+    const result = systemdManager.restart('telegram');
+    expect(result.kind).toBe('failed');
   });
 });

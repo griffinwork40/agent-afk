@@ -36,6 +36,17 @@ export function pathUnitFileName(name: ServiceName): string {
   return `afk-${name}.path`;
 }
 
+/**
+ * Oneshot restart-helper unit filename triggered by the `.path` unit. A
+ * plain `start` on an already-active `Restart=always` service is a no-op,
+ * so the `.path` unit activates this oneshot instead, which runs
+ * `systemctl --user restart` on the real service. See `unit.ts`'s
+ * `renderRestartUnit`.
+ */
+export function restartUnitFileName(name: ServiceName): string {
+  return `afk-${name}-restart.service`;
+}
+
 /** Absolute path of the `.service` unit file. */
 export function unitPath(name: ServiceName, home: string = homedir()): string {
   return join(systemdUserDir(home), unitFileName(name));
@@ -44,6 +55,11 @@ export function unitPath(name: ServiceName, home: string = homedir()): string {
 /** Absolute path of the companion `.path` unit file. */
 export function pathUnitPath(name: ServiceName, home: string = homedir()): string {
   return join(systemdUserDir(home), pathUnitFileName(name));
+}
+
+/** Absolute path of the oneshot restart-helper unit file. */
+export function restartUnitPath(name: ServiceName, home: string = homedir()): string {
+  return join(systemdUserDir(home), restartUnitFileName(name));
 }
 
 /** Unit label used in CLI output and `systemctl --user` targets. */
