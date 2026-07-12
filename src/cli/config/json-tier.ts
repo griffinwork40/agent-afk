@@ -99,7 +99,7 @@ export function loadJsonConfig(): {
           config.temperature = json.temperature;
         }
 
-        if (json.systemPrompt) {
+        if (typeof json.systemPrompt === 'string' && json.systemPrompt.length > 0) {
           config.systemPrompt = json.systemPrompt;
         }
 

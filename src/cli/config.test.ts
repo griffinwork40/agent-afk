@@ -189,6 +189,47 @@ describe('Config Loader', () => {
       expect(config.temperature).toBe(0.7);
     });
 
+    it('keeps the default maxTokens when AFK_MAX_TOKENS is non-numeric (no NaN)', () => {
+      // parseInt("abc") === NaN, which would otherwise win the `??` merge over
+      // DEFAULT_CONFIG.maxTokens and poison every request. Guard drops it.
+      process.env.AFK_MAX_TOKENS = 'abc';
+
+      const config = loadConfig();
+
+      expect(config.maxTokens).toBe(4096);
+      expect(Number.isNaN(config.maxTokens)).toBe(false);
+    });
+
+    it('keeps the default temperature when AFK_TEMPERATURE is non-numeric (no NaN)', () => {
+      process.env.AFK_TEMPERATURE = 'abc';
+
+      const config = loadConfig();
+
+      expect(config.temperature).toBe(1.0);
+      expect(Number.isNaN(config.temperature)).toBe(false);
+    });
+
+    it('keeps the default maxTokens when AFK_MAX_TOKENS has trailing garbage (no silent truncation)', () => {
+      // parseInt("123abc") used to truncate to 123 — a non-numeric value
+      // slipping through as a plausible-looking token count. Number(...)
+      // whole-string-matches and is NaN here, so the guard now drops it too.
+      process.env.AFK_MAX_TOKENS = '123abc';
+
+      const config = loadConfig();
+
+      expect(config.maxTokens).toBe(4096);
+    });
+
+    it('keeps the default maxTokens when AFK_MAX_TOKENS is a non-integer number', () => {
+      // A token count can't be fractional; Number("8192.5") is finite but
+      // not an integer, so it must be rejected even though it "parses".
+      process.env.AFK_MAX_TOKENS = '8192.5';
+
+      const config = loadConfig();
+
+      expect(config.maxTokens).toBe(4096);
+    });
+
     it('prefers AFK_MODEL over CLAUDE_MODEL', () => {
       process.env.AFK_MODEL = 'haiku';
       process.env.CLAUDE_MODEL = 'opus';
@@ -474,6 +515,68 @@ describe('Config Loader', () => {
 
       const config = loadConfig();
       expect(config.systemPrompt).toBe('json-config-wins');
+      expect(config.systemPromptSource).toBe(`file:${cwdConfigJson}`);
+    });
+
+    it('ignores a non-string systemPrompt in afk.config.json and falls back to AFK.md', () => {
+      // {"systemPrompt": 5} must not be assigned (siblings model/maxTokens/
+      // temperature all use typeof guards). The AFK.md content wins instead.
+      const cwdConfigJson = join(process.cwd(), 'afk.config.json');
+      const cwdAfkMd = join(process.cwd(), 'AFK.md');
+      mockedExistsSync().mockImplementation((p) => {
+        const s = String(p);
+        if (s === cwdAfkMd) return true;
+        if (s === cwdConfigJson) return true;
+        if (s.endsWith('AFK.md')) return false;
+        return realFsModule.__realExistsSync(p as fs.PathLike);
+      });
+      mockedReadFileSync().mockImplementation((p, ...args) => {
+        const s = String(p);
+        if (s === cwdConfigJson) return JSON.stringify({ systemPrompt: 5 });
+        if (s === cwdAfkMd) return 'afk-md fallback wins';
+        return (realFsModule.__realReadFileSync as Function)(p, ...args);
+      });
+
+      const config = loadConfig();
+      expect(config.systemPrompt).toBe('afk-md fallback wins');
+      expect(config.systemPromptSource).toBe(`afk-md:${cwdAfkMd}`);
+    });
+
+    it('ignores an empty-string systemPrompt in afk.config.json', () => {
+      const cwdConfigJson = join(process.cwd(), 'afk.config.json');
+      mockedExistsSync().mockImplementation((p) => {
+        const s = String(p);
+        if (s.endsWith('AFK.md')) return false;
+        if (s === cwdConfigJson) return true;
+        return realFsModule.__realExistsSync(p as fs.PathLike);
+      });
+      mockedReadFileSync().mockImplementation((p, ...args) => {
+        const s = String(p);
+        if (s === cwdConfigJson) return JSON.stringify({ systemPrompt: '' });
+        return (realFsModule.__realReadFileSync as Function)(p, ...args);
+      });
+
+      const config = loadConfig();
+      expect(config.systemPrompt).toBeUndefined();
+      expect(config.systemPromptSource).toBeUndefined();
+    });
+
+    it('keeps a valid non-empty string systemPrompt in afk.config.json', () => {
+      const cwdConfigJson = join(process.cwd(), 'afk.config.json');
+      mockedExistsSync().mockImplementation((p) => {
+        const s = String(p);
+        if (s.endsWith('AFK.md')) return false;
+        if (s === cwdConfigJson) return true;
+        return realFsModule.__realExistsSync(p as fs.PathLike);
+      });
+      mockedReadFileSync().mockImplementation((p, ...args) => {
+        const s = String(p);
+        if (s === cwdConfigJson) return JSON.stringify({ systemPrompt: 'valid string prompt' });
+        return (realFsModule.__realReadFileSync as Function)(p, ...args);
+      });
+
+      const config = loadConfig();
+      expect(config.systemPrompt).toBe('valid string prompt');
       expect(config.systemPromptSource).toBe(`file:${cwdConfigJson}`);
     });
 
