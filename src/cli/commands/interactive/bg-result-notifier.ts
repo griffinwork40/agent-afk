@@ -161,6 +161,17 @@ export class BgResultNotifier {
   /** Buffer of settled jobs awaiting a one-line completion notice. */
   private pendingNotifications: PendingBgAgentNotification[] = [];
 
+  /**
+   * Optional wake hook, fired once AFTER an injectable (non-cancelled,
+   * auto-deliver-on) result is buffered. The REPL loop wires this to its
+   * auto-resume trigger so an idle prompt can wake without a keystroke.
+   * Injectability is decided HERE (past the auto-deliver + cancelled gates)
+   * so the loop's handler never re-derives it; the handler owns only the
+   * wake POLICY (idle / empty-buffer / session-budget) and is a no-op when
+   * any of those gates fail. Null when nothing is wired (no behavior change).
+   */
+  onInjectable: (() => void) | null = null;
+
   private readonly onSettled = (job: BackgroundJob): void => {
     if (!isAutoDeliverEnabled(env.AFK_BG_AUTO_DELIVER)) return;
     this.pendingNotifications.push({ job });
@@ -174,6 +185,10 @@ export class BgResultNotifier {
     if (this.pendingInjections.length > MAX_PENDING) {
       this.pendingInjections.shift();
     }
+    // A real injectable result just landed — nudge the wake hook (if wired)
+    // so an idle REPL can auto-resume. Fired last so the buffer is already
+    // populated when the handler drains on the woken turn.
+    this.onInjectable?.();
   };
 
   constructor(private readonly registry: BackgroundAgentRegistry) {

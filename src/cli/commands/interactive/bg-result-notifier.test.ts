@@ -215,6 +215,48 @@ describe('BgResultNotifier', () => {
     notifier.drainInjections();
     expect(spy).toHaveBeenCalledWith(job.jobId);
   });
+
+  // ── onInjectable wake hook (auto-resume trigger) ──────────────────────────
+  // The REPL loop wires `onInjectable` to its auto-resume path. It must fire
+  // exactly for results that produced an injection — so a woken turn always
+  // has an envelope to drain — and stay silent otherwise.
+
+  it('onInjectable fires once when an injectable job settles', () => {
+    const spy = vi.fn();
+    notifier.onInjectable = spy;
+    const { handle, fireTerminal } = makeBgHandle('sub-k');
+    registry.register({ handle, prompt: 'wake me', model: 'sonnet' });
+    fireTerminal(succeed('sub-k', 'result'));
+    expect(spy).toHaveBeenCalledTimes(1);
+    // And an injection is genuinely buffered for the woken turn to drain.
+    expect(notifier.drainInjections()).not.toBe('');
+  });
+
+  it('onInjectable does NOT fire for a cancelled job (notice-only, nothing to resume on)', async () => {
+    const spy = vi.fn();
+    notifier.onInjectable = spy;
+    const { handle, fireTerminal } = makeBgHandle('sub-l');
+    const job = registry.register({ handle, prompt: 'cancel me', model: 'sonnet' });
+    await registry.cancelJob(job.jobId);
+    fireTerminal({ id: 'sub-l', status: 'cancelled' } as SubagentResult);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('onInjectable does NOT fire when AFK_BG_AUTO_DELIVER=0 (natural off-switch)', () => {
+    process.env['AFK_BG_AUTO_DELIVER'] = '0';
+    const spy = vi.fn();
+    notifier.onInjectable = spy;
+    const { handle, fireTerminal } = makeBgHandle('sub-m');
+    registry.register({ handle, prompt: 'opted out', model: 'sonnet' });
+    fireTerminal(succeed('sub-m', 'invisible'));
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('a settle with no onInjectable wired does not throw (default null)', () => {
+    const { handle, fireTerminal } = makeBgHandle('sub-n');
+    registry.register({ handle, prompt: 'no hook', model: 'sonnet' });
+    expect(() => fireTerminal(succeed('sub-n', 'ok'))).not.toThrow();
+  });
 });
 
 describe('isAutoDeliverEnabled', () => {

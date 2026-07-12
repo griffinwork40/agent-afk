@@ -15,6 +15,7 @@ import { isDebugEnabled, debugLog } from '../../../utils/debug.js';
 import { sanitizeForDisplay } from '../../../utils/terminal-sanitize.js';
 import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
+import { ringBellIfEnabled } from '../../_lib/capture-mode.js';
 import { cyclePermissionMode } from '../../permission-mode-cycle.js';
 import {
   autoRegisterPluginPassthroughs,
@@ -37,6 +38,26 @@ import type { FooterSubsystems } from './footer-subsystems.js';
  *  registry default (HOOK_HANDLER_TIMEOUT_MS = 30s) because Stop fires every
  *  REPL turn — a notification hook must not stall the prompt for 30s × N handlers. */
 const STOP_HOOK_HANDLER_TIMEOUT_MS = 5_000;
+
+/**
+ * Session-wide cap on autonomous auto-resumes — an idle REPL woken by a settled
+ * background subagent (see the `onInjectable` wiring below). Circuit breaker
+ * against a self-perpetuating loop: a woken turn can itself dispatch another
+ * background job that settles and re-wakes the session. This bounds that chain;
+ * once hit, further results still deliver on the user's next manual turn.
+ * Mirrors the per-session budget precedent in `background-summarizer.ts`.
+ */
+const MAX_AUTO_RESUMES_PER_SESSION = 3;
+
+/**
+ * User-message text seeded when a background result auto-resumes an idle REPL.
+ * The settled-result envelope is prepended at drain time (`runText = envelope +
+ * this`), so the model sees the finished result followed by an explicit, honest
+ * continue instruction — never a spoofed empty turn. The `[auto-resume]` tag
+ * also makes the woken turn legible when scrolling back through history.
+ */
+const AUTO_RESUME_DIRECTIVE =
+  '[auto-resume] The background task above has finished. Continue the work it was dispatched for.';
 
 async function runFirstTurnHookIfNeeded(ctx: InteractiveCtx, text: string): Promise<void> {
   // First-turn hook — awaited before any first-turn side effect that relies on
@@ -149,6 +170,30 @@ export async function runInputLoop(
   // conversation is resumable. Surface the FIRST failure per session; stay
   // quiet afterwards so a broken disk doesn't spam the transcript every turn.
   let autosaveFailureLogged = false;
+
+  // Auto-resume: wake an idle prompt when a background subagent result lands so
+  // the session continues its work without waiting for a keystroke. Fires only
+  // for injectable results (the notifier gates on AFK_BG_AUTO_DELIVER + skips
+  // cancels before invoking this), and only when the prompt is genuinely idle —
+  // blocked on readLine (isAwaitingInput) with an empty input buffer, so a
+  // half-typed line is never clobbered and a result that lands mid-turn just
+  // delivers on the next drain. Bounded by MAX_AUTO_RESUMES_PER_SESSION as a
+  // circuit breaker. TTY-only: isAwaitingInput() is false on the non-TTY reader.
+  let autoResumeCount = 0;
+  bgResultNotifier.onInjectable = () => {
+    if (autoResumeCount >= MAX_AUTO_RESUMES_PER_SESSION) return;
+    if (!surface.isAwaitingInput() || !surface.bufferIsEmpty()) return;
+    autoResumeCount++;
+    // Audible cue (no-op unless AFK_BELL=1 + TTY) before the seeded turn takes
+    // over the prompt — the human-facing "your background work resumed" signal.
+    ringBellIfEnabled(process.stdout);
+    // Set the function-scope seed FIRST, then wake. abortPendingRead resolves
+    // the in-flight readLine with an empty payload, tripping the empty-input
+    // `continue` below; the next iteration's seed fast-path fires the directive
+    // and the drain prepends the result envelope (runText = envelope + directive).
+    seedBuffer = { text: AUTO_RESUME_DIRECTIVE, attachments: [] };
+    surface.abortPendingRead();
+  };
 
   while (true) {
       if (pendingInitMeta) {
