@@ -188,6 +188,13 @@ export async function* dispatchAndAppendToolCalls({
         content: result.content,
         ...(result.isError === true ? { isError: true } : {}),
         ...(result.truncated === true ? { truncated: true } : {}),
+        // Plumb concurrency-batch membership onto the render-facing event, not
+        // just the trace event above, so the TUI `∥i/N` badge works here too.
+        // Parity with anthropic-direct/loop.ts's tool.output yield — omitting it
+        // silently drops the badge for every openai-compatible session.
+        ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
+          ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
+          : {}),
         sessionId,
       };
       if (result.render?.diff) {
