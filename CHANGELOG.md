@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.30.3] - 2026-07-12
+
+### Fixed
+- explicit writeRoots grant + truthful deny for forked children (#514) (360b999)
+
 ## [5.30.2] - 2026-07-11
 
 ### Fixed
