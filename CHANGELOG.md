@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.34.0] - 2026-07-12
+
+### Added
+- app-like TUI — /config settings menu + /model & /resume pickers (#506) (7cf6c0b)
+
 ## [5.33.2] - 2026-07-12
 
 ### Fixed
