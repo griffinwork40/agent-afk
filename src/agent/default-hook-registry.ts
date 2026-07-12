@@ -10,6 +10,7 @@ import { createHookRegistry, type HookRegistry } from './hooks.js';
 import { createShadowVerifyNudge } from './shadow-verify-nudge.js';
 import { createAskQuestionGate } from './ask-question-gate.js';
 import { createSafeDestructDetect } from './safe-destruct-detect.js';
+import { createReleaseBoundaryDetect } from './release-boundary-detect.js';
 import { MemoryStore, createMemorySessionEndHook } from './memory/index.js';
 import { createPlanModeGate } from './plan-mode-gate.js';
 import { createAfkModeGate } from './afk-mode-gate.js';
@@ -125,6 +126,17 @@ export function createDefaultHookRegistry(
   // autonomous surfaces too). See safe-destruct-detect.ts and
   // .afk/plans/friction-substrate-and-gate-migration.md §9.
   registry.register('PreToolUse', createSafeDestructDetect());
+  // Release-boundary detector (observe-only, ALL surfaces): witness — but never
+  // block — bash commands that cross a publish/deploy boundary (npm/pnpm/yarn/
+  // cargo/twine/poetry/gem publish, docker push, gh release create, terraform/
+  // kubectl apply) or a sync boundary (git push --mirror / --tags). Same
+  // `approve`-outcome catch-record mechanism as safe-destruct: ZERO blocking
+  // friction (a release is often exactly what was asked — a block would be a
+  // false positive by construction), filterable as decision==='approve', ignored
+  // by the mechanical friction detectors. Wave-1 slice 2 shadow window. See
+  // release-boundary-detect.ts and
+  // .afk/plans/friction-substrate-and-gate-migration.md §9.
+  registry.register('PreToolUse', createReleaseBoundaryDetect());
   const store = memoryStore ?? new MemoryStore();
   if (getPermissionMode !== undefined) {
     registry.register('PreToolUse', createPlanModeGate(getPermissionMode));
