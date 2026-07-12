@@ -45,7 +45,11 @@ import {
   getSkillsDir,
 } from '../../paths.js';
 import { env } from '../../config/env.js';
-import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
+import {
+  loadImportFromConfig,
+  resolveImportedRoots,
+  readSourceEnabledState,
+} from '../../config/import-sources.js';
 
 
 export interface SkillManifestEntry {
@@ -353,8 +357,11 @@ export function scanAllPluginRoots(opts?: CollectSkillEntriesOptions): SdkPlugin
     ...scanLocalPlugins(getProjectPluginsDir(opts?.cwd)),
     ...scanLocalPlugins(),
     ...scanLocalPlugins(getBundledPluginsDir()),
-    ...resolveImportedRoots(loadImportFromConfig()).pluginRoots.flatMap((root) =>
-      scanLocalPlugins(root, { trustAll: true }),
+    ...resolveImportedRoots(loadImportFromConfig()).pluginRoots.flatMap(({ dir, binary }) =>
+      // Mirror the source tool's own enabled/disabled state: a plugin disabled
+      // in Claude Code (its `~/.claude/settings.json` `enabledPlugins`) is
+      // skipped here rather than loaded into every AFK session.
+      scanLocalPlugins(dir, { trustAll: true, sourceEnabled: readSourceEnabledState(binary) }),
     ),
   ];
 }

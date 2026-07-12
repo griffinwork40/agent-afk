@@ -357,4 +357,93 @@ describe('plugins-scanner', () => {
     const result = scanLocalPlugins(tmpHome);
     expect(result.map((p) => p.path)).toEqual([join(tmpHome, 'still-here')]);
   });
+
+  // ── Imported-root mirroring: trustAll + sourceEnabled ──────────────────────
+  // A trusted imported root (e.g. ~/.claude/plugins) has no AFK index; instead
+  // of loading everything, the scan mirrors the SOURCE tool's own enabled state.
+
+  it('trustAll + sourceEnabled: skips a cache plugin the source tool disabled', () => {
+    const pluginDir = join(tmpHome, 'cache', 'some-market', 'some-plugin');
+    writePluginManifest(pluginDir);
+    const sourceEnabled = new Map([['some-plugin@some-market', false]]);
+    expect(scanLocalPlugins(tmpHome, { trustAll: true, sourceEnabled })).toEqual([]);
+  });
+
+  it('trustAll + sourceEnabled: loads a cache plugin the source tool enabled', () => {
+    const pluginDir = join(tmpHome, 'cache', 'some-market', 'some-plugin');
+    writePluginManifest(pluginDir);
+    const sourceEnabled = new Map([['some-plugin@some-market', true]]);
+    expect(scanLocalPlugins(tmpHome, { trustAll: true, sourceEnabled })).toEqual([
+      { type: 'local', path: pluginDir },
+    ]);
+  });
+
+  it('trustAll + sourceEnabled: loads a plugin absent from the map (no signal ⇒ enabled)', () => {
+    const pluginDir = join(tmpHome, 'cache', 'some-market', 'some-plugin');
+    writePluginManifest(pluginDir);
+    const sourceEnabled = new Map([['unrelated@other', false]]);
+    expect(scanLocalPlugins(tmpHome, { trustAll: true, sourceEnabled })).toEqual([
+      { type: 'local', path: pluginDir },
+    ]);
+  });
+
+  it('trustAll + sourceEnabled: mirrors per-plugin (enabled loads, disabled skips) in one scan', () => {
+    writePluginManifest(join(tmpHome, 'cache', 'mp', 'keep'));
+    writePluginManifest(join(tmpHome, 'cache', 'mp', 'drop'));
+    const sourceEnabled = new Map([
+      ['keep@mp', true],
+      ['drop@mp', false],
+    ]);
+    const result = scanLocalPlugins(tmpHome, { trustAll: true, sourceEnabled });
+    expect(result.map((p) => p.path)).toEqual([join(tmpHome, 'cache', 'mp', 'keep')]);
+  });
+
+  it('folds sourceEnabled into the cache key so filtered/unfiltered scans do not alias', () => {
+    const pluginDir = join(tmpHome, 'cache', 'mp', 'p');
+    writePluginManifest(pluginDir);
+    // Unfiltered trusted scan loads it and memoizes under its own key…
+    expect(scanLocalPlugins(tmpHome, { trustAll: true })).toEqual([
+      { type: 'local', path: pluginDir },
+    ]);
+    // …a source-filtered scan (disabled) must NOT return the cached unfiltered result.
+    const sourceEnabled = new Map([['p@mp', false]]);
+    expect(scanLocalPlugins(tmpHome, { trustAll: true, sourceEnabled })).toEqual([]);
+  });
+
+  it('trustAll + sourceEnabled: skips a flat-layout plugin the source disabled (key = dir name)', () => {
+    writePluginManifest(join(tmpHome, 'flat-plugin'));
+    const sourceEnabled = new Map([['flat-plugin', false]]);
+    expect(scanLocalPlugins(tmpHome, { trustAll: true, sourceEnabled })).toEqual([]);
+  });
+
+  it('an empty sourceEnabled map disables nothing (fail-open)', () => {
+    const pluginDir = join(tmpHome, 'cache', 'mp', 'p');
+    writePluginManifest(pluginDir);
+    const sourceEnabled = new Map<string, boolean>();
+    expect(scanLocalPlugins(tmpHome, { trustAll: true, sourceEnabled })).toEqual([
+      { type: 'local', path: pluginDir },
+    ]);
+  });
+
+  it("matches Claude's real installed layout cache/<mp>/<plugin>/<version> ↔ <plugin>@<mp>", () => {
+    // Claude Code copies installed plugins to
+    // `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/` and keys
+    // `enabledPlugins` as `<plugin>@<marketplace>` — e.g. the cache dir
+    // `cache/superpowers-dev/` pairs with `superpowers@superpowers-dev`
+    // (anthropics/claude-code#8, #14815, #17061). This locks the derivation
+    // against the real on-disk shape, not just a synthetic fixture.
+    const pluginDir = join(tmpHome, 'cache', 'superpowers-dev', 'superpowers', '4.0.3');
+    writePluginManifest(pluginDir);
+
+    // Disabled in Claude → skipped in AFK.
+    const disabled = new Map([['superpowers@superpowers-dev', false]]);
+    expect(scanLocalPlugins(tmpHome, { trustAll: true, sourceEnabled: disabled })).toEqual([]);
+
+    // Enabled in Claude → loaded.
+    _resetPluginScanCache();
+    const enabled = new Map([['superpowers@superpowers-dev', true]]);
+    expect(scanLocalPlugins(tmpHome, { trustAll: true, sourceEnabled: enabled })).toEqual([
+      { type: 'local', path: pluginDir },
+    ]);
+  });
 });
