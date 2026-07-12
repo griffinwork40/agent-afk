@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.35.1] - 2026-07-12
+
+### Fixed
+- stop redacting long filesystem paths as opaque secrets (#533) (57cb592)
+
 ## [5.35.0] - 2026-07-12
 
 ### Added
