@@ -99,6 +99,18 @@ describe('summarizeToolInput — inline secret redaction (codex P1 on #511)', ()
     expect(out).toContain('export ANTHROPIC_API_KEY=');
   });
 
+  it('does not redact a long absolute path in a `cd` argument (path false-positive)', () => {
+    // The exact screenshot shape: a subagent running `cd <long abs path> && …`
+    // rendered as `$ bash cd [REDACTED] echo …` because the generic token rule
+    // swallowed the path. The path must survive so the operator can read it.
+    const out = summarizeToolInput('bash', {
+      command:
+        'cd /Users/griffinlong/Projects/open_source/agent-afk && echo "===== HookDecision ====="',
+    });
+    expect(out).toContain('/Users/griffinlong/Projects/open_source/agent-afk');
+    expect(out).not.toContain('[REDACTED]');
+  });
+
   it('leaves an ordinary git commit command intact (verb + message survive)', () => {
     // Proves redaction does not break derive.ts commit detection, which reads
     // this summary and keys on the `git commit` verb.

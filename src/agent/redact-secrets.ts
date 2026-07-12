@@ -30,8 +30,10 @@
  *     (AKIA = long-lived, ASIA = STS, AROA = role, AIDA = user, ...) — below
  *     the generic 32-char floor so they need explicit coverage.
  *   - Generic long opaque tokens           ≥32 contiguous non-whitespace chars
- *     that consist entirely of hex or base64 alphabet characters
- *     (heuristic; avoids redacting prose words or file paths)
+ *     that consist entirely of hex or base64 alphabet characters (heuristic).
+ *     Runs shaped like a filesystem/URL path are excluded — see
+ *     `looksLikeFilesystemPath` — so a long bare `cd <path>` argument is not
+ *     mistaken for a secret.
  *
  * Explicit patterns run BEFORE the generic length rule so short or
  * dot-separated tokens get redacted regardless of the 32-char floor.
@@ -52,7 +54,30 @@ export function redactSecrets(text: string): string {
     // (AROA), user (AIDA), group (AGPA), instance profile (AIPA), managed
     // policy (ANPA/ANVA), public key (APKA), server cert (ABIA), context (ACCA).
     .replace(/\b(?:AKIA|ASIA|AROA|AIDA|AGPA|AIPA|ANPA|ANVA|APKA|ABIA|ACCA)[A-Z0-9]{16}\b/g, '[REDACTED]')
-    // Generic long hex/base64 secrets (≥32 chars of [A-Za-z0-9+/=_-])
-    // Anchored to word-boundary so paths like /usr/local/bin don't match.
-    .replace(/(?<![/.\w])[A-Za-z0-9+/=_-]{32,}(?![/.\w])/g, '[REDACTED]');
+    // Generic long hex/base64 secrets (≥32 chars of [A-Za-z0-9+/=_-]).
+    // The word-boundary lookaround only guards where a match may START — it
+    // does NOT stop the class from swallowing `/`, so a long bare path argument
+    // (`cd /Users/me/Projects/open_source/agent-afk`) matched as one contiguous
+    // token and was redacted to `[REDACTED]`. The path-shape guard below carves
+    // real paths back out; genuine opaque tokens are still redacted.
+    .replace(/(?<![/.\w])[A-Za-z0-9+/=_-]{32,}(?![/.\w])/g, (m) =>
+      looksLikeFilesystemPath(m) ? m : '[REDACTED]');
+}
+
+/**
+ * True when a generic-rule match is a filesystem/URL path rather than an opaque
+ * secret. The generic token class includes `/`, `_`, `-` — the characters a
+ * path is built from — so a long bare path would otherwise be redacted.
+ *
+ * Heuristic: a run is a path when it contains a `/` separator AND none of
+ * base64's exclusive characters (`+`, `=`). base64url (JWTs, most modern API
+ * tokens) uses `-`/`_` and hex/alphanumeric keys have no `/` at all, so those
+ * still match and are redacted; classic base64 carries `+`/`=`, so it is still
+ * redacted even with a `/`. Accepted gap: a classic-base64 blob containing `/`
+ * but neither `+` nor `=` is preserved — the high-value named secrets (sk-ant,
+ * Bearer, JWT, AWS) are already covered by the explicit rules that run first,
+ * and this generic rule is only a heuristic backstop.
+ */
+function looksLikeFilesystemPath(run: string): boolean {
+  return run.includes('/') && !/[+=]/.test(run);
 }

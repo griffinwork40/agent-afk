@@ -505,6 +505,32 @@ describe('redactSecrets', () => {
     expect(redactSecrets(text)).toBe(text);
   });
 
+  it('does not redact a long absolute filesystem path (path false-positive regression)', () => {
+    // A bare `cd <long absolute path>` argument is a run of ≥32 chars drawn
+    // entirely from the generic token class ([A-Za-z0-9+/=_-]); it used to be
+    // redacted to `cd [REDACTED]` in tool-lane labels. A path is not a secret.
+    const path = '/Users/griffinlong/Projects/open_source/agent-afk';
+    expect(path.length).toBeGreaterThanOrEqual(32);
+    expect(redactSecrets(`cd ${path} && echo hi`)).toBe(`cd ${path} && echo hi`);
+  });
+
+  it('still redacts a base64 blob with slashes when it carries +/= (not a path)', () => {
+    // Classic base64 with a `/` but also `+`/`=` must NOT be mistaken for a
+    // path — the path guard only spares `/`-runs free of base64 signal chars.
+    const b64 = 'a1b2c3d4e5f6g7h8+i9j0k1l2m3n4/o5p6q7r8s9t0=';
+    const out = redactSecrets(`X ${b64}`);
+    expect(out).not.toContain(b64);
+    expect(out).toContain('[REDACTED]');
+  });
+
+  it('still redacts a base64url token with no slash (path guard does not apply)', () => {
+    // base64url uses -/_ and no `/`, so the path guard never spares it.
+    const token = 'abcABC123_-abcABC123_-abcABC123_-abcABC12';
+    const out = redactSecrets(`X-Token: ${token}`);
+    expect(out).not.toContain(token);
+    expect(out).toContain('[REDACTED]');
+  });
+
   it('does not redact 16-char base32 strings without an AWS prefix', () => {
     // Looks like the back-half of an AKIA but without the prefix — should
     // not be flagged. (Floor is 32 chars for generic patterns.)
