@@ -4,9 +4,13 @@ import { summarizeToolInput } from './tool-input-summary.js';
 /**
  * Regression coverage for the "0 clue what the agent is running" bug: a
  * multi-line bash command rendered as a bare `$ bash cd <dir>` because the
- * summarizer kept only `command.split('\n')[0]`. The summary is display-only
- * (full fidelity lives in toolInputRaw), so it flattens the whole command to
- * one line instead of dropping everything after the first newline.
+ * summarizer kept only `command.split('\n')[0]`. It now flattens the whole
+ * command to one line instead of dropping everything after the first newline.
+ *
+ * Because that flattened summary is EXTERNALIZED (session sidecar via
+ * saveSession, events.jsonl via session-ledger, telegram streaming) rather than
+ * display-only, inline secrets are redacted at this source — see the redaction
+ * describe block below (codex P1 on #511).
  */
 describe('summarizeToolInput — bash command flattening', () => {
   it('flattens a multi-line command instead of keeping only the first line', () => {
@@ -52,7 +56,9 @@ describe('summarizeToolInput — bash command flattening', () => {
   });
 
   it('caps a pathological long one-liner with an ellipsis', () => {
-    const long = 'echo ' + 'x'.repeat(400);
+    // Long but non-secret-like (short space-separated tokens) so the secret
+    // redactor is a no-op and this exercises the length cap, not redaction.
+    const long = 'echo ' + 'word '.repeat(100);
     const out = summarizeToolInput('bash', { command: long });
     // ' ' + 160 chars (159 + '…').
     expect(out.length).toBe(1 + 160);
@@ -63,6 +69,43 @@ describe('summarizeToolInput — bash command flattening', () => {
   it('reads the `cmd` alias as well as `command`', () => {
     const out = summarizeToolInput('bash', { cmd: 'ls -la\npwd' });
     expect(out).toBe(' ls -la pwd');
+  });
+});
+
+describe('summarizeToolInput — inline secret redaction (codex P1 on #511)', () => {
+  // The flattened summary is externalized (session sidecar, events.jsonl,
+  // telegram), so a secret on lines 2+ — previously dropped by the
+  // first-line-only slice — must be scrubbed here at the single source.
+  it('redacts a bearer token carried after the first line', () => {
+    const secret = 'sk-ant-api03-' + 'A'.repeat(24);
+    const out = summarizeToolInput('bash', {
+      command: `cd repo\ncurl -H "Authorization: Bearer ${secret}" https://api.example.com`,
+    });
+    expect(out).not.toContain(secret);
+    expect(out).toContain('[REDACTED]');
+    // Command structure survives so the operator still knows what ran.
+    expect(out).toContain('cd repo');
+    expect(out).toContain('curl');
+    expect(out).not.toContain('\n');
+  });
+
+  it('redacts an inline env-assigned API key on a later line', () => {
+    const secret = 'sk-ant-api03-' + 'B'.repeat(30);
+    const out = summarizeToolInput('bash', {
+      command: `cd repo\nexport ANTHROPIC_API_KEY=${secret}`,
+    });
+    expect(out).not.toContain(secret);
+    expect(out).toContain('[REDACTED]');
+    expect(out).toContain('export ANTHROPIC_API_KEY=');
+  });
+
+  it('leaves an ordinary git commit command intact (verb + message survive)', () => {
+    // Proves redaction does not break derive.ts commit detection, which reads
+    // this summary and keys on the `git commit` verb.
+    const out = summarizeToolInput('bash', {
+      command: 'git commit -m "fix: flatten multi-line bash summaries"',
+    });
+    expect(out).toBe(' git commit -m "fix: flatten multi-line bash summaries"');
   });
 });
 

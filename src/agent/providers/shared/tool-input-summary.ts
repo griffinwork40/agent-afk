@@ -14,6 +14,8 @@
  * @module agent/providers/shared/tool-input-summary
  */
 
+import { redactSecrets } from '../../redact-secrets.js';
+
 /**
  * Backstop cap on the flattened `command`/`cmd` summary length (display
  * columns are approximated by characters here). This is NOT the primary
@@ -53,17 +55,25 @@ export function summarizeToolInput(toolName: string, input: unknown): string {
   if (typeof path === 'string') return ' ' + path;
   const cmd = obj['command'] ?? obj['cmd'];
   if (typeof cmd === 'string') {
-    // Flatten multi-line commands to a single line rather than keeping only
-    // the first physical line. Models routinely emit `cd <dir> && …` split
-    // across a `\`-continuation, or multi-statement scripts with the real
-    // work on lines 2+. The old first-line-only slice discarded that work,
-    // rendering a useless `$ bash cd <dir>` (or even `$ bash \`) — the user
-    // could not tell what actually ran. Drop line-continuation backslashes,
-    // then collapse every whitespace run (including newlines) to one space so
-    // the meaningful verb survives into the tool-lane / progress-banner label.
-    // Full fidelity is preserved separately in toolInputRaw for facet
-    // derivation, so this summary is display-only and safe to flatten.
-    const flat = cmd.replace(/\\\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
+    // Invariant: this summary is NOT display-only — it becomes the tool-use
+    // event's `toolInput`, which is externalized to at-rest storage (the
+    // session sidecar via saveSession; events.jsonl via session-ledger) AND
+    // over the network (telegram streaming). Two steps happen here, in order:
+    //   1. Flatten the whole command to one line — drop `\`-continuations,
+    //      collapse whitespace/newline runs. Models emit `cd <dir> && …` split
+    //      across continuations, or multi-statement scripts with the real work
+    //      on lines 2+; the old first-line-only slice discarded it, rendering a
+    //      useless `$ bash cd <dir>` (or even `$ bash \`).
+    //   2. Redact inline secrets. The raw-input whitelist (raw-input.ts) keeps
+    //      the raw `command` out of `inputRaw`, but this flattened summary would
+    //      otherwise carry secrets on lines 2+ (`export TOKEN=…`,
+    //      `Authorization: Bearer …`) into every sink above. Redacting at this
+    //      single source closes them all at once; command structure is
+    //      preserved for the operator (verbs and `git commit -m "msg"` survive)
+    //      — only opaque ≥32-char tokens and key/bearer/JWT patterns become
+    //      [REDACTED]. Redact BEFORE the length cap so a token is never split
+    //      below the detector threshold.
+    const flat = redactSecrets(cmd.replace(/\\\r?\n/g, ' ').replace(/\s+/g, ' ').trim());
     return (
       ' ' +
       (flat.length > COMMAND_SUMMARY_MAX

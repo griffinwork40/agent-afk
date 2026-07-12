@@ -346,6 +346,8 @@ export async function streamResponse(
       // fan-out (silent on the parent stream) does not trip a false timeout.
       lastActivityAt = Date.now();
       if (event.type === 'chunk' && event.chunk.type === 'tool_use_detail') {
+        // toolInput is redacted at its source (summarizeToolInput) before it
+        // reaches this network-egress sink, so no secret-scrub is needed here.
         const toolArgs = event.chunk.toolInput.length > 60
           ? event.chunk.toolInput.slice(0, 57) + '...'
           : event.chunk.toolInput;
