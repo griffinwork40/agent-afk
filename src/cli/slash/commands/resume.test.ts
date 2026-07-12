@@ -21,6 +21,28 @@ import { createSessionStats, recordTurn } from '../session-stats.js';
 import type { SlashContext, SessionStats } from '../types.js';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
 import type { ResumeSwapResult } from '../../commands/interactive/shared.js';
+import type { PickerController, TerminalCompositor } from '../../terminal-compositor.js';
+
+class FakeHost {
+  controller: PickerController | null = null;
+  enterCalls = 0;
+  exitCalls = 0;
+
+  enterPickerMode(controller: PickerController): void {
+    this.enterCalls += 1;
+    this.controller = controller;
+  }
+  exitPickerMode(): void {
+    this.exitCalls += 1;
+    this.controller = null;
+  }
+  repaintPicker(): void {}
+
+  press(name: string): void {
+    if (!this.controller) throw new Error('FakeHost: no controller installed');
+    this.controller.onKey(undefined, { name, ctrl: false, shift: false });
+  }
+}
 
 let tmpHome: string;
 let originalHome: string | undefined;
@@ -182,5 +204,127 @@ describe('/resume — no-arg CWD filtering', () => {
     await resumeCmd.handler(ctx, sidecarId);
 
     expect(requestResumeSpy).toHaveBeenCalledOnce();
+  });
+});
+
+describe('/resume interactive picker', () => {
+  it('bare /resume opens a picker and resumes the selected session (TTY)', async () => {
+    const stats = createSessionStats('sonnet');
+    stats.cwd = '/proj/pick';
+    recordTurn(stats, 'pick work', 'done', {
+      sessionId: 'sdk-pick',
+      totalCostUsd: 0.01,
+      durationMs: 10,
+      usage: { input_tokens: 5, output_tokens: 5 },
+    });
+    stats.name = 'session-pick';
+    saveSession(stats);
+
+    const { ctx, requestResumeSpy } = makeCtx('sdk-live');
+    ctx.stats.cwd = '/proj/pick';
+    const host = new FakeHost();
+    ctx.getCompositor = (): TerminalCompositor => host as unknown as TerminalCompositor;
+
+    const p = resumeCmd.handler(ctx, '');
+    host.press('return'); // select the first (only) entry
+    await p;
+
+    expect(host.enterCalls).toBe(1);
+    expect(host.exitCalls).toBe(1);
+    expect(requestResumeSpy).toHaveBeenCalledOnce();
+  });
+
+  it('cancelling the picker (Esc) resumes nothing', async () => {
+    const stats = createSessionStats('sonnet');
+    stats.cwd = '/proj/pick2';
+    recordTurn(stats, 'pick work', 'done', {
+      sessionId: 'sdk-pick2',
+      totalCostUsd: 0.01,
+      durationMs: 10,
+      usage: { input_tokens: 5, output_tokens: 5 },
+    });
+    stats.name = 'session-pick2';
+    saveSession(stats);
+
+    const { ctx, requestResumeSpy } = makeCtx('sdk-live');
+    ctx.stats.cwd = '/proj/pick2';
+    const host = new FakeHost();
+    ctx.getCompositor = (): TerminalCompositor => host as unknown as TerminalCompositor;
+
+    const p = resumeCmd.handler(ctx, '');
+    host.press('escape');
+    await p;
+
+    expect(requestResumeSpy).not.toHaveBeenCalled();
+  });
+
+  it('resumes the highlighted row when two sessions share an identical label', async () => {
+    // Two sessions with the same name/model/turns/origin saved in the same
+    // minute render an IDENTICAL pickLabel. runPicker returns the selected
+    // *label* string; without unique options the label→row mapping (indexOf)
+    // resolves both rows to the first match, so selecting row 2 would wrongly
+    // resume session 1. The uniquePickLabels disambiguator must keep each row
+    // distinct so the highlighted session is the one resumed.
+    const save = (sdkId: string): void => {
+      const s = createSessionStats('sonnet');
+      s.cwd = '/proj/dup';
+      recordTurn(s, 'work', 'done', {
+        sessionId: sdkId,
+        totalCostUsd: 0.01,
+        durationMs: 10,
+        usage: { input_tokens: 5, output_tokens: 5 },
+      });
+      s.name = 'dup-name';
+      saveSession(s);
+    };
+    save('sdk-dup-1');
+    save('sdk-dup-2');
+
+    const resumeRow = async (downPresses: number): Promise<string | undefined> => {
+      let captured: ResolvedResumeTarget | undefined;
+      const { ctx } = makeCtx('sdk-live', async (t) => {
+        captured = t;
+        return { ok: true as const, sessionId: 'new' };
+      });
+      ctx.stats.cwd = '/proj/dup';
+      const host = new FakeHost();
+      ctx.getCompositor = (): TerminalCompositor => host as unknown as TerminalCompositor;
+      const p = resumeCmd.handler(ctx, '');
+      for (let i = 0; i < downPresses; i++) host.press('down');
+      host.press('return');
+      await p;
+      return captured?.resumeId;
+    };
+
+    const row1 = await resumeRow(0);
+    const row2 = await resumeRow(1);
+
+    expect(row1).toBeDefined();
+    expect(row2).toBeDefined();
+    // The collision bug resumed the first match for BOTH rows — distinct rows
+    // must resolve to distinct sessions.
+    expect(row1).not.toBe(row2);
+    expect(['sdk-dup-1', 'sdk-dup-2']).toContain(row1);
+    expect(['sdk-dup-1', 'sdk-dup-2']).toContain(row2);
+  });
+
+  it('bare /resume on a non-TTY surface lists sessions without resuming', async () => {
+    const stats = createSessionStats('sonnet');
+    stats.cwd = '/proj/txt';
+    recordTurn(stats, 'txt work', 'done', {
+      sessionId: 'sdk-txt',
+      totalCostUsd: 0.01,
+      durationMs: 10,
+      usage: { input_tokens: 5, output_tokens: 5 },
+    });
+    stats.name = 'session-txt';
+    saveSession(stats);
+
+    const { ctx, lines, requestResumeSpy } = makeCtx(undefined);
+    ctx.stats.cwd = '/proj/txt';
+    await resumeCmd.handler(ctx, '');
+
+    expect(lines.join('\n')).toContain('session-txt');
+    expect(requestResumeSpy).not.toHaveBeenCalled();
   });
 });

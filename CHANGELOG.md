@@ -13,6 +13,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ### Added
 - openai-compatible: honor server `retry-after` / `retry-after-ms` on 429/503 backoff instead of blind exponential (parity with anthropic-direct) (#536)
+## [5.34.0] - 2026-07-12
+
+### Added
+- app-like TUI — /config settings menu + /model & /resume pickers (#506) (7cf6c0b)
+
+## [5.33.2] - 2026-07-12
+
+### Fixed
+- guard NaN config + non-string systemPrompt + unmask registry-skill errors (#534) (edfcd64)
 
 ## [5.33.1] - 2026-07-12
 

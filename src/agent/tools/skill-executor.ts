@@ -153,11 +153,20 @@ export class SkillExecutor {
 
     // 1. Try the global skill registry (built-in + user-space skills).
     //    These already have handlers that dispatch subagents internally.
+    //    Only the getSkill LOOKUP is guarded: it throws "Skill not found" when
+    //    the name isn't in the registry, which is the legitimate fall-through
+    //    to plugin lookup. executeRegistrySkill() must run OUTSIDE the try so a
+    //    genuine setup/execution failure (e.g. a forked/loaded skill throwing)
+    //    propagates instead of being misrouted to plugin lookup and surfacing a
+    //    misleading `Skill "<name>" not found`.
+    let skill: ReturnType<typeof getSkill> | undefined;
     try {
-      const skill = getSkill(parsed.name);
-      return await this.executeRegistrySkill(skill, parsed.arguments, call);
+      skill = getSkill(parsed.name);
     } catch {
-      // getSkill throws on not-found — fall through to plugin lookup.
+      // not a registry skill — fall through to plugin lookup.
+    }
+    if (skill) {
+      return await this.executeRegistrySkill(skill, parsed.arguments, call);
     }
 
     // 2. Try plugin skills (SKILL.md body). Default is in-context LOAD; a

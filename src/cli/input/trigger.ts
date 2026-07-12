@@ -11,6 +11,7 @@ import { join } from 'path';
 import { list as listSlashCommands, aliasEntries } from '../slash/registry.js';
 import { resolveQuery, MAX_FILE_MATCHES } from '../multi-line-reader.js';
 import type { Candidate, Trigger } from './types.js';
+import type { SlashCommand } from '../slash/types.js';
 
 /**
  * Detect the trigger kind and query from the buffer at the cursor position.
@@ -67,34 +68,65 @@ export function detectTrigger(buffer: string, cursorCol: number): Trigger | null
 }
 
 /**
- * Filter slash commands by query prefix.
+ * True when every character of `needle` appears in `haystack` in order (not
+ * necessarily contiguous). Used for the subsequence fallback so an abbreviation
+ * like `cfg` matches `config`. Both inputs are expected pre-lowercased.
+ */
+function isSubsequence(needle: string, haystack: string): boolean {
+  if (needle.length === 0) return true;
+  let i = 0;
+  for (let j = 0; j < haystack.length && i < needle.length; j++) {
+    if (haystack[j] === needle[i]) i += 1;
+  }
+  return i === needle.length;
+}
+
+/**
+ * Filter slash commands for the autocomplete dropdown.
+ *
+ * Ranking: prefix matches first (preserving the historical `startsWith`
+ * behaviour and its alphabetical ordering), then subsequence matches — e.g.
+ * `cfg` → `/config` — appended below, so abbreviations resolve without
+ * displacing the common prefix case. Matching is case-insensitive. Canonical
+ * commands and aliases (e.g. `/quit` → `/exit`, which borrow their canonical
+ * command's summary) share the same ranking. Capped at 20.
  */
 export function filterSlashCandidates(query: string): Candidate[] {
   const cmds = listSlashCommands();
-  const canonical: Candidate[] = cmds
-    .filter((cmd) => cmd.name.slice(1).startsWith(query)) // cmd.name includes '/'
-    .map((cmd) => ({
-      value: cmd.name,
-      summary: cmd.summary,
-      ...(cmd.hint ? { hint: cmd.hint } : {}),
-    }));
-  // Aliases (e.g. `/quit` → `/exit`) live in a separate map; surface them here
-  // so they show up in the dropdown alongside canonical commands. They borrow
-  // their canonical command's summary so users see what the alias does.
-  const aliasMatches: Candidate[] = aliasEntries()
-    .filter((entry) => entry.alias.slice(1).startsWith(query))
-    .map((entry) => {
-      const canonicalCmd = cmds.find((c) => c.name === entry.canonical);
-      return {
-        value: entry.alias,
-        summary: entry.summary,
-        ...(canonicalCmd?.hint ? { hint: canonicalCmd.hint } : {}),
-      };
-    });
-  const matches = [...canonical, ...aliasMatches].sort((a, b) =>
-    a.value.localeCompare(b.value),
-  );
-  return matches.slice(0, 20);
+  const q = query.toLowerCase();
+
+  const canonicalCand = (cmd: SlashCommand): Candidate => ({
+    value: cmd.name,
+    summary: cmd.summary,
+    ...(cmd.hint ? { hint: cmd.hint } : {}),
+  });
+  const aliasCand = (entry: { alias: string; canonical: string; summary: string }): Candidate => {
+    const canonicalCmd = cmds.find((c) => c.name === entry.canonical);
+    return {
+      value: entry.alias,
+      summary: entry.summary,
+      ...(canonicalCmd?.hint ? { hint: canonicalCmd.hint } : {}),
+    };
+  };
+
+  // (searchKey without leading slash, candidate) universe over commands + aliases.
+  const universe: Array<{ key: string; cand: Candidate }> = [
+    ...cmds.map((cmd) => ({ key: cmd.name.slice(1).toLowerCase(), cand: canonicalCand(cmd) })),
+    ...aliasEntries().map((entry) => ({ key: entry.alias.slice(1).toLowerCase(), cand: aliasCand(entry) })),
+  ];
+
+  const prefix = universe.filter((u) => u.key.startsWith(q));
+  const prefixValues = new Set(prefix.map((u) => u.cand.value));
+  const subseq =
+    q.length === 0
+      ? []
+      : universe.filter((u) => !prefixValues.has(u.cand.value) && isSubsequence(q, u.key));
+
+  const byValue = (a: { cand: Candidate }, b: { cand: Candidate }): number =>
+    a.cand.value.localeCompare(b.cand.value);
+  prefix.sort(byValue);
+  subseq.sort(byValue);
+  return [...prefix, ...subseq].map((u) => u.cand).slice(0, 20);
 }
 
 /**
