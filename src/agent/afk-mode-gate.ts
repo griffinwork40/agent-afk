@@ -81,10 +81,12 @@ import type { HookContext, HookDecision, HookHandler } from './hooks.js';
 import type { PermissionMode } from './types/sdk-types.js';
 import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js';
 import type { TraceWriter } from './trace/index.js';
+import path from 'path';
 import { classifyRisk } from './risk-classifier.js';
 import { elicitationRouter } from './elicitation-router.js';
 import { emitHookDecision } from './trace/emit.js';
 import { redactInlineSecrets } from './session/prompt-dump.js';
+import { worktreeRootFor } from './worktree-occupancy.js';
 
 /** Default deny-on-timeout window for a high-risk approval (ms). */
 const DEFAULT_APPROVAL_TIMEOUT_MS = 300_000;
@@ -249,25 +251,38 @@ export function createAfkModeGate(
     // surface Asking states from an unattended run.
     if (toolName === 'send_telegram') return {};
 
-    // Single source of truth for risk. `workspaceRoot` is set to the session
-    // cwd so writes that escape it are flagged `high` (classifyRisk's workspace
-    // boundary rule). Resolution order, most-specific first:
-    //   1. context.cwd — the dispatcher's per-call resolve base. Load-bearing
-    //      for forked subagents: they intentionally share the parent hook
-    //      registry, but their dispatcher runs in a sibling worktree, so the
-    //      per-call cwd classifies a child's in-worktree write correctly instead
-    //      of against the parent session's cwd. For the top-level session this
-    //      tracks /cwd in lockstep with getCwd() (updateCwdDependents keeps the
-    //      main dispatcher's resolveBase synced), so the two agree there.
-    //   2. getCwd() — the live session cwd (tracks a mid-session /cwd change),
-    //      preferred over the static construction-time cwd.
-    //   3. the static construction-time cwd, then process.cwd().
-    // This matters because in AFK the path-approval prompt is disabled
-    // (allowAll), so this gate is the SOLE path-safety layer.
-    const root = context.cwd ?? getCwd?.() ?? cwd ?? process.cwd();
+    // Invariant: the AFK workspace-escape ceiling must be anchored to a TRUSTED
+    // root. classifyRisk takes two path inputs with distinct roles:
+    //   - `cwd`: the base RELATIVE file paths resolve against. MUST equal the
+    //     dispatcher's actual resolve base (context.cwd) or the classified path
+    //     diverges from where the write lands — defeating the gate for relative
+    //     paths.
+    //   - `workspaceRoot`: the containment BOUNDARY. A write resolving outside it
+    //     is flagged `high` (classifyRisk's workspace-escape rule).
+    // context.cwd is the per-call resolve base. For a forked subagent it is the
+    // child's (possibly sibling-worktree) cwd — load-bearing, since subagents
+    // share the parent hook registry, so without it a child's in-worktree write
+    // is measured against the PARENT cwd and wrongly flagged high. For the top-
+    // level session it tracks /cwd in lockstep with getCwd().
+    // SECURITY: a subagent's cwd is caller-supplied — the `agent` tool's `cwd` is
+    // only format-validated (parseAgentInput: absolute, no `..`), never contained
+    // to a trusted root. So context.cwd must NOT be trusted as the BOUNDARY: a
+    // child dispatched at `/tmp` or `/` would else classify every write under it
+    // as in-workspace, bypassing the sole path-safety layer (path-approval is
+    // allowAll in AFK). We therefore resolve relative paths against context.cwd
+    // but anchor the boundary to it ONLY when it is provably inside the session's
+    // trust domain (isTrustedChildRoot); otherwise fall back to the trusted
+    // session root so an out-of-tree child write escapes and is flagged high.
+    const sessionRoot = getCwd?.() ?? cwd ?? process.cwd();
+    const perCall = context.cwd;
+    const resolveBase = perCall ?? sessionRoot;
+    const workspaceRoot =
+      perCall !== undefined && isTrustedChildRoot(perCall, sessionRoot)
+        ? perCall
+        : sessionRoot;
     const risk = classifyRisk(toolName, context.input, {
-      cwd: root,
-      workspaceRoot: root,
+      cwd: resolveBase,
+      workspaceRoot,
     });
 
     if (risk !== 'high') return {};
@@ -347,4 +362,41 @@ function blockDecision(toolName: string, why: string): HookDecision {
       `and ${why}. Push an Asking summary to Telegram (send_telegram) and stop, ` +
       `or have the operator run /afk off and take over.`,
   };
+}
+
+/**
+ * Whether a forked subagent's per-call cwd (`context.cwd`) may be trusted as the
+ * workspace containment boundary. The `agent` tool's `cwd` is caller-supplied and
+ * only format-validated (absolute, no `..`), so an arbitrary absolute path like
+ * `/tmp` must NOT silently become the boundary. `perCall` is trusted only when it
+ * is provably within the session's trust domain:
+ *   - the session root itself, or a descendant of it (the common case: a child
+ *     worktree under the session's own tree, and the top-level session where
+ *     perCall === sessionRoot), or
+ *   - a sibling managed worktree under the SAME `<repoRoot>/.afk-worktrees/` dir
+ *     as the session (the isolation:"worktree" case where the PARENT itself runs
+ *     in a worktree, so the child is a sibling rather than a descendant).
+ * Any other path (`/tmp`, `/`, or an `.afk-worktrees/` tree of a different repo)
+ * is untrusted. Pure lexical path computation, mirroring worktreeRootFor — no
+ * filesystem access.
+ */
+function isTrustedChildRoot(perCall: string, sessionRoot: string): boolean {
+  const child = path.resolve(perCall);
+  const root = path.resolve(sessionRoot);
+  if (child === root) return true;
+  // Descendant of the session root (relative path stays within — no `..` escape).
+  const rel = path.relative(root, child);
+  if (rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel)) return true;
+  // Sibling managed worktree: same `.afk-worktrees/` parent dir as the session's
+  // own worktree. Only reachable when the session itself runs inside a worktree.
+  const sessionWt = worktreeRootFor(root);
+  const childWt = worktreeRootFor(child);
+  if (
+    sessionWt !== undefined &&
+    childWt !== undefined &&
+    path.dirname(sessionWt) === path.dirname(childWt)
+  ) {
+    return true;
+  }
+  return false;
 }
