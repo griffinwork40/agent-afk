@@ -655,6 +655,9 @@ export async function* runTurn(
         durationMs,
         ...(result.circuitBreaker === true ? { circuitBreaker: true } : {}),
         ...(result.failureClass ? { failureClass: result.failureClass } : {}),
+        ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
+          ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
+          : {}),
       });
 
       yield {
@@ -664,6 +667,9 @@ export async function* runTurn(
         content: result.content,
         ...(result.isError === true ? { isError: true } : {}),
         ...(truncated ? { truncated: true } : {}),
+        ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
+          ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
+          : {}),
         sessionId: input.ctx.sessionId,
       };
 

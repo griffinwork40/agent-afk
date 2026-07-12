@@ -22,7 +22,7 @@ import type { AgentConfig } from '../../types/config-types.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
 import { createHookRegistry } from '../../hooks.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
-import type { ToolHandler } from '../../tools/types.js';
+import type { ToolHandler, ConcurrencyClassifier } from '../../tools/types.js';
 import {
   __setOpenAIClientFactory,
   OpenAICompatibleQuery,
@@ -90,7 +90,10 @@ interface DispatcherFixture {
   postHookFired: string[];
 }
 
-function makeDispatcher(opts?: { allowedTools?: string[] }): DispatcherFixture {
+function makeDispatcher(opts?: {
+  allowedTools?: string[];
+  concurrencyClassifier?: ConcurrencyClassifier;
+}): DispatcherFixture {
   const handlerCalls: DispatcherFixture['handlerCalls'] = [];
   const preHookFired: string[] = [];
   const postHookFired: string[] = [];
@@ -137,6 +140,9 @@ function makeDispatcher(opts?: { allowedTools?: string[] }): DispatcherFixture {
   };
   if (opts?.allowedTools !== undefined) {
     dispatcherOpts.permissions = { allowedTools: opts.allowedTools };
+  }
+  if (opts?.concurrencyClassifier !== undefined) {
+    dispatcherOpts.concurrencyClassifier = opts.concurrencyClassifier;
   }
 
   const dispatcher = new SessionToolDispatcher(dispatcherOpts);
@@ -601,6 +607,61 @@ describe('OpenAICompatibleQuery — tool dispatch (slice 3)', () => {
     const toolMsgs = turn2Messages.filter((m) => m.role === 'tool');
     expect(toolMsgs).toHaveLength(2);
     expect(toolMsgs.map((m) => m.tool_call_id).sort()).toEqual(['a', 'b']);
+  });
+
+  it('stamps batchIndex/batchSize onto tool.output for a parallel safe wave (badge parity with anthropic-direct)', async () => {
+    // Regression guard for the render-path plumbing: the dispatcher stamps
+    // batch membership on each ToolResult, but the TUI `∥i/N` badge only
+    // renders if the provider forwards those fields onto the `tool.output`
+    // event. A `() => true` classifier makes both echo calls concurrency-safe
+    // so they partition into ONE batch of size 2 (batchSize > 1 = a real
+    // parallel wave). Without the forwarding, batchIndex/batchSize are absent
+    // and the badge silently vanishes for every openai-compatible session.
+    const fixture = makeDispatcher({ concurrencyClassifier: () => true });
+    scriptedTurns = [
+      {
+        chunks: [
+          {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    { index: 0, id: 'a', type: 'function', function: { name: 'echo', arguments: '{"msg":"first"}' } },
+                    { index: 1, id: 'b', type: 'function', function: { name: 'echo', arguments: '{"msg":"second"}' } },
+                  ],
+                },
+              },
+            ],
+          },
+          { choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 } },
+        ],
+      },
+      {
+        chunks: [
+          { choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }], usage: { prompt_tokens: 30, completion_tokens: 1, total_tokens: 31 } },
+        ],
+      },
+    ];
+
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk', source: 'config' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('echo two things'),
+      config: baseConfig(),
+      toolDispatcher: fixture.dispatcher,
+    });
+    const events = await collect(q);
+
+    const toolOutputs = events.filter((e) => e.type === 'tool.output');
+    expect(toolOutputs).toHaveLength(2);
+    // Emission order mirrors call order (i=0 → 'a', i=1 → 'b'), so batchIndex is
+    // a stable 1-based ordinal within the size-2 wave.
+    for (const [pos, ev] of toolOutputs.entries()) {
+      if (ev.type !== 'tool.output') throw new Error('unreachable');
+      expect(ev.batchSize).toBe(2);
+      expect(ev.batchIndex).toBe(pos + 1);
+    }
   });
 
   it('sums usage across iterations into a single turn.completed event', async () => {

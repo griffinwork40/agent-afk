@@ -609,6 +609,58 @@ describe('SessionToolDispatcher', () => {
       expect(order.indexOf('grep')).toBeGreaterThan(order.indexOf('bash'));
     });
 
+    it('stamps batchIndex/batchSize reflecting the partition', async () => {
+      const track = (name: string): ToolHandler => async () => ({ content: name });
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', track('read')],
+          ['glob', track('glob')],
+          ['bash', track('bash')],
+          ['grep', track('grep')],
+        ]),
+        permissions: { allowedTools: ['read_file', 'glob', 'bash', 'grep'] },
+      });
+
+      // [safe, safe, unsafe, safe] → batches {read,glob}, {bash}, {grep}.
+      const results = await dispatcher.executeBatch([
+        makeBatchCall('read_file'),
+        makeBatchCall('glob'),
+        makeBatchCall('bash'),
+        makeBatchCall('grep'),
+      ]);
+
+      // Parallel wave of 2: 1-based index within a size-2 batch.
+      expect(results[0]).toMatchObject({ batchIndex: 1, batchSize: 2 });
+      expect(results[1]).toMatchObject({ batchIndex: 2, batchSize: 2 });
+      // bash is concurrency-unsafe → its own singleton batch (never badged).
+      expect(results[2]).toMatchObject({ batchIndex: 1, batchSize: 1 });
+      // The trailing safe call is severed from the first wave by bash, so it
+      // is a singleton too — proving batchSize tracks the partition, not the
+      // tool's mere safety class.
+      expect(results[3]).toMatchObject({ batchIndex: 1, batchSize: 1 });
+    });
+
+    it('stamps a whole safe fan-out as one batch', async () => {
+      const track = (name: string): ToolHandler => async () => ({ content: name });
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', track('read')],
+          ['glob', track('glob')],
+          ['grep', track('grep')],
+        ]),
+        permissions: { allowedTools: ['read_file', 'glob', 'grep'] },
+      });
+
+      const results = await dispatcher.executeBatch([
+        makeBatchCall('read_file'),
+        makeBatchCall('glob'),
+        makeBatchCall('grep'),
+      ]);
+
+      expect(results.map((r) => r.batchSize)).toEqual([3, 3, 3]);
+      expect(results.map((r) => r.batchIndex)).toEqual([1, 2, 3]);
+    });
+
     it('collects all results when one tool fails in a safe batch', async () => {
       const ok: ToolHandler = async () => ({ content: 'ok' });
       const fail: ToolHandler = async () => { throw new Error('boom'); };

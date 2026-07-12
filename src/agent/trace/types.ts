@@ -104,6 +104,18 @@ export interface ToolCallCompletedPayload {
   /** Coarse failure classification when `isError` is true. Absent on success
    *  and on unclassified failures. See {@link ToolFailureClass}. */
   failureClass?: ToolFailureClass;
+  /**
+   * Concurrency-batch membership: 1-based position (`batchIndex`) and total
+   * size (`batchSize`) of the batch this call was dispatched in, set by the
+   * dispatcher's `executeBatch`. `batchSize > 1` means the call ran in a
+   * parallel wave; `batchSize === 1` means it ran alone in its own sequential
+   * batch (always the case for concurrency-unsafe tools like bash). Lets
+   * `afk trace show` and failure-analysis distinguish real parallelism from
+   * back-to-back sequential dispatch. Absent on the single-tool `execute()`
+   * path and on blocked/short-circuited calls.
+   */
+  batchIndex?: number;
+  batchSize?: number;
   subagentId?: string;
 }
 
