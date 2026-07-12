@@ -277,6 +277,13 @@ export async function runCompactionCore<M>(
   try {
     summary = await withTimeout(summarize(transcript), timeoutMs, deps.abortInFlight);
   } catch (err) {
+    // A timeout fires abortInFlight() to cancel the request, which in the real
+    // provider wiring also trips the shared abort signal — so check the timeout
+    // sentinel BEFORE isAborted(), or a genuine timeout would be misreported as
+    // a user-initiated 'aborted'.
+    if (err instanceof CompactionTimeoutError) {
+      return { compacted: false, reason: 'summarization-failed: ' + err.message, ...unchanged };
+    }
     if (isAborted()) {
       return { compacted: false, reason: 'aborted', ...unchanged };
     }

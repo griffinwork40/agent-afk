@@ -72,6 +72,24 @@ function deps(over: Partial<CompactOpenAIHistoryDeps> = {}): CompactOpenAIHistor
   };
 }
 
+/**
+ * History with a complete tool round BEFORE the keep window and another INSIDE
+ * it. Fresh user turns (role:'user') sit at indices 0, 3, 6 → keepLastN=2 lands
+ * the boundary on u2 (index 3), so the first round (t1) is summarized away and
+ * the second round (t2) must survive intact in the kept tail.
+ */
+function historyWithToolRounds(): OpenAIMessage[] {
+  return [
+    { role: 'user', content: 'u1' },
+    { role: 'assistant', content: '', tool_calls: [{ id: 't1', type: 'function', function: { name: 'grep', arguments: '{}' } }] },
+    { role: 'tool', content: 'result-1', tool_call_id: 't1' },
+    { role: 'user', content: 'u2' },
+    { role: 'assistant', content: '', tool_calls: [{ id: 't2', type: 'function', function: { name: 'read', arguments: '{}' } }] },
+    { role: 'tool', content: 'result-2', tool_call_id: 't2' },
+    { role: 'user', content: 'u3' },
+  ] as unknown as OpenAIMessage[];
+}
+
 describe('compactOpenAIHistory', () => {
   it('summarizes older turns and splices the preamble in place', async () => {
     const d = deps();
@@ -139,5 +157,28 @@ describe('compactOpenAIHistory', () => {
     const clearAbort = vi.fn();
     await compactOpenAIHistory(deps({ clearAbort }));
     expect(clearAbort).toHaveBeenCalledTimes(1);
+  });
+
+  it('never splits a tool round: drops complete older rounds, keeps later rounds intact', async () => {
+    const priorTurns = historyWithToolRounds();
+    const result = await compactOpenAIHistory(deps({ priorTurns }));
+    expect(result.compacted).toBe(true);
+    // New history: [user(summary), assistant(ack), u2, assistant(t2), tool(t2), u3]
+    expect(priorTurns).toHaveLength(6);
+    expect(priorTurns[0]?.role).toBe('user'); // summary preamble
+    expect(priorTurns[1]?.role).toBe('assistant'); // ack preamble
+    expect(priorTurns[2]?.content).toBe('u2'); // kept tail starts on a fresh user turn
+    // The summarized round's tool result (t1) must not survive as an orphan;
+    // only the kept round's result (t2) remains.
+    const toolIds = priorTurns
+      .filter((m) => m.role === 'tool')
+      .map((m) => (m as { tool_call_id?: string }).tool_call_id);
+    expect(toolIds).toEqual(['t2']);
+    // The surviving tool result must be immediately preceded by an assistant
+    // turn carrying its matching tool_call id — proving the round was not split.
+    const toolIdx = priorTurns.findIndex((m) => m.role === 'tool');
+    const prev = priorTurns[toolIdx - 1] as { role?: string; tool_calls?: Array<{ id?: string }> };
+    expect(prev.role).toBe('assistant');
+    expect(prev.tool_calls?.some((tc) => tc.id === 't2')).toBe(true);
   });
 });

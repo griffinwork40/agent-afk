@@ -146,19 +146,25 @@ describe('runCompactionCore', () => {
     expect(result.reason).toBe('aborted');
   });
 
-  it('times out a hung summarize, cancels it, and no-ops', async () => {
+  it('reports a timeout as summarization-failed even when abortInFlight trips the shared abort signal', async () => {
     const deps = baseDeps();
     const before = [...deps.messages];
-    const abortInFlight = vi.fn();
+    // Mirror the real provider wiring (openai-compatible/compact.ts): isAborted
+    // and abortInFlight read the SAME controller, so the timeout's abortInFlight()
+    // flips isAborted() to true. A genuine timeout must still be reported as
+    // summarization-failed, never reclassified as a user-initiated 'aborted'.
+    const controller = new AbortController();
     const result = await runCompactionCore({
       ...deps,
       timeoutMs: 20,
-      abortInFlight,
+      isAborted: () => controller.signal.aborted,
+      abortInFlight: () => controller.abort(),
       summarize: () => new Promise<string>(() => {}), // never resolves
     });
     expect(result.compacted).toBe(false);
     expect(result.reason).toContain('summarization-failed');
-    expect(abortInFlight).toHaveBeenCalledTimes(1);
+    expect(result.reason).toContain('timed out');
+    expect(controller.signal.aborted).toBe(true);
     expect(deps.messages).toEqual(before);
   });
 

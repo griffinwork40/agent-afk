@@ -1078,6 +1078,23 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
     q.close();
   });
 
+  it('compact bails `unsupported-wire-mode` on a responses-mode (ChatGPT-OAuth) session', async () => {
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'chatgpt-oauth', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('x'),
+      config: baseConfig(),
+    });
+    // A ChatGPT-OAuth session is forced to the responses wire, whose backend
+    // would reject the Chat Completions summarize call — so compact() must bail
+    // early with an actionable reason rather than issue a doomed request.
+    const result = await q.compact();
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe('unsupported-wire-mode');
+    q.close();
+  });
+
   it('setCwd forwards cwd to dispatcher.setResolveBase (U1)', () => {
     const hookRegistry = createHookRegistry();
     const dispatcher = new SessionToolDispatcher({

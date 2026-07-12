@@ -991,12 +991,30 @@ export class OpenAICompatibleQuery implements ProviderQuery {
    * provider summarization (e.g. a Claude model summarizing an OpenAI session)
    * is intentionally NOT wired here: a mismatched id simply fails the summarize
    * call, which the core treats as a safe no-op, leaving history untouched.
+   *
+   * Only Chat Completions sessions are supported. The summarizer runs through
+   * `oneShotChatCompletion` (Chat Completions wire), so a responses-mode session
+   * (ChatGPT-OAuth, or the `AFK_OPENAI_USE_RESPONSES` opt-in) bails early with
+   * `unsupported-wire-mode` rather than issuing a chat.completions call its
+   * backend would reject.
    */
   async compact(): Promise<ProviderCompactResult> {
     const messagesBefore = this.priorTurns.length;
     if (this.opts.auth.apiKey === null) {
       // No usable client was constructed — nothing to compact against.
       return { compacted: false, reason: 'session-closed', messagesBefore, messagesAfter: messagesBefore };
+    }
+    if (this.wireMode === 'responses') {
+      // oneShotChatCompletion speaks only Chat Completions; a responses-mode
+      // backend (ChatGPT-OAuth / AFK_OPENAI_USE_RESPONSES) would reject that
+      // call. Surface an explicit, honest no-op instead of a generic
+      // summarization failure so the reason is actionable.
+      return {
+        compacted: false,
+        reason: 'unsupported-wire-mode',
+        messagesBefore,
+        messagesAfter: messagesBefore,
+      };
     }
     const compactModel = env.AFK_COMPACT_MODEL ?? this.currentModel;
     return compactOpenAIHistory({
