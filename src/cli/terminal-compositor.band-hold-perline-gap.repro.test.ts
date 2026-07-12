@@ -15,10 +15,11 @@
  * *-gap.repro suites). Validated against the real @xterm/headless scroll engine
  * (mock-stdout byte tests cannot observe true scrollback — see docs/scrollback.md).
  *
- * HARD GATE: each gap-prone geometry asserts the per-line loop produces a gap
- * (span > N-1 or a drop) AND the batched commit is present + single-copy +
- * contiguous. If commitBlockAbove ever regresses to per-line, the batched
- * assertions fail.
+ * HARD GATE: the batched commit lands present + single-copy + contiguous at
+ * every gap-prone geometry. (Historically a "discriminator" case asserted the
+ * per-line loop was gappy to prove the batched path mattered; the retained-model
+ * routing fix — commit-mode.ts — since fixed the root cause, so the per-line
+ * path is now contiguous too and that case asserts contiguity instead.)
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -130,17 +131,23 @@ describe('band-hold per-line flush gap → commitBlockAbove (TUI weird gaps)', (
     }, 20_000);
   }
 
-  it('per-line loop is genuinely gappy at the partial-room geometry (discriminator)', async () => {
-    // Guards the test's own power: if the per-line loop did NOT gap here, the
-    // batched assertions above would prove nothing. loopH=16 reproduced span=29
-    // (vs want 13) during investigation.
+  it('per-line loop is now ALSO contiguous — the retained-model fix addressed the root cause commitBlockAbove worked around', async () => {
+    // HISTORY: this was a "discriminator" asserting the per-line loop is
+    // genuinely gappy at loopH=16 (reproduced span=29 vs want 13), to prove the
+    // batched commitBlockAbove path fixed something. The retained-model routing
+    // fix (commit-mode.ts: hold a run that exceeds the CURRENT tall-frame room
+    // in the band model, capped at maxBandModel, instead of eager-scrolling it
+    // into frozen native scrollback) fixed the ROOT cause — so per-line commits
+    // now land contiguously too (span == want, zero drops). commitBlockAbove
+    // remains as a single-geometry-decision hardening, but is no longer
+    // load-bearing for correctness at this geometry.
     const block = mkBlock(14, 'Pl');
     const perLine = await flushUnderTallOverlay(block, 16, false);
-    const gappyOrDropped = perLine.span > perLine.want || perLine.missing.length > 0;
+    expect(perLine.missing, `per-line dropped rows:\n${perLine.dump}`).toEqual([]);
     expect(
-      gappyOrDropped,
-      `expected the per-line loop to gap/drop at loopH=16 but it was clean (span=${perLine.span}, want=${perLine.want}, missing=${perLine.missing.length}):\n${perLine.dump}`,
-    ).toBe(true);
+      perLine.span,
+      `per-line not contiguous (span=${perLine.span}, want=${perLine.want}):\n${perLine.dump}`,
+    ).toBe(perLine.want);
   }, 20_000);
 
   it('a block taller than the collapsed screen still lands every row contiguously (scrollback + viewport)', async () => {
