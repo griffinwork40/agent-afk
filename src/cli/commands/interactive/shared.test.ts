@@ -11,8 +11,11 @@
  *   - Picks the LAST turn from a multi-turn array
  */
 
-import { describe, it, expect } from 'vitest';
-import { printResumeBanner } from './shared.js';
+import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { printResumeBanner, resolveResumeCwd } from './shared.js';
 import type { SessionStats, TurnRecord } from '../../slash/types.js';
 import type { CompletionWriter } from './shared.js';
 
@@ -318,5 +321,52 @@ describe('printResumeBanner', () => {
     // No ellipsis means no truncation happened.
     expect(line).not.toContain('…');
     expect(line).toBe('  Last: ' + '🎉'.repeat(80));
+  });
+});
+
+/**
+ * Tests for `resolveResumeCwd` — the precedence helper that lets a resumed
+ * interactive session run in the directory it was saved in (the fork/resume
+ * cwd-restore fix), without clobbering an explicit `--worktree` override.
+ *
+ * Precedence under test:
+ *   (a) stored cwd that EXISTS on disk is used
+ *   (b) stored cwd that does NOT exist falls back (returns undefined)
+ *   (c) an explicit extras.cwd (--worktree) always wins over stored cwd
+ */
+describe('resolveResumeCwd — resume cwd precedence', () => {
+  let tmp: string | undefined;
+
+  afterEach(() => {
+    if (tmp !== undefined) rmSync(tmp, { recursive: true, force: true });
+    tmp = undefined;
+  });
+
+  it('uses the stored cwd when it still exists on disk', () => {
+    tmp = mkdtempSync(join(tmpdir(), 'afk-resume-cwd-'));
+    // No --worktree override → fall back to the (existing) stored cwd.
+    expect(resolveResumeCwd(undefined, tmp)).toBe(tmp);
+  });
+
+  it('falls back (undefined) when the stored cwd no longer exists', () => {
+    // A cleaned-up worktree: the stored path is gone. The helper returns
+    // undefined so the caller degrades to process.cwd().
+    const gone = join(tmpdir(), `afk-resume-cwd-missing-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    expect(resolveResumeCwd(undefined, gone)).toBeUndefined();
+  });
+
+  it('lets an explicit extras.cwd (--worktree) win over the stored cwd', () => {
+    tmp = mkdtempSync(join(tmpdir(), 'afk-resume-cwd-'));
+    // Even though the stored cwd exists, the explicit override takes priority
+    // and is returned WITHOUT an existsSync check.
+    expect(resolveResumeCwd('/explicit/worktree', tmp)).toBe('/explicit/worktree');
+  });
+
+  it('returns undefined when neither an override nor a stored cwd is present', () => {
+    expect(resolveResumeCwd(undefined, undefined)).toBeUndefined();
+  });
+
+  it('returns the explicit override even when there is no stored cwd', () => {
+    expect(resolveResumeCwd('/explicit/worktree', undefined)).toBe('/explicit/worktree');
   });
 });

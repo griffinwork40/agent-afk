@@ -62,7 +62,7 @@ import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
 import { emitSessionPhase } from '../../../agent/trace/emit.js';
 import { palette } from '../../palette.js';
 import { performResumeSwap, resumeConfigFor } from './resume-swap.js';
-import { reseedStatsFromStored } from './shared.js';
+import { reseedStatsFromStored, resolveResumeCwd } from './shared.js';
 
 /**
  * Dependencies for constructing a fresh `AgentSession`. Captures everything
@@ -159,6 +159,18 @@ export async function bootstrapSession(
   const bootstrapStartedAt = Date.now();
   const resumeTarget = resolveResumeTarget(options);
   const resumeConfig = resumeConfigFor(resumeTarget);
+  // Resume cwd restoration: a resumed session should run in the directory it
+  // was saved in (e.g. an `afk --worktree` session that was later /fork'd or
+  // --resume'd), not wherever the shell happens to be. Precedence: an explicit
+  // --worktree override (extras.cwd) always wins; otherwise fall back to the
+  // stored cwd IFF it still exists on disk — a cleaned-up worktree degrades
+  // safely to process.cwd(). `effectiveCwd` is threaded through every
+  // cwd-purpose usage below (stats stamp, hook/session cwd, subagent/skill/
+  // compose/MCP cwd) so resumed worktree sessions AND their children anchor
+  // correctly. Defaults to `extras?.cwd` when there is no resume override, so
+  // this is a safe drop-in: behavior only changes for a resume whose stored
+  // cwd still exists.
+  const effectiveCwd = resolveResumeCwd(extras?.cwd, resumeTarget?.stored?.cwd);
   const sessionModel = resumeTarget?.stored?.model ?? options.model;
   // Fail fast on an unconfigured capability tier (e.g. `afk i -m local` with no
   // AFK_MODEL_LOCAL) before building the REPL session — an empty id would
@@ -223,7 +235,7 @@ export async function bootstrapSession(
     // subagents resolve relative paths like `src/foo.ts` against the parent
     // repo and the `read_file` handler returns parent-repo contents instead
     // of the worktree's. Mirrors `chat.ts:163` for the one-shot path.
-    ...(extras?.cwd !== undefined ? { cwd: extras.cwd } : {}),
+    ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
     // Witness layer: manager-level writer so `agent`-tool forks (which never
     // set config.traceWriter) still emit subagent_lifecycle events and hand
     // the writer to their handles. Skill forks already thread it via
@@ -306,7 +318,7 @@ export async function bootstrapSession(
   // + project .afk/agents & .claude/agents). Enables `agent_type` dispatch
   // on the `agent` tool at every depth of this REPL session.
   const agentRegistry = loadAgentRegistry({
-    ...(extras?.cwd !== undefined ? { cwd: extras.cwd } : {}),
+    ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
     pluginAgents: discoverPluginAgents(),
   });
 
@@ -320,8 +332,9 @@ export async function bootstrapSession(
     // Worktree cwd propagates into every depth of the skill-executor chain
     // (grandchild SkillExecutor → its per-call SubagentManager → forked
     // subagent config). Without this, depth ≥ 1 skill children silently
-    // lose worktree isolation.
-    extras?.cwd,
+    // lose worktree isolation. `effectiveCwd` also carries a resumed
+    // session's restored cwd (see resolveResumeCwd above).
+    effectiveCwd,
     // Per-model credential resolver: resolves credentials by child model
     // rather than forwarding the parent's captured apiKey — fixes Anthropic
     // children starving when the main model is OpenAI-routed.
@@ -368,7 +381,7 @@ export async function bootstrapSession(
     // Worktree isolation for depth ≥ 2 `agent` dispatch — `rootManager`
     // already carries cwd for depth-1, but the per-call childManager
     // constructed inside SubagentExecutor.execute() needs cwd too.
-    ...(extras?.cwd !== undefined ? { cwd: extras.cwd } : {}),
+    ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
     // Named-agent dispatch: registry + the session model as the `inherit`
     // anchor for named-agent model resolution.
     agentRegistry,
@@ -411,7 +424,7 @@ export async function bootstrapSession(
     // executor. Without forwarding cwd here, every `/diagnose`, `/mint`,
     // etc. runs its first-tier subagents against the host repo even when
     // `--worktree` was set.
-    ...(extras?.cwd !== undefined ? { cwd: extras.cwd } : {}),
+    ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
   });
 
   // Pass the raw base prompt (pre-assembly) so compose subagents do not
@@ -427,7 +440,7 @@ export async function bootstrapSession(
     resolveApiKeyForModel: getApiKeyForModel,
     ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
     // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
-    ...(extras?.cwd !== undefined ? { cwd: extras.cwd } : {}),
+    ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
     systemPrompt: basePrompt ?? '',
     // Session identity for routing-decision rows (REPL → cli).
     surface: 'cli',
@@ -453,7 +466,7 @@ export async function bootstrapSession(
     // Use the worktree cwd for project-local `.mcp.json` resolution so each
     // worktree can carry its own MCP config (matching how the worktree
     // already isolates everything else under `worktreeCwd`).
-    const projectCwd = extras?.cwd ?? process.cwd();
+    const projectCwd = effectiveCwd ?? process.cwd();
     // Imported MCP servers from trusted source binaries (`importFrom`). Only
     // JSON-format configs (Claude Code) are loadable today; they enter as the
     // lowest-priority layer so AFK's own config always wins. MCP import is
@@ -587,17 +600,29 @@ export async function bootstrapSession(
     stats.thinkingUi = options.thinkingUi;
   }
   // Stamp the effective working directory on stats so the status line can
-  // render it. We capture the same cwd the provider will see: the explicit
-  // `extras.cwd` override (e.g. from `--worktree`) when present, else
+  // render it. We capture the same cwd the provider will see: `effectiveCwd`
+  // (the explicit `--worktree` override when present, else a resumed session's
+  // restored cwd — see resolveResumeCwd above), falling back to
   // `process.cwd()`. Captured once at bootstrap — sessions don't `chdir`
   // mid-run, and the status line treats this as a fixed identity field.
-  stats.cwd = extras?.cwd ?? process.cwd();
+  stats.cwd = effectiveCwd ?? process.cwd();
 
   // Trace was opened earlier (before the executor) so the
   // BackgroundAgentRegistry could be constructed with the writer. Surface
   // the path here so the startup banner ordering is preserved.
   if (trace) {
     console.log(palette.dim(`  trace: ${trace.tracePath}`));
+  }
+  // Make a restored resume cwd legible: only when the cwd came from the stored
+  // session (not an explicit --worktree, which the banner already implies) and
+  // differs from where the shell launched. Printed in the same dim-log style
+  // as the trace line above, before the compositor is armed.
+  if (
+    extras?.cwd === undefined &&
+    effectiveCwd !== undefined &&
+    effectiveCwd !== process.cwd()
+  ) {
+    console.log(palette.dim(`  ↪ resuming in ${effectiveCwd}`));
   }
 
   // Both slots default to `console.log` here; `runReplLoop` mutates them
@@ -626,9 +651,9 @@ export async function bootstrapSession(
     'cli',
     sharedMemoryStore,
     () => stats.permissionMode,
-    loadHooksConfig({ cwd: extras?.cwd }),
-    { cwd: extras?.cwd, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}) },
-    () => extras?.cwd ?? process.cwd(),
+    loadHooksConfig({ cwd: effectiveCwd }),
+    { cwd: effectiveCwd, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}) },
+    () => effectiveCwd ?? process.cwd(),
   );
   const hookRegistry = hookRegistryBundle.registry;
   const pathApprovalGrantRef = hookRegistryBundle.pathApprovalGrantRef;
@@ -647,7 +672,7 @@ export async function bootstrapSession(
     providerFactory,
     hookRegistry,
     traceWriter: trace?.writer,
-    cwd: extras?.cwd,
+    cwd: effectiveCwd,
     maxTurns: parseInt(options.maxTurns, 10),
     autoResumeOnUsageLimit: cliConfig.autoResumeOnUsageLimit,
     ...(initialPermissionMode !== undefined ? { permissionMode: initialPermissionMode } : {}),

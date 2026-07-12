@@ -1,4 +1,5 @@
 import * as readline from 'node:readline';
+import { existsSync } from 'node:fs';
 import type { HookRegistry } from '../../../agent/hooks.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
 import type { MemoryStore } from '../../../agent/memory/index.js';
@@ -52,6 +53,35 @@ export function reseedStatsFromStored(
   // was added lack the field, deserializing as undefined despite the type.
   // Default to now so the status-line duration is 0, not NaN.
   stats.sessionStartTime = stored.startedAt ?? Date.now();
+}
+
+/**
+ * Resolve the effective working directory for a (possibly resumed) interactive
+ * session. Precedence:
+ *   1. An explicit `--worktree` override (`extrasCwd`) ALWAYS wins.
+ *   2. Otherwise, fall back to the resumed session's stored cwd — but ONLY when
+ *      it still exists on disk. A resumed session should run in the directory
+ *      it was saved in (e.g. an `afk --worktree` session later `/fork`'d or
+ *      `--resume`'d), not wherever the shell happens to be. A cleaned-up
+ *      worktree degrades safely (the stored cwd is ignored, caller falls back
+ *      to `process.cwd()`).
+ *
+ * Returns `undefined` when neither source applies, so callers keep their
+ * existing `?? process.cwd()` fallback. Because it defaults to `extrasCwd` when
+ * there is no resume override, this is a safe drop-in — behavior only changes
+ * for a resume whose stored cwd still exists.
+ *
+ * Extracted as a pure helper (rather than inlined in bootstrap) so the
+ * precedence contract is unit-testable in isolation from the heavy session
+ * construction path.
+ */
+export function resolveResumeCwd(
+  extrasCwd: string | undefined,
+  storedCwd: string | undefined,
+): string | undefined {
+  if (extrasCwd !== undefined) return extrasCwd;
+  if (storedCwd !== undefined && existsSync(storedCwd)) return storedCwd;
+  return undefined;
 }
 
 /**
