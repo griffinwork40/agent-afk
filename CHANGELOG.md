@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.35.3] - 2026-07-12
+
+### Fixed
+- inherit parent read scope for forked sub-agents (#544) (94298d7)
+
 ## [5.35.2] - 2026-07-12
 
 ### Fixed
