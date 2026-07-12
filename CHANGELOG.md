@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.33.2] - 2026-07-12
+
+### Fixed
+- guard NaN config + non-string systemPrompt + unmask registry-skill errors (#534) (edfcd64)
+
 ## [5.33.1] - 2026-07-12
 
 ### Fixed
