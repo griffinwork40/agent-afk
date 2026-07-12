@@ -183,16 +183,23 @@ export function loadEnvConfig(): Partial<CliConfig> {
   }
 
   if (env.AFK_MAX_TOKENS) {
-    // Only assign when finite — a non-numeric value parses to NaN, which would
-    // otherwise win the `??` merge over DEFAULT_CONFIG.maxTokens and poison
-    // every request (see cli/config.ts merge site).
-    const maxTokens = parseInt(env.AFK_MAX_TOKENS, 10);
-    if (Number.isFinite(maxTokens)) config.maxTokens = maxTokens;
+    // Whole-string match via `Number(...)`, not `parseInt(...)`: parseInt
+    // only extracts a leading numeric prefix, so "123abc" silently parsed to
+    // 123 — a non-numeric value slipping through as a plausible-looking
+    // token count. `Number("123abc")` is NaN, closing that gap. Also require
+    // an integer (not just finite) since a token count can't be fractional —
+    // `Number("123.5")` is finite but not an integer and is now rejected too.
+    // A non-numeric/fractional value must not win the `??` merge over
+    // DEFAULT_CONFIG.maxTokens and poison every request (see cli/config.ts
+    // merge site).
+    const maxTokens = Number(env.AFK_MAX_TOKENS);
+    if (Number.isInteger(maxTokens)) config.maxTokens = maxTokens;
   }
 
   if (env.AFK_TEMPERATURE) {
-    // Same NaN guard as AFK_MAX_TOKENS above.
-    const temperature = parseFloat(env.AFK_TEMPERATURE);
+    // Same whole-string-match guard as AFK_MAX_TOKENS above; temperature is
+    // a float so `Number.isFinite` (no integer constraint) is the right gate.
+    const temperature = Number(env.AFK_TEMPERATURE);
     if (Number.isFinite(temperature)) config.temperature = temperature;
   }
 

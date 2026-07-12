@@ -209,6 +209,27 @@ describe('Config Loader', () => {
       expect(Number.isNaN(config.temperature)).toBe(false);
     });
 
+    it('keeps the default maxTokens when AFK_MAX_TOKENS has trailing garbage (no silent truncation)', () => {
+      // parseInt("123abc") used to truncate to 123 — a non-numeric value
+      // slipping through as a plausible-looking token count. Number(...)
+      // whole-string-matches and is NaN here, so the guard now drops it too.
+      process.env.AFK_MAX_TOKENS = '123abc';
+
+      const config = loadConfig();
+
+      expect(config.maxTokens).toBe(4096);
+    });
+
+    it('keeps the default maxTokens when AFK_MAX_TOKENS is a non-integer number', () => {
+      // A token count can't be fractional; Number("8192.5") is finite but
+      // not an integer, so it must be rejected even though it "parses".
+      process.env.AFK_MAX_TOKENS = '8192.5';
+
+      const config = loadConfig();
+
+      expect(config.maxTokens).toBe(4096);
+    });
+
     it('prefers AFK_MODEL over CLAUDE_MODEL', () => {
       process.env.AFK_MODEL = 'haiku';
       process.env.CLAUDE_MODEL = 'opus';
