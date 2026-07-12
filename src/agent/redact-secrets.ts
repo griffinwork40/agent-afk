@@ -33,7 +33,8 @@
  *     that consist entirely of hex or base64 alphabet characters (heuristic).
  *     Runs shaped like a filesystem/URL path are excluded — see
  *     `looksLikeFilesystemPath` — so a long bare `cd <path>` argument is not
- *     mistaken for a secret.
+ *     mistaken for a secret. An opaque token fused into a path segment
+ *     (`/tmp/uploads/<token>`) is still redacted (rule 3 of that guard).
  *
  * Explicit patterns run BEFORE the generic length rule so short or
  * dot-separated tokens get redacted regardless of the 32-char floor.
@@ -59,7 +60,8 @@ export function redactSecrets(text: string): string {
     // does NOT stop the class from swallowing `/`, so a long bare path argument
     // (`cd /Users/me/Projects/open_source/agent-afk`) matched as one contiguous
     // token and was redacted to `[REDACTED]`. The path-shape guard below carves
-    // real paths back out; genuine opaque tokens are still redacted.
+    // real paths back out; genuine opaque tokens — including one fused into a
+    // path segment (`/tmp/uploads/<token>`, rule 3) — are still redacted.
     .replace(/(?<![/.\w])[A-Za-z0-9+/=_-]{32,}(?![/.\w])/g, (m) =>
       looksLikeFilesystemPath(m) ? m : '[REDACTED]');
 }
@@ -69,15 +71,31 @@ export function redactSecrets(text: string): string {
  * secret. The generic token class includes `/`, `_`, `-` — the characters a
  * path is built from — so a long bare path would otherwise be redacted.
  *
- * Heuristic: a run is a path when it contains a `/` separator AND none of
- * base64's exclusive characters (`+`, `=`). base64url (JWTs, most modern API
- * tokens) uses `-`/`_` and hex/alphanumeric keys have no `/` at all, so those
- * still match and are redacted; classic base64 carries `+`/`=`, so it is still
- * redacted even with a `/`. Accepted gap: a classic-base64 blob containing `/`
- * but neither `+` nor `=` is preserved — the high-value named secrets (sk-ant,
- * Bearer, JWT, AWS) are already covered by the explicit rules that run first,
- * and this generic rule is only a heuristic backstop.
+ * A run is a path only when ALL hold:
+ *   1. it contains a `/` separator, and
+ *   2. it carries none of base64's exclusive chars (`+`, `=`) — classic base64
+ *      (JWT sigs aside) is a secret, not a path, so a run with `+`/`=` is redacted;
+ *   3. no single `/`-delimited segment is itself a long opaque token — i.e. a
+ *      secret fused into a path segment (`/tmp/uploads/<44-char token>`) is
+ *      redacted, not spared. "Long opaque token" = ≥32 chars, mixing letters
+ *      and digits, with no dotted extension. (The generic-rule class excludes
+ *      `.`, so a matched run never contains one; the dot check is defensive for
+ *      standalone use.)
+ *
+ * base64url tokens (JWTs, most modern API keys) use `-`/`_` and have no `/`, so
+ * they never reach this guard and are redacted by the generic rule; a token
+ * fused into a path is caught by rule 3.
+ *
+ * Accepted residual gap: an unusually long (≥32-char) DOTLESS path segment that
+ * mixes letters and digits — a raw hash directory or a UUID-without-dashes — is
+ * over-redacted (treated as a token). Rare and cosmetic; it fails safe, and the
+ * common case (short word segments, e.g. `/Users/me/Projects/open_source/agent-afk`)
+ * is preserved. The high-value NAMED secrets (sk-ant, Bearer, JWT, AWS) are
+ * covered by the explicit rules that run first, regardless of path context.
  */
 function looksLikeFilesystemPath(run: string): boolean {
-  return run.includes('/') && !/[+=]/.test(run);
+  if (!run.includes('/') || /[+=]/.test(run)) return false;
+  const isOpaqueTokenSegment = (seg: string): boolean =>
+    seg.length >= 32 && !seg.includes('.') && /[A-Za-z]/.test(seg) && /[0-9]/.test(seg);
+  return !run.split('/').some(isOpaqueTokenSegment);
 }

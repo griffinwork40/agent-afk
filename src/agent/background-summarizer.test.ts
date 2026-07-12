@@ -537,4 +537,27 @@ describe('redactSecrets', () => {
     const text = 'random IOSFODNN7EXAMPLE9 token';
     expect(redactSecrets(text)).toBe(text);
   });
+
+  it('redacts an opaque base64url token fused into a path segment (PR #533 review med)', () => {
+    // A ≥32-char opaque token as a path segment is still a secret even though the
+    // whole run contains `/` and no +/=. The per-segment guard catches it.
+    const token = 'abcABC123_-abcABC123_-abcABC123_-abcABC12';
+    const out = redactSecrets(`cat /tmp/uploads/${token}`);
+    expect(out).not.toContain(token);
+    expect(out).toContain('[REDACTED]');
+  });
+
+  it('redacts a long hex token fused into a path segment', () => {
+    const token = '0123456789abcdef0123456789abcdef0123';
+    const out = redactSecrets(`cat /var/data/${token}`);
+    expect(out).not.toContain(token);
+    expect(out).toContain('[REDACTED]');
+  });
+
+  it('preserves a long DIGITLESS descriptive path segment (not an opaque token)', () => {
+    // A long path segment with no digits is a descriptive name, not a secret —
+    // it must survive. Guards against over-redacting real long directory names.
+    const p = '/opt/SomeVeryLongDirectoryNameWithoutAnyDigits/bin';
+    expect(redactSecrets(`ls ${p}`)).toBe(`ls ${p}`);
+  });
 });
