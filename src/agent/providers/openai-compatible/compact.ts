@@ -28,6 +28,7 @@ import { env } from '../../../config/env.js';
 import type { ProviderCompactResult } from '../../provider.js';
 import { emitCompaction } from '../../trace/emit.js';
 import type { TraceWriter } from '../../trace/index.js';
+import type { CompactionTrigger } from '../../trace/types.js';
 import {
   COMPACT_ACK_TEXT,
   COMPACT_SUMMARY_HEADER,
@@ -150,6 +151,12 @@ export interface CompactOpenAIHistoryDeps {
   beginAbort: () => AbortController;
   /** Release the abort scope once the summarization settles. */
   clearAbort: (controller: AbortController) => void;
+  /**
+   * What initiated this compaction, for the witness trace. `'manual'` (REPL
+   * /compact, Telegram, router) or `'token_threshold'` (the turn-boundary
+   * auto-compaction trigger). Defaults to `'manual'`.
+   */
+  trigger?: CompactionTrigger;
   traceWriter?: TraceWriter;
 }
 
@@ -183,7 +190,7 @@ export async function compactOpenAIHistory(
       onSuccess: (info) => {
         // Fire-and-forget; emitCompaction swallows writer errors internally.
         void emitCompaction(deps.traceWriter, {
-          trigger: 'manual',
+          trigger: deps.trigger ?? 'manual',
           preCompactionMessages: info.olderSlice,
           summary: info.summary,
           keptTailCount: info.keptTailCount,

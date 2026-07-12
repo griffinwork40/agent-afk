@@ -181,4 +181,24 @@ describe('runCompactionCore', () => {
     expect(result.reason).toBe('history-too-short');
     expect(summarize).not.toHaveBeenCalled();
   });
+
+  it('no-ops (nothing-to-summarize) when the whole history is within the keep window', async () => {
+    // history() has 3 fresh user turns (indices 0,2,4). keepLastN=3 lands the
+    // boundary at index 0 — nothing older than the keep window to summarize —
+    // so the core bails without touching the summarizer or the history.
+    const summarize = vi.fn();
+    const messages = history();
+    const before = [...messages];
+    const result = await runCompactionCore({
+      messages,
+      ops: fakeOps,
+      keepLastN: 3,
+      isAborted: () => false,
+      summarize,
+    });
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe('nothing-to-summarize');
+    expect(summarize).not.toHaveBeenCalled();
+    expect(messages).toEqual(before);
+  });
 });
