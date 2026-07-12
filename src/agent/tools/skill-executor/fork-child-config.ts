@@ -84,12 +84,21 @@ export function buildForkedChildConfig(
     // dropping that gate here would re-open mutating bash even at the cap.
     if (readOnly) {
       // readOnly (with OR without a tools: list): buildReadOnlyReconProvider
-      // carries readOnlyBash + readOnlyMemory + RECON_ALLOWED_TOOLS. The
-      // tools: intersection (effectiveAllowed) is a subset of RECON, so RECON
-      // is a safe read-only superset and — crucially — the mutating-bash gate
-      // is preserved. This closes the cap-path readOnlyBash fail-open for a
+      // carries readOnlyBash + readOnlyMemory. Pass effectiveAllowed so a
+      // read-only skill that DECLARED `tools:` is restricted to its declared
+      // subset (the RECON intersection) instead of the full RECON superset —
+      // matching the factory path below (issue #499, finding 2: the cap path
+      // previously ignored effectiveAllowed and granted the whole RECON set,
+      // e.g. web_scrape egress to a `tools: [bash]` skill). When the skill
+      // declared no `tools:`, effectiveAllowed is the full RECON set, so the
+      // historical behavior is unchanged. Either branch preserves the
+      // mutating-bash gate, closing the cap-path readOnlyBash fail-open for a
       // `read-only: true` + `tools: bash` skill forked at the depth cap.
-      childConfig.provider = buildReadOnlyReconProvider(childConfig.model, ctx.openaiBaseUrl);
+      childConfig.provider = buildReadOnlyReconProvider(
+        childConfig.model,
+        ctx.openaiBaseUrl,
+        effectiveAllowed,
+      );
     } else if (effectiveAllowed !== undefined) {
       // Non-readOnly tools: allowlist at the cap. Restrict to the declared
       // tools (no readOnlyBash — the skill did not declare read-only).

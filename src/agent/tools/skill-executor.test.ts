@@ -2573,8 +2573,54 @@ describe('SkillExecutor', () => {
       expect(result.isError).toBeUndefined();
       // readOnly wins: the recon provider (which keeps readOnlyBash) is used, and
       // the bare restricted provider that would drop the bash gate is NOT.
-      expect(reconSpy).toHaveBeenCalledWith('sonnet', undefined);
+      //
+      // issue #499 finding 2: the cap path now threads the EFFECTIVE allowlist —
+      // the RECON intersection of the declared `tools:` — as the third arg, so
+      // the child is restricted to the declared subset (`write_file` dropped: not
+      // in RECON) instead of silently receiving the full RECON superset. The
+      // readOnlyBash + readOnlyMemory gates are still baked in by the builder.
+      expect(reconSpy).toHaveBeenCalledWith('sonnet', undefined, ['read_file', 'bash']);
       expect(restrictedSpy).not.toHaveBeenCalled();
+    });
+
+    it('read-only skill with NO tools: at the depth cap gets the FULL RECON set (backward compat)', async () => {
+      // issue #499 finding 2 (companion to the test above): a read-only skill
+      // that declares no `tools:` must still get the whole RECON allowlist at
+      // the cap — the narrowing only kicks in when a `tools:` list was declared.
+      vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockResolvedValue({
+        runToResult: vi.fn().mockResolvedValue({
+          status: 'succeeded',
+          message: { content: 'recon output' },
+        }),
+        teardown: vi.fn().mockResolvedValue(undefined),
+      } as never);
+      vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
+
+      const reconSpy = vi.spyOn(nestingModule, 'buildReadOnlyReconProvider');
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'test',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+      });
+
+      const skillBody: PluginSkillBody = {
+        body: 'You are a read-only auditor.',
+        pluginPath: '/fake/plugin',
+        context: 'fork',
+        readOnly: true,
+        // no allowedTools — effectiveAllowed resolves to the full RECON set.
+      };
+      (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
+        new Map([['recon-no-tools', skillBody]]);
+
+      const result = await executor.execute(makeCall({ name: 'recon-no-tools' }));
+
+      expect(result.isError).toBeUndefined();
+      expect(reconSpy).toHaveBeenCalledWith('sonnet', undefined, [...RECON_ALLOWED_TOOLS]);
     });
 
     it('does NOT call buildSkillRestrictedProvider when allowedTools is absent', async () => {
@@ -2652,6 +2698,83 @@ describe('SkillExecutor', () => {
         'sonnet',
         false,
         undefined,
+      );
+    });
+  });
+
+  describe('plugin skill model: override (issue #499 finding 3)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function capturePluginFork(skillName: string, body: PluginSkillBody, ctx?: Partial<{ defaultModel: string; defaultSubagentModel: string }>) {
+      const mockForkSubagent = vi.fn().mockResolvedValue({
+        runToResult: vi.fn().mockResolvedValue({
+          status: 'succeeded',
+          message: { content: 'ok' },
+        }),
+        teardown: vi.fn().mockResolvedValue(undefined),
+      });
+      vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockImplementation(mockForkSubagent);
+      vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'test',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        ...(ctx?.defaultModel !== undefined ? { defaultModel: ctx.defaultModel } : {}),
+        ...(ctx?.defaultSubagentModel !== undefined ? { defaultSubagentModel: ctx.defaultSubagentModel } : {}),
+      });
+      (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
+        new Map([[skillName, body]]);
+      return { executor, mockForkSubagent };
+    }
+
+    it('forks the plugin skill on its declared model: override', async () => {
+      // Before the fix, executePluginSkill resolved
+      // `defaultSubagentModel ?? defaultModel ?? 'sonnet'` only — the SKILL.md
+      // `model:` was silently ignored. It must now win, mirroring the registry
+      // fork path (executeForkedRegistrySkill honors skill.model).
+      const { executor, mockForkSubagent } = capturePluginFork(
+        'pinned-plugin',
+        { body: 'body', pluginPath: '/fake/plugin', context: 'fork', model: 'opus' },
+        { defaultModel: 'sonnet', defaultSubagentModel: 'haiku' },
+      );
+
+      await executor.execute(makeCall({ name: 'pinned-plugin' }));
+
+      expect(mockForkSubagent).toHaveBeenCalledWith(
+        expect.objectContaining({ config: expect.objectContaining({ model: 'opus' }) }),
+      );
+    });
+
+    it('falls back to defaultSubagentModel when the plugin skill declares no model:', async () => {
+      const { executor, mockForkSubagent } = capturePluginFork(
+        'no-model-plugin',
+        { body: 'body', pluginPath: '/fake/plugin', context: 'fork' },
+        { defaultModel: 'opus', defaultSubagentModel: 'haiku' },
+      );
+
+      await executor.execute(makeCall({ name: 'no-model-plugin' }));
+
+      expect(mockForkSubagent).toHaveBeenCalledWith(
+        expect.objectContaining({ config: expect.objectContaining({ model: 'haiku' }) }),
+      );
+    });
+
+    it('falls back to defaultModel when neither model: nor defaultSubagentModel is set', async () => {
+      const { executor, mockForkSubagent } = capturePluginFork(
+        'default-model-plugin',
+        { body: 'body', pluginPath: '/fake/plugin', context: 'fork' },
+        { defaultModel: 'opus' },
+      );
+
+      await executor.execute(makeCall({ name: 'default-model-plugin' }));
+
+      expect(mockForkSubagent).toHaveBeenCalledWith(
+        expect.objectContaining({ config: expect.objectContaining({ model: 'opus' }) }),
       );
     });
   });

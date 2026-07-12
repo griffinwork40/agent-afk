@@ -49,6 +49,15 @@ export interface PluginSkillMetadata {
    * dispatcher's `readOnlyBash` gate.
    */
   readOnly?: boolean;
+  /**
+   * Per-skill model override from the `model:` frontmatter field. When present,
+   * a forked subagent for this skill runs on this model instead of the session
+   * default. Mirrors the registry-skill `model` field (see `SkillMetadata` in
+   * `src/skills/index.ts`); the forked plugin path resolves
+   * `model ?? defaultSubagentModel ?? defaultModel ?? 'sonnet'`. Absent → the
+   * session-default resolution applies unchanged.
+   */
+  model?: string;
   /** Markdown content after the frontmatter closing `---`. */
   body?: string;
   /**
@@ -343,6 +352,14 @@ function parseSkillMetadata(
         // child's write tools.
         const raw = value.replace(/^["']|["']$/g, '').trim();
         if (raw === 'true') metadata.readOnly = true;
+      } else if (key === 'model') {
+        // Per-skill model override. Strip surrounding quotes and only assign a
+        // non-empty value so a bare `model:` line falls through to the session
+        // default. No allow-list validation — an arbitrary id flows to
+        // providerForModel()/the credential resolver exactly like the
+        // registry-skill `model` field, which is also unvalidated.
+        const raw = value.replace(/^["']|["']$/g, '').trim();
+        if (raw.length > 0) metadata.model = raw;
       }
     }
 
