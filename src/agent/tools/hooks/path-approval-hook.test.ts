@@ -108,6 +108,112 @@ describe('createPathApprovalHook — typed-tool gating', () => {
   });
 });
 
+describe('createPathApprovalHook — session-scoped grants via context.grantManager (#514)', () => {
+  // #514: the dispatcher injects the EXECUTING session's provider as
+  // context.grantManager. For a forked child that is the CHILD's own grant
+  // manager (with its composed writeRoots) — NOT the process-global ref, which
+  // is pinned to the top-level session. So a writeRoots-granted sibling write
+  // must be ALLOWED even though the parent ref (opts.getGrantManager) does not
+  // grant it. This is the interactive-surface gap PR 514 left open: it composed
+  // writeRoots into the child config but the hook still checked the parent ref.
+  const SIBLING = '/sibling/repo';
+
+  it('ALLOWS a forked-child write to a path in its INJECTED writeRoots (parent ref would deny)', async () => {
+    // Parent ref grants only BASE — on its own it would auto-deny the sibling.
+    const parentRef = makeMockGrantManager({ writeRoots: [BASE] });
+    // Child provider (injected via context) grants BASE + the sibling.
+    const childMgr = makeMockGrantManager({ writeRoots: [BASE, SIBLING] });
+    const { preToolUse } = createPathApprovalHook({
+      getGrantManager: () => parentRef,
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    const decision = await preToolUse({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: `${SIBLING}/out.txt`, content: 'x' },
+      sessionId: 'child-1',
+      parentSessionId: 'parent-1',
+      grantManager: childMgr,
+    });
+
+    // Not blocked: the child's own grants permit the write, so the `!restricted`
+    // early-return fires BEFORE the parentSessionId auto-deny. The remedy the
+    // PR advertised is now real on interactive surfaces.
+    expect(decision).toEqual({});
+    // The parent ref was never consulted for the decision.
+    expect(parentRef._events).toHaveLength(0);
+  });
+
+  it('STILL auto-denies a forked-child write OUTSIDE its injected grants (confinement preserved)', async () => {
+    const childMgr = makeMockGrantManager({ writeRoots: [BASE] });
+    const { preToolUse } = createPathApprovalHook({
+      // Even a permissive parent ref must not widen the child.
+      getGrantManager: () => makeMockGrantManager({ writeRoots: [BASE, SIBLING] }),
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    const decision = await preToolUse({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: '/etc/hosts', content: 'x' },
+      sessionId: 'child-1',
+      parentSessionId: 'parent-1',
+      grantManager: childMgr,
+    });
+
+    // /etc/hosts is outside the CHILD's writeRoots → restricted → fork auto-deny.
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('Sub-agent path access denied');
+  });
+
+  it('context.grantManager takes precedence over opts.getGrantManager (the ref)', async () => {
+    // Ref grants the sibling; the injected (child) manager does NOT. If the
+    // injected manager wins, the fork write is restricted → auto-deny.
+    const refMgr = makeMockGrantManager({ writeRoots: [BASE, SIBLING] });
+    const injectedMgr = makeMockGrantManager({ writeRoots: [BASE] });
+    const { preToolUse } = createPathApprovalHook({
+      getGrantManager: () => refMgr,
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    const decision = await preToolUse({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: `${SIBLING}/out.txt`, content: 'x' },
+      sessionId: 'child-1',
+      parentSessionId: 'parent-1',
+      grantManager: injectedMgr,
+    });
+
+    expect(decision.decision).toBe('block'); // the restrictive injected manager won
+  });
+
+  it('falls back to opts.getGrantManager when no grantManager is injected (prior behavior)', async () => {
+    // Top-level session, no injected manager: the ref grants the path, so the
+    // hook resolves exactly as before — no prompt, no block.
+    const refMgr = makeMockGrantManager({ readRoots: [BASE, SIBLING] });
+    const { preToolUse } = createPathApprovalHook({
+      getGrantManager: () => refMgr,
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    const decision = await preToolUse({
+      event: 'PreToolUse',
+      toolName: 'read_file',
+      input: { file_path: `${SIBLING}/in.txt` },
+      sessionId: 'sess-1',
+      // no parentSessionId, no grantManager
+    });
+
+    expect(decision).toEqual({});
+  });
+});
+
 describe('createPathApprovalHook — sub-agent auto-deny (PR1)', () => {
   // A forked sub-agent (parentSessionId set) must never prompt the operator for
   // out-of-root access — the prompt would surface on the parent's handler with
@@ -228,6 +334,45 @@ describe('createPathApprovalHook — outcome mapping', () => {
     postToolUse(postCtx('read_file', { file_path: '/etc/hosts' }));
     expect(mgr._readRoots).not.toContain('/etc/hosts');
     expect(mgr._events.map((e) => e.op)).toEqual(['addRead', 'revoke']);
+  });
+
+  it('once: revoke targets the injected context.grantManager, not the ref (#514)', async () => {
+    // #514 PostToolUse mirror: the dispatcher injects the executing session's
+    // provider as context.grantManager on BOTH Pre and Post. The "Once"-grant
+    // must be added to — and revoked from — that SAME injected manager, never
+    // the process-global ref (opts.getGrantManager). Here the ref and the
+    // injected manager are DISTINCT instances: if the Post revoke hit the ref
+    // instead of the injected manager, the once-grant would leak on the
+    // injected manager (its writeRoots/readRoots would keep the granted path).
+    elicitationRouter.install(async () => ({ action: 'accept', content: { choice: 'once' } }));
+    const refMgr = makeMockGrantManager();
+    const injectedMgr = makeMockGrantManager();
+    const { preToolUse, postToolUse } = createPathApprovalHook({
+      getGrantManager: () => refMgr,
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    // Pre: approve "once" against the INJECTED manager (context.grantManager).
+    const decision = await preToolUse({
+      ...preCtx('read_file', { file_path: '/etc/hosts' }),
+      grantManager: injectedMgr,
+    });
+    expect(decision).toEqual({});
+    expect(injectedMgr._readRoots).toContain('/etc/hosts');
+    // The ref was never consulted or mutated for the add.
+    expect(refMgr._events).toHaveLength(0);
+
+    // Post: revoke must land on the SAME injected manager the Pre check mutated.
+    postToolUse({
+      ...postCtx('read_file', { file_path: '/etc/hosts' }),
+      grantManager: injectedMgr,
+    });
+    expect(injectedMgr._readRoots).not.toContain('/etc/hosts');
+    expect(injectedMgr._events.map((e) => e.op)).toEqual(['addRead', 'revoke']);
+    // The ref remained untouched throughout — proving the injected manager
+    // (not opts.getGrantManager) drove BOTH the add and the revoke.
+    expect(refMgr._events).toHaveLength(0);
   });
 
   it('session: adds to readRoots and caches; second call does not re-prompt', async () => {

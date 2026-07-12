@@ -183,7 +183,14 @@ async function preToolUseImpl(
   // Reproduce the handler's containment check. cwd / readRoots / writeRoots
   // are sampled from the grant manager using the same fresh-snapshot pattern
   // the dispatcher uses on every handler call.
-  const grantManager = opts.getGrantManager();
+  //
+  // Prefer the grant manager injected by the executing session's dispatcher
+  // (context.grantManager) over the process-global ref: for a forked child the
+  // ref is pinned to the TOP-LEVEL session and blind to the child's own
+  // writeRoots, so a writeRoots-granted sibling write would be auto-denied even
+  // though the child's grants permit it (#435/#514). The ref remains the
+  // fallback for non-dispatcher-originated dispatch (tests, SessionEnd).
+  const grantManager = context.grantManager ?? opts.getGrantManager();
   if (!grantManager) {
     // Failsafe — no wired grant manager (headless, one-shot, daemon). Skip
     // the approval pre-check and let the handler's own resolveAndContain
@@ -216,11 +223,13 @@ async function preToolUseImpl(
   // the operator for out-of-root access — the prompt would surface on the
   // parent's REPL/Telegram handler (the elicitation router is process-wide),
   // interleaved into the parent's turn with no attribution. Auto-deny instead.
-  // The sub-agent inherits the parent's grants (this hook and its grant-manager
-  // closure are shared via the inherited registry), so any path the parent
-  // already approved still passes the `!restricted` check above; only a
-  // genuinely NEW out-of-root path reaches here, and the sub-agent reports the
-  // requirement back to its parent, which owns the surface and can grant it.
+  // The fork resolves path containment against its OWN grant manager (injected
+  // as `context.grantManager` by the executing session's dispatcher) — the
+  // child's own composed write/read roots, not the parent's. So a path inside
+  // the child's own granted roots still passes the `!restricted` check above;
+  // only a path outside the child's own grants reaches here, and the sub-agent
+  // reports the requirement back to its parent, which owns the surface and can
+  // grant it.
   // Mirrors the `parentSessionId` self-skip used by the memory + plan-mode hooks.
   if (context.parentSessionId !== undefined) {
     // eslint-disable-next-line no-console
@@ -293,7 +302,9 @@ function postToolUseImpl(
     ? 'write'
     : 'read';
 
-  const grantManager = opts.getGrantManager();
+  // Prefer the dispatcher-injected grant manager (same session as PreToolUse)
+  // so the "Once"-grant revoke targets the manager the Pre check mutated.
+  const grantManager = context.grantManager ?? opts.getGrantManager();
   if (!grantManager) return {};
   const grants = grantManager.getGrants();
 

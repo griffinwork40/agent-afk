@@ -26,6 +26,7 @@ import { checkToolPermission, type ToolPermissionConfig } from './permissions.js
 import type { CanUseTool, PermissionResult } from '../types/sdk-types.js';
 import { classifyBashCommand } from './readonly-bash.js';
 import { PathGrantManager, type GrantSnapshot } from './grant-manager.js';
+import type { GrantManager } from '../../cli/slash/commands/allow-dir.js';
 import { emitHookDecision } from '../trace/emit.js';
 import type { TraceWriter } from '../trace/index.js';
 import { defaultConcurrencyClassifier, partitionIntoBatches } from './dispatch-batching.js';
@@ -144,6 +145,17 @@ export interface SessionToolDispatcherOptions {
    * calls. Undefined for top-level sessions.
    */
   parentSessionId?: string;
+  /**
+   * The PROVIDER that owns this dispatcher (it implements {@link GrantManager}).
+   * The provider's `buildDispatcher` passes `this`; the dispatcher injects it
+   * onto every PreToolUse/PostToolUse context as `context.grantManager` so
+   * path-scoped hooks resolve THIS session's live grants instead of the
+   * process-global `pathApprovalGrantRef` — which is pinned to the top-level
+   * session and blind to a forked child's own writeRoots (#435/#514). Optional:
+   * test dispatchers that construct directly leave it unset and the hooks fall
+   * back to their ref, preserving prior behavior.
+   */
+  sessionGrantManager?: GrantManager;
   /** Witness-layer trace writer. When provided, every PreToolUse and
    *  PostToolUse dispatch records a `hook_decision` event. */
   traceWriter?: TraceWriter;
@@ -198,6 +210,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly _env: Record<string, string> | undefined;
   private readonly sessionId: string | undefined;
   private readonly parentSessionId: string | undefined;
+  /**
+   * Provider that owns this dispatcher (implements GrantManager). Injected onto
+   * PreToolUse/PostToolUse contexts so path-scoped hooks read THIS session's
+   * live grants. See {@link SessionToolDispatcherOptions.sessionGrantManager}.
+   */
+  private readonly sessionGrantManager: GrantManager | undefined;
   private readonly traceWriter: TraceWriter | undefined;
   /** When true, mutating `bash` commands are blocked (read-only skill child). */
   private readonly readOnlyBash: boolean;
@@ -238,6 +256,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this._env = opts.env;
     this.sessionId = opts.sessionId;
     this.parentSessionId = opts.parentSessionId;
+    this.sessionGrantManager = opts.sessionGrantManager;
     this.traceWriter = opts.traceWriter;
     this.readOnlyBash = opts.readOnlyBash === true;
     this._allowAll = opts.allowAll === true;
@@ -568,6 +587,11 @@ export class SessionToolDispatcher implements ToolDispatcher {
         ...(this.parentSessionId !== undefined
           ? { parentSessionId: this.parentSessionId }
           : {}),
+        // Inject THIS session's provider so path-scoped hooks resolve the real
+        // (possibly forked-child) grants instead of the process-global ref.
+        ...(this.sessionGrantManager !== undefined
+          ? { grantManager: this.sessionGrantManager }
+          : {}),
       };
       try {
         await dispatchPreToolUse(this.hookRegistry, preCtx, {
@@ -657,6 +681,10 @@ export class SessionToolDispatcher implements ToolDispatcher {
           ...(this.resolveBase !== undefined ? { cwd: this.resolveBase } : {}),
           ...(this.parentSessionId !== undefined
             ? { parentSessionId: this.parentSessionId }
+            : {}),
+          // See execute(): inject THIS session's provider grant manager.
+          ...(this.sessionGrantManager !== undefined
+            ? { grantManager: this.sessionGrantManager }
             : {}),
         };
         try {
@@ -953,6 +981,11 @@ export class SessionToolDispatcher implements ToolDispatcher {
       output,
       ...(input !== undefined ? { input } : {}),
       ...(this.parentSessionId !== undefined ? { parentSessionId: this.parentSessionId } : {}),
+      // Mirror PreToolUse so the path-approval "Once"-grant revoke mutates the
+      // SAME grant manager the Pre containment check consulted.
+      ...(this.sessionGrantManager !== undefined
+        ? { grantManager: this.sessionGrantManager }
+        : {}),
     };
     void dispatchPostToolUse(this.hookRegistry, postCtx, {
       signal,
