@@ -229,7 +229,7 @@ describe('createAfkModeGate', () => {
   });
 
   it('SECURITY: refuses a per-call cwd spoofing an .afk-worktrees/ tree of another repo', async () => {
-    // isTrustedChildRoot must not trust ANY path containing an `.afk-worktrees/`
+    // trustedChildRoot must not trust ANY path containing an `.afk-worktrees/`
     // segment — only a sibling under the SAME worktrees dir as the session. A
     // child cwd at `/tmp/.afk-worktrees/evil` (a different repo family) is
     // untrusted, so its write is measured against the session root and blocked.
@@ -267,6 +267,78 @@ describe('createAfkModeGate', () => {
       input: { file_path: '/repo/.afk-worktrees/parent/src/feature.ts' },
       parentSessionId: 'parent-session-123',
       cwd: '/repo/.afk-worktrees/child',
+    });
+    expect(escaping.decision).toBe('block');
+  });
+
+  it('contains a subagent to its whole worktree when the per-call cwd is a sub-directory of it', async () => {
+    // Regression (over-restriction): when the child's per-call cwd is a SUB-DIR of
+    // a sibling managed worktree, the containment boundary must normalize to the
+    // worktree ROOT (not the sub-dir), so a legitimate write elsewhere in the same
+    // worktree is allowed rather than wrongly flagged high. Before the normalization
+    // the boundary was the raw sub-dir cwd and this write was blocked.
+    const { gate } = makeGate('autonomous', '/repo/.afk-worktrees/parent');
+
+    // absolute write OUTSIDE the sub-dir cwd but INSIDE the child worktree
+    const inWorktree = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: '/repo/.afk-worktrees/child/other.ts' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/repo/.afk-worktrees/child/packages/app',
+    });
+    expect(inWorktree.decision).toBeUndefined();
+
+    // escape out of the child worktree entirely stays blocked
+    const escaping = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: '/repo/.afk-worktrees/parent/x.ts' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/repo/.afk-worktrees/child/packages/app',
+    });
+    expect(escaping.decision).toBe('block');
+  });
+
+  it('SECURITY: refuses a foreign-repo .afk-worktrees/ child even when the session runs in a worktree', async () => {
+    // Exercises the sibling branch's real dirname-inequality path (not the
+    // sessionWt===undefined short-circuit): the session itself runs in a worktree,
+    // and the child cwd sits in a DIFFERENT repo's `.afk-worktrees/` dir. The two
+    // worktree parents differ, so the child is untrusted, its write is measured
+    // against the session root, escapes it, and is blocked.
+    const { gate } = makeGate('autonomous', '/repo/.afk-worktrees/parent');
+    const foreign = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: 'evil.sh' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/other-repo/.afk-worktrees/evil',
+    });
+    expect(foreign.decision).toBe('block');
+  });
+
+  it('classifies a top-level write against the session root when the per-call cwd equals it', async () => {
+    // perCall === sessionRoot (the top-level session, where context.cwd tracks
+    // getCwd() in lockstep): the trust check short-circuits on child===root, the
+    // boundary is the session root, so an in-tree write is allowed and an absolute
+    // escape out of the session tree is blocked.
+    const { gate } = makeGate('autonomous', '/Users/dev/project');
+
+    const inTree = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: 'src/feature.ts' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/Users/dev/project',
+    });
+    expect(inTree.decision).toBeUndefined();
+
+    const escaping = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: '/Users/dev/elsewhere/evil.ts' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/Users/dev/project',
     });
     expect(escaping.decision).toBe('block');
   });
