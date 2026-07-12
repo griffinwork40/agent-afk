@@ -17,9 +17,15 @@
  *     (or the tool-round cap fires — see shared/tool-loop-cap.ts — after which
  *     one tools-stripped wind-down round runs, matching anthropic-direct/loop.ts)
  *
+ * History compaction is supported via {@link OpenAICompatibleQuery.compact},
+ * which reuses this session's client to summarize the older transcript through
+ * the provider-neutral core in `shared/compaction.ts` — see `./compact.ts`.
+ * Auto-compaction is wired too: when `config.autoCompact` resolves a threshold,
+ * the turn-boundary check in {@link run} fires `compactHistory('token_threshold')`
+ * once the context-window footprint crosses it (mirrors anthropic-direct/query.ts).
+ *
  * Things deliberately deferred:
  *   - File checkpointing / rewindFiles (deferred — `canRewind: false`)
- *   - Compact (provider opts out by leaving `compact` undefined)
  *
  * @module agent/providers/openai-compatible/query
  */
@@ -30,6 +36,7 @@ import type { AgentConfig } from '../../types/config-types.js';
 import { emitSessionPhase } from '../../trace/emit.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
 import type { TraceWriter } from '../../trace/index.js';
+import type { CompactionTrigger } from '../../trace/types.js';
 import type {
   ProviderQuery,
   ProviderEvent,
@@ -43,9 +50,10 @@ import type {
   ProviderMcpServerStatus,
   ProviderAccountInfo,
   ProviderUsage,
+  ProviderCompactResult,
 } from '../../provider.js';
 import { sumProviderUsage } from '../../usage.js';
-import { contextLimitFor } from '../../model-limits.js';
+import { contextLimitFor, autoCompactLimitFor } from '../../model-limits.js';
 import { resolveModelId } from '../../session/model-resolution.js';
 import { collectSupportedCommands } from '../shared/supported-commands.js';
 import { debugLog } from '../../../utils/debug.js';
@@ -72,7 +80,16 @@ import { translateResponsesEvent, type ResponsesStreamEvent } from './responses-
 import { resolveWireMode, envFlagEnabled, isClaudeFamilyModel, type WireMode } from './responses-config.js';
 import { env } from '../../../config/env.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
-import { contextWindowTokensUsed, buildContextUsageFields } from '../shared/auto-compact.js';
+import {
+  contextWindowTokensUsed,
+  buildContextUsageFields,
+  shouldAutoCompact,
+  resolveAutoCompactThreshold,
+} from '../shared/auto-compact.js';
+import { HookBlockedError } from '../../../utils/errors.js';
+import { COMPACT_SYSTEM_PROMPT, wrapTranscriptForSummary } from '../shared/compaction.js';
+import { compactOpenAIHistory } from './compact.js';
+import { oneShotChatCompletion } from './oneshot.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../shared/plan-mode-addendum.js';
 import { AFK_MODE_ADDENDUM_TEXT } from '../shared/afk-mode-addendum.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
@@ -189,6 +206,15 @@ export class OpenAICompatibleQuery implements ProviderQuery {
    */
   private lastUsage: ProviderUsage | null = null;
 
+  /**
+   * Auto-compaction threshold as a fraction of the context window (0–1), or
+   * `undefined` when disabled. Resolved once from `config.autoCompact` through
+   * the shared {@link resolveAutoCompactThreshold} — the same source the
+   * anthropic-direct provider uses. Read by the turn-boundary auto-compaction
+   * check in {@link run} and reported via `getInfo().isAutoCompactEnabled`.
+   */
+  private readonly autoCompactThreshold: number | undefined;
+
   constructor(opts: OpenAICompatibleQueryOptions) {
     this.opts = opts;
     this.initSessionId = opts.synthesizedSessionId;
@@ -197,6 +223,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     this.toolDispatcher = opts.toolDispatcher;
     this.onPermissionMode = opts.onPermissionMode;
     this.traceWriter = opts.traceWriter;
+    this.autoCompactThreshold = resolveAutoCompactThreshold(opts.config.autoCompact);
 
     // Pre-compute the OpenAI tool catalog once. Only `SessionToolDispatcher`
     // (and not the structural `ToolDispatcher` minimal interface) exposes
@@ -288,6 +315,34 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         if (turnResult.done) break;
 
         yield* this.runTurn(turnResult.value.content);
+
+        // Auto-compaction fires at the natural turn boundary — runTurn has
+        // returned and its `finally` nulled `abortController`, so the handler's
+        // idle guard passes and compaction never runs mid-tool-call. Mirrors
+        // anthropic-direct/query.ts. `compactHistory` itself never throws (every
+        // summarize failure is a typed no-op leaving history byte-for-byte
+        // unchanged); only a PreCompact `block` decision throws HookBlockedError,
+        // caught here to skip this turn's compaction without surfacing an error.
+        if (this.autoCompactThreshold !== undefined && !this.closed) {
+          const usage = this.lastUsage;
+          const compactionLimit = autoCompactLimitFor(this.currentModel);
+          if (usage !== null && compactionLimit > 0) {
+            const usedTokens = contextWindowTokensUsed(usage);
+            if (shouldAutoCompact(usedTokens, compactionLimit, this.autoCompactThreshold)) {
+              try {
+                await this.opts.config.hookRegistry?.dispatch({
+                  event: 'PreCompact',
+                  sessionId: this.initSessionId,
+                  trigger: 'auto',
+                });
+                await this.compactHistory('token_threshold');
+              } catch (compactErr) {
+                if (!(compactErr instanceof HookBlockedError)) throw compactErr;
+                // Hook blocked auto-compaction — continue the session normally.
+              }
+            }
+          }
+        }
       }
     } catch (iterErr) {
       const e = iterErr instanceof Error ? iterErr : new Error(String(iterErr));
@@ -766,6 +821,82 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     this.pendingAbortReason = 'interrupted';
   }
 
+  /**
+   * Summarize older history into a short preamble, in place. Delegates the
+   * boundary → summarize → splice sequence (with guardrails) to the shared
+   * {@link compactOpenAIHistory} / `runCompactionCore`; the summarization call
+   * reuses THIS session's `client`, so it lands on the same endpoint,
+   * credentials, and headers as the conversation — a custom-baseURL or local
+   * shim session compacts against its own server, never a re-resolved one.
+   *
+   * The compaction model is `AFK_COMPACT_MODEL` when set (it must be an id this
+   * session's endpoint can serve), otherwise the live session model. Cross-
+   * provider summarization (e.g. a Claude model summarizing an OpenAI session)
+   * is intentionally NOT wired here: a mismatched id simply fails the summarize
+   * call, which the core treats as a safe no-op, leaving history untouched.
+   *
+   * Only Chat Completions sessions are supported. The summarizer runs through
+   * `oneShotChatCompletion` (Chat Completions wire), so a responses-mode session
+   * (ChatGPT-OAuth, or the `AFK_OPENAI_USE_RESPONSES` opt-in) bails early with
+   * `unsupported-wire-mode` rather than issuing a chat.completions call its
+   * backend would reject.
+   */
+  async compact(): Promise<ProviderCompactResult> {
+    // Manual entrypoint (REPL /compact, Telegram, router). Auto-compaction
+    // calls compactHistory('token_threshold') directly from the turn-boundary
+    // check in run(), so the two paths differ only in the emitted trace trigger.
+    return this.compactHistory('manual');
+  }
+
+  private async compactHistory(
+    trigger: CompactionTrigger,
+  ): Promise<ProviderCompactResult> {
+    const messagesBefore = this.priorTurns.length;
+    if (this.opts.auth.apiKey === null) {
+      // No usable client was constructed — an auth problem, distinct from a
+      // closed session lifecycle. Surface a specific, actionable reason rather
+      // than reusing 'session-closed'.
+      return { compacted: false, reason: 'no-usable-auth', messagesBefore, messagesAfter: messagesBefore };
+    }
+    if (this.wireMode === 'responses') {
+      // oneShotChatCompletion speaks only Chat Completions; a responses-mode
+      // backend (ChatGPT-OAuth / AFK_OPENAI_USE_RESPONSES) would reject that
+      // call. Surface an explicit, honest no-op instead of a generic
+      // summarization failure so the reason is actionable.
+      return {
+        compacted: false,
+        reason: 'unsupported-wire-mode',
+        messagesBefore,
+        messagesAfter: messagesBefore,
+      };
+    }
+    const compactModel = env.AFK_COMPACT_MODEL ?? this.currentModel;
+    return compactOpenAIHistory({
+      priorTurns: this.priorTurns,
+      summarize: (transcript, signal) =>
+        oneShotChatCompletion({
+          client: this.client,
+          model: compactModel,
+          system: COMPACT_SYSTEM_PROMPT,
+          user: wrapTranscriptForSummary(transcript),
+          maxTokens: 1024,
+          signal,
+        }),
+      isClosed: this.closed,
+      isIdle: this.abortController === null,
+      beginAbort: () => {
+        const controller = new AbortController();
+        this.abortController = controller;
+        return controller;
+      },
+      clearAbort: (controller) => {
+        if (this.abortController === controller) this.abortController = null;
+      },
+      trigger,
+      traceWriter: this.traceWriter,
+    });
+  }
+
   async setModel(model?: string): Promise<void> {
     // Resolve slot/legacy aliases (small/medium/large, custom tier names,
     // haiku/sonnet/opus) to the bound concrete id BEFORE it reaches the request
@@ -854,7 +985,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       // Context-window usage shape: tools/agents are per-entry token stats AFK does not populate (NOT AgentConfig.agents).
       tools: [],
       agents: [],
-      isAutoCompactEnabled: false,
+      isAutoCompactEnabled: this.autoCompactThreshold !== undefined,
       apiUsage,
       totalTokens,
       ...(percentage !== undefined ? { percentage } : {}),

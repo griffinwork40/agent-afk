@@ -1061,7 +1061,7 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
     q.close();
   });
 
-  it('does not expose `compact` (history mgmt deferred)', () => {
+  it('exposes `compact` and no-ops (history-too-short) on an empty session', async () => {
     const q = new OpenAICompatibleQuery({
       auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
       model: 'gpt-4o-mini',
@@ -1069,8 +1069,145 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
       promptStream: singleInput('x'),
       config: baseConfig(),
     });
-    expect(q.compact).toBeUndefined();
+    expect(typeof q.compact).toBe('function');
+    // No turns have run, so there are no fresh user turns older than the keep
+    // window — compaction is a typed no-op and never calls the summarizer.
+    const result = await q.compact();
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe('history-too-short');
     q.close();
+  });
+
+  it('compact bails `unsupported-wire-mode` on a responses-mode (ChatGPT-OAuth) session', async () => {
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'chatgpt-oauth', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('x'),
+      config: baseConfig(),
+    });
+    // A ChatGPT-OAuth session is forced to the responses wire, whose backend
+    // would reject the Chat Completions summarize call — so compact() must bail
+    // early with an actionable reason rather than issue a doomed request.
+    const result = await q.compact();
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe('unsupported-wire-mode');
+    q.close();
+  });
+
+  it("compact bails 'no-usable-auth' when no client was constructed (null auth)", async () => {
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: null, source: 'no-usable-auth' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('x'),
+      config: baseConfig(),
+    });
+    // No usable auth → no client. This is distinct from a closed session
+    // lifecycle, so the reason must be the specific 'no-usable-auth', not the
+    // generic 'session-closed' it previously reused.
+    const result = await q.compact();
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe('no-usable-auth');
+    q.close();
+  });
+
+  it('getContextUsage().isAutoCompactEnabled reflects config.autoCompact', async () => {
+    const on = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('x'),
+      config: baseConfig({ autoCompact: true }),
+    });
+    expect((await on.getContextUsage()).isAutoCompactEnabled).toBe(true);
+    on.close();
+
+    const off = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('x'),
+      config: baseConfig(),
+    });
+    expect((await off.getContextUsage()).isAutoCompactEnabled).toBe(false);
+    off.close();
+  });
+
+  it('auto-compacts at the turn boundary once the context-window threshold is crossed', async () => {
+    // Each streaming turn reports a context-window footprint (~200k) far over
+    // the 90% default threshold for gpt-4o-mini's 128k window. Compaction is
+    // the only thing that issues a NON-streaming Chat Completions call
+    // (the summarize), so recording that call proves the turn-boundary trigger
+    // fired compactHistory('token_threshold'). Three fresh user turns are the
+    // minimum for a real boundary (keepLastN defaults to 2).
+    const summarizeCalls: unknown[] = [];
+    __setOpenAIClientFactory(
+      () =>
+        ({
+          chat: {
+            completions: {
+              create: async (args: { stream?: boolean }) => {
+                if (args.stream) {
+                  return (async function* () {
+                    yield {
+                      choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+                      usage: { prompt_tokens: 200_000, completion_tokens: 10, total_tokens: 200_010 },
+                    } as OpenAIChunk;
+                  })();
+                }
+                summarizeCalls.push(args);
+                return { choices: [{ message: { content: 'AUTO-SUMMARY' } }] };
+              },
+            },
+          },
+        }) as unknown as OpenAI,
+    );
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: multiInput('u1', 'u2', 'u3'),
+      config: baseConfig({ autoCompact: true }),
+    });
+    await collect(q);
+    // Exactly one compaction: history-too-short after turn 1, nothing-to-
+    // summarize after turn 2 (boundary 0), then a real splice after turn 3.
+    expect(summarizeCalls).toHaveLength(1);
+  });
+
+  it('does NOT auto-compact when config.autoCompact is unset (default off)', async () => {
+    const summarizeCalls: unknown[] = [];
+    __setOpenAIClientFactory(
+      () =>
+        ({
+          chat: {
+            completions: {
+              create: async (args: { stream?: boolean }) => {
+                if (args.stream) {
+                  return (async function* () {
+                    yield {
+                      choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+                      usage: { prompt_tokens: 200_000, completion_tokens: 10, total_tokens: 200_010 },
+                    } as OpenAIChunk;
+                  })();
+                }
+                summarizeCalls.push(args);
+                return { choices: [{ message: { content: 'AUTO-SUMMARY' } }] };
+              },
+            },
+          },
+        }) as unknown as OpenAI,
+    );
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: multiInput('u1', 'u2', 'u3'),
+      config: baseConfig(),
+    });
+    await collect(q);
+    expect(summarizeCalls).toHaveLength(0);
   });
 
   it('setCwd forwards cwd to dispatcher.setResolveBase (U1)', () => {

@@ -14,6 +14,7 @@
  */
 
 import type { ProviderUsage } from '../../provider.js';
+import type { AgentConfig } from '../../types/config-types.js';
 
 /**
  * Cumulative billed tokens for a turn: `inputTokens + outputTokens`.
@@ -128,4 +129,30 @@ export function shouldAutoCompact(
   if (usedTokens <= 0) return false;
   if (threshold <= 0 || threshold >= 1) return false;
   return usedTokens / contextLimit >= threshold;
+}
+
+/** Default auto-compaction threshold (fraction of the context window). */
+export const DEFAULT_AUTO_COMPACT_THRESHOLD = 0.9;
+
+/**
+ * Resolve `AgentConfig.autoCompact` to a numeric threshold fraction, or
+ * `undefined` when auto-compaction is disabled. Provider-neutral: both the
+ * anthropic-direct and openai-compatible providers resolve their threshold
+ * through this single source of truth.
+ *
+ * - `false` or `undefined` → disabled (`undefined` returned).
+ * - `true` → default threshold (0.90).
+ * - `{ threshold: n }` → custom fraction; clamped to (0, 1) exclusive.
+ *   Out-of-range values are silently treated as disabled.
+ */
+export function resolveAutoCompactThreshold(
+  autoCompact: AgentConfig['autoCompact'],
+): number | undefined {
+  if (autoCompact === undefined || autoCompact === false) return undefined;
+  if (autoCompact === true) return DEFAULT_AUTO_COMPACT_THRESHOLD;
+  const t = autoCompact.threshold;
+  if (typeof t !== 'number' || !Number.isFinite(t) || t <= 0 || t >= 1) {
+    return undefined;
+  }
+  return t;
 }
