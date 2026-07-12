@@ -58,11 +58,9 @@ import {
 import { buildMessages, buildUserContent, type OpenAIMessage } from './messages.js';
 import { supportsVision } from '../../model-capabilities.js';
 import {
-  createStreamState,
   translateChunk,
   usageFromState,
   finalizedToolCalls,
-  isToolCallStop,
   type OpenAIChunk,
   type StreamState,
 } from './translate.js';
@@ -71,15 +69,13 @@ import {
   type OpenAIFunctionTool,
 } from './loop.js';
 import { translateResponsesEvent, type ResponsesStreamEvent } from './responses-translate.js';
-import { buildResponsesRequest } from './responses-messages.js';
-import { resolveWireMode, envFlagEnabled, isClaudeFamilyModel, DEFAULT_RESPONSES_INSTRUCTIONS, type WireMode } from './responses-config.js';
+import { resolveWireMode, envFlagEnabled, isClaudeFamilyModel, type WireMode } from './responses-config.js';
 import { env } from '../../../config/env.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { contextWindowTokensUsed, buildContextUsageFields } from '../shared/auto-compact.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../shared/plan-mode-addendum.js';
 import { AFK_MODE_ADDENDUM_TEXT } from '../shared/afk-mode-addendum.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
-import { sleepWithAbort } from '../shared/sleep-with-abort.js';
 import { summarizeToolInput } from '../shared/tool-input-summary.js';
 import { dispatchAndAppendToolCalls } from './query/dispatch-append.js';
 import {
@@ -89,19 +85,15 @@ import {
   shouldWindDown,
 } from '../shared/tool-loop-cap.js';
 import {
-  MAX_CONNECTION_RETRIES,
-  MAX_STREAM_RETRIES,
-  isRetryableConnectionError,
-  isRetryableStreamError,
-  computeBackoffDelay,
-} from './query/retry.js';
-import {
-  resolveEffectiveMaxOutputTokens,
-  resolveStreamingMaxTokens,
   normalizePermissionMode,
   resolveReasoningEffort,
 } from './query/model-params.js';
 import { resolveClientFactory } from './query/client.js';
+import { driveStream, type IterationResult } from './query/stream-drive.js';
+import {
+  buildChatCompletionsRequestBody,
+  buildResponsesRequestBody,
+} from './query/request-body.js';
 
 // Re-exported from the extracted query/ submodules so existing import sites
 // (sibling tests + index.ts) keep resolving these from './query.js'.
@@ -163,15 +155,6 @@ export interface OpenAICompatibleQueryOptions {
 }
 
 /** Internal record used to drive the per-turn iteration loop. */
-interface IterationResult {
-  state: StreamState;
-  events: ProviderEvent[];
-  /** Final assistant text accumulated this iteration. */
-  text: string;
-  /** True when this iteration ended in tool_calls (we need to dispatch and loop). */
-  needsToolDispatch: boolean;
-}
-
 export class OpenAICompatibleQuery implements ProviderQuery {
   private readonly client: OpenAI;
   private readonly opts: OpenAICompatibleQueryOptions;
@@ -671,6 +654,18 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     }
     const activeTools = windDown ? undefined : this.activeOpenAITools();
 
+    // Shared context for the retry/stream-drive skeleton (query/stream-drive.ts).
+    // Both wire branches build their request body, then hand off to driveStream
+    // with a per-wire strategy — the connection/mid-stream retry, once-only
+    // model_ttfb emission, and clean-completion return live in one place.
+    const driveCtx = {
+      controller,
+      traceWriter: this.traceWriter,
+      initSessionId: this.initSessionId,
+      currentModel: this.currentModel,
+      isClosed: () => this.closed,
+    };
+
     if (this.wireMode === 'responses') {
       const isChatGptBackend = this.opts.auth.source === 'chatgpt-oauth';
 
@@ -692,250 +687,50 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         return null;
       }
 
-      // Responses API path. `messages` (built + plan-mode-adjusted above) is
-      // converted to the Responses input shape; the system prompt becomes
-      // `instructions`, tool calls/results become function_call/_output items.
-      const req = buildResponsesRequest(messages, activeTools);
-      const requestBody: Record<string, unknown> = {
-        model: this.currentModel,
-        input: req.input,
-        stream: true,
-      };
-      // Output-token cap. The Responses API uses `max_output_tokens` — NOT Chat
-      // Completions' `max_tokens`/`max_completion_tokens`. The private ChatGPT/
-      // Codex subscription backend rejects *every* output-cap parameter with an
-      // opaque HTTP 400 (`{"detail":"Unsupported parameter: max_tokens"}`, and
-      // likewise for `max_output_tokens`), so omit the cap there entirely and
-      // let the backend apply its own limit. (Sending `max_tokens` here is what
-      // made every ChatGPT-subscription request fail.)
-      if (!isChatGptBackend) {
-        requestBody['max_output_tokens'] = resolveEffectiveMaxOutputTokens(
-          this.currentModel,
-          this.opts.config.maxOutputTokens,
-        );
-      }
-      // The private ChatGPT backend (subscription path) has two hard
-      // requirements the public Responses API does not: a non-empty
-      // `instructions`, and `store: false`. Scope both to that path so the
-      // public API-key path keeps its defaults.
-      const instructions =
-        req.instructions ?? (isChatGptBackend ? DEFAULT_RESPONSES_INSTRUCTIONS : undefined);
-      if (instructions !== undefined) requestBody['instructions'] = instructions;
-      if (isChatGptBackend) requestBody['store'] = false;
-      if (req.tools && req.tools.length > 0) requestBody['tools'] = req.tools;
-      // Forward reasoning effort for o-series models on the Responses API.
-      // Uses the `reasoning: { effort }` shape per OpenAI's Responses API spec.
-      const responsesEffort = resolveReasoningEffort(this.opts.config.effort, this.currentModel);
-      if (responsesEffort !== undefined) {
-        requestBody['reasoning'] = { effort: responsesEffort };
-      }
-
-      // Retry loop: connection-phase + mid-stream retry with exponential
-      // backoff. Mirrors the Anthropic provider's createWithRetry + overload
-      // retry pattern (see `anthropic-direct/loop.ts`). State is reset on each
-      // retry so the re-driven request starts from a clean slate.
-      let streamRetries = 0;
-      for (;;) {
-        const state = createStreamState();
-
-        // Witness layer: stamp request-initiation time for model_ttfb below.
-        const requestStartedAt = Date.now();
-
-        // ── Connection-phase retry ──────────────────────────────────────
-        let stream: AsyncIterable<ResponsesStreamEvent>;
-        let connectionError: unknown = null;
-        for (let attempt = 0; ; attempt++) {
-          try {
-            stream = (await this.client.responses.create(requestBody as never, {
-              signal: controller.signal,
-            })) as unknown as AsyncIterable<ResponsesStreamEvent>;
-            break; // connection succeeded
-          } catch (err) {
-            if (controller.signal.aborted) return null;
-            if (isRetryableConnectionError(err) && attempt < MAX_CONNECTION_RETRIES) {
-              const delay = computeBackoffDelay(attempt);
-              await sleepWithAbort(delay, controller.signal);
-              if (controller.signal.aborted) return null;
-              continue;
-            }
-            connectionError = err;
-            break;
-          }
-        }
-
-        if (connectionError !== null) {
-          yield { type: 'error', error: this.clarifyResponsesError(connectionError, isChatGptBackend) };
-          return null;
-        }
-
-        // ── Mid-stream consumption with retry ───────────────────────────
-        let streamError: unknown = null;
-        // Witness layer: emit model_ttfb exactly once per API call, on the
-        // first translated stream event. Reset per for(;;) iteration so each
-        // retry-driven call reports its own time-to-first-byte. Mirrors
-        // anthropic-direct/loop.ts:307–327.
-        let ttfbEmitted = false;
-        try {
-          for await (const event of stream!) {
-            if (this.closed) return null;
-            for (const ev of translateResponsesEvent(event, state, this.initSessionId)) {
-              if (!ttfbEmitted) {
-                ttfbEmitted = true;
-                void emitSessionPhase(this.traceWriter, {
-                  phase: 'model_ttfb',
-                  durationMs: Date.now() - requestStartedAt,
-                  resolvedModel: this.currentModel,
-                });
-              }
-              yield ev;
-            }
-          }
-        } catch (err) {
-          if (controller.signal.aborted) return null;
-          if (isRetryableStreamError(err) && streamRetries < MAX_STREAM_RETRIES) {
-            streamRetries++;
-            yield { type: 'stream.retry', sessionId: this.initSessionId };
-            await sleepWithAbort(
-              computeBackoffDelay(streamRetries - 1),
-              controller.signal,
-            );
-            if (controller.signal.aborted) return null;
-            continue; // retry the whole iteration
-          }
-          streamError = err;
-        }
-
-        if (streamError !== null) {
-          yield { type: 'error', error: this.clarifyResponsesError(streamError, isChatGptBackend) };
-          return null;
-        }
-
-        // Clean completion — return the result.
-        return {
-          state,
-          events: [],
-          text: state.assistantText,
-          needsToolDispatch: isToolCallStop(state) && state.toolCallsByIndex.size > 0,
-        };
-      }
-    } else {
-      const requestBody: Record<string, unknown> = {
+      // Responses API path. Request-body assembly (incl. the ChatGPT-backend
+      // quirks) lives in query/request-body.ts.
+      const requestBody = buildResponsesRequestBody({
         model: this.currentModel,
         messages,
-        stream: true,
-        stream_options: { include_usage: true },
-      };
-      // Thread the output-token cap into the streaming request so callers can
-      // bound output length (parity with Anthropic's always-forwarded
-      // max_tokens).  Reuses the o-series field-selection logic from
-      // oneshot.ts:91–96.
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-      Object.assign(requestBody, resolveStreamingMaxTokens(
-        this.currentModel,
-        this.opts.config.maxOutputTokens,
-      ));
-      // Only attach `tools` when there are any to advertise THIS turn — empty
-      // arrays make some providers reject the request. `activeOpenAITools()`
-      // drops the plan-exit tool on non-plan turns (resident-but-gated); on a
-      // wind-down round `activeTools` is undefined (tools stripped, see above).
-      if (activeTools && activeTools.length > 0) {
-        requestBody['tools'] = activeTools;
-      }
-      // Forward reasoning effort for o-series models on Chat Completions.
-      // Uses the `reasoning_effort` field per OpenAI's Chat Completions API spec.
-      const chatEffort = resolveReasoningEffort(this.opts.config.effort, this.currentModel);
-      if (chatEffort !== undefined) {
-        requestBody['reasoning_effort'] = chatEffort;
-      }
+        activeTools,
+        maxOutputTokens: this.opts.config.maxOutputTokens,
+        effort: this.opts.config.effort,
+        isChatGptBackend,
+      });
 
-      // Retry loop: connection-phase + mid-stream retry with exponential
-      // backoff. Same pattern as the Responses path above.
-      let streamRetries = 0;
-      for (;;) {
-        const state = createStreamState();
+      // Retry / stream-drive is shared with the Chat-Completions branch — see
+      // query/stream-drive.ts. Only the four per-wire deltas differ here:
+      // client call, event type, translator, and error clarification.
+      return yield* driveStream<ResponsesStreamEvent>(driveCtx, {
+        createStream: async (signal) =>
+          (await this.client.responses.create(requestBody as never, {
+            signal,
+          })) as unknown as AsyncIterable<ResponsesStreamEvent>,
+        translate: (event, state) => translateResponsesEvent(event, state, this.initSessionId),
+        clarifyError: (err) => this.clarifyResponsesError(err, isChatGptBackend),
+      });
+    } else {
+      // Chat Completions path. Request-body assembly lives in
+      // query/request-body.ts.
+      const requestBody = buildChatCompletionsRequestBody({
+        model: this.currentModel,
+        messages,
+        activeTools,
+        maxOutputTokens: this.opts.config.maxOutputTokens,
+        effort: this.opts.config.effort,
+      });
 
-        // Witness layer: stamp request-initiation time for model_ttfb below.
-        const requestStartedAt = Date.now();
-
-        // ── Connection-phase retry ──────────────────────────────────────
-        let stream: AsyncIterable<OpenAIChunk>;
-        let connectionError: unknown = null;
-        for (let attempt = 0; ; attempt++) {
-          try {
-            stream = (await this.client.chat.completions.create(requestBody as never, {
-              signal: controller.signal,
-            })) as unknown as AsyncIterable<OpenAIChunk>;
-            break; // connection succeeded
-          } catch (err) {
-            if (controller.signal.aborted) return null;
-            if (isRetryableConnectionError(err) && attempt < MAX_CONNECTION_RETRIES) {
-              const delay = computeBackoffDelay(attempt);
-              await sleepWithAbort(delay, controller.signal);
-              if (controller.signal.aborted) return null;
-              continue;
-            }
-            connectionError = err;
-            break;
-          }
-        }
-
-        if (connectionError !== null) {
-          const e = connectionError instanceof Error ? connectionError : new Error(String(connectionError));
-          yield { type: 'error', error: e };
-          return null;
-        }
-
-        // ── Mid-stream consumption with retry ───────────────────────────
-        let streamError: unknown = null;
-        // Witness layer: emit model_ttfb exactly once per API call, on the
-        // first translated stream event. Reset per for(;;) iteration so each
-        // retry-driven call reports its own time-to-first-byte. Mirrors
-        // anthropic-direct/loop.ts:307–327.
-        let ttfbEmitted = false;
-        try {
-          for await (const chunk of stream!) {
-            if (this.closed) return null;
-            for (const ev of translateChunk(chunk, state, this.initSessionId)) {
-              if (!ttfbEmitted) {
-                ttfbEmitted = true;
-                void emitSessionPhase(this.traceWriter, {
-                  phase: 'model_ttfb',
-                  durationMs: Date.now() - requestStartedAt,
-                  resolvedModel: this.currentModel,
-                });
-              }
-              yield ev;
-            }
-          }
-        } catch (err) {
-          if (controller.signal.aborted) return null;
-          if (isRetryableStreamError(err) && streamRetries < MAX_STREAM_RETRIES) {
-            streamRetries++;
-            yield { type: 'stream.retry', sessionId: this.initSessionId };
-            await sleepWithAbort(
-              computeBackoffDelay(streamRetries - 1),
-              controller.signal,
-            );
-            if (controller.signal.aborted) return null;
-            continue; // retry the whole iteration
-          }
-          streamError = err;
-        }
-
-        if (streamError !== null) {
-          const e = streamError instanceof Error ? streamError : new Error(String(streamError));
-          yield { type: 'error', error: e };
-          return null;
-        }
-
-        // Clean completion — return the result.
-        return {
-          state,
-          events: [],
-          text: state.assistantText,
-          needsToolDispatch: isToolCallStop(state) && state.toolCallsByIndex.size > 0,
-        };
-      }
+      // Retry / stream-drive is shared with the Responses branch — see
+      // query/stream-drive.ts. This wire differs only in the client call, the
+      // event type, the translator, and plain Error coercion (no clarify step).
+      return yield* driveStream<OpenAIChunk>(driveCtx, {
+        createStream: async (signal) =>
+          (await this.client.chat.completions.create(requestBody as never, {
+            signal,
+          })) as unknown as AsyncIterable<OpenAIChunk>,
+        translate: (event, state) => translateChunk(event, state, this.initSessionId),
+        clarifyError: (err) => (err instanceof Error ? err : new Error(String(err))),
+      });
     }
   }
 
