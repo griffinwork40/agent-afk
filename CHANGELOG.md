@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.30.5] - 2026-07-12
+
+### Fixed
+- classify AFK gate writes by tool cwd (port afk-workshop#836) (#512) (fd7e3ab)
+
 ## [5.30.4] - 2026-07-12
 
 ### Changed
