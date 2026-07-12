@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.31.1] - 2026-07-12
+
+### Fixed
+- flatten multi-line bash summaries in the tool-lane label (#511) (ea3b9c0)
+
 ## [5.31.0] - 2026-07-12
 
 ### Added
