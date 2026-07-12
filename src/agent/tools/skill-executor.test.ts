@@ -260,6 +260,77 @@ describe('SkillExecutor', () => {
     expect(result.content).toContain('skill boom');
   });
 
+  it('regression: a registry-skill execution error PROPAGATES and is not masked as "not found"', async () => {
+    // Bug (#499 finding 1): `executeRegistrySkill(...)` used to run INSIDE the
+    // try that guards the `getSkill()` lookup, so ANY throw from executing a
+    // registry skill (e.g. a forked/loaded-skill setup failure) was swallowed
+    // by the `catch {}` and misrouted to plugin lookup — surfacing a
+    // misleading `Skill "<name>" not found`. Only the getSkill LOOKUP should be
+    // guarded. Here the skill EXISTS (getSkill succeeds) but its execution
+    // throws; the error must reach the caller intact.
+    registerSkill({
+      name: 'registry-exec-boom',
+      description: 'test',
+      handler: vi.fn(),
+    });
+
+    const executor = new SkillExecutor({
+      parentSession: {
+        sessionId: 'test',
+        getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+        abortSignal,
+      },
+    });
+
+    // Force executeRegistrySkill to throw an *unexpected* error (i.e. one not
+    // internally converted to an error ToolResult), simulating a setup failure
+    // deep in the fork/loaded path. Restore it in `finally` so the spy does not
+    // leak into sibling tests (the top-level afterEach does not restore mocks).
+    const spy = vi
+      .spyOn(
+        SkillExecutor.prototype as unknown as {
+          executeRegistrySkill: (...a: unknown[]) => Promise<unknown>;
+        },
+        'executeRegistrySkill',
+      )
+      .mockRejectedValue(new Error('registry setup exploded'));
+
+    try {
+      // The real error must PROPAGATE (the fix moved executeRegistrySkill
+      // OUTSIDE the getSkill try/catch). Under the old code the throw was
+      // swallowed by `catch {}` and the call resolved to a misleading
+      // "not found" ToolResult.
+      await expect(executor.execute(makeCall({ name: 'registry-exec-boom' }))).rejects.toThrow(
+        'registry setup exploded',
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('regression: a genuinely-unknown skill name still falls through to a "not found" error', async () => {
+    // The other half of the #499 finding-1 contract: the getSkill LOOKUP throw
+    // ("Skill not found") must STILL be caught and fall through to plugin
+    // lookup (→ not found here), so legitimate not-found routing is preserved.
+    registerSkill({
+      name: 'present-skill',
+      description: 'test',
+      handler: vi.fn().mockResolvedValue('ok'),
+    });
+
+    const executor = new SkillExecutor({
+      parentSession: {
+        sessionId: 'test',
+        getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+        abortSignal,
+      },
+    });
+
+    const result = await executor.execute(makeCall({ name: 'no-such-skill-anywhere' }));
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('not found');
+  });
+
   it('regression: trusted skill complete event fires even when handler throws (HIGH fix)', async () => {
     // Register the skill as trusted in the agent-layer registry.
     registerTrustedSkillName('trusted-throwing');

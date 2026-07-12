@@ -183,11 +183,17 @@ export function loadEnvConfig(): Partial<CliConfig> {
   }
 
   if (env.AFK_MAX_TOKENS) {
-    config.maxTokens = parseInt(env.AFK_MAX_TOKENS, 10);
+    // Only assign when finite — a non-numeric value parses to NaN, which would
+    // otherwise win the `??` merge over DEFAULT_CONFIG.maxTokens and poison
+    // every request (see cli/config.ts merge site).
+    const maxTokens = parseInt(env.AFK_MAX_TOKENS, 10);
+    if (Number.isFinite(maxTokens)) config.maxTokens = maxTokens;
   }
 
   if (env.AFK_TEMPERATURE) {
-    config.temperature = parseFloat(env.AFK_TEMPERATURE);
+    // Same NaN guard as AFK_MAX_TOKENS above.
+    const temperature = parseFloat(env.AFK_TEMPERATURE);
+    if (Number.isFinite(temperature)) config.temperature = temperature;
   }
 
   if (env.AFK_SYSTEM_PROMPT) {
