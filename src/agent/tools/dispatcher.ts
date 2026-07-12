@@ -564,6 +564,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
         event: 'PreToolUse',
         toolName: call.name,
         input: call.input,
+        ...(this.resolveBase !== undefined ? { cwd: this.resolveBase } : {}),
         ...(this.parentSessionId !== undefined
           ? { parentSessionId: this.parentSessionId }
           : {}),
@@ -653,6 +654,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
           event: 'PreToolUse',
           toolName: call.name,
           input: call.input,
+          ...(this.resolveBase !== undefined ? { cwd: this.resolveBase } : {}),
           ...(this.parentSessionId !== undefined
             ? { parentSessionId: this.parentSessionId }
             : {}),
