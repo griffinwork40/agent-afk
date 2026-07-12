@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.32.0] - 2026-07-12
+
+### Added
+- distinguish parallel vs sequential tool dispatch with ∥i/N batch badge (#520) (f617893)
+
 ## [5.31.2] - 2026-07-12
 
 ### Fixed
