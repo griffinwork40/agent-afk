@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.33.1] - 2026-07-12
+
+### Fixed
+- resolve path-approval grants per executing session (#435/#514) (#527) (01632cd)
+
 ## [5.33.0] - 2026-07-12
 
 ### Added
