@@ -12,8 +12,31 @@
  * Extracted from `query.ts` so the query module carries only the session class
  * and its turn loop; the retryability predicates + backoff schedule live here.
  *
+ * **Server backoff hints.** When a retryable error carries a `retry-after`
+ * (or OpenAI's `retry-after-ms`) header, {@link retryAfterDelayMs} honors it —
+ * clamped to {@link RETRY_AFTER_MAX_WAIT_MS} — in preference to the blind
+ * exponential schedule, so a 429 from a rate-limited endpoint (local shim,
+ * OpenRouter, DeepSeek, Together, …) waits the server-advised interval instead
+ * of guessing. Mirrors the Anthropic provider's transient-429 handling
+ * (`retry-layer.ts` `rate-limit-transient`), which likewise honors `retry-after`
+ * with a 120s cap.
+ *
+ * **Why no `paused`/`resumed` here.** The harness's `paused`/`resumed`
+ * `ProviderEvent`s model OAuth *subscription* exhaustion plus keychain
+ * account hot-swap — an Anthropic-subscription concept with no analog on a
+ * generic OpenAI-compatible endpoint. The Anthropic provider itself does NOT
+ * emit those events for a transient rate-limit 429; it reserves them for the
+ * `oauth-limit` classification and treats ordinary 429s with exactly this
+ * `retry-after` backoff. An OpenAI-compatible 429 is either a transient
+ * rate-limit (handled here) or a hard quota/billing error (correctly surfaced
+ * as an `error`, not auto-resumable), so honoring `retry-after` IS the parity
+ * with the Anthropic path — a pause/resume UI would model a state this surface
+ * does not have. See issue #536.
+ *
  * @module agent/providers/openai-compatible/query/retry
  */
+
+import { parseRetryAfterMs } from '../../shared/retry-after.js';
 
 /**
  * HTTP status codes that warrant a retry with backoff. 429 (rate limit) and
@@ -47,6 +70,31 @@ export function __setRetryBaseDelay(ms: number | null): void {
  */
 export function computeBackoffDelay(attempt: number): number {
   return retryBaseDelayMs * Math.pow(2, attempt);
+}
+
+/**
+ * Cap on a single honored `retry-after` wait. A server hint beyond this is
+ * clamped so a pathological or hostile header cannot park a turn for minutes.
+ * Matches the Anthropic provider's `RATE_LIMIT_RETRY_MAX_WAIT_MS` (120s).
+ */
+export const RETRY_AFTER_MAX_WAIT_MS = 120_000;
+
+/**
+ * Server-advised backoff for a retryable error, or `undefined` when the error
+ * carries no usable `retry-after` / `retry-after-ms` header.
+ *
+ * When present the value is clamped to {@link RETRY_AFTER_MAX_WAIT_MS}. Callers
+ * use `retryAfterDelayMs(err) ?? computeBackoffDelay(attempt)` so a server hint
+ * wins over the blind exponential schedule, falling back to exponential when no
+ * hint is given. Deterministic (no jitter) so the wait is exactly reproducible
+ * in tests and traces; parsing is delegated to the shared
+ * {@link parseRetryAfterMs}, which handles both the `Headers` and plain-record
+ * error shapes and the seconds / HTTP-date / `-ms` header variants.
+ */
+export function retryAfterDelayMs(err: unknown): number | undefined {
+  const hinted = parseRetryAfterMs(err);
+  if (hinted === undefined) return undefined;
+  return Math.min(hinted, RETRY_AFTER_MAX_WAIT_MS);
 }
 
 /**

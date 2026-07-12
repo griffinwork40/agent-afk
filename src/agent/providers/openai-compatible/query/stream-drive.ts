@@ -28,6 +28,7 @@ import {
   computeBackoffDelay,
   isRetryableConnectionError,
   isRetryableStreamError,
+  retryAfterDelayMs,
 } from './retry.js';
 
 /** Result of a single model round-trip, consumed by the tool-loop orchestrator. */
@@ -91,7 +92,23 @@ export async function* driveStream<TEvent>(
       } catch (err) {
         if (ctx.controller.signal.aborted) return null;
         if (isRetryableConnectionError(err) && attempt < MAX_CONNECTION_RETRIES) {
-          const delay = computeBackoffDelay(attempt);
+          // Honor a server `retry-after` hint (clamped) over blind exponential
+          // backoff — the endpoint's own advised interval on a 429/503.
+          const hinted = retryAfterDelayMs(err);
+          const delay = hinted ?? computeBackoffDelay(attempt);
+          // Witness layer: record the wait so it is legible in `afk trace show`
+          // (mirrors retry-layer.ts's `rate_limit` phase). Fire-and-forget so
+          // trace latency never stalls the retry.
+          void emitSessionPhase(ctx.traceWriter, {
+            phase: 'rate_limit',
+            durationMs: delay,
+            resolvedModel: ctx.currentModel,
+            metadata: {
+              source: 'connection',
+              reason: hinted !== undefined ? 'retry-after' : 'backoff',
+              attempt,
+            },
+          });
           await sleepWithAbort(delay, ctx.controller.signal);
           if (ctx.controller.signal.aborted) return null;
           continue;
@@ -133,7 +150,21 @@ export async function* driveStream<TEvent>(
       if (isRetryableStreamError(err) && streamRetries < MAX_STREAM_RETRIES) {
         streamRetries++;
         yield { type: 'stream.retry', sessionId: ctx.initSessionId };
-        await sleepWithAbort(computeBackoffDelay(streamRetries - 1), ctx.controller.signal);
+        // Honor a server `retry-after` hint (clamped) over blind exponential
+        // backoff, same as the connection phase above.
+        const hinted = retryAfterDelayMs(err);
+        const delay = hinted ?? computeBackoffDelay(streamRetries - 1);
+        void emitSessionPhase(ctx.traceWriter, {
+          phase: 'rate_limit',
+          durationMs: delay,
+          resolvedModel: ctx.currentModel,
+          metadata: {
+            source: 'stream',
+            reason: hinted !== undefined ? 'retry-after' : 'backoff',
+            attempt: streamRetries,
+          },
+        });
+        await sleepWithAbort(delay, ctx.controller.signal);
         if (ctx.controller.signal.aborted) return null;
         continue; // retry the whole iteration
       }
