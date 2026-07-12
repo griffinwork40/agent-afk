@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.35.2] - 2026-07-12
+
+### Fixed
+- restore worktree cwd when resuming or forking a session (#535) (a1ea133)
+
 ## [5.35.1] - 2026-07-12
 
 ### Fixed
