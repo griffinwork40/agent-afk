@@ -223,11 +223,13 @@ async function preToolUseImpl(
   // the operator for out-of-root access — the prompt would surface on the
   // parent's REPL/Telegram handler (the elicitation router is process-wide),
   // interleaved into the parent's turn with no attribution. Auto-deny instead.
-  // The sub-agent inherits the parent's grants (this hook and its grant-manager
-  // closure are shared via the inherited registry), so any path the parent
-  // already approved still passes the `!restricted` check above; only a
-  // genuinely NEW out-of-root path reaches here, and the sub-agent reports the
-  // requirement back to its parent, which owns the surface and can grant it.
+  // The fork resolves path containment against its OWN grant manager (injected
+  // as `context.grantManager` by the executing session's dispatcher) — the
+  // child's own composed write/read roots, not the parent's. So a path inside
+  // the child's own granted roots still passes the `!restricted` check above;
+  // only a path outside the child's own grants reaches here, and the sub-agent
+  // reports the requirement back to its parent, which owns the surface and can
+  // grant it.
   // Mirrors the `parentSessionId` self-skip used by the memory + plan-mode hooks.
   if (context.parentSessionId !== undefined) {
     // eslint-disable-next-line no-console

@@ -329,6 +329,64 @@ describe('createBashRestrictionHook — grant containment direction (F4 regressi
   });
 });
 
+describe('createBashRestrictionHook — context.grantManager precedence (#514)', () => {
+  // #514: SessionToolDispatcher injects the EXECUTING session's provider as
+  // context.grantManager (bash-restriction-hook.ts:229 —
+  // `context.grantManager ?? opts.getGrantManager()`), mirroring the same
+  // precedence path-approval-hook.test.ts pins in its own "#514" describe
+  // block ("context.grantManager takes precedence over opts.getGrantManager").
+  // Before this hook read context.grantManager at all, a forked child's
+  // restricted-root view was blind to its OWN grants and pinned to whichever
+  // session's ref happened to construct the hook closure.
+  const home = homedir();
+  const sshPath = `${home}/.ssh`;
+
+  function grantsGranting(extraRoot: string): GrantManager {
+    return {
+      addReadRoot: () => {},
+      addWriteRoot: () => {},
+      revokeRoot: () => {},
+      getGrants() {
+        return {
+          resolveBase: '/tmp/repo',
+          readRoots: ['/tmp/repo', extraRoot],
+          writeRoots: ['/tmp/repo'],
+        };
+      },
+    };
+  }
+
+  it('uses context.grantManager over opts.getGrantManager (the ref) for the restricted-root view (#514)', () => {
+    // Ref (opts.getGrantManager) grants ~/.ssh — permissive: if the hook fell
+    // back to the ref, `.ssh` would be dropped from restrictedSubstrings and
+    // the command would pass through unblocked.
+    const refMgr = grantsGranting(sshPath);
+    // Injected (context.grantManager) grants an UNRELATED root — `.ssh`
+    // remains restricted under its view.
+    const injectedMgr = grantsGranting('/some/other/granted-root');
+    const hook = createBashRestrictionHook({ getGrantManager: () => refMgr });
+
+    // Sanity check: using the ref alone (no injected context), this same
+    // command is NOT blocked — confirms the ref really is the permissive one.
+    const refOnlyDecision = hook(ctx(`cat ${sshPath}/id_rsa`));
+    expect(refOnlyDecision.decision).not.toBe('block');
+
+    // Now fire with the INJECTED (restrictive) manager on the context. If it
+    // wins over the ref, `.ssh` is still restricted under its own grants and
+    // the command blocks — proving the injected manager, not the ref, drove
+    // the decision.
+    const decision = hook({
+      event: 'PreToolUse',
+      toolName: 'bash',
+      input: { command: `cat ${sshPath}/id_rsa` },
+      grantManager: injectedMgr,
+    });
+
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toMatch(/restricted path/);
+  });
+});
+
 describe('createBashRestrictionHook — wiring failsafes', () => {
   it('fails open when grant manager is undefined (bootstrap race)', () => {
     const hook = createBashRestrictionHook({ getGrantManager: () => undefined });

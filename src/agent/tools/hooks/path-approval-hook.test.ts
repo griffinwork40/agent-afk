@@ -336,6 +336,45 @@ describe('createPathApprovalHook — outcome mapping', () => {
     expect(mgr._events.map((e) => e.op)).toEqual(['addRead', 'revoke']);
   });
 
+  it('once: revoke targets the injected context.grantManager, not the ref (#514)', async () => {
+    // #514 PostToolUse mirror: the dispatcher injects the executing session's
+    // provider as context.grantManager on BOTH Pre and Post. The "Once"-grant
+    // must be added to — and revoked from — that SAME injected manager, never
+    // the process-global ref (opts.getGrantManager). Here the ref and the
+    // injected manager are DISTINCT instances: if the Post revoke hit the ref
+    // instead of the injected manager, the once-grant would leak on the
+    // injected manager (its writeRoots/readRoots would keep the granted path).
+    elicitationRouter.install(async () => ({ action: 'accept', content: { choice: 'once' } }));
+    const refMgr = makeMockGrantManager();
+    const injectedMgr = makeMockGrantManager();
+    const { preToolUse, postToolUse } = createPathApprovalHook({
+      getGrantManager: () => refMgr,
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+
+    // Pre: approve "once" against the INJECTED manager (context.grantManager).
+    const decision = await preToolUse({
+      ...preCtx('read_file', { file_path: '/etc/hosts' }),
+      grantManager: injectedMgr,
+    });
+    expect(decision).toEqual({});
+    expect(injectedMgr._readRoots).toContain('/etc/hosts');
+    // The ref was never consulted or mutated for the add.
+    expect(refMgr._events).toHaveLength(0);
+
+    // Post: revoke must land on the SAME injected manager the Pre check mutated.
+    postToolUse({
+      ...postCtx('read_file', { file_path: '/etc/hosts' }),
+      grantManager: injectedMgr,
+    });
+    expect(injectedMgr._readRoots).not.toContain('/etc/hosts');
+    expect(injectedMgr._events.map((e) => e.op)).toEqual(['addRead', 'revoke']);
+    // The ref remained untouched throughout — proving the injected manager
+    // (not opts.getGrantManager) drove BOTH the add and the revoke.
+    expect(refMgr._events).toHaveLength(0);
+  });
+
   it('session: adds to readRoots and caches; second call does not re-prompt', async () => {
     const handler = vi.fn(async () => ({ action: 'accept', content: { choice: 'session' } }));
     elicitationRouter.install(handler);
