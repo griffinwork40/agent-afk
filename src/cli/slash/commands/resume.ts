@@ -49,6 +49,29 @@ function pickLabel(e: SessionEntry): string {
 }
 
 /**
+ * Picker option strings for a set of entries, guaranteed unique.
+ *
+ * Invariant: `runPicker` resolves with the selected *label string*, and the
+ * caller maps it back to a row via `options.indexOf(label)`. Two entries can
+ * render an identical `pickLabel` — duplicate session names are allowed and
+ * `fmtWhen` truncates the timestamp to the minute — in which case `indexOf`
+ * would resolve BOTH highlighted rows to the first match and resume the wrong
+ * session. Appending the (unique) sidecar id to any colliding label keeps
+ * every option distinct so the label→row mapping stays exact.
+ */
+function uniquePickLabels(entries: readonly SessionEntry[]): string[] {
+  const counts = new Map<string, number>();
+  for (const e of entries) {
+    const l = pickLabel(e);
+    counts.set(l, (counts.get(l) ?? 0) + 1);
+  }
+  return entries.map((e) => {
+    const l = pickLabel(e);
+    return (counts.get(l) ?? 0) > 1 ? `${l}  ${palette.dim(e.id)}` : l;
+  });
+}
+
+/**
  * Resume a resolved session: guard against resuming into the live session,
  * then swap via requestResume, or (when that capability is absent) print the
  * launch command. Writes all output via ctx.out; never throws.
@@ -138,7 +161,7 @@ export const resumeCmd: SlashCommand = {
     const compositor = ctx.getCompositor?.() ?? null;
     if (compositor) {
       const shown = displayEntries.slice(0, 20);
-      const options = shown.map(pickLabel);
+      const options = uniquePickLabels(shown);
       const picked = await runPicker(compositor, {
         header: [
           palette.bold(`Resume a session  (${shown.length})`),

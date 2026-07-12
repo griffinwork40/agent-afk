@@ -258,6 +258,56 @@ describe('/resume interactive picker', () => {
     expect(requestResumeSpy).not.toHaveBeenCalled();
   });
 
+  it('resumes the highlighted row when two sessions share an identical label', async () => {
+    // Two sessions with the same name/model/turns/origin saved in the same
+    // minute render an IDENTICAL pickLabel. runPicker returns the selected
+    // *label* string; without unique options the label→row mapping (indexOf)
+    // resolves both rows to the first match, so selecting row 2 would wrongly
+    // resume session 1. The uniquePickLabels disambiguator must keep each row
+    // distinct so the highlighted session is the one resumed.
+    const save = (sdkId: string): void => {
+      const s = createSessionStats('sonnet');
+      s.cwd = '/proj/dup';
+      recordTurn(s, 'work', 'done', {
+        sessionId: sdkId,
+        totalCostUsd: 0.01,
+        durationMs: 10,
+        usage: { input_tokens: 5, output_tokens: 5 },
+      });
+      s.name = 'dup-name';
+      saveSession(s);
+    };
+    save('sdk-dup-1');
+    save('sdk-dup-2');
+
+    const resumeRow = async (downPresses: number): Promise<string | undefined> => {
+      let captured: ResolvedResumeTarget | undefined;
+      const { ctx } = makeCtx('sdk-live', async (t) => {
+        captured = t;
+        return { ok: true as const, sessionId: 'new' };
+      });
+      ctx.stats.cwd = '/proj/dup';
+      const host = new FakeHost();
+      ctx.getCompositor = (): TerminalCompositor => host as unknown as TerminalCompositor;
+      const p = resumeCmd.handler(ctx, '');
+      for (let i = 0; i < downPresses; i++) host.press('down');
+      host.press('return');
+      await p;
+      return captured?.resumeId;
+    };
+
+    const row1 = await resumeRow(0);
+    const row2 = await resumeRow(1);
+
+    expect(row1).toBeDefined();
+    expect(row2).toBeDefined();
+    // The collision bug resumed the first match for BOTH rows — distinct rows
+    // must resolve to distinct sessions.
+    expect(row1).not.toBe(row2);
+    expect(['sdk-dup-1', 'sdk-dup-2']).toContain(row1);
+    expect(['sdk-dup-1', 'sdk-dup-2']).toContain(row2);
+  });
+
   it('bare /resume on a non-TTY surface lists sessions without resuming', async () => {
     const stats = createSessionStats('sonnet');
     stats.cwd = '/proj/txt';

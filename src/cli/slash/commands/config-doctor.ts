@@ -168,7 +168,23 @@ const configCmd: SlashCommand = {
       return 'continue';
     }
 
-    await runConfigMenu(overlaysFromCompositor(compositor), defaultIo());
+    // A malformed afk.config.json makes defaultIo().current (getConfigValue)
+    // throw MalformedConfigError while the menu renders its key rows. The
+    // normal config loader tolerates a bad file by warning and continuing
+    // (config/json-tier.ts), and the `/config set` fast-path already catches
+    // its own writes — mirror that tolerance here so a bad file degrades to the
+    // read-only view with an actionable error instead of escaping dispatch()
+    // (registry.ts) into the REPL loop, which has no catch and would tear the
+    // session down.
+    try {
+      await runConfigMenu(overlaysFromCompositor(compositor), defaultIo());
+    } catch (err) {
+      ctx.out.error(
+        `Could not open the settings menu: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      ctx.out.line(palette.dim('  Showing the read-only view instead:'));
+      renderConfigView(ctx.out);
+    }
     return 'continue';
   },
 };
