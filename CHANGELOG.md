@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.30.4] - 2026-07-12
+
+### Changed
+- extract closure-emitter, ledger-lifecycle, plan-exit-bridge (#364) (#519) (040403a)
+
 ## [5.30.3] - 2026-07-12
 
 ### Fixed
