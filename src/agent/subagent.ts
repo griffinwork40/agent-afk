@@ -36,6 +36,7 @@ import { appendRoutingDecision } from './routing-telemetry.js';
 import { getCurrentSink } from './_lib/skill-sink-channel.js';
 import { touchWorktreeOccupancy } from './worktree-occupancy.js';
 import { resolveWorktreeMainRoot } from './worktree-read-root.js';
+import { computeInheritedReadRoots } from './subagent-read-scope.js';
 import { buildPhaseRestrictedProvider, type PhaseRole } from './tools/nesting.js';
 import { applyManagerApiKeyFallback } from './tools/child-credential.js';
 import { providerForModel, type BundledProviderName } from './providers/index.js';
@@ -259,6 +260,18 @@ export interface SubagentManagerOptions {
    */
   cwd?: string;
   /**
+   * The parent session's effective READ roots, used to derive a forked child's
+   * inherited read scope (see ./subagent-read-scope). `undefined` means "derive
+   * from {@link cwd}": a defined `cwd` is treated as the parent's containment
+   * base, an undefined `cwd` as an UNCONFINED parent (reads anywhere → read-open
+   * child). Pass an explicit array only when the parent is confined to roots
+   * that differ from its cwd — chiefly to propagate a read-open or `/allow-dir`-
+   * widened scope transitively to grandchildren. A caller (e.g. `afk farm`) that
+   * pins each fork's `config.readRoots` suppresses inheritance entirely, so this
+   * never widens a deliberately-confined worker.
+   */
+  parentReadRoots?: string[];
+  /**
    * Witness-layer trace writer. Threaded into the manager's {@link AbortGraph}
    * so cascade aborts emit `abort` events, AND auto-inherited by every forked
    * child whose `config.traceWriter` is unset — so all worker sessions write
@@ -306,6 +319,10 @@ export class SubagentManager {
   // `afk -w` worktree is created mid-session. Read at fork time (forkSubagent),
   // so updating it makes every subsequent fork inherit the new worktree cwd.
   private parentCwd: string | undefined;
+  // The parent session's effective read roots, for read-scope inheritance
+  // (see ./subagent-read-scope). `undefined` = derive from parentCwd
+  // (defined → confined base; undefined → unconfined parent → read-open child).
+  private readonly parentReadRoots: string[] | undefined;
   // Per-cwd cache of the resolved main-repo root for worktree children (see
   // `resolveWorktreeMainRoot`). Forks overwhelmingly share one cwd, so this
   // collapses N git subprocesses to one per distinct cwd for the whole
@@ -331,6 +348,7 @@ export class SubagentManager {
     this.parentProvider =
       options.parentModel !== undefined ? providerForModel(options.parentModel) : undefined;
     this.parentCwd = options.cwd;
+    this.parentReadRoots = options.parentReadRoots;
     this.parentTraceWriter = options.traceWriter;
     this.parentSurface = options.surface;
     this.onSubagentSucceededCb = options.onSubagentSucceeded;
@@ -404,6 +422,19 @@ export class SubagentManager {
     // the cache (#441). setCwd is rare (born-named worktree creation on turn 1),
     // so forcing one re-resolution on the next fork costs nothing.
     this.worktreeMainRootCache.delete(cwd);
+  }
+
+  /**
+   * The read-scope inputs this manager applies to its forks — the parent's
+   * `readRoots` (may be undefined = derive from cwd) and `cwd`. Used to
+   * propagate read scope transitively: a forked child that builds its OWN
+   * manager for grandchildren computes its inherited read roots from these
+   * inputs (via {@link computeInheritedReadRoots}) and passes the result as the
+   * grandchild manager's `parentReadRoots`, so a read-open (or `/allow-dir`-
+   * widened) scope is not silently re-narrowed one nesting level down.
+   */
+  getReadScopeInputs(): { parentReadRoots: string[] | undefined; parentCwd: string | undefined } {
+    return { parentReadRoots: this.parentReadRoots, parentCwd: this.parentCwd };
   }
 
   /**
@@ -520,22 +551,40 @@ export class SubagentManager {
     this.abortGraph.register(id, childController);
     this.abortGraph.linkChild(this.rootId, id);
 
-    // Worktree read-root grant: when the child runs in a linked git worktree
-    // and the caller did not pin its own read roots, add the MAIN repo root as
-    // a READ root (never a write root — writes stay confined to the worktree).
-    // Without this, a subagent is confined to `[cwd]` and cannot read main-repo
-    // absolute paths that pervade its context (system prompt, skill prompts,
-    // parent messages), yet it cannot approve them interactively either — the
-    // path-approval hook auto-denies forked children. See ./worktree-read-root.
-    // A caller that pins `readRoots` (e.g. `afk farm`, which deliberately
-    // confines each branch worker) is left untouched.
+    // Read-scope inheritance (#416/#441 successor — see ./subagent-read-scope).
+    // Invariant: a forked read-only sub-agent must be able to READ everything
+    // its parent could; writes stay confined (writeRoots, below). When the
+    // caller did NOT pin `readRoots` — a caller that pins (e.g. `afk farm`,
+    // which deliberately confines each branch worker) is left untouched — derive
+    // the child's read roots from the parent's scope:
+    //   - UNCONFINED parent (top-level `afk`/`afk i` with no worktree →
+    //     resolveBase undefined → reads anywhere) → read-open child.
+    //   - CONFINED parent → union(child cwd, parent roots, worktree main root);
+    //     the main root lexically covers sibling `.afk-worktrees/*`.
+    // This replaces the prior single main-root grant that vanished silently on
+    // any `git rev-parse` failure, re-confining the child to `[cwd]` (#441) and
+    // hard-blocking every out-of-cwd read until a wall-clock timeout.
     const effectiveChildCwd = options.config.cwd ?? this.parentCwd;
-    let worktreeReadRoots: string[] | undefined;
-    if (options.config.readRoots === undefined && effectiveChildCwd !== undefined) {
-      const mainRoot = await this.resolveMainRootForCwd(effectiveChildCwd);
-      if (mainRoot !== undefined && mainRoot !== effectiveChildCwd) {
-        worktreeReadRoots = [effectiveChildCwd, mainRoot];
-      }
+    let inheritedReadRoots: string[] | undefined;
+    if (options.config.readRoots === undefined) {
+      // An UNCONFINED parent yields a read-open child regardless of the worktree
+      // main root, so skip the (cached) git resolution in that case — the common
+      // top-level `afk` fan-out never pays for it. For a CONFINED parent the main
+      // root is best-effort; on git failure the parentCwd/parentReadRoots union
+      // still supplies the repo root, so the #441 silent-fail is no longer
+      // load-bearing.
+      const parentUnconfined =
+        this.parentReadRoots === undefined && this.parentCwd === undefined;
+      const worktreeMainRoot =
+        !parentUnconfined && effectiveChildCwd !== undefined
+          ? await this.resolveMainRootForCwd(effectiveChildCwd)
+          : undefined;
+      inheritedReadRoots = computeInheritedReadRoots({
+        parentReadRoots: this.parentReadRoots,
+        parentCwd: this.parentCwd,
+        childCwd: effectiveChildCwd,
+        worktreeMainRoot,
+      });
     }
 
     // Explicit write-root pre-grant (#435): when the caller passed writeRoots on
@@ -634,11 +683,10 @@ export class SubagentManager {
       ...(options.config.cwd === undefined && this.parentCwd !== undefined
         ? { cwd: this.parentCwd }
         : {}),
-      // Worktree read-root grant (see the computation above the literal). Only
-      // set when the child runs in a linked worktree AND the caller left
-      // readRoots unset; otherwise the `...options.config` spread's readRoots
-      // (or the provider's `[cwd]` default) stands.
-      ...(worktreeReadRoots !== undefined ? { readRoots: worktreeReadRoots } : {}),
+      // Inherited read scope (see the computation above the literal). Only set
+      // when the caller left readRoots unset; otherwise the `...options.config`
+      // spread's readRoots (or the provider's `[cwd]` default) stands.
+      ...(inheritedReadRoots !== undefined ? { readRoots: inheritedReadRoots } : {}),
       // Explicit write-root pre-grant (#435): composed with cwd above. When
       // writeRoots is absent, composedWriteRoots is undefined and the
       // `...options.config` spread's writeRoots (or the provider's `[cwd]`
