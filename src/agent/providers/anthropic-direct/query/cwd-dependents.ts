@@ -14,7 +14,8 @@ import type { SubagentExecutor } from '../../../tools/subagent-executor.js';
 import type { SkillExecutor } from '../../../tools/skill-executor.js';
 import type { ComposeExecutor } from '../../../tools/compose-executor.js';
 import type { ToolDispatcher } from '../tool-dispatcher.js';
-import { formatEnvironmentFragment, type RuntimeStateSource } from '../../../awareness/index.js';
+import type { RuntimeStateSource } from '../../../awareness/index.js';
+import { assembleSystemPrompt } from './system-prompt.js';
 
 export type CwdDependentsFactory = (newCwd: string) => {
   userSystem: string;
@@ -83,25 +84,18 @@ export function createCwdDependentsFactory(args: CwdDependentsFactoryArgs): CwdD
     args.skillExecutor?.setCwd(newCwd);
     args.composeExecutor?.setCwd(newCwd);
 
-    // 2. Rebuild system-prompt fragment with the new `# Environment` line.
-    //    Build a fresh copy each invocation — splice mutates in place.
-    //    Awareness identity fields (sessionId/surface/depth/maxDepth)
-    //    are stable across cwd swaps, so we reuse the config snapshot.
-    const newSystemParts = [
-      args.stableSystemPrefix[0]!,
-      args.stableSystemPrefix[1]!,
-      formatEnvironmentFragment({
-        cwd: newCwd,
-        ...(args.config.sessionId !== undefined ? { sessionId: args.config.sessionId } : {}),
-        surface: args.surface,
-        ...(args.config.depth !== undefined ? { depth: args.config.depth } : {}),
-        ...(args.config.maxDepth !== undefined ? { maxDepth: args.config.maxDepth } : {}),
-        // Workspace is stable across cwd swaps (captured at session start).
-        workspace: args.runtimeStateSource.getWorkspace(),
-      }),
-      ...args.stableSystemPrefix.slice(2),
-    ];
-    const newUserSystem = newSystemParts.join('\n\n');
+    // 2. Rebuild the system prompt with the new `# Environment` line via the
+    //    SAME assembler the first-turn path uses (query/system-prompt.ts), so
+    //    the two can never drift. Awareness identity fields
+    //    (sessionId/surface/depth/maxDepth/workspace) are stable across cwd
+    //    swaps, so we reuse the config snapshot; only `newCwd` changes.
+    const newUserSystem = assembleSystemPrompt(args.stableSystemPrefix, newCwd, {
+      surface: args.surface,
+      sessionId: args.config.sessionId,
+      depth: args.config.depth,
+      maxDepth: args.config.maxDepth,
+      workspace: args.runtimeStateSource.getWorkspace(),
+    });
 
     // 3. Build the new dispatcher. Its bash/grep/glob handlers close over
     //    `newCwd` so future fall-through reads (where context is absent)

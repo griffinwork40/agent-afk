@@ -78,11 +78,11 @@ import {
   createGetRuntimeStateHandler,
   wrapDispatcherWithRuntimeState,
   buildRuntimeStateSource,
-  formatEnvironmentFragment,
   type RuntimeStateSource,
 } from '../../awareness/index.js';
 import { registerPresenceLifecycle } from './query/presence-lifecycle.js';
 import { createCwdDependentsFactory } from './query/cwd-dependents.js';
+import { assembleSystemPrompt, buildStableSystemPrefix } from './query/system-prompt.js';
 
 const PROVIDER_NAME = 'anthropic-direct';
 const DEFAULT_MODEL = 'claude-sonnet-5';
@@ -757,31 +757,28 @@ export class AnthropicDirectProvider implements ModelProvider {
     // instructions for memory_update / procedure_write — keeps the model from
     // being told about tools it does not have.
     const memoryPrompt = resolveMemorySystemPrompt(this.readOnlyMemory);
-    const systemParts = [toolBase, memoryPrompt];
-    // Awareness layer (Phase 1 + 2): session identity fragment + workspace line.
-    // `formatEnvironmentFragment` always emits `- Working directory: <cwd>`
-    // (existing behavior), conditionally appends `- Session: <id> (...)` when
-    // at least one identity field is known, and (Phase 2) conditionally appends
-    // `- Workspace: <branch> @ <sha> (clean|N dirty)` when git state is available.
-    systemParts.push(
-      formatEnvironmentFragment({
-        cwd,
-        ...(config.sessionId !== undefined ? { sessionId: config.sessionId } : {}),
-        surface: this.surface,
-        ...(config.depth !== undefined ? { depth: config.depth } : {}),
-        ...(config.maxDepth !== undefined ? { maxDepth: config.maxDepth } : {}),
-        workspace: runtimeStateSource.getWorkspace(),
-      }),
-    );
-    if (manifest.length > 0) systemParts.push(manifest);
-    if (userSystem) systemParts.push(userSystem);
-    const toolSystemAppend = systemParts.join('\n\n');
 
-    // Stable parts of the system prompt that don't change when cwd changes.
-    // Used by the cwdDependentsFactory closure below.
-    const stableSystemPrefix = [toolBase, memoryPrompt];
-    if (manifest.length > 0) stableSystemPrefix.push(manifest);
-    if (userSystem) stableSystemPrefix.push(userSystem);
+    // Awareness identity fields interleaved into the `# Environment` fragment
+    // (Phase 1 + 2). Stable across cwd swaps — only `cwd` changes on setCwd().
+    const environmentIdentity = {
+      surface: this.surface,
+      sessionId: config.sessionId,
+      depth: config.depth,
+      maxDepth: config.maxDepth,
+      workspace: runtimeStateSource.getWorkspace(),
+    };
+
+    // Stable (cwd-independent) parts of the system prompt. The cwd-dependent
+    // `# Environment` fragment is spliced in by assembleSystemPrompt — the same
+    // helper the cwdDependentsFactory below uses on a cwd change, so the
+    // first-turn and rebuilt prompts can never drift.
+    const stableSystemPrefix = buildStableSystemPrefix({
+      toolBase,
+      memoryPrompt,
+      manifest,
+      userSystem,
+    });
+    const toolSystemAppend = assembleSystemPrompt(stableSystemPrefix, cwd, environmentIdentity);
 
     // Dump prompt debug info if AFK_DUMP_PROMPT is set (wired via --dump-prompt CLI flag).
     dumpIfEnabled({
