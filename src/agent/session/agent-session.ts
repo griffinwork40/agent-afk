@@ -13,8 +13,8 @@
 
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { debugLog } from '../../utils/debug.js';
-import { AbortError, BudgetExceededError, TimeoutError } from '../../utils/errors.js';
-import { emitClosure, emitSessionPhase } from '../trace/emit.js';
+import { AbortError } from '../../utils/errors.js';
+import { emitSessionPhase } from '../trace/emit.js';
 import type { HookRegistry } from '../hooks.js';
 import { resolveProvider, providerForModel } from '../providers/index.js';
 import { ProviderRouter } from '../providers/router/provider-router.js';
@@ -23,8 +23,11 @@ import type { ProviderCompactResult, ProviderEvent, ProviderQuery } from '../pro
 import { DEFAULT_SESSION_TIMEOUT_MS, RESET_DRAIN_TIMEOUT_MS, withTimeout } from '../timeout.js';
 import { dispatchSessionEnd, dispatchSessionStart } from './hooks-dispatch.js';
 import { HookBlockedError } from '../../utils/errors.js';
-import { classifyClosureReason } from './closure-reason.js';
-import { buildClosureGuidance } from './closure-guidance.js';
+import {
+  emitClosureEvent,
+  sealTraceWriter,
+  type ClosureSignals,
+} from './closure-emitter.js';
 import { extractStructuredOutput } from '../output-extractor.js';
 import { z, type ZodType } from 'zod';
 import type {
@@ -50,10 +53,9 @@ import type {
   StructuredMessageOptions,
 } from '../types.js';
 import { QueryInputStream } from './input-iterable.js';
-import { SessionLedgerWriter } from '../session-ledger.js';
-import { sessionLabelFromTracePath } from '../../paths.js';
+import { LedgerLifecycle } from './ledger-lifecycle.js';
+import { PlanExitBridge } from './plan-exit-bridge.js';
 import type { ElicitationRequest } from '../types/sdk-types.js';
-import { env } from '../../config/env.js';
 import { resolveModelId } from './model-resolution.js';
 import { deriveOrigin, deriveActor } from './session-identity.js';
 import { updatePresenceCwd } from '../awareness/presence.js';
@@ -76,42 +78,13 @@ import {
 export class AgentSession implements IAgentSession {
   private config: AgentConfig;
   /**
-   * Pending plan-exit implement-turn queued by an approved `exit_plan_mode`
-   * tool call (via the injected {@link PlanExitControls}). The REPL drains it
-   * with {@link takePendingPlanExitSeed} after the current turn, which atomically
-   * applies the deferred permission-mode flip and returns the seed message.
-   * Stores both the message and the approved mode so the flip can be deferred to
-   * the post-turn boundary — closing the mid-turn TOCTOU window.
-   * Lives on the session (not the per-turn dispatcher) so it survives from the
-   * mid-turn tool call to the post-turn REPL boundary.
+   * Plan-mode-exit state machine: the pending implement-turn seed, the captured
+   * pre-plan mode to restore, and the transient Shift+Tab ring-gesture memory.
+   * Lives on the session (not the per-turn dispatcher) so it survives from a
+   * mid-turn `exit_plan_mode` tool call to the post-turn REPL boundary. See
+   * {@link PlanExitBridge} for the ring-gesture rescue invariants.
    */
-  private _pendingPlanExitSeed: { message: string; mode: PermissionMode } | undefined;
-  /**
-   * The permission mode the session was in immediately BEFORE entering plan
-   * mode. Captured by {@link setPermissionMode} on the transition INTO 'plan'
-   * (covering every entry path — `/plan`, free-text `/plan`, Shift+Tab) and read
-   * by an approved plan-exit ({@link getPrePlanMode}) so the implement-turn
-   * restores it instead of forcing 'default'. `undefined` until the first
-   * plan-entry, and reset to `undefined` when the prior mode was 'autonomous'
-   * (AFK is not restorable by a bare flip) so restore falls back to 'default'.
-   */
-  private _prePlanPermissionMode: PermissionMode | undefined;
-  /**
-   * Ring-gesture memory for the Shift+Tab permission cycle
-   * (`default → plan → bypassPermissions`, see `cli/permission-mode-cycle.ts`).
-   * `plan`'s only ring-predecessor is `default`, so cycling from a privileged
-   * working mode (e.g. bypass) INTO plan necessarily passes through a TRANSIENT
-   * `default` hop: bypass → default → plan. Without this, {@link setPermissionMode}
-   * would capture that transient `default` as the pre-plan mode and an approved
-   * exit would drop the user to `default` instead of restoring their real working
-   * mode. So on a `<privileged> → default` transition we stash the mode left
-   * behind here; the very next `default → plan` transition restores it as the
-   * pre-plan mode. Cleared at every turn boundary (see `sendMessageStreamInternal`)
-   * so it survives ONLY an uninterrupted Shift+Tab gesture — a genuine rest in
-   * `default` (which submits a turn) clears it, keeping the restore safe: it never
-   * escalates back to bypass after the user actually worked in `default`.
-   */
-  private _modeBeforeDefault: PermissionMode | undefined;
+  private readonly planExit = new PlanExitBridge();
   private currentState: SessionState = 'idle';
   private providerQuery!: ProviderQuery;
   private providerIterator!: AsyncIterator<ProviderEvent>;
@@ -190,11 +163,10 @@ export class AgentSession implements IAgentSession {
    * Created lazily on the first turn once the provider has issued a session id.
    * Top-level sessions only — subagents are observable via the bg-job log and
    * witness traces; mirroring them here would multiply files per session.
-   * Null when disabled (env opt-out), gated off (subagent), or after close.
+   * Inert (no writer) when disabled (env opt-out), gated off (subagent), or
+   * after close. Lifecycle glue lives in {@link LedgerLifecycle}.
    */
-  private ledger: SessionLedgerWriter | null = null;
-  /** Set true once ledger creation has been attempted (success or not). */
-  private ledgerInitAttempted = false;
+  private readonly ledger = new LedgerLifecycle();
 
   constructor(config: AgentConfig) {
     // Wire the plan-exit control bridge for top-level sessions only (plan mode
@@ -209,10 +181,9 @@ export class AgentSession implements IAgentSession {
             ...config,
             planExitControls: {
               setPermissionMode: (mode) => this.setPermissionMode(mode),
-              requestImplementSeed: (message, mode) => {
-                this._pendingPlanExitSeed = { message, mode };
-              },
-              getPrePlanMode: () => this._prePlanPermissionMode,
+              requestImplementSeed: (message, mode) =>
+                this.planExit.requestImplementSeed(message, mode),
+              getPrePlanMode: () => this.planExit.getPrePlanMode(),
             },
           }
         : config;
@@ -632,8 +603,8 @@ export class AgentSession implements IAgentSession {
     // user actually RESTED in the current mode, so a transient-default stash
     // from `setPermissionMode` must not survive into a later `default → plan`
     // (which would wrongly restore bypass after real work in default). See
-    // {@link _modeBeforeDefault}.
-    this._modeBeforeDefault = undefined;
+    // {@link PlanExitBridge}.
+    this.planExit.clearModeBeforeDefault();
 
     // Fold queued hook context into THIS message so it rides along with the
     // user's text instead of becoming a turn of its own — see
@@ -653,7 +624,7 @@ export class AgentSession implements IAgentSession {
     // constructor) because the provider-issued session id only exists after
     // `session.init` — which `initPromise` above has just drained.
     this.ensureLedger();
-    this.ledger?.recordUser(historySummary);
+    this.ledger.recordUser(historySummary);
 
     const deps = this.buildTransformDeps();
 
@@ -677,7 +648,7 @@ export class AgentSession implements IAgentSession {
             // `succeeded` / `model_end_turn` to `failed` / `abort`.
             this.sawProviderError = true;
           }
-          this.ledger?.recordEvent(output);
+          this.ledger.recordEvent(output);
           yield output;
           if (output.type === 'done' || output.type === 'error') break;
         }
@@ -688,53 +659,21 @@ export class AgentSession implements IAgentSession {
   }
 
   /**
-   * Create the session ledger writer on first use.
-   *
-   * Gates (all must pass):
-   *   - top-level session (subagents: `depth`/`parentSessionId` set at fork);
-   *   - `AFK_SESSION_LEDGER_DISABLED` is not `'1'`;
-   *   - the provider has issued a session id.
-   *
-   * One attempt per lifecycle: if the id is unavailable or unsafe the first
-   * time, the session simply runs unledgered — never throws, never retries
-   * per-event (the `ledgerInitAttempted` latch keeps the hot path cheap).
+   * Create the session ledger writer on first use, deferring to
+   * {@link LedgerLifecycle.ensure}. Deferred to the first turn (not the
+   * constructor) because the provider-issued session id only exists after
+   * `session.init`. Metadata is passed as a lazy accessor so it is read only
+   * when a writer is actually created, not on the per-turn no-op path.
    */
   private ensureLedger(): void {
-    if (this.ledgerInitAttempted) return;
-    this.ledgerInitAttempted = true;
-    if (this.config.depth !== undefined || this.config.parentSessionId !== undefined) return;
-    if (env.AFK_SESSION_LEDGER_DISABLED === '1') return;
-    const id = this.sessionId;
-    if (!id) return;
-    const writer = new SessionLedgerWriter(id);
-    if (!writer.active) return;
-    this.ledger = writer;
-    const meta = this.getSessionMetadata();
-    writer.record({
-      kind: 'meta',
-      sessionId: id,
-      model: meta.model ?? String(this.config.model),
-      ...(meta.cwd !== undefined ? { cwd: meta.cwd } : {}),
-      // Correlate this id-keyed ledger to its witness trace: fresh sessions
-      // label the trace dir with a random UUID (not the session id), so the
-      // ledger is the durable id→label bridge. `null` when tracing is
-      // disabled/unwired, so absence is explicit rather than silent.
-      traceLabel: sessionLabelFromTracePath(this.config.traceWriter?.getTracePath()),
+    this.ledger.ensure({
+      depth: this.config.depth,
+      parentSessionId: this.config.parentSessionId,
+      sessionId: this.sessionId,
+      fallbackModel: String(this.config.model),
+      tracePath: this.config.traceWriter?.getTracePath(),
+      getMetadata: () => this.getSessionMetadata(),
     });
-  }
-
-  /**
-   * Seal the ledger with a terminal record and flush. Idempotent.
-   * `close()`/`reset()` await the returned promise so tailers see the
-   * terminal record before teardown completes; the abort path
-   * fire-and-forgets it (abort handlers cannot block on disk I/O).
-   */
-  private sealLedger(reason: string): Promise<void> {
-    const ledger = this.ledger;
-    if (!ledger) return Promise.resolve();
-    this.ledger = null;
-    this.ledgerInitAttempted = false;
-    return ledger.close(reason);
   }
 
   /**
@@ -751,7 +690,7 @@ export class AgentSession implements IAgentSession {
    * existing path.
    */
   recordLedgerElicitation(reqId: string, request: ElicitationRequest): void {
-    this.ledger?.record({ kind: 'elicitation', reqId, request });
+    this.ledger.recordElicitation(reqId, request);
   }
 
   private summarizeContentBlocks(blocks: ContentBlockParam[]): string {
@@ -822,7 +761,7 @@ export class AgentSession implements IAgentSession {
     }
 
     await this.dispatchSessionEndOnce('reset');
-    await this.sealLedger('reset');
+    await this.ledger.seal('reset');
 
     try {
       await this.providerQuery.close();
@@ -873,7 +812,7 @@ export class AgentSession implements IAgentSession {
   }
 
   private async onAbort(): Promise<void> {
-    void this.sealLedger('abort');
+    void this.ledger.seal('abort');
     try {
       await this.providerQuery.interrupt();
     } catch {
@@ -897,38 +836,11 @@ export class AgentSession implements IAgentSession {
   }
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
-    // Capture the mode being LEFT on the transition INTO plan, so an approved
-    // exit (exit_plan_mode tool or `/plan off`) can restore it instead of
-    // forcing 'default'. Read the live mode BEFORE flipping. Guard on the
-    // non-plan → plan edge only: a redundant plan → plan flip must not overwrite
-    // the real pre-plan mode with 'plan'. 'autonomous' (AFK) is reset to
-    // undefined — it carries dedicated enter/exit machinery (toggleAfkMode) and
-    // is not safe to re-enter by a bare flip — so restore falls back to 'default'.
+    // Capture the plan bookkeeping (pre-plan mode to restore, Shift+Tab ring-
+    // gesture memory) BEFORE flipping — the live mode is read here, the
+    // transition rules live in PlanExitBridge. Then apply the actual flip.
     const current = this.stateManager.getSessionMetadata().permissionMode;
-    if (mode === 'plan') {
-      if (current !== 'plan') {
-        // Ring-gesture rescue: the Shift+Tab cycle reaches plan only via a
-        // TRANSIENT `default` hop off a privileged mode (bypass → default → plan).
-        // When we're entering plan FROM that transient default, restore the mode
-        // stashed on the hop instead of the default itself. `_modeBeforeDefault`
-        // is turn-scoped, so this only fires for an uninterrupted gesture.
-        const effectivePrev =
-          current === 'default' && this._modeBeforeDefault !== undefined
-            ? this._modeBeforeDefault
-            : current;
-        this._prePlanPermissionMode = effectivePrev === 'autonomous' ? undefined : effectivePrev;
-      }
-    } else if (mode === 'default') {
-      // Stash the privileged mode being left so the NEXT `default → plan` press
-      // in the same Shift+Tab gesture can see past this transient default. Only
-      // privileged non-plan modes are worth restoring; default/plan are not.
-      this._modeBeforeDefault =
-        current !== 'default' && current !== 'plan' ? current : undefined;
-    } else {
-      // Landing on a concrete working mode (bypass / acceptEdits / …) ends any
-      // in-flight ring gesture toward plan — drop the transient-default memory.
-      this._modeBeforeDefault = undefined;
-    }
+    this.planExit.recordModeTransition(mode, current);
     await this.providerQuery.setPermissionMode(mode);
     this.stateManager.setSessionMetadata((prev) => ({ ...prev, permissionMode: mode }));
   }
@@ -937,10 +849,10 @@ export class AgentSession implements IAgentSession {
    * The permission mode the session was in immediately before entering plan
    * mode, or `undefined` if none was captured (never entered plan, or the prior
    * mode was 'autonomous'). An approved plan-exit restores this; callers fall
-   * back to 'default' on `undefined`. See {@link _prePlanPermissionMode}.
+   * back to 'default' on `undefined`. See {@link PlanExitBridge}.
    */
   getPrePlanMode(): PermissionMode | undefined {
-    return this._prePlanPermissionMode;
+    return this.planExit.getPrePlanMode();
   }
 
   /**
@@ -972,8 +884,7 @@ export class AgentSession implements IAgentSession {
    * plan mode and can retry `exit_plan_mode`.
    */
   async takePendingPlanExitSeed(): Promise<{ message: string; mode: PermissionMode } | undefined> {
-    const seed = this._pendingPlanExitSeed;
-    this._pendingPlanExitSeed = undefined;
+    const seed = this.planExit.takeSeed();
     if (seed === undefined) return undefined;
     try {
       await this.setPermissionMode(seed.mode);
@@ -1189,7 +1100,7 @@ export class AgentSession implements IAgentSession {
   async close(): Promise<void> {
     if (this.currentState === 'closed') return;
     this.currentState = 'closed';
-    await this.sealLedger('close');
+    await this.ledger.seal('close');
     if (!this.abortController.signal.aborted) {
       this.abortController.abort('closed');
     }
@@ -1232,8 +1143,21 @@ export class AgentSession implements IAgentSession {
     //   3. Dispatch the SessionEnd hook.
     // Both 1 and 2 swallow writer errors so a broken sink never masks the
     // real session-end reason from observers downstream.
-    await this.emitClosure(reason).catch(() => {});
-    await this.sealTraceWriter(reason).catch(() => {});
+    const signals = this.closureSignals(reason);
+    await emitClosureEvent(this.config.traceWriter, {
+      ...signals,
+      finalTurnCount: this.turnCount,
+      finalCostUsd: this.sessionRunningCostUsd,
+      runningTokens: this.sessionRunningTokens,
+    }).catch(() => {});
+    await sealTraceWriter(this.config.traceWriter, {
+      ...signals,
+      finalTurnCount: this.turnCount,
+      finalCostUsd: this.sessionRunningCostUsd,
+      subagentCompletedCount: this.subagentCompletedCount,
+      subagentRunningTokens: this.subagentRunningTokens,
+      subagentRunningCostUsd: this.subagentRunningCostUsd,
+    }).catch(() => {});
     await dispatchSessionEnd(
       this._hookRegistry,
       {
@@ -1255,122 +1179,19 @@ export class AgentSession implements IAgentSession {
   }
 
   /**
-   * Emit the `closure` trace event with the session's terminal
-   * classification. Delegates the precedence rules to the pure
-   * {@link classifyClosureReason} (`./closure-reason.ts`), which maps the
-   * `dispatchSessionEndOnce` reason, the terminal-cause flags (`maxTurnsHit`,
-   * `hookBlocked`), the pre-classified abort reason, and the last provider
-   * stop reason into a {@link ClosureReason}.
-   *
-   * Wired reasons: `model_end_turn`, `truncated`, `abort`, `timeout`,
-   * `budget_exceeded`, `hook_blocked`, `max_turns_exceeded`. `iteration_cap`
-   * remains deferred — it is wired alongside the tool-use loop cap that
-   * produces it.
+   * Snapshot the terminal-cause signals the closure emitters read. `reason` is
+   * the `dispatchSessionEndOnce` string (close/reset/error) and doubles as the
+   * seal reason. The derivation rules live in `./closure-emitter.ts`.
    */
-  private async emitClosure(dispatchReason: string): Promise<void> {
-    const writer = this.config.traceWriter;
-    if (!writer) return;
-    const reasonValue = this.deriveClosureReason(dispatchReason);
-    const finalTokens: {
-      input?: number;
-      output?: number;
-      cacheRead?: number;
-      cacheCreation?: number;
-    } = {};
-    if (this.sessionRunningTokens.input > 0) finalTokens.input = this.sessionRunningTokens.input;
-    if (this.sessionRunningTokens.output > 0) finalTokens.output = this.sessionRunningTokens.output;
-    if (this.sessionRunningTokens.cacheRead > 0) finalTokens.cacheRead = this.sessionRunningTokens.cacheRead;
-    if (this.sessionRunningTokens.cacheCreation > 0)
-      finalTokens.cacheCreation = this.sessionRunningTokens.cacheCreation;
-
-    // closure-anomaly guardrail: attach an actionable recovery hint for an
-    // anomalous reason so the closure event names not just WHY it ended but
-    // what to do next. Null (benign / not-yet-covered reasons) → field omitted.
-    const guidance = buildClosureGuidance(reasonValue);
-
-    await emitClosure(writer, {
-      reason: reasonValue,
-      finalTurnCount: this.turnCount,
-      finalCostUsd: this.sessionRunningCostUsd,
-      finalTokens,
-      ...(this.lastStopReason !== undefined ? { lastStopReason: this.lastStopReason } : {}),
-      ...(guidance !== null ? { guidance } : {}),
-    });
-  }
-
-  private deriveClosureReason(dispatchReason: string): import('../trace/index.js').ClosureReason {
-    // Pre-classify the abort-signal reason here (needs the concrete error
-    // classes); the precedence decision tree lives in the pure
-    // classifyClosureReason so it is unit-testable without a live session.
-    let abort: 'budget_exceeded' | 'timeout' | 'abort' | null = null;
-    const signal = this.abortController.signal;
-    if (signal.aborted && signal.reason !== 'closed') {
-      const r = signal.reason;
-      if (r instanceof BudgetExceededError) abort = 'budget_exceeded';
-      else if (r instanceof TimeoutError) abort = 'timeout';
-      // Some abort paths pass the error's message string rather than the
-      // error instance — match the well-known prefixes as a fallback so the
-      // classification stays accurate when the abort reason was stringified.
-      else if (typeof r === 'string' && r.startsWith('Budget ')) abort = 'budget_exceeded';
-      else if (typeof r === 'string' && r.includes('timed out')) abort = 'timeout';
-      else abort = 'abort';
-    }
-    return classifyClosureReason({
-      dispatchReason,
+  private closureSignals(reason: string): ClosureSignals {
+    return {
+      dispatchReason: reason,
+      signal: this.abortController.signal,
       maxTurnsHit: this.maxTurnsHit,
       hookBlocked: this.hookBlocked,
-      abort,
       lastStopReason: this.lastStopReason,
       sawProviderError: this.sawProviderError,
-    });
-  }
-
-  /**
-   * Map a session-end {@link dispatchSessionEndOnce} reason to the
-   * `session_sealed` payload and ask the configured trace writer to
-   * seal. No-op when the writer is absent.
-   *
-   * Status mapping:
-   *  - reason `'close'` or `'reset'` while not aborted → `'succeeded'`
-   *  - reason `'error'` → `'failed'`
-   *  - any reason with an aborted signal → `'cancelled'` (abort beats
-   *    the reason string, matching the abort-precedence invariant in
-   *    `abort-graph.ts`)
-   */
-  private async sealTraceWriter(reason: string): Promise<void> {
-    const writer = this.config.traceWriter;
-    if (!writer) return;
-    const status = this.deriveSealStatus(reason);
-
-    // Build the optional subagent rollup fields — only present when at
-    // least one subagent completed and reported data.
-    const subagentCount =
-      this.subagentCompletedCount > 0 ? this.subagentCompletedCount : undefined;
-
-    const tok = this.subagentRunningTokens;
-    const hasSubagentTokens =
-      tok.input > 0 || tok.output > 0 || tok.cacheRead > 0 || tok.cacheCreation > 0;
-    const subagentTokens = hasSubagentTokens
-      ? {
-          ...(tok.input > 0 ? { input: tok.input } : {}),
-          ...(tok.output > 0 ? { output: tok.output } : {}),
-          ...(tok.cacheRead > 0 ? { cacheRead: tok.cacheRead } : {}),
-          ...(tok.cacheCreation > 0 ? { cacheCreation: tok.cacheCreation } : {}),
-        }
-      : undefined;
-
-    const subagentCostUsd =
-      this.subagentRunningCostUsd > 0 ? this.subagentRunningCostUsd : undefined;
-
-    await writer.seal({
-      status,
-      finalCostUsd: this.sessionRunningCostUsd,
-      finalTurnCount: this.turnCount,
-      closedAt: new Date().toISOString(),
-      ...(subagentCount !== undefined ? { subagentCount } : {}),
-      ...(subagentTokens !== undefined ? { subagentTokens } : {}),
-      ...(subagentCostUsd !== undefined ? { subagentCostUsd } : {}),
-    });
+    };
   }
 
   /**
@@ -1411,24 +1232,6 @@ export class AgentSession implements IAgentSession {
     if (typeof costUsd === 'number' && Number.isFinite(costUsd) && costUsd > 0) {
       this.subagentRunningCostUsd += costUsd;
     }
-  }
-
-  private deriveSealStatus(reason: string): 'succeeded' | 'failed' | 'cancelled' {
-    if (reason === 'error') return 'failed';
-    // `close()` itself aborts the internal controller with reason
-    // `'closed'` as part of normal teardown — that is NOT a cancellation.
-    // Only an abort whose reason came from somewhere else (external
-    // AbortSignal, budget-trip, hook-block routed through abort) counts
-    // as cancelled.
-    const signal = this.abortController.signal;
-    if (signal.aborted && signal.reason !== 'closed') return 'cancelled';
-    // A provider error (HTTP / auth / stream failure) that ended the final
-    // turn is a failure even when the surface then closed the session cleanly.
-    // Checked AFTER the abort branch so a genuine cancel/budget/timeout (which
-    // also emits an error event) keeps its more-specific `cancelled` status.
-    // Without this, a 0-turn/0-token error run seals as a silent `succeeded`.
-    if (this.sawProviderError) return 'failed';
-    return 'succeeded';
   }
 
   private assertCanSend(): void {
