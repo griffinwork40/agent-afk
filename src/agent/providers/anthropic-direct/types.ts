@@ -105,6 +105,26 @@ export interface ToolResult {
    * See {@link import('../../trace/types.js').ToolFailureClass}.
    */
   failureClass?: ToolFailureClass;
+  /**
+   * 1-based position and total size of the concurrency batch this call was
+   * dispatched in, stamped by {@link SessionToolDispatcher.executeBatch}.
+   * `batchSize > 1` means the call ran in a parallel wave alongside
+   * `batchSize - 1` sibling calls; `batchSize === 1` (or absent) means it ran
+   * alone in its own sequential batch — which is the case for EVERY
+   * concurrency-unsafe tool (bash, write_file, edit_file, …), since the
+   * partitioner isolates each into a singleton batch.
+   *
+   * Render-only + trace metadata, never forwarded to the model. Lets the TUI
+   * and `afk trace show` distinguish a genuine parallel wave from back-to-back
+   * sequential dispatches, which are otherwise visually identical once
+   * committed to scrollback. Note `batchSize` is the number of calls
+   * DISPATCHED together, not the number that ran at literally the same instant:
+   * a safe batch wider than `maxConcurrentSafeCalls` drains through the pool in
+   * sub-waves, but is one logical batch here. Absent when the dispatcher ran
+   * the non-batching `execute()` path (single-tool fallback).
+   */
+  batchIndex?: number;
+  batchSize?: number;
   render?: RenderHints;
   /**
    * Structured test-runner result parsed from bash output by

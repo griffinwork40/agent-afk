@@ -176,6 +176,9 @@ export async function* dispatchAndAppendToolCalls({
         durationMs,
         ...(result.circuitBreaker === true ? { circuitBreaker: true } : {}),
         ...(result.failureClass ? { failureClass: result.failureClass } : {}),
+        ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
+          ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
+          : {}),
       });
 
       yield {

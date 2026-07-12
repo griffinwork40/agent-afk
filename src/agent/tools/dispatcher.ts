@@ -798,6 +798,26 @@ export class SessionToolDispatcher implements ToolDispatcher {
           results[originalIndex] = await this.executeCore(call);
         }
       }
+
+      // Stamp batch membership onto each result so downstream consumers
+      // (TUI tool-lane render + `tool_call` completed trace event) can tell a
+      // genuine parallel wave apart from back-to-back sequential dispatches —
+      // which are otherwise indistinguishable once a fast root commits to
+      // scrollback ahead of a slow one. 1-based `batchIndex` = ordinal within
+      // the batch; `batchSize` = number of calls dispatched together. A
+      // concurrency-unsafe tool (bash, write_file, …) is always its own
+      // singleton batch, so it lands batchSize=1 and is never badged. Blocked
+      // / short-circuited calls (permission, read-only-bash gate, circuit
+      // breaker) are excluded from `executableCalls`, so they correctly carry
+      // no batch info at all.
+      const batchSize = batch.indices.length;
+      batch.indices.forEach((batchIdx, pos) => {
+        const r = results[executableCalls[batchIdx]!.originalIndex];
+        if (r) {
+          r.batchIndex = pos + 1;
+          r.batchSize = batchSize;
+        }
+      });
     }
 
     return results;

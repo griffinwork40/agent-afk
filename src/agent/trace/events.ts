@@ -48,6 +48,11 @@ export const ToolCallCompletedPayloadSchema = z.object({
   circuitBreaker: z.boolean().optional(),
   /** Coarse failure classification when `isError` is true. Absent otherwise. */
   failureClass: ToolFailureClassSchema.optional(),
+  /** Concurrency-batch membership (1-based index + total size). `batchSize > 1`
+   *  ⇒ ran in a parallel wave; `=== 1` ⇒ ran alone. Absent on the single-tool
+   *  `execute()` path and on blocked/short-circuited calls. */
+  batchIndex: z.number().int().positive().optional(),
+  batchSize: z.number().int().positive().optional(),
   subagentId: z.string().optional(),
 });
 
