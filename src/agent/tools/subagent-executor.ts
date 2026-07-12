@@ -9,6 +9,7 @@
  */
 
 import { SubagentManager, SUBAGENT_BACKGROUND_TIMEOUT_MS } from '../subagent.js';
+import { computeInheritedReadRoots } from '../subagent-read-scope.js';
 import { BackgroundAgentRegistry } from '../background-registry.js';
 import type { ModelProvider } from '../provider.js';
 import type { AgentModelInput, IAgentSession } from '../types.js';
@@ -475,6 +476,27 @@ export class SubagentExecutor implements SubagentControl {
         ? { origin: deriveOrigin(this.ctx.surface), actor: actorFromDepth(depth) }
         : {};
 
+    // Transitive read-scope propagation (see ../subagent-read-scope): compute
+    // THIS child's inherited read roots from the manager that will fork it, so
+    // the nested manager the child builds for its OWN grandchildren starts from
+    // the child's scope — not a cwd-only proxy that would silently re-confine a
+    // read-open (or /allow-dir-widened) child one nesting level down.
+    // `getReadScopeInputs` is a required method on the real SubagentManager (the
+    // `subagentManager: SubagentManager` type enforces it exists — deleting it
+    // would fail tsc here); the `?.()` guards only the runtime VALUE so the many
+    // `as any`-cast test doubles that predate this method fall back to "no
+    // explicit parent scope" (→ cwd-derivation) instead of throwing. Production
+    // always takes the real branch.
+    const childScopeInputs = this.ctx.subagentManager.getReadScopeInputs?.() ?? {
+      parentReadRoots: undefined,
+      parentCwd: undefined,
+    };
+    const childInheritedReadRoots = computeInheritedReadRoots({
+      parentReadRoots: childScopeInputs.parentReadRoots,
+      parentCwd: childScopeInputs.parentCwd,
+      childCwd: parsed.cwd ?? this.currentCwd,
+    });
+
     // Build the child config + nested-dispatch wiring. All context this needs
     // is passed explicitly; the recursive child executor is injected as a
     // factory so child-config.ts never imports this class at runtime.
@@ -484,6 +506,7 @@ export class SubagentExecutor implements SubagentControl {
       depth,
       maxDepth,
       currentCwd: this.currentCwd,
+      ...(childInheritedReadRoots !== undefined ? { childInheritedReadRoots } : {}),
       signal: call.signal,
       defaultConfig: this.ctx.defaultConfig,
       ...(this.ctx.resolveApiKeyForModel !== undefined

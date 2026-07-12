@@ -1,21 +1,25 @@
 /**
- * Regression tests: forkSubagent grants the MAIN repo root as a read root to
- * subagents whose cwd is a linked git worktree.
+ * Regression tests: forkSubagent derives a forked child's READ roots by
+ * inheriting the parent session's read scope (see ./subagent-read-scope).
  *
- * Bug (pre-fix): a subagent forked from an `afk -w` worktree session inherits
- * the worktree cwd but no read roots, so its dispatcher defaults to
- * `readRoots = [worktree]`. Any `read_file <mainRepo>/…` is rejected as
- * "outside the allowed read roots", and the subagent cannot approve it (the
- * path-approval hook auto-denies forked children). This locks subagents out of
- * main-repo paths that pervade their context.
+ * Bug (pre-fix, #416/#441): a fork inherited a concrete cwd but its read roots
+ * either defaulted to `[worktree]` or relied on a main-root grant that vanished
+ * silently on any `git rev-parse` failure. Any read outside `[cwd]` — a sibling
+ * `.afk-worktrees/*` tree, a `~/.afk/state` path, the main repo — was rejected
+ * as "outside the allowed read roots", and the fork could not approve it (the
+ * path-approval hook auto-denies forked children), so it spun on retried
+ * denials to a wall-clock timeout.
  *
- * Fix: forkSubagent resolves the worktree's main-repo root (best-effort, via
- * ./worktree-read-root) and sets `childConfig.readRoots = [cwd, mainRoot]` when
- * the caller did not pin its own read roots. These tests capture the config
- * handed to the child AgentSession and assert the grant.
+ * Fix (Option A): child read scope ⊇ parent read scope. An UNCONFINED parent
+ * (top-level `afk` with no worktree → reads anywhere) yields a read-open child;
+ * a CONFINED parent yields the union of its roots, the child's cwd, and the
+ * worktree main root. Writes stay confined (separate writeRoots axis). A caller
+ * that pins `readRoots` (e.g. `afk farm`) suppresses inheritance. These tests
+ * capture the config handed to the child AgentSession and assert the scope.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import path from 'path';
 import type { Message } from './types.js';
 
 type CapturedConfig = Record<string, unknown> | null;
@@ -62,6 +66,7 @@ import { resolveWorktreeMainRoot } from './worktree-read-root.js';
 
 const WORKTREE = '/repo/.afk-worktrees/wt';
 const MAIN = '/repo';
+const FS_ROOT = path.parse(path.resolve('.')).root || path.sep;
 
 const mockedResolve = vi.mocked(resolveWorktreeMainRoot);
 
@@ -92,15 +97,20 @@ describe('forkSubagent — worktree main-repo read-root grant', () => {
     expect(mockedResolve).toHaveBeenCalledWith(WORKTREE);
   });
 
-  it('grants [cwd, mainRoot] when cwd comes from per-call config (agent tool cwd)', async () => {
+  it('grants READ-OPEN when the parent is unconfined (no manager cwd), even with a per-call worktree cwd', async () => {
+    // A top-level `afk`/`afk i` with no `-w` is unconfined (reads anywhere).
+    // A fork given an explicit worktree cwd must inherit that reach — a
+    // read-open root — not be re-confined to [cwd, mainRoot]. (Writes stay
+    // confined to the worktree via the separate writeRoots axis.)
     mockedResolve.mockResolvedValue(MAIN);
-    const mgr = new SubagentManager(); // no manager cwd
+    const mgr = new SubagentManager(); // no manager cwd → UNCONFINED parent
     await mgr.forkSubagent(forkOpts({ model: 'sonnet', apiKey: 'k', cwd: WORKTREE }));
 
     const cfg = shared.lastConfig as { cwd?: string; readRoots?: string[] } | null;
     expect(cfg?.cwd).toBe(WORKTREE);
-    expect(cfg?.readRoots).toEqual([WORKTREE, MAIN]);
-    expect(mockedResolve).toHaveBeenCalledWith(WORKTREE);
+    expect(cfg?.readRoots).toEqual([FS_ROOT]);
+    // Read-open ignores the worktree main root → no git resolution is paid for.
+    expect(mockedResolve).not.toHaveBeenCalled();
   });
 
   it('does NOT set readRoots when cwd is not a worktree (resolver returns undefined)', async () => {

@@ -58,6 +58,14 @@ export interface BuildChildConfigArgs {
   depth: number;
   maxDepth: number;
   currentCwd: string | undefined;
+  /**
+   * This child's own inherited read roots, precomputed by the dispatching
+   * executor from the manager that forks it (see ../subagent-read-scope). Passed
+   * to the nested grandchild {@link SubagentManager} as its `parentReadRoots` so
+   * a read-open (or `/allow-dir`-widened) read scope propagates transitively
+   * instead of being silently re-narrowed to the child's cwd one level down.
+   */
+  childInheritedReadRoots?: string[];
   /** The dispatching tool-call's abort signal (owns the child manager lifetime). */
   signal: AbortSignal;
   defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl'>;
@@ -290,6 +298,12 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     childManager = new SubagentManager({
       parentAbortSignal: signal,
       ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
+      // Transitive read-scope: seed the grandchild manager with THIS child's
+      // inherited read roots (see ../subagent-read-scope) so a read-open child
+      // does not re-confine its own grandchildren to `[cwd]`.
+      ...(args.childInheritedReadRoots !== undefined
+        ? { parentReadRoots: args.childInheritedReadRoots }
+        : {}),
       // Witness layer: without this, depth-2+ `agent` forks emit no
       // subagent_lifecycle events — the nested manager had no writer and
       // agent-tool dispatches never set config.traceWriter. Mirrors the
