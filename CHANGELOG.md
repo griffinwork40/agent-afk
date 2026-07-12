@@ -11,8 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.35.0] - 2026-07-12
+
 ### Added
 - openai-compatible: honor server `retry-after` / `retry-after-ms` on 429/503 backoff instead of blind exponential (parity with anthropic-direct) (#536)
+
+### Added
+- mirror source tool enabled/disabled state for imported plugins (#537) (2df91f4)
+- honor retry-after on 429/503 backoff (#536) (#538) (e4e3bf2)
+
 ## [5.34.0] - 2026-07-12
 
 ### Added
