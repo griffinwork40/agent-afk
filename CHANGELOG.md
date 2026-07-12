@@ -11,6 +11,13 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.30.6] - 2026-07-12
+
+### Changed
+- dedupe runIteration's two wire branches (#365) (#525) (db03f41)
+- unify system-prompt assembly into query/system-prompt.ts (#362) (#523) (5c5cf97)
+- bump the fumadocs group in /website with 3 updates (#529) (be2459b)
+
 ## [5.30.5] - 2026-07-12
 
 ### Fixed
