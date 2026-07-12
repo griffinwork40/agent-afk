@@ -57,6 +57,19 @@ export type ImportedSkillOrigin = `imported:${ImportSourceBinary}`;
 /** Format of a source binary's MCP config file. */
 export type McpConfigFormat = 'json' | 'toml';
 
+/**
+ * A source tool's OWN plugin enabled/disabled state, keyed in that tool's
+ * native key format. For Claude Code the key is `<pluginName>@<marketplace>`
+ * (from `~/.claude/settings.json` `enabledPlugins`). A key ABSENT from the map
+ * means "no signal" — the scanner defaults such a plugin to enabled. An EMPTY
+ * map (missing/malformed source config, or a binary with no plugin-enable
+ * concept) disables nothing — fail-open by design.
+ */
+export type SourceEnabledMap = ReadonlyMap<string, boolean>;
+
+/** Shared fail-open sentinel: no source signal ⇒ disables no plugins. */
+const EMPTY_SOURCE_ENABLED: SourceEnabledMap = new Map();
+
 // ── Source path maps ───────────────────────────────────────────────────────
 
 interface SourcePathMap {
@@ -66,6 +79,12 @@ interface SourcePathMap {
   /** Candidate MCP config paths in priority order — first existing wins. */
   mcpConfigCandidates: (home: string) => string[];
   mcpFormat: McpConfigFormat;
+  /**
+   * Read the binary's OWN plugin enabled/disabled state (in its native key
+   * format) so an imported-root scan can mirror it. Returns an empty map when
+   * the binary exposes no such state or its config is missing/malformed.
+   */
+  pluginEnabledState: (home: string) => SourceEnabledMap;
 }
 
 const SOURCE_MAPS: Record<ImportSourceBinary, SourcePathMap> = {
@@ -81,6 +100,7 @@ const SOURCE_MAPS: Record<ImportSourceBinary, SourcePathMap> = {
       join(home, '.claude', 'claude-code', 'mcp.json'),
     ],
     mcpFormat: 'json',
+    pluginEnabledState: (home) => readClaudeEnabledPlugins(home),
   },
   codex: {
     label: 'Codex',
@@ -88,6 +108,9 @@ const SOURCE_MAPS: Record<ImportSourceBinary, SourcePathMap> = {
     skillRoots: (home) => [join(home, '.codex', 'skills')],
     mcpConfigCandidates: (home) => [join(home, '.codex', 'config.toml')],
     mcpFormat: 'toml',
+    // Codex plugin import is detection-only today (see `afk migrate`), so
+    // there is no enabled-state read yet — a follow-up phase.
+    pluginEnabledState: () => EMPTY_SOURCE_ENABLED,
   },
 };
 
@@ -178,8 +201,12 @@ export function loadImportFromConfig(
 
 /** Resolved scan roots derived from a trusted `importFrom` config. */
 export interface ResolvedImportRoots {
-  /** Plugin dirs to scan with trust-all semantics (no AFK index required). */
-  pluginRoots: string[];
+  /**
+   * Plugin dirs to scan with trust-all semantics (no AFK index required),
+   * each tagged with its source binary so the scanner can mirror that tool's
+   * own enabled/disabled state via {@link readSourceEnabledState}.
+   */
+  pluginRoots: Array<{ dir: string; binary: ImportSourceBinary }>;
   /** Skill dirs to scan, tagged with their per-binary import origin. */
   skillRoots: Array<{ dir: string; origin: ImportedSkillOrigin }>;
   /** MCP config files to load as lowest-priority layers. */
@@ -205,7 +232,7 @@ export function resolveImportedRoots(
     const map = SOURCE_MAPS[binary];
     if (toggles.plugins) {
       for (const root of map.pluginRoots(home)) {
-        if (existsSync(root)) out.pluginRoots.push(root);
+        if (existsSync(root)) out.pluginRoots.push({ dir: root, binary });
       }
     }
     if (toggles.skills) {
@@ -220,6 +247,21 @@ export function resolveImportedRoots(
     }
   }
   return out;
+}
+
+/**
+ * Read a trusted source binary's OWN plugin enabled/disabled state so an
+ * imported-root scan can mirror it — a plugin the user disabled in Claude Code
+ * should not load in AFK. `home` is injectable for tests. Fail-open: any
+ * missing/unreadable/malformed source config yields an empty map (disables
+ * nothing). v1 implements `claude-code`; `codex` returns empty (its plugin
+ * import is detection-only).
+ */
+export function readSourceEnabledState(
+  binary: ImportSourceBinary,
+  home: string = homedir(),
+): SourceEnabledMap {
+  return SOURCE_MAPS[binary].pluginEnabledState(home);
 }
 
 // ── Detection (consumed by `afk migrate` + doctor) ──────────────────────────
@@ -283,6 +325,35 @@ function firstExisting(candidates: string[]): string | null {
     if (existsSync(c)) return c;
   }
   return null;
+}
+
+/**
+ * Parse Claude Code's own plugin enable/disable state from
+ * `~/.claude/settings.json` `enabledPlugins` — an object map of
+ * `"<pluginName>@<marketplace>": boolean`. Only the user-global settings file
+ * is consulted; project/local/managed scopes are deliberately out of scope
+ * (AFK's import model is home-dir and cwd-independent). Fail-open: a missing
+ * or malformed file, or a non-boolean value, contributes no signal.
+ */
+function readClaudeEnabledPlugins(home: string): SourceEnabledMap {
+  const settingsPath = join(home, '.claude', 'settings.json');
+  if (!existsSync(settingsPath)) return EMPTY_SOURCE_ENABLED;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+  } catch {
+    return EMPTY_SOURCE_ENABLED;
+  }
+  if (!raw || typeof raw !== 'object') return EMPTY_SOURCE_ENABLED;
+  const enabledPlugins = (raw as { enabledPlugins?: unknown }).enabledPlugins;
+  if (!enabledPlugins || typeof enabledPlugins !== 'object' || Array.isArray(enabledPlugins)) {
+    return EMPTY_SOURCE_ENABLED;
+  }
+  const map = new Map<string, boolean>();
+  for (const [key, val] of Object.entries(enabledPlugins as Record<string, unknown>)) {
+    if (typeof val === 'boolean') map.set(key, val);
+  }
+  return map;
 }
 
 /** Read a plugin manifest's `name` field. Inlined to avoid an agent-layer import. */
