@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.31.0] - 2026-07-12
+
+### Added
+- auto-resume idle REPL when a background subagent completes (#518) (2a1d374)
+
+### Changed
+- bump @types/node from 26.1.0 to 26.1.1 in /website (#531) (7e1baef)
+
 ## [5.30.6] - 2026-07-12
 
 ### Changed
