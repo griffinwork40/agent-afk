@@ -42,6 +42,7 @@
 
 import { createHookRegistryImpl } from './hook-registry.js';
 import type { SubagentTrace } from './subagent/result.js';
+import type { GrantManager } from '../cli/slash/commands/allow-dir.js';
 
 export type HarnessHookEvent =
   | 'SessionStart'
@@ -159,6 +160,17 @@ export interface PreToolUseContext {
   parentSessionId?: string;
   toolName: string;
   input?: unknown;
+  /**
+   * Live grant manager of the session EXECUTING this call — the provider that
+   * built the dispatcher dispatching this hook. Injected per-call by
+   * {@link SessionToolDispatcher} so path-scoped hooks (path-approval,
+   * bash-restriction) resolve the ACTUAL session's grants: a forked child's own
+   * cwd/readRoots/writeRoots rather than a process-global ref pinned to the
+   * top-level session (the #435/#514 write-confinement gap). When absent
+   * (non-dispatcher-originated dispatch, unit tests), those hooks fall back to
+   * their `opts.getGrantManager()` ref, preserving prior behavior.
+   */
+  grantManager?: GrantManager;
 }
 
 export interface PostToolUseContext {
@@ -181,6 +193,13 @@ export interface PostToolUseContext {
    */
   input?: unknown;
   output?: unknown;
+  /**
+   * Live grant manager of the executing session — see
+   * {@link PreToolUseContext.grantManager}. Injected so the "Once"-grant revoke
+   * in the path-approval PostToolUse hook mutates the SAME grant manager the
+   * PreToolUse containment check consulted.
+   */
+  grantManager?: GrantManager;
 }
 
 export interface PreCompactContext {

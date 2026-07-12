@@ -432,6 +432,14 @@ export class AnthropicDirectProvider implements ModelProvider {
     }
     return new SessionToolDispatcher({
       handlers,
+      // This provider IS the session's GrantManager. Passing it here lets the
+      // dispatcher inject it onto PreToolUse/PostToolUse contexts, so the
+      // path-approval + bash-restriction hooks resolve THIS session's live
+      // grants (a forked child's own writeRoots) rather than the process-global
+      // ref pinned to the top-level session (#435/#514). getGrants() reads the
+      // same _sharedReadRoots/_sharedWriteRoots the dispatcher shares by
+      // reference, so hook and handler stay in lockstep.
+      sessionGrantManager: this,
       // Path-containment bypass: bypassPermissions (explicit) AND autonomous
       // (AFK) both carry allowAll:true so path containment + the path-approval
       // prompt are disabled per-call. In AFK the afk-mode-gate is the safety

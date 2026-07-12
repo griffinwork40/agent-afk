@@ -183,7 +183,14 @@ async function preToolUseImpl(
   // Reproduce the handler's containment check. cwd / readRoots / writeRoots
   // are sampled from the grant manager using the same fresh-snapshot pattern
   // the dispatcher uses on every handler call.
-  const grantManager = opts.getGrantManager();
+  //
+  // Prefer the grant manager injected by the executing session's dispatcher
+  // (context.grantManager) over the process-global ref: for a forked child the
+  // ref is pinned to the TOP-LEVEL session and blind to the child's own
+  // writeRoots, so a writeRoots-granted sibling write would be auto-denied even
+  // though the child's grants permit it (#435/#514). The ref remains the
+  // fallback for non-dispatcher-originated dispatch (tests, SessionEnd).
+  const grantManager = context.grantManager ?? opts.getGrantManager();
   if (!grantManager) {
     // Failsafe — no wired grant manager (headless, one-shot, daemon). Skip
     // the approval pre-check and let the handler's own resolveAndContain
@@ -293,7 +300,9 @@ function postToolUseImpl(
     ? 'write'
     : 'read';
 
-  const grantManager = opts.getGrantManager();
+  // Prefer the dispatcher-injected grant manager (same session as PreToolUse)
+  // so the "Once"-grant revoke targets the manager the Pre check mutated.
+  const grantManager = context.grantManager ?? opts.getGrantManager();
   if (!grantManager) return {};
   const grants = grantManager.getGrants();
 

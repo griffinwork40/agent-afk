@@ -76,6 +76,43 @@ describe('SessionToolDispatcher', () => {
     });
   });
 
+  describe('sessionGrantManager injection (#514)', () => {
+    // The provider passes itself as sessionGrantManager; the dispatcher must
+    // surface it on the PreToolUse context so path-scoped hooks resolve THIS
+    // session's grants (a forked child's own writeRoots) instead of the
+    // process-global ref pinned to the top-level session.
+    const fakeGM = {
+      getGrants: () => ({ resolveBase: undefined, readRoots: [], writeRoots: [] }),
+      addReadRoot: () => {},
+      addWriteRoot: () => {},
+      revokeRoot: () => {},
+    };
+
+    it('injects sessionGrantManager onto the PreToolUse context', async () => {
+      let captured: unknown = 'unset';
+      const registry = createHookRegistryImpl();
+      registry.register('PreToolUse', (ctx) => {
+        if (ctx.event === 'PreToolUse') captured = ctx.grantManager;
+        return {};
+      });
+      const dispatcher = makeDispatcher({ hookRegistry: registry, sessionGrantManager: fakeGM });
+      await dispatcher.execute(makeCall());
+      expect(captured).toBe(fakeGM);
+    });
+
+    it('leaves context.grantManager undefined when no sessionGrantManager is provided', async () => {
+      let captured: unknown = 'unset';
+      const registry = createHookRegistryImpl();
+      registry.register('PreToolUse', (ctx) => {
+        if (ctx.event === 'PreToolUse') captured = ctx.grantManager;
+        return {};
+      });
+      const dispatcher = makeDispatcher({ hookRegistry: registry });
+      await dispatcher.execute(makeCall());
+      expect(captured).toBeUndefined();
+    });
+  });
+
   it('returns isError for unknown tool', async () => {
     const dispatcher = makeDispatcher({
       permissions: { allowedTools: ['echo', 'nonexistent'] },

@@ -491,6 +491,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // Path-containment bypass: bypassPermissions (explicit) + autonomous (AFK)
     // both disable path containment for every per-call context.
     dispatcherOpts.allowAll = pathContainmentBypassed(permissionMode);
+    // This provider IS the session's GrantManager — parity with
+    // AnthropicDirectProvider.buildDispatcher. The dispatcher injects it onto
+    // PreToolUse/PostToolUse contexts so path-scoped hooks resolve THIS
+    // session's live grants (a forked child's own writeRoots), not the
+    // process-global ref pinned to the top-level session (#435/#514).
+    dispatcherOpts.sessionGrantManager = this;
 
     return new SessionToolDispatcher(dispatcherOpts);
   }
