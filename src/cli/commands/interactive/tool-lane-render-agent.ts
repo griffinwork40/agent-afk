@@ -16,6 +16,40 @@ import { getGlyphs, clampLineToTerminal } from './tool-lane-render.js';
 import { renderFlushChildren } from './tool-lane-render-children.js';
 
 /**
+ * Append the concurrency-batch badge (` ∥i/N`) to a NESTING root's
+ * result-summary — the `Done (…)` closer line — when the root ran in a parallel
+ * wave (`agent.result.batchSize > 1`). Returns the summary unchanged (badge
+ * included only when applicable) or `undefined`/empty as-is so no phantom closer
+ * is synthesized (`addResultSummarySynthetic` skips a falsy summary).
+ *
+ * Contract (issue #532 — scrollback NESTING-root badge): the closer, NOT the
+ * head row, is the correct anchor for a NESTING root's badge in committed
+ * scrollback:
+ *  - A NESTING head row (`◉ → agent(…)`) carries NO outcome — the outcome lives
+ *    on the `agentResultSummary` closer, so the closer is the nesting-root analog
+ *    of a flat root's outcome row (where the badge already lives after #520).
+ *  - The head row may be committed EAGERLY by {@link formatAgentHeader} (via
+ *    flushSource's ancestor walk) BEFORE the root completes, when `batchSize` is
+ *    not yet known; that path sets `headerEmitted=true` and routes the completion
+ *    emit to {@link formatAgentChildren} (closer only, no head row). The closer is
+ *    the one row emitted at completion time in BOTH the headerEmitted=false
+ *    ({@link formatAgentSummary}) and headerEmitted=true ({@link formatAgentChildren})
+ *    paths, and `agent.result.batchSize` is available at that point.
+ *  - `batchBadge` returns `''` for singleton batches (batchSize<=1) and when
+ *    `result` is absent, so a sequential dispatch is never badged (parity with
+ *    flat roots / bash).
+ *
+ * The badge is a trailing dim text suffix on the closer's content — it changes
+ * no indent, connector, or spine glyph, so the severed-spine dual-encoding
+ * invariant between formatAgentHeader/formatAgentSummary is untouched.
+ */
+function summaryWithBatchBadge(agent: ToolEntry): string | undefined {
+  return agent.agentResultSummary
+    ? agent.agentResultSummary + batchBadge(agent.result)
+    : agent.agentResultSummary;
+}
+
+/**
  * Render an Agent (subagent) entry plus its tree of children as a scrollback
  * block.
  *
@@ -101,7 +135,9 @@ function formatAgentSummary(
     children,
     childMap,
     homeDir,
-    agent.agentResultSummary,
+    // #532: badge the closer (Done line) when this NESTING root ran in a
+    // parallel wave. See summaryWithBatchBadge for why the closer, not the head.
+    summaryWithBatchBadge(agent),
     getTerminalWidth(),
     externalAncestors,
     g,
@@ -188,7 +224,11 @@ function formatAgentChildren(
     children,
     childMap,
     homeDir,
-    agent.agentResultSummary,
+    // #532: badge the closer (Done line) when this NESTING root ran in a
+    // parallel wave. In this (headerEmitted) path the head row was already
+    // committed eagerly by formatAgentHeader without the badge (batchSize was
+    // unknown then), so the closer is the only completion-time anchor.
+    summaryWithBatchBadge(agent),
     getTerminalWidth(),
     externalAncestors,
     g,
