@@ -11,6 +11,7 @@
 import path from 'path';
 import { realpathSync } from 'fs';
 import type { ToolHandlerContext } from '../types.js';
+import { isReadDenied } from './read-denylist.js';
 
 // Invariant: symlink containment must be resolved at the filesystem level, not
 // lexically. A symlink that lives INSIDE a granted root but points OUTSIDE it
@@ -96,6 +97,24 @@ export function resolveAndContain(
   const abs = path.isAbsolute(inputPath)
     ? inputPath
     : path.resolve(resolveBase ?? process.cwd(), inputPath);
+
+  // Unconditional read-denylist floor: credential/secret paths (~/.ssh,
+  // ~/.afk/config, …) are never readable by a typed file tool — regardless of
+  // confinement, bypass mode, or fork status. This closes the read/write
+  // asymmetry (writes are gated by write-denylist.ts; reads had NO floor) and
+  // backstops the `allowAll` + unconfined fast-paths below, which would
+  // otherwise admit a credential read. Checked here because all four read
+  // handlers funnel through resolveAndContain. Writes keep their own floor in
+  // write-file.ts / edit-file.ts.
+  if (mode === 'read') {
+    const denied = isReadDenied(abs);
+    if (denied.denied) {
+      throw new Error(
+        `Path \`${inputPath}\` is a protected credential/secret path ` +
+          `(read-denylist entry: \`${denied.matched}\`) and cannot be read.`,
+      );
+    }
+  }
 
   // Bypass mode: the session runs in `bypassPermissions`, which disables all
   // path containment. Admit any path (no throw). This is the same switch the

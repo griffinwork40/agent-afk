@@ -54,9 +54,11 @@
  * @module agent/tools/hooks/path-approval-hook
  */
 
+import path from 'path';
 import { elicitationRouter } from '../../elicitation-router.js';
 import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
 import { wouldBeRestricted, realpathSafe } from '../handlers/_cwd-utils.js';
+import { isReadDenied } from '../handlers/read-denylist.js';
 import { appendGrant } from '../../permissions-store.js';
 import type { HookContext, HookDecision, HookHandler } from '../../hooks.js';
 
@@ -203,20 +205,66 @@ async function preToolUseImpl(
   // so a cwd change between Pre and Post (worktree rename, /cwd command)
   // cannot cause the revoke to miss the correct key.
   const cwd = opts.getCwd();
+
+  // Resolve the candidate to an absolute path the SAME way resolveAndContain
+  // will (grants.resolveBase, then cwd) — used for the denylist floor below.
+  // Note `cwd` only anchors a RELATIVE candidate here; it is NOT a confinement
+  // base (see the unconfined short-circuit below).
+  const resolvedAbs = path.isAbsolute(candidate)
+    ? candidate
+    : path.resolve(grants.resolveBase ?? cwd ?? process.cwd(), candidate);
+
+  // (1) Unconditional read-denylist floor. Secret/credential paths (~/.ssh,
+  // ~/.afk/config, …) are blocked outright for reads — never prompted, never
+  // bypassed — for top-level sessions and forks alike. Mirrors the floor in
+  // resolveAndContain (_cwd-utils.ts) so the hook blocks cleanly instead of
+  // prompting-then-letting-the-handler-throw. `~/.afk/state` is intentionally
+  // NOT denied (forks legitimately read skill-preflight/todos/transcripts).
+  if (mode === 'read') {
+    const denied = isReadDenied(resolvedAbs);
+    if (denied.denied) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[path-approval] surface=${opts.surface} tool=${context.toolName} path=${resolvedAbs} outcome=read-denylist`,
+      );
+      return {
+        decision: 'block',
+        reason:
+          `Access denied: ${resolvedAbs} is a protected credential/secret path ` +
+          `(read-denylist entry: ${denied.matched}). This path is never readable — ` +
+          `it holds credentials, not task data; do not retry.`,
+      };
+    }
+  }
+
+  // (2) Bypass mode (bypassPermissions): no containment prompt.
+  if (grants.allowAll === true) return {};
+
+  // (3) Unconfined session: `resolveBase` is deliberately unset — a top-level
+  // `afk`/`afk i` with no worktree, or a fork inheriting that read-open scope.
+  // The file-tool HANDLER (resolveAndContain, _cwd-utils.ts:107-119) bypasses
+  // containment for exactly this case, so the hook MUST agree. The prior
+  // `resolveBase: grants.resolveBase ?? cwd` fabricated a concrete base from
+  // getCwd() (the REPL wires it to `effectiveCwd ?? process.cwd()`,
+  // bootstrap.ts), turning an unconfined session into a confined one whose
+  // readRoots were `[]` — so EVERY typed-file read was "restricted", and forks
+  // (which cannot prompt) auto-denied all of them. Honoring undefined
+  // resolveBase here — matching the handler's own documented invariant — is the
+  // fix for the sub-agent deny-all.
+  if (grants.resolveBase === undefined) return {};
+
+  // (4) Confined session: reproduce the handler's containment verdict. Pass
+  // grants.resolveBase directly (no `?? cwd`); it is defined on this branch.
   const result = wouldBeRestricted(
     candidate,
     {
       cwd,
-      resolveBase: grants.resolveBase ?? cwd,
+      resolveBase: grants.resolveBase,
       readRoots: grants.readRoots,
       writeRoots: grants.writeRoots,
-      ...(grants.allowAll === true ? { allowAll: true } : {}),
     },
     mode,
   );
-  // Bypass mode: `allowAll` makes wouldBeRestricted return not-restricted, so
-  // this returns {} here — no prompt. (Belt-and-suspenders with the explicit
-  // flag pass-through above.)
   if (!result.restricted) return {};
 
   // A forked sub-agent has no human relationship of its own and must not prompt

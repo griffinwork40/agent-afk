@@ -16,8 +16,12 @@
  */
 
 import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { homedir } from 'os';
 import { elicitationRouter } from '../../elicitation-router.js';
 import { createPathApprovalHook } from './path-approval-hook.js';
+import { resolveAndContain } from '../handlers/_cwd-utils.js';
+import { _resetReadDenylistCacheForTests } from '../handlers/read-denylist.js';
+import type { ToolHandlerContext } from '../types.js';
 import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
 import type { PreToolUseContext, PostToolUseContext } from '../../hooks.js';
 import * as permissionsStore from '../../permissions-store.js';
@@ -27,6 +31,14 @@ const BASE = '/tmp/repo';
 function makeMockGrantManager(initial?: {
   readRoots?: string[];
   writeRoots?: string[];
+  /**
+   * Pass `undefined` explicitly to model an UNCONFINED session (a plain
+   * `afk i` with no worktree). Omitting the key entirely defaults to BASE
+   * (a confined session), preserving every pre-existing caller unchanged.
+   */
+  resolveBase?: string | undefined;
+  /** Session in bypassPermissions → getGrants().allowAll === true. */
+  allowAll?: boolean;
 }): GrantManager & {
   _readRoots: string[];
   _writeRoots: string[];
@@ -34,6 +46,8 @@ function makeMockGrantManager(initial?: {
 } {
   const readRoots = initial?.readRoots?.slice() ?? [BASE];
   const writeRoots = initial?.writeRoots?.slice() ?? [BASE];
+  const resolveBase = initial && 'resolveBase' in initial ? initial.resolveBase : BASE;
+  const allowAll = initial?.allowAll === true;
   const events: Array<{ op: string; path: string }> = [];
 
   return {
@@ -57,7 +71,12 @@ function makeMockGrantManager(initial?: {
       events.push({ op: 'revoke', path: p });
     },
     getGrants() {
-      return { resolveBase: BASE, readRoots: readRoots.slice(), writeRoots: writeRoots.slice() };
+      return {
+        resolveBase,
+        readRoots: readRoots.slice(),
+        writeRoots: writeRoots.slice(),
+        ...(allowAll ? { allowAll: true } : {}),
+      };
     },
   };
 }
@@ -703,4 +722,197 @@ describe('createPathApprovalHook — M5: audit log line emitted per decision', (
     expect(logLine).toContain('tool=write_file');
     expect(logLine).toContain('outcome=deny');
   });
+});
+
+describe('createPathApprovalHook — unconfined-session forks (deny-all regression)', () => {
+  // Regression for the sub-agent deny-all bug. A plain `afk i` REPL (no -w, no
+  // resume) is UNCONFINED: getGrants().resolveBase === undefined. But the REPL
+  // wires getCwd to a CONCRETE dir (bootstrap.ts: effectiveCwd ?? process.cwd()).
+  // A no-cwd fork of that session inherits an EMPTY readRoots. The old hook did
+  // `resolveBase: grants.resolveBase ?? cwd` → concrete base + [] roots →
+  // wouldBeRestricted flagged EVERY path (`[] ?? [base]` stays `[]`) → the fork
+  // (which cannot prompt) auto-denied all reads. The HANDLER (resolveAndContain)
+  // always ALLOWED these reads, so the two layers disagreed. These tests pin the
+  // hook to the handler for the unconfined case.
+  const REPO = '/tmp/unconfined-repo';
+
+  it('does NOT block a fork reading a repo file when the parent is unconfined', async () => {
+    const mgr = makeMockGrantManager({ resolveBase: undefined, readRoots: [] });
+    const { preToolUse } = createPathApprovalHook({
+      getGrantManager: () => mgr,
+      getCwd: () => REPO, // REPL fabricates a concrete cwd even when unconfined
+      surface: 'repl',
+    });
+    const decision = await preToolUse({
+      event: 'PreToolUse',
+      toolName: 'read_file',
+      input: { file_path: `${REPO}/package.json` },
+      sessionId: 'child-1',
+      parentSessionId: 'parent-1', // a FORK
+      grantManager: mgr,
+    });
+    expect(decision).toEqual({}); // allowed — the bug would have blocked it
+  });
+
+  it('does NOT block a fork glob/grep of an arbitrary absolute path when unconfined', async () => {
+    const mgr = makeMockGrantManager({ resolveBase: undefined, readRoots: [] });
+    const { preToolUse } = createPathApprovalHook({
+      getGrantManager: () => mgr,
+      getCwd: () => REPO,
+      surface: 'repl',
+    });
+    for (const [tool, input] of [
+      ['glob', { pattern: '**/*.ts', path: '/some/other/tree' }],
+      ['grep', { pattern: 'x', path: '/yet/another/tree' }],
+    ] as const) {
+      const decision = await preToolUse({
+        event: 'PreToolUse',
+        toolName: tool,
+        input,
+        sessionId: 'child-1',
+        parentSessionId: 'parent-1',
+        grantManager: mgr,
+      });
+      expect(decision).toEqual({});
+    }
+  });
+
+  it('does NOT block a fork reading ~/.afk/state (skill-preflight inputs — #554 must not regress)', async () => {
+    const mgr = makeMockGrantManager({ resolveBase: undefined, readRoots: [] });
+    const { preToolUse } = createPathApprovalHook({
+      getGrantManager: () => mgr,
+      getCwd: () => REPO,
+      surface: 'repl',
+    });
+    const decision = await preToolUse({
+      event: 'PreToolUse',
+      toolName: 'read_file',
+      input: { file_path: `${homedir()}/.afk/state/skill-preflight/s/pr-553.diff` },
+      sessionId: 'child-1',
+      parentSessionId: 'parent-1',
+      grantManager: mgr,
+    });
+    expect(decision).toEqual({});
+  });
+});
+
+describe('createPathApprovalHook — read-denylist floor', () => {
+  beforeEach(() => _resetReadDenylistCacheForTests());
+
+  const CREDS = [
+    `${homedir()}/.ssh/id_rsa`,
+    `${homedir()}/.afk/config/afk.env`,
+    `${homedir()}/.aws/credentials`,
+  ];
+
+  for (const p of CREDS) {
+    it(`blocks a fork reading credential path ${p.replace(homedir(), '~')}`, async () => {
+      const mgr = makeMockGrantManager({ resolveBase: undefined, readRoots: [] });
+      const { preToolUse } = createPathApprovalHook({
+        getGrantManager: () => mgr,
+        getCwd: () => '/tmp/x',
+        surface: 'repl',
+      });
+      const decision = await preToolUse({
+        event: 'PreToolUse',
+        toolName: 'read_file',
+        input: { file_path: p },
+        sessionId: 'child-1',
+        parentSessionId: 'parent-1',
+        grantManager: mgr,
+      });
+      expect(decision.decision).toBe('block');
+      expect(decision.reason).toContain('protected credential/secret path');
+    });
+  }
+
+  it('blocks a credential read even in bypass (allowAll) mode', async () => {
+    const mgr = makeMockGrantManager({ allowAll: true });
+    const { preToolUse } = createPathApprovalHook({
+      getGrantManager: () => mgr,
+      getCwd: () => BASE,
+      surface: 'repl',
+    });
+    const decision = await preToolUse(
+      preCtx('read_file', { file_path: `${homedir()}/.ssh/id_rsa` }),
+    );
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('protected credential/secret path');
+  });
+
+  it('does NOT deny ~/.afk/state but DOES deny ~/.afk/config (handler floor)', () => {
+    _resetReadDenylistCacheForTests();
+    const unconfined = { resolveBase: undefined } as unknown as ToolHandlerContext;
+    expect(() =>
+      resolveAndContain(`${homedir()}/.afk/state/x/y.diff`, unconfined, 'read'),
+    ).not.toThrow();
+    expect(() =>
+      resolveAndContain(`${homedir()}/.afk/config/afk.env`, unconfined, 'read'),
+    ).toThrow(/credential\/secret/);
+  });
+});
+
+describe('path-approval hook ↔ handler parity (the divergence six PRs kept re-introducing)', () => {
+  // Invariant: the hook's read verdict must match the handler's resolveAndContain
+  // verdict. The bug was a DIVERGENCE — the hook blocked reads the handler would
+  // allow. This matrix turns "the two layers must agree" into a CI tripwire.
+  beforeEach(() => _resetReadDenylistCacheForTests());
+
+  const CWD = '/tmp/matrix-repo';
+  type Grants = {
+    resolveBase: string | undefined;
+    readRoots: string[];
+    writeRoots: string[];
+    allowAll?: boolean;
+  };
+  const cases: Array<{ name: string; grants: Grants; path: string }> = [
+    { name: 'unconfined + empty roots (the bug), repo file', grants: { resolveBase: undefined, readRoots: [], writeRoots: [] }, path: `${CWD}/pkg.json` },
+    { name: 'unconfined + empty roots, /etc/hosts', grants: { resolveBase: undefined, readRoots: [], writeRoots: [] }, path: '/etc/hosts' },
+    { name: 'confined, path inside root', grants: { resolveBase: CWD, readRoots: [CWD], writeRoots: [CWD] }, path: `${CWD}/src/a.ts` },
+    { name: 'confined, path OUTSIDE root', grants: { resolveBase: CWD, readRoots: [CWD], writeRoots: [CWD] }, path: '/tmp/other/x.ts' },
+    { name: 'bypass mode, out-of-root path', grants: { resolveBase: CWD, readRoots: [CWD], writeRoots: [CWD], allowAll: true }, path: '/var/log/x' },
+  ];
+
+  for (const c of cases) {
+    it(`hook allows iff handler allows — ${c.name}`, async () => {
+      const mgr = makeMockGrantManager({
+        resolveBase: c.grants.resolveBase,
+        readRoots: c.grants.readRoots,
+        writeRoots: c.grants.writeRoots,
+        ...(c.grants.allowAll ? { allowAll: true } : {}),
+      });
+      const { preToolUse } = createPathApprovalHook({
+        getGrantManager: () => mgr,
+        getCwd: () => CWD,
+        surface: 'repl',
+      });
+
+      // Handler verdict: does resolveAndContain throw?
+      const handlerCtx = {
+        resolveBase: c.grants.resolveBase,
+        readRoots: c.grants.readRoots,
+        writeRoots: c.grants.writeRoots,
+        ...(c.grants.allowAll ? { allowAll: true } : {}),
+      } as unknown as ToolHandlerContext;
+      let handlerAllows = true;
+      try {
+        resolveAndContain(c.path, handlerCtx, 'read');
+      } catch {
+        handlerAllows = false;
+      }
+
+      // Hook verdict for a FORK (deterministic: no prompt — allow ⇒ {}, restrict ⇒ block).
+      const decision = await preToolUse({
+        event: 'PreToolUse',
+        toolName: 'read_file',
+        input: { file_path: c.path },
+        sessionId: 'child-1',
+        parentSessionId: 'parent-1',
+        grantManager: mgr,
+      });
+      const hookAllows = Object.keys(decision).length === 0;
+
+      expect(hookAllows).toBe(handlerAllows);
+    });
+  }
 });
