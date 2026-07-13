@@ -5,6 +5,7 @@ import { makeReplElicitationHandler } from '../../elicitation-repl.js';
 import { AgentSession } from '../../../agent/session.js';
 import type { PermissionMode } from '../../../agent/types/sdk-types.js';
 import { unconfiguredSlotError } from '../../../agent/session/model-slots.js';
+import { registerSurfaceSession } from '../../../agent/session/register-surface-session.js';
 import { createDefaultHookRegistry } from '../../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../../agent/hooks/config-loader.js';
 import { MemoryStore, injectHotMemory } from '../../../agent/memory/index.js';
@@ -688,6 +689,19 @@ export async function bootstrapSession(
   const session = buildAgentSession(sharedDeps);
   // Populate sessionRef (declared above deferredParent so the proxy works).
   sessionRef.current = session;
+
+  // Step 7: register this REPL session in the cross-surface session registry so
+  // it appears alongside Telegram/daemon sessions. Best-effort (never throws).
+  // Process-scoped — the in-memory registry dies with the REPL — so no dispose
+  // is wired here (unlike the long-running daemon, which archives on close).
+  registerSurfaceSession(session, {
+    surface: 'cli',
+    model: sharedDeps.model,
+    ...(sharedDeps.cwd !== undefined ? { cwd: sharedDeps.cwd } : {}),
+    ...(resumeTarget?.stored?.sessionId !== undefined
+      ? { sdkSessionId: resumeTarget.stored.sessionId }
+      : {}),
+  });
 
   // Witness layer: wire the subagent-success rollup so the rootManager's
   // foreground forks accumulate token/cost data into the parent session's
