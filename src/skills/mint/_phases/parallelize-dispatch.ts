@@ -17,7 +17,7 @@
 import { getSkill } from '../../index.js';
 import { discoverPluginSkillBodies } from '../../../agent/tools/skill-bridge.js';
 import { SubagentManager } from '../../../agent/subagent.js';
-import { getApiKey, getModel } from '../../../cli/shared-helpers.js';
+import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
 
 export type ParallelizeDispatchResult =
@@ -105,11 +105,6 @@ export async function runParallelizeDispatch(
     // surprise if it ever shells out to inspect the working tree.
     const manager = new SubagentManager({
       parentAbortSignal: parentSession.abortSignal,
-      apiKey: getApiKey(),
-      // `getApiKey()` keys off `getModel()` (AFK_MODEL), so the parent key's
-      // provider is `providerForModel(getModel())` — the source of truth for
-      // the fork-time credential fallback (see SubagentManager.parentProvider).
-      parentModel: getModel(),
       ...(parentSession.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
       ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
     });
@@ -131,6 +126,12 @@ export async function runParallelizeDispatch(
           model: defaultSubagentModel,
           systemPrompt: skill.body,
           env: { PLUGIN_ROOT: skill.pluginPath },
+          // Resolve the child's credential off ITS OWN model, not the ambient
+          // top-level model — matches the other 7 mint phase forks (#431/#378).
+          // Fixes #444: this was the last site still keying off getApiKey()/
+          // AFK_MODEL, which left the fork credential-less under a cross-provider
+          // operator and silently degraded parallelize to single-lane.
+          apiKey: resolveCredentialForModel(defaultSubagentModel),
         },
         idPrefix: 'mint-parallelize',
         agentType: 'mint-parallelize',
