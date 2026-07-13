@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.38.0] - 2026-07-13
+
+### Added
+- main-session Stop injectContext + terminal-state gate (#237) (#557) (adb5c1f)
+
 ## [5.37.7] - 2026-07-13
 
 ### Changed
