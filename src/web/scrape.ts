@@ -132,6 +132,12 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
       }
       // HTML or unknown content-type → extraction pipeline.
       fetched = await safeExtract(body, fetchedUrl);
+      // Extraction is an async boundary (lazy jsdom/Readability/Turndown import
+      // on first call, then parse) that does NOT observe the signal. Re-check
+      // after it resolves so a cancel/timeout that fired during the await is
+      // honored — the catch below turns this into a terminal abort instead of
+      // returning a stale successful result.
+      if (opts.signal.aborted) throw opts.signal.reason ?? new Error('aborted');
     }
   } catch (err) {
     // Abort is terminal — propagate so the handler reports cancellation.
@@ -159,6 +165,10 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
   try {
     const rendered = await renderFn(url, { timeoutMs: opts.timeoutMs, signal: opts.signal });
     const renderedContent = await safeExtract(rendered.html, rendered.finalUrl);
+    // Same async-boundary abort re-check as the fetch path above: extraction
+    // does not observe the signal, so honor a cancel/timeout that landed during
+    // it. The catch below re-throws when aborted rather than degrading.
+    if (opts.signal.aborted) throw opts.signal.reason ?? new Error('aborted');
     // Prefer the render result when it has at least as much text as the fetch.
     if (fetched === null || renderedContent.textLength >= fetched.textLength) {
       return {
