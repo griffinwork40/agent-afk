@@ -37,6 +37,7 @@ import { getCurrentSink } from './_lib/skill-sink-channel.js';
 import { touchWorktreeOccupancy } from './worktree-occupancy.js';
 import { resolveWorktreeMainRoot } from './worktree-read-root.js';
 import { computeInheritedReadRoots, type ReadScopeInputs } from './subagent-read-scope.js';
+import { getAfkStateDir } from '../paths.js';
 import { buildPhaseRestrictedProvider, type PhaseRole } from './tools/nesting.js';
 import { applyManagerApiKeyFallback } from './tools/child-credential.js';
 import { providerForModel, type BundledProviderName } from './providers/index.js';
@@ -570,20 +571,41 @@ export class SubagentManager {
       // An UNCONFINED parent yields a read-open child regardless of the worktree
       // main root, so skip the (cached) git resolution in that case — the common
       // top-level `afk` fan-out never pays for it. For a CONFINED parent the main
-      // root is best-effort; on git failure the parentCwd/parentReadRoots union
-      // still supplies the repo root, so the #441 silent-fail is no longer
-      // load-bearing.
+      // root is best-effort; on git failure we ALSO try the parent cwd (Gap B
+      // below) so a confined *worktree* parent's fork still reaches the main
+      // checkout + siblings, and the child is additionally granted the AFK state
+      // dir (Gap A below) so ~/.afk/state reads are not hard-denied.
       const parentUnconfined =
         this.parentReadRoots === undefined && this.parentCwd === undefined;
-      const worktreeMainRoot =
-        !parentUnconfined && effectiveChildCwd !== undefined
-          ? await this.resolveMainRootForCwd(effectiveChildCwd)
-          : undefined;
+      let worktreeMainRoot: string | undefined;
+      if (!parentUnconfined && effectiveChildCwd !== undefined) {
+        worktreeMainRoot = await this.resolveMainRootForCwd(effectiveChildCwd);
+        // Gap B: when the child cwd yields no distinct main root (git failure, or
+        // the child cwd is not itself a linked worktree), fall back to the PARENT
+        // cwd. A confined parent is frequently ITSELF a linked worktree (`afk -w`);
+        // resolving from it recovers the repo root, which lexically covers the main
+        // checkout AND every sibling `.afk-worktrees/*` the fork would otherwise be
+        // hard-denied. Best-effort + cached; strictly additive (only ever adds a
+        // read root when one is found).
+        if (
+          worktreeMainRoot === undefined &&
+          this.parentCwd !== undefined &&
+          this.parentCwd !== effectiveChildCwd
+        ) {
+          worktreeMainRoot = await this.resolveMainRootForCwd(this.parentCwd);
+        }
+      }
       inheritedReadRoots = computeInheritedReadRoots({
         parentReadRoots: this.parentReadRoots,
         parentCwd: this.parentCwd,
         childCwd: effectiveChildCwd,
         worktreeMainRoot,
+        // Gap A: a CONFINED fork's cwd+repo roots do not lexically contain
+        // ~/.afk/state, so skill-preflight inputs, todos, transcripts, and
+        // session ledgers were hard-denied (forks cannot prompt). Grant the STATE
+        // dir only — NEVER ~/.afk/config (credentials). Unconfined forks are
+        // already read-open, so this is a confined-parent-only grant.
+        ...(parentUnconfined ? {} : { afkStateRoot: getAfkStateDir() }),
       });
     }
 

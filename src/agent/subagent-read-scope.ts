@@ -120,6 +120,21 @@ export interface InheritedReadRootsArgs {
    * and containment is lexical — every sibling worktree too.
    */
   worktreeMainRoot?: string | undefined;
+  /**
+   * The AFK state directory (`~/.afk/state`, or the `$AFK_STATE_DIR` override).
+   * Folded into a CONFINED fork's read union so it can reach the runtime-state
+   * paths that pervade its prompt/context — skill-preflight staged inputs (e.g.
+   * a PR diff a `/review` fan-out hands its children), todos, transcripts, and
+   * per-session ledgers — none of which a worktree/confined parent's cwd+repo
+   * roots lexically contain, so every such read was hard-denied (forks cannot
+   * prompt) until a wall-clock timeout.
+   *
+   * Pass the STATE dir ONLY — NEVER `~/.afk/config`, which holds `afk.env`
+   * credentials: read scope must not widen to secrets. Ignored by the unconfined
+   * branch (already read-open). `undefined` adds nothing, so a caller that omits
+   * it gets byte-for-byte the pre-fix behaviour.
+   */
+  afkStateRoot?: string | undefined;
 }
 
 /**
@@ -131,16 +146,17 @@ export interface InheritedReadRootsArgs {
  *    the child inherits read-open — `[readOpenRootFor(childCwd)]`. Writes stay
  *    confined to the child's own cwd/writeRoots.
  *  - Parent CONFINED (explicit `parentReadRoots`, or a defined `parentCwd`):
- *    the child gets the UNION of the parent's roots, its own cwd, and the
- *    worktree main root — never narrower than the parent (child read scope ⊇
- *    parent read scope), never write-relevant.
+ *    the child gets the UNION of the parent's roots, its own cwd, the worktree
+ *    main root, and the AFK state dir ({@link InheritedReadRootsArgs.afkStateRoot})
+ *    — never narrower than the parent (child read scope ⊇ parent read scope),
+ *    never write-relevant.
  *
  * Returns a de-duplicated, resolved array. `undefined` only when there is
  * genuinely nothing to grant (no child cwd, no parent scope) — the caller then
  * leaves the provider default untouched.
  */
 export function computeInheritedReadRoots(args: InheritedReadRootsArgs): string[] | undefined {
-  const { parentReadRoots, parentCwd, childCwd, worktreeMainRoot } = args;
+  const { parentReadRoots, parentCwd, childCwd, worktreeMainRoot, afkStateRoot } = args;
   const resolvedChildCwd =
     childCwd !== undefined && childCwd !== '' ? path.resolve(childCwd) : undefined;
 
@@ -165,6 +181,14 @@ export function computeInheritedReadRoots(args: InheritedReadRootsArgs): string[
   }
   if (worktreeMainRoot !== undefined && worktreeMainRoot !== '') {
     roots.add(path.resolve(worktreeMainRoot));
+  }
+  // The AFK state dir (~/.afk/state) — runtime state a confined fork's cwd+repo
+  // roots do not lexically contain (skill-preflight inputs, todos, transcripts,
+  // session ledgers). Callers pass the state dir only, never ~/.afk/config
+  // (credentials). Added AFTER the cwd/parent/worktree roots so the size checks
+  // below correctly see it as a broadening grant.
+  if (afkStateRoot !== undefined && afkStateRoot !== '') {
+    roots.add(path.resolve(afkStateRoot));
   }
 
   // Nothing to grant, OR the only root is the child's own cwd (which equals the

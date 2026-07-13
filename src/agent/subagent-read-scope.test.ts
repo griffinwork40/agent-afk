@@ -128,6 +128,77 @@ describe('computeInheritedReadRoots', () => {
       expect(roots).toBeUndefined();
     });
   });
+
+  describe('afkStateRoot grant (confined forks reach ~/.afk/state — Gap A)', () => {
+    const STATE = '/Users/me/.afk/state';
+
+    it('folds the AFK state dir into a confined worktree fork union', () => {
+      const roots = computeInheritedReadRoots({
+        parentReadRoots: undefined,
+        parentCwd: '/repo/.afk-worktrees/wt',
+        childCwd: '/repo/.afk-worktrees/wt',
+        worktreeMainRoot: '/repo',
+        afkStateRoot: STATE,
+      })!;
+      expect(new Set(roots)).toEqual(
+        new Set(['/repo/.afk-worktrees/wt', '/repo', STATE]),
+      );
+      // A skill-preflight staged input under the state dir is now admitted
+      // (containment is lexical: path.relative does not escape the root).
+      expect(
+        path.relative(STATE, `${STATE}/skill-preflight/pr-548.diff`).startsWith('..'),
+      ).toBe(false);
+    });
+
+    it('grants [cwd, state] even with no worktree main root (state lifts the fork out of the [cwd] default)', () => {
+      const roots = computeInheritedReadRoots({
+        parentReadRoots: undefined,
+        parentCwd: '/plain/repo',
+        childCwd: '/plain/repo',
+        worktreeMainRoot: undefined,
+        afkStateRoot: STATE,
+      });
+      // Without afkStateRoot this is the "only root is cwd" case → undefined.
+      expect(new Set(roots)).toEqual(new Set(['/plain/repo', STATE]));
+    });
+
+    it('is ignored for an unconfined (read-open) parent — read-open already covers state', () => {
+      const roots = computeInheritedReadRoots({
+        parentReadRoots: undefined,
+        parentCwd: undefined,
+        childCwd: '/repo/.afk-worktrees/wt',
+        afkStateRoot: STATE,
+      });
+      expect(roots).toEqual([FS_ROOT]); // read-open, not [.., STATE]
+    });
+
+    it('omitting afkStateRoot preserves the pre-fix behaviour (back-compat)', () => {
+      const roots = computeInheritedReadRoots({
+        parentReadRoots: undefined,
+        parentCwd: '/repo',
+        childCwd: '/repo',
+        worktreeMainRoot: undefined,
+      });
+      expect(roots).toBeUndefined();
+    });
+
+    it('never derives ~/.afk/config — only the exact state root passed', () => {
+      const roots = computeInheritedReadRoots({
+        parentReadRoots: undefined,
+        parentCwd: '/repo/.afk-worktrees/wt',
+        childCwd: '/repo/.afk-worktrees/wt',
+        worktreeMainRoot: '/repo',
+        afkStateRoot: STATE,
+      })!;
+      const CONFIG = '/Users/me/.afk/config';
+      // The credential dir is a sibling of state; it must never be granted, and
+      // no granted root may lexically admit a config path.
+      expect(roots.some((r) => path.resolve(r) === CONFIG)).toBe(false);
+      expect(
+        roots.every((r) => path.relative(r, `${CONFIG}/afk.env`).startsWith('..')),
+      ).toBe(true);
+    });
+  });
 });
 
 // #547: the choke point skill / inline-skill / compose managers use to derive
