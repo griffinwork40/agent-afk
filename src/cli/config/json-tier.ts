@@ -16,7 +16,7 @@ import {
 import { getJsonConfigPath, getLegacyJsonConfigPath } from '../../paths.js';
 import { validateBranchPrefix, validateBaseRef } from '../commands/interactive/worktree.js';
 import type { RawHooksConfig } from '../../agent/hooks/config-loader.js';
-import { parseImportFromConfig } from '../../config/import-sources.js';
+import { importFromConfigPaths, parseImportFromConfig } from '../../config/import-sources.js';
 import type { AutoRoutingConfig, CliConfig, ConfigFileSchema } from './types.js';
 
 /**
@@ -76,6 +76,16 @@ export function loadJsonConfig(): {
     getJsonConfigPath(),
     getLegacyJsonConfigPath(),
   ];
+
+  // Invariant: a parse failure in an earlier tier must NOT permanently
+  // memoize the fallen-through result (#501-F2). If a malformed
+  // `<cwd>/afk.config.json` falls through to the user-global file and we
+  // cached THAT, a later fix to the cwd file would stay invisible until
+  // `_resetConfigCache()`/process restart — which bites long-lived
+  // daemon/telegram processes (one-shot CLI self-heals on the next spawn).
+  // So when any file in the walk fails to parse, we return the resolved
+  // result transiently (uncached) and re-read disk on the next call.
+  let sawParseError = false;
 
   for (const configPath of configPaths) {
     if (existsSync(configPath)) {
@@ -208,13 +218,19 @@ export function loadJsonConfig(): {
         // project-local afk.config.json must NOT be able to set it, so honor it
         // only from the user-global / legacy config, never `<cwd>/afk.config.json`.
         //
+        // Gate via an ALLOWLIST of the user-global + legacy paths
+        // (`importFromConfigPaths()`, the same set the real gate reads) rather
+        // than a cwd denylist. An allowlist fails closed: any path that isn't
+        // provably one of those two files — including a symlinked or case-variant
+        // `<cwd>/afk.config.json` — is denied, closing the exact-string-compare
+        // gap the old `configPath !== join(cwd, ...)` check left open (#501-F5).
+        //
         // Note: `config.importFrom` is exposed on `CliConfig` for completeness and
         // inspection (e.g. `--dump-prompt` tooling), but runtime asset scanners
         // deliberately call `loadImportFromConfig()` directly — the agent layer
         // cannot import from `src/cli/` without a circular-dependency violation.
-        // The project-local exclusion guard below is intentional defense-in-depth
-        // that mirrors `loadImportFromConfig`'s own user-global-only path restriction.
-        if (configPath !== join(process.cwd(), 'afk.config.json')) {
+        // This guard is intentional defense-in-depth mirroring that real gate.
+        if (importFromConfigPaths().includes(configPath)) {
           const importFrom = parseImportFromConfig(json.importFrom);
           if (importFrom !== undefined) {
             config.importFrom = importFrom;
@@ -268,14 +284,20 @@ export function loadJsonConfig(): {
           }
         }
 
-        jsonConfigCache = { config, sourcePath: configPath, modelsPartial };
-        return jsonConfigCache;
+        const result = { config, sourcePath: configPath, modelsPartial };
+        // Only memoize when the walk was clean — see the sawParseError
+        // invariant above (a fall-through past a malformed earlier tier is
+        // returned but not cached, so a later fix is picked up on re-read).
+        if (!sawParseError) jsonConfigCache = result;
+        return result;
       } catch (error) {
         console.error(`Warning: Failed to parse ${configPath}:`, error);
+        sawParseError = true;
       }
     }
   }
 
-  jsonConfigCache = { config: {}, sourcePath: undefined, modelsPartial: {} };
-  return jsonConfigCache;
+  const emptyResult = { config: {}, sourcePath: undefined, modelsPartial: {} };
+  if (!sawParseError) jsonConfigCache = emptyResult;
+  return emptyResult;
 }
