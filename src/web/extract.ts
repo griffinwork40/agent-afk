@@ -17,15 +17,22 @@
  *   4. If Readability finds no article (landing pages, apps, sparse markup),
  *      fall back to converting the whole `<body>` and flag `usedFallback`.
  *
- * Pure module: no network, no browser, no filesystem. Fully unit-testable on
- * HTML string fixtures.
+ * jsdom, Readability, and Turndown are only ever needed together (there's no
+ * caller that wants one without the other two), and jsdom alone costs
+ * ~350-450ms to import — about 30% of `afk`'s cold-start (see #581) — even
+ * though extraction only runs when `web_scrape` is actually invoked. All
+ * three are deferred behind one lazy `import()` on first call instead of
+ * loaded eagerly for every `afk` invocation, mirroring the
+ * `getBrowserProvider()` lazy-load + coalesce pattern in
+ * `src/browser/registry.ts`.
+ *
+ * Otherwise pure: no network, no browser, no filesystem. Fully unit-testable
+ * on HTML string fixtures — only the first call in a process pays the import
+ * cost.
  *
  * @module web/extract
  */
 
-import { JSDOM } from 'jsdom';
-import { Readability } from '@mozilla/readability';
-import TurndownService from 'turndown';
 import type { ExtractedContent } from './types.js';
 
 /**
@@ -35,20 +42,51 @@ import type { ExtractedContent } from './types.js';
  */
 export const THIN_CONTENT_CHARS = 200;
 
-// Invariant: one Turndown instance is safe to reuse across calls — it holds no
-// per-document state between `.turndown()` calls. Configured for ATX headings
-// (`# h1`) and fenced code blocks, which render more cleanly in chat surfaces
-// than the setext/indented defaults.
-const turndown = new TurndownService({
-  headingStyle: 'atx',
-  codeBlockStyle: 'fenced',
-  bulletListMarker: '-',
-});
+// ---------------------------------------------------------------------------
+// Lazy-loaded extraction dependencies
+// ---------------------------------------------------------------------------
 
-// Drop elements that never carry readable content. Readability removes most of
-// these already, but the fallback path (whole-body conversion) needs its own
-// guard so we don't emit script bodies or style sheets as markdown.
-turndown.remove(['script', 'style', 'noscript', 'iframe']);
+/**
+ * Imports jsdom, Readability, and Turndown, and constructs the shared
+ * Turndown instance. Not called directly by extraction logic — go through
+ * `getExtractDeps()`, which caches this promise at module scope.
+ */
+async function importExtractDeps() {
+  const [{ JSDOM }, { Readability }, { default: TurndownService }] = await Promise.all([
+    import('jsdom'),
+    import('@mozilla/readability'),
+    import('turndown'),
+  ]);
+
+  // Invariant: one Turndown instance is safe to reuse across calls — it holds
+  // no per-document state between `.turndown()` calls. Configured for ATX
+  // headings (`# h1`) and fenced code blocks, which render more cleanly in
+  // chat surfaces than the setext/indented defaults.
+  const turndown = new TurndownService({
+    headingStyle: 'atx',
+    codeBlockStyle: 'fenced',
+    bulletListMarker: '-',
+  });
+  // Drop elements that never carry readable content. Readability removes most
+  // of these already, but the fallback path (whole-body conversion) needs its
+  // own guard so we don't emit script bodies or style sheets as markdown.
+  turndown.remove(['script', 'style', 'noscript', 'iframe']);
+
+  return { JSDOM, Readability, turndown };
+}
+
+let depsPromise: ReturnType<typeof importExtractDeps> | null = null;
+
+// Invariant: coalesce concurrent first-call imports so multiple concurrent
+// extractions in flight before the first resolves share one import() + one
+// TurndownService construction rather than racing (mirrors the `constructing`
+// coalescing in src/browser/registry.ts).
+function getExtractDeps(): ReturnType<typeof importExtractDeps> {
+  if (depsPromise === null) {
+    depsPromise = importExtractDeps();
+  }
+  return depsPromise;
+}
 
 /** Collapse 3+ blank lines to a single blank line and trim edges. */
 function tidyMarkdown(md: string): string {
@@ -70,9 +108,12 @@ function textLengthOf(node: { textContent: string | null } | null | undefined): 
  * @returns     Title, markdown, extracted-text length, and a fallback flag.
  *              Never throws for well-formed HTML; a jsdom parse failure on
  *              pathological input propagates to the caller, which degrades
- *              gracefully.
+ *              gracefully. The first call in a process also pays the
+ *              one-time cost of importing jsdom/Readability/Turndown.
  */
-export function extractReadableMarkdown(html: string, url: string): ExtractedContent {
+export async function extractReadableMarkdown(html: string, url: string): Promise<ExtractedContent> {
+  const { JSDOM, Readability, turndown } = await getExtractDeps();
+
   const dom = new JSDOM(html, { url });
   const doc = dom.window.document;
   const docTitle = (doc.title ?? '').trim();
@@ -80,14 +121,15 @@ export function extractReadableMarkdown(html: string, url: string): ExtractedCon
   // Contract: Readability MUTATES the document it is given (it strips nodes
   // in place). We clone first so the fallback path below still has the
   // original body to convert when Readability returns null.
-  let article: ReturnType<Readability['parse']> = null;
-  try {
-    const clone = doc.cloneNode(true) as Document;
-    article = new Readability(clone).parse();
-  } catch {
-    // Readability can throw on degenerate DOMs — fall through to whole-body.
-    article = null;
-  }
+  const article = (() => {
+    try {
+      const clone = doc.cloneNode(true) as Document;
+      return new Readability(clone).parse();
+    } catch {
+      // Readability can throw on degenerate DOMs — fall through to whole-body.
+      return null;
+    }
+  })();
 
   if (article && typeof article.content === 'string' && article.content.trim().length > 0) {
     const markdown = tidyMarkdown(turndown.turndown(article.content));
