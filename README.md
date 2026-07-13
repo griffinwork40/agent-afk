@@ -58,12 +58,11 @@ afk chat "hello"
 - **Background subagent jobs** — dispatch a subagent with `mode:'background'`; results auto-deliver into the model's context when they finish. `/bgsub` lists running and completed jobs, `/bgsub:join <id>` replays a result manually.
 
 ## Four surfaces, one session manager
-
 | Command | Surface |
 |---|---|
 | `afk chat "..."` | One-shot (fire & forget) turn — pipe-friendly, scripts well |
 | `afk` (alias of `afk interactive`) | REPL with slash commands, streaming, plan mode, image paste |
-| `afk daemon` | Long-running headless agent, cron-friendly |
+| `afk daemon` | Long-running headless agent, cron-friendly. For persistence across reboot and crash, use `/service-setup` (launchd on macOS, systemd `--user` on Linux) instead of running in a bare tmux pane. |
 | `afk telegram start` | Telegram bot — same tools, same memory, on your phone |
 
 ## Configuration
