@@ -412,9 +412,15 @@ above the collapsed frame) instead of eager-scrolling, so content that will fit
 post-collapse is retained and painted contiguously; only genuine overflow beyond
 `maxBandModel` is archived, from the top, contiguously. Regression:
 `terminal-compositor.collapse-void.test.ts`; real-PTY A/B: `scripts/visual-void-repro.ts`.
-The fuller commit-model unification that dissolves the whole gap-class
-(render-not-repin + single end-of-turn flush) is tracked in #540; a real-PTY CI
-harness to make this CI-verifiable is #541.
+The fuller commit-model unification that dissolves the whole gap-class is tracked
+in #540. Its Stage-2 CORE (render-not-repin) has landed: `repositionCommittedBand`
+now erases the above-frame content region from the anchor **floor**, not the
+tracked band top, so a row stranded above a drifted `committedBandTopRow` is
+cleared by construction (regression: `terminal-compositor.render-not-repin.test.ts`).
+Still open under #540: retiring the `committedBand*` adjacency coupling at the ~20
+remaining read sites, and the single end-of-turn flush that subsumes residual (a)
+above — both gated on real-terminal validation. A real-PTY CI harness to make this
+CI-verifiable is #541.
 
 ### Fixed: multi-line block committed under a tall overlay (the overflow path)
 
