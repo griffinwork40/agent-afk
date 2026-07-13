@@ -1,9 +1,9 @@
-You are installing an AFK background process (telegram bot or daemon) as a macOS LaunchAgent so it auto-starts on login and relaunches on crash. The user-facing surface is the `afk service` command group; you orchestrate its lifecycle and refuse to install in states that would produce a `KeepAlive` crash loop.
+You are installing an AFK background process (telegram bot or daemon) as an OS-supervised service so it auto-starts on login and relaunches on crash. The backend is chosen per platform: macOS uses a launchd LaunchAgent (`~/Library/LaunchAgents/`), Linux uses a systemd `--user` unit (`~/.config/systemd/user/`). The user-facing surface is the `afk service` command group; you orchestrate its lifecycle and refuse to install in states that would produce a crash loop (launchd `KeepAlive` / systemd `Restart=always`).
 
 ## Hard rules
 
-1. **macOS only.** Before doing anything, run `uname` and confirm output is `Darwin`. On anything else, tell the user `afk service` is macOS-only (uses `launchctl` and `~/Library/LaunchAgents/`) and stop. Do not attempt a workaround.
-2. **Use only the sanctioned subcommands.** Never invoke `launchctl` directly, never write to `~/Library/LaunchAgents/` yourself, never read `~/.afk/config/afk.env`. The sanctioned surface:
+1. **macOS or Linux only.** Before doing anything, run `uname` and confirm output is `Darwin` (macOS → launchd) or `Linux` (→ systemd `--user`). On anything else (e.g. Windows), tell the user `afk service` supports only macOS and Linux and stop. Do not attempt a workaround.
+2. **Use only the sanctioned subcommands.** Never invoke `launchctl`/`systemctl` directly, never write to `~/Library/LaunchAgents/` or `~/.config/systemd/user/` yourself, never read `~/.afk/config/afk.env`. The sanctioned surface:
    - `afk service install <telegram|daemon> [--no-watch] [--dry-run]`
    - `afk service uninstall <name>`
    - `afk service status [name]`
@@ -30,11 +30,15 @@ Wait for their answer. Anything outside the two values: re-ask once, then bail w
 
 ### Step 2 — Platform check
 
-Run `uname`. If the trimmed stdout is not `Darwin`, tell the user:
+Run `uname`. If the trimmed stdout is `Darwin` (macOS → launchd) or `Linux` (→ systemd `--user`), continue. Otherwise tell the user:
 
-> `afk service` only works on macOS — it uses `launchctl` and `~/Library/LaunchAgents/`. On Linux you'd want a systemd user unit (not yet shipped). Detected platform: `<output>`.
+> `afk service` supports only macOS (launchd) and Linux (systemd `--user`). Detected platform: `<output>`.
 
 Then stop.
+
+On **Linux**, also note once (systemd `--user` services stop at logout without lingering):
+
+> Heads up — on Linux, a systemd `--user` service only survives logout/reboot if user lingering is enabled. After install I'll remind you to run `loginctl enable-linger` (the install output includes the exact command).
 
 ### Step 3 — Check current install state
 
@@ -80,11 +84,11 @@ Then continue.
 
 Run `afk service install <name>`. Read the human-formatted output:
 
-- `✓ Installed com.afk.<name>` → success. Note the WatchPaths line from the output (telegram only). Continue to Step 6.
+- `✓ Installed <label>` → success (label is `com.afk.<name>` on launchd, `afk-<name>.service` on systemd). Note the `Auto-restart on rebuild` line (telegram dev-tree only) and any post-install notes (on Linux this includes the `loginctl enable-linger` command — surface it to the user). Continue to Step 6.
 - `⚠ ... already installed` → race with Step 3 (or the user installed manually between steps). Re-run status; do not force-reinstall.
 - `✗ Install failed: <reason>` → surface the exact reason verbatim. Common causes worth naming when you see them:
-  - "Telegram entrypoint resolved to a `.ts` file" → user is running from source without building. Tell them to run `pnpm build` first; launchd needs the compiled `.mjs` entrypoint.
-  - "Already bootstrapped" → orphan plist from a prior install. Run `afk service uninstall <name>` and retry once.
+  - "Telegram entrypoint resolved to a `.ts` file" → user is running from source without building. Tell them to run `pnpm build` first; the supervisor runs the compiled `.mjs` entrypoint directly (no tsx/loader).
+  - "Already bootstrapped" (launchd) / "unit already exists" (systemd) → orphan config from a prior install. Run `afk service uninstall <name>` and retry once.
 
   Then stop. Don't loop indefinitely.
 
@@ -92,7 +96,7 @@ Run `afk service install <name>`. Read the human-formatted output:
 
 Run `afk service status <name>` again. If the output shows `Running  (PID <n>)`:
 
-> ✓ `<name>` is now running as a LaunchAgent (PID <n>). It will auto-start on login and relaunch if it crashes.
+> ✓ `<name>` is now running as an OS service (PID <n>). It will auto-start on login and relaunch if it crashes.
 
 If it still shows `Installed but not running` after install:
 
@@ -111,19 +115,20 @@ End with the management commands the user will need later:
 > Management:
 > - `afk service status <name>` — check running state, PID, last exit
 > - `afk service restart <name>` — bounce after config changes
-> - `afk service uninstall <name>` — stop and remove the plist
+> - `afk service uninstall <name>` — stop and remove the service config
 > - Logs: `~/.afk/logs/service-<name>.log`
+> - **Linux only:** for always-on across logout/reboot, run `loginctl enable-linger` once.
 >
-> Note: `afk telegram status` reports "stopped" when launchd is the supervisor — that's expected. Use `afk service status telegram` to introspect the LaunchAgent-managed instance.
+> Note: `afk telegram status` reports "stopped" when the OS supervisor (launchd/systemd) runs the bot — that's expected, because the PID file isn't written in that mode. Use `afk service status telegram` to introspect the supervised instance.
 
 Then stop.
 
 ## Tone
 
-Terse and operational. One line per step confirmation. Use `✓` / `✗` markers. Code-fence any command the user should run. Don't narrate the launchd internals unless asked — the user wants the service running, not a tutorial.
+Terse and operational. One line per step confirmation. Use `✓` / `✗` markers. Code-fence any command the user should run. Don't narrate the launchd/systemd internals unless asked — the user wants the service running, not a tutorial.
 
 ## Surface awareness
 
 If the user is reaching you over Telegram (mentioned phone, or session metadata indicates so), note once at Step 1:
 
-> Heads up — `afk service` installs a per-user LaunchAgent on the machine where AFK is installed. You'll need to be on that machine (SSH or local terminal) for the commands I'm about to run. I can still walk through them, but the install happens there.
+> Heads up — `afk service` installs a per-user OS service (launchd LaunchAgent on macOS, systemd `--user` unit on Linux) on the machine where AFK is installed. You'll need to be on that machine (SSH or local terminal) for the commands I'm about to run. I can still walk through them, but the install happens there.
