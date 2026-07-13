@@ -316,9 +316,13 @@ describe('SubagentManager', () => {
       );
     });
 
-    it('lets an OpenAI-shaped parent key flow to an OpenAI-routed child (same-provider inheritance)', async () => {
+    it('lets an OpenAI-shaped parent key flow to an OpenAI-routed child when parentModel marks the parent OpenAI (same-provider inheritance)', async () => {
+      // parentModel is what every production manager supplies (chat/bootstrap/
+      // telegram/compose all pass it): it makes parentProvider exact so the
+      // same-provider inheritance is allowed. Without it, inheritance fails
+      // closed — see the #438 test below.
       shared.lastConfig = null;
-      const mgr = new SubagentManager({ apiKey: 'sk-proj-PARENT' });
+      const mgr = new SubagentManager({ apiKey: 'sk-proj-PARENT', parentModel: 'gpt-5.5' });
       await mgr.forkSubagent({
         parent: { sessionId: 'p' },
         config: { model: 'gpt-5.5' },
@@ -328,6 +332,32 @@ describe('SubagentManager', () => {
       expect(shared.lastConfig).toEqual(
         expect.objectContaining({ apiKey: 'sk-proj-PARENT' }),
       );
+    });
+
+    it('fails closed when an OpenAI-shaped parent key has no parentModel — no inherit in either direction (#438)', async () => {
+      // Without parentModel the manager cannot prove the parent's provider, so a
+      // non-sk-ant key is never inherited: this closes the reverse
+      // (openai→anthropic) leak AND refuses the same-provider case until
+      // parentModel is supplied. Both children below must be credential-less.
+      shared.lastConfig = null;
+      const mgrOpenAiChild = new SubagentManager({ apiKey: 'sk-proj-PARENT' });
+      await mgrOpenAiChild.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'gpt-5.5' },
+        idPrefix: 'inherit-check',
+        agentType: 'inherit-check',
+      });
+      expect((shared.lastConfig as Record<string, unknown>)['apiKey']).toBeUndefined();
+
+      shared.lastConfig = null;
+      const mgrAnthropicChild = new SubagentManager({ apiKey: 'sk-proj-PARENT' });
+      await mgrAnthropicChild.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet' },
+        idPrefix: 'inherit-check',
+        agentType: 'inherit-check',
+      });
+      expect((shared.lastConfig as Record<string, unknown>)['apiKey']).toBeUndefined();
     });
 
     it('still inherits the Anthropic parent apiKey + baseUrl for an Anthropic-routed child', async () => {

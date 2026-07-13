@@ -163,17 +163,21 @@ describe('applyManagerApiKeyFallback', () => {
     ).toBe(ANTHROPIC_OAUTH);
   });
 
-  it('lets an OpenAI-shaped parent credential flow to an OpenAI-routed child (same-provider inheritance)', () => {
+  it('fails closed for an OpenAI-shaped parent key with no parentProvider — even to an OpenAI child (#438)', () => {
+    // Without parentProvider the parent's provider is unknowable (a bare/sk-proj
+    // key could be OpenAI OR a local Anthropic-shim), so inheritance is refused
+    // even though the child here is OpenAI. Callers enable same-provider
+    // inheritance by supplying parentModel — see the provider-identity gate below.
     expect(
       applyManagerApiKeyFallback({
         childModel: OPENAI_CHILD,
         configApiKey: undefined,
         parentApiKey: OPENAI_KEY,
       }),
-    ).toBe(OPENAI_KEY);
+    ).toBeUndefined();
   });
 
-  it('lets the parent credential flow to an Anthropic-routed child (pre-existing inheritance path)', () => {
+  it('lets an sk-ant parent credential flow to an Anthropic-routed child (forward key-shape path, no parentProvider)', () => {
     expect(
       applyManagerApiKeyFallback({
         childModel: ANTHROPIC_CHILD,
@@ -267,5 +271,71 @@ describe('applyManagerApiKeyFallback — provider-identity gate (parentProvider)
         parentProvider: 'openai-compatible',
       }),
     ).toBe(ANTHROPIC_API);
+  });
+});
+
+// Fail-closed contract (#438): when the manager is built WITHOUT parentModel,
+// `parentProvider` is undefined. For a non-`sk-ant` parent key the provider is
+// then unknowable, so inheritance is refused outright — this makes the
+// reverse-direction (OpenAI parent key → Anthropic child) leak guard hold even
+// for callers that never supplied parentModel. The `sk-ant-` forward path is
+// deliberately retained.
+describe('applyManagerApiKeyFallback — fail-closed on unknown provider (#438)', () => {
+  // A local-Anthropic-shim key: not sk-ant-shaped, so with no parentProvider its
+  // provider cannot be proven and it must NOT be inherited across the boundary.
+  const LOCAL_SHIM_KEY = 'local-shim-secret-123';
+
+  it('refuses a non-sk-ant parent key for an Anthropic child when parentProvider is absent (the #438 reverse leak)', () => {
+    // The core bug: an OpenAI parent key with no parentProvider used to inherit
+    // unconditionally into an Anthropic child. It must now resolve to undefined.
+    expect(
+      applyManagerApiKeyFallback({
+        childModel: ANTHROPIC_CHILD,
+        configApiKey: undefined,
+        parentApiKey: OPENAI_KEY,
+      }),
+    ).toBeUndefined();
+    // Same for an unrecognizable local-shim-shaped key: without parentProvider
+    // we cannot prove it belongs to the Anthropic provider, so fail closed.
+    expect(
+      applyManagerApiKeyFallback({
+        childModel: ANTHROPIC_CHILD,
+        configApiKey: undefined,
+        parentApiKey: LOCAL_SHIM_KEY,
+      }),
+    ).toBeUndefined();
+  });
+
+  it('still inherits an sk-ant parent key for an Anthropic child without parentProvider (forward key-shape path retained)', () => {
+    expect(
+      applyManagerApiKeyFallback({
+        childModel: ANTHROPIC_CHILD,
+        configApiKey: undefined,
+        parentApiKey: ANTHROPIC_OAUTH,
+      }),
+    ).toBe(ANTHROPIC_OAUTH);
+  });
+
+  it('re-enables same-provider inheritance once parentModel (→ parentProvider) is supplied', () => {
+    // The OpenAI→OpenAI case that now fails closed above resolves correctly the
+    // moment the caller supplies parentProvider (derived from parentModel).
+    expect(
+      applyManagerApiKeyFallback({
+        childModel: OPENAI_CHILD,
+        configApiKey: undefined,
+        parentApiKey: OPENAI_KEY,
+        parentProvider: 'openai-compatible',
+      }),
+    ).toBe(OPENAI_KEY);
+    // And a non-sk-ant local-shim key inherits into an Anthropic child when the
+    // provider is known — proving fail-closed only blocks the UNKNOWN case.
+    expect(
+      applyManagerApiKeyFallback({
+        childModel: ANTHROPIC_CHILD,
+        configApiKey: undefined,
+        parentApiKey: LOCAL_SHIM_KEY,
+        parentProvider: 'anthropic-direct',
+      }),
+    ).toBe(LOCAL_SHIM_KEY);
   });
 });
