@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.38.1] - 2026-07-13
+
+### Fixed
+- render-not-repin — erase committed band from the anchor floor (Stage 2 core, #540) (#552) (8112051)
+
 ## [5.38.0] - 2026-07-13
 
 ### Added
