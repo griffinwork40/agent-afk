@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.37.2] - 2026-07-13
+
+### Fixed
+- grant ~/.afk/state to confined forks; harden worktree main-root fallback (#554) (5b63f2b)
+
 ## [5.37.1] - 2026-07-13
 
 ### Fixed
