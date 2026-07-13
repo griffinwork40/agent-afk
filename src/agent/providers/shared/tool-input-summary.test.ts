@@ -119,6 +119,38 @@ describe('summarizeToolInput — inline secret redaction (codex P1 on #511)', ()
     });
     expect(out).toBe(' git commit -m "fix: flatten multi-line bash summaries"');
   });
+
+  it('leaves a bare git SHA arg intact (git cat-file -t <sha> — real-session shape)', () => {
+    // A full 40-hex SHA is byte-identical to a hex secret; it used to render as
+    // `git cat-file -t [REDACTED]`, hiding the id the operator needs to read.
+    const sha = 'a1b2c3d4e5f6789012345678901234567890abcd';
+    const out = summarizeToolInput('bash', { command: `git cat-file -t ${sha}` });
+    expect(out).toBe(` git cat-file -t ${sha}`);
+    expect(out).not.toContain('[REDACTED]');
+  });
+
+  it('leaves a REF=<sha> assignment intact through the flattener (real-session shape)', () => {
+    // Exact shape observed in events.jsonl: `cd <dir> && REF=<sha> && git show
+    // $REF:<file>` rendered as `cd <dir> && [REDACTED] && git show $REF:<file>`.
+    const sha = 'abcdef1234567890abcdef1234567890abcdef12';
+    const out = summarizeToolInput('bash', {
+      command: `cd repo && REF=${sha} && git show $REF:src/index.ts | sed -n '1,40p'`,
+    });
+    expect(out).toContain(`REF=${sha}`);
+    expect(out).not.toContain('[REDACTED]');
+  });
+
+  it('redacts a non-allowlisted NAME=<sha> assignment through the flattener (allowlist boundary)', () => {
+    // Symmetric to the REF= test above: same 40-hex width, but PAT is not on the
+    // isGitObjectName allowlist, so it must be redacted end-to-end through the
+    // flatten+redact pipeline, not just at the pure redactSecrets unit level.
+    const sha = 'abcdef1234567890abcdef1234567890abcdef12';
+    const out = summarizeToolInput('bash', {
+      command: `cd repo && PAT=${sha} && curl -H "Authorization: token $PAT" https://api`,
+    });
+    expect(out).not.toContain(`PAT=${sha}`);
+    expect(out).toContain('[REDACTED]');
+  });
 });
 
 describe('summarizeToolInput — other tool shapes unchanged', () => {
