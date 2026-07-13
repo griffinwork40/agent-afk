@@ -11,11 +11,27 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { existsSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+
+// Mocked so tests never touch the real system clipboard or attempt to spawn a
+// real terminal tab — and so the interactive-surface gating (the fix for the
+// PR #582 Codex review finding, below) is deterministically observable.
+vi.mock('../../clipboard.js', () => ({
+  copyToClipboard: vi.fn(),
+}));
+vi.mock('../../terminal-spawn/index.js', () => ({
+  trySpawnTab: vi.fn(),
+}));
+
 import { forkCmd, forkSpawnLines } from './fork.js';
 import { listSessions, loadSession } from '../../session-store.js';
 import { createSessionStats, recordTurn } from '../session-stats.js';
+import { copyToClipboard } from '../../clipboard.js';
+import { trySpawnTab } from '../../terminal-spawn/index.js';
 import type { SlashContext, SessionStats } from '../types.js';
 import type { SpawnOutcome } from '../../terminal-spawn/index.js';
+
+const mockedCopyToClipboard = vi.mocked(copyToClipboard);
+const mockedTrySpawnTab = vi.mocked(trySpawnTab);
 
 let tmpHome: string;
 let originalHome: string | undefined;
@@ -24,14 +40,24 @@ beforeEach(() => {
   originalHome = process.env['HOME'];
   tmpHome = join(tmpdir(), `afk-fork-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   process.env['HOME'] = tmpHome;
+
+  // Default: mirror the real trySpawnTab behavior for a non-interactive ctx
+  // (no requestResume) — spawn refuses, clipboard would be the only fallback.
+  mockedTrySpawnTab.mockReturnValue({ spawned: false, kind: 'unknown', capability: 'none', reason: 'non-interactive-surface' });
+  mockedCopyToClipboard.mockReturnValue(false);
 });
 
 afterEach(() => {
   if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
   if (originalHome !== undefined) process.env['HOME'] = originalHome;
+  vi.clearAllMocks();
+  Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: undefined });
 });
 
-function makeCtx(stats: SessionStats): { ctx: SlashContext; lines: string[] } {
+function makeCtx(
+  stats: SessionStats,
+  opts: { interactive?: boolean } = {},
+): { ctx: SlashContext; lines: string[] } {
   const lines: string[] = [];
   const push = (t = ''): void => { lines.push(t); };
   const ctx: SlashContext = {
@@ -39,6 +65,9 @@ function makeCtx(stats: SessionStats): { ctx: SlashContext; lines: string[] } {
     stats,
     out: { line: push, raw: push, success: push, info: push, warn: push, error: push },
     ui: { clearScreen: vi.fn(), repaintStatusLine: vi.fn() },
+    // requestResume is the established local-interactive-REPL marker — absent
+    // for Telegram/daemon ctx (see /resume and /fork's own interactive check).
+    ...(opts.interactive ? { requestResume: vi.fn() } : {}),
   } as unknown as SlashContext;
   return { ctx, lines };
 }
@@ -94,6 +123,45 @@ describe('/fork', () => {
 
     // The fork never swaps the running session: its sessionId is unchanged.
     expect(ctx.stats.sessionId).toBe('live-id');
+  });
+});
+
+// Regression coverage for the PR #582 Codex review finding: the OSC 52
+// clipboard fallback must be gated on the same local-interactive-REPL check as
+// the tab spawn. Without the gate, a Telegram/daemon-invoked /fork on a host
+// process that still has its own TTY would write escape bytes to that host's
+// terminal while telling the remote caller "(copied to clipboard)" — a copy
+// that landed on the wrong machine reported as a success.
+describe('/fork clipboard fallback — interactive-surface gating', () => {
+  it('never calls copyToClipboard on a non-interactive surface, even when the host process has a TTY', async () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'q', 'a', { sessionId: 'live-id' });
+    const { ctx, lines } = makeCtx(stats); // no requestResume => non-interactive (Telegram/daemon shape)
+
+    // The exact scenario from the review comment: the bot/daemon host has its
+    // own TTY, and the clipboard write would succeed if it were attempted.
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+    mockedCopyToClipboard.mockReturnValue(true);
+
+    await forkCmd.handler(ctx, '');
+
+    expect(mockedCopyToClipboard).not.toHaveBeenCalled();
+    expect(lines.join('\n')).not.toContain('copied to clipboard');
+  });
+
+  it('falls back to the clipboard on the local interactive REPL when the tab spawn does not happen', async () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'q', 'a', { sessionId: 'live-id' });
+    const { ctx, lines } = makeCtx(stats, { interactive: true });
+
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
+    mockedTrySpawnTab.mockReturnValue({ spawned: false, kind: 'unknown', capability: 'none', reason: 'no-tab-mechanism' });
+    mockedCopyToClipboard.mockReturnValue(true);
+
+    await forkCmd.handler(ctx, '');
+
+    expect(mockedCopyToClipboard).toHaveBeenCalledTimes(1);
+    expect(lines.join('\n')).toContain('copied to clipboard');
   });
 });
 

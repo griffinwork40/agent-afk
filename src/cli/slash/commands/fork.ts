@@ -7,11 +7,12 @@
  * history, resumable via `afk interactive --resume <new-id>`.
  *
  * Two layers, decoupled:
- *   - Always: write the fork + print the resume command + best-effort
- *     clipboard copy. This is the contract that can never fail silently.
- *   - Best-effort: on a local interactive REPL, detect the terminal and open
- *     the fork in a new tab/window. Any failure degrades to the printed
- *     command — never a false success.
+ *   - Always: write the fork + print the resume command. This is the
+ *     contract that can never fail silently.
+ *   - Best-effort, local-interactive-REPL only: detect the terminal and open
+ *     the fork in a new tab/window, or (if that doesn't happen) copy the
+ *     resume command to the clipboard. Both degrade to the printed command —
+ *     never a false success, and never fired for Telegram/daemon callers.
  */
 
 import { palette } from '../../palette.js';
@@ -87,12 +88,18 @@ export const forkCmd: SlashCommand = {
     const command = formatResumeCommand(id, ctx.stats.model);
     const cwd = ctx.stats.cwd ?? process.cwd();
 
-    // Best-effort tab spawn. Only on the local interactive REPL (requestResume
-    // is the established marker — absent on Telegram/daemon, see /resume) and a
-    // real TTY. Never blocks or throws; failure falls through to the print path.
+    // Best-effort tab spawn AND clipboard fallback. Both are gated on the same
+    // local-interactive-REPL check (requestResume is the established marker —
+    // absent on Telegram/daemon, see /resume) and a real TTY. Without this
+    // gate, a Telegram/daemon-invoked /fork on a host that still has its own
+    // TTY (e.g. the bot run directly in a terminal rather than as a service)
+    // would fall through to the OSC 52 path and write escape bytes into the
+    // *host's* terminal while reporting "(copied to clipboard)" to the remote
+    // caller — copying to the wrong machine's clipboard while claiming success.
+    // Never blocks or throws; failure falls through to the print path.
     const interactive = typeof ctx.requestResume === 'function' && process.stdout.isTTY === true;
     const spawn = trySpawnTab({ forkId: id, model: ctx.stats.model, cwd, interactive });
-    const copied = !spawn.spawned && copyToClipboard(command);
+    const copied = !spawn.spawned && interactive && copyToClipboard(command);
 
     ctx.out.success(palette.success('Forked') + palette.dim(`  ${path}`));
     ctx.out.line();
