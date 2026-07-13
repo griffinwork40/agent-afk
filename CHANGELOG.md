@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.37.0] - 2026-07-13
+
+### Added
+- detect forked sub-agent read auto-denials (f10df60)
+- badge NESTING roots in committed scrollback (#532) (0c69100)
+
+### Changed
+- Merge pull request #545 from griffinwork40/fix/subagent-read-denial-detector (e6b333d)
+- Merge pull request #543 from griffinwork40/feat/scrollback-nesting-root-batch-badge (c5b8a0a)
+- dim NESTING-root closer base in composer, not render site (0ea46e0)
+
 ## [5.36.2] - 2026-07-13
 
 ### Fixed
