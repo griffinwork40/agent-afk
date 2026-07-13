@@ -361,11 +361,10 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
   // Contract: surface 'cli' is the correct origin for `afk farm` — it is a
   // CLI batch command whose workers should resolve to origin='cli', matching
   // `afk chat` / `afk interactive`. Worker sessions forked via runSubagentDAG
-  // inherit the writer through SubagentManager once SubagentManager gains
-  // manager-level traceWriter inheritance (tracked as a follow-up: the
-  // `dag-subagent.ts` forkSubagent path does not yet forward traceWriter from
-  // SubagentManagerOptions into child AgentConfigs the way apiKey/baseUrl/cwd
-  // do; adding that inheritance is the remaining gap).
+  // inherit the writer through SubagentManager's manager-level traceWriter
+  // inheritance: childConfig inherits it for session events, and forkSubagent's
+  // effectiveTraceWriter resolution makes the lifecycle emits + handle use the
+  // manager writer too (the former follow-up gap, now closed).
   const trace = createTraceWriterFn();
   const abortController = new AbortController();
   const manager = new SubagentManager({

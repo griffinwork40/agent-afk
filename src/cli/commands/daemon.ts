@@ -96,6 +96,10 @@ export function buildDaemonSessionFactory(
       parentModel: opts.model,
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      // Origin attribution: the daemon is a `daemon` entrypoint. Thread the
+      // surface so forked `agent`-tool children inherit origin 'daemon' (not
+      // 'unknown') via forkSubagent's parentSurface fill. Mirrors farm.ts.
+      surface: 'daemon',
     });
 
     const childProviderFactory = createChildProviderFactory(
@@ -172,6 +176,9 @@ export function buildDaemonSessionFactory(
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      // Read-scope inheritance (#547): skill-forked children inherit the parent
+      // session's read scope via the root manager. See bootstrap.ts.
+      getReadScopeInputs: () => rootManager.getReadScopeInputs(),
     });
 
     const composeExecutor = new ComposeExecutor({
@@ -181,6 +188,9 @@ export function buildDaemonSessionFactory(
       ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
       // Per-model credential resolver — mirrors #640 for the compose fork-path.
       resolveApiKeyForModel: getApiKeyForModel,
+      // Read-scope inheritance (#547): DAG nodes inherit the parent session's
+      // read scope via the root manager. See bootstrap.ts.
+      getReadScopeInputs: () => rootManager.getReadScopeInputs(),
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),

@@ -19,9 +19,6 @@
  * @module agent/providers/anthropic-direct
  */
 
-import path from 'path';
-import { appendFileSync, mkdirSync } from 'fs';
-import { dirname } from 'path';
 import Anthropic from '@anthropic-ai/sdk';
 import type { AgentConfig } from '../../types/config-types.js';
 import type { CanUseTool } from '../../types/sdk-types.js';
@@ -53,6 +50,7 @@ import {
 export { resolveEffort, resolveMaxTokens, resolveThinkingParam } from './resolve-params.js';
 import type { ToolDispatcher } from './tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
+import { PathGrantManager } from '../../tools/grant-manager.js';
 import { createBuiltinHandlers } from '../../tools/handlers/index.js';
 import {
   exitPlanModeTool,
@@ -73,7 +71,6 @@ import { resolveModelId } from '../../session/model-resolution.js';
 import { buildSkillManifest } from '../../tools/skill-bridge.js';
 import { MemoryStore, createMemoryHandlers, memoryToolSchemas, memorySearchTool } from '../../memory/index.js';
 import { dumpIfEnabled } from '../../session/prompt-dump.js';
-import { getSessionGrantsPath } from '../../../paths.js';
 import { env } from '../../../config/env.js';
 import { resolveQueryToken } from './query/token-resolution.js';
 import {
@@ -81,11 +78,11 @@ import {
   createGetRuntimeStateHandler,
   wrapDispatcherWithRuntimeState,
   buildRuntimeStateSource,
-  formatEnvironmentFragment,
   type RuntimeStateSource,
 } from '../../awareness/index.js';
 import { registerPresenceLifecycle } from './query/presence-lifecycle.js';
 import { createCwdDependentsFactory } from './query/cwd-dependents.js';
+import { assembleSystemPrompt, buildStableSystemPrefix } from './query/system-prompt.js';
 
 const PROVIDER_NAME = 'anthropic-direct';
 const DEFAULT_MODEL = 'claude-sonnet-5';
@@ -435,6 +432,14 @@ export class AnthropicDirectProvider implements ModelProvider {
     }
     return new SessionToolDispatcher({
       handlers,
+      // This provider IS the session's GrantManager. Passing it here lets the
+      // dispatcher inject it onto PreToolUse/PostToolUse contexts, so the
+      // path-approval + bash-restriction hooks resolve THIS session's live
+      // grants (a forked child's own writeRoots) rather than the process-global
+      // ref pinned to the top-level session (#435/#514). getGrants() reads the
+      // same _sharedReadRoots/_sharedWriteRoots the dispatcher shares by
+      // reference, so hook and handler stay in lockstep.
+      sessionGrantManager: this,
       // Path-containment bypass: bypassPermissions (explicit) AND autonomous
       // (AFK) both carry allowAll:true so path containment + the path-approval
       // prompt are disabled per-call. In AFK the afk-mode-gate is the safety
@@ -556,75 +561,36 @@ export class AnthropicDirectProvider implements ModelProvider {
     }
   }
 
+  /**
+   * Shared grant-state machine (issues #361/#362). Hooks bind provider
+   * semantics: lazy `ensureSharedRoots` init, the session's INITIAL
+   * resolveBase as the non-revocable anchor (fixed across worktree renames),
+   * `allowAll` derived from the current permission mode, and per-call
+   * sessionId threading (no construction-bound default). See
+   * grant-manager.ts for the divergence catalogue.
+   */
+  private readonly grantManager = new PathGrantManager({
+    getReadRoots: () => this._sharedReadRoots,
+    getWriteRoots: () => this._sharedWriteRoots,
+    ensureInitialized: () => this.ensureSharedRoots(),
+    getProtectedRoot: () => this._initialResolveBase,
+    getAllowAll: () => pathContainmentBypassed(this._currentPermissionMode),
+  });
+
   addReadRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
-    this.ensureSharedRoots();
-    const p = path.resolve(absPath);
-    // Invariant: audit only on state change — a repeat grant of an
-    // already-present root must not emit a duplicate ledger record (see
-    // SessionToolDispatcher.addReadRoot; the unconditional append caused a
-    // 196x blow-up of session-grants.jsonl).
-    if (!this._sharedReadRoots!.includes(p)) {
-      this._sharedReadRoots!.push(p);
-      this.appendProviderAuditLog({ action: 'grant-read', path: p, source, sessionId });
-    }
+    this.grantManager.addReadRoot(absPath, source, sessionId);
   }
 
   addWriteRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
-    this.ensureSharedRoots();
-    const p = path.resolve(absPath);
-    if (!this._sharedReadRoots!.includes(p)) {
-      this._sharedReadRoots!.push(p);
-    }
-    if (!this._sharedWriteRoots!.includes(p)) {
-      this._sharedWriteRoots!.push(p);
-      this.appendProviderAuditLog({ action: 'grant-write', path: p, source, sessionId });
-    }
+    this.grantManager.addWriteRoot(absPath, source, sessionId);
   }
 
   revokeRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
-    if (!this._sharedReadRoots) return;
-    const p = path.resolve(absPath);
-    // Non-revocable guard: refuse to remove the initial resolveBase, mirroring
-    // the dispatcher-level check (see SessionToolDispatcher.revokeRoot).
-    if (this._initialResolveBase && p === this._initialResolveBase) return;
-    const rIdx = this._sharedReadRoots.indexOf(p);
-    if (rIdx !== -1) this._sharedReadRoots.splice(rIdx, 1);
-    if (this._sharedWriteRoots) {
-      const wIdx = this._sharedWriteRoots.indexOf(p);
-      if (wIdx !== -1) this._sharedWriteRoots.splice(wIdx, 1);
-    }
-    this.appendProviderAuditLog({ action: 'revoke', path: p, source, sessionId });
+    this.grantManager.revokeRoot(absPath, source, sessionId);
   }
 
   getGrants(): { resolveBase: string | undefined; readRoots: string[]; writeRoots: string[]; allowAll: boolean } {
-    return {
-      resolveBase: this._initialResolveBase,
-      readRoots: this._sharedReadRoots?.slice() ?? [],
-      writeRoots: this._sharedWriteRoots?.slice() ?? [],
-      allowAll: pathContainmentBypassed(this._currentPermissionMode),
-    };
-  }
-
-  private appendProviderAuditLog(entry: {
-    action: 'grant-read' | 'grant-write' | 'revoke';
-    path: string;
-    source: 'slash' | 'tool';
-    sessionId?: string;
-  }): void {
-    try {
-      const logPath = getSessionGrantsPath();
-      mkdirSync(dirname(logPath), { recursive: true });
-      const line = JSON.stringify({
-        timestamp: new Date().toISOString(),
-        sessionId: entry.sessionId ?? null,
-        action: entry.action,
-        path: entry.path,
-        source: entry.source,
-      });
-      appendFileSync(logPath, line + '\n');
-    } catch {
-      // Audit log is best-effort.
-    }
+    return this.grantManager.getGrants();
   }
 
   query(args: ProviderQueryArgs): ProviderQuery {
@@ -799,31 +765,28 @@ export class AnthropicDirectProvider implements ModelProvider {
     // instructions for memory_update / procedure_write — keeps the model from
     // being told about tools it does not have.
     const memoryPrompt = resolveMemorySystemPrompt(this.readOnlyMemory);
-    const systemParts = [toolBase, memoryPrompt];
-    // Awareness layer (Phase 1 + 2): session identity fragment + workspace line.
-    // `formatEnvironmentFragment` always emits `- Working directory: <cwd>`
-    // (existing behavior), conditionally appends `- Session: <id> (...)` when
-    // at least one identity field is known, and (Phase 2) conditionally appends
-    // `- Workspace: <branch> @ <sha> (clean|N dirty)` when git state is available.
-    systemParts.push(
-      formatEnvironmentFragment({
-        cwd,
-        ...(config.sessionId !== undefined ? { sessionId: config.sessionId } : {}),
-        surface: this.surface,
-        ...(config.depth !== undefined ? { depth: config.depth } : {}),
-        ...(config.maxDepth !== undefined ? { maxDepth: config.maxDepth } : {}),
-        workspace: runtimeStateSource.getWorkspace(),
-      }),
-    );
-    if (manifest.length > 0) systemParts.push(manifest);
-    if (userSystem) systemParts.push(userSystem);
-    const toolSystemAppend = systemParts.join('\n\n');
 
-    // Stable parts of the system prompt that don't change when cwd changes.
-    // Used by the cwdDependentsFactory closure below.
-    const stableSystemPrefix = [toolBase, memoryPrompt];
-    if (manifest.length > 0) stableSystemPrefix.push(manifest);
-    if (userSystem) stableSystemPrefix.push(userSystem);
+    // Awareness identity fields interleaved into the `# Environment` fragment
+    // (Phase 1 + 2). Stable across cwd swaps — only `cwd` changes on setCwd().
+    const environmentIdentity = {
+      surface: this.surface,
+      sessionId: config.sessionId,
+      depth: config.depth,
+      maxDepth: config.maxDepth,
+      workspace: runtimeStateSource.getWorkspace(),
+    };
+
+    // Stable (cwd-independent) parts of the system prompt. The cwd-dependent
+    // `# Environment` fragment is spliced in by assembleSystemPrompt — the same
+    // helper the cwdDependentsFactory below uses on a cwd change, so the
+    // first-turn and rebuilt prompts can never drift.
+    const stableSystemPrefix = buildStableSystemPrefix({
+      toolBase,
+      memoryPrompt,
+      manifest,
+      userSystem,
+    });
+    const toolSystemAppend = assembleSystemPrompt(stableSystemPrefix, cwd, environmentIdentity);
 
     // Dump prompt debug info if AFK_DUMP_PROMPT is set (wired via --dump-prompt CLI flag).
     dumpIfEnabled({

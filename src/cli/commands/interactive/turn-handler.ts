@@ -635,7 +635,7 @@ export async function runTurn(
     // The SDK's server-side session store preserves the response even
     // when we skip local recordTurn; the REPL session stays live, so the
     // user continues simply by sending the next message — no resume needed.
-    // (/resume and --resume operate on *other* /saved sessions, not the
+    // (/resume and --resume operate on *other* saved sessions, not the
     // live one that was just soft-stopped, so they must NOT be advertised
     // here; doing so sent users down a dead-end. See the onSoftStop doc in
     // terminal-compositor.types.ts: "next Enter starts a new turn in the
@@ -709,8 +709,16 @@ export async function runTurn(
       if (verdict) {
         writeAbove(renderVerdictCard(verdict));
         writeAbove('');
+        // One evidence check, two consumers: (1) the onTerminalState callback
+        // forwards it onto the post-turn `Stop` hook's StopContext so the
+        // terminal-state gate can bounce a self-certified `Done` with nothing
+        // behind it (see terminal-state-gate.ts); (2) the Telegram
+        // "Done (unverified)" relabel below. Computed once, here.
+        const hasCorroboratingEvidence = doneHasCorroboratingEvidence(toolEvents);
         if (h.onTerminalState) {
-          try { h.onTerminalState(verdict); } catch { /* ledger update is best-effort */ }
+          try {
+            h.onTerminalState(verdict, { doneHasCorroboratingEvidence: hasCorroboratingEvidence });
+          } catch { /* ledger update is best-effort */ }
         }
         // AFK mode: the operator is away and the transcript is unwatched, so
         // surface the terminal state to them over Telegram. Scrubbed + rate-
@@ -725,7 +733,7 @@ export async function runTurn(
           const unverified =
             verdict.kind === 'done' &&
             loadTelegramConfig().verifyDone === true &&
-            !doneHasCorroboratingEvidence(toolEvents);
+            !hasCorroboratingEvidence;
           void pushTerminalStateToTelegram(verdict, undefined, { unverified });
         }
       }

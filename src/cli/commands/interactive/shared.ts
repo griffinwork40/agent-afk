@@ -1,4 +1,5 @@
 import * as readline from 'node:readline';
+import { statSync } from 'node:fs';
 import type { HookRegistry } from '../../../agent/hooks.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
 import type { MemoryStore } from '../../../agent/memory/index.js';
@@ -52,6 +53,49 @@ export function reseedStatsFromStored(
   // was added lack the field, deserializing as undefined despite the type.
   // Default to now so the status-line duration is 0, not NaN.
   stats.sessionStartTime = stored.startedAt ?? Date.now();
+}
+
+/**
+ * True iff `p` exists AND is a directory. A stored cwd that resolved to a
+ * regular file (or a broken symlink) must NOT be used as a working directory,
+ * so we stat rather than existsSync. Any stat error (ENOENT, EACCES, race)
+ * degrades to false, so the caller falls back to process.cwd().
+ */
+function isExistingDir(p: string): boolean {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the effective working directory for a (possibly resumed) interactive
+ * session. Precedence:
+ *   1. An explicit `--worktree` override (`extrasCwd`) ALWAYS wins.
+ *   2. Otherwise, fall back to the resumed session's stored cwd — but ONLY when
+ *      it still exists on disk as a directory. A resumed session should run in
+ *      the directory it was saved in (e.g. an `afk --worktree` session later
+ *      `/fork`'d or `--resume`'d), not wherever the shell happens to be. A
+ *      cleaned-up worktree degrades safely (the stored cwd is ignored, caller
+ *      falls back to `process.cwd()`).
+ *
+ * Returns `undefined` when neither source applies, so callers keep their
+ * existing `?? process.cwd()` fallback. Because it defaults to `extrasCwd` when
+ * there is no resume override, this is a safe drop-in — behavior only changes
+ * for a resume whose stored cwd still exists.
+ *
+ * Extracted as a pure helper (rather than inlined in bootstrap) so the
+ * precedence contract is unit-testable in isolation from the heavy session
+ * construction path.
+ */
+export function resolveResumeCwd(
+  extrasCwd: string | undefined,
+  storedCwd: string | undefined,
+): string | undefined {
+  if (extrasCwd !== undefined) return extrasCwd;
+  if (storedCwd !== undefined && isExistingDir(storedCwd)) return storedCwd;
+  return undefined;
 }
 
 /**
@@ -350,6 +394,15 @@ export interface InteractiveCtx {
    */
   firstTurnHook?: (firstMessage: string) => Promise<void>;
   /**
+   * Optional first message seeded from the launch argument — set when the user
+   * runs `afk "prompt"` or `afk /slash args` (the interactive command's
+   * variadic `[input...]` positional). When present, the REPL loop promotes it
+   * into its `seedBuffer` fast-path and auto-submits it as the opening turn,
+   * echoed and dispatched exactly as if typed: a plain prompt runs a turn, a
+   * `/command` routes through the slash dispatcher. Absent for a bare `afk`.
+   */
+  initialInput?: string;
+  /**
    * Returns true while a turn is in flight. Set by `interactive.ts` after
    * building `turnState` so the swap closure can refuse mid-turn swaps.
    * Defaults to false when absent.
@@ -528,8 +581,17 @@ export interface TurnHandles {
    * The verdict card itself has already been printed to scrollback by the
    * turn handler before this hook fires; the hook is purely for ledger
    * bookkeeping. Best-effort — errors are swallowed by the caller.
+   *
+   * `meta.doneHasCorroboratingEvidence` reports whether the turn produced a
+   * successful file write/edit or executed command (see
+   * `doneHasCorroboratingEvidence` in `afk-push.ts`). The REPL loop forwards it
+   * onto the post-turn `Stop` hook's {@link StopContext} so the terminal-state
+   * gate can flag a self-certified `Done` with nothing behind it.
    */
-  onTerminalState?(state: import('./terminal-state.js').TerminalState): void;
+  onTerminalState?(
+    state: import('./terminal-state.js').TerminalState,
+    meta?: { doneHasCorroboratingEvidence?: boolean },
+  ): void;
   /**
    * Publishes the in-flight turn's active TerminalCompositor (or null when
    * none exists, e.g. on non-TTY surfaces or after dispose). The REPL's

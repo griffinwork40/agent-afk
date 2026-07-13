@@ -60,8 +60,8 @@ describe('getApiKey / getModel provider agreement (regression: default-model div
     const resolvedModel = getModel();
     const resolvedApiKey = getApiKey();
 
-    // getModel() defaults to the literal 'sonnet' -> anthropic-direct.
-    expect(resolvedModel).toBe('sonnet');
+    // getModel() defaults to the `medium` tier -> claude-sonnet-5 -> anthropic-direct.
+    expect(resolvedModel).toBe('medium');
     expect(providerForModel(resolvedModel)).toBe('anthropic-direct');
 
     // getApiKey() must agree: it should resolve the Anthropic credential,

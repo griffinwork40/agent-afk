@@ -24,7 +24,20 @@ interface PendingUpdate {
   triggeredAt: number;
 }
 
-const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+/**
+ * How long the cached "latest published version" is trusted before the next
+ * launch spawns a background refresh. Kept deliberately short: agent-afk can
+ * ship several releases in a single day, and a day-long TTL left the passive
+ * banner blind to a fresh publish for up to 24h. 3h tracks that cadence while
+ * still bounding background npm-registry hits to at most one per window.
+ */
+const CACHE_TTL_MS = 3 * 60 * 60 * 1000;
+/**
+ * Bounded timeout for the ONE inline registry fetch `coldStartUpdateCheck()`
+ * performs when no cache exists yet. Short enough not to noticeably delay a
+ * cold first launch; on timeout it falls back to the detached background path.
+ */
+const COLD_START_TIMEOUT_MS = 800;
 /**
  * How long a pending-update marker is trusted to mean "an install is still in
  * flight." Within this window `triggerAutoUpdate()` refuses to spawn a second
@@ -130,7 +143,7 @@ export function checkForUpdates(updatePolicy: 'notify' | 'auto' | 'off'): Update
   const cache = readCache();
   const now = Date.now();
 
-  if (!cache || now - cache.checkedAt > TWENTY_FOUR_HOURS) {
+  if (!cache || now - cache.checkedAt > CACHE_TTL_MS) {
     spawnBackgroundCheck();
   }
 
@@ -141,6 +154,43 @@ export function checkForUpdates(updatePolicy: 'notify' | 'auto' | 'off'): Update
     return { currentVersion, latestVersion: cache.latestVersion };
   }
 
+  return null;
+}
+
+/** True when a parseable update-check cache exists on disk. */
+export function hasUpdateCache(): boolean {
+  return readCache() !== null;
+}
+
+/**
+ * Cold-cache path for the very first launch after install (or a cache clear),
+ * where `checkForUpdates()` can only spawn a detached background fetch and
+ * return null — so a banner would never appear until a *second* run. Here we
+ * instead await one short bounded registry fetch, persist the result to the
+ * cache, and render the banner on this run. Applies the same off/CI/
+ * NO_UPDATE_NOTIFIER guards as `checkForUpdates()`.
+ */
+export async function coldStartUpdateCheck(
+  updatePolicy: 'notify' | 'auto' | 'off',
+): Promise<UpdateInfo | null> {
+  if (updatePolicy === 'off') return null;
+  if (env.NO_UPDATE_NOTIFIER) return null;
+  if (env.CI) return null;
+
+  const latest = await fetchLatestVersion(COLD_START_TIMEOUT_MS);
+  if (latest === undefined) {
+    // Inline fetch failed or timed out — fall back to the detached background
+    // refresh so the NEXT launch at least has a warm cache to render from.
+    spawnBackgroundCheck();
+    return null;
+  }
+
+  writeUpdateCache(latest);
+
+  const currentVersion = getVersion();
+  if (isNewerVersion(currentVersion, latest)) {
+    return { currentVersion, latestVersion: latest };
+  }
   return null;
 }
 
@@ -177,6 +227,31 @@ export function writePendingUpdateMarker(targetVersion: string): void {
     );
   } catch {
     // best-effort — confirmation is a nicety
+  }
+}
+
+/**
+ * Overwrite the update-check cache with a version learned directly from the
+ * registry — used by `afk update` / `afk update --check`, which fetch the
+ * latest version out-of-band (bypassing the cache). Without this, a manual
+ * update leaves the passive notifier's cache frozen at its previous value
+ * until the next TTL-driven background refresh, so the banner logic keeps
+ * comparing against a stale `latestVersion`. Keeping the cache in sync here
+ * makes the notifier honest immediately after a manual update.
+ */
+export function writeUpdateCache(latestVersion: string): void {
+  if (!SEMVER_RE.test(latestVersion)) return;
+  try {
+    ensureCacheDir();
+    writeFileSync(
+      cachePath(),
+      JSON.stringify({
+        latestVersion,
+        checkedAt: Date.now(),
+      }),
+    );
+  } catch {
+    // best-effort — a stale cache only affects notifier freshness
   }
 }
 

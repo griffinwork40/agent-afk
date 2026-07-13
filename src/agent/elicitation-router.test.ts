@@ -330,3 +330,16 @@ describe('elicitationRouter', () => {
     });
   });
 });
+
+describe('hasHandler', () => {
+  it('reflects install/uninstall state', () => {
+    elicitationRouter.uninstall();
+    expect(elicitationRouter.hasHandler()).toBe(false);
+
+    elicitationRouter.install(async (): Promise<ElicitationResult> => ({ action: 'decline' }));
+    expect(elicitationRouter.hasHandler()).toBe(true);
+
+    elicitationRouter.uninstall();
+    expect(elicitationRouter.hasHandler()).toBe(false);
+  });
+});

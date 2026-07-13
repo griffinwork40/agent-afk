@@ -57,8 +57,21 @@ export function flushResizeGhostErase(self: CommittedBandHost): void {
  *
  * Idempotent: when the block has not moved AND the just-completed frame render
  * did not erase its rows, this is a no-op (no per-tick churn on a stable
- * frame). When the render's erase pass covered the band (the collapse render,
- * whose stale-tall previousTopRow erases down through the band) it repaints.
+ * frame — the flicker guard). When the render's erase pass covered the band
+ * (the collapse render, whose stale-tall previousTopRow erases down through the
+ * band) it repaints.
+ *
+ * Stage 2 (#540 — render, don't re-pin): when it DOES repaint, the visible
+ * window is re-rendered STATELESSLY — the above-frame content region is cleared
+ * from the anchor floor and the band's bottom `fit` rows are repainted at
+ * [newTop, targetBottom], so the on-screen result is a pure function of
+ * (committedBand, floor, targetBottom) and never depends on the tracked
+ * `committedBandTopRow` for the erase range. That dissolves the scrollback-gap
+ * "void" class by construction (a stranded row above a drifted tracked top is
+ * always erased) instead of relying on incremental band-adjacency bookkeeping.
+ * The committedBand* fields are still MAINTAINED here for the commit / eviction
+ * paths that read them; removing that coupling entirely, plus the Stage 3
+ * single end-of-turn flush, remain follow-ups (see #540 / the PR body).
  *
  * @param desiredTopRow      the frame's true target top (pre-padding) this repaint
  * @param preRenderFrameTop  CupFrameRenderer.topRow captured BEFORE render() —
@@ -112,9 +125,20 @@ export function repositionCommittedBand(
   // Cursor stays hidden (the frame render hid it); CUP writes emit no '\n', so
   // the DECSTBM scroll region is never triggered — no writeWithGuard needed.
   let out = '\x1b[?25l';
-  // Erase rows the block vacated when it slid DOWN (the former gap), down to —
-  // but not including — its new top.
-  for (let r = Math.max(floor, self.committedBandTopRow); r < newTop; r++) {
+  // Stage 2 (#540 — render, don't re-pin): erase the ENTIRE above-frame content
+  // region [floor, newTop) from the anchor floor, NOT from the tracked band top
+  // (`committedBandTopRow`). The painted window below is a pure function of
+  // (committedBand, floor, targetBottom); clearing from the floor makes the
+  // whole render stateless — any row stranded above a STALE tracked top (the
+  // scrollback-gap "void": rows a prior eager-scroll/eviction left painted while
+  // the tracked top drifted below them) is erased unconditionally, so it is
+  // gap-free by construction rather than by trusting the incremental
+  // `committedBandTopRow` adjacency. The class invariant guarantees
+  // `committedBand` is the SOLE committed content in [floor, targetBottom]
+  // (committed-band-commit.ts:513-519), so nothing legitimate is cleared; the
+  // banner/anchor above `floor` is never touched. Rows [floor, newTop) are all
+  // blank after this loop; [newTop, targetBottom] are repainted below.
+  for (let r = floor; r < newTop; r++) {
     out += eraseAndPaintRow(r);
   }
   for (let i = 0; i < paint.length; i++) {

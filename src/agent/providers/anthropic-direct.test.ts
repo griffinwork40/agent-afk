@@ -260,6 +260,65 @@ function makeToolUseStream(
   ];
 }
 
+/**
+ * Build a stream where a SINGLE assistant turn emits multiple parallel
+ * `tool_use` blocks (distinct content-block indices), ending with
+ * stop_reason=tool_use. Models this scenario: one round batches N tool calls.
+ */
+function makeParallelToolUseStream(
+  calls: Array<{ id: string; name: string; inputJson: string }>,
+): RawMessageStreamEvent[] {
+  const events: RawMessageStreamEvent[] = [
+    {
+      type: 'message_start',
+      message: {
+        id: 'msg_par',
+        type: 'message',
+        role: 'assistant',
+        content: [],
+        model: 'claude-sonnet-5',
+        stop_reason: null,
+        stop_sequence: null,
+        usage: {
+          input_tokens: 7,
+          output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          server_tool_use: null,
+          service_tier: null,
+        },
+      },
+    } as unknown as RawMessageStreamEvent,
+  ];
+  calls.forEach((call, index) => {
+    events.push(
+      {
+        type: 'content_block_start',
+        index,
+        content_block: { type: 'tool_use', id: call.id, name: call.name, input: {} },
+      } as unknown as RawMessageStreamEvent,
+      {
+        type: 'content_block_delta',
+        index,
+        delta: { type: 'input_json_delta', partial_json: call.inputJson },
+      } as unknown as RawMessageStreamEvent,
+      {
+        type: 'content_block_stop',
+        index,
+      } as unknown as RawMessageStreamEvent,
+    );
+  });
+  events.push(
+    {
+      type: 'message_delta',
+      delta: { stop_reason: 'tool_use', stop_sequence: null },
+      usage: { output_tokens: 9 },
+    } as unknown as RawMessageStreamEvent,
+    { type: 'message_stop' } as unknown as RawMessageStreamEvent,
+  );
+  return events;
+}
+
 // --- Tests ---
 
 describe('AnthropicDirectProvider', () => {
@@ -883,6 +942,53 @@ describe('AnthropicDirectProvider', () => {
     expect(second.progress.summary).toContain('round 2');
     expect(second.progress.summary).toContain('write_file');
     expect(second.progress.taskId).toBe(first.progress.taskId);
+  });
+
+  // Regression (PR 508 codex review, P2): a single round that batches multiple
+  // parallel tool_use blocks must report `toolUses` as the actual number of
+  // tool CALLS — not "1" (the round/iteration count). Before the fix `toolUses`
+  // carried the round counter, so 3 parallel calls in round 1 rendered as
+  // "1 tool call".
+  it('progress.toolUses reflects actual tool-call count when a round batches parallel calls', async () => {
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      if (callIdx === 1) {
+        // Round 1: THREE parallel tool_use blocks in a single assistant turn.
+        return fromArray(
+          makeParallelToolUseStream([
+            { id: 'toolu_a', name: 'read_file', inputJson: '{"path":"a"}' },
+            { id: 'toolu_b', name: 'read_file', inputJson: '{"path":"b"}' },
+            { id: 'toolu_c', name: 'read_file', inputJson: '{"path":"c"}' },
+          ]),
+        );
+      }
+      return fromArray(makeTextStream('Done.'));
+    });
+
+    const dispatcher: ToolDispatcher = {
+      async execute(): Promise<ToolResult> {
+        return { content: 'ok' };
+      },
+    };
+
+    const provider = new AnthropicDirectProvider({ tools: dispatcher });
+    const query = provider.query({
+      prompt: singleInput('read three files'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-api03-test' },
+    });
+    const events = await collect(query);
+
+    const progressEvents = events.filter((e) => e.type === 'progress') as Array<
+      Extract<ProviderEvent, { type: 'progress' }>
+    >;
+    // One progress event (one round), but it dispatched 3 calls.
+    expect(progressEvents.length).toBe(1);
+    const only = progressEvents[0]!;
+    // The fix: toolUses is the cumulative CALL count (3), not the round (1).
+    expect(only.progress.toolUses).toBe(3);
+    // The human-readable summary still names the ROUND, unchanged.
+    expect(only.progress.summary).toContain('round 1');
   });
 
   it('single text response emits no progress events', async () => {

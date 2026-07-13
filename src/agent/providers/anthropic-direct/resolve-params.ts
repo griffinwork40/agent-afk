@@ -28,28 +28,10 @@ const isOpus47Plus = (model: string): boolean => /opus-4-(7|[89])/.test(model);
 const requiresAdaptiveThinking = (model: string): boolean =>
   isOpus47Plus(model) || /(claude-)?sonnet-5/.test(model);
 
-const DEFAULT_AUTO_COMPACT_THRESHOLD = 0.9;
-
-/**
- * Resolve `AgentConfig.autoCompact` to a numeric threshold fraction, or
- * `undefined` when auto-compaction is disabled.
- *
- * - `false` or `undefined` → disabled (`undefined` returned).
- * - `true` → default threshold (0.90).
- * - `{ threshold: n }` → custom fraction; clamped to (0, 1) exclusive.
- *   Out-of-range values are silently treated as disabled.
- */
-export function resolveAutoCompactThreshold(
-  autoCompact: AgentConfig['autoCompact'],
-): number | undefined {
-  if (autoCompact === undefined || autoCompact === false) return undefined;
-  if (autoCompact === true) return DEFAULT_AUTO_COMPACT_THRESHOLD;
-  const t = autoCompact.threshold;
-  if (typeof t !== 'number' || !Number.isFinite(t) || t <= 0 || t >= 1) {
-    return undefined;
-  }
-  return t;
-}
+// resolveAutoCompactThreshold moved to shared/auto-compact.ts (both providers
+// auto-compact now). Re-exported here so existing importers (index.ts) resolve
+// unchanged.
+export { resolveAutoCompactThreshold } from '../shared/auto-compact.js';
 
 /**
  * Module-scope dedupe for budget-clamp warnings, keyed so a single

@@ -28,8 +28,10 @@ describe('builtin-skills slash registration', () => {
   it('registers public built-in TS skills as slash commands', () => {
     registerAll();
     const names = list().map((c) => c.name);
-    // /mint and /diagnose are public-tier — visible by default.
-    for (const skill of ['/mint', '/diagnose']) {
+    // /mint is public-tier — visible by default. (/diagnose is no longer a
+    // vendored TS skill — it ships as the awa-bundled plugin SKILL.md and is
+    // registered by the plugin scanner, not registerAll().)
+    for (const skill of ['/mint']) {
       expect(names).toContain(skill);
     }
     // /audit-fit is internal-tier — MUST NOT be visible without AFK_INTERNAL=1.
@@ -40,7 +42,7 @@ describe('builtin-skills slash registration', () => {
     vi.stubEnv('AFK_INTERNAL', '1');
     registerAll();
     const names = list().map((c) => c.name);
-    for (const skill of ['/mint', '/diagnose', '/audit-fit']) {
+    for (const skill of ['/mint', '/audit-fit']) {
       expect(names).toContain(skill);
     }
   });

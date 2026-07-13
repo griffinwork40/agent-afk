@@ -796,3 +796,254 @@ describe('SessionManager — session naming (/name)', () => {
     await m2.closeAll().catch(() => {});
   });
 });
+
+describe('SessionManager — session switcher (/sessions, /switch, /new)', () => {
+  // Same unset-AFK_HOME contract as the recordTelegramTurn suite: the shared
+  // sidecar store (listSessions/loadSession) resolves under this suite's tmp HOME.
+  useUnsetAfkHome();
+
+  class MockSessionWithId implements IAgentSession {
+    state: SessionState = 'idle';
+    constructor(readonly sessionId?: string) {}
+    async sendMessage(content: string) {
+      return { role: 'assistant' as const, content: `Echo: ${content}`, timestamp: new Date() };
+    }
+    async *getOutputStream() { yield { type: 'done' as const }; }
+    abort(_reason: string): void { /* no-op */ }
+    async close() { /* no-op */ }
+    async reset() { /* no-op */ }
+  }
+
+  let testDataDir: string;
+  let tmpHome: string;
+  let originalHome: string | undefined;
+  let lastConfig: AgentConfig | undefined;
+  let manager: SessionManager;
+
+  function makeManager(sessionId?: string): SessionManager {
+    return new SessionManager({
+      dataDir: testDataDir,
+      apiKey: 'test-key',
+      defaultModel: 'sonnet',
+      createSession: async (config: AgentConfig) => {
+        lastConfig = config;
+        return new MockSessionWithId(sessionId);
+      },
+    });
+  }
+
+  beforeEach(() => {
+    const entropy = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    testDataDir = join(tmpdir(), `afk-tg-sw-data-${entropy}`);
+    originalHome = process.env['HOME'];
+    tmpHome = join(tmpdir(), `afk-tg-sw-home-${entropy}`);
+    process.env['HOME'] = tmpHome;
+    lastConfig = undefined;
+    manager = makeManager('sdk-live-default');
+  });
+
+  afterEach(async () => {
+    await manager.closeAll().catch(() => {});
+    if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
+    if (existsSync(testDataDir)) rmSync(testDataDir, { recursive: true, force: true });
+    if (originalHome !== undefined) process.env['HOME'] = originalHome;
+  });
+
+  test('listChatSessions lists this chat\'s telegram sidecars, excluding other chats', async () => {
+    // Two distinct conversations for chat 800 (reset between so each gets its own sidecar).
+    manager.recordTelegramTurn(800, 'alpha work', 'a', { sessionId: 'sdk-A' });
+    await manager.resetSession(800);
+    manager.recordTelegramTurn(800, 'beta work', 'b', { sessionId: 'sdk-B' });
+    // A different chat's sidecar must NOT leak into 800's list.
+    manager.recordTelegramTurn(999, 'other chat', 'x', { sessionId: 'sdk-other' });
+
+    const list = manager.listChatSessions(800);
+    expect(list.map((s) => s.sessionId).sort()).toEqual(['sdk-A', 'sdk-B']);
+    // No live/active session was established for 800 → nothing flagged active.
+    expect(list.every((s) => s.active === false)).toBe(true);
+    const alpha = list.find((s) => s.sessionId === 'sdk-A');
+    expect(alpha?.name).toBe('alpha-work');
+    expect(alpha?.turns).toBe(1);
+    expect(alpha?.model).toBe('sonnet');
+  });
+
+  test('switchToSession stages resume, marks the target active, and the next getSession resumes it', async () => {
+    manager.recordTelegramTurn(801, 'first convo', 'a', { sessionId: 'sdk-1' });
+    await manager.resetSession(801);
+    manager.recordTelegramTurn(801, 'second convo', 'b', { sessionId: 'sdk-2' });
+
+    const res = await manager.switchToSession(801, 'sdk-1');
+    expect(res).toEqual({ ok: true, name: 'first-convo' });
+    expect(manager.listChatSessions(801).find((s) => s.sessionId === 'sdk-1')?.active).toBe(true);
+
+    // The rebuilt session continues the chosen conversation: config.resume === target.
+    await manager.getSession(801);
+    expect(lastConfig?.resume).toBe('sdk-1');
+
+    // A subsequent /clear starts fresh — the staged resume is dropped.
+    await manager.resetSession(801);
+    lastConfig = undefined;
+    await manager.getSession(801);
+    expect(lastConfig?.resume).toBeUndefined();
+  });
+
+  test('switchToSession rejects an unknown or cross-chat target', async () => {
+    manager.recordTelegramTurn(802, 'my convo', 'a', { sessionId: 'sdk-802' });
+
+    expect(await manager.switchToSession(802, 'does-not-exist')).toEqual({ ok: false, reason: 'not-found' });
+    // sdk-802 belongs to chat 802, so switching chat 803 to it must be refused.
+    expect(await manager.switchToSession(803, 'sdk-802')).toEqual({ ok: false, reason: 'not-found' });
+  });
+
+  test('switchToSession no-ops when the target is already the live active session', async () => {
+    await manager.getSession(804);
+    manager.recordTelegramTurn(804, 'hi', 'yo', { sessionId: 'sdk-live-default' });
+    const res = await manager.switchToSession(804, 'sdk-live-default');
+    expect(res).toEqual({ ok: false, reason: 'already-active' });
+  });
+
+  test('newSession preserves the previous conversation as resumable and starts fresh', async () => {
+    manager.recordTelegramTurn(805, 'old convo', 'a', { sessionId: 'sdk-old' });
+    await manager.newSession(805);
+    manager.recordTelegramTurn(805, 'new convo', 'b', { sessionId: 'sdk-fresh' });
+
+    expect(manager.listChatSessions(805).map((s) => s.sessionId).sort()).toEqual(['sdk-fresh', 'sdk-old']);
+  });
+
+  test('a rejecting close() during switch still deletes the stale session and rebuilds on next getSession', async () => {
+    class RejectingCloseSession extends MockSessionWithId {
+      override async close() { throw new Error('close boom'); }
+    }
+    let created = 0;
+    const m = new SessionManager({
+      dataDir: testDataDir,
+      apiKey: 'test-key',
+      defaultModel: 'sonnet',
+      createSession: async (config: AgentConfig) => {
+        lastConfig = config;
+        created += 1;
+        // The FIRST built session (the one live at switch-time) rejects on
+        // close; the post-switch rebuild closes cleanly. This isolates the
+        // rejecting close to switchToSession's close path (ITEM 3's fix).
+        return created === 1 ? new RejectingCloseSession('sdk-live-default') : new MockSessionWithId('sdk-rebuilt');
+      },
+    });
+    // Record the switch TARGET sidecar with no live session so the passed
+    // metadata id ('sdk-target') sticks — a live session's own sessionId would
+    // otherwise shadow it (recordTelegramTurn copies live.sessionId into stats).
+    m.recordTelegramTurn(900, 'target convo', 'b', { sessionId: 'sdk-target' });
+    await m.resetSession(900); // no live session to close; clears data.sessionId
+    // Establish the live session switchToSession will close — build #1, whose
+    // close() rejects. Its own turn keys it to 'sdk-live-default'.
+    const stale = await m.getSession(900);
+    m.recordTelegramTurn(900, 'live convo', 'a', { sessionId: 'sdk-live-default' });
+
+    const res = await m.switchToSession(900, 'sdk-target');
+    expect(res.ok).toBe(true);
+
+    lastConfig = undefined;
+    const rebuilt = await m.getSession(900);
+    // The stale (reject-on-close) session was still evicted → getSession rebuilt.
+    expect(rebuilt).not.toBe(stale);
+    expect(lastConfig?.resume).toBe('sdk-target');
+    await m.closeAll().catch(() => {});
+  });
+
+  test('a staged resume survives a createSession failure and is retried on the next build', async () => {
+    // Regression guard for the resume-drop bug: switchToSession stages the
+    // resume, but the FIRST session build throws. The staged resume must NOT be
+    // consumed by the failed build — the next getSession must still resume the
+    // target. (Before the fix, getSession deleted pendingResume BEFORE the
+    // fallible createSession, so the failed build silently dropped the resume
+    // and the next build started a fresh conversation — this assertion caught it.)
+    let created = 0;
+    const m = new SessionManager({
+      dataDir: testDataDir,
+      apiKey: 'test-key',
+      defaultModel: 'sonnet',
+      createSession: async (config: AgentConfig) => {
+        lastConfig = config;
+        created += 1;
+        // First build throws; every build afterwards succeeds.
+        if (created === 1) throw new Error('creation failed');
+        return new MockSessionWithId('sdk-rebuilt');
+      },
+    });
+    // Persist the switch TARGET sidecar with no live session so the passed
+    // metadata id ('sdk-target') sticks, then clear any live session.
+    m.recordTelegramTurn(906, 'target convo', 'b', { sessionId: 'sdk-target' });
+    await m.resetSession(906); // no live session; clears data.sessionId
+
+    // Stage the resume via /switch — succeeds (no live session to close).
+    expect((await m.switchToSession(906, 'sdk-target')).ok).toBe(true);
+
+    // First getSession: the build throws → rejects. The staged resume must be
+    // left intact (consumed only after a successful build).
+    await expect(m.getSession(906)).rejects.toThrow('creation failed');
+
+    // Second getSession: succeeds AND still carries the staged resume.
+    lastConfig = undefined;
+    await m.getSession(906);
+    expect(lastConfig?.resume).toBe('sdk-target');
+
+    await m.closeAll().catch(() => {});
+  });
+
+  test('a switch during an in-flight creation does not silently revert', async () => {
+    // Regression guard for the in-flight-revert bug: a getSession creation is in
+    // flight when switchToSession runs. Without the fix, switchToSession would
+    // inspect/close the live session BEFORE the in-flight promise resolved, then
+    // the in-flight promise would set the pre-switch session as live AFTER the
+    // switch adopted the target — silently reverting it. switchToSession now
+    // awaits the in-flight creation first, so the built session is evicted by the
+    // close path and the switch sticks.
+    //
+    // Deterministic (no timing race): the first createSession returns a DEFERRED
+    // promise, so the first build stays parked until we release it. switchToSession
+    // awaits that same in-flight promise, so its continuation is gated on the
+    // release — a promise-settle dependency, not a wall-clock sleep.
+    let created = 0;
+    let releaseFirst: (session: IAgentSession) => void = () => {};
+    const firstBuilt = new MockSessionWithId('sdk-live-default');
+    const m = new SessionManager({
+      dataDir: testDataDir,
+      apiKey: 'test-key',
+      defaultModel: 'sonnet',
+      createSession: async (config: AgentConfig) => {
+        lastConfig = config;
+        created += 1;
+        if (created === 1) {
+          // Park the first build until releaseFirst() is called below.
+          return await new Promise<IAgentSession>((resolve) => {
+            releaseFirst = resolve;
+          });
+        }
+        return new MockSessionWithId('sdk-rebuilt');
+      },
+    });
+    // Persist the switch TARGET sidecar with no live session so 'sdk-target' sticks.
+    m.recordTelegramTurn(907, 'target convo', 'b', { sessionId: 'sdk-target' });
+    await m.resetSession(907); // clears data.sessionId; no live session
+
+    // Start the first creation WITHOUT awaiting — it parks on the deferred, and
+    // getSession has already populated pendingSessions by the time it yields.
+    const inflightGet = m.getSession(907);
+
+    // Switch while the first build is in flight. switchToSession must await the
+    // in-flight promise; kick it off, then release the build so both settle.
+    const switchPromise = m.switchToSession(907, 'sdk-target');
+    releaseFirst(firstBuilt);
+
+    // The switch resolved successfully — it did not observe a reverted state.
+    expect((await switchPromise).ok).toBe(true);
+    await inflightGet; // the parked first creation resolves cleanly
+
+    // The staged resume points at the target: the next build resumes it, proving
+    // the switch stuck (the in-flight build's session was evicted, not adopted).
+    lastConfig = undefined;
+    await m.getSession(907);
+    expect(lastConfig?.resume).toBe('sdk-target');
+
+    await m.closeAll().catch(() => {});
+  });
+});

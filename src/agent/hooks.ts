@@ -18,7 +18,7 @@
  * with the original error attached as `cause`. This prevents a bug in one
  * handler from silently skipping policy enforcement.
  *
- * **Context injection (SubagentStop and UserPromptSubmit):** Foreground
+ * **Context injection (SubagentStop, UserPromptSubmit, and Stop):** Foreground
  * subagents hand their final assistant output to the parent through the normal
  * `agent` tool result; `injectContext` is a separate hook-generated framework
  * note, not text typed by the human user. When a `SubagentStop` handler returns
@@ -35,13 +35,23 @@
  * is prepended to the user's prompt text before `runTurn` is called — allowing
  * hook handlers to inject per-turn system notes or policy context inline with
  * the human's message. The injection is performed by the REPL loop immediately
- * after dispatch; other hook events ignore `injectContext` entirely.
+ * after dispatch.
+ *
+ * For `Stop` (main-session post-turn), `injectContext` is stashed by the REPL
+ * loop and prepended to the NEXT turn's prompt text — the same next-turn
+ * delivery contract as `UserPromptSubmit`, but fired from the turn-completion
+ * boundary rather than the submission boundary. This is the "bounce the turn
+ * back" primitive: a post-turn policy handler (e.g. the terminal-state gate)
+ * can read the parsed verdict on {@link StopContext} and inject a correction
+ * the next turn must address. The remaining hook events ignore `injectContext`
+ * entirely.
  *
  * @module agent/hooks
  */
 
 import { createHookRegistryImpl } from './hook-registry.js';
 import type { SubagentTrace } from './subagent/result.js';
+import type { GrantManager } from '../cli/slash/commands/allow-dir.js';
 
 export type HarnessHookEvent =
   | 'SessionStart'
@@ -63,7 +73,7 @@ export interface HookDecision {
   /** Human-readable rationale for blocking or approving. */
   reason?: string;
   /**
-   * (SubagentStop and UserPromptSubmit) Framework-generated context to inject.
+   * (SubagentStop, UserPromptSubmit, and Stop) Framework-generated context to inject.
    *
    * For **SubagentStop**: queued to the parent session's input stream after
    * dispatch completes; dropped if the parent is aborting. DAG/compose and
@@ -77,6 +87,11 @@ export interface HookDecision {
    * `runTurn` is called. Allows per-turn system notes or policy context to be
    * injected inline with the human's message. Same concatenation merge policy
    * applies when multiple handlers return `injectContext`.
+   *
+   * For **Stop**: stashed by the REPL loop and prepended to the NEXT turn's
+   * prompt text (same next-turn delivery as UserPromptSubmit, fired from the
+   * post-turn boundary). Lets a post-turn policy handler bounce a correction
+   * into the next turn. Same concatenation merge policy across handlers.
    *
    * Ignored for all other hook events.
    */
@@ -157,8 +172,26 @@ export interface PreToolUseContext {
    * conversation-level affordance) use it to skip subagent tool calls.
    */
   parentSessionId?: string;
+  /**
+   * Effective cwd for this specific tool call, when known. Dispatchers set this
+   * from their current resolve base so shared hook registries can classify
+   * forked subagent calls against the child's worktree rather than the parent
+   * session's construction-time cwd.
+   */
+  cwd?: string;
   toolName: string;
   input?: unknown;
+  /**
+   * Live grant manager of the session EXECUTING this call — the provider that
+   * built the dispatcher dispatching this hook. Injected per-call by
+   * {@link SessionToolDispatcher} so path-scoped hooks (path-approval,
+   * bash-restriction) resolve the ACTUAL session's grants: a forked child's own
+   * cwd/readRoots/writeRoots rather than a process-global ref pinned to the
+   * top-level session (the #435/#514 write-confinement gap). When absent
+   * (non-dispatcher-originated dispatch, unit tests), those hooks fall back to
+   * their `opts.getGrantManager()` ref, preserving prior behavior.
+   */
+  grantManager?: GrantManager;
 }
 
 export interface PostToolUseContext {
@@ -181,6 +214,13 @@ export interface PostToolUseContext {
    */
   input?: unknown;
   output?: unknown;
+  /**
+   * Live grant manager of the executing session — see
+   * {@link PreToolUseContext.grantManager}. Injected so the "Once"-grant revoke
+   * in the path-approval PostToolUse hook mutates the SAME grant manager the
+   * PreToolUse containment check consulted.
+   */
+  grantManager?: GrantManager;
 }
 
 export interface PreCompactContext {
@@ -219,6 +259,21 @@ export interface StopContext {
    * Top-level sessions leave this undefined.
    */
   parentSessionId?: string;
+  /**
+   * The parsed terminal-state kind of the turn that just completed, when the
+   * surface parses one (REPL only — see `terminal-state.ts`). Absent when the
+   * turn emitted no recognizable verdict, or on surfaces that do not parse
+   * terminal states. Inlines the cli-layer `TerminalKind` union rather than
+   * importing it, keeping the agent layer free of a cli runtime dependency.
+   */
+  terminalState?: 'done' | 'blocked' | 'asking' | 'interrupted';
+  /**
+   * True when the completed turn produced at least one successful corroborating
+   * tool call — a file write/edit or an executed command (see
+   * `doneHasCorroboratingEvidence` in `afk-push.ts`). Only meaningful when
+   * `terminalState === 'done'`. Absent on surfaces that do not compute it.
+   */
+  doneHasCorroboratingEvidence?: boolean;
 }
 
 export interface UserPromptSubmitContext {

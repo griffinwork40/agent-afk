@@ -9,6 +9,7 @@ import { formatError, formatModelSwitch } from './formatter.js';
 import { handleStart } from './handlers/start.js';
 import { handleHelp } from './handlers/help.js';
 import { handleClear, handleCompact, handleCwd, handleModelSwitch, handleName, MODEL_ALIASES_HINT } from './handlers/commands.js';
+import { handleSessions, handleNew, handleSwitchCallback } from './handlers/sessions.js';
 import type { AgentModelInput } from '../agent/types.js';
 import { handleFarmCallback } from './handlers/farm-callbacks.js';
 import { MessageHandler } from './handlers/message.js';
@@ -63,7 +64,15 @@ export class TelegramBot {
 
   constructor(options: BotOptions) {
     this.options = options;
-    this.bot = new Telegraf(options.botToken);
+    // Disable Telegraf's default handlerTimeout (90_000ms). It wraps the ENTIRE
+    // update handler — a full agent turn — in a p-timeout, so any turn over 90s
+    // total (sub-agents, web_scrape, long bash) rejects to `bot.catch` as a
+    // generic "unexpected error" even though the AgentSession keeps running
+    // (p-timeout does not abort the underlying promise). src/telegram/streaming.ts
+    // is the real timeout authority: an inter-event, tool-in-flight-aware,
+    // usage-limit-pause-aware watchdog that throws a handled StreamTimeoutError.
+    // p-timeout short-circuits on Infinity, handing it sole timeout control.
+    this.bot = new Telegraf(options.botToken, { handlerTimeout: Infinity });
     this.sessionManager = new SessionManager(options);
     this.messageHandler = new MessageHandler(
       this.bot,
@@ -132,6 +141,16 @@ export class TelegramBot {
     );
     this.bot.command('name', (ctx) =>
       handleName(ctx, this.sessionManager, this.log.bind(this))
+    );
+    // /sessions — list this chat's resumable conversations with tap-to-switch
+    // buttons; /new — start a fresh conversation (previous preserved). One
+    // active session per chat; switching stages a resume that continues on the
+    // next message (see handlers/sessions.ts + SessionManager.switchToSession).
+    this.bot.command('sessions', (ctx) =>
+      handleSessions(ctx, this.sessionManager, this.log.bind(this))
+    );
+    this.bot.command('new', (ctx) =>
+      handleNew(ctx, this.sessionManager, this.registeredCommandChats, this.log.bind(this))
     );
     // /watch <session> — live-tail another surface's session ledger into
     // this chat. /watch with no arg lists watchable sessions. The ledger is
@@ -257,6 +276,15 @@ export class TelegramBot {
       } catch (err) {
         this.log('Model action error:', err);
       }
+    });
+
+    // Inline-keyboard session-switch callbacks from the /sessions reply. Prefix
+    // afk:sw: is disjoint from afk:m: / afk:e: / afk:pa: / the farm prefix, so
+    // taps never cross-route. Allowlist-guarded like the model action.
+    this.bot.action(/^afk:sw:/, async (ctx) => {
+      await ctx.answerCbQuery().catch(() => {});
+      if (ctx.chat?.id !== undefined && !this.options.allowedChatIds.has(ctx.chat.id)) return;
+      await handleSwitchCallback(ctx, this.sessionManager, this.log.bind(this));
     });
 
     this.bot.catch((err, ctx) => {

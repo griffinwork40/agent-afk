@@ -193,6 +193,16 @@ function buildToolOutputEvent(
       : renderToolResult(event.toolName, event.content);
   const displayPassthrough = display !== null ? { display } : {};
 
+  // Plumb concurrency-batch membership through to the ToolResultChunk so the
+  // tool-lane render can badge a parallel wave (batchSize>1) distinctly from
+  // sequential dispatch. Both are present or both absent (stamped together by
+  // executeBatch); the `typeof` guard keeps the type honest for providers that
+  // don't batch.
+  const batchPassthrough =
+    typeof event.batchIndex === 'number' && typeof event.batchSize === 'number'
+      ? { batchIndex: event.batchIndex, batchSize: event.batchSize }
+      : {};
+
   const parsed = parsePersistedOutput(event.content);
   if (parsed) {
     return {
@@ -206,6 +216,7 @@ function buildToolOutputEvent(
         sizeBytes: parsed.sizeBytes,
         sizeLabel: parsed.sizeLabel,
         ...displayPassthrough,
+        ...batchPassthrough,
       },
     };
   }
@@ -234,6 +245,7 @@ function buildToolOutputEvent(
       ...(event.truncated === true && { truncated: true }),
       ...(lineCount !== undefined && { lineCount }),
       ...displayPassthrough,
+      ...batchPassthrough,
     },
   };
 }

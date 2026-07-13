@@ -109,6 +109,19 @@ export interface ToolResultChunk {
    * `truncateContent` length cap because it's already short by construction.
    */
   display?: string;
+  /**
+   * Concurrency-batch membership, plumbed from the `tool.output` provider event
+   * (originally `ToolResult.batchIndex` / `.batchSize`, stamped by the
+   * dispatcher's `executeBatch`). `batchSize > 1` ⇒ this call ran in a parallel
+   * wave of `batchSize` calls dispatched together; `=== 1` (or absent) ⇒ it ran
+   * alone in its own sequential batch (always the case for concurrency-unsafe
+   * tools like bash). The tool-lane render badges the root row with `∥i/N`
+   * only when `batchSize > 1`, making a genuine parallel wave visually distinct
+   * from back-to-back sequential dispatches that otherwise look identical once
+   * committed to scrollback.
+   */
+  batchIndex?: number;
+  batchSize?: number;
   metadata?: Record<string, unknown>;
 }
 

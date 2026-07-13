@@ -7,7 +7,8 @@
  */
 
 import './audit-fit/index.js';
-import './diagnose/index.js';
+// diagnose is a bundled-plugin SKILL.md (awa-bundled/skills/diagnose), not a
+// vendored TS registry skill — resolved by the plugin scanner, not registerSkill().
 import './get-started/index.js';
 import './mint/index.js';
 import './service-setup/index.js';

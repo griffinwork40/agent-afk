@@ -81,6 +81,38 @@ describe('tool_call payload', () => {
     ).toThrow();
   });
 
+  it('accepts and preserves batchIndex/batchSize on the completed phase', () => {
+    const parsed = ToolCallPayloadSchema.parse({
+      phase: 'completed',
+      toolUseId: 't1',
+      name: 'read_file',
+      resultBytes: 64,
+      isError: false,
+      truncated: false,
+      durationMs: 5,
+      batchIndex: 2,
+      batchSize: 3,
+    });
+    expect(parsed).toMatchObject({ batchIndex: 2, batchSize: 3 });
+  });
+
+  it('rejects a non-positive or non-integer batchIndex/batchSize', () => {
+    for (const bad of [{ batchIndex: 0, batchSize: 2 }, { batchIndex: 1, batchSize: 1.5 }, { batchIndex: -1, batchSize: 2 }]) {
+      expect(() =>
+        ToolCallPayloadSchema.parse({
+          phase: 'completed',
+          toolUseId: 't1',
+          name: 'grep',
+          resultBytes: 0,
+          isError: false,
+          truncated: false,
+          durationMs: 1,
+          ...bad,
+        }),
+      ).toThrow();
+    }
+  });
+
   it('rejects unknown phase', () => {
     expect(() =>
       ToolCallPayloadSchema.parse({

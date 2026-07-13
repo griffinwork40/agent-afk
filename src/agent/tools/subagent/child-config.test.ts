@@ -27,6 +27,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { buildChildConfig, type BuildChildConfigArgs } from './child-config.js';
+import { InMemoryTraceWriter } from '../../trace/writer.js';
 import type { AgentInput } from './input-parse.js';
 import type { RegisteredAgent } from '../../agents/index.js';
 import type { ModelProvider } from '../../provider.js';
@@ -153,6 +154,41 @@ describe('buildChildConfig', () => {
     it('propagates maxDepth to the child config', () => {
       const { childConfig } = buildChildConfig(baseArgs({ depth: 0, maxDepth: 5 }));
       expect(childConfig.maxDepth).toBe(5);
+    });
+  });
+
+  describe('childWriteCapable (isolation gating)', () => {
+    it('is true for an unrestricted dispatch (no cage → full write surface)', () => {
+      const { childWriteCapable } = buildChildConfig(baseArgs());
+      expect(childWriteCapable).toBe(true);
+    });
+
+    it('is false for a read-only cage (no write/edit, no bash)', () => {
+      const { childWriteCapable } = buildChildConfig(
+        baseArgs({ allowedTools: ['read_file', 'grep', 'glob', 'web_scrape'] }),
+      );
+      expect(childWriteCapable).toBe(false);
+    });
+
+    it('is false when bash is allowed but read-only', () => {
+      const { childWriteCapable } = buildChildConfig(
+        baseArgs({ allowedTools: ['read_file', 'grep', 'bash'], readOnlyBash: true }),
+      );
+      expect(childWriteCapable).toBe(false);
+    });
+
+    it('is true when the cage includes write_file', () => {
+      const { childWriteCapable } = buildChildConfig(
+        baseArgs({ allowedTools: ['read_file', 'write_file'] }),
+      );
+      expect(childWriteCapable).toBe(true);
+    });
+
+    it('is true when the cage includes mutating (non-read-only) bash', () => {
+      const { childWriteCapable } = buildChildConfig(
+        baseArgs({ allowedTools: ['read_file', 'bash'] }),
+      );
+      expect(childWriteCapable).toBe(true);
     });
   });
 
@@ -307,6 +343,94 @@ describe('buildChildConfig', () => {
       );
       const mgr = childManager as unknown as { parentCwd: string | undefined };
       expect(mgr.parentCwd).toBe('/tmp/wt/feat-y');
+    });
+
+    // Regression: depth-2+ `agent` forks were invisible in the witness trace —
+    // the nested child manager was built without a traceWriter and agent-tool
+    // dispatches never set config.traceWriter, so subagent_lifecycle emits
+    // no-op'd. traceWriter must chain like cwd: into the nested manager AND
+    // into the recursive child executor ctx (for depth-3+).
+    it('forwards traceWriter to the child manager and the recursive executor ctx', () => {
+      const traceWriter = new InMemoryTraceWriter();
+      let capturedCtx: SubagentExecutorContext | undefined;
+      const childProviderFactory = vi.fn(() => mockProvider());
+      const createChildExecutor = vi.fn((ctx: SubagentExecutorContext) => {
+        capturedCtx = ctx;
+        return stubChildExecutor();
+      });
+      const { childManager } = buildChildConfig(
+        baseArgs({
+          depth: 0,
+          maxDepth: 3,
+          traceWriter,
+          childProviderFactory,
+          createChildExecutor,
+        }),
+      );
+      const mgr = childManager as unknown as {
+        parentTraceWriter: { write: unknown } | undefined;
+      };
+      expect(mgr.parentTraceWriter).toBe(traceWriter);
+      expect(capturedCtx).toBeDefined();
+      expect(capturedCtx!.traceWriter).toBe(traceWriter);
+    });
+
+    it('omits traceWriter from the child manager and executor ctx when unset', () => {
+      let capturedCtx: SubagentExecutorContext | undefined;
+      const childProviderFactory = vi.fn(() => mockProvider());
+      const createChildExecutor = vi.fn((ctx: SubagentExecutorContext) => {
+        capturedCtx = ctx;
+        return stubChildExecutor();
+      });
+      const { childManager } = buildChildConfig(
+        baseArgs({ depth: 0, maxDepth: 3, childProviderFactory, createChildExecutor }),
+      );
+      const mgr = childManager as unknown as { parentTraceWriter: unknown };
+      expect(mgr.parentTraceWriter).toBeUndefined();
+      expect(capturedCtx!.traceWriter).toBeUndefined();
+    });
+
+    // Regression (PR #466 follow-up): `agent`-tool + compose forks became
+    // trace-visible but were attributed origin:'unknown' because the surface
+    // was never threaded into the fork managers. The nested manager must
+    // inherit the owning surface like traceWriter/cwd, so depth-2+ forks report
+    // the real origin via forkSubagent's parentSurface fill. See
+    // session-identity.ts:deriveOrigin.
+    it('forwards surface to the child manager and the recursive executor ctx', () => {
+      let capturedCtx: SubagentExecutorContext | undefined;
+      const childProviderFactory = vi.fn(() => mockProvider());
+      const createChildExecutor = vi.fn((ctx: SubagentExecutorContext) => {
+        capturedCtx = ctx;
+        return stubChildExecutor();
+      });
+      const { childManager } = buildChildConfig(
+        baseArgs({
+          depth: 0,
+          maxDepth: 3,
+          surface: 'cli',
+          childProviderFactory,
+          createChildExecutor,
+        }),
+      );
+      const mgr = childManager as unknown as { parentSurface: string | undefined };
+      expect(mgr.parentSurface).toBe('cli');
+      expect(capturedCtx).toBeDefined();
+      expect(capturedCtx!.surface).toBe('cli');
+    });
+
+    it('omits surface from the child manager and executor ctx when unset', () => {
+      let capturedCtx: SubagentExecutorContext | undefined;
+      const childProviderFactory = vi.fn(() => mockProvider());
+      const createChildExecutor = vi.fn((ctx: SubagentExecutorContext) => {
+        capturedCtx = ctx;
+        return stubChildExecutor();
+      });
+      const { childManager } = buildChildConfig(
+        baseArgs({ depth: 0, maxDepth: 3, childProviderFactory, createChildExecutor }),
+      );
+      const mgr = childManager as unknown as { parentSurface: unknown };
+      expect(mgr.parentSurface).toBeUndefined();
+      expect(capturedCtx!.surface).toBeUndefined();
     });
 
     it('skips nesting (no child manager, no provider) at the depth cap', () => {

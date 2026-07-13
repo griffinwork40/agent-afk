@@ -12,7 +12,6 @@ import { infoCommands } from './commands/info.js';
 import { planCmd } from './commands/plan.js';
 import { afkCmd } from './commands/afk.js';
 import { todoCmd } from './commands/todo.js';
-import { saveCmd } from './commands/save.js';
 import { nameCmd } from './commands/name.js';
 import { resumeCmd } from './commands/resume.js';
 import { forkCmd } from './commands/fork.js';
@@ -42,7 +41,6 @@ export function registerAll(): void {
   register(planCmd);
   register(afkCmd);
   register(todoCmd);
-  register(saveCmd);
   register(nameCmd);
   register(resumeCmd);
   register(forkCmd);

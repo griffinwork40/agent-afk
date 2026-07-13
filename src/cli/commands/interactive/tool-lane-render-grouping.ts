@@ -22,7 +22,13 @@ interface GroupedSibling {
   entries: ToolEntry[];
 }
 
-/** Synthetic result-summary placeholder produced by {@link addResultSummarySynthetic}. */
+/**
+ * Synthetic result-summary placeholder produced by {@link addResultSummarySynthetic}.
+ *
+ * Invariant: `summary` is PRE-STYLED by its sole feeder `summaryWithBatchBadge`
+ * (dim base + self-dimmed `∥i/N` batch badge). Render sites emit it verbatim and
+ * MUST NOT re-wrap it in `palette.dim()` — re-dimming nests the badge's own dim.
+ */
 interface ResultSummarySibling {
   kind: 'resultSummary';
   summary: string;

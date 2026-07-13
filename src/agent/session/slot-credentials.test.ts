@@ -117,4 +117,40 @@ describe('applySlotCredentials', () => {
     applySlotCredentials(child, table);
     expect(child.apiKey).toBeUndefined();
   });
+
+  it('sets forceChatgptOAuth + clears apiKey for a chatgpt-oauth slot', () => {
+    // A `provider: 'chatgpt-oauth'` tier routes openai-compatible (so an
+    // inherited key is cleared) AND flags forceChatgptOAuth, so resolveOpenAIAuth
+    // selects the ChatGPT-subscription token regardless of OPENAI_API_KEY.
+    const config: SlotCredentialTarget = { model: 'medium', apiKey: 'sk-should-be-cleared' };
+    applySlotCredentials(config, slots({ medium: { id: 'gpt-5.6', provider: 'chatgpt-oauth' } }));
+    expect(config.forceChatgptOAuth).toBe(true);
+    expect(config.apiKey).toBeUndefined();
+    expect(config.baseUrl).toBeUndefined();
+  });
+
+  it('clears forceChatgptOAuth when switching to a non-chatgpt (keyed OpenAI) slot', () => {
+    // resolveInner spreads a shared baseConfig for every /model target, so a
+    // config that started on a chatgpt-oauth slot carries forceChatgptOAuth:true.
+    // Switching to a keyed OpenAI slot must clear it, else resolveOpenAIAuth
+    // ignores the tier key and keeps using the ChatGPT token (#548).
+    const config: SlotCredentialTarget = { model: 'small', forceChatgptOAuth: true };
+    applySlotCredentials(
+      config,
+      slots({ small: { id: 'gpt-4o-mini', provider: 'openai', apiKey: 'sk-openai' } }),
+    );
+    expect(config.forceChatgptOAuth).toBe(false);
+    expect(config.apiKey).toBe('sk-openai');
+  });
+
+  it('clears an inherited forceChatgptOAuth for a raw id that is not a slot', () => {
+    // A /model switch to a raw id (no slot) must not keep forcing ChatGPT OAuth
+    // inherited from a chatgpt-oauth startup slot.
+    const config: SlotCredentialTarget = { model: 'claude-sonnet-5', forceChatgptOAuth: true };
+    applySlotCredentials(
+      config,
+      slots({ medium: { id: 'gpt-5.6', provider: 'chatgpt-oauth' } }),
+    );
+    expect(config.forceChatgptOAuth).toBe(false);
+  });
 });

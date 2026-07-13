@@ -264,6 +264,14 @@ async function main() {
           parentModel: sessionConfig.model,
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
           ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
+          // Witness layer: manager-level writer so `agent`-tool forks (which
+          // never set config.traceWriter) emit subagent_lifecycle events and
+          // hand the writer to their handles. Mirrors bootstrap.ts / chat.ts.
+          ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
+          // Origin attribution: thread the surface so forked `agent`-tool
+          // children inherit origin 'telegram' (not 'unknown') via
+          // forkSubagent's parentSurface fill. Mirrors farm.ts.
+          surface: 'telegram',
         });
 
         const deferredParent = {
@@ -341,6 +349,9 @@ async function main() {
           // Named-agent dispatch: registry + `inherit` anchor.
           agentRegistry,
           parentModel: sessionConfig.model,
+          // Witness layer: thread the writer so depth ≥ 2 `agent` forks stay
+          // visible in the trace. Mirrors bootstrap.ts / chat.ts.
+          ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
         });
 
         const skillExecutor = new SkillExecutor({
@@ -358,6 +369,9 @@ async function main() {
           resolveApiKeyForModel: getApiKeyForModel,
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
           ...(telegramOpenaiBaseUrl !== undefined ? { openaiBaseUrl: telegramOpenaiBaseUrl } : {}),
+          // Read-scope inheritance (#547): skill-forked children inherit the
+          // parent session's read scope via the root manager. See bootstrap.ts.
+          getReadScopeInputs: () => rootManager.getReadScopeInputs(),
         });
 
         // Compose subagents inherit the framework base + operator overlay
@@ -371,6 +385,9 @@ async function main() {
           apiKey: telegramApiKey,
           // Per-model credential resolver — mirrors #640 for the compose fork-path.
           resolveApiKeyForModel: getApiKeyForModel,
+          // Read-scope inheritance (#547): DAG nodes inherit the parent session's
+          // read scope via the root manager. See bootstrap.ts.
+          getReadScopeInputs: () => rootManager.getReadScopeInputs(),
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
           // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
           ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
@@ -378,6 +395,8 @@ async function main() {
           // Session identity for routing-decision rows (Telegram → telegram).
           surface: 'telegram',
           depth: 0,
+          // Witness layer: DAG nodes emit subagent_lifecycle into the session trace.
+          ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
         });
 
         const allowedTools = topLevelSurfaceAllowedTools(mcpManager?.getMcpToolWireNames() ?? []);
@@ -418,6 +437,9 @@ async function main() {
         const session = attachMcpCleanup(constructTelegramSession({
           ...(sessionConfig.apiKey !== undefined ? { apiKey: sessionConfig.apiKey } : {}),
           model: sessionConfig.model,
+          // /switch resumes a prior conversation: thread the target SDK session
+          // id so the AgentSession continues it (see SessionManager.switchToSession).
+          ...(sessionConfig.resume !== undefined ? { resume: sessionConfig.resume } : {}),
           ...(systemPromptInner !== undefined ? { systemPrompt: systemPromptInner } : {}),
           maxTurns: 100,
           ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
@@ -480,6 +502,8 @@ async function main() {
       const session = attachMcpCleanup(constructTelegramSession({
         ...(sessionConfig.apiKey !== undefined ? { apiKey: sessionConfig.apiKey } : {}),
         model: sessionConfig.model,
+        // /switch resume: continue the target SDK session (parity with the Anthropic branch).
+        ...(sessionConfig.resume !== undefined ? { resume: sessionConfig.resume } : {}),
         ...(systemPrompt !== undefined ? { systemPrompt } : {}),
         maxTurns: 100,
         ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),

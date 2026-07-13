@@ -9,12 +9,12 @@
 
 import type { ToolHandler } from '../types.js';
 import { bashHandler, createBashHandler } from './bash.js';
-import { readFileHandler } from './read-file.js';
-import { writeFileHandler } from './write-file.js';
-import { editFileHandler } from './edit-file.js';
+import { readFileHandler, createReadFileHandler } from './read-file.js';
+import { writeFileHandler, createWriteFileHandler } from './write-file.js';
+import { editFileHandler, createEditFileHandler } from './edit-file.js';
 import { globHandler, createGlobHandler } from './glob.js';
 import { grepHandler, createGrepHandler } from './grep.js';
-import { listDirectoryHandler } from './list-directory.js';
+import { listDirectoryHandler, createListDirectoryHandler } from './list-directory.js';
 import { sendTelegramHandler } from './send-telegram.js';
 import { webScrapeHandler } from './web-scrape.js';
 import {
@@ -47,10 +47,13 @@ import { browserCloseHandler } from './browser-close.js';
  * @param cwd - The session's working directory (typically a worktree path
  *   from `afk interactive -w`). When supplied, bash/grep spawn child
  *   processes with this cwd, and glob/grep use it as the default search
- *   path when the model omits one. Without this, concurrent sessions in
- *   different worktrees all spawn against the host's `process.cwd()` —
- *   causing `git stash`, `git checkout`, etc. to clobber each other.
- *   The Node process's `process.cwd()` is never mutated.
+ *   path when the model omits one. read_file/write_file/edit_file/
+ *   list_directory close over it as their last resolve-base tier (issue
+ *   #434), so a context-less invocation still anchors and confines relative
+ *   paths to this tree instead of the host launch dir. Without this,
+ *   concurrent sessions in different worktrees all spawn against the host's
+ *   `process.cwd()` — causing `git stash`, `git checkout`, etc. to clobber
+ *   each other. The Node process's `process.cwd()` is never mutated.
  */
 export function createBuiltinHandlers(
   permissionMode?: string,
@@ -61,16 +64,23 @@ export function createBuiltinHandlers(
     : (cwd !== undefined ? createBashHandler('default', cwd) : bashHandler);
   const glob = cwd !== undefined ? createGlobHandler(cwd) : globHandler;
   const grep = cwd !== undefined ? createGrepHandler(cwd) : grepHandler;
+  // read/write/edit/list close over cwd as their resolve-base fallback tier
+  // (issue #434) — parity with glob/grep. No-op on the dispatcher path, where
+  // context.resolveBase already carries this same value.
+  const readFile = cwd !== undefined ? createReadFileHandler(cwd) : readFileHandler;
+  const writeFile = cwd !== undefined ? createWriteFileHandler(cwd) : writeFileHandler;
+  const editFile = cwd !== undefined ? createEditFileHandler(cwd) : editFileHandler;
+  const listDirectory = cwd !== undefined ? createListDirectoryHandler(cwd) : listDirectoryHandler;
   const terminalFontSize = createTerminalFontSizeHandler();
   const worktree = createWorktreeHandler(cwd);
   return new Map<string, ToolHandler>([
     ['bash', bash],
-    ['read_file', readFileHandler],
-    ['write_file', writeFileHandler],
-    ['edit_file', editFileHandler],
+    ['read_file', readFile],
+    ['write_file', writeFile],
+    ['edit_file', editFile],
     ['glob', glob],
     ['grep', grep],
-    ['list_directory', listDirectoryHandler],
+    ['list_directory', listDirectory],
     ['send_telegram', sendTelegramHandler],
     ['web_scrape', webScrapeHandler],
     ['create_schedule', createScheduleHandler],

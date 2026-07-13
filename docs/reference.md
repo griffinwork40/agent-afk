@@ -96,7 +96,6 @@ The interactive REPL registers slash commands directly in TypeScript (`src/cli/s
 ### Planning & state
 - `/plan` — open the plan editor
 - `/todo` — manage the persistent todo list
-- `/save` — snapshot session state to disk
 - `/resume` — resume a saved session
 - `/init` — scan the current project and write `AFK.md`
 - `/changelog` — render `CHANGELOG.md` paginated

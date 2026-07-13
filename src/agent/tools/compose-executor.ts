@@ -12,11 +12,13 @@
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { SubagentManager } from '../subagent.js';
+import { resolveChildManagerReadRoots, type ReadScopeInputs } from '../subagent-read-scope.js';
 import { runSubagentDAG, type SubagentDAGNode } from '../dag-subagent.js';
 import { providerForModel } from '../providers/index.js';
 import type { DAGEdge, DAGRunResult } from '../dag.js';
 import type { AgentModelInput, IAgentSession } from '../types.js';
 import type { Surface } from '../awareness/types.js';
+import type { TraceWriter } from '../trace/index.js';
 import type { ToolCall, ToolResult } from './types.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { deriveOrigin, actorFromDepth } from '../session/session-identity.js';
@@ -99,6 +101,14 @@ export interface ComposeExecutorContext {
    */
   cwd?: string;
   /**
+   * Witness-layer trace writer inherited from the owning surface. Seeded into
+   * the per-call {@link SubagentManager} so every compose DAG node emits
+   * `subagent_lifecycle` events into the session trace. Without it, compose
+   * nodes are invisible in `afk trace show` — same gap as the raw `agent`
+   * tool path; see SubagentExecutorContext.traceWriter.
+   */
+  traceWriter?: TraceWriter;
+  /**
    * User-facing surface of the session that owns this executor
    * (cli/telegram/daemon). Recorded as `origin` on compose routing-decision
    * rows. `actor` is derived from {@link ComposeExecutorContext.depth}.
@@ -112,6 +122,19 @@ export interface ComposeExecutorContext {
    * → `subagent`). Optional/back-compat: defaults to 0 when unset.
    */
   depth?: number;
+  /**
+   * Reads the parent session's read scope ({@link ReadScopeInputs}) at
+   * dispatch time (wired to the root
+   * {@link SubagentManager.getReadScopeInputs}). Used to seed the per-call
+   * compose {@link SubagentManager}'s `parentReadRoots` via
+   * {@link resolveChildManagerReadRoots} so every DAG node inherits the parent
+   * session's full read scope — the `child ⊇ parent` invariant the `agent`
+   * tool enforces (#544), extended to compose dispatch (#547). Without it,
+   * nodes derive read scope from cwd alone and silently narrow when the parent
+   * session is read-open or `/allow-dir`-widened. Optional/back-compat: when
+   * unset, nodes fall back to cwd-only derivation, unchanged.
+   */
+  getReadScopeInputs?: () => ReadScopeInputs;
 }
 
 interface ComposeNodeInput {
@@ -565,6 +588,15 @@ export class ComposeExecutor {
       }
     };
 
+    // Read-scope inheritance (#547): derive the DAG nodes' parentReadRoots from
+    // the parent session's read scope + this executor's cwd, mirroring the
+    // `agent` tool (subagent-executor.ts). Without it, nodes inherit read scope
+    // from cwd alone and silently narrow when the parent session is read-open
+    // or `/allow-dir`-widened beyond `[cwd, mainRoot]`. Writes stay confined.
+    const nodeReadRoots = resolveChildManagerReadRoots(
+      this.ctx.getReadScopeInputs?.(),
+      this.currentCwd,
+    );
     manager = new SubagentManager({
       parentAbortSignal: call.signal,
       apiKey: this.ctx.apiKey,
@@ -578,6 +610,18 @@ export class ComposeExecutor {
       // setCwd). Without this the manager's parentCwd is undefined and nodes
       // fall back to the host's process.cwd() (subagent.ts fork fallback).
       ...(this.currentCwd !== undefined ? { cwd: this.currentCwd } : {}),
+      // Read-scope inheritance (#547): seed parentReadRoots so each DAG node's
+      // read scope ⊇ the parent session's. See nodeReadRoots above.
+      ...(nodeReadRoots !== undefined ? { parentReadRoots: nodeReadRoots } : {}),
+      // Witness layer: manager-level writer so every DAG node fork emits
+      // subagent_lifecycle events into the session trace (compose nodes never
+      // set config.traceWriter). See ComposeExecutorContext.traceWriter.
+      ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
+      // Origin attribution: thread the surface into the manager so every DAG
+      // node fork inherits the owning surface's origin ('cli'/'telegram'/
+      // 'daemon', not 'unknown') via forkSubagent's parentSurface fill.
+      // this.ctx.surface already drives routing telemetry (deriveOrigin).
+      ...(this.ctx.surface !== undefined ? { surface: this.ctx.surface } : {}),
     });
 
     const startedAt = Date.now();

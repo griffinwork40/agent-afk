@@ -22,14 +22,23 @@
  * SKILL.md prose.
  *
  * Classification runs in three passes (see `classifyBashCommand`):
- *   - Pass 1 (RAW_RULES): rules that must see the FULL command string —
- *     flag-bearing git/gh/curl/pkg forms. Pass 1b then captures an interpreter
- *     (`python -c`/`node -e`) quoted payload and tests it for a write API.
- *   - Pass 2 (STRIPPED_RULES): rules matching short generic tokens (`cp`, `mv`,
- *     `find … -delete`, command-position `patch`/`install`) run against a
- *     DATA-string-stripped view, so a quoted search term like `grep -rn "cp " .`
- *     is not misread as a `cp` invocation. Command substitutions (`$(…)`,
- *     backticks) are PRESERVED so a real `echo "$(rm -rf x)"` is still caught.
+ *   - Pass 1 (RAW_RULES): the ONLY rules that must see the raw string are the
+ *     ones whose mutation SIGNAL can itself be legitimately quoted — `git config
+ *     <key> <value>` (the value is often quoted) and `find … -exec <verb>` (the
+ *     verb may be quoted). Quote-stripping those would hide a real write. Pass 1b
+ *     then captures an interpreter (`python -c`/`node -e`) quoted payload and
+ *     tests it for a write API.
+ *   - Pass 2 (STRIPPED_RULES): every other rule runs against a DATA-string-
+ *     stripped view. A command name/verb/flag is never legitimately quoted in a
+ *     real invocation (`git push`, `rm -rf`, `gh pr create`, `npm install`,
+ *     `sed -i`, `curl -X POST`), so stripping quoted data lets a recon search
+ *     term like `grep -rn "cp " .` or `rg "git push"` through while a genuine
+ *     invocation — whose verb survives stripping — is still caught. Command
+ *     substitutions (`$(…)`, backticks) are PRESERVED so a real `echo "$(rm -rf
+ *     x)"` is still caught. (History: the git/gh/curl/pkg/sed rules originally
+ *     lived in Pass 1; matching them on the raw string over-blocked recon that
+ *     merely mentioned a verb inside quotes — e.g. `rg "git push"` — so they
+ *     were moved here to match the pipe/fs treatment.)
  *   - Pass 3 (redirect): after stripping the allowed no-op sinks, a surviving
  *     `>`/`>>` operator is a write to a real path.
  *
@@ -222,34 +231,27 @@ const ARITHMETIC_EXPANSION = /\$\(\(.*?\)\)/g;
 // — high-frequency in TS/Rust recon — allowed.
 const REAL_REDIRECT = /(?<![=<>-])>>?(?!&)/;
 
-// Rules evaluated against the RAW command string (Pass 1). These must see the
-// full command (flag positions, chaining). Interpreter payload writes are
-// handled separately in Pass 1b; see INTERPRETER_EVAL.
+// Rules evaluated against the RAW command string (Pass 1). ONLY rules whose
+// mutation signal can be legitimately quoted belong here — quote-stripping them
+// (as Pass 2 does) would hide a real write:
+//   - GIT_CONFIG_SET: the value in `git config <key> <value>` is often quoted
+//     (`git config user.name "Foo"`); stripping it leaves the key with no value
+//     token, so the set-form would go undetected.
+//   - FIND_EXEC_MUTATING: the verb after `-exec` may be quoted (`-exec 'rm'`).
+// Every OTHER mutation rule (git verbs, gh, curl, pkg, sed/perl) lives in
+// STRIPPED_RULES: its command name/verb/flag is never quoted in a real call, so
+// matching it against the raw string only over-blocks recon (`rg "git push"`).
+// Interpreter payload writes are handled separately in Pass 1b; see INTERPRETER_EVAL.
 const RAW_RULES: readonly MutationRule[] = [
-  { re: GIT_MUTATING_VERBS, reason: 'git repository mutation' },
-  { re: GIT_TAG_MUTATING, reason: 'git tag create/delete' },
-  { re: GIT_BRANCH_MUTATING, reason: 'git branch delete/rename' },
-  { re: GIT_REMOTE_MUTATING, reason: 'git remote mutation' },
-  { re: GIT_STASH_MUTATING, reason: 'git stash mutation (only `stash list`/`stash show` allowed)' },
-  { re: GIT_CONFIG_WRITE_FLAG, reason: 'git config write flag (only reads allowed)' },
   { re: GIT_CONFIG_SET, reason: 'git config set (`<key> <value>`; only reads allowed)' },
-  { re: GH_NOUN_MUTATING, reason: 'gh write operation' },
-  { re: GH_API_WRITE_METHOD, reason: 'gh api write method (POST/PUT/PATCH/DELETE)' },
-  { re: GH_API_FIELD, reason: 'gh api field payload (-f/-F/--field)' },
-  { re: GH_EXTENDED_MUTATING, reason: 'gh extended write operation (secret/variable/workflow/run/cache)' },
-  { re: GIT_WORKTREE_MUTATING, reason: 'git worktree mutation (remove/prune/move)' },
-  { re: SED_INPLACE, reason: 'sed in-place edit (-i)' },
-  { re: PERL_INPLACE, reason: 'perl in-place edit (-i)' },
-  { re: PKG_INSTALL, reason: 'package install/modify' },
-  { re: CURL_WGET_OUTPUT, reason: 'curl/wget output-to-file' },
-  { re: CURL_WRITE_METHOD, reason: 'curl write method (POST/PUT/PATCH/DELETE)' },
-  { re: CURL_DATA, reason: 'curl data/form payload' },
   { re: FIND_EXEC_MUTATING, reason: 'find -exec with mutating verb' },
 ];
 
-// Rules evaluated against the DATA-string-stripped view (Pass 2). These match
-// short generic tokens that recur as quoted search terms / arguments, so they
-// must not see the contents of plain string literals.
+// Rules evaluated against the DATA-string-stripped view (Pass 2). A command
+// name/verb/flag is never legitimately quoted in a real invocation, so matching
+// the quote-stripped view lets a recon search term like `grep -rn "cp " .` or
+// `rg "git push"` through while a genuine invocation (whose verb survives
+// stripping) is still caught. These must not see the contents of string literals.
 const STRIPPED_RULES: readonly MutationRule[] = [
   { re: PIPE_TO_SHELL, reason: 'pipe-to-shell (RCE via piped interpreter)' },
   { re: FS_MUTATING, reason: 'filesystem mutation' },
@@ -260,6 +262,26 @@ const STRIPPED_RULES: readonly MutationRule[] = [
   { re: TAR_WRITE, reason: 'tar create/extract/append/update (writes files/archive)' },
   { re: UNZIP_CMD, reason: 'unzip (writes files)' },
   { re: CPIO_EXTRACT, reason: 'cpio extract (-i mode writes files)' },
+  // git / gh / curl / pkg / sed verb-and-flag rules — moved here from RAW_RULES
+  // so a quoted mention (`rg "git push"`, `echo "…git push…"`) is not misread as
+  // an invocation. A real call's verb/flag is unquoted and survives stripping.
+  { re: GIT_MUTATING_VERBS, reason: 'git repository mutation' },
+  { re: GIT_TAG_MUTATING, reason: 'git tag create/delete' },
+  { re: GIT_BRANCH_MUTATING, reason: 'git branch delete/rename' },
+  { re: GIT_REMOTE_MUTATING, reason: 'git remote mutation' },
+  { re: GIT_STASH_MUTATING, reason: 'git stash mutation (only `stash list`/`stash show` allowed)' },
+  { re: GIT_WORKTREE_MUTATING, reason: 'git worktree mutation (remove/prune/move)' },
+  { re: GIT_CONFIG_WRITE_FLAG, reason: 'git config write flag (only reads allowed)' },
+  { re: GH_NOUN_MUTATING, reason: 'gh write operation' },
+  { re: GH_API_WRITE_METHOD, reason: 'gh api write method (POST/PUT/PATCH/DELETE)' },
+  { re: GH_API_FIELD, reason: 'gh api field payload (-f/-F/--field)' },
+  { re: GH_EXTENDED_MUTATING, reason: 'gh extended write operation (secret/variable/workflow/run/cache)' },
+  { re: SED_INPLACE, reason: 'sed in-place edit (-i)' },
+  { re: PERL_INPLACE, reason: 'perl in-place edit (-i)' },
+  { re: PKG_INSTALL, reason: 'package install/modify' },
+  { re: CURL_WGET_OUTPUT, reason: 'curl/wget output-to-file' },
+  { re: CURL_WRITE_METHOD, reason: 'curl write method (POST/PUT/PATCH/DELETE)' },
+  { re: CURL_DATA, reason: 'curl data/form payload' },
 ];
 
 /**
@@ -292,12 +314,15 @@ export function classifyBashCommand(command: string): { mutating: boolean; reaso
     return { mutating: false };
   }
 
-  // Pass 1 — rules that must see the FULL command (flag-bearing gh/curl/git/pkg
-  // forms). First neutralize `stash@{N}` reflog refs → ` `: they are arguments,
-  // never verbs, and the literal `stash` inside them otherwise lets
-  // GIT_STASH_MUTATING's greedy prefix backtrack onto the argument and misclassify
-  // the read `git stash show stash@{0}` as a mutation. Stripping the ref cannot
-  // hide a mutation — the real subcommand verb (`drop`/`pop`/`apply`/…) remains.
+  // Pass 1 — only rules whose mutation signal can itself be quoted
+  // (`git config <key> <value>`, `find -exec <verb>`); see RAW_RULES. First
+  // neutralize `stash@{N}` reflog refs → ` `: they are arguments, never verbs,
+  // and the literal `stash` inside them otherwise lets GIT_STASH_MUTATING's
+  // greedy prefix backtrack onto the argument and misclassify the read
+  // `git stash show stash@{0}` as a mutation. `rawForRules` is reused as the
+  // Pass-2 base below so this neutralization also reaches GIT_STASH_MUTATING,
+  // which now runs in Pass 2. Stripping the ref cannot hide a mutation — the
+  // real subcommand verb (`drop`/`pop`/`apply`/…) remains.
   const rawForRules = command.replace(STASH_REFLOG_REF, ' ');
   for (const rule of RAW_RULES) {
     if (rule.re.test(rawForRules)) {
@@ -312,9 +337,12 @@ export function classifyBashCommand(command: string): { mutating: boolean; reaso
     return { mutating: true, reason: 'interpreter one-liner file write (`-c`/`-e`)' };
   }
 
-  // Pass 2 — rules matching short generic tokens, evaluated against a view with
-  // DATA string literals removed so a quoted search term isn't misread.
-  const unquoted = stripDataStrings(command);
+  // Pass 2 — the bulk of the rules, evaluated against a view with DATA string
+  // literals removed so a quoted search term / verb mention isn't misread. Base
+  // off `rawForRules` (NOT the original `command`) so the `stash@{N}` reflog
+  // neutralization reaches GIT_STASH_MUTATING, which now lives in Pass 2 —
+  // otherwise `git stash show stash@{0}` backtracks into a false positive.
+  const unquoted = stripDataStrings(rawForRules);
   for (const rule of STRIPPED_RULES) {
     if (rule.re.test(unquoted)) {
       return { mutating: true, reason: rule.reason };

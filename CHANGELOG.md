@@ -11,9 +11,445 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.42.1] - 2026-07-13
+
+### Changed
+- lazy-load jsdom to cut ~35% off CLI cold-start (#587) (0e9198e)
+
+## [5.42.0] - 2026-07-13
+
+### Added
+- OSC 52 clipboard fallback for SSH+tmux (closes #563) (#582) (f9f84d9)
+
+## [5.41.0] - 2026-07-13
+
+### Added
+- first-class per-slot chatgpt-oauth provider (#548) (d3cbf51)
+
+### Changed
+- document Stop shell-hook additionalContext reaching the next-turn prompt (#585) (12cc0f3)
+- cover first-turn image-echo in BOTH headless + real-PTY harness (#509) (#509) (7d2d77e)
+
+## [5.40.0] - 2026-07-13
+
+### Added
+- bound time-to-first-byte with a configurable per-request timeout (#583) (#584) (a9d3640)
+
+## [5.39.0] - 2026-07-13
+
+### Added
+- multi-session support — session-registry foundation + /sessions switcher (#562) (da1cd03)
+
+## [5.38.7] - 2026-07-13
+
+### Fixed
+- fail closed on unknown parent provider in fork credential fallback (#438) (#580) (69b0a8b)
+
+## [5.38.6] - 2026-07-13
+
+### Fixed
+- stop over-blocking recon that quotes a git/gh/curl verb (#574) (66a7cf7)
+
+## [5.38.5] - 2026-07-13
+
+### Fixed
+- resolve parallelize-dispatch subagent credential per child model (#444) (#569) (e556426)
+
+## [5.38.4] - 2026-07-13
+
+### Changed
+- retire committedBandTopRow erase-loop reads in frame-preserve (advances #540) (#573) (9f7985c)
+
+## [5.38.3] - 2026-07-13
+
+### Changed
+- extract buildSkillForkManager to de-dup the two per-call fork managers (follow-up to #469) (#572) (bf1b26e)
+
+## [5.38.2] - 2026-07-13
+
+### Fixed
+- thread surface into skill-fork managers so forked skills get correct trace origin (#469) (#568) (0eed46b)
+
+### Changed
+- add note on using /service-setup for daemon persistence (#567) (3f09eec)
+
+## [5.38.1] - 2026-07-13
+
+### Fixed
+- render-not-repin — erase committed band from the anchor floor (Stage 2 core, #540) (#552) (8112051)
+
+## [5.38.0] - 2026-07-13
+
+### Added
+- main-session Stop injectContext + terminal-state gate (#237) (#557) (adb5c1f)
+
+## [5.37.7] - 2026-07-13
+
+### Changed
+- extract computeContainment SSOT for resolveAndContain + wouldBeRestricted (#561) (1d13445)
+
+## [5.37.6] - 2026-07-13
+
+### Fixed
+- stop redacting git object names (SHAs) as opaque secrets (#549) (58e506f)
+
+## [5.37.5] - 2026-07-13
+
+### Fixed
+- propagate parent read scope to skill/inline/compose forks (#547) (#556) (60f2254)
+
+### Changed
+- lock in injectContext throw-path keep-drop decision (#392) (#550) (225b893)
+
+## [5.37.4] - 2026-07-13
+
+### Changed
+- remove redundant /save slash command (#559) (d005cec)
+
+## [5.37.3] - 2026-07-13
+
+### Added
+- **C4** `bash` handler now runs a best-effort, advisory-only `readRoots`/`writeRoots` path-containment scan before spawning: absolute and home-relative path tokens are extracted from the command and checked against the session's write roots, emitting a one-time `[security]` warning + `tool.bash_path_escape` telemetry (counts only, no command string) when one escapes — but never blocking execution (warn-only, to preserve the top-level `afk -w` bypass workflow). Rationale, threat model, and residual gaps documented in `docs/decisions/0001-bash-tool-path-containment.md`. Full `execFile`/sandbox containment remains deferred (tracked C4). (#354)
+
+### Fixed
+- honor unconfined resolveBase in the hook + add read-denylist floor (#560) (f62a960)
+
+### Changed
+- best-effort readRoots/writeRoots path scan + ADR (closes #354) (#558) (256ccd7)
+- real-PTY scrollback harness for the compositor (#541) (#553) (11fb1eb)
+
+## [5.37.2] - 2026-07-13
+
+### Fixed
+- grant ~/.afk/state to confined forks; harden worktree main-root fallback (#554) (5b63f2b)
+
+## [5.37.1] - 2026-07-13
+
+### Fixed
+- don't cache config past a parse failure; gate importFrom via user-global allowlist (#501) (#551) (a678b81)
+
+## [5.37.0] - 2026-07-13
+
+### Added
+- detect forked sub-agent read auto-denials (f10df60)
+- badge NESTING roots in committed scrollback (#532) (0c69100)
+
+### Changed
+- Merge pull request #545 from griffinwork40/fix/subagent-read-denial-detector (e6b333d)
+- Merge pull request #543 from griffinwork40/feat/scrollback-nesting-root-batch-badge (c5b8a0a)
+- dim NESTING-root closer base in composer, not render site (0ea46e0)
+
+## [5.36.2] - 2026-07-13
+
+### Fixed
+- eliminate end-of-turn report/table void on overlay collapse (#539) (4898a2c)
+
+## [5.36.1] - 2026-07-13
+
+### Fixed
+- restrict read-only depth-cap forks to declared tools + honor plugin model: (#499) (#542) (2f7dc7e)
+
+## [5.36.0] - 2026-07-13
+
+### Added
+- Linux systemd --user support behind a platform-neutral ServiceManager (#515) (25bd80c)
+
+## [5.35.3] - 2026-07-12
+
+### Fixed
+- inherit parent read scope for forked sub-agents (#544) (94298d7)
+
+## [5.35.2] - 2026-07-12
+
+### Fixed
+- restore worktree cwd when resuming or forking a session (#535) (a1ea133)
+
+## [5.35.1] - 2026-07-12
+
+### Fixed
+- stop redacting long filesystem paths as opaque secrets (#533) (57cb592)
+
+## [5.35.0] - 2026-07-12
+
+### Added
+- openai-compatible: honor server `retry-after` / `retry-after-ms` on 429/503 backoff instead of blind exponential (parity with anthropic-direct) (#536)
+
+### Added
+- mirror source tool enabled/disabled state for imported plugins (#537) (2df91f4)
+- honor retry-after on 429/503 backoff (#536) (#538) (e4e3bf2)
+
+## [5.34.0] - 2026-07-12
+
+### Added
+- app-like TUI — /config settings menu + /model & /resume pickers (#506) (7cf6c0b)
+
+## [5.33.2] - 2026-07-12
+
+### Fixed
+- guard NaN config + non-string systemPrompt + unmask registry-skill errors (#534) (edfcd64)
+
+## [5.33.1] - 2026-07-12
+
+### Fixed
+- resolve path-approval grants per executing session (#435/#514) (#527) (01632cd)
+
+## [5.33.0] - 2026-07-12
+
+### Added
+- observe-only release-boundary PreToolUse detector (gate-migration wave 1 slice 2) (#524) (7f5a4fc)
+- cross-provider history compaction (#517) (d44cc30)
+
+## [5.32.0] - 2026-07-12
+
+### Added
+- distinguish parallel vs sequential tool dispatch with ∥i/N batch badge (#520) (f617893)
+
+## [5.31.2] - 2026-07-12
+
+### Fixed
+- give read/write/edit/list the factory-cwd resolve tier glob/grep have (#434) (#522) (a4be744)
+
+## [5.31.1] - 2026-07-12
+
+### Fixed
+- flatten multi-line bash summaries in the tool-lane label (#511) (ea3b9c0)
+
+## [5.31.0] - 2026-07-12
+
+### Added
+- auto-resume idle REPL when a background subagent completes (#518) (2a1d374)
+
+### Changed
+- bump @types/node from 26.1.0 to 26.1.1 in /website (#531) (7e1baef)
+
+## [5.30.6] - 2026-07-12
+
+### Changed
+- dedupe runIteration's two wire branches (#365) (#525) (db03f41)
+- unify system-prompt assembly into query/system-prompt.ts (#362) (#523) (5c5cf97)
+- bump the fumadocs group in /website with 3 updates (#529) (be2459b)
+
+## [5.30.5] - 2026-07-12
+
+### Fixed
+- classify AFK gate writes by tool cwd (port afk-workshop#836) (#512) (fd7e3ab)
+
+## [5.30.4] - 2026-07-12
+
+### Changed
+- extract closure-emitter, ledger-lifecycle, plan-exit-bridge (#364) (#519) (040403a)
+
+## [5.30.3] - 2026-07-12
+
+### Fixed
+- explicit writeRoots grant + truthful deny for forked children (#514) (360b999)
+
+## [5.30.2] - 2026-07-11
+
+### Fixed
+- refresh lastMeasuredFrameTop in the picker repaint path too (#513) (0c83bfa)
+
+## [5.30.1] - 2026-07-11
+
+### Fixed
+- label subagent tool-call tallies "N tool calls" not "N tools" (#508) (2f1c857)
+- route commitAbove on the real measured frame top, not the shrink-padded one (#505) (60a664b)
+
+## [5.30.0] - 2026-07-11
+
+### Added
+- seed the REPL from a launch argument (`afk "prompt"` / `afk /review`) (#510) (ae561dd)
+
+## [5.29.3] - 2026-07-11
+
+### Fixed
+- decouple bash/grep output kill-cap from model budget; keep head+tail (#507) (dda24b2)
+
+## [5.29.2] - 2026-07-11
+
+### Fixed
+- keep the update-notifier fresh instead of ≤24h stale (#504) (f9225b5)
+
+### Changed
+- Merge branch 'main' of https://github.com/griffinwork40/agent-afk (589d1b0)
+- removed stale ref to legacy import (7f147e9)
+- split terminal-compositor.test.ts monolith into topic siblings (#369) (#498) (1f89e9e)
+
+## [5.29.1] - 2026-07-11
+
+### Fixed
+- mirror exit_plan_mode's deferred flip onto stats.permissionMode (#495) (#497) (2710e6b)
+
+## [5.29.0] - 2026-07-11
+
+### Added
+- classify usage-limit 429s via anthropic-ratelimit-unified-* headers (#488) (#490) (a43dab4)
+
+## [5.28.3] - 2026-07-11
+
+### Changed
+- extract dispatch-batching + repeat-circuit-breaker from dispatcher.ts (#361) (#496) (045f1de)
+
+## [5.28.2] - 2026-07-11
+
+### Fixed
+- surface deps-not-installed note on create (#479) (21375e9)
+
+## [5.28.1] - 2026-07-11
+
+### Fixed
+- cap session-grants.jsonl growth with atomic size trim (#473) (5a7d3db)
+
+## [5.28.0] - 2026-07-11
+
+### Added
+- observe-only safe-destruct PreToolUse detector (gate-migration wave 1) (#492) (a442571)
+
+## [5.27.2] - 2026-07-11
+
+### Changed
+- split config.ts into tier modules (#368) — checkpoint (#493) (db9e42c)
+
+## [5.27.1] - 2026-07-10
+
+### Changed
+- consolidate 3 grant-manager copies into shared module (#361, #362 prep) (#489) (e2b745c)
+- split skill-executor.ts into per-strategy modules (#363) (#491) (2a24d2f)
+
+## [5.27.0] - 2026-07-10
+
+### Added
+- first-class isolation:"worktree" for the agent tool (#487) (7941226)
+
+## [5.26.5] - 2026-07-10
+
+### Fixed
+- route long/absent-retry-after 429s back to the usage-limit pause path (#483) (34a09c5)
+
+## [5.26.4] - 2026-07-10
+
+### Changed
+- split elicitation-repl.ts into mode modules (#367) (#484) (c3e39d6)
+
+## [5.26.3] - 2026-07-10
+
+### Changed
+- split plugin-skills.ts into flags/listing/reload modules (#366) (#486) (cd37ef1)
+- split loop.test.ts into sibling suites (#370) (#485) (708c4ff)
+
+## [5.26.2] - 2026-07-10
+
+### Added
+- ask-question PreToolUse gate + orphan root-settings warning (#477) (362d05b)
+
+### Changed
+- retire vendored TS orchestrator for bundled SKILL.md (#480) (88a77db)
+- mark AFK_MAX_TOKENS / maxTokens as deprecated and inert (#482) (f37b0a9)
+
+## [5.26.1] - 2026-07-10
+
+### Changed
+- cover in-turn SubagentStop injectContext append (#391) (#481) (73e8644)
+- extract appendInjectContext helper (#393) (#478) (b0cbbed)
+
+## [5.26.0] - 2026-07-10
+
+### Added
+- GPT-5.6 model family support for the openai-compatible provider (reachable via
+  Codex ChatGPT-OAuth or an OpenAI API key): explicit 1M context-window entries
+  (`MODEL_CONTEXT_LIMITS`) and 128k max-output-token entries
+  (`MODEL_MAX_OUTPUT_TOKENS`) for the `gpt-5.6` alias and the
+  `gpt-5.6-sol`/`-terra`/`-luna` variants (plus `gpt-5.5`, previously falling
+  through to the 262k / 64k defaults), `/model` picker listings, and an updated
+  ChatGPT/Codex-backend 400 diagnostic. Without the output-cap entries these ids
+  hit `DEFAULT_MAX_OUTPUT` (64k) and silently halved their advertised 128k output
+  budget when `config.maxOutputTokens` was unset, truncating long code/research
+  responses. Routing and the reasoning/vision request contract already covered
+  `gpt-5.6` via the `/^gpt-5/` patterns; this closes the maintained-table gaps
+  and adds regression coverage.
+
+### Added
+- add GPT-5.6 family support to openai-compatible provider (#474) (068d910)
+
+## [5.25.11] - 2026-07-10
+
+### Fixed
+- Telegram: don't guillotine long agent turns at 90s — disable Telegraf's default `handlerTimeout` so the purpose-built `streaming.ts` inactivity watchdog is the sole timeout authority; fixes the spurious "❌ An unexpected error occurred. Please try again." shown while a turn (sub-agents, web_scrape, long tool calls) was still running and would complete
+
+### Fixed
+- make witness traces correlatable to sessions via ledger meta (#476) (4a7833f)
+- disable Telegraf 90s handlerTimeout so long turns aren't guillotined (#475) (1e80771)
+
+## [5.25.10] - 2026-07-09
+
+### Fixed
+- space out ⚡ glyph and bp tag in bypass prompt caret (#472) (32ea78d)
+
+## [5.25.9] - 2026-07-09
+
+### Fixed
+- #441 robustness cluster — grep cwd-error enrichment, subagent cache invalidation, worktree-root debug log (#471) (fe19cb5)
+
+## [5.25.8] - 2026-07-08
+
+### Changed
+- generalize o-series predicate to reasoning-model contract (#463) (fad5e64)
+
+## [5.25.7] - 2026-07-08
+
+### Fixed
+- surface capped/truncated partials to the parent instead of silent success (#461) (9cfddd0)
+
+### Changed
+- negative coverage for flag-like/path-traversal base refs (#398) (#458) (badf06f)
+
+## [5.25.6] - 2026-07-08
+
+### Fixed
+- Witness-trace `origin` attribution for forked subagents: `agent`-tool and `compose` child (and grandchild) sessions were made trace-visible in #466 but recorded `origin: "unknown"` instead of the owning surface, because the session `surface` was never threaded into the fork managers (only `traceWriter`/`cwd` were). The REPL/chat/Telegram/daemon root managers, the nested depth-2+ child manager, and the compose executor's manager now carry the surface, so forked children inherit the correct `origin` (`cli`/`telegram`/`daemon`) via `forkSubagent`'s `parentSurface` fill — mirroring the existing `farm.ts` pattern. Follow-up to Codex review on #466. (Skill-forked subagents share the same latent gap and are tracked separately.)
+
+### Fixed
+- thread session surface into fork managers so forked subagents get correct trace origin (#468) (b86fdb5)
+
+## [5.25.5] - 2026-07-08
+
+### Fixed
+- fix wrap overflow + bound and label the diagnose verifier fan-out (#470) (227a99e)
+
+## [5.25.4] - 2026-07-08
+
+### Fixed
+- Messages typed during the ESC soft-stop settle window now **merge** into one next turn instead of last-wins replacement. The #403 coalescing kept only the latest post-ESC message, so a real instruction followed by a "." liveness poke silently dropped the instruction — the "it didn't send" report, round 2. All post-ESC messages now join (newline-separated, attachments concatenated) and run as exactly one next turn; the no-backlog invariant and the pre-ESC queue-preservation contract are unchanged.
+
+### Fixed
+- merge post-ESC type-ahead instead of last-wins so soft-stop never drops a typed message (#467) (064ea20)
+
+## [5.25.3] - 2026-07-07
+
+### Fixed
+- tolerate indented fences in isInOpenCodeFence parity check (#464) (ec31016)
+
+## [5.25.2] - 2026-07-07
+
+### Fixed
+- `agent`-tool and `compose` subagents are now visible in the witness trace (`afk trace show`). Three gaps closed: (1) `forkSubagent` resolves the trace writer as per-fork config → manager-level writer, so the `subagent_lifecycle` started/succeeded/failed/cancelled events and the handle's writer no longer silently drop when inheritance came from the manager; (2) the REPL/chat/Telegram root managers and compose executors now carry the session trace writer; (3) the writer chains through nested child managers (depth ≥ 2 `agent` forks), mirroring the existing `cwd` chain. Previously a raw `agent` dispatch produced zero trace events between `tool_call started` and `completed` — a stuck child was indistinguishable from a never-started one.
+
+### Fixed
+- make agent-tool and compose forks visible in the witness trace (#466)do (a41a7d3)
+
+## [5.25.1] - 2026-07-07
+
 ### Fixed
 - Forked subagents no longer hang their parent indefinitely: every fork now gets a bounded wall-clock budget by default — 20 min foreground (`SUBAGENT_DEFAULT_TIMEOUT_MS`), 60 min background (`SUBAGENT_BACKGROUND_TIMEOUT_MS`) — instead of the unbounded session default. On expiry the child's controller aborts (cascading to descendants) and the parent receives a legible timeout error. Explicit `timeoutMs` wins; `0` restores unbounded.
 - Forked subagents now **fail fast on OAuth usage-limit pauses** (`autoResumeOnUsageLimit` defaults to `false` for forks) instead of silently polling for reset — up to 2 h — while the parent looked frozen. The classified usage-limit error surfaces to the parent, which decides whether to retry, reroute, or surface the pause. Callers may opt a child back in with an explicit `autoResumeOnUsageLimit: true`.
+
+### Fixed
+- bound fork wall-clock budget + fail fast on usage-limit pauses (#465) (1516e65)
+- preserve empty-fence <i> label when the safety net strips emphasis (#456) (64ddd04)
+- thread openaiBaseUrl so OpenAI Telegram sessions reach the configured endpoint (#459) (e674621)
+
+### Changed
+- consolidate o-series detection into one predicate (#457) (db71f16)
 
 ## [5.25.0] - 2026-07-07
 

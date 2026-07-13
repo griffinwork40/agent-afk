@@ -209,7 +209,7 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'AFK_MAX_TOKENS',
-    description: 'Cap on total tokens per turn (input + output). Default 4096.',
+    description: 'Deprecated and inert: not read by the generation path. Use AFK_MAX_OUTPUT_TOKENS (or --max-output-tokens) to cap per-response output tokens; falls back to the model output ceiling when unset.',
     type: 'number',
     required: false,
     default: '4096',
@@ -253,6 +253,25 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     required: false,
     default: 'sonnet',
     example: 'claude-opus-4-5',
+    category: 'model',
+  },
+  {
+    name: 'AFK_MODEL_TTFB_TIMEOUT_MS',
+    description:
+      'Per-request time-to-first-token timeout (ms) for the anthropic-direct streaming loop. ' +
+      'Bounds how long a single model call may stall BEFORE its first streamed CONTENT token ' +
+      '(a text/thinking delta or tool_use); the connection-level message_start and keep-alive ' +
+      'pings do NOT count. Once a content token streams, the timer is cleared and the rest of ' +
+      'the response runs unbounded, so a normal slow call (below the bound) and any actively-' +
+      'streaming extended-thinking response are never aborted. NOTE: a request whose FIRST token ' +
+      'takes longer than the bound — e.g. a very large opus_1m prefill — is aborted, retried ' +
+      'once, then surfaces as an error (raise this value or set 0 for such workloads); this ' +
+      'trims the degrading-call tail instead of a silent ~10-min hang on the SDK default. ' +
+      'Default 180000 (180s ≈ 2× the measured p99 ttfb). Set to 0 to disable.',
+    type: 'number',
+    required: false,
+    default: '180000',
+    example: '120000',
     category: 'model',
   },
   {
@@ -1068,6 +1087,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'misc',
   },
   {
+    name: 'AFK_READ_DENYLIST',
+    description: 'Colon-separated list of additional absolute paths the read_file/grep/glob/list_directory tools refuse to read. Built-in credential entries (~/.ssh, ~/.aws, ~/.afk/config, …) always apply on top and cannot be removed.',
+    type: 'string',
+    required: false,
+    example: '/Users/me/project/.env:/Users/me/secrets',
+    category: 'misc',
+  },
+  {
     name: 'AFK_WRITE_DIFF',
     description: 'Show a diff preview before each write_file tool call. Defaults provider-controlled when unset.',
     type: 'boolean',
@@ -1187,6 +1214,7 @@ export const env = {
   get AFK_MAX_TOOL_USE_ITERATIONS(): string | undefined { return process.env['AFK_MAX_TOOL_USE_ITERATIONS']; },
   get AFK_MEMORY_EVIDENCE_GATE(): string | undefined { return process.env['AFK_MEMORY_EVIDENCE_GATE']; },
   get AFK_MODEL(): string | undefined { return process.env['AFK_MODEL']; },
+  get AFK_MODEL_TTFB_TIMEOUT_MS(): string | undefined { return process.env['AFK_MODEL_TTFB_TIMEOUT_MS']; },
   get AFK_MODEL_LARGE(): string | undefined { return process.env['AFK_MODEL_LARGE']; },
   get AFK_MODEL_LARGE_API_KEY(): string | undefined { return process.env['AFK_MODEL_LARGE_API_KEY']; },
   get AFK_MODEL_LARGE_BASE_URL(): string | undefined { return process.env['AFK_MODEL_LARGE_BASE_URL']; },
@@ -1313,6 +1341,7 @@ export const env = {
 
   // Filesystem
   get AFK_WRITE_DENYLIST(): string | undefined { return process.env['AFK_WRITE_DENYLIST']; },
+  get AFK_READ_DENYLIST(): string | undefined { return process.env['AFK_READ_DENYLIST']; },
   get AFK_WRITE_DIFF(): string | undefined { return process.env['AFK_WRITE_DIFF']; },
 
   // CLI / capture-mode

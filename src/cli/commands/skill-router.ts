@@ -11,11 +11,12 @@ import { getSkill, listSkills, isSkillVisible } from '../../skills/index.js';
 import { env } from '../../config/env.js';
 import type { IAgentSession } from '../../agent/types.js';
 
-// Import skill modules to trigger registerSkill() side-effects
+// Import skill modules to trigger registerSkill() side-effects.
+// diagnose is no longer a vendored TS registry skill — it ships as the
+// bundled-plugin `awa-bundled/skills/diagnose` SKILL.md (context: fork),
+// resolved via the plugin scanner, not registerSkill().
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import '../../skills/mint/index.js';
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import '../../skills/diagnose/index.js';
 
 export interface RouteResult {
   handled: true;

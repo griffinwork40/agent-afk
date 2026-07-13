@@ -1,7 +1,7 @@
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import { palette } from '../../palette.js';
 import { SUBAGENT_TOOLS, NESTING_TOOLS, SKILL_TOOLS } from '../../tool-category.js';
-import { formatToolLine, formatToolResultLine, formatOutcome, formatDiffBlock, doneGlyph, sanitizeLabel } from './tool-lane-format.js';
+import { formatToolLine, formatToolResultLine, formatOutcome, formatDiffBlock, doneGlyph, sanitizeLabel, batchBadge } from './tool-lane-format.js';
 import type { DiffPayload } from '../../../utils/diff.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 import { truncateDisplayWidth, stripAnsi } from '../../display.js';
@@ -496,7 +496,7 @@ export class ToolLane {
         // never carries a `diff` payload (diffs originate from edit/write
         // tool_diff chunks), so no diff block is rendered here.
         if (entry.result) {
-          lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName)));
+          lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName) + batchBadge(entry.result)));
         } else {
           lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' …')));
         }
@@ -509,7 +509,7 @@ export class ToolLane {
         }
       } else {
         if (entry.result) {
-          lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName)));
+          lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName) + batchBadge(entry.result)));
           if (entry.diff && !entry.result.isError) {
             // Diff hangs under the outcome line, indented one level deeper
             // (4 spaces) so it visually attaches to this tool entry.

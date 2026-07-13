@@ -62,6 +62,34 @@ export interface AgentInput {
    * Each level must specify `cwd` explicitly to operate in a worktree.
    */
   cwd?: string;
+  /**
+   * Optional extra write roots to pre-grant to the forked child (#435). By
+   * default a fork's writes are confined to its cwd/worktree; the path-approval
+   * hook auto-denies any write outside it and a fork cannot elicit. Passing
+   * writeRoots here lets the PARENT deliberately grant additional write roots.
+   * Composed WITH the child's cwd (never replaces it), so the child keeps write
+   * access to its own tree. Each entry must be an absolute path with no `..`
+   * segments. Mutually exclusive with `isolation:'worktree'` (isolation's
+   * contract is total confinement). Unlike the #416 read grant this is never
+   * automatic — writing outside the worktree breaks isolation, so it requires
+   * explicit parent intent.
+   */
+  writeRoots?: string[];
+  /**
+   * Filesystem-isolation mode. When `'worktree'`, the executor forks the child
+   * inside a fresh afk-managed git worktree (`.afk-worktrees/<slug>` on a new
+   * branch) and sets the child's cwd to it, so parallel write-capable
+   * subagents never collide in the shared tree. Omitted / `'none'` runs the
+   * child in the parent tree (or `cwd`).
+   *
+   * Mutually exclusive with {@link cwd} (the executor owns the child's cwd when
+   * isolating). Forbidden with `mode: 'background'` in this release: a detached
+   * child outlives the executor's teardown, so nothing would reclaim its
+   * worktree in-turn (see docs/proposals/first-class-worktree-isolation.md
+   * Open Question 1). Only the honored value is retained — `'none'` normalizes
+   * to `undefined` (no field) so the executor's `=== 'worktree'` check is total.
+   */
+  isolation?: 'worktree';
 }
 
 /**
@@ -195,6 +223,74 @@ export function parseAgentInput(input: unknown): AgentInput {
     cwd = cwdValue;
   }
 
+  // writeRoots: optional array of absolute paths pre-granted as extra write
+  // roots to the fork (#435). Same per-entry rules as cwd (non-empty, absolute,
+  // no '..' segments). An empty array normalizes to undefined (no-op grant).
+  let writeRoots: string[] | undefined;
+  const writeRootsValue = agentInput['writeRoots'];
+  if (writeRootsValue !== undefined) {
+    if (!Array.isArray(writeRootsValue)) {
+      throw new Error(
+        `Agent tool writeRoots must be an array of absolute paths, got: ${JSON.stringify(writeRootsValue)}`,
+      );
+    }
+    const roots: string[] = [];
+    for (const entry of writeRootsValue) {
+      if (typeof entry !== 'string' || entry.length === 0) {
+        throw new Error(
+          `Agent tool writeRoots entries must be non-empty strings, got: ${JSON.stringify(entry)}`,
+        );
+      }
+      if (!isAbsolute(entry)) {
+        throw new Error(
+          `Agent tool writeRoots entries must be absolute paths, got: ${JSON.stringify(entry)}`,
+        );
+      }
+      if (entry.split(/[/\\]/).includes('..')) {
+        throw new Error(
+          `Agent tool writeRoots entries must not contain '..' segments, got: ${JSON.stringify(entry)}`,
+        );
+      }
+      roots.push(entry);
+    }
+    if (roots.length > 0) writeRoots = roots;
+  }
+
+  // isolation: optional enum. 'none' (or omitted) is a no-op and normalizes to
+  // undefined so the executor's `=== 'worktree'` check is total. 'worktree'
+  // asks the executor to fork the child inside a fresh managed git worktree.
+  //   - Mutually exclusive with cwd: isolating means the executor owns the
+  //     child's cwd, so a caller-supplied cwd would be silently overwritten —
+  //     reject loudly instead.
+  //   - Forbidden with mode:'background': a detached child outlives the
+  //     foreground teardown that removes the worktree, so nothing would reclaim
+  //     it in-turn (proposal Open Q1). Reject rather than leak.
+  let isolation: 'worktree' | undefined;
+  const isolationValue = agentInput['isolation'];
+  if (isolationValue !== undefined && isolationValue !== 'none') {
+    if (isolationValue !== 'worktree') {
+      throw new Error(
+        `Agent tool isolation must be "none" or "worktree", got: ${JSON.stringify(isolationValue)}`,
+      );
+    }
+    if (cwd !== undefined) {
+      throw new Error(
+        'Agent tool cwd and isolation are mutually exclusive — pass one or the other',
+      );
+    }
+    if (writeRoots !== undefined) {
+      throw new Error(
+        'Agent tool writeRoots and isolation are mutually exclusive — a worktree-isolated child is fully confined by design',
+      );
+    }
+    if (mode === 'background') {
+      throw new Error(
+        'Agent tool isolation:"worktree" is not supported with mode:"background" yet',
+      );
+    }
+    isolation = 'worktree';
+  }
+
   return {
     prompt,
     model,
@@ -206,5 +302,7 @@ export function parseAgentInput(input: unknown): AgentInput {
     mode,
     ...(agent_type !== undefined ? { agent_type } : {}),
     ...(cwd !== undefined ? { cwd } : {}),
+    ...(writeRoots !== undefined ? { writeRoots } : {}),
+    ...(isolation !== undefined ? { isolation } : {}),
   };
 }

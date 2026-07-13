@@ -5,6 +5,13 @@
  * the markdown / title / fallback outputs. The key behaviors are (a) main
  * content isolation strips chrome, (b) markdown formatting is faithful, and
  * (c) sparse pages degrade to a flagged whole-body fallback.
+ *
+ * `extractReadableMarkdown()` is async (it lazily imports jsdom/Readability/
+ * Turndown on first call — see extract.ts) so every call site here awaits it.
+ * The static `Readability` import below is only for `vi.spyOn` in the last
+ * describe block; it resolves to the same module instance extract.ts's
+ * dynamic `import()` loads, since Node's module cache is keyed by resolved
+ * specifier regardless of import style.
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -36,8 +43,8 @@ function articlePage(): string {
 }
 
 describe('extractReadableMarkdown — main content isolation', () => {
-  it('isolates the article and strips nav/sidebar/footer chrome', () => {
-    const out = extractReadableMarkdown(articlePage(), 'https://example.com/post');
+  it('isolates the article and strips nav/sidebar/footer chrome', async () => {
+    const out = await extractReadableMarkdown(articlePage(), 'https://example.com/post');
     expect(out.usedFallback).toBe(false);
     expect(out.markdown).toContain('main article body');
     // Chrome should be gone.
@@ -46,24 +53,24 @@ describe('extractReadableMarkdown — main content isolation', () => {
     expect(out.markdown).not.toContain('About');
   });
 
-  it('derives the title', () => {
-    const out = extractReadableMarkdown(articlePage(), 'https://example.com/post');
+  it('derives the title', async () => {
+    const out = await extractReadableMarkdown(articlePage(), 'https://example.com/post');
     expect(out.title).toBe('The Real Title');
   });
 
-  it('reports a non-trivial textLength above the thin threshold', () => {
-    const out = extractReadableMarkdown(articlePage(), 'https://example.com/post');
+  it('reports a non-trivial textLength above the thin threshold', async () => {
+    const out = await extractReadableMarkdown(articlePage(), 'https://example.com/post');
     expect(out.textLength).toBeGreaterThan(THIN_CONTENT_CHARS);
   });
 
-  it('resolves relative links to absolute URLs', () => {
-    const out = extractReadableMarkdown(articlePage(), 'https://example.com/post');
+  it('resolves relative links to absolute URLs', async () => {
+    const out = await extractReadableMarkdown(articlePage(), 'https://example.com/post');
     expect(out.markdown).toContain('https://example.com/relative/link');
   });
 });
 
 describe('extractReadableMarkdown — markdown formatting', () => {
-  it('emits ATX headings and fenced code blocks', () => {
+  it('emits ATX headings and fenced code blocks', async () => {
     const html = `<!DOCTYPE html><html><head><title>Doc</title></head><body><article>
       <h2>Heading Two</h2>
       <p>Intro paragraph with enough text to be considered an article body by the
@@ -72,7 +79,7 @@ describe('extractReadableMarkdown — markdown formatting', () => {
       <pre><code>const x = 1;</code></pre>
       <ul><li>first</li><li>second</li></ul>
     </article></body></html>`;
-    const out = extractReadableMarkdown(html, 'https://example.com/doc');
+    const out = await extractReadableMarkdown(html, 'https://example.com/doc');
     expect(out.markdown).toMatch(/^#+ Heading Two/m);
     expect(out.markdown).toContain('```');
     expect(out.markdown).toContain('const x = 1;');
@@ -82,10 +89,10 @@ describe('extractReadableMarkdown — markdown formatting', () => {
 });
 
 describe('extractReadableMarkdown — thin / fallback paths', () => {
-  it('reports a thin textLength for a JS-gated app shell (escalation signal)', () => {
+  it('reports a thin textLength for a JS-gated app shell (escalation signal)', async () => {
     const html = `<!DOCTYPE html><html><head><title>App Shell</title></head>
       <body><div id="root"><p>Loading…</p></div></body></html>`;
-    const out = extractReadableMarkdown(html, 'https://example.com/app');
+    const out = await extractReadableMarkdown(html, 'https://example.com/app');
     expect(out.title).toBe('App Shell');
     expect(out.markdown).toContain('Loading');
     // The escalation signal is a thin extraction — Readability may or may not
@@ -94,20 +101,20 @@ describe('extractReadableMarkdown — thin / fallback paths', () => {
     expect(out.textLength).toBeLessThan(THIN_CONTENT_CHARS);
   });
 
-  it('drops script and style content in the fallback path', () => {
+  it('drops script and style content in the fallback path', async () => {
     const html = `<!DOCTYPE html><html><head><title>X</title></head><body>
       <script>console.log('should not appear');</script>
       <style>.a{color:red}</style>
       <div>visible text</div>
     </body></html>`;
-    const out = extractReadableMarkdown(html, 'https://example.com/x');
+    const out = await extractReadableMarkdown(html, 'https://example.com/x');
     expect(out.markdown).toContain('visible text');
     expect(out.markdown).not.toContain('should not appear');
     expect(out.markdown).not.toContain('color:red');
   });
 
-  it('handles an empty document without throwing', () => {
-    const out = extractReadableMarkdown('<html></html>', 'https://example.com/empty');
+  it('handles an empty document without throwing', async () => {
+    const out = await extractReadableMarkdown('<html></html>', 'https://example.com/empty');
     expect(out.usedFallback).toBe(true);
     expect(out.markdown).toBe('');
     expect(out.textLength).toBe(0);
@@ -115,8 +122,8 @@ describe('extractReadableMarkdown — thin / fallback paths', () => {
 });
 
 describe('extractReadableMarkdown — Readability.parse() throws (safeExtract catch branch)', () => {
-  it('falls back to whole-body content when Readability.parse() throws', () => {
-    // Branch: extract.ts lines 84-89 — the try/catch around `new Readability(clone).parse()`.
+  it('falls back to whole-body content when Readability.parse() throws', async () => {
+    // Branch: extract.ts's try/catch around `new Readability(clone).parse()`.
     // When parse() throws (degenerate DOM or internal error), article is set to
     // null and the function falls through to the whole-body fallback path.
     // We spy on Readability.prototype.parse to simulate the throw deterministically.
@@ -129,7 +136,7 @@ describe('extractReadableMarkdown — Readability.parse() throws (safeExtract ca
     const html = `<!DOCTYPE html><html><head><title>Throws Doc</title></head>
       <body><div>fallback body content</div></body></html>`;
 
-    const out = extractReadableMarkdown(html, 'https://example.com/throws');
+    const out = await extractReadableMarkdown(html, 'https://example.com/throws');
 
     // The throw was swallowed; we fell back to the whole-body path.
     expect(out.usedFallback).toBe(true);

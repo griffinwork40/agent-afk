@@ -12,12 +12,15 @@ import { formatCost, formatTokens } from '../../format-utils.js';
 import { contextLimitFor, MODEL_CONTEXT_LIMITS } from '../../model-limits.js';
 import { renderDebugBanner } from '../../debug-banner.js';
 import { providerForModel } from '../../../agent/providers/index.js';
-import { slotForInput, unconfiguredSlotError } from '../../../agent/session/model-slots.js';
-import type { SlashCommand } from '../types.js';
+import {
+  MODEL_ALIASES_HINT,
+  resolveBinding,
+  slotForInput,
+  unconfiguredSlotError,
+} from '../../../agent/session/model-slots.js';
+import { runPicker } from '../../render/picker.js';
+import type { SlashCommand, SlashContext } from '../types.js';
 import type { AgentModelInput } from '../../../agent/types.js';
-
-/** Display hint only — not used for validation. Full model IDs (org/model) are also accepted. */
-const MODEL_ALIASES_HINT = ['local', 'small', 'medium', 'large', 'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable'] as const;
 
 const costCmd: SlashCommand = {
   name: '/cost',
@@ -192,45 +195,81 @@ const historyCmd: SlashCommand = {
   },
 };
 
+/**
+ * Validate + apply a model target (mid-session, live). Shared by the text-arg
+ * path (`/model <name>`) and the interactive picker (bare `/model` on a TTY).
+ * Writes all user-facing output via ctx.out; never throws.
+ */
+async function switchModel(ctx: SlashContext, target: string): Promise<void> {
+  // Accept slot tier names / configured custom names, the built-in Claude
+  // identity aliases, a raw Anthropic wire id (e.g. `claude-sonnet-5`), OR full
+  // HF-style org/model ids (routed openai-compatible). Bare unknown strings
+  // (e.g. typos) are rejected — they'd silently fall through to anthropic-direct
+  // and produce an unhelpful API error at turn time.
+  const isKnownAlias = MODEL_ALIASES_HINT.includes(target);
+  const isSlotName = slotForInput(target) !== undefined;
+  const isOpenAICompatibleId = providerForModel(target) === 'openai-compatible';
+  // The resolved id's `claude-` prefix is the confident raw-Claude-id signal;
+  // aliases already resolve to a claude- id too, so this also covers them.
+  const resolvedId = resolveBinding(target).id.trim().toLowerCase();
+  const isClaudeWireId = resolvedId.startsWith('claude-') || resolvedId.startsWith('claude_');
+  if (!isKnownAlias && !isSlotName && !isOpenAICompatibleId && !isClaudeWireId) {
+    ctx.out.warn(`Unknown model: ${target}. Aliases: ${MODEL_ALIASES_HINT.join(', ')}  (or a full model id)`);
+    return;
+  }
+  // Reject an unconfigured capability tier (e.g. an empty `local` slot) at the
+  // point of selection — otherwise the empty id reaches the provider as an
+  // opaque empty-model error or a silent cloud fallback.
+  const unconfigured = unconfiguredSlotError(target);
+  if (unconfigured) {
+    ctx.out.warn(unconfigured);
+    return;
+  }
+  try {
+    await ctx.session.current.setModel(target as AgentModelInput);
+    ctx.stats.model = target as AgentModelInput;
+    ctx.ui.repaintStatusLine();
+    ctx.out.success(`Model switched to ${palette.brand(target)}`);
+  } catch (err) {
+    ctx.out.error(`Failed to switch model: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 const modelCmd: SlashCommand = {
   name: '/model',
-  usage: '/model <local|small|medium|large|opus|sonnet|haiku|fable|org/model>',
+  usage: '/model [local|small|medium|large|opus|sonnet|haiku|fable|org/model]',
   summary: 'Switch the active model mid-session',
-  hint: 'Switch the capability tier (local/small/medium/large — or your configured names) or pass a full model id. Upgrade to large for a hard problem, downshift to small for cheap iteration — context carries over. Also accepts HuggingFace-style ids (e.g. mlx-community/Qwen3-30B-A3B-4bit).',
+  hint: 'Switch the capability tier (local/small/medium/large — or your configured names) or pass a full model id. Bare `/model` opens an interactive picker on a TTY. Upgrade to large for a hard problem, downshift to small for cheap iteration — context carries over. Also accepts HuggingFace-style ids (e.g. mlx-community/Qwen3-30B-A3B-4bit).',
   async handler(ctx, args) {
     const target = args.trim().toLowerCase();
-    if (!target) {
-      ctx.out.info(`Current model: ${palette.brand(ctx.stats.model)}`);
-      ctx.out.line(palette.dim(`  Aliases: ${MODEL_ALIASES_HINT.join(', ')}  (or any org/model HF id)`));
+    if (target) {
+      await switchModel(ctx, target);
       return 'continue';
     }
-    // Accept slot tier names / configured custom names, known Claude aliases,
-    // OR full HF-style org/model ids (routed openai-compatible). Bare unknown
-    // strings (e.g. typos) are rejected — they'd silently fall through to
-    // anthropic-direct and produce an unhelpful API error at turn time.
-    const isKnownAlias = MODEL_ALIASES_HINT.includes(target as (typeof MODEL_ALIASES_HINT)[number]);
-    const isSlotName = slotForInput(target) !== undefined;
-    const isHFStyleId = providerForModel(target) === 'openai-compatible';
-    if (!isKnownAlias && !isSlotName && !isHFStyleId) {
-      ctx.out.warn(`Unknown model: ${target}. Aliases: ${MODEL_ALIASES_HINT.join(', ')}  (or org/model for local/OpenAI-compatible)`);
+
+    // No argument: open an arrow-key picker on a TTY; fall back to the current
+    // model + alias list on non-TTY surfaces (Telegram, daemon, tests).
+    const compositor = ctx.getCompositor?.() ?? null;
+    if (compositor) {
+      const options = [...MODEL_ALIASES_HINT];
+      const currentIdx = options.indexOf(ctx.stats.model as (typeof MODEL_ALIASES_HINT)[number]);
+      const picked = await runPicker(compositor, {
+        header: [
+          palette.bold('Switch model'),
+          palette.dim(`current: ${ctx.stats.model}`),
+          palette.dim('or type a full id: /model <org/model>'),
+          '',
+        ],
+        options,
+        initialIndex: currentIdx >= 0 ? currentIdx : 0,
+      });
+      const choice = picked?.[0];
+      if (choice) await switchModel(ctx, choice);
       return 'continue';
     }
-    // Reject an unconfigured capability tier (e.g. an empty `local` slot) at the
-    // point of selection — otherwise the empty id reaches the provider as an
-    // opaque empty-model error or a silent cloud fallback.
-    const unconfigured = unconfiguredSlotError(target);
-    if (unconfigured) {
-      ctx.out.warn(unconfigured);
-      return 'continue';
-    }
-    try {
-      await ctx.session.current.setModel(target as AgentModelInput);
-      ctx.stats.model = target as AgentModelInput;
-      ctx.ui.repaintStatusLine();
-      ctx.out.success(`Model switched to ${palette.brand(target)}`);
-    } catch (err) {
-      ctx.out.error(`Failed to switch model: ${err instanceof Error ? err.message : String(err)}`);
-    }
+
+    ctx.out.info(`Current model: ${palette.brand(ctx.stats.model)}`);
+    ctx.out.line(palette.dim(`  Aliases: ${MODEL_ALIASES_HINT.join(', ')}  (or any org/model HF id)`));
     return 'continue';
   },
 };

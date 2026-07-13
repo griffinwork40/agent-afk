@@ -308,6 +308,8 @@ describe('formatHelp', () => {
     expect(result).toContain('/compact');
     expect(result).toContain('/model');
     expect(result).toContain('/name');
+    expect(result).toContain('/sessions');
+    expect(result).toContain('/new');
     expect(result).toContain('CLI');
   });
 

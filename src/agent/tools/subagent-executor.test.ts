@@ -1252,6 +1252,54 @@ describe('SubagentExecutor', () => {
       expect(capturedChildExecutorCtx!.cwd).toBe('/tmp/wt/feat-x');
     });
 
+    // Witness-trace propagation through the `agent` tool's recursive nesting —
+    // same shape as the cwd chain above. Without ctx.traceWriter, the per-call
+    // childManager had no writer and depth-2+ `agent` forks emitted zero
+    // subagent_lifecycle events (invisible in `afk trace show`).
+    it('forwards ctx.traceWriter to childManager and recursive child executor (depth ≥ 2 visibility)', async () => {
+      let capturedChildExecutorCtx: SubagentExecutorContext | undefined;
+
+      const handle = mockHandle();
+      const manager = {
+        forkSubagent: vi.fn().mockResolvedValue(handle),
+        teardownAll: vi.fn().mockResolvedValue(undefined),
+      };
+      const traceWriter = {
+        write: vi.fn(async () => undefined),
+        getTracePath: () => 'in-memory://trace',
+      };
+
+      const factory = vi.fn().mockImplementation(({ childExecutor }: { childExecutor: SubagentExecutor }) => {
+        capturedChildExecutorCtx = (childExecutor as any).ctx as SubagentExecutorContext;
+        return { name: 'p', query: vi.fn() };
+      });
+
+      const exec = new SubagentExecutor({
+        subagentManager: manager as any,
+        parentSession: {
+          sessionId: 'root',
+          getInputStreamRef: vi.fn(),
+          abortSignal: new AbortController().signal,
+        },
+        defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+        childProviderFactory: factory,
+        depth: 0,
+        maxDepth: DEFAULT_MAX_NESTING_DEPTH,
+        traceWriter: traceWriter as never,
+      });
+
+      await exec.execute(makeCall());
+
+      expect(capturedChildExecutorCtx).toBeDefined();
+      // (1) childManager carries the writer so depth-2 forks emit lifecycle events.
+      const childManager = capturedChildExecutorCtx!.subagentManager as unknown as {
+        parentTraceWriter: unknown;
+      };
+      expect(childManager.parentTraceWriter).toBe(traceWriter);
+      // (2) the recursive executor received it, so the chain holds depth-3+.
+      expect(capturedChildExecutorCtx!.traceWriter).toBe(traceWriter);
+    });
+
     // setCwd re-anchors mid-session (born-named `afk -w` worktree on turn 1):
     //   (1) the root manager (depth-1 forks) is re-anchored via manager.setCwd
     //   (2) the depth-2+ childManager built in execute() uses the new cwd
@@ -1967,6 +2015,58 @@ describe('SubagentExecutor', () => {
       const payload = JSON.parse(jsonPart!);
       expect(payload.status).toBe('failed');
       expect(payload.error).toBe('kaboom');
+    });
+
+    // THROW PATH (runToResult rejects, toolResult stays unset): the recorded
+    // SubagentStop note is dropped for that stop BY DESIGN (#392 keep-drop).
+    // foreground-promotion.ts's catch re-throws, leaving `toolResult`
+    // undefined, so `appendInjectContext` has no result to ride; and because
+    // teardown ran with `deferInjectContextToCaller: true` the queue push was
+    // suppressed at source — so the note reaches NEITHER channel. The throw is
+    // the parent's signal; a supplemental nudge to "verify these findings" is
+    // meaningless when the run threw before producing findings.
+    //
+    // Mirror of skill-executor.test.ts "does NOT append when runToResult
+    // throws" — keeps the two in-turn-delivery suites in symmetry (they differ
+    // only in that the skill catch returns a plain error string while the
+    // `agent` catch re-throws, so here we assert the throw propagates and the
+    // note is delivered through neither channel rather than inspecting content).
+    it('drops the injectContext note when runToResult throws (dropped by design, #392)', async () => {
+      const nudge = 'verify: should not appear';
+      const queueSpy = vi.fn();
+      const pushSpy = vi.fn();
+      const handle: Partial<SubagentHandle> = {
+        id: 'child-throw-inject',
+        status: 'failed' as any,
+        runToResult: vi.fn().mockRejectedValue(new Error('Response timeout')),
+        cancel: vi.fn().mockResolvedValue(undefined),
+        teardown: vi.fn().mockResolvedValue(undefined),
+        // The note IS recorded/available — the drop is deliberate, not absence.
+        getLastStopInjectContext: vi.fn().mockReturnValue(nudge),
+      };
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      const exec = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: {
+          sessionId: 'parent',
+          getInputStreamRef: () => ({ pushUserMessage: pushSpy, queueFrameworkContext: queueSpy }),
+          abortSignal: new AbortController().signal,
+        } as any,
+        defaultConfig: mockConfig,
+        depth: 0,
+      });
+
+      // The throw propagates (re-throw contract preserved) ...
+      await expect(exec.execute(makeCall())).rejects.toThrow('Response timeout');
+      // ... teardown still ran with the defer flag (queue push suppressed at
+      // source) and the note was looked at — proving it was available ...
+      expect(handle.teardown).toHaveBeenCalledWith({ deferInjectContextToCaller: true });
+      expect(handle.getLastStopInjectContext).toHaveBeenCalled();
+      // ... yet it reached NEITHER channel: no tool_result to append to (execute
+      // threw) and the executor never pushed to the parent queue.
+      expect(queueSpy).not.toHaveBeenCalled();
+      expect(pushSpy).not.toHaveBeenCalled();
     });
   });
 

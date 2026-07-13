@@ -12,6 +12,7 @@ import type { IAgentSession } from '../types.js';
 import type { ModelProvider } from '../provider.js';
 import type { AgentModelInput } from '../types.js';
 import type { Surface } from '../awareness/types.js';
+import type { ReadScopeInputs } from '../subagent-read-scope.js';
 import { AnthropicDirectProvider } from '../providers/anthropic-direct/index.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible/index.js';
 import { providerForModel } from '../providers/index.js';
@@ -206,7 +207,11 @@ export function createChildProviderFactory(
  * silently defeating read-only enforcement.
  *
  * This helper builds a minimal provider with:
- *   - `permissions.allowedTools = RECON_ALLOWED_TOOLS` (no write_file/edit_file)
+ *   - `permissions.allowedTools = allowedTools ?? RECON_ALLOWED_TOOLS`
+ *     (no write_file/edit_file — the caller passes the read-only-intersected
+ *     `tools:` allowlist so the child is never granted tools the SKILL.md never
+ *     declared; falls back to the full RECON set when the skill declares no
+ *     `tools:`)
  *   - `readOnlyBash: true` (dispatcher blocks mutating bash)
  *   - `readOnlyMemory: true` (consistency with the factory path)
  *   - NO `subagentExecutor` / `skillExecutor` — at the depth cap the child
@@ -222,10 +227,18 @@ export function buildReadOnlyReconProvider(
   // an OpenAICompatibleProvider with no baseURL and POSTs to api.openai.com
   // (defense-in-depth with openai-compatible/base-url.ts's query-time fallback).
   openaiBaseUrl?: string,
+  // Effective read-only allowlist. When the read-only skill declared a `tools:`
+  // list, the caller passes its intersection with RECON_ALLOWED_TOOLS here so
+  // the depth-cap child is restricted to the declared subset — NOT the full
+  // RECON superset (issue #499, finding 2: least-privilege). Undefined → the
+  // full RECON set (a read-only skill with no `tools:` declaration). Every
+  // value is already a subset of RECON, so readOnlyBash/readOnlyMemory below
+  // still hold regardless of what is passed.
+  allowedTools?: readonly string[],
 ): ModelProvider {
   // Materialize the allowlist per call so test/runtime mutation of the shared
   // array doesn't bleed across siblings (mirrors buildPhaseRestrictedProvider).
-  const permissions = { allowedTools: [...RECON_ALLOWED_TOOLS] };
+  const permissions = { allowedTools: [...(allowedTools ?? RECON_ALLOWED_TOOLS)] };
   const route = providerForModel(typeof model === 'string' ? model : undefined);
   if (route === 'openai-compatible') {
     return new OpenAICompatibleProvider({
@@ -285,13 +298,20 @@ export function createChildSkillExecutorFactory(
   // child's restricted/depth-cap provider builders point at the configured
   // endpoint. Trailing optional — legacy positional callers stay valid.
   openaiBaseUrl?: string,
-): (depth: number, maxDepth: number, signal: AbortSignal, inheritedCwd?: string) => SkillExecutor {
-  const factory: (depth: number, maxDepth: number, signal: AbortSignal, inheritedCwd?: string) => SkillExecutor = (
-    depth,
-    maxDepth,
-    signal,
-    inheritedCwd,
-  ) => {
+): (
+  depth: number,
+  maxDepth: number,
+  signal: AbortSignal,
+  inheritedCwd?: string,
+  inheritedReadScope?: ReadScopeInputs,
+) => SkillExecutor {
+  const factory: (
+    depth: number,
+    maxDepth: number,
+    signal: AbortSignal,
+    inheritedCwd?: string,
+    inheritedReadScope?: ReadScopeInputs,
+  ) => SkillExecutor = (depth, maxDepth, signal, inheritedCwd, inheritedReadScope) => {
     // Invariant: the closure-captured `cwd` is frozen at bootstrap. For
     // born-named `afk -w` worktrees it is `undefined` (the worktree is
     // created on turn 1 via worktree-autoname, after bootstrap). A later
@@ -358,6 +378,18 @@ export function createChildSkillExecutorFactory(
       // Named-agent registry propagates so nested skill children can
       // dispatch `agent_type`-named sub-agents at any depth.
       ...(agentRegistry !== undefined ? { agentRegistry } : {}),
+      // Read-scope inheritance (#547): the depth-1 caller
+      // (fork-child-config.ts / child-config.ts) passes THIS skill child's
+      // inherited read scope so its own skill forks (great-grandchildren)
+      // inherit ⊇ it, not the frozen bootstrap session scope. Unlike the
+      // top-level SkillExecutors (wired directly to the root manager's
+      // getReadScopeInputs), grandchild executors have no manager reference —
+      // the scope is threaded through this factory param instead. Frozen at
+      // call time via a closure, mirroring how `inheritedCwd` overrides the
+      // stale closure `cwd`.
+      ...(inheritedReadScope !== undefined
+        ? { getReadScopeInputs: () => inheritedReadScope }
+        : {}),
     });
   };
   return factory;

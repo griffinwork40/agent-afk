@@ -25,7 +25,13 @@ export function renderTextBlock(text: string, contentWidth: number): string {
   if (isMarkdown) {
     return renderMarkdownToTerminal(text, { maxWidth: contentWidth });
   } else {
-    return wrapToWidth(text, contentWidth);
+    // breakLongWords: this output is painted as raw lines by the compositor,
+    // which then hard-wraps at paint time. A soft wrap here leaves a long
+    // unbreakable token (file path, URL) overflowing contentWidth, so the
+    // compositor's row-count math and resize reflow disagree with the stored
+    // line — the persistent-wrap / fucky-on-resize bug. Break here so no
+    // emitted line ever exceeds contentWidth.
+    return wrapToWidth(text, contentWidth, { breakLongWords: true });
   }
 }
 
@@ -58,7 +64,10 @@ export function formatPendingBuffer(
     pendingRender = renderTextBlock(buffer, contentWidth);
   }
 
-  return wrapToWidth(pendingRender, contentWidth);
+  // breakLongWords: same contract as formatBlockForCommit — a long unbreakable
+  // token must not overflow contentWidth, or the live overlay paints past the
+  // right edge and the compositor's row accounting drifts.
+  return wrapToWidth(pendingRender, contentWidth, { breakLongWords: true });
 }
 
 /**
@@ -89,7 +98,16 @@ export function formatBlockForCommit(
   // while leaving table/code lines untouched (they already fit contentWidth).
   // Wrapping after indent (to contentWidth) would re-split structural lines
   // like table borders mid-row.
-  const wrapped = wrapToWidth(rendered, contentWidth);
+  //
+  // breakLongWords: a single unbreakable token wider than contentWidth (a bare
+  // file path or URL — which afk prints constantly) is broken at the column
+  // boundary instead of overflowing. Without it, the committed line exceeds
+  // contentWidth; the compositor then hard-wraps it at a DIFFERENT width at
+  // paint time (committed-band-commit.ts) and band-reflow re-splits the stored
+  // over-wide line on resize — the persistent-wrap / fucky-on-resize bug.
+  // Tables/code that already fit are unaffected (breakLongWords only splits
+  // tokens strictly wider than contentWidth).
+  const wrapped = wrapToWidth(rendered, contentWidth, { breakLongWords: true });
   const indented = applyIndent(wrapped, indentStr);
   // Strip BOTH leading and trailing blank lines. The caller (`commitBlock`)
   // re-adds exactly one trailing blank via `commitAbove(trimmed + '\n\n')`, so
@@ -118,19 +136,38 @@ export function hasMarkdownContent(text: string): boolean {
  * Detect if we're in the middle of a fenced code block (unclosed fence).
  *
  * Rules:
- * - Count only line-anchored fences (`^``` ` or `^~~~`) to avoid flipping
- *   parity on inline backtick sequences (e.g. regex literals in code, prose
- *   mentioning fences).
+ * - Count only line-anchored fences indented 0–3 spaces (`^ {0,3}``` ` or
+ *   `^ {0,3}~~~`). This tracks the CommonMark rule EXACTLY: a code-fence opener
+ *   may be indented up to three spaces, but a line indented FOUR OR MORE spaces
+ *   is an indented code block, so a ``` there is LITERAL content, not a fence.
+ *   The 0–3 bound serves two ends at once:
+ *     (a) it still counts a fence nested inside a list item (indented to align
+ *         under the marker — bullets = 2 spaces, single-digit ordered = 3), the
+ *         case that made findBlockBoundary mistake an indented OPENER for a
+ *         closer and orphan the fence into TWO "(empty code block)" placeholders
+ *         sandwiching the body; and
+ *     (b) it does NOT count a 4-space-indented literal ``` (e.g. a copied
+ *         snippet shown as an indented code block). An unbounded `[ \t]*` prefix
+ *         counted that lone marker as an open fence, so findBlockBoundary
+ *         suppressed every following \n\n boundary and the stream froze on
+ *         "▍ streaming code…" until flush — the P2 regression this bound fixes.
+ *   The bound MUST stay identical to the leading-indent bound of
+ *   findBlockBoundary's closing-fence regex; any asymmetry reintroduces one of
+ *   the two bugs above. (Zero indent still matches, so flush-left fences are
+ *   unchanged. Fences under 10+-numbered or deeply-nested list items indent 4+
+ *   absolute spaces and fall outside this simple line regex — acceptable: they
+ *   degrade to the mild empty-block cosmetic case, never the stream freeze.)
  * - ``` and ~~~ are independent fence families: each has its own parity check
  *   so a ~~~ opener is not closed by a ``` closer.
  * - Language tags (e.g. ```TypeScript, ```C++, ```YAML) are matched by
  *   allowing any non-newline characters after the fence marker.
  */
 export function isInOpenCodeFence(text: string): boolean {
-  // Line-anchored backtick fences (any language tag — not just lowercase alpha)
-  const backtickFences = (text.match(/^```[^\n]*$/gm) ?? []).length;
-  // Line-anchored tilde fences (any language tag)
-  const tildeFences = (text.match(/^~~~[^\n]*$/gm) ?? []).length;
+  // Line-anchored backtick fences (any language tag — not just lowercase alpha),
+  // indented 0–3 spaces per CommonMark's fence-opener rule.
+  const backtickFences = (text.match(/^ {0,3}```[^\n]*$/gm) ?? []).length;
+  // Line-anchored tilde fences (any language tag), same 0–3 space bound.
+  const tildeFences = (text.match(/^ {0,3}~~~[^\n]*$/gm) ?? []).length;
   // Odd count for either family means an unclosed fence
   return backtickFences % 2 === 1 || tildeFences % 2 === 1;
 }
@@ -181,9 +218,14 @@ export function findBlockBoundary(text: string): number {
   }
 
   // Commit at a CLOSING fenced code fence (``` or ~~~ on its own line).
-  // Pattern: newline, optional spaces, BARE fence marker, optional spaces,
-  // newline. (A fence with a language tag — `\n```bash\n` — never matches, so
-  // only bare fence lines are candidates here.)
+  // Pattern: newline, 0–3 leading spaces, BARE fence marker, optional trailing
+  // spaces, newline. (A fence with a language tag — `\n```bash\n` — never
+  // matches, so only bare fence lines are candidates here.) The 0–3 leading-
+  // space bound is CommonMark's fence rule and MUST stay identical to
+  // isInOpenCodeFence's bound: the parity check below delegates entirely to it,
+  // so a 4+-space (or tab) line is LITERAL indented-code content here too, not a
+  // fence candidate. Keeping the two bounds identical is what prevents both the
+  // empty-block bug and the stream-freeze regression (see isInOpenCodeFence).
   //
   // Invariant: this regex cannot tell an OPENING fence from a CLOSING one — a
   // bare opener that directly follows non-blank text (e.g. "run:\n```\nbody")
@@ -196,7 +238,7 @@ export function findBlockBoundary(text: string): number {
   // closes an open block. An opener leaves odd parity → defer past it to its
   // matching closer; if none has arrived yet, return -1 so the whole fence
   // stays pending until the closer streams in (or flush() commits the tail).
-  const fenceLineRe = /\n[ \t]*(?:```|~~~)[ \t]*\n/g;
+  const fenceLineRe = /\n {0,3}(?:```|~~~)[ \t]*\n/g;
   let fence: RegExpExecArray | null;
   while ((fence = fenceLineRe.exec(text)) !== null) {
     const endIdx = fence.index + fence[0].length;

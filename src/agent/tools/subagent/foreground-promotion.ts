@@ -19,11 +19,14 @@
 
 import type { BackgroundAgentRegistry } from '../../background-registry.js';
 import type { SubagentManager } from '../../subagent.js';
+import { annotateIfIncomplete } from '../../subagent/result.js';
 import { debugLog } from '../../../utils/debug.js';
 import type { TraceOrigin, TraceActor } from '../../session/session-identity.js';
 import type { ToolResult } from '../types.js';
 import type { PromotedSubagentInfo } from '../subagent-executor.js';
 import { emitTelemetry, truncate, measurePartial, buildFailurePayload } from './failure-payload.js';
+import { appendInjectContext } from './inject-context.js';
+import { teardownIsolatedWorktree } from '../handlers/worktree-managed.js';
 
 type ForkedHandle = Awaited<ReturnType<SubagentManager['forkSubagent']>>;
 
@@ -60,6 +63,13 @@ export interface RunForegroundArgs {
   promotionTriggers: Map<string, PromotionTrigger>;
   /** The executor's live cancellable-handle map (keyed by handle.id). */
   activeForegroundHandles: Map<string, { cancel: () => Promise<void> }>;
+  /**
+   * Present when this dispatch runs in an isolated worktree (isolation:
+   * "worktree"). Torn down in the finally unless the run was promoted to
+   * background (the detached job then owns the tree; the sweep reclaims it
+   * later). A dirty / commits-ahead tree is preserved and locked, not removed.
+   */
+  isolationTeardown?: { repoRoot: string; worktreePath: string };
 }
 
 /**
@@ -231,7 +241,9 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
       });
       // Assign (don't return) so the finally can append the in-turn
       // SubagentStop injectContext after teardown. See `toolResult` above.
-      toolResult = { content };
+      // annotateIfIncomplete marks capped/stream-truncated partials so the
+      // parent model doesn't treat them as a final answer (no-op if clean).
+      toolResult = { content: annotateIfIncomplete(content, result.stopReason) };
       return toolResult;
     }
 
@@ -315,14 +327,30 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
       // In-turn append: only when this foreground run produced a completion
       // ToolResult (success or structured failure). The error-rethrow path
       // leaves toolResult unset — nothing to append to, note is dropped for
-      // that stop by design (the throw is the parent's signal). Attribution:
-      // the note is appended to THIS subagent's own result, so a parent
-      // batching multiple `agent` calls sees each nudge next to its result.
-      // Optional-chain: real SubagentHandleImpl always defines this; the
-      // `?.()` tolerates narrow handle doubles (returns undefined = no note).
+      // that stop by design (the throw is the parent's signal; keep-drop
+      // confirmed in #392, queue-fallback rejected — rationale in
+      // inject-context.ts). Attribution: the note is appended to THIS
+      // subagent's own result, so a parent batching multiple `agent` calls
+      // sees each nudge next to its result. Optional-chain: real
+      // SubagentHandleImpl always defines this; the `?.()` tolerates narrow
+      // handle doubles (returns undefined = no note).
       const injectContext = handle.getLastStopInjectContext?.();
-      if (toolResult !== undefined && injectContext !== undefined && injectContext.length > 0) {
-        toolResult.content = `${toolResult.content}\n\n${injectContext}`;
+      appendInjectContext(toolResult, injectContext);
+
+      // isolation:"worktree" teardown — remove the child's worktree now that it
+      // has finished. A dirty / commits-ahead tree is preserved and locked
+      // (WIP is never destroyed); the promoted path skips this (guarded by
+      // !promoted) so a still-running detached job keeps its tree. Best-effort:
+      // teardownIsolatedWorktree never throws, so it cannot break the finally.
+      if (args.isolationTeardown) {
+        const { repoRoot, worktreePath } = args.isolationTeardown;
+        const outcome = await teardownIsolatedWorktree({ repoRoot, worktreePath });
+        if (outcome.preserved) {
+          debugLog(
+            `[isolation] preserved worktree ${worktreePath} (${outcome.reason}) — ` +
+              `locked so the sweep will not reap it; recover via the worktree tool`,
+          );
+        }
       }
     }
   }

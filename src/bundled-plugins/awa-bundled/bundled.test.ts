@@ -36,7 +36,7 @@ const __dirname = dirname(__filename);
 // developer to look at both copies.
 const PINNED_HASHES = {
   // automate: afk-native scheduled-run skill (create_schedule + send_telegram +
-  // `afk service install daemon`). Mirrors the awa-dev upstream (→ framework);
+  // `afk service install daemon`). Mirrors the upstream framework plugin;
   // vendored byte-equal, so no INTENTIONAL_DIFFS entry is needed. Drift row is
   // wired in UPSTREAM_PATHS below (skips until example-plugin is co-located).
   automate: '93380f58316e607f6b95b27a9c2375f0a5403f3a42eb695d0490b50225d8838c',
@@ -46,6 +46,11 @@ const PINNED_HASHES = {
   // Wave 3.5 — prose-consistency fix only; no behavior change to the guard.
   'devils-advocate':
     '8a729f40297e43f33aa84f80c66f21c9a46fd8b610727601f4e13dc597be633b',
+  // diagnose is bundled-only (no upstream example-plugin counterpart). It ships
+  // as the agent-driven /diagnose (context: fork) that replaced the retired
+  // vendored TS orchestrator (src/skills/diagnose/). Hash bumps need no parallel
+  // PR — document the change in the commit message instead.
+  diagnose: '999ba8306f264d06a04676ab477cbf939637370afeb982cbc41814345eec4159',
   // gather + parallelize carry a bundled-only `context: load` frontmatter line
   // (2026-06 skill-execution-mode work). `context` is an agent-afk-specific
   // field; Claude Code upstream skills are natively inline/progressive-disclosure,
@@ -447,7 +452,11 @@ describe('bundled skills', () => {
     // line-for-line identical.  Any remaining difference is a back-port gap.
 
     const mirrorableSkills = SKILLS.filter(
-      (s) => s !== 'intent-lock' && s !== 'simplify' && s !== 'refactor',
+      (s) =>
+        s !== 'intent-lock' &&
+        s !== 'simplify' &&
+        s !== 'refactor' &&
+        s !== 'diagnose',
     );
 
     for (const name of mirrorableSkills) {

@@ -21,6 +21,12 @@ import { ensureSessionsMigrated, getSessionsDir } from '../paths.js';
 import type { SessionStats, TurnRecord } from './slash/types.js';
 import type { AgentModelInput } from '../agent/types.js';
 import type { TraceActor } from '../agent/session/session-identity.js';
+import {
+  asHandleId,
+  type SessionBinding,
+  type SessionHandle,
+  type SessionSurface,
+} from '../agent/session/session-registry.js';
 
 export interface StoredSession {
   sessionId?: string;
@@ -50,6 +56,13 @@ export interface StoredSession {
    * to filter the list to sessions from the current directory. Absent on
    * legacy sidecars — those surface only in the global fallback view. */
   cwd?: string;
+  /** Session-registry handle id. Absent on pre-registry sidecars → the
+   *  sidecar's on-disk id is used as the stable handle id (see storedToHandle). */
+  handleId?: string;
+  /** Session-registry bindings (surface → opaque routing key). Absent on
+   *  pre-registry sidecars; a legacy `telegramChatId` migrates to one telegram
+   *  binding so existing Telegram conversations resolve unchanged. */
+  bindings?: SessionBinding[];
 }
 
 export interface SessionListEntry {
@@ -59,6 +72,8 @@ export interface SessionListEntry {
   name?: string;
   source?: 'cli' | 'telegram' | 'daemon';
   actor?: TraceActor;
+  /** Telegram chat id for telegram-sourced sidecars — lets a surface filter a chat's sessions (the /sessions switcher). */
+  telegramChatId?: number;
   model: AgentModelInput;
   startedAt: number;
   savedAt: number;
@@ -186,6 +201,10 @@ export function forkStoredSession(
     totalTokens: stats.totalTokens,
     totalDurationMs: stats.totalDurationMs,
     turns: [...stats.turns],
+    // Preserve the session's cwd so a forked sidecar records where it was
+    // running (e.g. an `afk --worktree` session). Without this, resuming the
+    // fork lands in the launch cwd instead of the worktree. Mirrors saveSession.
+    ...(stats.cwd ? { cwd: stats.cwd } : {}),
     ...(stats.sessionId ? { forkedFrom: stats.sessionId } : {}),
     forkedAt: Date.now(),
   };
@@ -199,14 +218,18 @@ export function loadSession(idOrPath: string): StoredSession | undefined {
   let path: string;
   try {
     path = safeResolvePath(idOrPath);
-  } catch {
+  } catch (err) {
+    // Path escaped the session store (traversal probe) — leave an audit trail
+    // instead of silently returning undefined.
+    console.warn(`loadSession: rejected unsafe session id ${JSON.stringify(idOrPath)}: ${(err as Error).message}`);
     return undefined;
   }
   if (!existsSync(path)) return undefined;
   try {
     const raw = readFileSync(path, 'utf-8');
     return JSON.parse(raw) as StoredSession;
-  } catch {
+  } catch (err) {
+    console.warn(`loadSession: failed to read/parse ${path}: ${(err as Error).message}`);
     return undefined;
   }
 }
@@ -286,6 +309,7 @@ export function listSessions(): SessionListEntry[] {
         name: loaded.name,
         source: loaded.source,
         actor: loaded.actor,
+        telegramChatId: loaded.telegramChatId,
         model: loaded.model,
         startedAt: loaded.startedAt,
         savedAt: loaded.savedAt,
@@ -312,4 +336,71 @@ export function sdkSessionIdFor(idOrName: string): string | undefined {
     if (entry.name === idOrName) return entry.sessionId;
   }
   return undefined;
+}
+
+// ---- session-registry bridge -------------------------------------------------
+// Pure mappings between the persisted StoredSession sidecar and a registry
+// SessionHandle. These are the seam the session-registry loads/persists through;
+// no I/O and no production call site yet (wired when a surface routes through
+// the registry). See .afk/plans/session-registry-architecture.md step 2.
+
+/**
+ * The registry bindings for a stored session, applying the legacy migration.
+ *
+ * Precedence: an explicit `bindings[]` wins; else a legacy `telegramChatId`
+ * becomes a single telegram binding keyed by the chat id (so existing Telegram
+ * conversations resolve unchanged); else no routing binding (the session is
+ * still reachable by id / sdkSessionId until something re-binds it on resume).
+ */
+export function bindingsForStored(stored: StoredSession): SessionBinding[] {
+  if (stored.bindings && stored.bindings.length > 0) {
+    return stored.bindings.map((b) => ({ ...b }));
+  }
+  if (stored.telegramChatId !== undefined) {
+    return [
+      {
+        surface: 'telegram',
+        key: String(stored.telegramChatId),
+        boundAt: stored.startedAt,
+        lastActiveAt: stored.savedAt,
+      },
+    ];
+  }
+  return [];
+}
+
+/**
+ * Map a persisted StoredSession to a registry SessionHandle.
+ *
+ * `sidecarId` is the sidecar's stable on-disk id (filename minus `.json`); it
+ * becomes the handle id when the sidecar predates the registry (no `handleId`),
+ * keeping the handle id stable across reloads. `source` defaults to `'cli'` for
+ * legacy sidecars (matching StoredSession's documented default).
+ */
+export function storedToHandle(stored: StoredSession, sidecarId: string): SessionHandle {
+  const surface: SessionSurface = stored.source ?? 'cli';
+  const handle: SessionHandle = {
+    id: asHandleId(stored.handleId ?? sidecarId),
+    surface,
+    model: stored.model,
+    createdAt: stored.startedAt,
+    lastActiveAt: stored.savedAt,
+    status: 'active',
+    bindings: bindingsForStored(stored),
+  };
+  if (stored.sessionId !== undefined) handle.sdkSessionId = stored.sessionId;
+  if (stored.name !== undefined) handle.name = stored.name;
+  if (stored.cwd !== undefined) handle.cwd = stored.cwd;
+  return handle;
+}
+
+/**
+ * The registry-owned fields to merge onto a StoredSession when persisting a
+ * handle. (The SDK session id continues to persist as `StoredSession.sessionId`
+ * via saveSession — it is not duplicated here.)
+ */
+export function storedFieldsFromHandle(
+  handle: SessionHandle,
+): Pick<StoredSession, 'handleId' | 'bindings'> {
+  return { handleId: handle.id, bindings: handle.bindings.map((b) => ({ ...b })) };
 }

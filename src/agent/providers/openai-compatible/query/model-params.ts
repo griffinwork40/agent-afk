@@ -1,6 +1,6 @@
 /**
  * Model-shape parameter helpers for the openai-compatible provider: output-
- * token cap resolution, o-series detection, and effort→reasoning_effort
+ * token cap resolution, reasoning-model detection, and effort→reasoning_effort
  * mapping. Pure functions extracted from `query.ts` so the query module
  * carries only the session class and its turn loop.
  *
@@ -9,7 +9,7 @@
 
 import type { EffortLevel } from '../../../types/sdk-types.js';
 import { maxOutputTokensFor } from '../../../model-limits.js';
-import { isOSeriesModel } from '../../../model-capabilities.js';
+import { isOSeriesModel, isReasoningModel } from '../../../model-capabilities.js';
 
 /**
  * Resolve the effective output-token cap (a plain number).
@@ -37,9 +37,9 @@ export function resolveEffectiveMaxOutputTokens(
 /**
  * Resolve the **Chat Completions** streaming output-token cap.
  *
- * Mirrors the o-series field-selection logic in `oneshot.ts:91–96`:
- * o-series reasoning models (o1/o3/o4…) reject `max_tokens` and require
- * `max_completion_tokens`; everything else (chat models, local shims)
+ * Mirrors the reasoning-model field-selection logic in `oneshot.ts`: reasoning
+ * models (o-series ∪ gpt-5.x) reject `max_tokens` and require
+ * `max_completion_tokens`; everything else (classic chat models, local shims)
  * wants `max_tokens`.  (The Responses API is different again — it uses
  * `max_output_tokens` — so this helper is Chat-Completions-only.)
  *
@@ -51,7 +51,7 @@ export function resolveStreamingMaxTokens(
   configMaxOutput: number | undefined,
 ): Record<string, number> {
   const effectiveMax = resolveEffectiveMaxOutputTokens(model, configMaxOutput);
-  return isOSeriesModel(model)
+  return isReasoningModel(model)
     ? { max_completion_tokens: effectiveMax }
     : { max_tokens: effectiveMax };
 }
@@ -61,11 +61,12 @@ export function normalizePermissionMode(mode: string | undefined): string {
 }
 
 /**
- * Re-exported for backward compatibility — `query.ts` re-exports it and older
- * call sites import it from here. Canonical definition (incl. o5+/`oN` and
- * `provider/`-prefix handling) now lives in `model-capabilities.ts`.
+ * Re-exported for backward compatibility — `query.ts` re-exports these and older
+ * call sites import them from here. Canonical definitions live in
+ * `model-capabilities.ts`: `isOSeriesModel` (id family → routing) and
+ * `isReasoningModel` (request contract → o-series ∪ gpt-5.x).
  */
-export { isOSeriesModel };
+export { isOSeriesModel, isReasoningModel };
 
 /**
  * Map AFK's `EffortLevel` to OpenAI's `reasoning_effort` values.
@@ -87,7 +88,7 @@ export function mapEffortForOpenAI(effort: EffortLevel): 'low' | 'medium' | 'hig
 
 /**
  * Resolve the `reasoning_effort` to send for a given model + effort config.
- * Returns `undefined` when effort should not be forwarded (non-o-series model
+ * Returns `undefined` when effort should not be forwarded (non-reasoning model
  * or no effort configured). Callers attach the result to the request body
  * under `reasoning_effort` (Chat Completions) or `reasoning.effort` (Responses).
  */
@@ -96,6 +97,6 @@ export function resolveReasoningEffort(
   model: string,
 ): 'low' | 'medium' | 'high' | undefined {
   if (effort === undefined) return undefined;
-  if (!isOSeriesModel(model)) return undefined;
+  if (!isReasoningModel(model)) return undefined;
   return mapEffortForOpenAI(effort);
 }

@@ -135,10 +135,12 @@ export function deriveSessionFacet(
       bashCommands += 1;
       // Commit detection reads the parsed `command` when present (older sidecars
       // written before the secret-at-rest fix) and otherwise falls back to the
-      // summarized `input` (≤80-char first line). The raw `command` is no longer
-      // persisted to inputRaw — it can carry inline secrets verbatim — so for
-      // current sidecars detection runs against the truncated summary, which
-      // still catches a leading `git commit`. See raw-input.ts.
+      // summarized `input` (a flattened, ≤160-char one-line summary — newlines
+      // collapsed to spaces; see summarizeToolInput). The raw `command` is no
+      // longer persisted to inputRaw — it can carry inline secrets verbatim — so
+      // for current sidecars detection runs against that summary, which catches a
+      // `git commit` anywhere in the flattened command (not just line 1). See
+      // raw-input.ts.
       const cmd = asString(parsed?.['command']) ?? ev.input;
       if (cmd && COMMIT_RE.test(cmd)) commits += 1;
     }

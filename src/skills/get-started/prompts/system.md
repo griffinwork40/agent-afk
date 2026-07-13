@@ -41,7 +41,7 @@ Then give a 4–6 line intro, e.g.:
 **3b. Optional capabilities.** Offer only the ones not already configured:
 - **Exa Search** (web research/grounding): if `EXA_API_KEY` is unset, tell them to set it in `~/.afk/config/afk.env`; offer to explain how.
 - **Telegram** (drive/monitor AFK from your phone): if unconfigured, dispatch the `skill` tool with `/telegram-setup`.
-- **Background service** (always-on bot/daemon): **macOS only** — first check the platform (e.g. `uname` → `Darwin`). If not macOS, skip and say service mode is macOS-only today. On macOS, if they want it, dispatch the `skill` tool with `/service-setup`.
+- **Background service** (always-on bot/daemon): **macOS + Linux** — first check the platform (`uname` → `Darwin` for launchd, `Linux` for systemd `--user`). On other platforms (e.g. Windows), skip and say service mode isn't supported there. Otherwise, if they want it, dispatch the `skill` tool with `/service-setup`.
 
 Don't push all three — suggest based on what they said they want. Re-check the relevant signal after each so you can confirm ✓.
 

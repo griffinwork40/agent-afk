@@ -159,6 +159,14 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
       // user-skill's forked sub-agent inherits it and its tool activity —
       // including any permission-denials a restricted user SKILL.md produces —
       // lands in the parent trace. See skills/index.ts SkillExecutionContext.traceWriter.
+      //
+      // Read-scope note (#547): this manager passes no `cwd`, so its fork is
+      // read-open — which already satisfies the child ⊇ parent read-scope
+      // invariant (#544/#547) for any parent. Seeding parentReadRoots from a
+      // CONFINED session would only NARROW the fork (an arbitrary user SKILL.md
+      // may legitimately read outside the worktree, e.g. its own
+      // `~/.afk/skills/<name>` dir), so it is intentionally omitted. Worktree
+      // isolation for user skills (passing cwd) is a separate, pre-existing gap.
       ...(ctx?.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
     });
 

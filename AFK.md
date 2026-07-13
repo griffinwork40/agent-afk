@@ -70,7 +70,7 @@ Key layers under `src/`:
 | `src/bundled-plugins/` | Plugins shipped with the package (copied at install; `tests/copy-bundled-plugins.test.ts`). |
 | `website/` | Next.js docs site (separate package, npm-locked; CI typechecks + builds it). |
 
-Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/session/stream-consumer.ts`. **No model SDK is imported for runtime use outside `src/agent/providers/`** — the rest of the tree imports only the SDK's `ContentBlockParam` *type*, with one legacy runtime `Anthropic` import in `src/cli/interactive.ts` as a known exception.
+Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/session/stream-consumer.ts`. **No model SDK is imported for runtime use outside `src/agent/providers/`** — the rest of the tree imports only the SDK's `ContentBlockParam` *type*. The only runtime `import Anthropic from '@anthropic-ai/sdk'` statements live in `src/agent/providers/anthropic-direct/` (`index.ts`, `oneshot.ts`).
 
 ### Cross-cutting subsystems
 

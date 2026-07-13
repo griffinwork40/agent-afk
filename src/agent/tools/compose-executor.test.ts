@@ -1034,6 +1034,32 @@ describe('ComposeExecutor', () => {
     });
   });
 
+  describe('witness trace threading', () => {
+    // Regression: compose DAG nodes never set config.traceWriter, so without
+    // manager-level threading their subagent_lifecycle events silently
+    // no-op'd — every compose fan-out was invisible in `afk trace show`.
+    it('seeds ctx.traceWriter into the SubagentManager so DAG nodes emit lifecycle events', async () => {
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const traceWriter = { write: vi.fn(async () => undefined) };
+      const executor = new ComposeExecutor(
+        makeContext({ traceWriter: traceWriter as never }),
+      );
+
+      await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'task a' }] }));
+
+      expect((lastManagerOpts as { traceWriter?: unknown })?.traceWriter).toBe(traceWriter);
+    });
+
+    it('omits traceWriter when ctx.traceWriter is undefined', async () => {
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext());
+
+      await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'task a' }] }));
+
+      expect((lastManagerOpts as { traceWriter?: unknown })?.traceWriter).toBeUndefined();
+    });
+  });
+
   describe('max_tool_calls_per_node enforcement', () => {
     it('installs a progressSink on the SubagentManager when budget is set', async () => {
       mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });

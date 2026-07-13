@@ -40,10 +40,18 @@
  *   - `cwd` is not inside a git repository,
  *   - `cwd` is inside the MAIN worktree (its root or a subdir) — nothing
  *     distinct to grant,
- *   - git resolution fails for any reason.
+ *   - git resolution fails AND `cwd` is not an afk-managed worktree.
  *
- * Best-effort: never throws. A resolution failure degrades to today's behavior
- * (worktree-only read root).
+ * Git-free fallback (#544/#554 completion): when `git rev-parse` throws on an
+ * afk-managed worktree (`<mainRoot>/.afk-worktrees/<slug>`), the main root is
+ * recovered LEXICALLY from the path. This closes the gap where a pruned or
+ * mid-sweep worktree admin dir makes git fail on the fork's OWN cwd — a case
+ * re-resolving via git (from any cwd, e.g. #554's parent-cwd fallback) cannot
+ * fix — which otherwise silently re-confines the fork to `[worktree]` and hard-
+ * denies every main-repo read.
+ *
+ * Best-effort: never throws. A git failure on a NON-afk path still degrades to
+ * today's behavior (worktree-only read root).
  *
  * @module agent/worktree-read-root
  */
@@ -51,6 +59,7 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
+import { debugLog } from '../utils/debug.js';
 
 const execFilePromise = promisify(execFileCb);
 
@@ -62,6 +71,31 @@ export type ExecFileFn = (
 
 const defaultExecFile: ExecFileFn = (cmd, args) =>
   execFilePromise(cmd, args) as Promise<{ stdout: string; stderr: string }>;
+
+/**
+ * Git-free recovery of the main-repo root for an afk-managed worktree.
+ *
+ * Invariant: afk worktrees are created at `<mainRoot>/.afk-worktrees/<slug>`
+ * (see `tools/handlers/worktree-managed.ts` and `worktree-sweep.ts`), so the
+ * main root is the path prefix preceding the `.afk-worktrees/` segment —
+ * derivable WITHOUT git. This is the load-bearing fallback for the case
+ * #544/#554 left open: when `git rev-parse` fails on the fork's OWN worktree
+ * cwd (a pruned/mid-sweep admin dir), re-resolving via git — from any cwd —
+ * cannot recover the main root, so a purely lexical path is the only remedy.
+ *
+ * Returns undefined for any path not under an `.afk-worktrees/` segment (a
+ * relocated `AFK_WORKTREE_BASE`, or a non-afk worktree), leaving today's
+ * best-effort `undefined` in place there.
+ */
+function lexicalAfkWorktreeMainRoot(cwd: string): string | undefined {
+  const resolved = path.resolve(cwd);
+  const marker = `${path.sep}.afk-worktrees${path.sep}`;
+  const idx = resolved.indexOf(marker);
+  // idx <= 0 covers "not found" (−1) and the degenerate "at the filesystem
+  // root" (0), where there is no non-empty prefix to grant.
+  if (idx <= 0) return undefined;
+  return resolved.slice(0, idx);
+}
 
 /**
  * Resolve the main repository root for a worktree at `cwd`. See the module
@@ -104,8 +138,30 @@ export async function resolveWorktreeMainRoot(
     if (mainRoot === topLevel) return undefined;
 
     return mainRoot;
-  } catch {
-    // Not a git repo, git missing, or any other failure — best-effort.
+  } catch (err) {
+    // Not a git repo, git missing, or any other failure — best-effort. afk
+    // worktrees encode their main root in the path, so try a git-free lexical
+    // recovery FIRST: this is exactly the case #544/#554 left open — a
+    // pruned/mid-sweep worktree admin dir makes `git rev-parse` throw on the
+    // fork's OWN cwd, and re-resolving via git cannot help. Recovery keeps the
+    // fork's main-repo read access instead of silently re-confining it.
+    const lexical = lexicalAfkWorktreeMainRoot(cwd);
+    if (lexical !== undefined) {
+      debugLog(
+        `[worktree-read-root] git rev-parse failed for cwd=${cwd}; recovered main ` +
+          `root lexically as ${lexical} (afk worktree layout) — ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+      return lexical;
+    }
+    // Non-afk path with no lexical anchor: the silent return re-confines a
+    // forked child to `[worktree]` (the #416 symptom returns) with no signal,
+    // so surface the degradation under AFK_DEBUG=1 — otherwise a subagent that
+    // unexpectedly loses main-repo read access is undiagnosable (#441).
+    debugLog(
+      `[worktree-read-root] git rev-parse failed for cwd=${cwd}; child confined ` +
+        `to worktree only — ${err instanceof Error ? err.message : String(err)}`,
+    );
     return undefined;
   }
 }
