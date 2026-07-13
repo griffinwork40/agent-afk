@@ -30,7 +30,11 @@ import {
 import { stripCommandTags, extractSkillTag } from '../slash/_lib/command-tags.js';
 import { styleForCategory, SUBAGENT_TOOLS, DAG_TOOLS } from '../tool-category.js';
 import { formatThinkingParagraph } from '../commands/interactive/thinking-paragraph.js';
-import { deriveProgressActivity, formatProgressBanner } from '../commands/interactive/progress-banner.js';
+import {
+  deriveProgressActivity,
+  formatProgressBanner,
+  formatRateLimitActivity,
+} from '../commands/interactive/progress-banner.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import {
   emitPanel,
@@ -48,6 +52,14 @@ export {
   emitErrorBox,
   flushToolLaneToScrollback,
 } from './stream-renderer-orchestrator-emit.js';
+
+/**
+ * Reserved `lastProgressByTask` key for the synthetic rate-limit backoff
+ * banner. Distinct from any model-minted taskId (loop.ts uses `randomUUID()`),
+ * so a real `progress` event's `clear()` evicts it and it never collides with a
+ * live tool-use loop entry. Underscore-bracketed to read as a sentinel.
+ */
+const RATE_LIMIT_TASK_ID = '__rate_limit__';
 
 /**
  * Context object passed to orchestrator event handlers. Wraps mutable fields
@@ -371,7 +383,38 @@ export function handleOrchestratorEvent(
       // already committed past a block boundary are append-only and remain.
       source.contentBuffer = '';
       ctx.streamingMarkdown.current?.discardPending();
+      // A fresh request is starting: clear any stale rate-limit backoff banner
+      // so the re-drive isn't shadowed by an ETA that no longer applies. The
+      // next real `progress` event repaints the normal banner.
+      if (ctx.lastProgressByTask.delete(RATE_LIMIT_TASK_ID) && ctx.isTTY) {
+        setComposedOverlay(ctx);
+      }
       return;
+
+    case 'rate_limit': {
+      // Live backoff signal from the provider (429/503/529 + retry-after). The
+      // per-turn loop is parked awaiting the throttled `messages.create`, so on
+      // the FIRST model call of a turn there is NO progress entry and the
+      // overlay shows only the spinner — a healthy wait looks like a hang.
+      // Inject a synthetic progress entry carrying the formatted activity in
+      // `description` (the field `formatProgressBanner` shows verbatim; the
+      // `activity`/`summary` slot is masked by deriveProgressActivity when the
+      // model is mid-thought, so `description` is the reliable channel). Keyed
+      // by a reserved taskId so we can evict it on stream_retry; the next real
+      // `progress` event's `clear()`+`set()` (see the 'progress' case) and the
+      // turn-end `lastProgressByTask.clear()` both drop it automatically, so
+      // the normal banner resumes with no extra bookkeeping.
+      if (!ctx.isTTY) return;
+      ctx.lastProgressByTask.set(RATE_LIMIT_TASK_ID, {
+        taskId: RATE_LIMIT_TASK_ID,
+        description: formatRateLimitActivity(event.retryAfterMs),
+        totalTokens: 0,
+        toolUses: 0,
+        durationMs: 0,
+      });
+      setComposedOverlay(ctx);
+      return;
+    }
 
     case 'panel':
       emitPanel(event.spec as CardSpec, source, ctx);

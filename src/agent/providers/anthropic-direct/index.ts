@@ -35,6 +35,7 @@ import {
 } from './auth.js';
 import { oneShotCompletion, type OneShotInput } from './oneshot.js';
 import { makeTracingFetch } from './tracing-fetch.js';
+import { ThrottleQueue } from './throttle-queue.js';
 import { refreshClaudeCodeOauthToken } from '../../auth/keychain.js';
 import { AnthropicDirectQuery } from './query.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
@@ -602,16 +603,34 @@ export class AnthropicDirectProvider implements ModelProvider {
       );
     }
     const authMode = detectAuthMode(token);
+    // Live-throttle mailbox: the wrapped fetch pushes a signal onto this queue
+    // for every 429/503/529 the SDK sleep-and-retries INSIDE a single
+    // `messages.create`; the per-turn loop drains it to surface a `rate_limit`
+    // ProviderEvent LIVE (the loop is otherwise parked awaiting the SDK and
+    // cannot yield during the backoff). Installed only when the tracing fetch
+    // is (non-local-shim + a trace writer OR a live surface would consume it) —
+    // here it rides alongside the existing trace-writer gate so the queue and
+    // the wrapper share the same lifetime. The SAME instance is handed to the
+    // query below so the fetch producer and the loop consumer meet.
+    const throttleQueue =
+      !localMode && config.traceWriter ? new ThrottleQueue() : undefined;
     const clientOpts = buildClientOptions(
       token,
       authMode,
       config.baseUrl,
-      // Observability: route SDK HTTP through a wrapper that records 429/503/529
-      // throttling into the witness trace, so the SDK's otherwise-silent
-      // retry-after backoff is legible in `afk trace show`. Skipped in
-      // local-shim mode (not Anthropic's billing surface) and when no trace
-      // writer is attached.
-      !localMode && config.traceWriter ? makeTracingFetch(config.traceWriter) : undefined,
+      // Observability: route SDK HTTP through a wrapper that (1) records
+      // 429/503/529 throttling into the witness trace so the SDK's
+      // otherwise-silent retry-after backoff is legible in `afk trace show`,
+      // and (2) pushes a live signal onto `throttleQueue` so the progress
+      // banner can show the backoff as it happens. Skipped in local-shim mode
+      // (not Anthropic's billing surface) and when no trace writer is attached.
+      !localMode && config.traceWriter
+        ? makeTracingFetch(
+            config.traceWriter,
+            undefined,
+            throttleQueue ? (info) => throttleQueue.push(info) : undefined,
+          )
+        : undefined,
     );
     const factory = this.providerFactory ?? clientFactory;
     const client = factory ? factory(clientOpts) : new Anthropic(clientOpts);
@@ -825,10 +844,17 @@ export class AnthropicDirectProvider implements ModelProvider {
           freshToken,
           'oauth',
           config.baseUrl,
-          // Preserve throttle observability across an OAuth account swap — the
-          // rebuilt client must keep the tracing-fetch wrapper. localMode is
-          // false in this branch (see the guard above).
-          config.traceWriter ? makeTracingFetch(config.traceWriter) : undefined,
+          // Preserve throttle observability AND the live-banner signal across an
+          // OAuth account swap — the rebuilt client must keep the same
+          // tracing-fetch wrapper wired to the same `throttleQueue`. localMode
+          // is false in this branch (see the guard above).
+          config.traceWriter
+            ? makeTracingFetch(
+                config.traceWriter,
+                undefined,
+                throttleQueue ? (info) => throttleQueue.push(info) : undefined,
+              )
+            : undefined,
         );
         return factory ? factory(opts) : new Anthropic(opts);
       };
@@ -913,6 +939,9 @@ export class AnthropicDirectProvider implements ModelProvider {
       // we reuse config.hookRegistry directly here — the query stores it
       // separately from the dispatcher and dispatches only PreCompact events.
       ...(config.hookRegistry !== undefined ? { hookRegistry: config.hookRegistry } : {}),
+      // Live-throttle mailbox: the SAME instance wired to the client fetch
+      // callback above, so the loop's consumer meets the fetch producer.
+      ...(throttleQueue !== undefined ? { throttleQueue } : {}),
     });
   }
 }

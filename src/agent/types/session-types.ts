@@ -98,6 +98,13 @@ export type OutputEvent =
   // on this event so the re-streamed text does not visibly duplicate. See
   // ProviderEvent 'stream.retry' for the full contract.
   | { type: 'stream_retry' }
+  // Live rate-limit / backoff marker. Emitted while the anthropic-direct
+  // provider is throttled (429/503/529 + retry-after) and the SDK is sleeping
+  // out the backoff inside a single request. Surfaces that render a live status
+  // banner show `rate-limited · retrying in ~Ns` for the duration; unlike
+  // `stream_retry` it does NOT invalidate already-streamed text. See
+  // ProviderEvent 'rate_limit' for the full contract.
+  | { type: 'rate_limit'; retryAfterMs?: number }
   // Skill-emitted panel/card payload. Skills call `emitCard(spec)` from
   // `src/skills/_lib/emit-card.ts`; the renderer flushes pending content
   // and renders via `card(spec)` from `src/cli/render.ts`.
