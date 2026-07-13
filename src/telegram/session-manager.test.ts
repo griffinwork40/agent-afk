@@ -796,3 +796,117 @@ describe('SessionManager — session naming (/name)', () => {
     await m2.closeAll().catch(() => {});
   });
 });
+
+describe('SessionManager — session switcher (/sessions, /switch, /new)', () => {
+  // Same unset-AFK_HOME contract as the recordTelegramTurn suite: the shared
+  // sidecar store (listSessions/loadSession) resolves under this suite's tmp HOME.
+  useUnsetAfkHome();
+
+  class MockSessionWithId implements IAgentSession {
+    state: SessionState = 'idle';
+    constructor(readonly sessionId?: string) {}
+    async sendMessage(content: string) {
+      return { role: 'assistant' as const, content: `Echo: ${content}`, timestamp: new Date() };
+    }
+    async *getOutputStream() { yield { type: 'done' as const }; }
+    abort(_reason: string): void { /* no-op */ }
+    async close() { /* no-op */ }
+    async reset() { /* no-op */ }
+  }
+
+  let testDataDir: string;
+  let tmpHome: string;
+  let originalHome: string | undefined;
+  let lastConfig: AgentConfig | undefined;
+  let manager: SessionManager;
+
+  function makeManager(sessionId?: string): SessionManager {
+    return new SessionManager({
+      dataDir: testDataDir,
+      apiKey: 'test-key',
+      defaultModel: 'sonnet',
+      createSession: async (config: AgentConfig) => {
+        lastConfig = config;
+        return new MockSessionWithId(sessionId);
+      },
+    });
+  }
+
+  beforeEach(() => {
+    const entropy = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    testDataDir = join(tmpdir(), `afk-tg-sw-data-${entropy}`);
+    originalHome = process.env['HOME'];
+    tmpHome = join(tmpdir(), `afk-tg-sw-home-${entropy}`);
+    process.env['HOME'] = tmpHome;
+    lastConfig = undefined;
+    manager = makeManager('sdk-live-default');
+  });
+
+  afterEach(async () => {
+    await manager.closeAll().catch(() => {});
+    if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
+    if (existsSync(testDataDir)) rmSync(testDataDir, { recursive: true, force: true });
+    if (originalHome !== undefined) process.env['HOME'] = originalHome;
+  });
+
+  test('listChatSessions lists this chat\'s telegram sidecars, excluding other chats', async () => {
+    // Two distinct conversations for chat 800 (reset between so each gets its own sidecar).
+    manager.recordTelegramTurn(800, 'alpha work', 'a', { sessionId: 'sdk-A' });
+    await manager.resetSession(800);
+    manager.recordTelegramTurn(800, 'beta work', 'b', { sessionId: 'sdk-B' });
+    // A different chat's sidecar must NOT leak into 800's list.
+    manager.recordTelegramTurn(999, 'other chat', 'x', { sessionId: 'sdk-other' });
+
+    const list = manager.listChatSessions(800);
+    expect(list.map((s) => s.sessionId).sort()).toEqual(['sdk-A', 'sdk-B']);
+    // No live/active session was established for 800 → nothing flagged active.
+    expect(list.every((s) => s.active === false)).toBe(true);
+    const alpha = list.find((s) => s.sessionId === 'sdk-A');
+    expect(alpha?.name).toBe('alpha-work');
+    expect(alpha?.turns).toBe(1);
+    expect(alpha?.model).toBe('sonnet');
+  });
+
+  test('switchToSession stages resume, marks the target active, and the next getSession resumes it', async () => {
+    manager.recordTelegramTurn(801, 'first convo', 'a', { sessionId: 'sdk-1' });
+    await manager.resetSession(801);
+    manager.recordTelegramTurn(801, 'second convo', 'b', { sessionId: 'sdk-2' });
+
+    const res = await manager.switchToSession(801, 'sdk-1');
+    expect(res).toEqual({ ok: true });
+    expect(manager.listChatSessions(801).find((s) => s.sessionId === 'sdk-1')?.active).toBe(true);
+
+    // The rebuilt session continues the chosen conversation: config.resume === target.
+    await manager.getSession(801);
+    expect(lastConfig?.resume).toBe('sdk-1');
+
+    // A subsequent /clear starts fresh — the staged resume is dropped.
+    await manager.resetSession(801);
+    lastConfig = undefined;
+    await manager.getSession(801);
+    expect(lastConfig?.resume).toBeUndefined();
+  });
+
+  test('switchToSession rejects an unknown or cross-chat target', async () => {
+    manager.recordTelegramTurn(802, 'my convo', 'a', { sessionId: 'sdk-802' });
+
+    expect(await manager.switchToSession(802, 'does-not-exist')).toEqual({ ok: false, reason: 'not-found' });
+    // sdk-802 belongs to chat 802, so switching chat 803 to it must be refused.
+    expect(await manager.switchToSession(803, 'sdk-802')).toEqual({ ok: false, reason: 'not-found' });
+  });
+
+  test('switchToSession no-ops when the target is already the live active session', async () => {
+    await manager.getSession(804);
+    manager.recordTelegramTurn(804, 'hi', 'yo', { sessionId: 'sdk-live-default' });
+    const res = await manager.switchToSession(804, 'sdk-live-default');
+    expect(res).toEqual({ ok: false, reason: 'already-active' });
+  });
+
+  test('newSession preserves the previous conversation as resumable and starts fresh', async () => {
+    manager.recordTelegramTurn(805, 'old convo', 'a', { sessionId: 'sdk-old' });
+    await manager.newSession(805);
+    manager.recordTelegramTurn(805, 'new convo', 'b', { sessionId: 'sdk-fresh' });
+
+    expect(manager.listChatSessions(805).map((s) => s.sessionId).sort()).toEqual(['sdk-fresh', 'sdk-old']);
+  });
+});

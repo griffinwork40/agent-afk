@@ -72,6 +72,8 @@ export interface SessionListEntry {
   name?: string;
   source?: 'cli' | 'telegram' | 'daemon';
   actor?: TraceActor;
+  /** Telegram chat id for telegram-sourced sidecars — lets a surface filter a chat's sessions (the /sessions switcher). */
+  telegramChatId?: number;
   model: AgentModelInput;
   startedAt: number;
   savedAt: number;
@@ -303,6 +305,7 @@ export function listSessions(): SessionListEntry[] {
         name: loaded.name,
         source: loaded.source,
         actor: loaded.actor,
+        telegramChatId: loaded.telegramChatId,
         model: loaded.model,
         startedAt: loaded.startedAt,
         savedAt: loaded.savedAt,
