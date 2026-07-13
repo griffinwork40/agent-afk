@@ -43,12 +43,23 @@ export function modelAvailability(model: string | undefined, bindings?: ModelSlo
     if (b.id === '') {
       return { available: false, needs: 'local', hint: 'not configured (set AFK_MODEL_LOCAL / models.local)' };
     }
-    if (b.apiKey) return { available: true, needs: b.provider === 'chatgpt-oauth' ? 'chatgpt-oauth' : 'unknown' };
+    // A `chatgpt-oauth` slot forces the ChatGPT-subscription OAuth path at
+    // runtime: applySlotCredentials sets `forceChatgptOAuth`, and
+    // resolveOpenAIAuth(..., true) resolves from ~/.codex/auth.json REGARDLESS
+    // of any per-slot/explicit apiKey. So this must precede the generic apiKey
+    // short-circuit below — otherwise a slot carrying a stale per-slot key but
+    // no OAuth token is mislabeled available (no sign-in hint) while the next
+    // real request fails for missing ChatGPT sign-in.
     if (b.provider === 'chatgpt-oauth') {
       const ok = resolveOpenAIAuth(undefined, {}, true).apiKey != null;
       return { available: ok, needs: 'chatgpt-oauth', hint: ok ? undefined : 'needs ChatGPT sign-in (~/.codex/auth.json)' };
     }
-    const provider = providerForModel(model);
+    if (b.apiKey) return { available: true, needs: 'unknown' };
+    // Thread the supplied `bindings` through so provider routing resolves the
+    // SAME table `resolveBinding` used above (mirrors applySlotCredentials);
+    // otherwise an explicit bindings arg diverging from the process-global
+    // singleton would be checked against the wrong credential family.
+    const provider = providerForModel(model, bindings ? { slots: bindings } : undefined);
     if (provider === 'anthropic-direct') {
       const ok = !!loadAnthropicCredential();
       return { available: ok, needs: 'anthropic', hint: ok ? undefined : 'needs Claude sign-in / ANTHROPIC_API_KEY' };

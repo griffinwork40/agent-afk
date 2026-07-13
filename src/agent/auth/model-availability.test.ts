@@ -105,11 +105,27 @@ describe('modelAvailability', () => {
       });
     });
 
-    it('short-circuits on a per-slot apiKey without calling resolveOpenAIAuth', () => {
+    it('does NOT let a per-slot apiKey mask a missing ChatGPT OAuth token', () => {
+      // Runtime forces the OAuth path for a chatgpt-oauth slot and ignores any
+      // per-slot/explicit key (resolveOpenAIAuth(..., true) reads ~/.codex only),
+      // so a stale per-slot key must not short-circuit to "available" here.
+      resolveOpenAIAuth.mockReturnValue({ apiKey: null, source: 'no-usable-auth-forced-chatgpt-oauth' });
+      const bindings = slots({ medium: { id: 'gpt-5', provider: 'chatgpt-oauth', apiKey: 'preset' } });
+      const result = modelAvailability('medium', bindings);
+      expect(result).toEqual({
+        available: false,
+        needs: 'chatgpt-oauth',
+        hint: 'needs ChatGPT sign-in (~/.codex/auth.json)',
+      });
+      expect(resolveOpenAIAuth).toHaveBeenCalledWith(undefined, {}, true);
+    });
+
+    it('is available when a chatgpt-oauth slot with a per-slot key also has a resolvable OAuth token', () => {
+      resolveOpenAIAuth.mockReturnValue({ apiKey: 'chatgpt-token', source: 'chatgpt-oauth' });
       const bindings = slots({ medium: { id: 'gpt-5', provider: 'chatgpt-oauth', apiKey: 'preset' } });
       const result = modelAvailability('medium', bindings);
       expect(result).toEqual({ available: true, needs: 'chatgpt-oauth' });
-      expect(resolveOpenAIAuth).not.toHaveBeenCalled();
+      expect(resolveOpenAIAuth).toHaveBeenCalledWith(undefined, {}, true);
     });
   });
 
@@ -146,6 +162,14 @@ describe('modelAvailability', () => {
       const bindings = slots({ small: { id: 'local-model', baseUrl: 'http://localhost:8080/v1' } });
       const result = modelAvailability('small', bindings);
       expect(result).toEqual({ available: true, needs: 'local' });
+      expect(loadOpenAICredential).not.toHaveBeenCalled();
+      expect(resolveOpenAIAuth).not.toHaveBeenCalled();
+    });
+
+    it('short-circuits to available/unknown on a per-slot apiKey (non-oauth), skipping credential resolution', () => {
+      const bindings = slots({ small: { id: 'gpt-4o-mini', apiKey: 'sk-preset' } });
+      const result = modelAvailability('small', bindings);
+      expect(result).toEqual({ available: true, needs: 'unknown' });
       expect(loadOpenAICredential).not.toHaveBeenCalled();
       expect(resolveOpenAIAuth).not.toHaveBeenCalled();
     });
