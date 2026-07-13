@@ -66,6 +66,43 @@ export const READ_PATH_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Stable, framework-owned prefix the path-approval `PreToolUse` hook emits on
+ * the `reason` of a forked child's CONTAINMENT auto-deny — a read whose resolved
+ * path falls outside the fork's granted read roots (path-approval-hook.ts:
+ * "Sub-agent path access denied: <path> is outside the session's granted <mode>
+ * roots. …"). This is the exact class of denial the breaker exists to catch
+ * (#546), and the only one for which its remedy ("widen the read scope /
+ * re-dispatch with the path in cwd") is correct.
+ *
+ * Mirrored here (a literal, not an import) for the same reason as {@link
+ * READ_PATH_TOOLS}: to keep the breaker decoupled from the hook module. It is
+ * already a load-bearing contract elsewhere — the `subagent-read-denial`
+ * telemetry detector keys on this same prefix, and path-approval-hook.test.ts
+ * locks the producer at three sites — so a drift in the reason text fails those
+ * tests loudly. If path-approval changes the wording, update it here too.
+ */
+export const SUBAGENT_PATH_DENIAL_REASON_PREFIX = 'Sub-agent path access denied:';
+
+/**
+ * True only for a genuine path-approval CONTAINMENT auto-deny (see {@link
+ * SUBAGENT_PATH_DENIAL_REASON_PREFIX}) — NOT for the two other reasons a forked
+ * read can be hook-blocked:
+ *   - the unconditional credential/secret read-denylist floor
+ *     ("Access denied: … protected credential/secret path … do not retry"), and
+ *   - an arbitrary user-defined `PreToolUse` hook blocking a read.
+ *
+ * The breaker counts ONLY containment denials so its "widen readRoots" remedy is
+ * always accurate: a denylisted-secret block is never recoverable by widening
+ * roots (the message even says "do not retry"), and a user-policy block has
+ * semantics the framework cannot presume. Those spins are rare and remain
+ * bounded by the byte-identical repeat breaker / the wall-clock budget; folding
+ * them in here would only misdirect the parent. `#546`.
+ */
+export function isSubagentContainmentDenial(reason: string | undefined): boolean {
+  return reason !== undefined && reason.includes(SUBAGENT_PATH_DENIAL_REASON_PREFIX);
+}
+
+/**
  * Best-effort human-readable path for a denied read call, for the abort
  * message. Mirrors path-approval-hook.ts's `extractCandidatePath`:
  * `read_file` uses `file_path`; `list_directory`/`glob`/`grep` use `path`

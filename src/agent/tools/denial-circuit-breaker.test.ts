@@ -8,9 +8,20 @@ import {
   DENIAL_CIRCUIT_BREAKER_THRESHOLD,
   DENIAL_BREAKER_FAILURE_CLASS,
   READ_PATH_TOOLS,
+  SUBAGENT_PATH_DENIAL_REASON_PREFIX,
+  isSubagentContainmentDenial,
   extractDeniedReadPath,
   buildDenialBreakerMessage,
 } from './denial-circuit-breaker.js';
+
+// Representative non-containment hook-block reasons the breaker must IGNORE.
+// Byte-for-byte prefixes of the real producers (path-approval-hook.ts's
+// credential floor; an arbitrary user-defined PreToolUse hook).
+const CREDENTIAL_DENYLIST_REASON =
+  'Access denied: /home/u/.ssh/id_rsa is a protected credential/secret path ' +
+  '(read-denylist entry: ~/.ssh). This path is never readable — it holds ' +
+  'credentials, not task data; do not retry.';
+const USER_HOOK_REASON = 'Blocked by org policy: reads of /vault/** are not allowed here.';
 
 // ---- Pure helpers ---------------------------------------------------------
 
@@ -76,21 +87,49 @@ describe('denial-circuit-breaker pure helpers', () => {
     expect(msg).toContain('readRoots'); // the grant remedy
     expect(msg).toMatch(/afk farm/i); // deliberate-confinement framing
   });
+
+  it('isSubagentContainmentDenial: TRUE only for genuine path-approval containment reasons', () => {
+    // The exact shape path-approval-hook.ts emits for a fork read outside roots.
+    expect(
+      isSubagentContainmentDenial(
+        `${SUBAGENT_PATH_DENIAL_REASON_PREFIX} /out/x.ts is outside the session's granted read roots. Reads are confined…`,
+      ),
+    ).toBe(true);
+    // Prefix is load-bearing and must stay in sync with the producer.
+    expect(SUBAGENT_PATH_DENIAL_REASON_PREFIX).toBe('Sub-agent path access denied:');
+  });
+
+  it('isSubagentContainmentDenial: FALSE for the credential/secret read-denylist floor', () => {
+    // A denylisted-secret block is never recoverable by widening readRoots
+    // ("do not retry"), so the breaker's remedy would misdirect — must not count.
+    expect(isSubagentContainmentDenial(CREDENTIAL_DENYLIST_REASON)).toBe(false);
+  });
+
+  it('isSubagentContainmentDenial: FALSE for arbitrary user-hook reasons and undefined', () => {
+    expect(isSubagentContainmentDenial(USER_HOOK_REASON)).toBe(false);
+    expect(isSubagentContainmentDenial(undefined)).toBe(false);
+    expect(isSubagentContainmentDenial('')).toBe(false);
+  });
 });
 
 // ---- Dispatcher integration ----------------------------------------------
 
 const PARENT = 'parent-session-1';
 
-/** PreToolUse hook that path-approval-denies any call whose tool ∈ blockTools. */
-function blockingHook(blockTools: ReadonlySet<string>): HookRegistry {
+/**
+ * PreToolUse hook that path-approval-denies any call whose tool ∈ blockTools.
+ * The block `reason` defaults to a genuine path-approval CONTAINMENT reason (so
+ * the breaker counts it); pass a different `reason` to model the credential
+ * read-denylist floor or a user hook (which must NOT count).
+ */
+function blockingHook(
+  blockTools: ReadonlySet<string>,
+  reason = `Sub-agent path access denied: outside the session's granted read roots`,
+): HookRegistry {
   const registry = createHookRegistryImpl();
   registry.register('PreToolUse', async (ctx) => {
     if (ctx.event === 'PreToolUse' && blockTools.has(ctx.toolName)) {
-      return {
-        decision: 'block' as const,
-        reason: `Sub-agent path access denied: outside the session's granted read roots`,
-      };
+      return { decision: 'block' as const, reason };
     }
     return {};
   });
@@ -105,12 +144,14 @@ function echoHandler(): ToolHandler {
 function makeForkDispatcher(opts: {
   blockTools: ReadonlySet<string>;
   fork?: boolean;
+  /** Custom hook-block reason (default: a genuine containment denial). */
+  reason?: string;
 }): SessionToolDispatcher {
   return new SessionToolDispatcher({
     handlers: new Map<string, ToolHandler>([['echo', echoHandler()]]),
     schemas: [...builtinToolSchemas],
     permissions: { allowedTools: ['echo', 'read_file', 'list_directory', 'glob', 'grep', 'write_file'] },
-    hookRegistry: blockingHook(opts.blockTools),
+    hookRegistry: blockingHook(opts.blockTools, opts.reason),
     ...(opts.fork !== false ? { parentSessionId: PARENT } : {}),
   });
 }
@@ -203,11 +244,66 @@ describe('denial circuit breaker — dispatcher integration', () => {
     expect(trip.failureClass).toBe(DENIAL_BREAKER_FAILURE_CLASS);
   });
 
-  it('trips through the parallel batch path too', async () => {
+  it('trips through the parallel batch path too — first N-1 stay hook-block, Nth trips', async () => {
     const d = makeForkDispatcher({ blockTools: new Set(['read_file']) });
     const calls = Array.from({ length: DENIAL_CIRCUIT_BREAKER_THRESHOLD }, (_, i) => readCall(i));
     const results = await d.executeBatch(calls);
-    // At least the tripping (Nth) call carries the denial-breaker class.
-    expect(results.some((r) => r.failureClass === DENIAL_BREAKER_FAILURE_CLASS)).toBe(true);
+    // Denials are counted in index order during phase-1, so the first N-1 stay
+    // ordinary hook-blocks and exactly the Nth (last) carries the trip. Stronger
+    // than a bare `.some(...)`: it pins WHICH call trips and that earlier ones did not.
+    for (let i = 0; i < DENIAL_CIRCUIT_BREAKER_THRESHOLD - 1; i++) {
+      expect(results[i]!.failureClass).toBe('hook-block');
+    }
+    expect(results[DENIAL_CIRCUIT_BREAKER_THRESHOLD - 1]!.failureClass).toBe(
+      DENIAL_BREAKER_FAILURE_CLASS,
+    );
+  });
+
+  it('executeBatch reset-on-success: a successful sibling restarts the consecutive count', async () => {
+    const d = makeForkDispatcher({ blockTools: new Set(['read_file']) });
+
+    // Batch 1: N-1 denials + a successful echo. N-1 < threshold so no trip, and
+    // the success fires the end-of-batch reset.
+    const batch1: ToolCall[] = [
+      ...Array.from({ length: DENIAL_CIRCUIT_BREAKER_THRESHOLD - 1 }, (_, i) => readCall(i + 1)),
+      { id: 'echo-batch', name: 'echo', input: { message: 'progress' }, signal: new AbortController().signal },
+    ];
+    const r1 = await d.executeBatch(batch1);
+    expect(r1.every((r) => r.failureClass !== DENIAL_BREAKER_FAILURE_CLASS)).toBe(true);
+    expect(r1.some((r) => r.isError === undefined)).toBe(true); // echo succeeded
+
+    // Batch 2: N-1 more denials. If the reset had NOT fired, the running count
+    // would already be N-1 and the first denial here would be the Nth → trip.
+    // It must stay below threshold, proving the reset landed.
+    const batch2 = Array.from({ length: DENIAL_CIRCUIT_BREAKER_THRESHOLD - 1 }, (_, i) => readCall(100 + i));
+    const r2 = await d.executeBatch(batch2);
+    expect(r2.every((r) => r.failureClass === 'hook-block')).toBe(true);
+  });
+
+  it('credential/secret read-denylist blocks NEVER trip — only containment denials count', async () => {
+    // A forked read hard-blocked by the credential floor ("do not retry") is not
+    // recoverable by widening readRoots, so it must not trip this breaker even
+    // well past the threshold. #546 review follow-up.
+    const d = makeForkDispatcher({
+      blockTools: new Set(['read_file']),
+      reason: CREDENTIAL_DENYLIST_REASON,
+    });
+    for (let i = 0; i < DENIAL_CIRCUIT_BREAKER_THRESHOLD * 2; i++) {
+      const r = await d.execute(readCall(i));
+      expect(r.isError).toBe(true);
+      expect(r.failureClass).toBe('hook-block'); // never 'denial-breaker'
+    }
+  });
+
+  it('arbitrary user-hook read blocks NEVER trip — framework does not presume their semantics', async () => {
+    const d = makeForkDispatcher({
+      blockTools: new Set(['read_file']),
+      reason: USER_HOOK_REASON,
+    });
+    for (let i = 0; i < DENIAL_CIRCUIT_BREAKER_THRESHOLD * 2; i++) {
+      const r = await d.execute(readCall(i));
+      expect(r.isError).toBe(true);
+      expect(r.failureClass).toBe('hook-block'); // never 'denial-breaker'
+    }
   });
 });

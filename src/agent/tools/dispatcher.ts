@@ -35,6 +35,7 @@ import {
   DENIAL_CIRCUIT_BREAKER_THRESHOLD,
   DENIAL_BREAKER_FAILURE_CLASS,
   READ_PATH_TOOLS,
+  isSubagentContainmentDenial,
   extractDeniedReadPath,
   buildDenialBreakerMessage,
 } from './denial-circuit-breaker.js';
@@ -532,22 +533,36 @@ export class SessionToolDispatcher implements ToolDispatcher {
   }
 
   /**
-   * Denial circuit breaker (#546). Called with the just-built path-approval
-   * block result for a PreToolUse `hook-block`. Counts the denial ONLY when it
-   * is a forked child (`parentSessionId` set — only forks auto-deny reads; an
-   * interactive session gets a prompt instead) reading via a {@link
-   * READ_PATH_TOOLS} tool (so write-confinement is never counted). Below the
-   * threshold the original block result is returned unchanged; at the threshold
-   * a `denial-breaker` result is returned instead, which the provider loop
-   * converts into a loud `error` event so the parent gets a structured,
+   * Denial circuit breaker (#546). Called from the `HookBlockedError` catch with
+   * the block `reason` and the just-built `hook-block` result. Counts the denial
+   * ONLY when ALL of:
+   *   - it is a forked child (`parentSessionId` set — only forks auto-deny reads;
+   *     an interactive session gets a prompt instead), AND
+   *   - the tool is a {@link READ_PATH_TOOLS} read (so write-confinement is never
+   *     counted), AND
+   *   - the block is a genuine path-approval CONTAINMENT denial per {@link
+   *     isSubagentContainmentDenial} — NOT the credential/secret read-denylist
+   *     floor or an arbitrary user-defined `PreToolUse` hook, whose denials the
+   *     breaker's "widen readRoots" remedy would misdirect.
+   * Below the threshold the original block result is returned unchanged; at the
+   * threshold a `denial-breaker` result is returned instead, which the provider
+   * loop converts into a loud `error` event so the parent gets a structured,
    * actionable failure rather than a fork that burns its wall-clock budget.
    *
    * Invariant: consecutive — {@link resetDenialBreaker} clears the count on any
    * successful tool result, so a fork that probes a couple of out-of-scope
    * paths and then makes progress never trips.
    */
-  private recordForkReadDenial(call: ToolCall, blockResult: ToolResult): ToolResult {
-    if (this.parentSessionId === undefined || !READ_PATH_TOOLS.has(call.name)) {
+  private recordForkReadDenial(
+    call: ToolCall,
+    blockReason: string | undefined,
+    blockResult: ToolResult,
+  ): ToolResult {
+    if (
+      this.parentSessionId === undefined ||
+      !READ_PATH_TOOLS.has(call.name) ||
+      !isSubagentContainmentDenial(blockReason)
+    ) {
       return blockResult;
     }
     const breaker = this.denialBreaker ?? { count: 0, deniedPaths: [] };
@@ -659,7 +674,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
         });
       } catch (err) {
         if (err instanceof HookBlockedError) {
-          return this.recordForkReadDenial(call, {
+          return this.recordForkReadDenial(call, err.reason, {
             content: `Tool "${call.name}" blocked by PreToolUse hook: ${err.message}`,
             isError: true,
             failureClass: 'hook-block',
@@ -757,7 +772,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
           });
         } catch (err) {
           if (err instanceof HookBlockedError) {
-            results[i] = this.recordForkReadDenial(call, {
+            results[i] = this.recordForkReadDenial(call, err.reason, {
               content: `Tool "${call.name}" blocked by PreToolUse hook: ${err.message}`,
               isError: true,
               failureClass: 'hook-block',
