@@ -7,15 +7,19 @@
  *     fields are used. No prompt content, no user data.
  *   - Unknown fields are ignored.
  *
- * Note: routing decisions don't have consistent timestamps in all records, so
- * this aggregator aggregates ALL records in the file (no `--days` window filter).
+ * Note: `appendRoutingDecision` (see `agent/routing-telemetry.ts`) stamps
+ * every record with a `ts` ISO-8601 field at write time, so this aggregator
+ * applies the same `--days` window filter as the other aggregators (see
+ * `daemon.ts`'s `triggeredAt` handling): records missing/with an unparseable
+ * `ts`, or older than the window, are skipped.
  *
  * @module insights/aggregators/routing
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { getRoutingDecisionsPath } from '../../paths.js';
+import { readTailMb } from './daemon.js';
 import type { InsightsOptions, RoutingAggregates } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -56,11 +60,15 @@ export function aggregateRoutingDecisions(options: InsightsOptions): RoutingAggr
 
   let rawContent: string;
   try {
-    rawContent = readFileSync(routingPath, 'utf-8');
+    // Bounded tail read (same 1 MB cap as daemon.ts) — routing-decisions.jsonl
+    // can grow unbounded over time, and we only need records inside the
+    // `--days` window anyway.
+    rawContent = readTailMb(routingPath);
   } catch {
     return agg;
   }
 
+  const cutoffMs = Date.now() - options.days * 24 * 60 * 60 * 1000;
   const lines = rawContent.split('\n');
 
   let totalComposeNodes = 0;
@@ -81,6 +89,14 @@ export function aggregateRoutingDecisions(options: InsightsOptions): RoutingAggr
     // property access so `null['event']` can never throw.
     if (parsed === null || typeof parsed !== 'object') continue;
     const record = parsed as Record<string, unknown>;
+
+    // Filter by the `ts` field every record carries (see appendRoutingDecision
+    // in agent/routing-telemetry.ts). Missing/unparseable timestamps are
+    // treated as out-of-window, consistent with daemon.ts's triggeredAt check.
+    const tsRaw = record['ts'];
+    if (typeof tsRaw !== 'string') continue;
+    const tsMs = Date.parse(tsRaw);
+    if (Number.isNaN(tsMs) || tsMs < cutoffMs) continue;
 
     const event = typeof record['event'] === 'string' ? record['event'] : null;
     if (!event) continue;

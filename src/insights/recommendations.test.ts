@@ -10,54 +10,36 @@
 import { describe, it, expect } from 'vitest';
 import { evaluateRecommendations } from './recommendations.js';
 import { RECOMMENDATION_THRESHOLDS as T } from './constants.js';
+import { zeroSessionAggregates } from './aggregators/sessions.js';
+import { zeroTraceAggregates } from './aggregators/traces.js';
+import { zeroDaemonAggregates } from './aggregators/daemon.js';
+import { zeroRoutingAggregates } from './aggregators/routing.js';
 import type { InsightAggregates } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers
+//
+// The base fixture AND every per-test override is built from the same exported
+// zero-factories the aggregators themselves use (zeroSessionAggregates /
+// zeroTraceAggregates / zeroDaemonAggregates / zeroRoutingAggregates), then
+// spread-overridden with only the fields a given rule cares about. This keeps
+// the fixtures structurally in sync with `InsightAggregates`: a field
+// added/renamed on any *Aggregates type is inherited here automatically (and a
+// tests-inclusive `tsc` would catch a stale override) instead of silently
+// drifting. Previously these overrides passed full object literals that had
+// already drifted from the real types (missing 6 TraceAggregates fields, and
+// bogus totalInputTokens/totalOutputTokens on SessionAggregates) — invisible
+// because tsconfig excludes *.test.ts from the lint gate.
 // ---------------------------------------------------------------------------
 
 function makeAgg(overrides: Partial<InsightAggregates> = {}): InsightAggregates {
   return {
     generatedAt: Date.now(),
     windowDays: 30,
-    sessions: {
-      totalSessions: 0,
-      totalCostUsd: 0,
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
-      byDay: {},
-      byModel: {},
-      bySurface: {},
-    },
-    traces: {
-      totalTracedSessions: 0,
-      toolCallCounts: {},
-      toolErrorCounts: {},
-      toolDurationsMs: {},
-      subagentForkDepths: {},
-      compactionCount: 0,
-      closureReasons: {},
-    },
-    daemon: {
-      totalRuns: 0,
-      successCount: 0,
-      errorCount: 0,
-      skipCount: 0,
-      byTaskId: {},
-      triggerBreakdown: {},
-      skipReasons: {},
-      recentErrors: [],
-      avgDurationMs: 0,
-    },
-    routing: {
-      totalRoutingEvents: 0,
-      skillDispatchModes: {},
-      skillFrequency: {},
-      composeCallCount: 0,
-      avgComposeNodes: 0,
-      avgComposeEdges: 0,
-      overflowKills: {},
-    },
+    sessions: zeroSessionAggregates(),
+    traces: zeroTraceAggregates(),
+    daemon: zeroDaemonAggregates(),
+    routing: zeroRoutingAggregates(),
     ...overrides,
   };
 }
@@ -72,13 +54,10 @@ describe('checkHighErrorRateTool', () => {
     const errorCount = Math.ceil(callCount * T.toolErrorRateMin);
     const agg = makeAgg({
       traces: {
+        ...zeroTraceAggregates(),
         totalTracedSessions: 1,
         toolCallCounts: { bash: callCount },
         toolErrorCounts: { bash: errorCount },
-        toolDurationsMs: {},
-        subagentForkDepths: {},
-        compactionCount: 0,
-        closureReasons: {},
       },
     });
 
@@ -96,13 +75,10 @@ describe('checkHighErrorRateTool', () => {
     const errorCount = Math.floor(callCount * (T.toolErrorRateMin - 0.01));
     const agg = makeAgg({
       traces: {
+        ...zeroTraceAggregates(),
         totalTracedSessions: 1,
         toolCallCounts: { bash: callCount },
         toolErrorCounts: { bash: errorCount },
-        toolDurationsMs: {},
-        subagentForkDepths: {},
-        compactionCount: 0,
-        closureReasons: {},
       },
     });
 
@@ -113,13 +89,10 @@ describe('checkHighErrorRateTool', () => {
   it('tool below minCalls → does not fire even with 100% error rate', () => {
     const agg = makeAgg({
       traces: {
+        ...zeroTraceAggregates(),
         totalTracedSessions: 1,
         toolCallCounts: { bash: T.highErrorToolMinCalls - 1 },
         toolErrorCounts: { bash: T.highErrorToolMinCalls - 1 },
-        toolDurationsMs: {},
-        subagentForkDepths: {},
-        compactionCount: 0,
-        closureReasons: {},
       },
     });
 
@@ -137,16 +110,13 @@ describe('checkFailingDaemonTask', () => {
     // 1 success out of 10 = 10% < 50% threshold
     const agg = makeAgg({
       daemon: {
+        ...zeroDaemonAggregates(),
         totalRuns: 10,
         successCount: 1,
         errorCount: 9,
-        skipCount: 0,
         byTaskId: {
           'task-abc': { success: 1, error: 9, skip: 0 },
         },
-        triggerBreakdown: {},
-        skipReasons: {},
-        recentErrors: [],
         avgDurationMs: 1000,
       },
     });
@@ -161,16 +131,13 @@ describe('checkFailingDaemonTask', () => {
     // 6 success out of 10 = 60% > 50% threshold
     const agg = makeAgg({
       daemon: {
+        ...zeroDaemonAggregates(),
         totalRuns: 10,
         successCount: 6,
         errorCount: 4,
-        skipCount: 0,
         byTaskId: {
           'task-good': { success: 6, error: 4, skip: 0 },
         },
-        triggerBreakdown: {},
-        skipReasons: {},
-        recentErrors: [],
         avgDurationMs: 1000,
       },
     });
@@ -188,12 +155,8 @@ describe('checkBudgetExceededSessions', () => {
   it('budget exceeded at threshold → fires', () => {
     const agg = makeAgg({
       traces: {
+        ...zeroTraceAggregates(),
         totalTracedSessions: T.budgetExceededSessionsMin,
-        toolCallCounts: {},
-        toolErrorCounts: {},
-        toolDurationsMs: {},
-        subagentForkDepths: {},
-        compactionCount: 0,
         closureReasons: { budget_exceeded: T.budgetExceededSessionsMin },
       },
     });
@@ -206,12 +169,8 @@ describe('checkBudgetExceededSessions', () => {
   it('budget exceeded below threshold → does not fire', () => {
     const agg = makeAgg({
       traces: {
+        ...zeroTraceAggregates(),
         totalTracedSessions: 1,
-        toolCallCounts: {},
-        toolErrorCounts: {},
-        toolDurationsMs: {},
-        subagentForkDepths: {},
-        compactionCount: 0,
         closureReasons: { budget_exceeded: T.budgetExceededSessionsMin - 1 },
       },
     });
@@ -229,12 +188,8 @@ describe('checkOverflowKills', () => {
   it('overflow kill present → fires', () => {
     const agg = makeAgg({
       routing: {
+        ...zeroRoutingAggregates(),
         totalRoutingEvents: 1,
-        skillDispatchModes: {},
-        skillFrequency: {},
-        composeCallCount: 0,
-        avgComposeNodes: 0,
-        avgComposeEdges: 0,
         overflowKills: { web_scrape: T.overflowKillsMin },
       },
     });
@@ -261,15 +216,12 @@ describe('checkCostConcentration', () => {
     const modelCost = totalCost * T.costConcentrationMax; // exactly at threshold
     const agg = makeAgg({
       sessions: {
+        ...zeroSessionAggregates(),
         totalSessions: 10,
         totalCostUsd: totalCost,
-        totalInputTokens: 1000,
-        totalOutputTokens: 2000,
-        byDay: {},
         byModel: {
           'claude-3-opus-20240229': { costUsd: modelCost, sessions: 10 },
         },
-        bySurface: {},
       },
     });
 
@@ -283,15 +235,12 @@ describe('checkCostConcentration', () => {
     const totalCost = T.costConcentrationMinCostUsd * 0.5; // below min
     const agg = makeAgg({
       sessions: {
+        ...zeroSessionAggregates(),
         totalSessions: 1,
         totalCostUsd: totalCost,
-        totalInputTokens: 10,
-        totalOutputTokens: 20,
-        byDay: {},
         byModel: {
           'claude-3-opus': { costUsd: totalCost, sessions: 1 },
         },
-        bySurface: {},
       },
     });
 
@@ -308,22 +257,14 @@ describe('checkNoTracedSessions', () => {
   it('sessions exist but no traces → fires info recommendation', () => {
     const agg = makeAgg({
       sessions: {
+        ...zeroSessionAggregates(),
         totalSessions: 5,
         totalCostUsd: 0.1,
-        totalInputTokens: 100,
-        totalOutputTokens: 200,
-        byDay: {},
-        byModel: {},
-        bySurface: {},
+        totalTokens: 300,
       },
       traces: {
+        ...zeroTraceAggregates(),
         totalTracedSessions: 0,
-        toolCallCounts: {},
-        toolErrorCounts: {},
-        toolDurationsMs: {},
-        subagentForkDepths: {},
-        compactionCount: 0,
-        closureReasons: {},
       },
     });
 
@@ -349,14 +290,10 @@ describe('checkHighAvgDaemonError', () => {
     const errors = Math.ceil(total * (T.highDaemonErrorRateMin + 0.01)); // just above threshold
     const agg = makeAgg({
       daemon: {
+        ...zeroDaemonAggregates(),
         totalRuns: total,
         successCount: total - errors,
         errorCount: errors,
-        skipCount: 0,
-        byTaskId: {},
-        triggerBreakdown: {},
-        skipReasons: {},
-        recentErrors: [],
         avgDurationMs: 1000,
       },
     });
@@ -370,15 +307,10 @@ describe('checkHighAvgDaemonError', () => {
   it('below min runs → does not fire even with 100% error rate', () => {
     const agg = makeAgg({
       daemon: {
+        ...zeroDaemonAggregates(),
         totalRuns: T.minRunsForDaemonErrorRate - 1,
         successCount: 0,
         errorCount: T.minRunsForDaemonErrorRate - 1,
-        skipCount: 0,
-        byTaskId: {},
-        triggerBreakdown: {},
-        skipReasons: {},
-        recentErrors: [],
-        avgDurationMs: 0,
       },
     });
 
@@ -403,21 +335,14 @@ describe('evaluateRecommendations', () => {
     const errorCount = callCount; // 100% error rate
     const agg = makeAgg({
       traces: {
+        ...zeroTraceAggregates(),
         totalTracedSessions: 1,
         toolCallCounts: { bash: callCount },
         toolErrorCounts: { bash: errorCount },
-        toolDurationsMs: {},
-        subagentForkDepths: {},
-        compactionCount: 0,
-        closureReasons: {},
       },
       routing: {
+        ...zeroRoutingAggregates(),
         totalRoutingEvents: 1,
-        skillDispatchModes: {},
-        skillFrequency: {},
-        composeCallCount: 0,
-        avgComposeNodes: 0,
-        avgComposeEdges: 0,
         overflowKills: { bash: 3 },
       },
     });
@@ -434,15 +359,13 @@ describe('evaluateRecommendations', () => {
     // Even when constructing an agg that mentions these strings in task names
     const agg = makeAgg({
       daemon: {
+        ...zeroDaemonAggregates(),
         totalRuns: 10,
         successCount: 1,
         errorCount: 9,
-        skipCount: 0,
         byTaskId: {
           'task-abc': { success: 1, error: 9, skip: 0 },
         },
-        triggerBreakdown: {},
-        skipReasons: {},
         recentErrors: [{ taskId: 'task-abc', ts: Date.now(), message: 'error msg' }],
         avgDurationMs: 1000,
       },

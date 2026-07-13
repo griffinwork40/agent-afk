@@ -26,6 +26,7 @@ beforeEach(() => {
   );
   mkdirSync(tmpRoot, { recursive: true });
   outputPath = join(tmpRoot, 'test-insights.html');
+  vi.mocked(openInBrowser).mockClear();
 });
 
 afterEach(() => {
@@ -42,6 +43,12 @@ import { evaluateRecommendations } from '../../insights/recommendations.js';
 import { generateHtml } from '../../insights/html.js';
 import { openInBrowser } from '../../insights/open.js';
 import type { InsightsOptions } from '../../insights/types.js';
+
+// Mock the open module at the module level so the imported `openInBrowser`
+// binding that `runInsights` actually calls is the mock. (The previous test
+// spied on a throwaway `{ openInBrowser }` object literal, which never bound
+// to the real call site — so the assertion passed regardless of behavior.)
+vi.mock('../../insights/open.js', () => ({ openInBrowser: vi.fn() }));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -136,18 +143,20 @@ describe('insights command (integration)', () => {
     expect(aggregates.sessions.totalCostUsd).toBeLessThan(1);
   });
 
-  it('--no-open: openInBrowser is not called', async () => {
-    // We call runInsights with open: false and verify no browser opens
-    // Since we can't easily spy on exec, we just verify the call path works
-    const openSpy = vi.spyOn({ openInBrowser }, 'openInBrowser').mockReturnValue();
-
-    // Run without open
+  it('--no-open: openInBrowser is NOT called', async () => {
     await runInsights({ days: 30, afkHome: tmpRoot, outputPath, open: false });
 
-    // The spy captures calls to the replaced function, but since we replaced
-    // the object method, the real open was NOT called.
-    expect(openSpy).not.toHaveBeenCalled();
+    // openInBrowser is module-mocked, so the spy binds the real call site the
+    // pipeline invokes — this assertion can actually fail if the guard breaks.
+    expect(vi.mocked(openInBrowser)).not.toHaveBeenCalled();
+    expect(existsSync(outputPath)).toBe(true);
+  });
 
+  it('default (open): openInBrowser IS called with the report path', async () => {
+    await runInsights({ days: 30, afkHome: tmpRoot, outputPath, open: true });
+
+    expect(vi.mocked(openInBrowser)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(openInBrowser)).toHaveBeenCalledWith(outputPath);
     expect(existsSync(outputPath)).toBe(true);
   });
 

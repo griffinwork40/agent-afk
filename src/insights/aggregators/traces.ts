@@ -94,6 +94,22 @@ export function aggregateTraces(options: InsightsOptions): TraceAggregates {
     const tracePath = join(witnessRoot, sessionId, 'trace.jsonl');
     if (!existsSync(tracePath)) continue;
 
+    // Cheap pre-filter: mtime is always >= the session's start time (the
+    // trace file is appended to throughout the session, so its last-write
+    // time can never precede its first-write time). If mtime < cutoffMs,
+    // the session definitely ended before the window opened — skip WITHOUT
+    // reading the (potentially large) trace file. Sessions that pass this
+    // check still get the precise first-line-ts check below.
+    let mtimeMs: number;
+    try {
+      mtimeMs = statSync(tracePath).mtimeMs;
+    } catch {
+      continue; // can't stat — skip
+    }
+    if (mtimeMs < cutoffMs) {
+      continue; // definitely outside window — skip without reading the file
+    }
+
     // Read the trace file once and reuse it for both the window check and
     // aggregation below (this file was previously read twice per session).
     let raw: string | null = null;
@@ -104,7 +120,8 @@ export function aggregateTraces(options: InsightsOptions): TraceAggregates {
     }
 
     // Determine whether this session falls within the window.
-    // We parse the first event's ts field, falling back to file mtime.
+    // We parse the first event's ts field, falling back to file mtime
+    // (already read above during the pre-filter).
     let sessionStartMs: number | null = null;
     if (raw !== null) {
       try {
@@ -125,11 +142,7 @@ export function aggregateTraces(options: InsightsOptions): TraceAggregates {
 
     // Fallback: use trace.jsonl mtime
     if (sessionStartMs === null) {
-      try {
-        sessionStartMs = statSync(tracePath).mtimeMs;
-      } catch {
-        continue; // can't determine time — skip
-      }
+      sessionStartMs = mtimeMs;
     }
 
     if (sessionStartMs < cutoffMs) {

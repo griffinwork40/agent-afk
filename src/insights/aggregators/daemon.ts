@@ -46,8 +46,11 @@ const ONE_MB = 1_048_576;
 /**
  * Read up to the last 1 MB of a file as a UTF-8 string.
  * Always returns complete lines (splits on '\n').
+ *
+ * Exported so other aggregators (e.g. routing.ts) reuse the same bounded-read
+ * strategy instead of an unbounded `readFileSync`.
  */
-function readTailMb(filePath: string): string {
+export function readTailMb(filePath: string): string {
   const fd = openSync(filePath, 'r');
   try {
     const stat = fstatSync(fd);

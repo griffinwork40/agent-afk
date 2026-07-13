@@ -255,4 +255,47 @@ describe('aggregateRoutingDecisions', () => {
     expect(result.avgComposeNodes).toBe(0);
     expect(result.avgComposeEdges).toBe(0);
   });
+
+  // -------------------------------------------------------------------------
+  // M1: --days window filter (every record carries a `ts` field — see
+  // appendRoutingDecision in agent/routing-telemetry.ts)
+  // -------------------------------------------------------------------------
+
+  it('record dated outside the window is excluded at days:1; an in-window record is included', () => {
+    const oldTs = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(); // 10 days ago
+    const recentTs = new Date().toISOString();
+    writeRouting([
+      JSON.stringify({
+        ts: oldTs,
+        event: 'skill.dispatched',
+        surface: 'afk',
+        mode: 'fork',
+        requested_name: 'old-skill',
+      }),
+      JSON.stringify({
+        ts: recentTs,
+        event: 'skill.dispatched',
+        surface: 'afk',
+        mode: 'fork',
+        requested_name: 'new-skill',
+      }),
+    ]);
+
+    const result = aggregateRoutingDecisions({ days: 1, afkHome: tmpRoot });
+    expect(result.totalRoutingEvents).toBe(1);
+    expect(result.skillFrequency['new-skill']).toBe(1);
+    expect(result.skillFrequency['old-skill']).toBeUndefined();
+  });
+
+  it('record missing `ts` is excluded (treated as out-of-window, consistent with daemon.ts)', () => {
+    writeRouting([
+      JSON.stringify({ event: 'skill.dispatched', surface: 'afk', mode: 'fork', requested_name: 'no-ts' }),
+      skillDispatched('fork', 'has-ts'),
+    ]);
+
+    const result = aggregateRoutingDecisions({ days: 30, afkHome: tmpRoot });
+    expect(result.totalRoutingEvents).toBe(1);
+    expect(result.skillFrequency['has-ts']).toBe(1);
+    expect(result.skillFrequency['no-ts']).toBeUndefined();
+  });
 });
