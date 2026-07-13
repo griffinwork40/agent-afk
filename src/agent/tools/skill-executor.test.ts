@@ -1059,6 +1059,83 @@ describe('SkillExecutor', () => {
     });
   });
 
+  describe('trace origin surface threading (#469)', () => {
+    // Regression (follow-up to #468): skill-forked subagents recorded
+    // origin:'unknown' in the witness trace because the owning surface was
+    // never threaded into the per-call fork manager (fork-dispatch.ts). The
+    // manager must inherit `surface` like traceWriter/cwd so forkSubagent's
+    // parentSurface fill (subagent.ts) stamps the skill subagent's
+    // config.surface → deriveOrigin returns the real cli/telegram/daemon
+    // instead of 'unknown'. Mirrors child-config.test.ts's #468 surface tests.
+    function setupSurfaceCapture(): () => SubagentManager | undefined {
+      registerSkill({
+        name: 'fork-skill-surface',
+        description: 'test',
+        context: 'fork',
+        handler: vi.fn(),
+      });
+      vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({
+        'system.md': 'fake-system-prompt',
+      });
+      let capturedManager: SubagentManager | undefined;
+      vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockImplementation(
+        function (this: SubagentManager) {
+          capturedManager = this;
+          return Promise.resolve({
+            id: 'h',
+            runToResult: vi.fn().mockResolvedValue({
+              status: 'succeeded',
+              message: { content: 'ok' },
+            }),
+            teardown: vi.fn().mockResolvedValue(undefined),
+          }) as any;
+        } as any,
+      );
+      vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
+      return () => capturedManager;
+    }
+
+    it('forwards the owning surface to the per-call fork manager', async () => {
+      const getManager = setupSurfaceCapture();
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'parent-123',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        surface: 'cli',
+      });
+
+      const result = await executor.execute(makeCall({ name: 'fork-skill-surface' }));
+
+      expect(result.isError).toBeUndefined();
+      // parentSurface === 'cli' is what lets forkSubagent fill the skill
+      // subagent's config.surface, so deriveOrigin('cli') → 'cli' in the trace
+      // rather than deriveOrigin(undefined) → 'unknown' (the #469 bug).
+      expect((getManager() as unknown as { parentSurface: string | undefined }).parentSurface)
+        .toBe('cli');
+    });
+
+    it('omits surface from the fork manager when the host surface is unset', async () => {
+      const getManager = setupSurfaceCapture();
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'parent-123',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+      });
+
+      const result = await executor.execute(makeCall({ name: 'fork-skill-surface' }));
+
+      expect(result.isError).toBeUndefined();
+      expect((getManager() as unknown as { parentSurface: unknown }).parentSurface)
+        .toBeUndefined();
+    });
+  });
+
   describe('getPluginSkillBody — cwd cache invalidation (regression)', () => {
     // Regression: PR #418 threaded cwd into the FIRST population of the
     // lazy `pluginBodies` cache but did not invalidate it on setCwd(), so a
