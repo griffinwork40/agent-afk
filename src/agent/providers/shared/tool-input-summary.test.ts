@@ -119,6 +119,26 @@ describe('summarizeToolInput — inline secret redaction (codex P1 on #511)', ()
     });
     expect(out).toBe(' git commit -m "fix: flatten multi-line bash summaries"');
   });
+
+  it('leaves a bare git SHA arg intact (git cat-file -t <sha> — real-session shape)', () => {
+    // A full 40-hex SHA is byte-identical to a hex secret; it used to render as
+    // `git cat-file -t [REDACTED]`, hiding the id the operator needs to read.
+    const sha = 'a1b2c3d4e5f6789012345678901234567890abcd';
+    const out = summarizeToolInput('bash', { command: `git cat-file -t ${sha}` });
+    expect(out).toBe(` git cat-file -t ${sha}`);
+    expect(out).not.toContain('[REDACTED]');
+  });
+
+  it('leaves a REF=<sha> assignment intact through the flattener (real-session shape)', () => {
+    // Exact shape observed in events.jsonl: `cd <dir> && REF=<sha> && git show
+    // $REF:<file>` rendered as `cd <dir> && [REDACTED] && git show $REF:<file>`.
+    const sha = 'abcdef1234567890abcdef1234567890abcdef12';
+    const out = summarizeToolInput('bash', {
+      command: `cd repo && REF=${sha} && git show $REF:src/index.ts | sed -n '1,40p'`,
+    });
+    expect(out).toContain(`REF=${sha}`);
+    expect(out).not.toContain('[REDACTED]');
+  });
 });
 
 describe('summarizeToolInput — other tool shapes unchanged', () => {

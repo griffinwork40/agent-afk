@@ -35,6 +35,11 @@
  *     `looksLikeFilesystemPath` — so a long bare `cd <path>` argument is not
  *     mistaken for a secret. An opaque token fused into a path segment
  *     (`/tmp/uploads/<token>`) is still redacted (rule 3 of that guard).
+ *     Git object names (40/64-char lowercase-hex SHA-1/SHA-256, including a
+ *     `NAME=<sha>` shell assignment) are also excluded — see `isGitObjectName`
+ *     — so `git show <sha>` and `REF=<sha>` render legibly in tool-lane labels
+ *     instead of `git show [REDACTED]`. A secret-named assignment
+ *     (`TOKEN=<sha>`, `API_KEY=<sha>`) is still redacted.
  *
  * Explicit patterns run BEFORE the generic length rule so short or
  * dot-separated tokens get redacted regardless of the 32-char floor.
@@ -63,7 +68,7 @@ export function redactSecrets(text: string): string {
     // real paths back out; genuine opaque tokens — including one fused into a
     // path segment (`/tmp/uploads/<token>`, rule 3) — are still redacted.
     .replace(/(?<![/.\w])[A-Za-z0-9+/=_-]{32,}(?![/.\w])/g, (m) =>
-      looksLikeFilesystemPath(m) ? m : '[REDACTED]');
+      looksLikeFilesystemPath(m) || isGitObjectName(m) ? m : '[REDACTED]');
 }
 
 /**
@@ -98,4 +103,50 @@ function looksLikeFilesystemPath(run: string): boolean {
   const isOpaqueTokenSegment = (seg: string): boolean =>
     seg.length >= 32 && !seg.includes('.') && /[A-Za-z]/.test(seg) && /[0-9]/.test(seg);
   return !run.split('/').some(isOpaqueTokenSegment);
+}
+
+/**
+ * True when a generic-rule match is a git object name (a SHA-1 or SHA-256
+ * commit/tree/blob id) rather than an opaque secret. A full git SHA is
+ * byte-identical in shape to a long hex secret, so the generic rule redacted
+ * `git show <40-hex-sha>` to `git show [REDACTED]`, hiding exactly the id the
+ * operator needs to read in a tool-lane label. Real-session evidence shows two
+ * shapes: a bare SHA arg (`git cat-file -t <sha>`) and a `NAME=<sha>` shell
+ * assignment (`REF=<sha> && git show $REF:…`, matched whole because `=` is in
+ * the token class). Both are spared here.
+ *
+ * Spared only when EXACTLY 40 (SHA-1) or 64 (SHA-256) lowercase-hex — git
+ * object names are always lowercase, so an uppercase-hex or off-width run stays
+ * redacted, keeping the carve-out narrow. For the assignment form, the variable
+ * name must NOT advertise a secret (see `looksLikeSecretName`), so `REF=<sha>`
+ * and `COMMIT=<sha>` are spared while `TOKEN=<sha>` / `GITHUB_TOKEN=<sha>` /
+ * `API_KEY=<sha>` remain redacted.
+ *
+ * Accepted residual risk (documented, narrow): a BARE 40/64-char lowercase-hex
+ * secret (e.g. a legacy 40-hex GitHub PAT, or `openssl rand -hex 20/32` output)
+ * or a non-secret-named `NAME=<sha>` assignment (`PAT=<sha>`) is no longer
+ * redacted on the two sinks that use this helper (transcript tail → Haiku;
+ * bash tool-lane label → events.jsonl/telegram). All high-value NAMED secrets
+ * (sk-ant, Bearer, JWT, AWS key ids, and any base64/base64url/mixed-case blob)
+ * are still caught by the explicit rules that run BEFORE the generic rule.
+ */
+function isGitObjectName(run: string): boolean {
+  if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(run)) return true;
+  const assign = /^([A-Za-z_][A-Za-z0-9_]*)=(?:[0-9a-f]{40}|[0-9a-f]{64})$/.exec(run);
+  if (assign) {
+    const name = assign[1] ?? '';
+    if (!looksLikeSecretName(name)) return true;
+  }
+  return false;
+}
+
+/**
+ * True when a shell variable name advertises that its value is a secret, so a
+ * `NAME=<40/64-hex>` assignment must NOT be spared as a git object name. Errs
+ * toward over-matching (fails safe: a false hit only over-redacts). Substring,
+ * case-insensitive — `GITHUB_TOKEN`, `MY_API_KEY`, `DB_PASSWORD`, `AUTH`,
+ * `CREDENTIAL`, `PRIVATE_KEY` all match; `REF`, `SHA`, `COMMIT`, `BASE` do not.
+ */
+function looksLikeSecretName(name: string): boolean {
+  return /token|secret|key|pass|pwd|auth|cred|private/i.test(name);
 }
