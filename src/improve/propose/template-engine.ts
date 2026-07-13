@@ -216,6 +216,70 @@ const TEMPLATES: Record<FailureCard['pattern'], PatternTemplate> = {
   },
 
   // -------------------------------------------------------------------------
+  // subagent-read-denial
+  // -------------------------------------------------------------------------
+  'subagent-read-denial': {
+    rootCauseClass: 'dispatcher-bug',
+    hypothesis: (card) => {
+      const denialCount = typeof card.detail['denialCount'] === 'number' ? card.detail['denialCount'] : '?';
+      const distinctSessions = typeof card.detail['distinctSessions'] === 'number' ? card.detail['distinctSessions'] : '?';
+      const tools = Array.isArray(card.detail['blockedTools']) ? (card.detail['blockedTools'] as unknown[]).join(', ') : '?';
+      return (
+        `The path-approval PreToolUse hook auto-denied a forked sub-agent's READ (${tools}) ${denialCount} times across ${distinctSessions} session(s) — the resolved path fell outside the fork's granted READ roots and a fork cannot prompt to approve. ` +
+        `The child then retries the read and spins until a wall-clock timeout. Root cause is almost always a read-scope grant that is NARROWER than the parent's: the fork was given a concrete cwd but not the parent's read reach (main repo, sibling .afk-worktrees/*, ~/.afk/state).`
+      );
+    },
+    fixSketch: () => {
+      return [
+        '## Candidate fixes (human picks)',
+        '',
+        "**Option A — widen the fork's inherited read scope (usual fix).** A forked read-only sub-agent must be able to READ everything its parent could; only WRITES stay confined. The inheritance rule lives in `computeInheritedReadRoots` (`src/agent/subagent-read-scope.ts`), applied at the fork choke point in `SubagentManager.forkSubagent` (`src/agent/subagent.ts`). Confirm an unconfined parent yields a read-open child and a confined parent yields union(childCwd, parentRoots, worktreeMainRoot).",
+        '',
+        '**Option B — verify the `afk farm` guardrail still holds.** A caller that pins `readRoots` (branch workers) must keep suppressing inheritance so a deliberately-confined worker is never widened. Guard with the regression test in `subagent-worktree-readroot.test.ts`.',
+        '',
+        '**Option C — fail fast instead of hanging.** If a denial is legitimate (genuinely out-of-scope), the fork should abort with an actionable message after N identical denials rather than retry to a wall-clock timeout. Separate hardening from the scope fix.',
+      ].join('\n');
+    },
+    likelyFiles: [
+      {
+        path: 'src/agent/subagent-read-scope.ts',
+        rationale: 'The read-scope inheritance rule (computeInheritedReadRoots). The usual fix site.',
+        riskTier: 'moderate',
+        confidence: 'high',
+      },
+      {
+        path: 'src/agent/subagent.ts',
+        rationale: 'forkSubagent applies the inherited read roots at the fork choke point.',
+        riskTier: 'moderate',
+        confidence: 'medium',
+      },
+      {
+        path: 'src/agent/tools/hooks/path-approval-hook.ts',
+        rationale: 'The PreToolUse hook that auto-denies out-of-root reads. Touch only to change the fail-fast behavior (Option C), not the grant.',
+        riskTier: 'high',
+        confidence: 'low',
+      },
+    ],
+    riskFloor: 'medium',
+    validationPlan: {
+      unitTests: [
+        'pnpm test -- src/agent/subagent-read-scope',
+        'pnpm test -- src/agent/subagent-worktree-readroot',
+        'pnpm test -- src/improve/scan/detectors/subagent-read-denial',
+      ],
+      evalCases: [],
+      smokeChecks: [
+        'pnpm lint',
+        'afk improve scan --only subagent-read-denial --since 7d  # after fix, read-denials should not recur',
+      ],
+      manualChecks: [
+        'Open the trace at the evidence seqs; confirm the denied paths are ones the parent could read (main repo / sibling worktree / ~/.afk/state).',
+        'Run a fan-out (e.g. /diagnose) that dispatches read-only forks and confirm they can read across the workspace.',
+      ],
+    },
+  },
+
+  // -------------------------------------------------------------------------
   // tool-failure-density
   // -------------------------------------------------------------------------
   'tool-failure-density': {
