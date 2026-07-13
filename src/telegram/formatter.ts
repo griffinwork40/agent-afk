@@ -297,6 +297,8 @@ export function formatHelp(sdkCommands?: string[]): string {
     '  /model      — Switch Claude model',
     '  /cd         — Change working directory',
     '  /name       — Show or set the session name',
+    '  /sessions   — List and switch between sessions',
+    '  /new        — Start a new session (keeps the current one)',
     '  /watch      — Live-tail a CLI session from this chat',
     '  /unwatch    — Stop watching a session',
     '',
