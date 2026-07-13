@@ -25,7 +25,10 @@ export default defineConfig({
     // Exclude live/network tests from the default run — they require RUN_LIVE_API=1
     // and real credentials. Run them explicitly:
     //   RUN_LIVE_API=1 pnpm vitest run src/agent/providers/anthropic-direct.live.test.ts
-    exclude: ['**/node_modules/**', '**/dist/**', '**/*.live.test.ts'],
+    // Exclude the real-PTY harness (*.pty.test.ts) — it needs the native
+    // node-pty build and a real pseudo-terminal; run it via `pnpm test:pty`
+    // (vitest.pty.config.ts). See tests/pty/ and issue #541.
+    exclude: ['**/node_modules/**', '**/dist/**', '**/*.live.test.ts', '**/*.pty.test.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
