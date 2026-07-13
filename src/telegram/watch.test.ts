@@ -597,7 +597,7 @@ describe('SessionWatchManager — keep-alive heartbeat for a pending elicitation
     expect(nudges()).toBeGreaterThanOrEqual(1);
     expect(nudges()).toBeLessThanOrEqual(4);
     // ... and the wait is STILL open — answer whenever (resolver live, NOT cut off).
-    const resolver = pendingElicitations.get(chatId);
+    const resolver = pendingElicitations.get(String(chatId));
     expect(resolver).toBeDefined();
 
     // Answer → the wait resolves, the heartbeat is cleared, nudges stop.
