@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.42.1] - 2026-07-13
+
+### Changed
+- lazy-load jsdom to cut ~35% off CLI cold-start (#587) (0e9198e)
+
 ## [5.42.0] - 2026-07-13
 
 ### Added
