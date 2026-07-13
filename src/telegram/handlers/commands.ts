@@ -22,15 +22,24 @@ import {
   formatSystemError,
 } from '../formatter.js';
 import { providerForModel } from '../../agent/providers/index.js';
-import { slotForInput, unconfiguredSlotError } from '../../agent/session/model-slots.js';
+import {
+  MODEL_ALIASES_HINT,
+  resolveBinding,
+  slotForInput,
+  unconfiguredSlotError,
+} from '../../agent/session/model-slots.js';
 import type { AgentModelInput } from '../../agent/types.js';
 import { slugifySessionName } from '../../cli/session-name.js';
 import { formatResumeCommand } from '../../cli/resume-command.js';
 
 type LogFn = (...args: unknown[]) => void;
 
-/** Canonical short aliases accepted by /model and the inline keyboard. */
-export const MODEL_ALIASES_HINT = ['local', 'small', 'medium', 'large', 'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable'] as const;
+/**
+ * Canonical model handles accepted by /model and the inline keyboard. Re-exported
+ * from the single source of truth in `model-slots.ts` so this surface and the CLI
+ * `/model` picker can never drift. bot.ts imports it from here.
+ */
+export { MODEL_ALIASES_HINT };
 
 /**
  * Handle /clear command (SDK /clear - clear conversation history)
@@ -151,13 +160,17 @@ export async function handleModelSwitch(
   }
 
   const model = modelArg.toLowerCase() as AgentModelInput;
-  const isKnownAlias = MODEL_ALIASES_HINT.includes(model as (typeof MODEL_ALIASES_HINT)[number]);
+  const isKnownAlias = MODEL_ALIASES_HINT.includes(model);
   const isSlotName = slotForInput(model) !== undefined;
-  const isHFStyleId = providerForModel(model) === 'openai-compatible';
+  const isOpenAICompatibleId = providerForModel(model) === 'openai-compatible';
+  // Accept a raw Anthropic wire id (e.g. `claude-sonnet-5`); the resolved id's
+  // `claude-` prefix is the confident signal. Bare typos still match nothing.
+  const resolvedId = resolveBinding(model).id.trim().toLowerCase();
+  const isClaudeWireId = resolvedId.startsWith('claude-') || resolvedId.startsWith('claude_');
 
-  if (!isKnownAlias && !isSlotName && !isHFStyleId) {
+  if (!isKnownAlias && !isSlotName && !isOpenAICompatibleId && !isClaudeWireId) {
     await ctx.reply(
-      formatError(`Invalid model: ${modelArg}\nAliases: ${MODEL_ALIASES_HINT.join(', ')}, or org/model HF id`)
+      formatError(`Invalid model: ${modelArg}\nAliases: ${MODEL_ALIASES_HINT.join(', ')}, or a full model id`)
     );
     return;
   }

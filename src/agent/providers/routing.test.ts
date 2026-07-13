@@ -644,13 +644,16 @@ describe('getDefaultSubagentModel — parent-aware fallback', () => {
     'claude-opus-4-8',
     'claude-sonnet-5',
     'claude-fable-5',
-  ])('defaults to "sonnet" for Claude parent %s (preserves cost-mgmt intent)', (parent) => {
-    expect(getDefaultSubagentModel(parent)).toBe('sonnet');
+  ])('defaults to the "medium" tier for Claude parent %s (preserves cost-mgmt intent)', (parent) => {
+    // Post-#548: the default is the rebindable `medium` TIER (resolves to Claude
+    // Sonnet by default), not the fixed `'sonnet'` identity alias — so a user who
+    // rebinds `medium` redirects default subagents with it.
+    expect(getDefaultSubagentModel(parent)).toBe('medium');
   });
 
-  it('defaults to "sonnet" when no parent model is supplied (legacy callers)', () => {
-    expect(getDefaultSubagentModel()).toBe('sonnet');
-    expect(getDefaultSubagentModel(undefined)).toBe('sonnet');
+  it('defaults to the "medium" tier when no parent model is supplied (legacy callers)', () => {
+    expect(getDefaultSubagentModel()).toBe('medium');
+    expect(getDefaultSubagentModel(undefined)).toBe('medium');
   });
 
   it('honors AFK_DEFAULT_SUBAGENT_MODEL even when parent is OpenAI-routed (env wins)', () => {
@@ -666,6 +669,6 @@ describe('getDefaultSubagentModel — parent-aware fallback', () => {
   it('treats empty AFK_DEFAULT_SUBAGENT_MODEL as unset (falls through to parent-aware logic)', () => {
     process.env['AFK_DEFAULT_SUBAGENT_MODEL'] = '';
     expect(getDefaultSubagentModel('gpt-4o')).toBe('gpt-4o');
-    expect(getDefaultSubagentModel('sonnet')).toBe('sonnet');
+    expect(getDefaultSubagentModel('sonnet')).toBe('medium');
   });
 });

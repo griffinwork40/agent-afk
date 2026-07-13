@@ -12,13 +12,15 @@ import { formatCost, formatTokens } from '../../format-utils.js';
 import { contextLimitFor, MODEL_CONTEXT_LIMITS } from '../../model-limits.js';
 import { renderDebugBanner } from '../../debug-banner.js';
 import { providerForModel } from '../../../agent/providers/index.js';
-import { slotForInput, unconfiguredSlotError } from '../../../agent/session/model-slots.js';
+import {
+  MODEL_ALIASES_HINT,
+  resolveBinding,
+  slotForInput,
+  unconfiguredSlotError,
+} from '../../../agent/session/model-slots.js';
 import { runPicker } from '../../render/picker.js';
 import type { SlashCommand, SlashContext } from '../types.js';
 import type { AgentModelInput } from '../../../agent/types.js';
-
-/** Display hint only — not used for validation. Full model IDs (org/model) are also accepted. */
-const MODEL_ALIASES_HINT = ['local', 'small', 'medium', 'large', 'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable'] as const;
 
 const costCmd: SlashCommand = {
   name: '/cost',
@@ -199,15 +201,20 @@ const historyCmd: SlashCommand = {
  * Writes all user-facing output via ctx.out; never throws.
  */
 async function switchModel(ctx: SlashContext, target: string): Promise<void> {
-  // Accept slot tier names / configured custom names, known Claude aliases,
-  // OR full HF-style org/model ids (routed openai-compatible). Bare unknown
-  // strings (e.g. typos) are rejected — they'd silently fall through to
-  // anthropic-direct and produce an unhelpful API error at turn time.
-  const isKnownAlias = MODEL_ALIASES_HINT.includes(target as (typeof MODEL_ALIASES_HINT)[number]);
+  // Accept slot tier names / configured custom names, the built-in Claude
+  // identity aliases, a raw Anthropic wire id (e.g. `claude-sonnet-5`), OR full
+  // HF-style org/model ids (routed openai-compatible). Bare unknown strings
+  // (e.g. typos) are rejected — they'd silently fall through to anthropic-direct
+  // and produce an unhelpful API error at turn time.
+  const isKnownAlias = MODEL_ALIASES_HINT.includes(target);
   const isSlotName = slotForInput(target) !== undefined;
-  const isHFStyleId = providerForModel(target) === 'openai-compatible';
-  if (!isKnownAlias && !isSlotName && !isHFStyleId) {
-    ctx.out.warn(`Unknown model: ${target}. Aliases: ${MODEL_ALIASES_HINT.join(', ')}  (or org/model for local/OpenAI-compatible)`);
+  const isOpenAICompatibleId = providerForModel(target) === 'openai-compatible';
+  // The resolved id's `claude-` prefix is the confident raw-Claude-id signal;
+  // aliases already resolve to a claude- id too, so this also covers them.
+  const resolvedId = resolveBinding(target).id.trim().toLowerCase();
+  const isClaudeWireId = resolvedId.startsWith('claude-') || resolvedId.startsWith('claude_');
+  if (!isKnownAlias && !isSlotName && !isOpenAICompatibleId && !isClaudeWireId) {
+    ctx.out.warn(`Unknown model: ${target}. Aliases: ${MODEL_ALIASES_HINT.join(', ')}  (or a full model id)`);
     return;
   }
   // Reject an unconfigured capability tier (e.g. an empty `local` slot) at the

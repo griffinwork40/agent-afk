@@ -111,6 +111,22 @@ describe('/model', () => {
     expect(host.enterCalls).toBe(0);
   });
 
+  it('accepts a raw Anthropic wire id, not just short aliases (#548)', async () => {
+    const { ctx, setModel } = makeCtx(true);
+    await modelCmd.handler(ctx, 'claude-sonnet-5');
+
+    // Previously rejected as "Unknown model" — a full claude- id is now selectable.
+    expect(setModel).toHaveBeenCalledWith('claude-sonnet-5');
+  });
+
+  it('still rejects a bare typo that matches no alias/tier/provider', async () => {
+    const { ctx, setModel, lines } = makeCtx(true);
+    await modelCmd.handler(ctx, 'sonnnet');
+
+    expect(setModel).not.toHaveBeenCalled();
+    expect(lines.join('\n')).toMatch(/Unknown model/);
+  });
+
   it('bare /model on a non-TTY surface prints the current model (no picker)', async () => {
     const { ctx, lines, setModel } = makeCtx(false);
     await modelCmd.handler(ctx, '');
