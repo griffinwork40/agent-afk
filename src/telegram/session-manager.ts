@@ -218,14 +218,15 @@ export class SessionManager {
       }
 
       // /switch: continue a staged prior conversation instead of starting fresh.
-      // Consumed once here — a later /clear (via _resetStats) drops any stale target.
+      // Consumed after a successful build below — a failed createSession leaves it
+      // staged so the next getSession retries the resume; teardown via _resetStats
+      // (/clear, model switch, /cd) still clears any stale target.
       // Load the target sidecar and populate the SAME resume fields the CLI does
       // (resume + sessionId + resumeHistory) so the providers actually replay the
       // saved transcript. Forwarding only config.resume (the SDK id) resumes an
       // empty conversation. Mirrors resumeConfigFor (src/cli/resume-session.ts).
       const resumeTarget = this.pendingResume.get(chatId);
       if (resumeTarget !== undefined) {
-        this.pendingResume.delete(chatId);
         const stored = loadSession(resumeTarget);
         Object.assign(
           config,
@@ -240,6 +241,10 @@ export class SessionManager {
       const session = await this.options.createSession(injectHotMemory(config));
       this.sessions.set(chatId, session);
       this.sessionData.set(chatId, data);
+      // Consume the staged resume only after a successful build: a thrown
+      // createSession must leave it staged so the next getSession retries the
+      // resume instead of silently starting a fresh conversation.
+      if (resumeTarget !== undefined) this.pendingResume.delete(chatId);
       return session;
     })();
 
@@ -640,6 +645,17 @@ export class SessionManager {
     chatId: number,
     targetSessionId: string,
   ): Promise<{ ok: true; name?: string } | { ok: false; reason: 'not-found' | 'already-active' }> {
+    // If a session creation is in flight for this chat, let it settle before we
+    // inspect and close the live session. Otherwise the in-flight promise sets
+    // the pre-switch session as live AFTER we adopt the target below, silently
+    // reverting the switch. Awaiting materializes it so the close path evicts it
+    // normally; a failed creation leaves this.sessions empty, which the `old`
+    // guard already handles.
+    const inflight = this.pendingSessions.get(chatId);
+    if (inflight !== undefined) {
+      await inflight.catch(() => undefined);
+    }
+
     // Already the live active conversation → no-op (avoid a needless rebuild).
     if (this.sessions.has(chatId) && this.sessionData.get(chatId)?.sessionId === targetSessionId) {
       return { ok: false, reason: 'already-active' };

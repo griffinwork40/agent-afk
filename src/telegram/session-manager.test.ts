@@ -948,4 +948,102 @@ describe('SessionManager — session switcher (/sessions, /switch, /new)', () =>
     expect(lastConfig?.resume).toBe('sdk-target');
     await m.closeAll().catch(() => {});
   });
+
+  test('a staged resume survives a createSession failure and is retried on the next build', async () => {
+    // Regression guard for the resume-drop bug: switchToSession stages the
+    // resume, but the FIRST session build throws. The staged resume must NOT be
+    // consumed by the failed build — the next getSession must still resume the
+    // target. (Before the fix, getSession deleted pendingResume BEFORE the
+    // fallible createSession, so the failed build silently dropped the resume
+    // and the next build started a fresh conversation — this assertion caught it.)
+    let created = 0;
+    const m = new SessionManager({
+      dataDir: testDataDir,
+      apiKey: 'test-key',
+      defaultModel: 'sonnet',
+      createSession: async (config: AgentConfig) => {
+        lastConfig = config;
+        created += 1;
+        // First build throws; every build afterwards succeeds.
+        if (created === 1) throw new Error('creation failed');
+        return new MockSessionWithId('sdk-rebuilt');
+      },
+    });
+    // Persist the switch TARGET sidecar with no live session so the passed
+    // metadata id ('sdk-target') sticks, then clear any live session.
+    m.recordTelegramTurn(906, 'target convo', 'b', { sessionId: 'sdk-target' });
+    await m.resetSession(906); // no live session; clears data.sessionId
+
+    // Stage the resume via /switch — succeeds (no live session to close).
+    expect((await m.switchToSession(906, 'sdk-target')).ok).toBe(true);
+
+    // First getSession: the build throws → rejects. The staged resume must be
+    // left intact (consumed only after a successful build).
+    await expect(m.getSession(906)).rejects.toThrow('creation failed');
+
+    // Second getSession: succeeds AND still carries the staged resume.
+    lastConfig = undefined;
+    await m.getSession(906);
+    expect(lastConfig?.resume).toBe('sdk-target');
+
+    await m.closeAll().catch(() => {});
+  });
+
+  test('a switch during an in-flight creation does not silently revert', async () => {
+    // Regression guard for the in-flight-revert bug: a getSession creation is in
+    // flight when switchToSession runs. Without the fix, switchToSession would
+    // inspect/close the live session BEFORE the in-flight promise resolved, then
+    // the in-flight promise would set the pre-switch session as live AFTER the
+    // switch adopted the target — silently reverting it. switchToSession now
+    // awaits the in-flight creation first, so the built session is evicted by the
+    // close path and the switch sticks.
+    //
+    // Deterministic (no timing race): the first createSession returns a DEFERRED
+    // promise, so the first build stays parked until we release it. switchToSession
+    // awaits that same in-flight promise, so its continuation is gated on the
+    // release — a promise-settle dependency, not a wall-clock sleep.
+    let created = 0;
+    let releaseFirst: (session: IAgentSession) => void = () => {};
+    const firstBuilt = new MockSessionWithId('sdk-live-default');
+    const m = new SessionManager({
+      dataDir: testDataDir,
+      apiKey: 'test-key',
+      defaultModel: 'sonnet',
+      createSession: async (config: AgentConfig) => {
+        lastConfig = config;
+        created += 1;
+        if (created === 1) {
+          // Park the first build until releaseFirst() is called below.
+          return await new Promise<IAgentSession>((resolve) => {
+            releaseFirst = resolve;
+          });
+        }
+        return new MockSessionWithId('sdk-rebuilt');
+      },
+    });
+    // Persist the switch TARGET sidecar with no live session so 'sdk-target' sticks.
+    m.recordTelegramTurn(907, 'target convo', 'b', { sessionId: 'sdk-target' });
+    await m.resetSession(907); // clears data.sessionId; no live session
+
+    // Start the first creation WITHOUT awaiting — it parks on the deferred, and
+    // getSession has already populated pendingSessions by the time it yields.
+    const inflightGet = m.getSession(907);
+
+    // Switch while the first build is in flight. switchToSession must await the
+    // in-flight promise; kick it off, then release the build so both settle.
+    const switchPromise = m.switchToSession(907, 'sdk-target');
+    releaseFirst(firstBuilt);
+
+    // The switch resolved successfully — it did not observe a reverted state.
+    expect((await switchPromise).ok).toBe(true);
+    await inflightGet; // the parked first creation resolves cleanly
+
+    // The staged resume points at the target: the next build resumes it, proving
+    // the switch stuck (the in-flight build's session was evicted, not adopted).
+    lastConfig = undefined;
+    await m.getSession(907);
+    expect(lastConfig?.resume).toBe('sdk-target');
+
+    await m.closeAll().catch(() => {});
+  });
 });
