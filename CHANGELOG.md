@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.40.0] - 2026-07-13
+
+### Added
+- bound time-to-first-byte with a configurable per-request timeout (#583) (#584) (a9d3640)
+
 ## [5.39.0] - 2026-07-13
 
 ### Added
