@@ -467,3 +467,52 @@ function formatTokenCount(n: number): string {
   if (n >= 1000) return `${Math.round(n / 100) / 10}k`;
   return String(n);
 }
+
+/**
+ * Format the `/sessions` list body — one line per resumable conversation for
+ * this chat, active one marked. Tappable switch buttons are attached by the
+ * handler; this is the text shown above them. Structural param (a superset of
+ * SessionManager.ChatSessionInfo) keeps the formatter decoupled from that module.
+ */
+export function formatSessionsList(
+  sessions: ReadonlyArray<{ name?: string; model: string; turns: number; active: boolean }>,
+): string {
+  const lines = sessions.map((s, i) => {
+    const marker = s.active ? '✅ ' : '';
+    const label = s.name ? escapeHtml(s.name) : '(unnamed)';
+    const turns = s.turns === 1 ? '1 turn' : `${s.turns} turns`;
+    return `${i + 1}. ${marker}<b>${label}</b> · ${escapeHtml(s.model)} · ${turns}`;
+  });
+  return `🗂️ <b>Your sessions</b> (${sessions.length})\n\n${lines.join('\n')}\n\nTap one to switch. /new starts a fresh session.`;
+}
+
+/** Reply when a chat has no resumable sessions yet. */
+export function formatNoSessions(): string {
+  return '🗂️ No saved sessions yet.\n\nSend a message to start one, or /new for a fresh session.';
+}
+
+/** /switch (button) confirmation — lazy resume continues on the next message. */
+export function formatSwitched(session: { name?: string }): string {
+  const label = session.name ? `<b>${escapeHtml(session.name)}</b>` : 'that session';
+  return `↩️ Switched to ${label}. Your next message continues it.`;
+}
+
+/** /new confirmation — the previous conversation is preserved + resumable. */
+export function formatNewSession(): string {
+  return '🆕 Started a fresh session. Your previous one is saved — /sessions to switch back.';
+}
+
+/** Shown when a switch/new is attempted while the active session is mid-turn. */
+export function formatSessionBusy(): string {
+  return '⏳ Finish or wait for the current turn before switching sessions.';
+}
+
+/** Shown when a switch target can no longer be found. */
+export function formatSwitchNotFound(): string {
+  return formatError('That session could no longer be found. /sessions to see the current list.');
+}
+
+/** Shown when switching to the already-active session. */
+export function formatAlreadyActive(): string {
+  return "✅ You're already on that session.";
+}
