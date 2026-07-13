@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.37.4] - 2026-07-13
+
+### Changed
+- remove redundant /save slash command (#559) (d005cec)
+
 ## [5.37.3] - 2026-07-13
 
 ### Added
