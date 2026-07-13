@@ -1,9 +1,15 @@
 # Proposal: unify the compositor commit model to dissolve the scrollback-gap class
 
-**Status:** Stage 0 VALIDATED — real-terminal A/B (iTerm2) confirmed the fix (void gone, header
-present, report contiguous). This PR ships the **minimal A2 core** (~15 LOC in `commit-mode.ts`: retain
-against `maxBandModel`, not the tall-frame room). Stages 2–3 (stateless render-instead-of-repin, single
-end-of-turn flush) remain OPTIONAL future hardening — not required for this fix.
+**Status:** Stage 0 VALIDATED — real-terminal A/B (iTerm2) confirmed the #539 fix (void gone, header
+present, report contiguous). #539 shipped the **minimal A2 core** (~15 LOC in `commit-mode.ts`: retain
+against `maxBandModel`, not the tall-frame room). **Stage 2 CORE landed (#540):** `repositionCommittedBand`
+now re-renders the visible window statelessly, erasing the above-frame content region from the anchor
+**floor** rather than the (possibly stale) tracked band top — gap-free by construction. Still open under
+#540: (a) removing the `committedBand*` adjacency coupling from the ~20 remaining read sites, and (b)
+Stage 3 (single end-of-turn flush). Both are deferred because they touch the real-PTY scrollback
+semantics the headless suite cannot certify — they need the real-terminal matrix (§7 Stage 4) as their
+gate. Stage 2's viewport property IS headless-certifiable and carries a regression test
+(`terminal-compositor.render-not-repin.test.ts`).
 **Author:** session 8831d316 (diagnosis + design). All claims cited to code read this session.
 **Supersedes intent of:** the "separate, larger item" flagged in `docs/scrollback.md:404`.
 
@@ -116,7 +122,13 @@ model, not a ground-up compositor rewrite** — the earlier "2–4k LOC rewrite"
   spike in a real terminal.** If it doesn't hold, we learned cheaply and stop. ← de-risks §2-V before real spend.
 - **Stage 1 — Unify routing.** Route all commits through `turnModel`; delete the eager fits-path; archive at
   `maxBandModel`. Full suite green.
-- **Stage 2 — Render-not-repin.** Replace `repositionCommittedBand` with the stateless window re-render. Full suite.
+- **Stage 2 — Render-not-repin.** Replace `repositionCommittedBand`'s incremental erase with the stateless
+  window re-render. **CORE DONE (#540):** the repin erase now runs from the anchor floor, not the tracked
+  top, so the visible window is a pure function of `(committedBand, floor, targetBottom)` — the stranded-row
+  void is dissolved by construction. Regression: `terminal-compositor.render-not-repin.test.ts` (fails on
+  the pre-Stage-2 `max(floor, committedBandTopRow)` erase, passes after). Still open: retiring the
+  `committedBand*` adjacency reads at the ~20 remaining sites (commit/eviction paths still maintain the
+  fields). Full suite stays green.
 - **Stage 3 — Single end-of-turn flush.** Full suite + new deterministic regression tests (the 100×40 void, the
   many-small-commits trigger, the header-loss case).
 - **Stage 4 — Real-terminal validation matrix** (human): iTerm2 / Apple Terminal / xterm × {short report, long
