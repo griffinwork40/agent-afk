@@ -17,6 +17,11 @@
  *   - `/etc`, `/System`, … are NOT blanket-denied for reads (unlike writes):
  *     legitimate reads of `/etc/hosts` etc. are common, and the truly-secret
  *     system files are enumerated individually below.
+ *   - Conversely, this list floors a few high-value credential files the WRITE
+ *     denylist does not yet cover (~/.git-credentials, ~/.netrc, gh hosts.yml,
+ *     ~/.kube/config): read-exfiltration of a live token is the acute risk for
+ *     an agent that runs git/gh, so reads are floored first. Mirroring these
+ *     into BUILTIN_WRITE_DENYLIST is a reasonable follow-up.
  *
  * Symlink safety is inherited from `safeRealpath` (write-denylist.ts): a
  * symlink `~/link → ~/.ssh` is dereferenced before the prefix comparison.
@@ -51,6 +56,15 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
   // npm publish tokens and Docker registry credentials.
   `${homedir()}/.npmrc`,
   `${homedir()}/.docker/config.json`,
+  // Git/HTTP credential stores and CLI OAuth tokens. This agent does heavy
+  // git/gh work, so a leaked token here would let an exfiltrator push to the
+  // operator's repos — highest-value reads to floor. File-level (not whole-dir)
+  // so ordinary reads of sibling non-secret config (~/.kube/cache, gh config.yml)
+  // still work; extend via AFK_READ_DENYLIST for non-default token locations.
+  `${homedir()}/.git-credentials`,
+  `${homedir()}/.netrc`,
+  `${homedir()}/.config/gh/hosts.yml`,
+  `${homedir()}/.kube/config`,
   // Classic system secret stores. Enumerated individually (not the whole /etc)
   // so ordinary /etc reads still work; these are usually root-only anyway.
   '/etc/shadow',
@@ -60,8 +74,8 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
 
 // Memoized resolved denylist, keyed by the AFK_READ_DENYLIST value so a test
 // that changes the env re-resolves. Reads are a hot path (every grep/glob/
-// read_file call routes through resolveAndContain), so resolving the ~10
-// built-in entries' symlinks on every call is avoided. Threat-model note: a
+// read_file call routes through resolveAndContain), so resolving the built-in
+// entries' symlinks on every call is avoided. Threat-model note: a
 // denylist entry's symlink is assumed stable within a process (mirrors the
 // rootRealpathCache assumption in _cwd-utils.ts).
 let cached: { key: string; list: readonly string[] } | undefined;

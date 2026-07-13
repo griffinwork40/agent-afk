@@ -3,11 +3,13 @@
  *
  * Covers:
  * - Credential stores (~/.ssh, ~/.aws, ~/.gnupg, ~/.afk/config, ~/.npmrc,
- *   ~/.docker/config.json) are read-denied.
+ *   ~/.docker/config.json) plus git/gh/k8s token files (~/.git-credentials,
+ *   ~/.netrc, ~/.config/gh/hosts.yml, ~/.kube/config) are read-denied.
  * - Deliberate divergence from the WRITE denylist: ~/.afk/STATE is NOT denied
  *   (forks must read skill-preflight/todos/transcripts — #544/#547/#554), and
  *   /etc is not blanket-denied (only specific secret files).
- * - Symlink bypass is blocked: a symlink pointing into ~/.ssh is dereferenced.
+ * - Symlink bypass is blocked: a symlink into a denylisted dir is dereferenced
+ *   (via a tmpdir fixture that always runs, not gated on ~/.ssh existing).
  * - Custom AFK_READ_DENYLIST entries are applied (with cache reset).
  *
  * @module agent/tools/handlers/read-denylist.test
@@ -47,6 +49,11 @@ describe('isReadDenied — credential stores', () => {
     join(homedir(), '.afk', 'config', 'afk.env'),
     join(homedir(), '.npmrc'),
     join(homedir(), '.docker', 'config.json'),
+    // Git/HTTP credential stores and CLI OAuth tokens (read-exfil hardening).
+    join(homedir(), '.git-credentials'),
+    join(homedir(), '.netrc'),
+    join(homedir(), '.config', 'gh', 'hosts.yml'),
+    join(homedir(), '.kube', 'config'),
   ];
 
   for (const p of credPaths) {
@@ -103,9 +110,33 @@ describe('assertNotReadDenied', () => {
 });
 
 describe('read-denylist — symlink dereference', () => {
-  it('blocks a read through a symlink that resolves to ~/.ssh', () => {
+  // Robust fixture: build a real denylisted dir inside tmpDir (registered via
+  // AFK_READ_DENYLIST) and point a symlink at it, so the dereference path is
+  // exercised UNCONDITIONALLY — not gated on ~/.ssh existing on the runner
+  // (the prior test silently returned when it didn't, asserting nothing).
+  it('blocks a read through a symlink that resolves into a denylisted dir', () => {
+    const secretDir = join(tmpDir, 'real-secret');
+    mkdirSync(secretDir, { recursive: true });
+    process.env['AFK_READ_DENYLIST'] = secretDir;
+    _resetReadDenylistCacheForTests();
+
+    const linkPath = join(tmpDir, 'secret-link');
+    symlinkSync(secretDir, linkPath);
+
+    // Reading THROUGH the symlink must be denied (safeRealpath dereferences it
+    // to the denylisted target before the prefix comparison).
+    const via = isReadDenied(join(linkPath, 'token.txt'));
+    expect(via.denied).toBe(true);
+    // And the innocuous symlink path is not what matched — the resolved target is.
+    expect(via.matched).not.toBe(linkPath);
+  });
+
+  it('dereferences a symlink into a built-in denylisted dir when it exists', () => {
+    // Bonus real-world case against a built-in (~/.ssh). Kept guarded because
+    // the runner may lack ~/.ssh; the tmpdir fixture above is the authoritative
+    // dereference assertion, so skipping here never leaves the suite vacuous.
     const sshDir = join(homedir(), '.ssh');
-    if (!existsSync(sshDir)) return; // dangling symlink can't resolve — vacuous on this runner
+    if (!existsSync(sshDir)) return;
     const linkPath = join(tmpDir, 'ssh-link');
     symlinkSync(sshDir, linkPath);
     expect(isReadDenied(join(linkPath, 'id_rsa')).denied).toBe(true);
