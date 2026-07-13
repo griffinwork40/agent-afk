@@ -36,7 +36,7 @@ import { appendRoutingDecision } from './routing-telemetry.js';
 import { getCurrentSink } from './_lib/skill-sink-channel.js';
 import { touchWorktreeOccupancy } from './worktree-occupancy.js';
 import { resolveWorktreeMainRoot } from './worktree-read-root.js';
-import { computeInheritedReadRoots } from './subagent-read-scope.js';
+import { computeInheritedReadRoots, type ReadScopeInputs } from './subagent-read-scope.js';
 import { buildPhaseRestrictedProvider, type PhaseRole } from './tools/nesting.js';
 import { applyManagerApiKeyFallback } from './tools/child-credential.js';
 import { providerForModel, type BundledProviderName } from './providers/index.js';
@@ -433,7 +433,7 @@ export class SubagentManager {
    * grandchild manager's `parentReadRoots`, so a read-open (or `/allow-dir`-
    * widened) scope is not silently re-narrowed one nesting level down.
    */
-  getReadScopeInputs(): { parentReadRoots: string[] | undefined; parentCwd: string | undefined } {
+  getReadScopeInputs(): ReadScopeInputs {
     return { parentReadRoots: this.parentReadRoots, parentCwd: this.parentCwd };
   }
 

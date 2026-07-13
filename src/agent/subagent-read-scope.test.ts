@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import path from 'path';
-import { computeInheritedReadRoots, readOpenRootFor } from './subagent-read-scope.js';
+import {
+  computeInheritedReadRoots,
+  readOpenRootFor,
+  resolveChildManagerReadRoots,
+} from './subagent-read-scope.js';
 
 const FS_ROOT = path.parse(path.resolve('.')).root || path.sep;
 
@@ -123,5 +127,66 @@ describe('computeInheritedReadRoots', () => {
       });
       expect(roots).toBeUndefined();
     });
+  });
+});
+
+// #547: the choke point skill / inline-skill / compose managers use to derive
+// their parentReadRoots from the parent session's scope + the child's cwd.
+describe('resolveChildManagerReadRoots', () => {
+  const WORKTREE = '/repo/.afk-worktrees/wt';
+
+  it('grants read-open when the parent session is unconfined and the child has a cwd', () => {
+    // THE #547 fix: a skill fork operating in a worktree under an unconfined
+    // (read-open) parent session must inherit read-open — NOT be re-confined to
+    // [worktree, mainRoot] the way bare cwd-derivation would. Matches the
+    // `agent`-tool behaviour (subagent-worktree-readroot.test.ts).
+    const roots = resolveChildManagerReadRoots(
+      { parentReadRoots: undefined, parentCwd: undefined },
+      WORKTREE,
+    );
+    expect(roots).toEqual([FS_ROOT]);
+  });
+
+  it('unions the child cwd with a confined parent cwd (child ⊇ parent)', () => {
+    const roots = resolveChildManagerReadRoots(
+      { parentReadRoots: undefined, parentCwd: '/repo' },
+      WORKTREE,
+    );
+    expect(roots).toEqual([WORKTREE, '/repo']);
+  });
+
+  it('propagates an explicit (e.g. /allow-dir-widened) parent read scope', () => {
+    const roots = resolveChildManagerReadRoots(
+      { parentReadRoots: ['/repo', '/tmp/data'], parentCwd: '/repo' },
+      WORKTREE,
+    );
+    expect(roots).toEqual([WORKTREE, '/repo', '/tmp/data']);
+  });
+
+  it('returns undefined when child cwd equals the confined parent cwd (leave cwd-derivation)', () => {
+    // The common inline case (e.g. /mint): the child worktree IS the session
+    // cwd, so there is nothing broader to grant — the manager's own
+    // cwd-derivation ([cwd, mainRoot]) already equals the parent scope.
+    const roots = resolveChildManagerReadRoots(
+      { parentReadRoots: undefined, parentCwd: WORKTREE },
+      WORKTREE,
+    );
+    expect(roots).toBeUndefined();
+  });
+
+  it('returns undefined when the parent scope is unknown (unwired ctx — back-compat)', () => {
+    // `undefined` parentScope = "getReadScopeInputs not wired" (test stub /
+    // legacy surface), NOT "parent unconfined". Must leave the manager's
+    // cwd-derivation untouched rather than granting read-open.
+    expect(resolveChildManagerReadRoots(undefined, WORKTREE)).toBeUndefined();
+    expect(resolveChildManagerReadRoots(undefined, undefined)).toBeUndefined();
+  });
+
+  it('returns undefined for a known-unconfined parent when the child also has no cwd', () => {
+    const roots = resolveChildManagerReadRoots(
+      { parentReadRoots: undefined, parentCwd: undefined },
+      undefined,
+    );
+    expect(roots).toBeUndefined();
   });
 });

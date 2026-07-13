@@ -369,6 +369,9 @@ async function main() {
           resolveApiKeyForModel: getApiKeyForModel,
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
           ...(telegramOpenaiBaseUrl !== undefined ? { openaiBaseUrl: telegramOpenaiBaseUrl } : {}),
+          // Read-scope inheritance (#547): skill-forked children inherit the
+          // parent session's read scope via the root manager. See bootstrap.ts.
+          getReadScopeInputs: () => rootManager.getReadScopeInputs(),
         });
 
         // Compose subagents inherit the framework base + operator overlay
@@ -382,6 +385,9 @@ async function main() {
           apiKey: telegramApiKey,
           // Per-model credential resolver — mirrors #640 for the compose fork-path.
           resolveApiKeyForModel: getApiKeyForModel,
+          // Read-scope inheritance (#547): DAG nodes inherit the parent session's
+          // read scope via the root manager. See bootstrap.ts.
+          getReadScopeInputs: () => rootManager.getReadScopeInputs(),
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
           // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
           ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),

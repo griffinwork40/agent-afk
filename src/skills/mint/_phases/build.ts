@@ -36,6 +36,10 @@ export async function runBuildPhase(
   // skill's tool-lane entry. See skills/index.ts SkillExecutionContext.callId.
   skillCallId?: string,
   defaultSubagentModel: AgentModelInput = 'sonnet',
+  // Read-scope inheritance (#547): parent session's read roots (resolved once
+  // by the mint handler); seeds the fork manager's parentReadRoots so the phase
+  // subagent's reads ⊇ the parent session's. Undefined leaves cwd-derivation.
+  parentReadRoots?: string[],
 ): Promise<BuildResult> {
   const prompts = loadSkillPrompts('mint');
   const buildPrompt = prompts['build.md'];
@@ -47,9 +51,10 @@ export async function runBuildPhase(
   // Propagate parent worktree to the build subagent so its bash/grep
   // run in the right working tree — critical here because build is the
   // phase that actually mutates files and runs git commands.
-  const manager = new SubagentManager(
-    parentCwd !== undefined ? { cwd: parentCwd } : {},
-  );
+  const manager = new SubagentManager({
+    ...(parentCwd !== undefined ? { cwd: parentCwd } : {}),
+    ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
+  });
   const buildHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },
     config: {

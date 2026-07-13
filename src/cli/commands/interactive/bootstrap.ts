@@ -426,6 +426,11 @@ export async function bootstrapSession(
     // etc. runs its first-tier subagents against the host repo even when
     // `--worktree` was set.
     ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
+    // Read-scope inheritance (#547): skill-forked children inherit the parent
+    // session's read scope via the root manager — symmetric with the `agent`
+    // tool (subagentManager: rootManager above). Read fresh so mid-session
+    // setCwd re-anchors are reflected.
+    getReadScopeInputs: () => rootManager.getReadScopeInputs(),
   });
 
   // Pass the raw base prompt (pre-assembly) so compose subagents do not
@@ -439,6 +444,9 @@ export async function bootstrapSession(
     apiKey,
     // Per-model credential resolver — mirrors #640 for the compose fork-path.
     resolveApiKeyForModel: getApiKeyForModel,
+    // Read-scope inheritance (#547): DAG nodes inherit the parent session's
+    // read scope via the root manager, symmetric with the `agent`/`skill` tools.
+    getReadScopeInputs: () => rootManager.getReadScopeInputs(),
     ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
     // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
     ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),

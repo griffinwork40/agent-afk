@@ -20,6 +20,7 @@ import type { BackgroundAgentRegistry } from '../../background-registry.js';
 import type { SdkPluginConfig } from '../../types/sdk-types.js';
 import type { ChildProviderFactoryArgs } from '../nesting.js';
 import type { Surface } from '../../awareness/types.js';
+import type { ReadScopeInputs } from '../../subagent-read-scope.js';
 import type { SkillExecutor } from '../skill-executor.js';
 
 export interface SkillExecutorContext {
@@ -91,7 +92,13 @@ export interface SkillExecutorContext {
    * skill child can in turn dispatch sibling skills. Mirrors
    * {@link SubagentExecutorContext.childSkillExecutorFactory}.
    */
-  childSkillExecutorFactory?: (depth: number, maxDepth: number, signal: AbortSignal, inheritedCwd?: string) => SkillExecutor;
+  childSkillExecutorFactory?: (
+    depth: number,
+    maxDepth: number,
+    signal: AbortSignal,
+    inheritedCwd?: string,
+    inheritedReadScope?: ReadScopeInputs,
+  ) => SkillExecutor;
   /**
    * Witness-layer trace writer. When provided, the per-call
    * {@link SubagentManager} that wraps each skill fork is constructed with
@@ -142,6 +149,23 @@ export interface SkillExecutorContext {
    * Optional: surfaces without a worktree (telegram) leave this unset.
    */
   cwd?: string;
+  /**
+   * Reads the parent session's read scope ({@link ReadScopeInputs}) at
+   * dispatch time. Wired at each surface to the root
+   * {@link SubagentManager.getReadScopeInputs}, so a skill-forked child
+   * inherits the parent session's full read scope — the same invariant #544
+   * established for the `agent` tool, now applied to `skill`-tool dispatch
+   * (#547). Every `new SubagentManager(...)` this executor builds
+   * (fork-dispatch.ts, fork-child-config.ts) computes its `parentReadRoots`
+   * via {@link resolveChildManagerReadRoots} from this callback's result and
+   * the child's cwd.
+   *
+   * A callback (not a snapshot) so it reflects mid-session `setCwd` re-anchors
+   * — matching the `agent` tool, which reads `getReadScopeInputs()` fresh on
+   * every dispatch. Optional/back-compat: when unset (older wiring, test
+   * stubs), the fork paths fall back to cwd-only derivation, unchanged.
+   */
+  getReadScopeInputs?: () => ReadScopeInputs;
   /**
    * Session-wide named-agent registry, forwarded to the child
    * {@link SubagentExecutor}s this executor constructs so skill-forked

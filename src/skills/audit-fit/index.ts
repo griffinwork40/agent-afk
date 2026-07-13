@@ -344,6 +344,15 @@ async function handler(
   // Forward the parent's witness writer (when ctx supplies one) so the
   // inspector forks below inherit it and their `canUseTool` permission-denials
   // land in the parent trace. See skills/index.ts SkillExecutionContext.traceWriter.
+  //
+  // Read-scope note (#547): this manager DELIBERATELY passes no `cwd` and no
+  // `parentReadRoots`. Its inspectors roam `~/.afk` user/plugin artifacts that
+  // live OUTSIDE any repo, so a cwd-less manager (→ read-open forks) is
+  // required. Read-open already satisfies the child ⊇ parent read-scope
+  // invariant (#544/#547) for ANY parent, so this is compliant, not a gap:
+  // seeding parentReadRoots from a CONFINED session (e.g. `afk -w`) would
+  // narrow inspectors to the worktree and break `~/.afk` discovery. Do not add
+  // it here — the omission is correct.
   const manager = new SubagentManager({
     apiKey,
     // `apiKey` is `ctx.apiKey` — resolved by the parent session for

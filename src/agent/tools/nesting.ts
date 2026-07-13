@@ -12,6 +12,7 @@ import type { IAgentSession } from '../types.js';
 import type { ModelProvider } from '../provider.js';
 import type { AgentModelInput } from '../types.js';
 import type { Surface } from '../awareness/types.js';
+import type { ReadScopeInputs } from '../subagent-read-scope.js';
 import { AnthropicDirectProvider } from '../providers/anthropic-direct/index.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible/index.js';
 import { providerForModel } from '../providers/index.js';
@@ -297,13 +298,20 @@ export function createChildSkillExecutorFactory(
   // child's restricted/depth-cap provider builders point at the configured
   // endpoint. Trailing optional — legacy positional callers stay valid.
   openaiBaseUrl?: string,
-): (depth: number, maxDepth: number, signal: AbortSignal, inheritedCwd?: string) => SkillExecutor {
-  const factory: (depth: number, maxDepth: number, signal: AbortSignal, inheritedCwd?: string) => SkillExecutor = (
-    depth,
-    maxDepth,
-    signal,
-    inheritedCwd,
-  ) => {
+): (
+  depth: number,
+  maxDepth: number,
+  signal: AbortSignal,
+  inheritedCwd?: string,
+  inheritedReadScope?: ReadScopeInputs,
+) => SkillExecutor {
+  const factory: (
+    depth: number,
+    maxDepth: number,
+    signal: AbortSignal,
+    inheritedCwd?: string,
+    inheritedReadScope?: ReadScopeInputs,
+  ) => SkillExecutor = (depth, maxDepth, signal, inheritedCwd, inheritedReadScope) => {
     // Invariant: the closure-captured `cwd` is frozen at bootstrap. For
     // born-named `afk -w` worktrees it is `undefined` (the worktree is
     // created on turn 1 via worktree-autoname, after bootstrap). A later
@@ -370,6 +378,18 @@ export function createChildSkillExecutorFactory(
       // Named-agent registry propagates so nested skill children can
       // dispatch `agent_type`-named sub-agents at any depth.
       ...(agentRegistry !== undefined ? { agentRegistry } : {}),
+      // Read-scope inheritance (#547): the depth-1 caller
+      // (fork-child-config.ts / child-config.ts) passes THIS skill child's
+      // inherited read scope so its own skill forks (great-grandchildren)
+      // inherit ⊇ it, not the frozen bootstrap session scope. Unlike the
+      // top-level SkillExecutors (wired directly to the root manager's
+      // getReadScopeInputs), grandchild executors have no manager reference —
+      // the scope is threaded through this factory param instead. Frozen at
+      // call time via a closure, mirroring how `inheritedCwd` overrides the
+      // stale closure `cwd`.
+      ...(inheritedReadScope !== undefined
+        ? { getReadScopeInputs: () => inheritedReadScope }
+        : {}),
     });
   };
   return factory;

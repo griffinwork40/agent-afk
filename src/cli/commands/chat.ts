@@ -586,6 +586,9 @@ export function registerChatCommand(program: Command): void {
           // Worktree isolation for skill-dispatched subagents. See
           // bootstrap.ts for the same wiring.
           ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
+          // Read-scope inheritance (#547): skill-forked children inherit the
+          // parent session's read scope via the root manager. See bootstrap.ts.
+          getReadScopeInputs: () => rootManager.getReadScopeInputs(),
         });
 
         // Pass the raw base prompt (pre-assembly) so compose subagents do not
@@ -599,6 +602,9 @@ export function registerChatCommand(program: Command): void {
           apiKey,
           // Per-model credential resolver — mirrors #640 for the compose fork-path.
           resolveApiKeyForModel: getApiKeyForModel,
+          // Read-scope inheritance (#547): DAG nodes inherit the parent session's
+          // read scope via the root manager. See bootstrap.ts.
+          getReadScopeInputs: () => rootManager.getReadScopeInputs(),
           ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
           // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
           ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
