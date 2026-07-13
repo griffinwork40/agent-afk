@@ -44,8 +44,14 @@ export const SLOT_NAMES: readonly SlotName[] = ['local', 'small', 'medium', 'lar
  * with no `gpt-`/`o*`/`org/model` signal, or an Anthropic-compatible shim. The
  * concrete bundled providers are `anthropic-direct` / `openai-compatible`;
  * `anthropic`/`openai` are accepted shorthands.
+ *
+ * `chatgpt-oauth` routes to `openai-compatible` but additionally forces the
+ * ChatGPT-subscription OAuth credential (`~/.codex/auth.json`) + backend for
+ * THIS tier — regardless of `OPENAI_API_KEY` and without the global
+ * `AFK_OPENAI_CHATGPT_OAUTH` flag. This lets a ChatGPT-subscription model, a
+ * custom keyed OpenAI model, and an Anthropic model coexist in one session.
  */
-export type SlotProvider = 'anthropic' | 'openai';
+export type SlotProvider = 'anthropic' | 'openai' | 'chatgpt-oauth';
 
 /**
  * Binding for one capability tier.
@@ -327,6 +333,7 @@ function normalizeSlotProvider(value: unknown): SlotProvider | undefined {
   const lowered = value.trim().toLowerCase();
   if (lowered === 'anthropic' || lowered === 'anthropic-direct') return 'anthropic';
   if (lowered === 'openai' || lowered === 'openai-compatible') return 'openai';
+  if (lowered === 'chatgpt-oauth' || lowered === 'chatgpt') return 'chatgpt-oauth';
   return undefined;
 }
 

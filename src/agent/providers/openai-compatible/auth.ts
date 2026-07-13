@@ -57,7 +57,8 @@ export type OpenAIAuthSource =
   | 'codex-cli'
   | 'chatgpt-oauth'
   | 'no-usable-auth'
-  | 'no-usable-auth-codex-oauth';
+  | 'no-usable-auth-codex-oauth'
+  | 'no-usable-auth-forced-chatgpt-oauth';
 
 /**
  * Result of auth resolution. When `apiKey` is set the request can proceed;
@@ -105,14 +106,44 @@ function defaultReadFile(path: string): string | null {
  *
  * @param explicitConfigKey - `AgentConfig.apiKey` (caller-provided), if any.
  * @param deps - Optional env + fs injection point for tests.
+ * @param forceChatgptOAuth - When true (a `provider: 'chatgpt-oauth'` slot),
+ *   resolve the ChatGPT-subscription token from `~/.codex/auth.json` ahead of
+ *   every other tier and without the global `AFK_OPENAI_CHATGPT_OAUTH` flag.
  */
 export function resolveOpenAIAuth(
   explicitConfigKey: string | undefined,
   deps: AuthResolverDeps = {},
+  forceChatgptOAuth = false,
 ): OpenAIAuthResolution {
   const readEnv = deps.readEnv ?? ((k) => process.env[k]);
   const home = (deps.homedir ?? homedir)();
   const readFile = deps.readFile ?? defaultReadFile;
+
+  // Tier 0: per-slot forced ChatGPT-subscription OAuth (a slot bound
+  // `provider: 'chatgpt-oauth'`). Selects the ChatGPT token from
+  // ~/.codex/auth.json REGARDLESS of an explicit key / OPENAI_API_KEY /
+  // CODEX_API_KEY, and WITHOUT the global AFK_OPENAI_CHATGPT_OAUTH flag — the
+  // slot declaration IS the opt-in. This is what lets a ChatGPT-subscription
+  // model and a custom keyed OpenAI model resolve independently in one session.
+  if (forceChatgptOAuth) {
+    const codexAuthPath = join(home, '.codex', 'auth.json');
+    const codexRaw = readFile(codexAuthPath);
+    if (codexRaw !== null) {
+      const parsed = parseCodexAuthJson(codexRaw);
+      if (parsed.kind === 'chatgpt' && parsed.accessToken) {
+        const res: OpenAIAuthResolution = {
+          apiKey: parsed.accessToken,
+          source: 'chatgpt-oauth',
+          last4: last4Of(parsed.accessToken),
+        };
+        if (parsed.accountId !== undefined) res.accountId = parsed.accountId;
+        if (parsed.expiresAt !== undefined) res.expiresAt = parsed.expiresAt;
+        return res;
+      }
+    }
+    // Slot explicitly requires ChatGPT OAuth but no usable token was found.
+    return { apiKey: null, source: 'no-usable-auth-forced-chatgpt-oauth' };
+  }
 
   // Tier 1: explicit config key.
   if (explicitConfigKey && explicitConfigKey.length > 0) {
@@ -320,6 +351,12 @@ export function formatAuthDiagnostic(resolution: OpenAIAuthResolution): string {
         'Found ChatGPT/OAuth credentials in ~/.codex/auth.json but the OpenAI provider is in API-key mode. ' +
         'To use your ChatGPT subscription, set AFK_OPENAI_CHATGPT_OAUTH=1 (read-only; AFK will not refresh the token — ' +
         're-run `codex` when it expires). Otherwise run `codex login --api-key` or set OPENAI_API_KEY.'
+      );
+    case 'no-usable-auth-forced-chatgpt-oauth':
+      return (
+        "This model's slot is configured provider: 'chatgpt-oauth' but no ChatGPT-subscription token was found in " +
+        '~/.codex/auth.json. Sign in with `codex` using ChatGPT (not API-key mode), or change the slot to ' +
+        "provider: 'openai' with a key. (read-only; AFK will not refresh the token — re-run `codex` when it expires)."
       );
     case 'no-usable-auth':
     default:

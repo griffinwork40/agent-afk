@@ -117,4 +117,15 @@ describe('applySlotCredentials', () => {
     applySlotCredentials(child, table);
     expect(child.apiKey).toBeUndefined();
   });
+
+  it('sets forceChatgptOAuth + clears apiKey for a chatgpt-oauth slot', () => {
+    // A `provider: 'chatgpt-oauth'` tier routes openai-compatible (so an
+    // inherited key is cleared) AND flags forceChatgptOAuth, so resolveOpenAIAuth
+    // selects the ChatGPT-subscription token regardless of OPENAI_API_KEY.
+    const config: SlotCredentialTarget = { model: 'medium', apiKey: 'sk-should-be-cleared' };
+    applySlotCredentials(config, slots({ medium: { id: 'gpt-5.6', provider: 'chatgpt-oauth' } }));
+    expect(config.forceChatgptOAuth).toBe(true);
+    expect(config.apiKey).toBeUndefined();
+    expect(config.baseUrl).toBeUndefined();
+  });
 });

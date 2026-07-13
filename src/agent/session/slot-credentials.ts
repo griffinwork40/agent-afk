@@ -36,6 +36,8 @@ export interface SlotCredentialTarget {
   apiKey?: string;
   baseUrl?: string;
   openaiBaseUrl?: string;
+  /** Set true for a `provider: 'chatgpt-oauth'` slot — forces ChatGPT OAuth. */
+  forceChatgptOAuth?: boolean;
 }
 
 /**
@@ -63,9 +65,17 @@ export function applySlotCredentials(config: SlotCredentialTarget, bindings?: Mo
   const route =
     binding.provider === 'anthropic'
       ? 'anthropic-direct'
-      : binding.provider === 'openai'
+      : binding.provider === 'openai' || binding.provider === 'chatgpt-oauth'
         ? 'openai-compatible'
         : providerForModel(config.model, bindings ? { slots: bindings } : undefined);
+
+  // A slot bound `provider: 'chatgpt-oauth'` selects the ChatGPT-subscription
+  // token for THIS tier regardless of OPENAI_API_KEY / the global
+  // AFK_OPENAI_CHATGPT_OAUTH flag — see resolveOpenAIAuth(..., forceChatgptOAuth).
+  // The apiKey is still cleared below (route === 'openai-compatible').
+  if (binding.provider === 'chatgpt-oauth') {
+    config.forceChatgptOAuth = true;
+  }
 
   if (binding.apiKey !== undefined) {
     config.apiKey = binding.apiKey;

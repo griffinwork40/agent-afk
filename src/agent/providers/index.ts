@@ -170,7 +170,8 @@ export function providerForModel(
   // a bare id on a shim (no gpt-/org-model signal) still routes to its declared
   // provider rather than defaulting to anthropic-direct.
   if (binding.provider === 'anthropic') return 'anthropic-direct';
-  if (binding.provider === 'openai') return 'openai-compatible';
+  if (binding.provider === 'openai' || binding.provider === 'chatgpt-oauth')
+    return 'openai-compatible';
 
   // Tier 2: Claude lock (beats env-hint tier — see Tier 4 docstring), applied
   // to the resolved bound id.

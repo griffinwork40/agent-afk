@@ -308,6 +308,17 @@ describe('Stage 2: per-slot provider credentials', () => {
     expect(parseModelsConfig({ medium: { id: 'z', provider: 'gemini' } }).medium).toEqual({ id: 'z' });
   });
 
+  it('parseBinding normalizes the chatgpt-oauth provider (+ chatgpt shorthand)', () => {
+    expect(parseModelsConfig({ medium: { id: 'gpt-5.6', provider: 'chatgpt-oauth' } }).medium).toEqual({
+      id: 'gpt-5.6',
+      provider: 'chatgpt-oauth',
+    });
+    expect(parseModelsConfig({ small: { id: 'gpt-5.6', provider: 'ChatGPT' } }).small).toEqual({
+      id: 'gpt-5.6',
+      provider: 'chatgpt-oauth',
+    });
+  });
+
   it('resolveBinding returns per-slot creds for a slot alias, bare {id} for a raw id', () => {
     const bindings = computeSlotBindings({
       small: { id: 'gpt-4o-mini', provider: 'openai', baseUrl: 'http://h/v1', apiKey: 'k' },

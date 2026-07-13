@@ -197,6 +197,10 @@ export class ProviderRouter implements ProviderQuery {
       innerConfig.baseUrl ?? '',
       innerConfig.openaiBaseUrl ?? '',
       innerConfig.apiKey ?? '',
+      // Fold the forced-ChatGPT-OAuth intent in: a `provider: 'chatgpt-oauth'`
+      // tier clears apiKey + shares the openai base with a plain openai tier, so
+      // without this a switch between them would collide and skip the rebuild.
+      innerConfig.forceChatgptOAuth ? 'chatgpt-oauth' : '',
     ].join('\u0000');
 
     return { provider, innerConfig, signature };
