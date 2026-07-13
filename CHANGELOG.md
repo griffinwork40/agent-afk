@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.37.5] - 2026-07-13
+
+### Fixed
+- propagate parent read scope to skill/inline/compose forks (#547) (#556) (60f2254)
+
+### Changed
+- lock in injectContext throw-path keep-drop decision (#392) (#550) (225b893)
+
 ## [5.37.4] - 2026-07-13
 
 ### Changed
