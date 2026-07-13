@@ -28,7 +28,7 @@ export type ExecFileFn = (
   opts?: { cwd?: string },
 ) => Promise<{ stdout: string; stderr: string }>;
 
-export interface WorktreeMeta {
+interface WorktreeMeta {
   owner: 'interactive' | 'diagnose' | string;
   /**
    * PID of the process that created this worktree. Used by the sweep
@@ -46,7 +46,7 @@ export interface WorktreeMeta {
   baseBranch?: string;
 }
 
-export interface WorktreeCandidate {
+interface WorktreeCandidate {
   path: string;
   head?: string;
   branch?: string;
@@ -70,7 +70,7 @@ export interface WorktreeCandidate {
   ownerLiveness: 'alive' | 'dead' | 'unknown';
 }
 
-export type WorktreeVerdict =
+type WorktreeVerdict =
   | 'empty'
   | 'stale-clean'
   | 'stale-dirty'
@@ -127,7 +127,7 @@ export interface SweepOptions {
   readPresence?: () => Promise<PresenceRecord[]>;
 }
 
-export interface SweepCandidateSummary {
+interface SweepCandidateSummary {
   path: string;
   verdict: WorktreeVerdict;
   /** Resolved owner from `.afk-worktree-meta.json`, or 'unknown' when meta is absent. */
@@ -213,6 +213,17 @@ function isPathWithin(child: string, parent: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
+/**
+ * `git worktree list --porcelain` reports `branch` as a fully-qualified ref
+ * (e.g. `refs/heads/afk/foo`), but `git branch -d` expects the short branch
+ * name (`afk/foo`) — passing the qualified ref makes the delete always fail
+ * with "branch 'refs/heads/afk/foo' not found" (#371). Strip the prefix
+ * before every `git branch -d` invocation.
+ */
+function shortBranchName(branch: string): string {
+  return branch.replace(/^refs\/heads\//, '');
+}
+
 // ---------------------------------------------------------------------------
 // Section 2 — Porcelain parser
 // ---------------------------------------------------------------------------
@@ -281,8 +292,14 @@ function classifyCandidate(
   // No commits ahead, no dirty files, and old enough to not be a freshly-
   // created worktree mid-setup → empty. The age guard closes the race where
   // a worktree created seconds before the cron fires would be reaped on its
-  // first tick before the user has a chance to do anything in it.
+  // first tick before the user has a chance to do anything in it. Gated on
+  // ownerLiveness !== 'alive' the same way dead-owner is (#380) — without
+  // this, the live-session presence guard (which forces ownerLiveness to
+  // 'alive' when a live session's cwd is inside the worktree) only ever
+  // protected the dead-owner path, so a live session's clean, 0-commits-
+  // ahead worktree older than MIN_EMPTY_AGE_MS still got reaped mid-session.
   if (
+    candidate.ownerLiveness !== 'alive' &&
     candidate.commitsAhead === 0 &&
     !candidate.isDirty &&
     candidate.ageMs >= MIN_EMPTY_AGE_MS
@@ -293,8 +310,15 @@ function classifyCandidate(
   // Has dirty working tree past dirty threshold
   if (candidate.isDirty && candidate.ageMs > dirtyThresholdMs) return 'stale-dirty';
 
-  // Clean (committed work, no dirty files) past clean threshold
-  if (!candidate.isDirty && candidate.ageMs > cleanThresholdMs) return 'stale-clean';
+  // Clean committed work past clean threshold. Clean zero-ahead worktrees are
+  // handled by `empty` once old enough; before then they stay active.
+  if (
+    !candidate.isDirty &&
+    candidate.commitsAhead > 0 &&
+    candidate.ageMs > cleanThresholdMs
+  ) {
+    return 'stale-clean';
+  }
 
   return 'active';
 }
@@ -604,7 +628,7 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
         if (verdict === 'empty') {
           await execFile('git', ['-C', repoRoot, 'worktree', 'remove', '--force', entry.path]);
           if (entry.branch) {
-            await execFile('git', ['-C', repoRoot, 'branch', '-d', entry.branch]).catch(() => {});
+            await execFile('git', ['-C', repoRoot, 'branch', '-d', shortBranchName(entry.branch)]).catch(() => {});
           }
           result.removed.push(entry.path);
         } else if (verdict === 'dead-owner') {
@@ -615,12 +639,21 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
           // elsewhere — git refuses, we move on).
           await execFile('git', ['-C', repoRoot, 'worktree', 'remove', '--force', entry.path]);
           if (entry.branch) {
-            await execFile('git', ['-C', repoRoot, 'branch', '-d', entry.branch]).catch(() => {});
+            await execFile('git', ['-C', repoRoot, 'branch', '-d', shortBranchName(entry.branch)]).catch(() => {});
           }
           result.removed.push(entry.path);
         } else if (verdict === 'stale-clean') {
-          await execFile('git', ['-C', repoRoot, 'worktree', 'remove', '--force', entry.path]);
-          result.removed.push(entry.path);
+          // Invariant: `stale-clean` fires only on trees with commits ahead
+          // of base — a clean tree with zero commits ahead is always caught
+          // by `empty` first. Removing here therefore destroys exclusively
+          // trees holding committed-but-unmerged work (the branch ref
+          // survives, the checkout does not). Preserve + warn instead,
+          // mirroring `stale-dirty`; explicit removal paths (`afk worktree
+          // prune`-adjacent tooling, the model-facing `worktree` tool) are
+          // the sanctioned way to drop these.
+          result.warnings.push(
+            `[WARN] stale-clean worktree preserved (commits ahead of base): ${entry.path}`,
+          );
         } else if (verdict === 'stale-dirty') {
           result.warnings.push(
             `[WARN] stale-dirty worktree preserved (uncommitted changes): ${entry.path}`,

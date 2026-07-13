@@ -114,7 +114,7 @@ function makeTextStream(text: string): RawMessageStreamEvent[] {
         type: 'message',
         role: 'assistant',
         content: [],
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         stop_reason: null,
         stop_sequence: null,
         usage: {
@@ -189,7 +189,7 @@ describe('AnthropicDirectQuery — interrupt mid-turn then resume', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: prompts.iterable,
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
     });
     queryRef = query;
 
@@ -249,7 +249,7 @@ describe('AnthropicDirectQuery — interrupt mid-turn then resume', () => {
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('first'),
-      config: { model: 'claude-sonnet-4-5-20250929', apiKey: 'sk-ant-oat01-test' },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' },
     });
 
     // `collect` runs the generator to completion — if a real error wrongly kept

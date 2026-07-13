@@ -209,11 +209,28 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'AFK_MAX_TOKENS',
-    description: 'Cap on total tokens per turn (input + output). Default 4096.',
+    description: 'Deprecated and inert: not read by the generation path. Use AFK_MAX_OUTPUT_TOKENS (or --max-output-tokens) to cap per-response output tokens; falls back to the model output ceiling when unset.',
     type: 'number',
     required: false,
     default: '4096',
     example: '8192',
+    category: 'model',
+  },
+  {
+    name: 'AFK_MAX_TOOL_USE_ITERATIONS',
+    description:
+      'Opt-in ceiling on tool-use rounds per turn for TOP-LEVEL (non-subagent) sessions, on both ' +
+      'providers. Mirrors the maxToolUseIterations config key / max_tool_use_iterations tool param. ' +
+      'Unset, non-numeric, or <=0 means unlimited (the default — zero behavior change): a top-level ' +
+      'turn ends only when the model stops calling tools, the abort signal fires, the provider ' +
+      'errors, or the dollar budget trips. A positive integer N makes top-level turns wind down ' +
+      'gracefully after N tool rounds (one tools-stripped final round). An explicit config/CLI ' +
+      'value wins over this env default. Does NOT affect subagent forks — they keep their own ' +
+      'non-zero anti-hang default (SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS) regardless of this var.',
+    type: 'number',
+    required: false,
+    default: '0',
+    example: '150',
     category: 'model',
   },
   {
@@ -236,6 +253,25 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     required: false,
     default: 'sonnet',
     example: 'claude-opus-4-5',
+    category: 'model',
+  },
+  {
+    name: 'AFK_MODEL_TTFB_TIMEOUT_MS',
+    description:
+      'Per-request time-to-first-token timeout (ms) for the anthropic-direct streaming loop. ' +
+      'Bounds how long a single model call may stall BEFORE its first streamed CONTENT token ' +
+      '(a text/thinking delta or tool_use); the connection-level message_start and keep-alive ' +
+      'pings do NOT count. Once a content token streams, the timer is cleared and the rest of ' +
+      'the response runs unbounded, so a normal slow call (below the bound) and any actively-' +
+      'streaming extended-thinking response are never aborted. NOTE: a request whose FIRST token ' +
+      'takes longer than the bound — e.g. a very large opus_1m prefill — is aborted, retried ' +
+      'once, then surfaces as an error (raise this value or set 0 for such workloads); this ' +
+      'trims the degrading-call tail instead of a silent ~10-min hang on the SDK default. ' +
+      'Default 180000 (180s ≈ 2× the measured p99 ttfb). Set to 0 to disable.',
+    type: 'number',
+    required: false,
+    default: '180000',
+    example: '120000',
     category: 'model',
   },
   {
@@ -299,7 +335,7 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     description: 'Bind the "medium" capability tier (general-use) to a model id/alias. Overrides afk.config.json models.medium.',
     type: 'string',
     required: false,
-    example: 'claude-sonnet-4-6',
+    example: 'claude-sonnet-5',
     category: 'model',
   },
   {
@@ -399,6 +435,19 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     default: 'adaptive',
     example: 'adaptive',
     category: 'model',
+  },
+  {
+    name: 'AFK_THINKING_UI',
+    description:
+      'Default thinking-display mode for the interactive REPL: summary | live | digest | off. ' +
+      'Display-only — controls how extended-thinking blocks render, never whether thinking runs (cost/latency unaffected). ' +
+      'Overridden per-launch by --thinking-ui and mutable mid-session via /thinking. ' +
+      'Precedence: --thinking-ui flag > this env > interactive.thinkingUi config > live. Invalid values are ignored.',
+    type: 'string',
+    required: false,
+    default: 'live',
+    example: 'digest',
+    category: 'misc',
   },
   {
     name: 'AFK_TIMEOUT_MS',
@@ -786,6 +835,16 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     example: '0',
     category: 'misc',
   },
+  {
+    name: 'AFK_BG_AUTO_DELIVER',
+    description:
+      'Auto-deliver background subagent results into the model context on the next user turn (interactive REPL). On by default. Set to 0, false, off, or no (case-insensitive) to disable, restoring the manual /bgsub:join retrieval flow.',
+    type: 'boolean',
+    required: false,
+    default: '1',
+    example: '0',
+    category: 'misc',
+  },
 
   // ── UI / output ───────────────────────────────────────────────────────────
   {
@@ -1010,6 +1069,21 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     example: '/path/to/browser.json',
     category: 'browser',
   },
+  {
+    name: 'AFK_BROWSER_DEFAULT_PROFILE',
+    description:
+      'Name of the persistent session-vault profile the agent reuses for browser ' +
+      'sessions. The context restores its login from (and saves it back to) ' +
+      '~/.afk/state/browser/<profile>/storageState.json, so a human runs ' +
+      '`afk browser login --profile <name>` once and the agent reuses that ' +
+      'authenticated session across unattended runs. Unset defaults to `default` ' +
+      '(a fresh, empty profile — identical to pre-vault behavior). ' +
+      'Allowed charset: [A-Za-z0-9_-], max 128 chars.',
+    type: 'string',
+    required: false,
+    example: 'work',
+    category: 'browser',
+  },
 
   // ── Filesystem ────────────────────────────────────────────────────────────
   {
@@ -1018,6 +1092,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     type: 'string',
     required: false,
     example: '**/.env,**/secrets/**',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_READ_DENYLIST',
+    description: 'Colon-separated list of additional absolute paths the read_file/grep/glob/list_directory tools refuse to read. Built-in credential entries (~/.ssh, ~/.aws, ~/.afk/config, …) always apply on top and cannot be removed.',
+    type: 'string',
+    required: false,
+    example: '/Users/me/project/.env:/Users/me/secrets',
     category: 'misc',
   },
   {
@@ -1138,8 +1220,10 @@ export const env = {
   get AFK_MAX_BUDGET_USD(): string | undefined { return process.env['AFK_MAX_BUDGET_USD']; },
   get AFK_MAX_OUTPUT_TOKENS(): string | undefined { return process.env['AFK_MAX_OUTPUT_TOKENS']; },
   get AFK_MAX_TOKENS(): string | undefined { return process.env['AFK_MAX_TOKENS']; },
+  get AFK_MAX_TOOL_USE_ITERATIONS(): string | undefined { return process.env['AFK_MAX_TOOL_USE_ITERATIONS']; },
   get AFK_MEMORY_EVIDENCE_GATE(): string | undefined { return process.env['AFK_MEMORY_EVIDENCE_GATE']; },
   get AFK_MODEL(): string | undefined { return process.env['AFK_MODEL']; },
+  get AFK_MODEL_TTFB_TIMEOUT_MS(): string | undefined { return process.env['AFK_MODEL_TTFB_TIMEOUT_MS']; },
   get AFK_MODEL_LARGE(): string | undefined { return process.env['AFK_MODEL_LARGE']; },
   get AFK_MODEL_LARGE_API_KEY(): string | undefined { return process.env['AFK_MODEL_LARGE_API_KEY']; },
   get AFK_MODEL_LARGE_BASE_URL(): string | undefined { return process.env['AFK_MODEL_LARGE_BASE_URL']; },
@@ -1160,6 +1244,7 @@ export const env = {
   get AFK_TASK_BUDGET(): string | undefined { return process.env['AFK_TASK_BUDGET']; },
   get AFK_TEMPERATURE(): string | undefined { return process.env['AFK_TEMPERATURE']; },
   get AFK_THINKING(): string | undefined { return process.env['AFK_THINKING']; },
+  get AFK_THINKING_UI(): string | undefined { return process.env['AFK_THINKING_UI']; },
   get AFK_TIMEOUT_MS(): string | undefined { return process.env['AFK_TIMEOUT_MS']; },
   get CLAUDE_MODEL(): string | undefined { return process.env['CLAUDE_MODEL']; },
 
@@ -1224,6 +1309,7 @@ export const env = {
   get AFK_AUTO_ROUTING(): string | undefined { return process.env['AFK_AUTO_ROUTING']; },
   get AFK_INTERNAL(): string | undefined { return process.env['AFK_INTERNAL']; },
   get AFK_SHELL_PASSTHROUGH(): string | undefined { return process.env['AFK_SHELL_PASSTHROUGH']; },
+  get AFK_BG_AUTO_DELIVER(): string | undefined { return process.env['AFK_BG_AUTO_DELIVER']; },
 
   // UI / output
   get AFK_BANNER_PLAIN(): string | undefined { return process.env['AFK_BANNER_PLAIN']; },
@@ -1260,9 +1346,11 @@ export const env = {
   get AFK_BROWSER_DOM_SNAPSHOTS(): string | undefined { return process.env['AFK_BROWSER_DOM_SNAPSHOTS']; },
   get AFK_BROWSER_BACKEND(): string | undefined { return process.env['AFK_BROWSER_BACKEND']; },
   get AFK_BROWSER_CONFIG(): string | undefined { return process.env['AFK_BROWSER_CONFIG']; },
+  get AFK_BROWSER_DEFAULT_PROFILE(): string | undefined { return process.env['AFK_BROWSER_DEFAULT_PROFILE']; },
 
   // Filesystem
   get AFK_WRITE_DENYLIST(): string | undefined { return process.env['AFK_WRITE_DENYLIST']; },
+  get AFK_READ_DENYLIST(): string | undefined { return process.env['AFK_READ_DENYLIST']; },
   get AFK_WRITE_DIFF(): string | undefined { return process.env['AFK_WRITE_DIFF']; },
 
   // CLI / capture-mode

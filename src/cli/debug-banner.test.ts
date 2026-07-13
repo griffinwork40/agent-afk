@@ -15,7 +15,7 @@ describe('renderDebugBanner', () => {
   it('renders a framed block with all populated fields', () => {
     const meta: SessionMetadata = {
       sessionId: 'sess-abc',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       permissionMode: 'bypassPermissions',
       cwd: '/tmp/work',
       claudeCodeVersion: '2.1.114',
@@ -30,7 +30,7 @@ describe('renderDebugBanner', () => {
     const out = strip(renderDebugBanner(meta));
     expect(out).toContain('Session Debug');
     expect(out).toContain('sess-abc');
-    expect(out).toContain('claude-sonnet-4-6');
+    expect(out).toContain('claude-sonnet-5');
     expect(out).toContain('bypassPermissions');
     expect(out).toContain('/tmp/work');
     expect(out).toContain('v2.1.114');

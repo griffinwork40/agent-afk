@@ -2,10 +2,11 @@
  * Tests for `afk daemon` command — Daemon Gap B (zero-config invocability).
  *
  * Covers:
- *   - `afk daemon` with no flags starts with sessionstart trigger + compiled
- *     default task (no error, no required options).
+ *   - `afk daemon` with no flags starts with sessionstart trigger and does NOT
+ *     fabricate a default task (no error, no required options).
  *   - `afk daemon --task <x>` still wires through correctly.
- *   - `afk daemon --cron <expr>` auto-selects cron trigger.
+ *   - `afk daemon --task <x> --cron <expr>` auto-selects cron trigger.
+ *   - `afk daemon --cron <expr>` without a task produces an error.
  *   - `afk daemon --trigger cron` without --cron still produces an error.
  *   - Config-driven default: `daemon.task` from afk.config.json is used when
  *     no --task flag is provided.
@@ -59,6 +60,8 @@ vi.mock('../shared-helpers.js', () => ({
   // New exports used by buildDaemonSessionFactory (added in daemon.ts).
   parseProvider: vi.fn(() => undefined),
   getDefaultSubagentModel: vi.fn(() => 'sonnet'),
+  // Opt-in top-level tool-round ceiling reader; undefined = unlimited (default).
+  getMaxToolUseIterations: vi.fn(() => undefined),
 }));
 
 vi.mock('../errors/index.js', () => ({
@@ -189,21 +192,19 @@ describe('afk daemon (CLI integration)', () => {
     consoleSpy.mockRestore();
   });
 
-  it('runs with no flags — uses sessionstart trigger and compiled default task', async () => {
+  it('runs with no flags — sessionstart trigger, no fabricated default task', async () => {
     await runDaemon();
 
     expect(mockStartDaemon).toHaveBeenCalledOnce();
     const opts = mockStartDaemon.mock.calls[0]?.[0];
     expect(opts).toBeDefined();
 
-    // The main task should use compiled defaults
+    // With no --task / env / config task, the daemon no longer invents a
+    // default task (previously '/forge-friction --auto'). The 'default' task id
+    // is unique to that fabricated task, so its absence is the precise signal —
+    // robust even if persisted schedules exist on the test machine.
     const tasks = opts?.tasks ?? [];
-    const mainTask = tasks.find((t) => t.taskId !== 'worktree-prune');
-    expect(mainTask).toBeDefined();
-    expect(mainTask?.command).toBe(COMPILED_DEFAULT_TASK);
-    expect(mainTask?.trigger).toBe('sessionstart');
-    // No cron expression required for sessionstart
-    expect(mainTask?.cronExpression).toBeUndefined();
+    expect(tasks.find((t) => t.taskId === COMPILED_DEFAULT_TASK_ID)).toBeUndefined();
   });
 
   it('passes --task through correctly', async () => {
@@ -222,13 +223,20 @@ describe('afk daemon (CLI integration)', () => {
     expect(mainTask?.trigger).toBe('sessionstart');
   });
 
-  it('auto-selects cron trigger when --cron is provided', async () => {
-    await runDaemon('--cron', '0 */6 * * *');
+  it('auto-selects cron trigger when --cron is provided (with a task)', async () => {
+    await runDaemon('--task', '/my-task --auto', '--cron', '0 */6 * * *');
 
     const opts = mockStartDaemon.mock.calls[0]?.[0];
-    const mainTask = opts?.tasks?.find((t) => t.taskId !== 'worktree-prune');
+    const mainTask = opts?.tasks?.find((t) => t.taskId === COMPILED_DEFAULT_TASK_ID);
+    expect(mainTask?.command).toBe('/my-task --auto');
     expect(mainTask?.trigger).toBe('cron');
     expect(mainTask?.cronExpression).toBe('0 */6 * * *');
+  });
+
+  it('errors when --cron is provided but no task is configured', async () => {
+    await expect(runDaemon('--cron', '0 */6 * * *')).rejects.toThrow(
+      /task is required for the cron and both triggers/,
+    );
   });
 
   it('errors when --trigger cron is explicit but --cron is absent', async () => {
@@ -306,6 +314,7 @@ describe('afk daemon (CLI integration)', () => {
 
     expect(mockPushIfConfigured).toHaveBeenCalledWith(
       expect.stringContaining('full daemon output'),
+      { markdown: true },
     );
   });
 });

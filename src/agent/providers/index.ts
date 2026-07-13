@@ -24,6 +24,7 @@ import { anthropicDirectProvider, AnthropicDirectProvider } from './anthropic-di
 import { OpenAICompatibleProvider } from './openai-compatible/index.js';
 import { MODEL_MAP } from '../session/model-resolution.js';
 import { resolveBinding, type ModelSlots } from '../session/model-slots.js';
+import { isOSeriesModel } from '../model-capabilities.js';
 import { env } from '../../config/env.js';
 
 /**
@@ -34,7 +35,7 @@ import { env } from '../../config/env.js';
  * model-router sentinel that resolves to itself (no fixed id; the provider
  * selects the model dynamically at run time). The `MODEL_MAP`-derived keys are
  * a defensive fallback: under default bindings a resolved alias like `sonnet`
- * becomes `claude-sonnet-4-6` and routes via the `claude-` prefix below, so
+ * becomes `claude-sonnet-5` and routes via the `claude-` prefix below, so
  * those keys are not normally hit. Kept (and derived from `MODEL_MAP` to avoid
  * drift) so any path that bypasses resolution still locks to Anthropic.
  */
@@ -169,7 +170,8 @@ export function providerForModel(
   // a bare id on a shim (no gpt-/org-model signal) still routes to its declared
   // provider rather than defaulting to anthropic-direct.
   if (binding.provider === 'anthropic') return 'anthropic-direct';
-  if (binding.provider === 'openai') return 'openai-compatible';
+  if (binding.provider === 'openai' || binding.provider === 'chatgpt-oauth')
+    return 'openai-compatible';
 
   // Tier 2: Claude lock (beats env-hint tier — see Tier 4 docstring), applied
   // to the resolved bound id.
@@ -190,9 +192,7 @@ export function providerForModel(
     if (
       lowered.startsWith('gpt-') ||
       lowered.startsWith('gpt_') ||
-      lowered.startsWith('o1') ||
-      lowered.startsWith('o3') ||
-      lowered.startsWith('o4') ||
+      isOSeriesModel(lowered) ||
       lowered.startsWith('codex-') ||
       lowered.startsWith('codex_') ||
       lowered === 'codex' ||
@@ -260,22 +260,38 @@ export function providerForModel(
  * Construction is cheap (no SDK handshake, no I/O) so allocating a fresh
  * provider per session is preferable to threading sessionId into every
  * shared-state read site.
+ *
+ * @param opts.customTools - In-process custom tools to register on the
+ *   provider. Forwarded from `AgentConfig.customTools` by `AgentSession`
+ *   when no explicit `providerFactory` is set. No-op when empty/absent.
  */
 export function resolveProvider(
   model: string | undefined,
   hints?: ProviderRouteHints,
+  opts?: {
+    customTools?: import('../tools/custom-tool.js').CustomToolDef[];
+    canUseTool?: import('../types/sdk-types.js').CanUseTool;
+  },
 ): ModelProvider {
   const name = providerForModel(model, hints);
+  const customTools = opts?.customTools;
+  const canUseTool = opts?.canUseTool;
+  // Mirror the customTools threading: forward each only when present so the
+  // default path constructs the provider with an empty options bag.
+  const ctorOpts = {
+    ...(customTools !== undefined && customTools.length > 0 ? { customTools } : {}),
+    ...(canUseTool !== undefined ? { canUseTool } : {}),
+  };
   switch (name) {
     case 'openai-compatible':
     case 'openai-codex':
       // IMPORTANT: fresh instance per session — see docstring above.
-      return new OpenAICompatibleProvider();
+      return new OpenAICompatibleProvider(ctorOpts);
     case 'anthropic':
     case 'anthropic-direct':
     default:
       // IMPORTANT: fresh instance per session — see docstring above.
-      return new AnthropicDirectProvider();
+      return new AnthropicDirectProvider(ctorOpts);
   }
 }
 

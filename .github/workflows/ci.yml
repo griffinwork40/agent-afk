@@ -55,6 +55,18 @@ jobs:
       - name: Audit SDK dependency surface (no unlocked @anthropic-ai/sdk imports)
         run: pnpm audit:sdk:check
 
+      - name: Audit dependency CVEs (critical severity in prod deps)
+        # Gates on critical-severity CVEs in production dependencies only.
+        # --audit-level=critical: only fail on critical advisories (not high/moderate).
+        # --prod: exclude devDependencies (vitest, coverage-v8, esbuild, etc.) which
+        #   carry several high/moderate unfixable transitive advisories that are dev-
+        #   only build/test tools, not shipped runtime code.
+        # Current state (as of 2026-06-29): no critical CVEs in prod deps → exits 0.
+        # Non-critical prod advisories (4 high via jsdom>undici and
+        #   @modelcontextprotocol/sdk>hono) are acknowledged; upstream fixes are
+        #   tracked in pnpm-lock.yaml — tighten to --audit-level=high once resolved.
+        run: pnpm audit:deps
+
       - name: Build
         run: pnpm build
 
@@ -91,6 +103,42 @@ jobs:
           name: coverage-report
           path: coverage/
           retention-days: 14
+
+  # Real-PTY scrollback harness (issue #541). Isolated from the main `test` job
+  # because it depends on the native `node-pty` module (compiled from source on
+  # Linux via pnpm.onlyBuiltDependencies — the same path better-sqlite3 already
+  # uses) and drives a real pseudo-terminal, which is slower and timing-
+  # sensitive. It is a real gate (not continue-on-error) but runs serially with
+  # in-suite retries (vitest.pty.config.ts). If PTY flakiness ever destabilises
+  # CI, mark this job `continue-on-error: true` to quarantine it without losing
+  # the signal. See tests/pty/ and docs/scrollback.md.
+  test-pty:
+    name: Test (real PTY scrollback)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        # Builds node-pty from source (no Linux prebuild ships) via
+        # pnpm.onlyBuiltDependencies; ubuntu-latest has the C++/python toolchain.
+        run: pnpm install --frozen-lockfile
+
+      - name: Test (real PTY scrollback harness)
+        run: pnpm test:pty
 
   # The docs site under website/ is a standalone npm app (Fumadocs/Next.js)
   # with its own tsconfig and dependency tree — not part of the root pnpm
@@ -157,7 +205,7 @@ jobs:
       - name: Assert bundle entry points exist and are executable
         run: |
           set -e
-          for entry in cli.mjs telegram.mjs index.mjs postinstall.mjs; do
+          for entry in cli.mjs telegram.mjs index.mjs index.d.ts postinstall.mjs; do
             if [ ! -f "dist/$entry" ]; then
               echo "::error::dist/$entry missing after build:dist" >&2
               exit 1

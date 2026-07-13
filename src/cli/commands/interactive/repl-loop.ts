@@ -125,6 +125,10 @@ export async function runReplLoop(
     // race a half-torn-down passthrough into killing nothing.
     turnState.tryAbortShellForeground = null;
     footer?.shellPassthrough.drainOnExit();
+    // Unsubscribe the bg-result notifier BEFORE the registry's cancelAll
+    // fires (interactive.ts teardown) so cascade-cancelled jobs don't queue
+    // notices into a buffer that will never drain.
+    footer?.bgResultNotifier.dispose();
     // Stop the footer painters top → bottom so each clears the exact row it
     // painted before the counts below it change. LoopStageBar positions from
     // the full extraRows, so it must clear before bgStatusBar/verdictLedger

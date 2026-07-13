@@ -6,6 +6,33 @@ import { describe, it, expect, vi } from 'vitest';
 import { createCanUseToolHook } from './permissions.js';
 
 describe('createCanUseToolHook', () => {
+  const OPTS = { signal: new AbortController().signal, toolUseID: 't' };
+
+  // Contract guard: rule keys are matched VERBATIM against the AFK runtime tool
+  // name (snake_case), which is what the dispatcher passes to canUseTool. This
+  // is the namespace consumers must use; the JSDoc example teaches it.
+  it('matches rules by AFK runtime (snake_case) tool name', async () => {
+    const hook = createCanUseToolHook({
+      rules: { defaultMode: 'allow', tools: { bash: 'deny', edit_file: 'deny' } },
+    });
+    expect((await hook('bash', {}, OPTS)).behavior).toBe('deny');
+    expect((await hook('edit_file', {}, OPTS)).behavior).toBe('deny');
+    expect((await hook('read_file', {}, OPTS)).behavior).toBe('allow');
+  });
+
+  // Fail-open trap: a PascalCase (Claude Code alias) key does NOT match the
+  // snake_case runtime name, so it falls through to defaultMode. With
+  // defaultMode:'allow' the tool the author meant to DENY is silently allowed.
+  // This test documents the trap so the docs-vs-runtime contract can't regress
+  // to teaching PascalCase keys.
+  it('fails open when a PascalCase key is used with defaultMode:allow (documented trap)', async () => {
+    const hook = createCanUseToolHook({
+      rules: { defaultMode: 'allow', tools: { Bash: 'deny' } }, // WRONG namespace
+    });
+    // Author intended to block bash, but the runtime name 'bash' misses 'Bash':
+    expect((await hook('bash', {}, OPTS)).behavior).toBe('allow');
+  });
+
   it('allows tools matching allow rules', async () => {
     const hook = createCanUseToolHook({
       rules: {

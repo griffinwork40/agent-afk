@@ -140,6 +140,33 @@ describe('/worktree slash command', () => {
     expect(rowsForThis.every((l) => !l.includes('→'))).toBe(true);
   });
 
+  it('list renders stale-clean as a warning', async () => {
+    const wtPath = join(tmpRoot, 'wt-stale-clean');
+    await fs.mkdir(wtPath, { recursive: true });
+
+    mockRunSweep.mockResolvedValue({
+      candidates: [{ path: wtPath, verdict: 'stale-clean', owner: 'interactive', ageMs: 99_000_000 }],
+      removed: [],
+      warnings: [],
+      dryRun: true,
+    });
+
+    const { ctx, lines } = makeCtx();
+    await worktreeCmd.handler(ctx, 'list');
+
+    const tail = wtPath.slice(-44);
+    const row = lines.find((l) => l.includes(tail.slice(-20)));
+    expect(row).toContain('stale-clean');
+    // The prune-marker column is the final whitespace-delimited token. Assert it
+    // is exactly the "warn" marker (stale-clean is preserved-with-warning), which
+    // rules out both "no" (non-candidate) and "yes" (prunable). Asserting the whole
+    // row does not contain the substring "no" was flaky: the random mkdtemp path
+    // can itself contain "no" (e.g. ".../wt-slash-test-JnoMkV/..."), tripping the
+    // guard intermittently in CI.
+    const pruneMarker = (row ?? '').replace(/\x1b\[[0-9;]*m/g, '').trim().split(/\s+/).pop();
+    expect(pruneMarker).toBe('warn');
+  });
+
   it('prune without --apply runs as dry-run', async () => {
     mockRunSweep.mockResolvedValue({
       candidates: [

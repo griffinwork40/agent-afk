@@ -8,7 +8,9 @@ This is the single hardest-to-debug mechanism in the TUI because:
 
 - Mock-stdout unit tests can verify bytes were *written* but cannot verify
   they actually *reached scrollback* — that's a property of the real PTY's
-  scroll engine, not of our code.
+  scroll engine, not of our code. (The `tests/pty/` harness closes this gap by
+  driving the compositor through a real pseudo-terminal and asserting on an
+  xterm emulator's scrollback buffer — see "Empirical verification" below.)
 - Multiple prior fixes (6d7cb90, 9690b9f) were validated on byte-level tests
   that passed even though the real-terminal behavior was broken.
 - The mismatch between VT100 sub-region and full-screen DECSTBM scroll
@@ -394,15 +396,31 @@ through `@xterm/headless`, and asserts every committed line survives exactly onc
 in commit order and that committed lines in scrollback have no >1-row blank gap.
 It fails hard on the pre-fix code (early markers found 0 times) and passes after.
 
-**Known residuals (NOT fixed here).** (a) Phase 1 still emits one `\n` per commit
-(unchanged), so a band that has not yet filled the viewport leaves at most a
-single blank row between some scrollback entries — cosmetic line-spacing, not a
-massive gap. (b) When content scrolled into scrollback during a tall phase and
-the frame later collapses, the bottom-anchored band can sit below the
-scrolled-off content with blank viewport rows between them. That live-viewport
-"boundary gap" is the bottom-anchored-frame design tension (the frame does not
-float up to meet sparse content) and is a separate, larger item — but see the
-band-hold fix below, which closes the most common manifestation.
+**Known residuals.** (a) Phase 1 still emits one `\n` per commit (unchanged), so a
+band that has not yet filled the viewport leaves at most a single blank row between
+some scrollback entries — cosmetic line-spacing, not a massive gap. (Subsumed by the
+single end-of-turn flush proposed in #540.) (b) **[FIXED — PR #539]** When content
+scrolled into scrollback during a tall phase and the frame later collapsed, the
+bottom-anchored band could sit below the scrolled-off content with blank viewport
+rows between them — the live-viewport "boundary gap." Root cause: the eager
+fits-path archived committed rows to (append-only) scrollback based on the room
+above the *current tall* frame, not the *collapsed* frame; on collapse the surviving
+band re-pinned down to the bottom-pinned frame and stranded the prematurely-archived
+rows. Fixed in `commit-mode.ts`: any run exceeding the current tall-frame room now
+routes through band-hold (retained, capped at `maxBandModel` = the rows that fit
+above the collapsed frame) instead of eager-scrolling, so content that will fit
+post-collapse is retained and painted contiguously; only genuine overflow beyond
+`maxBandModel` is archived, from the top, contiguously. Regression:
+`terminal-compositor.collapse-void.test.ts`; real-PTY A/B: `scripts/visual-void-repro.ts`.
+The fuller commit-model unification that dissolves the whole gap-class is tracked
+in #540. Its Stage-2 CORE (render-not-repin) has landed: `repositionCommittedBand`
+now erases the above-frame content region from the anchor **floor**, not the
+tracked band top, so a row stranded above a drifted `committedBandTopRow` is
+cleared by construction (regression: `terminal-compositor.render-not-repin.test.ts`).
+Still open under #540: retiring the `committedBand*` adjacency coupling at the ~20
+remaining read sites, and the single end-of-turn flush that subsumes residual (a)
+above — both gated on real-terminal validation. A real-PTY CI harness to make this
+CI-verifiable is #541.
 
 ### Fixed: multi-line block committed under a tall overlay (the overflow path)
 
@@ -525,6 +543,72 @@ commit satisfies `overflowPriorContiguous` and merges contiguously, and both
 blocks survive in commit order. Verified by the third case in
 `terminal-compositor.h1-prevtoprow.test.ts`.
 
+### Fixed: block taller than the COLLAPSED screen blanked the viewport on end-of-turn collapse
+
+Repro / regression guard: `terminal-compositor.endturn-overflow-gap.repro.test.ts`.
+Operator symptom (pre-fix): after a long turn, the final assistant message
+"disappears" — the viewport is blank above the prompt and the content is only
+reachable by scrolling up into native scrollback.
+
+Mechanism (empirically verified by per-step `@xterm/headless` instrumentation —
+NOT a stale-tall Phase-2 erase; `commitAbove` calls `logUpdate.clear()` first, so
+that erase is a no-op):
+
+1. The block is committed while a tall overlay fills the viewport, so
+   `prevTopRow <= 1` (BLOCKER-1, review #592) and `fitsAboveFrame` is false.
+2. The block is taller than even the COLLAPSED screen, so `decideCommitMode`
+   returns `useBandHold = false` (the `overflowRun.length > maxBandModel &&
+   textLines.length > maxBandModel` case — the one this doc's "the overflow path
+   is unchanged" notes #645 deliberately left alone). Phase 1 archives the whole
+   block to native scrollback.
+3. Phase 3 is guarded by `if (newTopRow > 1)` (`committed-band-commit.ts`).
+   With the overlay still filling the screen `newTopRow === 1`, so Phase 3 is
+   SKIPPED and `committedBand` is left EMPTY.
+4. At end-of-turn the overlay collapses (`setOverlay('')` → `bootstrap.ts`;
+   `loopStageBar.repaint('observing')` → `loop-iteration.ts`). `render()` erases
+   the overlay rows, but `committedBand` is empty so `repositionCommittedBand`
+   has nothing to re-pin — the freed viewport rows stay blank. The content sits
+   in scrollback ABOVE the viewport, unreachable without scrolling.
+
+So the defect is **"viewport not refilled with recent committed content after
+collapse"**, not an erase wiping a painted band. "No existing test hits
+prevTopRow <= 1" (`committed-band-commit.ts`); the repro above is that test.
+
+The fix (two parts):
+
+1. **Route the over-tall case through band-hold** (`commit-mode.ts`):
+   `useBandHold = overflowHasPending || (!fitsAboveFrame && maxBandModel > 0)`.
+   The block is no longer dropped down the legacy overflow archive — Phase 1
+   archives the genuine overflow (oldest rows beyond `maxBandModel`) to scrollback
+   as REAL content, and the pending capped model is stored so a collapse re-pin
+   can materialize it.
+
+2. **Evict the pending overflow at collapse** (`preserveRowsBeforeFrameRender`,
+   `terminal-compositor.frame-preserve.ts`). Part 1 alone would regress the
+   multi-commit case: band-hold's COMMIT-TIME `maxBandModel` can exceed the true
+   collapse paint capacity (`repositionCommittedBand`'s `maxFit`) once the real
+   collapsed-frame height (input + rhythm separator + loop-stage bar + status) is
+   counted, so `repositionCommittedBand` paints only `fit` rows and the oldest
+   `bandLen - fit` PENDING rows would be neither painted nor archived — silent
+   content loss. The fix evicts that excess to scrollback BEFORE the collapse
+   render, gated on the **genuine end-of-turn signal — the overlay being empty**
+   (`self.overlay.trim() === ''`), NOT a room-magnitude threshold or a
+   shrink-direction heuristic. `room` (= `desiredTopRow - 1`) is then the TRUE
+   above-frame capacity for whatever the collapsed-frame height is, so the
+   eviction count (`bandLen - room`) is exactly the overflow that cannot be shown
+   — correct for ANY footer/input geometry. A mid-turn minor shrink (e.g. the
+   spinner stopping while a tall overlay is still held) leaves the overlay
+   non-empty, so the pending band is preserved intact for the real collapse and
+   rows that should stay visible are never prematurely archived.
+
+Guards: `terminal-compositor.endturn-overflow-gap.repro.test.ts` (the gap is
+closed), `terminal-compositor.band-hold-perline-gap.repro.test.ts` ("a block
+taller than the collapsed screen still lands every row contiguously" — the
+content-loss guard), and `terminal-compositor.overflow-gap.test.ts` ("archives
+the genuine overflow ... R10 visible" — no premature eviction). Verified against
+a real `@xterm/headless` buffer across varied collapsed-frame heights (extraRows,
+spinner-at-settle, multi-step collapse) — no content loss, no premature archival.
+
 ## What is and isn't in scrollback after a commit
 
 After a single `commitAbove(text)`:
@@ -559,10 +643,18 @@ and `SCROLLBACK_TEST_B` with cursor at `rows` (post-fix behavior). Scroll
 up after the script exits. Only `SCROLLBACK_TEST_B` should appear in
 scrollback.
 
-For future regression-detection in CI: a `node-pty` + `xterm.js`-headless
-integration test could pipe agent-afk output through a real terminal
-emulator and assert that committed lines appear in the emulator's
-scrollback buffer. None exists today.
+For regression-detection in CI: a `node-pty` + `@xterm/headless` integration
+harness drives the real `TerminalCompositor` through a real pseudo-terminal,
+pipes its output into an xterm emulator, and asserts that committed lines
+appear in the emulator's **scrollback** buffer (not just that bytes were
+written). It lives in `tests/pty/` — `scenarios.ts` defines the gap-class
+geometries (multi-commit, collapse-void #539, overflow-gap, shrink-gap,
+first-turn banner echo #509), `harness.ts` spawns the pty and reconstructs the
+emulator buffer, and `compositor-scrollback.pty.test.ts` asserts on the
+scrollback/viewport. Run it with `pnpm test:pty`; CI runs it as the dedicated
+`test-pty` job (kept out of the default `pnpm test` run because it needs the
+native node-pty build). This is the real-terminal net that the two prior
+byte-level failures (6d7cb90, 9690b9f) lacked (issue #541).
 
 ## Don't change without reading this
 

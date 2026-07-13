@@ -215,12 +215,22 @@ class HookRegistryImpl implements HookRegistry {
         );
       }
 
-      // Accumulate non-blocking decisions so the caller can inspect them.
-      // Current contract: decisions are not merged. If multiple SubagentStop
-      // handlers return injectContext, the last handler's value wins and earlier
-      // values are dropped. This documents the existing behavior until a typed
-      // result envelope or explicit merge policy replaces it.
-      lastDecision = decision;
+      // Invariant: merge policy for non-blocking decisions.
+      // - injectContext: concatenated across all non-blocking handlers in
+      //   registration order, joined by '\n'. Empty/absent values are skipped
+      //   so there are no leading, trailing, or duplicate separators.
+      // - All other decision fields: last-handler-wins (same as before), so
+      //   callers reading `reason`, `decision`, `continue` see the final value.
+      // - Blocking short-circuit (isBlocking check above) fires BEFORE this
+      //   accumulation, so a blocking handler never contributes to the merge.
+      const mergedInjectContext = [lastDecision.injectContext, decision.injectContext]
+        .filter((s): s is string => typeof s === 'string' && s.length > 0)
+        .join('\n');
+      lastDecision = {
+        ...lastDecision,
+        ...decision,
+        ...(mergedInjectContext.length > 0 ? { injectContext: mergedInjectContext } : {}),
+      };
     }
 
     return lastDecision;

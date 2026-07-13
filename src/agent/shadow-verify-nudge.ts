@@ -28,6 +28,15 @@ const VERIFIED_ORCHESTRATORS = [
   // parent to re-verify its output would either fire on a report it can't act
   // on destructively, or double-verify what review already verified. Suppress.
   'review',
+  // The shadow-verify skill dispatches its verifier wave via raw `agent`
+  // calls, so nothing forces the id_prefix to carry the skill name — prefixes
+  // like `verify-claim1` or `sv-verifier` sail past the tokens above and the
+  // nudge fires on its own verification wave (#355). An agent whose prefix
+  // carries a `verify`/`verifier` token is a verification dispatch by
+  // construction, so suppression cannot mute a legitimate nudge. (Hyphen-
+  // bounded matching below keeps look-alikes like `verification-x` unmatched.)
+  'verify',
+  'verifier',
 ];
 
 const DECISION_MARKERS: RegExp[] = [
@@ -56,6 +65,15 @@ const VERIFIER_SIGNATURES: RegExp[] = [
   /\bre-derived\b[^.\n]{0,80}\bindependent/i,
   /\bindependently\s+(re-derived|re-verified|verified|checked)\b/i,
   /\bverifier\s+(agrees|disagrees|confirms|refutes)\b/i,
+  // Verdict-table style output (#355): a typical shadow-verify verifier reply
+  // is a markdown table of per-claim CONFIRMED/REFUTED/UNVERIFIABLE rows that
+  // hit none of the signatures above while hitting many DECISION_MARKERS —
+  // the more structured the verifier's report, the more certainly it
+  // (wrongly) triggered the nudge. Two case-sensitive verdict tokens = a
+  // verification report, not ordinary findings prose.
+  /\b(CONFIRMED|REFUTED|UNVERIFIABLE)\b[\s\S]*?\b(CONFIRMED|REFUTED|UNVERIFIABLE)\b/,
+  // Markdown table header with a claim/verdict column.
+  /\|\s*(claims?|verdicts?)\s*\|/i,
 ];
 
 const CONTEXT_MESSAGE =
@@ -99,12 +117,49 @@ function decisionHits(output: string): number {
   return hits;
 }
 
+/**
+ * Create a session-scoped nudge handler with dedup state (#355).
+ *
+ * Register the SAME returned handler for both `SubagentStop` and `Stop`:
+ * - `SubagentStop` runs the heuristics and injects at most ONCE per parent
+ *   turn — a parallel wave of decision-heavy children produces one nudge,
+ *   not N identical ones.
+ * - `Stop` (dispatched at turn end) resets the once-per-turn latch. On
+ *   surfaces that never dispatch `Stop`, the latch degrades to once-per-
+ *   session — conservative by design ("false alarms train users to ignore
+ *   the nudge"; false silence is cheap).
+ *
+ * A per-child `nudged` set additionally guarantees the same subagentId can
+ * never generate the nudge twice, even across turn boundaries (duplicate
+ * SubagentStop delivery for one child re-fired the nudge on turns where no
+ * new sub-agent had completed).
+ */
+export function createShadowVerifyNudge(): (context: HookContext) => HookDecision {
+  let injectedThisTurn = false;
+  const nudged = new Set<string>();
+  return (context: HookContext): HookDecision => {
+    if (context.event === 'Stop') {
+      injectedThisTurn = false;
+      return {};
+    }
+    if (context.event !== 'SubagentStop') return {};
+    const output = context.lastMessage ?? '';
+    if (output.length < MIN_OUTPUT_CHARS) return {};
+    if (fromVerifiedOrchestrator(context.agentType)) return {};
+    if (looksLikeVerifierResponse(output)) return {};
+    if (decisionHits(output) < MIN_MARKER_HITS) return {};
+    if (injectedThisTurn || nudged.has(context.subagentId)) return {};
+    injectedThisTurn = true;
+    nudged.add(context.subagentId);
+    return { injectContext: CONTEXT_MESSAGE };
+  };
+}
+
+/**
+ * Stateless single-shot evaluation (no dedup) — retained for callers/tests
+ * that check the heuristics in isolation. Production registration should use
+ * {@link createShadowVerifyNudge} so the dedup latch is session-scoped.
+ */
 export function shadowVerifyNudge(context: HookContext): HookDecision {
-  if (context.event !== 'SubagentStop') return {};
-  const output = context.lastMessage ?? '';
-  if (output.length < MIN_OUTPUT_CHARS) return {};
-  if (fromVerifiedOrchestrator(context.agentType)) return {};
-  if (looksLikeVerifierResponse(output)) return {};
-  if (decisionHits(output) < MIN_MARKER_HITS) return {};
-  return { injectContext: CONTEXT_MESSAGE };
+  return createShadowVerifyNudge()(context);
 }

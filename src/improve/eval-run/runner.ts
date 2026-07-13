@@ -13,10 +13,24 @@
  *
  * ## What this runner does NOT do
  *
- * No LLM. No patch/apply. No git. No fixture *replay* through the detector —
- * the eval-case's own `pattern-absent` assertion remains the full contract;
- * this runner validates the guardrail the pattern maps to instead. The
- * boundary is documented on {@link EvalRunSchema}.
+ * No LLM. No patch/apply. No git.
+ *
+ * ## Two validation layers
+ *
+ *   1. Guardrail-presence contract (see {@link ./contracts}) — proves the
+ *      guardrail a pattern maps to EXISTS and behaves against a synthetic
+ *      stimulus. Every supported pattern has one.
+ *   2. Fixture-replay (see {@link ./replay}) — for patterns with a registered
+ *      handler (currently `repeated-tool-use` and `closure-anomaly`), re-drives
+ *      THIS card's recorded failure through the live guardrail and asserts it is
+ *      neutralised at the recorded magnitude. This is the "is the behaviour
+ *      fixed?" signal, not merely "does a guardrail exist?". It runs only after
+ *      the fixture's sha256 re-verifies — a corrupt/missing fixture forces
+ *      `fail` first.
+ *
+ * The replay does NOT re-execute the original tool/LLM; it re-drives the
+ * recorded failure conditions (the loop shape, or the closure reason). The
+ * boundary is documented on {@link ./replay} and {@link EvalRunSchema}.
  *
  * ## Eval-run ID format
  *
@@ -56,6 +70,11 @@ import { getAfkHome } from '../../paths.js';
 import { sha256Bytes } from '../eval-gen/replay-fixture.js';
 import type { IdContext } from '../eval-gen/writer.js';
 import { makeCheck, resolveContract, snapshot, supportedContractPatterns } from './contracts.js';
+import {
+  isReplayNeutralizeCheck,
+  resolveReplayHandler,
+  type LoopDriver,
+} from './replay.js';
 
 /** Runner identity stamped into every result. */
 export const EVAL_RUN_RUNNER_VERSION = 'eval-run@v1';
@@ -103,6 +122,13 @@ export interface RunEvalCaseContext {
    * Tests inject for isolation.
    */
   resolveFixtureAbsPath?: (relativeFixturePath: string) => string;
+  /**
+   * Override the fixture-replay loop driver. Defaults to the live
+   * {@link SessionToolDispatcher}-backed driver inside the replay handler.
+   * Tests inject a no-breaker driver to simulate the pre-fix world and assert
+   * the gate flips to `fail`.
+   */
+  driveLoop?: LoopDriver;
 }
 
 /**
@@ -157,7 +183,49 @@ export async function runEvalCase(evalCase: EvalCase, ctx: RunEvalCaseContext): 
     }
   }
 
-  const status = decideStatus({ hasContract: contract !== undefined, contractThrew, checks });
+  // 3. Fixture-replay (pattern-specific): re-drive the recorded failure through
+  //    the live guardrail. Runs only when the fixture read cleanly AND its
+  //    sha256 matched (fixture.check passed) — a corrupt/missing fixture has
+  //    already produced a failing integrity check, so we never replay bytes we
+  //    cannot trust.
+  const replayHandler = resolveReplayHandler(evalCase.assertion.patternId);
+  let replayRan = false;
+  if (replayHandler && fixture.bytes !== undefined && fixture.check.status === 'pass') {
+    try {
+      const probe = await replayHandler.run(evalCase, fixture.bytes, {
+        ...(ctx.driveLoop ? { driveLoop: ctx.driveLoop } : {}),
+      });
+      checks.push(...probe.checks);
+      evidence.push(...probe.evidence);
+      replayRan = true;
+    } catch (err) {
+      // A replay throw is an execution error, same precedence as a contract throw.
+      contractThrew = true;
+      const message = err instanceof Error ? err.message : String(err);
+      notes.push({
+        at: nowIso,
+        text: `Fixture-replay for '${evalCase.assertion.patternId}' threw during execution: ${snapshot(message)}`,
+      });
+    }
+  }
+
+  // A replay was expected (handler exists) and the fixture was intact, but it
+  // produced no neutralise check — i.e. the recorded loop did not reproduce, so
+  // the card-specific behaviour was never actually verified. That must not
+  // surface as `pass`: see decideStatus.
+  const replayDrove = checks.some((c) => isReplayNeutralizeCheck(c.name));
+  const replayInconclusive =
+    replayHandler !== undefined && fixture.check.status === 'pass' && replayRan && !replayDrove;
+
+  // `hasContract` gates the `unsupported` verdict; a replay that ran is itself
+  // a validation, so it must suppress `unsupported` even for a pattern with no
+  // guardrail-presence contract.
+  const status = decideStatus({
+    hasContract: contract !== undefined || replayRan,
+    contractThrew,
+    checks,
+    replayInconclusive,
+  });
   const durationMs = Math.max(0, Math.round(clock() - t0));
 
   const evalRun: EvalRun = {
@@ -183,27 +251,43 @@ export async function runEvalCase(evalCase: EvalCase, ctx: RunEvalCaseContext): 
 
 /**
  * Aggregate a top-line {@link EvalRunStatus} from the run signals. Pure and
- * exported for direct precedence testing: once every registered
- * {@link FailurePattern} has a contract, `unsupported` is unreachable through
- * {@link runEvalCase} (the eval-case/eval-run schemas reject unregistered
- * patterns), so the `hasContract: false` branch is exercised here instead.
+ * exported for direct precedence testing.
  *
  * Precedence (highest wins): `error` > `fail` > `unsupported` > `pass`.
+ *
+ * `unsupported` is reached two ways: when no validation ran (`!hasContract`),
+ * or when a fixture-replay was EXPECTED but could not conclusively run
+ * (`replayInconclusive`). The latter is load-bearing: a skipped replay must
+ * never surface as `pass`, or a guardrail-presence-only result would be
+ * mistaken for card-specific behavioural proof.
  */
 export function decideStatus(args: {
   hasContract: boolean;
   contractThrew: boolean;
   checks: EvalCheck[];
+  /**
+   * True when a replay handler exists for the pattern and the fixture was
+   * intact, yet the recorded loop did not reproduce — so no drive happened and
+   * the card-specific behaviour was NOT proven. Forces a non-`pass` verdict.
+   */
+  replayInconclusive?: boolean;
 }): EvalRunStatus {
   if (args.contractThrew) return 'error';
   if (args.checks.some((c) => c.status === 'fail')) return 'fail';
-  if (!args.hasContract) return 'unsupported';
+  if (!args.hasContract || args.replayInconclusive === true) return 'unsupported';
   return 'pass';
 }
 
 interface FixtureCheckResult {
   check: EvalCheck;
   evidence?: EvalRunEvidenceRef;
+  /**
+   * The fixture bytes, present only when the file was read successfully
+   * (regardless of whether the sha256 matched). Undefined when the file is
+   * missing or unreadable. The replay stage consumes these to avoid a second
+   * read, and only when `check.status === 'pass'`.
+   */
+  bytes?: Buffer;
 }
 
 /**
@@ -232,9 +316,9 @@ function checkFixtureIntegrity(evalCase: EvalCase, ctx: RunEvalCaseContext): Fix
     };
   }
 
-  let actualSha: string;
+  let bytes: Buffer;
   try {
-    actualSha = sha256Bytes(readFileSync(abs));
+    bytes = readFileSync(abs);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
@@ -248,6 +332,7 @@ function checkFixtureIntegrity(evalCase: EvalCase, ctx: RunEvalCaseContext): Fix
     };
   }
 
+  const actualSha = sha256Bytes(bytes);
   const ok = actualSha === expectedSha;
   return {
     check: makeCheck({
@@ -262,6 +347,7 @@ function checkFixtureIntegrity(evalCase: EvalCase, ctx: RunEvalCaseContext): Fix
       ref: evalCase.replay.fixturePath,
       detail: `sha256 ${ok ? 'match' : 'MISMATCH'} (${evalCase.replay.sliceLineCount} lines)`,
     },
+    bytes,
   };
 }
 
@@ -336,11 +422,24 @@ export function renderEvalRunMarkdown(run: EvalRun): string {
   );
   out.push('');
 
-  out.push('> **What this is.** A narrow, deterministic check that the guardrail');
-  out.push(`> mapped to pattern \`${run.patternId}\` is present and behaving. It does`);
-  out.push('> NOT replay the fixture through the detector — that broader capability');
-  out.push("> is reserved for a later sprint. The eval-case's own `pattern-absent`");
-  out.push('> assertion remains the full contract.');
+  // A neutralise check (repeat-loop or closure-guided) is present only when a
+  // fixture-replay actually drove the recorded failure (not when it was skipped
+  // for a non-reproducing fixture), so it is the honest signal that this run
+  // proved a fix vs. only a guardrail.
+  const didReplay = run.checks.some((c) => isReplayNeutralizeCheck(c.name));
+  if (didReplay) {
+    out.push('> **What this is.** A deterministic validation of pattern');
+    out.push(`> \`${run.patternId}\`. It re-drove the failure recorded in the committed`);
+    out.push('> fixture through the LIVE guardrail and asserts the recorded failure is');
+    out.push('> neutralised at the recorded magnitude — proving the behaviour is fixed,');
+    out.push('> not merely that a guardrail exists. It re-drives the recorded failure');
+    out.push('> conditions; it does NOT re-execute the original tool/LLM.');
+  } else {
+    out.push('> **What this is.** A narrow, deterministic check that the guardrail');
+    out.push(`> mapped to pattern \`${run.patternId}\` is present and behaving. It`);
+    out.push("> validates the guardrail the pattern maps to; the eval-case's own");
+    out.push('> `pattern-absent` assertion remains the full contract.');
+  }
   out.push('');
 
   out.push(`## Result: ${STATUS_GLYPH[run.status]}  (${passed}/${run.checks.length} checks passed${failed ? `, ${failed} failed` : ''}${skipped ? `, ${skipped} skipped` : ''})`);

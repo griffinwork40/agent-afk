@@ -29,7 +29,7 @@ function mkSelf(overrides: Partial<RuntimeSelf> = {}): RuntimeSelf {
     maxDepth: null,
     phaseRole: null,
     cwd: '/Users/me/project',
-    model: { provider: 'anthropic-direct', name: 'claude-sonnet-4-5-20250929' },
+    model: { provider: 'anthropic-direct', name: 'claude-sonnet-5' },
     permissionMode: 'default',
     ...overrides,
   };
@@ -220,18 +220,26 @@ describe('buildRuntimeSnapshot', () => {
 // --- formatEnvironmentFragment ----------------------------------------------
 
 describe('formatEnvironmentFragment', () => {
-  it('emits only working-directory line when no identity fields supplied', () => {
-    const out = formatEnvironmentFragment({ cwd: '/tmp/project' });
-    expect(out).toBe('# Environment\n- Working directory: /tmp/project');
+  // Fixed clock + timezone so exact-match assertions stay deterministic across
+  // CI machines (the host timezone otherwise varies). 2026-06-18T12:00:00Z is a
+  // Thursday in UTC.
+  const FIXED_NOW = new Date('2026-06-18T12:00:00Z');
+  const FIXED_DATE_LINE = '- Date: Thursday, 2026-06-18 (UTC)';
+
+  it('emits working-directory and date lines when no identity fields supplied', () => {
+    const out = formatEnvironmentFragment({ cwd: '/tmp/project', now: FIXED_NOW, timeZone: 'UTC' });
+    expect(out).toBe(`# Environment\n- Working directory: /tmp/project\n${FIXED_DATE_LINE}`);
   });
 
   it('appends session line with truncated id when sessionId supplied', () => {
     const out = formatEnvironmentFragment({
       cwd: '/tmp',
       sessionId: 'af31a2b0-1234-4567-89ab-cdef01234567',
+      now: FIXED_NOW,
+      timeZone: 'UTC',
     });
     expect(out).toBe(
-      '# Environment\n- Working directory: /tmp\n- Session: af31a2b0',
+      `# Environment\n- Working directory: /tmp\n${FIXED_DATE_LINE}\n- Session: af31a2b0`,
     );
   });
 
@@ -269,9 +277,11 @@ describe('formatEnvironmentFragment', () => {
       cwd: '/tmp',
       sessionId: 'af31a2b0-x',
       surface: 'unknown',
+      now: FIXED_NOW,
+      timeZone: 'UTC',
     });
     expect(out).toBe(
-      '# Environment\n- Working directory: /tmp\n- Session: af31a2b0',
+      `# Environment\n- Working directory: /tmp\n${FIXED_DATE_LINE}\n- Session: af31a2b0`,
     );
     expect(out).not.toContain('unknown');
   });
@@ -283,8 +293,10 @@ describe('formatEnvironmentFragment', () => {
       surface: null,
       depth: null,
       maxDepth: null,
+      now: FIXED_NOW,
+      timeZone: 'UTC',
     });
-    expect(out).toBe('# Environment\n- Working directory: /tmp');
+    expect(out).toBe(`# Environment\n- Working directory: /tmp\n${FIXED_DATE_LINE}`);
   });
 
   it('omits session id when sessionId is empty string', () => {
@@ -301,8 +313,38 @@ describe('formatEnvironmentFragment', () => {
     const out = formatEnvironmentFragment({
       cwd: '/tmp',
       surface: 'daemon',
+      now: FIXED_NOW,
+      timeZone: 'UTC',
     });
-    expect(out).toBe('# Environment\n- Working directory: /tmp\n- Session: (daemon)');
+    expect(out).toBe(`# Environment\n- Working directory: /tmp\n${FIXED_DATE_LINE}\n- Session: (daemon)`);
+  });
+
+  it('includes a Date line with weekday, ISO date, and timezone (injected now/tz)', () => {
+    const out = formatEnvironmentFragment({ cwd: '/tmp', now: FIXED_NOW, timeZone: 'UTC' });
+    expect(out).toContain('- Date: Thursday, 2026-06-18 (UTC)');
+  });
+
+  it('renders the date in the supplied timezone (shifts local date across UTC midnight)', () => {
+    const out = formatEnvironmentFragment({
+      cwd: '/tmp',
+      // 03:00Z on the 18th is 20:00 PDT on the 17th — the local date is the 17th.
+      now: new Date('2026-06-18T03:00:00Z'),
+      timeZone: 'America/Los_Angeles',
+    });
+    expect(out).toContain('- Date: Wednesday, 2026-06-17 (America/Los_Angeles)');
+  });
+
+  it('falls back to a UTC ISO date without throwing on an invalid timezone', () => {
+    let out = '';
+    expect(() => {
+      out = formatEnvironmentFragment({ cwd: '/tmp', now: FIXED_NOW, timeZone: 'Not/AZone' });
+    }).not.toThrow();
+    expect(out).toContain('- Date: 2026-06-18');
+  });
+
+  it('emits a well-formed Date line using the host clock when now/timeZone omitted', () => {
+    const out = formatEnvironmentFragment({ cwd: '/tmp' });
+    expect(out).toMatch(/\n- Date: \w+, \d{4}-\d{2}-\d{2} \(.+\)/);
   });
 
   // External constraint: the fragment is appended verbatim to the system

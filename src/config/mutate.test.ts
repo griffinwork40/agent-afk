@@ -20,6 +20,7 @@ import {
   ConfigValidationError,
   MalformedConfigError,
 } from './mutate.js';
+import { parseModelsConfig, computeSlotBindings } from '../agent/session/model-slots.js';
 
 describe('config mutation engine', () => {
   let dir: string;
@@ -201,6 +202,60 @@ describe('config mutation engine', () => {
       setConfigValue('model', 'opus', { filePath: jsonFile });
       expect(JSON.parse(readFileSync(`${jsonFile}.bak`, 'utf-8'))).toEqual({ model: 'sonnet' });
       expect(JSON.parse(readFileSync(jsonFile, 'utf-8'))).toEqual({ model: 'opus' });
+    });
+  });
+
+  describe('config: setConfigValue — models.* model-slot object form', () => {
+    it('writes a slot-binding object (id + provider) and round-trips it via getConfigValue', () => {
+      const binding = { id: 'glm-5.2', provider: 'openai' };
+      const r = setConfigValue('models.large', binding, { filePath: jsonFile });
+      expect(r.value).toEqual(binding);
+      expect(JSON.parse(readFileSync(jsonFile, 'utf-8'))).toEqual({ models: { large: binding } });
+      expect(getConfigValue('models.large', { filePath: jsonFile }).value).toEqual(binding);
+    });
+
+    it('writes a slot-binding object with a custom name and round-trips it via getConfigValue', () => {
+      const binding = { id: 'glm-5.2', provider: 'openai', name: 'fast' };
+      const r = setConfigValue('models.large', binding, { filePath: jsonFile });
+      expect(r.value).toEqual(binding);
+      expect(getConfigValue('models.large', { filePath: jsonFile }).value).toEqual(binding);
+    });
+
+    it('round-trips a written binding object through the runtime loader (computeSlotBindings)', () => {
+      const binding = { id: 'glm-5.2', provider: 'openai', name: 'fast' };
+      setConfigValue('models.large', binding, { filePath: jsonFile });
+      // Re-read the file and load through the runtime loader — not getConfigValue
+      const fileJson = JSON.parse(readFileSync(jsonFile, 'utf-8'));
+      const parsed = parseModelsConfig(fileJson.models);
+      const resolved = computeSlotBindings(parsed);
+      expect(resolved.large).toEqual({ id: 'glm-5.2', provider: 'openai', name: 'fast' });
+    });
+
+    it('still accepts a bare string id', () => {
+      const r = setConfigValue('models.large', 'glm-5.2', { filePath: jsonFile });
+      expect(r.value).toBe('glm-5.2');
+      expect(JSON.parse(readFileSync(jsonFile, 'utf-8'))).toEqual({ models: { large: 'glm-5.2' } });
+    });
+
+    it('overwriting a pre-existing string-form slot with an object leaves no stray keys', () => {
+      setConfigValue('models.large', 'old-id', { filePath: jsonFile });
+      const binding = { id: 'glm-5.2', provider: 'openai' };
+      setConfigValue('models.large', binding, { filePath: jsonFile });
+      const obj = JSON.parse(readFileSync(jsonFile, 'utf-8'));
+      expect(obj).toEqual({ models: { large: binding } });
+      expect(Object.keys(obj.models.large).sort()).toEqual(['id', 'provider']);
+    });
+
+    it('rejects an object carrying apiKey', () => {
+      expect(() =>
+        setConfigValue('models.large', { id: 'glm-5.2', apiKey: 'sk-secret' }, { filePath: jsonFile }),
+      ).toThrow(ConfigValidationError);
+    });
+
+    it('rejects an object carrying baseUrl (endpoint-redirect credential vector)', () => {
+      expect(() =>
+        setConfigValue('models.large', { id: 'glm-5.2', baseUrl: 'https://attacker.example/v1' }, { filePath: jsonFile }),
+      ).toThrow(ConfigValidationError);
     });
   });
 

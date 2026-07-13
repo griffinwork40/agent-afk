@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import * as os from 'node:os';
@@ -247,6 +247,33 @@ describe('bashHandler', () => {
       expect(result.isError).toBeFalsy();
       expect(result.content).toContain('success');
     });
+
+    it('[TOCTOU] kills the child promptly when abort lands after the pre-flight check but before listener registration', async () => {
+      // Regression: an abort firing in the window between the top-of-handler
+      // `signal.aborted` pre-flight check (passes → the child IS spawned) and the
+      // `addEventListener('abort', ...)` registration is never delivered to the
+      // late-added listener (a real AbortSignal does not replay an
+      // already-dispatched 'abort'). Without the post-registration re-check the
+      // child runs to completion and leaks a late result. This fake signal
+      // reproduces that exact race: `aborted` is false at the pre-flight read,
+      // then flips true when the handler registers its listener.
+      let aborted = false;
+      const raceSignal = {
+        get aborted() { return aborted; },
+        addEventListener: (_type: string, _cb: () => void) => { aborted = true; },
+        removeEventListener: () => {},
+      } as unknown as AbortSignal;
+
+      const start = Date.now();
+      const result = await bashHandler({ command: 'sleep 5' }, raceSignal);
+      const elapsed = Date.now() - start;
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toBe('Command aborted');
+      // The fix kills the child immediately; without it, the result would only
+      // arrive after `sleep 5` exits on its own (~5s) via the close handler.
+      expect(elapsed).toBeLessThan(3000);
+    }, 15_000);
   });
 
   describe('ANSI stripping', () => {
@@ -289,7 +316,7 @@ describe('bashHandler', () => {
       expect(result.content).toContain('truncated');
     });
 
-    it('includes truncation notice when output exceeds 100KB', async () => {
+    it('includes a head+tail truncation notice when output exceeds the model cap', async () => {
       const largeLine = 'x'.repeat(105_000);
       const result = await bashHandler(
         { command: `printf "${largeLine}"` },
@@ -297,15 +324,15 @@ describe('bashHandler', () => {
       );
 
       expect(result.isError).toBeFalsy();
-      expect(result.content).toContain('[output truncated — exceeded 100KB]');
+      // The command completed well under the 8MB hard cap, so the close path
+      // reduced its output to a head+tail view with a middle elision marker.
+      expect(result.content).toContain('bytes truncated');
     });
 
     // Regression: subagents (and any caller) must be able to detect
-    // overflow without substring-scanning content. Before this flag,
-    // distinguishing "got 100KB of legitimate output" from "got 100KB then
-    // killed" required matching the sentinel string — fragile because the
-    // bash and grep sentinels differ ("exceeded 100KB" vs bare), and
-    // because handlers are free to emit content containing the literal
+    // truncation without substring-scanning content. Matching a sentinel
+    // string is fragile — the wording varies by path (head+tail elision
+    // marker vs hard-cap kill note), and handlers may emit the literal
     // string "truncated" in legitimate output (e.g. a log line about
     // database truncation). The structured flag is unambiguous.
     it('sets ToolResult.truncated=true when output exceeds 100KB', async () => {
@@ -332,78 +359,73 @@ describe('bashHandler', () => {
     });
 
     // Regression: V8 max-string-length crash (RangeError: Invalid string
-    // length). Pre-fix, `stdout += chunk.toString()` accumulated
-    // unboundedly with the 100KB cap applied only post-close. A command
-    // emitting >~512MB before exiting (`yes | head -c 600MB`, an
-    // accidental `cat` of a binary, a runaway log dump) would overflow
-    // V8's max string length synchronously inside the data callback,
-    // crashing the process. The fix adds a mid-stream byte counter that
-    // SIGKILLs the child and settles as soon as the threshold is crossed.
-    //
-    // This test proves the kill happened BEFORE the process finished —
-    // we emit 150KB of 'a', then sleep 3s, then emit 150KB of 'b'. If
-    // the kill works, we never see the 'b' chunk and the call returns
-    // well under the 3s sleep. If only the post-close cap fires, the
-    // call would wait the full sleep duration and the content would
-    // include both 'a' and 'b'.
-    it('mid-stream byte cap: kills the process before the post-output sleep (V8 overflow guard)', async () => {
+    // length). The accumulator is bounded at HARD_CAP_BYTES (8MB) and the
+    // child is SIGKILL'd the instant combined output crosses it — a
+    // genuine-runaway circuit-breaker (a `cat` of a huge binary, a runaway
+    // `yes`). This proves the mid-stream kill fires BEFORE the process
+    // finishes: we emit >8MB of 'q', then sleep 3s, then emit 'z'. If the
+    // kill works, the child is terminated during the 'q' flood (before the
+    // sleep), so we never see 'z', the call returns fast, and the hard-cap
+    // kill sentinel ("… was terminated") is present. If the guard regressed
+    // to letting the command complete, the close path would run instead —
+    // emitting the ordinary head+tail marker (no "terminated" sentinel)
+    // only after waiting out the 3s sleep. NB: 'q'/'z' are the phase markers
+    // because neither letter appears in the truncation marker text — 'b',
+    // for one, collides with the word "bytes".
+    it('mid-stream hard cap: SIGKILLs a runaway before it completes (V8 overflow guard)', async () => {
       const start = Date.now();
       const result = await bashHandler(
         {
-          // `head -c 150000 /dev/zero | tr '\0' 'a'` emits 150,000 'a's.
-          // Portable on macOS + Linux without bash brace-expansion or
-          // node/python sidecars.
+          // 9MB of 'q' crosses the 8MB hard cap; the kill fires mid-flood,
+          // before the sleep and the 'z' emission are ever reached. Portable
+          // on macOS + Linux without bash brace-expansion or sidecars.
           command:
-            "head -c 150000 /dev/zero | tr '\\0' 'a'; sleep 3; head -c 150000 /dev/zero | tr '\\0' 'b'",
-          timeout_ms: 15_000,
+            "head -c 9000000 /dev/zero | tr '\\0' 'q'; sleep 3; head -c 9000000 /dev/zero | tr '\\0' 'z'",
+          timeout_ms: 20_000,
         },
         createSignal(),
       );
       const elapsedMs = Date.now() - start;
 
       expect(result.isError).toBeFalsy();
-      expect(result.content).toContain('[output truncated — exceeded 100KB]');
+      // Hard-cap kill sentinel — ONLY the overflow-kill path emits this, so
+      // it discriminates "killed mid-flood" from "ran to completion".
+      expect(result.content).toContain('was terminated');
       // Structured truncation flag is the load-bearing signal for callers
-      // (subagent traces, hooks). The sentinel string in `content` stays
-      // for the model's in-band context — both must be set on the
-      // mid-stream kill path.
+      // (subagent traces, hooks).
       expect(result.truncated).toBe(true);
-      // Phase-1 marker must be present (we got some output before the
-      // kill).
-      expect(result.content).toContain('a');
-      // Phase-2 marker must be absent (kill fired before the post-sleep
-      // emission). If this assertion fails, the mid-stream guard didn't
-      // fire and the post-close path took over.
-      expect(result.content).not.toContain('b');
-      // Returned well before the 3s sleep would have completed. 5000ms
-      // bound gives ample headroom for slow CI without losing
-      // discrimination from a "waited for the sleep" failure mode.
-      expect(elapsedMs).toBeLessThan(5_000);
-    }, 20_000);
+      // Got some 'q' before the kill; never reached the post-sleep 'z'.
+      expect(result.content).toContain('q');
+      expect(result.content).not.toContain('z');
+      // Kill fired during the 'q' flood, before the 3s sleep elapsed.
+      // Reading 8MB off a pipe is sub-second; 3000ms cleanly separates the
+      // kill path from a "waited for the sleep" regression.
+      expect(elapsedMs).toBeLessThan(3_000);
+    }, 25_000);
 
-    // Companion test: same byte cap protects stderr accumulation. Many
+    // Companion test: the same hard cap protects stderr accumulation. Many
     // long-running commands write progress to stderr (e.g. `find /` with
     // permission errors), so a stderr-only flood must also trigger the
     // mid-stream kill.
-    it('mid-stream byte cap: protects stderr from unbounded accumulation', async () => {
+    it('mid-stream hard cap: protects stderr from unbounded accumulation', async () => {
       const start = Date.now();
       const result = await bashHandler(
         {
           command:
-            "head -c 150000 /dev/zero | tr '\\0' 'a' >&2; sleep 3; head -c 150000 /dev/zero | tr '\\0' 'b' >&2",
-          timeout_ms: 15_000,
+            "head -c 9000000 /dev/zero | tr '\\0' 'q' >&2; sleep 3; head -c 9000000 /dev/zero | tr '\\0' 'z' >&2",
+          timeout_ms: 20_000,
         },
         createSignal(),
       );
       const elapsedMs = Date.now() - start;
 
       expect(result.isError).toBeFalsy();
-      expect(result.content).toContain('[output truncated — exceeded 100KB]');
+      expect(result.content).toContain('was terminated');
       expect(result.truncated).toBe(true);
-      expect(result.content).toContain('a');
-      expect(result.content).not.toContain('b');
-      expect(elapsedMs).toBeLessThan(5_000);
-    }, 20_000);
+      expect(result.content).toContain('q');
+      expect(result.content).not.toContain('z');
+      expect(elapsedMs).toBeLessThan(3_000);
+    }, 25_000);
   });
 
   describe('edge cases', () => {
@@ -515,6 +537,22 @@ describe('bashHandler', () => {
         await fs.rm(tmpA, { recursive: true, force: true });
         await fs.rm(tmpB, { recursive: true, force: true });
       }
+    });
+
+    it('names the dead working directory when cwd was deleted (ENOENT masquerade)', async () => {
+      // Spawn with a deleted cwd rejects as `spawn /bin/sh ENOENT` — naming
+      // the shell, not the missing directory. The handler must translate
+      // this into an actionable error so agents stop retrying blindly
+      // (production incident: 4 consecutive identical retries after a
+      // worktree was reaped mid-session).
+      const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'bash-cwd-dead-'));
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+      const handler = createBashHandler('default', tmpRoot);
+      const result = await handler({ command: 'echo alive' }, createSignal());
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('working directory does not exist');
+      expect(result.content).toContain(tmpRoot);
+      expect(result.content).toContain('deleted worktree?');
     });
   });
 
@@ -803,6 +841,132 @@ describe('bash SIGKILL — S10', () => {
     },
     5000, // vitest per-test timeout: 5 s (handler kills at 300 ms + 100 ms reap window + headroom)
   );
+});
+
+// ---------------------------------------------------------------------------
+// C4 (#354): best-effort readRoots/writeRoots path-containment scan.
+//
+// The scan is ADVISORY-ONLY: when a command references an absolute/home-relative
+// path outside the session's writeRoots it emits one `[security]` console.warn
+// (and a telemetry row) but STILL executes the command — it never blocks. These
+// tests assert both halves: the warning fires (or is suppressed) as specified,
+// AND the command runs to completion either way.
+//
+// NB: appendRoutingDecision is a no-op under vitest (env.VITEST guard), so we
+// spy on console.warn — the reliable, synchronous signal that the escape path
+// was taken. `warnIfBypassPermissions` also writes a `[security]` line, so we
+// match specifically on the path-escape substring to disambiguate.
+// ---------------------------------------------------------------------------
+describe('bash path-containment scan — C4 (#354)', () => {
+  function createSignal(): AbortSignal {
+    return new AbortController().signal;
+  }
+
+  const ESCAPE_MARKER = 'command references path(s) outside writeRoots';
+
+  let root: string;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    // Real temp dir so realpathSafe (inside wouldBeRestricted) resolves.
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'bash-contain-')));
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  function escapeWarnings(): string[] {
+    return warnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((m) => m.includes(ESCAPE_MARKER));
+  }
+
+  it('warns AND still executes when a command references a path outside writeRoots', async () => {
+    // 'default' mode → allowAll is NOT set, so containment is enforced/advised.
+    const handler = createBashHandler('default', root);
+    const result = await handler(
+      { command: 'echo hi /etc/hosts' },
+      createSignal(),
+      { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false },
+    );
+
+    // Warned about the escape…
+    const warnings = escapeWarnings();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('/etc/hosts');
+    expect(warnings[0]).toContain('best-effort');
+
+    // …but the command STILL ran (advisory-only, not a block).
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('hi');
+  });
+
+  it('expands ~/… and warns when a home-relative path escapes writeRoots', async () => {
+    // End-to-end exercise of scanPathsBestEffort's ~ / ~/… expansion branch:
+    // `~/.ssh/id_rsa` expands to os.homedir()/.ssh/id_rsa — outside the temp-dir
+    // writeRoots — so it warns (and still executes). Had expansion NOT fired, the
+    // token would anchor to resolveBase (in-root) and produce zero warnings, so
+    // the single warning is itself proof the expansion happened.
+    const handler = createBashHandler('default', root);
+    const result = await handler(
+      { command: 'echo hi ~/.ssh/id_rsa' },
+      createSignal(),
+      { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false },
+    );
+
+    const warnings = escapeWarnings();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(join(os.homedir(), '.ssh/id_rsa'));
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('hi');
+  });
+
+  it('does NOT warn when allowAll (bypass) is set, even for an out-of-root path', async () => {
+    const handler = createBashHandler('default', root);
+    const result = await handler(
+      { command: 'echo hi /etc/hosts' },
+      createSignal(),
+      { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: true },
+    );
+
+    expect(escapeWarnings()).toHaveLength(0);
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('hi');
+  });
+
+  it('does NOT warn when the command references only in-root paths', async () => {
+    const inRoot = join(root, 'file.txt');
+    const handler = createBashHandler('default', root);
+    const result = await handler(
+      { command: `echo hi ${inRoot}` },
+      createSignal(),
+      { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false },
+    );
+
+    expect(escapeWarnings()).toHaveLength(0);
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('hi');
+  });
+
+  it('warns at most once per handler instance (one-time latch)', async () => {
+    const handler = createBashHandler('default', root);
+    const ctx = { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false };
+    await handler({ command: 'cat /etc/hosts' }, createSignal(), ctx);
+    await handler({ command: 'cat /etc/passwd' }, createSignal(), ctx);
+
+    // Latch means the second escaping command does not re-warn.
+    expect(escapeWarnings()).toHaveLength(1);
+  });
+
+  it('does NOT warn when no context is supplied (inline/back-compat call)', async () => {
+    const handler = createBashHandler('default', root);
+    const result = await handler({ command: 'echo hi /etc/hosts' }, createSignal());
+    expect(escapeWarnings()).toHaveLength(0);
+    expect(result.isError).toBeFalsy();
+  });
 });
 
 

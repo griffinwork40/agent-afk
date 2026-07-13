@@ -18,23 +18,40 @@
  * with the original error attached as `cause`. This prevents a bug in one
  * handler from silently skipping policy enforcement.
  *
- * **Context injection (SubagentStop only):** Foreground subagents hand their
- * final assistant output to the parent through the normal `agent` tool result;
- * `injectContext` is a separate hook-generated framework note, not text typed
- * by the human user. When a `SubagentStop` handler returns `injectContext`, the
- * dispatch result is propagated to the caller, which queues the context string
- * to the parent session's input stream for the parent's next turn. If the
- * parent is aborting, the injection is skipped. DAG/compose and background
- * paths are not guaranteed to inject (some intentionally leave this channel
- * dark), and multiple `injectContext` values do not merge today: hook dispatch
- * returns the last non-blocking decision. Other hook events ignore
- * `injectContext` entirely.
+ * **Context injection (SubagentStop, UserPromptSubmit, and Stop):** Foreground
+ * subagents hand their final assistant output to the parent through the normal
+ * `agent` tool result; `injectContext` is a separate hook-generated framework
+ * note, not text typed by the human user. When a `SubagentStop` handler returns
+ * `injectContext`, the dispatch result is propagated to the caller, which queues
+ * the context string to the parent session's input stream for the parent's next
+ * turn. If the parent is aborting, the injection is skipped. DAG/compose and
+ * background paths are not guaranteed to inject (some intentionally leave this
+ * channel dark). When multiple non-blocking handlers each return `injectContext`,
+ * all non-empty values are concatenated in registration order, joined by `'\n'`,
+ * and returned as a single string — so no injection is silently dropped. A
+ * blocking handler still short-circuits before any accumulation occurs.
+ *
+ * For `UserPromptSubmit`, `injectContext` works differently: the returned string
+ * is prepended to the user's prompt text before `runTurn` is called — allowing
+ * hook handlers to inject per-turn system notes or policy context inline with
+ * the human's message. The injection is performed by the REPL loop immediately
+ * after dispatch.
+ *
+ * For `Stop` (main-session post-turn), `injectContext` is stashed by the REPL
+ * loop and prepended to the NEXT turn's prompt text — the same next-turn
+ * delivery contract as `UserPromptSubmit`, but fired from the turn-completion
+ * boundary rather than the submission boundary. This is the "bounce the turn
+ * back" primitive: a post-turn policy handler (e.g. the terminal-state gate)
+ * can read the parsed verdict on {@link StopContext} and inject a correction
+ * the next turn must address. The remaining hook events ignore `injectContext`
+ * entirely.
  *
  * @module agent/hooks
  */
 
 import { createHookRegistryImpl } from './hook-registry.js';
 import type { SubagentTrace } from './subagent/result.js';
+import type { GrantManager } from '../cli/slash/commands/allow-dir.js';
 
 export type HarnessHookEvent =
   | 'SessionStart'
@@ -42,7 +59,11 @@ export type HarnessHookEvent =
   | 'SubagentStart'
   | 'SubagentStop'
   | 'PreToolUse'
-  | 'PostToolUse';
+  | 'PostToolUse'
+  | 'PreCompact'
+  | 'PostToolUseFailure'
+  | 'Stop'
+  | 'UserPromptSubmit';
 
 export interface HookDecision {
   /** False halts session lifecycle; undefined/true continues. */
@@ -52,12 +73,27 @@ export interface HookDecision {
   /** Human-readable rationale for blocking or approving. */
   reason?: string;
   /**
-   * (SubagentStop only) Framework-generated context to inject into the parent
-   * session's next turn. This is not human-authored user text. Queued to the
-   * parent's input stream after dispatch completes; dropped if the parent is
-   * aborting. DAG/compose and background paths may intentionally not inject.
-   * Multiple injected contexts currently do not merge — the last non-blocking
-   * hook decision wins. Ignored for all other hook events.
+   * (SubagentStop, UserPromptSubmit, and Stop) Framework-generated context to inject.
+   *
+   * For **SubagentStop**: queued to the parent session's input stream after
+   * dispatch completes; dropped if the parent is aborting. DAG/compose and
+   * background paths may intentionally not inject. When multiple non-blocking
+   * handlers each return `injectContext`, all non-empty values are concatenated
+   * in registration order (joined by `'\n'`) and returned as a single string —
+   * no injection is silently dropped. A blocking handler short-circuits before
+   * any accumulation.
+   *
+   * For **UserPromptSubmit**: prepended to the user's prompt text before
+   * `runTurn` is called. Allows per-turn system notes or policy context to be
+   * injected inline with the human's message. Same concatenation merge policy
+   * applies when multiple handlers return `injectContext`.
+   *
+   * For **Stop**: stashed by the REPL loop and prepended to the NEXT turn's
+   * prompt text (same next-turn delivery as UserPromptSubmit, fired from the
+   * post-turn boundary). Lets a post-turn policy handler bounce a correction
+   * into the next turn. Same concatenation merge policy across handlers.
+   *
+   * Ignored for all other hook events.
    */
   injectContext?: string;
 }
@@ -136,14 +172,39 @@ export interface PreToolUseContext {
    * conversation-level affordance) use it to skip subagent tool calls.
    */
   parentSessionId?: string;
+  /**
+   * Effective cwd for this specific tool call, when known. Dispatchers set this
+   * from their current resolve base so shared hook registries can classify
+   * forked subagent calls against the child's worktree rather than the parent
+   * session's construction-time cwd.
+   */
+  cwd?: string;
   toolName: string;
   input?: unknown;
+  /**
+   * Live grant manager of the session EXECUTING this call — the provider that
+   * built the dispatcher dispatching this hook. Injected per-call by
+   * {@link SessionToolDispatcher} so path-scoped hooks (path-approval,
+   * bash-restriction) resolve the ACTUAL session's grants: a forked child's own
+   * cwd/readRoots/writeRoots rather than a process-global ref pinned to the
+   * top-level session (the #435/#514 write-confinement gap). When absent
+   * (non-dispatcher-originated dispatch, unit tests), those hooks fall back to
+   * their `opts.getGrantManager()` ref, preserving prior behavior.
+   */
+  grantManager?: GrantManager;
 }
 
 export interface PostToolUseContext {
   event: 'PostToolUse';
   sessionId?: string;
   subagentId?: string;
+  /**
+   * Parent session id when the tool call originates inside a forked subagent
+   * (set from {@link AgentConfig.parentSessionId}). Top-level sessions leave
+   * this undefined. Symmetric with {@link PostToolUseFailureContext} so hook
+   * authors can treat both events uniformly for subagent correlation.
+   */
+  parentSessionId?: string;
   toolName: string;
   /**
    * Tool-call input passed through from {@link PreToolUseContext}. Carried
@@ -153,6 +214,82 @@ export interface PostToolUseContext {
    */
   input?: unknown;
   output?: unknown;
+  /**
+   * Live grant manager of the executing session — see
+   * {@link PreToolUseContext.grantManager}. Injected so the "Once"-grant revoke
+   * in the path-approval PostToolUse hook mutates the SAME grant manager the
+   * PreToolUse containment check consulted.
+   */
+  grantManager?: GrantManager;
+}
+
+export interface PreCompactContext {
+  event: 'PreCompact';
+  sessionId?: string;
+  /**
+   * 'manual' = /compact command or Telegram /compact. Only 'manual' is emitted today.
+   * 'auto' (threshold-based) is reserved for future wiring -- see TODO in query.ts.
+   */
+  trigger?: 'manual' | 'auto';
+}
+
+export interface PostToolUseFailureContext {
+  event: 'PostToolUseFailure';
+  sessionId?: string;
+  subagentId?: string;
+  /**
+   * Parent session id when the tool call originates inside a forked subagent
+   * (set from {@link AgentConfig.parentSessionId}). Top-level sessions leave
+   * this undefined.
+   */
+  parentSessionId?: string;
+  toolName: string;
+  /** Tool-call input, carried verbatim from the originating call. */
+  input?: unknown;
+  /** The error message string from the thrown handler. */
+  error: string;
+}
+
+export interface StopContext {
+  event: 'Stop';
+  /** Session id from the REPL session that completed the turn. */
+  sessionId?: string;
+  /**
+   * Parent session id when this Stop fires inside a forked subagent.
+   * Top-level sessions leave this undefined.
+   */
+  parentSessionId?: string;
+  /**
+   * The parsed terminal-state kind of the turn that just completed, when the
+   * surface parses one (REPL only — see `terminal-state.ts`). Absent when the
+   * turn emitted no recognizable verdict, or on surfaces that do not parse
+   * terminal states. Inlines the cli-layer `TerminalKind` union rather than
+   * importing it, keeping the agent layer free of a cli runtime dependency.
+   */
+  terminalState?: 'done' | 'blocked' | 'asking' | 'interrupted';
+  /**
+   * True when the completed turn produced at least one successful corroborating
+   * tool call — a file write/edit or an executed command (see
+   * `doneHasCorroboratingEvidence` in `afk-push.ts`). Only meaningful when
+   * `terminalState === 'done'`. Absent on surfaces that do not compute it.
+   */
+  doneHasCorroboratingEvidence?: boolean;
+}
+
+export interface UserPromptSubmitContext {
+  event: 'UserPromptSubmit';
+  /**
+   * The full text of the user's prompt at the moment it is submitted to the
+   * REPL loop, after shell injection and forward-manifest stitching but before
+   * `runTurn`. Handlers may inspect it for policy enforcement; the
+   * `injectContext` return value prepends additional context to this text.
+   */
+  prompt: string;
+  /**
+   * Session identifier, propagated from {@link SessionStats.sessionId}.
+   * Optional because early turns may not yet have one.
+   */
+  sessionId?: string;
 }
 
 /** Discriminated union — narrow via `switch (context.event)`. */
@@ -162,7 +299,11 @@ export type HookContext =
   | SubagentStartContext
   | SubagentStopContext
   | PreToolUseContext
-  | PostToolUseContext;
+  | PostToolUseContext
+  | PreCompactContext
+  | PostToolUseFailureContext
+  | StopContext
+  | UserPromptSubmitContext;
 
 /**
  * A hook handler. `signal` is the turn/dispatch {@link AbortSignal} forwarded

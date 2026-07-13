@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { streamResponse } from './streaming.js';
+import { streamResponse, StreamTimeoutError, renderSubagentFooter } from './streaming.js';
 import { TelegramError } from 'telegraf';
 import type { Context } from 'telegraf';
 import type { IAgentSession, OutputEvent } from '../agent/types.js';
@@ -110,6 +110,43 @@ describe('streamResponse', () => {
     expect(joined).toContain('◦ Researching codebase');
     expect(joined).toContain('(Grep)');
     expect(joined).toContain('12 matches in 4 files');
+  });
+
+  it('sanitizes control/ANSI sequences in model-controlled progress fields before sending to Telegram', async () => {
+    // Regression: progress.description/summary/lastToolName are populated
+    // from model-controlled tool input (summarizeToolInput) and interpolated
+    // raw into the Telegram message. markdownToTelegramHtml only strips
+    // \x02/\x03 sentinels + HTML-escapes & < > — it does not strip ANSI/C1
+    // control bytes. Verify the streaming handler scrubs them itself.
+    const { ctx, replies, edits } = makeCtx();
+    const session = makeSession(async function* () {
+      yield* yieldEvents(
+        {
+          type: 'progress',
+          progress: {
+            taskId: 't1',
+            description: 'grep \x1b[2Jsrc/\x9b malicious',
+            summary: 'grep \x1b[2Jsrc/\x9b malicious',
+            lastToolName: 'Grep\x1b[2J\x9b',
+            totalTokens: 100,
+            toolUses: 2,
+            durationMs: 300,
+          },
+        },
+        { type: 'done', metadata: undefined },
+      );
+    });
+
+    await streamResponse(ctx, session, 'go');
+    const joined = [...replies, ...edits].join('\n');
+
+    // Visible text survives sanitization.
+    expect(joined).toContain('grep');
+    expect(joined).toContain('src/');
+
+    // Raw escape/control bytes must not reach the Telegram message.
+    expect(joined).not.toContain('\x1b');
+    expect(joined).not.toContain('\x9b');
   });
 
   it('appends prompt_suggestion as a final 💡 line', async () => {
@@ -447,4 +484,172 @@ describe('generator finalizer cleanup', () => {
     // called on the error path, not just on the normal exhaustion path.
     expect(finallyRan).toBe(true);
   });
+});
+
+describe('renderSubagentFooter (bounded sub-agent progress)', () => {
+  it('returns empty string when there is no activity', () => {
+    expect(renderSubagentFooter(0, [])).toBe('');
+    expect(renderSubagentFooter(0, ['ignored'])).toBe('');
+  });
+
+  it('reports the step count and pluralizes correctly', () => {
+    expect(renderSubagentFooter(1, ['recon: read_file a'])).toContain('1 step');
+    expect(renderSubagentFooter(1, ['recon: read_file a'])).not.toContain('1 steps');
+    expect(renderSubagentFooter(5, ['recon: read_file a'])).toContain('5 steps');
+  });
+
+  it('bounds the preview to the last few lines regardless of total step count', () => {
+    // The pre-fix sink appended one line per child tool call, unbounded. The
+    // footer must stay bounded even after 50 tool calls.
+    const many = Array.from({ length: 50 }, (_, i) => `recon: read_file file${i}`);
+    const footer = renderSubagentFooter(50, many);
+    const shownLines = footer.split('\n').filter((l) => l.includes('read_file'));
+    expect(shownLines.length).toBeLessThanOrEqual(4);
+    // The rolling tail keeps the MOST RECENT entries…
+    expect(footer).toContain('file49');
+    // …and drops the oldest.
+    expect(footer).not.toContain('file0 ');
+    // The counter still reflects the true total even though lines are capped.
+    expect(footer).toContain('50 steps');
+  });
+});
+
+describe('provider-turn interrupt on incomplete exit (stale-buffer guard)', () => {
+  it('throws StreamTimeoutError and interrupts the still-running turn on total silence', async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseHang: () => void = () => {};
+      const hang = new Promise<void>((resolve) => { releaseHang = resolve; });
+      const session = makeSession(async function* () {
+        // One event so receivedAny becomes true (NEXT_EVENT_TIMEOUT_MS applies),
+        // then the provider goes silent — simulating a turn still running with
+        // no parent-stream events AND no sink activity, so the watchdog fires.
+        yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'partial' } };
+        await hang;
+      });
+      // Mirror the real interrupt() contract: aborting the turn unblocks the
+      // in-flight provider pull so the generator can finalize cleanly.
+      (session as { interrupt: ReturnType<typeof vi.fn> }).interrupt = vi.fn(async () => { releaseHang(); });
+      const { ctx } = makeCtx();
+
+      const p = streamResponse(ctx, session, 'go');
+      const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+      // Flush the first event, then advance past the 180s inactivity window.
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(180_001);
+      await rejection;
+      // The fix: a timeout MUST abort the underlying turn so it doesn't keep
+      // streaming into the shared providerIterator and get drained by the next
+      // message ("send a '.' to recover the lost result" bug).
+      expect((session as { interrupt: ReturnType<typeof vi.fn> }).interrupt).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 15_000);
+
+  it('does NOT interrupt on a provider error EVENT — the turn already ended (terminal event seen)', async () => {
+    const { ctx } = makeCtx();
+    const session = makeSession(async function* () {
+      yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'partial' } };
+      yield { type: 'error' as const, error: new Error('mid-stream boom') };
+    });
+    await expect(streamResponse(ctx, session, 'go')).rejects.toThrow('mid-stream boom');
+    // An 'error' EVENT is terminal: the provider emitted it and parked itself at
+    // the next-prompt boundary, so there is nothing to interrupt. (Contrast with
+    // a RAW throw / non-terminal exit below, which DOES require interrupt().)
+    expect((session as { interrupt: ReturnType<typeof vi.fn> }).interrupt).not.toHaveBeenCalled();
+  });
+
+  it('interrupts on a non-terminal early exit (raw throw, no done/error event)', async () => {
+    // The leak the fix closes: the consumer exits WITHOUT a terminal event
+    // (here a raw throw, standing in for a Telegram render exception or other
+    // mid-stream failure). The shared provider iterator is still live, so
+    // without interrupt() its buffered events would be drained by the user's
+    // NEXT message — the "send a '.' to recover the lost result" bug. Previously
+    // this path was NOT covered because interrupt() was gated on `timedOut` alone.
+    const { ctx } = makeCtx();
+    const session = makeSession(async function* () {
+      yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'partial' } };
+      throw new Error('render boom'); // raw throw — NOT an 'error' OutputEvent
+    });
+    await expect(streamResponse(ctx, session, 'go')).rejects.toThrow('render boom');
+    expect((session as { interrupt: ReturnType<typeof vi.fn> }).interrupt).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT interrupt on a clean turn that reaches done', async () => {
+    // Happy path: a terminal done event was seen, so interrupt() must be a
+    // no-op here — firing it would abort an already-completed turn (and, before
+    // iter.return() runs, currentState is still 'streaming', so the abort would
+    // NOT be swallowed). The gate must therefore key off the terminal event.
+    const { ctx } = makeCtx();
+    const session = makeSession(async function* () {
+      yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'all good' } };
+      yield { type: 'done' as const, metadata: undefined };
+    });
+    await streamResponse(ctx, session, 'go');
+    expect((session as { interrupt: ReturnType<typeof vi.fn> }).interrupt).not.toHaveBeenCalled();
+  });
+
+  it('suspends the watchdog while a foreground tool is in flight, then fires past MAX_TOOL_INFLIGHT_MS', async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseHang: () => void = () => {};
+      const hang = new Promise<void>((resolve) => { releaseHang = resolve; });
+      const session = makeSession(async function* () {
+        // A foreground tool STARTS (tool_use_detail) then the parent stream goes
+        // silent for the whole tool run — exactly a long bash / nested `afk chat`.
+        // No tool_result arrives, so the tool stays "in flight" and the watchdog
+        // must SUSPEND rather than fire at NEXT_EVENT_TIMEOUT_MS.
+        yield { type: 'chunk' as const, chunk: { type: 'tool_use_detail' as const, toolUseId: 't1', toolName: 'bash', toolInput: 'afk chat' } };
+        await hang;
+      });
+      (session as { interrupt: ReturnType<typeof vi.fn> }).interrupt = vi.fn(async () => { releaseHang(); });
+      const { ctx } = makeCtx();
+
+      const p = streamResponse(ctx, session, 'go');
+      let settled = false;
+      void p.then(() => { settled = true; }, () => { settled = true; });
+
+      await vi.advanceTimersByTimeAsync(1);        // flush tool_use_detail → tool in flight
+      await vi.advanceTimersByTimeAsync(180_001);  // past NEXT_EVENT_TIMEOUT_MS
+      await vi.advanceTimersByTimeAsync(180_001);  // still in flight → suspended, no timeout
+      expect(settled).toBe(false);
+      expect((session as { interrupt: ReturnType<typeof vi.fn> }).interrupt).not.toHaveBeenCalled();
+
+      // Past MAX_TOOL_INFLIGHT_MS (660s) the tool is treated as genuinely wedged
+      // and the watchdog is finally allowed to fire.
+      const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+      await vi.advanceTimersByTimeAsync(660_001);
+      await rejection;
+      expect((session as { interrupt: ReturnType<typeof vi.fn> }).interrupt).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it('resumes the watchdog after a tool_result clears the in-flight set', async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseHang: () => void = () => {};
+      const hang = new Promise<void>((resolve) => { releaseHang = resolve; });
+      const session = makeSession(async function* () {
+        // Tool starts AND finishes (tool_result), so the in-flight set is empty
+        // again — subsequent silence is a genuinely stuck turn and MUST time out.
+        yield { type: 'chunk' as const, chunk: { type: 'tool_use_detail' as const, toolUseId: 't1', toolName: 'bash', toolInput: 'x' } };
+        yield { type: 'chunk' as const, chunk: { type: 'tool_result' as const, toolUseId: 't1', content: 'ok' } };
+        await hang;
+      });
+      (session as { interrupt: ReturnType<typeof vi.fn> }).interrupt = vi.fn(async () => { releaseHang(); });
+      const { ctx } = makeCtx();
+
+      const p = streamResponse(ctx, session, 'go');
+      const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+      await vi.advanceTimersByTimeAsync(1);        // flush tool_use_detail + tool_result
+      await vi.advanceTimersByTimeAsync(180_001);  // silence, no tool in flight → fires
+      await rejection;
+      expect((session as { interrupt: ReturnType<typeof vi.fn> }).interrupt).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 15_000);
 });

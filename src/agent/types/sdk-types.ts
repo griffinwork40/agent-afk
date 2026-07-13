@@ -243,6 +243,14 @@ export type AgentDefinition = {
   skills?: string[];
   initialPrompt?: string;
   maxTurns?: number;
+  /**
+   * Optional per-agent cap on tool-use rounds within the child's single turn
+   * (anti-hang ceiling). Omitted / ≤0 means unlimited. Frontmatter key
+   * `maxToolUseIterations` (alias `max-tool-use-iterations`). Honored on the
+   * `agent`-tool dispatch path (see child-config.ts) and enforced uniformly by
+   * both providers via shared/tool-loop-cap.ts.
+   */
+  maxToolUseIterations?: number;
   background?: boolean;
   memory?: 'user' | 'project' | 'local';
   effort?: EffortLevel | number;
@@ -256,6 +264,16 @@ export type AgentDefinition = {
 export type SdkPluginConfig = {
   type: 'local';
   path: string;
+  /**
+   * Optional path (relative to {@link path}, or absolute) of a JS module to
+   * dynamically import at session boot, taken from the plugin manifest's `main`
+   * field. Importing the module runs its top-level side-effects — e.g.
+   * `registerSkill()` calls — so a plugin can contribute code-backed skills or
+   * agents without editing core. Resolved and imported by
+   * {@link loadPluginEntrypoints}; a failing import is non-fatal. Absent when
+   * the manifest declares no `main`.
+   */
+  main?: string;
 };
 
 // ---------------------------------------------------------------------------

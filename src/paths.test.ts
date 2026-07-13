@@ -32,10 +32,22 @@ import {
   getBgJobDir,
   getBgJobLog,
   getBgJobMeta,
+  assertSafeBrowserProfile,
+  getBrowserStateRoot,
+  getBrowserProfileStateDir,
+  getBrowserStorageStatePath,
+  getTraceDir,
+  sessionLabelFromTracePath,
 } from './paths.js';
+import { useUnsetAfkHome } from './__test-utils__/unset-afk-home.js';
 
 let tmpHome: string;
 let originalHome: string | undefined;
+
+// This suite asserts the unset-AFK_HOME fallback ($HOME/.afk) — drop the
+// global sentinel AFK_HOME per test; HOME is redirected to a tmp dir below.
+// Cases that exercise AFK_HOME explicitly set/delete it themselves.
+useUnsetAfkHome();
 
 beforeEach(() => {
   originalHome = process.env['HOME'];
@@ -265,6 +277,62 @@ describe('assertSafeJobId and bg job path accessors', () => {
   });
 });
 
+describe('assertSafeBrowserProfile and browser vault path accessors', () => {
+  describe('assertSafeBrowserProfile', () => {
+    it('accepts simple profile names', () => {
+      expect(() => assertSafeBrowserProfile('default')).not.toThrow();
+      expect(() => assertSafeBrowserProfile('work')).not.toThrow();
+      expect(() => assertSafeBrowserProfile('WORK_2')).not.toThrow();
+      expect(() => assertSafeBrowserProfile('a-b-c')).not.toThrow();
+      expect(() => assertSafeBrowserProfile('a')).not.toThrow();
+    });
+
+    it.each([
+      ['empty string', ''],
+      ['traversal: ../..', '../..'],
+      ['traversal: ../../etc/passwd', '../../etc/passwd'],
+      ['forward slash', 'work/sub'],
+      ['back slash', 'work\\sub'],
+      ['null byte', 'work\u0000'],
+      ['leading dot', '.hidden'],
+      ['parent ref', '..'],
+      ['just dot', '.'],
+      ['space', 'my work'],
+      ['unicode', 'wörk'],
+      ['absolute path', '/etc/passwd'],
+      ['url-encoded slash', 'work%2Fsub'],
+    ])('rejects %s', (_label, payload) => {
+      expect(() => assertSafeBrowserProfile(payload)).toThrow(/Invalid browser profile/);
+    });
+
+    it('rejects payloads longer than 128 chars', () => {
+      expect(() => assertSafeBrowserProfile('a'.repeat(129))).toThrow(/exceeds 128/);
+    });
+
+    it('accepts exactly 128 chars', () => {
+      expect(() => assertSafeBrowserProfile('a'.repeat(128))).not.toThrow();
+    });
+  });
+
+  describe('browser vault path accessors guard against traversal', () => {
+    it('getBrowserProfileStateDir throws on traversal attempt', () => {
+      expect(() => getBrowserProfileStateDir('../../etc/passwd')).toThrow(/Invalid browser profile/);
+    });
+
+    it('getBrowserStorageStatePath throws on traversal attempt', () => {
+      expect(() => getBrowserStorageStatePath('../../etc')).toThrow(/Invalid browser profile/);
+    });
+
+    it('valid profiles resolve under the browser state root, with the storageState leaf', () => {
+      const root = getBrowserStateRoot();
+      expect(getBrowserProfileStateDir('work').startsWith(root + '/')).toBe(true);
+      const statePath = getBrowserStorageStatePath('work');
+      expect(statePath.startsWith(root + '/')).toBe(true);
+      expect(statePath.endsWith('/work/storageState.json')).toBe(true);
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // F1 — AFK_HOME validation
 // ---------------------------------------------------------------------------
@@ -287,6 +355,36 @@ describe('getAfkHome — AFK_HOME validation (F1)', () => {
   it('returns the value when AFK_HOME is a valid absolute non-root path', () => {
     vi.stubEnv('AFK_HOME', '/tmp/afk-test');
     expect(getAfkHome()).toBe('/tmp/afk-test');
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('sessionLabelFromTracePath — inverse of getTraceDir', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('recovers the witness label from a trace.jsonl path', () => {
+    expect(
+      sessionLabelFromTracePath('/home/u/.afk/state/witness/label-xyz-123/trace.jsonl'),
+    ).toBe('label-xyz-123');
+  });
+
+  it('is the inverse of getTraceDir for a valid label', () => {
+    vi.stubEnv('AFK_HOME', '/tmp/afk-label-test');
+    const p = join(getTraceDir('default-uuid-1'), 'trace.jsonl');
+    expect(sessionLabelFromTracePath(p)).toBe('default-uuid-1');
+  });
+
+  it('returns null for the in-memory writer sentinel', () => {
+    expect(sessionLabelFromTracePath('in-memory://trace')).toBeNull();
+  });
+
+  it('returns null for nullish or empty input', () => {
+    expect(sessionLabelFromTracePath(undefined)).toBeNull();
+    expect(sessionLabelFromTracePath(null)).toBeNull();
+    expect(sessionLabelFromTracePath('')).toBeNull();
   });
 });
 

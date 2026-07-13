@@ -7,6 +7,8 @@
  */
 
 import type { AgentModelInput, IAgentSession } from '../agent/types.js';
+import type { TraceWriter } from '../agent/trace/index.js';
+import type { ReadScopeInputs } from '../agent/subagent-read-scope.js';
 
 /**
  * Execution context handed to inline-registry skill handlers by the
@@ -63,6 +65,41 @@ export interface SkillExecutionContext {
    * as throws.
    */
   dispatchSkill?: (name: string, args?: string) => Promise<string>;
+  /**
+   * The parent session's witness trace writer, when one is open. Inline
+   * handlers that fork sub-agents via their OWN `new SubagentManager(...)`
+   * MUST forward this so the forked sub-agents inherit the writer and their
+   * tool activity — including `canUseTool` permission-denials, emitted as
+   * `hook_decision` block + `tool_call` (failureClass: 'permission-denied')
+   * events — lands in the parent's `trace.jsonl`. Without it the child
+   * dispatcher's `traceWriter` is undefined and every `emitHookDecision` /
+   * `emitToolCall` no-ops, so the denials a restrictive allowlist produces are
+   * visible only in the live TUI and are lost from the durable witness record
+   * (and therefore from the run receipt's refusal tally).
+   *
+   * Optional: callers must handle `undefined` (tracing disabled via
+   * `AFK_TRACE_DISABLED=1`, or older SkillExecutor versions / test stubs that
+   * do not provide it). In that case forking proceeds untraced, as before.
+   */
+  traceWriter?: TraceWriter;
+  /**
+   * Reads the parent session's read scope ({@link ReadScopeInputs}) at
+   * dispatch time (wired to the root
+   * {@link SubagentManager.getReadScopeInputs}). Inline handlers that fork
+   * sub-agents via their OWN `new SubagentManager(...)` (e.g. `/mint` phases,
+   * `/audit-fit`) MUST use this to seed each manager's `parentReadRoots` via
+   * {@link resolveChildManagerReadRoots}, so the forked sub-agent inherits the
+   * parent session's full read scope — the same `child ⊇ parent` invariant the
+   * `agent` tool enforces (#544), extended to inline-skill dispatch (#547).
+   * Without it, an inline fork derives read scope from its cwd alone and
+   * silently narrows whenever the parent session is read-open or
+   * `/allow-dir`-widened beyond `[cwd, mainRoot]`.
+   *
+   * Optional: callers must handle `undefined` (older SkillExecutor versions or
+   * test stubs). In that case forking falls back to cwd-only derivation, as
+   * before.
+   */
+  getReadScopeInputs?: () => ReadScopeInputs;
 }
 
 export interface SkillMetadata {
@@ -200,6 +237,32 @@ export function listSkills(): string[] {
  */
 export function listVisibleSkills(internalUnlocked: boolean): string[] {
   return listSkills().filter((name) => isSkillVisible(getSkill(name), internalUnlocked));
+}
+
+/**
+ * Evict all skills whose `origin` matches the given value.
+ *
+ * Used by `collectSkillEntries()` before each project scan so that skills
+ * registered for a previous cwd do not persist when the working directory
+ * changes in a long-lived process (daemon, Telegram bot). Only
+ * `'project'`-origin entries are evicted in production; the caller is
+ * responsible for passing the correct origin.
+ *
+ * User-origin (`~/.afk/skills/`) and built-in (undefined origin) skills are
+ * never passed here and therefore survive across cwd changes, which is the
+ * correct steady-state: global skills are cwd-agnostic.
+ *
+ * Returns the number of registry entries removed.
+ */
+export function evictSkillsByOrigin(origin: SkillMetadata['origin']): number {
+  let removed = 0;
+  for (const [key, meta] of registry) {
+    if (meta.origin === origin) {
+      registry.delete(key);
+      removed++;
+    }
+  }
+  return removed;
 }
 
 /**

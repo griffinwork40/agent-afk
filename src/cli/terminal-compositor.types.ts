@@ -366,10 +366,28 @@ export interface TerminalCompositorOptions {
    * detection contract.
    *
    * Does NOT change the input-handling, scrollback-commit, or
-   * state-transition-driven overlay paths — only the spinner ticker.
+   * state-transition-driven overlay paths — only the spinner ticker
+   * and the caret-blink ticker (see {@link caretBlink}).
    * Default `false` (live-TTY behavior unchanged).
    */
   captureMode?: boolean;
+  /**
+   * Enable the blinking input caret (pulse on/off like a terminal cursor).
+   * Default `false` — the caller that owns an interactive surface
+   * (`InputSurface.armCompositor`) resolves
+   * `detectCaretBlink() && !detectReducedMotion()` and passes it; tests and
+   * non-interactive constructions leave it off, so no blink timer is ever
+   * created (this is what keeps the existing compositor suite free of
+   * auto-started recurring timers). When true, {@link captureMode} still
+   * suppresses the ticker so recordings show a steady caret.
+   */
+  caretBlink?: boolean;
+  /**
+   * Blink half-period in ms (dwell time per on/off phase). Default 530 (the
+   * classic terminal cursor cadence). Exposed mainly so tests can drive a tiny
+   * interval; intentionally NOT surfaced as an env var.
+   */
+  caretBlinkIntervalMs?: number;
   /**
    * Upper-bound row protection for the live frame. When set, the compositor
    * treats rows `1..anchorRow-1` as containing pre-arm scrollback content

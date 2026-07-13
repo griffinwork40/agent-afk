@@ -64,11 +64,6 @@ describe('Skill audience tier gate', () => {
       expect(getSkill('audit-fit').audience).toBe('internal');
     });
 
-    it('diagnose is registered as public (absent or "public")', () => {
-      const a = getSkill('diagnose').audience;
-      expect(a === undefined || a === 'public').toBe(true);
-    });
-
     it('mint is registered as public (absent or "public")', () => {
       const a = getSkill('mint').audience;
       expect(a === undefined || a === 'public').toBe(true);

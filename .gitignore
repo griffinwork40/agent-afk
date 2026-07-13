@@ -51,9 +51,10 @@ agent-afk@*
 # Claude Code worktrees (local-only)
 .claude/worktrees/
 
-# AFK worktrees (local-only, created by `afk interactive --worktree`)
+# AFK worktrees & plans (local-only, created by `afk interactive --worktree`)
 .afk-worktrees/
 .afk-work/
+.afk/plans
 
 # AFK worktree bookkeeping (local-only)
 .afk-worktree-meta.json

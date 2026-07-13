@@ -39,10 +39,11 @@ Type `/` in the REPL to see available commands. Typos are caught automatically �
 | `/help` | List all available slash commands |
 | `/exit`, `/quit` | Leave the REPL |
 | `/clear` | Clear the screen |
-| `/reset` | Start a fresh session, discarding history |
 | `/compact` | Manually compact conversation history |
-| `/save` | Snapshot session state to disk |
 | `/resume` | Resume a saved session |
+| `/fork` | Duplicate this conversation into a new, independent session |
+| `/name [name]` | Show or set this session's name |
+| `/sh [list \| show \<id\> \| kill \<id\>]` | Inspect or kill user-typed `!cmd` shell jobs |
 
 ### Information
 
@@ -50,22 +51,28 @@ Type `/` in the REPL to see available commands. Typos are caught automatically �
 |---|---|
 | `/cost` | Running cost for the session |
 | `/tokens` | Context usage breakdown (total, categories, MCP tools, agents, skills) |
+| `/stats` | Show session statistics including skill runs |
 | `/history` | Print prior turns |
+| `/transcript` | View full session transcript in `$PAGER` |
 | `/model` | Show or switch the active model |
 | `/tools` | List registered tools |
 | `/mcp` | Show MCP server status |
 | `/limits` | Show rate-limit and budget state |
 | `/debug` | Toggle verbose debug output |
+| `/keys` | Show keybinding reference |
+| `/config` | View resolved configuration (model, provider, API keys, env vars) |
+| `/doctor` | Run system health checks (API keys, directories, config, Telegram) |
+| `/font-size [size] [editor]` | Get or set the terminal font size in Cursor / VS Code |
+| `/reauth [--check]` | Re-read keychain credentials and swap the running session's client |
 
 ### Permissions
 
 | Command | Description |
 |---|---|
 | `/allow-dir <path>` | Pre-authorize a directory for file tools (`--revoke <path>` to remove a grant) |
-| `/bypass` | Disable path containment entirely (`/bypass off` to restore); shows a `⚠ BYPASS` badge |
 | `/afk` | Enter autonomous mode — risk-gated, with remote answer/abort over Telegram (`/afk off` to exit) |
 
-See [Permissions](/configuration/permissions) for the full model behind these commands.
+There is no `/bypass` command — cycle into `bypassPermissions` with **Shift+Tab** (the REPL shows a `⚠ BYPASS` badge while it is active). See [Permissions](/configuration/permissions) for the full model behind these commands.
 
 ### Planning and state
 
@@ -74,7 +81,7 @@ See [Permissions](/configuration/permissions) for the full model behind these co
 | `/plan` | Open the plan editor |
 | `/todo` | Manage the persistent todo list |
 | `/init` | Scan the current project and generate an `AFK.md` |
-| `/changelog` | Render `CHANGELOG.md` paginated |
+| `/changelog [--dry-run]` | Generate CHANGELOG entries from commits since last tag |
 
 ### Background tasks
 
@@ -116,6 +123,43 @@ to surface them.
 `/plan` opens an in-REPL plan editor. You can write a multi-step plan, iterate on it, and
 then let the agent execute it. Plan state is saved to `~/.afk/state/` and survives session
 restarts.
+
+### Exiting plan mode
+
+When the model judges its plan ready, it calls the `exit_plan_mode` tool. This presents a
+three-choice picker:
+
+| Choice | What happens |
+|---|---|
+| **Approve — implement now (restore your previous mode)** | Restores the permission mode you were in before entering plan mode (e.g. `default`, `acceptEdits`) and seeds the implement turn |
+| **Approve — implement now (bypass mode)** | Escalates to `bypassPermissions` — no approval prompts, read/write any path — then seeds the implement turn |
+| **Keep planning** | Stays in plan mode; the model continues refining |
+
+The mode flip is deferred to the start of the next turn — the gate stays locked in plan mode
+for the remainder of the current turn. On approval, the model is instructed to first save the
+plan to `.afk/plans/` as a markdown file, then implement it.
+
+You can also exit plan mode manually with `/plan off`.
+
+## Shift+Tab permission cycle
+
+Press **Shift+Tab** at any time to cycle the active permission mode. The cycle order is:
+
+```
+default → plan → bypassPermissions → default (wraps)
+```
+
+| Mode | What it does |
+|---|---|
+| `default` | Path containment + approval prompts active |
+| `plan` | Writes refused; read-only bash allowed, mutating bash blocked |
+| `bypassPermissions` | Path-approval prompts and containment off; read/write any path |
+
+Each press advances one step and prints a one-line status message. If the session is already
+in `autonomous` (AFK) mode, Shift+Tab exits AFK and lands on `default` — the key never
+_enters_ AFK. Use `/afk` to enter autonomous mode.
+
+See [Permissions](../configuration/permissions.mdx) for full mode descriptions.
 
 ## Streaming output
 

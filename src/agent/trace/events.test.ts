@@ -81,6 +81,38 @@ describe('tool_call payload', () => {
     ).toThrow();
   });
 
+  it('accepts and preserves batchIndex/batchSize on the completed phase', () => {
+    const parsed = ToolCallPayloadSchema.parse({
+      phase: 'completed',
+      toolUseId: 't1',
+      name: 'read_file',
+      resultBytes: 64,
+      isError: false,
+      truncated: false,
+      durationMs: 5,
+      batchIndex: 2,
+      batchSize: 3,
+    });
+    expect(parsed).toMatchObject({ batchIndex: 2, batchSize: 3 });
+  });
+
+  it('rejects a non-positive or non-integer batchIndex/batchSize', () => {
+    for (const bad of [{ batchIndex: 0, batchSize: 2 }, { batchIndex: 1, batchSize: 1.5 }, { batchIndex: -1, batchSize: 2 }]) {
+      expect(() =>
+        ToolCallPayloadSchema.parse({
+          phase: 'completed',
+          toolUseId: 't1',
+          name: 'grep',
+          resultBytes: 0,
+          isError: false,
+          truncated: false,
+          durationMs: 1,
+          ...bad,
+        }),
+      ).toThrow();
+    }
+  });
+
   it('rejects unknown phase', () => {
     expect(() =>
       ToolCallPayloadSchema.parse({
@@ -123,6 +155,64 @@ describe('hook_decision payload', () => {
         decision: undefined,
       }),
     ).not.toThrow();
+  });
+
+  // Regression: the pass-through case writes `decision: undefined`, and
+  // JSON.stringify drops undefined-valued keys, so a PERSISTED line has no
+  // `decision` key at all. The reader must accept the absent-key form. Under a
+  // `z.union([..., z.undefined()])` field, zod ≥4.4 rejected the missing key
+  // ("expected nonoptional"), silently invalidating ~every hook_decision line
+  // in `afk improve scan`. `.optional()` is what makes absence valid.
+  it('accepts a payload with the decision key entirely absent', () => {
+    expect(() =>
+      HookDecisionPayloadSchema.parse({ hookEvent: 'SessionStart' }),
+    ).not.toThrow();
+  });
+
+  it('round-trips a pass-through event through JSON (the reader path)', () => {
+    const event = {
+      ts: '2026-06-23T16:08:08.736Z',
+      seq: 7,
+      kind: 'hook_decision' as const,
+      payload: { hookEvent: 'SessionStart' as const, decision: undefined },
+    };
+    // JSON.stringify drops `decision: undefined`; the on-disk line has no key.
+    const onDisk = JSON.parse(JSON.stringify(event));
+    expect(Object.prototype.hasOwnProperty.call(onDisk.payload, 'decision')).toBe(false);
+    expect(TraceEventSchema.safeParse(onDisk).success).toBe(true);
+  });
+
+  it('accepts durationMs and approvalOutcome from the AFK high-risk gate', () => {
+    expect(() =>
+      HookDecisionPayloadSchema.parse({
+        hookEvent: 'PreToolUse',
+        decision: 'block',
+        reason: 'the operator denied it',
+        blockedTool: 'bash',
+        durationMs: 1234,
+        approvalOutcome: 'denied',
+      }),
+    ).not.toThrow();
+  });
+
+  it('accepts approvalOutcome:approved with no decision key (pass-through)', () => {
+    expect(() =>
+      HookDecisionPayloadSchema.parse({
+        hookEvent: 'PreToolUse',
+        durationMs: 42,
+        approvalOutcome: 'approved',
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects an unknown approvalOutcome value', () => {
+    expect(() =>
+      HookDecisionPayloadSchema.parse({
+        hookEvent: 'PreToolUse',
+        durationMs: 10,
+        approvalOutcome: 'maybe',
+      }),
+    ).toThrow();
   });
 
   it('rejects unknown hookEvent', () => {

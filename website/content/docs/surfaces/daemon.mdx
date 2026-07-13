@@ -8,7 +8,7 @@ cron expressions, on session start, or from a pull queue — and optionally push
 notifications via Telegram.
 
 ```bash
-afk daemon --cron "0 */6 * * *" --task "/forge-friction --auto"
+afk daemon --cron "0 */6 * * *" --task "/review --auto"
 ```
 
 ## Trigger modes
@@ -21,6 +21,19 @@ The daemon supports four trigger modes set with `--trigger`:
 | `sessionstart` | Fire once when the daemon starts |
 | `both` | Fire on sessionstart and then on the cron schedule |
 | `pull` | Dequeue tasks from a file-based queue (no cron expression needed) |
+
+### Pull mode
+
+`--trigger pull` starts the daemon without a cron expression. Instead of firing on a schedule,
+it polls `~/.afk/state/queue/` every 30 seconds and dequeues tasks written there by `afk queue add`.
+
+```bash
+afk daemon --trigger pull
+```
+
+No `--cron` or `--task` flag is needed. Tasks are consumed one-by-one in the order they were
+enqueued. Use pull mode when you want to push work to a running daemon on demand rather than
+on a fixed schedule.
 
 ## Common options
 
@@ -67,7 +80,7 @@ status (✅ success / ⏭️ skipped / ❌ failed), duration, and a response exc
 ```bash
 export TELEGRAM_BOT_TOKEN=1234567890:ABC...
 export AFK_TELEGRAM_ALLOWED_CHAT_IDS=12345678
-afk daemon --cron "0 2 * * *" --task "/mint run-nightly"
+afk daemon --cron "0 2 * * *" --task "run the nightly test suite and triage any failures"
 ```
 
 ## Scheduled tasks with `afk schedule`

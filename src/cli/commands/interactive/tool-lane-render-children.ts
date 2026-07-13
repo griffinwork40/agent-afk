@@ -151,7 +151,9 @@ function renderOverlayChildren(
     } else if (item.kind === 'resultSummary') {
       // resultSummary synthetics are not added for the overlay path (no
       // agentResultSummary in the overlay context), but handle gracefully.
-      lines.push(clampLineToTerminal(indentColored + connector + palette.dim(item.summary), cols));
+      // `.summary` is PRE-STYLED by summaryWithBatchBadge (dim base + self-dim
+      // batch badge) — emit verbatim; re-dimming would nest the badge's dim.
+      lines.push(clampLineToTerminal(indentColored + connector + item.summary, cols));
     } else {
       const child = item;
       const grandchildren = childMap.get(child.toolUseId);
@@ -392,7 +394,9 @@ function renderFlushChildren(
       lines.push(clampLineToTerminal(indentColored + connector + palette.dim(item.text), cols));
     } else if (item.kind === 'resultSummary') {
       // LAST connector from assignConnectors — not a hardcoded '⎿' (that was Bug #5).
-      lines.push(clampLineToTerminal(indentColored + connector + palette.dim(item.summary), cols));
+      // `.summary` is PRE-STYLED by summaryWithBatchBadge (dim base + self-dim
+      // batch badge) — emit verbatim; re-dimming would nest the badge's dim.
+      lines.push(clampLineToTerminal(indentColored + connector + item.summary, cols));
     } else if (item.kind === 'group') {
       lines.push(clampLineToTerminal(indentColored + connector + formatGroupedSibling(item), cols));
     } else {

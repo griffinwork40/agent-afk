@@ -209,24 +209,28 @@ export class MemoryStore {
       // on completion. The chain is exhaustive over [1, SCHEMA_VERSION); a
       // future step appends a new `if (existingVersion < N)` block.
       if (existingVersion < 2) {
-        // v1 → v2: add UNIQUE index on facts(content, created_at, session_id, category).
-        // First, deduplicate any colliding rows keeping the lowest id.
-        this.db.exec(`
-          DELETE FROM facts
-          WHERE id NOT IN (
-            SELECT MIN(id)
-            FROM facts
-            GROUP BY content, created_at, COALESCE(session_id, ''), category
-          );
-        `);
-        // Rebuild FTS index after the dedup deletes.
-        this.db.exec(`INSERT INTO facts_fts(facts_fts) VALUES('rebuild');`);
-        // Apply the new unique index.
-        this.db.exec(`
-          CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_fingerprint
-            ON facts(content, created_at, COALESCE(session_id, ''), category);
-        `);
-        this.db.pragma(`user_version = 2`);
+        // v1 → v2: add UNIQUE index on facts(content, created_at, session_id,
+        // category). Uses CREATE … IF NOT EXISTS — already idempotent — so a
+        // plain transaction wrapper is sufficient.
+        this.db.transaction(() => {
+          // First, deduplicate any colliding rows keeping the lowest id.
+          this.db.exec(`
+            DELETE FROM facts
+            WHERE id NOT IN (
+              SELECT MIN(id)
+              FROM facts
+              GROUP BY content, created_at, COALESCE(session_id, ''), category
+            );
+          `);
+          // Rebuild FTS index after the dedup deletes.
+          this.db.exec(`INSERT INTO facts_fts(facts_fts) VALUES('rebuild');`);
+          // Apply the new unique index.
+          this.db.exec(`
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_fingerprint
+              ON facts(content, created_at, COALESCE(session_id, ''), category);
+          `);
+          this.db.pragma(`user_version = 2`);
+        })();
         debugLog('memory-store: migrated schema v1 → v2 (added fingerprint UNIQUE index)');
       }
       if (existingVersion < 3) {
@@ -236,25 +240,26 @@ export class MemoryStore {
         // additive, but the SCHEMA_VERSION guard above still rejects a v3 DB
         // from older builds — see the deployment note.)
         //
-        // SQLite has no `ADD COLUMN IF NOT EXISTS`. The table_info check is
-        // cheap and covers sequential re-runs. It is NOT atomic across
-        // processes, though — this global DB is cold-opened concurrently by
-        // every AFK surface, so two new-build processes can race the ALTER and
-        // the loser throws "duplicate column name". Wrap it: treat an
-        // already-present column (re-checked via table_info, not the error
-        // text) as success; re-throw if the column stayed absent.
-        const hasActor = (): boolean =>
-          (this.db.pragma('table_info(sessions)') as Array<{ name: string }>).some(
+        // Invariant: pre-check-only pattern instead of try/catch. SQLite has
+        // no `ADD COLUMN IF NOT EXISTS`, and this global DB is cold-opened
+        // concurrently by every AFK surface, so two new-build processes can
+        // race the ALTER. By checking column presence INSIDE the transaction
+        // BEFORE attempting the ALTER we avoid a swallowed error masking a
+        // partial commit:
+        //   - Normal case: column absent → ALTER runs → version stamped → commit.
+        //   - Concurrent racer added the column first → pre-check sees it →
+        //     skip ALTER → stamp version → commit. (No try/catch needed.)
+        //   - Genuine ALTER failure (disk error) → transaction throws → ROLLS
+        //     BACK (version NOT stamped) → next open re-runs from existingVersion.
+        this.db.transaction(() => {
+          const hasActor = (this.db.pragma('table_info(sessions)') as Array<{ name: string }>).some(
             (col) => col.name === 'actor',
           );
-        if (!hasActor()) {
-          try {
+          if (!hasActor) {
             this.db.exec(`ALTER TABLE sessions ADD COLUMN actor TEXT;`);
-          } catch (err) {
-            if (!hasActor()) throw err;
           }
-        }
-        this.db.pragma(`user_version = 3`);
+          this.db.pragma(`user_version = 3`);
+        })();
         debugLog('memory-store: migrated schema v2 → v3 (added sessions.actor column)');
       }
       if (existingVersion < 4) {
@@ -262,24 +267,19 @@ export class MemoryStore {
         // citation backing a codebase fact). No default → existing rows read
         // back NULL (= uncited), so the migration cannot fail on stored data.
         //
-        // Same concurrency-safe ALTER wrapper as the v2→v3 actor migration:
-        // SQLite has no `ADD COLUMN IF NOT EXISTS`, and this global DB is
-        // cold-opened concurrently by every AFK surface, so two new-build
-        // processes can race the ALTER and the loser throws "duplicate column
-        // name". Treat an already-present column (re-checked via table_info,
-        // not the error text) as success; re-throw if the column stayed absent.
-        const hasEvidence = (): boolean =>
-          (this.db.pragma('table_info(facts)') as Array<{ name: string }>).some(
+        // Invariant: same pre-check-only pattern as v2→v3 (see comment above).
+        // The column presence check happens inside the transaction so the
+        // pre-check and ALTER are atomic: if the ALTER fails, the transaction
+        // rolls back and the version stamp is not advanced.
+        this.db.transaction(() => {
+          const hasEvidence = (this.db.pragma('table_info(facts)') as Array<{ name: string }>).some(
             (col) => col.name === 'evidence',
           );
-        if (!hasEvidence()) {
-          try {
+          if (!hasEvidence) {
             this.db.exec(`ALTER TABLE facts ADD COLUMN evidence TEXT;`);
-          } catch (err) {
-            if (!hasEvidence()) throw err;
           }
-        }
-        this.db.pragma(`user_version = 4`);
+          this.db.pragma(`user_version = 4`);
+        })();
         debugLog('memory-store: migrated schema v3 → v4 (added facts.evidence column)');
       }
     } else {

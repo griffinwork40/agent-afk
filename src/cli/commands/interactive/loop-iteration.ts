@@ -1,4 +1,5 @@
 import type { ReadWithAutocompleteResult } from '../../input-box.js';
+import type { UserPromptSubmitContext } from '../../../agent/hooks.js';
 import { formatSubmittedEcho } from '../../input/echo.js';
 import { describeAttachmentSummary, type ImageAttachment } from '../../input/attachments.js';
 import { dispatch as dispatchSlash, parse as parseSlash } from '../../slash/registry.js';
@@ -11,8 +12,10 @@ import {
 } from '../../slash/preflight/index.js';
 import { renderDebugBanner } from '../../debug-banner.js';
 import { isDebugEnabled, debugLog } from '../../../utils/debug.js';
+import { sanitizeForDisplay } from '../../../utils/terminal-sanitize.js';
 import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
+import { ringBellIfEnabled } from '../../_lib/capture-mode.js';
 import { cyclePermissionMode } from '../../permission-mode-cycle.js';
 import {
   autoRegisterPluginPassthroughs,
@@ -20,6 +23,9 @@ import {
 } from '../../slash/plugin-skills.js';
 import type { InteractiveCtx } from './shared.js';
 import { formatStatusFields } from './shared.js';
+import { AbortError, HookBlockedError } from '../../../utils/errors.js';
+import { HookHandlerTimeoutError } from '../../../agent/hook-registry.js';
+
 import type { TranscriptHandle } from './transcript.js';
 import { runTurn } from './turn-handler.js';
 import { saveSession } from '../../session-store.js';
@@ -27,6 +33,31 @@ import type { InputSurface } from '../../input/input-surface.js';
 import type { ReplHistory } from '../../input/history.js';
 import { buildPrompt, type TurnState } from './repl-loop-shared.js';
 import type { FooterSubsystems } from './footer-subsystems.js';
+
+/** Per-handler timeout for the post-turn Stop notification. Tighter than the
+ *  registry default (HOOK_HANDLER_TIMEOUT_MS = 30s) because Stop fires every
+ *  REPL turn — a notification hook must not stall the prompt for 30s × N handlers. */
+const STOP_HOOK_HANDLER_TIMEOUT_MS = 5_000;
+
+/**
+ * Session-wide cap on autonomous auto-resumes — an idle REPL woken by a settled
+ * background subagent (see the `onInjectable` wiring below). Circuit breaker
+ * against a self-perpetuating loop: a woken turn can itself dispatch another
+ * background job that settles and re-wakes the session. This bounds that chain;
+ * once hit, further results still deliver on the user's next manual turn.
+ * Mirrors the per-session budget precedent in `background-summarizer.ts`.
+ */
+const MAX_AUTO_RESUMES_PER_SESSION = 3;
+
+/**
+ * User-message text seeded when a background result auto-resumes an idle REPL.
+ * The settled-result envelope is prepended at drain time (`runText = envelope +
+ * this`), so the model sees the finished result followed by an explicit, honest
+ * continue instruction — never a spoofed empty turn. The `[auto-resume]` tag
+ * also makes the woken turn legible when scrolling back through history.
+ */
+const AUTO_RESUME_DIRECTIVE =
+  '[auto-resume] The background task above has finished. Continue the work it was dispatched for.';
 
 async function runFirstTurnHookIfNeeded(ctx: InteractiveCtx, text: string): Promise<void> {
   // First-turn hook — awaited before any first-turn side effect that relies on
@@ -79,7 +110,7 @@ export async function runInputLoop(
   footer: FooterSubsystems,
   history: ReplHistory,
 ): Promise<void> {
-  const { contextPane, loopStageBar, verdictLedger, shellPassthrough } =
+  const { contextPane, loopStageBar, verdictLedger, shellPassthrough, bgResultNotifier } =
     footer;
 
   // Init metadata (tools/MCP/SDK version) only resolves once the SDK
@@ -117,7 +148,16 @@ export async function runInputLoop(
   // (user types + Enters mid-turn) was retired in Stage 3e because the
   // persistent compositor now handles that natively (queued buffer →
   // setInputMode('idle') flush via the surface's onSubmit handler).
-  let seedBuffer: { text: string; attachments: readonly ImageAttachment[] } | undefined;
+  //
+  // Pre-seeded from `ctx.initialInput` when the session was launched with a
+  // first-message argument (`afk "prompt"` / `afk /review`): the first loop
+  // iteration takes the same fast-path, so the launch arg is echoed and
+  // dispatched (slash command or model turn) exactly as if the user had typed
+  // it and pressed Enter.
+  let seedBuffer: { text: string; attachments: readonly ImageAttachment[] } | undefined =
+    ctx.initialInput !== undefined
+      ? { text: ctx.initialInput, attachments: [] }
+      : undefined;
 
   // First-use notice for ! shell passthrough: shown once per session on the
   // first `!cmd` dispatch so users who relied on `!literal text` as model
@@ -130,6 +170,45 @@ export async function runInputLoop(
   // conversation is resumable. Surface the FIRST failure per session; stay
   // quiet afterwards so a broken disk doesn't spam the transcript every turn.
   let autosaveFailureLogged = false;
+
+  // Post-turn Stop-hook injection. When a Stop handler returns injectContext
+  // (e.g. the terminal-state gate bouncing a self-certified `Done` with no
+  // corroborating evidence — see terminal-state-gate.ts), we stash it here and
+  // prepend it to the NEXT turn's prompt at the top of the loop — the same
+  // next-turn delivery contract as the shell/bg-result injections below.
+  // Cross-turn state is exactly what the v1 Stop wiring deferred (see the Stop
+  // dispatch site at the bottom of the loop).
+  let pendingStopInjection: string | undefined;
+  // Parsed terminal-state kind + corroborating-evidence flag of the current
+  // turn, captured from onTerminalState (which fires during runTurn) so the
+  // post-turn Stop dispatch can carry them on StopContext for policy handlers.
+  // Reset before every runTurn so a verdict-less turn never reuses a stale kind.
+  let currentTerminalKind: 'done' | 'blocked' | 'asking' | 'interrupted' | undefined;
+  let currentDoneHasEvidence: boolean | undefined;
+
+  // Auto-resume: wake an idle prompt when a background subagent result lands so
+  // the session continues its work without waiting for a keystroke. Fires only
+  // for injectable results (the notifier gates on AFK_BG_AUTO_DELIVER + skips
+  // cancels before invoking this), and only when the prompt is genuinely idle —
+  // blocked on readLine (isAwaitingInput) with an empty input buffer, so a
+  // half-typed line is never clobbered and a result that lands mid-turn just
+  // delivers on the next drain. Bounded by MAX_AUTO_RESUMES_PER_SESSION as a
+  // circuit breaker. TTY-only: isAwaitingInput() is false on the non-TTY reader.
+  let autoResumeCount = 0;
+  bgResultNotifier.onInjectable = () => {
+    if (autoResumeCount >= MAX_AUTO_RESUMES_PER_SESSION) return;
+    if (!surface.isAwaitingInput() || !surface.bufferIsEmpty()) return;
+    autoResumeCount++;
+    // Audible cue (no-op unless AFK_BELL=1 + TTY) before the seeded turn takes
+    // over the prompt — the human-facing "your background work resumed" signal.
+    ringBellIfEnabled(process.stdout);
+    // Set the function-scope seed FIRST, then wake. abortPendingRead resolves
+    // the in-flight readLine with an empty payload, tripping the empty-input
+    // `continue` below; the next iteration's seed fast-path fires the directive
+    // and the drain prepends the result envelope (runText = envelope + directive).
+    seedBuffer = { text: AUTO_RESUME_DIRECTIVE, attachments: [] };
+    surface.abortPendingRead();
+  };
 
   while (true) {
       if (pendingInitMeta) {
@@ -163,6 +242,22 @@ export async function runInputLoop(
           palette.dim(`  ${glyph} [${job.id}] ${exitPart} · ${seconds}s · `) + job.command,
         );
       }
+      // Background-subagent completion notifications — one line per settled
+      // `agent`-tool background job (mode:"background" or Ctrl+B promotion)
+      // since the last prompt. The result itself reaches the model via
+      // `bgResultNotifier.drainInjections()` below; this notice is
+      // human-summary-only, matching the shell-job style above.
+      const bgAgentNotifications = bgResultNotifier.drainNotifications();
+      for (const { job } of bgAgentNotifications) {
+        const glyph = job.status === 'completed' ? '✓' : job.status === 'failed' ? '✗' : '⊘';
+        const seconds = job.endedAt !== undefined
+          ? Math.max(0, Math.round((job.endedAt - job.startedAt) / 100) / 10)
+          : 0;
+        const label = job.label.length > 60 ? `${job.label.slice(0, 60)}…` : job.label;
+        ctx.replRenderer.writeLine(
+          palette.dim(`  ${glyph} [${job.jobId}] subagent ${job.status} · ${seconds}s · `) + label,
+        );
+      }
       const paneLines = contextPane.renderIfChanged(ctx.stats.sessionId);
       if (paneLines.length > 0) {
         for (const l of paneLines) ctx.replRenderer.writeLine(l);
@@ -172,6 +267,26 @@ export async function runInputLoop(
       // row by verdictLedger itself (started above). No inline writeLine here.
       let text: string;
       let attachments: ReadWithAutocompleteResult['attachments'];
+
+      // Drain any implement-turn queued by an approved `exit_plan_mode` tool
+      // call during the previous turn. The session held it (the per-turn tool
+      // dispatcher can't reach this REPL loop), so we promote it to the seed
+      // buffer here, post-turn — the model-proposed counterpart to `/plan off`'s
+      // seeded save-and-implement handoff. A `/plan off` seed (set directly,
+      // same turn) takes precedence if both are somehow present.
+      if (seedBuffer === undefined) {
+        const planExit = await ctx.session.current.takePendingPlanExitSeed();
+        if (planExit !== undefined) {
+          // #495: takePendingPlanExitSeed already applied the deferred flip to
+          // the SESSION's mode, but the plan-mode gate and this loop's prompt
+          // read `stats.permissionMode` (bootstrap wires the gate to
+          // `() => stats.permissionMode`). Mirror the applied mode here — exactly
+          // as `togglePlanMode` does for `/plan off` — or the gate stays
+          // plan-locked and the operator's prompt indicator never flips.
+          ctx.stats.permissionMode = planExit.mode;
+          seedBuffer = { text: planExit.message, attachments: [] };
+        }
+      }
 
       if (seedBuffer !== undefined) {
         // Slash-command follow-up: a previous handler returned
@@ -185,7 +300,7 @@ export async function runInputLoop(
         // readLine echo path so scrollback parity holds).
         const queued = seedBuffer;
         seedBuffer = undefined;
-        const prompt = buildPrompt(ctx.stats.model, ctx.stats.permissionMode);
+        const prompt = buildPrompt(ctx.stats.permissionMode);
         const echo = formatSubmittedEcho({
           buffer: queued.text,
           promptText: prompt,
@@ -201,7 +316,7 @@ export async function runInputLoop(
         // on non-TTY surfaces. Shift+Tab and onSigint are wired ONCE at
         // armCompositor time (above) — no need to re-pass per-call.
         const result = await surface.readLine({
-          promptFn: () => buildPrompt(ctx.stats.model, ctx.stats.permissionMode),
+          promptFn: () => buildPrompt(ctx.stats.permissionMode),
           onSigint: sigintHandler,
           onShiftTab: () => {
             // Shift+Tab is the keyboard speed lane: it advances the permission-
@@ -273,8 +388,11 @@ export async function runInputLoop(
             ctx.replRenderer.writeLine(palette.dim(`  transcript: ${transcript.path()}`));
             // The conversation has been wiped — its verdict trajectory is
             // no longer meaningful. Drop the ledger so the next prompt
-            // doesn't carry stale state into a fresh session.
+            // doesn't carry stale state into a fresh session. Same reasoning
+            // clears any pending post-turn Stop correction from the old
+            // conversation so it can't leak into the fresh one.
             verdictLedger.reset();
+            pendingStopInjection = undefined;
           }
           if (
             res.result !== null &&
@@ -394,7 +512,75 @@ export async function runInputLoop(
         runText = shellInjection + runText;
       }
 
+      // Prepend any settled background-subagent results so the model sees
+      // them as context for the next user message — same next-turn delivery
+      // contract as shell passthrough above. Drain also emits a `delivered`
+      // witness event per job; /bgsub:join remains available for replay.
+      const bgAgentInjection = bgResultNotifier.drainInjections();
+      if (bgAgentInjection.length > 0) {
+        runText = bgAgentInjection + runText;
+      }
 
+      // Prepend a pending post-turn Stop-hook correction stashed after the
+      // previous turn's Stop dispatch (e.g. the terminal-state gate bouncing a
+      // self-certified `Done` with no evidence). Same next-turn delivery as the
+      // shell/bg injections above; consumed exactly once (cleared on drain).
+      // Drained AFTER shell/bg so the framework correction sits at the top of
+      // the prompt, directly below any UserPromptSubmit injection added below.
+      if (pendingStopInjection !== undefined) {
+        runText = pendingStopInjection + '\n\n' + runText;
+        pendingStopInjection = undefined;
+      }
+
+      // UserPromptSubmit hook — fires before every turn submission.
+      // Handlers may block the turn (HookBlockedError → continue loop),
+      // inject additional context (prepended to runText), or approve silently.
+      // A handler timeout (HookHandlerTimeoutError) fails closed like a block;
+      // AbortError and any other throw propagate out of the loop unchanged.
+      if (ctx.hookRegistry) {
+        try {
+          const upsCtx: UserPromptSubmitContext = {
+            event: 'UserPromptSubmit',
+            prompt: runText,
+            sessionId: ctx.stats.sessionId,
+          };
+          const upsDecision = await ctx.hookRegistry.dispatch(upsCtx);
+          if (upsDecision.injectContext) {
+            runText = upsDecision.injectContext + runText;
+          }
+        } catch (err) {
+          if (err instanceof HookBlockedError) {
+            ctx.replRenderer.writeLine(
+              palette.warning('⊘ Turn blocked by hook') +
+                (err.reason ? palette.dim(`: ${sanitizeForDisplay(err.reason)}`) : ''),
+            );
+            ctx.statusLine.rearm();
+            continue;
+          }
+          // A handler that exceeds HOOK_HANDLER_TIMEOUT_MS fails closed exactly
+          // like a deliberate block. hook-registry re-throws
+          // HookHandlerTimeoutError raw (so dispatchSubagentStop can distinguish
+          // a timeout from a block); here we drop the turn with a notice rather
+          // than letting the timeout unwind and crash the REPL loop.
+          if (err instanceof HookHandlerTimeoutError) {
+            ctx.replRenderer.writeLine(
+              palette.warning('⊘ Turn blocked by hook') +
+                palette.dim(`: handler timed out after ${err.timeoutMs}ms`),
+            );
+            ctx.statusLine.rearm();
+            continue;
+          }
+          // AbortError (Ctrl-C teardown) and every other non-block, non-timeout
+          // throw propagate out of the REPL loop unchanged.
+          throw err;
+        }
+      }
+
+      // Reset the per-turn verdict capture so a turn that emits no terminal
+      // state never carries the previous turn's kind into the Stop dispatch.
+      // onTerminalState re-sets these during runTurn when a verdict parses.
+      currentTerminalKind = undefined;
+      currentDoneHasEvidence = undefined;
       await runTurn({ text: runText, attachments }, ctx.session.current, ctx.stats, {
         setInFlight(v: boolean) { turnState.turnInFlight = v; },
         // Forward the promotion seam so Ctrl+B can background a running
@@ -440,6 +626,9 @@ export async function runInputLoop(
         },
         async onAfterTurn() {
           await ctx.contextSampler.onTurn(ctx.stats.totalTurns);
+          // Re-sample the git branch each turn (cheap, local). The PR lookup
+          // (network) is detached inside refresh() and lands on a later repaint.
+          await ctx.gitStatusSampler.refresh();
           ctx.statusLine.rearm();
           // Reset the loop-stage bar to 'observing' so the footer rail shows
           // a clean "waiting" state between turns rather than the last active
@@ -447,7 +636,13 @@ export async function runInputLoop(
           loopStageBar?.repaint('observing');
         },
         rearmStatus: () => ctx.statusLine.rearm(),
-        onTerminalState: (state) => verdictLedger?.push(state),
+        onTerminalState: (state, meta) => {
+          verdictLedger?.push(state);
+          // Capture for the post-turn Stop dispatch (StopContext). Fires during
+          // runTurn, so these are set by the time Stop dispatches at loop tail.
+          currentTerminalKind = state.kind;
+          currentDoneHasEvidence = meta?.doneHasCorroboratingEvidence;
+        },
         setActiveCompositor: (c) => {
           // Publish the active compositor for the SIGINT handler (which
           // routes the interrupt notice through `commitAbove` when an
@@ -480,13 +675,13 @@ export async function runInputLoop(
         setPauseInterruptHandler: (handler) => surface.setPauseInterruptHandler(handler),
         async onContextProgress() {
           await ctx.contextSampler.refresh();
-          ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler));
+          ctx.statusLine.repaint(formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler));
         },
         // Repaint the LoopStageBar footer row whenever the agent's loop stage
         // transitions.  The bar is a per-session singleton; the callback is
         // safe to call on non-TTY (LoopStageBar.repaint() TTY-gates itself).
         ...(loopStageBar ? { onStageChange: (stage) => loopStageBar!.repaint(stage) } : {}),
-      }, ctx.options.thinkingUi, ctx.completionWriter,
+      }, ctx.stats.thinkingUi ?? ctx.options.thinkingUi, ctx.completionWriter,
         // Surface refs threaded into the per-turn StreamRenderer for the
         // legacy non-borrow path (non-TTY, when surface.getCompositor()
         // is null and the renderer constructs its own compositor). In
@@ -494,7 +689,70 @@ export async function runInputLoop(
         // by armCompositor and the renderer's borrow skips this branch
         // — passing them anyway is a defensive belt-and-suspenders for
         // surfaces that haven't armed (e.g. a future test path).
-        surface.toRunTurnRefs(buildPrompt(ctx.stats.model, ctx.stats.permissionMode)),
+        surface.toRunTurnRefs(buildPrompt(ctx.stats.permissionMode)),
       );
+
+      // Contract: Stop fires post-turn. A Stop handler may return injectContext
+      // to bounce a correction into the NEXT turn — stashed in
+      // pendingStopInjection and drained at the top of the loop (the terminal-
+      // state gate uses this). AbortError propagates (abort precedence is
+      // non-negotiable). HookBlockedError surfaces a brief notice and continues
+      // -- block still does NOT force REPL continuation (block-to-force-
+      // continuation remains deferred; only injectContext-into-next-turn, which
+      // needed the cross-turn state now declared above, is wired here).
+      //
+      // Invariant: Stop fires only on non-throwing runTurn completions. Any
+      // throw from runTurn (including model errors and abort) bypasses this
+      // block entirely -- error and abort paths skip Stop by design. The
+      // sequential placement (not finally) is intentional: Stop signals
+      // successful turn completion, not turn exit.
+      //
+      // Invariant: slash-command-only iterations (res.handled paths above)
+      // end in `continue` before reaching this block, so Stop does not fire
+      // for slash-command-only turns. Only turns that invoke runTurn trigger
+      // Stop.
+      //
+      // Contract: Stop dispatch uses STOP_HOOK_HANDLER_TIMEOUT_MS (5s) rather
+      // than the registry default (30s) because Stop fires every REPL turn —
+      // a notification hook must not stall the prompt for 30s × N handlers.
+      if (ctx.hookRegistry) {
+        try {
+          const stopDecision = await ctx.hookRegistry.dispatch(
+            {
+              event: 'Stop',
+              sessionId: ctx.stats.sessionId,
+              // Carry the just-completed turn's parsed verdict (captured via
+              // onTerminalState during runTurn) so post-turn policy handlers —
+              // the terminal-state gate — can read it. Omitted when the turn
+              // emitted no recognizable terminal state.
+              ...(currentTerminalKind !== undefined ? { terminalState: currentTerminalKind } : {}),
+              ...(currentDoneHasEvidence !== undefined
+                ? { doneHasCorroboratingEvidence: currentDoneHasEvidence }
+                : {}),
+            },
+            undefined,
+            STOP_HOOK_HANDLER_TIMEOUT_MS,
+          );
+          // Stash any handler-returned correction for delivery on the next turn
+          // (drained at the top of the loop). dispatch() already merges
+          // injectContext across non-blocking handlers (#345), so this is the
+          // single merged string; a whitespace-only value is ignored.
+          if (stopDecision.injectContext && stopDecision.injectContext.trim().length > 0) {
+            pendingStopInjection = stopDecision.injectContext;
+          }
+        } catch (err) {
+          if (err instanceof AbortError) throw err;
+          if (err instanceof HookHandlerTimeoutError) {
+            debugLog('[stop hook] handler timed out');
+            ctx.completionWriter.fn(palette.dim('  [stop hook] timed out'));
+          } else if (err instanceof HookBlockedError) {
+            ctx.completionWriter.fn(
+              palette.dim(`  [stop hook] blocked: ${sanitizeForDisplay(err.reason ?? 'no reason given')}`),
+            );
+          } else {
+            debugLog('[stop hook] unexpected error: ' + String(err));
+          }
+        }
+      }
     }
 }

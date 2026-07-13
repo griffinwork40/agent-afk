@@ -33,7 +33,9 @@ describe('interactive bootstrap status line hooks', () => {
     }));
     vi.doMock('../agent/default-hook-registry.js', () => ({
       createDefaultHookRegistry: vi.fn(() => ({
-        registry: {},
+        // register stub: bootstrap now registers the terminal-state gate (#237)
+        // on the 'Stop' event, so the mock registry must expose `.register`.
+        registry: { register: vi.fn() },
         memoryStore: { close: vi.fn() },
         // Real factory always returns this ref (default-hook-registry.ts:72,125);
         // bootstrap.ts:601 writes `.current` once the provider exists, so the mock
@@ -55,14 +57,19 @@ describe('interactive bootstrap status line hooks', () => {
       parseProvider: vi.fn(() => undefined),
       getApiKey: vi.fn(() => 'test-key'),
       getApiKeyForModel: vi.fn(() => 'test-key'),
+      getModel: vi.fn(() => 'sonnet'),
       getThinking: vi.fn(() => undefined),
       getEffort: vi.fn(() => undefined),
       getMaxOutputTokens: vi.fn(() => undefined),
+      getMaxToolUseIterations: vi.fn(() => undefined),
       getDefaultSubagentModel: vi.fn(() => 'sonnet'),
       findClaudeExecutable: vi.fn(() => '/usr/bin/claude'),
       loadSystemPrompt: vi.fn(() => undefined),
       loadConfigSystemPrompt: vi.fn(() => undefined),
       resolveBaseSystemPrompt: vi.fn(() => ({ prompt: undefined, source: 'none' })),
+      // Required since bootstrap.ts now calls isGrantManager — return false so
+      // the pre-existing tests don't care about grant wiring.
+      isGrantManager: vi.fn(() => false),
     }));
     vi.doMock('./status-line.js', () => ({
       StatusLine: vi.fn(() => statusLine),
@@ -189,7 +196,9 @@ describe('interactive bootstrap — P1: suggestBaseUrl mirrors openaiBaseUrl', (
     }));
     vi.doMock('../agent/default-hook-registry.js', () => ({
       createDefaultHookRegistry: vi.fn(() => ({
-        registry: {},
+        // register stub: bootstrap now registers the terminal-state gate (#237)
+        // on the 'Stop' event, so the mock registry must expose `.register`.
+        registry: { register: vi.fn() },
         memoryStore: { close: vi.fn() },
         // Real factory always returns this ref (default-hook-registry.ts);
         // bootstrap.ts writes `.current` once the provider exists, so the mock
@@ -212,14 +221,19 @@ describe('interactive bootstrap — P1: suggestBaseUrl mirrors openaiBaseUrl', (
       parseProvider: vi.fn(() => undefined),
       getApiKey: vi.fn(() => 'test-key'),
       getApiKeyForModel: vi.fn(() => 'test-key'),
+      getModel: vi.fn(() => 'sonnet'),
       getThinking: vi.fn(() => undefined),
       getEffort: vi.fn(() => undefined),
       getMaxOutputTokens: vi.fn(() => undefined),
+      getMaxToolUseIterations: vi.fn(() => undefined),
       getDefaultSubagentModel: vi.fn(() => 'sonnet'),
       findClaudeExecutable: vi.fn(() => '/usr/bin/claude'),
       loadSystemPrompt: vi.fn(() => undefined),
       loadConfigSystemPrompt: vi.fn(() => undefined),
       resolveBaseSystemPrompt: vi.fn(() => ({ prompt: undefined, source: 'none' })),
+      // Required since bootstrap.ts now calls isGrantManager — return false so
+      // these tests don't care about grant wiring.
+      isGrantManager: vi.fn(() => false),
     }));
     vi.doMock('./status-line.js', () => ({
       StatusLine: vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), repaint: vi.fn() })),
@@ -1020,5 +1034,164 @@ describe('interactive signal-handler wiring (PR #486)', () => {
     // both layers cooperate to keep this at exactly one call.
     expect(abortSpy).toHaveBeenCalledTimes(1);
     expect(abortSpy).toHaveBeenCalledWith('sigterm');
+  });
+});
+
+/**
+ * Regression guard for issue #166: path-approval grant wiring for
+ * OpenAI-compatible providers.
+ *
+ * Before the fix, `bootstrapSession` gated the grant-wiring block on
+ * `instanceof AnthropicDirectProvider`, so any OpenAI-compatible provider
+ * (GPT-4o, local vLLM, etc.) left `pathApprovalGrantRef.current` undefined
+ * and path-approval failed open silently.
+ *
+ * The fix replaces the `instanceof` check with a structural `isGrantManager`
+ * guard so any provider exposing the four GrantManager methods gets wired —
+ * regardless of its concrete class.
+ */
+describe('interactive bootstrap — path-approval grant wiring for OpenAI-compatible providers', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * A minimal provider stub that satisfies both the ModelProvider duck-type
+   * the bootstrap expects AND the GrantManager interface, but without
+   * opening any real resources (no SQLite, no HTTP connections).
+   */
+  function makeOpenAICompatStub() {
+    const readRoots: string[] = [];
+    return {
+      // GrantManager surface — the methods isGrantManager checks for
+      addReadRoot: vi.fn((absPath: string) => { readRoots.push(absPath); }),
+      addWriteRoot: vi.fn(),
+      revokeRoot: vi.fn(),
+      getGrants: vi.fn(() => ({
+        resolveBase: undefined,
+        readRoots: [...readRoots],
+        writeRoots: [],
+        allowAll: false,
+      })),
+      // ModelProvider minimum surface bootstrap touches before the wiring block
+      close: vi.fn(),
+    };
+  }
+
+  /**
+   * Helper that wires all mocks needed for bootstrapSession to reach the grant-
+   * wiring block. `pathApprovalGrantRef` is the observable bundle returned by the
+   * mock hook registry — its `.current` must be set to `stub` by bootstrap when
+   * `stub` passes the isGrantManager check.
+   */
+  function applyGrantWiringMocks(
+    stub: ReturnType<typeof makeOpenAICompatStub>,
+    pathApprovalGrantRef: { current: unknown },
+  ) {
+    const rl = { on: vi.fn(), close: vi.fn() };
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.doMock('node:readline', () => ({ createInterface: vi.fn(() => rl) }));
+    vi.doMock('../agent/session.js', () => ({
+      AgentSession: class MockAgentSession {
+        close = vi.fn(async () => undefined);
+        interrupt = vi.fn(async () => undefined);
+      },
+    }));
+    vi.doMock('../agent/default-hook-registry.js', () => ({
+      createDefaultHookRegistry: vi.fn(() => ({
+        // register stub: bootstrap now registers the terminal-state gate (#237)
+        // on the 'Stop' event, so the mock registry must expose `.register`.
+        registry: { register: vi.fn() },
+        memoryStore: { close: vi.fn() },
+        pathApprovalGrantRef,
+      })),
+    }));
+    vi.doMock('../agent/memory/index.js', () => ({
+      MemoryStore: vi.fn(() => ({ close: vi.fn() })),
+      injectHotMemory: vi.fn((config: unknown) => config),
+      memoryToolSchemas: [],
+      MEMORY_TOOL_NAMES: [],
+      createMemoryHandlers: vi.fn(() => new Map()),
+    }));
+    // Mock shared-helpers — BUT keep isGrantManager real and parseProvider
+    // returning the OpenAI-compatible stub so the wiring block fires.
+    vi.doMock('./shared-helpers.js', () => ({
+      parseThinking: vi.fn(() => undefined),
+      parseEffort: vi.fn(() => undefined),
+      parseMaxOutputTokens: vi.fn(() => undefined),
+      // parseProvider returns our stub — this causes the memoized factory to
+      // build stub as startupProvider, which then passes isGrantManager.
+      parseProvider: vi.fn(() => stub),
+      getApiKey: vi.fn(() => 'test-key'),
+      getApiKeyForModel: vi.fn(() => 'test-key'),
+      getModel: vi.fn(() => 'sonnet'),
+      getThinking: vi.fn(() => undefined),
+      getEffort: vi.fn(() => undefined),
+      getMaxOutputTokens: vi.fn(() => undefined),
+      getMaxToolUseIterations: vi.fn(() => undefined),
+      getDefaultSubagentModel: vi.fn(() => 'sonnet'),
+      findClaudeExecutable: vi.fn(() => '/usr/bin/claude'),
+      loadSystemPrompt: vi.fn(() => undefined),
+      loadConfigSystemPrompt: vi.fn(() => undefined),
+      resolveBaseSystemPrompt: vi.fn(() => ({ prompt: undefined, source: 'none' })),
+      // isGrantManager is the guard under test — keep the real structural check.
+      isGrantManager: (p: unknown): boolean => {
+        if (p === null || typeof p !== 'object') return false;
+        const obj = p as Record<string, unknown>;
+        return (
+          typeof obj['addReadRoot'] === 'function' &&
+          typeof obj['addWriteRoot'] === 'function' &&
+          typeof obj['revokeRoot'] === 'function' &&
+          typeof obj['getGrants'] === 'function'
+        );
+      },
+    }));
+    vi.doMock('./status-line.js', () => ({
+      StatusLine: vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), repaint: vi.fn() })),
+    }));
+    vi.doMock('./slash/index.js', () => ({ registerAll: vi.fn() }));
+    vi.doMock('./slash/writer.js', () => ({
+      createConsoleWriter: vi.fn(() => ({
+        line: vi.fn(), raw: vi.fn(), success: vi.fn(),
+        info: vi.fn(), warn: vi.fn(), error: vi.fn(),
+      })),
+    }));
+  }
+
+  it('wires pathApprovalGrantRef when the startup provider implements GrantManager (OpenAI-compat path)', async () => {
+    const stub = makeOpenAICompatStub();
+    // Observable ref for pathApprovalGrantRef — bootstrap must set .current to stub.
+    const pathApprovalGrantRef: { current: unknown } = { current: undefined };
+    applyGrantWiringMocks(stub, pathApprovalGrantRef);
+
+    // Use importActual to bypass any cached mock for bootstrap — other tests
+    // in this file register vi.doMock('./commands/interactive/bootstrap.js', ...)
+    // which persists in the mock registry and would shadow the real import.
+    const { bootstrapSession } = await vi.importActual<typeof import('./commands/interactive/bootstrap.js')>('./commands/interactive/bootstrap.js');
+    await bootstrapSession({ model: 'gpt-4o', maxTurns: '10' });
+
+    // pathApprovalGrantRef.current must be set to the GrantManager stub.
+    // This test FAILS on origin/main (instanceof AnthropicDirectProvider check
+    // skips the wiring block for non-Anthropic providers) and PASSES after fix.
+    expect(pathApprovalGrantRef.current).toBe(stub);
+  });
+
+  it('does NOT set pathApprovalGrantRef.current when the startup provider lacks GrantManager methods', async () => {
+    // A stub that has close() but NONE of the four GrantManager methods.
+    const noGrantsStub = { close: vi.fn() } as unknown as ReturnType<typeof makeOpenAICompatStub>;
+    const pathApprovalGrantRef: { current: unknown } = { current: undefined };
+    applyGrantWiringMocks(noGrantsStub, pathApprovalGrantRef);
+
+    const { bootstrapSession } = await vi.importActual<typeof import('./commands/interactive/bootstrap.js')>('./commands/interactive/bootstrap.js');
+    await bootstrapSession({ model: 'gpt-4o', maxTurns: '10' });
+
+    // pathApprovalGrantRef.current must remain undefined — the no-grants stub
+    // fails isGrantManager, so the else-warn branch fires instead.
+    expect(pathApprovalGrantRef.current).toBeUndefined();
   });
 });

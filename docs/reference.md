@@ -82,7 +82,6 @@ The interactive REPL registers slash commands directly in TypeScript (`src/cli/s
 - `/exit`, `/quit` — leave the REPL
 - `/clear` — clear screen
 - `/compact` — manually compact conversation history
-- `/reset` — start a fresh session, discarding history
 
 ### Information
 - `/cost` — running cost for the session
@@ -90,14 +89,13 @@ The interactive REPL registers slash commands directly in TypeScript (`src/cli/s
 - `/history` — print prior turns
 - `/model` — show or switch active model
 - `/tools` — list registered tools
-- `/mcp` — show MCP server status
+- `/mcp` — show MCP server status ([full docs](mcp.md))
 - `/limits` — show rate-limit / budget state
 - `/debug` — toggle verbose debug output
 
 ### Planning & state
 - `/plan` — open the plan editor
 - `/todo` — manage the persistent todo list
-- `/save` — snapshot session state to disk
 - `/resume` — resume a saved session
 - `/init` — scan the current project and write `AFK.md`
 - `/changelog` — render `CHANGELOG.md` paginated
@@ -191,7 +189,7 @@ The setup wizard prompts for the token and the chat IDs allowed to interact with
 
 **Bot commands:**
 - `/start` — welcome
-- `/reset` — clear conversation
+- `/clear` — clear conversation history
 - `/model local|small|medium|large|opus|sonnet|haiku|fable` — switch model
 
 Send any other message to chat. The bot runs in the default permission mode — tools execute without per-tool prompts, and file access outside the working directory stays contained.

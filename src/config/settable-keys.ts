@@ -21,6 +21,7 @@
  */
 
 import { getEnvVarMeta, type EnvVarMeta } from './env.js';
+import { coerceSlotBindingInput, type ModelSlotBinding } from '../agent/session/model-slots.js';
 
 // ── Env-var classification ───────────────────────────────────────────────────
 
@@ -168,7 +169,7 @@ export function coerceEnvValue(meta: EnvVarMeta, raw: string): CoerceResult {
 // ── Config-key (afk.config.json) classification + validation ──────────────────
 
 export type ConfigKeyTier = 'agent' | 'human';
-export type ConfigKeyType = 'string' | 'number' | 'boolean' | 'enum' | 'number-array';
+export type ConfigKeyType = 'string' | 'number' | 'boolean' | 'enum' | 'number-array' | 'model-slot';
 
 export interface ConfigKeySpec {
   /** Dotted path, e.g. `models.large` or `telegram.notify.mode`. */
@@ -195,11 +196,11 @@ export interface ConfigKeySpec {
  */
 export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'model', tier: 'agent', type: 'string', description: 'Default model id / alias.' },
-  { path: 'models.local', tier: 'agent', type: 'string', description: 'Local-tier model id (OpenAI-compatible shim: Ollama, LM Studio, vLLM, MLX).' },
-  { path: 'models.small', tier: 'agent', type: 'string', description: 'Small-tier model id.' },
-  { path: 'models.medium', tier: 'agent', type: 'string', description: 'Medium-tier model id.' },
-  { path: 'models.large', tier: 'agent', type: 'string', description: 'Large-tier model id.' },
-  { path: 'maxTokens', tier: 'agent', type: 'number', clamp: { min: 1, max: 1_000_000, integer: true }, description: 'Max tokens per turn.' },
+  { path: 'models.local', tier: 'agent', type: 'model-slot', description: 'Local-tier model id (OpenAI-compatible shim: Ollama, LM Studio, vLLM, MLX). Accepts a bare id string or a { id, provider, name } object (provider: anthropic | openai | chatgpt-oauth — chatgpt is accepted shorthand; baseUrl/apiKey are human-gated: set them via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here).' },
+  { path: 'models.small', tier: 'agent', type: 'model-slot', description: 'Small-tier model id. Accepts a bare id string or a { id, provider, name } object (provider: anthropic | openai | chatgpt-oauth — chatgpt is accepted shorthand; baseUrl/apiKey are human-gated: set them via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here).' },
+  { path: 'models.medium', tier: 'agent', type: 'model-slot', description: 'Medium-tier model id. Accepts a bare id string or a { id, provider, name } object (provider: anthropic | openai | chatgpt-oauth — chatgpt is accepted shorthand; baseUrl/apiKey are human-gated: set them via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here).' },
+  { path: 'models.large', tier: 'agent', type: 'model-slot', description: 'Large-tier model id. Accepts a bare id string or a { id, provider, name } object (provider: anthropic | openai | chatgpt-oauth — chatgpt is accepted shorthand; baseUrl/apiKey are human-gated: set them via the AFK_MODEL_<TIER>_BASE_URL / _API_KEY env vars, not here).' },
+  { path: 'maxTokens', tier: 'agent', type: 'number', clamp: { min: 1, max: 1_000_000, integer: true }, description: 'Deprecated and inert: not read by the generation path. Use AFK_MAX_OUTPUT_TOKENS or --max-output-tokens to cap per-response output.' },
   { path: 'temperature', tier: 'agent', type: 'number', clamp: { min: 0, max: 2 }, description: 'Sampling temperature.' },
   { path: 'autoRouting.interactive', tier: 'agent', type: 'boolean', description: 'Auto-route model in the REPL.' },
   { path: 'autoRouting.chat', tier: 'agent', type: 'boolean', description: 'Auto-route model for chat.' },
@@ -209,8 +210,10 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'telegram.notify.primaryChatId', tier: 'human', type: 'number', clamp: { min: -1e15, max: 1e15, integer: true }, description: 'Primary Telegram chat id (human-tier: notification-redirect vector).' },
   { path: 'telegram.notify.targets', tier: 'human', type: 'number-array', description: 'Custom Telegram target chat ids (human-tier: notification-redirect vector).' },
   { path: 'telegram.verifyDone', tier: 'human', type: 'boolean', description: 'Opt-in AFK "Done" verification gate (human-tier: a self-honesty check on the agent\'s own completion reporting — the agent must not be able to disable it on its own config, same rationale as enableShellHooks/permissionMode).' },
+  { path: 'enforceDoneEvidence', tier: 'human', type: 'boolean', description: 'Opt-in AFK terminal-state enforcement gate: in autonomous mode a turn that self-certifies "Done" with no corroborating evidence (a successful file write/edit or executed command) gets a framework correction injected into the next turn, which must substantiate or downgrade the claim (issue #237). Human-tier: a self-honesty check the agent must not be able to disable on its own config, same rationale as telegram.verifyDone. Sibling of telegram.verifyDone (which only relabels the Telegram push; this one bounces the turn).' },
   { path: 'interactive.worktreeAutoname', tier: 'agent', type: 'boolean', description: 'Auto-name worktrees.' },
   { path: 'interactive.suggestGhost', tier: 'agent', type: 'boolean', description: 'Ghost-text suggestions in the REPL.' },
+  { path: 'interactive.thinkingUi', tier: 'agent', type: 'enum', enumValues: ['summary', 'live', 'digest', 'off'], description: 'Default REPL thinking-display mode.' },
   { path: 'updatePolicy', tier: 'human', type: 'enum', enumValues: ['notify', 'auto', 'off'], description: 'Self-update policy (human-tier: auto self-update is scope-widening).' },
   { path: 'autoResumeOnUsageLimit', tier: 'agent', type: 'boolean', description: 'Auto-resume after a usage-limit pause.' },
   { path: 'bgSummaries', tier: 'agent', type: 'boolean', description: 'Background summarisation.' },
@@ -247,7 +250,7 @@ export function classifyConfigKey(path: string): ConfigKeyClass {
 }
 
 export type ConfigCoerceResult =
-  | { ok: true; value: string | number | boolean | number[] }
+  | { ok: true; value: string | number | boolean | number[] | ModelSlotBinding }
   | { ok: false; error: string };
 
 /**
@@ -303,6 +306,15 @@ export function coerceConfigValue(spec: ConfigKeySpec, raw: unknown): ConfigCoer
         nums.push(n);
       }
       return { ok: true, value: nums };
+    }
+    case 'model-slot': {
+      if (typeof raw === 'string') {
+        if (raw.trim().length === 0) return { ok: false, error: `${spec.path} must not be empty` };
+        return { ok: true, value: raw.trim() };
+      }
+      const res = coerceSlotBindingInput(raw);
+      if (!res.ok) return { ok: false, error: `${spec.path}: ${res.error}` };
+      return { ok: true, value: res.value };
     }
     case 'string':
     default: {

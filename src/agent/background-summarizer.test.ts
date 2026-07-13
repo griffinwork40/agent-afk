@@ -505,10 +505,142 @@ describe('redactSecrets', () => {
     expect(redactSecrets(text)).toBe(text);
   });
 
+  it('does not redact a long absolute filesystem path (path false-positive regression)', () => {
+    // A bare `cd <long absolute path>` argument is a run of ≥32 chars drawn
+    // entirely from the generic token class ([A-Za-z0-9+/=_-]); it used to be
+    // redacted to `cd [REDACTED]` in tool-lane labels. A path is not a secret.
+    const path = '/Users/griffinlong/Projects/open_source/agent-afk';
+    expect(path.length).toBeGreaterThanOrEqual(32);
+    expect(redactSecrets(`cd ${path} && echo hi`)).toBe(`cd ${path} && echo hi`);
+  });
+
+  it('still redacts a base64 blob with slashes when it carries +/= (not a path)', () => {
+    // Classic base64 with a `/` but also `+`/`=` must NOT be mistaken for a
+    // path — the path guard only spares `/`-runs free of base64 signal chars.
+    const b64 = 'a1b2c3d4e5f6g7h8+i9j0k1l2m3n4/o5p6q7r8s9t0=';
+    const out = redactSecrets(`X ${b64}`);
+    expect(out).not.toContain(b64);
+    expect(out).toContain('[REDACTED]');
+  });
+
+  it('still redacts a base64url token with no slash (path guard does not apply)', () => {
+    // base64url uses -/_ and no `/`, so the path guard never spares it.
+    const token = 'abcABC123_-abcABC123_-abcABC123_-abcABC12';
+    const out = redactSecrets(`X-Token: ${token}`);
+    expect(out).not.toContain(token);
+    expect(out).toContain('[REDACTED]');
+  });
+
   it('does not redact 16-char base32 strings without an AWS prefix', () => {
     // Looks like the back-half of an AKIA but without the prefix — should
     // not be flagged. (Floor is 32 chars for generic patterns.)
     const text = 'random IOSFODNN7EXAMPLE9 token';
     expect(redactSecrets(text)).toBe(text);
+  });
+
+  it('redacts an opaque base64url token fused into a path segment (PR #533 review med)', () => {
+    // A ≥32-char opaque token as a path segment is still a secret even though the
+    // whole run contains `/` and no +/=. The per-segment guard catches it.
+    const token = 'abcABC123_-abcABC123_-abcABC123_-abcABC12';
+    const out = redactSecrets(`cat /tmp/uploads/${token}`);
+    expect(out).not.toContain(token);
+    expect(out).toContain('[REDACTED]');
+  });
+
+  it('redacts a long hex token fused into a path segment', () => {
+    const token = '0123456789abcdef0123456789abcdef0123';
+    const out = redactSecrets(`cat /var/data/${token}`);
+    expect(out).not.toContain(token);
+    expect(out).toContain('[REDACTED]');
+  });
+
+  it('preserves a long DIGITLESS descriptive path segment (not an opaque token)', () => {
+    // A long path segment with no digits is a descriptive name, not a secret —
+    // it must survive. Guards against over-redacting real long directory names.
+    const p = '/opt/SomeVeryLongDirectoryNameWithoutAnyDigits/bin';
+    expect(redactSecrets(`ls ${p}`)).toBe(`ls ${p}`);
+  });
+
+  // -------------------------------------------------------------------------
+  // Git object names — a full 40/64-char lowercase-hex SHA is byte-identical
+  // in shape to a long hex secret, so the generic rule used to redact
+  // `git show <sha>` to `git show [REDACTED]`. isGitObjectName carves them
+  // back out. Two real-session shapes: a bare SHA arg and a `REF=<sha>`
+  // assignment. Secret-named assignments (TOKEN=/KEY=) stay redacted.
+  // -------------------------------------------------------------------------
+  it('does not redact a bare 40-char SHA-1 git object name', () => {
+    const sha = 'a1b2c3d4e5f6789012345678901234567890abcd';
+    expect(redactSecrets(`git cat-file -t ${sha}`)).toBe(`git cat-file -t ${sha}`);
+  });
+
+  it('does not redact a bare 64-char SHA-256 git object name', () => {
+    const sha = 'a'.repeat(64);
+    expect(redactSecrets(`git show ${sha}`)).toBe(`git show ${sha}`);
+  });
+
+  it('does not redact a 40-char SHA embedded before a `:path` (git show <sha>:file)', () => {
+    // The `:` is outside the token class, so the run is the bare 40-hex SHA.
+    const sha = 'abcdef1234567890abcdef1234567890abcdef12';
+    const out = redactSecrets(`git show ${sha}:src/index.ts`);
+    expect(out).toBe(`git show ${sha}:src/index.ts`);
+    expect(out).not.toContain('[REDACTED]');
+  });
+
+  it('does not redact a REF=<sha> shell assignment (git ref variable)', () => {
+    // `=` is inside the generic token class, so `REF=<sha>` matches whole; it
+    // must be recognized as a git object name, not a secret.
+    const sha = 'abcdef1234567890abcdef1234567890abcdef12';
+    const out = redactSecrets(`REF=${sha} && git show $REF:src/index.ts`);
+    expect(out).toBe(`REF=${sha} && git show $REF:src/index.ts`);
+    expect(out).not.toContain('[REDACTED]');
+  });
+
+  it('does not redact SHA=/COMMIT=/BASE= git-ish assignments', () => {
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    expect(redactSecrets(`SHA=${sha}`)).toBe(`SHA=${sha}`);
+    expect(redactSecrets(`COMMIT=${sha}`)).toBe(`COMMIT=${sha}`);
+    expect(redactSecrets(`BASE=${sha}`)).toBe(`BASE=${sha}`);
+  });
+
+  it('STILL redacts a secret-named assignment at git-SHA width (TOKEN=/KEY=/token=)', () => {
+    // Same 40-hex shape as a SHA, but the variable name advertises a secret —
+    // the carve-out must not spare it. Closes the GITHUB_TOKEN=<40hex> hole and
+    // keeps the existing `token=<40hex>` pinned assertion above green.
+    const hex40 = 'a1b2c3d4e5f6789012345678901234567890abcd';
+    expect(redactSecrets(`TOKEN=${hex40}`)).toContain('[REDACTED]');
+    expect(redactSecrets(`GITHUB_TOKEN=${hex40}`)).toContain('[REDACTED]');
+    expect(redactSecrets(`API_KEY=${hex40}`)).toContain('[REDACTED]');
+    expect(redactSecrets(`DB_PASSWORD=${hex40}`)).toContain('[REDACTED]');
+  });
+
+  it('STILL redacts non-allowlisted assignment names at git-SHA width (allowlist boundary)', () => {
+    // isGitObjectName's NAME=<sha> carve-out is an ALLOWLIST (REF/SHA/COMMIT/
+    // BASE only), not a denylist of secret-sounding words — so a name that is
+    // neither git-plausible nor obviously secret-shaped (COOKIE, SESSION,
+    // BEARER, PAT, DATA) must still be redacted. Pins the boundary: only the
+    // four allowlisted names are spared, everything else at the same 40-hex
+    // width is not.
+    const hex40 = 'a1b2c3d4e5f6789012345678901234567890abcd';
+    expect(redactSecrets(`COOKIE=${hex40}`)).toContain('[REDACTED]');
+    expect(redactSecrets(`SESSION=${hex40}`)).toContain('[REDACTED]');
+    expect(redactSecrets(`BEARER=${hex40}`)).toContain('[REDACTED]');
+    expect(redactSecrets(`PAT=${hex40}`)).toContain('[REDACTED]');
+    expect(redactSecrets(`DATA=${hex40}`)).toContain('[REDACTED]');
+  });
+
+  it('STILL redacts an UPPERCASE-hex 40-char run (git object names are lowercase)', () => {
+    // A carve-out this narrow only spares lowercase hex — an uppercase-hex blob
+    // of the same length is not a git object name and stays redacted.
+    const upper = 'A1B2C3D4E5F6789012345678901234567890ABCD';
+    const out = redactSecrets(`token=${upper}`);
+    expect(out).not.toContain(upper);
+    expect(out).toContain('[REDACTED]');
+  });
+
+  it('STILL redacts an off-width (48-char) bare hex blob (not a 40/64 SHA)', () => {
+    const hex48 = 'a'.repeat(48);
+    const out = redactSecrets(`echo ${hex48}`);
+    expect(out).not.toContain(hex48);
+    expect(out).toContain('[REDACTED]');
   });
 });

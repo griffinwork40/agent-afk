@@ -18,8 +18,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildSkillManifest, collectSkillEntries, discoverPluginSkillBodies } from './skill-bridge.js';
+import {
+  buildSkillManifest,
+  collectSkillEntries,
+  discoverPluginSkillBodies,
+  discoverPluginAgents,
+  scanAllPluginRoots,
+} from './skill-bridge.js';
 import { registerSkill, _resetRegistry } from '../../skills/index.js';
+import { _resetPluginScanCache } from '../plugins-scanner.js';
+import { getPluginsDir } from '../../paths.js';
 
 // ---------------------------------------------------------------------------
 // File-level isolation: redirect AFK_HOME + cwd before every test so the
@@ -558,6 +566,134 @@ describe('discoverPluginSkillBodies', () => {
   });
 });
 
+describe('discoverPluginAgents', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync('/tmp/plugin-agents-test-');
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(tmpDir, { recursive: true });
+    } catch {
+      // Non-fatal cleanup.
+    }
+  });
+
+  function writeManifest(pluginPath: string, name: string): void {
+    const dir = join(pluginPath, '.claude-plugin');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'plugin.json'), JSON.stringify({ name, version: '1.0.0' }));
+  }
+
+  function writeAgentFile(pluginPath: string, file: string, name: string, extra = ''): void {
+    const dir = join(pluginPath, 'agents');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, file),
+      `---\nname: ${name}\ndescription: A test agent\n${extra}---\nAgent body for ${name}.\n`,
+    );
+  }
+
+  it('namespaces discovered agents as <plugin>:<agent> with plugin source', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    writeManifest(pluginA, 'demo');
+    writeAgentFile(pluginA, 'researcher.md', 'research-agent');
+
+    const agents = discoverPluginAgents([{ type: 'local', path: pluginA }]);
+    expect(agents).toHaveLength(1);
+    expect(agents[0]?.name).toBe('demo:research-agent');
+    expect(agents[0]?.source).toBe('plugin:demo');
+    expect(agents[0]?.definition.description).toBe('A test agent');
+    expect(agents[0]?.definition.prompt).toContain('Agent body for research-agent.');
+    expect(agents[0]?.filePath).toBe(join(pluginA, 'agents', 'researcher.md'));
+  });
+
+  it('takes identity from frontmatter name, not filename (CC parity)', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    writeManifest(pluginA, 'demo');
+    writeAgentFile(pluginA, 'anything.md', 'git-investigator');
+    const agents = discoverPluginAgents([{ type: 'local', path: pluginA }]);
+    expect(agents[0]?.name).toBe('demo:git-investigator');
+  });
+
+  it('scans agents/ recursively (subfolders)', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    writeManifest(pluginA, 'demo');
+    const sub = join(pluginA, 'agents', 'review');
+    mkdirSync(sub, { recursive: true });
+    writeFileSync(join(sub, 'sec.md'), '---\nname: security\ndescription: d\n---\nbody\n');
+    const agents = discoverPluginAgents([{ type: 'local', path: pluginA }]);
+    expect(agents.map((a) => a.name)).toContain('demo:security');
+  });
+
+  it('carries bash: read-only through as bashReadOnly', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    writeManifest(pluginA, 'demo');
+    writeAgentFile(pluginA, 'git.md', 'git-investigator', 'tools: Bash, Read\nbash: read-only\n');
+    const agents = discoverPluginAgents([{ type: 'local', path: pluginA }]);
+    expect(agents[0]?.bashReadOnly).toBe(true);
+  });
+
+  it('first-wins on qualified-name collisions', () => {
+    const a = join(tmpDir, 'a');
+    const b = join(tmpDir, 'b');
+    writeManifest(a, 'dup');
+    writeManifest(b, 'dup');
+    writeAgentFile(a, 'x.md', 'shared');
+    writeAgentFile(b, 'x.md', 'shared');
+    const agents = discoverPluginAgents([
+      { type: 'local', path: a },
+      { type: 'local', path: b },
+    ]);
+    const shared = agents.filter((ag) => ag.name === 'dup:shared');
+    expect(shared).toHaveLength(1);
+    expect(shared[0]?.filePath).toBe(join(a, 'agents', 'x.md'));
+  });
+
+  it('supports agents-only plugins (no skills/ dir)', () => {
+    const pluginA = join(tmpDir, 'agents-only');
+    writeManifest(pluginA, 'agentsonly');
+    writeAgentFile(pluginA, 'a.md', 'solo');
+    const agents = discoverPluginAgents([{ type: 'local', path: pluginA }]);
+    expect(agents.map((a) => a.name)).toEqual(['agentsonly:solo']);
+  });
+
+  it('skips a plugin with no readable manifest name', () => {
+    const pluginA = join(tmpDir, 'no-manifest');
+    // No .claude-plugin/plugin.json written — its agents have no stable id.
+    writeAgentFile(pluginA, 'a.md', 'orphan');
+    const agents = discoverPluginAgents([{ type: 'local', path: pluginA }]);
+    expect(agents).toHaveLength(0);
+  });
+
+  it('skips malformed agent files without failing the scan', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    writeManifest(pluginA, 'demo');
+    const dir = join(pluginA, 'agents');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'broken.md'), 'no frontmatter at all');
+    writeAgentFile(pluginA, 'ok.md', 'works');
+    const agents = discoverPluginAgents([{ type: 'local', path: pluginA }]);
+    expect(agents.map((a) => a.name)).toEqual(['demo:works']);
+  });
+
+  it('returns empty for a plugin with no agents/ dir', () => {
+    const pluginA = join(tmpDir, 'plugin-a');
+    writeManifest(pluginA, 'demo');
+    const agents = discoverPluginAgents([{ type: 'local', path: pluginA }]);
+    expect(agents).toHaveLength(0);
+  });
+
+  it('ignores non-local plugin configs', () => {
+    const agents = discoverPluginAgents([
+      { type: 'git', path: join(tmpDir, 'nope') } as never,
+    ]);
+    expect(agents).toHaveLength(0);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Regression: collectSkillEntries() must scan disk fresh so ~/.afk/skills/
 // skills appear in the manifest on all surfaces (daemon, Telegram, one-shot,
@@ -712,5 +848,311 @@ describe('collectSkillEntries — disk-scan regression (user + project skills)',
       (e) => e.source === 'user' || e.source === 'project',
     );
     expect(userOrProject).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: #179 — project-origin skills must be evicted when cwd changes.
+//
+// Simulates a long-lived daemon serving project A, then project B: the project
+// scan in collectSkillEntries() must remove stale project-A entries before
+// registering project-B entries. User-origin and built-in skills must survive.
+// ---------------------------------------------------------------------------
+describe('collectSkillEntries — project skill eviction on cwd change (#179)', () => {
+  let tmpAfkHome: string;
+  let cwdA: string;
+  let cwdB: string;
+  let origCwd: string;
+
+  beforeEach(() => {
+    _resetRegistry();
+    vi.unstubAllEnvs();
+
+    tmpAfkHome = mkdtempSync('/tmp/skill-bridge-evict-afkhome-');
+    cwdA = mkdtempSync('/tmp/skill-bridge-evict-cwdA-');
+    cwdB = mkdtempSync('/tmp/skill-bridge-evict-cwdB-');
+    origCwd = process.cwd();
+
+    vi.stubEnv('AFK_HOME', tmpAfkHome);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    process.chdir(origCwd);
+    try { rmSync(tmpAfkHome, { recursive: true }); } catch { /* non-fatal */ }
+    try { rmSync(cwdA, { recursive: true }); } catch { /* non-fatal */ }
+    try { rmSync(cwdB, { recursive: true }); } catch { /* non-fatal */ }
+  });
+
+  function writeSkillIn(baseDir: string, name: string, description: string): void {
+    const dir = join(baseDir, '.afk', 'skills', name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: ${description}\n---\n# Body\n`,
+    );
+  }
+
+  function writeUserSkillIn(afkHome: string, name: string, description: string): void {
+    const dir = join(afkHome, 'skills', name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: ${description}\n---\n# Body\n`,
+    );
+  }
+
+  it('evicts project-A skills after switching to project B', () => {
+    writeSkillIn(cwdA, 'proj-a-skill', 'Skill only in project A');
+    writeSkillIn(cwdB, 'proj-b-skill', 'Skill only in project B');
+
+    // First call: cwd = project A
+    process.chdir(cwdA);
+    const entriesA = collectSkillEntries([]);
+    const namesA = entriesA.map((e) => e.name);
+    expect(namesA).toContain('proj-a-skill');
+    expect(namesA).not.toContain('proj-b-skill');
+
+    // Second call: cwd = project B — proj-a-skill must be gone
+    process.chdir(cwdB);
+    const entriesB = collectSkillEntries([]);
+    const namesB = entriesB.map((e) => e.name);
+    expect(namesB).toContain('proj-b-skill');
+    expect(namesB).not.toContain('proj-a-skill');
+  });
+
+  it('user-origin skills survive the cwd change', () => {
+    writeUserSkillIn(tmpAfkHome, 'global-user-skill', 'Always present');
+    writeSkillIn(cwdA, 'proj-a-only', 'Project A only');
+    writeSkillIn(cwdB, 'proj-b-only', 'Project B only');
+
+    // First call: cwd = project A
+    process.chdir(cwdA);
+    const entriesA = collectSkillEntries([]);
+    expect(entriesA.map((e) => e.name)).toContain('global-user-skill');
+
+    // Second call: cwd = project B — user skill must still be present
+    process.chdir(cwdB);
+    const entriesB = collectSkillEntries([]);
+    const namesB = entriesB.map((e) => e.name);
+    expect(namesB).toContain('global-user-skill');
+    expect(namesB).toContain('proj-b-only');
+    expect(namesB).not.toContain('proj-a-only');
+  });
+
+  it('evicted project entries are fully absent from the manifest', () => {
+    writeSkillIn(cwdA, 'stale-skill', 'Stale from project A');
+
+    process.chdir(cwdA);
+    const manifestA = buildSkillManifest([]);
+    expect(manifestA).toContain('stale-skill');
+
+    // Switch to project B (no skills)
+    process.chdir(cwdB);
+    const manifestB = buildSkillManifest([]);
+    expect(manifestB).not.toContain('stale-skill');
+  });
+
+  // -------------------------------------------------------------------------
+  // Session-cwd resolution (daemon / Telegram): the host process never
+  // chdir()s — the session's configured cwd is passed explicitly instead.
+  // These cases exercise the opts.cwd path with process.cwd() held constant.
+  // -------------------------------------------------------------------------
+
+  it('resolves project skills against opts.cwd without process.chdir()', () => {
+    writeSkillIn(cwdA, 'proj-a-skill', 'Skill only in project A');
+    writeSkillIn(cwdB, 'proj-b-skill', 'Skill only in project B');
+
+    // Host process cwd stays wherever the test runner lives — never chdir.
+    const entriesA = collectSkillEntries([], { cwd: cwdA });
+    const namesA = entriesA.map((e) => e.name);
+    expect(namesA).toContain('proj-a-skill');
+    expect(namesA).not.toContain('proj-b-skill');
+
+    // A different session cwd in the same process — stale entries evicted.
+    const entriesB = collectSkillEntries([], { cwd: cwdB });
+    const namesB = entriesB.map((e) => e.name);
+    expect(namesB).toContain('proj-b-skill');
+    expect(namesB).not.toContain('proj-a-skill');
+  });
+
+  it('buildSkillManifest forwards opts.cwd to the project scan', () => {
+    writeSkillIn(cwdA, 'session-cwd-skill', 'Visible only via session cwd');
+
+    // Without the override the host cwd has no .afk/skills — skill absent.
+    expect(buildSkillManifest([])).not.toContain('session-cwd-skill');
+    // With the session cwd the same process sees the project skill.
+    expect(buildSkillManifest([], { cwd: cwdA })).toContain('session-cwd-skill');
+    // And a later no-override call evicts it again (no leak into other sessions).
+    expect(buildSkillManifest([])).not.toContain('session-cwd-skill');
+  });
+
+  it('evicts collision-fallback `project:<name>` entries on cwd change', () => {
+    // Same skill name in user scope and project A: user scope scans first and
+    // keeps the bare name, so the project entry registers as `project:<name>`.
+    writeUserSkillIn(tmpAfkHome, 'shared-name', 'User-scope variant');
+    writeSkillIn(cwdA, 'shared-name', 'Project-A variant');
+
+    const entriesA = collectSkillEntries([], { cwd: cwdA });
+    const namesA = entriesA.map((e) => e.name);
+    expect(namesA).toContain('shared-name');
+    expect(namesA).toContain('project:shared-name');
+
+    // Switching to project B must evict the namespaced fallback entry too.
+    const entriesB = collectSkillEntries([], { cwd: cwdB });
+    const namesB = entriesB.map((e) => e.name);
+    expect(namesB).toContain('shared-name');
+    expect(namesB).not.toContain('project:shared-name');
+  });
+});
+
+describe('scanAllPluginRoots', () => {
+  it('returns well-formed local plugin configs', () => {
+    _resetPluginScanCache();
+    const roots = scanAllPluginRoots();
+    expect(Array.isArray(roots)).toBe(true);
+    for (const r of roots) {
+      expect(r.type).toBe('local');
+      expect(typeof r.path).toBe('string');
+    }
+  });
+
+  it('surfaces a user-scope plugin together with its manifest `main`', () => {
+    // AFK_HOME is stubbed to an empty temp dir by the file-level beforeEach, so
+    // getPluginsDir() points inside it. Drop a fixture plugin that declares a
+    // `main`, then assert scanAllPluginRoots() carries it through — this is the
+    // scan→entrypoint flow that loadPluginEntrypoints() consumes at boot.
+    const pluginDir = join(getPluginsDir(), 'with-main');
+    mkdirSync(join(pluginDir, '.claude-plugin'), { recursive: true });
+    writeFileSync(
+      join(pluginDir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'with-main', version: '0.0.0', main: 'dist/index.js' }),
+    );
+    _resetPluginScanCache();
+
+    expect(scanAllPluginRoots()).toContainEqual({
+      type: 'local',
+      path: pluginDir,
+      main: 'dist/index.js',
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: project-scoped plugins must resolve against the session cwd,
+// not process.cwd(). Same bug class as the skills-cwd fix (#179 follow-up).
+// ---------------------------------------------------------------------------
+describe('scanAllPluginRoots — project plugin session-cwd resolution', () => {
+  let tmpAfkHome: string;
+  let cwdA: string;
+  let cwdB: string;
+  let origCwd: string;
+
+  beforeEach(() => {
+    _resetPluginScanCache();
+    vi.unstubAllEnvs();
+
+    tmpAfkHome = mkdtempSync('/tmp/plugin-roots-evict-afkhome-');
+    cwdA = mkdtempSync('/tmp/plugin-roots-evict-cwdA-');
+    cwdB = mkdtempSync('/tmp/plugin-roots-evict-cwdB-');
+    origCwd = process.cwd();
+
+    vi.stubEnv('AFK_HOME', tmpAfkHome);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    process.chdir(origCwd);
+    try { rmSync(tmpAfkHome, { recursive: true }); } catch { /* non-fatal */ }
+    try { rmSync(cwdA, { recursive: true }); } catch { /* non-fatal */ }
+    try { rmSync(cwdB, { recursive: true }); } catch { /* non-fatal */ }
+  });
+
+  function writePluginIn(baseDir: string, pluginName: string, _description: string): void {
+    const pluginDir = join(baseDir, '.afk', 'plugins', pluginName);
+    mkdirSync(join(pluginDir, '.claude-plugin'), { recursive: true });
+    writeFileSync(
+      join(pluginDir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: pluginName, version: '0.0.0' }),
+    );
+  }
+
+  it('scanAllPluginRoots resolves project plugins against opts.cwd', () => {
+    writePluginIn(cwdA, 'proj-a-plugin', 'Plugin only in project A');
+
+    _resetPluginScanCache();
+    const rootsA = scanAllPluginRoots({ cwd: cwdA });
+    const pathsA = rootsA.map((r) => r.path);
+    expect(pathsA.some((p) => p.includes('proj-a-plugin'))).toBe(true);
+
+    _resetPluginScanCache();
+    const rootsB = scanAllPluginRoots({ cwd: cwdB });
+    const pathsB = rootsB.map((r) => r.path);
+    expect(pathsB.some((p) => p.includes('proj-a-plugin'))).toBe(false);
+  });
+});
+
+describe('discoverPluginSkillBodies — project plugin session-cwd resolution', () => {
+  let tmpAfkHome: string;
+  let cwdA: string;
+  let cwdB: string;
+  let origCwd: string;
+
+  beforeEach(() => {
+    _resetPluginScanCache();
+    vi.unstubAllEnvs();
+
+    tmpAfkHome = mkdtempSync('/tmp/plugin-bodies-evict-afkhome-');
+    cwdA = mkdtempSync('/tmp/plugin-bodies-evict-cwdA-');
+    cwdB = mkdtempSync('/tmp/plugin-bodies-evict-cwdB-');
+    origCwd = process.cwd();
+
+    vi.stubEnv('AFK_HOME', tmpAfkHome);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    process.chdir(origCwd);
+    try { rmSync(tmpAfkHome, { recursive: true }); } catch { /* non-fatal */ }
+    try { rmSync(cwdA, { recursive: true }); } catch { /* non-fatal */ }
+    try { rmSync(cwdB, { recursive: true }); } catch { /* non-fatal */ }
+  });
+
+  function writePluginSkillIn(baseDir: string, skillName: string, body: string): void {
+    const pluginDir = join(baseDir, '.afk', 'plugins', `${skillName}-plugin`);
+    const skillDir = join(pluginDir, 'skills', skillName);
+    mkdirSync(skillDir, { recursive: true });
+    mkdirSync(join(pluginDir, '.claude-plugin'), { recursive: true });
+    writeFileSync(
+      join(pluginDir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: `${skillName}-plugin`, version: '0.0.0' }),
+    );
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      `---\nname: ${skillName}\ndescription: Plugin skill ${skillName}\n---\n${body}\n`,
+    );
+  }
+
+  it('discoverPluginSkillBodies forwards opts.cwd to project scan', () => {
+    writePluginSkillIn(cwdA, 'session-cwd-plugin-skill', 'Plugin skill body');
+
+    _resetPluginScanCache();
+    const bodiesWithoutCwd = discoverPluginSkillBodies();
+    expect(bodiesWithoutCwd.has('session-cwd-plugin-skill')).toBe(false);
+
+    _resetPluginScanCache();
+    const bodiesWithCwd = discoverPluginSkillBodies(undefined, { cwd: cwdA });
+    expect(bodiesWithCwd.has('session-cwd-plugin-skill')).toBe(true);
+
+    // And switching to project B must not leak project A's plugin skill,
+    // while project B's own plugin skill becomes visible (cwd-A -> cwd-B
+    // switch — mirrors the scanAllPluginRoots eviction test above, which
+    // this test previously didn't exercise).
+    writePluginSkillIn(cwdB, 'other-cwd-plugin-skill', 'Plugin skill body B');
+
+    _resetPluginScanCache();
+    const bodiesWithCwdB = discoverPluginSkillBodies(undefined, { cwd: cwdB });
+    expect(bodiesWithCwdB.has('other-cwd-plugin-skill')).toBe(true);
+    expect(bodiesWithCwdB.has('session-cwd-plugin-skill')).toBe(false);
   });
 });

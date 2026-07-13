@@ -36,6 +36,47 @@ export interface ResumeHistoryTurn {
   assistant: string;
 }
 
+/**
+ * Session-control callbacks handed to the model-callable `exit_plan_mode` tool
+ * so an approved plan exit can queue the crafted implement-turn for the REPL to
+ * auto-submit after the current turn — reproducing `/plan off`'s
+ * save-and-implement handoff from a model-proposed, elicitation-confirmed exit.
+ *
+ * **Deferred-flip contract**: the handler does NOT flip the permission mode
+ * mid-turn. Instead it records the approved mode alongside the seed message via
+ * `requestImplementSeed`. The mode flip is deferred to the post-turn drain
+ * boundary in `src/cli/commands/interactive/loop-iteration.ts`, where
+ * `takePendingPlanExitSeed()` atomically applies the flip and promotes the seed
+ * — so the gate stays locked in plan mode for the entire current turn and only
+ * opens for the clean, seeded implement-turn that follows.
+ *
+ * Populated by `AgentSession` for top-level sessions only (plan mode is a REPL
+ * affordance); the `exit_plan_mode` schema is offered solely while
+ * `permissionMode === 'plan'`, so these callbacks are inert on every other
+ * surface. See `src/agent/tools/handlers/exit-plan-mode.ts` and the seed drain
+ * at `src/cli/commands/interactive/loop-iteration.ts`.
+ */
+export interface PlanExitControls {
+  /** Flip the live session permission mode on approval (e.g. 'default' | 'bypassPermissions'). */
+  setPermissionMode(mode: PermissionMode): Promise<void>;
+  /**
+   * Queue the crafted implement-turn message AND the approved mode for the REPL
+   * to apply atomically at the post-turn drain boundary. The mode flip is NOT
+   * applied here — it is deferred to `takePendingPlanExitSeed()`.
+   */
+  requestImplementSeed(message: string, mode: PermissionMode): void;
+  /**
+   * The permission mode the session was in immediately BEFORE it entered plan
+   * mode — captured by `AgentSession.setPermissionMode` on the flip into 'plan'.
+   * An approved exit restores THIS mode instead of forcing 'default', so a user
+   * who was (say) in bypass before planning lands back in bypass. Returns
+   * `undefined` when nothing was captured (the session started in plan, or the
+   * prior mode was 'autonomous' — AFK has dedicated enter/exit machinery and is
+   * not restorable by a bare flip); callers fall back to 'default'.
+   */
+  getPrePlanMode(): PermissionMode | undefined;
+}
+
 /** Agent session configuration */
 export interface AgentConfig {
   /**
@@ -80,8 +121,38 @@ export interface AgentConfig {
    */
   openaiBaseUrl?: string;
 
+  /**
+   * Per-slot signal set by `applySlotCredentials` for a `provider:
+   * 'chatgpt-oauth'` tier: force ChatGPT-subscription OAuth for this session's
+   * openai-compatible provider — selecting the `~/.codex/auth.json` ChatGPT
+   * token over `OPENAI_API_KEY`/`CODEX_API_KEY` and WITHOUT requiring the global
+   * `AFK_OPENAI_CHATGPT_OAUTH` flag. Lets a ChatGPT-subscription model coexist
+   * with a custom keyed OpenAI model in one session. See `resolveOpenAIAuth`.
+   */
+  forceChatgptOAuth?: boolean;
+
   /** Maximum number of conversation turns (optional) */
   maxTurns?: number;
+
+  /**
+   * Hard cap on tool-use rounds within a single user turn. Honored uniformly by
+   * both providers (anthropic-direct and openai-compatible) via the shared
+   * policy in `providers/shared/tool-loop-cap.ts`; when it fires, the provider
+   * runs one tools-stripped "wind-down" round so the model still returns a real
+   * answer. `0` or unset means no cap — the top-level default for both
+   * providers. Subagent forks set a non-zero default (see
+   * `SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS` in subagent.ts) so a runaway
+   * child tool-loop cannot hang the parent, which is suspended awaiting the
+   * child's result.
+   *
+   * Top-level sessions leave this unset by default (unlimited). An operator can
+   * opt into a top-level ceiling with the `AFK_MAX_TOOL_USE_ITERATIONS` env var
+   * (`getMaxToolUseIterations()` in cli/shared-helpers.ts): unset/`<=0` →
+   * unlimited (no change); a positive integer fills this field at every
+   * top-level session surface via `explicit ?? getMaxToolUseIterations()`, so an
+   * explicit config value still wins. The env var never touches subagent forks.
+   */
+  maxToolUseIterations?: number;
 
   /**
    * Controls Claude's extended-thinking / reasoning behavior. When omitted,
@@ -152,10 +223,37 @@ export interface AgentConfig {
    */
   mcpServers?: Record<string, import('../mcp/types.js').McpServerConfig>;
 
-  /** Subagent definitions. Passed through when SDK V2 supports it. */
+  /**
+   * Live MCP manager for the session. Entry points that own MCP lifecycle
+   * construct this with `McpManager.fromConfig()` and close it after the
+   * AgentSession shuts down; provider/session wiring only consumes it.
+   */
+  mcpManager?: import('../mcp/index.js').McpManager;
+
+  /**
+   * Programmatic named-agent definitions, merged into the session's
+   * named-agent registry at the HIGHEST precedence (above project/user file
+   * scopes — the analog of Claude Code's `--agents` CLI tier).
+   *
+   * NOT wired into any built-in surface today: the one-shot chat, daemon,
+   * REPL, and Telegram bootstraps all call `loadAgentRegistry({ cwd })`
+   * WITHOUT `configAgents`, and no config-file field populates this — so it
+   * is a no-op unless a programmatic embedder builds the registry itself via
+   * `loadAgentRegistry({ configAgents })`. File-scope agents (`.afk/agents/`,
+   * `.claude/agents/`, `~/.afk/agents/`) are the supported path today.
+   *
+   * The registry powers the `agent` tool's `agent_type` dispatch (see
+   * `src/agent/agents/`). Keys are agent names; values follow the
+   * {@link AgentDefinition} shape (`prompt` = system prompt, `tools`/
+   * `disallowedTools` in Claude Code or AFK tool vocabulary, `model`,
+   * `maxTurns`; long-tail fields are tolerated but not honored yet).
+   */
   agents?: Record<string, AgentDefinition>;
 
-  /** Main agent name when using agents. Passed through when SDK V2 supports it. */
+  /**
+   * Main agent name when using `agents`. NOT currently consumed (reserved for
+   * future SDK V2 support); has no effect today.
+   */
   agent?: string;
 
   /**
@@ -199,10 +297,17 @@ export interface AgentConfig {
    */
   env?: Record<string, string>;
 
-  /** Enable file checkpointing for rewind. Passed through when SDK V2 supports it. */
+  /**
+   * Enable file checkpointing for rewind. NOT currently consumed by any
+   * provider (reserved for future SDK V2 support); has no effect today.
+   */
   enableFileCheckpointing?: boolean;
 
-  /** Path to the Claude Code executable. Uses the SDK's built-in CLI if not specified. */
+  /**
+   * Path to a Claude Code executable. NOT currently consumed — AFK runs its own
+   * provider harness and never spawns a Claude Code CLI. Reserved for future
+   * SDK V2 support; has no effect today.
+   */
   pathToClaudeCodeExecutable?: string;
 
   /** Continue the most recent persisted session in the current working directory */
@@ -255,6 +360,14 @@ export interface AgentConfig {
    * SDK event plumbing.
    */
   hookRegistry?: HookRegistry;
+
+  /**
+   * Session-control bridge for the model-callable `exit_plan_mode` tool. When
+   * present (top-level sessions), the providers register the `exit_plan_mode`
+   * handler + schema while `permissionMode === 'plan'`. Absent → the tool is
+   * never offered. See {@link PlanExitControls}.
+   */
+  planExitControls?: PlanExitControls;
 
   /**
    * Witness-layer trace writer. When provided, {@link IAgentSession}
@@ -468,4 +581,25 @@ export interface AgentConfig {
    * by the existing re-entrance lock in `compact-handler.ts`.
    */
   autoCompact?: boolean | { threshold: number };
+
+  /**
+   * In-process custom tools available to the session. Each entry is created
+   * via the `tool()` helper and provides both a JSON-schema `AnthropicToolDef`
+   * (so the model knows the tool exists) and a validated `ToolHandler`
+   * (so the dispatcher can execute it).
+   *
+   * Forwarded to the provider ONLY on the bare `resolveProvider` fallback path
+   * (neither `provider` nor `providerFactory` set) — the common library
+   * `query()` case. When `provider` (injected) or `providerFactory` is supplied,
+   * that provider owns its own tool wiring and these `customTools` are NOT
+   * auto-forwarded; register them on the injected/constructed provider yourself.
+   * See `resolveProvider` (`src/agent/providers/index.ts`) and `agent-session.ts`.
+   *
+   * Permission gate and PreToolUse/PostToolUse hooks apply identically to
+   * custom tools and built-in tools (no bypass). When an `allowedTools`
+   * allowlist is configured, custom-tool names are unioned into it
+   * automatically (see `withCustomToolsAllowed`), so registering a custom tool
+   * is the grant — it is not denied by the gate.
+   */
+  customTools?: import('../tools/custom-tool.js').CustomToolDef[];
 }

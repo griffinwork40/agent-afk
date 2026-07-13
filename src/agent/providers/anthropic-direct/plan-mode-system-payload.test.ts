@@ -62,7 +62,7 @@ function makeTextStream(text: string): RawMessageStreamEvent[] {
         type: 'message',
         role: 'assistant',
         content: [],
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         stop_reason: null,
         stop_sequence: null,
         usage: {
@@ -131,7 +131,7 @@ describe('AnthropicDirectQuery — plan-mode system payload', () => {
     const query = provider.query({
       prompt: singleInput('hello'),
       config: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
         permissionMode: 'default',
       },
@@ -153,7 +153,7 @@ describe('AnthropicDirectQuery — plan-mode system payload', () => {
     const query = provider.query({
       prompt: singleInput('hello'),
       config: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
       },
     });
@@ -171,7 +171,7 @@ describe('AnthropicDirectQuery — plan-mode system payload', () => {
     const query = provider.query({
       prompt: singleInput('hello'),
       config: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
         permissionMode: 'plan',
       },
@@ -194,7 +194,7 @@ describe('AnthropicDirectQuery — plan-mode system payload', () => {
     const query = provider.query({
       prompt: singleInput('hello'),
       config: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
         permissionMode: 'autonomous',
       },
@@ -217,7 +217,7 @@ describe('AnthropicDirectQuery — plan-mode system payload', () => {
     const query = provider.query({
       prompt: singleInput('hello'),
       config: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
         permissionMode: 'default',
       },
@@ -237,7 +237,7 @@ describe('AnthropicDirectQuery — plan-mode system payload', () => {
     const query = provider.query({
       prompt: singleInput('hello'),
       config: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
         permissionMode: 'plan',
         systemPrompt: 'Some user-provided system prompt.',
@@ -290,7 +290,7 @@ describe('AnthropicDirectQuery — plan-mode system payload', () => {
     const query = provider.query({
       prompt: twoInputs(),
       config: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
         permissionMode: 'default',
       },

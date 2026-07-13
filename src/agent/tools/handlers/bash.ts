@@ -1,21 +1,28 @@
 /**
  * Bash tool handler.
  *
- * Executes shell commands using `child_process.spawn`. Output is capped at
- * 100KB via TWO independent guards: a mid-stream byte counter that kills the
- * child via SIGKILL as soon as combined stdout+stderr cross the threshold
- * (prevents V8 max-string-length overflow when a command emits hundreds of MB
- * of output before exiting), and a post-close length cap as a safety net.
- * Respects timeout and signal-based cancellation. Strips ANSI escape sequences.
+ * Executes shell commands using `child_process.spawn`. Output is governed by
+ * TWO decoupled thresholds (see `_output-cap.ts`): the accumulator is bounded
+ * at HARD_CAP_BYTES (8MB) with a mid-stream SIGKILL only when combined
+ * stdout+stderr cross it — a genuine-runaway circuit-breaker that keeps a
+ * single JS string under V8's ~512MB limit — while the model-facing view is
+ * reduced to head+tail at MODEL_CAP_BYTES (100KB). Legitimate verbose commands
+ * (test runs, builds, large diffs) therefore run to completion, so the real
+ * exit code and the output tail (where summaries live) survive. Respects
+ * timeout and signal-based cancellation. Strips ANSI escape sequences.
  *
  * @module agent/tools/handlers/bash
  */
 
 import { spawn } from 'child_process';
+import os from 'os';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { appendRoutingDecision } from '../../routing-telemetry.js';
 import { detectTestResult } from './test-runner-detector.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
+import { describeSpawnCwdError, isSpawnEnoent } from '../../../utils/spawn-cwd-error.js';
+import { HARD_CAP_BYTES, MODEL_CAP_BYTES, headAndTail, capForModel, HARD_CAP_KILL_NOTE } from './_output-cap.js';
+import { extractCandidatePaths, wouldBeRestricted } from './_cwd-utils.js';
 
 /**
  * Input shape for the bash tool (validated at runtime).
@@ -81,12 +88,30 @@ function parseBashInput(input: unknown): { command: string; timeout_ms: number }
  * full `execFile`-based refactor that disables the shell is tracked as a
  * separate work item. For now we emit a one-time warning at startup so the
  * risk surface is explicit in logs.
+ *
+ * Path containment (advisory-only): unlike the typed filesystem handlers,
+ * which route every path through `resolveAndContain` and hard-reject writes
+ * outside `writeRoots`, bash cannot reliably know which paths a `shell: true`
+ * command will touch — the command string is opaque. So instead of blocking,
+ * the handler runs a BEST-EFFORT scan before spawning: it extracts absolute
+ * and home-relative path tokens (`extractCandidatePaths`) and checks each
+ * against the session's write roots (`wouldBeRestricted`, `mode: 'write'`).
+ * If any references a path outside the roots it emits a ONE-TIME advisory
+ * `console.warn` plus a `tool.bash_path_escape` telemetry row, then spawns
+ * normally — it never refuses execution. Refusing would break the primary
+ * human-driven `afk -w` worktree flow (a top-level bypass session legitimately
+ * carries a non-empty `writeRoots`), and `wouldBeRestricted` already returns
+ * not-restricted under `allowAll`, so bypass sessions produce no noise. The
+ * scan is deliberately not a shell parser: it does not catch `$()`, env-var
+ * indirection, backticks, or globs. Rationale and the accepted threat model
+ * are documented in `docs/decisions/0001-bash-tool-path-containment.md`.
  */
 export function createBashHandler(
   permissionMode: string,
   cwd?: string,
 ): ToolHandler {
   let _shellModeWarned = false;
+  let _pathEscapeWarned = false;
 
   function warnIfBypassPermissions(): void {
     if (_shellModeWarned) return;
@@ -100,6 +125,59 @@ export function createBashHandler(
     }
   }
 
+  /**
+   * Best-effort, ADVISORY-ONLY containment scan (never blocks execution).
+   *
+   * Extracts absolute / home-relative path tokens from the raw command and
+   * checks each against the session's WRITE roots — the stricter, most
+   * relevant boundary for the "escape the worktree" threat, and in practice
+   * `readRoots ⊇ writeRoots` for confined forks. Home-relative tokens are
+   * expanded to `os.homedir()` first so `wouldBeRestricted` (which anchors
+   * non-absolute inputs to `resolveBase`) sees a true absolute path.
+   *
+   * On the first out-of-root reference (per handler instance) it emits one
+   * `console.warn` naming the escaping resolved paths and one
+   * `tool.bash_path_escape` telemetry row (counts + mode only — never the raw
+   * command string; audit §G.4). Then it returns and the caller spawns as
+   * normal. `wouldBeRestricted` short-circuits to not-restricted under
+   * `allowAll` (bypass) and when no `resolveBase` is set (unconfined session),
+   * so those sessions naturally produce zero warnings — intended, not
+   * special-cased here.
+   */
+  function scanPathsBestEffort(command: string, context: ToolHandlerContext): void {
+    if (_pathEscapeWarned) return; // one-time per handler instance
+    const fallbackBase = context.resolveBase ?? context.cwd ?? cwd;
+    const home = os.homedir();
+    const escaping: string[] = [];
+    for (const candidate of extractCandidatePaths(command)) {
+      // Expand ~ / ~/… to an absolute path so wouldBeRestricted does not
+      // anchor it to resolveBase and mis-resolve it as in-root.
+      const expanded =
+        candidate === '~'
+          ? home
+          : candidate.startsWith('~/')
+            ? home + candidate.slice(1)
+            : candidate;
+      const verdict = wouldBeRestricted(expanded, context, 'write', fallbackBase);
+      if (verdict.restricted) escaping.push(verdict.resolved);
+    }
+    if (escaping.length === 0) return;
+    _pathEscapeWarned = true;
+    console.warn(
+      `[security] bash: command references path(s) outside writeRoots: ${escaping.join(', ')} — ` +
+        'bash containment is best-effort (tracked C4); use file tools for contained writes.',
+    );
+    // Telemetry: counts + mode only. The raw command string and the escaping
+    // paths list are tool input and stay out of the JSONL (audit §G.4) — same
+    // privacy rule as the overflow-kill path above.
+    void appendRoutingDecision({
+      event: 'tool.bash_path_escape',
+      tool: 'bash',
+      restricted_count: escaping.length,
+      mode: 'write',
+    });
+  }
+
   return async (input: unknown, signal: AbortSignal, context?: ToolHandlerContext) => {
     let { command, timeout_ms } = parseBashInput(input);
 
@@ -108,6 +186,19 @@ export function createBashHandler(
     }
 
     warnIfBypassPermissions();
+
+    // Advisory-only containment scan (warn + telemetry, never blocks). Only
+    // runs when a context is present — inline/back-compat calls without one
+    // have no roots to check against. Wrapped in try/catch so a scan-internal
+    // throw (e.g. os.homedir() failing) can never invert the "never blocks"
+    // guarantee: an advisory failure must not stop the command from spawning.
+    if (context !== undefined) {
+      try {
+        scanPathsBestEffort(command, context);
+      } catch {
+        /* advisory-only — swallow and spawn regardless */
+      }
+    }
 
   return new Promise((resolve) => {
     let resolved = false;
@@ -169,25 +260,18 @@ export function createBashHandler(
     let stdout = '';
     let stderr = '';
 
-    // Mid-stream byte cap. Without this, `stdout += chunk.toString()`
-    // / `stderr += chunk.toString()` accumulate unboundedly: a command
-    // that emits >~512MB before exiting (`yes | head -c 600MB`,
-    // accidental `cat` of a binary, recursive log dump) overflows V8's
-    // max string length and throws `RangeError: Invalid string length`
-    // synchronously inside this data callback — escaping every try/catch
-    // because the throw originates inside Node's Socket.emit →
-    // Readable.push chain. The 120s timeout does NOT save us: the crash
-    // is byte-driven, not time-driven, and `yes | head -c 600MB`
-    // completes well under 120s. The post-close cap does NOT save us
-    // either: `close` never fires when the throw aborts the read
-    // pipeline. So we count bytes here and kill+settle as soon as the
-    // cap is crossed. SIGKILL (not SIGTERM) so the child cannot flush
-    // more output during termination.
-    //
-    // External constraint: V8 max string length (~512MB on x64). The
-    // 100KB cap matches the post-close cap so behavior is consistent
-    // regardless of which path fires.
-    const MAX_OUTPUT_BYTES = 100_000;
+    // Mid-stream hard cap. Without an accumulator bound, `stdout += ...`
+    // / `stderr += ...` grow unboundedly: a command emitting >~512MB before
+    // exiting (`yes | head -c 600MB`, accidental `cat` of a binary, recursive
+    // log dump) overflows V8's max string length and throws `RangeError:
+    // Invalid string length` synchronously inside this data callback —
+    // escaping every try/catch because the throw originates inside Node's
+    // Socket.emit → Readable.push chain, and neither the 120s timeout (crash
+    // is byte-driven) nor the post-close cap (`close` never fires once the
+    // throw aborts the read pipeline) can save us. So we bound the string at
+    // HARD_CAP_BYTES and SIGKILL only when it is crossed — a genuine-runaway
+    // circuit-breaker, NOT a routine truncation. Everyday verbose output stays
+    // far below 8MB and runs to completion; only true floods are killed.
     let totalBytes = 0;
     let overflowKilled = false;
 
@@ -197,9 +281,9 @@ export function createBashHandler(
       // Check overflowKilled first so only the first caller settles.
       if (overflowKilled) return;
       if (resolved) return;
-      if (totalBytes < MAX_OUTPUT_BYTES) return;
+      if (totalBytes < HARD_CAP_BYTES) return;
       overflowKilled = true;
-      // P1: structured log so operators can observe overflow frequency in
+      // P1: structured log so operators can observe runaway kills in
       // production without grepping for RangeError crash traces.
       console.warn(
         `[bash] overflow kill: stream=${stream} totalBytes=${totalBytes} command="${command}"`,
@@ -217,35 +301,24 @@ export function createBashHandler(
         stream,
       });
       proc.kill('SIGKILL');
-      let combined = (stdout + stderr).trimEnd();
-      combined = stripEscapeSequences(combined);
-      // Test-runner detection runs on the truncated buffer (we cannot
-      // wait for more data — the child is being killed). If the result
-      // marker is in the first ~100KB it will still be picked up; if it
-      // is past the cap it is unrecoverable, which is the same boundary
-      // as any other 100KB-truncated command.
+      const combined = stripEscapeSequences((stdout + stderr).trimEnd());
+      // Test-runner detection runs on the (up to 8MB) buffer we captured
+      // before the kill — the true tail past 8MB is unrecoverable.
       const testResult = detectTestResult(combined) ?? undefined;
-      // The process was SIGKILL'd because output exceeded the byte cap —
-      // we always truncate here. Slice the display string to the byte cap
-      // (the primary guard already capped incoming buffers, so this is
-      // belt-and-suspenders for the string-layer), then append the sentinel
-      // unconditionally so the model sees the in-band signal. The
-      // structured `truncated: true` flag below is the parallel signal for
-      // non-model consumers (subagent traces, hooks, caller code) — they
-      // should not need to substring-scan `content` for the sentinel.
-      if (combined.length > MAX_OUTPUT_BYTES) {
-        combined = combined.slice(0, MAX_OUTPUT_BYTES);
-      }
-      combined += '\n[output truncated — exceeded 100KB]';
-      settle({ content: combined, truncated: true, ...(testResult !== undefined ? { testResult } : {}) });
+      // The child was SIGKILL'd for exceeding the hard cap. Give the model a
+      // head+tail view of what we captured plus the kill sentinel; the
+      // structured `truncated: true` flag is the parallel signal for non-model
+      // consumers (subagent traces, hooks) — they should not substring-scan.
+      const content = headAndTail(combined, MODEL_CAP_BYTES) + HARD_CAP_KILL_NOTE;
+      settle({ content, truncated: true, ...(testResult !== undefined ? { testResult } : {}) });
     }
 
     proc.stdout!.on('data', (chunk: Buffer) => {
       // H1 + M1: slice at the Buffer layer BEFORE .toString() so a single
-      // oversized chunk (>= MAX_OUTPUT_BYTES) never allocates a full V8
+      // oversized chunk (>= HARD_CAP_BYTES) never allocates a full V8
       // string. Remaining budget is computed in bytes (not UTF-16 code
       // units) so truncation always lands on a valid byte boundary.
-      const remaining = MAX_OUTPUT_BYTES - totalBytes;
+      const remaining = HARD_CAP_BYTES - totalBytes;
       const safe = chunk.length <= remaining ? chunk : chunk.subarray(0, Math.max(0, remaining));
       totalBytes += safe.length;
       stdout += safe.toString('utf8');
@@ -254,7 +327,7 @@ export function createBashHandler(
 
     proc.stderr!.on('data', (chunk: Buffer) => {
       // H1 + M1: same Buffer-layer guard as stdout handler above.
-      const remaining = MAX_OUTPUT_BYTES - totalBytes;
+      const remaining = HARD_CAP_BYTES - totalBytes;
       const safe = chunk.length <= remaining ? chunk : chunk.subarray(0, Math.max(0, remaining));
       totalBytes += safe.length;
       stderr += safe.toString('utf8');
@@ -270,6 +343,15 @@ export function createBashHandler(
       settle({ content: 'Command aborted', isError: true });
     };
     signal.addEventListener('abort', abortHandler);
+    // Close the TOCTOU window between the pre-flight `signal.aborted` check (top
+    // of the handler) and this listener registration: an abort that fired in
+    // that gap never invokes `abortHandler` (addEventListener does not replay an
+    // already-dispatched 'abort' event), so the just-spawned child would run to
+    // completion and leak a late result instead of being killed promptly.
+    // settle() is idempotent (guards on `resolved`), so re-firing here is safe.
+    if (signal.aborted) {
+      abortHandler();
+    }
 
     // Normal completion — `close` fires after all stdio streams drain.
     proc.on('close', (code) => {
@@ -283,10 +365,13 @@ export function createBashHandler(
 
       if (code !== null && code !== 0) {
         // Non-zero exit: name the failure mode and include collected output.
-        const detail = stderr.trimEnd() || stdout.trimEnd();
+        // The detail may be up to HARD_CAP_BYTES (8MB) now that the
+        // accumulator bound was raised, so cap it to the model budget.
+        const capped = capForModel(stderr.trimEnd() || stdout.trimEnd());
         settle({
-          content: `Command exited with code ${code}${detail ? '\n' + detail : ''}`,
+          content: `Command exited with code ${code}${capped.content ? '\n' + capped.content : ''}`,
           isError: true,
+          ...(capped.truncated ? { truncated: true } : {}),
         });
         return;
       }
@@ -295,31 +380,43 @@ export function createBashHandler(
       // round-trip; nothing more to do.
       if (overflowKilled) return;
 
-      let combined = (stdout + stderr).trimEnd();
-      combined = stripEscapeSequences(combined);
+      const combined = stripEscapeSequences((stdout + stderr).trimEnd());
 
       // Detect test-runner results BEFORE truncation so patterns near the
       // end of long output are not missed. External constraint: detection
-      // runs on the full ANSI-stripped output; the 100KB cap applied below
-      // is for model-context cost only — it must not silently hide test
-      // summaries from the structured result.
+      // runs on the full ANSI-stripped output (up to 8MB); the model-budget
+      // head+tail applied below is for context cost only — it must not
+      // silently hide test summaries from the structured result.
       const testResult = detectTestResult(combined) ?? undefined;
 
-      let truncatedHere = false;
-      if (combined.length > MAX_OUTPUT_BYTES) {
-        combined = combined.slice(0, MAX_OUTPUT_BYTES) + '\n[output truncated — exceeded 100KB]';
-        truncatedHere = true;
-      }
-
+      const capped = capForModel(combined);
       settle({
-        content: combined,
-        ...(truncatedHere ? { truncated: true } : {}),
+        content: capped.content,
+        ...(capped.truncated ? { truncated: true } : {}),
         ...(testResult !== undefined ? { testResult } : {}),
       });
     });
 
     proc.on('error', (err) => {
-      settle({ content: `Failed to execute: ${err.message}`, isError: true });
+      // Spawn ENOENT masquerade: a dead working directory (deleted worktree)
+      // surfaces as `spawn /bin/sh ENOENT` — naming the shell, not the dir.
+      // Translate post-failure via statSync (error path only — no TOCTOU).
+      // When no explicit cwd was passed, spawn inherited the process cwd;
+      // process.cwd() itself throws when that directory has been deleted,
+      // which is the same masquerade — report it as such.
+      const effectiveCwd = context?.resolveBase ?? context?.cwd ?? cwd;
+      let message: string;
+      if (effectiveCwd === undefined && isSpawnEnoent(err)) {
+        try {
+          const inherited = process.cwd();
+          message = describeSpawnCwdError(err, inherited);
+        } catch {
+          message = `working directory does not exist (process cwd deleted — deleted worktree?) — underlying: ${err.message}`;
+        }
+      } else {
+        message = describeSpawnCwdError(err, effectiveCwd);
+      }
+      settle({ content: `Failed to execute: ${message}`, isError: true });
     });
   });
   };

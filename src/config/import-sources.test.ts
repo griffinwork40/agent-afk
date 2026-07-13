@@ -14,6 +14,7 @@ import {
   loadImportFromConfig,
   parseImportFromConfig,
   readMcpServers,
+  readSourceEnabledState,
   resolveImportedRoots,
 } from './import-sources.js';
 
@@ -93,7 +94,7 @@ describe('resolveImportedRoots', () => {
       { 'claude-code': { plugins: true, skills: true, mcp: false } },
       home,
     );
-    expect(resolved.pluginRoots).toEqual([claudePlugins]);
+    expect(resolved.pluginRoots).toEqual([{ dir: claudePlugins, binary: 'claude-code' }]);
     expect(resolved.skillRoots).toEqual([{ dir: claudeSkills, origin: 'imported:claude-code' }]);
     expect(resolved.mcpConfigs).toEqual([]); // mcp disabled
   });
@@ -115,6 +116,56 @@ describe('resolveImportedRoots', () => {
     expect(resolved.pluginRoots).toEqual([]);
     expect(resolved.skillRoots).toEqual([]);
     expect(resolved.mcpConfigs).toEqual([]);
+  });
+});
+
+describe('readSourceEnabledState', () => {
+  function writeClaudeSettings(content: unknown): void {
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify(content));
+  }
+
+  it('reads Claude Code enabledPlugins as a name@marketplace → bool map', () => {
+    writeClaudeSettings({
+      enabledPlugins: { 'foo@mp': true, 'bar@mp': false },
+      otherKey: 'ignored',
+    });
+    const map = readSourceEnabledState('claude-code', home);
+    expect(map.get('foo@mp')).toBe(true);
+    expect(map.get('bar@mp')).toBe(false);
+    expect(map.size).toBe(2);
+  });
+
+  it('returns an empty map when settings.json is missing', () => {
+    expect(readSourceEnabledState('claude-code', home).size).toBe(0);
+  });
+
+  it('returns an empty map when settings.json is malformed JSON (fail-open)', () => {
+    mkdirSync(join(home, '.claude'), { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), '{ not valid json');
+    expect(readSourceEnabledState('claude-code', home).size).toBe(0);
+  });
+
+  it('returns an empty map when enabledPlugins is absent or not a plain object', () => {
+    writeClaudeSettings({ someOtherSetting: true });
+    expect(readSourceEnabledState('claude-code', home).size).toBe(0);
+    writeClaudeSettings({ enabledPlugins: ['foo@mp'] });
+    expect(readSourceEnabledState('claude-code', home).size).toBe(0);
+  });
+
+  it('ignores non-boolean enabledPlugins values', () => {
+    writeClaudeSettings({ enabledPlugins: { 'a@mp': true, 'b@mp': 'yes', 'c@mp': 1 } });
+    const map = readSourceEnabledState('claude-code', home);
+    expect(map.get('a@mp')).toBe(true);
+    expect(map.has('b@mp')).toBe(false);
+    expect(map.has('c@mp')).toBe(false);
+  });
+
+  it('returns an empty map for codex (plugin import is detection-only)', () => {
+    // Even with a config.toml present, v1 reads no Codex plugin-enable state.
+    mkdirSync(join(home, '.codex'), { recursive: true });
+    writeFileSync(join(home, '.codex', 'config.toml'), '[plugins."x@mp"]\nenabled = false\n');
+    expect(readSourceEnabledState('codex', home).size).toBe(0);
   });
 });
 

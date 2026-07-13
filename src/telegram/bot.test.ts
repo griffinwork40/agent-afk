@@ -5,6 +5,7 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TelegramBot } from './bot';
 import { isRateLimitError, isNetworkError } from './error-utils';
+import * as skillBridge from '../agent/tools/skill-bridge.js';
 import type { IAgentSession, AgentConfig, SessionState, OutputEvent } from '../agent/types';
 import type { Context } from 'telegraf';
 
@@ -109,6 +110,19 @@ describe('TelegramBot', () => {
     if (bot) {
       await bot.stop().catch(() => {});
     }
+  });
+
+  describe('construction', () => {
+    test('disables Telegraf handlerTimeout so long turns are governed by the streaming watchdog, not a 90s guillotine', () => {
+      // Regression: Telegraf's default handlerTimeout (90_000ms) p-timeouts the
+      // whole turn → bot.catch → generic error, while the AgentSession keeps
+      // running in the background. streaming.ts owns timeout policy instead.
+      const handlerTimeout = (
+        bot as unknown as { bot: { options: { handlerTimeout: number } } }
+      ).bot.options.handlerTimeout;
+      expect(handlerTimeout).toBe(Infinity);
+      expect(handlerTimeout).not.toBe(90_000);
+    });
   });
 
   describe('commands', () => {
@@ -278,6 +292,30 @@ describe('TelegramBot', () => {
 
     test('should allow stop even if not running', async () => {
       await expect(bot.stop()).resolves.not.toThrow();
+    });
+
+    test('loads plugin entrypoints before launching the bot', async () => {
+      // Invariant: a plugin's registerSkill() side-effects must run before the
+      // first update is handled, because each per-chat session assembles its
+      // skill manifest synchronously at construction. Lock the ordering:
+      // ensurePluginEntrypointsLoaded() must be awaited before bot.launch().
+      const order: string[] = [];
+      const entrypointsSpy = vi
+        .spyOn(skillBridge, 'ensurePluginEntrypointsLoaded')
+        .mockImplementation(async () => {
+          order.push('entrypoints');
+        });
+      (bot as any).bot.launch = vi.fn(async () => {
+        order.push('launch');
+      });
+      (bot as any).bot.telegram.setMyCommands = vi.fn(async () => {});
+
+      await bot.start();
+      await bot.stop();
+
+      expect(entrypointsSpy).toHaveBeenCalledTimes(1);
+      expect(order).toEqual(['entrypoints', 'launch']);
+      entrypointsSpy.mockRestore();
     });
   });
 });

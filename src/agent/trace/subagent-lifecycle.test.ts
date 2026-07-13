@@ -161,6 +161,67 @@ describe('subagent_lifecycle trace events', () => {
       await new Promise((resolve) => setImmediate(resolve));
       expect(writer.events).toHaveLength(0);
     });
+
+    // Regression: the `agent`-tool path never sets config.traceWriter — its
+    // forks relied on manager-level inheritance, which only reached the
+    // child session's own events, NOT the lifecycle emits or the handle.
+    // Result: raw agent dispatches were invisible in `afk trace show`
+    // (the 2026-07-06 stuck-subagent incident's forensic dead end).
+    // forkSubagent now resolves effectiveTraceWriter = config → manager.
+    it('inherits the manager-level writer when config.traceWriter is unset', async () => {
+      const writer = new InMemoryTraceWriter();
+      const mgr = new SubagentManager({ traceWriter: writer });
+      const handle = await mgr.forkSubagent({
+        parent: { sessionId: 'parent-mgr' },
+        config: { model: 'sonnet' }, // no per-fork traceWriter — the agent-tool shape
+        idPrefix: 'agent-tool',
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const started = writer.events.find(
+        (e) => e.kind === 'subagent_lifecycle' && e.payload.transition === 'started',
+      );
+      if (started?.kind !== 'subagent_lifecycle' || started.payload.transition !== 'started') {
+        throw new Error('expected started event via manager-level writer');
+      }
+      expect(started.payload.subagentId).toBe(handle.id);
+      expect(started.payload.parentId).toBe('parent-mgr');
+    });
+
+    it('manager-level writer also covers the handle terminal emits (succeeded)', async () => {
+      const writer = new InMemoryTraceWriter();
+      const mgr = new SubagentManager({ traceWriter: writer });
+      const handle = await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet' }, // no per-fork traceWriter
+      });
+      await handle.run('hi');
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const transitions = writer.events
+        .filter((e) => e.kind === 'subagent_lifecycle')
+        .map((e) => (e.kind === 'subagent_lifecycle' ? e.payload.transition : ''));
+      expect(transitions).toContain('started');
+      expect(transitions).toContain('succeeded');
+    });
+
+    it('per-fork config.traceWriter wins over the manager-level writer', async () => {
+      const managerWriter = new InMemoryTraceWriter();
+      const forkWriter = new InMemoryTraceWriter();
+      const mgr = new SubagentManager({ traceWriter: managerWriter });
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet', traceWriter: forkWriter },
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(
+        forkWriter.events.some(
+          (e) => e.kind === 'subagent_lifecycle' && e.payload.transition === 'started',
+        ),
+      ).toBe(true);
+      expect(managerWriter.events).toHaveLength(0);
+    });
   });
 
   describe('succeeded', () => {

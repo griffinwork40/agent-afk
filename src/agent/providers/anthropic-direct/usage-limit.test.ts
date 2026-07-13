@@ -3,7 +3,13 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { classifyUsageLimitError, waitForReset, waitForHotSwap } from './usage-limit.js';
+import {
+  classifyUsageLimitError,
+  parseRetryAfterMs,
+  waitForReset,
+  waitForHotSwap,
+  RATE_LIMIT_TRANSIENT_MAX_RETRY_AFTER_MS,
+} from './usage-limit.js';
 
 // ---------------------------------------------------------------------------
 // classifyUsageLimitError
@@ -12,6 +18,18 @@ import { classifyUsageLimitError, waitForReset, waitForHotSwap } from './usage-l
 function makeError(status: number, message: string): Error {
   const e = new Error(message);
   (e as Error & { status: number }).status = status;
+  return e;
+}
+
+function makeErrorWithHeaders(
+  status: number,
+  message: string,
+  headers: Record<string, string> | Headers,
+): Error {
+  const e = new Error(message);
+  const w = e as Error & { status: number; headers: unknown };
+  w.status = status;
+  w.headers = headers;
   return e;
 }
 
@@ -57,6 +75,313 @@ describe('classifyUsageLimitError', () => {
   it('returns null for 400 without both keywords', () => {
     expect(classifyUsageLimitError(makeError(400, 'invalid_request_error: something else'))).toBeNull();
     expect(classifyUsageLimitError(makeError(400, 'credit balance issue'))).toBeNull();
+  });
+
+  // A standard API-tier rate-limit 429 must NOT be treated as OAuth
+  // subscription exhaustion (which would park the turn in a 2-hour poll).
+  it('returns rate-limit-transient for a 429 with a retry-after header and no |ts', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', { 'retry-after': '30' });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('rate-limit-transient');
+    if (result?.kind === 'rate-limit-transient') {
+      expect(result.retryAfterMs).toBe(30_000);
+    }
+  });
+
+  it('prefers oauth-limit (|ts) over the retry-after header', () => {
+    const unixTs = 1700000000;
+    const err = makeErrorWithHeaders(429, `usage limit|${unixTs}`, { 'retry-after': '30' });
+    expect(classifyUsageLimitError(err)?.kind).toBe('oauth-limit');
+  });
+
+  it('still returns oauth-limit-no-ts for a 429 with no timestamp and no retry-after header', () => {
+    expect(classifyUsageLimitError(makeError(429, 'Claude AI usage limit reached'))?.kind).toBe(
+      'oauth-limit-no-ts',
+    );
+  });
+
+  it('reads retry-after from a web Headers object', () => {
+    const err = makeErrorWithHeaders(429, '429', new Headers({ 'retry-after': '5' }));
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('rate-limit-transient');
+    if (result?.kind === 'rate-limit-transient') {
+      expect(result.retryAfterMs).toBe(5_000);
+    }
+  });
+
+  // Regression (2026-07): Anthropic delivers an OAuth *subscription* cap as a
+  // bare `429 rate_limit_error` + a LONG retry-after and no |ts — identical in
+  // shape to a transient throttle except for magnitude (anthropics/claude-
+  // code#30930). It must route to the pause + hot-swap path (oauth-limit-no-ts),
+  // NOT the silent transient-retry path — which emits no `paused` event (so the
+  // operator is never notified) and never watches the keychain for an account
+  // switch (so switching accounts never resumes the turn).
+  it('returns oauth-limit-no-ts for a 429 with a long retry-after and no |ts (subscription cap)', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', { 'retry-after': '3600' });
+    expect(classifyUsageLimitError(err)?.kind).toBe('oauth-limit-no-ts');
+  });
+
+  it('routes a retry-after AT the transient threshold as transient, just PAST it as subscription', () => {
+    const atThreshold = makeErrorWithHeaders(429, '429', {
+      'retry-after-ms': String(RATE_LIMIT_TRANSIENT_MAX_RETRY_AFTER_MS),
+    });
+    expect(classifyUsageLimitError(atThreshold)?.kind).toBe('rate-limit-transient');
+
+    const pastThreshold = makeErrorWithHeaders(429, '429', {
+      'retry-after-ms': String(RATE_LIMIT_TRANSIENT_MAX_RETRY_AFTER_MS + 1),
+    });
+    expect(classifyUsageLimitError(pastThreshold)?.kind).toBe('oauth-limit-no-ts');
+  });
+
+  // -------------------------------------------------------------------------
+  // #488 — prefer `anthropic-ratelimit-unified-*` headers over the retry-after
+  // magnitude proxy. These are the authoritative signals Claude Code keys on
+  // (verified v2.1.206). The change is additive + presence-gated: the fallback
+  // regression guards above must keep passing unchanged.
+  // -------------------------------------------------------------------------
+
+  it('returns oauth-limit with a header-derived resetsAt for a unified claim + unified-reset', () => {
+    const resetEpochSec = Math.floor(Date.now() / 1000) + 3600; // 1h in the future
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-unified-representative-claim': 'five_hour',
+      'anthropic-ratelimit-unified-reset': String(resetEpochSec),
+    });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('oauth-limit');
+    if (result?.kind === 'oauth-limit') {
+      expect(result.resetsAt.getTime()).toBe(resetEpochSec * 1000);
+    }
+  });
+
+  it('returns oauth-limit-no-ts for a unified claim header with NO unified-reset', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-unified-representative-claim': 'seven_day',
+    });
+    expect(classifyUsageLimitError(err)?.kind).toBe('oauth-limit-no-ts');
+  });
+
+  it('returns oauth-limit-no-ts for unified-status "rejected" with no reset', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-unified-status': 'rejected',
+    });
+    expect(classifyUsageLimitError(err)?.kind).toBe('oauth-limit-no-ts');
+  });
+
+  it('returns oauth-limit-no-ts for a unified-overage-status header (no reset)', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-unified-overage-status': 'active',
+    });
+    expect(classifyUsageLimitError(err)?.kind).toBe('oauth-limit-no-ts');
+  });
+
+  it('ignores a non-finite / non-positive unified-reset and falls to oauth-limit-no-ts', () => {
+    const nonFinite = makeErrorWithHeaders(429, '429', {
+      'anthropic-ratelimit-unified-representative-claim': 'five_hour',
+      'anthropic-ratelimit-unified-reset': 'not-a-number',
+    });
+    expect(classifyUsageLimitError(nonFinite)?.kind).toBe('oauth-limit-no-ts');
+
+    const nonPositive = makeErrorWithHeaders(429, '429', {
+      'anthropic-ratelimit-unified-representative-claim': 'five_hour',
+      'anthropic-ratelimit-unified-reset': '0',
+    });
+    expect(classifyUsageLimitError(nonPositive)?.kind).toBe('oauth-limit-no-ts');
+  });
+
+  it('returns rate-limit-transient for only per-minute headers (no unified headers)', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-requests-remaining': '0',
+      'retry-after': '30',
+    });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('rate-limit-transient');
+    if (result?.kind === 'rate-limit-transient') {
+      expect(result.retryAfterMs).toBe(30_000);
+    }
+  });
+
+  // The authoritative subscription signal must win over retry-after MAGNITUDE:
+  // a 429 with a unified claim AND a short retry-after is a subscription cap,
+  // NOT a transient throttle (this is the core behavioral change of #488).
+  it('prefers a unified subscription header over a short retry-after', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-unified-representative-claim': 'five_hour',
+      'retry-after': '30',
+    });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('oauth-limit-no-ts');
+    expect(result?.kind).not.toBe('rate-limit-transient');
+  });
+
+  // Precedence: the `|<ts>` message parse (step 1) still wins over unified
+  // headers (step 2) when both are present.
+  it('prefers the |ts message parse over unified headers', () => {
+    const unixTs = 1700000000;
+    const err = makeErrorWithHeaders(429, `usage limit|${unixTs}`, {
+      'anthropic-ratelimit-unified-representative-claim': 'five_hour',
+      'anthropic-ratelimit-unified-reset': String(Math.floor(Date.now() / 1000) + 3600),
+    });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('oauth-limit');
+    if (result?.kind === 'oauth-limit') {
+      expect(result.resetsAt.getTime()).toBe(unixTs * 1000);
+    }
+  });
+
+  // Regression guard (fallback / step 4 — no rate-limit headers at all): the
+  // pre-#488 magnitude behavior must be preserved byte-for-byte.
+  it('FALLBACK: short retry-after with no rate-limit headers → rate-limit-transient', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', { 'retry-after': '30' });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('rate-limit-transient');
+    if (result?.kind === 'rate-limit-transient') {
+      expect(result.retryAfterMs).toBe(30_000);
+    }
+  });
+
+  it('FALLBACK: long retry-after with no rate-limit headers → oauth-limit-no-ts', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', { 'retry-after': '3600' });
+    expect(classifyUsageLimitError(err)?.kind).toBe('oauth-limit-no-ts');
+  });
+
+  it('reads unified headers from a web Headers object (not just a plain record)', () => {
+    const resetEpochSec = Math.floor(Date.now() / 1000) + 7200;
+    const err = makeErrorWithHeaders(
+      429,
+      '429',
+      new Headers({
+        'anthropic-ratelimit-unified-representative-claim': 'seven_day_opus',
+        'anthropic-ratelimit-unified-reset': String(resetEpochSec),
+      }),
+    );
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('oauth-limit');
+    if (result?.kind === 'oauth-limit') {
+      expect(result.resetsAt.getTime()).toBe(resetEpochSec * 1000);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // #490 review follow-ups — edge cases the original #488 suite did not cover.
+  // -------------------------------------------------------------------------
+
+  // M1 regression: a `unified-reset` past the ECMAScript Date ceiling must NOT
+  // produce an `oauth-limit` with an Invalid Date (NaN getTime), which would
+  // slip past the downstream `> TWO_HOURS_MS` surface-guard and hang
+  // `waitForReset` on a NaN deadline. It falls to the timestamp-less path.
+  it('falls to oauth-limit-no-ts for a unified-reset beyond the JS Date range', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-unified-representative-claim': 'five_hour',
+      'anthropic-ratelimit-unified-reset': '99999999999999', // ~1e14 s → overflows Date
+    });
+    expect(classifyUsageLimitError(err)?.kind).toBe('oauth-limit-no-ts');
+  });
+
+  // M1 regression, step-1 parity: an out-of-range `|ts` timestamp falls through
+  // the header steps to the fallback (no retry-after → oauth-limit-no-ts),
+  // never an Invalid-Date oauth-limit.
+  it('falls through a |ts timestamp beyond the JS Date range (step 1 guard)', () => {
+    const err = makeError(429, 'usage limit|99999999999999');
+    expect(classifyUsageLimitError(err)?.kind).toBe('oauth-limit-no-ts');
+  });
+
+  // Precedence: when BOTH a unified subscription header and per-minute throttle
+  // headers are present, step 2 (subscription) wins over step 3 (transient).
+  it('prefers the unified subscription header over per-minute throttle headers', () => {
+    const resetEpochSec = Math.floor(Date.now() / 1000) + 3600;
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-unified-representative-claim': 'five_hour',
+      'anthropic-ratelimit-unified-reset': String(resetEpochSec),
+      'anthropic-ratelimit-requests-remaining': '0',
+      'retry-after': '30',
+    });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('oauth-limit');
+    if (result?.kind === 'oauth-limit') {
+      expect(result.resetsAt.getTime()).toBe(resetEpochSec * 1000);
+    }
+  });
+
+  // Step 3 with per-minute headers but no retry-after hint → transient with an
+  // undefined retryAfterMs (retry-layer falls back to its default backoff).
+  it('returns rate-limit-transient with undefined retryAfterMs for per-minute headers and no retry-after', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-requests-remaining': '0',
+    });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('rate-limit-transient');
+    if (result?.kind === 'rate-limit-transient') {
+      expect(result.retryAfterMs).toBeUndefined();
+    }
+  });
+
+  // Characterization (review M2 / #488 design): step 3 is intentionally
+  // magnitude-blind — per-minute headers route to `rate-limit-transient` even
+  // when retry-after exceeds the transient threshold. retry-layer clamps the
+  // wait, so this stays a bounded retry rather than a subscription pause.
+  it('keeps per-minute headers with a long retry-after as rate-limit-transient (magnitude-blind step 3)', () => {
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-requests-remaining': '0',
+      'retry-after': '3600',
+    });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('rate-limit-transient');
+    if (result?.kind === 'rate-limit-transient') {
+      expect(result.retryAfterMs).toBe(3_600_000);
+    }
+  });
+
+  // Characterization (review L2): a past `unified-reset` is accepted as-is
+  // (parity with the |ts path); downstream the deadline collapses to ~now →
+  // immediate replay. Guarding future-ness is deliberately left as follow-up.
+  it('accepts a past unified-reset as oauth-limit with a past resetsAt', () => {
+    const pastSec = Math.floor(Date.now() / 1000) - 3600;
+    const err = makeErrorWithHeaders(429, '429 rate_limit_error', {
+      'anthropic-ratelimit-unified-representative-claim': 'five_hour',
+      'anthropic-ratelimit-unified-reset': String(pastSec),
+    });
+    const result = classifyUsageLimitError(err);
+    expect(result?.kind).toBe('oauth-limit');
+    if (result?.kind === 'oauth-limit') {
+      expect(result.resetsAt.getTime()).toBe(pastSec * 1000);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseRetryAfterMs
+// ---------------------------------------------------------------------------
+
+describe('parseRetryAfterMs', () => {
+  it('returns undefined for non-objects and missing/empty headers', () => {
+    expect(parseRetryAfterMs(null)).toBeUndefined();
+    expect(parseRetryAfterMs('nope')).toBeUndefined();
+    expect(parseRetryAfterMs({})).toBeUndefined();
+    expect(parseRetryAfterMs({ headers: {} })).toBeUndefined();
+  });
+
+  it('prefers retry-after-ms (milliseconds)', () => {
+    expect(parseRetryAfterMs({ headers: { 'retry-after-ms': '1500' } })).toBe(1500);
+  });
+
+  it('parses retry-after seconds into milliseconds', () => {
+    expect(parseRetryAfterMs({ headers: { 'retry-after': '2' } })).toBe(2000);
+  });
+
+  it('reads from a web Headers object via .get', () => {
+    expect(parseRetryAfterMs({ headers: new Headers({ 'retry-after': '3' }) })).toBe(3000);
+  });
+
+  it('parses an HTTP-date retry-after into a forward delta', () => {
+    const future = new Date(Date.now() + 10_000).toUTCString();
+    const ms = parseRetryAfterMs({ headers: { 'retry-after': future } });
+    expect(ms).toBeGreaterThan(0);
+    expect(ms).toBeLessThanOrEqual(10_000);
+  });
+
+  it('ignores a past HTTP-date', () => {
+    const past = new Date(Date.now() - 10_000).toUTCString();
+    expect(parseRetryAfterMs({ headers: { 'retry-after': past } })).toBeUndefined();
   });
 });
 

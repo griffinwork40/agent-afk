@@ -6,6 +6,7 @@ import { formatStatusFields, printResumeBanner, reseedStatsFromStored, type Resu
 import type { SessionRef } from '../../../agent/session-ref.js';
 import type { SessionStats } from '../../slash/types.js';
 import type { ContextSampler } from '../../context-sampler.js';
+import type { GitStatusSampler } from '../../git-status-sampler.js';
 import type { StatusLine } from '../../status-line.js';
 import type { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import type { AgentSession } from '../../../agent/session.js';
@@ -37,6 +38,13 @@ export interface ResumeSwapDeps {
   sessionRef: SessionRef;
   stats: SessionStats;
   contextSampler: ContextSampler;
+  /**
+   * Git branch + PR sampler for the status line. Optional — the resumed
+   * session keeps the SAME working directory (resume does not chdir), so the
+   * branch is unchanged across a swap and the cache stays valid; this is
+   * threaded only so the post-swap repaint shows the branch/PR segment.
+   */
+  gitStatusSampler?: GitStatusSampler;
   statusLine: StatusLine;
   backgroundRegistry: BackgroundAgentRegistry;
   completionWriter: CompletionWriter;
@@ -231,7 +239,7 @@ export async function performResumeSwap(
   printResumeBanner(deps.stats, deps.completionWriter);
 
   // Step 12 — Repaint status line.
-  deps.statusLine.repaint(formatStatusFields(deps.stats, deps.contextSampler));
+  deps.statusLine.repaint(formatStatusFields(deps.stats, deps.contextSampler, deps.gitStatusSampler));
 
   return { ok: true, sessionId: newSession.sessionId ?? deps.stats.sessionId ?? target.resumeId };
 }

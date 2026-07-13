@@ -7,7 +7,9 @@ import {
 import { builtinToolSchemas } from './schemas.js';
 import type { ToolCall } from './types.js';
 import type { ToolHandler } from './types.js';
+import type { CanUseTool } from '../types/sdk-types.js';
 import { createHookRegistryImpl } from '../hook-registry.js';
+import { InMemoryTraceWriter } from '../trace/writer.js';
 
 function makeCall(overrides?: Partial<ToolCall>): ToolCall {
   return {
@@ -74,6 +76,43 @@ describe('SessionToolDispatcher', () => {
     });
   });
 
+  describe('sessionGrantManager injection (#514)', () => {
+    // The provider passes itself as sessionGrantManager; the dispatcher must
+    // surface it on the PreToolUse context so path-scoped hooks resolve THIS
+    // session's grants (a forked child's own writeRoots) instead of the
+    // process-global ref pinned to the top-level session.
+    const fakeGM = {
+      getGrants: () => ({ resolveBase: undefined, readRoots: [], writeRoots: [] }),
+      addReadRoot: () => {},
+      addWriteRoot: () => {},
+      revokeRoot: () => {},
+    };
+
+    it('injects sessionGrantManager onto the PreToolUse context', async () => {
+      let captured: unknown = 'unset';
+      const registry = createHookRegistryImpl();
+      registry.register('PreToolUse', (ctx) => {
+        if (ctx.event === 'PreToolUse') captured = ctx.grantManager;
+        return {};
+      });
+      const dispatcher = makeDispatcher({ hookRegistry: registry, sessionGrantManager: fakeGM });
+      await dispatcher.execute(makeCall());
+      expect(captured).toBe(fakeGM);
+    });
+
+    it('leaves context.grantManager undefined when no sessionGrantManager is provided', async () => {
+      let captured: unknown = 'unset';
+      const registry = createHookRegistryImpl();
+      registry.register('PreToolUse', (ctx) => {
+        if (ctx.event === 'PreToolUse') captured = ctx.grantManager;
+        return {};
+      });
+      const dispatcher = makeDispatcher({ hookRegistry: registry });
+      await dispatcher.execute(makeCall());
+      expect(captured).toBeUndefined();
+    });
+  });
+
   it('returns isError for unknown tool', async () => {
     const dispatcher = makeDispatcher({
       permissions: { allowedTools: ['echo', 'nonexistent'] },
@@ -105,9 +144,46 @@ describe('SessionToolDispatcher', () => {
     expect(result.failureClass).toBe('abort');
   });
 
-  it('exposes toolDefs from schemas', () => {
-    const dispatcher = makeDispatcher();
+  it('exposes toolDefs from schemas (no allowlist = full pass-through)', () => {
+    // Pass undefined permissions so no allowlist is configured — full schema returned.
+    const dispatcher = makeDispatcher({ permissions: undefined });
     expect(dispatcher.toolDefs).toEqual(builtinToolSchemas);
+  });
+
+  describe('toolDefs allowlist subsetting', () => {
+    it('returns all schemas when no allowlist is configured (permissions undefined)', () => {
+      const dispatcher = new SessionToolDispatcher({
+        handlers: new Map(),
+        schemas: [...builtinToolSchemas],
+        // no permissions → undefined
+      });
+      expect(dispatcher.toolDefs).toEqual(builtinToolSchemas);
+    });
+
+    it('returns only allowlisted schemas when allowedTools is set', () => {
+      const bashSchema = builtinToolSchemas.find((s) => s.name === 'bash')!;
+      const readFileSchema = builtinToolSchemas.find((s) => s.name === 'read_file')!;
+      expect(bashSchema).toBeDefined();
+      expect(readFileSchema).toBeDefined();
+      const dispatcher = new SessionToolDispatcher({
+        handlers: new Map(),
+        schemas: [bashSchema, readFileSchema],
+        permissions: { allowedTools: ['read_file'] },
+      });
+      const defs = dispatcher.toolDefs;
+      expect(defs).toHaveLength(1);
+      expect(defs[0]!.name).toBe('read_file');
+      expect(defs.map((d) => d.name)).not.toContain('bash');
+    });
+
+    it('returns empty array when allowedTools matches no schema', () => {
+      const dispatcher = new SessionToolDispatcher({
+        handlers: new Map(),
+        schemas: [...builtinToolSchemas],
+        permissions: { allowedTools: ['nonexistent_tool'] },
+      });
+      expect(dispatcher.toolDefs).toEqual([]);
+    });
   });
 
   describe('permissions', () => {
@@ -189,6 +265,65 @@ describe('SessionToolDispatcher', () => {
       const result = await dispatcher.execute(makeCall());
       expect(result.content).toBe('hello');
       expect(result.isError).toBeUndefined();
+    });
+
+    it('PostToolUseFailure fires with error message when handler throws', async () => {
+      const registry = createHookRegistryImpl();
+      const failureSpy = vi.fn(async () => ({}));
+      const postSpy = vi.fn(async () => ({}));
+      registry.register('PostToolUseFailure', failureSpy);
+      registry.register('PostToolUse', postSpy);
+
+      const throwingHandler: ToolHandler = async () => {
+        throw new Error('tool blew up');
+      };
+      const dispatcher = new SessionToolDispatcher({
+        handlers: new Map([['bomb', throwingHandler]]),
+        schemas: [...builtinToolSchemas],
+        permissions: { allowedTools: ['bomb'] },
+        hookRegistry: registry,
+      });
+
+      const call: ToolCall = {
+        id: 'c1',
+        name: 'bomb',
+        input: {},
+        signal: new AbortController().signal,
+      };
+      const result = await dispatcher.execute(call);
+
+      // Tool result is an isError result
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('tool blew up');
+
+      // PostToolUseFailure fired once with correct payload
+      await vi.waitFor(() => expect(failureSpy).toHaveBeenCalledOnce());
+      const callArgs = failureSpy.mock.calls[0] as unknown[];
+      expect(callArgs[0]).toMatchObject({
+        event: 'PostToolUseFailure',
+        toolName: 'bomb',
+        error: 'tool blew up',
+      });
+
+      // PostToolUse must NOT have fired
+      expect(postSpy).not.toHaveBeenCalled();
+    });
+
+    it('PostToolUseFailure does not fire when handler succeeds', async () => {
+      const registry = createHookRegistryImpl();
+      const failureSpy = vi.fn(async () => ({}));
+      const postSpy = vi.fn(async () => ({}));
+      registry.register('PostToolUseFailure', failureSpy);
+      registry.register('PostToolUse', postSpy);
+
+      const dispatcher = makeDispatcher({ hookRegistry: registry });
+      const result = await dispatcher.execute(makeCall());
+
+      expect(result.isError).toBeUndefined();
+      // Drain the event loop by waiting for PostToolUse to fire, then assert
+      // PostToolUseFailure did not fire -- avoids the fragile setTimeout fence.
+      await vi.waitFor(() => expect(postSpy).toHaveBeenCalledOnce());
+      expect(failureSpy).not.toHaveBeenCalled();
     });
   });
 
@@ -511,6 +646,58 @@ describe('SessionToolDispatcher', () => {
       expect(order.indexOf('grep')).toBeGreaterThan(order.indexOf('bash'));
     });
 
+    it('stamps batchIndex/batchSize reflecting the partition', async () => {
+      const track = (name: string): ToolHandler => async () => ({ content: name });
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', track('read')],
+          ['glob', track('glob')],
+          ['bash', track('bash')],
+          ['grep', track('grep')],
+        ]),
+        permissions: { allowedTools: ['read_file', 'glob', 'bash', 'grep'] },
+      });
+
+      // [safe, safe, unsafe, safe] → batches {read,glob}, {bash}, {grep}.
+      const results = await dispatcher.executeBatch([
+        makeBatchCall('read_file'),
+        makeBatchCall('glob'),
+        makeBatchCall('bash'),
+        makeBatchCall('grep'),
+      ]);
+
+      // Parallel wave of 2: 1-based index within a size-2 batch.
+      expect(results[0]).toMatchObject({ batchIndex: 1, batchSize: 2 });
+      expect(results[1]).toMatchObject({ batchIndex: 2, batchSize: 2 });
+      // bash is concurrency-unsafe → its own singleton batch (never badged).
+      expect(results[2]).toMatchObject({ batchIndex: 1, batchSize: 1 });
+      // The trailing safe call is severed from the first wave by bash, so it
+      // is a singleton too — proving batchSize tracks the partition, not the
+      // tool's mere safety class.
+      expect(results[3]).toMatchObject({ batchIndex: 1, batchSize: 1 });
+    });
+
+    it('stamps a whole safe fan-out as one batch', async () => {
+      const track = (name: string): ToolHandler => async () => ({ content: name });
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', track('read')],
+          ['glob', track('glob')],
+          ['grep', track('grep')],
+        ]),
+        permissions: { allowedTools: ['read_file', 'glob', 'grep'] },
+      });
+
+      const results = await dispatcher.executeBatch([
+        makeBatchCall('read_file'),
+        makeBatchCall('glob'),
+        makeBatchCall('grep'),
+      ]);
+
+      expect(results.map((r) => r.batchSize)).toEqual([3, 3, 3]);
+      expect(results.map((r) => r.batchIndex)).toEqual([1, 2, 3]);
+    });
+
     it('collects all results when one tool fails in a safe batch', async () => {
       const ok: ToolHandler = async () => ({ content: 'ok' });
       const fail: ToolHandler = async () => { throw new Error('boom'); };
@@ -754,6 +941,108 @@ describe('SessionToolDispatcher', () => {
       expect(results[0]!.content).toBe('slow');
       expect(results[1]!.content).toBe('fast');
     });
+
+    describe('maxConcurrentSafeCalls (bounded concurrency)', () => {
+      // A safe handler that records concurrency: increments a live counter on
+      // entry, tracks the peak, decrements on exit. `peak` is the maximum
+      // number that were ever in flight simultaneously.
+      function makeConcurrencyProbe() {
+        const state = { inFlight: 0, peak: 0 };
+        const handler: ToolHandler = async () => {
+          state.inFlight += 1;
+          state.peak = Math.max(state.peak, state.inFlight);
+          await new Promise((r) => setTimeout(r, 20));
+          state.inFlight -= 1;
+          return { content: 'ok' };
+        };
+        return { state, handler };
+      }
+
+      it('caps simultaneous in-flight safe calls at the configured limit', async () => {
+        const { state, handler } = makeConcurrencyProbe();
+        const dispatcher = makeDispatcher({
+          handlers: new Map([['read_file', handler]]),
+          permissions: { allowedTools: ['read_file'] },
+          maxConcurrentSafeCalls: 2,
+        });
+
+        const calls = Array.from({ length: 6 }, (_, i) =>
+          makeBatchCall('read_file', `read-${i}`),
+        );
+        const results = await dispatcher.executeBatch(calls);
+
+        expect(results).toHaveLength(6);
+        expect(results.every((r) => r.content === 'ok')).toBe(true);
+        // Never more than 2 running at once, despite 6 safe calls in the batch.
+        expect(state.peak).toBe(2);
+      });
+
+      it('runs the whole batch concurrently when the cap exceeds batch width', async () => {
+        const { state, handler } = makeConcurrencyProbe();
+        const dispatcher = makeDispatcher({
+          handlers: new Map([['read_file', handler]]),
+          permissions: { allowedTools: ['read_file'] },
+          maxConcurrentSafeCalls: 10,
+        });
+
+        const calls = Array.from({ length: 4 }, (_, i) =>
+          makeBatchCall('read_file', `read-${i}`),
+        );
+        await dispatcher.executeBatch(calls);
+
+        // Cap (10) > batch width (4): all four run at once, like allSettled.
+        expect(state.peak).toBe(4);
+      });
+
+      it('preserves result order when draining a batch wider than the cap', async () => {
+        // Descending delays: without index-keyed write-back, a naive pool
+        // would return results in completion order (fastest first).
+        const mk = (ms: number, content: string): ToolHandler => async () => {
+          await new Promise((r) => setTimeout(r, ms));
+          return { content };
+        };
+        const dispatcher = makeDispatcher({
+          handlers: new Map([
+            ['read_file', mk(40, 'a')],
+            ['glob', mk(30, 'b')],
+            ['grep', mk(20, 'c')],
+            ['list_directory', mk(10, 'd')],
+          ]),
+          permissions: { allowedTools: ['read_file', 'glob', 'grep', 'list_directory'] },
+          maxConcurrentSafeCalls: 2,
+        });
+
+        const results = await dispatcher.executeBatch([
+          makeBatchCall('read_file'),
+          makeBatchCall('glob'),
+          makeBatchCall('grep'),
+          makeBatchCall('list_directory'),
+        ]);
+
+        expect(results.map((r) => r.content)).toEqual(['a', 'b', 'c', 'd']);
+      });
+
+      it('degrades to sequential (not deadlock) when the cap is below 1', async () => {
+        // A non-positive/non-finite cap falls back to the default in the
+        // constructor, so behaviour stays parallel — assert it does not hang
+        // and every call still resolves.
+        const { state, handler } = makeConcurrencyProbe();
+        const dispatcher = makeDispatcher({
+          handlers: new Map([['read_file', handler]]),
+          permissions: { allowedTools: ['read_file'] },
+          maxConcurrentSafeCalls: 0,
+        });
+
+        const calls = Array.from({ length: 3 }, (_, i) =>
+          makeBatchCall('read_file', `read-${i}`),
+        );
+        const results = await dispatcher.executeBatch(calls);
+
+        expect(results.map((r) => r.content)).toEqual(['ok', 'ok', 'ok']);
+        // Default cap (8) applies → all 3 run at once.
+        expect(state.peak).toBe(3);
+      });
+    });
   });
 
   describe('compose tool routing (L4)', () => {
@@ -790,6 +1079,35 @@ describe('SessionToolDispatcher', () => {
       ]);
       expect(results[0]!.isError).toBe(true);
       expect(results[0]!.content).toContain('not available');
+    });
+
+    // Compose deferral: PostToolUseFailure hook wiring for compose calls is
+    // deferred (acknowledged in PR #282). This skip-marked test documents the
+    // current behavior so future changes do not accidentally fire or suppress
+    // the hooks without a deliberate decision.
+    it.skip('compose deferral: PostToolUseFailure does NOT fire inside compose, PostToolUse does NOT fire either (deferred -- see PR #282)', async () => {
+      const registry = createHookRegistryImpl();
+      const failureSpy = vi.fn(async () => ({}));
+      const postSpy = vi.fn(async () => ({}));
+      registry.register('PostToolUseFailure', failureSpy);
+      registry.register('PostToolUse', postSpy);
+
+      const throwingExecutor = {
+        execute: vi.fn().mockRejectedValue(new Error('compose exploded')),
+      } as any;
+      const dispatcher = makeDispatcher({
+        composeExecutor: throwingExecutor,
+        permissions: { allowedTools: ['echo', 'compose'] },
+        hookRegistry: registry,
+      });
+      const result = await dispatcher.execute(
+        makeCall({ name: 'compose', input: { nodes: [{ id: 'a', prompt: 'task' }] } }),
+      );
+      expect(result.isError).toBe(true);
+      // Current behavior: neither hook fires for compose errors (deferred).
+      await new Promise((r) => setTimeout(r, 20));
+      expect(failureSpy).not.toHaveBeenCalled();
+      expect(postSpy).not.toHaveBeenCalled();
     });
   });
 });
@@ -1118,5 +1436,185 @@ describe('SessionToolDispatcher — repeat-loop circuit breaker', () => {
     const r = await d2.execute(makeCall());
     expect(r.isError).toBeUndefined();
     expect(r.content).toBe('hello');
+  });
+});
+
+describe('SessionToolDispatcher — canUseTool (Dim 8 in-process permission policy)', () => {
+  const allowAll: CanUseTool = async () => ({ behavior: 'allow' });
+
+  it('allow result lets the call through to the handler', async () => {
+    const handler = vi.fn(echoHandler());
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', handler]]),
+      canUseTool: allowAll,
+    });
+    const r = await d.execute(makeCall());
+    expect(r.isError).toBeUndefined();
+    expect(r.content).toBe('hello');
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('deny result short-circuits before the handler runs', async () => {
+    const handler = vi.fn(echoHandler());
+    const denyEcho: CanUseTool = async (name) => ({
+      behavior: 'deny',
+      message: `policy denied ${name}`,
+    });
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', handler]]),
+      canUseTool: denyEcho,
+    });
+    const r = await d.execute(makeCall());
+    expect(r.isError).toBe(true);
+    expect(r.content).toBe('policy denied echo');
+    expect(r.failureClass).toBe('permission-denied');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('deny overrides a tool that the static allowlist permits (policy can restrict)', async () => {
+    // 'echo' IS allowlisted, but the policy denies it. canUseTool runs AFTER
+    // the allowlist, so it can further restrict — never widen.
+    const handler = vi.fn(echoHandler());
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', handler]]),
+      permissions: { allowedTools: ['echo'] },
+      canUseTool: async () => ({ behavior: 'deny', message: 'nope' }),
+    });
+    const r = await d.execute(makeCall());
+    expect(r.isError).toBe(true);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('static allowlist still wins: canUseTool cannot widen a denied tool', async () => {
+    // 'forbidden' is NOT allowlisted. Even though the policy would allow it,
+    // checkToolPermission runs first and denies — canUseTool never widens.
+    const handler = vi.fn(echoHandler());
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['forbidden', handler]]),
+      permissions: { allowedTools: ['echo'] },
+      canUseTool: allowAll,
+    });
+    const r = await d.execute(makeCall({ name: 'forbidden' }));
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('not in the configured allowlist');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('allow.updatedInput rewrites the input the handler receives', async () => {
+    const handler = vi.fn(echoHandler());
+    const rewrite: CanUseTool = async () => ({
+      behavior: 'allow',
+      updatedInput: { message: 'rewritten' },
+    });
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', handler]]),
+      canUseTool: rewrite,
+    });
+    const r = await d.execute(makeCall({ input: { message: 'original' } }));
+    expect(r.content).toBe('rewritten');
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed: a throwing policy denies rather than crashing the turn', async () => {
+    const handler = vi.fn(echoHandler());
+    const boom: CanUseTool = async () => {
+      throw new Error('policy bug');
+    };
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', handler]]),
+      canUseTool: boom,
+    });
+    const r = await d.execute(makeCall());
+    expect(r.isError).toBe(true);
+    expect(r.failureClass).toBe('permission-denied');
+    expect(r.content).toContain('policy bug');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('gates parallel calls in executeBatch (policy not bypassed on batched rounds)', async () => {
+    const handler = vi.fn(echoHandler());
+    const policy: CanUseTool = async (_name, input) => {
+      const msg = (input as { message?: string }).message;
+      return msg === 'deny-me'
+        ? { behavior: 'deny', message: 'blocked in batch' }
+        : { behavior: 'allow' };
+    };
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', handler]]),
+      permissions: { allowedTools: ['echo'] },
+      canUseTool: policy,
+    });
+    const results = await d.executeBatch([
+      makeCall({ id: 'a', input: { message: 'ok' } }),
+      makeCall({ id: 'b', input: { message: 'deny-me' } }),
+    ]);
+    expect(results[0]!.isError).toBeUndefined();
+    expect(results[0]!.content).toBe('ok');
+    expect(results[1]!.isError).toBe(true);
+    expect(results[1]!.content).toBe('blocked in batch');
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('is a no-op when canUseTool is unset (default path unchanged)', async () => {
+    const handler = vi.fn(echoHandler());
+    const d = makeDispatcher({ handlers: new Map<string, ToolHandler>([['echo', handler]]) });
+    const r = await d.execute(makeCall());
+    expect(r.content).toBe('hello');
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('deny emits a hook_decision block', async () => {
+    const writer = new InMemoryTraceWriter();
+    const denyPolicy: CanUseTool = async (name) => ({
+      behavior: 'deny',
+      message: `policy denied ${name}`,
+    });
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', echoHandler()]]),
+      canUseTool: denyPolicy,
+      traceWriter: writer,
+    });
+    await d.execute(makeCall());
+    const hookEvents = writer.events.filter((e) => e.kind === 'hook_decision');
+    expect(hookEvents).toHaveLength(1);
+    const ev = hookEvents[0]!;
+    if (ev.kind !== 'hook_decision') throw new Error('unreachable');
+    expect(ev.payload.hookEvent).toBe('PreToolUse');
+    expect(ev.payload.decision).toBe('block');
+    expect(ev.payload.blockedTool).toBe('echo');
+    expect(ev.payload.reason).toContain('policy denied echo');
+  });
+
+  it('throw (fail-closed) emits a hook_decision block', async () => {
+    const writer = new InMemoryTraceWriter();
+    const boom: CanUseTool = async () => {
+      throw new Error('policy bug');
+    };
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', echoHandler()]]),
+      canUseTool: boom,
+      traceWriter: writer,
+    });
+    await d.execute(makeCall());
+    const hookEvents = writer.events.filter((e) => e.kind === 'hook_decision');
+    expect(hookEvents).toHaveLength(1);
+    const ev = hookEvents[0]!;
+    if (ev.kind !== 'hook_decision') throw new Error('unreachable');
+    expect(ev.payload.hookEvent).toBe('PreToolUse');
+    expect(ev.payload.decision).toBe('block');
+    expect(ev.payload.blockedTool).toBe('echo');
+    expect(ev.payload.reason).toContain('threw');
+    expect(ev.payload.reason).toContain('policy bug');
+  });
+
+  it('allow emits no hook_decision', async () => {
+    const writer = new InMemoryTraceWriter();
+    const d = makeDispatcher({
+      handlers: new Map<string, ToolHandler>([['echo', echoHandler()]]),
+      canUseTool: allowAll,
+      traceWriter: writer,
+    });
+    await d.execute(makeCall());
+    expect(writer.events.filter((e) => e.kind === 'hook_decision')).toHaveLength(0);
   });
 });

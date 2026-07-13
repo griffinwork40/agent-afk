@@ -19,8 +19,17 @@
  *     (src/cli/commands/interactive/verdict-card.ts)
  *
  * This test drives the REAL renderVerdictCard + TerminalCompositor.commitAbove
- * pipeline (mirroring turn-handler's card → blank → footer sequence) into a
- * headless xterm and asserts the closing border survives in a tight frame.
+ * pipeline into a headless xterm and asserts the closing border survives in a
+ * tight frame. It mirrors the real end-of-turn ORDER from turn-handler.ts: the
+ * stream renderer's dispose (stop spinner, collapse the live overlay, flip to
+ * idle — stream-renderer.ts borrow-dispose) runs BEFORE the card → blank →
+ * footer commits (turn-handler.ts:671). The card therefore commits into the
+ * COLLAPSED frame, never the tall live frame — so commitAbove's band-hold path
+ * archives the genuine overflow (oldest prior rows) to scrollback as real
+ * content and holds the card whole, exactly as the operator sees it once the
+ * turn lands. (Committing the card under a still-tall frame would be a state the
+ * real REPL never reaches, and would strand the card's top rows in the pending
+ * band model — see commit-mode.ts band-hold doc.)
  */
 import { describe, it, expect, vi } from 'vitest';
 import { PassThrough } from 'node:stream';
@@ -70,10 +79,17 @@ const VERDICT: TerminalState = {
   rawBody: '',
 };
 
-// A tall idle frame like the real REPL: loop-stage bar + ledger + prompt + status.
-const TALL_IDLE_FRAME = [
-  '  \u25e6 Tool-use loop',
-  '    Iteration 3: used read_file \u00b7 3 tools \u00b7 4.4k tok',
+// The live frame WHILE the turn streams: spinner + status. Prior streamed prose
+// commits above it, pushing the screen near-full so the card later lands in
+// tight room (the overflow scenario the original "bottom border cut off" bug
+// hit, where prose + card together exceed the screen).
+const STREAMING_FRAME = ['  \u25e6 generating\u2026', '~/x \u00b7 opus_1m \u00b7 3%'].join('\n');
+
+// The idle prompt the REPL returns to AFTER the card commits: loop-stage bar +
+// ledger + prompt + status.
+const IDLE_PROMPT = [
+  '  \u25e6 Working',
+  '    round 3: read_file /tmp/x.ts \u00b7 3 tools \u00b7 4.4k tok',
   'afk > observe  model  choose  act  update',
   'ledger  done   (1 turn)',
   '~/x \u00b7 opus_1m \u00b7 3%',
@@ -87,15 +103,29 @@ async function renderTurnIntoXterm(cols: number, rows: number): Promise<string[]
   const scrollRegion = makeScrollRegion(stdout);
   const c = new TerminalCompositor({ stdout, stdin, scrollRegion: scrollRegion as never });
   await c.arm();
-  // Prior streamed prose pushes the screen near-full so the card commits into
-  // tight room above the frame (forces commitAbove's overflow path).
+  const internals = c as unknown as {
+    repaint(): void;
+    setInputMode(mode: 'idle' | 'streaming' | 'picker'): void;
+  };
+  // During the turn: prose streams above the live (spinner) frame, filling the
+  // screen so the card lands in tight room.
+  c.setSpinner({ enabled: true });
+  c.setOverlay(STREAMING_FRAME);
   for (let i = 0; i < 8; i++) c.commitAbove(`prior streamed assistant prose line ${i}`);
-  c.setOverlay(TALL_IDLE_FRAME);
-  // Mirror turn-handler.ts: card -> blank -> footer.
+  // End of turn — mirror turn-handler.ts's disposeRendererOnce() BEFORE the card
+  // commits (stream-renderer.ts borrow-dispose): stop the spinner, collapse the
+  // live overlay, flip to idle. The card commits into THIS collapsed frame.
+  c.setSpinner({ enabled: false });
+  c.setOverlay('');
+  internals.setInputMode('idle');
+  // Mirror turn-handler.ts end-of-turn: card -> blank -> footer -> blank.
   c.commitAbove(renderVerdictCard(VERDICT));
   c.commitAbove('');
   c.commitAbove('  \u25e6 3m 12s  \u00b7  7.3k tok');
   c.commitAbove('');
+  // The REPL returns to readLine: the idle prompt frame appears.
+  c.setOverlay(IDLE_PROMPT);
+  internals.repaint();
 
   const term = new HeadlessTerminal({ cols, rows, scrollback: 1000, allowProposedApi: true });
   await new Promise<void>((resolve) => term.write(chunks.join(''), resolve));
@@ -113,8 +143,11 @@ describe('verdict card bottom border survives a tight frame (regression)', () =>
     expect(hasBottom, `bottom border ╰──╯ missing from rendered grid:\n${grid}`).toBe(true);
     // The affordance (the actionable end-of-turn line) must remain visible.
     expect(lines.some((l) => l.includes('Objective satisfied')), `affordance missing:\n${grid}`).toBe(true);
-    // Sanity: the box opened too (top border present somewhere).
-    expect(hasTop).toBe(true);
+    // The card's top border must remain ACCESSIBLE — on screen or scrolled into
+    // scrollback (band-hold archives the genuine overflow as real content). Its
+    // total absence is the failure: top rows stranded in the pending band model,
+    // neither painted nor in scrollback.
+    expect(hasTop, `top border ╭─ Done ╮ absent from buffer (viewport + scrollback):\n${grid}`).toBe(true);
   });
 });
 

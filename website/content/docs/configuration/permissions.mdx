@@ -21,11 +21,41 @@ A session runs in one permission mode, set by the `permissionMode` key in `afk.c
 |---|---|---|
 | `default` | Path containment + path-approval prompts for out-of-root file access. No per-tool flow. | REPL and Telegram default |
 | `plan` | Read-only investigation; write-class tools are blocked until you approve a plan. | `/plan` in the REPL |
-| `autonomous` | Default containment **plus** a risk gate that blocks high-risk actions, and a remote channel so you can answer prompts from Telegram. | `/afk` in the REPL |
-| `bypassPermissions` | Disables containment and path approval entirely — read/write any path with no prompt. | `/bypass`, `--dangerously-skip-permissions`, or `afk daemon` |
+| `autonomous` | AFK-specific mode (agent-afk `PermissionMode` value). Default containment **plus** a risk gate that refuses high-risk/irreversible actions tree-wide, a system-prompt addendum telling the model to work autonomously on reversible operations, and a Telegram channel that pushes each turn's terminal state so you can supervise from your phone. | `/afk` in the REPL |
+| `bypassPermissions` | Disables containment and path approval entirely — read/write any path with no prompt. | Shift+Tab from `plan`, the `--dangerously-skip-permissions` flag, or `afk daemon` |
 
 The interactive default is `default`, **not** bypass. Plan and autonomous modes are mutually
-exclusive with each other (they share the one mode field).
+exclusive with each other (they share the one `permissionMode` field). `autonomous` is an
+agent-afk–local value; it is not an Anthropic SDK permission level. The internal SDK-level values
+`dontAsk`, `auto`, and `acceptEdits` are not user-facing modes and are not surfaced in the REPL.
+
+### Cycling modes with Shift+Tab
+
+In the REPL, **Shift+Tab** advances through a fixed three-stop ring without leaving the keyboard:
+
+```
+default → plan → bypassPermissions → default → …
+```
+
+`autonomous` (AFK) is intentionally excluded from the ring — entering it activates
+non-idempotent machinery (Telegram push-budget reset, abort-watcher, ledger channel swap) that
+must not fire on a transient keypress. If the session is already in `autonomous`, Shift+Tab exits
+AFK cleanly (running full teardown) and lands on `default`; the next press resumes the ring.
+
+### Leaving plan mode — `exit_plan_mode` escalation
+
+When the model judges its plan ready, it calls the `exit_plan_mode` tool and the REPL presents
+you with a picker:
+
+| Choice | Effect |
+|---|---|
+| **Approve — implement now (restore previous mode)** | Restores the mode you were in *before* entering plan (typically `default`). Implementation begins on the next turn. |
+| **Approve — implement now (bypass mode)** | Escalates to `bypassPermissions` for the implement turn — offered unless you were already in bypass before planning. |
+| **Keep planning** | Stays in plan mode; the model continues refining. |
+
+The permission flip is deferred to the post-turn drain boundary so the plan-mode gate stays
+locked for the entire current model turn, closing a mid-turn TOCTOU window. This is
+behaviorally identical to running `/plan off` yourself.
 
 ## Path-access approval
 
@@ -108,16 +138,12 @@ Bypass mode (`permissionMode: 'bypassPermissions'`) turns the containment off en
 tools may read and write **any** path with no confirmation, and the path-approval prompt never
 fires.
 
-```
-/bypass        # enable bypass for the current REPL session
-/bypass off    # return to default mode
-```
-
-While bypass is active the status line shows a `⚠ BYPASS` badge. From the command line, the
-equivalent is the `--dangerously-skip-permissions` flag on both `afk i` and `afk chat`:
+In the REPL the primary keyboard entry point is **Shift+Tab** (advances the ring
+`default → plan → bypassPermissions`). From the command line, the equivalent is the
+`--dangerously-skip-permissions` flag on both `afk i` and `afk chat`:
 
 ```bash
-afk chat "migrate the schema" --dangerously-skip-permissions
+afk chat "run the pending migrations and fix any broken model references" --dangerously-skip-permissions
 ```
 
 <Callout type="warn">
@@ -157,7 +183,7 @@ Three things switch on together:
 
 | Surface | Default mode | Notes |
 |---|---|---|
-| REPL (`afk i`) | `default` | Out-of-root file access prompts inline; `/bypass` to disable containment. |
+| REPL (`afk i`) | `default` | Out-of-root file access prompts inline; cycle to `bypassPermissions` with Shift+Tab to disable containment. |
 | Telegram bot | `default` | Same as the REPL; prompts are pushed to your chat. |
 | `afk chat` | `default` | Non-interactive — out-of-root access can't be approved, so it is denied; pass `--dangerously-skip-permissions` for wide-open access. |
 | `afk daemon` | `bypassPermissions` | Unattended; containment off so no prompt can wedge the run. |

@@ -61,9 +61,10 @@ export function parseView(raw: unknown): RuntimeView {
 /**
  * Build the `# Environment` block for the system prompt.
  *
- * Always includes the working directory (existing behavior preserved). The
- * session identity line is appended only when at least one of `sessionId`,
- * `surface`, or `depth` is supplied — never with placeholder dashes.
+ * Always includes the working directory and the current date (existing
+ * working-directory behavior preserved). The session identity line is appended
+ * only when at least one of `sessionId`, `surface`, or `depth` is supplied —
+ * never with placeholder dashes.
  *
  * Phase 2: When `workspace` is supplied and at least one of `branch` or
  * `headSha` is non-null, a `- Workspace:` line is emitted. If the workspace
@@ -73,6 +74,7 @@ export function parseView(raw: unknown): RuntimeView {
  *
  *   # Environment
  *   - Working directory: /Users/me/project
+ *   - Date: Thursday, 2026-06-18 (America/Los_Angeles)
  *   - Session: af31a2b0 (repl, depth 1/3)
  *   - Workspace: main @ a1b2c3d (clean)
  *
@@ -80,12 +82,14 @@ export function parseView(raw: unknown): RuntimeView {
  *
  *   # Environment
  *   - Working directory: /Users/me/project
+ *   - Date: Thursday, 2026-06-18 (America/Los_Angeles)
  *   - Workspace: feat/foo @ a1b2c3d (3 dirty)
  *
  * Output shape (cwd only, no git):
  *
  *   # Environment
  *   - Working directory: /Users/me/project
+ *   - Date: Thursday, 2026-06-18 (America/Los_Angeles)
  */
 export function formatEnvironmentFragment(args: {
   cwd: string;
@@ -105,6 +109,17 @@ export function formatEnvironmentFragment(args: {
    * are null, i.e. when the cwd is not a git repo).
    */
   workspace?: RuntimeWorkspace | null;
+  /**
+   * Clock used for the always-present `- Date:` line. Defaults to `new Date()`.
+   * Injectable so tests stay deterministic.
+   */
+  now?: Date;
+  /**
+   * IANA timezone (e.g. `America/Los_Angeles`) the date is rendered in.
+   * Defaults to the host zone (`Intl…resolvedOptions().timeZone`). Injectable
+   * so tests can pin a zone; an invalid value falls back to a UTC ISO date.
+   */
+  timeZone?: string;
 }): string {
   // Sanitise CR/LF in cwd so a working directory containing a newline (rare
   // but reachable via network mounts or hostile-input scenarios) cannot inject
@@ -114,6 +129,14 @@ export function formatEnvironmentFragment(args: {
   // working-directory line that the model would then trust.
   const safeCwd = args.cwd.replace(/[\r\n]/g, ' ');
   const lines: string[] = [`- Working directory: ${safeCwd}`];
+
+  // Always-present current-date line — gives the model temporal grounding
+  // (relative-date math, "latest"/"recent" reasoning, weekday-gated skills,
+  // log interpretation). Date granularity (not clock time) keeps this block
+  // stable across turns within a session, so the cached system-prompt
+  // breakpoint is not busted per turn (the block is built once per provider
+  // query()). `now`/`timeZone` are injectable for deterministic tests.
+  lines.push(`- Date: ${formatDateLine(args.now ?? new Date(), args.timeZone)}`);
 
   const idShort =
     typeof args.sessionId === 'string' && args.sessionId.length > 0
@@ -163,4 +186,34 @@ export function formatEnvironmentFragment(args: {
   }
 
   return `# Environment\n${lines.join('\n')}`;
+}
+
+/**
+ * Render the `- Date:` line value: `<Weekday>, <YYYY-MM-DD> (<IANA-TZ>)`.
+ *
+ * Locale is pinned (`en-US` weekday, `en-CA` ISO date assembled via
+ * `formatToParts`) so the output never varies with the host locale — only the
+ * timezone reflects the host (or the injected `timeZone`). Wrapped in
+ * try/catch because this runs inside system-prompt assembly on every query:
+ * an invalid `timeZone` (only reachable via a bad caller-supplied value) must
+ * never throw and abort the request — it falls back to a UTC ISO date.
+ */
+function formatDateLine(now: Date, timeZone?: string): string {
+  try {
+    const tz = timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC';
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(now);
+    const pick = (t: string): string => parts.find((p) => p.type === t)?.value ?? '';
+    const weekday = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      weekday: 'long',
+    }).format(now);
+    return `${weekday}, ${pick('year')}-${pick('month')}-${pick('day')} (${tz})`;
+  } catch {
+    return now.toISOString().slice(0, 10);
+  }
 }

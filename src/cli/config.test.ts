@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import {
   loadConfig,
   isValidModel,
@@ -21,6 +21,8 @@ import {
   resolveModelInput,
 } from '../agent/session/model-slots.js';
 import { resolveSuggestGhost } from './commands/interactive/repl-loop.js';
+import { loadJsonConfig } from './config/json-tier.js';
+import { getJsonConfigPath } from '../paths.js';
 
 // Mock dotenv to prevent .env from polluting test env. The repo's .env
 // contains CLAUDE_MODEL=opus_1m for local dev — without this mock, the
@@ -99,8 +101,8 @@ describe('Config Loader', () => {
     it('should return correct model IDs', () => {
       expect(getModelId('opus')).toBe('claude-opus-4-8');
       expect(getModelId('opus_1m')).toBe('claude-opus-4-8');
-      expect(getModelId('sonnet')).toBe('claude-sonnet-4-6');
-      expect(getModelId('sonnet_1m')).toBe('claude-sonnet-4-6');
+      expect(getModelId('sonnet')).toBe('claude-sonnet-5');
+      expect(getModelId('sonnet_1m')).toBe('claude-sonnet-5');
       expect(getModelId('haiku')).toBe('claude-haiku-4-5-20251001');
       expect(getModelId('fable')).toBe('claude-fable-5');
     });
@@ -187,6 +189,47 @@ describe('Config Loader', () => {
       expect(config.model).toBe('haiku');
       expect(config.maxTokens).toBe(8192);
       expect(config.temperature).toBe(0.7);
+    });
+
+    it('keeps the default maxTokens when AFK_MAX_TOKENS is non-numeric (no NaN)', () => {
+      // parseInt("abc") === NaN, which would otherwise win the `??` merge over
+      // DEFAULT_CONFIG.maxTokens and poison every request. Guard drops it.
+      process.env.AFK_MAX_TOKENS = 'abc';
+
+      const config = loadConfig();
+
+      expect(config.maxTokens).toBe(4096);
+      expect(Number.isNaN(config.maxTokens)).toBe(false);
+    });
+
+    it('keeps the default temperature when AFK_TEMPERATURE is non-numeric (no NaN)', () => {
+      process.env.AFK_TEMPERATURE = 'abc';
+
+      const config = loadConfig();
+
+      expect(config.temperature).toBe(1.0);
+      expect(Number.isNaN(config.temperature)).toBe(false);
+    });
+
+    it('keeps the default maxTokens when AFK_MAX_TOKENS has trailing garbage (no silent truncation)', () => {
+      // parseInt("123abc") used to truncate to 123 — a non-numeric value
+      // slipping through as a plausible-looking token count. Number(...)
+      // whole-string-matches and is NaN here, so the guard now drops it too.
+      process.env.AFK_MAX_TOKENS = '123abc';
+
+      const config = loadConfig();
+
+      expect(config.maxTokens).toBe(4096);
+    });
+
+    it('keeps the default maxTokens when AFK_MAX_TOKENS is a non-integer number', () => {
+      // A token count can't be fractional; Number("8192.5") is finite but
+      // not an integer, so it must be rejected even though it "parses".
+      process.env.AFK_MAX_TOKENS = '8192.5';
+
+      const config = loadConfig();
+
+      expect(config.maxTokens).toBe(4096);
     });
 
     it('prefers AFK_MODEL over CLAUDE_MODEL', () => {
@@ -333,7 +376,7 @@ describe('Config Loader', () => {
       });
 
       it('does NOT activate local mode when AFK_LOCAL_BASE_URL is unset', () => {
-        const config = loadConfig({ model: 'claude-sonnet-4-6' });
+        const config = loadConfig({ model: 'claude-sonnet-5' });
         expect(config.baseUrl).toBeUndefined();
         expect(config.apiKey).toBe('test-api-key-12345');
       });
@@ -399,8 +442,15 @@ describe('Config Loader', () => {
     });
 
     it('falls back to ~/.afk/AFK.md when cwd/AFK.md is absent', () => {
-      // Use homedir-based path since AFK_HOME is not set in tests
-      const homeAfkMd = join(process.env['HOME'] ?? process.env['USERPROFILE'] ?? '', '.afk', 'AFK.md');
+      // Mirror getAfkHome() precedence: the global test setup
+      // (redirect-paths-env.ts) points AFK_HOME at a tmp sentinel, so the
+      // user-scope AFK.md resolves under it; fall back to $HOME/.afk only
+      // if the redirect is opted out.
+      const homeAfkMd = join(
+        process.env['AFK_HOME'] ??
+          join(process.env['HOME'] ?? process.env['USERPROFILE'] ?? '', '.afk'),
+        'AFK.md',
+      );
       mockedExistsSync().mockImplementation((p) => {
         const s = String(p);
         if (s.endsWith('AFK.md')) return s === homeAfkMd;
@@ -470,6 +520,68 @@ describe('Config Loader', () => {
       expect(config.systemPromptSource).toBe(`file:${cwdConfigJson}`);
     });
 
+    it('ignores a non-string systemPrompt in afk.config.json and falls back to AFK.md', () => {
+      // {"systemPrompt": 5} must not be assigned (siblings model/maxTokens/
+      // temperature all use typeof guards). The AFK.md content wins instead.
+      const cwdConfigJson = join(process.cwd(), 'afk.config.json');
+      const cwdAfkMd = join(process.cwd(), 'AFK.md');
+      mockedExistsSync().mockImplementation((p) => {
+        const s = String(p);
+        if (s === cwdAfkMd) return true;
+        if (s === cwdConfigJson) return true;
+        if (s.endsWith('AFK.md')) return false;
+        return realFsModule.__realExistsSync(p as fs.PathLike);
+      });
+      mockedReadFileSync().mockImplementation((p, ...args) => {
+        const s = String(p);
+        if (s === cwdConfigJson) return JSON.stringify({ systemPrompt: 5 });
+        if (s === cwdAfkMd) return 'afk-md fallback wins';
+        return (realFsModule.__realReadFileSync as Function)(p, ...args);
+      });
+
+      const config = loadConfig();
+      expect(config.systemPrompt).toBe('afk-md fallback wins');
+      expect(config.systemPromptSource).toBe(`afk-md:${cwdAfkMd}`);
+    });
+
+    it('ignores an empty-string systemPrompt in afk.config.json', () => {
+      const cwdConfigJson = join(process.cwd(), 'afk.config.json');
+      mockedExistsSync().mockImplementation((p) => {
+        const s = String(p);
+        if (s.endsWith('AFK.md')) return false;
+        if (s === cwdConfigJson) return true;
+        return realFsModule.__realExistsSync(p as fs.PathLike);
+      });
+      mockedReadFileSync().mockImplementation((p, ...args) => {
+        const s = String(p);
+        if (s === cwdConfigJson) return JSON.stringify({ systemPrompt: '' });
+        return (realFsModule.__realReadFileSync as Function)(p, ...args);
+      });
+
+      const config = loadConfig();
+      expect(config.systemPrompt).toBeUndefined();
+      expect(config.systemPromptSource).toBeUndefined();
+    });
+
+    it('keeps a valid non-empty string systemPrompt in afk.config.json', () => {
+      const cwdConfigJson = join(process.cwd(), 'afk.config.json');
+      mockedExistsSync().mockImplementation((p) => {
+        const s = String(p);
+        if (s.endsWith('AFK.md')) return false;
+        if (s === cwdConfigJson) return true;
+        return realFsModule.__realExistsSync(p as fs.PathLike);
+      });
+      mockedReadFileSync().mockImplementation((p, ...args) => {
+        const s = String(p);
+        if (s === cwdConfigJson) return JSON.stringify({ systemPrompt: 'valid string prompt' });
+        return (realFsModule.__realReadFileSync as Function)(p, ...args);
+      });
+
+      const config = loadConfig();
+      expect(config.systemPrompt).toBe('valid string prompt');
+      expect(config.systemPromptSource).toBe(`file:${cwdConfigJson}`);
+    });
+
     it('treats empty or whitespace-only AFK.md as absent', () => {
       mockedExistsSync().mockImplementation((p) => {
         if (String(p).endsWith('AFK.md')) return true;
@@ -503,7 +615,11 @@ describe('Config Loader', () => {
     const mockedReadFileSync = () => vi.mocked(fs.readFileSync);
     const cwdConfigJson = join(process.cwd(), 'afk.config.json');
 
-    const ENV = ['AFK_MODEL', 'CLAUDE_MODEL', 'AFK_MODEL_SMALL', 'AFK_MODEL_MEDIUM', 'AFK_MODEL_LARGE'];
+    const ENV = [
+      'AFK_MODEL', 'CLAUDE_MODEL',
+      'AFK_MODEL_SMALL', 'AFK_MODEL_MEDIUM', 'AFK_MODEL_LARGE',
+      'AFK_MODEL_LOCAL', 'AFK_MODEL_LOCAL_BASE_URL', 'AFK_MODEL_LOCAL_API_KEY',
+    ];
 
     function mockConfig(json: unknown): void {
       mockedExistsSync().mockImplementation((p) => {
@@ -543,16 +659,16 @@ describe('Config Loader', () => {
       mockConfig({
         models: {
           small: 'gpt-4o-mini',
-          medium: { id: 'claude-sonnet-4-6', name: 'balanced' },
+          medium: { id: 'claude-sonnet-5', name: 'balanced' },
         },
       });
       const config = loadConfig();
       expect(config.models?.small).toEqual({ id: 'gpt-4o-mini' });
-      expect(config.models?.medium).toEqual({ id: 'claude-sonnet-4-6', name: 'balanced' });
+      expect(config.models?.medium).toEqual({ id: 'claude-sonnet-5', name: 'balanced' });
       expect(config.models?.large).toEqual(DEFAULT_SLOT_BINDINGS.large);
       // Installed process-globally → the resolver sees the rebinding + custom name.
       expect(resolveModelInput('small')).toBe('gpt-4o-mini');
-      expect(resolveModelInput('balanced')).toBe('claude-sonnet-4-6');
+      expect(resolveModelInput('balanced')).toBe('claude-sonnet-5');
     });
 
     it('lets AFK_MODEL_* env override the file binding', () => {
@@ -611,6 +727,223 @@ describe('Config Loader', () => {
       mockConfig({ telegram: { verifyDone: 'yes' } });
       expect(loadConfig().telegram?.verifyDone).toBeUndefined();
     });
+  });
+
+  describe('enforceDoneEvidence (afk.config.json parsing)', () => {
+    const mockedExistsSync = () => vi.mocked(fs.existsSync);
+    const mockedReadFileSync = () => vi.mocked(fs.readFileSync);
+    const cwdConfigJson = join(process.cwd(), 'afk.config.json');
+
+    function mockConfig(json: unknown): void {
+      mockedExistsSync().mockImplementation((p) => {
+        const s = String(p);
+        if (s === cwdConfigJson) return true;
+        if (s.endsWith('AFK.md') || s.endsWith('afk.config.json')) return false;
+        return realFsModule.__realExistsSync(p as fs.PathLike);
+      });
+      mockedReadFileSync().mockImplementation((p, ...args) => {
+        if (String(p) === cwdConfigJson) return JSON.stringify(json);
+        return (realFsModule.__realReadFileSync as Function)(p, ...args);
+      });
+    }
+
+    beforeEach(() => {
+      _resetConfigCache();
+    });
+
+    afterEach(() => {
+      _resetConfigCache();
+      mockedExistsSync().mockImplementation(realFsModule.__realExistsSync);
+      mockedReadFileSync().mockImplementation(realFsModule.__realReadFileSync);
+    });
+
+    it('parses enforceDoneEvidence: true', () => {
+      mockConfig({ enforceDoneEvidence: true });
+      expect(loadConfig().enforceDoneEvidence).toBe(true);
+    });
+
+    it('parses enforceDoneEvidence: false', () => {
+      mockConfig({ enforceDoneEvidence: false });
+      expect(loadConfig().enforceDoneEvidence).toBe(false);
+    });
+
+    it('defaults to undefined (off) when absent', () => {
+      mockConfig({ telegram: { notify: { mode: 'primary' } } });
+      expect(loadConfig().enforceDoneEvidence).toBeUndefined();
+    });
+
+    it('ignores a non-boolean enforceDoneEvidence (defensive parse → undefined)', () => {
+      mockConfig({ enforceDoneEvidence: 'yes' });
+      expect(loadConfig().enforceDoneEvidence).toBeUndefined();
+    });
+  });
+});
+
+describe('loadJsonConfig() — parse-failure cache invalidation (#501-F2)', () => {
+  // A malformed cwd afk.config.json used to fall through to the user-global
+  // file AND memoize that result permanently, so a later fix to the cwd file
+  // stayed invisible until _resetConfigCache()/restart (bites long-lived
+  // daemon/telegram processes). The fix returns a post-parse-error result
+  // transiently (uncached) so the next call re-reads disk. The happy path
+  // (every tier parses) must still memoize — no perf regression.
+  const mockedExistsSync = () => vi.mocked(fs.existsSync);
+  const mockedReadFileSync = () => vi.mocked(fs.readFileSync);
+  const cwdConfigJson = join(process.cwd(), 'afk.config.json');
+  const userConfigJson = getJsonConfigPath();
+  let errSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    _resetConfigCache();
+    // Capture (and silence) the "Warning: Failed to parse …" stderr line.
+    errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errSpy.mockRestore();
+    _resetConfigCache();
+    mockedExistsSync().mockImplementation(realFsModule.__realExistsSync);
+    mockedReadFileSync().mockImplementation(realFsModule.__realReadFileSync);
+  });
+
+  // cwd + user-global both exist; cwd content is supplied via a getter so a
+  // test can "fix" the file mid-run without re-installing the mock.
+  function mockTwoTier(getCwd: () => string, userGlobal: string): void {
+    mockedExistsSync().mockImplementation((p) => {
+      const s = String(p);
+      if (s === cwdConfigJson) return true;
+      if (s === userConfigJson) return true;
+      if (s.endsWith('AFK.md') || s.endsWith('afk.config.json')) return false;
+      return realFsModule.__realExistsSync(p as fs.PathLike);
+    });
+    mockedReadFileSync().mockImplementation((p, ...args) => {
+      const s = String(p);
+      if (s === cwdConfigJson) return getCwd();
+      if (s === userConfigJson) return userGlobal;
+      return (realFsModule.__realReadFileSync as Function)(p, ...args);
+    });
+  }
+
+  it('does not cache the user-global fall-through when the cwd file is malformed (a later cwd fix is picked up without reset)', () => {
+    let cwdContent = '{ this is not valid json';
+    mockTwoTier(() => cwdContent, JSON.stringify({ maxTokens: 1111 }));
+
+    // 1st load: malformed cwd → falls through to user-global.
+    const first = loadJsonConfig();
+    expect(first.sourcePath).toBe(userConfigJson);
+    expect(first.config.maxTokens).toBe(1111);
+    expect(errSpy).toHaveBeenCalled();
+
+    // Operator fixes the cwd file — deliberately NO _resetConfigCache().
+    cwdContent = JSON.stringify({ maxTokens: 2222 });
+    const second = loadJsonConfig();
+    expect(second.sourcePath).toBe(cwdConfigJson);
+    expect(second.config.maxTokens).toBe(2222);
+  });
+
+  it('does not cache the empty terminal when the only config file is malformed', () => {
+    let cwdContent = '{{ broken';
+    mockedExistsSync().mockImplementation((p) => {
+      const s = String(p);
+      if (s === cwdConfigJson) return true;
+      if (s.endsWith('AFK.md') || s.endsWith('afk.config.json')) return false;
+      return realFsModule.__realExistsSync(p as fs.PathLike);
+    });
+    mockedReadFileSync().mockImplementation((p, ...args) => {
+      if (String(p) === cwdConfigJson) return cwdContent;
+      return (realFsModule.__realReadFileSync as Function)(p, ...args);
+    });
+
+    const first = loadJsonConfig();
+    expect(first.sourcePath).toBeUndefined();
+    expect(first.config).toEqual({});
+
+    cwdContent = JSON.stringify({ maxTokens: 5555 });
+    const second = loadJsonConfig();
+    expect(second.sourcePath).toBe(cwdConfigJson);
+    expect(second.config.maxTokens).toBe(5555);
+  });
+
+  it('memoizes a clean walk (no caching regression on the happy path)', () => {
+    let cwdContent = JSON.stringify({ maxTokens: 3333 });
+    mockTwoTier(() => cwdContent, JSON.stringify({ maxTokens: 4444 }));
+
+    expect(loadJsonConfig().config.maxTokens).toBe(3333);
+    // File changes on disk, but a clean walk was memoized — the cached value
+    // must persist without an explicit reset.
+    cwdContent = JSON.stringify({ maxTokens: 9999 });
+    expect(loadJsonConfig().config.maxTokens).toBe(3333);
+    // …and the new value is observed only after an explicit reset.
+    _resetConfigCache();
+    expect(loadJsonConfig().config.maxTokens).toBe(9999);
+    expect(errSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('loadConfig() — importFrom user-global allowlist (#501-F5)', () => {
+  // importFrom is a user-global-only trust grant. The guard now honors it via
+  // an allowlist of the user-global + legacy paths (fails closed) instead of a
+  // fragile `configPath !== join(cwd, 'afk.config.json')` denylist.
+  const mockedExistsSync = () => vi.mocked(fs.existsSync);
+  const mockedReadFileSync = () => vi.mocked(fs.readFileSync);
+  const cwdConfigJson = join(process.cwd(), 'afk.config.json');
+  const userConfigJson = getJsonConfigPath();
+
+  beforeEach(() => {
+    _resetConfigCache();
+    process.env.ANTHROPIC_API_KEY = 'test-api-key-12345';
+    delete process.env.AFK_MODEL;
+    delete process.env.CLAUDE_MODEL;
+  });
+
+  afterEach(() => {
+    _resetConfigCache();
+    delete process.env.ANTHROPIC_API_KEY;
+    mockedExistsSync().mockImplementation(realFsModule.__realExistsSync);
+    mockedReadFileSync().mockImplementation(realFsModule.__realReadFileSync);
+  });
+
+  // Make exactly one config file present, with the given JSON content.
+  function onlyFile(path: string, content: string): void {
+    mockedExistsSync().mockImplementation((p) => {
+      const s = String(p);
+      if (s === path) return true;
+      if (s.endsWith('AFK.md') || s.endsWith('afk.config.json')) return false;
+      return realFsModule.__realExistsSync(p as fs.PathLike);
+    });
+    mockedReadFileSync().mockImplementation((p, ...args) => {
+      if (String(p) === path) return content;
+      return (realFsModule.__realReadFileSync as Function)(p, ...args);
+    });
+  }
+
+  it('honors importFrom from the user-global afk.config.json', () => {
+    onlyFile(userConfigJson, JSON.stringify({ importFrom: { 'claude-code': true } }));
+    const cfg = loadConfig();
+    expect(cfg.importFrom).toBeDefined();
+    expect(cfg.importFrom?.['claude-code']).toEqual({ plugins: true, skills: true, mcp: true });
+  });
+
+  it('ignores importFrom from a project-local <cwd>/afk.config.json (allowlist denies cwd)', () => {
+    onlyFile(cwdConfigJson, JSON.stringify({ importFrom: { 'claude-code': true } }));
+    const cfg = loadConfig();
+    expect(cfg.importFrom).toBeUndefined();
+  });
+
+  it('honors importFrom when cwd IS the user-global config dir (allowlist, not the old cwd-denylist)', () => {
+    // When afk runs from inside the user-global config dir, the cwd config
+    // path string-equals the user-global path. The old denylist
+    // (`configPath !== join(cwd, 'afk.config.json')`) FALSE-DENIED this real
+    // user-global file; the allowlist correctly honors it. This is the one
+    // scenario that behaviorally distinguishes the fix from the old check.
+    const userDir = dirname(userConfigJson);
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(userDir);
+    try {
+      onlyFile(userConfigJson, JSON.stringify({ importFrom: { codex: true } }));
+      const cfg = loadConfig();
+      expect(cfg.importFrom?.codex).toEqual({ plugins: true, skills: true, mcp: true });
+    } finally {
+      cwdSpy.mockRestore();
+    }
   });
 });
 
@@ -693,6 +1026,57 @@ describe('loadConfig() — interactive.suggestGhost JSON integration', () => {
     });
     const config = loadConfig();
     expect(config.interactive?.suggestGhost).toBeUndefined();
+  });
+});
+
+describe('loadConfig() — interactive.thinkingUi JSON integration', () => {
+  const mockedExistsSync = () => vi.mocked(fs.existsSync);
+  const mockedReadFileSync = () => vi.mocked(fs.readFileSync);
+
+  beforeEach(() => {
+    _resetConfigCache();
+    mockedExistsSync().mockImplementation(realFsModule.__realExistsSync);
+    mockedReadFileSync().mockImplementation(realFsModule.__realReadFileSync);
+  });
+
+  afterEach(() => {
+    mockedExistsSync().mockImplementation(realFsModule.__realExistsSync);
+    mockedReadFileSync().mockImplementation(realFsModule.__realReadFileSync);
+    _resetConfigCache();
+  });
+
+  const withConfigJson = (json: unknown) => {
+    mockedExistsSync().mockImplementation((p) => {
+      if (String(p).endsWith('afk.config.json')) return true;
+      return realFsModule.__realExistsSync(p as fs.PathLike);
+    });
+    mockedReadFileSync().mockImplementation((p, ...args) => {
+      if (String(p).endsWith('afk.config.json')) {
+        return JSON.stringify(json);
+      }
+      return (realFsModule.__realReadFileSync as Function)(p, ...args);
+    });
+  };
+
+  it.each(['summary', 'live', 'digest', 'off'] as const)(
+    'surfaces valid interactive.thinkingUi=%s from JSON config',
+    (mode) => {
+      withConfigJson({ interactive: { thinkingUi: mode } });
+      const config = loadConfig();
+      expect(config.interactive?.thinkingUi).toBe(mode);
+    },
+  );
+
+  it('ignores an invalid interactive.thinkingUi value (leaves it undefined)', () => {
+    withConfigJson({ interactive: { thinkingUi: 'verbose' } });
+    const config = loadConfig();
+    expect(config.interactive?.thinkingUi).toBeUndefined();
+  });
+
+  it('leaves interactive.thinkingUi undefined when not set in JSON', () => {
+    withConfigJson({ interactive: { worktreeAutoname: true } });
+    const config = loadConfig();
+    expect(config.interactive?.thinkingUi).toBeUndefined();
   });
 });
 

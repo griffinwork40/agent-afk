@@ -57,10 +57,11 @@ function parseWriteFileInput(input: unknown): {
  * Returns an error result for permission issues.
  * Throws for invalid input (caught by the dispatcher).
  */
-export const writeFileHandler: ToolHandler = async (
+const writeFileImpl = async (
   input: unknown,
   signal: AbortSignal,
-  context?: ToolHandlerContext,
+  context: ToolHandlerContext | undefined,
+  cwd: string | undefined,
 ) => {
   if (signal.aborted) {
     return {
@@ -73,7 +74,7 @@ export const writeFileHandler: ToolHandler = async (
 
   let file_path: string;
   try {
-    file_path = resolveAndContain(rawFilePath, context, 'write');
+    file_path = resolveAndContain(rawFilePath, context, 'write', cwd);
   } catch (err) {
     return { content: err instanceof Error ? err.message : String(err), isError: true };
   }
@@ -181,3 +182,15 @@ export const writeFileHandler: ToolHandler = async (
     };
   }
 };
+
+/**
+ * Create a `write_file` handler closed over a session-specific base path.
+ * See `createReadFileHandler` — `cwd` is the last resolve-base tier for
+ * out-of-context invocations; a no-op on the dispatcher path. Issue #434.
+ */
+export function createWriteFileHandler(cwd?: string): ToolHandler {
+  return (input, signal, context) => writeFileImpl(input, signal, context, cwd);
+}
+
+/** Bare `write_file` handler with no session cwd (`createWriteFileHandler()`). */
+export const writeFileHandler: ToolHandler = createWriteFileHandler();

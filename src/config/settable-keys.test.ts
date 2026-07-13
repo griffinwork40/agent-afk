@@ -89,6 +89,7 @@ describe('classifyConfigKey / specs', () => {
     expect(classifyConfigKey('telegram.notify.mode')).toBe('human'); // notification-redirect vector
     expect(classifyConfigKey('telegram.notify.targets')).toBe('human');
     expect(classifyConfigKey('telegram.verifyDone')).toBe('human'); // self-honesty gate — agent must not disable its own verification
+    expect(classifyConfigKey('enforceDoneEvidence')).toBe('human'); // self-honesty gate — agent must not disable its own enforcement
     expect(classifyConfigKey('updatePolicy')).toBe('human'); // auto self-update is scope-widening
     expect(classifyConfigKey('systemPrompt')).toBe('human');
     expect(classifyConfigKey('enableShellHooks')).toBe('human'); // trust gate — agent must not flip it
@@ -142,6 +143,59 @@ describe('coerceConfigValue', () => {
     const spec = getConfigKeySpec('model')!;
     expect(coerceConfigValue(spec, 'opus')).toEqual({ ok: true, value: 'opus' });
     expect(coerceConfigValue(spec, '   ').ok).toBe(false);
+  });
+
+  describe('model-slot', () => {
+    const spec = { path: 'models.large', tier: 'agent' as const, type: 'model-slot' as const, description: '' };
+
+    it('accepts a bare id string', () => {
+      expect(coerceConfigValue(spec, 'glm-5.2')).toEqual({ ok: true, value: 'glm-5.2' });
+    });
+    it('registered models.* specs are model-slot typed', () => {
+      for (const path of ['models.local', 'models.small', 'models.medium', 'models.large']) {
+        expect(getConfigKeySpec(path)!.type).toBe('model-slot');
+      }
+    });
+    it('accepts a minimal object with just an id', () => {
+      expect(coerceConfigValue(spec, { id: 'glm-5.2' })).toEqual({ ok: true, value: { id: 'glm-5.2' } });
+    });
+    it('accepts an object with id + provider and normalizes provider', () => {
+      expect(coerceConfigValue(spec, { id: 'glm-5.2', provider: 'openai' })).toEqual({
+        ok: true,
+        value: { id: 'glm-5.2', provider: 'openai' },
+      });
+    });
+    it('accepts an object with id + provider + name', () => {
+      expect(coerceConfigValue(spec, { id: 'glm-5.2', provider: 'openai', name: 'fast' })).toEqual({
+        ok: true,
+        value: { id: 'glm-5.2', provider: 'openai', name: 'fast' },
+      });
+    });
+    it('rejects an object carrying baseUrl (endpoint-redirect credential vector)', () => {
+      const res = coerceConfigValue(spec, { id: 'glm-5.2', provider: 'openai', baseUrl: 'https://x/v1' });
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toMatch(/AFK_MODEL_.*BASE_URL/);
+    });
+    it('rejects an unrecognized provider', () => {
+      const res = coerceConfigValue(spec, { id: 'glm-5.2', provider: 'opencode-go' });
+      expect(res.ok).toBe(false);
+    });
+    it('rejects a missing id', () => {
+      expect(coerceConfigValue(spec, { provider: 'openai' }).ok).toBe(false);
+      expect(coerceConfigValue(spec, {}).ok).toBe(false);
+    });
+    it('rejects an object carrying apiKey', () => {
+      expect(coerceConfigValue(spec, { id: 'glm-5.2', apiKey: 'sk-secret' }).ok).toBe(false);
+    });
+    it('rejects snake_case base_url', () => {
+      expect(coerceConfigValue(spec, { id: 'glm-5.2', base_url: 'https://x/v1' }).ok).toBe(false);
+    });
+    it('rejects a number', () => {
+      expect(coerceConfigValue(spec, 42).ok).toBe(false);
+    });
+    it('rejects an array', () => {
+      expect(coerceConfigValue(spec, ['glm-5.2']).ok).toBe(false);
+    });
   });
 });
 

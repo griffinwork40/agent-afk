@@ -34,7 +34,7 @@ import { TelegramBot } from './telegram/bot.js';
 import { parseAllowedChatIds } from './telegram/allowlist.js';
 import { validateBotToken } from './telegram/setup-wizard.js';
 import { AgentSession } from './agent/session.js';
-import { constructTelegramSession } from './telegram/construct-session.js';
+import { constructTelegramSession, createTelegramTraceWriter } from './telegram/construct-session.js';
 import { createDefaultHookRegistry } from './agent/default-hook-registry.js';
 import { seedPersistedGrants } from './agent/permissions-store.js';
 import { loadHooksConfig } from './agent/hooks/config-loader.js';
@@ -43,18 +43,19 @@ import { providerForModel, AnthropicDirectProvider, OpenAICompatibleProvider } f
 import { detectAuthMode } from './agent/providers/anthropic-direct/auth.js';
 import { loadConfig, loadCredential } from './cli/config.js';
 import { getEnvConfigPath } from './paths.js';
-import { assembleSystemPrompt, pendingBriefContext } from './agent/routing-directive.js';
+import { assembleSystemPrompt } from './agent/routing-directive.js';
 import { resolveModelId } from './agent/session/model-resolution.js';
-import { getDefaultSubagentModel, getMaxOutputTokens, getApiKeyForModel, loadSystemPrompt, composeSystemPrompt } from './cli/shared-helpers.js';
+import { getDefaultSubagentModel, getMaxOutputTokens, getMaxToolUseIterations, getApiKeyForModel, loadSystemPrompt, composeSystemPrompt } from './cli/shared-helpers.js';
+import { topLevelSurfaceAllowedTools } from './agent/tools/top-level-allowlist.js';
 import type { AgentConfig, AgentModelInput } from './agent/types.js';
 import { SubagentManager } from './agent/subagent.js';
 import { SubagentExecutor } from './agent/tools/subagent-executor.js';
 import { SkillExecutor } from './agent/tools/skill-executor.js';
 import { ComposeExecutor } from './agent/tools/compose-executor.js';
-import { BUILTIN_TOOL_NAMES } from './agent/tools/schemas.js';
-import { MEMORY_TOOL_NAMES } from './agent/memory/index.js';
-import { AWARENESS_TOOL_NAMES } from './agent/awareness/index.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory } from './agent/tools/nesting.js';
+import { loadAgentRegistry } from './agent/agents/index.js';
+import { discoverPluginAgents } from './agent/tools/skill-bridge.js';
+import { attachMcpCleanup, loadTelegramMcpManager } from './telegram/mcp-session.js';
 
 // Capture version once at module load. Used by checkVersionDrift on each stats tick.
 // One level up from dist/ reaches project root where package.json lives.
@@ -216,6 +217,12 @@ async function main() {
       const isCodex =
         sessionProviderName === 'openai-compatible' || sessionProviderName === 'openai-codex';
       const maxOutputTokens = isCodex ? undefined : getMaxOutputTokens();
+      // Opt-in top-level tool-use-round ceiling (AFK_MAX_TOOL_USE_ITERATIONS).
+      // Unlike maxOutputTokens (Anthropic-only here), this applies to BOTH
+      // providers via resolveMaxToolIterations(), so it is NOT gated by isCodex.
+      // undefined = unlimited (no behavior change). No per-chat override exists,
+      // so this is the env default only.
+      const maxToolUseIterations = getMaxToolUseIterations();
 
       // System-prompt layering (mirrors chat.ts / bootstrap.ts): the framework
       // base is unconditional; the operator overlay (per-chat sessionConfig
@@ -229,19 +236,42 @@ async function main() {
         typeof overlayPrompt === 'string' ? overlayPrompt : undefined,
       );
 
-      let directProvider;
-      if (!isCodex) {
+      const sessionCwd = sessionConfig.cwd ?? telegramCwd;
+      // Create the trace writer before loadTelegramMcpManager so the MCP
+      // connect phase (mcp_server_start/done, mcp_connect_start/done) is
+      // captured in the same session trace as the rest of the Telegram session.
+      const telegramTraceWriter = createTelegramTraceWriter();
+      const mcpManager = await loadTelegramMcpManager(sessionCwd, {
+        ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
+      });
+      let returnedSession: AgentSession | undefined;
+      try {
+        let directProvider;
+        if (!isCodex) {
         let boundSession: AgentSession | undefined;
         const telegramApiKey = sessionConfig.apiKey ?? config.apiKey ?? '';
         const telegramBaseUrl = config.baseUrl;
+        // OpenAI-compatible endpoint (distinct from telegramBaseUrl, which is
+        // Anthropic-only) — threaded for parity with chat.ts's cliConfig.openaiBaseUrl wiring.
+        const telegramOpenaiBaseUrl = sessionConfig.openaiBaseUrl ?? config.openaiBaseUrl;
         // Inherit configured-or-host cwd so forked subagents stay in the
         // same working tree as the parent session — important when the
         // bot is pointed at a worktree via AFK_TELEGRAM_CWD.
-        const sessionCwd = sessionConfig.cwd ?? telegramCwd;
         const rootManager = new SubagentManager({
           apiKey: telegramApiKey,
+          // Parent model → provider, so the fork-time credential fallback never
+          // crosses the provider boundary (see SubagentManager.parentProvider).
+          parentModel: sessionConfig.model,
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
           ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
+          // Witness layer: manager-level writer so `agent`-tool forks (which
+          // never set config.traceWriter) emit subagent_lifecycle events and
+          // hand the writer to their handles. Mirrors bootstrap.ts / chat.ts.
+          ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
+          // Origin attribution: thread the surface so forked `agent`-tool
+          // children inherit origin 'telegram' (not 'unknown') via
+          // forkSubagent's parentSurface fill. Mirrors farm.ts.
+          surface: 'telegram',
         });
 
         const deferredParent = {
@@ -253,7 +283,18 @@ async function main() {
           get hookRegistry() { return boundSession?.hookRegistry; },
         };
 
-        const childProviderFactory = createChildProviderFactory();
+        // Pass openaiBaseUrl so OpenAI-routed children point at the configured
+        // local shim instead of the default api.openai.com (parity with chat.ts).
+        const childProviderFactory = createChildProviderFactory(
+          telegramOpenaiBaseUrl !== undefined ? { openaiBaseUrl: telegramOpenaiBaseUrl } : {},
+        );
+
+        // Named-agent registry: session-static scan enabling `agent_type`
+        // dispatch (builtin + user + project scopes, anchored at the bot cwd).
+        const agentRegistry = loadAgentRegistry({
+          ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
+          pluginAgents: discoverPluginAgents(),
+        });
 
         // Shared child-skill-executor factory — both SubagentExecutor and
         // SkillExecutor need it for plugin skill children to nest properly.
@@ -268,6 +309,18 @@ async function main() {
           sessionCwd !== undefined && sessionCwd.length > 0 ? sessionCwd : undefined,
           // Per-model credential resolver — see bootstrap.ts for rationale.
           getApiKeyForModel,
+          // Surface: Telegram skill executor children inherit origin 'telegram'.
+          'telegram',
+          // Resolved default-subagent model threaded into nested skill
+          // executors so skill→skill / skill→agent chains inherit the SAME
+          // policy as the top-level executors — closing the leak where a
+          // nested subagent silently defaulted to Anthropic `sonnet` under an
+          // OpenAI-routed parent.
+          getDefaultSubagentModel(sessionConfig.model),
+          // Named-agent registry propagates to nested skill executors.
+          agentRegistry,
+          // OpenAI endpoint → nested restricted/depth-cap provider builders.
+          telegramOpenaiBaseUrl,
         );
 
         // Pass `sessionConfig.model` to `getDefaultSubagentModel` for
@@ -284,6 +337,7 @@ async function main() {
             apiKey: telegramApiKey,
             systemPrompt: layeredBasePrompt,
             ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
+            ...(telegramOpenaiBaseUrl !== undefined ? { openaiBaseUrl: telegramOpenaiBaseUrl } : {}),
           },
           defaultSubagentModel: getDefaultSubagentModel(sessionConfig.model),
           childProviderFactory,
@@ -292,6 +346,12 @@ async function main() {
           resolveApiKeyForModel: getApiKeyForModel,
           // Top-level Telegram wiring → explicit depth 0. See SubagentExecutorContext.depth.
           depth: 0,
+          // Named-agent dispatch: registry + `inherit` anchor.
+          agentRegistry,
+          parentModel: sessionConfig.model,
+          // Witness layer: thread the writer so depth ≥ 2 `agent` forks stay
+          // visible in the trace. Mirrors bootstrap.ts / chat.ts.
+          ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
         });
 
         const skillExecutor = new SkillExecutor({
@@ -302,10 +362,16 @@ async function main() {
           defaultSubagentModel: getDefaultSubagentModel(sessionConfig.model),
           apiKey: telegramApiKey,
           childProviderFactory,
+          // Named-agent registry for skill-forked orchestrator children.
+          agentRegistry,
           childSkillExecutorFactory,
           // Per-model credential resolver — mirrors bootstrap.ts / chat.ts.
           resolveApiKeyForModel: getApiKeyForModel,
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
+          ...(telegramOpenaiBaseUrl !== undefined ? { openaiBaseUrl: telegramOpenaiBaseUrl } : {}),
+          // Read-scope inheritance (#547): skill-forked children inherit the
+          // parent session's read scope via the root manager. See bootstrap.ts.
+          getReadScopeInputs: () => rootManager.getReadScopeInputs(),
         });
 
         // Compose subagents inherit the framework base + operator overlay
@@ -319,18 +385,27 @@ async function main() {
           apiKey: telegramApiKey,
           // Per-model credential resolver — mirrors #640 for the compose fork-path.
           resolveApiKeyForModel: getApiKeyForModel,
+          // Read-scope inheritance (#547): DAG nodes inherit the parent session's
+          // read scope via the root manager. See bootstrap.ts.
+          getReadScopeInputs: () => rootManager.getReadScopeInputs(),
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
           // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
           ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
           systemPrompt: layeredBasePrompt ?? '',
+          // Session identity for routing-decision rows (Telegram → telegram).
+          surface: 'telegram',
+          depth: 0,
+          // Witness layer: DAG nodes emit subagent_lifecycle into the session trace.
+          ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
         });
 
-        const allowedTools = [...BUILTIN_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'agent', 'skill', 'compose'];
+        const allowedTools = topLevelSurfaceAllowedTools(mcpManager?.getMcpToolWireNames() ?? []);
         directProvider = new AnthropicDirectProvider({
           permissions: { allowedTools },
           subagentExecutor,
           skillExecutor,
           composeExecutor,
+          ...(mcpManager !== undefined ? { mcpManager } : {}),
           // Tag the presence file (~/.afk/state/presence/<id>.json) and
           // get_runtime_state as the Telegram surface. Without this the provider
           // defaults to 'cli' (anthropic-direct/index.ts) and `/watch`
@@ -344,7 +419,7 @@ async function main() {
         const rawPromptInner = layeredBasePrompt;
         const telegramAutoRoutingInner = config.autoRouting?.telegram ?? false;
         const systemPromptInner = typeof rawPromptInner === 'string'
-          ? assembleSystemPrompt(rawPromptInner, telegramAutoRoutingInner, 'telegram', pendingBriefContext())
+          ? assembleSystemPrompt(rawPromptInner, telegramAutoRoutingInner, 'telegram')
           : rawPromptInner;
 
         // permissionMode is intentionally omitted here: AgentSession defaults
@@ -356,22 +431,27 @@ async function main() {
           sharedMemoryStore,
           undefined,
           loadHooksConfig(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
-          { cwd: sessionCwd !== undefined && sessionCwd.length > 0 ? sessionCwd : undefined },
+          { cwd: sessionCwd !== undefined && sessionCwd.length > 0 ? sessionCwd : undefined, ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}) },
           () => sessionCwd,
         );
-        const session = constructTelegramSession({
+        const session = attachMcpCleanup(constructTelegramSession({
           ...(sessionConfig.apiKey !== undefined ? { apiKey: sessionConfig.apiKey } : {}),
           model: sessionConfig.model,
+          // /switch resumes a prior conversation: thread the target SDK session
+          // id so the AgentSession continues it (see SessionManager.switchToSession).
+          ...(sessionConfig.resume !== undefined ? { resume: sessionConfig.resume } : {}),
           ...(systemPromptInner !== undefined ? { systemPrompt: systemPromptInner } : {}),
           maxTurns: 100,
           ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+          ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
           // Pipe cwd through to tool handlers so bash/grep honor the
           // configured worktree (AFK_TELEGRAM_CWD or sessionConfig.cwd).
           ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
           provider: directProvider,
           hookRegistry: telegramHookBundle.registry,
-        });
+        }, { traceWriter: telegramTraceWriter }), mcpManager);
+        returnedSession = session;
         // Wire the path-approval grant ref to the provider so elicitation
         // approvals mutate readRoots / writeRoots on the right backend.
         telegramHookBundle.pathApprovalGrantRef.current = directProvider;
@@ -385,10 +465,13 @@ async function main() {
       const rawPrompt = layeredBasePrompt;
       const telegramAutoRouting = config.autoRouting?.telegram ?? false;
       const systemPrompt = typeof rawPrompt === 'string'
-        ? assembleSystemPrompt(rawPrompt, telegramAutoRouting, 'telegram', pendingBriefContext())
+        ? assembleSystemPrompt(rawPrompt, telegramAutoRouting, 'telegram')
         : rawPrompt;
       // Codex branch: same cwd resolution as the Anthropic branch above.
-      const codexSessionCwd = sessionConfig.cwd ?? telegramCwd;
+      const codexSessionCwd = sessionCwd;
+      // OpenAI-compatible endpoint for this branch's own top-level session
+      // (parity with the Anthropic branch's telegramOpenaiBaseUrl above).
+      const codexOpenaiBaseUrl = sessionConfig.openaiBaseUrl ?? config.openaiBaseUrl;
 
       // permissionMode is intentionally omitted here: AgentSession defaults
       // to 'default' (post-C2 fix), which is the correct mode for Telegram
@@ -403,35 +486,54 @@ async function main() {
       // sessions (PR #202 review H1). surface:'telegram' is the lone constructor
       // arg — there is no per-query surface field — and prevents the presence
       // file mis-labeling Telegram sessions as 'cli' in `/watch`.
-      const codexProvider = new OpenAICompatibleProvider({ surface: 'telegram' });
+      const codexProvider = new OpenAICompatibleProvider({
+        surface: 'telegram',
+        ...(mcpManager !== undefined ? { mcpManager } : {}),
+      });
       const codexHookBundle = createDefaultHookRegistry(
         undefined,
         'telegram',
         sharedMemoryStore,
         undefined,
         loadHooksConfig(codexSessionCwd !== undefined && codexSessionCwd.length > 0 ? { cwd: codexSessionCwd } : {}),
-        { cwd: codexSessionCwd !== undefined && codexSessionCwd.length > 0 ? codexSessionCwd : undefined },
+        { cwd: codexSessionCwd !== undefined && codexSessionCwd.length > 0 ? codexSessionCwd : undefined, ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}) },
         () => codexSessionCwd,
       );
-      const session = constructTelegramSession({
+      const session = attachMcpCleanup(constructTelegramSession({
         ...(sessionConfig.apiKey !== undefined ? { apiKey: sessionConfig.apiKey } : {}),
         model: sessionConfig.model,
+        // /switch resume: continue the target SDK session (parity with the Anthropic branch).
+        ...(sessionConfig.resume !== undefined ? { resume: sessionConfig.resume } : {}),
         ...(systemPrompt !== undefined ? { systemPrompt } : {}),
         maxTurns: 100,
         ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+        ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),
+        // Sets config.openaiBaseUrl -> effectiveBaseURL (openai-compatible/index.ts)
+        // so this top-level OpenAI Telegram session reaches the configured shim
+        // instead of defaulting to api.openai.com.
+        ...(codexOpenaiBaseUrl !== undefined ? { openaiBaseUrl: codexOpenaiBaseUrl } : {}),
         ...(codexSessionCwd !== undefined && codexSessionCwd.length > 0
           ? { cwd: codexSessionCwd }
           : {}),
         provider: codexProvider,
         hookRegistry: codexHookBundle.registry,
-      });
+      }, { traceWriter: telegramTraceWriter }), mcpManager);
+      returnedSession = session;
       // Wire the path-approval grant ref + seed persisted `persist` grants so
       // the OpenAI Telegram surface gets the same restricted-path prompts and
       // persisted-grant replay as the Anthropic branch.
       codexHookBundle.pathApprovalGrantRef.current = codexProvider;
       seedPersistedGrants(codexProvider);
 
-      return session;
+        return session;
+      } catch (error) {
+        if (returnedSession !== undefined) {
+          await returnedSession.close().catch(() => undefined);
+        } else if (mcpManager !== undefined) {
+          await mcpManager.disconnectAll();
+        }
+        throw error;
+      }
     },
   });
 

@@ -12,10 +12,11 @@
  * This class is a {@link ProviderQuery} facade the session installs as its
  * single `providerQuery`. It owns ONE active inner provider at a time; its
  * long-lived async-iterator pumps the active inner and yields its events
- * straight through. When the selected model's provider FAMILY changes, at the
- * next turn boundary it tears down the inner, constructs the target inner
- * (seeded with a router-maintained text shadow history), swallows the new
- * inner's `session.init`, and keeps pumping.
+ * straight through. When the selected model's routing SIGNATURE changes — its
+ * provider family OR its resolved endpoint/credentials (so a same-family switch
+ * onto a different backend counts) — at the next turn boundary it tears down the
+ * inner, constructs the target inner (seeded with a router-maintained text
+ * shadow history), swallows the new inner's `session.init`, and keeps pumping.
  *
  * Why this beats a session-level reset (the rejected "fork-on-switch"): the
  * swap happens BELOW the session. `AgentSession`'s cost/token/turn accumulators
@@ -34,8 +35,9 @@
  * equivalent, and tool-call ID schemas differ. The router therefore carries a
  * TEXT-ONLY shadow history (`ResumeHistoryTurn[]`) across a family switch — the
  * new model sees prior turns as plain prose, not structured tool/thinking
- * content. This is the documented, accepted degradation for cross-provider
- * switches; same-family runs keep full native fidelity inside the live inner.
+ * content. This is the documented, accepted degradation for any inner rebuild
+ * (cross-family, or same-family onto a different endpoint); same-signature runs
+ * keep full native fidelity inside the live inner.
  *
  * @module agent/providers/router/provider-router
  */
@@ -82,6 +84,14 @@ export interface ProviderRouterArgs {
 /** One constructed inner provider plus the plumbing to drive it. */
 interface ActiveInner {
   family: string;
+  /**
+   * Routing signature the inner was built for: family + resolved endpoint(s) +
+   * resolved apiKey (see {@link ProviderRouter.resolveInner}). A switch whose
+   * target signature differs requires a REBUILD — `family` alone is too coarse
+   * because two same-family tiers can target different endpoints/credentials
+   * (e.g. a cloud OpenAI model vs. a local OpenAI-shim tier on its own baseUrl).
+   */
+  signature: string;
   query: ProviderQuery;
   iterator: AsyncIterator<ProviderEvent>;
   input: QueryInputStream;
@@ -114,6 +124,12 @@ export class ProviderRouter implements ProviderQuery {
   private readonly startupFamily: string;
 
   private active: ActiveInner | undefined;
+  /**
+   * The model the `active` inner was built for. Gates the per-turn signature
+   * recompute in the event lane: an unchanged model skips resolution entirely,
+   * so a session that never switches pays no per-turn cost.
+   */
+  private activeModel: string | undefined;
   private closed = false;
 
   /** Text-only conversation carry, seeded from any resumeHistory, grown per turn. */
@@ -137,13 +153,25 @@ export class ProviderRouter implements ProviderQuery {
   // ---- inner construction -------------------------------------------------
 
   /**
-   * Build the inner provider for `model`. When `seed` is true (a family swap),
-   * the inner is seeded with the text shadow history so the new model sees
-   * prior turns as prose. Credentials are resolved for the model's OWN family.
+   * Resolve the effective inner-construction inputs for `model`: its provider,
+   * the fully credential-resolved inner config (per-family apiKey anti-leak +
+   * per-slot provider/baseUrl/apiKey via {@link applySlotCredentials}), and a
+   * routing SIGNATURE capturing the inner's identity.
+   *
+   * The signature is what {@link buildInner} stores and the event lane / setModel
+   * compare against: two models with the same signature can share one live inner;
+   * a differing signature forces a rebuild. Crucially it folds in the per-slot
+   * endpoint/credentials — without that, a same-family switch onto a different
+   * backend (a cloud OpenAI model → a local OpenAI-shim tier on its own baseUrl)
+   * would reuse the old inner's frozen credentials and keep hitting the old
+   * endpoint. Pure w.r.t. router state: operates on a fresh copy of baseConfig.
    */
-  private buildInner(model: string | undefined, seed: boolean): ActiveInner {
+  private resolveInner(model: string | undefined): {
+    provider: ModelProvider;
+    innerConfig: AgentConfig;
+    signature: string;
+  } {
     const provider = this.deps.resolveProvider(model);
-    const input = new QueryInputStream(() => this.lastSessionId);
 
     const innerConfig: AgentConfig = { ...this.baseConfig };
     innerConfig.model = (model ?? this.baseConfig.model) as AgentConfig['model'];
@@ -162,7 +190,34 @@ export class ProviderRouter implements ProviderQuery {
     // carries explicit provider/baseUrl/apiKey for the (possibly aliased) model.
     applySlotCredentials(innerConfig);
 
-    // Carry mid-session permission-mode / cwd changes onto the new inner.
+    // Identity = family + resolved endpoint(s) + resolved key. NUL-joined so no
+    // value can collide across fields. In-memory only — never logged/persisted.
+    const signature = [
+      provider.name,
+      innerConfig.baseUrl ?? '',
+      innerConfig.openaiBaseUrl ?? '',
+      innerConfig.apiKey ?? '',
+      // Fold the forced-ChatGPT-OAuth intent in: a `provider: 'chatgpt-oauth'`
+      // tier clears apiKey + shares the openai base with a plain openai tier, so
+      // without this a switch between them would collide and skip the rebuild.
+      innerConfig.forceChatgptOAuth ? 'chatgpt-oauth' : '',
+    ].join('\u0000');
+
+    return { provider, innerConfig, signature };
+  }
+
+  /**
+   * Build the inner provider for `model`. When `seed` is true (a swap), the
+   * inner is seeded with the text shadow history so the new model sees prior
+   * turns as prose. Credentials/endpoint are resolved for the model's OWN family
+   * + tier via {@link resolveInner}.
+   */
+  private buildInner(model: string | undefined, seed: boolean): ActiveInner {
+    const { provider, innerConfig, signature } = this.resolveInner(model);
+    const input = new QueryInputStream(() => this.lastSessionId);
+
+    // Carry mid-session permission-mode / cwd changes onto the new inner. These
+    // do not affect the routing signature (computed in resolveInner above).
     if (this.currentPermissionMode !== undefined) innerConfig.permissionMode = this.currentPermissionMode;
     if (this.currentCwd !== undefined) innerConfig.cwd = this.currentCwd;
 
@@ -171,6 +226,7 @@ export class ProviderRouter implements ProviderQuery {
     const query = provider.query({ prompt: input.createIterable(), config: innerConfig });
     return {
       family: provider.name,
+      signature,
       query,
       iterator: (query as AsyncIterable<ProviderEvent>)[Symbol.asyncIterator](),
       input,
@@ -214,6 +270,7 @@ export class ProviderRouter implements ProviderQuery {
     try {
       // Construct the first inner and surface its session.init to the session.
       this.active = this.buildInner(this.currentModel, /* seed */ false);
+      this.activeModel = this.currentModel;
       yield* this.driveUntilInit(/* swallow */ false);
 
       while (!this.closed) {
@@ -222,9 +279,20 @@ export class ProviderRouter implements ProviderQuery {
         const turn = next.value;
         this.lastSessionId = turn.sessionId;
 
-        // Switch the inner provider at this turn boundary if the family changed.
-        const targetFamily = this.deps.providerNameForModel(this.currentModel);
-        if (!this.active || targetFamily !== this.active.family) {
+        // Rebuild the inner at this turn boundary when the resolved routing
+        // SIGNATURE for the current model differs from the active inner's. This
+        // captures BOTH a provider-family swap AND a same-family endpoint/
+        // credential change (e.g. a cloud OpenAI model → a local OpenAI-shim
+        // tier on its own baseUrl) — the latter previously slipped through a
+        // family-only check, leaving the request on the prior model's frozen
+        // backend. Gated on a model change so an unchanged session never pays
+        // the per-turn resolution cost (same model ⇒ same signature).
+        const modelChanged = this.currentModel !== this.activeModel;
+        const needSwap =
+          !this.active ||
+          (modelChanged && this.resolveInner(this.currentModel).signature !== this.active.signature);
+        this.activeModel = this.currentModel;
+        if (needSwap) {
           await this.closeActive();
           this.active = this.buildInner(this.currentModel, /* seed */ true);
           debugLog(`🔀 ProviderRouter: switched inner provider → ${this.active.family} (model=${this.currentModel})`);
@@ -301,10 +369,14 @@ export class ProviderRouter implements ProviderQuery {
   async setModel(model?: string): Promise<void> {
     if (typeof model === 'string' && model.length > 0) {
       this.currentModel = model;
-      // Same-family switch: forward to the live inner so the next turn uses the
-      // new model string. Cross-family switch: recorded only — the swap happens
-      // at the next turn boundary in the event lane.
-      if (this.active && this.deps.providerNameForModel(model) === this.active.family) {
+      // Forward to the live inner ONLY for a true same-inner switch — same
+      // routing signature (family + endpoint + credentials). A switch that
+      // changes the effective backend (e.g. a cloud OpenAI model → a local
+      // OpenAI-shim tier on its own baseUrl) must NOT be forwarded: forwarding
+      // would leave the request on the old inner's frozen endpoint/credentials.
+      // Such a switch is recorded only; the turn-boundary rebuild in the event
+      // lane re-points it. (A family-only check used to forward these wrongly.)
+      if (this.active && this.resolveInner(model).signature === this.active.signature) {
         await this.active.query.setModel(model);
       }
     }

@@ -15,6 +15,8 @@ Writes the raw `OutputEvent` stream to **stdout** as [NDJSON](https://ndjson.org
 
 ## OutputEvent schema
 
+> This is the canonical reference for the `--format stream-json` event schema, jq recipes, and parsing examples. [`surfaces/chat`](../surfaces/chat) links here for the full specification.
+
 Full event schema: `src/agent/types/session-types.ts`.
 
 - `OutputEvent` — top-level discriminated union
@@ -64,7 +66,7 @@ afk chat "summarise this repo" --format stream-json \
   | jq -r 'select(.type == "chunk" and .chunk.type == "content") | .chunk.content'
 
 # Extract final token usage
-afk chat "count words" --format stream-json \
+afk chat "summarise the staged diff" --format stream-json \
   | jq 'select(.type == "done") | .metadata.usage'
 
 # Detect tool-use events in the stream
@@ -104,10 +106,10 @@ for await (const line of rl) {
 
 ```bash
 # Start a session and record its ID
-afk chat "begin the task" --format stream-json | tee run1.ndjson
+afk chat "start reviewing PR 1234" --format stream-json | tee run1.ndjson
 
 # Resume later
-afk chat "continue" --format stream-json --session-id <id> | tee run2.ndjson
+afk chat "now post your findings as a PR comment" --format stream-json --session-id <id> | tee run2.ndjson
 ```
 
 ## Scope and limitations

@@ -19,6 +19,7 @@ function base(overrides: Partial<CommitModeInput> = {}): CommitModeInput {
     extraRows: 2,
     committedBand: [],
     committedBandBottomRow: 0,
+    committedBandPaintedRows: 0,
     ...overrides,
   };
 }
@@ -61,11 +62,50 @@ describe('decideCommitMode', () => {
     expect(m.overflowRun).toHaveLength(5);
   });
 
-  it('legacy overflow: a block taller than the collapsed screen (no pending band) takes neither flag', () => {
+  it('over-tall block (> maxBandModel, no pending band) now takes band-hold (end-of-turn viewport-void fix)', () => {
+    // Pre-fix: this case returned useBandHold=false and fell through to the
+    // legacy overflow archive, leaving committedBand empty after commit. When the
+    // overlay collapsed, repositionCommittedBand had nothing to re-pin, so the
+    // freed viewport rows stayed blank (the "end-of-turn viewport void" bug).
+    // Post-fix: useBandHold=true routes the block through band-hold; Phase 1
+    // archives genuineOverflow rows to scrollback as REAL content; Phase 3 stores
+    // the capped model; repositionCommittedBand (or preserveRowsBeforeFrameRender's
+    // collapse-eviction) fills the viewport on collapse. No content loss.
     const tall = Array.from({ length: 25 }, (_, i) => `row${i}`);
     const m = decideCommitMode(base({ prevTopRow: 3, frameTop: 3, lineCount: 25, textLines: tall }));
     expect(m.fitsAboveFrame).toBe(false);
-    expect(m.useBandHold).toBe(false); // → caller falls through to the legacy archive path
+    expect(m.useBandHold).toBe(true); // post-fix: band-hold routes all !fitsAboveFrame cases
+  });
+
+  it('two-table fix: a new block that fits alone takes band-hold even when the merged painted run exceeds maxBandModel', () => {
+    // The recurring "second table renders broken" bug. T1 (12 rows) is committed
+    // and FULLY painted (no pending rows), then T2 (14 rows) commits under the
+    // same tall overlay, contiguous with T1. The merged run = 26 > maxBandModel
+    // (20), but T2 ALONE = 14 <= 20. Pre-fix: overflowHasPending=false and
+    // overflowRun(26) > 20 → useBandHold=false → legacy overflow path splits T2's
+    // header to scrollback and paints a border-less copy on screen. Post-fix: the
+    // `textLines.length <= maxBandModel` clause routes T2 to band-hold, which
+    // archives the oldest 6 rows of T1 to scrollback and holds T2 whole.
+    const band = Array.from({ length: 12 }, (_, i) => `t1-row${i}`);
+    const t2 = Array.from({ length: 14 }, (_, i) => `t2-row${i}`);
+    const m = decideCommitMode(
+      base({
+        prevTopRow: 13,
+        frameTop: 13, // room = 13 - 1 = 12; T2 (14) does NOT fit → fitsAboveFrame false
+        lineCount: 14,
+        textLines: t2,
+        committedBand: band,
+        committedBandBottomRow: 12, // === frameTop - 1 → contiguous
+        committedBandPaintedRows: 12, // T1 FULLY painted → overflowHasPending false
+      }),
+    );
+    expect(m.fitsAboveFrame).toBe(false);
+    expect(m.overflowPriorContiguous).toBe(true);
+    expect(m.overflowHasPending).toBe(false); // the prior band has NO pending rows
+    expect(m.overflowRun).toHaveLength(26);
+    expect(m.overflowRun.length > m.maxBandModel).toBe(true); // merged run overflows
+    expect(t2.length <= m.maxBandModel).toBe(true); // but the new block fits alone
+    expect(m.useBandHold).toBe(true); // pre-fix this was false (the bug)
   });
 
   it('review #649 P1: overflowHasPending forces band-hold even when the merged run exceeds maxBandModel', () => {
@@ -89,6 +129,34 @@ describe('decideCommitMode', () => {
     expect(m.overflowRun).toHaveLength(22);
     expect(m.overflowRun.length > m.maxBandModel).toBe(true);
     expect(m.useBandHold).toBe(true); // without the override this would be false
+  });
+
+  it('overflowHasPending uses the exact painted-row count, not the room geometry proxy (#255 two-block follow-up)', () => {
+    // Deferred #255 follow-up. Under a single intervening repaint the frame top
+    // can grow so `room` (frameTop - anchorFloor = 7) exceeds the band length
+    // (5) WHILE pending rows remain (only 3 of 5 painted). The OLD proxy
+    // `committedBand.length > room` reads 5 > 7 = FALSE → routes to the fits
+    // path, which scrolls the 2 unpainted rows into scrollback as BLANKS (the
+    // drop). The EXACT signal `committedBand.length > committedBandPaintedRows`
+    // reads 5 > 3 = TRUE → stays on band-hold and archives REAL content.
+    const band = ['b0', 'b1', 'b2', 'b3', 'b4'];
+    const m = decideCommitMode(
+      base({
+        prevTopRow: 8,
+        frameTop: 8, // room = 8 - 1 = 7
+        lineCount: 2,
+        textLines: ['new-a', 'new-b'],
+        committedBand: band,
+        committedBandBottomRow: 7, // === frameTop - 1 → contiguous
+        committedBandPaintedRows: 3, // 2 of 5 rows still pending
+      }),
+    );
+    // Prove this geometry is exactly where the proxy and the exact signal DIVERGE.
+    expect(m.room).toBe(7);
+    expect(band.length > m.room).toBe(false); // the old proxy → "no pending" (wrong)
+    expect(m.overflowPriorContiguous).toBe(true);
+    expect(m.overflowHasPending).toBe(true); // the exact signal → pending (right)
+    expect(m.useBandHold).toBe(true); // would route to the fits path under the proxy
   });
 
   it('merges the prior band into the run only when verifiably contiguous', () => {

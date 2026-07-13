@@ -24,6 +24,118 @@ function makeResult(content: string, isError = false): ToolResultChunk {
   };
 }
 
+describe('ToolLane — batch (parallel-wave) badge on root rows', () => {
+  const batchResult = (content: string, batchIndex: number, batchSize: number): ToolResultChunk => ({
+    type: 'tool_result',
+    toolUseId: 'unused',
+    content,
+    isError: false,
+    batchIndex,
+    batchSize,
+  });
+
+  it('flush() badges each root of a parallel safe wave with ∥i/N', () => {
+    const lane = new ToolLane();
+    lane.addStart('r1', 'Read', '("a.ts")');
+    lane.addStart('g1', 'Grep', '("foo")');
+    lane.addResult('r1', batchResult('10 lines', 1, 2));
+    lane.addResult('g1', batchResult('3 matches', 2, 2));
+
+    const joined = stripAnsi(lane.flush().join('\n'));
+    expect(joined).toContain('∥1/2');
+    expect(joined).toContain('∥2/2');
+  });
+
+  it('does NOT badge a singleton batch (batchSize === 1) — the sequential-dispatch case', () => {
+    const lane = new ToolLane();
+    lane.addStart('b1', 'Bash', '("echo hi")');
+    lane.addResult('b1', batchResult('hi', 1, 1));
+
+    expect(stripAnsi(lane.flush().join('\n'))).not.toContain('∥');
+  });
+
+  it('badges the live overlay too, not just committed scrollback', () => {
+    const lane = new ToolLane();
+    lane.addStart('r1', 'Read', '("a.ts")');
+    lane.addStart('g1', 'Grep', '("foo")');
+    lane.addResult('r1', batchResult('10 lines', 1, 2));
+    lane.addResult('g1', batchResult('3 matches', 2, 2));
+
+    const overlay = stripAnsi(lane.getOverlay());
+    expect(overlay).toContain('∥1/2');
+    expect(overlay).toContain('∥2/2');
+  });
+
+  // ── NESTING-root badge in committed scrollback (issue #532) ──────────────
+  //
+  // #520 badged flat roots in both overlay and scrollback, and NESTING roots
+  // (agent/skill/compose) in the live overlay only. These assert the deferred
+  // path: a NESTING root that ran in a parallel wave carries the badge once
+  // committed to scrollback, on its `Done (…)` closer line (the nesting-root
+  // analog of a flat root's badged outcome row). The head row is NOT the anchor
+  // — it may be committed eagerly before batchSize is known (see
+  // summaryWithBatchBadge in tool-lane-render-agent.ts).
+
+  it('flush() badges a NESTING root closer with ∥i/N for a parallel wave (formatAgentSummary path)', () => {
+    const lane = new ToolLane();
+    // Two agent roots dispatched together (batchSize=2), each with a child +
+    // a Done summary. No flushSource ran, so each root commits via
+    // formatAgentSummary (headerEmitted=false) with result+batchSize present.
+    lane.addStartWithAgentContext('agent-1', 'Agent', '(researcher)', undefined);
+    lane.addStartWithAgentContext('c1', 'Read', '("a.ts")', 'agent-1');
+    lane.addResult('c1', makeResult('10 lines'));
+    lane.setAgentResultSummary('agent-1', 'Done (1 tool · 2.0s)');
+    lane.addResult('agent-1', batchResult('done', 1, 2));
+
+    lane.addStartWithAgentContext('agent-2', 'Agent', '(verifier)', undefined);
+    lane.addStartWithAgentContext('c2', 'Grep', '("foo")', 'agent-2');
+    lane.addResult('c2', makeResult('3 matches'));
+    lane.setAgentResultSummary('agent-2', 'Done (1 tool · 1.5s)');
+    lane.addResult('agent-2', batchResult('done', 2, 2));
+
+    const joined = stripAnsi(lane.flush().join('\n'));
+    // Badge lands on the Done closer of each nesting root, not the head row.
+    expect(joined).toMatch(/Done \(1 tool · 2\.0s\) ∥1\/2/);
+    expect(joined).toMatch(/Done \(1 tool · 1\.5s\) ∥2\/2/);
+  });
+
+  it('flush() does NOT badge a singleton NESTING root (batchSize === 1)', () => {
+    const lane = new ToolLane();
+    lane.addStartWithAgentContext('agent-1', 'Agent', '(researcher)', undefined);
+    lane.addStartWithAgentContext('c1', 'Read', '("a.ts")', 'agent-1');
+    lane.addResult('c1', makeResult('10 lines'));
+    lane.setAgentResultSummary('agent-1', 'Done (1 tool · 2.0s)');
+    lane.addResult('agent-1', batchResult('done', 1, 1));
+
+    expect(stripAnsi(lane.flush().join('\n'))).not.toContain('∥');
+  });
+
+  it('eager-header (flushSource) path: NESTING root badge lands on the closer via formatAgentChildren', () => {
+    const lane = new ToolLane();
+    // skill root dispatched in a parallel wave (batchSize=2) with an agent child
+    // that itself owns a tool. The agent completes first → flushSource walks up
+    // and EAGERLY emits skill-1's header (headerEmitted=true, no badge yet —
+    // skill-1 has not completed, batchSize unknown). skill-1 then completes and
+    // flushes via formatAgentChildren (closer only), which carries the badge.
+    lane.addStartWithAgentContext('skill-1', 'skill', '(review)', undefined);
+    lane.addStartWithAgentContext('agent-a', 'Agent', '(reviewer)', 'skill-1');
+    lane.addStartWithAgentContext('c1', 'Read', '("a.ts")', 'agent-a');
+    lane.addResult('c1', makeResult('10 lines'));
+    lane.setAgentResultSummary('agent-a', 'Done (1 tool)');
+    lane.addResult('agent-a', makeResult('done'));
+
+    const eager = stripAnsi(lane.flushSource('agent-a').join('\n'));
+    // The eagerly-committed skill-1 head row is unbadged (batchSize not yet known).
+    expect(eager).not.toContain('∥');
+
+    lane.setAgentResultSummary('skill-1', 'Done (1 subagent · 3.0s)');
+    lane.addResult('skill-1', batchResult('done', 1, 2));
+    const rest = stripAnsi(lane.flush().join('\n'));
+    // Badge lands on skill-1's Done closer, committed at completion time.
+    expect(rest).toMatch(/Done \(1 subagent · 3\.0s\) ∥1\/2/);
+  });
+});
+
 describe('ToolLane.addStartWithAgentContext', () => {
   it('creates an entry with the given agentContext (does not consult agentIdStack)', () => {
     const lane = new ToolLane();
@@ -343,16 +455,19 @@ describe('ToolLane.upsertTextChild / removeTextChildrenUnder', () => {
   it('categorical overflow lists tool-name buckets when the visible budget overflows', () => {
     const lane = new ToolLane();
     lane.addStartWithAgentContext('synth-A', 'Agent', '(researcher)', undefined);
+    // Recency window keeps the most-recent 3 visible; the OLDER head collapses
+    // into the overflow line. Dispatch the intended-hidden pair (Write, Glob)
+    // FIRST so they land in the older head.
+    lane.addStartWithAgentContext('t-4', 'Write', '("c.ts")', 'synth-A');
+    lane.addResult('t-4', makeResult('1 line'));
+    lane.addStartWithAgentContext('t-5', 'Glob', '("**/*")', 'synth-A');
+    lane.addResult('t-5', makeResult('1 line'));
     lane.addStartWithAgentContext('t-1', 'Read', '("a.ts")', 'synth-A');
     lane.addResult('t-1', makeResult('1 line'));
     lane.addStartWithAgentContext('t-2', 'Bash', '("ls")', 'synth-A');
     lane.addResult('t-2', makeResult('1 line'));
     lane.addStartWithAgentContext('t-3', 'Grep', '("foo")', 'synth-A');
     lane.addResult('t-3', makeResult('1 line'));
-    lane.addStartWithAgentContext('t-4', 'Write', '("c.ts")', 'synth-A');
-    lane.addResult('t-4', makeResult('1 line'));
-    lane.addStartWithAgentContext('t-5', 'Glob', '("**/*")', 'synth-A');
-    lane.addResult('t-5', makeResult('1 line'));
     lane.addResult('synth-A', makeResult('done'));
 
     const overlay = stripAnsi(lane.getOverlay());
@@ -371,19 +486,21 @@ describe('ToolLane.upsertTextChild / removeTextChildrenUnder', () => {
   // (sh|ch|x|z + already-`s`) keeps these names invariant.
   it('categorical overflow keeps sibilant-cluster names invariant when n > 1', () => {
     // Hidden = [bash, bash] (2 instances, below GROUP_THRESHOLD_LEAF=3, so
-    // they appear individually and land in the categorical bucket).
+    // they appear individually and land in the categorical bucket). Recency
+    // window keeps the newest 3 visible, so dispatch the 2 bash calls FIRST
+    // (oldest) to land them in the collapsed older head.
     const lane = new ToolLane();
     lane.addStartWithAgentContext('parent', 'Agent', '(tester)', undefined);
+    lane.addStartWithAgentContext('b1', 'bash', '("ls")', 'parent');
+    lane.addResult('b1', makeResult('ok'));
+    lane.addStartWithAgentContext('b2', 'bash', '("pwd")', 'parent');
+    lane.addResult('b2', makeResult('ok'));
     lane.addStartWithAgentContext('r1', 'Read', '("a.ts")', 'parent');
     lane.addResult('r1', makeResult('ok'));
     lane.addStartWithAgentContext('g1', 'Grep', '("TODO")', 'parent');
     lane.addResult('g1', makeResult('ok'));
     lane.addStartWithAgentContext('glob1', 'Glob', '("**/*")', 'parent');
     lane.addResult('glob1', makeResult('ok'));
-    lane.addStartWithAgentContext('b1', 'bash', '("ls")', 'parent');
-    lane.addResult('b1', makeResult('ok'));
-    lane.addStartWithAgentContext('b2', 'bash', '("pwd")', 'parent');
-    lane.addResult('b2', makeResult('ok'));
     lane.addResult('parent', makeResult('done'));
 
     const overlay = stripAnsi(lane.getOverlay());
@@ -849,11 +966,11 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
     }
 
     // Attach the Done summary (as finalizeSubagent does)
-    lane.setAgentResultSummary(agentId, 'Done (4 tools · 2.5s)');
+    lane.setAgentResultSummary(agentId, 'Done (4 tool calls · 2.5s)');
     lane.addResult(agentId, {
       type: 'tool_result',
       toolUseId: 'synthetic',
-      content: 'Done (4 tools · 2.5s)',
+      content: 'Done (4 tool calls · 2.5s)',
       isError: false,
     });
 
@@ -864,7 +981,7 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
     // Find overflow line: matches "… +N" pattern from formatCategoricalOverflow
     const overflowIdx = allLines.findIndex((l) => /….*\+\d+/.test(l));
     // Find result summary line
-    const doneIdx = allLines.findIndex((l) => l.includes('Done (4 tools'));
+    const doneIdx = allLines.findIndex((l) => l.includes('Done (4 tool calls'));
 
     // Both lines must exist
     expect(overflowIdx, 'overflow ellipsis line must exist').toBeGreaterThanOrEqual(0);
@@ -889,7 +1006,7 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
     expect(overflowLine.indexOf('├')).toBe(2);
     expect(overflowLine.indexOf('…')).toBe(5);
     expect(doneLine.indexOf('╰')).toBe(2);
-    expect(doneLine.indexOf('Done (4 tools')).toBe(5);
+    expect(doneLine.indexOf('Done (4 tool calls')).toBe(5);
 
     // Assertion 4 (full-topology snapshot): locks the entire overlay shape.
     // Any structural drift — column position, sibling ordering, glyph
@@ -897,12 +1014,12 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
     // as a visible inline-snapshot diff instead of slipping past a
     // single-glyph toContain. Populated by `pnpm test -u` on first run.
     expect(stripped).toMatchInlineSnapshot(`
-      "◉ → Agent(overflow-tester) [subagent] — 4 tools
-      │ ├─ ● Read("file0.ts") — ✓ result0
+      "◉ → Agent(overflow-tester) [subagent] — 4 tool calls
+      │ ├─ … +1 (1 Read)
       │ ├─ $ Bash("file1.ts") — ✓ result1
       │ ├─ ● Grep("file2.ts") — ✓ result2
-      │ ├─ … +1 (1 Glob)
-      │ ╰─ Done (4 tools · 2.5s)"
+      │ ├─ ● Glob("file3.ts") — ✓ result3
+      │ ╰─ Done (4 tool calls · 2.5s)"
     `);
   });
 
@@ -1014,15 +1131,36 @@ describe('assignConnectors — property tests', () => {
     }
   });
 
-  it('overflow synthetic as last item → gets ╰─  connector', () => {
+  it('overflow synthetic as FIRST item → gets ├─ ; last visible group gets ╰─ ', () => {
     const siblings = Array.from({ length: 5 }, (_, i) => makeToolSibling(i));
-    // addOverflowSynthetic with maxVisible=3: first 3 + overflow
+    // Recency window (maxVisible=3): leading overflow (older head) + most-recent 3.
     const withOverflow = addOverflowSynthetic(siblings, 3);
     const connected = assignConnectors(withOverflow);
 
+    // Overflow now LEADS the list (summarizes the older head) → MID connector.
+    const firstItem = connected[0]!;
+    expect(firstItem.sibling.kind).toBe('overflow');
+    expect(firstItem.connector).toBe('├─ ');
+
+    // A real visible group is now last → keeps the LAST connector.
     const lastItem = connected[connected.length - 1]!;
-    expect(lastItem.sibling.kind).toBe('overflow');
+    expect(lastItem.sibling.kind).toBe('tool');
     expect(lastItem.connector).toBe('╰─ ');
+  });
+
+  it('addOverflowSynthetic keeps the most-recent maxVisible (tail) and leads with overflow', () => {
+    const siblings = Array.from({ length: 5 }, (_, i) => makeToolSibling(i)); // t0..t4
+    const result = addOverflowSynthetic(siblings, 3);
+    expect(result).toHaveLength(4); // leading overflow + 3 visible
+    expect(result[0]!.kind).toBe('overflow');
+    // Visible tail = the 3 MOST-RECENT siblings, preserving dispatch order.
+    const visibleIds = result
+      .slice(1)
+      .map((s) => (s.kind === 'tool' ? s.toolUseId : undefined));
+    expect(visibleIds).toEqual(['t2', 't3', 't4']);
+    // The leading overflow summarizes the older head (t0, t1).
+    const overflow = result[0]!;
+    expect(overflow.kind === 'overflow' && overflow.count).toBe(2);
   });
 
   it('resultSummary synthetic as last item → gets ╰─  connector', () => {
@@ -1035,18 +1173,18 @@ describe('assignConnectors — property tests', () => {
     expect(lastItem.connector).toBe('╰─ ');
   });
 
-  it('overflow before resultSummary: overflow gets ├─ , resultSummary gets ╰─ ', () => {
+  it('overflow (first) gets ├─ , resultSummary (last) gets ╰─ ', () => {
     const siblings = Array.from({ length: 5 }, (_, i) => makeToolSibling(i));
     const withOverflow = addOverflowSynthetic(siblings, 3);
     const withSummary = addResultSummarySynthetic(withOverflow, 'Done (5 tools · 2.0s)');
     const connected = assignConnectors(withSummary);
 
-    // Second-to-last is overflow
-    const overflowItem = connected[connected.length - 2]!;
+    // Overflow now LEADS the list (older-head summary) → MID connector.
+    const overflowItem = connected[0]!;
     expect(overflowItem.sibling.kind).toBe('overflow');
     expect(overflowItem.connector).toBe('├─ ');
 
-    // Last is resultSummary
+    // resultSummary remains the appended LAST sibling.
     const summaryItem = connected[connected.length - 1]!;
     expect(summaryItem.sibling.kind).toBe('resultSummary');
     expect(summaryItem.connector).toBe('╰─ ');
@@ -1085,65 +1223,63 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
     lane.addResult('parent', makeResult('done'));
 
     const overlay = stripAnsi(lane.getOverlay());
-    // MAX_VISIBLE_CHILDREN = 3, so pr1–pr3 are visible, pr4–pr6 hidden.
-    // Overflow line: … +3 more: pr4, pr5, pr6
-    expect(overlay).toMatch(/… \+3 more: pr4, pr5, pr6/);
+    // Recency window: MAX_VISIBLE_CHILDREN = 3 keeps the MOST-RECENT pr4–pr6
+    // visible; the older pr1–pr3 collapse into the leading overflow line.
+    // Overflow line: … +3 more: pr1, pr2, pr3
+    expect(overlay).toMatch(/… \+3 more: pr1, pr2, pr3/);
     // The label-list must NOT collapse to a categorical bucket
     expect(overlay).not.toMatch(/\+3 \(/);
   });
 
   it('4 distinct leaf tools → categorical overflow shows pluralized names', () => {
-    // 4 different leaf tool names under one Agent:
-    // Read, Bash, Grep, Glob → Read visible (pos 1), Bash (pos 2), Grep (pos 3),
-    // Glob hidden → +1 (1 Glob). n=1 so no pluralization (correct).
-    // To see pluralization we need more: 3 visible + 2 hidden (same tool name).
-    // Use: Read, Bash, Grep all at n=1 (individual), plus 2 hidden Writes.
-    // But leaf threshold = 3 → 2 Writes don't group. They appear as 2 siblings.
-    // So: Read (1), Bash (1), Grep (1), Write (2 individuals) = 5 siblings.
-    // MAX_VISIBLE=3 → 3 visible, 2 hidden. Hidden: [Write1, Write2].
-    // formatCategoricalOverflow({Write, Write}) → allDispatch=false → categorical
-    // → "… +2 (2 Writes)" (Write ends in 'e' not 's' → pluralizes to 'Writes').
+    // Recency window keeps the MOST-RECENT 3 visible and collapses the OLDER
+    // head, so the items we want hidden (the 2 Writes) must be dispatched
+    // FIRST. Order: Write, Write (oldest), then Read, Bash, Grep (newest 3).
+    // Leaf threshold = 3 → 2 Writes don't group; they appear as 2 siblings,
+    // both in the older head. 5 siblings, MAX_VISIBLE=3 → 3 visible, 2 hidden.
+    // Hidden: [Write1, Write2]. formatCategoricalOverflow({Write, Write}) →
+    // allDispatch=false → categorical → "… +2 (2 Writes)" (Write ends in 'e'
+    // not 's' → pluralizes to 'Writes').
     const lane = new ToolLane();
     lane.addStartWithAgentContext('parent', 'Agent', '(tester)', undefined);
+    lane.addStartWithAgentContext('w1', 'Write', '("x.ts")', 'parent');
+    lane.addResult('w1', makeResult('ok'));
+    lane.addStartWithAgentContext('w2', 'Write', '("y.ts")', 'parent');
+    lane.addResult('w2', makeResult('ok'));
     lane.addStartWithAgentContext('r1', 'Read', '("a.ts")', 'parent');
     lane.addResult('r1', makeResult('ok'));
     lane.addStartWithAgentContext('b1', 'Bash', '("ls")', 'parent');
     lane.addResult('b1', makeResult('ok'));
     lane.addStartWithAgentContext('g1', 'Grep', '("TODO")', 'parent');
     lane.addResult('g1', makeResult('ok'));
-    lane.addStartWithAgentContext('w1', 'Write', '("x.ts")', 'parent');
-    lane.addResult('w1', makeResult('ok'));
-    lane.addStartWithAgentContext('w2', 'Write', '("y.ts")', 'parent');
-    lane.addResult('w2', makeResult('ok'));
     lane.addResult('parent', makeResult('done'));
 
     const overlay = stripAnsi(lane.getOverlay());
-    // Hidden: Write ×2 → "… +2 (2 Writes)"
+    // Hidden (older head): Write ×2 → "… +2 (2 Writes)"
     expect(overlay).toMatch(/… \+2 \(2 Writes\)/);
     // Must not use the label-aware path (Write is not dispatch-class)
     expect(overlay).not.toMatch(/more:/);
   });
 
   it('mixed dispatch + leaf hidden → categorical fallback (heterogeneous)', () => {
-    // 2 Agent + 2 bash hidden → allDispatch=false → categorical bucket path.
-    // Set up 5 visible children to guarantee the hidden slice is mixed.
-    // MAX_VISIBLE=3: use Read, Bash, Grep visible (3), then Agent1, Agent2 hidden.
-    // But wait — Agent siblings with distinct labels won't group. We need exactly
-    // 2 hidden items that are mixed (1 Agent + 1 bash).
-    // Layout: Read, Bash, Grep visible; Agent(pr1), bash("cmd") hidden.
+    // A mixed (1 Agent + 1 bash) HIDDEN slice → allDispatch=false → categorical.
+    // Recency window collapses the OLDER head, so the mixed pair must be
+    // dispatched FIRST: Agent(pr1), bash (oldest, → hidden), then Read, Bash,
+    // Grep (newest 3, → visible). 5 siblings, MAX_VISIBLE=3 → 2 hidden.
     const lane = new ToolLane();
     lane.addStartWithAgentContext('parent', 'Agent', '(outer)', undefined);
+    // Older head (becomes hidden): 1 Agent + 1 bash → heterogeneous.
+    lane.addStartWithAgentContext('inner-agent', 'Agent', '(pr1)', 'parent');
+    lane.addResult('inner-agent', makeResult('done'));
+    lane.addStartWithAgentContext('b2', 'bash', '("cmd")', 'parent');
+    lane.addResult('b2', makeResult('ok'));
+    // Most-recent 3 (stay visible):
     lane.addStartWithAgentContext('r1', 'Read', '("a.ts")', 'parent');
     lane.addResult('r1', makeResult('ok'));
     lane.addStartWithAgentContext('b1', 'Bash', '("ls")', 'parent');
     lane.addResult('b1', makeResult('ok'));
     lane.addStartWithAgentContext('g1', 'Grep', '("TODO")', 'parent');
     lane.addResult('g1', makeResult('ok'));
-    // Now the hidden ones (beyond MAX_VISIBLE=3):
-    lane.addStartWithAgentContext('inner-agent', 'Agent', '(pr1)', 'parent');
-    lane.addResult('inner-agent', makeResult('done'));
-    lane.addStartWithAgentContext('b2', 'bash', '("cmd")', 'parent');
-    lane.addResult('b2', makeResult('ok'));
     lane.addResult('parent', makeResult('done'));
 
     const overlay = stripAnsi(lane.getOverlay());
@@ -1166,8 +1302,9 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
     lane.addResult('parent', makeResult('done'));
 
     const overlay = stripAnsi(lane.getOverlay());
-    // 9 children, MAX_VISIBLE=3, hidden=6. LABEL_LIST_CAP=5, so shows 5 labels + (+1).
-    expect(overlay).toMatch(/… \+6 more: pr4, pr5, pr6, pr7, pr8 \(\+1\)/);
+    // 9 children, MAX_VISIBLE=3 keeps newest pr7–pr9 visible; older pr1–pr6
+    // collapse (hidden=6). LABEL_LIST_CAP=5 → shows pr1–pr5 + (+1) for pr6.
+    expect(overlay).toMatch(/… \+6 more: pr1, pr2, pr3, pr4, pr5 \(\+1\)/);
   });
 
   it('getGroupKey invariant: different Agent labels do NOT merge (existing invariant preserved)', () => {
@@ -1206,16 +1343,17 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
   // slice. The unmerged entry's toolName (`agent`/`skill`/`compose`) differs
   // from the merged entry's toolName (`Agent`) — heterogeneous → categorical.
   it('hidden slice mixing merged Agent + unmerged agent → categorical fallback', () => {
-    // 5 agent dispatches, 4 merged + 1 still pre-merge. Visible 1-3, hidden 4-5.
-    // Hidden = [Agent(pr4) merged, agent(' …') unmerged]. Both in NESTING_TOOLS
-    // but different toolNames → heterogeneous → categorical.
+    // 5 agent dispatches, 4 merged + 1 still pre-merge. Recency window keeps the
+    // newest 3 visible; the older head (oldest 2) collapses. Dispatch the
+    // pre-merge 'agent' FIRST so the hidden slice mixes it with a merged
+    // 'Agent' → different toolNames → heterogeneous → categorical.
     const lane = new ToolLane();
     lane.addStartWithAgentContext('parent', 'skill', '(compose)', undefined);
+    // Pre-merge entry — literal placeholder from translate.ts (oldest → hidden).
+    lane.addStartWithAgentContext('agent-5', 'agent', ' …', 'parent');
     for (let i = 1; i <= 4; i++) {
       lane.addStartWithAgentContext(`agent-${i}`, 'Agent', `(pr${i})`, 'parent');
     }
-    // Pre-merge entry — literal placeholder from translate.ts.
-    lane.addStartWithAgentContext('agent-5', 'agent', ' …', 'parent');
 
     const overlay = stripAnsi(lane.getOverlay());
     // Must NOT render ellipsis or empty strings as labels.
@@ -1232,6 +1370,12 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
     // ' …', which must NOT be emitted as a label.
     const lane = new ToolLane();
     lane.addStartWithAgentContext('parent', 'skill', '(compose)', undefined);
+    // 2 unmerged agents with shared ' …' toolInput → collapse to one group
+    // (GROUP_THRESHOLD_DISPATCH=2). Dispatch FIRST so the group lands in the
+    // collapsed older head; the 3 newest leaf entries stay visible.
+    for (let i = 1; i <= 2; i++) {
+      lane.addStartWithAgentContext(`agent-${i}`, 'agent', ' …', 'parent');
+    }
     // 3 visible leaf entries (Read/Bash/Grep — distinct names, no grouping).
     lane.addStartWithAgentContext('r1', 'Read', '("a.ts")', 'parent');
     lane.addResult('r1', makeResult('ok'));
@@ -1239,11 +1383,6 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
     lane.addResult('b1', makeResult('ok'));
     lane.addStartWithAgentContext('g1', 'Grep', '("TODO")', 'parent');
     lane.addResult('g1', makeResult('ok'));
-    // 2 unmerged agents with shared ' …' toolInput → collapse to one group
-    // (GROUP_THRESHOLD_DISPATCH=2). Group lands at position 4 → hidden.
-    for (let i = 1; i <= 2; i++) {
-      lane.addStartWithAgentContext(`agent-${i}`, 'agent', ' …', 'parent');
-    }
 
     const overlay = stripAnsi(lane.getOverlay());
     // Must NOT render ' …' as a label.
@@ -1261,20 +1400,21 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
   it('heterogeneous dispatch (Agent + skill) hidden → categorical fallback', () => {
     const lane = new ToolLane();
     lane.addStartWithAgentContext('parent', 'compose', '(wave)', undefined);
-    // 3 visible Read/Bash/Grep, then 3 hidden mixed-dispatch items.
-    lane.addStartWithAgentContext('r1', 'Read', '("a.ts")', 'parent');
-    lane.addResult('r1', makeResult('ok'));
-    lane.addStartWithAgentContext('b1', 'Bash', '("ls")', 'parent');
-    lane.addResult('b1', makeResult('ok'));
-    lane.addStartWithAgentContext('g1', 'Grep', '("TODO")', 'parent');
-    lane.addResult('g1', makeResult('ok'));
-    // Hidden: 1 Agent + 2 skills — all in NESTING_TOOLS, but heterogeneous.
+    // Hidden (older head): 1 Agent + 2 skills — all NESTING_TOOLS, heterogeneous.
+    // Dispatch FIRST so they collapse; the 3 newest leaf tools stay visible.
     lane.addStartWithAgentContext('a1', 'Agent', '(pr1)', 'parent');
     lane.addResult('a1', makeResult('done'));
     lane.addStartWithAgentContext('s1', 'skill', '(forge)', 'parent');
     lane.addResult('s1', makeResult('done'));
     lane.addStartWithAgentContext('s2', 'skill', '(resolve)', 'parent');
     lane.addResult('s2', makeResult('done'));
+    // 3 most-recent Read/Bash/Grep stay visible.
+    lane.addStartWithAgentContext('r1', 'Read', '("a.ts")', 'parent');
+    lane.addResult('r1', makeResult('ok'));
+    lane.addStartWithAgentContext('b1', 'Bash', '("ls")', 'parent');
+    lane.addResult('b1', makeResult('ok'));
+    lane.addStartWithAgentContext('g1', 'Grep', '("TODO")', 'parent');
+    lane.addResult('g1', makeResult('ok'));
     lane.addResult('parent', makeResult('done'));
 
     const overlay = stripAnsi(lane.getOverlay());
@@ -1299,17 +1439,19 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
     // Post-fix output: `… +4 more: pr1 ×4` (entries explicit).
     const lane = new ToolLane();
     lane.addStartWithAgentContext('parent', 'skill', '(compose)', undefined);
+    // Same-label Agents collapse to one group (GROUP_THRESHOLD_DISPATCH=2).
+    // Dispatch FIRST so the group lands in the collapsed older head; the 3
+    // newest leaf tools stay visible.
+    for (let i = 1; i <= 4; i++) {
+      lane.addStartWithAgentContext(`a-${i}`, 'Agent', '(pr1)', 'parent');
+      lane.addResult(`a-${i}`, makeResult('done'));
+    }
     lane.addStartWithAgentContext('r1', 'Read', '("a.ts")', 'parent');
     lane.addResult('r1', makeResult('ok'));
     lane.addStartWithAgentContext('b1', 'Bash', '("ls")', 'parent');
     lane.addResult('b1', makeResult('ok'));
     lane.addStartWithAgentContext('g1', 'Grep', '("TODO")', 'parent');
     lane.addResult('g1', makeResult('ok'));
-    // Same-label Agents collapse to one group (GROUP_THRESHOLD_DISPATCH=2).
-    for (let i = 1; i <= 4; i++) {
-      lane.addStartWithAgentContext(`a-${i}`, 'Agent', '(pr1)', 'parent');
-      lane.addResult(`a-${i}`, makeResult('done'));
-    }
     lane.addResult('parent', makeResult('done'));
 
     const overlay = stripAnsi(lane.getOverlay());
@@ -1325,12 +1467,8 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
     // equals leading +5 with no trailing (+M).
     const lane = new ToolLane();
     lane.addStartWithAgentContext('parent', 'skill', '(compose)', undefined);
-    lane.addStartWithAgentContext('r1', 'Read', '("a.ts")', 'parent');
-    lane.addResult('r1', makeResult('ok'));
-    lane.addStartWithAgentContext('b1', 'Bash', '("ls")', 'parent');
-    lane.addResult('b1', makeResult('ok'));
-    lane.addStartWithAgentContext('g1', 'Grep', '("TODO")', 'parent');
-    lane.addResult('g1', makeResult('ok'));
+    // The agent dispatches are the intended hidden slice — dispatch FIRST so
+    // they collapse into the older head; the 3 newest leaf tools stay visible.
     // 3 same-label Agents → group of 3.
     for (let i = 1; i <= 3; i++) {
       lane.addStartWithAgentContext(`a-${i}`, 'Agent', '(pr1)', 'parent');
@@ -1341,6 +1479,12 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
     lane.addResult('a-x', makeResult('done'));
     lane.addStartWithAgentContext('a-y', 'Agent', '(pr3)', 'parent');
     lane.addResult('a-y', makeResult('done'));
+    lane.addStartWithAgentContext('r1', 'Read', '("a.ts")', 'parent');
+    lane.addResult('r1', makeResult('ok'));
+    lane.addStartWithAgentContext('b1', 'Bash', '("ls")', 'parent');
+    lane.addResult('b1', makeResult('ok'));
+    lane.addStartWithAgentContext('g1', 'Grep', '("TODO")', 'parent');
+    lane.addResult('g1', makeResult('ok'));
     lane.addResult('parent', makeResult('done'));
 
     const overlay = stripAnsi(lane.getOverlay());
@@ -1354,12 +1498,8 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
     // Output: `… +8 more: pr1 ×3, pr2, pr3, pr4, pr5 (+1)`.
     const lane = new ToolLane();
     lane.addStartWithAgentContext('parent', 'skill', '(compose)', undefined);
-    lane.addStartWithAgentContext('r1', 'Read', '("a.ts")', 'parent');
-    lane.addResult('r1', makeResult('ok'));
-    lane.addStartWithAgentContext('b1', 'Bash', '("ls")', 'parent');
-    lane.addResult('b1', makeResult('ok'));
-    lane.addStartWithAgentContext('g1', 'Grep', '("TODO")', 'parent');
-    lane.addResult('g1', makeResult('ok'));
+    // The agent dispatches are the intended hidden slice — dispatch FIRST so
+    // they collapse into the older head; the 3 newest leaf tools stay visible.
     // 3 same-label Agents → group of 3.
     for (let i = 1; i <= 3; i++) {
       lane.addStartWithAgentContext(`a-${i}`, 'Agent', '(pr1)', 'parent');
@@ -1370,6 +1510,12 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
       lane.addStartWithAgentContext(`a-${i}-uniq`, 'Agent', `(pr${i})`, 'parent');
       lane.addResult(`a-${i}-uniq`, makeResult('done'));
     }
+    lane.addStartWithAgentContext('r1', 'Read', '("a.ts")', 'parent');
+    lane.addResult('r1', makeResult('ok'));
+    lane.addStartWithAgentContext('b1', 'Bash', '("ls")', 'parent');
+    lane.addResult('b1', makeResult('ok'));
+    lane.addStartWithAgentContext('g1', 'Grep', '("TODO")', 'parent');
+    lane.addResult('g1', makeResult('ok'));
     lane.addResult('parent', makeResult('done'));
 
     const overlay = stripAnsi(lane.getOverlay());
@@ -1385,20 +1531,22 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
   it('label-aware overflow strips CR/LF/ESC control characters from labels', () => {
     const lane = new ToolLane();
     lane.addStartWithAgentContext('parent', 'skill', '(compose)', undefined);
-    // 6 distinct Agent labels — hidden = pr4, pr5, pr6 (3 rows).
+    // 6 distinct Agent labels — hidden (older head) = pr4, pr5, pr6 (3 rows).
+    // Recency window keeps the newest 3 visible, so dispatch the injected
+    // labels FIRST so they land in the collapsed (and sanitized) overflow line.
     // pr4 carries CR+LF; pr5 carries ANSI CSI sequence; pr6 is clean.
-    lane.addStartWithAgentContext('a-1', 'Agent', '(pr1)', 'parent');
-    lane.addResult('a-1', makeResult('done'));
-    lane.addStartWithAgentContext('a-2', 'Agent', '(pr2)', 'parent');
-    lane.addResult('a-2', makeResult('done'));
-    lane.addStartWithAgentContext('a-3', 'Agent', '(pr3)', 'parent');
-    lane.addResult('a-3', makeResult('done'));
     lane.addStartWithAgentContext('a-4', 'Agent', '(pr4\r\nINJECTED)', 'parent');
     lane.addResult('a-4', makeResult('done'));
     lane.addStartWithAgentContext('a-5', 'Agent', '(pr5\x1b[31mRED)', 'parent');
     lane.addResult('a-5', makeResult('done'));
     lane.addStartWithAgentContext('a-6', 'Agent', '(pr6)', 'parent');
     lane.addResult('a-6', makeResult('done'));
+    lane.addStartWithAgentContext('a-1', 'Agent', '(pr1)', 'parent');
+    lane.addResult('a-1', makeResult('done'));
+    lane.addStartWithAgentContext('a-2', 'Agent', '(pr2)', 'parent');
+    lane.addResult('a-2', makeResult('done'));
+    lane.addStartWithAgentContext('a-3', 'Agent', '(pr3)', 'parent');
+    lane.addResult('a-3', makeResult('done'));
     lane.addResult('parent', makeResult('done'));
 
     const overlay = stripAnsi(lane.getOverlay());
@@ -1515,9 +1663,9 @@ describe('Snapshot pins — tool-lane-render.ts representative outputs', () => {
       lane.addStartWithAgentContext(`sc${i}`, names[i]!, `("snap${i}.ts")`, agentId);
       lane.addResult(`sc${i}`, makeResult(`snap-result-${i}`));
     }
-    lane.setAgentResultSummary(agentId, 'Done (4 tools · 4.0s)');
+    lane.setAgentResultSummary(agentId, 'Done (4 tool calls · 4.0s)');
     lane.addResult(agentId, {
-      type: 'tool_result', toolUseId: 'synthetic', content: 'Done (4 tools · 4.0s)', isError: false,
+      type: 'tool_result', toolUseId: 'synthetic', content: 'Done (4 tool calls · 4.0s)', isError: false,
     });
     expect(stripAnsi(lane.flush().join('\n'))).toMatchSnapshot();
   });
@@ -2607,5 +2755,53 @@ describe('ToolLane.flushCompletedRoots', () => {
     const third = lane.flushCompletedRoots();
     expect(third.length).toBeGreaterThan(0);
     expect(lane.hasPending()).toBe(false);
+  });
+});
+
+describe('ToolLane.peekTrailingCompletedRootToolName — cross-flush run gate', () => {
+  it('returns undefined for an empty lane', () => {
+    const lane = new ToolLane();
+    expect(lane.peekTrailingCompletedRootToolName()).toBeUndefined();
+  });
+
+  it('returns the toolName of the trailing completed flat root', () => {
+    const lane = new ToolLane();
+    lane.addStart('b1', 'Bash', '"echo a"');
+    lane.addResult('b1', makeResult('a'));
+    expect(lane.peekTrailingCompletedRootToolName()).toBe('Bash');
+  });
+
+  it('returns undefined when the trailing flat root is still in-flight', () => {
+    const lane = new ToolLane();
+    lane.addStart('b1', 'Bash', '"echo a"');
+    lane.addResult('b1', makeResult('a'));
+    lane.addStart('b2', 'Bash', '"echo b"'); // registered, no result yet
+    expect(lane.peekTrailingCompletedRootToolName()).toBeUndefined();
+  });
+
+  it('returns undefined when the trailing root is a NESTING tool (own commit path)', () => {
+    const lane = new ToolLane();
+    lane.addStart('a1', 'Agent', '(researcher)');
+    lane.addResult('a1', makeResult('done'));
+    expect(lane.peekTrailingCompletedRootToolName()).toBeUndefined();
+  });
+
+  it('skips nested (agentContext) children to report the trailing ROOT tool', () => {
+    const lane = new ToolLane();
+    lane.addStart('b1', 'Bash', '"echo a"');
+    lane.addResult('b1', makeResult('a'));
+    // A completed child bound to an agent context — must be skipped (not a root).
+    lane.addStartWithAgentContext('child-1', 'Read', '("x.ts")', 'some-agent');
+    lane.addResult('child-1', makeResult('1 line'));
+    expect(lane.peekTrailingCompletedRootToolName()).toBe('Bash');
+  });
+
+  it('reports the MOST-RECENT completed flat root when several tool names differ', () => {
+    const lane = new ToolLane();
+    lane.addStart('b1', 'Bash', '"a"');
+    lane.addResult('b1', makeResult('a'));
+    lane.addStart('r1', 'Read', '("x.ts")');
+    lane.addResult('r1', makeResult('1 line'));
+    expect(lane.peekTrailingCompletedRootToolName()).toBe('Read');
   });
 });

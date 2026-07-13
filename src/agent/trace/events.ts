@@ -48,6 +48,11 @@ export const ToolCallCompletedPayloadSchema = z.object({
   circuitBreaker: z.boolean().optional(),
   /** Coarse failure classification when `isError` is true. Absent otherwise. */
   failureClass: ToolFailureClassSchema.optional(),
+  /** Concurrency-batch membership (1-based index + total size). `batchSize > 1`
+   *  ⇒ ran in a parallel wave; `=== 1` ⇒ ran alone. Absent on the single-tool
+   *  `execute()` path and on blocked/short-circuited calls. */
+  batchIndex: z.number().int().positive().optional(),
+  batchSize: z.number().int().positive().optional(),
   subagentId: z.string().optional(),
 });
 
@@ -63,6 +68,7 @@ export const ToolCallPayloadSchema = z.discriminatedUnion('phase', [
 export const HookEventNameSchema = z.enum([
   'PreToolUse',
   'PostToolUse',
+  'PostToolUseFailure',
   'SessionStart',
   'SessionEnd',
   'SubagentStart',
@@ -71,10 +77,20 @@ export const HookEventNameSchema = z.enum([
 
 export const HookDecisionPayloadSchema = z.object({
   hookEvent: HookEventNameSchema,
-  decision: z.union([z.literal('block'), z.literal('approve'), z.undefined()]),
+  // Invariant: `decision` is absent on the wire for the pass-through case —
+  // the writer sets it to `undefined`, and JSON.stringify drops undefined-valued
+  // keys, so a persisted line has no `decision` key at all. `.optional()` (not a
+  // `z.undefined()` union member) is required: zod ≥4.4 treats a union-with-undefined
+  // field as nonoptional and rejects a MISSING key, which silently invalidated
+  // every pass-through hook_decision line in `afk improve scan`.
+  decision: z.union([z.literal('block'), z.literal('approve')]).optional(),
   reason: z.string().optional(),
   blockedTool: z.string().optional(),
   injectedContextBytes: z.number().int().nonnegative().optional(),
+  /** Set only by the AFK high-risk approval gate. Wall-clock ms from gate entry to decision. */
+  durationMs: z.number().nonnegative().optional(),
+  /** Set only by the AFK high-risk approval gate. Fine-grained approval outcome. */
+  approvalOutcome: z.enum(['approved', 'denied', 'unrecognised', 'timeout', 'decline', 'cancel']).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -97,6 +113,7 @@ export const SubagentSucceededPayloadSchema = z.object({
   turnCount: z.number().int().nonnegative(),
   totalCostUsd: z.number().nonnegative().optional(),
   outputBytes: z.number().int().nonnegative(),
+  stopReason: z.string().optional(),
 });
 
 export const SubagentFailedPayloadSchema = z.object({
@@ -163,12 +180,20 @@ export const BackgroundAgentJoinedPayloadSchema = z.object({
   jobStatus: z.enum(['completed', 'failed', 'cancelled']),
 });
 
+export const BackgroundAgentDeliveredPayloadSchema = z.object({
+  transition: z.literal('delivered'),
+  jobId: z.string(),
+  subagentId: z.string(),
+  jobStatus: z.enum(['completed', 'failed', 'cancelled']),
+});
+
 export const BackgroundAgentPayloadSchema = z.discriminatedUnion('transition', [
   BackgroundAgentStartedPayloadSchema,
   BackgroundAgentCompletedPayloadSchema,
   BackgroundAgentFailedPayloadSchema,
   BackgroundAgentCancelledPayloadSchema,
   BackgroundAgentJoinedPayloadSchema,
+  BackgroundAgentDeliveredPayloadSchema,
 ]);
 
 // ---------------------------------------------------------------------------
@@ -364,6 +389,7 @@ export const SessionPhaseNameSchema = z.enum([
   'loop_start',
   'loop_end',
   'model_ttfb',
+  'rate_limit',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

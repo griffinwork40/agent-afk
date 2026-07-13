@@ -10,8 +10,54 @@
 import type { ZodError, ZodType } from 'zod';
 import type { Message } from '../types.js';
 import { extractStructuredOutput } from '../output-extractor.js';
+import { parseSignal, type Signal } from '../signal-block.js';
+import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
 
 export type SubagentStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+
+/**
+ * Synthetic `stopReason` set by {@link SubagentHandle} when a run resolves with
+ * partial assistant text but NO terminal `message` event — i.e. the child was
+ * cut off mid-output (an abort, an early/abnormal provider-stream close, or a
+ * provider that ended the stream without a final message). Distinct from
+ * {@link TOOL_USE_LOOP_CAPPED} (the tool-use iteration cap). Both mean the
+ * result the parent receives is an INCOMPLETE partial, not a final answer.
+ *
+ * Kept a distinct sentinel (not a provider stop reason) so callers can
+ * recognise it: a clean turn always sets a real terminal message, so this
+ * value only ever appears on a genuinely truncated run.
+ */
+export const STREAM_INCOMPLETE = 'stream_incomplete';
+
+/**
+ * True when `stopReason` indicates the subagent did NOT reach a clean final
+ * answer — it was capped by the tool-use budget or cut off mid-stream. A
+ * `status: 'succeeded'` result with such a stopReason carries partial content
+ * that consumers must NOT present to the parent model as a complete answer.
+ */
+export function isIncompleteStopReason(stopReason: string | undefined): boolean {
+  return stopReason === TOOL_USE_LOOP_CAPPED || stopReason === STREAM_INCOMPLETE;
+}
+
+/**
+ * When a succeeded subagent result is actually an incomplete partial (see
+ * {@link isIncompleteStopReason}), prepend a parent-visible marker so the model
+ * consuming the tool result treats the text as a truncated intermediate finding
+ * rather than a conclusion. No-op for clean completions — returns `content`
+ * unchanged. This is the single consumption-boundary fix for the
+ * "subagent returns a partial result reported as success" class.
+ */
+export function annotateIfIncomplete(content: string, stopReason: string | undefined): string {
+  if (!isIncompleteStopReason(stopReason)) return content;
+  const why =
+    stopReason === TOOL_USE_LOOP_CAPPED
+      ? 'hit its tool-use iteration cap before finishing'
+      : 'was cut off before finishing (its stream ended without a final message)';
+  return (
+    `[⚠ PARTIAL RESULT — the subagent ${why}. The text below is an incomplete ` +
+    `intermediate finding, NOT a final answer; treat it as such.]\n\n${content}`
+  );
+}
 
 export interface SubagentToolCall {
   id: string;
@@ -29,13 +75,12 @@ export interface SubagentToolResult {
   toolUseId: string;
   isError?: boolean;
   /**
-   * `true` when the tool handler reported a byte-cap overflow (e.g. bash
-   * or grep killed mid-stream because output exceeded 100KB). Reflects the
-   * structured `ToolResult.truncated` flag set by the handler — not the
-   * cosmetic 80-char display preview clip. Parent agents can use this to
-   * distinguish "subagent's bash got 100KB of legitimate output" from
-   * "subagent's bash got 100KB then was killed" without substring-scanning
-   * tool output for the `[output truncated …]` sentinel.
+   * `true` when the tool handler reduced its output to fit the model budget
+   * (e.g. bash/grep output larger than ~100KB returned as a head+tail slice,
+   * or a runaway killed at the multi-MB hard cap). Reflects the structured
+   * `ToolResult.truncated` flag set by the handler — not the cosmetic 80-char
+   * display preview clip. Parent agents use this to detect truncated tool
+   * output without substring-scanning for a sentinel.
    */
   truncated?: boolean;
   sizeBytes?: number;
@@ -93,6 +138,23 @@ export interface SubagentResult<T = unknown> {
   completionPercent?: number;
   /** Execution trace: tool calls, tool results, thinking presence, and usage. */
   trace?: SubagentTrace;
+  /**
+   * Passive SIGNAL block parsed from the subagent's final message, when present
+   * and well-formed. Non-authoritative v0 metadata — callers MUST NOT use this
+   * to gate finalization, block tools, or alter control flow. Only set when the
+   * message contained a valid SIGNAL block; absent otherwise.
+   */
+  signal?: Signal;
+  /**
+   * The provider's terminal stop reason for the subagent's final turn, when
+   * known (e.g. `'end_turn'`, `'max_tokens'`). In particular,
+   * `'tool_use_loop_capped'` means the tool-use iteration cap fired before the
+   * child produced a final message — `message` may then be a synthetic
+   * capped-partial marker rather than a real answer, so callers can use this
+   * field to distinguish a capped partial from a genuine completion. Absent
+   * when the provider reported no stop reason.
+   */
+  stopReason?: string;
 }
 
 /**
@@ -105,15 +167,34 @@ export function buildResultFromMessage<T>(
   message: Message,
   outputSchema: ZodType<T> | undefined,
   trace?: SubagentTrace,
+  stopReason?: string,
 ): SubagentResult<T> {
+  const sig = parseSignal(message.content);
+  const signal = sig.ok ? sig.signal : undefined;
+
   if (!outputSchema) {
-    return { id, status, message, trace };
+    return {
+      id,
+      status,
+      message,
+      trace,
+      ...(signal !== undefined && { signal }),
+      ...(stopReason !== undefined && { stopReason }),
+    };
   }
 
   const candidate = extractStructuredOutput(message.content);
   const parsed = outputSchema.safeParse(candidate);
   if (parsed.success) {
-    return { id, status, message, output: parsed.data, trace };
+    return {
+      id,
+      status,
+      message,
+      output: parsed.data,
+      trace,
+      ...(signal !== undefined && { signal }),
+      ...(stopReason !== undefined && { stopReason }),
+    };
   }
 
   return {
@@ -125,6 +206,8 @@ export function buildResultFromMessage<T>(
     }),
     schemaError: parsed.error,
     trace,
+    ...(signal !== undefined && { signal }),
+    ...(stopReason !== undefined && { stopReason }),
   };
 }
 
@@ -136,9 +219,10 @@ export function buildResultFromError<T>(
   status: SubagentStatus,
   err: unknown,
   trace?: SubagentTrace,
+  stopReason?: string,
 ): SubagentResult<T> {
   const error = err instanceof Error ? err : new Error(String(err));
-  return { id, status, error, trace };
+  return { id, status, error, trace, ...(stopReason !== undefined && { stopReason }) };
 }
 
 /**

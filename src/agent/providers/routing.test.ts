@@ -23,12 +23,17 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { providerForModel, resolveProvider } from './index.js';
-import { createChildProviderFactory } from '../tools/nesting.js';
+import {
+  createChildProviderFactory,
+  createChildSkillExecutorFactory,
+  type ChildProviderFactoryArgs,
+} from '../tools/nesting.js';
 import { AnthropicDirectProvider } from './anthropic-direct/index.js';
 import { OpenAICompatibleProvider } from './openai-compatible/index.js';
 import { getDefaultSubagentModel } from '../../cli/shared-helpers.js';
 import type { SubagentExecutor } from '../tools/subagent-executor.js';
 import type { SkillExecutor } from '../tools/skill-executor.js';
+import type { ModelProvider } from '../provider.js';
 
 describe('providerForModel', () => {
   // Scrub env vars that `providerForModel` now consults internally.
@@ -69,7 +74,7 @@ describe('providerForModel', () => {
 
     it.each([
       'claude-opus-4-8',
-      'claude-sonnet-4-6',
+      'claude-sonnet-5',
       'claude-haiku-4-5-20251001',
       'claude-sonnet-4',
       'claude-fable-5',
@@ -89,6 +94,11 @@ describe('providerForModel', () => {
 
   describe('OpenAI routing', () => {
     it.each([
+      'gpt-5.6',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'gpt-5.5',
       'gpt-5.4',
       'gpt-5.4-mini',
       'gpt-4o',
@@ -412,7 +422,7 @@ describe('createChildProviderFactory — child provider routing', () => {
     'haiku',
     'fable',
     'claude-opus-4-8',
-    'claude-sonnet-4-6',
+    'claude-sonnet-5',
     'claude-fable-5',
   ])('routes Claude id %s to AnthropicDirectProvider', (model) => {
     const factory = createChildProviderFactory();
@@ -505,6 +515,84 @@ describe('createChildProviderFactory — child provider routing', () => {
 });
 
 /**
+ * createChildSkillExecutorFactory's trailing `openaiBaseUrl` positional arg
+ * (nesting.ts) must be threaded onto every nested SkillExecutor's ctx —
+ * `ctx.openaiBaseUrl` is what `buildForkedChildConfig` later forwards into
+ * `buildReadOnlyReconProvider` / `buildSkillRestrictedProvider` (depth-cap
+ * fallback, see nesting.test.ts) and into the grandchild SubagentExecutor's
+ * `defaultConfig` (see skill-executor.test.ts's openaiBaseUrl propagation
+ * test). This closes the gap at the factory→ctx handoff itself, mirroring
+ * nesting.model-fallback.test.ts's coverage of the sibling
+ * `defaultSubagentModel` parameter on the same factory.
+ */
+describe('createChildSkillExecutorFactory — openaiBaseUrl threading', () => {
+  const stubProviderFactory = (_args: ChildProviderFactoryArgs): ModelProvider =>
+    ({}) as ModelProvider;
+
+  it('threads openaiBaseUrl into the constructed SkillExecutor ctx', () => {
+    const factory = createChildSkillExecutorFactory(
+      'gpt-4o', // 1 defaultModel
+      undefined, // 2 apiKey
+      stubProviderFactory, // 3 childProviderFactory
+      undefined, // 4 baseUrl
+      undefined, // 5 traceWriter
+      undefined, // 6 backgroundRegistry
+      undefined, // 7 cwd
+      undefined, // 8 resolveApiKeyForModel
+      'cli', // 9 surface
+      undefined, // 10 defaultSubagentModel
+      undefined, // 11 agentRegistry
+      'http://localhost:8080/v1', // 12 openaiBaseUrl
+    );
+    const skillExecutor = factory(1, 3, new AbortController().signal);
+    expect(
+      (skillExecutor as unknown as { ctx: { openaiBaseUrl?: string } }).ctx.openaiBaseUrl,
+    ).toBe('http://localhost:8080/v1');
+  });
+
+  it('recursively propagates openaiBaseUrl to grandchild SkillExecutors (skill→skill→skill)', () => {
+    const factory = createChildSkillExecutorFactory(
+      'gpt-4o',
+      undefined,
+      stubProviderFactory,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'cli',
+      undefined,
+      undefined,
+      'http://localhost:8080/v1',
+    );
+    const child = factory(1, 3, new AbortController().signal);
+    const recursiveFactory = (
+      child as unknown as {
+        ctx: {
+          childSkillExecutorFactory: (
+            depth: number,
+            maxDepth: number,
+            signal: AbortSignal,
+          ) => SkillExecutor;
+        };
+      }
+    ).ctx.childSkillExecutorFactory;
+    const grandchild = recursiveFactory(2, 3, new AbortController().signal);
+    expect(
+      (grandchild as unknown as { ctx: { openaiBaseUrl?: string } }).ctx.openaiBaseUrl,
+    ).toBe('http://localhost:8080/v1');
+  });
+
+  it('omits openaiBaseUrl when the caller does not supply it (back-compat)', () => {
+    const factory = createChildSkillExecutorFactory('sonnet', undefined, stubProviderFactory);
+    const skillExecutor = factory(1, 3, new AbortController().signal);
+    expect(
+      (skillExecutor as unknown as { ctx: { openaiBaseUrl?: string } }).ctx.openaiBaseUrl,
+    ).toBeUndefined();
+  });
+});
+
+/**
  * Parent-aware subagent default — closes the second half of the bug.
  *
  * Without this, even after Fix A (the factory routing above) a local-only
@@ -554,15 +642,18 @@ describe('getDefaultSubagentModel — parent-aware fallback', () => {
     'haiku',
     'fable',
     'claude-opus-4-8',
-    'claude-sonnet-4-6',
+    'claude-sonnet-5',
     'claude-fable-5',
-  ])('defaults to "sonnet" for Claude parent %s (preserves cost-mgmt intent)', (parent) => {
-    expect(getDefaultSubagentModel(parent)).toBe('sonnet');
+  ])('defaults to the "medium" tier for Claude parent %s (preserves cost-mgmt intent)', (parent) => {
+    // Post-#548: the default is the rebindable `medium` TIER (resolves to Claude
+    // Sonnet by default), not the fixed `'sonnet'` identity alias — so a user who
+    // rebinds `medium` redirects default subagents with it.
+    expect(getDefaultSubagentModel(parent)).toBe('medium');
   });
 
-  it('defaults to "sonnet" when no parent model is supplied (legacy callers)', () => {
-    expect(getDefaultSubagentModel()).toBe('sonnet');
-    expect(getDefaultSubagentModel(undefined)).toBe('sonnet');
+  it('defaults to the "medium" tier when no parent model is supplied (legacy callers)', () => {
+    expect(getDefaultSubagentModel()).toBe('medium');
+    expect(getDefaultSubagentModel(undefined)).toBe('medium');
   });
 
   it('honors AFK_DEFAULT_SUBAGENT_MODEL even when parent is OpenAI-routed (env wins)', () => {
@@ -578,6 +669,6 @@ describe('getDefaultSubagentModel — parent-aware fallback', () => {
   it('treats empty AFK_DEFAULT_SUBAGENT_MODEL as unset (falls through to parent-aware logic)', () => {
     process.env['AFK_DEFAULT_SUBAGENT_MODEL'] = '';
     expect(getDefaultSubagentModel('gpt-4o')).toBe('gpt-4o');
-    expect(getDefaultSubagentModel('sonnet')).toBe('sonnet');
+    expect(getDefaultSubagentModel('sonnet')).toBe('medium');
   });
 });

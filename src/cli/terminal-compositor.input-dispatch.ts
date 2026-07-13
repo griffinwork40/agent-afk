@@ -18,7 +18,8 @@
  */
 
 import { InputCore, type InputCoreState } from './input-core.js';
-import { nextGraphemeIndex } from './display.js';
+import { isPrintableGrapheme } from './input/printable.js';
+import { isSoftNewlineEnter, endsWithBackslashContinuation } from './input/enter-decision.js';
 import { readClipboardImage } from './input/clipboard-image.js';
 import { MAX_DROPDOWN_ROWS } from './terminal-compositor.autocomplete.js';
 import * as Paste from './terminal-compositor.paste.js';
@@ -46,6 +47,15 @@ import type {
 export interface KeyDispatchHost {
   /** Re-render the live frame. */
   repaint(): void;
+  /**
+   * Clear the terminal viewport (erase entire screen + cursor home) and
+   * repaint the live compositor frame. Used by the Ctrl+L binding.
+   *
+   * External constraint (ordered-operation invariant): the physical screen
+   * erase must precede repaint() — if repaint fires first its cursor-math
+   * is wrong relative to the cleared screen. Mirrors reader.ts:566-576.
+   */
+  clearScreen(): void;
   /** Apply a pure InputCore transition (clears queued, refreshes autocomplete/ghost, repaints). */
   applyEdit(next: InputCoreState): boolean;
   /** Recompute autocomplete dropdown state for the current buffer. */
@@ -98,6 +108,15 @@ export interface KeyDispatchHost {
 
   /** Once-only soft-stop guard for ESC in streaming mode. */
   softStopped: boolean;
+  /**
+   * Snapshot of `pendingSubmissions.length` taken at ESC soft-stop time
+   * (handleEscape). Entries at indices `0..softStopQueueBase-1` were queued
+   * BEFORE esc and are contract-protected (handleEscape comment lines 318-327):
+   * "Already-queued messages: left untouched." Post-ESC Enters coalesce by
+   * MERGING everything at/above this base into one payload, so neither the
+   * pre-ESC queue nor earlier post-ESC messages are ever silently dropped.
+   */
+  softStopQueueBase: number;
   /** Hard-abort flag set by Ctrl+C in streaming mode. */
   canceled: boolean;
   /** Once-only guard for Ctrl+B background in streaming mode. */
@@ -319,6 +338,10 @@ function handleEscape(self: KeyDispatchHost, key: KeyInfo): boolean {
   // committing it would fling it as a turn the user never submitted. Ctrl+C
   // (handleInterrupt below) follows the same no-auto-commit rule.
   self.softStopped = true;
+  // Snapshot the queue length so post-ESC coalesce (handleEnter) can merge
+  // everything at/above this base — preserving pre-ESC payloads per the
+  // contract above while folding post-ESC messages into one next turn.
+  self.softStopQueueBase = self.pendingSubmissions.length;
   if (self.onSoftStop) self.onSoftStop();
   return true;
 }
@@ -465,6 +488,32 @@ function handleVerticalNav(self: KeyDispatchHost, key: KeyInfo): boolean {
   return false;
 }
 
+/**
+ * Merge multiple soft-stop-window submissions into ONE payload.
+ *
+ * Texts join with a newline (empty texts skipped) so every post-ESC message
+ * the user typed survives into the single coalesced next turn; attachments
+ * concatenate in submission order. `displayText` merges the same way — it is
+ * emitted only when at least one constituent carried a distinct displayText
+ * (i.e. a paste placeholder was expanded somewhere), mirroring the
+ * "absent when identical" contract on SubmissionPayload.
+ */
+function mergeSubmissionPayloads(payloads: readonly SubmissionPayload[]): SubmissionPayload {
+  if (payloads.length === 1) return payloads[0]!;
+  const text = payloads
+    .map((p) => p.text)
+    .filter((t) => t.length > 0)
+    .join('\n');
+  const attachments = payloads.flatMap((p) => [...p.attachments]);
+  const hasDisplay = payloads.some((p) => p.displayText !== undefined);
+  if (!hasDisplay) return { text, attachments };
+  const displayText = payloads
+    .map((p) => p.displayText ?? p.text)
+    .filter((t) => t.length > 0)
+    .join('\n');
+  return { text, displayText, attachments };
+}
+
 function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boolean {
   if (key?.name !== 'return') return false;
   // ── Newline-insertion guards ─────────────────────────────────
@@ -494,9 +543,7 @@ function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boo
   // a single libuv read tick (same Date.now()) from rapid synthetic
   // emits in tests. Bracketed-paste mode is the reliable signal —
   // and is enabled on every TTY in arm().
-  const isShiftEnter = key?.shift === true || sequence === '\x1b[13;2u';
-  const isAltEnter = key?.meta === true;
-  if (isShiftEnter || isAltEnter) {
+  if (isSoftNewlineEnter(key, sequence)) {
     // Explicit user-driven newline — route through applyEdit so the
     // autocomplete dropdown closes (a `\n` in the buffer almost
     // never matches a trigger), history recall is reset, and a
@@ -541,6 +588,23 @@ function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boo
     if (kind !== 'slash') return true;
     if (!applied) return true;
     // Slash + applied: fall through with the now-completed buffer.
+  }
+  // Trailing backslash escapes Enter → convert to a real newline. The
+  // documented escape hatch (mirrors reader.ts via endsWithBackslashContinuation)
+  // for terminals that don't report shift-state on Enter; without it the live
+  // REPL submitted the raw trailing `\` instead of continuing onto a new line.
+  // Routed through applyEdit (like the soft-newline branch above) so the
+  // dropdown closes and history recall resets.
+  if (endsWithBackslashContinuation(self.input.buffer)) {
+    self.history?.resetRecall();
+    self.applyEdit(
+      InputCore.replaceRange(
+        self.input,
+        { start: self.input.buffer.length - 1, end: self.input.buffer.length },
+        '\n',
+      ),
+    );
+    return true;
   }
   // Allow Enter to submit attachment-only messages (empty text + ≥1
   // image) — matches readWithAutocomplete's behavior on Ctrl+D /
@@ -601,11 +665,47 @@ function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boo
   const displayText = self.input.buffer;
   const expandedText = Paste.expandPastePlaceholders(self, displayText);
   const attachments = [...self.attachments];
-  self.pendingSubmissions.push(
+  const payload: SubmissionPayload =
     expandedText === displayText
       ? { text: expandedText, attachments }
-      : { text: expandedText, displayText, attachments },
-  );
+      : { text: expandedText, displayText, attachments };
+  // Invariant: during the ESC soft-stop window — `softStopped` is set by
+  // handleEscape and cleared only at the post-soft-stop `→ idle` transition
+  // (setInputMode, terminal-compositor.input-mode.ts) — Enter must NOT
+  // accumulate a type-ahead backlog. That window is the async turn-teardown
+  // gap: for a subagent turn, cancelActiveForeground() (subagent-executor.ts)
+  // resolves the parent `await` only after the child settles — seconds for a
+  // deep/wide wave — and the compositor lingers in 'streaming' the whole time.
+  // Each Enter would otherwise push onto the FIFO, which drains ONE payload per
+  // turn (the `→ idle` flush), stranding the user one turn behind: the "it
+  // doesn't send, then I keep sending characters to catch up" report. So during
+  // a soft-stop, all post-ESC messages COALESCE into a single payload that runs
+  // as exactly one next turn — no backlog.
+  //
+  // Coalesce = MERGE, not last-wins. The original #403 fix kept only the
+  // latest post-ESC message, which silently DROPPED earlier ones: a user who
+  // typed a real instruction during the settle window and then poked with "."
+  // (because nothing appeared to send) had the instruction replaced by the "."
+  // — the "message → no response → retype it" report, round 2. Merging joins
+  // the post-ESC texts with newlines (and concatenates attachments) so the
+  // user's full post-stop intent survives while the no-backlog invariant —
+  // exactly ONE next turn — still holds.
+  //
+  // Contract preservation: `softStopQueueBase` was snapshotted by handleEscape
+  // at ESC time, capturing the count of pre-ESC payloads already on the FIFO.
+  // Entries below the base are pre-ESC turns and are left untouched (they
+  // drain as their own sequential turns via the `→ idle` flush), so the
+  // handleEscape contract — "Already-queued messages: left untouched" — holds.
+  // Only entries at/above the base participate in the merge. Normal mid-turn
+  // type-ahead (softStopped === false) still accumulates: sequential-turn
+  // delivery is the intended contract there (the "NO ESC" regression tests).
+  if (self.softStopped) {
+    const postEsc = self.pendingSubmissions.slice(self.softStopQueueBase);
+    self.pendingSubmissions.length = self.softStopQueueBase;
+    self.pendingSubmissions.push(mergeSubmissionPayloads([...postEsc, payload]));
+  } else {
+    self.pendingSubmissions.push(payload);
+  }
   self.queued = true; // maintained mirror: pendingSubmissions is now non-empty
   // Clear the compose window for the next message. Mirrors the idle-mode
   // submit reset above so dropdown chrome / paste side-table / attachments
@@ -765,6 +865,31 @@ function handleCursorAndEdit(self: KeyDispatchHost, key: KeyInfo): boolean {
     return true;
   }
 
+  // Ctrl+L → clear screen and repaint the live frame.
+  // External constraint: clearScreen() writes the erase sequences BEFORE
+  // repaint() so log-update's cursor-math starts from a clean screen.
+  // Mirrors reader.ts:566-576. Works in idle and streaming modes alike —
+  // there is no turn-scoped state to protect here.
+  if (key?.ctrl && key?.name === 'l') {
+    self.clearScreen();
+    return true;
+  }
+
+  // Ctrl+D → EOF / forward-delete.
+  // When the buffer is EMPTY: trigger the same onCancel path used by idle
+  // Ctrl+C (equivalent to EOF on an empty line — standard shell behavior).
+  // When the buffer is NON-EMPTY: forward-delete one character at the
+  // cursor (readline `delete-char`). Mirrors reader.ts:462-478.
+  if (key?.ctrl && key?.name === 'd') {
+    if (self.input.buffer.length === 0) {
+      if (self.onCancel) self.onCancel();
+    } else {
+      self.history?.resetRecall();
+      self.applyEdit(InputCore.deleteForward(self.input));
+    }
+    return true;
+  }
+
   if (key?.name === 'left') {
     self.applyEdit(InputCore.moveLeft(self.input));
     return true;
@@ -786,13 +911,23 @@ function handleCursorAndEdit(self: KeyDispatchHost, key: KeyInfo): boolean {
     return true;
   }
 
+  // Home → move to start of current logical line (`moveLineStart`).
+  // In a multi-line buffer this lands at the character after the previous
+  // '\n', not at absolute position 0 — matching the user's visual intent
+  // when editing a multi-line draft. Ctrl+A retains the same behavior
+  // (it has always called moveLineStart). moveHome / moveEnd (buffer-
+  // absolute) are intentionally NOT used here.
   if (key?.name === 'home') {
-    self.applyEdit(InputCore.moveHome(self.input));
+    self.applyEdit(InputCore.moveLineStart(self.input));
     return true;
   }
 
+  // End → move to end of current logical line (`moveLineEnd`).
+  // Symmetric counterpart to Home above. In a multi-line buffer this
+  // lands at the '\n' position (the character before the newline),
+  // not at the absolute buffer end. Ctrl+E retains the same behavior.
   if (key?.name === 'end') {
-    self.applyEdit(InputCore.moveEnd(self.input));
+    self.applyEdit(InputCore.moveLineEnd(self.input));
     return true;
   }
 
@@ -861,18 +996,6 @@ function handleTab(self: KeyDispatchHost, key: KeyInfo): boolean {
     return true;
   }
   return false;
-}
-
-/**
- * True when `s` is a single printable grapheme cluster (one visual character):
- * not a control char (< ' '), and exactly one grapheme — so multi-UTF-16-unit
- * emoji (surrogate pairs, variation selectors, skin-tone modifiers) count as
- * one printable character, while escape sequences and multi-char fragments are
- * rejected. Replaces the old `s.length === 1` UTF-16 code-unit test that
- * silently dropped all astral / composed emoji.
- */
-function isPrintableGrapheme(s: string): boolean {
-  return s >= ' ' && nextGraphemeIndex(s, 0) === s.length;
 }
 
 function handlePrintable(self: KeyDispatchHost, char: string | undefined, key: KeyInfo): void {

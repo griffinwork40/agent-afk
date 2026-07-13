@@ -160,8 +160,8 @@ describe('resolveDefaultTask', () => {
     expect(resolveDefaultTask(undefined, undefined, '')).toBe(COMPILED_DEFAULT_TASK);
   });
 
-  it('frozen-default guard: COMPILED_DEFAULT_TASK is "/forge-friction --auto"', () => {
-    expect(COMPILED_DEFAULT_TASK).toBe('/forge-friction --auto');
+  it('default guard: COMPILED_DEFAULT_TASK is empty (daemon fabricates no task)', () => {
+    expect(COMPILED_DEFAULT_TASK).toBe('');
   });
 });
 

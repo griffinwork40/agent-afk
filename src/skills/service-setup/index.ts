@@ -1,7 +1,8 @@
 /**
  * /service-setup skill — walks the user through installing an AFK background
- * process (telegram bot, daemon) as a macOS LaunchAgent so it auto-starts on
- * login and relaunches on crash.
+ * process (telegram bot, daemon) as an OS-supervised service (macOS launchd
+ * LaunchAgent / Linux systemd `--user` unit) so it auto-starts on login and
+ * relaunches on crash.
  *
  * This is the natural companion to the `afk service` CLI surface introduced
  * in PR #346. The CLI itself is one-shot and assumes you know what you want.
@@ -15,8 +16,9 @@
  *   token produces an infinite KeepAlive crash loop. The skill checks
  *   `afk telegram check-token` first and routes to `/telegram-setup` if
  *   the token isn't valid.
- * - macOS-only — the skill surfaces a clean error on non-Darwin instead of
- *   relying on commander's `assertMacOS()` to fire mid-pipeline.
+ * - macOS + Linux — the skill checks `uname` up front and surfaces a clean
+ *   error on unsupported platforms (e.g. Windows) instead of relying on the
+ *   CLI's platform dispatch to fail mid-pipeline.
  * - Parallel to `/telegram-setup` (which configures the token) — together
  *   they cover the full "make this thing always-on" flow.
  *
@@ -46,7 +48,7 @@ async function handler(): Promise<unknown> {
 export const serviceSetupSkill: SkillMetadata = {
   name: 'service-setup',
   description:
-    'Install an AFK background process (telegram bot or daemon) as a macOS LaunchAgent so it auto-starts on login and relaunches on crash. Runs pre-flight checks (e.g., refuses to install the telegram service with an invalid token, which would otherwise crash-loop under KeepAlive), invokes `afk service install`, verifies with `afk service status`, and surfaces the management cheatsheet. macOS-only — gracefully refuses on other platforms.',
+    'Install an AFK background process (telegram bot or daemon) as an OS-supervised service — a launchd LaunchAgent on macOS or a systemd `--user` unit on Linux — so it auto-starts on login and relaunches on crash. Runs pre-flight checks (e.g., refuses to install the telegram service with an invalid token, which would otherwise crash-loop under KeepAlive/Restart=always), invokes `afk service install`, verifies with `afk service status`, and surfaces the management cheatsheet (including the `loginctl enable-linger` step on Linux). macOS + Linux — gracefully refuses on other platforms.',
   handler,
   context: 'fork',
   whenToUse:

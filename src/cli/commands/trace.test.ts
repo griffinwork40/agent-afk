@@ -27,7 +27,7 @@ import {
   listTraces,
   resolveLatestSession,
 } from './trace.js';
-import { getTraceDir } from '../../paths.js';
+import { getTraceDir, getSessionLedgerDir, getSessionLedgerPath } from '../../paths.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -130,6 +130,100 @@ describe('formatTrace — default human view', () => {
   });
 });
 
+describe('formatTrace — rate_limit is high-signal (shown by default)', () => {
+  // Regression: a rate_limit event is a session_phase, and session_phase is
+  // hidden by default (latency waterfall). But throttling is the whole reason a
+  // stuck turn is stuck, so it must appear WITHOUT --all — otherwise the
+  // observability it provides is invisible to an operator who doesn't already
+  // know to enable low-signal output.
+  const events: EventObj[] = [
+    { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'session_phase', payload: { phase: 'model_ttfb', durationMs: 300 } },
+    { ts: '2026-06-05T12:30:01.000Z', seq: 1, kind: 'session_phase', payload: { phase: 'rate_limit', durationMs: 30000, metadata: { status: 429, reason: 'rate-limit', source: 'sdk-fetch', retryAfterMs: 30000 } } },
+    { ts: '2026-06-05T12:35:00.000Z', seq: 2, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+  ];
+  const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+
+  it('renders the rate_limit event in the DEFAULT view (no --all)', () => {
+    expect(out).toContain('throttle');
+    expect(out).toContain('rate-limit');
+    expect(out).toContain('429');
+    expect(out).toContain('retry-after 30.0s');
+    expect(out).toContain('(sdk-fetch)');
+  });
+
+  it('still hides the low-signal model_ttfb phase by default', () => {
+    expect(out).not.toContain('model_ttfb');
+  });
+
+  it('surfaces a throttled count in the summary header', () => {
+    expect(out).toContain('1 throttled');
+  });
+
+  it('omits the throttled count when there are none', () => {
+    const clean = formatTrace(
+      's',
+      '/p',
+      parseTrace(
+        toJsonl([
+          { ts: '2026-06-05T12:35:00.000Z', seq: 0, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+        ]),
+      ),
+    );
+    expect(clean).not.toContain('throttled');
+  });
+});
+
+describe('formatTrace — closure stop_reason rendering', () => {
+  const seal: EventObj = {
+    ts: '2026-06-05T12:35:00.500Z',
+    seq: 2,
+    kind: 'session_sealed',
+    payload: {
+      status: 'succeeded',
+      finalCostUsd: 0.01,
+      finalTurnCount: 1,
+      closedAt: '2026-06-05T12:35:00.500Z',
+    },
+  };
+
+  // Regression: the raw provider stop_reason (e.g. `refusal`) is persisted on
+  // the closure event but was previously unrendered, so a silent stop (turn
+  // ends with no output and no error) was only diagnosable from raw
+  // trace.jsonl. `afk trace show` must now surface it.
+  it('renders the raw provider stop_reason on the closure line when present', () => {
+    const closure: EventObj = {
+      ts: '2026-06-05T12:35:00.000Z',
+      seq: 1,
+      kind: 'closure',
+      payload: {
+        reason: 'model_end_turn',
+        finalTurnCount: 1,
+        finalCostUsd: 0.01,
+        finalTokens: {},
+        lastStopReason: 'refusal',
+      },
+    };
+    const out = formatTrace('s', '/p', parseTrace(toJsonl([closure, seal])));
+    expect(out).toContain('stop=refusal');
+  });
+
+  it('omits stop= when the closure carries no lastStopReason', () => {
+    const closure: EventObj = {
+      ts: '2026-06-05T12:35:00.000Z',
+      seq: 1,
+      kind: 'closure',
+      payload: {
+        reason: 'model_end_turn',
+        finalTurnCount: 1,
+        finalCostUsd: 0.01,
+        finalTokens: {},
+      },
+    };
+    const out = formatTrace('s', '/p', parseTrace(toJsonl([closure, seal])));
+    expect(out).not.toContain('stop=');
+  });
+});
+
 describe('formatTrace — root model provenance header', () => {
   const initStart = (model: string, resolvedModel: string): EventObj => ({
     ts: '2026-06-05T12:30:00.000Z',
@@ -148,9 +242,9 @@ describe('formatTrace — root model provenance header', () => {
     const out = formatTrace(
       's',
       '/p',
-      parseTrace(toJsonl([initStart('sonnet', 'claude-sonnet-4-5-20250929'), seal])),
+      parseTrace(toJsonl([initStart('sonnet', 'claude-sonnet-5'), seal])),
     );
-    expect(out).toContain('Model  sonnet → claude-sonnet-4-5-20250929');
+    expect(out).toContain('Model  sonnet → claude-sonnet-5');
   });
 
   it('renders the model once (no arrow) when alias === resolved (raw passthrough)', () => {
@@ -169,7 +263,7 @@ describe('formatTrace — root model provenance header', () => {
     const out = formatTrace(
       's',
       '/p',
-      parseTrace(toJsonl([initStart('sonnet', 'claude-sonnet-4-5-20250929'), seal])),
+      parseTrace(toJsonl([initStart('sonnet', 'claude-sonnet-5'), seal])),
       { showAll: true },
     );
     expect(out).toMatch(/session_init_start.*sonnet/);
@@ -239,5 +333,48 @@ describe('witness discovery', () => {
 
   it('throws a helpful error for a missing session', async () => {
     await expect(loadTrace('does-not-exist-xyz')).rejects.toThrow(/No trace found/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ledger fallback: fresh sessions label the witness dir with a random UUID
+// (not the session id), so loadTrace(sessionId) must recover the real label
+// from the session ledger's `meta.traceLabel`.
+// ---------------------------------------------------------------------------
+
+async function writeLedger(sessionId: string, records: EventObj[]): Promise<void> {
+  await mkdir(getSessionLedgerDir(sessionId), { recursive: true });
+  await writeFile(getSessionLedgerPath(sessionId), toJsonl(records), 'utf8');
+}
+
+describe('loadTrace ledger fallback', () => {
+  it('resolves a trace whose witness label differs from the session id', async () => {
+    // Trace lives under a random-UUID label; nothing under <witness>/<sessionId>/.
+    await writeTrace('random-label-abc123', sampleEvents());
+    await writeLedger('sess-fresh-a', [
+      { v: 1, ts: 1000, kind: 'meta', sessionId: 'sess-fresh-a', model: 'sonnet', traceLabel: 'random-label-abc123' },
+      { v: 1, ts: 1001, kind: 'user', text: 'hi' },
+    ]);
+
+    const loaded = await loadTrace('sess-fresh-a');
+    expect(loaded.sessionId).toBe('sess-fresh-a');
+    expect(loaded.tracePath).toContain('random-label-abc123');
+    expect(loaded.events).toHaveLength(10);
+  });
+
+  it('reports tracing-disabled when the ledger meta records traceLabel: null', async () => {
+    await writeLedger('sess-notrace', [
+      { v: 1, ts: 1000, kind: 'meta', sessionId: 'sess-notrace', model: 'sonnet', traceLabel: null },
+    ]);
+
+    await expect(loadTrace('sess-notrace')).rejects.toThrow(/tracing disabled/);
+  });
+
+  it('falls through to "No trace found" when the ledger meta predates the field', async () => {
+    await writeLedger('sess-legacy', [
+      { v: 1, ts: 1000, kind: 'meta', sessionId: 'sess-legacy', model: 'sonnet' },
+    ]);
+
+    await expect(loadTrace('sess-legacy')).rejects.toThrow(/No trace found/);
   });
 });

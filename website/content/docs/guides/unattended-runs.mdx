@@ -18,13 +18,13 @@ The daemon accepts a task at startup and runs until it reaches a terminal state.
 Pass a task inline:
 
 ```bash
-afk daemon --task "refactor the auth module and run tests"
+afk daemon --task "run the test suite; if anything is red, diagnose it and open a draft PR with the fix"
 ```
 
 Or set a default task in your environment:
 
 ```bash
-AFK_DAEMON_TASK="triage open issues and file a daily summary" afk daemon
+AFK_DAEMON_TASK="review any PRs opened since the last run and post findings as a comment" afk daemon
 ```
 
 The working directory for spawned sessions defaults to the current directory. Override with `AFK_DAEMON_CWD`.
@@ -34,7 +34,7 @@ The working directory for spawned sessions defaults to the current directory. Ov
 `--once` runs a single task and exits when it reaches a terminal state, rather than looping:
 
 ```bash
-afk daemon --once --task "run the test suite and report"
+afk daemon --once --task "run the full test suite and send me a summary on Telegram"
 ```
 
 This is useful in CI or cron where you want a bounded execution.
@@ -87,7 +87,7 @@ export AFK_TASK_BUDGET=50000
 afk config env set AFK_MAX_BUDGET_USD 2.00
 
 # Or per-run
-afk daemon --max-budget-usd 2.00 --task "..."
+afk daemon --max-budget-usd 2.00 --task "triage today's new issues and draft a reply to each"
 ```
 
 When the session's cumulative spend crosses the ceiling, the turn aborts and you'll see `Hit the budget cap` in the output. Raise `AFK_MAX_BUDGET_USD` or unset it for the session to remove the limit.
@@ -97,7 +97,7 @@ A per-output-token cap is also available if you need tighter control:
 | Variable | Default | What it limits |
 |---|---|---|
 | `AFK_MAX_OUTPUT_TOKENS` | provider default | Output tokens per turn only |
-| `AFK_MAX_TOKENS` | `4096` | Total tokens per turn (input + output) |
+| `AFK_MAX_TOKENS` | `4096` | Deprecated / inert — use `AFK_MAX_OUTPUT_TOKENS` |
 
 ## Scheduled tasks
 
@@ -106,8 +106,8 @@ A per-output-token cap is also available if you need tighter control:
 ```bash
 # Add a task
 afk schedule add \
-  --name "nightly test run" \
-  --command "run the test suite and file a summary" \
+  --name "nightly tests" \
+  --command "run the test suite; if it fails, diagnose the failure and open a fix PR" \
   --cron "0 2 * * *"
 
 # List all tasks
@@ -146,11 +146,48 @@ Control when Telegram notifications fire per task:
 
 ```bash
 afk schedule add \
-  --name "daily digest" \
-  --command "..." \
-  --cron "0 9 * * *" \
+  --name "daily PR review" \
+  --command "/review --auto" \
+  --cron "0 9 * * 1-5" \
   --notify always     # always | failure | never
 ```
+
+## Pull queue (`afk queue`)
+
+`afk queue` lets you enqueue tasks that a daemon running in `--trigger pull` mode will drain.
+Tasks are persisted as JSON files in `~/.afk/state/queue/` and consumed one-by-one on the
+daemon's poll interval (30 seconds).
+
+### Subcommands
+
+| Subcommand | Description |
+|---|---|
+| `afk queue add <command>` | Enqueue a command for the pull-trigger daemon to execute |
+| `afk queue list` | List all pending queued tasks in FIFO order |
+| `afk queue remove <id>` | Remove a pending task by id |
+| `afk queue clear` | Remove all pending tasks from the queue |
+
+`add` accepts one option:
+
+| Flag | Description |
+|---|---|
+| `--notify-on <mode>` | When to send a Telegram notification: `failure` \| `always` \| `never` |
+
+### Typical workflow
+
+```bash
+# 1. Start the daemon in pull mode (no cron needed)
+afk daemon --trigger pull
+
+# 2. Enqueue tasks from another terminal (or a script) while the daemon runs
+afk queue add "/review 1234 --post github" --notify-on always
+afk queue add "/diagnose the failing integration test on main" --notify-on failure
+
+# Tasks are picked up and executed in order on the next poll (≤30s)
+```
+
+The daemon prints `✔ Daemon in pull mode` on start and processes each queued file in
+sequence-number order, deleting it after the task completes.
 
 ## Putting it together
 

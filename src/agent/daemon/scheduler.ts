@@ -31,13 +31,15 @@ import { loadHooksConfig } from '../hooks/config-loader.js';
 import { createDefaultTraceWriter } from '../trace/factory.js';
 import { MemoryStore, injectHotMemory } from '../memory/index.js';
 import { injectCompanionPrimer } from '../companion/index.js';
+import { McpManager, loadMcpConfig } from '../mcp/index.js';
+import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
+import { emitSessionPhase } from '../trace/emit.js';
 import type { AgentConfig } from '../types.js';
 import { getTelemetryPath } from '../../paths.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { ScheduledTask, validateScheduledTask } from './triggers.js';
 import {
   DEFAULT_SESSIONSTART_COOLDOWN_MS,
-  defaultBriefsDir,
   evaluateSessionStartGates,
   type GateDecision,
   type SessionStartSkipReason,
@@ -101,8 +103,6 @@ export interface SchedulerOptions {
    * 6 hours. `0` disables the cooldown check.
    */
   cooldownMs?: number;
-  /** Directory scanned for pending briefs (sessionstart brief-queue gate). */
-  briefsDir?: string;
   /** Clock injection (tests). Defaults to `Date.now`. */
   now?: () => number;
   /**
@@ -155,7 +155,6 @@ export class CronScheduler {
   private readonly registry = new Map<string, RegisteredEntry>();
   private readonly options: SchedulerOptions;
   private readonly defaultCooldownMs: number;
-  private readonly briefsDir: string;
   private readonly now: () => number;
   private readonly idleDetector = new IdleDetector();
   private pullPollTimer: ReturnType<typeof setInterval> | undefined;
@@ -166,7 +165,6 @@ export class CronScheduler {
   constructor(options: SchedulerOptions = {}) {
     this.options = options;
     this.defaultCooldownMs = options.cooldownMs ?? DEFAULT_SESSIONSTART_COOLDOWN_MS;
-    this.briefsDir = options.briefsDir ?? defaultBriefsDir();
     this.now = options.now ?? Date.now;
     this.queueDir = options.queueDir ?? getQueueDir();
     this.ensureTelemetrySink();
@@ -235,7 +233,6 @@ export class CronScheduler {
         cooldownMs,
         nowMs: this.now(),
         telemetryPath: this.telemetryPath(),
-        briefsDir: this.briefsDir,
       });
       if (decision.fire) {
         records.push(await this.runOnce(task, 'sessionstart'));
@@ -290,10 +287,17 @@ export class CronScheduler {
         ...(queued.notifyOn !== undefined ? { notifyOn: queued.notifyOn } : {}),
       };
       await this.runOnce(syntheticTask, 'pull');
-    } catch {
-      // Mirror the cron error path: errors are captured inside runOnce and
-      // written to telemetry. Any uncaught error here is silently swallowed
-      // so a bad queue entry never kills the poll loop.
+    } catch (err) {
+      // Errors thrown INSIDE runOnce are captured there and written to
+      // telemetry. Errors reaching here come from the dequeue path (now
+      // quarantined inside dequeueNext) or from synthetic-task construction.
+      // Log so a bad tick is visible in daemon logs instead of vanishing;
+      // the poll loop still survives (mirrors writeTelemetry's logging path).
+      // Redact error-derived text before logging, matching the runOnce
+      // telemetry path (a synthetic task's command may carry an inline secret).
+      const msg = redactInlineSecrets(err instanceof Error ? err.message : String(err));
+      // eslint-disable-next-line no-console
+      console.error(`[daemon] pull tick failed: ${msg}`);
     } finally {
       this.isDequeuing = false;
     }
@@ -320,11 +324,13 @@ export class CronScheduler {
 
     let session: AgentSession | null = null;
     let memoryStore: MemoryStore | null = null;
+    let mcpManager: McpManager | null = null;
     this.idleDetector.increment();
     try {
-      const spawned = this.spawnSession(task.taskId);
+      const spawned = await this.spawnSession(task.taskId);
       session = spawned.session;
       memoryStore = spawned.memoryStore;
+      mcpManager = spawned.mcpManager ?? null;
       const response = await session.sendMessage(task.command);
       const responseText = redactInlineSecrets(response.content);
       const record: TelemetryRecord = {
@@ -351,6 +357,13 @@ export class CronScheduler {
           await session.close();
         } catch {
           // already-closed sessions throw; ignore.
+        }
+      }
+      if (mcpManager) {
+        try {
+          await mcpManager.disconnectAll();
+        } catch {
+          // MCP server shutdown is best-effort during daemon tick teardown.
         }
       }
       memoryStore?.close();
@@ -424,9 +437,10 @@ export class CronScheduler {
         telemetryPath: this.telemetryPath(),
       });
 
+      // 'stale-clean' is intentionally absent: the sweep engine preserves +
+      // warns on stale-clean (commits ahead of base) rather than removing.
       const prunableVerdicts = new Set([
         'empty',
-        'stale-clean',
         'orphaned-dir',
         'orphaned-registration',
         'dead-owner',
@@ -455,28 +469,97 @@ export class CronScheduler {
     }
   }
 
-  private spawnSession(taskId: string): { session: AgentSession; memoryStore: MemoryStore } {
+  private async spawnSession(taskId: string): Promise<{
+    session: AgentSession;
+    memoryStore: MemoryStore;
+    mcpManager?: McpManager;
+  }> {
     // Derive a unique-per-tick sessionId (daemonTraceLabel appends a random
     // suffix, so each tick gets its own label) so hook commands receive a
     // non-empty AFK_SESSION_ID and traces stay greppable by task name.
     const sessionId = daemonTraceLabel(taskId);
     const agentCwd = this.options.sessionConfig?.cwd ?? process.cwd();
-    const { registry, memoryStore } = createDefaultHookRegistry(
-      undefined,
-      'daemon',
-      undefined,
-      undefined,
-      loadHooksConfig({ cwd: agentCwd }),
-      { cwd: agentCwd, sessionId },
-    );
     // Witness layer: open a fresh trace per spawned daemon session so its
     // subagent + skill lifecycle events are durable on disk — the AFK
     // (away-from-keyboard) surface where post-hoc inspection matters most.
     // Mirrors chat.ts / interactive bootstrap.ts. Returns null under
     // AFK_TRACE_DISABLED=1. The label is derived from the taskId (see
     // daemonTraceLabel) so traces are greppable by task name while each tick
-    // still gets its own trace dir.
+    // still gets its own trace dir. Created before the hook registry so the
+    // AFK gate's structured audit trace is wired from the start of the session.
     const trace = createDefaultTraceWriter({ sessionLabel: daemonTraceLabel(taskId) });
+    const { registry, memoryStore } = createDefaultHookRegistry(
+      undefined,
+      'daemon',
+      undefined,
+      undefined,
+      loadHooksConfig({ cwd: agentCwd }),
+      { cwd: agentCwd, sessionId, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}) },
+    );
+
+    let mcpManager: McpManager | undefined;
+    // Mirror the chat / telegram / interactive surfaces: include MCP configs
+    // contributed by imported roots so the daemon reaches the same MCP
+    // surface-parity, not just cwd `.mcp.json` + the global config.
+    const importedMcpConfigs = resolveImportedRoots(loadImportFromConfig())
+      .mcpConfigs.filter((c) => c.format === 'json')
+      .map((c) => c.source);
+    const loadedMcp = loadMcpConfig({
+      cwd: agentCwd,
+      ...(importedMcpConfigs.length > 0 ? { importedMcpConfigs } : {}),
+    });
+    const enabledMcpCount = Object.values(loadedMcp.mcpServers).filter((s) => !s.disabled).length;
+    try {
+      if (enabledMcpCount > 0) {
+        // Witness layer: bracket the whole-fleet MCP connect with
+        // mcp_connect_start / mcp_connect_done phases — surface-parity with
+        // chat.ts, interactive/bootstrap.ts, and telegram/mcp-session.ts.
+        // try/finally so mcp_connect_done fires even when an alwaysLoad server
+        // makes fromConfig throw. Fire-and-forget; never gates the connect.
+        const mcpStartedAt = Date.now();
+        void emitSessionPhase(trace?.writer, {
+          phase: 'mcp_connect_start',
+          metadata: { serverCount: enabledMcpCount },
+        });
+        try {
+          mcpManager = await McpManager.fromConfig(loadedMcp.mcpServers, {
+            warnings: loadedMcp.warnings,
+            ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
+          });
+        } finally {
+          void emitSessionPhase(trace?.writer, {
+            phase: 'mcp_connect_done',
+            durationMs: Date.now() - mcpStartedAt,
+            metadata: { serverCount: enabledMcpCount },
+          });
+        }
+      } else if (loadedMcp.warnings.length > 0) {
+        for (const warning of loadedMcp.warnings) console.warn(`[mcp] ${warning}`);
+      }
+    } catch (err) {
+      // McpManager.fromConfig re-throws when an `alwaysLoad` server fails to
+      // connect. runOnce()'s finally cannot close this tick's MemoryStore
+      // (its local is still null until spawnSession returns), so close it here
+      // to avoid orphaning the SQLite handle on a connect failure.
+      memoryStore.close();
+      throw err;
+    }
+
+    // Opt-in top-level tool-use-round ceiling (AFK_MAX_TOOL_USE_ITERATIONS).
+    // Parsed inline from the already-imported `env` rather than via the CLI
+    // `getMaxToolUseIterations()` helper to avoid an agent→cli layering
+    // dependency (scheduler lives in src/agent/). Mirrors the lenient contract
+    // of `parseMaxToolUseIterations` in cli/shared-helpers.ts: unset/non-numeric/
+    // <=0 → undefined = unlimited (no behavior change); positive → floored int.
+    // Placed BEFORE the `...sessionConfig` spread so an explicit
+    // sessionConfig.maxToolUseIterations still wins (escape-hatch parity with
+    // permissionMode/surface). The production path also re-applies the same
+    // env fallback in the daemon.ts factory; both resolve to the same value.
+    const rawMaxToolIters = env.AFK_MAX_TOOL_USE_ITERATIONS;
+    const parsedMaxToolIters =
+      rawMaxToolIters !== undefined && Number.isFinite(Number(rawMaxToolIters)) && Number(rawMaxToolIters) > 0
+        ? Math.floor(Number(rawMaxToolIters))
+        : undefined;
     const config: AgentConfig = {
       model: 'sonnet',
       // Daemon-spawned sessions run autonomously and require tool use without
@@ -492,18 +575,40 @@ export class CronScheduler {
       // scheduler / tests). Placed before the sessionConfig spread so an
       // operator escape-hatch could still override it, mirroring permissionMode.
       isNonInteractive: true,
+      // Surface stamps the session as 'daemon' so routing-decision telemetry
+      // rows derive origin:'daemon' correctly. Placed before sessionConfig so
+      // an operator escape-hatch via sessionConfig.surface can still override.
+      // The production factory path (daemon.ts ComposeExecutor / SubagentExecutor
+      // wiring) already stamps surface:'daemon' on its executors; this covers
+      // the fallback/standalone path where no factory is set.
+      surface: 'daemon',
       // Trace writer placed before sessionConfig so an operator-supplied
       // sessionConfig.traceWriter still wins (escape-hatch parity with
       // permissionMode).
       ...(trace ? { traceWriter: trace.writer } : {}),
+      ...(mcpManager !== undefined ? { mcpManager } : {}),
+      // Opt-in top-level tool-round ceiling default; overridable by an explicit
+      // sessionConfig.maxToolUseIterations via the spread below.
+      ...(parsedMaxToolIters !== undefined ? { maxToolUseIterations: parsedMaxToolIters } : {}),
       // sessionConfig may override permissionMode if the operator explicitly
       // wants a different mode for daemon tasks (intentional escape hatch).
       ...this.options.sessionConfig,
     };
-    const session = this.options.sessionFactory
-      ? this.options.sessionFactory(config)
-      : new AgentSession(injectCompanionPrimer(injectHotMemory(config)));
-    return { session, memoryStore };
+    try {
+      const session = this.options.sessionFactory
+        ? this.options.sessionFactory(config)
+        : new AgentSession(injectCompanionPrimer(injectHotMemory(config)));
+      return { session, memoryStore, ...(mcpManager !== undefined ? { mcpManager } : {}) };
+    } catch (err) {
+      if (mcpManager) {
+        await mcpManager.disconnectAll().catch(() => undefined);
+      }
+      // Session construction failed after MCP connected — close this tick's
+      // MemoryStore too (runOnce()'s finally can't, per the fromConfig catch
+      // above) so it is not orphaned.
+      memoryStore.close();
+      throw err;
+    }
   }
 
   private telemetryPath(): string {

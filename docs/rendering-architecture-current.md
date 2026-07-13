@@ -1,5 +1,13 @@
 # Rendering Architecture — Current State
 
+> **SUPERSEDED (2026-07-02).** This doc is a Phase-0 snapshot from the initial
+> public release (`0a23cff`, 2026-06-05) and describes the renderer **before**
+> the five root-cause fixes it motivated. All five landed (tracked as
+> checkpoints 2a–2e in `stream-renderer-ordering.test.ts` and
+> `tool-lane.test.ts`); the source is now the only accurate reference. Kept for
+> the lifecycle vocabulary and historical rationale. For the resize/reflow
+> layer added 2026-07, see `docs/tui-resize-reflow.md`.
+
 > Phase 0 reconnaissance. All claims verified from source with file:line citations.
 
 ---

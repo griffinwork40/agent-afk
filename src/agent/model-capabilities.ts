@@ -124,3 +124,75 @@ export function supportsVision(model: string | undefined): boolean {
   if (VISION_MODEL_IDS.has(lowered)) return true;
   return VISION_MODEL_PATTERNS.some((re) => re.test(resolved));
 }
+
+/**
+ * Normalize a model id for family matching: strip a leading `provider/` segment
+ * (OpenRouter-style ids such as `openai/o3`) and lower-case + trim it. Shared by
+ * the family predicates below so `openai/o3`, `  O3  `, and `o3` all classify
+ * identically. Because the result is already lower-cased, the predicates' regex
+ * patterns do not need the `/i` flag.
+ */
+function bareModelId(model: string): string {
+  const trimmed = model.trim().toLowerCase();
+  return trimmed.includes('/') ? trimmed.slice(trimmed.lastIndexOf('/') + 1) : trimmed;
+}
+
+/**
+ * Detect OpenAI o-series reasoning models — o1, o3, o4, and any future `oN`.
+ *
+ * This is the *id-family* predicate — it answers "is this an o-series id?" — and
+ * is the single source of truth consumed by the provider router
+ * (`providers/index.ts`) and token sizing (`model-limits.ts`) to route bare
+ * o-series ids to the openai-compatible provider. For the *request contract*
+ * (which token field / effort param to send) use {@link isReasoningModel}, a
+ * superset that also covers the gpt-5.x models OpenAI names as the o-series
+ * replacements.
+ *
+ * Robustness the enumerated `startsWith('o1'|'o3'|'o4')` copies lacked:
+ *   - matches ANY `o<digit>` prefix, so o5/o6/… are covered without edits;
+ *   - strips a leading `provider/` segment (OpenRouter-style ids) so
+ *     `openai/o3` and `openrouter/o1-mini` classify correctly;
+ *   - case-insensitive.
+ *
+ * Note: unlike `supportsVision`, this does NOT resolve slot aliases — o-series
+ * ids arrive as concrete strings (there is no `o3` alias), so it stays a pure
+ * string predicate with no `resolveModelInput` dependency.
+ */
+export function isOSeriesModel(model: string | undefined): boolean {
+  if (!model) return false;
+  return /^o[0-9]/.test(bareModelId(model));
+}
+
+/**
+ * Reasoning-model id families *beyond* the o-series (which {@link isOSeriesModel}
+ * already covers). These speak OpenAI's reasoning request contract on Chat
+ * Completions: they reject `max_tokens` (requiring `max_completion_tokens`) and
+ * accept `reasoning_effort` — the inverse of the classic chat models (gpt-4o,
+ * gpt-4.1, …) which want `max_tokens` and ignore effort.
+ *
+ * Kept as a data table (not an enumerated `||` chain) so a new reasoning family
+ * — a future gpt-6, say — is a one-line addition that propagates to every
+ * request-shaping call site at once. Patterns run against the provider-stripped,
+ * lower-cased id from {@link bareModelId}, so no `/i` flag is needed.
+ */
+const REASONING_MODEL_PATTERNS: readonly RegExp[] = [
+  /^gpt-5/, // gpt-5.x line: gpt-5, gpt-5.1, gpt-5.5, gpt-5-mini, gpt-5-codex, …
+];
+
+/**
+ * Detect OpenAI reasoning models — the o-series (o1/o3/o4/oN) *and* the gpt-5.x
+ * line — i.e. every model that requires the `max_completion_tokens` +
+ * `reasoning_effort` request contract rather than plain `max_tokens`.
+ *
+ * Single source of truth for request shaping in the openai-compatible provider:
+ * `query/model-params.ts` (`resolveStreamingMaxTokens`, `resolveReasoningEffort`)
+ * and `oneshot.ts`. A superset of {@link isOSeriesModel}: every o-series id is a
+ * reasoning model, but so are the gpt-5.x ids that replace them. Extend the
+ * non-o-series families via {@link REASONING_MODEL_PATTERNS}.
+ */
+export function isReasoningModel(model: string | undefined): boolean {
+  if (!model) return false;
+  if (isOSeriesModel(model)) return true;
+  const bare = bareModelId(model);
+  return REASONING_MODEL_PATTERNS.some((re) => re.test(bare));
+}

@@ -10,6 +10,13 @@ export interface MockProviderOptions {
   sessionId?: string;
   model?: string;
   onTurn?: (turn: ProviderUserTurn) => void;
+  /**
+   * Per-turn assistant-text override. When provided, its return value is used
+   * as the assistant message instead of the default `Echo: <content>`. `index`
+   * is the zero-based user-turn number. Lets tests drive SEQUENCED responses
+   * (e.g. invalid-then-valid JSON for the structured-output retry loop).
+   */
+  respond?: (turn: ProviderUserTurn, index: number) => string;
 }
 
 export interface MockProviderHandle extends ModelProvider {
@@ -23,7 +30,7 @@ export interface MockQueryHandle extends ProviderQuery {
 
 export function createMockProvider(opts: MockProviderOptions = {}): MockProviderHandle {
   const sessionId = opts.sessionId ?? 'mock-session-123';
-  const model = opts.model ?? 'claude-sonnet-4-6';
+  const model = opts.model ?? 'claude-sonnet-5';
   const queries: MockQueryHandle[] = [];
 
   return {
@@ -37,6 +44,7 @@ export function createMockProvider(opts: MockProviderOptions = {}): MockProvider
         closeResolve = () => resolve('__closed__');
       });
       let abortController: AbortController | null = null;
+      let turnIndex = 0;
 
       const q: MockQueryHandle = {
         interruptCalls: 0,
@@ -69,6 +77,7 @@ export function createMockProvider(opts: MockProviderOptions = {}): MockProvider
             const turnResult = nextOrClose as IteratorResult<ProviderUserTurn>;
             if (turnResult.done) break;
             const turn = turnResult.value;
+            const index = turnIndex++;
 
             opts.onTurn?.(turn);
 
@@ -102,7 +111,7 @@ export function createMockProvider(opts: MockProviderOptions = {}): MockProvider
 
             yield {
               type: 'assistant.message',
-              text: `Echo: ${userContent}`,
+              text: opts.respond ? opts.respond(turn, index) : `Echo: ${userContent}`,
               sessionId,
             } satisfies ProviderEvent;
 

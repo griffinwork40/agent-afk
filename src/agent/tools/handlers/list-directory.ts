@@ -30,7 +30,12 @@ import { resolveAndContain } from './_cwd-utils.js';
  * file2.ts
  * ```
  */
-export const listDirectoryHandler: ToolHandler = async (input, _signal, context?: ToolHandlerContext) => {
+const listDirectoryImpl = async (
+  input: unknown,
+  _signal: AbortSignal,
+  context: ToolHandlerContext | undefined,
+  cwd: string | undefined,
+) => {
   // Validate input shape
   if (!input || typeof input !== 'object') {
     throw new Error('Invalid input: expected an object');
@@ -46,7 +51,7 @@ export const listDirectoryHandler: ToolHandler = async (input, _signal, context?
 
   let resolvedPath: string;
   try {
-    resolvedPath = resolveAndContain(rawPath, context, 'read');
+    resolvedPath = resolveAndContain(rawPath, context, 'read', cwd);
   } catch (err) {
     return { content: err instanceof Error ? err.message : String(err), isError: true };
   }
@@ -93,3 +98,15 @@ export const listDirectoryHandler: ToolHandler = async (input, _signal, context?
     return { content: 'Unknown error listing directory', isError: true };
   }
 };
+
+/**
+ * Create a `list_directory` handler closed over a session-specific base path.
+ * See `createReadFileHandler` — `cwd` is the last resolve-base tier for
+ * out-of-context invocations; a no-op on the dispatcher path. Issue #434.
+ */
+export function createListDirectoryHandler(cwd?: string): ToolHandler {
+  return (input, signal, context) => listDirectoryImpl(input, signal, context, cwd);
+}
+
+/** Bare `list_directory` handler with no session cwd (`createListDirectoryHandler()`). */
+export const listDirectoryHandler: ToolHandler = createListDirectoryHandler();

@@ -17,6 +17,7 @@
  */
 
 import type { SdkPluginConfig } from './types/sdk-types.js';
+import type { SourceEnabledMap } from '../config/import-sources.js';
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'fs';
 import { join, resolve as resolvePath } from 'path';
 import { getPluginsDir, getPluginsIndexPath } from '../paths.js';
@@ -74,10 +75,22 @@ export function _resetPluginScanCache(): void {
  */
 export function scanLocalPlugins(
   dir: string = getPluginsDir(),
-  opts: { trustAll?: boolean } = {},
+  opts: { trustAll?: boolean; sourceEnabled?: SourceEnabledMap } = {},
 ): SdkPluginConfig[] {
   const trustAll = opts.trustAll === true;
-  const cacheKey = trustAll ? `${dir}\u0000trustAll` : dir;
+  const sourceEnabled = opts.sourceEnabled;
+  let cacheKey = trustAll ? `${dir}\u0000trustAll` : dir;
+  // Fold the source enabled-state into the trusted-scan cache key so a mirrored
+  // (source-filtered) scan of an imported root never aliases a prior unfiltered
+  // trusted scan of the same dir. The map is small (a few plugins), so the
+  // digest is cheap; order-independent via sort.
+  if (trustAll && sourceEnabled && sourceEnabled.size > 0) {
+    const digest = [...sourceEnabled.entries()]
+      .map(([k, v]) => `${k}=${v ? 1 : 0}`)
+      .sort()
+      .join(',');
+    cacheKey = `${cacheKey}\u0000${digest}`;
+  }
   if (!scanCache) scanCache = new Map();
   const cached = scanCache.get(cacheKey);
   if (cached) {
@@ -93,7 +106,7 @@ export function scanLocalPlugins(
   const indexPath = dir === getPluginsDir() ? getPluginsIndexPath() : join(dir, '.index.json');
   const index = readIndex(indexPath);
   const plugins: SdkPluginConfig[] = [];
-  walk(dir, dir, 0, plugins, new Set<string>(), index.plugins, trustAll);
+  walk(dir, dir, 0, plugins, new Set<string>(), index.plugins, trustAll, sourceEnabled);
   scanCache.set(cacheKey, plugins);
   return [...plugins];
 }
@@ -106,6 +119,7 @@ function walk(
   seen: Set<string>,
   indexPlugins: Record<string, { enabled: boolean }>,
   trustAll: boolean,
+  sourceEnabled: SourceEnabledMap | undefined,
 ): void {
   if (depth > MAX_SCAN_DEPTH) return;
   // Key `seen` on the realpath so two string-distinct symlinks to the same
@@ -125,24 +139,31 @@ function walk(
     if (key === null) {
       // Path that doesn't fit either layout — keep loading it (matches
       // pre-marketplace behavior for unexpected directory shapes).
-      out.push({ type: 'local', path: dir });
+      pushPlugin(out, dir);
+      return;
+    }
+    if (trustAll) {
+      // Trusted imported root (e.g. `~/.claude/plugins`): the whole binary was
+      // opted into via `importFrom` and AFK keeps no index for foreign
+      // plugins. Mirror the SOURCE tool's OWN enabled/disabled state — a plugin
+      // the user disabled in Claude Code must not load here. No signal (no
+      // source map, or key absent from it) defaults to enabled.
+      if (sourceEnabled && sourceEnabled.get(sourceEnabledKey(key)) === false) return;
+      pushPlugin(out, dir);
       return;
     }
     if (key.layout === 'cache') {
-      // Cache-layout plugins must be explicitly installed — UNLESS this is a
-      // trusted imported root, where the whole binary was opted into and there
-      // is no AFK index to consult.
-      if (!trustAll) {
-        const entry = indexPlugins[key.key];
-        if (!entry || entry.enabled === false) return;
-      }
-      out.push({ type: 'local', path: dir });
+      // Cache-layout plugins must be explicitly installed (present + enabled in
+      // AFK's own index).
+      const entry = indexPlugins[key.key];
+      if (!entry || entry.enabled === false) return;
+      pushPlugin(out, dir);
       return;
     }
     // Flat layout: include unless explicitly disabled.
     const entry = indexPlugins[key.key];
     if (entry && entry.enabled === false) return;
-    out.push({ type: 'local', path: dir });
+    pushPlugin(out, dir);
     return;
   }
 
@@ -162,8 +183,56 @@ function walk(
     } catch {
       continue;
     }
-    if (stat.isDirectory()) walk(root, full, depth + 1, out, seen, indexPlugins, trustAll);
+    if (stat.isDirectory())
+      walk(root, full, depth + 1, out, seen, indexPlugins, trustAll, sourceEnabled);
   }
+}
+
+/**
+ * Read the optional `main` entrypoint from a plugin's manifest. Returns the
+ * declared string (relative or absolute) when present and non-blank, else
+ * undefined. Defensive: the scan must never throw on a malformed/unreadable
+ * manifest — such a plugin simply contributes no entrypoint.
+ */
+function readPluginMain(dir: string): string | undefined {
+  try {
+    const raw = readFileSync(join(dir, '.claude-plugin', 'plugin.json'), 'utf8');
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed !== null && typeof parsed === 'object' && 'main' in parsed) {
+      const main = (parsed as { main?: unknown }).main;
+      if (typeof main === 'string' && main.trim() !== '') return main;
+    }
+  } catch {
+    // Missing/unreadable/invalid manifest → no entrypoint.
+  }
+  return undefined;
+}
+
+/**
+ * Push a discovered plugin onto the scan result, attaching its manifest `main`
+ * entrypoint when declared. Centralizes the three walk() push sites so the
+ * `main` field is populated consistently. Omits the key entirely when absent so
+ * existing `{ type, path }` deep-equality expectations stay green.
+ */
+function pushPlugin(out: SdkPluginConfig[], dir: string): void {
+  const main = readPluginMain(dir);
+  out.push(main !== undefined ? { type: 'local', path: dir, main } : { type: 'local', path: dir });
+}
+
+/**
+ * Translate the AFK scanner's index key into the SOURCE tool's native
+ * enabled-state key. AFK keys a cache-layout plugin as `<marketplace>:<name>`;
+ * Claude Code keys the same plugin as `<name>@<marketplace>` in its
+ * `enabledPlugins` map. Flat-layout keys (`<name>`) pass through unchanged.
+ * Splits on the FIRST `:` so a plugin name containing `:` is preserved.
+ */
+function sourceEnabledKey(key: { layout: 'flat' | 'cache'; key: string }): string {
+  if (key.layout !== 'cache') return key.key;
+  const sep = key.key.indexOf(':');
+  if (sep <= 0) return key.key;
+  const marketplace = key.key.slice(0, sep);
+  const name = key.key.slice(sep + 1);
+  return `${name}@${marketplace}`;
 }
 
 /**

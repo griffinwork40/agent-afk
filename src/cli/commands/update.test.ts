@@ -22,6 +22,7 @@ vi.mock('../version.js', () => ({
 vi.mock('../update-checker.js', () => ({
   fetchLatestVersion: vi.fn(),
   writePendingUpdateMarker: vi.fn(),
+  writeUpdateCache: vi.fn(),
 }));
 
 vi.mock('child_process', () => ({
@@ -39,12 +40,13 @@ vi.mock('../palette.js', () => ({
 }));
 
 import { spawn } from 'child_process';
-import { fetchLatestVersion, writePendingUpdateMarker } from '../update-checker.js';
+import { fetchLatestVersion, writePendingUpdateMarker, writeUpdateCache } from '../update-checker.js';
 import { registerUpdateCommand } from './update.js';
 import { EventEmitter } from 'events';
 
 const mockFetchLatestVersion = vi.mocked(fetchLatestVersion);
 const mockWritePendingUpdateMarker = vi.mocked(writePendingUpdateMarker);
+const mockWriteUpdateCache = vi.mocked(writeUpdateCache);
 const mockSpawn = vi.mocked(spawn);
 
 // ---------------------------------------------------------------------------
@@ -111,6 +113,8 @@ describe('afk update', () => {
       expect(output).toContain('Update available');
       expect(output).toContain('1.10.1');
       expect(output).toContain('1.12.0');
+      // B: --check refreshes the notifier cache with what it learned.
+      expect(mockWriteUpdateCache).toHaveBeenCalledWith('1.12.0');
       expect(process.exitCode).toBeUndefined();
     });
 
@@ -179,6 +183,9 @@ describe('afk update', () => {
         expect.objectContaining({ stdio: 'inherit' }),
       );
       expect(mockWritePendingUpdateMarker).toHaveBeenCalledWith('1.11.0');
+      // B: an explicit --pin must NOT touch the notifier cache — it may target
+      // an older-than-latest version and would otherwise poison the banner.
+      expect(mockWriteUpdateCache).not.toHaveBeenCalled();
       const output = consoleSpy.mock.calls.flat().join('\n');
       expect(output).toContain('installed');
       expect(process.exitCode).toBeUndefined();
@@ -229,6 +236,8 @@ describe('afk update', () => {
         expect.objectContaining({ stdio: 'inherit' }),
       );
       expect(mockWritePendingUpdateMarker).toHaveBeenCalledWith('1.12.0');
+      // B: the fetched-latest install path refreshes the notifier cache.
+      expect(mockWriteUpdateCache).toHaveBeenCalledWith('1.12.0');
     });
 
     it('prints up-to-date and skips install when already on latest', async () => {
@@ -239,6 +248,9 @@ describe('afk update', () => {
       expect(mockSpawn).not.toHaveBeenCalled();
       const output = consoleSpy.mock.calls.flat().join('\n');
       expect(output).toContain('up to date');
+      // B: even when already current, we refresh the cache with the fetched
+      // latest so the banner stops offering an install we don't need.
+      expect(mockWriteUpdateCache).toHaveBeenCalledWith('1.10.1');
     });
 
     it('sets exitCode=1 when registry is unreachable', async () => {

@@ -10,7 +10,12 @@ import type { Writer } from '../slash/types.js';
 import type { CardSpec } from '../render.js';
 import { card, errorBox } from '../render.js';
 import { renderMarkdownToTerminal } from '../formatter.js';
+import { getTerminalWidth } from '../terminal-size.js';
+import { wrapToWidth } from '../wrap.js';
 import { formatThoughtSummary } from '../commands/interactive/thinking-lane.js';
+import { formatThinkingParagraph } from '../commands/interactive/thinking-paragraph.js';
+import { sanitizeLabel } from '../commands/interactive/tool-lane-format-sanitize.js';
+import { commitBlockAbove } from './commit-block.js';
 
 import type { OrchestratorCtx } from './stream-renderer-orchestrator.js';
 
@@ -39,16 +44,21 @@ export function emitPanel(
   const rendered = card(spec);
   const lines = rendered.split('\n');
   if (ctx.isTTY && ctx.compositor) {
-    for (const line of lines) ctx.compositor.commitAbove(line);
+    // Atomic block commit — a card is ONE coherent artifact; per-line commits
+    // desync band-hold under a tall overlay. See commit-block.ts.
+    commitBlockAbove(ctx.compositor, lines);
   } else {
     for (const line of lines) ctx.out.line(line);
   }
 }
 
 /**
- * Seal the current thinking phase and return its formatted `◆ thought for Xs ·
- * N tok` summary line, or `null` when no phase is pending or it produced only
- * whitespace.
+ * Seal the current thinking phase and return both its raw drained text and its
+ * formatted `◆ thought for Xs · N tok` summary line, or `null` when no phase is
+ * pending or it produced only whitespace. Callers pass the result to
+ * {@link renderSealedPhase} to build the scrollback rows (mode-dependent —
+ * `digest` prepends a capped reasoning paragraph, other modes emit the stat
+ * line alone).
  *
  * Single source of truth for the drain + timer-clear + duration + format step
  * shared by the two TTY callers — {@link commitThinkingPhase} (immediate commit
@@ -63,13 +73,58 @@ export function emitPanel(
  * duration here — not at commit time — lets the finalize path schedule a
  * deferred commit without the elapsed time drifting to flush time.
  */
-function sealThinkingPhase(source: SourceState, ctx: OrchestratorCtx): string | null {
+/**
+ * Number of reasoning body lines `digest` mode commits to scrollback per sealed
+ * thinking phase. Matches {@link formatThinkingParagraph}'s DEFAULT_MAX_BODY_LINES
+ * so `digest` reads as "the live preview, frozen into scrollback on seal" —
+ * short phases render in full; long phases keep their most-recent
+ * DIGEST_MAX_LINES lines and gain a `⋯ +N chars earlier` footer.
+ */
+const DIGEST_MAX_LINES = 5;
+
+function sealThinkingPhase(
+  source: SourceState,
+  ctx: OrchestratorCtx,
+): { summaryLine: string; phaseText: string } | null {
   const start = source.thinkingPhaseStartedAt;
   if (start == null) return null;
   source.thinkingPhaseStartedAt = undefined;
   const phase = ctx.thinkingLane.drainPhase();
   if (!phase.trim()) return null;
-  return formatThoughtSummary(Date.now() - start, phase.length);
+  return {
+    summaryLine: formatThoughtSummary(Date.now() - start, phase.length),
+    phaseText: phase,
+  };
+}
+
+/**
+ * Build the physical scrollback rows for a sealed thinking phase.
+ *
+ * All modes emit the `◆ thought for Xs · N tok` stat line. `digest` mode
+ * additionally prepends the capped reasoning paragraph (`◆ thinking` header +
+ * body + optional `⋯ +N chars earlier` footer) ABOVE the stat, so scrollback
+ * reads top-to-bottom as: reasoning → its cost → the tool it produced.
+ *
+ * The phase text is scrubbed through {@link sanitizeLabel} before formatting:
+ * unlike the ephemeral `live` overlay, a digest row is COMMITTED to scrollback,
+ * so raw ANSI / C0 / C1 control bytes in model reasoning must be stripped to
+ * avoid persistent terminal corruption. `formatThinkingParagraph` collapses
+ * whitespace but does not strip control sequences — hence the explicit scrub.
+ */
+function renderSealedPhase(
+  sealed: { summaryLine: string; phaseText: string },
+  ctx: OrchestratorCtx,
+): string[] {
+  const lines: string[] = [];
+  if (ctx.thinkingMode === 'digest') {
+    const paragraph = formatThinkingParagraph(sanitizeLabel(sealed.phaseText), {
+      cols: getTerminalWidth(),
+      maxLines: DIGEST_MAX_LINES,
+    });
+    if (paragraph) lines.push(...paragraph.split('\n'));
+  }
+  lines.push(sealed.summaryLine);
+  return lines;
 }
 
 /**
@@ -90,12 +145,17 @@ function sealThinkingPhase(source: SourceState, ctx: OrchestratorCtx): string | 
  * {@link sealThinkingPhase} (shared with the finalize trailing-phase path).
  */
 export function commitThinkingPhase(source: SourceState, ctx: OrchestratorCtx): void {
-  const line = sealThinkingPhase(source, ctx);
-  if (line == null) return;
+  const sealed = sealThinkingPhase(source, ctx);
+  if (sealed == null) return;
+  const lines = renderSealedPhase(sealed, ctx);
   if (ctx.isTTY && ctx.compositor) {
-    ctx.compositor.commitAbove(line);
+    // digest mode yields a multi-line block (paragraph + stat) — commit it
+    // atomically (one geometry decision) via commitBlockAbove; other modes
+    // are a single stat line and take the direct commitAbove path.
+    if (lines.length > 1) commitBlockAbove(ctx.compositor, lines);
+    else ctx.compositor.commitAbove(lines[0] ?? '');
   } else {
-    ctx.out.line(line);
+    for (const line of lines) ctx.out.line(line);
   }
 }
 
@@ -125,6 +185,15 @@ export function finalizeOrchestrator(
   source: SourceState,
   ctx: OrchestratorCtx,
 ): void {
+  // Evict the live progress entry: the tool-use loop is over, so its banner
+  // must stop rendering. Without this the entry persists (the only other
+  // mutation site is the 'progress' case's clear()+set()) and — because the
+  // OverlayComposer redraws EVERY slot on ANY markDirty — the stale banner
+  // provably repaints on every post-loop prose chunk, presenting a frozen
+  // "current activity" as live. Cleared BEFORE the overlay-refreshing
+  // commits scheduled below so their flush() paints a banner-free frame.
+  ctx.lastProgressByTask.clear();
+
   if (!ctx.streamingMarkdown.current && source.contentBuffer.trim()) {
     // Non-TTY path: no streaming renderer active. Emit accumulated content
     // directly. This path is unchanged — no coordinator needed here.
@@ -204,7 +273,10 @@ export function finalizeOrchestrator(
           anchor: 'before-content',
           commits: [() => {
             if (isTTY && compositor) {
-              for (const line of lines) compositor.commitAbove(line);
+              // Atomic block commit — the flushed root is ONE coherent block;
+              // per-line commits desync band-hold under a tall overlay (a live
+              // subagent's rows). See commit-block.ts.
+              commitBlockAbove(compositor, lines);
               compositor.commitAbove('');
               // Refresh the overlay from CURRENT lane state — in-flight
               // subagent rows that survived the selective flush must keep
@@ -233,8 +305,9 @@ export function finalizeOrchestrator(
     // tool. sealThinkingPhase returns null (→ no schedule) when no phase is
     // pending or it produced only whitespace.
     if (ctx.isTTY && ctx.thinkingMode !== 'off') {
-      const line = sealThinkingPhase(source, ctx);
-      if (line != null) {
+      const sealed = sealThinkingPhase(source, ctx);
+      if (sealed != null) {
+        const lines = renderSealedPhase(sealed, ctx);
         // Capture ctx refs used in the closure — avoids closing over the
         // mutable ctx object (mirrors the tool-lane closure above).
         const compositor = ctx.compositor;
@@ -243,8 +316,12 @@ export function finalizeOrchestrator(
         ctx.coordinator.schedule({
           anchor: 'before-content',
           commits: [() => {
-            if (isTTY && compositor) compositor.commitAbove(line);
-            else out.line(line);
+            if (isTTY && compositor) {
+              if (lines.length > 1) commitBlockAbove(compositor, lines);
+              else compositor.commitAbove(lines[0] ?? '');
+            } else {
+              for (const line of lines) out.line(line);
+            }
           }],
         });
       }
@@ -280,8 +357,23 @@ export function finalizeOrchestrator(
  * content streaming.
  */
 export function emitMarkdown(text: string, out: Writer): void {
-  const rendered = renderMarkdownToTerminal(text);
-  for (const line of rendered.split('\n')) {
+  // History: this fallback rendered with renderMarkdownToTerminal(text) and NO
+  // maxWidth, so the table formatter used +Infinity — rows emitted at their
+  // natural width overflowed past the right edge on any terminal narrower than
+  // the table, and never reflowed on resize (the lines are already committed to
+  // scrollback). The streaming commit path was always width-capped; this aligns
+  // the fallback with it. On a TTY, cap to the visible content width (matching
+  // calculateContentWidth = terminal − 2) so tables are squeezed/truncated and
+  // prose is wrapped, breaking over-long tokens (URLs, long identifiers) that a
+  // raw-line sink would otherwise let run off the edge. Off a TTY (piped /
+  // redirected) keep the width unbounded so consumers receive full-width
+  // markdown — the prior behavior.
+  const contentWidth = process.stdout.isTTY
+    ? Math.max(1, getTerminalWidth() - 2)
+    : Number.POSITIVE_INFINITY;
+  const rendered = renderMarkdownToTerminal(text, { maxWidth: contentWidth });
+  const wrapped = wrapToWidth(rendered, contentWidth, { breakLongWords: true });
+  for (const line of wrapped.split('\n')) {
     out.line(line);
   }
 }
@@ -322,7 +414,11 @@ export function flushToolLaneToScrollback(ctx: OrchestratorCtx): void {
   // own trailing. See docs/tui-rhythm.md.
   if (ctx.isTTY && ctx.compositor) {
     if (lines.length > 0) {
-      for (const line of lines) ctx.compositor.commitAbove(line);
+      // Atomic block commit — the flushed root(s) form ONE coherent block;
+      // committing line-by-line desyncs the band-hold model under a tall
+      // overlay and scrolls blank rows into scrollback (the "weird gaps"
+      // bug). See commit-block.ts.
+      commitBlockAbove(ctx.compositor, lines);
       ctx.compositor.commitAbove('');
     }
     // Refresh from current lane state. Empty when all roots were

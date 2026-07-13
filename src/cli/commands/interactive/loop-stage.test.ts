@@ -186,10 +186,12 @@ describe('formatStageRail', () => {
     bold: (s: string) => `bold<${s}>`,
   };
 
-  it('renders all five stages joined by separators', () => {
+  it('collapses "observing" (idle/reset) to a single dim "· idle" cell', () => {
     const out = formatStageRail('observing', fmt);
+    expect(out).toBe('dim<· idle>');
+    // The idle collapse must NOT leak any of the five stage labels.
     for (const stage of LOOP_STAGES) {
-      expect(out).toContain(STAGE_LABEL[stage]);
+      expect(out).not.toContain(STAGE_LABEL[stage]);
     }
   });
 
@@ -199,6 +201,21 @@ describe('formatStageRail', () => {
     // Inactives use the hollow diamond + dim.
     expect(out).toContain('dim<◇ observe>');
     expect(out).toContain('dim<◇ update>');
+  });
+
+  it('renders the full 5-cell rail (with ◆ on the active cell) for every non-observing stage', () => {
+    for (const stage of LOOP_STAGES.filter((s) => s !== 'observing')) {
+      const out = formatStageRail(stage, fmt);
+      // All five stage labels present — the rail is not collapsed.
+      for (const label of Object.values(STAGE_LABEL)) {
+        expect(out).toContain(label);
+      }
+      // Exactly the active stage's cell carries the solid diamond.
+      expect(out).toContain(`◆ ${STAGE_LABEL[stage]}`);
+      for (const other of LOOP_STAGES.filter((s) => s !== stage)) {
+        expect(out).not.toContain(`◆ ${STAGE_LABEL[other]}`);
+      }
+    }
   });
 });
 
@@ -266,9 +283,10 @@ describe('LoopStageBar', () => {
     const out = joinWrites(stream);
     // rows=24, extraRows=1 → paint at row 23 (immediately above the status row).
     expect(cupRows(out)).toContain(23);
-    // Idle rail shows every stage label, with 'observe' active.
-    expect(out).toContain('observe');
-    expect(out).toContain('update');
+    // Idle paint collapses to the single dim `· idle` cell (formatStageRail
+    // special-cases the between-turns 'observing' stage) — no stage labels.
+    expect(out).toContain('· idle');
+    expect(out).not.toContain('observe');
     bar.stop();
   });
 

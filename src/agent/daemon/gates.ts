@@ -2,33 +2,24 @@
  * Gating helpers for Phase 6 sessionstart triggers.
  *
  * `evaluateSessionStartGates` decides whether a sessionstart fire should
- * proceed by checking two gates:
- *   1. Cooldown — has the task fired (on any trigger) within `cooldownMs`?
- *      Read from the most recent telemetry entry for this taskId.
- *   2. Brief queue — are there any pending briefs under `briefsDir`? If so,
- *      coordinate with `forge_brief_nudge` and skip fire so briefs are
- *      consumed before more are generated.
+ * proceed by checking the cooldown gate: has the task fired (on any trigger)
+ * within `cooldownMs`? Read from the most recent telemetry entry for this
+ * taskId.
  *
  * @module agent/daemon/gates
  */
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { getBriefsDir } from '../../paths.js';
+import { existsSync, readFileSync } from 'node:fs';
 
 export const DEFAULT_SESSIONSTART_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 hours
 
-export function defaultBriefsDir(): string {
-  return getBriefsDir();
-}
-
-export type SessionStartSkipReason = 'cooldown' | 'briefs_pending';
+export type SessionStartSkipReason = 'cooldown';
 
 export interface GateDecision {
   fire: boolean;
   skipReason?: SessionStartSkipReason;
   lastFiredAtMs?: number;
   cooldownRemainingMs?: number;
-  pendingBriefCount?: number;
 }
 
 export interface GateOptions {
@@ -36,7 +27,6 @@ export interface GateOptions {
   cooldownMs: number;
   nowMs: number;
   telemetryPath: string;
-  briefsDir: string;
 }
 
 /**
@@ -70,20 +60,6 @@ export function readLastTickTime(taskId: string, telemetryPath: string): number 
   return null;
 }
 
-/**
- * Count pending briefs in `briefsDir`. A "brief" is any regular file whose
- * name does not start with `.` (dotfiles are ignored). Missing directory
- * returns 0.
- */
-export function countPendingBriefs(briefsDir: string): number {
-  if (!existsSync(briefsDir)) return 0;
-  try {
-    return readdirSync(briefsDir).filter((name) => !name.startsWith('.')).length;
-  } catch {
-    return 0;
-  }
-}
-
 export function evaluateSessionStartGates(options: GateOptions): GateDecision {
   const lastFiredMs = readLastTickTime(options.taskId, options.telemetryPath);
   if (lastFiredMs !== null && options.cooldownMs > 0) {
@@ -96,16 +72,6 @@ export function evaluateSessionStartGates(options: GateOptions): GateDecision {
         cooldownRemainingMs: options.cooldownMs - elapsed,
       };
     }
-  }
-
-  const pendingBriefs = countPendingBriefs(options.briefsDir);
-  if (pendingBriefs > 0) {
-    return {
-      fire: false,
-      skipReason: 'briefs_pending',
-      pendingBriefCount: pendingBriefs,
-      ...(lastFiredMs !== null ? { lastFiredAtMs: lastFiredMs } : {}),
-    };
   }
 
   return {

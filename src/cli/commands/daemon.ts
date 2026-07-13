@@ -9,7 +9,6 @@ import { getQueueDir } from '../../paths.js';
 import { pushIfConfigured } from '../../telegram/push.js';
 import type { TaskCompletionDetails, TelemetryRecord } from '../../agent/daemon/scheduler.js';
 import {
-  COMPILED_DEFAULT_TASK,
   COMPILED_DEFAULT_TASK_ID,
   resolveDaemonHost,
   resolveDaemonTimeoutMs,
@@ -22,7 +21,7 @@ import {
 import { loadConfig } from '../config.js';
 import type { AgentConfig, ThinkingConfig, EffortLevel, AgentModelInput } from '../../agent/types.js';
 import type { ScheduledTask } from '../../agent/daemon/triggers.js';
-import { parseThinking, parseEffort, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, parseProvider, getDefaultSubagentModel } from '../shared-helpers.js';
+import { parseThinking, parseEffort, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, parseProvider, getDefaultSubagentModel, getMaxToolUseIterations } from '../shared-helpers.js';
 import { loadSchedules, toScheduledTask } from '../../agent/daemon/schedule-store.js';
 import { AgentSession } from '../../agent/session.js';
 import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
@@ -31,7 +30,9 @@ import { SubagentManager } from '../../agent/subagent.js';
 import { SubagentExecutor } from '../../agent/tools/subagent-executor.js';
 import { SkillExecutor } from '../../agent/tools/skill-executor.js';
 import { ComposeExecutor } from '../../agent/tools/compose-executor.js';
+import { ensurePluginEntrypointsLoaded, discoverPluginAgents } from '../../agent/tools/skill-bridge.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory, createStubParentSession } from '../../agent/tools/nesting.js';
+import { loadAgentRegistry } from '../../agent/agents/index.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import { BUILTIN_TOOL_NAMES } from '../../agent/tools/schemas.js';
 import { MEMORY_TOOL_NAMES } from '../../agent/memory/index.js';
@@ -91,13 +92,27 @@ export function buildDaemonSessionFactory(
 
     const rootManager = new SubagentManager({
       ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
+      // Parent model → provider, so the fork-time credential fallback never
+      // crosses the provider boundary (see SubagentManager.parentProvider).
+      parentModel: opts.model,
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      // Origin attribution: the daemon is a `daemon` entrypoint. Thread the
+      // surface so forked `agent`-tool children inherit origin 'daemon' (not
+      // 'unknown') via forkSubagent's parentSurface fill. Mirrors farm.ts.
+      surface: 'daemon',
     });
 
     const childProviderFactory = createChildProviderFactory(
       opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {},
     );
+
+    // Named-agent registry: session-static scan enabling `agent_type`
+    // dispatch for daemon-run tasks (builtin + user + project scopes).
+    const agentRegistry = loadAgentRegistry({
+      ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      pluginAgents: discoverPluginAgents(),
+    });
 
     const childSkillExecutorFactory = createChildSkillExecutorFactory(
       opts.model,
@@ -111,6 +126,17 @@ export function buildDaemonSessionFactory(
       opts.cwd,
       // Per-model credential resolver — see bootstrap.ts for rationale.
       getApiKeyForModel,
+      // Surface: daemon skill executor children inherit origin 'daemon'.
+      'daemon',
+      // Resolved default-subagent model threaded into nested skill executors
+      // so skill→skill / skill→agent chains inherit the SAME policy as the
+      // top-level executors — closing the leak where a nested subagent
+      // silently defaulted to Anthropic `sonnet` under an OpenAI-routed parent.
+      getDefaultSubagentModel(opts.model),
+      // Named-agent registry propagates to nested skill executors.
+      agentRegistry,
+      // OpenAI endpoint → nested restricted/depth-cap provider builders.
+      opts.openaiBaseUrl,
     );
 
     const subagentExecutor = new SubagentExecutor({
@@ -121,6 +147,7 @@ export function buildDaemonSessionFactory(
       defaultConfig: {
         ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
         ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
+        ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
       },
       defaultSubagentModel: getDefaultSubagentModel(opts.model),
       childProviderFactory,
@@ -129,6 +156,9 @@ export function buildDaemonSessionFactory(
       resolveApiKeyForModel: getApiKeyForModel,
       depth: 0,
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      // Named-agent dispatch: registry + `inherit` anchor.
+      agentRegistry,
+      parentModel: opts.model,
     });
 
     const skillExecutor = new SkillExecutor({
@@ -140,10 +170,16 @@ export function buildDaemonSessionFactory(
       ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
       childProviderFactory,
       childSkillExecutorFactory,
+      // Named-agent registry for skill-forked orchestrator children.
+      agentRegistry,
       // Per-model credential resolver — mirrors bootstrap.ts / chat.ts.
       resolveApiKeyForModel: getApiKeyForModel,
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
+      ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      // Read-scope inheritance (#547): skill-forked children inherit the parent
+      // session's read scope via the root manager. See bootstrap.ts.
+      getReadScopeInputs: () => rootManager.getReadScopeInputs(),
     });
 
     const composeExecutor = new ComposeExecutor({
@@ -153,13 +189,21 @@ export function buildDaemonSessionFactory(
       ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
       // Per-model credential resolver — mirrors #640 for the compose fork-path.
       resolveApiKeyForModel: getApiKeyForModel,
+      // Read-scope inheritance (#547): DAG nodes inherit the parent session's
+      // read scope via the root manager. See bootstrap.ts.
+      getReadScopeInputs: () => rootManager.getReadScopeInputs(),
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
       systemPrompt: '',
+      // Session identity for routing-decision rows (daemon/scheduler → daemon).
+      surface: 'daemon',
+      depth: 0,
     });
 
     memoryStore ??= new MemoryStore();
+    const mcpManager = config.mcpManager;
+    const mcpToolWireNames = mcpManager?.getMcpToolWireNames() ?? [];
 
     const provider = parseProvider(undefined, {
       subagentExecutor,
@@ -168,17 +212,26 @@ export function buildDaemonSessionFactory(
       memoryStore,
       model: String(opts.model),
       ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
+      ...(mcpManager !== undefined ? { mcpManager } : {}),
     }) ?? new AnthropicDirectProvider({
       permissions: {
-        allowedTools: [...BUILTIN_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'agent', 'skill', 'compose'],
+        allowedTools: [...BUILTIN_TOOL_NAMES, ...MEMORY_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'agent', 'skill', 'compose', ...mcpToolWireNames],
       },
       subagentExecutor,
       skillExecutor,
       composeExecutor,
       memoryStore,
       surface: 'daemon',
+      ...(mcpManager !== undefined ? { mcpManager } : {}),
     });
 
+    // Opt-in top-level tool-use-round ceiling. Explicit caller config wins;
+    // AFK_MAX_TOOL_USE_ITERATIONS is the fallback (undefined/<=0 → unlimited, no
+    // behavior change). Resolved after `...config` so an explicit value on the
+    // caller's config takes precedence over the env default. This is the
+    // production chokepoint the scheduler routes every task through, so it also
+    // caps scheduler/cron-spawned top-level sessions.
+    const daemonMaxToolUseIterations = config.maxToolUseIterations ?? getMaxToolUseIterations();
     return new AgentSession(injectCompanionPrimer(injectHotMemory({
       ...config,
       provider,
@@ -191,6 +244,9 @@ export function buildDaemonSessionFactory(
       // `...config` for the same reason as `isNonInteractive`: every daemon +
       // scheduler/cron session routes through here → 'daemon'.
       surface: 'daemon',
+      ...(daemonMaxToolUseIterations !== undefined
+        ? { maxToolUseIterations: daemonMaxToolUseIterations }
+        : {}),
     })));
   };
 }
@@ -228,7 +284,7 @@ export function registerDaemonCommand(program: Command): void {
       '--host <address>',
       'Bind address for the control HTTP surface. Overrides AFK_DAEMON_HOST. Defaults to 127.0.0.1 (loopback only). The control surface is UNAUTHENTICATED — bind a non-loopback address (e.g. 0.0.0.0) only on a trusted or firewalled network.',
     )
-    .option('-t, --task <command>', `Command to fire on each tick (default: ${COMPILED_DEFAULT_TASK})`)
+    .option('-t, --task <command>', 'Command to fire on each tick. Required for the cron and both triggers; optional otherwise.')
     .option('-c, --cron <expression>', 'Cron expression (e.g. "0 */6 * * *"). Required when --trigger includes cron.')
     .option('-i, --task-id <id>', `Task identifier (default: ${COMPILED_DEFAULT_TASK_ID})`)
     .option('--once', 'Fire one tick and exit (for testing)', false)
@@ -246,12 +302,8 @@ export function registerDaemonCommand(program: Command): void {
       '--sessionstart-cooldown-ms <ms>',
       'Cooldown between Phase 6 sessionstart fires. Overrides AFK_SESSIONSTART_COOLDOWN_MS. Defaults to 6h.',
     )
-    .option(
-      '--briefs-dir <path>',
-      'Override directory scanned for pending briefs (defaults to ~/.afk/agent-framework/briefs).',
-    )
     .option('--dump-prompt [path]', 'Dump resolved SDK prompt+options+provenance to file (default: ~/.afk/logs/prompt-dump-<ISO>.json) or "stderr"')
-    .action(async (options: { port: string; host?: string; task?: string; cron?: string; taskId?: string; once: boolean; timeoutMs?: string; thinking?: string; effort?: string; trigger?: string; sessionstartCooldownMs?: string; briefsDir?: string; dumpPrompt?: string | boolean | undefined }) => {
+    .action(async (options: { port: string; host?: string; task?: string; cron?: string; taskId?: string; once: boolean; timeoutMs?: string; thinking?: string; effort?: string; trigger?: string; sessionstartCooldownMs?: string; dumpPrompt?: string | boolean | undefined }) => {
       const port = parseInt(options.port, 10);
       if (Number.isNaN(port) || port <= 0) {
         handleCommandError(new Error(`Invalid port: ${options.port}`));
@@ -287,6 +339,18 @@ export function registerDaemonCommand(program: Command): void {
       if ((trigger === 'cron' || trigger === 'both') && !options.cron) {
         handleCommandError(new Error(`--cron is required when --trigger is '${trigger}'.`));
       }
+      // A task is mandatory for cron/both: the user scheduled a tick but, with
+      // no --task / AFK_DAEMON_TASK / daemon.task, there is nothing to run. Fail
+      // clearly instead of registering an empty default task (historically this
+      // fell back to an internal-only skill a public build cannot execute).
+      if ((trigger === 'cron' || trigger === 'both') && command.trim() === '') {
+        handleCommandError(
+          new Error(
+            'A daemon task is required for the cron and both triggers. Provide one via ' +
+              '--task, the AFK_DAEMON_TASK env var, or daemon.task in afk.config.json.',
+          ),
+        );
+      }
       // pull mode: no cron expression needed — tasks are dequeued from the queue directory
 
       let thinking: ThinkingConfig | undefined;
@@ -310,8 +374,11 @@ export function registerDaemonCommand(program: Command): void {
       };
 
       // In pull mode, the task queue is file-driven — no ScheduledTask registered.
-      // For all other trigger modes, register the default task.
-      const tasks: ScheduledTask[] = trigger === 'pull'
+      // For other trigger modes, register the default task only when one is
+      // actually configured: with an empty command the daemon runs just its
+      // persisted schedules + worktree-prune rather than fabricating a task.
+      // (cron/both with an empty task already errored above.)
+      const tasks: ScheduledTask[] = (trigger === 'pull' || command.trim() === '')
         ? []
         : [{
             taskId,
@@ -375,6 +442,15 @@ export function registerDaemonCommand(program: Command): void {
       const daemonApiKey = getApiKey();
       const daemonCwdResolved = daemonCwd !== undefined && daemonCwd.length > 0 ? daemonCwd : undefined;
 
+      // Import any plugin JS entrypoints (manifest `main`) once at daemon
+      // startup, before the session factory is built and before the scheduler
+      // spawns any task session. Each daemon-spawned session assembles its skill
+      // manifest synchronously at construction, so a plugin's registerSkill()
+      // side-effects must already have run for its code-backed skills (e.g. a
+      // scheduled task command) to resolve. Idempotent + non-fatal; no-op
+      // without plugins.
+      await ensurePluginEntrypointsLoaded();
+
       // Build a fully-wired session factory so skill/agent/compose tools are
       // available in daemon-spawned sessions. Without this, commands like
       // `/forge-friction --auto` fail because the bare provider constructed by
@@ -405,11 +481,13 @@ export function registerDaemonCommand(program: Command): void {
           },
           sessionFactory,
           ...(cooldownMs !== undefined ? { cooldownMs } : {}),
-          ...(options.briefsDir !== undefined ? { briefsDir: options.briefsDir } : {}),
           ...(trigger === 'pull' ? { pullPollIntervalMs: 30_000, queueDir: getQueueDir() } : {}),
           tasks,
           onTaskComplete: (record: TelemetryRecord, details?: TaskCompletionDetails) => {
-            void pushIfConfigured(formatTaskCompletion(record, details)).catch(() => undefined);
+            // markdown:true — task output is agent-authored markdown; render it
+            // to Telegram HTML so **bold**/`code`/headers format instead of
+            // showing their literal markers (plain-text fallback on parse error).
+            void pushIfConfigured(formatTaskCompletion(record, details), { markdown: true }).catch(() => undefined);
           },
         });
 

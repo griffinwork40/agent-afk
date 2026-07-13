@@ -1,21 +1,74 @@
 /**
- * Tests for system-prompt layering helpers.
+ * Tests for system-prompt layering helpers and GrantManager type guard.
  *
- * Invariant under test: the framework base (`prompts/system-prompt.md`) is the
- * UNCONDITIONAL foundation; the operator overlay (AFK_SYSTEM_PROMPT →
- * afk.config.json → AFK.md) is APPENDED on top, never substituted for the base.
- * This is the inverse of the historical `overlay ?? framework` behavior, where
- * any operator prompt replaced the framework base wholesale.
+ * Invariant under test (system-prompt): the framework base
+ * (`prompts/system-prompt.md`) is the UNCONDITIONAL foundation; the operator
+ * overlay (AFK_SYSTEM_PROMPT → afk.config.json → AFK.md) is APPENDED on top,
+ * never substituted for the base. This is the inverse of the historical
+ * `overlay ?? framework` behavior, where any operator prompt replaced the
+ * framework base wholesale.
+ *
+ * Invariant under test (isGrantManager): any provider that structurally exposes
+ * addReadRoot / addWriteRoot / revokeRoot / getGrants passes — regardless of its
+ * concrete class — and a plain object missing any of those methods does not.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   OPERATOR_CONFIG_HEADER,
   composeSystemPrompt,
+  isGrantManager,
   resolveBaseSystemPrompt,
 } from './shared-helpers.js';
 import { loadConfig } from './config.js';
+import { AnthropicDirectProvider } from '../agent/providers/index.js';
+import { OpenAICompatibleProvider } from '../agent/providers/openai-compatible/index.js';
+
+describe('getApiKey / getModel provider agreement (regression: default-model divergence)', () => {
+  // Regression guard for a bug where getApiKey() re-read `AFK_MODEL ?? CLAUDE_MODEL`
+  // directly (possibly undefined) instead of resolving against getModel() (which
+  // defaults to the literal 'sonnet'). With both model env vars unset and
+  // AFK_OPENAI_BASE_URL set, `providerForModel(undefined)` fell through to the
+  // Tier-4 env hint -> 'openai-compatible' (OPENAI_API_KEY), while getModel()
+  // returned 'sonnet' -> 'anthropic-direct'. The session then paired an
+  // anthropic-routed model with an OpenAI credential (401s downstream).
+  const ORIG_ENV = { ...process.env };
+
+  beforeEach(() => {
+    vi.resetModules();
+    delete process.env['AFK_MODEL'];
+    delete process.env['CLAUDE_MODEL'];
+    delete process.env['AFK_PROVIDER'];
+    delete process.env['ANTHROPIC_API_KEY'];
+    delete process.env['CLAUDE_CODE_OAUTH_TOKEN'];
+    delete process.env['OPENAI_API_KEY'];
+    delete process.env['CODEX_API_KEY'];
+    process.env['AFK_OPENAI_BASE_URL'] = 'http://localhost:8000/v1';
+    process.env['OPENAI_API_KEY'] = 'sk-proj-SENTINEL-OPENAI-KEY';
+    process.env['ANTHROPIC_API_KEY'] = 'sk-ant-api03-SENTINEL-ANTHROPIC-KEY';
+  });
+
+  afterEach(() => {
+    process.env = { ...ORIG_ENV };
+  });
+
+  it('getApiKey() resolves the credential for the same provider getModel() routes to, with AFK_MODEL/CLAUDE_MODEL unset and AFK_OPENAI_BASE_URL set', async () => {
+    const { getApiKey, getModel } = await import('./shared-helpers.js');
+    const { providerForModel } = await import('../agent/providers/index.js');
+
+    const resolvedModel = getModel();
+    const resolvedApiKey = getApiKey();
+
+    // getModel() defaults to the `medium` tier -> claude-sonnet-5 -> anthropic-direct.
+    expect(resolvedModel).toBe('medium');
+    expect(providerForModel(resolvedModel)).toBe('anthropic-direct');
+
+    // getApiKey() must agree: it should resolve the Anthropic credential,
+    // not fall through the AFK_OPENAI_BASE_URL Tier-4 hint via an undefined model.
+    expect(resolvedApiKey).toBe('sk-ant-api03-SENTINEL-ANTHROPIC-KEY');
+  });
+});
 
 // Mock the config module so loadConfig() (the overlay source) is controllable.
 // loadSystemPrompt() is an in-module call in shared-helpers and reads the real
@@ -110,5 +163,61 @@ describe('resolveBaseSystemPrompt', () => {
     vi.mocked(loadConfig).mockReturnValue(fakeConfig('env override', 'env:AFK_SYSTEM_PROMPT'));
     const { source } = resolveBaseSystemPrompt();
     expect(source).toBe('framework+env:AFK_SYSTEM_PROMPT');
+  });
+});
+
+describe('isGrantManager', () => {
+  // Providers opened in these tests need to be closed so SQLite handles release.
+  const anthropicProviders: AnthropicDirectProvider[] = [];
+  const openaiProviders: OpenAICompatibleProvider[] = [];
+
+  afterEach(() => {
+    for (const p of anthropicProviders) p.close();
+    anthropicProviders.length = 0;
+    for (const p of openaiProviders) p.close();
+    openaiProviders.length = 0;
+  });
+
+  it('returns true for AnthropicDirectProvider (which implements GrantManager)', () => {
+    const p = new AnthropicDirectProvider();
+    anthropicProviders.push(p);
+    expect(isGrantManager(p)).toBe(true);
+  });
+
+  it('returns true for OpenAICompatibleProvider (which implements GrantManager)', () => {
+    const p = new OpenAICompatibleProvider();
+    openaiProviders.push(p);
+    expect(isGrantManager(p)).toBe(true);
+  });
+
+  it('returns false for a plain empty object', () => {
+    expect(isGrantManager({})).toBe(false);
+  });
+
+  it('returns false for an object missing some GrantManager methods', () => {
+    // Has three of the four required methods — must still fail.
+    expect(isGrantManager({
+      addReadRoot: () => {},
+      addWriteRoot: () => {},
+      revokeRoot: () => {},
+      // getGrants intentionally absent
+    })).toBe(false);
+  });
+
+  it('returns false for null and non-objects', () => {
+    expect(isGrantManager(null)).toBe(false);
+    expect(isGrantManager(undefined)).toBe(false);
+    expect(isGrantManager(42)).toBe(false);
+    expect(isGrantManager('string')).toBe(false);
+  });
+
+  it('returns true for a plain mock object exposing all four methods', () => {
+    const mock = {
+      addReadRoot: (_path: string) => {},
+      addWriteRoot: (_path: string) => {},
+      revokeRoot: (_path: string) => {},
+      getGrants: () => ({ resolveBase: undefined, readRoots: [], writeRoots: [] }),
+    };
+    expect(isGrantManager(mock)).toBe(true);
   });
 });

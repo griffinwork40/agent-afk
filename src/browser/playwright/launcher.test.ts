@@ -10,7 +10,10 @@
  * before launcher.ts is imported.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import nodePath from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Stub types
@@ -32,6 +35,7 @@ interface StubPage {
 interface StubContext {
   newPage: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
+  storageState: ReturnType<typeof vi.fn>;
   _pages: StubPage[];
 }
 
@@ -84,6 +88,7 @@ function makeStubContext(): StubContext {
   const ctx: StubContext = {
     close: vi.fn().mockResolvedValue(undefined),
     newPage: vi.fn(),
+    storageState: vi.fn().mockResolvedValue({ cookies: [{ name: 'sid', value: 'abc' }], origins: [] }),
     _pages: [],
   };
   ctx.newPage.mockImplementation(() => {
@@ -129,6 +134,7 @@ vi.mock('playwright', () => ({
 import { BrowserLauncher } from './launcher.js';
 import type { BrowserConfig } from '../types.js';
 import { chromium } from 'playwright';
+import { getBrowserProfileStateDir, getBrowserStorageStatePath } from '../../paths.js';
 
 // ---------------------------------------------------------------------------
 // Test config fixture
@@ -141,6 +147,7 @@ const TEST_CONFIG: BrowserConfig = {
   domSnapshots: false,
   backend: 'playwright',
   configPath: null,
+  defaultProfile: 'default',
 };
 
 // ---------------------------------------------------------------------------
@@ -362,6 +369,36 @@ describe('BrowserLauncher', () => {
       ).rejects.toThrow(/render aborted/);
       // No page was created; context torn down.
       expect(ctx.newPage).not.toHaveBeenCalled();
+      expect(ctx.close).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns httpStatus:null when page.goto() resolves to null', async () => {
+      // Branch: launcher.ts ~L342 — `resp !== null ? resp.status() : null`.
+      // Playwright's goto() can return null when no HTTP response is produced
+      // (e.g. about:blank, data: URIs, or certain navigation modes). We mock
+      // goto to resolve to null and assert the result carries httpStatus:null.
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const ctx = makeStubContext();
+      currentStubBrowser.newContext.mockResolvedValueOnce(ctx);
+      ctx.newPage.mockImplementationOnce(async () => {
+        const p = makeStubPage();
+        // goto resolves to null — no HTTP response object.
+        p.goto.mockResolvedValueOnce(null);
+        p.content.mockResolvedValueOnce('<html><body>no-response page</body></html>');
+        p.url.mockReturnValue('about:blank');
+        ctx._pages.push(p);
+        return p;
+      });
+
+      const out = await launcher.renderHtml('about:blank', {
+        timeoutMs: 5000,
+        waitUntil: 'load',
+      });
+
+      expect(out.httpStatus).toBeNull();
+      expect(out.html).toBe('<html><body>no-response page</body></html>');
+      expect(out.finalUrl).toBe('about:blank');
+      // Context must still be torn down.
       expect(ctx.close).toHaveBeenCalledTimes(1);
     });
   });
@@ -709,5 +746,124 @@ describe('BrowserLauncher', () => {
       await launcher.ensurePage('session-A');
       await expect(launcher.dismissDialog('session-A', true)).resolves.toBeUndefined();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Session vault (storageState restore-on-open / save-on-close)
+// ---------------------------------------------------------------------------
+
+describe('BrowserLauncher — session vault', () => {
+  let tmpStateDir: string;
+  let prevStateDir: string | undefined;
+
+  // The vault profile for these tests. TEST_CONFIG uses 'default'; here we use a
+  // named profile so "established" semantics are unambiguous.
+  const VAULT_CONFIG: BrowserConfig = { ...TEST_CONFIG, defaultProfile: 'work' };
+
+  beforeEach(() => {
+    currentStubBrowser = makeStubBrowser();
+    vi.mocked(chromium.launch).mockClear();
+    vi.mocked(chromium.launch).mockImplementation(async () => currentStubBrowser);
+
+    // Point the state tier at a temp dir so the vault path resolves there.
+    tmpStateDir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'afk-vault-test-'));
+    prevStateDir = process.env['AFK_STATE_DIR'];
+    process.env['AFK_STATE_DIR'] = tmpStateDir;
+  });
+
+  afterEach(() => {
+    if (prevStateDir === undefined) delete process.env['AFK_STATE_DIR'];
+    else process.env['AFK_STATE_DIR'] = prevStateDir;
+    fs.rmSync(tmpStateDir, { recursive: true, force: true });
+  });
+
+  function establishProfile(profile: string, state: unknown = { cookies: [], origins: [] }): string {
+    const file = getBrowserStorageStatePath(profile);
+    fs.mkdirSync(getBrowserProfileStateDir(profile), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(state));
+    return file;
+  }
+
+  function firstNewContextOpts(): Record<string, unknown> | undefined {
+    return vi.mocked(currentStubBrowser.newContext).mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+  }
+
+  it('restores storageState into newContext when a vault file exists', async () => {
+    establishProfile('work', { cookies: [{ name: 'sid', value: 'abc' }], origins: [] });
+    const launcher = new BrowserLauncher(VAULT_CONFIG);
+    await launcher.ensureContext('s1');
+    expect(firstNewContextOpts()?.['storageState']).toBeDefined();
+  });
+
+  it('does NOT pass storageState when no vault file exists (fresh context)', async () => {
+    const launcher = new BrowserLauncher(VAULT_CONFIG);
+    await launcher.ensureContext('s1');
+    expect(firstNewContextOpts()?.['storageState']).toBeUndefined();
+  });
+
+  it('degrades to a fresh context when the vault file is corrupt', async () => {
+    fs.mkdirSync(getBrowserProfileStateDir('work'), { recursive: true });
+    fs.writeFileSync(getBrowserStorageStatePath('work'), '{ not valid json');
+    const launcher = new BrowserLauncher(VAULT_CONFIG);
+    await expect(launcher.ensureContext('s1')).resolves.toBeDefined();
+    expect(firstNewContextOpts()?.['storageState']).toBeUndefined();
+  });
+
+  it('saves storageState back on close when the profile is already established', async () => {
+    const file = establishProfile('work');
+    const launcher = new BrowserLauncher(VAULT_CONFIG);
+    await launcher.ensureContext('s1');
+    const ctx = currentStubBrowser._contexts[0];
+    await launcher.closeSession('s1');
+
+    expect(ctx?.storageState).toHaveBeenCalledTimes(1);
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+    expect(saved).toHaveProperty('cookies');
+  });
+
+  it('saves the vault file at 0600 after refreshing an established profile on close', async () => {
+    const file = establishProfile('work');
+    // Loosen perms first so the assertion proves the atomic save re-tightens to
+    // 0600 (the named observable: "saves storageState mode 0600").
+    fs.chmodSync(file, 0o644);
+    const launcher = new BrowserLauncher(VAULT_CONFIG);
+    await launcher.ensureContext('s1');
+    await launcher.closeSession('s1');
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+  });
+
+  it('renderHtml bypasses the vault even when the default profile IS established', async () => {
+    // A session context WOULD restore this vault; a one-shot render must not —
+    // renderHtml builds an ephemeral context that never loads storageState.
+    establishProfile('work', { cookies: [{ name: 'sid', value: 'abc' }], origins: [] });
+    const launcher = new BrowserLauncher(VAULT_CONFIG);
+    const ctx = makeStubContext();
+    currentStubBrowser.newContext.mockResolvedValueOnce(ctx);
+    ctx.newPage.mockImplementationOnce(async () => {
+      const p = makeStubPage();
+      p.goto.mockResolvedValueOnce({ status: () => 200 });
+      p.content.mockResolvedValueOnce('<html><body>ok</body></html>');
+      p.url.mockReturnValue('https://example.com/final');
+      ctx._pages.push(p);
+      return p;
+    });
+
+    await launcher.renderHtml('https://example.com/start', { timeoutMs: 5000, waitUntil: 'load' });
+
+    expect(firstNewContextOpts()?.['storageState']).toBeUndefined();
+    expect(launcher.activeSessions()).toBe(0); // ephemeral — not tracked as a session
+  });
+
+  it('does NOT create a vault file on close for an unestablished/ephemeral profile', async () => {
+    const launcher = new BrowserLauncher(VAULT_CONFIG);
+    await launcher.ensureContext('s1');
+    const ctx = currentStubBrowser._contexts[0];
+    await launcher.closeSession('s1');
+
+    expect(ctx?.storageState).not.toHaveBeenCalled();
+    expect(fs.existsSync(getBrowserStorageStatePath('work'))).toBe(false);
   });
 });

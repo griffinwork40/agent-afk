@@ -10,17 +10,15 @@
  * @module agent/tools/handlers/browser-close
  */
 
-import type { ToolHandler } from '../types.js';
+import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { BrowserHandlerOptions } from './browser-open.js';
 import { env } from '../../../config/env.js';
-
-// History: browser_event witness emission is a no-op in this handler.
-// See browser-open.ts for the full rationale.
+import { emitBrowserEvent } from '../../trace/emit.js';
 
 import { isPlaywrightMissing, playwrightMissingHint } from './playwright-hints.js';
 
 export function createBrowserCloseHandler(opts: BrowserHandlerOptions = {}): ToolHandler {
-  return async (_input, signal) => {
+  return async (_input, signal, context?: ToolHandlerContext) => {
     // Pre-aborted short-circuit.
     if (signal.aborted) {
       const reason = signal.reason;
@@ -52,11 +50,31 @@ export function createBrowserCloseHandler(opts: BrowserHandlerOptions = {}): Too
       return { content: `browser_close failed to get provider: ${msg}`, isError: true };
     }
 
+    const t0 = Date.now();
     try {
       await provider.close({ sessionId });
+      const durationMs = Date.now() - t0;
+      void emitBrowserEvent(context?.traceWriter, {
+        tool: 'browser_close',
+        toolUseId: context?.toolUseId ?? '',
+        urlBefore: null,
+        urlAfter: null,
+        status: 'ok',
+        durationMs,
+      });
       return { content: 'Browser session closed.' };
     } catch (err) {
+      const durationMs = Date.now() - t0;
       const msg = err instanceof Error ? err.message : String(err);
+      void emitBrowserEvent(context?.traceWriter, {
+        tool: 'browser_close',
+        toolUseId: context?.toolUseId ?? '',
+        urlBefore: null,
+        urlAfter: null,
+        status: 'error',
+        durationMs,
+        error: { reason: msg, recoverable: false },
+      });
       return { content: `browser_close failed: ${msg}`, isError: true };
     }
   };

@@ -16,6 +16,7 @@ import {
   sanitizeLabel,
   sanitizeTextParagraph,
   shortenPaths,
+  batchBadge,
   MAX_OVERLAY_DIFF_LINES,
   FLUSH_DIFF_LINES_DEFAULT,
 } from './tool-lane-format.js';
@@ -41,6 +42,35 @@ function makeResult(opts: {
     ...(opts.display !== undefined ? { display: opts.display } : {}),
   };
 }
+
+describe('batchBadge — parallel-wave indicator', () => {
+  const chunk = (over: Partial<ToolResultChunk>): ToolResultChunk => ({
+    type: 'tool_result',
+    toolUseId: 'u',
+    content: 'ok',
+    isError: false,
+    ...over,
+  });
+
+  it('renders ∥i/N when the call ran in a parallel wave (batchSize > 1)', () => {
+    expect(stripAnsi(batchBadge(chunk({ batchIndex: 1, batchSize: 2 })))).toBe(' ∥1/2');
+    expect(stripAnsi(batchBadge(chunk({ batchIndex: 3, batchSize: 3 })))).toBe(' ∥3/3');
+  });
+
+  it('is empty for a singleton batch (batchSize === 1) — e.g. bash always runs alone', () => {
+    expect(batchBadge(chunk({ batchIndex: 1, batchSize: 1 }))).toBe('');
+  });
+
+  it('is empty when batch metadata is absent (single-tool path / non-batching provider)', () => {
+    expect(batchBadge(chunk({}))).toBe('');
+    expect(batchBadge(undefined)).toBe('');
+  });
+
+  it('is empty when only one of the index/size pair is present (defensive)', () => {
+    expect(batchBadge(chunk({ batchSize: 2 }))).toBe('');
+    expect(batchBadge(chunk({ batchIndex: 1 }))).toBe('');
+  });
+});
 
 describe('summarizeToolArgs — bash cd-prefix stripping', () => {
   it('strips a single leading `cd <dir> && ` and surfaces the real command', () => {

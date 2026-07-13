@@ -1,13 +1,12 @@
 /**
- * Tests for Phase 6 sessionstart gates — cooldown + brief-queue.
+ * Tests for Phase 6 sessionstart gates — cooldown.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  countPendingBriefs,
   evaluateSessionStartGates,
   readLastTickTime,
   DEFAULT_SESSIONSTART_COOLDOWN_MS,
@@ -69,62 +68,25 @@ describe('readLastTickTime', () => {
   });
 });
 
-describe('countPendingBriefs', () => {
-  let dir: string;
-
-  beforeEach(() => {
-    dir = makeTmpDir();
-  });
-
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it('returns 0 when the directory does not exist', () => {
-    expect(countPendingBriefs(join(dir, 'missing'))).toBe(0);
-  });
-
-  it('returns 0 when the directory is empty', () => {
-    expect(countPendingBriefs(dir)).toBe(0);
-  });
-
-  it('counts regular files, ignoring dotfiles', () => {
-    writeFileSync(join(dir, 'brief-1.md'), '');
-    writeFileSync(join(dir, 'brief-2.md'), '');
-    writeFileSync(join(dir, '.hidden'), '');
-    expect(countPendingBriefs(dir)).toBe(2);
-  });
-
-  it('counts subdirectories (each is one brief)', () => {
-    mkdirSync(join(dir, 'brief-a'));
-    mkdirSync(join(dir, 'brief-b'));
-    expect(countPendingBriefs(dir)).toBe(2);
-  });
-});
-
 describe('evaluateSessionStartGates', () => {
   let dir: string;
   let telemetryPath: string;
-  let briefsDir: string;
 
   beforeEach(() => {
     dir = makeTmpDir();
     telemetryPath = join(dir, 'telemetry.jsonl');
-    briefsDir = join(dir, 'briefs');
-    mkdirSync(briefsDir);
   });
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('fires when no prior telemetry and no briefs', () => {
+  it('fires when no prior telemetry', () => {
     const decision = evaluateSessionStartGates({
       taskId: 't',
       cooldownMs: DEFAULT_SESSIONSTART_COOLDOWN_MS,
       nowMs: Date.now(),
       telemetryPath,
-      briefsDir,
     });
     expect(decision.fire).toBe(true);
     expect(decision.skipReason).toBeUndefined();
@@ -142,7 +104,6 @@ describe('evaluateSessionStartGates', () => {
       cooldownMs: 6 * 60 * 60 * 1000, // 6h
       nowMs,
       telemetryPath,
-      briefsDir,
     });
     expect(decision.fire).toBe(false);
     expect(decision.skipReason).toBe('cooldown');
@@ -162,7 +123,6 @@ describe('evaluateSessionStartGates', () => {
       cooldownMs: 6 * 60 * 60 * 1000,
       nowMs,
       telemetryPath,
-      briefsDir,
     });
     expect(decision.fire).toBe(true);
     expect(decision.lastFiredAtMs).toBe(Date.parse(lastFiredAt));
@@ -179,41 +139,7 @@ describe('evaluateSessionStartGates', () => {
       cooldownMs: 0,
       nowMs,
       telemetryPath,
-      briefsDir,
     });
     expect(decision.fire).toBe(true);
-  });
-
-  it('skips when a brief is pending even after cooldown passes', () => {
-    writeFileSync(join(briefsDir, 'brief-pending.md'), '');
-    const decision = evaluateSessionStartGates({
-      taskId: 't',
-      cooldownMs: DEFAULT_SESSIONSTART_COOLDOWN_MS,
-      nowMs: Date.now(),
-      telemetryPath,
-      briefsDir,
-    });
-    expect(decision.fire).toBe(false);
-    expect(decision.skipReason).toBe('briefs_pending');
-    expect(decision.pendingBriefCount).toBe(1);
-  });
-
-  it('cooldown is checked before brief queue — cooldown miss reported, not briefs', () => {
-    // Both gates would fail; cooldown gate fires first.
-    const nowMs = Date.parse('2026-04-18T12:00:00Z');
-    writeFileSync(
-      telemetryPath,
-      `${JSON.stringify({ taskId: 't', triggeredAt: '2026-04-18T11:00:00Z' })}\n`,
-    );
-    writeFileSync(join(briefsDir, 'brief.md'), '');
-    const decision = evaluateSessionStartGates({
-      taskId: 't',
-      cooldownMs: 6 * 60 * 60 * 1000,
-      nowMs,
-      telemetryPath,
-      briefsDir,
-    });
-    expect(decision.fire).toBe(false);
-    expect(decision.skipReason).toBe('cooldown');
   });
 });

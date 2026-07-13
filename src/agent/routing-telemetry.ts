@@ -114,6 +114,13 @@ export interface RoutingDecisionEntry {
   total_bytes?: number | undefined;
   /** Source stream when the event is stream-scoped: "stdout" | "stderr". */
   stream?: string | undefined;
+  /**
+   * Count of command-referenced paths found outside the allowed roots on a
+   * `tool.bash_path_escape` event. Operational metric only — the escaping
+   * paths themselves and the raw command string are deliberately NOT emitted
+   * (tool input; audit §G.4).
+   */
+  restricted_count?: number | undefined;
 }
 
 /**

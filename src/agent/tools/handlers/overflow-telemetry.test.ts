@@ -2,9 +2,9 @@
  * Tool-overflow telemetry tests.
  *
  * Asserts that the `tool.overflow_kill` event is emitted to
- * routing-decisions.jsonl when bash or grep hit the 100KB cap and SIGKILL the
- * child process. Mocks `routing-telemetry` to capture calls without touching
- * the real ~/.afk file.
+ * routing-decisions.jsonl when bash or grep cross the 8MB hard cap and SIGKILL
+ * the child process. Mocks `routing-telemetry` to capture calls without
+ * touching the real ~/.afk file.
  *
  * Privacy boundary (audit §G.4/G.5): tests assert that payloads do NOT
  * contain the grep pattern, search path, or shell command — only the
@@ -67,7 +67,7 @@ describe('tool.overflow_kill telemetry — grep', () => {
 
     // Sanity: the overflow path actually fired (otherwise telemetry isn't
     // expected to be emitted either).
-    expect(result.content).toContain('[output truncated]');
+    expect(result.content).toContain('was terminated');
 
     const evt = findEvent('tool.overflow_kill');
     expect(evt).toBeDefined();
@@ -91,7 +91,7 @@ describe('tool.overflow_kill telemetry — grep', () => {
       { pattern: secretPattern, path: tempDir },
       createSignal(),
     );
-    expect(result.content).toContain('[output truncated]');
+    expect(result.content).toContain('was terminated');
 
     const serialized = JSON.stringify(appendRoutingDecision.mock.calls);
     expect(serialized).not.toContain(secretPattern);
@@ -119,12 +119,13 @@ describe('tool.overflow_kill telemetry — bash', () => {
     appendRoutingDecision.mockClear();
   });
 
-  it('emits tool.overflow_kill with operational fields when bash crosses 100KB', async () => {
-    // Fast generator: head -c 600000 from /dev/zero is well over 100KB and
-    // exits within seconds. Pipe through tr to make the bytes printable so
-    // the buffer accumulation path is identical to a real noisy command.
+  it('emits tool.overflow_kill with operational fields when bash crosses the hard cap', async () => {
+    // Fast generator: head -c 9000000 from /dev/zero crosses the 8MB hard
+    // cap and exits within seconds. Pipe through tr to make the bytes
+    // printable so the buffer accumulation path is identical to a real
+    // noisy command.
     const result = await bashHandler(
-      { command: 'head -c 600000 /dev/zero | tr "\\0" "x"', timeout_ms: 30_000 },
+      { command: 'head -c 9000000 /dev/zero | tr "\\0" "x"', timeout_ms: 30_000 },
       createSignal(),
     );
 
@@ -142,7 +143,7 @@ describe('tool.overflow_kill telemetry — bash', () => {
     // Distinctive marker we can scan for in the serialized mock calls.
     const result = await bashHandler(
       {
-        command: 'echo SECRET-BASH-MARKER-7 && head -c 600000 /dev/zero | tr "\\0" "x"',
+        command: 'echo SECRET-BASH-MARKER-7 && head -c 9000000 /dev/zero | tr "\\0" "x"',
         timeout_ms: 30_000,
       },
       createSignal(),

@@ -31,6 +31,8 @@ export const palette = {
   goblin: chalk.hex('#9CB04A'),
   /** User cyan — for user prompt text and their "you said" markers. Reserved for user identity only. */
   user: chalk.cyan,
+  /** Caret — thin vertical-bar cursor rendered in the input field. Distinct from `user` (cyan) so the cursor style can evolve independently of user-identity chrome. Soft cornflower blue pairs cleanly with JetBrains Mono dark themes and contrasts the warm brand orange without competing with info sky-blue or fileRef teal. */
+  caret: chalk.hex('#7AA2F7'),
   /** Tool name — steel blue, used as the syntax-theme color for functions / classes / titles in fenced code blocks. Originally also drove `● ToolName` bullet chrome; that role moved to `chrome` so syntax and chrome can evolve independently. */
   tool: chalk.hex('#DCDCAA'),
   /** Bullet chrome — slate grey, used for the `● ToolName` glyph + name itself when no per-tool category color overrides it. Recedes visually so the category-colored variants carry the salience. */
@@ -49,7 +51,7 @@ export const palette = {
   warning: chalk.yellow,
   /** Plan tone — magenta hex, used for PLAN card border + title chip. */
   plan: chalk.hex('#9F7CE0'),
-  /** Bypass tone — electric synthwave pink, bold, used for the `⚡ BYPASS` status-line chip + `/bypass` toggle (bypassPermissions mode). Deliberately reads as a "full-power / turbo unlocked" badge, NOT a caution: bypass is the default CLI mode now, so the indicator should inform at a glance without alarming. Warm-pink pairs with brand orange (sunset/synthwave) yet stays distinct from it and from plan lavender, so the chip never reads as the model name or plan mode. */
+  /** Bypass tone — electric synthwave pink, bold, used for the `⚡ bypass` status-line chip + `/bypass` toggle (bypassPermissions mode). Deliberately reads as a "full-power / turbo unlocked" badge, NOT a caution: bypass is the default CLI mode now, so the indicator should inform at a glance without alarming. Warm-pink pairs with brand orange (sunset/synthwave) yet stays distinct from it and from plan lavender, so the chip never reads as the model name or plan mode. */
   bypass: chalk.bold.hex('#FF6AC1'),
   /** Meta tone — bright-black, used for per-turn stats, dim hints, diff hunk headers, "other"/"planning" tool fallbacks, and the neutral "interrupted" verdict. */
   meta: chalk.blackBright,
@@ -74,5 +76,3 @@ export const palette = {
   /** Diff hunk header — dim grey, used for `@@ -a,b +c,d @@` lines. Structural scaffolding, not user-side, so it lives in the meta family. */
   diffHunk: chalk.blackBright,
 } as const;
-
-export type Palette = typeof palette;

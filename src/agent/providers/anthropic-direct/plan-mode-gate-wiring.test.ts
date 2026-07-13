@@ -24,7 +24,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
-import type { ProviderEvent } from '../provider.js';
+import type { ProviderEvent } from '../../provider.js';
 import { AnthropicDirectProvider, __setAnthropicClientFactory } from './index.js';
 import { createHookRegistry, type HookRegistry } from '../../hooks.js';
 import { createPlanModeGate } from '../../plan-mode-gate.js';
@@ -71,7 +71,7 @@ function makeToolUseStream(
         type: 'message',
         role: 'assistant',
         content: [],
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         stop_reason: null,
         stop_sequence: null,
         usage: {
@@ -113,7 +113,7 @@ function makeTextStream(text: string): RawMessageStreamEvent[] {
         type: 'message',
         role: 'assistant',
         content: [],
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         stop_reason: null,
         stop_sequence: null,
         usage: {
@@ -192,7 +192,7 @@ describe('AnthropicDirectProvider — plan-mode gate reaches the dispatcher via 
     const query = provider.query({
       prompt: singleInput('edit the file'),
       config: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
         permissionMode: 'plan',
         hookRegistry: planGateRegistry('plan'),
@@ -217,7 +217,7 @@ describe('AnthropicDirectProvider — plan-mode gate reaches the dispatcher via 
     const query = provider.query({
       prompt: singleInput('edit the file'),
       config: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
         permissionMode: 'plan',
         parentSessionId: 'parent-session-123',
@@ -241,7 +241,7 @@ describe('AnthropicDirectProvider — plan-mode gate reaches the dispatcher via 
     const query = provider.query({
       prompt: singleInput('edit the file'),
       config: {
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         apiKey: 'sk-ant-oat01-test',
         permissionMode: 'default',
         hookRegistry: planGateRegistry('default'),

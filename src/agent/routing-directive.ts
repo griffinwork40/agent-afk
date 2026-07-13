@@ -21,9 +21,6 @@
  * @module agent/routing-directive
  */
 
-import { existsSync, readdirSync } from 'node:fs';
-import { getBriefsDir } from '../paths.js';
-
 export const ROUTING_DIRECTIVE = `[skill-routing: active]
 
 Route recurring work through registered skills instead of rolling ad-hoc solutions:
@@ -143,58 +140,15 @@ const SURFACES_WITH_END_OF_TURN: ReadonlySet<PromptSurface> = new Set([
   'telegram',
 ]);
 
-/**
- * Returns a nudge string when there are pending skill briefs awaiting `/forge`,
- * or `undefined` when the briefs directory is absent or empty.
- *
- * The TS implementation injects via `assembleSystemPrompt` (system-prompt layer)
- * rather than a SessionStart hook because AFK's `dispatchSessionStart` is
- * trace-only — `injectContext` from SessionStart hooks is never forwarded to
- * the model.
- *
- * @param briefsDir - Override the briefs directory (defaults to
- *   `getBriefsDir()`). Exists primarily for testing so callers can point at a
- *   temp dir without touching the real `~/.afk/agent-framework/briefs/`.
- */
-export function pendingBriefContext(briefsDir?: string): string | undefined {
-  const dir = briefsDir ?? getBriefsDir();
-  let briefs: string[];
-  try {
-    if (!existsSync(dir)) return undefined;
-    briefs = readdirSync(dir, { withFileTypes: true })
-      .filter((e) => e.isFile() && e.name.endsWith('.md'))
-      .map((e) => e.name)
-      .sort();
-  } catch {
-    return undefined;
-  }
-  if (briefs.length === 0) return undefined;
-
-  const count = briefs.length;
-  const noun = count === 1 ? 'brief' : 'briefs';
-  let preview = briefs.slice(0, 3).join(', ');
-  if (count > 3) preview += `, +${count - 3} more`;
-
-  return (
-    `[forge: ${count} pending skill ${noun}]\n\n` +
-    `${count} skill ${noun} from \`/forge-friction\` awaiting generation in ` +
-    `\`${dir}/\`: ${preview}\n\n` +
-    `Run \`/forge\` to process (it will pick up the pending briefs ` +
-    `automatically). Ignore if the user is mid-task on something else.`
-  );
-}
-
 export function assembleSystemPrompt(
   base: string | undefined,
   autoRouting: boolean,
   surface: PromptSurface = 'one-shot',
-  briefContext?: string,
 ): string | undefined {
   if (!base) return base;
   const parts: string[] = [base];
   if (autoRouting) parts.push(ROUTING_DIRECTIVE);
   if (SURFACES_WITH_END_OF_TURN.has(surface)) {
-    if (briefContext !== undefined) parts.push(briefContext);
     parts.push(END_OF_TURN_DIRECTIVE);
   }
   return parts.join('\n\n');

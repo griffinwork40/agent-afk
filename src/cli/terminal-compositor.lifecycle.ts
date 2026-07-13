@@ -12,6 +12,7 @@ import { emitKeypressEventsImmediateEscape } from './input/emit-keypress.js';
 import { acquireStdinClaim, type StdinClaimHandle } from './input/stdin-claim.js';
 import { ResizeBus } from './terminal-size.js';
 import type { SpinnerController } from './input/spinner.js';
+import type { CaretBlinkController } from './input/caret-blink.js';
 import type { SuggestEngine } from './terminal-compositor.types.js';
 import type {
   CompositorScrollRegionGuard,
@@ -33,6 +34,14 @@ export interface LifecycleHost {
   repaint(): void;
   resetState(): void;
 
+  /**
+   * Monotonic frame counter — bumped once per {@link repaint}. Read by arm()'s
+   * keypress handler to detect whether dispatchKey already painted a frame this
+   * keystroke, so the caret-blink un-hide repaint fires only when nothing else
+   * did (avoids a double frame on an off-phase keystroke).
+   */
+  readonly repaintCount: number;
+
   readonly stdout: NodeJS.WriteStream;
   readonly stdin: NodeJS.ReadStream;
 
@@ -52,6 +61,7 @@ export interface LifecycleHost {
   canceled: boolean;
 
   readonly spinnerController: SpinnerController;
+  readonly caretBlinkController: CaretBlinkController;
   readonly ghostEngine: SuggestEngine | undefined;
 
   // Resize ghost-erase state + committed-band rows: read by arm()'s immediate
@@ -63,6 +73,10 @@ export interface LifecycleHost {
   // Read by disarm() to flush genuinely-unpainted committed-band rows to
   // scrollback before teardown. See committedBandPaintedRows on the class.
   readonly committedBandPaintedRows: number;
+  // F2: set by the SIGWINCH-immediate handler; cleared by the next debounced
+  // repaint once repositionCommittedBand re-establishes real geometry. See the
+  // field doc on the class (terminal-compositor.ts).
+  bandGeometryStale: boolean;
 }
 
 /**
@@ -86,6 +100,9 @@ export function suspendInput(self: LifecycleHost): void {
     self.stdin.removeListener('keypress', self.handleKeypress);
   }
   try { self.stdin.setRawMode(false); } catch { /* noop */ }
+  // Pause the blink while an external readline (e.g. elicitation) owns the TTY
+  // — its own cursor takes over; resumeInput() restarts the ticker.
+  self.caretBlinkController.stop();
   self.suspended = true;
 }
 
@@ -101,6 +118,8 @@ export function resumeInput(self: LifecycleHost): void {
   }
   self.suspended = false;
   self.repaint();
+  // Resume blinking now that we hold the TTY again. No-op when disabled.
+  self.caretBlinkController.start();
 }
 
 // Contract: arm() installs a keypress listener that calls InputDispatch.dispatchKey(self, ...).
@@ -175,7 +194,28 @@ export async function arm(self: LifecycleHost & KeyDispatchHost): Promise<void> 
   // surfaced in LifecycleHost. The keypress listener calls InputDispatch.dispatchKey
   // directly (with `self` as the KeyDispatchHost) so no relaxation of
   // dispatchKey is needed and no circular dependency is introduced.
-  self.handleKeypress = (char, key) => InputDispatch.dispatchKey(self, char, key);
+  //
+  // Caret-blink reset: a deliberate keystroke snaps the caret back to solid and
+  // restarts the blink dwell window, mirroring terminal cursor behavior (steady
+  // while typing, blinks only when idle). Skipped mid-paste-burst (`self.pasting`
+  // is set by handlePasteMarkers on the `\x1b[200~` open marker) — a 10K-char
+  // paste would otherwise churn the interval per character with no visible
+  // benefit, and applyEdit already suppresses per-char repaints during a burst.
+  //
+  // Repaint coalescing: resetVisible() only mutates phase state and REPORTS
+  // whether it un-hid an off-phase caret — it does not paint. Almost every key
+  // dispatchKey handles repaints anyway (applyEdit, nav, dropdown…), and that
+  // frame already reflects the now-solid caret; firing resetVisible's own
+  // repaint too would write the frame twice. So snapshot repaintCount, run
+  // dispatchKey, and repaint here ONLY when the caret was un-hidden AND
+  // dispatchKey painted nothing (e.g. an unbound key) — otherwise the un-hide
+  // rides the edit's frame for free.
+  self.handleKeypress = (char, key) => {
+    const caretUnhidden = self.pasting ? false : self.caretBlinkController.resetVisible();
+    const repaintsBefore = self.repaintCount;
+    InputDispatch.dispatchKey(self, char, key);
+    if (caretUnhidden && self.repaintCount === repaintsBefore) self.repaint();
+  };
   self.stdin.on('keypress', self.handleKeypress);
 
   // Invariant (arm ordering): set `armed = true` BEFORE registering the
@@ -264,6 +304,17 @@ export async function arm(self: LifecycleHost & KeyDispatchHost): Promise<void> 
     // for a redundant vacated-gap erase, never a stale paint). The old
     // on-screen band copy is cleared via pendingResizeErase above on EXPAND,
     // or scrolled by the terminal on SHRINK.
+    //
+    // F2 (fail-safe commit mode on stale geometry): mark the band's row
+    // geometry stale ALONGSIDE the logUpdate reset above — a commit that
+    // lands in the window between this immediate handler and the next
+    // debounced repaint (below) must not trust committedBandBottomRow as a
+    // floor for prevTopRow (see the field doc on bandGeometryStale,
+    // terminal-compositor.ts, and the prevTopRow site in
+    // terminal-compositor.committed-band-commit.ts). Cleared by
+    // repositionCommittedBand once it re-pins the band against real
+    // post-resize geometry.
+    self.bandGeometryStale = true;
   });
 
   // Intentionally NOT calling `updateAutocomplete()` here. The compositor's
@@ -277,10 +328,17 @@ export async function arm(self: LifecycleHost & KeyDispatchHost): Promise<void> 
   // refresh the state via `applyEdit()` → `updateAutocomplete()`.
 
   self.repaint();
+
+  // Start the caret-blink ticker AFTER the first frame is painted so the
+  // initial caret is solid. No-op when blinking is disabled or in capture mode.
+  self.caretBlinkController.start();
 }
 
 export function disarm(self: LifecycleHost): void {
   self.spinnerController.dispose();
+  // Stop the caret-blink ticker so no timer outlives the armed cycle (and no
+  // stray tick fires repaint() against a disarmed compositor).
+  self.caretBlinkController.stop();
 
   if (!self.armed) {
     // Still safe to clear state — no-op for listener/raw-mode.

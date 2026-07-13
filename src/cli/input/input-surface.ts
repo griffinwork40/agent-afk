@@ -49,9 +49,11 @@ import {
   type SuggestContext,
 } from '../terminal-compositor.js';
 import { colorizeInputBuffer, type SlashRegistryView } from '../input-highlight.js';
+import { detectCaptureMode, detectCaretBlink, detectReducedMotion } from '../_lib/capture-mode.js';
 import { list as listSlashCommands } from '../slash/registry.js';
 import { formatSubmittedEcho } from './echo.js';
 import { describeAttachmentSummary } from './attachments.js';
+import { commitBlockAbove } from '../_lib/commit-block.js';
 
 /**
  * Minimal StatusLine surface used by InputSurface — kept structural
@@ -241,6 +243,18 @@ export class InputSurface {
   private pendingReadReject: ((reason: Error) => void) | null = null;
 
   /**
+   * Resolve callback for the currently-pending readLine Promise (if any) —
+   * the twin of {@link pendingReadReject}. Set inside `readLine()` alongside
+   * the reject, cleared once the Promise settles. Used by
+   * {@link abortPendingRead} to resolve an in-flight read with an EMPTY
+   * payload from outside the keypress loop (the auto-resume wake path), so a
+   * settled background subagent can wake an idle prompt without a keystroke.
+   * Non-null only on the compositor (TTY) path — the non-TTY reader resolves
+   * through `readWithAutocomplete` and cannot be externally woken.
+   */
+  private pendingReadResolve: ((value: ReadWithAutocompleteResult) => void) | null = null;
+
+  /**
    * Live-registry adapter — queried fresh via `listSlashCommands()` on
    * every call so plugins that register slash commands mid-session
    * colorize correctly. Held as a class field (not an `armCompositor`
@@ -302,6 +316,12 @@ export class InputSurface {
       history: this.history,
       autocompleteState: this.autocompleteState,
       formatInputBuffer: (segment) => colorizeInputBuffer(segment, this.slashRegistryView),
+      // Blinking caret (pulse on/off like a terminal cursor). Enabled by
+      // default; AFK_CARET_BLINK=0 or AFK_REDUCED_MOTION=1 opt out. captureMode
+      // (script(1)/asciinema/AFK_DEMO_CLEAN) suppresses the ticker inside the
+      // compositor so recordings show a steady caret.
+      caretBlink: detectCaretBlink() && !detectReducedMotion(),
+      captureMode: detectCaptureMode(),
       ...(opts.scrollRegion ? { scrollRegion: opts.scrollRegion } : {}),
       ...(opts.anchorRow !== undefined ? { anchorRow: opts.anchorRow } : {}),
       ...(opts.suggest ? { suggest: opts.suggest } : {}),
@@ -332,6 +352,7 @@ export class InputSurface {
       this.compositor.setOnSubmit(null);
       const reject = this.pendingReadReject;
       this.pendingReadReject = null;
+      this.pendingReadResolve = null;
       reject(new Error('InputSurface disposed while readLine was in progress'));
     }
     try { this.compositor.disarm(); } catch { /* best effort */ }
@@ -427,8 +448,11 @@ export class InputSurface {
       const compositor = this.compositor;
       return new Promise<ReadWithAutocompleteResult>((resolve, reject) => {
         // Store the reject so dispose() can abort this Promise if
-        // the surface is torn down before the user presses Enter.
+        // the surface is torn down before the user presses Enter, and the
+        // resolve so abortPendingRead() can wake it with an empty payload
+        // (auto-resume) without a keypress.
         this.pendingReadReject = reject;
+        this.pendingReadResolve = resolve;
 
         const handler = (payload: SubmissionPayload) => {
           // One-shot: clear the handler after fire so the next
@@ -437,9 +461,11 @@ export class InputSurface {
           // keeps the compositor's invariant that submission state
           // is cleared BEFORE the handler runs intact.
           compositor.setOnSubmit(null);
-          // Settled — clear the dispose-abort ref so a subsequent
-          // dispose() doesn't try to reject an already-resolved Promise.
+          // Settled — clear the dispose-abort + wake refs so a subsequent
+          // dispose()/abortPendingRead() doesn't touch an already-resolved
+          // Promise.
           this.pendingReadReject = null;
+          this.pendingReadResolve = null;
 
           // Visual parity with `readWithAutocomplete`: commit the
           // submitted message to scrollback above the live overlay.
@@ -476,13 +502,12 @@ export class InputSurface {
             isTTY: Boolean(echoStdout.isTTY),
             attachmentSummary: describeAttachmentSummary([...payload.attachments]),
           });
-          // formatSubmittedEcho can return multi-line strings (long
-          // input is rendered as a card with `\n` between rows).
-          // commitAbove expects one logical line per call — split so
-          // each row commits as its own scrollback entry.
-          for (const line of echo.split('\n')) {
-            compositor.commitAbove(line);
-          }
+          // formatSubmittedEcho can return multi-line strings (long input is
+          // rendered as a card with `\n` between rows). Commit the echo as ONE
+          // atomic block: commitAbove handles a multi-line block with a single
+          // geometry decision; committing row-by-row would desync the band-hold
+          // model under a tall overlay (the "weird gaps" bug). See commit-block.ts.
+          commitBlockAbove(compositor, echo.split('\n'));
 
           resolve({ text: payload.text, attachments: [...payload.attachments] });
         };
@@ -520,6 +545,52 @@ export class InputSurface {
       autocompleteState: this.autocompleteState,
       ...(this.statusLine ? { statusLine: this.statusLine } : {}),
     });
+  }
+
+  /**
+   * Whether a compositor-path {@link readLine} Promise is currently in
+   * flight (idle prompt, blocked awaiting Enter). False on the non-TTY
+   * reader path, which cannot be externally woken. Read by the REPL loop's
+   * auto-resume trigger to gate {@link abortPendingRead}.
+   */
+  isAwaitingInput(): boolean {
+    return this.pendingReadResolve !== null;
+  }
+
+  /**
+   * Whether the compositor's live input buffer holds no pending user intent
+   * — empty text AND no queued submission. Gates the auto-resume wake so it
+   * never clobbers a half-typed line or a submission queued mid-stream.
+   * Returns true when no compositor is armed (non-TTY), but the
+   * {@link isAwaitingInput} gate makes that case unreachable on the wake path.
+   */
+  bufferIsEmpty(): boolean {
+    const buf = this.compositor?.getBuffer();
+    if (!buf) return true;
+    return buf.text.length === 0 && !buf.queued;
+  }
+
+  /**
+   * Resolve an in-flight compositor-path {@link readLine} with an EMPTY
+   * payload WITHOUT a keypress — the external-wake twin of the
+   * {@link dispose} abort path (resolve instead of reject). Clears the
+   * one-shot `onSubmit` handler first (mirror the submit handler) so a
+   * later Enter cannot double-fire, then resolves. No-op when no read is in
+   * flight or on the non-TTY path.
+   *
+   * The empty payload trips the REPL loop's empty-input guard (`continue`),
+   * which re-enters the top of the loop where the caller's queued
+   * `seedBuffer` drives the actual turn. See
+   * `loop-iteration.ts` and
+   * `.afk/plans/auto-resume-repl-on-background-completion.md`.
+   */
+  abortPendingRead(): void {
+    if (!this.pendingReadResolve) return;
+    this.compositor?.setOnSubmit(null);
+    const resolve = this.pendingReadResolve;
+    this.pendingReadReject = null;
+    this.pendingReadResolve = null;
+    resolve({ text: '', attachments: [] });
   }
 
   /**

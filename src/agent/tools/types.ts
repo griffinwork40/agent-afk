@@ -13,6 +13,7 @@ export type { AnthropicToolDef } from '../providers/anthropic-direct/types.js';
 export type { ToolDispatcher } from '../providers/anthropic-direct/tool-dispatcher.js';
 
 import type { ToolResult } from '../providers/anthropic-direct/types.js';
+import type { TraceWriter } from '../trace/index.js';
 
 /**
  * Per-invocation context forwarded to every tool handler.
@@ -74,6 +75,22 @@ export interface ToolHandlerContext {
    * throw. Default (unset) enforces containment against the granted roots.
    */
   allowAll?: boolean;
+  /**
+   * Witness-layer trace writer. Forwarded from the session dispatcher so
+   * tool handlers can emit domain-specific trace events (e.g. `browser_event`)
+   * without knowing about the session's full trace plumbing.
+   *
+   * Optional — handlers that don't emit trace events ignore this field.
+   * Never required: missing writer is a no-op at the emit helper level.
+   */
+  traceWriter?: TraceWriter;
+  /**
+   * Stable identifier for the current tool use block. Correlates handler-emitted
+   * trace events with the surrounding `tool_call` started/completed records.
+   * Populated by the dispatcher from `ToolCall.id`; absent for inline test
+   * invocations that construct a context without a live dispatch cycle.
+   */
+  toolUseId?: string;
 }
 
 /**

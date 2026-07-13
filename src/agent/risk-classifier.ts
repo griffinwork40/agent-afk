@@ -195,6 +195,65 @@ function classifyFilePath(filePath: string, ctx: RiskContext): RiskLevel {
 }
 
 // ---------------------------------------------------------------------------
+// MCP destructive-verb table
+// ---------------------------------------------------------------------------
+
+// Invariant: an MCP tool name is `mcp__<server>__<tool>` (3 segments) by the
+// bridge convention, but a server MAY expose a 2-segment `mcp__<tool>` name.
+// classifyRisk scans EVERY word token after the `mcp__` prefix (server segment
+// included) for a destructive verb, matching on `_`/`-` word boundaries — never
+// a raw substring. Two failure modes this guards against, both surfaced in the
+// review of PR #339:
+//   1. UNDER-GATING (the security hole this table exists to close): extracting
+//      only the 3rd+ segment (`.slice(2)`) made a 2-segment `mcp__deploy` yield
+//      an empty sub-name, so the verb scan never fired and an irreversible op
+//      ran unattended at 'medium'. Scanning the full post-prefix suffix
+//      (`.slice(1)`) closes this — `mcp__deploy` now matches the `deploy` verb.
+//   2. FALSE POSITIVES from substring matching: `.includes('run')` gated
+//      `mcp__test__runner` and `.includes('exec')` gated `mcp__server__executor`
+//      to 'high'. Token matching on `_`/`-` boundaries keeps `run`/`execute` as
+//      whole-word verbs while letting `runner`/`executor` through as 'medium'.
+// Token (not substring) matching is REQUIRED once the server segment is scanned:
+// the `postgres` server name contains `post` (a verb), so substring matching
+// would wrongly gate every `mcp__postgres__*` tool 'high'. The tradeoff is that a
+// verb concatenated WITHOUT a separator (`mcp__db__dropall`) is not caught — but
+// real MCP tools use snake_case/kebab-case (`drop_all`), so this is a narrow gap.
+// Scanning the server segment too can over-gate a benign tool whose SERVER is
+// named after a verb (e.g. `mcp__deploy__status` → 'high'). That is deliberate
+// safe-side error: over-gating merely asks the operator to approve; under-gating
+// runs a destructive op unattended. A future per-server allowlist can refine it.
+const DESTRUCTIVE_VERBS: ReadonlySet<string> = new Set([
+  // data / storage mutation
+  'delete', 'drop', 'remove', 'destroy', 'truncate', 'purge', 'wipe',
+  'write', 'create', 'update', 'insert', 'upsert', 'patch', 'rename',
+  // execution
+  'exec', 'execute', 'run', 'eval',
+  // messaging / publishing
+  'send', 'push', 'publish', 'deploy', 'post',
+  // repo / vcs
+  'merge', 'rollback', 'reset',
+  // infra lifecycle
+  'terminate', 'provision', 'scale', 'disable',
+  // financial
+  'charge', 'refund',
+  // auth / access
+  'revoke',
+]);
+
+/**
+ * Lowercase word tokens of an MCP tool's sub-name (everything after the `mcp__`
+ * prefix), split on `_`/`-`/`__` boundaries. The server segment is intentionally
+ * included: a 2-segment name has no server, and the verb may live in either
+ * position. Empty tokens (from `__` separators or leading/trailing delimiters)
+ * are dropped so they never spuriously match a verb. `tool` must already be
+ * lowercased by the caller.
+ */
+function mcpSubNameTokens(tool: string): string[] {
+  const suffix = tool.split('__').slice(1).join('__');
+  return suffix.split(/[_-]+/).filter(Boolean);
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -239,6 +298,83 @@ export function classifyRisk(
   // ---- outbound communication --------------------------------------------
   if (tool === 'send_telegram') {
     // Can't be unsent — medium risk.
+    return 'medium';
+  }
+
+  // ---- MCP tools ----------------------------------------------------------
+  // Any `mcp__*` tool is an externally-contributed function from a third-party
+  // server (postgres, filesystem, GitHub, …). The classifier has NO visibility
+  // into what it does, so it cannot tell a safe MCP read from a destructive
+  // mutation (`mcp__postgres__drop_table`, `mcp__fs__delete`). Failing open
+  // (returning 'safe') would let an unattended run silently execute arbitrary
+  // external side-effects — exactly what the AFK gate exists to prevent.
+  //
+  // Policy (conservative default, operator-upgradable): a destructive verb in
+  // any post-prefix token → 'high' (gated behind approval); all other MCP tools
+  // → 'medium' (may have network/quota side-effects but not obviously
+  // destructive, and medium is allowed in AFK so autonomous research stays
+  // useful). See DESTRUCTIVE_VERBS / mcpSubNameTokens above for the exact scan
+  // rule and why it covers 2-segment names and matches on word boundaries.
+  //
+  // Prefix test uses the already-lowercased `tool` so mixed-case `Mcp__…` names
+  // are classified too, not silently dropped to the 'safe' default below.
+  if (tool.startsWith('mcp__')) {
+    const tokens = mcpSubNameTokens(tool);
+    if (tokens.some((t) => DESTRUCTIVE_VERBS.has(t))) return 'high';
+    return 'medium';
+  }
+
+  // ---- schedule mutations --------------------------------------------------
+  // Invariant: create_schedule and cancel_schedule modify the daemon's cron
+  // store (schedules.json) and may immediately affect a running daemon via live
+  // sync. These are irreversible in the sense that a wrongly-scheduled task
+  // could run before the operator notices — so they are 'high', gated behind
+  // explicit approval in AFK mode. list_schedules and get_schedule_history are
+  // read-only and fall through to the 'safe' default below.
+  if (tool === 'create_schedule' || tool === 'cancel_schedule') {
+    return 'high';
+  }
+
+  // ---- worktree lifecycle --------------------------------------------------
+  // Invariant: the `worktree` tool mutates git worktree state under
+  // .afk-worktrees/. `remove` with `force: true` is the only irreversible
+  // action — it discards uncommitted working-tree changes and commits-ahead
+  // trees that the non-forced path refuses (the branch ref always survives, but
+  // working-tree edits do not), so it is 'high' and gated behind approval.
+  // `list` is a dry-run sweep report (read-only) → 'safe'. Every other action
+  // (create/keep/release, and non-forced remove — which refuses dirty, locked,
+  // and commits-ahead trees) is reversible → 'medium', allowed unattended like
+  // other afk-managed writes. Without this branch the tool fell through to the
+  // 'safe' default below, so `remove --force` ran unattended with no approval.
+  if (tool === 'worktree') {
+    const obj =
+      typeof input === 'object' && input !== null
+        ? (input as Record<string, unknown>)
+        : {};
+    const action = typeof obj['action'] === 'string' ? obj['action'] : '';
+    if (action === 'list') return 'safe';
+    if (action === 'remove' && obj['force'] === true) return 'high';
+    return 'medium';
+  }
+
+  // ---- browser actions -----------------------------------------------------
+  // browser_act and browser_open drive a stateful headed browser session and
+  // can submit forms, click "Delete", trigger purchases, or navigate to
+  // arbitrary URLs — side-effects that survive the session and may be
+  // irreversible. They are 'medium' rather than 'high' because they are
+  // generally recoverable (navigate away, close the tab) and the AFK posture
+  // allows medium ops unattended. browser_screenshot and browser_observe are
+  // read-only; browser_close is a cleanup op — all safe.
+  if (tool === 'browser_act' || tool === 'browser_open') {
+    return 'medium';
+  }
+
+  // ---- web_scrape ----------------------------------------------------------
+  // web_scrape issues outbound HTTP requests (and optionally headless-browser
+  // renders for JS-heavy pages). It may hit rate-limited, metered, or
+  // auth-gated endpoints. 'medium' — notable network side-effect but recoverable
+  // and broadly necessary for autonomous research work in AFK mode.
+  if (tool === 'web_scrape') {
     return 'medium';
   }
 

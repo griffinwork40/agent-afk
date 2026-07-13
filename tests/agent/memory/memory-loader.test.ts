@@ -11,9 +11,15 @@ import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import type { AgentConfig } from '../../../src/agent/types/config-types.js';
 import { loadHotMemory, injectHotMemory } from '../../../src/agent/memory/memory-loader.js';
+import { useUnsetAfkHome } from '../../../src/__test-utils__/unset-afk-home.js';
 
 let tmpHome: string;
 let originalHome: string | undefined;
+
+// HOT.md fixtures are written under $HOME/.afk/state/memory and the loader
+// resolves that via the unset-AFK_HOME fallback — drop the global sentinel
+// AFK_HOME per test; HOME is redirected to a tmp dir below.
+useUnsetAfkHome();
 
 beforeEach(() => {
   originalHome = process.env['HOME'];

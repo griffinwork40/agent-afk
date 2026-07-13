@@ -1,17 +1,20 @@
 import * as readline from 'node:readline';
+import { statSync } from 'node:fs';
+import type { HookRegistry } from '../../../agent/hooks.js';
 import type { SessionRef } from '../../../agent/session-ref.js';
 import type { MemoryStore } from '../../../agent/memory/index.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 import type { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import type { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
 import type { SubagentControl } from '../../../agent/tools/subagent-executor.js';
-import type { SlashContext, SessionStats, ResumeSwapResult } from '../../slash/types.js';
+import type { SlashContext, SessionStats, ResumeSwapResult, ThinkingUiMode } from '../../slash/types.js';
 import type { StoredSession } from '../../session-store.js';
 import type { StatusLine } from '../../status-line.js';
 import type { ReplRenderer } from './repl-renderer.js';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
 import { contextLimitFor } from '../../model-limits.js';
 import { ContextSampler } from '../../context-sampler.js';
+import type { GitStatusSampler } from '../../git-status-sampler.js';
 import { formatTurnSparkline } from '../../context-sparkline.js';
 import { palette } from '../../palette.js';
 
@@ -50,6 +53,49 @@ export function reseedStatsFromStored(
   // was added lack the field, deserializing as undefined despite the type.
   // Default to now so the status-line duration is 0, not NaN.
   stats.sessionStartTime = stored.startedAt ?? Date.now();
+}
+
+/**
+ * True iff `p` exists AND is a directory. A stored cwd that resolved to a
+ * regular file (or a broken symlink) must NOT be used as a working directory,
+ * so we stat rather than existsSync. Any stat error (ENOENT, EACCES, race)
+ * degrades to false, so the caller falls back to process.cwd().
+ */
+function isExistingDir(p: string): boolean {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the effective working directory for a (possibly resumed) interactive
+ * session. Precedence:
+ *   1. An explicit `--worktree` override (`extrasCwd`) ALWAYS wins.
+ *   2. Otherwise, fall back to the resumed session's stored cwd — but ONLY when
+ *      it still exists on disk as a directory. A resumed session should run in
+ *      the directory it was saved in (e.g. an `afk --worktree` session later
+ *      `/fork`'d or `--resume`'d), not wherever the shell happens to be. A
+ *      cleaned-up worktree degrades safely (the stored cwd is ignored, caller
+ *      falls back to `process.cwd()`).
+ *
+ * Returns `undefined` when neither source applies, so callers keep their
+ * existing `?? process.cwd()` fallback. Because it defaults to `extrasCwd` when
+ * there is no resume override, this is a safe drop-in — behavior only changes
+ * for a resume whose stored cwd still exists.
+ *
+ * Extracted as a pure helper (rather than inlined in bootstrap) so the
+ * precedence contract is unit-testable in isolation from the heavy session
+ * construction path.
+ */
+export function resolveResumeCwd(
+  extrasCwd: string | undefined,
+  storedCwd: string | undefined,
+): string | undefined {
+  if (extrasCwd !== undefined) return extrasCwd;
+  if (storedCwd !== undefined && isExistingDir(storedCwd)) return storedCwd;
+  return undefined;
 }
 
 /**
@@ -210,7 +256,12 @@ function truncate(s: string, max: number): string {
   return codePoints.slice(0, max - 1).join('') + '…';
 }
 
-export type ThinkingUiMode = 'summary' | 'live' | 'off';
+/**
+ * Canonical definition lives in `slash/types.ts` (neutral layer) to avoid the
+ * upward import that would result from defining it here. Re-exported for
+ * backward compat — existing imports from this module continue to work.
+ */
+export type { ThinkingUiMode } from '../../slash/types.js';
 
 export interface CliOptions {
   /**
@@ -222,7 +273,13 @@ export interface CliOptions {
   model: AgentModelInput;
   maxTurns: string;
   thinking?: string;
-  thinkingUi: ThinkingUiMode;
+  /**
+   * `--thinking-ui` display mode. Optional at the CLI layer: the Commander
+   * option carries no static default, so this is `undefined` until the action
+   * handler resolves the flag > `AFK_THINKING_UI` env > `interactive.thinkingUi`
+   * config > `'live'` precedence (see `resolveThinkingUi`) and assigns it back.
+   */
+  thinkingUi?: ThinkingUiMode;
   effort?: string;
   maxOutputTokens?: string;
   resume?: string;
@@ -230,7 +287,8 @@ export interface CliOptions {
   debug?: boolean;
   /**
    * `--dangerously-skip-permissions` — start the session in `'bypassPermissions'`
-   * (skip path-approval prompts; read/write anywhere). Toggle live with /bypass.
+   * (skip path-approval prompts; read/write anywhere). Toggle live with Shift+Tab
+   * (the permission-mode cycle: default → plan → bypass).
    */
   dangerouslySkipPermissions?: boolean;
   /**
@@ -284,6 +342,7 @@ export interface InteractiveCtx {
   stats: SessionStats;          // mutable across turns
   statusLine: StatusLine;        // mutable — owns terminal side-effects
   contextSampler: ContextSampler; // mutable — cached SDK calls
+  gitStatusSampler: GitStatusSampler; // mutable — cached git branch + PR for the status line
   completionWriter: CompletionWriter;
   replRenderer: ReplRenderer;
   slashCtx: SlashContext;
@@ -335,6 +394,15 @@ export interface InteractiveCtx {
    */
   firstTurnHook?: (firstMessage: string) => Promise<void>;
   /**
+   * Optional first message seeded from the launch argument — set when the user
+   * runs `afk "prompt"` or `afk /slash args` (the interactive command's
+   * variadic `[input...]` positional). When present, the REPL loop promotes it
+   * into its `seedBuffer` fast-path and auto-submits it as the opening turn,
+   * echoed and dispatched exactly as if typed: a plain prompt runs a turn, a
+   * `/command` routes through the slash dispatcher. Absent for a bare `afk`.
+   */
+  initialInput?: string;
+  /**
    * Returns true while a turn is in flight. Set by `interactive.ts` after
    * building `turnState` so the swap closure can refuse mid-turn swaps.
    * Defaults to false when absent.
@@ -359,6 +427,14 @@ export interface InteractiveCtx {
    * by `runReplLoop` after the ledger is created.
    */
   clearVerdictLedger?: () => void;
+  /**
+   * Drops any buffered background-subagent results (BgResultNotifier) so a
+   * mid-session /resume swap can't leak the outgoing session's settled-job
+   * injections into the resumed session's first turn. Same wiring pattern
+   * as `clearVerdictLedger`: owned by the REPL loop's closure, set by
+   * `setupFooterSubsystems`, invoked from the swap's `onSwapped` callback.
+   */
+  clearBgResultBuffer?: () => void;
   /**
   /**
    * Cursor row (1-based) at the moment `armCompositor` will be invoked,
@@ -412,6 +488,13 @@ export interface InteractiveCtx {
    * the ghost toggle.
    */
   suggestGhostConfig?: boolean;
+  /**
+   * Hook registry for dispatching harness lifecycle events from the REPL loop.
+   * Absent in test stubs that do not exercise hooks. Set by bootstrap.ts from
+   * `hookRegistryBundle.registry`. Fires UserPromptSubmit before each runTurn
+   * call (enabling per-prompt policy hooks) and Stop after each completed turn.
+   */
+  hookRegistry?: HookRegistry;
 }
 
 /**
@@ -438,6 +521,23 @@ export interface InteractiveCtx {
 export interface CompletionWriter {
   fn: (line: string) => void;
   idleFn: (line: string) => void;
+  /**
+   * Turn-scoped guard: when true, the REPL's SubagentStop-hook completion
+   * line (`✓ <agentType> · <duration>` via {@link emitSubagentCompletion})
+   * is dropped because a foreground turn's live overlay owns subagent
+   * rendering — the ToolLane already commits the `→ Agent(…) Done` tree to
+   * scrollback (Channel A). Emitting the compact line here (Channel B) would
+   * double-render the node AND its uncoordinated `commitAbove` races the
+   * OverlayComposer's `setOverlay`, corrupting the compositor's frame
+   * row-accounting (ghost `◉` markers + swallowed committed lines).
+   *
+   * Set true by `turn-handler.ts`'s `armAndWire` (only when a compositor is
+   * armed — TTY) and reset false in its finally block, bracketing exactly the
+   * window where the overlay is live. Left false between turns and on non-TTY
+   * / one-shot `chat` (which uses its own console writer), so background-job
+   * completions and the `chat` surface still surface the line.
+   */
+  suppressSubagentCompletion?: boolean;
 }
 
 export interface TurnHandles {
@@ -481,8 +581,17 @@ export interface TurnHandles {
    * The verdict card itself has already been printed to scrollback by the
    * turn handler before this hook fires; the hook is purely for ledger
    * bookkeeping. Best-effort — errors are swallowed by the caller.
+   *
+   * `meta.doneHasCorroboratingEvidence` reports whether the turn produced a
+   * successful file write/edit or executed command (see
+   * `doneHasCorroboratingEvidence` in `afk-push.ts`). The REPL loop forwards it
+   * onto the post-turn `Stop` hook's {@link StopContext} so the terminal-state
+   * gate can flag a self-certified `Done` with nothing behind it.
    */
-  onTerminalState?(state: import('./terminal-state.js').TerminalState): void;
+  onTerminalState?(
+    state: import('./terminal-state.js').TerminalState,
+    meta?: { doneHasCorroboratingEvidence?: boolean },
+  ): void;
   /**
    * Publishes the in-flight turn's active TerminalCompositor (or null when
    * none exists, e.g. on non-TTY surfaces or after dispose). The REPL's
@@ -634,7 +743,11 @@ export function contextRatio(stats: SessionStats, sampler?: ContextSampler): num
   return used / contextLimitFor(stats.model);
 }
 
-export function formatStatusFields(stats: SessionStats, sampler?: ContextSampler) {
+export function formatStatusFields(
+  stats: SessionStats,
+  sampler?: ContextSampler,
+  gitSampler?: GitStatusSampler,
+) {
   const pct = contextRatio(stats, sampler);
   const contextLimit = contextLimitFor(stats.model);
 
@@ -663,6 +776,9 @@ export function formatStatusFields(stats: SessionStats, sampler?: ContextSampler
     }
   }
 
+  const branch = gitSampler?.getBranch();
+  const pr = gitSampler?.getPr();
+
   return {
     model: stats.model,
     cost: stats.totalCostUsd,
@@ -673,5 +789,7 @@ export function formatStatusFields(stats: SessionStats, sampler?: ContextSampler
     contextSparkline,
     permissionMode: stats.permissionMode,
     ...(stats.cwd !== undefined ? { cwd: stats.cwd } : {}),
+    ...(branch !== undefined ? { branch } : {}),
+    ...(pr !== undefined ? { pr } : {}),
   };
 }

@@ -152,14 +152,51 @@ export function markdownToTelegramHtml(text: string): string {
   // 8. Headers: drop # prefix, keep text
   out = out.replace(/^#{1,6}\s+/gm, '');
 
-  // 9. Restore code spans and fenced blocks after ALL inline transforms.
-  // External constraint: restore must happen last so no inline regex re-scans
-  // the restored HTML content. Inline code before fenced to prevent nested substitution.
+  // 9. Safety net: interleaved/overlapping emphasis markers (e.g. "**a _b** c_")
+  // can yield improperly-NESTED tags like "<b>a <i>b</b> c</i>", which Telegram
+  // rejects with HTTP 400 "can't parse entities" — failing or degrading the send.
+  // Code/pre/link tags are emitted as atomic, always-balanced units, so any
+  // imbalance is necessarily from emphasis (<b>/<i>/<s>); drop just those to
+  // recover guaranteed-valid, readable HTML instead of breaking the message.
+  //
+  // Invariant: this MUST precede the code/fenced restore below. While they are
+  // still placeholders, the balance check and strip see only real emphasis/link
+  // tags — never the restored content. That matters because an empty fence is
+  // emitted as a <i>(empty … block)</i> placeholder; restoring it first would
+  // expose that <i> to the strip and silently de-italicise the label whenever an
+  // unrelated mis-nested emphasis run in the same message trips the net.
+  if (!telegramHtmlTagsBalanced(out)) {
+    out = out.replace(/<\/?[bis]>/g, '');
+  }
+
+  // 10. Restore code spans, then fenced blocks, AFTER the safety net — so no regex
+  // re-scans the restored HTML content and the empty-fence <i> label survives the
+  // strip above. Inline code before fenced to prevent nested substitution.
   out = out.replace(/\x02CODE(\d+)\x03/g, (_m, i: string) => codeSpans[Number(i)] ?? _m);
-  // 10. Restore fenced code blocks
   out = out.replace(/\x02FENCED(\d+)\x03/g, (_m, i: string) => fencedBlocks[Number(i)] ?? _m);
 
   return out;
+}
+
+/**
+ * True iff every HTML tag in `html` is properly closed and correctly nested — a
+ * simple stack check over the tags markdownToTelegramHtml emits (b, i, s, code,
+ * pre, a). Used as a safety net so a mis-nested emphasis run never produces HTML
+ * that Telegram rejects with a 400 "can't parse entities".
+ */
+function telegramHtmlTagsBalanced(html: string): boolean {
+  const stack: string[] = [];
+  const re = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const tag = (m[2] ?? '').toLowerCase();
+    if (m[1] === '/') {
+      if (stack.pop() !== tag) return false;
+    } else {
+      stack.push(tag);
+    }
+  }
+  return stack.length === 0;
 }
 
 /**
@@ -260,6 +297,8 @@ export function formatHelp(sdkCommands?: string[]): string {
     '  /model      — Switch Claude model',
     '  /cd         — Change working directory',
     '  /name       — Show or set the session name',
+    '  /sessions   — List and switch between sessions',
+    '  /new        — Start a new session (keeps the current one)',
     '  /watch      — Live-tail a CLI session from this chat',
     '  /unwatch    — Stop watching a session',
     '',
@@ -429,4 +468,53 @@ export function formatCompactNoop(reason: string): string {
 function formatTokenCount(n: number): string {
   if (n >= 1000) return `${Math.round(n / 100) / 10}k`;
   return String(n);
+}
+
+/**
+ * Format the `/sessions` list body — one line per resumable conversation for
+ * this chat, active one marked. Tappable switch buttons are attached by the
+ * handler; this is the text shown above them. Structural param (a superset of
+ * SessionManager.ChatSessionInfo) keeps the formatter decoupled from that module.
+ */
+export function formatSessionsList(
+  sessions: ReadonlyArray<{ name?: string; model: string; turns: number; active: boolean }>,
+): string {
+  const lines = sessions.map((s, i) => {
+    const marker = s.active ? '✅ ' : '';
+    const label = s.name ? escapeHtml(s.name) : '(unnamed)';
+    const turns = s.turns === 1 ? '1 turn' : `${s.turns} turns`;
+    return `${i + 1}. ${marker}<b>${label}</b> · ${escapeHtml(s.model)} · ${turns}`;
+  });
+  return `🗂️ <b>Your sessions</b> (${sessions.length})\n\n${lines.join('\n')}\n\nTap one to switch. /new starts a fresh session.`;
+}
+
+/** Reply when a chat has no resumable sessions yet. */
+export function formatNoSessions(): string {
+  return '🗂️ No saved sessions yet.\n\nSend a message to start one, or /new for a fresh session.';
+}
+
+/** /switch (button) confirmation — lazy resume continues on the next message. */
+export function formatSwitched(session: { name?: string }): string {
+  const label = session.name ? `<b>${escapeHtml(session.name)}</b>` : 'that session';
+  return `↩️ Switched to ${label}. Your next message continues it.`;
+}
+
+/** /new confirmation — the previous conversation is preserved + resumable. */
+export function formatNewSession(): string {
+  return '🆕 Started a fresh session. Your previous one is saved — /sessions to switch back.';
+}
+
+/** Shown when a switch/new is attempted while the active session is mid-turn. */
+export function formatSessionBusy(): string {
+  return '⏳ Finish or wait for the current turn before switching sessions.';
+}
+
+/** Shown when a switch target can no longer be found. */
+export function formatSwitchNotFound(): string {
+  return formatError('That session could no longer be found. /sessions to see the current list.');
+}
+
+/** Shown when switching to the already-active session. */
+export function formatAlreadyActive(): string {
+  return "✅ You're already on that session.";
 }

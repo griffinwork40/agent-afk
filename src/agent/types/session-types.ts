@@ -22,9 +22,11 @@ import type {
   MessageChunk,
   ResponseMetadata,
   SendMessageOptions,
+  StructuredMessageOptions,
 } from './message-types.js';
 import type { ProviderCompactResult, ProviderQuery } from '../provider.js';
 import type { HookRegistry } from '../hooks.js';
+import type { ZodType } from 'zod';
 
 /** Agent session state */
 export type SessionState = 'idle' | 'processing' | 'streaming' | 'compacting' | 'closed';
@@ -179,6 +181,25 @@ export interface IAgentSession {
   sendMessage(content: string, options?: SendMessageOptions): Promise<Message>;
   sendMessageStream(content: string | ContentBlockParam[]): AsyncIterable<OutputEvent>;
 
+  /**
+   * Send a message and return its assistant response parsed against a Zod
+   * schema. Extracts a JSON payload from the reply (last fenced ```json block
+   * or last balanced object) and validates it; on mismatch, re-prompts the
+   * model with the validation error up to `maxRetries` times (default 2)
+   * before throwing. Mirrors the Claude Agent SDK's `outputFormat:
+   * json_schema`. Composes `sendMessage` turns — no streaming-path changes.
+   *
+   * Optional (`?`) so adding it does not break external implementers of
+   * `IAgentSession`. `AgentSession` always implements it; the library
+   * `query()`/`queryStructured()` path calls it on the concrete class, never
+   * through this interface.
+   */
+  sendMessageStructured?<T>(
+    content: string,
+    schema: ZodType<T>,
+    options?: StructuredMessageOptions,
+  ): Promise<T>;
+
   interrupt(): Promise<void>;
 
   /**
@@ -211,6 +232,18 @@ export interface IAgentSession {
   setModel(model?: AgentModelInput): Promise<void>;
   setPermissionMode(mode: PermissionMode): Promise<void>;
 
+  /**
+   * Return and CLEAR any implement-turn queued by an approved `exit_plan_mode`
+   * tool call. Atomically applies the deferred permission-mode flip (closing the
+   * mid-turn TOCTOU window) then returns BOTH the seed message AND the mode it
+   * flipped to. The REPL drains this post-turn: it mirrors `mode` onto
+   * `stats.permissionMode` (the value the plan-mode gate and prompt read — see
+   * #495) and auto-submits `message` as a fresh user turn (reproducing
+   * `/plan off`'s save-and-implement handoff). Returns `undefined` when nothing
+   * is pending (or when the deferred flip rejected and the seed was dropped).
+   */
+  takePendingPlanExitSeed(): Promise<{ message: string; mode: PermissionMode } | undefined>;
+
   waitForInitialization(): Promise<SessionMetadata>;
 
   getSessionIdentity(): SessionIdentity;
@@ -226,10 +259,14 @@ export interface IAgentSession {
   getOutputStream(): AsyncIterable<OutputEvent>;
 
   /**
-   * Get a narrow reference to the input stream for pushing user messages.
-   * Used by SubagentStop handlers to inject context into the parent's next turn.
+   * Get a narrow reference to the session's input channels.
+   *
+   * `pushUserMessage` starts a standalone turn (live steering);
+   * `queueFrameworkContext` holds hook-generated context (SubagentStop
+   * `injectContext`) to be prepended to the next real user message so it can
+   * never displace one. See `InputStreamRef` for the full contract.
    */
-  getInputStreamRef(): Pick<InputStreamRef, 'pushUserMessage'>;
+  getInputStreamRef(): Pick<InputStreamRef, 'pushUserMessage' | 'queueFrameworkContext'>;
 
   supportedCommands(): Promise<SlashCommand[]>;
   supportedModels(): Promise<ModelInfo[]>;

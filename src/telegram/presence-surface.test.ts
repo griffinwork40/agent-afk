@@ -115,7 +115,7 @@ const branches: Branch[] = [
     makeProvider: (surface) =>
       new AnthropicDirectProvider(surface !== undefined ? { surface } : {}),
     config: (sessionId) => ({
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'claude-sonnet-5',
       apiKey: 'sk-ant-oat01-test',
       sessionId,
     }),

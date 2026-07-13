@@ -7,7 +7,14 @@
 > Agent AFK isn't "smarter than Claude Code." It's *yours* in a way Claude Code can't be.
 
 [![npm version](https://img.shields.io/npm/v/agent-afk.svg)](https://www.npmjs.com/package/agent-afk)
+[![CI](https://github.com/griffinwork40/agent-afk/actions/workflows/ci.yml/badge.svg)](https://github.com/griffinwork40/agent-afk/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/node/v/agent-afk.svg)](https://nodejs.org/)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/griffinwork40/agent-afk?style=social)](https://github.com/griffinwork40/agent-afk/stargazers)
+
+<!-- DEMO GIF GOES HERE ▸ drop a 20–30s screen recording of one autonomous AFK run (e.g. kick off `afk daemon` / `afk mint "..."`, walk away, get the Telegram ping, come back done). Drag-and-drop the file into a GitHub issue/PR to host it on GitHub's CDN, then paste the URL as ![demo](URL) right here. This is the single biggest star-conversion lever — keep it above the fold. -->
+
+> ⭐ **Like the idea of an agent loop you fully own? [Star the repo](https://github.com/griffinwork40/agent-afk/stargazers)** — it's the fastest way to help other people find it.
 
 ## Claude Code vs. Agent AFK
 
@@ -33,9 +40,10 @@ Smoke test:
 ```bash
 afk --version    # confirm the install (works before login)
 afk doctor       # environment self-check
-afk login        # save an Anthropic API key or OAuth token
 afk chat "hello"
 ```
+
+**Already using Claude Code or Codex?** Run `afk migrate` — it imports your existing plugins, skills, and MCP servers. It doesn't copy files; it live-reads the source tool's dirs, so anything you install there keeps showing up in AFK with no re-run.
 
 ## What you can do with it
 
@@ -47,15 +55,14 @@ afk chat "hello"
 
 > **Agent AFK Pro:** Autonomous skill-generation (`/forge`) and the calibrated skill-qualification rubric (`/qualify`) are reserved for Agent AFK Pro and are not part of the open-source build.
 - **Cross-session memory** — Claude remembers preferences, decisions, and procedures across runs. See [Memory](#memory) below.
-- **Background subagent jobs** — dispatch a subagent with `mode:'background'`; `/bgsub` lists running and completed jobs, `/bgsub:join <id>` retrieves the result.
+- **Background subagent jobs** — dispatch a subagent with `mode:'background'`; results auto-deliver into the model's context when they finish. `/bgsub` lists running and completed jobs, `/bgsub:join <id>` replays a result manually.
 
 ## Four surfaces, one session manager
-
 | Command | Surface |
 |---|---|
 | `afk chat "..."` | One-shot (fire & forget) turn — pipe-friendly, scripts well |
 | `afk` (alias of `afk interactive`) | REPL with slash commands, streaming, plan mode, image paste |
-| `afk daemon` | Long-running headless agent, cron-friendly |
+| `afk daemon` | Long-running headless agent, cron-friendly. For persistence across reboot and crash, use `/service-setup` (launchd on macOS, systemd `--user` on Linux) instead of running in a bare tmux pane. |
 | `afk telegram start` | Telegram bot — same tools, same memory, on your phone |
 
 ## Configuration
@@ -132,11 +139,16 @@ afk chat "refactor this" --model gpt-5.5
 | Slot | Default | Notes |
 |---|---|---|
 | `local` | *(empty — you configure)* | Point at Ollama, LM Studio, or any OpenAI-compatible shim via `AFK_MODEL_LOCAL` + `AFK_MODEL_LOCAL_BASE_URL` |
-| `small` | `claude-haiku-4-5-20251001` | Cheapest/fastest Anthropic tier; `haiku` alias |
-| `medium` | `claude-sonnet-4-6` | General-use default; `sonnet` alias |
-| `large` | `claude-opus-4-8` | Most capable; `opus` alias |
+| `small` | `claude-haiku-4-5-20251001` | Cheapest/fastest Anthropic tier |
+| `medium` | `claude-sonnet-5` | General-use default |
+| `large` | `claude-opus-4-8` | Most capable |
 
-See [`docs/model-slots.md`](docs/model-slots.md) for the full configuration reference.
+The `haiku`/`sonnet`/`opus`/`fable` handles are **fixed identities**, not tier
+aliases: they always resolve to their Claude model even after you rebind a tier
+(so rebinding `medium` to an OpenAI model won't hijack `sonnet`). See
+[`docs/model-slots.md`](docs/model-slots.md) for the full configuration reference.
+
+MCP servers (tool-providing plugins over stdio/HTTP) — see [`docs/mcp.md`](docs/mcp.md) for config, transports, OAuth, and security notes.
 
 ## Useful commands
 
@@ -151,6 +163,58 @@ afk --help               # full command tree
 
 Aliases: `afk c` → `chat`, `afk i` → `interactive`, `afk s` → `status`.
 
+### Queue management
+
+`afk queue` manages the pull-trigger daemon's task queue — tasks are persisted as JSON files and consumed one-by-one by `afk daemon --trigger pull`.
+
+```bash
+afk queue add "/forge-friction --auto" --notify-on failure
+                         # enqueue a command; daemon picks it up on next poll
+afk queue list           # print all pending tasks (id, enqueued time, command)
+afk queue remove <id>    # drop a single pending task by id
+afk queue clear          # remove all pending tasks (prompts for confirmation)
+afk queue clear --yes    # clear without prompting (CI / non-interactive)
+```
+
+### Self-improvement pipeline
+
+`afk improve` is a zero-LLM, deterministic pipeline that mines `~/.afk/state/witness/` session traces for ranked failure patterns, without making any model calls.
+
+```bash
+# Scan traces for failure patterns (dry-run; add --write to persist cards)
+afk improve scan [--since 7d] [--write] [--only <detector,...>]
+
+# Inspect failure cards
+afk improve cards list [--pattern <name>] [--severity <level>] [--status open|deferred|resolved]
+afk improve cards show <slug>
+afk improve cards triage <slug> --note "..." [--status resolved]
+
+# Draft a template-mode improvement proposal for a card (no LLM)
+afk improve propose <slug> [--no-write]
+
+# Generate a replay-mode eval-case from a failure card
+afk improve eval-gen <cardSlug> [--evidence-row <i>] [--no-write]
+
+# Run the deterministic guardrail contract for an eval-case
+afk improve eval-run <evalCaseIdOrCardSlug> [--no-write]
+```
+
+Available detectors (run `afk improve scan --help` for thresholds): `repeated-tool-use`, `subagent-block`, `closure-anomaly`, `tool-failure-density`.
+
+### Speculative branch farm
+
+`afk farm` spawns N isolated git worktrees, runs an agent on each in parallel, scores the results (tests + lint + LoC delta), and prints a ranked summary.
+
+```bash
+afk farm "add retry logic to the queue consumer" --branches 3
+afk farm "<task>" -n 5 --model sonnet --fail-fast
+afk farm "<task>" -n 3 --no-score    # skip post-run scoring
+afk farm "<task>" -n 3 --labels "approach-a,approach-b,approach-c"
+afk farm "<task>" -n 3 --no-memory --no-digest  # skip memory write + Telegram
+```
+
+Each branch gets a dedicated worktree under `~/.afk/state/farm/`. A commit-count escape check confirms each agent did real work. On completion, the winner (branch that passes tests and makes the smallest net change) is surfaced; the rest are left for manual cherry-pick or deletion.
+
 ## A note on permissions
 
 `afk` does not prompt before each tool call — there is no per-tool approval flow. Claude runs bash, reads and writes files, fetches URLs, and calls MCP servers without asking each time. This is intentional — `afk` is built for unattended work, where a permission prompt with no human in front of it is just a wedged session.
@@ -160,7 +224,7 @@ Aliases: `afk c` → `chat`, `afk i` → `interactive`, `afk s` → `status`.
 **To re-enable path containment**, set the mode back any of these ways:
 
 - Persistently: `afk config set permissionMode default` (or `plan`), or `"permissionMode": "default"` in `afk.config.json`. It stays that way until you change it again.
-- For one session: `/bypass off` in the REPL (the status line clears `⚠ BYPASS`).
+- For one session: `/bypass off` in the REPL (the status line clears `⚡ bypass`).
 
 With containment on (`default`), a file tool (read/write/edit/list/glob/grep) targeting a path *outside* the session's working directory triggers a **path-approval** prompt; pre-authorize paths with `/allow-dir <path>` (or answer "persist" at the prompt to remember them across sessions). Toggle bypass live anytime with `/bypass`. `afk daemon` always runs in bypass (no human to prompt); **Telegram** sessions stay contained (`default`) and rely on hook-based enforcement.
 
@@ -179,6 +243,12 @@ With containment on (`default`), a file tool (read/write/edit/list/glob/grep) ta
 ## Changelog
 
 Recent releases at [`CHANGELOG.md`](CHANGELOG.md), also viewable in-REPL via `/changelog`.
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=griffinwork40/agent-afk&type=Date)](https://star-history.com/#griffinwork40/agent-afk&Date)
+
+If Agent AFK saves you time, **[⭐ star the repo](https://github.com/griffinwork40/agent-afk/stargazers)** — it's the single best way to help it reach more people.
 
 ## License
 

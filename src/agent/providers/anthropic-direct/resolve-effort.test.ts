@@ -49,6 +49,11 @@ describe('resolveEffort', () => {
     expect(resolveEffort(undefined, 'claude-sonnet-4-7-latest')).toBe('max');
   });
 
+  it('defaults to "max" for claude-sonnet-5 (adaptive-thinking Sonnet tier)', () => {
+    expect(resolveEffort(undefined, 'claude-sonnet-5')).toBe('max');
+    expect(resolveEffort(undefined, 'claude-sonnet-5-20260630')).toBe('max');
+  });
+
   // ── Explicit caller overrides always win ───────────────────────────────
 
   it('returns the explicit effort when caller specifies it, even on opus-4-7', () => {
@@ -173,6 +178,15 @@ describe('resolveThinkingParam', () => {
 
   it('promotes enabled to adaptive on opus-4.7+ (no explicit budget leaks through)', () => {
     const p = resolveThinkingParam(enabled(60_000), 64_000, 'claude-opus-4-8') as {
+      type: string;
+      budget_tokens?: number;
+    };
+    expect(p.type).toBe('adaptive');
+    expect(p.budget_tokens).toBeUndefined();
+  });
+
+  it('promotes enabled to adaptive on claude-sonnet-5 (adaptive-only; no budget leaks through)', () => {
+    const p = resolveThinkingParam(enabled(60_000), 64_000, 'claude-sonnet-5') as {
       type: string;
       budget_tokens?: number;
     };

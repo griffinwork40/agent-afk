@@ -280,6 +280,7 @@ async function runMintScenario(opts: {
     thinkingMode: 'off',
     streamingMarkdown: { current: null },
     coordinator,
+    lastProgressByTask: new Map(),
   };
   function fireOrchestratorMessageStop(): void {
     finalizeOrchestrator(orchestratorSource, orchestratorCtx);

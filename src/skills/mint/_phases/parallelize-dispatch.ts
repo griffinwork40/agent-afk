@@ -17,7 +17,7 @@
 import { getSkill } from '../../index.js';
 import { discoverPluginSkillBodies } from '../../../agent/tools/skill-bridge.js';
 import { SubagentManager } from '../../../agent/subagent.js';
-import { getApiKey } from '../../../cli/shared-helpers.js';
+import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
 
 export type ParallelizeDispatchResult =
@@ -57,6 +57,11 @@ export async function runParallelizeDispatch(
   // mint skill's tool-lane entry. See skills/index.ts SkillExecutionContext.callId.
   skillCallId?: string,
   defaultSubagentModel: AgentModelInput = 'sonnet',
+  // Read-scope inheritance (#547): parent session's read roots (resolved once
+  // by the mint handler); seeds the fork manager's parentReadRoots so the
+  // parallelize subagent's reads ⊇ the parent session's. Undefined leaves
+  // cwd-derivation intact.
+  parentReadRoots?: string[],
 ): Promise<ParallelizeDispatchResult> {
   const fileCount = countFileReferences(plan);
 
@@ -100,8 +105,8 @@ export async function runParallelizeDispatch(
     // surprise if it ever shells out to inspect the working tree.
     const manager = new SubagentManager({
       parentAbortSignal: parentSession.abortSignal,
-      apiKey: getApiKey(),
       ...(parentSession.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
+      ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
     });
     try {
       // PLUGIN_ROOT injection mirrors `executePluginSkill` — see
@@ -121,8 +126,15 @@ export async function runParallelizeDispatch(
           model: defaultSubagentModel,
           systemPrompt: skill.body,
           env: { PLUGIN_ROOT: skill.pluginPath },
+          // Resolve the child's credential off ITS OWN model, not the ambient
+          // top-level model — matches the other 7 mint phase forks (#431/#378).
+          // Fixes #444: this was the last site still keying off getApiKey()/
+          // AFK_MODEL, which left the fork credential-less under a cross-provider
+          // operator and silently degraded parallelize to single-lane.
+          apiKey: resolveCredentialForModel(defaultSubagentModel),
         },
         idPrefix: 'mint-parallelize',
+        agentType: 'mint-parallelize',
         ...(skillCallId ? { parentId: skillCallId } : {}),
       });
       const result = await handle.runToResult(JSON.stringify({ plan }));

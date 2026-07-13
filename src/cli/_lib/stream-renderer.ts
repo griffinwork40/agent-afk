@@ -49,6 +49,7 @@ import {
   type OrchestratorCtx,
 } from './stream-renderer-orchestrator.js';
 import { CommitCoordinator } from './commit-coordinator.js';
+import { commitBlockAbove } from './commit-block.js';
 import { handleSubagentEvent, synthesizeAgentEntry } from './stream-renderer-subagent.js';
 import { OverlayComposer } from './overlay-composer.js';
 import { createStageTracker, type StageTrackerState } from '../commands/interactive/loop-stage.js';
@@ -68,7 +69,7 @@ export interface StreamRendererOptions {
    *
    * Subagent thinking is always suppressed regardless of this flag.
    */
-  thinkingMode?: 'off' | 'summary' | 'live';
+  thinkingMode?: 'off' | 'summary' | 'live' | 'digest';
   /**
    * @deprecated Use `thinkingMode: 'live'` instead. Kept as a back-compat alias:
    * `verbose: true` maps to `thinkingMode: 'live'`, `false`/unset to `'summary'`.
@@ -193,7 +194,7 @@ export interface StreamRendererOptions {
  */
 export class StreamRenderer {
   private readonly out: Writer;
-  private readonly thinkingMode: 'off' | 'summary' | 'live';
+  private readonly thinkingMode: 'off' | 'summary' | 'live' | 'digest';
   private readonly isTTY: boolean;
   private readonly captureMode: boolean;
   private readonly reducedMotion: boolean;
@@ -626,7 +627,10 @@ export class StreamRenderer {
             anchor: `after-subagent:${sourceId}`,
             commits: [() => {
               if (compositor) {
-                for (const line of lines) compositor.commitAbove(line);
+                // Atomic block commit — a subagent block is ONE coherent
+                // artifact; per-line commits desync band-hold under a tall
+                // overlay. See commit-block.ts.
+                commitBlockAbove(compositor, lines);
                 // One blank line after the subagent block so the next
                 // orchestrator message (or a subsequent subagent block) has
                 // breathing room in scrollback.
@@ -704,6 +708,12 @@ export class StreamRenderer {
       this.resizeUnsub = null;
     }
 
+    // Defensive eviction of any live progress entry. finalizeOrchestrator
+    // already clears this on the 'done' path; this covers turns that reach
+    // dispose without a 'done' event (error aborts, interrupts) so the
+    // overlay flushes below never repaint a stale progress banner.
+    this.lastProgressByTask.clear();
+
     // CommitCoordinator.flushAll() is the single async owner at turn end.
     // It drains all scheduled commit batches in fixed anchor order:
     //   1. before-content (orchestrator tool-lane entries that precede prose)
@@ -753,7 +763,10 @@ export class StreamRenderer {
     if (this.toolLane.hasPending()) {
       const lines = this.toolLane.flush();
       if (this.isTTY && this.compositor) {
-        for (const line of lines) this.compositor.commitAbove(line);
+        // Atomic block commit — the safety-net flush is ONE coherent block;
+        // per-line commits desync band-hold under a tall overlay. See
+        // commit-block.ts.
+        commitBlockAbove(this.compositor, lines);
         this.compositor.commitAbove('');
         if (this.overlayComposer) {
           this.overlayComposer.markDirty('tool-lane');

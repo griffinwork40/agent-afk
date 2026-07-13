@@ -261,9 +261,10 @@ function renderInputRow(state: InputCoreState): string {
   // the full nextGraphemeIndex dance the compositor uses for the
   // persistent input. If a grapheme-split edge case surfaces in practice
   // we can swap in the grapheme-aware variant.
-  const cursorChar = cursor < buffer.length ? buffer.charAt(cursor) : ' ';
+  const atEnd = cursor >= buffer.length;
+  const cursorChar = atEnd ? '▏' : buffer.charAt(cursor);
   const after = cursor < buffer.length ? buffer.slice(cursor + 1) : '';
-  const caret = palette.user.inverse(cursorChar);
+  const caret = atEnd ? palette.caret(cursorChar) : palette.caret.inverse(cursorChar);
   return `  ${palette.dim(PROMPT_GLYPH)} ${before}${caret}${after}`;
 }
 
