@@ -437,6 +437,9 @@ async function main() {
         const session = attachMcpCleanup(constructTelegramSession({
           ...(sessionConfig.apiKey !== undefined ? { apiKey: sessionConfig.apiKey } : {}),
           model: sessionConfig.model,
+          // /switch resumes a prior conversation: thread the target SDK session
+          // id so the AgentSession continues it (see SessionManager.switchToSession).
+          ...(sessionConfig.resume !== undefined ? { resume: sessionConfig.resume } : {}),
           ...(systemPromptInner !== undefined ? { systemPrompt: systemPromptInner } : {}),
           maxTurns: 100,
           ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
@@ -499,6 +502,8 @@ async function main() {
       const session = attachMcpCleanup(constructTelegramSession({
         ...(sessionConfig.apiKey !== undefined ? { apiKey: sessionConfig.apiKey } : {}),
         model: sessionConfig.model,
+        // /switch resume: continue the target SDK session (parity with the Anthropic branch).
+        ...(sessionConfig.resume !== undefined ? { resume: sessionConfig.resume } : {}),
         ...(systemPrompt !== undefined ? { systemPrompt } : {}),
         maxTurns: 100,
         ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),

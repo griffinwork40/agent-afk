@@ -12,7 +12,8 @@ import { injectHotMemory } from '../agent/memory/index.js';
 // future cleanup could relocate them to a neutral module — for now this is the
 // only telegram→cli edge and there is no import cycle (they never import telegram).
 import { createSessionStats, recordTurn } from '../cli/slash/session-stats.js';
-import { saveSession, loadSession } from '../cli/session-store.js';
+import { saveSession, loadSession, listSessions } from '../cli/session-store.js';
+import { resumeConfigFor } from '../cli/resume-session.js';
 import type { SessionStats } from '../cli/slash/types.js';
 import { promises as fs } from 'fs';
 import { join } from 'path';
@@ -39,6 +40,24 @@ interface SessionData {
    * Persisted to disk so the cwd survives bot restart.
    */
   cwd?: string;
+}
+
+/**
+ * One resumable conversation for a chat, surfaced by the `/sessions` switcher.
+ * Derived from the shared sidecar store (telegram sidecars for this chatId).
+ */
+export interface ChatSessionInfo {
+  /** SDK session id — the resume target passed to `/switch`. */
+  sessionId: string;
+  /** Human-readable name (auto or via `/name`), when set. */
+  name?: string;
+  model: AgentModelInput;
+  /** Recorded turns in the conversation. */
+  turns: number;
+  /** Sidecar `savedAt` (ms) — most-recent activity; list is sorted by this desc. */
+  lastActive: number;
+  /** True when this is the chat's currently-active conversation. */
+  active: boolean;
 }
 
 /**
@@ -105,6 +124,14 @@ export class SessionManager {
    * conversation gets a fresh warning.
    */
   private autosaveFailureLogged = new Set<number>();
+  /**
+   * Chats with a staged `/switch` resume target (SDK session id). Consumed once
+   * by the next getSession() to build the rebuilt session with `config.resume`
+   * so it continues the chosen prior conversation. Cleared on any teardown
+   * (/clear, model switch, /cd) via _resetStats so those start fresh, never
+   * resuming a stale target.
+   */
+  private pendingResume = new Map<number, string>();
   private options: Required<Omit<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd'>> &
     Pick<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd'>;
 
@@ -190,9 +217,34 @@ export class SessionManager {
         config.cwd = effectiveCwd;
       }
 
+      // /switch: continue a staged prior conversation instead of starting fresh.
+      // Consumed after a successful build below — a failed createSession leaves it
+      // staged so the next getSession retries the resume; teardown via _resetStats
+      // (/clear, model switch, /cd) still clears any stale target.
+      // Load the target sidecar and populate the SAME resume fields the CLI does
+      // (resume + sessionId + resumeHistory) so the providers actually replay the
+      // saved transcript. Forwarding only config.resume (the SDK id) resumes an
+      // empty conversation. Mirrors resumeConfigFor (src/cli/resume-session.ts).
+      const resumeTarget = this.pendingResume.get(chatId);
+      if (resumeTarget !== undefined) {
+        const stored = loadSession(resumeTarget);
+        Object.assign(
+          config,
+          resumeConfigFor({
+            id: resumeTarget,
+            resumeId: stored?.sessionId ?? resumeTarget,
+            stored,
+          }),
+        );
+      }
+
       const session = await this.options.createSession(injectHotMemory(config));
       this.sessions.set(chatId, session);
       this.sessionData.set(chatId, data);
+      // Consume the staged resume only after a successful build: a thrown
+      // createSession must leave it staged so the next getSession retries the
+      // resume instead of silently starting a fresh conversation.
+      if (resumeTarget !== undefined) this.pendingResume.delete(chatId);
       return session;
     })();
 
@@ -420,6 +472,8 @@ export class SessionManager {
     this.sessionStats.delete(chatId);
     // Fresh conversation → allow the autosave-failure notice to fire again.
     this.autosaveFailureLogged.delete(chatId);
+    // Drop any staged /switch resume so a teardown always starts fresh.
+    this.pendingResume.delete(chatId);
     const data = this.sessionData.get(chatId);
     if (data) delete data.sessionId;
   }
@@ -544,6 +598,125 @@ export class SessionManager {
   getCwd(chatId: number): string | undefined {
     const data = this.sessionData.get(chatId);
     return data?.cwd ?? this.options.botCwd;
+  }
+
+  /**
+   * List this chat's resumable conversations for the `/sessions` switcher,
+   * newest-active first. Sourced from the shared sidecar store (telegram
+   * sidecars for this chatId) — the durable record of every conversation the
+   * chat has held — with the currently-active one flagged.
+   *
+   * A brand-new conversation with no recorded turn yet has no sidecar and so
+   * does not appear until its first turn is saved.
+   */
+  listChatSessions(chatId: number): ChatSessionInfo[] {
+    const activeId = this.sessionData.get(chatId)?.sessionId;
+    return listSessions()
+      .filter(
+        (s) => s.source === 'telegram' && s.telegramChatId === chatId && s.sessionId !== undefined,
+      )
+      .map((s) => {
+        const info: ChatSessionInfo = {
+          sessionId: s.sessionId as string,
+          model: s.model,
+          turns: s.totalTurns,
+          lastActive: s.savedAt,
+          active: s.sessionId === activeId,
+        };
+        if (s.name !== undefined) info.name = s.name;
+        return info;
+      })
+      .sort((a, b) => b.lastActive - a.lastActive);
+  }
+
+  /**
+   * Switch the chat's active conversation to a previously-persisted session
+   * (the `/switch` command). Closes the current live session — its sidecar is
+   * already persisted per-turn, so it stays resumable — drops in-memory stats so
+   * the target's name/turns re-hydrate from its sidecar, adopts the target's
+   * model + cwd, and stages the SDK session id for resume. The next
+   * getSession(chatId) rebuilds the session with `config.resume` so it continues
+   * the chosen conversation; callers wanting it warmed can await getSession after.
+   *
+   * @returns `{ ok: true }` on success; `{ ok: false, reason }` when the target
+   *   is missing / not a telegram sidecar for this chat, or already active.
+   */
+  async switchToSession(
+    chatId: number,
+    targetSessionId: string,
+  ): Promise<{ ok: true; name?: string } | { ok: false; reason: 'not-found' | 'already-active' }> {
+    // If a session creation is in flight for this chat, let it settle before we
+    // inspect and close the live session. Otherwise the in-flight promise sets
+    // the pre-switch session as live AFTER we adopt the target below, silently
+    // reverting the switch. Awaiting materializes it so the close path evicts it
+    // normally; a failed creation leaves this.sessions empty, which the `old`
+    // guard already handles.
+    const inflight = this.pendingSessions.get(chatId);
+    if (inflight !== undefined) {
+      await inflight.catch(() => undefined);
+    }
+
+    // Already the live active conversation → no-op (avoid a needless rebuild).
+    if (this.sessions.has(chatId) && this.sessionData.get(chatId)?.sessionId === targetSessionId) {
+      return { ok: false, reason: 'already-active' };
+    }
+
+    const stored = loadSession(targetSessionId);
+    if (!stored || stored.source !== 'telegram' || stored.telegramChatId !== chatId) {
+      return { ok: false, reason: 'not-found' };
+    }
+
+    // Close the current live session (sidecar already persisted per-turn).
+    const old = this.sessions.get(chatId);
+    if (old) {
+      // Guard the close (mirrors closeAll): a throwing close() must never block
+      // the delete + target-state adoption below, or the stale session stays keyed
+      // in this.sessions and the next getSession returns it unrebuilt.
+      await old.close().catch((err) => console.error('Error closing session on switch:', err));
+      this.sessions.delete(chatId);
+    }
+    // Drop in-memory stats so the resumed session hydrates the TARGET's stats
+    // (name/turns/sessionId) from its sidecar on next access — never the
+    // previous conversation's. autosave-failure notice re-arms for the switch.
+    this.sessionStats.delete(chatId);
+    this.autosaveFailureLogged.delete(chatId);
+
+    // Adopt the target's identity + model/cwd and stage the resume.
+    let data = this.sessionData.get(chatId);
+    if (!data) {
+      data = {
+        chatId,
+        model: stored.model,
+        createdAt: new Date().toISOString(),
+        lastActivity: new Date().toISOString(),
+      };
+      this.sessionData.set(chatId, data);
+    } else {
+      data.model = stored.model;
+      data.lastActivity = new Date().toISOString();
+    }
+    data.sessionId = targetSessionId;
+    // Adopt the target's cwd, or CLEAR a stale per-chat override when the target
+    // has none — otherwise the resumed session runs + autosaves under the
+    // previously-active conversation's directory (getSession uses data.cwd ?? botCwd).
+    if (stored.cwd !== undefined) data.cwd = stored.cwd;
+    else delete data.cwd;
+    this.pendingResume.set(chatId, targetSessionId);
+    return stored.name !== undefined ? { ok: true, name: stored.name } : { ok: true };
+  }
+
+  /**
+   * Start a fresh conversation for the chat (the `/new` command), preserving the
+   * previous one as a resumable session — its sidecar was persisted per-turn and
+   * is never deleted here, so `/sessions` still lists it and `/switch` can return
+   * to it. Behaviorally this is resetSession (close + fresh sessionId), exposed
+   * under a name that reflects the switcher intent.
+   */
+  async newSession(chatId: number): Promise<void> {
+    // resetSession → _resetStats already clears pendingResume; explicit here too
+    // so intent is local and obvious.
+    this.pendingResume.delete(chatId);
+    await this.resetSession(chatId);
   }
 
   /**
