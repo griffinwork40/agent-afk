@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.42.0] - 2026-07-13
+
+### Added
+- OSC 52 clipboard fallback for SSH+tmux (closes #563) (#582) (f9f84d9)
+
 ## [5.41.0] - 2026-07-13
 
 ### Added
