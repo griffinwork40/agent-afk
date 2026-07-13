@@ -16,11 +16,23 @@ import { getGlyphs, clampLineToTerminal } from './tool-lane-render.js';
 import { renderFlushChildren } from './tool-lane-render-children.js';
 
 /**
- * Append the concurrency-batch badge (` ∥i/N`) to a NESTING root's
- * result-summary — the `Done (…)` closer line — when the root ran in a parallel
- * wave (`agent.result.batchSize > 1`). Returns the summary unchanged (badge
- * included only when applicable) or `undefined`/empty as-is so no phantom closer
- * is synthesized (`addResultSummarySynthetic` skips a falsy summary).
+ * Compose a NESTING root's committed-scrollback closer — the `Done (…)` line —
+ * as a fully-styled string: the dimmed result-summary followed by the
+ * concurrency-batch badge (` ∥i/N`) when the root ran in a parallel wave
+ * (`agent.result.batchSize > 1`). Returns `undefined`/empty as-is for a falsy
+ * summary so no phantom closer is synthesized (`addResultSummarySynthetic` skips
+ * a falsy summary).
+ *
+ * Styling ownership (why this dims the base HERE): the render sites in
+ * tool-lane-render-children.ts emit a `resultSummary` sibling's `.summary`
+ * VERBATIM — they no longer wrap it in `palette.dim()`. A NESTING closer has two
+ * differently-styled parts (a dim base + a self-dimmed badge from `batchBadge`),
+ * so a single outer dim would nest the badge's own dim codes. Dimming the base
+ * here and letting `batchBadge` self-dim keeps each part dimmed exactly once.
+ * `summaryWithBatchBadge` is the SOLE feeder of `addResultSummarySynthetic` (via
+ * renderFlushChildren), so the "summary is pre-styled" invariant holds for every
+ * `resultSummary` item. For a non-parallel closer `batchBadge` returns `''`, so
+ * the output is `palette.dim(summary)` — byte-identical to the prior behavior.
  *
  * Contract (issue #532 — scrollback NESTING-root badge): the closer, NOT the
  * head row, is the correct anchor for a NESTING root's badge in committed
@@ -39,13 +51,13 @@ import { renderFlushChildren } from './tool-lane-render-children.js';
  *    `result` is absent, so a sequential dispatch is never badged (parity with
  *    flat roots / bash).
  *
- * The badge is a trailing dim text suffix on the closer's content — it changes
- * no indent, connector, or spine glyph, so the severed-spine dual-encoding
- * invariant between formatAgentHeader/formatAgentSummary is untouched.
+ * The badge changes no indent, connector, or spine glyph — it is text appended
+ * to the closer's content only, so the severed-spine dual-encoding invariant
+ * between formatAgentHeader/formatAgentSummary is untouched.
  */
 function summaryWithBatchBadge(agent: ToolEntry): string | undefined {
   return agent.agentResultSummary
-    ? agent.agentResultSummary + batchBadge(agent.result)
+    ? palette.dim(agent.agentResultSummary) + batchBadge(agent.result)
     : agent.agentResultSummary;
 }
 
