@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.36.1] - 2026-07-13
+
+### Fixed
+- restrict read-only depth-cap forks to declared tools + honor plugin model: (#499) (#542) (2f7dc7e)
+
 ## [5.36.0] - 2026-07-13
 
 ### Added
