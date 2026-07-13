@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.37.7] - 2026-07-13
+
+### Changed
+- extract computeContainment SSOT for resolveAndContain + wouldBeRestricted (#561) (1d13445)
+
 ## [5.37.6] - 2026-07-13
 
 ### Fixed
