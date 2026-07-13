@@ -139,6 +139,18 @@ describe('summarizeToolInput — inline secret redaction (codex P1 on #511)', ()
     expect(out).toContain(`REF=${sha}`);
     expect(out).not.toContain('[REDACTED]');
   });
+
+  it('redacts a non-allowlisted NAME=<sha> assignment through the flattener (allowlist boundary)', () => {
+    // Symmetric to the REF= test above: same 40-hex width, but PAT is not on the
+    // isGitObjectName allowlist, so it must be redacted end-to-end through the
+    // flatten+redact pipeline, not just at the pure redactSecrets unit level.
+    const sha = 'abcdef1234567890abcdef1234567890abcdef12';
+    const out = summarizeToolInput('bash', {
+      command: `cd repo && PAT=${sha} && curl -H "Authorization: token $PAT" https://api`,
+    });
+    expect(out).not.toContain(`PAT=${sha}`);
+    expect(out).toContain('[REDACTED]');
+  });
 });
 
 describe('summarizeToolInput — other tool shapes unchanged', () => {
