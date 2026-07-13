@@ -14,14 +14,44 @@ import { injectHotMemory } from '../agent/memory/index.js';
 import { createSessionStats, recordTurn } from '../cli/slash/session-stats.js';
 import { saveSession, loadSession, listSessions } from '../cli/session-store.js';
 import type { SessionStats } from '../cli/slash/types.js';
+import { type TelegramRoute, routeKey } from './route.js';
 import { promises as fs } from 'fs';
 import { join } from 'path';
+
+/**
+ * Public methods that used to take a bare `chatId: number` now take a route
+ * target. A bare `number` is accepted as shorthand for that chat's General
+ * topic — `{ chatId: n }` — so every pre-topics caller (and the entire existing
+ * telegram test suite) is byte-identical: `routeKey({ chatId: n })` === the
+ * legacy `String(n)` key. A real topic passes a full `TelegramRoute` with a
+ * `threadId`, which keys as `${chatId}:${threadId}` and isolates that topic's
+ * session/queue/elicitation from every other topic in the same chat.
+ */
+export type RouteTarget = TelegramRoute | number;
+
+/** Normalize a RouteTarget to a full route. A bare number is the General topic. */
+function toRoute(target: RouteTarget): TelegramRoute {
+  return typeof target === 'number' ? { chatId: target } : target;
+}
 
 /**
  * Session data for persistence
  */
 interface SessionData {
+  /**
+   * Telegram chat id — retained for provenance and outbound sends
+   * (`stats.telegramChatId`, `bot.telegram.sendMessage(chatId, …)`). The
+   * in-memory maps and the on-disk sidecar are keyed by the ROUTE (see
+   * `routeKey`), not this field: General topics key as `String(chatId)`
+   * (unchanged on disk for existing users), a real topic as `${chatId}:${threadId}`.
+   */
   chatId: number;
+  /**
+   * Topic thread id when this session belongs to a non-General topic; absent
+   * for General / topics-off. Persisted so a per-topic sidecar round-trips its
+   * route on reload (the routeKey is otherwise recoverable only from the filename).
+   */
+  threadId?: number;
   model: AgentModelInput;
   createdAt: string;
   lastActivity: string;
@@ -98,39 +128,46 @@ export interface SessionManagerOptions {
 }
 
 /**
- * Manages Telegram chat sessions
- * One AgentSession per chat ID
+ * Manages Telegram chat sessions.
+ *
+ * Invariant: every live-session map is keyed by `routeKey(route)`, NOT a bare
+ * chatId. General / topics-off routes normalize to `String(chatId)` (so an
+ * existing single-session user is byte-identical to the pre-topics bot), while a
+ * real Telegram topic keys as `${chatId}:${threadId}` — giving one fully-isolated
+ * AgentSession per topic inside a single chat. Public methods accept a
+ * `RouteTarget` (a full `TelegramRoute`, or a bare `number` treated as that chat's
+ * General topic) and compute the routeKey internally.
  */
 export class SessionManager {
-  private sessions = new Map<number, IAgentSession>();
-  /** In-flight creation promises — prevent duplicate session spawns on concurrent messages. */
-  private pendingSessions = new Map<number, Promise<IAgentSession>>();
-  private sessionData = new Map<number, SessionData>();
+  private sessions = new Map<string, IAgentSession>();
+  /** In-flight creation promises — prevent duplicate session spawns on concurrent messages (per route). */
+  private pendingSessions = new Map<string, Promise<IAgentSession>>();
+  private sessionData = new Map<string, SessionData>();
   /**
-   * Per-chat accumulating session stats (turns, totals, name, sessionId).
+   * Per-route accumulating session stats (turns, totals, name, sessionId).
    * Recorded on each completed turn and written to the shared session store
    * so the CLI can `--resume <name>` a Telegram conversation. Reset whenever
    * the underlying AgentSession is torn down (/clear, model switch, /cd) so a
    * fresh sessionId and name are captured for the rebuilt session.
    */
-  private sessionStats = new Map<number, SessionStats>();
+  private sessionStats = new Map<string, SessionStats>();
   /**
-   * Chats that have already logged an autosave failure this conversation.
+   * Routes that have already logged an autosave failure this conversation.
    * Per-turn autosave is best-effort, but a persistent failure (EACCES,
    * ENOSPC) would otherwise be silently swallowed every turn while the user
-   * assumes the chat is resumable from the CLI. Log the FIRST failure per chat
+   * assumes the chat is resumable from the CLI. Log the FIRST failure per route
    * and stay quiet afterwards; the entry is cleared on _resetStats so a fresh
    * conversation gets a fresh warning.
    */
-  private autosaveFailureLogged = new Set<number>();
+  private autosaveFailureLogged = new Set<string>();
   /**
-   * Chats with a staged `/switch` resume target (SDK session id). Consumed once
+   * Routes with a staged `/switch` resume target (SDK session id). Consumed once
    * by the next getSession() to build the rebuilt session with `config.resume`
    * so it continues the chosen prior conversation. Cleared on any teardown
    * (/clear, model switch, /cd) via _resetStats so those start fresh, never
    * resuming a stale target.
    */
-  private pendingResume = new Map<number, string>();
+  private pendingResume = new Map<string, string>();
   private options: Required<Omit<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd'>> &
     Pick<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd'>;
 
@@ -148,51 +185,51 @@ export class SessionManager {
   }
 
   /**
-   * Get existing session for a chat without creating one.
+   * Get existing session for a route without creating one.
    * Used e.g. to read SDK-native slash commands for /help.
    */
-  getSessionIfExists(chatId: number): IAgentSession | undefined {
-    return this.sessions.get(chatId);
+  getSessionIfExists(target: RouteTarget): IAgentSession | undefined {
+    return this.sessions.get(routeKey(toRoute(target)));
   }
 
   /**
-   * Get or create a session for a chat.
+   * Get or create a session for a route (chat + optional topic thread).
    *
-   * Concurrent calls for the same `chatId` that arrive before the first
+   * Concurrent calls for the same route that arrive before the first
    * session is fully initialised (e.g. two Telegram messages arriving within
    * milliseconds of each other) all share a single in-flight creation promise
-   * rather than spawning duplicate sessions.
+   * rather than spawning duplicate sessions. Different topics in the same chat
+   * are distinct routes → distinct sessions, never shared.
    *
-   * @param chatId - Telegram chat ID
+   * @param target - Route (chat + optional topic) or a bare chatId (General topic)
    * @returns Agent session
    */
-  async getSession(chatId: number): Promise<IAgentSession> {
-    const existing = this.sessions.get(chatId);
+  async getSession(target: RouteTarget): Promise<IAgentSession> {
+    const route = toRoute(target);
+    const key = routeKey(route);
+
+    const existing = this.sessions.get(key);
     if (existing) {
-      this._touchActivity(chatId);
+      this._touchActivity(key);
       return existing;
     }
 
-    // If there is already an in-flight creation for this chatId, wait for it.
+    // If there is already an in-flight creation for this route, wait for it.
     // Use try/finally so _touchActivity runs on both success and rejection —
     // invariant: callers must not observe a stale lastActivity on retry after a failure.
-    const inflight = this.pendingSessions.get(chatId);
+    const inflight = this.pendingSessions.get(key);
     if (inflight) {
       try {
         const session = await inflight;
         return session;
       } finally {
-        this._touchActivity(chatId);
+        this._touchActivity(key);
       }
     }
 
-    // No session and no pending creation — start one.
-    const data = this.sessionData.get(chatId) ?? {
-      chatId,
-      model: this.options.defaultModel,
-      createdAt: new Date().toISOString(),
-      lastActivity: new Date().toISOString(),
-    };
+    // No session and no pending creation — start one. New SessionData carries
+    // the chatId (provenance/sends) and the topic threadId (route round-trip).
+    const data = this.sessionData.get(key) ?? this._newData(route);
 
     const creationPromise = (async (): Promise<IAgentSession> => {
       const config: AgentConfig = {
@@ -218,31 +255,43 @@ export class SessionManager {
 
       // /switch: continue a staged prior conversation instead of starting fresh.
       // Consumed once here — a later /clear (via _resetStats) drops any stale target.
-      const resumeTarget = this.pendingResume.get(chatId);
+      const resumeTarget = this.pendingResume.get(key);
       if (resumeTarget !== undefined) {
         config.resume = resumeTarget;
-        this.pendingResume.delete(chatId);
+        this.pendingResume.delete(key);
       }
 
       const session = await this.options.createSession(injectHotMemory(config));
-      this.sessions.set(chatId, session);
-      this.sessionData.set(chatId, data);
+      this.sessions.set(key, session);
+      this.sessionData.set(key, data);
       return session;
     })();
 
-    this.pendingSessions.set(chatId, creationPromise);
+    this.pendingSessions.set(key, creationPromise);
     try {
       const session = await creationPromise;
-      this._touchActivity(chatId);
+      this._touchActivity(key);
       return session;
     } finally {
       // Always clean up the in-flight entry regardless of success or failure.
-      this.pendingSessions.delete(chatId);
+      this.pendingSessions.delete(key);
     }
   }
 
-  private _touchActivity(chatId: number): void {
-    const data = this.sessionData.get(chatId);
+  /** Build a fresh SessionData for a route, carrying chatId + topic threadId. */
+  private _newData(route: TelegramRoute): SessionData {
+    const data: SessionData = {
+      chatId: route.chatId,
+      model: this.options.defaultModel,
+      createdAt: new Date().toISOString(),
+      lastActivity: new Date().toISOString(),
+    };
+    if (route.threadId !== undefined) data.threadId = route.threadId;
+    return data;
+  }
+
+  private _touchActivity(key: string): void {
+    const data = this.sessionData.get(key);
     if (data) data.lastActivity = new Date().toISOString();
   }
 
@@ -257,16 +306,18 @@ export class SessionManager {
    * persistence failures never disrupt the chat.
    */
   recordTelegramTurn(
-    chatId: number,
+    target: RouteTarget,
     userText: string,
     assistantText: string,
     metadata?: ResponseMetadata,
   ): void {
-    const stats = this._getOrCreateStats(chatId);
+    const route = toRoute(target);
+    const key = routeKey(route);
+    const stats = this._getOrCreateStats(route);
 
     // Capture the SDK sessionId from the live session if the turn metadata
     // didn't carry one (recordTurn also sets it from metadata when present).
-    const live = this.sessions.get(chatId);
+    const live = this.sessions.get(key);
     if (!stats.sessionId && live?.sessionId) stats.sessionId = live.sessionId;
 
     recordTurn(stats, userText, assistantText, metadata);
@@ -274,7 +325,7 @@ export class SessionManager {
     if (!stats.sessionId && live?.sessionId) stats.sessionId = live.sessionId;
 
     // Mirror the captured sessionId into SessionData so it survives bot restart.
-    const data = this.sessionData.get(chatId);
+    const data = this.sessionData.get(key);
     if (data && stats.sessionId) data.sessionId = stats.sessionId;
 
     // Persist to the shared store. Requires a sessionId to key the file;
@@ -285,13 +336,13 @@ export class SessionManager {
         saveSession(stats);
       } catch (err) {
         // Best-effort — never break the chat on a persistence failure. Surface
-        // the FIRST failure per chat (autosaveFailureLogged) so a persistent
+        // the FIRST failure per route (autosaveFailureLogged) so a persistent
         // EACCES/ENOSPC isn't silently swallowed every turn while the user
         // assumes the conversation is resumable from `afk i --resume`.
-        if (!this.autosaveFailureLogged.has(chatId)) {
-          this.autosaveFailureLogged.add(chatId);
+        if (!this.autosaveFailureLogged.has(key)) {
+          this.autosaveFailureLogged.add(key);
           console.error(
-            `[session-manager] autosave failed for chat ${chatId} — conversation may not be resumable:`,
+            `[session-manager] autosave failed for chat ${route.chatId} — conversation may not be resumable:`,
             err,
           );
         }
@@ -316,19 +367,22 @@ export class SessionManager {
    * prior-conversation stats (sessionId, turns, totals), so a rename persists
    * in-place without forking a duplicate sidecar and turn counts are preserved.
    */
-  private _hydrateStatsFromStore(chatId: number): void {
+  private _hydrateStatsFromStore(route: TelegramRoute): void {
+    const key = routeKey(route);
     // Never clobber live in-memory stats — this is a post-restart-only repair.
-    if (this.sessionStats.has(chatId)) return;
+    if (this.sessionStats.has(key)) return;
 
-    const sessionId = this.sessionData.get(chatId)?.sessionId;
+    const sessionId = this.sessionData.get(key)?.sessionId;
     if (!sessionId) return;
 
     const stored = loadSession(sessionId);
     if (!stored) return;
 
     // Only hydrate telegram sidecars that belong to THIS chat — prevent
-    // accidentally adopting a CLI sidecar or a different chat's sidecar.
-    if (stored.source !== 'telegram' || stored.telegramChatId !== chatId) return;
+    // accidentally adopting a CLI sidecar or a different chat's sidecar. The
+    // per-route sidecar is keyed by SDK sessionId, so a topic can only hydrate
+    // its own conversation (each topic's session has a distinct sessionId).
+    if (stored.source !== 'telegram' || stored.telegramChatId !== route.chatId) return;
 
     // Map StoredSession → SessionStats.
     // Critical rename: stored.startedAt === SessionStats.sessionStartTime.
@@ -354,10 +408,10 @@ export class SessionManager {
       turnTokens: [],
       permissionMode: 'default',
     };
-    // Carry forward the per-chat cwd override if one was set via /cd.
-    const chatCwd = this.sessionData.get(chatId)?.cwd;
+    // Carry forward the per-route cwd override if one was set via /cd.
+    const chatCwd = this.sessionData.get(key)?.cwd;
     if (chatCwd !== undefined) stats.cwd = chatCwd;
-    this.sessionStats.set(chatId, stats);
+    this.sessionStats.set(key, stats);
   }
 
   /**
@@ -374,9 +428,10 @@ export class SessionManager {
    * _getOrCreateStats — that would fabricate an empty stats entry for a
    * genuinely new chat that has never had a session.
    */
-  getSessionName(chatId: number): string | undefined {
-    this._hydrateStatsFromStore(chatId);
-    return this.sessionStats.get(chatId)?.name;
+  getSessionName(target: RouteTarget): string | undefined {
+    const route = toRoute(target);
+    this._hydrateStatsFromStore(route);
+    return this.sessionStats.get(routeKey(route))?.name;
   }
 
   /**
@@ -397,20 +452,22 @@ export class SessionManager {
    * @throws Propagates a `saveSession` failure so the caller can report that
    *   the name was set but the immediate persist failed (retries on next turn).
    */
-  setSessionName(chatId: number, slug: string): { persisted: boolean } {
-    const stats = this._getOrCreateStats(chatId);
+  setSessionName(target: RouteTarget, slug: string): { persisted: boolean } {
+    const route = toRoute(target);
+    const key = routeKey(route);
+    const stats = this._getOrCreateStats(route);
     stats.name = slug;
 
     // Capture the live session's id if the stats don't carry one yet, so the
     // persisted sidecar is keyed the same way the per-turn autosave keys it.
-    const live = this.sessions.get(chatId);
+    const live = this.sessions.get(key);
     if (!stats.sessionId && live?.sessionId) stats.sessionId = live.sessionId;
 
     if (stats.totalTurns > 0 && stats.sessionId) {
       // Mirror the captured sessionId into SessionData BEFORE saveSession so
       // the data.sessionId update is guaranteed even if saveSession throws.
       // The throw still propagates to the caller so it can report the failure.
-      const data = this.sessionData.get(chatId);
+      const data = this.sessionData.get(key);
       if (data) data.sessionId = stats.sessionId;
       saveSession(stats);
       return { persisted: true };
@@ -427,87 +484,89 @@ export class SessionManager {
    * (via _hydrateStatsFromStore) so setSessionName and recordTelegramTurn
    * see the full prior-conversation state instead of fresh empty stats.
    */
-  private _getOrCreateStats(chatId: number): SessionStats {
+  private _getOrCreateStats(route: TelegramRoute): SessionStats {
+    const key = routeKey(route);
     // Repair post-restart: if sessionData has a sessionId but sessionStats is
     // empty, hydrate from the persisted sidecar before the get-or-create.
-    this._hydrateStatsFromStore(chatId);
+    this._hydrateStatsFromStore(route);
 
-    let stats = this.sessionStats.get(chatId);
+    let stats = this.sessionStats.get(key);
     if (!stats) {
-      stats = createSessionStats(this.getModel(chatId));
+      stats = createSessionStats(this.getModel(route));
       stats.source = 'telegram';
-      stats.telegramChatId = chatId;
-      const cwd = this.getCwd(chatId);
+      // Provenance stays the chatId (topics in one chat share it); the route's
+      // isolation lives in the routeKey the maps + sidecar filename key on.
+      stats.telegramChatId = route.chatId;
+      const cwd = this.getCwd(route);
       if (cwd) stats.cwd = cwd;
-      this.sessionStats.set(chatId, stats);
+      this.sessionStats.set(key, stats);
     }
     return stats;
   }
 
   /**
-   * Drop the accumulating stats and stale sessionId for a chat. Called when
+   * Drop the accumulating stats and stale sessionId for a route. Called when
    * the underlying AgentSession is torn down (/clear, model switch, /cd) so
    * the rebuilt session captures a fresh sessionId and auto-name rather than
    * appending to the previous conversation's sidecar.
    */
-  private _resetStats(chatId: number): void {
-    this.sessionStats.delete(chatId);
+  private _resetStats(key: string): void {
+    this.sessionStats.delete(key);
     // Fresh conversation → allow the autosave-failure notice to fire again.
-    this.autosaveFailureLogged.delete(chatId);
+    this.autosaveFailureLogged.delete(key);
     // Drop any staged /switch resume so a teardown always starts fresh.
-    this.pendingResume.delete(chatId);
-    const data = this.sessionData.get(chatId);
+    this.pendingResume.delete(key);
+    const data = this.sessionData.get(key);
     if (data) delete data.sessionId;
   }
 
   /**
-   * Reset a chat session (clear history)
-   * 
-   * @param chatId - Telegram chat ID
+   * Reset a route's session (clear history).
+   *
+   * @param target - Route (chat + optional topic) or a bare chatId (General topic)
    */
-  async resetSession(chatId: number): Promise<void> {
-    const oldSession = this.sessions.get(chatId);
+  async resetSession(target: RouteTarget): Promise<void> {
+    const key = routeKey(toRoute(target));
+    const oldSession = this.sessions.get(key);
     if (oldSession) {
       await oldSession.close();
-      this.sessions.delete(chatId);
+      this.sessions.delete(key);
     }
     // New conversation → drop accumulated stats + stale sessionId so the
     // rebuilt session is recorded as a fresh sidecar, not appended to the old.
-    this._resetStats(chatId);
+    this._resetStats(key);
 
     // Keep session data but create new session on next request
-    const data = this.sessionData.get(chatId);
+    const data = this.sessionData.get(key);
     if (data) {
       data.lastActivity = new Date().toISOString();
     }
   }
 
   /**
-   * Switch model for a chat session
-   * 
-   * @param chatId - Telegram chat ID
+   * Switch model for a route's session.
+   *
+   * @param target - Route (chat + optional topic) or a bare chatId (General topic)
    * @param model - New model to use
    */
-  async switchModel(chatId: number, model: AgentModelInput): Promise<void> {
+  async switchModel(target: RouteTarget, model: AgentModelInput): Promise<void> {
+    const route = toRoute(target);
+    const key = routeKey(route);
     // Close old session
-    const oldSession = this.sessions.get(chatId);
+    const oldSession = this.sessions.get(key);
     if (oldSession) {
       await oldSession.close();
-      this.sessions.delete(chatId);
+      this.sessions.delete(key);
     }
     // Model switch rebuilds the session with a new sessionId → fresh sidecar.
-    this._resetStats(chatId);
+    this._resetStats(key);
 
     // Update session data
-    let data = this.sessionData.get(chatId);
+    let data = this.sessionData.get(key);
     if (!data) {
-      data = {
-        chatId,
-        model,
-        createdAt: new Date().toISOString(),
-        lastActivity: new Date().toISOString(),
-      };
-      this.sessionData.set(chatId, data);
+      data = this._newData(route);
+      data.model = model;
+      this.sessionData.set(key, data);
     } else {
       data.model = model;
       data.lastActivity = new Date().toISOString();
@@ -517,13 +576,13 @@ export class SessionManager {
   }
 
   /**
-   * Get current model for a chat
-   * 
-   * @param chatId - Telegram chat ID
+   * Get current model for a route.
+   *
+   * @param target - Route (chat + optional topic) or a bare chatId (General topic)
    * @returns Current model
    */
-  getModel(chatId: number): AgentModelInput {
-    const data = this.sessionData.get(chatId);
+  getModel(target: RouteTarget): AgentModelInput {
+    const data = this.sessionData.get(routeKey(toRoute(target)));
     return data?.model || this.options.defaultModel;
   }
 
@@ -537,30 +596,27 @@ export class SessionManager {
    * Callers are responsible for validating that `cwd` exists and is a
    * directory before calling — this method does not stat the filesystem.
    *
-   * @param chatId - Telegram chat ID
+   * @param target - Route (chat + optional topic) or a bare chatId (General topic)
    * @param cwd - Absolute path to the new working directory
    */
-  async setCwd(chatId: number, cwd: string): Promise<void> {
+  async setCwd(target: RouteTarget, cwd: string): Promise<void> {
+    const route = toRoute(target);
+    const key = routeKey(route);
     // Close old session — next getSession() call rebuilds it with the
     // new cwd threaded through to the AgentSession + SubagentManager.
-    const oldSession = this.sessions.get(chatId);
+    const oldSession = this.sessions.get(key);
     if (oldSession) {
       await oldSession.close();
-      this.sessions.delete(chatId);
+      this.sessions.delete(key);
     }
     // cwd change rebuilds the session with a new sessionId → fresh sidecar.
-    this._resetStats(chatId);
+    this._resetStats(key);
 
-    let data = this.sessionData.get(chatId);
+    let data = this.sessionData.get(key);
     if (!data) {
-      data = {
-        chatId,
-        model: this.options.defaultModel,
-        createdAt: new Date().toISOString(),
-        lastActivity: new Date().toISOString(),
-        cwd,
-      };
-      this.sessionData.set(chatId, data);
+      data = this._newData(route);
+      data.cwd = cwd;
+      this.sessionData.set(key, data);
     } else {
       data.cwd = cwd;
       data.lastActivity = new Date().toISOString();
@@ -568,17 +624,17 @@ export class SessionManager {
   }
 
   /**
-   * Get the effective working directory for a chat: per-session override
+   * Get the effective working directory for a route: per-session override
    * (set via `/cd`) if present, otherwise the bot-global fallback.
    *
    * Returns undefined when neither is set — callers that need a real
    * path should fall back to `process.cwd()`.
    *
-   * @param chatId - Telegram chat ID
+   * @param target - Route (chat + optional topic) or a bare chatId (General topic)
    * @returns Effective cwd, or undefined when no override is configured
    */
-  getCwd(chatId: number): string | undefined {
-    const data = this.sessionData.get(chatId);
+  getCwd(target: RouteTarget): string | undefined {
+    const data = this.sessionData.get(routeKey(toRoute(target)));
     return data?.cwd ?? this.options.botCwd;
   }
 
@@ -586,16 +642,22 @@ export class SessionManager {
    * List this chat's resumable conversations for the `/sessions` switcher,
    * newest-active first. Sourced from the shared sidecar store (telegram
    * sidecars for this chatId) — the durable record of every conversation the
-   * chat has held — with the currently-active one flagged.
+   * chat has held — with the route's currently-active one flagged.
+   *
+   * Provenance is the chatId, so this lists every conversation the chat has
+   * held (across General and any topics). The `active` flag reflects the
+   * requesting route's own live session id — the conversation the switcher
+   * would replace on that route.
    *
    * A brand-new conversation with no recorded turn yet has no sidecar and so
    * does not appear until its first turn is saved.
    */
-  listChatSessions(chatId: number): ChatSessionInfo[] {
-    const activeId = this.sessionData.get(chatId)?.sessionId;
+  listChatSessions(target: RouteTarget): ChatSessionInfo[] {
+    const route = toRoute(target);
+    const activeId = this.sessionData.get(routeKey(route))?.sessionId;
     return listSessions()
       .filter(
-        (s) => s.source === 'telegram' && s.telegramChatId === chatId && s.sessionId !== undefined,
+        (s) => s.source === 'telegram' && s.telegramChatId === route.chatId && s.sessionId !== undefined,
       )
       .map((s) => {
         const info: ChatSessionInfo = {
@@ -624,48 +686,46 @@ export class SessionManager {
    *   is missing / not a telegram sidecar for this chat, or already active.
    */
   async switchToSession(
-    chatId: number,
+    target: RouteTarget,
     targetSessionId: string,
   ): Promise<{ ok: true } | { ok: false; reason: 'not-found' | 'already-active' }> {
+    const route = toRoute(target);
+    const key = routeKey(route);
     // Already the live active conversation → no-op (avoid a needless rebuild).
-    if (this.sessions.has(chatId) && this.sessionData.get(chatId)?.sessionId === targetSessionId) {
+    if (this.sessions.has(key) && this.sessionData.get(key)?.sessionId === targetSessionId) {
       return { ok: false, reason: 'already-active' };
     }
 
     const stored = loadSession(targetSessionId);
-    if (!stored || stored.source !== 'telegram' || stored.telegramChatId !== chatId) {
+    if (!stored || stored.source !== 'telegram' || stored.telegramChatId !== route.chatId) {
       return { ok: false, reason: 'not-found' };
     }
 
     // Close the current live session (sidecar already persisted per-turn).
-    const old = this.sessions.get(chatId);
+    const old = this.sessions.get(key);
     if (old) {
       await old.close();
-      this.sessions.delete(chatId);
+      this.sessions.delete(key);
     }
     // Drop in-memory stats so the resumed session hydrates the TARGET's stats
     // (name/turns/sessionId) from its sidecar on next access — never the
     // previous conversation's. autosave-failure notice re-arms for the switch.
-    this.sessionStats.delete(chatId);
-    this.autosaveFailureLogged.delete(chatId);
+    this.sessionStats.delete(key);
+    this.autosaveFailureLogged.delete(key);
 
     // Adopt the target's identity + model/cwd and stage the resume.
-    let data = this.sessionData.get(chatId);
+    let data = this.sessionData.get(key);
     if (!data) {
-      data = {
-        chatId,
-        model: stored.model,
-        createdAt: new Date().toISOString(),
-        lastActivity: new Date().toISOString(),
-      };
-      this.sessionData.set(chatId, data);
+      data = this._newData(route);
+      data.model = stored.model;
+      this.sessionData.set(key, data);
     } else {
       data.model = stored.model;
       data.lastActivity = new Date().toISOString();
     }
     data.sessionId = targetSessionId;
     if (stored.cwd !== undefined) data.cwd = stored.cwd;
-    this.pendingResume.set(chatId, targetSessionId);
+    this.pendingResume.set(key, targetSessionId);
     return { ok: true };
   }
 
@@ -676,15 +736,35 @@ export class SessionManager {
    * to it. Behaviorally this is resetSession (close + fresh sessionId), exposed
    * under a name that reflects the switcher intent.
    */
-  async newSession(chatId: number): Promise<void> {
+  async newSession(target: RouteTarget): Promise<void> {
     // resetSession → _resetStats already clears pendingResume; explicit here too
     // so intent is local and obvious.
-    this.pendingResume.delete(chatId);
-    await this.resetSession(chatId);
+    this.pendingResume.delete(routeKey(toRoute(target)));
+    await this.resetSession(target);
   }
 
   /**
-   * Load session data from disk
+   * The on-disk sidecar filename for a route's SessionData.
+   *
+   * Invariant: a General route's file is `<chatId>.json` — byte-identical to
+   * the pre-topics layout, so an existing user's session data loads unchanged.
+   * A topic route uses its routeKey (`<chatId>:<threadId>`). The `:` separator
+   * is legal on the macOS/Linux targets AFK supports; the loader recomputes the
+   * map key from the data's chatId+threadId, so it never relies on the filename.
+   */
+  private sidecarFileName(data: SessionData): string {
+    const route: TelegramRoute = { chatId: data.chatId };
+    if (data.threadId !== undefined) route.threadId = data.threadId;
+    return `${routeKey(route)}.json`;
+  }
+
+  /**
+   * Load session data from disk.
+   *
+   * Keys the in-memory map by the route recomputed from each file's payload
+   * (chatId + optional threadId), NOT the filename — so a legacy `<chatId>.json`
+   * (no threadId) loads to the General key `String(chatId)` exactly as before,
+   * and a topic sidecar loads to `<chatId>:<threadId>`.
    */
   async loadSessions(): Promise<void> {
     try {
@@ -696,7 +776,9 @@ export class SessionManager {
           const filePath = join(this.options.dataDir, file);
           const content = await fs.readFile(filePath, 'utf-8');
           const data: SessionData = JSON.parse(content);
-          this.sessionData.set(data.chatId, data);
+          const route: TelegramRoute = { chatId: data.chatId };
+          if (data.threadId !== undefined) route.threadId = data.threadId;
+          this.sessionData.set(routeKey(route), data);
         }
       }
     } catch (error) {
@@ -708,14 +790,14 @@ export class SessionManager {
   }
 
   /**
-   * Save session data to disk
+   * Save session data to disk, one file per route (General → `<chatId>.json`).
    */
   async saveSessions(): Promise<void> {
     try {
       await fs.mkdir(this.options.dataDir, { recursive: true });
       
-      for (const [chatId, data] of this.sessionData.entries()) {
-        const filePath = join(this.options.dataDir, `${chatId}.json`);
+      for (const data of this.sessionData.values()) {
+        const filePath = join(this.options.dataDir, this.sidecarFileName(data));
         await fs.writeFile(filePath, JSON.stringify(data, null, 2));
       }
     } catch (error) {

@@ -1,0 +1,76 @@
+{
+  "timestamp": "2026-06-29",
+  "goal": "Collapse legacy two-repo model into ONE canonical code repo (public agent-afk) + moat marketplace (awa-private). Plan: decouple-public-mirror-from-moat.md (Option B / B').",
+  "overall": "BLOCK",
+  "block_reason": "agent-afk-private cannot be retired: it holds the only copy of src/moat (~6,630 LOC, the B5 extraction source) plus 45 stashes + 7 unpushed main commits + 3 untracked files of un-triaged local-only state. Repos 1 and 2 are PASS. B5 extraction (a build task, not a remote mutation) can proceed now.",
+  "auth_probe": "SKIPPED — operator restricted recon to local-only read commands; no ls-remote/network probe run. Remote URL scheme noted as a proxy (repo1 HTTPS, repo3 SSH).",
+  "repos": [
+    {
+      "path": "/Users/griffinlong/Projects/open_source/agent-afk",
+      "role": "PUBLIC canonical (on disk)",
+      "branch": { "current": "fix/tui-endturn-overflow-scrollback-gap", "ahead": 2, "behind": 11, "tracking": "origin/main" },
+      "origin_main": "v5.10.1 @ 3a34e4b (2026-06-29)",
+      "remotes": [
+        { "name": "origin", "url": "https://github.com/griffinwork40/agent-afk" },
+        { "name": "fork", "url": "https://github.com/sorcerai/agent-afk.git" }
+      ],
+      "auth": "not-probed",
+      "dirty": true,
+      "dirty_detail": "1 modified (terminal-compositor.frame-preserve.ts) + 2 untracked (a repro test, stray testimonial.txt)",
+      "stashes": 0,
+      "moat_present": false,
+      "b_prereqs_merged": ["#298+#324 (entrypoint + DI inject, B4.5)", "#305 (16-symbol runtime API)", "#307 (loadSkillPrompts baseDir)", "#308 (surface wiring B4)"],
+      "verdict": "PASS",
+      "blockers": []
+    },
+    {
+      "path": "/Users/griffinlong/Projects/plugins/awa-private",
+      "role": "MOAT MARKETPLACE (agent-framework-private)",
+      "branch": { "current": "fix/skills-afk-framework-paths", "ahead": 1, "behind": 0, "tracking": "origin/main" },
+      "remotes": [ { "name": "origin", "url": "https://github.com/griffinwork40/awa-private.git" } ],
+      "auth": "not-probed",
+      "dirty": false,
+      "stashes": 0,
+      "hosts_plugins": ["awa-private", "awa-dev"],
+      "afk_moat_present": false,
+      "verdict": "PASS",
+      "blockers": [],
+      "note": "Clean, single-remote, well-formed. Designated home for the future afk-moat SIBLING plugin (B5), but afk-moat is not scaffolded yet."
+    },
+    {
+      "path": "/Users/griffinlong/Projects/personal_projects/agent-workspace/agent-afk-private",
+      "role": "OLD PRIVATE CANONICAL (afk-workshop) — extraction SOURCE",
+      "branch": { "current": "main", "ahead": 7, "behind": 5, "tracking": "origin/main", "ahead_commits": "all docs(plan) decouple commits, unpushed to afk-workshop" },
+      "remotes": [
+        { "name": "origin", "url": "git@github.com:griffinwork40/afk-workshop.git" },
+        { "name": "public", "url": "git@github.com:griffinwork40/agent-afk.git" }
+      ],
+      "auth": "not-probed",
+      "dirty": true,
+      "dirty_detail": "3 untracked: .afk/plans/rsi-pipeline-unclog-and-runhealth.md, scripts/harvest-probe.mts, scripts/harvest-top-n.mts",
+      "stashes": 45,
+      "local_branches": 32,
+      "branches_gone_safe_prune": 2,
+      "branches_worktree_attached": 9,
+      "stale_remote_tracking": "publocal/* (remote 'publocal' removed; refs linger)",
+      "moat_present": true,
+      "moat_loc": "~6,630 TS LOC in src/moat/ (forge, harvest, _agents/qualify, telemetry, register.ts, boundary.test.ts)",
+      "verdict": "BLOCK",
+      "blockers": [
+        "Holds the ONLY copy of src/moat — B5 extraction source, not yet extracted",
+        "45 stashes un-triaged (stash@{4} flags 111 divergent files 'NOT verified safe-to-drop')",
+        "7 unpushed main commits (the decouple plan doc updates)",
+        "3 untracked files including 2 harvest scripts that likely belong in afk-moat",
+        "stale publocal/* remote-tracking namespace (trivial prune)"
+      ]
+    }
+  ],
+  "consolidation_status": {
+    "decouple_prereqs": "COMPLETE — PR1/#298, #299, #305, #307, B4/#308, B4.5/#324 all merged to PUBLIC main (now v5.10.1). Public is moat-free, developed directly, with the DI plugin-entrypoint mechanism live.",
+    "b5_extraction": "NOT STARTED — afk-moat does not exist anywhere; src/moat/ lives only in agent-afk-private; awa-private marketplace still hosts only awa-private + awa-dev.",
+    "remotes_consolidated": false,
+    "private_carries_unique_work": "YES — src/moat (load-bearing) + plan commits + 45 stashes + untracked scripts.",
+    "architecture_decision": "B' (sibling code-backed afk-moat plugin in the awa-private marketplace, built against PUBLIC agent-afk via peerDependency, host injects PluginApi). Appears effectively decided — B4.5 (the DI enabler) already shipped to public. Confirm before starting B5.",
+    "next_action": "B5 Phase A — scaffold afk-moat as a sibling plugin in awa-private/plugins/, build against public agent-afk (peerDependency), copy src/moat/ in, rewrite core imports to `from 'agent-afk'`, delete the 2 MOAT-PRIVATE sentinel imports, move the 3 moat path helpers in, dev-install + smoke test. Plan steps 5-12 (steps 1-4 are superseded — already in public). One human gate first: the /forge nudge extension-point decision (plan recommends DROP)."
+  }
+}

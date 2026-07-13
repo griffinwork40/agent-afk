@@ -162,9 +162,11 @@ describe('SessionManager', () => {
       expect(successCallCount).toBe(1);
 
       // lastActivity must have been refreshed (>= before timestamp).
+      // sessionData is now keyed by routeKey (string); a General route for
+      // chatId 22222 keys as "22222" (byte-identical to the legacy chatId key).
       const lastActivity = Date.parse(
-        (succeedingManager as unknown as { sessionData: Map<number, { lastActivity: string }> })
-          .sessionData.get(22222)!.lastActivity
+        (succeedingManager as unknown as { sessionData: Map<string, { lastActivity: string }> })
+          .sessionData.get('22222')!.lastActivity
       );
       expect(lastActivity).toBeGreaterThanOrEqual(before);
 
