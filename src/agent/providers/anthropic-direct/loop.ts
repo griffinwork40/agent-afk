@@ -52,6 +52,10 @@ import { emitToolCall, emitSessionPhase } from '../../trace/emit.js';
 import { extractRawToolInput } from '../../facets/raw-input.js';
 import { env } from '../../../config/env.js';
 import { sleepWithAbort } from '../shared/sleep-with-abort.js';
+import {
+  armFirstByteTimeout,
+  resolveTtfbTimeoutMs,
+} from '../shared/first-byte-timeout.js';
 import { summarizeToolInput } from '../shared/tool-input-summary.js';
 import {
   TOOL_USE_LOOP_CAPPED,
@@ -118,24 +122,30 @@ export function isOverloadedErrorEvent(err: unknown): boolean {
   return innerType === 'overloaded_error';
 }
 
+// `requestSignal` is passed to `messages.create` — it is the caller's turn
+// signal chained with the per-request TTFB stall timer (see armFirstByteTimeout),
+// so aborting it covers BOTH a user interrupt and a first-byte timeout. The
+// 529/503 connection-phase backoff sleeps still gate on the caller's `turnSignal`
+// so a persistent overload wakes on interrupt but not on the TTFB timer alone.
 async function createWithRetry(
   client: { messages: { create(params: unknown, opts: unknown): unknown } },
   params: AnthropicMessagesCreateParams,
   headers: Record<string, string>,
-  signal: AbortSignal,
+  requestSignal: AbortSignal,
+  turnSignal: AbortSignal,
 ): Promise<AsyncIterable<unknown>> {
   for (let attempt = 0; ; attempt++) {
     if (attempt > 0) {
       const delay = OVERLOAD_BASE_DELAY_MS * Math.pow(2, attempt - 1);
-      await sleepWithAbort(delay, signal);
-      if (signal.aborted) throw new Error('aborted');
+      await sleepWithAbort(delay, turnSignal);
+      if (turnSignal.aborted) throw new Error('aborted');
     }
     try {
       return (await Promise.resolve(
-        client.messages.create(params, { headers, signal }),
+        client.messages.create(params, { headers, signal: requestSignal }),
       )) as AsyncIterable<unknown>;
     } catch (err) {
-      if (signal.aborted) throw err;
+      if (requestSignal.aborted) throw err;
       const e = err instanceof Error ? err : new Error(String(err));
       if (isTransientServerError(e) && attempt < OVERLOAD_MAX_RETRIES) {
         continue;
@@ -143,6 +153,27 @@ async function createWithRetry(
       throw e;
     }
   }
+}
+
+/**
+ * Emit the trace + surface events for a single time-to-first-byte-timeout
+ * re-drive, then return so the caller can `continue` the round with a fresh
+ * `messages.create`. Mirrors the mid-stream overload retry's signalling: a
+ * `rate_limit` trace phase (so the re-drive is legible in `afk trace show`)
+ * plus a `stream.retry` event so surfaces discard any partial paint. No backoff
+ * sleep — the point is to fail-fast off a stalled endpoint, and the single
+ * retry is gated by the per-round `ttfbRetried` flag so it cannot stack.
+ */
+async function* emitTtfbRetry(
+  input: RunTurnInput,
+  requestStartedAt: number,
+): AsyncGenerator<ProviderEvent, void, void> {
+  void emitSessionPhase(input.traceWriter, {
+    phase: 'rate_limit',
+    durationMs: Date.now() - requestStartedAt,
+    metadata: { reason: 'ttfb-timeout', source: 'first-byte', resolvedModel: input.model },
+  });
+  yield { type: 'stream.retry', sessionId: input.ctx.sessionId };
 }
 
 /**
@@ -187,6 +218,14 @@ export async function* runTurn(
   // and reset to 0 after every clean round so each tool-use round gets its own
   // allowance — mirroring createWithRetry's per-call (not per-turn) scope.
   let overloadRetries = 0;
+  // Per-round time-to-first-byte stall bound (issue #583). A degrading upstream
+  // call that never streams a first event is aborted at this bound and retried
+  // ONCE per round, then surfaces as an error — instead of hanging up to the
+  // SDK's ~10-min default. `0` (or AFK_MODEL_TTFB_TIMEOUT_MS=0) disables it.
+  // The single retry reuses the createWithRetry attempt budget model so it
+  // cannot stack on top of the overload backoff into a longer worst case.
+  const ttfbTimeoutMs = resolveTtfbTimeoutMs();
+  let ttfbRetried = false;
   const taskId = randomUUID();
   const loopStartTime = Date.now();
 
@@ -253,29 +292,59 @@ export async function* runTurn(
     // Witness layer: stamp request-initiation time so the model_ttfb phase
     // below can report time-to-first-byte for THIS model API call.
     const requestStartedAt = Date.now();
-    let events: AsyncIterable<unknown>;
+    // Arm the TTFB stall timer for THIS round. `ttfb.signal` is the request
+    // signal (caller's turn signal chained with the stall timer). We cancel the
+    // timer the instant the first stream event arrives (ttfbEmitted below), so a
+    // slow-but-progressing stream is never aborted; only a call that fails to
+    // stream ANY event within the bound trips it. Disposed in the retry/error
+    // paths below and again defensively per round.
+    const ttfb = armFirstByteTimeout(input.signal, ttfbTimeoutMs);
+    let retryTtfb = false;
+    // Definite-assignment: `events` is read only past the `if (retryTtfb)`
+    // guard below. Every path that leaves it unassigned either `return`s (the
+    // non-retry catch branch) or sets `retryTtfb` and `continue`s — so by the
+    // consumption point it is always assigned. TS cannot prove this across the
+    // try/catch + continue, hence the assertion.
+    let events!: AsyncIterable<unknown>;
     try {
       events = await createWithRetry(
         input.client,
         params,
         input.headers,
+        ttfb.signal,
         input.signal,
       );
     } catch (err) {
-      if (input.signal.aborted) {
-        yield {
-          type: 'turn.completed',
-          usage: withTurnDuration(accumulatedUsage),
-          sessionId: input.ctx.sessionId,
-        };
+      // A TTFB timeout aborts before the first byte (connection-phase stall).
+      // Distinguish it from a user interrupt (input.signal) and, on the first
+      // occurrence this round, re-drive the request once instead of erroring.
+      if (ttfb.timedOut() && !input.signal.aborted && !ttfbRetried) {
+        ttfb.dispose();
+        retryTtfb = true;
+      } else {
+        ttfb.dispose();
+        if (input.signal.aborted) {
+          yield {
+            type: 'turn.completed',
+            usage: withTurnDuration(accumulatedUsage),
+            sessionId: input.ctx.sessionId,
+          };
+          return;
+        }
+        const e = err instanceof Error ? err : new Error(String(err));
+        if (e.message.includes('thinking')) {
+          dumpThinkingDiagnostic(input.messages, e);
+        }
+        yield { type: 'error', error: e };
         return;
       }
-      const e = err instanceof Error ? err : new Error(String(err));
-      if (e.message.includes('thinking')) {
-        dumpThinkingDiagnostic(input.messages, e);
-      }
-      yield { type: 'error', error: e };
-      return;
+    }
+    if (retryTtfb) {
+      // Connection-phase TTFB timeout: re-drive once (handled below the stream
+      // consumption block, shared with the mid-stream TTFB path).
+      yield* emitTtfbRetry(input, requestStartedAt);
+      ttfbRetried = true;
+      continue;
     }
 
     // Translate the raw SDK events into ProviderEvents and capture the
@@ -293,8 +362,21 @@ export async function* runTurn(
         events as Parameters<typeof translateMessageStream>[0],
         input.ctx,
       )) {
-        if (!ttfbEmitted) {
+        // First-byte boundary = the first NON-error translated output (a real
+        // content/tool event, or the end-of-stream turn-result). An in-band
+        // error event is NOT a first byte — a TTFB timeout surfaces here as
+        // exactly that (translate.ts converts the abort throw into an error
+        // event), so gating on non-error keeps `ttfb.timedOut()` meaningful in
+        // the error branch below and avoids cancelling the timer on a stall.
+        const isFirstByte =
+          !ttfbEmitted &&
+          (out.kind === 'turn-result' || out.event.type !== 'error');
+        if (isFirstByte) {
           ttfbEmitted = true;
+          // First streamed event arrived: cancel the stall timer so the rest of
+          // this (now demonstrably progressing) stream runs unbounded — a long
+          // opus_1m prefill / extended-thinking response is never cut off.
+          ttfb.firstByteSeen();
           // Time-to-first-byte: request initiation (incl. any auth retries
           // inside createWithRetry) → first translated stream event.
           // Fire-and-forget; trace latency must never stall the stream.
@@ -311,6 +393,16 @@ export async function* runTurn(
         if (env.AFK_TELEGRAM_TRACE) console.log('[loop] translate yielded:', out.kind, out.kind === 'event' ? out.event.type : '');
         if (out.kind === 'event') {
           if (out.event.type === 'error') {
+            // A TTFB timeout that fires after response headers but before the
+            // first content event aborts the stream iterator; translate.ts
+            // converts that throw into this in-band error event. `ttfb.timedOut()`
+            // is true only while the timer is live (firstByteSeen clears it), and
+            // ttfbEmitted is still false here (no content byte arrived) — so this
+            // is unambiguously a first-byte stall. Re-drive once, then fail fast.
+            if (ttfb.timedOut() && !input.signal.aborted && !ttfbRetried && !ttfbEmitted) {
+              retryTtfb = true;
+              break;
+            }
             // Mid-stream transient overload (529 / overloaded_error): the SDK
             // throws it from inside the stream iterator with NO HTTP status,
             // so createWithRetry — status-based and connection-phase only —
@@ -342,24 +434,46 @@ export async function* runTurn(
       }
       if (env.AFK_TELEGRAM_TRACE) console.log('[loop] translate loop exited, turnResult=', turnResult ? 'set' : 'null');
     } catch (err) {
-      if (input.signal.aborted) {
-        yield {
-          type: 'turn.completed',
-          usage: withTurnDuration(accumulatedUsage),
-          sessionId: input.ctx.sessionId,
-        };
-        return;
-      }
-      const e = err instanceof Error ? err : new Error(String(err));
-      // Defensive: a mid-stream overload normally reaches us as an in-band
-      // error event (handled in the loop above), but if translate.ts ever
-      // re-throws one, route it into the same retry path rather than crashing.
-      if (isOverloadedErrorEvent(e) && overloadRetries < OVERLOAD_MAX_RETRIES && !input.signal.aborted) {
-        retryOverload = true;
+      // A TTFB timeout that fires AFTER response headers but BEFORE the first
+      // streamed event aborts the stream iterator here. `ttfb.timedOut()` is
+      // only true while the timer is live — firstByteSeen() above clears it, so
+      // this branch is unreachable once any event has streamed. Re-drive once.
+      if (ttfb.timedOut() && !input.signal.aborted && !ttfbRetried && !ttfbEmitted) {
+        ttfb.dispose();
+        retryTtfb = true;
       } else {
-        yield { type: 'error', error: e };
-        return;
+        ttfb.dispose();
+        if (input.signal.aborted) {
+          yield {
+            type: 'turn.completed',
+            usage: withTurnDuration(accumulatedUsage),
+            sessionId: input.ctx.sessionId,
+          };
+          return;
+        }
+        const e = err instanceof Error ? err : new Error(String(err));
+        // Defensive: a mid-stream overload normally reaches us as an in-band
+        // error event (handled in the loop above), but if translate.ts ever
+        // re-throws one, route it into the same retry path rather than crashing.
+        if (isOverloadedErrorEvent(e) && overloadRetries < OVERLOAD_MAX_RETRIES && !input.signal.aborted) {
+          retryOverload = true;
+        } else {
+          yield { type: 'error', error: e };
+          return;
+        }
       }
+    }
+    // Dispose the stall timer for this round once stream consumption is done
+    // (clean end, turn-result, or a retry decision) — idempotent, so the
+    // firstByteSeen() / catch-path disposes above are harmless duplicates.
+    ttfb.dispose();
+
+    if (retryTtfb) {
+      // Mid-stream TTFB timeout: re-drive the round once, mirroring the
+      // connection-phase path above. Shares the once-per-round ttfbRetried flag.
+      yield* emitTtfbRetry(input, requestStartedAt);
+      ttfbRetried = true;
+      continue;
     }
 
     if (retryOverload) {
@@ -403,6 +517,11 @@ export async function* runTurn(
     // placing it above them makes the invariant unconditional and survives a
     // future refactor that turns a terminal path into a `continue`.
     overloadRetries = 0;
+    // Same per-round scope for the TTFB single-retry allowance: a round that
+    // streamed a first byte spends its budget, so the next tool-use round gets a
+    // fresh one. A round only reaches here after a clean first byte, so this
+    // never runs on the failing (retry) attempt of the same round.
+    ttfbRetried = false;
 
     if (translatorErrored) {
       // Error event was already yielded. On an abort (interrupt/close), emit

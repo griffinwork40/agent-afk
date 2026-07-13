@@ -432,6 +432,15 @@
       "category": "model"
     },
     {
+      "name": "AFK_MODEL_TTFB_TIMEOUT_MS",
+      "description": "Per-request time-to-first-byte timeout (ms) for the anthropic-direct streaming loop. Bounds how long a single model call may stall BEFORE its first streamed event; once streaming starts the timer is cleared, so a legitimately slow-but-progressing response (long opus_1m prefill, extended thinking) is never aborted. On timeout the request is aborted and retried once, then surfaces as an error — never a silent ~10-min hang on the SDK default. Default 180000 (180s ≈ 2× the measured p99 ttfb). Set to 0 to disable.",
+      "type": "number",
+      "required": false,
+      "default": "180000",
+      "example": "120000",
+      "category": "model"
+    },
+    {
       "name": "AFK_OPENAI_BASE_URL",
       "description": "Base URL override for the OpenAI-compatible provider. Used for local shims (mlx_lm.server, Ollama, vLLM, LM Studio). The OpenAI SDK appends `/chat/completions` itself — a value ending in `/chat/completions` will be stripped at config-load time with a one-shot warning.",
       "type": "string",
