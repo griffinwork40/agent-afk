@@ -592,6 +592,141 @@ describe('runReplLoop -- Stop hook fires after runTurn completes', () => {
     // Third positional arg must be the explicit 5s timeout.
     expect(stopCall?.[2]).toBe(5000);
   });
+
+  it('delivers a Stop handler injectContext into the NEXT turn\'s prompt', async () => {
+    surfaceState.readLineQueue = [
+      { text: 'first turn', attachments: [] },
+      { text: 'second turn', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const registry = createHookRegistry();
+    let stopCount = 0;
+    // Return a correction only after the FIRST turn.
+    registry.register('Stop', async () => {
+      stopCount += 1;
+      return stopCount === 1 ? { injectContext: 'CORRECTION: substantiate your Done' } : {};
+    });
+
+    const ctx = makeCtx();
+    ctx.hookRegistry = registry;
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(2);
+    const firstText = (vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string }).text;
+    const secondText = (vi.mocked(runTurn).mock.calls[1]?.[0] as { text: string }).text;
+    // First turn: no injection yet (Stop hasn't fired).
+    expect(firstText).toBe('first turn');
+    // Second turn: the correction was prepended, user text preserved at the tail.
+    expect(secondText).toContain('CORRECTION: substantiate your Done');
+    expect(secondText.trimEnd().endsWith('second turn')).toBe(true);
+  });
+
+  it('consumes a Stop injectContext exactly once (not re-delivered next turn)', async () => {
+    surfaceState.readLineQueue = [
+      { text: 'turn one', attachments: [] },
+      { text: 'turn two', attachments: [] },
+      { text: 'turn three', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const registry = createHookRegistry();
+    let stopCount = 0;
+    registry.register('Stop', async () => {
+      stopCount += 1;
+      return stopCount === 1 ? { injectContext: 'ONE-SHOT-CORRECTION' } : {};
+    });
+
+    const ctx = makeCtx();
+    ctx.hookRegistry = registry;
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(3);
+    const texts = vi.mocked(runTurn).mock.calls.map((c) => (c[0] as { text: string }).text);
+    // Only the SECOND turn carries the correction; the third is clean.
+    expect(texts[0]).toBe('turn one');
+    expect(texts[1]).toContain('ONE-SHOT-CORRECTION');
+    expect(texts[2]).toBe('turn three');
+    expect(texts[2]).not.toContain('ONE-SHOT-CORRECTION');
+  });
+
+  it('ignores a whitespace-only Stop injectContext', async () => {
+    surfaceState.readLineQueue = [
+      { text: 'alpha', attachments: [] },
+      { text: 'beta', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const registry = createHookRegistry();
+    registry.register('Stop', async () => ({ injectContext: '   \n  ' }));
+
+    const ctx = makeCtx();
+    ctx.hookRegistry = registry;
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    const secondText = (vi.mocked(runTurn).mock.calls[1]?.[0] as { text: string }).text;
+    expect(secondText).toBe('beta');
+  });
+
+  it('carries the parsed verdict + evidence onto StopContext (from onTerminalState)', async () => {
+    surfaceState.readLineQueue = [
+      { text: 'do the thing', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    // Make runTurn invoke the loop's onTerminalState callback, as the real
+    // turn-handler does when it parses a Done verdict with no evidence.
+    vi.mocked(runTurn).mockImplementationOnce(
+      async (_input: unknown, _session: unknown, _stats: unknown, handlers: unknown) => {
+        (handlers as { onTerminalState?: (s: unknown, m?: unknown) => void }).onTerminalState?.(
+          { kind: 'done', rawBody: '' },
+          { doneHasCorroboratingEvidence: false },
+        );
+      },
+    );
+
+    const registry = createHookRegistry();
+    const stopHandler = vi.fn(async () => ({}));
+    registry.register('Stop', stopHandler);
+
+    const ctx = makeCtx();
+    ctx.hookRegistry = registry;
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    const received = stopHandler.mock.calls[0]?.[0];
+    expect(received).toMatchObject({
+      event: 'Stop',
+      terminalState: 'done',
+      doneHasCorroboratingEvidence: false,
+    });
+  });
+
+  it('omits verdict fields from StopContext when the turn parsed no terminal state', async () => {
+    // runTurn does NOT call onTerminalState (verdict-less turn) → the loop must
+    // not carry a stale kind onto the Stop context.
+    surfaceState.readLineQueue = [
+      { text: 'chatty turn', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const registry = createHookRegistry();
+    const stopHandler = vi.fn(async () => ({}));
+    registry.register('Stop', stopHandler);
+
+    const ctx = makeCtx();
+    ctx.hookRegistry = registry;
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    const received = stopHandler.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(received.event).toBe('Stop');
+    expect(received.terminalState).toBeUndefined();
+    expect(received.doneHasCorroboratingEvidence).toBeUndefined();
+  });
 });
 
 describe('runReplLoop — UserPromptSubmit hook integration', () => {

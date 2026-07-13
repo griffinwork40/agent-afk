@@ -171,6 +171,21 @@ export async function runInputLoop(
   // quiet afterwards so a broken disk doesn't spam the transcript every turn.
   let autosaveFailureLogged = false;
 
+  // Post-turn Stop-hook injection. When a Stop handler returns injectContext
+  // (e.g. the terminal-state gate bouncing a self-certified `Done` with no
+  // corroborating evidence — see terminal-state-gate.ts), we stash it here and
+  // prepend it to the NEXT turn's prompt at the top of the loop — the same
+  // next-turn delivery contract as the shell/bg-result injections below.
+  // Cross-turn state is exactly what the v1 Stop wiring deferred (see the Stop
+  // dispatch site at the bottom of the loop).
+  let pendingStopInjection: string | undefined;
+  // Parsed terminal-state kind + corroborating-evidence flag of the current
+  // turn, captured from onTerminalState (which fires during runTurn) so the
+  // post-turn Stop dispatch can carry them on StopContext for policy handlers.
+  // Reset before every runTurn so a verdict-less turn never reuses a stale kind.
+  let currentTerminalKind: 'done' | 'blocked' | 'asking' | 'interrupted' | undefined;
+  let currentDoneHasEvidence: boolean | undefined;
+
   // Auto-resume: wake an idle prompt when a background subagent result lands so
   // the session continues its work without waiting for a keystroke. Fires only
   // for injectable results (the notifier gates on AFK_BG_AUTO_DELIVER + skips
@@ -373,8 +388,11 @@ export async function runInputLoop(
             ctx.replRenderer.writeLine(palette.dim(`  transcript: ${transcript.path()}`));
             // The conversation has been wiped — its verdict trajectory is
             // no longer meaningful. Drop the ledger so the next prompt
-            // doesn't carry stale state into a fresh session.
+            // doesn't carry stale state into a fresh session. Same reasoning
+            // clears any pending post-turn Stop correction from the old
+            // conversation so it can't leak into the fresh one.
             verdictLedger.reset();
+            pendingStopInjection = undefined;
           }
           if (
             res.result !== null &&
@@ -503,6 +521,17 @@ export async function runInputLoop(
         runText = bgAgentInjection + runText;
       }
 
+      // Prepend a pending post-turn Stop-hook correction stashed after the
+      // previous turn's Stop dispatch (e.g. the terminal-state gate bouncing a
+      // self-certified `Done` with no evidence). Same next-turn delivery as the
+      // shell/bg injections above; consumed exactly once (cleared on drain).
+      // Drained AFTER shell/bg so the framework correction sits at the top of
+      // the prompt, directly below any UserPromptSubmit injection added below.
+      if (pendingStopInjection !== undefined) {
+        runText = pendingStopInjection + '\n\n' + runText;
+        pendingStopInjection = undefined;
+      }
+
       // UserPromptSubmit hook — fires before every turn submission.
       // Handlers may block the turn (HookBlockedError → continue loop),
       // inject additional context (prepended to runText), or approve silently.
@@ -547,6 +576,11 @@ export async function runInputLoop(
         }
       }
 
+      // Reset the per-turn verdict capture so a turn that emits no terminal
+      // state never carries the previous turn's kind into the Stop dispatch.
+      // onTerminalState re-sets these during runTurn when a verdict parses.
+      currentTerminalKind = undefined;
+      currentDoneHasEvidence = undefined;
       await runTurn({ text: runText, attachments }, ctx.session.current, ctx.stats, {
         setInFlight(v: boolean) { turnState.turnInFlight = v; },
         // Forward the promotion seam so Ctrl+B can background a running
@@ -602,7 +636,13 @@ export async function runInputLoop(
           loopStageBar?.repaint('observing');
         },
         rearmStatus: () => ctx.statusLine.rearm(),
-        onTerminalState: (state) => verdictLedger?.push(state),
+        onTerminalState: (state, meta) => {
+          verdictLedger?.push(state);
+          // Capture for the post-turn Stop dispatch (StopContext). Fires during
+          // runTurn, so these are set by the time Stop dispatches at loop tail.
+          currentTerminalKind = state.kind;
+          currentDoneHasEvidence = meta?.doneHasCorroboratingEvidence;
+        },
         setActiveCompositor: (c) => {
           // Publish the active compositor for the SIGINT handler (which
           // routes the interrupt notice through `commitAbove` when an
@@ -652,11 +692,14 @@ export async function runInputLoop(
         surface.toRunTurnRefs(buildPrompt(ctx.stats.permissionMode)),
       );
 
-      // Contract: Stop fires post-turn as a notification event. AbortError
-      // propagates (abort precedence is non-negotiable). HookBlockedError
-      // surfaces a brief notice and continues -- block does NOT force REPL
-      // continuation in v1 (deferred: block-to-force-continuation and
-      // injectContext-into-next-turn need cross-turn state).
+      // Contract: Stop fires post-turn. A Stop handler may return injectContext
+      // to bounce a correction into the NEXT turn — stashed in
+      // pendingStopInjection and drained at the top of the loop (the terminal-
+      // state gate uses this). AbortError propagates (abort precedence is
+      // non-negotiable). HookBlockedError surfaces a brief notice and continues
+      // -- block still does NOT force REPL continuation (block-to-force-
+      // continuation remains deferred; only injectContext-into-next-turn, which
+      // needed the cross-turn state now declared above, is wired here).
       //
       // Invariant: Stop fires only on non-throwing runTurn completions. Any
       // throw from runTurn (including model errors and abort) bypasses this
@@ -674,11 +717,29 @@ export async function runInputLoop(
       // a notification hook must not stall the prompt for 30s × N handlers.
       if (ctx.hookRegistry) {
         try {
-          await ctx.hookRegistry.dispatch(
-            { event: 'Stop', sessionId: ctx.stats.sessionId },
+          const stopDecision = await ctx.hookRegistry.dispatch(
+            {
+              event: 'Stop',
+              sessionId: ctx.stats.sessionId,
+              // Carry the just-completed turn's parsed verdict (captured via
+              // onTerminalState during runTurn) so post-turn policy handlers —
+              // the terminal-state gate — can read it. Omitted when the turn
+              // emitted no recognizable terminal state.
+              ...(currentTerminalKind !== undefined ? { terminalState: currentTerminalKind } : {}),
+              ...(currentDoneHasEvidence !== undefined
+                ? { doneHasCorroboratingEvidence: currentDoneHasEvidence }
+                : {}),
+            },
             undefined,
             STOP_HOOK_HANDLER_TIMEOUT_MS,
           );
+          // Stash any handler-returned correction for delivery on the next turn
+          // (drained at the top of the loop). dispatch() already merges
+          // injectContext across non-blocking handlers (#345), so this is the
+          // single merged string; a whitespace-only value is ignored.
+          if (stopDecision.injectContext && stopDecision.injectContext.trim().length > 0) {
+            pendingStopInjection = stopDecision.injectContext;
+          }
         } catch (err) {
           if (err instanceof AbortError) throw err;
           if (err instanceof HookHandlerTimeoutError) {

@@ -164,6 +164,7 @@ export function loadConfig(overrides?: Partial<CliConfig>): CliConfig {
     ...(merged.interactive !== undefined ? { interactive: merged.interactive } : {}),
     ...(merged.hooks !== undefined ? { hooks: merged.hooks } : {}),
     ...(merged.enableShellHooks !== undefined ? { enableShellHooks: merged.enableShellHooks } : {}),
+    ...(merged.enforceDoneEvidence !== undefined ? { enforceDoneEvidence: merged.enforceDoneEvidence } : {}),
     ...(merged.importFrom !== undefined ? { importFrom: merged.importFrom } : {}),
   };
 
