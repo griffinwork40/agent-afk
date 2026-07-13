@@ -15,12 +15,14 @@
  */
 
 import { spawn } from 'child_process';
+import os from 'os';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { appendRoutingDecision } from '../../routing-telemetry.js';
 import { detectTestResult } from './test-runner-detector.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { describeSpawnCwdError, isSpawnEnoent } from '../../../utils/spawn-cwd-error.js';
 import { HARD_CAP_BYTES, MODEL_CAP_BYTES, headAndTail, capForModel, HARD_CAP_KILL_NOTE } from './_output-cap.js';
+import { extractCandidatePaths, wouldBeRestricted } from './_cwd-utils.js';
 
 /**
  * Input shape for the bash tool (validated at runtime).
@@ -86,12 +88,30 @@ function parseBashInput(input: unknown): { command: string; timeout_ms: number }
  * full `execFile`-based refactor that disables the shell is tracked as a
  * separate work item. For now we emit a one-time warning at startup so the
  * risk surface is explicit in logs.
+ *
+ * Path containment (advisory-only): unlike the typed filesystem handlers,
+ * which route every path through `resolveAndContain` and hard-reject writes
+ * outside `writeRoots`, bash cannot reliably know which paths a `shell: true`
+ * command will touch — the command string is opaque. So instead of blocking,
+ * the handler runs a BEST-EFFORT scan before spawning: it extracts absolute
+ * and home-relative path tokens (`extractCandidatePaths`) and checks each
+ * against the session's write roots (`wouldBeRestricted`, `mode: 'write'`).
+ * If any references a path outside the roots it emits a ONE-TIME advisory
+ * `console.warn` plus a `tool.bash_path_escape` telemetry row, then spawns
+ * normally — it never refuses execution. Refusing would break the primary
+ * human-driven `afk -w` worktree flow (a top-level bypass session legitimately
+ * carries a non-empty `writeRoots`), and `wouldBeRestricted` already returns
+ * not-restricted under `allowAll`, so bypass sessions produce no noise. The
+ * scan is deliberately not a shell parser: it does not catch `$()`, env-var
+ * indirection, backticks, or globs. Rationale and the accepted threat model
+ * are documented in `docs/decisions/0001-bash-tool-path-containment.md`.
  */
 export function createBashHandler(
   permissionMode: string,
   cwd?: string,
 ): ToolHandler {
   let _shellModeWarned = false;
+  let _pathEscapeWarned = false;
 
   function warnIfBypassPermissions(): void {
     if (_shellModeWarned) return;
@@ -105,6 +125,59 @@ export function createBashHandler(
     }
   }
 
+  /**
+   * Best-effort, ADVISORY-ONLY containment scan (never blocks execution).
+   *
+   * Extracts absolute / home-relative path tokens from the raw command and
+   * checks each against the session's WRITE roots — the stricter, most
+   * relevant boundary for the "escape the worktree" threat, and in practice
+   * `readRoots ⊇ writeRoots` for confined forks. Home-relative tokens are
+   * expanded to `os.homedir()` first so `wouldBeRestricted` (which anchors
+   * non-absolute inputs to `resolveBase`) sees a true absolute path.
+   *
+   * On the first out-of-root reference (per handler instance) it emits one
+   * `console.warn` naming the escaping resolved paths and one
+   * `tool.bash_path_escape` telemetry row (counts + mode only — never the raw
+   * command string; audit §G.4). Then it returns and the caller spawns as
+   * normal. `wouldBeRestricted` short-circuits to not-restricted under
+   * `allowAll` (bypass) and when no `resolveBase` is set (unconfined session),
+   * so those sessions naturally produce zero warnings — intended, not
+   * special-cased here.
+   */
+  function scanPathsBestEffort(command: string, context: ToolHandlerContext): void {
+    if (_pathEscapeWarned) return; // one-time per handler instance
+    const fallbackBase = context.resolveBase ?? context.cwd ?? cwd;
+    const home = os.homedir();
+    const escaping: string[] = [];
+    for (const candidate of extractCandidatePaths(command)) {
+      // Expand ~ / ~/… to an absolute path so wouldBeRestricted does not
+      // anchor it to resolveBase and mis-resolve it as in-root.
+      const expanded =
+        candidate === '~'
+          ? home
+          : candidate.startsWith('~/')
+            ? home + candidate.slice(1)
+            : candidate;
+      const verdict = wouldBeRestricted(expanded, context, 'write', fallbackBase);
+      if (verdict.restricted) escaping.push(verdict.resolved);
+    }
+    if (escaping.length === 0) return;
+    _pathEscapeWarned = true;
+    console.warn(
+      `[security] bash: command references path(s) outside writeRoots: ${escaping.join(', ')} — ` +
+        'bash containment is best-effort (tracked C4); use file tools for contained writes.',
+    );
+    // Telemetry: counts + mode only. The raw command string and the escaping
+    // paths list are tool input and stay out of the JSONL (audit §G.4) — same
+    // privacy rule as the overflow-kill path above.
+    void appendRoutingDecision({
+      event: 'tool.bash_path_escape',
+      tool: 'bash',
+      restricted_count: escaping.length,
+      mode: 'write',
+    });
+  }
+
   return async (input: unknown, signal: AbortSignal, context?: ToolHandlerContext) => {
     let { command, timeout_ms } = parseBashInput(input);
 
@@ -113,6 +186,13 @@ export function createBashHandler(
     }
 
     warnIfBypassPermissions();
+
+    // Advisory-only containment scan (warn + telemetry, never blocks). Only
+    // runs when a context is present — inline/back-compat calls without one
+    // have no roots to check against.
+    if (context !== undefined) {
+      scanPathsBestEffort(command, context);
+    }
 
   return new Promise((resolve) => {
     let resolved = false;
