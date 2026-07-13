@@ -23,6 +23,7 @@ import { StatusLine } from '../../src/cli/status-line.js';
 import { LoopStageBar } from '../../src/cli/commands/interactive/loop-stage.js';
 import { renderMarkdownToTerminal } from '../../src/cli/formatter.js';
 import { formatSubmittedEcho } from '../../src/cli/input/echo.js';
+import { commitBlockAbove } from '../../src/cli/_lib/commit-block.js';
 
 /** Runtime handed to a scenario's drive() from inside the pty child. */
 export interface PtyDriveCtx {
@@ -291,17 +292,26 @@ export const SCENARIOS: Record<string, PtyScenario> = {
   },
 
   // ─────────────────────────────────────────────────────────────────────────
-  // first-turn-image-echo (#509): the FIRST commitAbove after arm, following a
-  // pre-arm banner and a pre-submit chrome cycle. The echoed submit card must
-  // commit exactly once (no orphan/duplicate copies), its body must survive
-  // streaming growth, and every banner row must remain intact. Mirrors
-  // terminal-compositor.first-turn-banner-echo.test.ts.
+  // first-turn-image-echo (#509): the FIRST commit after arm, following a
+  // pre-arm banner and a pre-submit chrome cycle, for a message carrying an
+  // IMAGE ATTACHMENT. Faithful to production (input-surface.ts:492): the echo —
+  // a multi-line user card PLUS the dim `[image attached]` summary row — is
+  // committed as ONE block via commitBlockAbove, NOT per-line (per-line forces N
+  // independent geometry decisions and is the void-prone path; see
+  // src/cli/_lib/commit-block.ts:13-24). The card body, the `[image attached]`
+  // summary, and the response must each land EXACTLY ONCE and in order (no
+  // orphan/duplicate copies — the reported double-render), and every banner row
+  // must reach real scrollback intact. Real-TTY sibling of the headless
+  // single-block guard in terminal-compositor.first-turn-echo-image.test.ts;
+  // the whole-buffer xterm replay still can't reproduce the terminal-only DECAWM
+  // deferred-wrap artifact, but it certifies the single-copy committed-band
+  // property over a real pty, which the mock-stdout path cannot.
   // ─────────────────────────────────────────────────────────────────────────
   'first-turn-image-echo': {
-    description: 'first commit after banner echoes the submit card once and preserves banner + body',
+    description: 'first commit after banner echoes the image card + [image attached] once, block-committed',
     cols: 80,
     rows: 24,
-    ref: '#509 · terminal-compositor.first-turn-banner-echo.test.ts',
+    ref: '#509 · terminal-compositor.first-turn-echo-image.test.ts',
     async drive({ stdout, stdin }): Promise<void> {
       const BANNER_ROWS = 11;
       const MESSAGE = 'Reply with only the word ok and nothing else. DUPCHECK alpha bravo charlie delta echo foxtrot golf hotel india';
@@ -313,8 +323,17 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       // Pre-submit chrome cycle: transient chrome then collapse back to idle.
       c.setOverlay('preflight-line');
       c.setOverlay('');
-      const echo = formatSubmittedEcho({ buffer: MESSAGE, promptText: 'afk (haiku)  › ', isTTY: true, terminalWidth: 80 });
-      for (const line of echo.split('\n')) c.commitAbove(line);
+      // Image-attachment echo shape: multi-line card + dim `[image attached]`
+      // trailer, committed as ONE block via commitBlockAbove — the exact
+      // production path (input-surface.ts:492), NOT the per-line loop.
+      const echo = formatSubmittedEcho({
+        buffer: MESSAGE,
+        promptText: 'afk (haiku)  › ',
+        isTTY: true,
+        terminalWidth: 80,
+        attachmentSummary: '[image attached]',
+      });
+      commitBlockAbove(c, echo.split('\n'));
       c.commitAbove('');
       c.setSpinner({ enabled: true });
       for (let g = 2; g <= 14; g += 3) {
@@ -334,10 +353,15 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       // regression that left the banner in the viewport would fail here.
       inScrollback: ['BANNER_LINE_0', 'BANNER_LINE_10'],
       exactlyOnce: [
-        'DUPCHECK', 'india', 'RESPONSE_OK',
+        'DUPCHECK', 'india', '[image attached]', 'RESPONSE_OK',
         'BANNER_LINE_0', 'BANNER_LINE_5', 'BANNER_LINE_10',
       ],
-      order: [['BANNER_LINE_10', 'DUPCHECK'], ['DUPCHECK', 'india'], ['india', 'RESPONSE_OK']],
+      order: [
+        ['BANNER_LINE_10', 'DUPCHECK'],
+        ['DUPCHECK', 'india'],
+        ['india', '[image attached]'],
+        ['[image attached]', 'RESPONSE_OK'],
+      ],
     },
   },
 };
