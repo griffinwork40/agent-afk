@@ -465,6 +465,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_PLAIN_OUTPUT",
+      "description": "Force the interactive REPL to use the append-only plain-stdout renderer instead of the TerminalCompositor live overlay, even when stdout is a TTY. Same code path already used for non-TTY surfaces (pipes, CI). Reliability escape hatch for tmux/SSH/multiplexer sessions where cursor-up redraws and DECSTBM scroll regions misbehave. Opt-in — default TTY behavior (live overlay) is unchanged. Truthy values: 1, true (case-insensitive).",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "misc"
+    },
+    {
       "name": "AFK_PROMPT_CACHE_TTL",
       "description": "TTL for Anthropic prompt-cache blocks. Accepts 5m or 1h.",
       "type": "string",

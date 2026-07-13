@@ -1,10 +1,14 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createReplRenderer } from './repl-renderer.js';
 
 function makeStdout(isTTY: boolean) {
   const write = vi.fn();
   return { write, isTTY } as unknown as NodeJS.WriteStream & { write: ReturnType<typeof vi.fn> };
 }
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe('createReplRenderer', () => {
   describe('armed compositor routing', () => {
@@ -73,6 +77,67 @@ describe('createReplRenderer', () => {
       const renderer = createReplRenderer(stdout);
       renderer.writeLine('');
       expect(stdout.write).toHaveBeenCalledWith('\n');
+    });
+  });
+
+  describe('AFK_PLAIN_OUTPUT opt-in', () => {
+    it('selects the plain path on a TTY when AFK_PLAIN_OUTPUT=1, bypassing the compositor', () => {
+      vi.stubEnv('AFK_PLAIN_OUTPUT', '1');
+      const stdout = makeStdout(true);
+      const commitAbove = vi.fn();
+      const compositor = { isArmed: () => true, commitAbove };
+      const renderer = createReplRenderer(stdout);
+      renderer.setCompositor(compositor);
+
+      renderer.writeLine('hello');
+
+      expect(stdout.write).toHaveBeenCalledWith('hello\n');
+      expect(commitAbove).not.toHaveBeenCalled();
+    });
+
+    it('selects the plain path on a TTY when AFK_PLAIN_OUTPUT=true (case-insensitive)', () => {
+      vi.stubEnv('AFK_PLAIN_OUTPUT', 'TRUE');
+      const stdout = makeStdout(true);
+      const renderer = createReplRenderer(stdout);
+
+      renderer.writeLine('hello');
+
+      expect(stdout.write).toHaveBeenCalledWith('hello\n');
+    });
+
+    it('setCompositor is a no-op on the plain path forced by AFK_PLAIN_OUTPUT', () => {
+      vi.stubEnv('AFK_PLAIN_OUTPUT', '1');
+      const stdout = makeStdout(true);
+      const renderer = createReplRenderer(stdout);
+      expect(() => renderer.setCompositor(null)).not.toThrow();
+    });
+
+    it('does not force the plain path for unrecognized values (e.g. "0")', () => {
+      vi.stubEnv('AFK_PLAIN_OUTPUT', '0');
+      const stdout = makeStdout(true);
+      const commitAbove = vi.fn();
+      const compositor = { isArmed: () => true, commitAbove };
+      const renderer = createReplRenderer(stdout);
+      renderer.setCompositor(compositor);
+
+      renderer.writeLine('hello');
+
+      expect(commitAbove).toHaveBeenCalledWith('hello');
+      expect(stdout.write).not.toHaveBeenCalled();
+    });
+
+    it('leaves the default TTY live-overlay path unchanged when AFK_PLAIN_OUTPUT is unset', () => {
+      vi.stubEnv('AFK_PLAIN_OUTPUT', undefined as unknown as string);
+      const stdout = makeStdout(true);
+      const commitAbove = vi.fn();
+      const compositor = { isArmed: () => true, commitAbove };
+      const renderer = createReplRenderer(stdout);
+      renderer.setCompositor(compositor);
+
+      renderer.writeLine('hello');
+
+      expect(commitAbove).toHaveBeenCalledWith('hello');
+      expect(stdout.write).not.toHaveBeenCalled();
     });
   });
 });
