@@ -362,7 +362,9 @@ export async function runForkedSkillToResult(
     if (handle) await handle.teardown({ deferInjectContextToCaller: true }).catch(debugLog);
     // In-turn append: only when this run produced a completion ToolResult.
     // The catch path leaves toolResult unset — nothing to append to, note
-    // dropped for that stop by design (the error string is the signal).
+    // dropped for that stop by design (the error string is the signal;
+    // keep-drop confirmed in #392, queue-fallback rejected — rationale in
+    // inject-context.ts).
     const injectContext = handle?.getLastStopInjectContext?.();
     appendInjectContext(toolResult, injectContext);
     await childManager?.teardownAll();
