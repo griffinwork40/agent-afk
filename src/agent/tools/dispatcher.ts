@@ -31,6 +31,13 @@ import { emitHookDecision } from '../trace/emit.js';
 import type { TraceWriter } from '../trace/index.js';
 import { defaultConcurrencyClassifier, partitionIntoBatches } from './dispatch-batching.js';
 import { repeatCallFingerprint } from './repeat-circuit-breaker.js';
+import {
+  DENIAL_CIRCUIT_BREAKER_THRESHOLD,
+  DENIAL_BREAKER_FAILURE_CLASS,
+  READ_PATH_TOOLS,
+  extractDeniedReadPath,
+  buildDenialBreakerMessage,
+} from './denial-circuit-breaker.js';
 
 // Re-exported for backward compatibility: external importers (dispatcher.test.ts,
 // schema-classification.test.ts) historically import this from './dispatcher.js'.
@@ -226,6 +233,17 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * dispatcher reconstruction. See {@link checkRepeatCircuitBreaker}.
    */
   private repeatBreaker: { fingerprint: string; count: number } | null = null;
+
+  /**
+   * Denial circuit breaker state (#546). Counts CONSECUTIVE path-approval READ
+   * denials on a FORKED child (one dispatcher per forked `query()`), reset to
+   * `null` on any successful tool result — so only a fork making zero progress
+   * trips. When `count` reaches {@link DENIAL_CIRCUIT_BREAKER_THRESHOLD} the
+   * dispatcher tags the tripping result `failureClass: 'denial-breaker'`, which
+   * the provider loop surfaces as a loud `error` event. `null` when no denial
+   * has been seen since the last success. See {@link recordForkReadDenial}.
+   */
+  private denialBreaker: { count: number; deniedPaths: string[] } | null = null;
 
   /**
    * Shared grant-state machine (issues #361/#362). The hooks bind the
@@ -514,6 +532,47 @@ export class SessionToolDispatcher implements ToolDispatcher {
   }
 
   /**
+   * Denial circuit breaker (#546). Called with the just-built path-approval
+   * block result for a PreToolUse `hook-block`. Counts the denial ONLY when it
+   * is a forked child (`parentSessionId` set — only forks auto-deny reads; an
+   * interactive session gets a prompt instead) reading via a {@link
+   * READ_PATH_TOOLS} tool (so write-confinement is never counted). Below the
+   * threshold the original block result is returned unchanged; at the threshold
+   * a `denial-breaker` result is returned instead, which the provider loop
+   * converts into a loud `error` event so the parent gets a structured,
+   * actionable failure rather than a fork that burns its wall-clock budget.
+   *
+   * Invariant: consecutive — {@link resetDenialBreaker} clears the count on any
+   * successful tool result, so a fork that probes a couple of out-of-scope
+   * paths and then makes progress never trips.
+   */
+  private recordForkReadDenial(call: ToolCall, blockResult: ToolResult): ToolResult {
+    if (this.parentSessionId === undefined || !READ_PATH_TOOLS.has(call.name)) {
+      return blockResult;
+    }
+    const breaker = this.denialBreaker ?? { count: 0, deniedPaths: [] };
+    breaker.count += 1;
+    const deniedPath = extractDeniedReadPath(call);
+    if (!breaker.deniedPaths.includes(deniedPath)) breaker.deniedPaths.push(deniedPath);
+    this.denialBreaker = breaker;
+    if (breaker.count < DENIAL_CIRCUIT_BREAKER_THRESHOLD) return blockResult;
+    return {
+      content: buildDenialBreakerMessage(breaker.deniedPaths, breaker.count),
+      isError: true,
+      failureClass: DENIAL_BREAKER_FAILURE_CLASS,
+    };
+  }
+
+  /**
+   * Clear the denial breaker's consecutive-denial count. Called on any
+   * successful tool result so the breaker tracks "read denials since the last
+   * progress", not lifetime denials. See {@link recordForkReadDenial}.
+   */
+  private resetDenialBreaker(): void {
+    this.denialBreaker = null;
+  }
+
+  /**
    * Consult the optional `canUseTool` permission callback for a single call.
    * Returns a permission-denied {@link ToolResult} to short-circuit when the
    * policy denies (or throws — fail-closed), or `null` to proceed. On an
@@ -600,11 +659,11 @@ export class SessionToolDispatcher implements ToolDispatcher {
         });
       } catch (err) {
         if (err instanceof HookBlockedError) {
-          return {
+          return this.recordForkReadDenial(call, {
             content: `Tool "${call.name}" blocked by PreToolUse hook: ${err.message}`,
             isError: true,
             failureClass: 'hook-block',
-          };
+          });
         }
         throw err;
       }
@@ -643,7 +702,11 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // that body (agent/skill/compose special-cases + handler lookup +
     // PostToolUse firing); the duplicate only added drift risk with no
     // behavioral difference, so the single-call path now delegates too.
-    return this.executeCore(call);
+    const coreResult = await this.executeCore(call);
+    // Reset-on-success: a completed (non-error) tool call is progress, so the
+    // denial breaker's consecutive-denial count restarts. See recordForkReadDenial.
+    if (coreResult.isError !== true) this.resetDenialBreaker();
+    return coreResult;
   }
 
   /**
@@ -694,11 +757,11 @@ export class SessionToolDispatcher implements ToolDispatcher {
           });
         } catch (err) {
           if (err instanceof HookBlockedError) {
-            results[i] = {
+            results[i] = this.recordForkReadDenial(call, {
               content: `Tool "${call.name}" blocked by PreToolUse hook: ${err.message}`,
               isError: true,
               failureClass: 'hook-block',
-            };
+            });
             blocked.add(i);
             continue;
           }
@@ -848,6 +911,14 @@ export class SessionToolDispatcher implements ToolDispatcher {
           r.batchSize = batchSize;
         }
       });
+    }
+
+    // Reset-on-success (#546): if any call in this batch executed successfully,
+    // the fork made progress, so the denial breaker's consecutive-denial count
+    // restarts. Blocked/denied calls carry isError:true and never reset. See
+    // recordForkReadDenial.
+    if (results.some((r) => r !== undefined && r.isError !== true)) {
+      this.resetDenialBreaker();
     }
 
     return results;

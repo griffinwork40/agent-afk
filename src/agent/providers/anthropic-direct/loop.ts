@@ -63,6 +63,8 @@ import {
   resolveMaxToolIterations,
   shouldWindDown,
 } from '../shared/tool-loop-cap.js';
+import { DENIAL_BREAKER_FAILURE_CLASS } from '../../tools/denial-circuit-breaker.js';
+import { DenialCircuitBreakerError } from '../../../utils/errors.js';
 
 // Re-exported from the provider-neutral `shared/tool-loop-cap.ts` (single
 // source of truth shared with openai-compatible). Kept exported here so
@@ -853,6 +855,22 @@ export async function* runTurn(
       content: toolResultBlocks as ContentBlockParam[],
     };
     input.messages.push(toolResultTurn);
+
+    // Denial circuit breaker (#546): the dispatcher tagged a result
+    // `denial-breaker` after a forked child hit N consecutive path-approval
+    // read denials with no progress. Surface it as a LOUD `error` event — never
+    // a silent partial — so the shared subagent handle rethrows it into a
+    // structured `buildResultFromError` failure the parent can act on (mirrors
+    // the TimeoutError teardown). History is already consistent here (assistant
+    // `tool_use` + matching `tool_result` blocks both pushed above), so
+    // returning is safe; the fork is done. A dispatcher throw would instead be
+    // swallowed by the executeBatch/execute catch above and the loop would keep
+    // spinning — which is the exact failure this breaker exists to prevent.
+    const denialTrip = results.find((r) => r.failureClass === DENIAL_BREAKER_FAILURE_CLASS);
+    if (denialTrip) {
+      yield { type: 'error', error: new DenialCircuitBreakerError(denialTrip.content) };
+      return;
+    }
     } catch (err) {
       // Rollback the orphaned assistant `tool_use` push above so the next
       // turn's API call does not 400 with "tool_use ids were found without

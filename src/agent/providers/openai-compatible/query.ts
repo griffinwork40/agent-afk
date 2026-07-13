@@ -80,13 +80,14 @@ import { translateResponsesEvent, type ResponsesStreamEvent } from './responses-
 import { resolveWireMode, envFlagEnabled, isClaudeFamilyModel, type WireMode } from './responses-config.js';
 import { env } from '../../../config/env.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
+import type { ToolResult } from '../anthropic-direct/types.js';
 import {
   contextWindowTokensUsed,
   buildContextUsageFields,
   shouldAutoCompact,
   resolveAutoCompactThreshold,
 } from '../shared/auto-compact.js';
-import { HookBlockedError } from '../../../utils/errors.js';
+import { HookBlockedError, DenialCircuitBreakerError } from '../../../utils/errors.js';
 import { COMPACT_SYSTEM_PROMPT, wrapTranscriptForSummary } from '../shared/compaction.js';
 import { compactOpenAIHistory } from './compact.js';
 import { oneShotChatCompletion } from './oneshot.js';
@@ -510,7 +511,19 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       }
 
       // Tool-call path: dispatch, append history, loop.
-      yield* this.dispatchAndAppend(result.state, controller.signal, vision);
+      const denialTrip = yield* this.dispatchAndAppend(result.state, controller.signal, vision);
+      // Denial circuit breaker (#546): a forked child hit N consecutive
+      // path-approval read denials with no progress. Surface a LOUD terminal
+      // `error` event (the subagent handle rethrows it into a structured
+      // failure) and stop — never keep looping to the wall-clock budget. History
+      // was appended by dispatchAndAppend, so the transcript is consistent. Skip
+      // finishTurn: the error event is itself terminal (mirrors the stream-error
+      // path above at `result === null`).
+      if (denialTrip) {
+        if (this.abortController === controller) this.abortController = null;
+        yield { type: 'error', error: new DenialCircuitBreakerError(denialTrip.content) };
+        return;
+      }
       round += 1;
 
       {
@@ -798,8 +811,8 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     state: StreamState,
     signal: AbortSignal,
     vision: boolean,
-  ): AsyncGenerator<ProviderEvent> {
-    yield* dispatchAndAppendToolCalls({
+  ): AsyncGenerator<ProviderEvent, ToolResult | undefined> {
+    return yield* dispatchAndAppendToolCalls({
       state,
       signal,
       vision,
