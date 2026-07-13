@@ -64,7 +64,11 @@ function assertExpectations(res: PtyRunResult, exp: PtyExpect): void {
   if (exp.maxViewportBlankRun !== undefined) {
     // Measure blank runs strictly BETWEEN committed content rows (first content
     // → last content anchor), so live-frame chrome below never counts as a void.
-    const anchors = [...(exp.inViewport ?? []), ...(exp.exactlyOnce ?? [])];
+    // Prefer a scenario-declared content-only anchor set so live-frame chrome
+    // (e.g. a StatusLine model id present in exactlyOnce) can't pull lastAnchor
+    // down into the frame and widen the void scan. Falls back to the general
+    // anchor sets when a scenario declares none (safe iff they hold no chrome).
+    const anchors = exp.contentAnchors ?? [...(exp.inViewport ?? []), ...(exp.exactlyOnce ?? [])];
     const firstContent = res.viewport.findIndex((l) => l.trim() !== '');
     let lastAnchor = -1;
     for (let i = res.viewport.length - 1; i >= 0; i--) {

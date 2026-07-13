@@ -50,6 +50,16 @@ export interface PtyExpect {
    */
   maxViewportBlankRun?: number;
   /**
+   * Content-only anchors marking the LAST committed content row, used solely
+   * to bound the maxViewportBlankRun window. Declare this when a scenario's
+   * `exactlyOnce`/`inViewport` sets carry live-frame CHROME strings (e.g. a
+   * StatusLine model id): the blank-run window must end at the last committed
+   * CONTENT row, never at a chrome row below it, or the void scan spills into
+   * the frame and over-counts on correct output. When unset, the window falls
+   * back to `inViewport ∪ exactlyOnce` (correct only when those hold no chrome).
+   */
+  contentAnchors?: string[];
+  /**
    * Substring pairs [a, b] where the first row containing `a` must appear
    * strictly above the first row containing `b` across the whole buffer.
    */
@@ -143,6 +153,10 @@ export const SCENARIOS: Record<string, PtyScenario> = {
         'TOOL_OUTPUT_00', 'TOOL_OUTPUT_05', 'TOOL_OUTPUT_11', 'TOOL_OUTPUT_17',
         'Done (114 tools)', 'STATUSMODELXYZ',
       ],
+      // 'STATUSMODELXYZ' above is the StatusLine model id (live-frame chrome).
+      // Bound the void scan by committed CONTENT only, so lastAnchor lands on
+      // the rollup tail — not the chrome status row below the frame.
+      contentAnchors: ['TOOL_OUTPUT_17', 'Done (114 tools)'],
       maxViewportBlankRun: 1,
     },
   },
@@ -314,6 +328,11 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       await settle();
     },
     expect: {
+      // Banner rows written before arm overflow past baseY (observed baseY=13)
+      // into real scrollback — the property this scenario is named for. Assert
+      // the REGION (not just whole-buffer presence via exactlyOnce/order), so a
+      // regression that left the banner in the viewport would fail here.
+      inScrollback: ['BANNER_LINE_0', 'BANNER_LINE_10'],
       exactlyOnce: [
         'DUPCHECK', 'india', 'RESPONSE_OK',
         'BANNER_LINE_0', 'BANNER_LINE_5', 'BANNER_LINE_10',
