@@ -121,6 +121,16 @@ export interface AgentConfig {
    */
   openaiBaseUrl?: string;
 
+  /**
+   * Per-slot signal set by `applySlotCredentials` for a `provider:
+   * 'chatgpt-oauth'` tier: force ChatGPT-subscription OAuth for this session's
+   * openai-compatible provider — selecting the `~/.codex/auth.json` ChatGPT
+   * token over `OPENAI_API_KEY`/`CODEX_API_KEY` and WITHOUT requiring the global
+   * `AFK_OPENAI_CHATGPT_OAUTH` flag. Lets a ChatGPT-subscription model coexist
+   * with a custom keyed OpenAI model in one session. See `resolveOpenAIAuth`.
+   */
+  forceChatgptOAuth?: boolean;
+
   /** Maximum number of conversation turns (optional) */
   maxTurns?: number;
 

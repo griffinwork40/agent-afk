@@ -638,9 +638,9 @@ describe('OpenAICompatibleQuery — model-slot resolution in request body', () =
 
   it('resolves a slot alias to its bound id before sending (closes the subagent-on-ChatGPT-backend gap)', async () => {
     // Bind every tier to gpt-5.5 — the only model a ChatGPT subscription
-    // accepts. A subagent/skill that picks `sonnet` (the alias the LLM copies
-    // from the agent tool's examples) must therefore reach the backend AS
-    // gpt-5.5, not the literal string `sonnet`.
+    // accepts. A subagent/skill that picks `medium` (the tier alias the LLM
+    // copies from the agent tool's examples) must therefore reach the backend AS
+    // gpt-5.5, not the literal string `medium`.
     setSlotBindings({
       local: { id: '' },
       small: { id: 'gpt-5.5' },
@@ -651,11 +651,11 @@ describe('OpenAICompatibleQuery — model-slot resolution in request body', () =
       { choices: [{ delta: { content: 'ok' } }] },
       { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
     ];
-    const q = buildQueryFromConfig(baseConfig({ model: 'sonnet' }), singleInput('hi'));
+    const q = buildQueryFromConfig(baseConfig({ model: 'medium' }), singleInput('hi'));
     const events = await collect(q);
     const sentModel = (createCalls[0]!.args as { model: string }).model;
     expect(sentModel).toBe('gpt-5.5');
-    expect(sentModel).not.toBe('sonnet');
+    expect(sentModel).not.toBe('medium');
     // The normalized session.init reflects the resolved id too.
     const init = events[0];
     if (init?.type === 'session.init') expect(init.info.model).toBe('gpt-5.5');

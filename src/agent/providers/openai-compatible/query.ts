@@ -1053,7 +1053,7 @@ export function buildQueryFromConfig(
     authDeps?: AuthResolverDeps;
   } = {},
 ): OpenAICompatibleQuery {
-  const auth = resolveOpenAIAuth(config.apiKey, options.authDeps);
+  const auth = resolveOpenAIAuth(config.apiKey, options.authDeps, config.forceChatgptOAuth ?? false);
   const synthesizedSessionId =
     config.resume ?? `openai-pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   // Resolve model-slot aliases (small/medium/large, custom names, and the

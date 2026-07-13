@@ -138,7 +138,9 @@ export class SessionManager {
   constructor(options: SessionManagerOptions) {
     this.options = {
       dataDir: options.dataDir || './data/telegram-sessions',
-      defaultModel: options.defaultModel || 'sonnet',
+      // Default to the `medium` capability TIER (not the fixed `'sonnet'` identity
+      // alias) so a rebound `medium` changes the default; matches CLI getModel().
+      defaultModel: options.defaultModel || 'medium',
       apiKey: options.apiKey,
       settingSources: options.settingSources,
       thinking: options.thinking,

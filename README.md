@@ -139,11 +139,14 @@ afk chat "refactor this" --model gpt-5.5
 | Slot | Default | Notes |
 |---|---|---|
 | `local` | *(empty — you configure)* | Point at Ollama, LM Studio, or any OpenAI-compatible shim via `AFK_MODEL_LOCAL` + `AFK_MODEL_LOCAL_BASE_URL` |
-| `small` | `claude-haiku-4-5-20251001` | Cheapest/fastest Anthropic tier; `haiku` alias |
-| `medium` | `claude-sonnet-5` | General-use default; `sonnet` alias |
-| `large` | `claude-opus-4-8` | Most capable; `opus` alias |
+| `small` | `claude-haiku-4-5-20251001` | Cheapest/fastest Anthropic tier |
+| `medium` | `claude-sonnet-5` | General-use default |
+| `large` | `claude-opus-4-8` | Most capable |
 
-See [`docs/model-slots.md`](docs/model-slots.md) for the full configuration reference.
+The `haiku`/`sonnet`/`opus`/`fable` handles are **fixed identities**, not tier
+aliases: they always resolve to their Claude model even after you rebind a tier
+(so rebinding `medium` to an OpenAI model won't hijack `sonnet`). See
+[`docs/model-slots.md`](docs/model-slots.md) for the full configuration reference.
 
 MCP servers (tool-providing plugins over stdio/HTTP) — see [`docs/mcp.md`](docs/mcp.md) for config, transports, OAuth, and security notes.
 
