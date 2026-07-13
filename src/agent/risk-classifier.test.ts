@@ -223,6 +223,47 @@ describe('classifyRisk — schedule tools', () => {
   });
 });
 
+// ---- worktree lifecycle --------------------------------------------------
+// Regression guard for PR #390 review finding F1: the `worktree` tool had no
+// classifier branch, so every action (including `remove --force`, which can
+// discard uncommitted work) fell through to the 'safe' default and ran
+// unattended in AFK mode with no approval. Only `remove` with `force:true` is
+// irreversible → 'high'; `list` is a read-only dry-run → 'safe'; all other
+// actions are reversible → 'medium'.
+describe('classifyRisk — worktree tool', () => {
+  it('remove with force:true → high (discards uncommitted work; must be gated)', () => {
+    expect(classifyRisk('worktree', { action: 'remove', path: 'foo', force: true }, ctx)).toBe('high');
+  });
+
+  it('remove without force → medium (refuses dirty/locked/ahead; reversible)', () => {
+    expect(classifyRisk('worktree', { action: 'remove', path: 'foo' }, ctx)).toBe('medium');
+  });
+
+  it('remove with explicit force:false → medium', () => {
+    expect(classifyRisk('worktree', { action: 'remove', path: 'foo', force: false }, ctx)).toBe('medium');
+  });
+
+  it('create → medium (reversible: the worktree can be removed)', () => {
+    expect(classifyRisk('worktree', { action: 'create', name: 'feat-x' }, ctx)).toBe('medium');
+  });
+
+  it('keep → medium (lock toggle)', () => {
+    expect(classifyRisk('worktree', { action: 'keep', path: 'foo', reason: 'wip' }, ctx)).toBe('medium');
+  });
+
+  it('release → medium (unlock toggle)', () => {
+    expect(classifyRisk('worktree', { action: 'release', path: 'foo' }, ctx)).toBe('medium');
+  });
+
+  it('list → safe (dry-run sweep report, read-only)', () => {
+    expect(classifyRisk('worktree', { action: 'list' }, ctx)).toBe('safe');
+  });
+
+  it('missing/unknown action → medium (conservative default, never safe)', () => {
+    expect(classifyRisk('worktree', {}, ctx)).toBe('medium');
+  });
+});
+
 // ---- browser tools -------------------------------------------------------
 describe('classifyRisk — browser tools', () => {
   it('browser_open → medium (stateful navigation)', () => {

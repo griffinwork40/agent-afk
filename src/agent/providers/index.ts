@@ -24,6 +24,7 @@ import { anthropicDirectProvider, AnthropicDirectProvider } from './anthropic-di
 import { OpenAICompatibleProvider } from './openai-compatible/index.js';
 import { MODEL_MAP } from '../session/model-resolution.js';
 import { resolveBinding, type ModelSlots } from '../session/model-slots.js';
+import { isOSeriesModel } from '../model-capabilities.js';
 import { env } from '../../config/env.js';
 
 /**
@@ -169,7 +170,8 @@ export function providerForModel(
   // a bare id on a shim (no gpt-/org-model signal) still routes to its declared
   // provider rather than defaulting to anthropic-direct.
   if (binding.provider === 'anthropic') return 'anthropic-direct';
-  if (binding.provider === 'openai') return 'openai-compatible';
+  if (binding.provider === 'openai' || binding.provider === 'chatgpt-oauth')
+    return 'openai-compatible';
 
   // Tier 2: Claude lock (beats env-hint tier — see Tier 4 docstring), applied
   // to the resolved bound id.
@@ -190,9 +192,7 @@ export function providerForModel(
     if (
       lowered.startsWith('gpt-') ||
       lowered.startsWith('gpt_') ||
-      lowered.startsWith('o1') ||
-      lowered.startsWith('o3') ||
-      lowered.startsWith('o4') ||
+      isOSeriesModel(lowered) ||
       lowered.startsWith('codex-') ||
       lowered.startsWith('codex_') ||
       lowered === 'codex' ||

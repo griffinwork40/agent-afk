@@ -26,6 +26,21 @@ export type ResumeSwapResult =
   | { ok: true; sessionId: string }
   | { ok: false; reason: string };
 
+/**
+ * How the REPL renders the model's extended-thinking blocks:
+ * - `'live'` (default) — streaming preview overlay + finalize summary
+ * - `'summary'` — collapsed one-line summary on finalize, no live preview
+ * - `'digest'` — streaming preview overlay (like `'live'`) AND, on each phase
+ *   seal, commits a capped reasoning paragraph to scrollback above the finalize
+ *   summary (persists what the model thought, for async / AFK review)
+ * - `'off'` — suppressed entirely (no buffer, no overlay, no summary)
+ *
+ * Canonical definition lives here (neutral slash-layer) to avoid the upward
+ * import that would result from placing it in `commands/interactive/shared.ts`.
+ * `commands/interactive/shared.ts` re-exports this for backward compat.
+ */
+export type ThinkingUiMode = 'summary' | 'live' | 'digest' | 'off';
+
 /** A recorded tool invocation within a turn — persisted for post-mortem diagnosis. */
 export interface ToolEvent {
   toolName: string;
@@ -37,7 +52,7 @@ export interface ToolEvent {
   isError?: boolean;
 }
 
-/** A single stored user/assistant exchange — used by /history and /save. */
+/** A single stored user/assistant exchange — used by /history. */
 export interface TurnRecord {
   user: string;
   assistant: string;
@@ -66,7 +81,7 @@ export interface SessionStats {
    * input+output+cache (which mixes cumulative input with last-round cache).
    */
   turnTokens: Array<{ input: number; output: number; cache: number; footprint?: number }>;
-  /** Full turn records (user + assistant pair) for /history and /save. */
+  /** Full turn records (user + assistant pair) for /history. */
   turns: TurnRecord[];
   /**
    * Current active model. Holds the exact string the user supplied (short
@@ -84,12 +99,21 @@ export interface SessionStats {
    * field), which is why AFK is not a separate boolean alongside plan.
    */
   permissionMode: PermissionMode;
+  /**
+   * Current thinking-display mode — the `--thinking-ui` knob, made mutable
+   * mid-session via the `/thinking` slash command. Seeded once at bootstrap
+   * from `options.thinkingUi` and mutated by `/thinking`; the REPL loop reads
+   * it on each new turn. Optional so existing test fixtures that build
+   * `SessionStats` literals don't need updating — `createSessionStats()`
+   * always seeds a value in production.
+   */
+  thinkingUi?: ThinkingUiMode;
   /** SDK session ID once initialized. Populated from ResponseMetadata. */
   sessionId?: string;
   /**
    * Human-readable session name (kebab-case slug). Auto-derived from the
-   * first user message by `recordTurn`, or set explicitly via `/name` (or
-   * `/save <name>`). Persisted as metadata on the <sessionId>.json sidecar —
+   * first user message by `recordTurn`, or set explicitly via `/name`.
+   * Persisted as metadata on the <sessionId>.json sidecar —
    * never used as the filename — so `/resume` can show it instead of a UUID
    * and `--resume <name>` / `/resume <name>` can resolve by it.
    */

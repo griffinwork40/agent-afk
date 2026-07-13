@@ -24,7 +24,7 @@ import {
 } from '../../utils/errors.js';
 import { isRateLimitError, isNetworkError } from '../../utils/error-classifiers.js';
 
-export type ErrorKind =
+type ErrorKind =
   | 'auth'
   | 'rate_limit'
   | 'overloaded'

@@ -29,6 +29,7 @@ import { join } from 'node:path';
 
 import { handleCommandError } from '../errors/index.js';
 import { getAfkStateDir, getTraceDir } from '../../paths.js';
+import { readLedger } from '../../agent/session-ledger.js';
 import type { TraceEvent } from '../../agent/trace/index.js';
 
 // ---------------------------------------------------------------------------
@@ -154,21 +155,78 @@ export async function loadTrace(
   }
 
   // getTraceDir validates the id shape and throws on an unsafe value.
-  const tracePath = join(getTraceDir(sessionId), 'trace.jsonl');
-  let content: string;
-  try {
-    content = await readFile(tracePath, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+  let tracePath = join(getTraceDir(sessionId), 'trace.jsonl');
+  let content = await readTraceFile(tracePath);
+
+  // Fresh sessions label the witness dir with a random UUID, not the session id
+  // (only resumed sessions reuse the id) — so a direct <witness>/<id>/ lookup
+  // misses them. The session ledger's `meta` record carries the real label;
+  // consult it before giving up.
+  if (content === null) {
+    const resolved = await traceLabelFromLedger(sessionId);
+    if (resolved.kind === 'disabled') {
       throw new Error(
-        `No trace found for session "${sessionId}" at ${tracePath}. ` +
-          `See \`afk trace list\` for available sessions.`,
+        `Session "${sessionId}" ran with tracing disabled — its ledger records ` +
+          `traceLabel: null, so no witness trace was written ` +
+          `(tracing is off when AFK_TRACE_DISABLED=1).`,
       );
     }
-    throw err;
+    if (resolved.kind === 'label' && resolved.label !== sessionId) {
+      try {
+        const relabeled = join(getTraceDir(resolved.label), 'trace.jsonl');
+        const viaLedger = await readTraceFile(relabeled);
+        if (viaLedger !== null) {
+          tracePath = relabeled;
+          content = viaLedger;
+        }
+      } catch {
+        // Unsafe/garbage label in the ledger — fall through to the not-found error.
+      }
+    }
+  }
+
+  if (content === null) {
+    throw new Error(
+      `No trace found for session "${sessionId}" at ${tracePath}. ` +
+        `See \`afk trace list\` for available sessions.`,
+    );
   }
 
   return { sessionId, tracePath, ...parseTrace(content) };
+}
+
+/** Read a `trace.jsonl`, returning `null` on ENOENT (other errors rethrow). */
+async function readTraceFile(tracePath: string): Promise<string | null> {
+  try {
+    return await readFile(tracePath, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+/**
+ * Recover a session's witness label from its ledger `meta` record.
+ *   - `{ kind: 'label', label }` — meta recorded a non-empty `traceLabel`.
+ *   - `{ kind: 'disabled' }`     — meta recorded `traceLabel: null` (tracing off).
+ *   - `{ kind: 'none' }`         — no ledger, no meta, or a pre-field ledger.
+ */
+async function traceLabelFromLedger(
+  sessionId: string,
+): Promise<{ kind: 'label'; label: string } | { kind: 'disabled' } | { kind: 'none' }> {
+  try {
+    for await (const rec of readLedger(sessionId)) {
+      if (rec.kind !== 'meta') continue;
+      if (typeof rec.traceLabel === 'string' && rec.traceLabel.length > 0) {
+        return { kind: 'label', label: rec.traceLabel };
+      }
+      if (rec.traceLabel === null) return { kind: 'disabled' };
+      return { kind: 'none' }; // meta present but written before the field existed
+    }
+  } catch {
+    // Ledger unreadable — treat as no signal and fall back to the direct lookup.
+  }
+  return { kind: 'none' };
 }
 
 // ---------------------------------------------------------------------------
@@ -308,6 +366,8 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
           return line('bg-agent', `cancelled (${p.source})  [${p.jobId}]`);
         case 'joined':
           return line('bg-agent', `joined  ${p.jobStatus}  [${p.jobId}]`);
+        case 'delivered':
+          return line('bg-agent', `delivered  ${p.jobStatus}  [${p.jobId}]`);
       }
       return null;
     }
@@ -362,8 +422,25 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
     }
 
     case 'session_phase': {
-      if (!ctx.showAll) return null; // latency waterfall — low signal by default
       const p = event.payload;
+      // `rate_limit` is HIGH-signal: it explains an otherwise-invisible stall
+      // (the SDK's silent 429/503/529 retry-after backoff surfaces only as an
+      // abnormally long model_ttfb). Render it in the DEFAULT view — unlike the
+      // other phases, which are low-signal latency-waterfall markers shown only
+      // with --all. Placed before the showAll gate below on purpose.
+      if (p.phase === 'rate_limit') {
+        const md = p.metadata ?? {};
+        const reason = md['reason'];
+        const status = md['status'];
+        const source = md['source'];
+        const wait =
+          p.durationMs !== undefined ? `  retry-after ${fmtDuration(p.durationMs)}` : '';
+        const statusBit = status !== undefined ? `  ${status}` : '';
+        const srcBit = source !== undefined ? `  (${source})` : '';
+        const head = reason !== undefined ? String(reason) : 'throttled';
+        return line('throttle', `${head}${statusBit}${wait}${srcBit}`);
+      }
+      if (!ctx.showAll) return null; // latency waterfall — low signal by default
       const dur = p.durationMs !== undefined ? `  ${fmtDuration(p.durationMs)}` : '';
       // Prefer the operator alias (session_init_start); fall back to the
       // resolved wire id (model_ttfb carries only that).
@@ -400,6 +477,8 @@ interface TraceSummary {
   subagents: number;
   claims: number;
   blocks: number;
+  /** Count of rate_limit events (429/503/529 backoff). */
+  throttles: number;
   sealStatus: string | null;
   finalCostUsd: number | null;
   /** Operator-typed model for the root session (from session_init_start). */
@@ -414,6 +493,7 @@ function summarize(events: TraceEvent[]): TraceSummary {
   let subagents = 0;
   let claims = 0;
   let blocks = 0;
+  let throttles = 0;
   let sealStatus: string | null = null;
   let finalCostUsd: number | null = null;
   let model: string | null = null;
@@ -428,6 +508,7 @@ function summarize(events: TraceEvent[]): TraceSummary {
         }
         break;
       case 'session_phase':
+        if (e.payload.phase === 'rate_limit') throttles++;
         // Root-session model provenance lives on session_init_start (the
         // earliest, always-emitted phase). First occurrence wins.
         if (e.payload.phase === 'session_init_start') {
@@ -465,6 +546,7 @@ function summarize(events: TraceEvent[]): TraceSummary {
     subagents,
     claims,
     blocks,
+    throttles,
     sealStatus,
     finalCostUsd,
     model,
@@ -508,6 +590,7 @@ export function formatTrace(
       ? `sealed (${summary.sealStatus})`
       : 'unsealed (live or crashed)';
   const costPart = summary.finalCostUsd !== null ? ` · ${fmtUsd(summary.finalCostUsd)}` : '';
+  const throttlePart = summary.throttles > 0 ? ` · ${summary.throttles} throttled` : '';
 
   const out: string[] = [];
   out.push(`Trace  ${sessionId}`);
@@ -522,7 +605,7 @@ export function formatTrace(
   out.push(
     `       ${status} · ${summary.total} events · ${summary.toolCalls} tool calls` +
       ` (${summary.toolErrors} err) · ${summary.subagents} subagents · ${summary.claims} claims` +
-      ` · ${summary.blocks} blocks${costPart}`,
+      ` · ${summary.blocks} blocks${throttlePart}${costPart}`,
   );
   out.push('');
 

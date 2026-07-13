@@ -69,7 +69,7 @@ export interface StreamRendererOptions {
    *
    * Subagent thinking is always suppressed regardless of this flag.
    */
-  thinkingMode?: 'off' | 'summary' | 'live';
+  thinkingMode?: 'off' | 'summary' | 'live' | 'digest';
   /**
    * @deprecated Use `thinkingMode: 'live'` instead. Kept as a back-compat alias:
    * `verbose: true` maps to `thinkingMode: 'live'`, `false`/unset to `'summary'`.
@@ -194,7 +194,7 @@ export interface StreamRendererOptions {
  */
 export class StreamRenderer {
   private readonly out: Writer;
-  private readonly thinkingMode: 'off' | 'summary' | 'live';
+  private readonly thinkingMode: 'off' | 'summary' | 'live' | 'digest';
   private readonly isTTY: boolean;
   private readonly captureMode: boolean;
   private readonly reducedMotion: boolean;
@@ -707,6 +707,12 @@ export class StreamRenderer {
       this.resizeUnsub();
       this.resizeUnsub = null;
     }
+
+    // Defensive eviction of any live progress entry. finalizeOrchestrator
+    // already clears this on the 'done' path; this covers turns that reach
+    // dispose without a 'done' event (error aborts, interrupts) so the
+    // overlay flushes below never repaint a stale progress banner.
+    this.lastProgressByTask.clear();
 
     // CommitCoordinator.flushAll() is the single async owner at turn end.
     // It drains all scheduled commit batches in fixed anchor order:

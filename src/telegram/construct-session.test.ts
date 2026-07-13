@@ -103,6 +103,25 @@ describe('constructTelegramSession', () => {
     );
     expect(captured?.traceWriter).toBeUndefined();
   });
+
+  it('preserves openaiBaseUrl on the config handed to newSession (parity with baseUrl/surface)', () => {
+    // Regression guard: telegram.ts is the only surface that must NOT drop
+    // config.openaiBaseUrl when constructing the top-level session — see
+    // src/agent/providers/openai-compatible/index.ts effectiveBaseURL
+    // resolution (`config.openaiBaseUrl ?? this.providerOpts.baseURL`).
+    // This test pins the pass-through at the construct-session seam itself;
+    // it does not assert the telegram.ts wiring that sets the field.
+    let captured: AgentConfig | undefined;
+    constructTelegramSession(
+      { model: 'gpt-4o', openaiBaseUrl: 'http://localhost:8080/v1' },
+      {
+        traceWriter: null,
+        newSession: (c): AgentSession => { captured = c; return {} as unknown as AgentSession; },
+      },
+    );
+    expect(captured?.openaiBaseUrl).toBe('http://localhost:8080/v1');
+    expect(captured?.surface).toBe('telegram');
+  });
 });
 
 describe('createTelegramTraceWriter', () => {

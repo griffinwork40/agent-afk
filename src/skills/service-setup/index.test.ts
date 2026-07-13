@@ -30,9 +30,12 @@ describe('service-setup skill registration', () => {
     expect(skill.whenToUse).toMatch(/always-on|service|launchd|auto-start/i);
   });
 
-  test('description names the macOS LaunchAgent surface and pre-flight intent', () => {
+  test('description names both service backends (launchd + systemd) and pre-flight intent', () => {
     const skill = getSkill('service-setup');
     expect(skill.description).toMatch(/launchagent|launchd|macOS/i);
+    // Cross-platform: the skill now supports Linux via systemd, so the
+    // description must name that backend too (issue #494).
+    expect(skill.description).toMatch(/systemd|linux/i);
     // Surfaces to the model that pre-flight prevents crash loops — if this
     // ever drifts, the prompt's hard-rule contract may be at risk.
     expect(skill.description).toMatch(/pre-flight|crash|token|valid/i);

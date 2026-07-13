@@ -29,6 +29,10 @@ import type {
   PickerController,
 } from './terminal-compositor.types.js';
 import { preserveRowsBeforeFrameRender } from './terminal-compositor.frame-preserve.js';
+import {
+  reflowCommittedBandToWidth,
+  type BandReflowCache,
+} from './terminal-compositor.band-reflow.js';
 
 /**
  * Narrowest TerminalCompositor state slice the frame-composition functions
@@ -68,7 +72,12 @@ export interface FrameHost {
   committedBand: string[];
   committedBandTopRow: number;
   committedBandBottomRow: number;
+  /** Real unpadded frame top; written here by repaint(), read by commitAbove's
+   *  routing. See the field doc on the class (terminal-compositor.ts). */
+  lastMeasuredFrameTop: number;
   committedBandPaintedRows: number;
+  /** Memoization for reflowCommittedBandToWidth — see the field doc on the class. */
+  bandReflowCache: BandReflowCache | null;
   hasCommitted: boolean;
   anchorRow: number | undefined;
   lastKnownRows: number;
@@ -97,6 +106,14 @@ export function repaint(self: FrameHost): void {
   // expand vs shrink.
   self.flushResizeGhostErase();
   self.lastKnownRows = self.stdout.rows ?? 24;
+  // F1 (retained-logical-source re-wrap): re-wrap the retained band at the
+  // CURRENT width before EITHER downstream consumer reads it this repaint —
+  // preserveRowsBeforeFrameRender's eviction paints (called below and from
+  // repaintPickerFrame) and repositionCommittedBand's re-pin (same two call
+  // sites) both read `self.committedBand` verbatim. Placed above the picker
+  // short-circuit so both paths see fresh-width rows; a steady-width repeat
+  // repaint is a cache hit (see reflowCommittedBandToWidth) and costs nothing.
+  reflowCommittedBandToWidth(self, self.stdout.columns ?? 80);
   // Picker-mode short-circuit. The picker rents the input region
   // (dropdown + hint + input line all suppressed) and supplies its
   // own rows via `renderRows()`. Overlay/spinner/tip/attachment
@@ -256,6 +273,9 @@ export function repaint(self: FrameHost): void {
   const desiredTopRow = self.logUpdate.measure
     ? self.logUpdate.measure(frame, targetBottomRow).topRow
     : Math.max(1, targetBottomRow - frameLines.length + 1);
+  // Record the real (unpadded) frame top for commitAbove's routing. This is the
+  // value Phase-2 will re-establish; logUpdate.topRow (shrink-padded) is not.
+  self.lastMeasuredFrameTop = desiredTopRow;
   preserveRowsBeforeFrameRender(self, desiredTopRow);
   // Capture the renderer's current top BEFORE render(): it is the first row
   // its erase pass will clear, which repositionCommittedBand() uses to detect
@@ -329,6 +349,17 @@ function repaintPickerFrame(self: FrameHost): void {
   const desiredTopRow = self.logUpdate.measure
     ? self.logUpdate.measure(frame, targetBottomRow).topRow
     : Math.max(1, targetBottomRow - frameLines.length + 1);
+  // Record the real (unpadded) frame top for commitAbove's routing, exactly as
+  // the non-picker repaint() body does (see its `self.lastMeasuredFrameTop =
+  // desiredTopRow;` above). Without this, a picker frame's row count differs
+  // from whatever was on screen before the picker opened (a normal-mode
+  // overlay+input frame vs. the picker's own rows), so lastMeasuredFrameTop
+  // silently keeps describing the PRE-picker layout for as long as the picker
+  // is active — a mismatch commitAbove's !bandGeometryStale gate cannot catch,
+  // since it's not a resize. Any commitAbove() landing while the picker is up
+  // (e.g. a backgrounded job's completion notice) would then trust a stale
+  // measured top for a frame shape that no longer exists.
+  self.lastMeasuredFrameTop = desiredTopRow;
   preserveRowsBeforeFrameRender(self, desiredTopRow);
   const preRenderFrameTop = self.logUpdate.topRow ?? 0;
   self.logUpdate.render(frame, targetBottomRow, self.anchorRow);

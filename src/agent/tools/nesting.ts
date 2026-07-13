@@ -12,6 +12,7 @@ import type { IAgentSession } from '../types.js';
 import type { ModelProvider } from '../provider.js';
 import type { AgentModelInput } from '../types.js';
 import type { Surface } from '../awareness/types.js';
+import type { ReadScopeInputs } from '../subagent-read-scope.js';
 import { AnthropicDirectProvider } from '../providers/anthropic-direct/index.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible/index.js';
 import { providerForModel } from '../providers/index.js';
@@ -22,6 +23,7 @@ import { SkillExecutor } from './skill-executor.js';
 import type { SubagentExecutor } from './subagent-executor.js';
 import type { TraceWriter } from '../trace/index.js';
 import type { BackgroundAgentRegistry } from '../background-registry.js';
+import type { AgentRegistry } from '../agents/types.js';
 
 export const DEFAULT_MAX_NESTING_DEPTH = 3;
 
@@ -205,7 +207,11 @@ export function createChildProviderFactory(
  * silently defeating read-only enforcement.
  *
  * This helper builds a minimal provider with:
- *   - `permissions.allowedTools = RECON_ALLOWED_TOOLS` (no write_file/edit_file)
+ *   - `permissions.allowedTools = allowedTools ?? RECON_ALLOWED_TOOLS`
+ *     (no write_file/edit_file — the caller passes the read-only-intersected
+ *     `tools:` allowlist so the child is never granted tools the SKILL.md never
+ *     declared; falls back to the full RECON set when the skill declares no
+ *     `tools:`)
  *   - `readOnlyBash: true` (dispatcher blocks mutating bash)
  *   - `readOnlyMemory: true` (consistency with the factory path)
  *   - NO `subagentExecutor` / `skillExecutor` — at the depth cap the child
@@ -214,13 +220,33 @@ export function createChildProviderFactory(
  * Routed by `providerForModel(model)` exactly like
  * {@link createChildProviderFactory} and {@link buildPhaseRestrictedProvider}.
  */
-export function buildReadOnlyReconProvider(model: AgentModelInput | undefined): ModelProvider {
+export function buildReadOnlyReconProvider(
+  model: AgentModelInput | undefined,
+  // Endpoint for an OpenAI-routed child. Mirrors createChildProviderFactory's
+  // openaiBaseUrl: without it, a read-only recon child at the depth cap builds
+  // an OpenAICompatibleProvider with no baseURL and POSTs to api.openai.com
+  // (defense-in-depth with openai-compatible/base-url.ts's query-time fallback).
+  openaiBaseUrl?: string,
+  // Effective read-only allowlist. When the read-only skill declared a `tools:`
+  // list, the caller passes its intersection with RECON_ALLOWED_TOOLS here so
+  // the depth-cap child is restricted to the declared subset — NOT the full
+  // RECON superset (issue #499, finding 2: least-privilege). Undefined → the
+  // full RECON set (a read-only skill with no `tools:` declaration). Every
+  // value is already a subset of RECON, so readOnlyBash/readOnlyMemory below
+  // still hold regardless of what is passed.
+  allowedTools?: readonly string[],
+): ModelProvider {
   // Materialize the allowlist per call so test/runtime mutation of the shared
   // array doesn't bleed across siblings (mirrors buildPhaseRestrictedProvider).
-  const permissions = { allowedTools: [...RECON_ALLOWED_TOOLS] };
+  const permissions = { allowedTools: [...(allowedTools ?? RECON_ALLOWED_TOOLS)] };
   const route = providerForModel(typeof model === 'string' ? model : undefined);
   if (route === 'openai-compatible') {
-    return new OpenAICompatibleProvider({ permissions, readOnlyBash: true, readOnlyMemory: true });
+    return new OpenAICompatibleProvider({
+      permissions,
+      readOnlyBash: true,
+      readOnlyMemory: true,
+      ...(openaiBaseUrl !== undefined ? { baseURL: openaiBaseUrl } : {}),
+    });
   }
   return new AnthropicDirectProvider({ permissions, readOnlyBash: true, readOnlyMemory: true });
 }
@@ -237,6 +263,24 @@ export function buildReadOnlyReconProvider(model: AgentModelInput | undefined): 
  * would have `agent`/`skill` tools, but its skill grandchildren would
  * silently fall back to the bare provider (the same bug the depth-0
  * caller fixes).
+ *
+ * `defaultSubagentModel` is the resolved default-subagent policy
+ * (`getDefaultSubagentModel(parentModel)`) threaded through every depth so
+ * nested skill children inherit the SAME policy the top-level executors use.
+ * When omitted (legacy/test callers), the nested SkillExecutor's
+ * `defaultSubagentModel` stays undefined and its own fallback chain applies.
+ *
+ * Invariant: this parameter closes the "subagent model falls back to
+ * Anthropic sonnet under an OpenAI-routed parent" leak. A nested SkillExecutor
+ * built without it has `defaultSubagentModel: undefined`; that undefined then
+ * flows into the child SubagentExecutor it constructs
+ * (skill-executor.ts buildForkedChildConfig), whose `agent`-tool resolution is
+ * `parsed.model ?? defaultSubagentModel ?? 'sonnet'` — with no `defaultModel`
+ * link, so an unset `defaultSubagentModel` routes straight to Anthropic
+ * `sonnet` even when the whole session is OpenAI-only (→ "missing Anthropic
+ * credentials"). Threading the resolved value here keeps every depth on the
+ * parent's provider. Explicit `agent.model` / SKILL.md `model:` still win —
+ * this only governs the no-model-specified default.
  */
 export function createChildSkillExecutorFactory(
   defaultModel: AgentModelInput,
@@ -248,17 +292,48 @@ export function createChildSkillExecutorFactory(
   cwd?: string,
   resolveApiKeyForModel?: (model: string) => string | undefined,
   surface?: Surface,
-): (depth: number, maxDepth: number, signal: AbortSignal) => SkillExecutor {
-  const factory: (depth: number, maxDepth: number, signal: AbortSignal) => SkillExecutor = (
-    depth,
-    maxDepth,
-    signal,
-  ) =>
-    new SkillExecutor({
+  defaultSubagentModel?: AgentModelInput,
+  agentRegistry?: AgentRegistry,
+  // OpenAI-compatible endpoint, propagated to every depth so a nested skill
+  // child's restricted/depth-cap provider builders point at the configured
+  // endpoint. Trailing optional — legacy positional callers stay valid.
+  openaiBaseUrl?: string,
+): (
+  depth: number,
+  maxDepth: number,
+  signal: AbortSignal,
+  inheritedCwd?: string,
+  inheritedReadScope?: ReadScopeInputs,
+) => SkillExecutor {
+  const factory: (
+    depth: number,
+    maxDepth: number,
+    signal: AbortSignal,
+    inheritedCwd?: string,
+    inheritedReadScope?: ReadScopeInputs,
+  ) => SkillExecutor = (depth, maxDepth, signal, inheritedCwd, inheritedReadScope) => {
+    // Invariant: the closure-captured `cwd` is frozen at bootstrap. For
+    // born-named `afk -w` worktrees it is `undefined` (the worktree is
+    // created on turn 1 via worktree-autoname, after bootstrap). A later
+    // `setCwd` re-anchors the live SkillExecutor / SubagentExecutor but
+    // NOT this closure. The `inheritedCwd` parameter (passed by the
+    // depth-1 caller) carries the live value so grandchild SkillExecutors
+    // anchor to the worktree, not the host's process.cwd().
+    const effectiveCwd = inheritedCwd ?? cwd;
+    return new SkillExecutor({
       parentSession: createStubParentSession(signal),
       defaultModel,
+      // Resolved default-subagent policy threaded through every depth so a
+      // nested skill child (and the SubagentExecutor it builds) defaults to the
+      // parent's provider rather than the Anthropic `sonnet` literal. Optional:
+      // when the caller omits it, back-compat fallback chains apply. See the
+      // leak-closure invariant in this factory's jsdoc.
+      ...(defaultSubagentModel !== undefined ? { defaultSubagentModel } : {}),
       apiKey,
       ...(baseUrl !== undefined ? { baseUrl } : {}),
+      // Endpoint threads through every depth (factory closes over openaiBaseUrl,
+      // so the recursive childSkillExecutorFactory below carries it too).
+      ...(openaiBaseUrl !== undefined ? { openaiBaseUrl } : {}),
       depth,
       maxDepth,
       childProviderFactory,
@@ -280,7 +355,16 @@ export function createChildSkillExecutorFactory(
       // worktree. Mirrors traceWriter / backgroundRegistry propagation.
       // Without this, a depth ≥ 2 skill dispatch silently loses worktree
       // isolation even though the depth-0 wiring was correct.
-      ...(cwd !== undefined ? { cwd } : {}),
+      //
+      // Invariant: prefer `inheritedCwd` (passed by the depth-1 caller's
+      // live `this.currentCwd`) over the closure-captured `cwd`. The
+      // closure value is frozen at bootstrap; for born-named `afk -w`
+      // worktrees it is `undefined` and a later `setCwd` re-anchors the
+      // live executors but NOT this closure. The `inheritedCwd` parameter
+      // (threaded from skill-executor.ts:652 / subagent-executor.ts:850)
+      // carries the live value so grandchild SkillExecutors anchor to the
+      // worktree, not the host's process.cwd().
+      ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
       // Per-model credential resolver: propagates so every depth in the
       // skill chain resolves credentials by child model rather than the
       // pre-captured parent apiKey. Optional — backward compat fallback to
@@ -291,7 +375,23 @@ export function createChildSkillExecutorFactory(
       // SubagentExecutor threads surface into its recursive child executor
       // (subagent-executor.ts:626).
       ...(surface !== undefined ? { surface } : {}),
+      // Named-agent registry propagates so nested skill children can
+      // dispatch `agent_type`-named sub-agents at any depth.
+      ...(agentRegistry !== undefined ? { agentRegistry } : {}),
+      // Read-scope inheritance (#547): the depth-1 caller
+      // (fork-child-config.ts / child-config.ts) passes THIS skill child's
+      // inherited read scope so its own skill forks (great-grandchildren)
+      // inherit ⊇ it, not the frozen bootstrap session scope. Unlike the
+      // top-level SkillExecutors (wired directly to the root manager's
+      // getReadScopeInputs), grandchild executors have no manager reference —
+      // the scope is threaded through this factory param instead. Frozen at
+      // call time via a closure, mirroring how `inheritedCwd` overrides the
+      // stale closure `cwd`.
+      ...(inheritedReadScope !== undefined
+        ? { getReadScopeInputs: () => inheritedReadScope }
+        : {}),
     });
+  };
   return factory;
 }
 
@@ -323,14 +423,25 @@ export type PhaseRole = 'read-only' | 'read-write';
 export function buildSkillRestrictedProvider(
   allowedTools: string[],
   model: AgentModelInput | undefined,
+  readOnlyBash = false,
+  // Endpoint for an OpenAI-routed child — see buildReadOnlyReconProvider. Trailing
+  // optional so existing positional callers are unaffected.
+  openaiBaseUrl?: string,
 ): ModelProvider {
   // Materialise once per fork so runtime array mutations don't bleed across siblings.
   const permissions = { allowedTools: [...allowedTools] };
   const route = providerForModel(typeof model === 'string' ? model : undefined);
+  // readOnlyBash: forwarded when the restricted surface additionally gates
+  // mutating shell (named agents with `bash: read-only`, cage cap paths).
+  // Default false preserves the original skill-tools call sites unchanged.
   if (route === 'openai-compatible') {
-    return new OpenAICompatibleProvider({ permissions });
+    return new OpenAICompatibleProvider({
+      permissions,
+      ...(readOnlyBash ? { readOnlyBash: true } : {}),
+      ...(openaiBaseUrl !== undefined ? { baseURL: openaiBaseUrl } : {}),
+    });
   }
-  return new AnthropicDirectProvider({ permissions });
+  return new AnthropicDirectProvider({ permissions, ...(readOnlyBash ? { readOnlyBash: true } : {}) });
 }
 
 /**

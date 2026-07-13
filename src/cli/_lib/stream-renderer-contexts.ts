@@ -32,7 +32,7 @@ export function makeOrchestratorCtx(args: {
   overlayComposer: OverlayComposer | null;
   toolLane: ToolLane;
   thinkingLane: ThinkingLane;
-  thinkingMode: 'off' | 'summary' | 'live';
+  thinkingMode: 'off' | 'summary' | 'live' | 'digest';
   streamingMarkdown: { current: StreamingMarkdownRenderer | null };
   coordinator: CommitCoordinator;
   stageTracker?: StageTrackerState;
@@ -68,7 +68,7 @@ export function makeSubagentCtx(args: {
   toolLane: ToolLane;
   out: Writer;
   streamingMarkdown: Map<string, StreamingMarkdownRenderer>;
-  thinkingMode: 'off' | 'summary' | 'live';
+  thinkingMode: 'off' | 'summary' | 'live' | 'digest';
   orchestratorCtx: OrchestratorCtx;
 }): SubagentCtx {
   return {

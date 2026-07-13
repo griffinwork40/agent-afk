@@ -16,6 +16,7 @@
 
 import type { ClaudeModel } from './types.js';
 import { resolveModelInput } from './session/model-slots.js';
+import { isOSeriesModel } from './model-capabilities.js';
 
 /**
  * Keys cover both short aliases (`opus`, `sonnet`, `haiku`, `*_1m`) and the
@@ -41,6 +42,18 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   'claude-haiku-4-5-20251001': 64_000,
   // Claude Fable 5 (Mythos-class, GA 2026-06-09): 128k max output.
   'claude-fable-5': 128_000,
+  // OpenAI GPT-5.6 family (GA 2026-07-09) + GPT-5.5. maxOutputTokensFor() is
+  // provider-agnostic: the openai-compatible query path
+  // (query/model-params.ts:resolveEffectiveMaxOutputTokens) calls it to bound
+  // output when config.maxOutputTokens is unset. Without these entries the
+  // gpt-5.x ids fall through to DEFAULT_MAX_OUTPUT (64k) and silently cap
+  // responses at half their real 128k output ceiling (per OpenAI API docs:
+  // gpt-5.5 and the gpt-5.6 sol/terra/luna tiers all support 128k max output).
+  'gpt-5.5': 128_000,
+  'gpt-5.6': 128_000,
+  'gpt-5.6-sol': 128_000,
+  'gpt-5.6-terra': 128_000,
+  'gpt-5.6-luna': 128_000,
 } as const;
 
 const DEFAULT_MAX_OUTPUT = 64_000;
@@ -85,9 +98,12 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   // Claude aliases
   opus: 200_000,
   opus_1m: 1_000_000,
-  // Sonnet 5 ships a 1M-token context window natively (like Fable 5, unlike
-  // opus/haiku whose base window is 200k). The `sonnet` alias, the now-redundant
-  // `sonnet_1m` back-compat alias, and the `claude-sonnet-5` wire id all report 1M.
+  // Sonnet 5 ships a 1M-token context window natively (like Fable 5) — no beta
+  // header required: per Anthropic's docs 1M is both the default and the maximum,
+  // with no smaller variant. The `sonnet` alias, the `sonnet_1m` alias, and the
+  // `claude-sonnet-5` wire id all report the full 1M window. Base `sonnet` still
+  // auto-compacts early for cost/latency (see MODEL_AUTOCOMPACT_BUDGET /
+  // autoCompactLimitFor below) — that is a compaction policy, NOT a smaller window.
   sonnet: 1_000_000,
   sonnet_1m: 1_000_000,
   haiku: 200_000,
@@ -105,6 +121,19 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'gpt-4o-mini': 128_000,
   'gpt-4.1': 1_000_000,
   'gpt-4.1-mini': 1_000_000,
+  // OpenAI GPT-5.6 family (GA 2026-07-09). The `gpt-5.6` alias routes to
+  // `gpt-5.6-sol` (flagship); `-terra` is the balanced tier and `-luna` the
+  // high-volume tier. All ship the flagship 5.x ~1.05M-token window (rounded to
+  // 1M here to match the gpt-4.1 / gpt-5.5 convention above). Keyed by the alias
+  // and all three variant ids so getContextUsage() reports an accurate percentage
+  // regardless of which id the user pins. gpt-5.5 is included as the prior
+  // flagship (the ChatGPT/Codex backend baseline) so it stops falling through to
+  // the 262k openai-compatible default.
+  'gpt-5.5': 1_000_000,
+  'gpt-5.6': 1_000_000,
+  'gpt-5.6-sol': 1_000_000,
+  'gpt-5.6-terra': 1_000_000,
+  'gpt-5.6-luna': 1_000_000,
   // OpenAI reasoning models — o-series. All 200k context windows except
   // o1-mini (128k).
   o1: 200_000,
@@ -144,7 +173,7 @@ function routesToOpenAICompatible(model: string): boolean {
   // are served exclusively by local OpenAI-shim runners.
   if (lowered.includes('/')) return true;
   if (lowered.startsWith('gpt-') || lowered.startsWith('gpt_')) return true;
-  if (lowered.startsWith('o1') || lowered.startsWith('o3') || lowered.startsWith('o4')) return true;
+  if (isOSeriesModel(lowered)) return true;
   if (lowered.startsWith('codex-') || lowered.startsWith('codex_') || lowered === 'codex') return true;
   return false;
 }
@@ -171,4 +200,39 @@ export function contextLimitFor(model: ClaudeModel | string): number {
   return routesToOpenAICompatible(id)
     ? DEFAULT_CONTEXT_LIMIT_OPENAI_COMPATIBLE
     : DEFAULT_CONTEXT_LIMIT;
+}
+
+/**
+ * Per-model auto-compaction working budget (absolute tokens).
+ *
+ * Sonnet 5 ships a truthful 1M window, but resending the whole conversation
+ * prefix every turn on a long DEFAULT session is slow and expensive. So base
+ * `sonnet` triggers auto-compaction around a smaller working budget rather than
+ * at `threshold × 1M`. This is a deliberate cost/latency policy, NOT a claim
+ * about the window (`MODEL_CONTEXT_LIMITS` stays truthful at 1M): the full
+ * window is one `sonnet_1m` away (the `_1m` opt-in bypasses the budget), or the
+ * user can raise the `autoCompact` threshold. Keyed by the resolved wire id so
+ * both the `sonnet` alias and a literal `claude-sonnet-5` requestedModel hit it.
+ */
+const MODEL_AUTOCOMPACT_BUDGET: Record<string, number> = {
+  'claude-sonnet-5': 200_000,
+};
+
+/**
+ * Token limit at which auto-compaction should trigger for a model: its context
+ * window, capped by its {@link MODEL_AUTOCOMPACT_BUDGET} entry when one exists.
+ * Used ONLY by the turn loop's auto-compaction check — the status-line /
+ * percentage path uses {@link contextLimitFor} (the true window). Mirrors
+ * `contextLimitFor`'s alias handling: an explicit `*_1m` opt-in always uses the
+ * full window, never the reduced budget. Models with no budget entry return
+ * their full window (identical to the pre-budget behavior).
+ */
+export function autoCompactLimitFor(model: ClaudeModel | string): number {
+  const window = contextLimitFor(model);
+  const lowered = String(model).trim().toLowerCase();
+  // Explicit *_1m opt-in → full window, never the reduced default budget.
+  if (lowered.endsWith('_1m')) return window;
+  const id = resolveModelInput(model) ?? String(model);
+  const budget = MODEL_AUTOCOMPACT_BUDGET[id] ?? MODEL_AUTOCOMPACT_BUDGET[id.toLowerCase()];
+  return budget !== undefined ? Math.min(window, budget) : window;
 }

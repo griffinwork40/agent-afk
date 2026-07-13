@@ -32,7 +32,7 @@ export function resolveResumeTarget(options: ResumeCliOptions): ResolvedResumeTa
   if (options.continue) {
     const latest = listSessions()[0];
     if (!latest) {
-      throw new Error('No saved sessions found for --continue. Run a session first or use /save.');
+      throw new Error('No saved sessions found for --continue. Run a session first — sessions autosave automatically.');
     }
     const stored = loadSession(latest.path);
     if (!stored) {

@@ -103,6 +103,35 @@ describe('config_get / config_set handlers', () => {
     });
   });
 
+  describe('config_set — models.* accepts a per-slot binding object', () => {
+    it('sets a full { id, provider } object', async () => {
+      const binding = { id: 'glm-5.2', provider: 'openai' };
+      const r = await configSetHandler({ target: 'config', key: 'models.large', value: binding }, signal);
+      expect(r.isError).toBeFalsy();
+      expect(JSON.parse(readFileSync(jsonFile, 'utf-8'))).toEqual({ models: { large: binding } });
+    });
+
+    it('rejects a value containing apiKey', async () => {
+      const r = await configSetHandler(
+        { target: 'config', key: 'models.large', value: { id: 'glm-5.2', apiKey: 'sk-secret' } },
+        signal,
+      );
+      expect(r.isError).toBe(true);
+      expect(r.content).toMatch(/afk config env set|api.?key/i);
+      expect(existsSync(jsonFile)).toBe(false);
+    });
+
+    it('rejects a value containing baseUrl (endpoint-redirect credential vector)', async () => {
+      const r = await configSetHandler(
+        { target: 'config', key: 'models.large', value: { id: 'glm-5.2', baseUrl: 'https://attacker.example/v1' } },
+        signal,
+      );
+      expect(r.isError).toBe(true);
+      expect(r.content).toMatch(/AFK_MODEL_.*BASE_URL/i);
+      expect(existsSync(jsonFile)).toBe(false);
+    });
+  });
+
   describe('config_get — masks secrets', () => {
     it('reads a config key and the whole file', async () => {
       await configSetHandler({ target: 'config', key: 'model', value: 'opus' }, signal);

@@ -603,3 +603,70 @@ describe('runDAG — nodeTimeoutMs', () => {
     expect(result.failed[0]!.id).toBe('slow');
   });
 });
+
+// ---------------------------------------------------------------------------
+// runDAG — maxConcurrency (bounded per-layer subagent fan-out).
+// ---------------------------------------------------------------------------
+
+describe('runDAG — maxConcurrency', () => {
+  function trackedNode(id: string, ms: number, t: { live: number; peak: number }): DAGNode {
+    return {
+      id,
+      run: vi.fn(async () => {
+        t.live++;
+        t.peak = Math.max(t.peak, t.live);
+        await new Promise((r) => setTimeout(r, ms));
+        t.live--;
+        return id;
+      }),
+    };
+  }
+
+  it('runs at most maxConcurrency nodes per layer simultaneously', async () => {
+    const t = { live: 0, peak: 0 };
+    const nodes = ['a', 'b', 'c', 'd', 'e'].map((id) => trackedNode(id, 30, t));
+
+    const result = await runDAG({ nodes, edges: [] }, new AbortController().signal, {
+      maxConcurrency: 2,
+    });
+
+    // All five ran to completion (none throttled out) and concurrency never
+    // exceeded the cap.
+    expect(Object.keys(result.outputs).sort()).toEqual(['a', 'b', 'c', 'd', 'e']);
+    expect(result.failed).toEqual([]);
+    expect(t.peak).toBe(2);
+  });
+
+  it('default (no maxConcurrency) does not throttle a typical layer', async () => {
+    const t = { live: 0, peak: 0 };
+    const nodes = ['a', 'b', 'c', 'd'].map((id) => trackedNode(id, 20, t));
+
+    // No maxConcurrency → defaults to DEFAULT_MAX_CONCURRENT_SUBAGENT_CALLS (8),
+    // which sits above this 4-node layer, so all four run at once (peak 4).
+    const result = await runDAG({ nodes, edges: [] }, new AbortController().signal);
+
+    expect(result.failed).toEqual([]);
+    expect(t.peak).toBe(4);
+  });
+
+  it('does not charge queue-wait against nodeTimeoutMs (timeout fairness)', async () => {
+    // maxConcurrency=1 forces A then B to run strictly sequentially. Each node
+    // runs 60ms; the per-node timeout is 100ms. B is dequeued only after A
+    // (~60ms) finishes. Because the timeout is armed INSIDE the pool worker (on
+    // dequeue), B's 100ms clock starts when B starts, so B completes (~120ms)
+    // inside its own budget and does NOT time out. If the timer were armed at
+    // enqueue (t=0) it would fire at 100ms while B was only ~40ms into its run,
+    // spuriously failing it.
+    const a = delayNode('a', 60);
+    const b = delayNode('b', 60);
+
+    const result = await runDAG({ nodes: [a, b], edges: [] }, new AbortController().signal, {
+      maxConcurrency: 1,
+      nodeTimeoutMs: 100,
+    });
+
+    expect(result.failed).toEqual([]);
+    expect(result.outputs['a']).toBe('a');
+    expect(result.outputs['b']).toBe('b');
+  });
+});

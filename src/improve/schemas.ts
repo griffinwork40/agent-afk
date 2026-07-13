@@ -33,6 +33,7 @@ export const FailurePatternSchema = z.enum([
   'closure-anomaly',    // closure { reason: <anything other than 'model_end_turn'> }
   // Sprint 2 adds:
   'tool-failure-density', // tool_call completed { isError: true } above threshold rate AND count
+  'subagent-read-denial', // hook_decision { hookEvent: 'PreToolUse', decision: 'block', read-family blockedTool }
   // Future phases will add: 'schema-error-burst', 'abort-cascade',
   // 'cost-spike', 'regression'.
 ]);

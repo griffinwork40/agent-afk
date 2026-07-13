@@ -308,6 +308,8 @@ describe('formatHelp', () => {
     expect(result).toContain('/compact');
     expect(result).toContain('/model');
     expect(result).toContain('/name');
+    expect(result).toContain('/sessions');
+    expect(result).toContain('/new');
     expect(result).toContain('CLI');
   });
 
@@ -662,5 +664,16 @@ describe('markdownToTelegramHtml — mis-nested emphasis safety net', () => {
     // Separate spans + identifiers are unaffected by the safety net.
     expect(markdownToTelegramHtml('**A** and *b* and snake_case'))
       .toBe('<b>A</b> and <i>b</i> and snake_case');
+  });
+
+  test('empty-fence label survives the strip when a separate emphasis run is mis-nested', () => {
+    // The empty-fence placeholder is <i>(empty … block)</i>. Because the safety net
+    // runs before the fenced restore, the label's <i> is not collateral-stripped when
+    // an unrelated interleaved run ("**a _b** c_") in the same message trips the net.
+    const out = markdownToTelegramHtml('**a _b** c_\n```bash\n```');
+    expect(tagsBalanced(out)).toBe(true);
+    expect(out).toContain('<i>(empty bash block)</i>'); // label keeps its italic
+    expect(out).not.toContain('<b>'); // mis-nested emphasis still dropped
+    expect(out).toContain('a b c'); // emphasis text preserved as plain
   });
 });

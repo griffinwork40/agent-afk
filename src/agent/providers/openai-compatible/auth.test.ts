@@ -264,3 +264,64 @@ describe('resolveOpenAIAuth — ChatGPT-subscription OAuth (flag-gated, read-onl
     expect(msg).not.toContain('acct_wxyz');
   });
 });
+
+describe('resolveOpenAIAuth — forced ChatGPT OAuth (per-slot, flag-independent)', () => {
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const ACCESS = `${b64({ alg: 'none', typ: 'JWT' })}.${b64({
+    'https://api.openai.com/auth': { chatgpt_account_id: 'acct_slot' },
+    exp: 9999999999,
+  })}.sig`;
+  const chatgptAuthJson = () =>
+    JSON.stringify({ auth_mode: 'chatgpt', OPENAI_API_KEY: null, tokens: { access_token: ACCESS } });
+
+  it('selects the ChatGPT token over OPENAI_API_KEY and WITHOUT the global flag', () => {
+    // OPENAI_API_KEY set, AFK_OPENAI_CHATGPT_OAUTH deliberately OFF — the per-slot
+    // signal alone must win. This is the whole point: a keyed OpenAI model and a
+    // ChatGPT-subscription model can coexist in one session.
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({
+        readEnv: (k) => (k === 'OPENAI_API_KEY' ? 'sk-env-should-not-win' : undefined),
+        readFile: () => chatgptAuthJson(),
+      }),
+      true,
+    );
+    expect(r.source).toBe('chatgpt-oauth');
+    expect(r.apiKey).toBe(ACCESS);
+    expect(r.accountId).toBe('acct_slot');
+  });
+
+  it('beats an explicit config key too (the slot declaration is authoritative)', () => {
+    const r = resolveOpenAIAuth('sk-explicit-1234', deps({ readFile: () => chatgptAuthJson() }), true);
+    expect(r.source).toBe('chatgpt-oauth');
+  });
+
+  it('fails with a distinct source when no ChatGPT token exists', () => {
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({ readEnv: (k) => (k === 'OPENAI_API_KEY' ? 'sk-env' : undefined), readFile: () => null }),
+      true,
+    );
+    expect(r.source).toBe('no-usable-auth-forced-chatgpt-oauth');
+    expect(r.apiKey).toBeNull();
+  });
+
+  it('does NOT alter precedence when the flag arg is false (regression)', () => {
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({
+        readEnv: (k) => (k === 'OPENAI_API_KEY' ? 'sk-env-9999' : undefined),
+        readFile: () => chatgptAuthJson(),
+      }),
+      false,
+    );
+    expect(r.source).toBe('env');
+    expect(r.apiKey).toBe('sk-env-9999');
+  });
+
+  it('renders an accurate diagnostic that names the slot, not the global flag', () => {
+    const msg = formatAuthDiagnostic({ apiKey: null, source: 'no-usable-auth-forced-chatgpt-oauth' });
+    expect(msg).toContain("provider: 'chatgpt-oauth'");
+    expect(msg).not.toContain('Found ChatGPT/OAuth credentials');
+  });
+});

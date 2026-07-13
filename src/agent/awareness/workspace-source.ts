@@ -31,10 +31,18 @@ const NULL_WORKSPACE: RuntimeWorkspace = {
 };
 
 /**
- * Run a single `git` command in `cwd` and return trimmed stdout, or `null`
- * on any failure (non-zero status, signal, error, or empty output).
+ * Run a single `git` command in `cwd` and return trimmed stdout.
+ *
+ * Contract: returns `null` on any failure (non-zero status, signal, spawn
+ * error). By default an empty-but-successful stdout ALSO collapses to `null`,
+ * since an empty branch name or remote URL is meaningless. Pass
+ * `allowEmpty: true` when empty output is itself a valid, distinct result —
+ * notably `git status --porcelain`, whose empty output means "clean tree" and
+ * MUST be distinguished from a failed status call. Without this flag a clean
+ * repo was indistinguishable from a git error and reported `dirty: null`
+ * instead of `dirty: false` (see gatherWorkspace).
  */
-function gitOutput(cwd: string, args: string[]): string | null {
+function gitOutput(cwd: string, args: string[], allowEmpty = false): string | null {
   try {
     const result = spawnSync('git', args, {
       cwd,
@@ -50,7 +58,8 @@ function gitOutput(cwd: string, args: string[]): string | null {
       return null;
     }
     const out = typeof result.stdout === 'string' ? result.stdout.trim() : null;
-    return out !== null && out.length > 0 ? out : null;
+    if (out === null) return null;
+    return out.length > 0 || allowEmpty ? out : null;
   } catch {
     return null;
   }
@@ -80,19 +89,23 @@ export function gatherWorkspace(cwd: string): RuntimeWorkspace {
   // Branch name — symbolic-ref fails on detached HEAD, falls back to null.
   const branchRaw = gitOutput(cwd, ['symbolic-ref', '--short', 'HEAD']);
 
-  // Porcelain status: one line per dirty file. Empty output = clean.
-  const statusRaw = gitOutput(cwd, ['status', '--porcelain']);
+  // Porcelain status: one line per dirty file. Empty output = clean tree.
+  // `allowEmpty: true` is load-bearing here — a clean repo emits empty stdout
+  // with exit 0, which must be read as "clean" (dirty:false, count:0), NOT
+  // conflated with a failed status call. Without it, gitOutput collapses
+  // empty→null and a clean checkout wrongly reports dirty:null/dirtyCount:null.
+  const statusRaw = gitOutput(cwd, ['status', '--porcelain'], true);
   let dirty: boolean | null = false;
   let dirtyCount: number | null = 0;
   if (statusRaw !== null) {
-    // Each non-empty line is one dirty file.
+    // Each non-empty line is one dirty file; '' (clean) yields zero lines.
     const lines = statusRaw.split('\n').filter((l) => l.trim().length > 0);
     dirty = lines.length > 0;
     dirtyCount = lines.length;
-  }
-  // statusRaw === null means git status itself failed — leave dirty/dirtyCount null.
-  // We know HEAD is valid (checked above), so null status means an unexpected error.
-  if (statusRaw === null) {
+  } else {
+    // statusRaw === null now means git status genuinely FAILED (not merely
+    // clean). HEAD was already validated above, so this is an unexpected error
+    // — surface it as null rather than a misleading "clean".
     dirty = null;
     dirtyCount = null;
   }

@@ -10,7 +10,13 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import type { Message } from '../types.js';
-import { buildResultFromMessage } from './result.js';
+import {
+  buildResultFromMessage,
+  isIncompleteStopReason,
+  annotateIfIncomplete,
+  STREAM_INCOMPLETE,
+} from './result.js';
+import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -114,5 +120,92 @@ describe('buildResultFromMessage — signal wiring', () => {
       expect(result.status).toBe('failed');
       expect(result.signal).toBeUndefined();
     });
+  });
+});
+
+describe('buildResultFromMessage — stopReason wiring', () => {
+  it('attaches stopReason when provided (no outputSchema)', () => {
+    const result = buildResultFromMessage(
+      'h',
+      'succeeded',
+      makeMessage('capped partial'),
+      undefined,
+      undefined,
+      'tool_use_loop_capped',
+    );
+    expect(result.stopReason).toBe('tool_use_loop_capped');
+  });
+
+  it('leaves stopReason absent when not provided', () => {
+    const result = buildResultFromMessage('i', 'succeeded', makeMessage('done'), undefined);
+    expect(result.stopReason).toBeUndefined();
+    expect('stopReason' in result).toBe(false);
+  });
+
+  it('carries stopReason through the schema-failure path', () => {
+    const OutputSchema = z.object({ answer: z.string() });
+    const result = buildResultFromMessage(
+      'j',
+      'succeeded',
+      makeMessage(fenced({ wrong_key: 42 })),
+      OutputSchema,
+      undefined,
+      'end_turn',
+    );
+    expect(result.status).toBe('failed');
+    expect(result.stopReason).toBe('end_turn');
+  });
+});
+
+describe('isIncompleteStopReason — partial-result classification', () => {
+  it('is true for the tool-use loop cap', () => {
+    expect(isIncompleteStopReason(TOOL_USE_LOOP_CAPPED)).toBe(true);
+  });
+
+  it('is true for a stream-truncated run', () => {
+    expect(isIncompleteStopReason(STREAM_INCOMPLETE)).toBe(true);
+  });
+
+  it('is false for a clean terminal stop reason', () => {
+    expect(isIncompleteStopReason('end_turn')).toBe(false);
+  });
+
+  it('is false when the stop reason is absent', () => {
+    expect(isIncompleteStopReason(undefined)).toBe(false);
+  });
+
+  it('is false for an unrelated provider stop reason', () => {
+    expect(isIncompleteStopReason('max_tokens')).toBe(false);
+  });
+});
+
+describe('annotateIfIncomplete — parent-visible partial marker', () => {
+  const BODY = 'here are my intermediate findings';
+
+  it('returns content unchanged for a clean completion', () => {
+    expect(annotateIfIncomplete(BODY, 'end_turn')).toBe(BODY);
+  });
+
+  it('returns content unchanged when the stop reason is absent', () => {
+    expect(annotateIfIncomplete(BODY, undefined)).toBe(BODY);
+  });
+
+  it('prepends a PARTIAL marker naming the iteration cap and preserves the body', () => {
+    const out = annotateIfIncomplete(BODY, TOOL_USE_LOOP_CAPPED);
+    expect(out).not.toBe(BODY);
+    expect(out).toContain('PARTIAL RESULT');
+    expect(out).toContain('tool-use iteration cap');
+    expect(out).toContain(BODY);
+    // The original body must survive verbatim as a suffix so downstream
+    // renderers/parsers still see the full text after the marker.
+    expect(out.endsWith(BODY)).toBe(true);
+  });
+
+  it('prepends a PARTIAL marker describing a cut-off stream and preserves the body', () => {
+    const out = annotateIfIncomplete(BODY, STREAM_INCOMPLETE);
+    expect(out).not.toBe(BODY);
+    expect(out).toContain('PARTIAL RESULT');
+    expect(out).toContain('cut off');
+    expect(out.endsWith(BODY)).toBe(true);
   });
 });

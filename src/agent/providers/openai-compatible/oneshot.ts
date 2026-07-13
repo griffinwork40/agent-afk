@@ -18,6 +18,7 @@
 
 import OpenAI from 'openai';
 import { resolveOpenAIAuth } from './auth.js';
+import { isReasoningModel } from '../../model-capabilities.js';
 
 /** Test injection hook — supplants the real `OpenAI` constructor. */
 export type OneShotOpenAIClientFactory = (opts: { apiKey: string; baseURL?: string }) => OpenAI;
@@ -56,6 +57,16 @@ export interface OpenAIOneShotInput {
    * hook. Lets callers inject a pre-built client without touching module state.
    */
   clientFactory?: OneShotOpenAIClientFactory;
+  /**
+   * Pre-built client to use verbatim. When provided, auth resolution and client
+   * construction are skipped entirely — the caller's client (with its own
+   * baseURL, headers, and credentials) is used as-is. This lets a live session
+   * reuse `this.client` for an in-session one-shot (e.g. history compaction)
+   * so the summarize call lands on the SAME custom endpoint / ChatGPT backend
+   * as the conversation, without re-resolving auth. Takes precedence over
+   * `apiKey` / `baseURL` / `clientFactory`.
+   */
+  client?: OpenAI;
 }
 
 /**
@@ -69,29 +80,37 @@ export interface OpenAIOneShotInput {
  * Token-limit field: chat models AND local OpenAI-shim runners (MLX,
  * llama.cpp, vLLM, ollama) accept `max_tokens` — and some shims reject the
  * newer `max_completion_tokens` — so `max_tokens` stays the default. The
- * reasoning o-series (o1/o3/o4…) is the inverse: it rejects `max_tokens` with a
- * 400 and requires `max_completion_tokens`. We switch the field only for those,
- * keyed off the bare model id, so an o-series `AFK_SUGGEST_MODEL` override (or
- * an o-series session model inherited as the suggest model) does not 400 on
- * every keystroke.
+ * reasoning models (o-series ∪ gpt-5.x) are the inverse: they reject
+ * `max_tokens` with a 400 and require `max_completion_tokens`. We switch the
+ * field only for those, keyed off the bare model id, so a reasoning-model
+ * `AFK_SUGGEST_MODEL` override (or a reasoning session model inherited as the
+ * suggest model) does not 400 on every keystroke.
  */
 export async function oneShotChatCompletion(input: OpenAIOneShotInput): Promise<string> {
   const { apiKey, baseURL, model, system, user, maxTokens = 64, signal, clientFactory } = input;
 
-  const auth = resolveOpenAIAuth(apiKey);
-  if (auth.apiKey === null) {
-    throw new Error('oneShotChatCompletion: no usable OpenAI auth (set OPENAI_API_KEY or pass apiKey)');
+  // A caller-supplied client (a live session reusing `this.client`) is used
+  // verbatim — no auth resolution, no reconstruction — so the call inherits the
+  // session's endpoint, headers, and credentials.
+  let client: OpenAI;
+  if (input.client !== undefined) {
+    client = input.client;
+  } else {
+    const auth = resolveOpenAIAuth(apiKey);
+    if (auth.apiKey === null) {
+      throw new Error('oneShotChatCompletion: no usable OpenAI auth (set OPENAI_API_KEY or pass apiKey)');
+    }
+    const clientOpts: { apiKey: string; baseURL?: string } = { apiKey: auth.apiKey };
+    if (baseURL !== undefined) clientOpts.baseURL = baseURL;
+    const factory = clientFactory ?? oneShotClientFactory;
+    client = factory ? factory(clientOpts) : new OpenAI(clientOpts);
   }
 
-  const clientOpts: { apiKey: string; baseURL?: string } = { apiKey: auth.apiKey };
-  if (baseURL !== undefined) clientOpts.baseURL = baseURL;
-  const factory = clientFactory ?? oneShotClientFactory;
-  const client = factory ? factory(clientOpts) : new OpenAI(clientOpts);
-
-  // o-series reasoning models reject `max_tokens`; everything else (and local
-  // shims) want it. Strip any `provider/` prefix (OpenRouter-style ids) first.
-  const bareModel = model.includes('/') ? model.slice(model.lastIndexOf('/') + 1) : model;
-  const tokenLimit = /^o[0-9]/.test(bareModel)
+  // Reasoning models (o-series ∪ gpt-5.x) reject `max_tokens` and require
+  // `max_completion_tokens`; everything else (chat models + local shims) wants
+  // `max_tokens`. Classification (incl. `provider/`-prefix strip) is shared —
+  // see `isReasoningModel` in model-capabilities.ts.
+  const tokenLimit = isReasoningModel(model)
     ? { max_completion_tokens: maxTokens }
     : { max_tokens: maxTokens };
 

@@ -63,6 +63,7 @@ vi.mock('../shared-helpers.js', () => ({
   getMaxBudgetUsd: vi.fn(() => undefined),
   getTaskBudget: vi.fn(() => undefined),
   getMaxOutputTokens: vi.fn(() => undefined),
+  getMaxToolUseIterations: vi.fn(() => undefined),
   getDefaultSubagentModel: vi.fn(() => 'sonnet'),
   loadSystemPrompt: vi.fn(() => undefined),
   loadConfigSystemPrompt: vi.fn(() => undefined),
@@ -105,6 +106,7 @@ vi.mock('../../agent/tools/compose-executor.js', () => ({
 // filesystem for plugin roots, which is out of scope here.
 vi.mock('../../agent/tools/skill-bridge.js', () => ({
   ensurePluginEntrypointsLoaded: vi.fn(async () => {}),
+  discoverPluginAgents: vi.fn(() => []),
 }));
 
 vi.mock('../../agent/tools/nesting.js', () => ({

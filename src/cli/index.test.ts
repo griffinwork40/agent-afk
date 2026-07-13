@@ -85,6 +85,8 @@ const mockPrintUpdateBanner = vi.fn();
 const mockCheckPendingUpdate = vi.fn();
 vi.mock('./update-checker.js', () => ({
   checkForUpdates: mockCheckForUpdates,
+  coldStartUpdateCheck: vi.fn().mockResolvedValue(null),
+  hasUpdateCache: vi.fn().mockReturnValue(true),
   printUpdateBanner: mockPrintUpdateBanner,
   triggerAutoUpdate: vi.fn(),
   checkPendingUpdate: mockCheckPendingUpdate,

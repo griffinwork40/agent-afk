@@ -156,11 +156,21 @@ export function advanceStage(s: StageTrackerState, event: OutputEvent): boolean 
  *
  * Color is intentionally restrained — bold + accent on the active stage,
  * dim on inactives. The goal is glance-readable, not decorative.
+ *
+ * Special case: `observing` is the idle/reset stage between turns (a turn
+ * just armed with no events yet, or no turn in flight at all) — the rail has
+ * nothing earned to show, so painting all five cells persistently between
+ * turns is chrome, not signal. Collapse to a single dim `· idle` cell
+ * instead of the full 5-cell rail. Every other stage renders the full rail
+ * unchanged.
  */
 export function formatStageRail(
   active: LoopStage,
   fmt: { dim: (s: string) => string; accent: (s: string) => string; bold: (s: string) => string },
 ): string {
+  if (active === 'observing') {
+    return fmt.dim('· idle');
+  }
   const cells = LOOP_STAGES.map((stage) => {
     const isActive = stage === active;
     const glyph = isActive ? '◆' : '◇';
@@ -205,7 +215,9 @@ export function formatStageRail(
  * `BackgroundStatusBar.repaint()`. It renders exactly one row.
  *
  * Visibility: renders whenever `started === true` and the stream is a TTY.
- * Between turns (stage = `'observing'`) it shows a dim "idle" rail.
+ * Between turns (stage = `'observing'`) `formatStageRail` collapses the full
+ * 5-cell rail to a single dim `· idle` cell (see its docstring) rather than
+ * painting all five stages with none of them earned yet.
  */
 export class LoopStageBar {
   private readonly stream: NodeJS.WriteStream;

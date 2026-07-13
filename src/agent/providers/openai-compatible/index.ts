@@ -12,10 +12,6 @@
  * @module agent/providers/openai-compatible
  */
 
-import path from 'path';
-import { appendFileSync, mkdirSync } from 'fs';
-import { dirname } from 'path';
-import { getSessionGrantsPath } from '../../../paths.js';
 import type {
   ModelProvider,
   ProviderQuery,
@@ -31,6 +27,7 @@ import { withMcpToolsAllowed, withCustomToolsAllowed, type ToolPermissionConfig 
 import type { CanUseTool } from '../../types/sdk-types.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
+import { PathGrantManager } from '../../tools/grant-manager.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
 import { createBuiltinHandlers } from '../../tools/handlers/index.js';
 import {
@@ -46,6 +43,8 @@ import {
   composeTool,
 } from '../../tools/schemas.js';
 import { MemoryStore, createMemoryHandlers, memoryToolSchemas, memorySearchTool } from '../../memory/index.js';
+import { resolveToolSystemPrompt, resolveMemorySystemPrompt } from '../../tools/system-prompt.js';
+import { buildSkillManifest } from '../../tools/skill-bridge.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { buildQueryFromConfig } from './query.js';
 import { oneShotChatCompletion, type OpenAIOneShotInput } from './oneshot.js';
@@ -154,7 +153,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this.memoryStore = opts.memoryStore ?? new MemoryStore();
 
     const schemas: AnthropicToolDef[] = [...builtinToolSchemas];
-    if (opts.subagentExecutor) schemas.push(agentTool);
+    // Executor-supplied `agent` def advertises named agent types when a
+    // registry is wired — parity with anthropic-direct (see agents/tool-def.ts).
+    if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);
     if (opts.skillExecutor) schemas.push(skillTool);
     if (opts.composeExecutor) schemas.push(composeTool);
     if (opts.readOnlyMemory === true) {
@@ -302,13 +303,28 @@ export class OpenAICompatibleProvider implements ModelProvider {
       ...(config.maxDepth !== undefined ? { maxDepth: config.maxDepth } : {}),
       workspace: runtimeStateSource.getWorkspace(),
     });
+    // Assemble the full provider-side system prompt so non-Anthropic sessions
+    // (this provider backs the REPL when the model is gpt-*/o*/local org/model)
+    // receive the SAME fragments as anthropic-direct — tool conventions, the
+    // interactive slash-command / bash-passthrough / background-subagent
+    // guidance, the memory prompt, and the skill manifest. Previously this
+    // provider sent only `userSystem + env`, so on a non-Anthropic REPL the
+    // model was never told what the `<background-subagent-result>` (and
+    // slash/bash) envelopes mean. The tool/memory fragments are resolved via
+    // the shared helpers in tools/system-prompt.ts so the set cannot drift from
+    // anthropic-direct. Ordering mirrors AnthropicDirectProvider.query():
+    // [toolBase, memoryPrompt, env, manifest?, userSystem?].
+    const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
+    const memoryPrompt = resolveMemorySystemPrompt(this.providerOpts.readOnlyMemory);
+    const manifest = this.providerOpts.skillExecutor ? buildSkillManifest() : '';
     const existingSys =
       typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined;
+    const systemParts = [toolBase, memoryPrompt, envFragment];
+    if (manifest.length > 0) systemParts.push(manifest);
+    if (existingSys !== undefined && existingSys.length > 0) systemParts.push(existingSys);
     const patchedConfig: typeof config = {
       ...config,
-      systemPrompt: existingSys !== undefined
-        ? `${existingSys}\n\n${envFragment}`
-        : envFragment,
+      systemPrompt: systemParts.join('\n\n'),
     };
 
     return buildQueryFromConfig(patchedConfig, args.prompt, buildOpts);
@@ -386,10 +402,15 @@ export class OpenAICompatibleProvider implements ModelProvider {
         handlers.set(t.schema.name, t.handler);
       }
     }
-    // Plan-exit tool: registered per-query ONLY while in plan mode and only when
-    // the session supplied control callbacks (top-level sessions). Mirrors
+    // Plan-exit tool: registered RESIDENT whenever the session supplied control
+    // callbacks (top-level sessions only). NOT gated on the construction-time
+    // `permissionMode` — the dispatcher is built once per query() and is not
+    // rebuilt by setPermissionMode, so a mode-gated registration left the tool
+    // unwired for the "enter plan mode after launch" flow ("Unknown tool
+    // exit_plan_mode"). Callability is gated per-turn on the LIVE mode instead:
+    // query.ts drops it from the advertised tools on non-plan turns. Mirrors
     // AnthropicDirectProvider.buildDispatcher; schema appended below to match.
-    const planExitControls = permissionMode === 'plan' ? opts.planExitControls : undefined;
+    const planExitControls = opts.planExitControls;
     if (planExitControls) {
       handlers.set(EXIT_PLAN_MODE_TOOL_NAME, createExitPlanModeHandler(planExitControls));
     }
@@ -422,7 +443,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
       handlers,
       // Constraint (semantic invariant): MCP schemas appended AFTER builtins
       // so builtin tool names always take precedence in any overlap. Plan-exit
-      // schema appended last, only while the tool is active (plan mode).
+      // schema appended last, RESIDENT whenever planExitControls is present
+      // (top-level); query.ts drops it from the advertised tools on non-plan
+      // turns so the model sees it only when it is actionable.
       schemas: [...baseSchemas, ...mcpSchemas, ...(planExitControls ? [exitPlanModeTool] : [])],
       // Session hook registry via the one canonical resolver (query-scoped
       // config registry wins over any constructor-provided one). Mirrors
@@ -468,6 +491,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // Path-containment bypass: bypassPermissions (explicit) + autonomous (AFK)
     // both disable path containment for every per-call context.
     dispatcherOpts.allowAll = pathContainmentBypassed(permissionMode);
+    // This provider IS the session's GrantManager — parity with
+    // AnthropicDirectProvider.buildDispatcher. The dispatcher injects it onto
+    // PreToolUse/PostToolUse contexts so path-scoped hooks resolve THIS
+    // session's live grants (a forked child's own writeRoots), not the
+    // process-global ref pinned to the top-level session (#435/#514).
+    dispatcherOpts.sessionGrantManager = this;
 
     return new SessionToolDispatcher(dispatcherOpts);
   }
@@ -493,70 +522,34 @@ export class OpenAICompatibleProvider implements ModelProvider {
   // which provider is active. Without this, grant/revoke actions on OpenAI
   // sessions previously wrote no audit entries — a forensic blind spot.
 
+  /**
+   * Shared grant-state machine (issues #361/#362) — same hook bindings as
+   * `AnthropicDirectProvider.grantManager`: lazy `ensureSharedRoots` init,
+   * INITIAL resolveBase as the non-revocable anchor, mode-derived `allowAll`,
+   * per-call sessionId threading. See grant-manager.ts.
+   */
+  private readonly grantManager = new PathGrantManager({
+    getReadRoots: () => this._sharedReadRoots,
+    getWriteRoots: () => this._sharedWriteRoots,
+    ensureInitialized: () => this.ensureSharedRoots(),
+    getProtectedRoot: () => this._initialResolveBase,
+    getAllowAll: () => pathContainmentBypassed(this._currentPermissionMode),
+  });
+
   addReadRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
-    this.ensureSharedRoots();
-    const p = path.resolve(absPath);
-    if (!this._sharedReadRoots!.includes(p)) this._sharedReadRoots!.push(p);
-    this.appendProviderAuditLog({ action: 'grant-read', path: p, source, sessionId });
+    this.grantManager.addReadRoot(absPath, source, sessionId);
   }
 
   addWriteRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
-    this.ensureSharedRoots();
-    const p = path.resolve(absPath);
-    if (!this._sharedReadRoots!.includes(p)) this._sharedReadRoots!.push(p);
-    if (!this._sharedWriteRoots!.includes(p)) this._sharedWriteRoots!.push(p);
-    this.appendProviderAuditLog({ action: 'grant-write', path: p, source, sessionId });
+    this.grantManager.addWriteRoot(absPath, source, sessionId);
   }
 
   revokeRoot(absPath: string, source: 'slash' | 'tool' = 'slash', sessionId?: string): void {
-    if (!this._sharedReadRoots) return;
-    const p = path.resolve(absPath);
-    if (this._initialResolveBase && p === this._initialResolveBase) return;
-    const rIdx = this._sharedReadRoots.indexOf(p);
-    if (rIdx !== -1) this._sharedReadRoots.splice(rIdx, 1);
-    if (this._sharedWriteRoots) {
-      const wIdx = this._sharedWriteRoots.indexOf(p);
-      if (wIdx !== -1) this._sharedWriteRoots.splice(wIdx, 1);
-    }
-    this.appendProviderAuditLog({ action: 'revoke', path: p, source, sessionId });
+    this.grantManager.revokeRoot(absPath, source, sessionId);
   }
 
   getGrants(): { resolveBase: string | undefined; readRoots: string[]; writeRoots: string[]; allowAll: boolean } {
-    return {
-      resolveBase: this._initialResolveBase,
-      readRoots: this._sharedReadRoots?.slice() ?? [],
-      writeRoots: this._sharedWriteRoots?.slice() ?? [],
-      allowAll: pathContainmentBypassed(this._currentPermissionMode),
-    };
-  }
-
-  /**
-   * Best-effort append to `session-grants.jsonl`. Mirrors
-   * `AnthropicDirectProvider.appendProviderAuditLog` (index.ts:269-289 of
-   * anthropic-direct). Inlined rather than extracted to keep the providers
-   * independently revertable; consolidate when a third provider needs the
-   * same logic.
-   */
-  private appendProviderAuditLog(entry: {
-    action: 'grant-read' | 'grant-write' | 'revoke';
-    path: string;
-    source: 'slash' | 'tool';
-    sessionId?: string;
-  }): void {
-    try {
-      const logPath = getSessionGrantsPath();
-      mkdirSync(dirname(logPath), { recursive: true });
-      const line = JSON.stringify({
-        timestamp: new Date().toISOString(),
-        sessionId: entry.sessionId ?? null,
-        action: entry.action,
-        path: entry.path,
-        source: entry.source,
-      });
-      appendFileSync(logPath, line + '\n');
-    } catch {
-      // Audit log is best-effort.
-    }
+    return this.grantManager.getGrants();
   }
 
   close(): void {

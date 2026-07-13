@@ -389,4 +389,34 @@ describe('ProviderRouter', () => {
     expect(openai.queries[0]!.rec.setModelCalls).toContain('medium');
     await router.close();
   });
+
+  it('rebuilds a same-endpoint switch when a tier forces ChatGPT OAuth (signature folds it in)', async () => {
+    // Two OpenAI-family tiers on the SAME default endpoint: a plain keyed tier
+    // and a chatgpt-oauth tier. Without folding forceChatgptOAuth into the
+    // routing signature these collide → the switch is forwarded onto the keyed
+    // inner and the request hits the wrong (keyed vs subscription) backend.
+    setSlotBindings({
+      local: { id: '' },
+      small: { id: 'gpt-4o', provider: 'openai' },
+      medium: { id: 'gpt-5.6', provider: 'chatgpt-oauth' },
+      large: { id: 'claude-opus-4-8' },
+    });
+    const { router, outer, openai } = makeSlotRouter('small');
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+
+    await driveTurn(iter, outer, 'keyed');
+    expect(openai.queries).toHaveLength(1);
+    expect(openai.queries[0]!.rec.config.forceChatgptOAuth).toBeFalsy();
+
+    await router.setModel('medium'); // same family + endpoint, but chatgpt-oauth
+    await driveTurn(iter, outer, 'subscription');
+
+    // A SECOND inner was built (signature now includes the forced-OAuth intent)…
+    expect(openai.queries).toHaveLength(2);
+    expect(openai.queries[1]!.rec.config.forceChatgptOAuth).toBe(true);
+    // …and the plain-keyed inner was torn down.
+    expect(openai.queries[0]!.rec.closed).toBe(true);
+    await router.close();
+  });
 });

@@ -104,6 +104,18 @@ export interface ToolCallCompletedPayload {
   /** Coarse failure classification when `isError` is true. Absent on success
    *  and on unclassified failures. See {@link ToolFailureClass}. */
   failureClass?: ToolFailureClass;
+  /**
+   * Concurrency-batch membership: 1-based position (`batchIndex`) and total
+   * size (`batchSize`) of the batch this call was dispatched in, set by the
+   * dispatcher's `executeBatch`. `batchSize > 1` means the call ran in a
+   * parallel wave; `batchSize === 1` means it ran alone in its own sequential
+   * batch (always the case for concurrency-unsafe tools like bash). Lets
+   * `afk trace show` and failure-analysis distinguish real parallelism from
+   * back-to-back sequential dispatch. Absent on the single-tool `execute()`
+   * path and on blocked/short-circuited calls.
+   */
+  batchIndex?: number;
+  batchSize?: number;
   subagentId?: string;
 }
 
@@ -177,6 +189,13 @@ export interface SubagentSucceededPayload {
   turnCount: number;
   totalCostUsd?: number;
   outputBytes: number;
+  /**
+   * Terminal stop reason for the subagent's final turn, when known. Present so
+   * a trace reader can distinguish a clean completion from a capped/truncated
+   * partial (`tool_use_loop_capped` / `stream_incomplete`) that was surfaced
+   * with `succeeded` status. Absent when the provider reported no stop reason.
+   */
+  stopReason?: string;
 }
 
 export interface SubagentFailedPayload {
@@ -257,12 +276,23 @@ export interface BackgroundAgentJoinedPayload {
   jobStatus: 'completed' | 'failed' | 'cancelled';
 }
 
+export interface BackgroundAgentDeliveredPayload {
+  /** Result auto-delivered into the parent conversation by a surface notifier
+   *  (BgResultNotifier) — distinct from an explicit `joined`. */
+  transition: 'delivered';
+  jobId: string;
+  subagentId: string;
+  /** Terminal status at the moment of delivery. */
+  jobStatus: 'completed' | 'failed' | 'cancelled';
+}
+
 export type BackgroundAgentPayload =
   | BackgroundAgentStartedPayload
   | BackgroundAgentCompletedPayload
   | BackgroundAgentFailedPayload
   | BackgroundAgentCancelledPayload
-  | BackgroundAgentJoinedPayload;
+  | BackgroundAgentJoinedPayload
+  | BackgroundAgentDeliveredPayload;
 
 // ---------------------------------------------------------------------------
 // budget — threshold record. Closure handles termination separately.
@@ -552,7 +582,8 @@ export type SessionPhaseName =
   | 'mcp_server_done'
   | 'loop_start'
   | 'loop_end'
-  | 'model_ttfb';
+  | 'model_ttfb'
+  | 'rate_limit';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

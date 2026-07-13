@@ -10,8 +10,15 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { useUnsetAfkHome } from '../../__test-utils__/unset-afk-home.js';
 
 describe('harvestPluginSkillFlags', () => {
+  // The "defaults to ~/.afk/plugins/cache under HOME" case asserts the
+  // unset-AFK_HOME fallback — drop the global sentinel AFK_HOME per test.
+  // The harvester is read-only and every other case passes an explicit
+  // cacheRoot, so nothing writes into $HOME/.afk.
+  useUnsetAfkHome();
+
   let tmpRoot: string;
   let harvestPluginSkillFlags: (cacheRoot?: string) => Map<string, string[]>;
 

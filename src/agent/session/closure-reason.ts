@@ -23,14 +23,15 @@
  *     yet the surface then closed the session cleanly (`dispatchReason` is
  *     `'close'`/`'reset'`, no abort signal). Without this a provider failure on
  *     an otherwise-clean close is silently sealed as `model_end_turn`.
- *  6. a truncation stop reason (`max_tokens` / `length`) on an otherwise clean
+ *  6. `lastStopReason === 'tool_use_loop_capped'` → `iteration_cap` — the
+ *     tool-use round budget fired (the subagent default, or an explicit
+ *     `max_tool_use_iterations`). The provider runs a tools-stripped wind-down
+ *     round first, so the session still carries the model's final summary; this
+ *     reason records that the turn was nonetheless cut short by the cap.
+ *  7. a truncation stop reason (`max_tokens` / `length`) on an otherwise clean
  *     close → `truncated` — the model's final turn was cut off by the
  *     output-token ceiling, previously indistinguishable from a clean end.
- *  7. otherwise → `model_end_turn`.
- *
- * `iteration_cap` is intentionally NOT produced here: nothing sets a tool-use
- * loop cap in production yet (`DEFAULT_MAX_TOOL_USE_ITERATIONS = 0`), so it is
- * wired alongside the cap itself in a later patch.
+ *  8. otherwise → `model_end_turn`.
  *
  * @module agent/session/closure-reason
  */
@@ -84,6 +85,7 @@ export function classifyClosureReason(i: ClosureReasonInputs): ClosureReason {
   if (i.dispatchReason === 'error') return 'abort';
   if (i.abort !== null) return i.abort;
   if (i.sawProviderError) return 'abort';
+  if (i.lastStopReason === 'tool_use_loop_capped') return 'iteration_cap';
   if (isTruncationStopReason(i.lastStopReason)) return 'truncated';
   return 'model_end_turn';
 }

@@ -15,6 +15,12 @@
  *   `decision: "block", reason: "…"`          → block with explanation
  *   `hookSpecificOutput.additionalContext`     → `injectContext` in result
  *
+ * This module is event-agnostic: it maps `additionalContext` into
+ * `HookDecision.injectContext` regardless of which event triggered it. What
+ * happens to that value next is caller-defined per event — see `../hooks.js`
+ * for the full contract (notably `Stop`, where a config-driven shell hook's
+ * `additionalContext` ends up prepended to the *next* turn's prompt).
+ *
  * @module agent/hooks/command-executor
  */
 

@@ -17,6 +17,10 @@ import type { LogUpdateFn, CompositorScrollRegionGuard } from './terminal-compos
 import { eraseAndPaintRow } from './terminal-compositor.types.js';
 import { hardWrapToWidth } from './wrap.js';
 import { capBandModel, decideCommitMode } from './commit-mode.js';
+import {
+  reflowCommittedBandToWidth,
+  type BandReflowCache,
+} from './terminal-compositor.band-reflow.js';
 
 /**
  * Narrowest TerminalCompositor state slice the committed-band functions touch.
@@ -33,8 +37,13 @@ export interface CommittedBandHost {
   committedBand: string[];
   committedBandTopRow: number;
   committedBandBottomRow: number;
+  /** Real unpadded frame top from the last repaint's measure() — see the field
+   *  doc on the class. Routing (prevTopRow) trusts this over logUpdate.topRow. */
+  lastMeasuredFrameTop: number;
   /** How many of committedBand's rows (its bottom suffix) are painted on screen. */
   committedBandPaintedRows: number;
+  /** Memoization for reflowCommittedBandToWidth — see the field doc on the class. */
+  bandReflowCache: BandReflowCache | null;
   /** Re-entrancy guard: suppresses a repaint during the clear→write window. */
   committing: boolean;
   /** Suppresses the shrink re-pin (repositionCommittedBand) for a commit. */
@@ -43,6 +52,12 @@ export interface CommittedBandHost {
   hasCommitted: boolean;
   /** Pre-resize on-screen footprint to physically erase on the next repaint. */
   pendingResizeErase: { top: number; bottom: number } | null;
+  /**
+   * F2: true from the SIGWINCH-immediate handler until the next debounced
+   * repaint re-establishes real frame geometry. See the field doc on the
+   * class (terminal-compositor.ts) for the full failure mode this guards.
+   */
+  bandGeometryStale: boolean;
   /** Pre-arm content ceiling — committed text never lands above this row. */
   anchorRow: number | undefined;
   /** Whether the compositor currently holds raw mode + the keypress listener. */
@@ -127,6 +142,15 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   // newest content still sits against the frame). The length>1 guard keeps
   // `commitAbove('')` painting its single blank row (the subagent-done path).
   const cols = Math.max(1, self.stdout.columns ?? 80);
+  // F1 (retained-logical-source re-wrap): the prior band was hard-wrapped at
+  // WHATEVER width was current when IT was committed — possibly a resize or
+  // several ago. Re-wrap it to the CURRENT `cols` before any of the geometry
+  // below reads `self.committedBand`/`committedBandBottomRow` (the merge
+  // contiguity check, decideCommitMode's overflowRun, and Phase 3's merge all
+  // read the band) — see terminal-compositor.band-reflow.ts's module doc for
+  // why a stale-width row can never be trusted verbatim again. No-op (and
+  // free) when nothing has resized since the band was last reflowed.
+  reflowCommittedBandToWidth(self, cols);
   const logicalLines = stripped.split('\n');
   let hasTrailingSeparator = false;
   while (logicalLines.length > 1 && logicalLines[logicalLines.length - 1] === '') {
@@ -166,7 +190,66 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   // reproduce. `capacity` is the number of rows available to DISPLAY committed
   // text above the frame, between the pre-arm content ceiling (anchorRow) and
   // the frame top.
-  const prevTopRow = self.logUpdate.topRow ?? 0;
+  //
+  // External constraint (pre-repaint vs post-repaint geometry ordering):
+  // CupFrameRenderer.render() applies shrink-padding when the frame shrinks
+  // between renders — it prepends blank rows so the erase pass covers the full
+  // prior footprint. The padded newTopRow is stored as logUpdate.topRow, making
+  // it LOWER than the raw content top that measure(currentFrame, bottom).topRow
+  // would return and that Phase-2 repaint() will actually establish (Phase-1
+  // clear() resets previousLineCount=0, so Phase-2 render() never applies shrink
+  // padding and always lands the frame at its real raw position).
+  //
+  // When the committed band exists and was repositioned by
+  // repositionCommittedBand during the preceding setOverlay()+repaint() call,
+  // committedBandBottomRow is adjacent to the real frame top (= real_top - 1).
+  // Use that as a floor to correct the stale padded value: the real frame top
+  // can never be LOWER than committedBandBottomRow + 1 (the band must be above
+  // the frame). Without this correction a stale low prevTopRow causes
+  // decideCommitMode to compute wrong fitsAboveFrame and overflowPriorContiguous,
+  // routing the commit to band-hold when the fits path was correct — and the
+  // band-hold paint then overwrites the repositioned prior-band content without
+  // archiving it to scrollback, permanently losing it (zero hits on the prior
+  // committed block after collapse).
+  //
+  // F2 (fail-safe commit mode on stale geometry): the correction above assumes
+  // `committedBandBottomRow` was set by a repositionCommittedBand call that ran
+  // against the CURRENT screen geometry. `bandGeometryStale` — set by the
+  // SIGWINCH-immediate handler alongside logUpdate.resetGeometry(), cleared by
+  // repositionCommittedBand once it re-pins against the new geometry — is false
+  // exactly when that assumption fails: a resize landed and no repaint has run
+  // since, so `committedBandBottomRow` is a PRE-resize row number. Using it as
+  // a floor here would reproduce that stale-but-nonzero row, defeat the
+  // `prevTopRow <= 1` band-hold safety fallback below (BLOCKER-1), and route
+  // decideCommitMode into the merge-then-cap fits path against geometry that no
+  // longer describes the screen — silently truncating the prior band as
+  // "already scrolled" rows that never scrolled (DEFECT 2, confirmed by
+  // terminal-compositor.resize-stale-width.repro.test.ts's H2 case). Skipping
+  // the floor while stale falls through to `rawLogUpdateTopRow` (0, since
+  // resetGeometry() zeroed it), which takes the `frameTop` fallback below and
+  // is exactly the "genuinely no known frame top" case BLOCKER-1 already
+  // handles safely via band-hold.
+  const rawLogUpdateTopRow = self.logUpdate.topRow ?? 0;
+  // Prefer the real post-render frame top the last repaint captured via measure()
+  // (lastMeasuredFrameTop). logUpdate.topRow reports the transient shrink-PADDED
+  // top, which reads LOWER than reality after a frame shrink and makes
+  // decideCommitMode compute a wrong (too-small) fitsAboveFrame — routing a block
+  // that FITS into band-hold, which then overwrites repositioned prior content
+  // without archiving it ("two boxes + blank void" streaming-table bug;
+  // terminal-compositor.commit-geometry.test.ts + the History note at
+  // frame.ts:191-198). Take the MAX so prevTopRow can only be RAISED toward the
+  // true top, never lowered — the existing committedBandBottomRow+1 floor is
+  // preserved. Gated on !bandGeometryStale: after a SIGWINCH with no repaint
+  // since, lastMeasuredFrameTop (and the band floor) are PRE-resize values, so
+  // both are excluded and we fall through to rawLogUpdateTopRow — the BLOCKER-1
+  // band-hold safety path. When lastMeasuredFrameTop is 0 (no repaint yet) this
+  // reduces EXACTLY to the prior expression.
+  const measuredFrameTop = self.bandGeometryStale ? 0 : self.lastMeasuredFrameTop;
+  const bandFloor =
+    self.committedBand.length > 0 && self.committedBandBottomRow > 0 && !self.bandGeometryStale
+      ? self.committedBandBottomRow + 1
+      : 0;
+  const prevTopRow = Math.max(rawLogUpdateTopRow, measuredFrameTop, bandFloor);
   const frameTop = prevTopRow > 1 ? prevTopRow : Math.max(1, rows - 1 - extraRows);
   const anchorFloor = Math.max(self.anchorRow ?? 1, 1);
   // The block "fits" when every line can be CUP-painted at a row in
@@ -247,6 +330,7 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
     committedBand: self.committedBand,
     committedBandBottomRow: self.committedBandBottomRow,
     committedBandPaintedRows: self.committedBandPaintedRows,
+    geometryStale: self.bandGeometryStale,
   });
 
   // Suppress the shrink re-pin for the whole commit; Phase 3 sets the band.
@@ -639,6 +723,10 @@ export function clearCommittedBand(self: CommittedBandHost): void {
   self.committedBandTopRow = 0;
   self.committedBandBottomRow = 0;
   self.committedBandPaintedRows = 0;
+  // Explicit reset (also self-invalidates via reflowCommittedBandToWidth's
+  // reference check once committedBand is reassigned above, but an empty band
+  // never needs a cache entry either way).
+  self.bandReflowCache = null;
 }
 
 /**

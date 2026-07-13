@@ -22,6 +22,7 @@ import {
   buildResultFromMessage,
   buildResultFromError,
   createEmptyTrace,
+  STREAM_INCOMPLETE,
   type SubagentResult,
   type SubagentStatus,
   type SubagentTrace,
@@ -54,8 +55,25 @@ export interface SubagentHandle<T = unknown> {
    * explicit "work is done, tear down quietly" lifecycle endpoint used after
    * a successful `run()` / `runToResult()`. Idempotent; composes with
    * `cancel()` via the shared `stopDispatched` guard.
+   *
+   * @param options.deferInjectContextToCaller — when true, a non-empty
+   *   `SubagentStop.injectContext` produced by this teardown is NOT pushed to
+   *   the parent's input-stream/queue channel. Instead it is recorded and made
+   *   readable via {@link getLastStopInjectContext} so the caller can deliver
+   *   it in-turn (e.g. appended to the foreground `agent`/`skill` tool_result).
+   *   The abort-precedence guard still applies: when the parent is aborting,
+   *   nothing is recorded (the parent will unwind before it could consume it).
+   *   Delivery is exactly-once — deferring here suppresses the queue push.
    */
-  teardown(): Promise<void>;
+  teardown(options?: { deferInjectContextToCaller?: boolean }): Promise<void>;
+  /**
+   * The `SubagentStop.injectContext` captured by the most recent teardown that
+   * was invoked with `deferInjectContextToCaller: true`. `undefined` when no
+   * context was produced, when delivery went through the queue channel, or
+   * when suppressed by the abort-precedence guard. Read once after `teardown`
+   * resolves; the caller owns delivery of the returned string.
+   */
+  getLastStopInjectContext(): string | undefined;
 }
 
 /**
@@ -81,6 +99,16 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
   private latestTerminalStatus: SubagentStatus | undefined;
   /** Guard so teardown-side SubagentStop fires exactly once per handle. */
   private stopDispatched = false;
+  /**
+   * The `SubagentStop.injectContext` captured for in-turn delivery by the
+   * caller — set only when {@link dispatchStopAndRelease} ran with
+   * `deferInjectContextToCaller: true` and the hook produced a non-empty
+   * context that was NOT suppressed by the abort-precedence guard. When set,
+   * the queue push is skipped, so this and the queue are mutually exclusive
+   * (exactly-once delivery). Read by the caller via
+   * {@link getLastStopInjectContext} after `teardown()` resolves.
+   */
+  private lastStopInjectContext: string | undefined;
   /** Optional sink for streaming progress events. Never mutated after construction. */
   private readonly progressSink: SubagentProgressSink | undefined;
   /** Optional parent session ID for context injection tracing. */
@@ -96,6 +124,16 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
    * managed to produce instead of just the error.
    */
   private lastStreamedContent: string = '';
+  /**
+   * The provider's terminal stop reason captured from the most recent run's
+   * `done` event (e.g. `'end_turn'`, `'tool_use_loop_capped'`). Persisted as
+   * an instance field so `runToResult` can attach it to the built
+   * {@link SubagentResult}, letting callers distinguish a capped partial from
+   * a genuine completion. Reset at the start of `run()` (before the
+   * `cancelled` short-circuit) so a re-invoked or cancelled handle never
+   * surfaces a prior run's stop reason on the error result.
+   */
+  private lastStopReason: string | undefined;
 
   /** @internal — positional argument order is not part of any public contract. */
   constructor(
@@ -134,6 +172,13 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
 
   async run(prompt: string, sinkOverride?: SubagentProgressSink): Promise<Message> {
     if (this.currentStatus === 'running') throw new Error(`Subagent ${this.id} is already running`);
+    // Invariant: reset the captured stop reason here — after the `running`
+    // guard, before the `cancelled` short-circuit — so a re-invoked or
+    // cancelled handle never surfaces a PRIOR run's stopReason on the error
+    // result built by `runToResult`'s catch. Past the `running` guard
+    // `currentStatus` is never `running` (and there is no `await` before it is
+    // set below), so no in-flight run owns this value for us to clobber.
+    this.lastStopReason = undefined;
     if (this.currentStatus === 'cancelled') throw new Error(`Subagent ${this.id} is cancelled`);
 
     this.currentStatus = 'running';
@@ -149,15 +194,26 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       this.lastDurationMs = Date.now() - startTime;
       this.currentStatus = 'succeeded';
       this.latestTerminalStatus = 'succeeded';
-      // Witness layer: subagent_lifecycle.succeeded fires before onTerminal()
-      // so the trace records the terminal transition even if the manager
-      // tears the handle down immediately after. Fire-and-forget.
-      void emitSubagentLifecycle(this.traceWriter, {
+      // Witness layer: subagent_lifecycle.succeeded MUST be awaited before
+      // onTerminal(). onTerminal() may trigger the owning session's immediate
+      // teardown, which calls writer.seal(); once sealed, writer.write() throws
+      // and emitSubagentLifecycle swallows it, silently dropping this terminal
+      // record (the "lost terminal trace event" orphan bug). Awaiting here
+      // guarantees the succeeded event is enqueued+persisted on the writer's
+      // FIFO queue BEFORE any seal can run. Safe: write() is a bounded FS append
+      // and emitSubagentLifecycle already swallows errors, so the await cannot
+      // introduce a new failure mode or an unbounded hang.
+      await emitSubagentLifecycle(this.traceWriter, {
         transition: 'succeeded',
         subagentId: this.id,
         durationMs: this.lastDurationMs,
         turnCount: this.currentTrace.turnCount,
         outputBytes: Buffer.byteLength(this.lastMessage, 'utf8'),
+        // Record the terminal stop reason so trace forensics can distinguish a
+        // clean completion from a capped/truncated partial (tool_use_loop_capped
+        // / stream_incomplete) WITHOUT recomputing marker byte-lengths. Absent
+        // when the provider reported no stop reason (a plain clean end).
+        ...(this.lastStopReason !== undefined && { stopReason: this.lastStopReason }),
       });
       // Propagate usage and cost to the parent session's rollup accumulators.
       // Fire synchronously before onTerminal() so the session_sealed event
@@ -189,8 +245,12 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
         // externally. The trace and the result-object status must agree so
         // downstream consumers (operator dashboard, future ActiveWorkRegistry)
         // can correctly attribute cascade terminations vs. genuine failures.
+        // Awaited (not fire-and-forget) for the same reason as the success
+        // path: onTerminal() below may seal the owning session's trace, and a
+        // seal that lands before this write is enqueued would drop the terminal
+        // record. Awaiting guarantees the event is persisted first.
         if (this.controller.signal.aborted) {
-          void emitSubagentLifecycle(this.traceWriter, {
+          await emitSubagentLifecycle(this.traceWriter, {
             transition: 'cancelled',
             subagentId: this.id,
             source: 'cascade',
@@ -198,7 +258,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
           this.currentStatus = 'cancelled';
           this.latestTerminalStatus = 'cancelled';
         } else {
-          void emitSubagentLifecycle(this.traceWriter, {
+          await emitSubagentLifecycle(this.traceWriter, {
             transition: 'failed',
             subagentId: this.id,
             errorClass: err instanceof Error ? err.constructor.name : 'Unknown',
@@ -284,6 +344,13 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
         streamError = event.error;
         break;
       } else if (event.type === 'done') {
+        // Capture the turn's stop reason so the post-loop fallback can tell a
+        // tool-use-cap termination (which yields a `done` with no assistant
+        // message) apart from a genuinely empty stream — and so `runToResult`
+        // can surface it on the SubagentResult (persisted on the handle).
+        if (typeof event.metadata?.stopReason === 'string') {
+          this.lastStopReason = event.metadata.stopReason;
+        }
         if (typeof event.metadata?.usage === 'object' && event.metadata.usage !== null) {
           const u = event.metadata.usage as Record<string, unknown>;
           this.currentTrace.usage = {
@@ -300,7 +367,33 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     if (streamError) throw streamError;
     if (finalMessage) return finalMessage;
     if (this.lastStreamedContent.length > 0) {
+      // The stream ended with partial assistant text but no terminal `message`
+      // event: the child was cut off mid-output (an abort, an early/abnormal
+      // provider-stream close, or a provider that ended without a final
+      // message). Mark the run non-clean so `runToResult` surfaces it as an
+      // incomplete partial (via `stopReason`) instead of a silent success —
+      // consumers prepend a parent-visible marker (annotateIfIncomplete). Use
+      // `??=` so a real terminal stopReason (if one somehow arrived) is never
+      // clobbered; reaching here implies none did.
+      this.lastStopReason ??= STREAM_INCOMPLETE;
       return { role: 'assistant', content: this.lastStreamedContent, timestamp: new Date() };
+    }
+    // Anti-hang fallback (see SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS in
+    // subagent.ts): a child that hits its tool-use cap normally returns a real
+    // summary — the provider runs a tools-stripped wind-down round on the cap
+    // (see loop.ts) whose text lands as `finalMessage`/`lastStreamedContent`
+    // above. This branch is the RARE fallback for when that wind-down produced
+    // no text at all: surface the cap as a terminal "capped" message instead of
+    // throwing, so `runToResult` reports a capped *partial* result (status
+    // 'succeeded') rather than an opaque subagent failure.
+    if (this.lastStopReason === 'tool_use_loop_capped') {
+      return {
+        role: 'assistant',
+        content:
+          `[subagent ${this.id} reached its tool-use iteration cap before ` +
+          `producing a final message; returning a capped partial result]`,
+        timestamp: new Date(),
+      };
     }
     throw new Error(`Subagent ${this.id} produced no terminal message`);
   }
@@ -308,9 +401,22 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
   async runToResult(prompt: string, sinkOverride?: SubagentProgressSink): Promise<SubagentResult<T>> {
     try {
       const message = await this.run(prompt, sinkOverride);
-      return buildResultFromMessage(this.id, this.currentStatus, message, this.outputSchema, this.currentTrace);
+      return buildResultFromMessage(
+        this.id,
+        this.currentStatus,
+        message,
+        this.outputSchema,
+        this.currentTrace,
+        this.lastStopReason,
+      );
     } catch (err) {
-      const result = buildResultFromError<T>(this.id, this.currentStatus, err, this.currentTrace);
+      const result = buildResultFromError<T>(
+        this.id,
+        this.currentStatus,
+        err,
+        this.currentTrace,
+        this.lastStopReason,
+      );
       // Preserve any assistant text streamed before the failure so the parent
       // receives partial findings rather than just an opaque error. The
       // raw string fragment is the best we have when a structured parse
@@ -400,7 +506,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     }
   }
 
-  async teardown(): Promise<void> {
+  async teardown(options?: { deferInjectContextToCaller?: boolean }): Promise<void> {
     // Idempotent — once the stop hook has fired (via either path), teardown
     // is a no-op. Intentional: `handle.status` stays truthful for succeeded
     // runs; no abort-graph notification, no currentStatus mutation.
@@ -421,8 +527,12 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     try {
       await this.session.close();
     } finally {
-      await this.dispatchStopAndRelease(reportedStatus);
+      await this.dispatchStopAndRelease(reportedStatus, options);
     }
+  }
+
+  getLastStopInjectContext(): string | undefined {
+    return this.lastStopInjectContext;
   }
 
   /**
@@ -430,8 +540,16 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
    * map. Shared by `cancel()` and `teardown()` — the only difference between
    * those is pre-work (abort-graph notification, currentStatus mutation).
    * Guarded by `stopDispatched` so concurrent paths fire the hook exactly once.
+   *
+   * @param options.deferInjectContextToCaller — see {@link teardown}. When
+   *   true, a produced (non-suppressed) `injectContext` is recorded on
+   *   {@link lastStopInjectContext} for the caller to deliver in-turn INSTEAD
+   *   of pushing it to the parent's input-stream/queue channel.
    */
-  private async dispatchStopAndRelease(reportedStatus: SubagentStatus): Promise<void> {
+  private async dispatchStopAndRelease(
+    reportedStatus: SubagentStatus,
+    options?: { deferInjectContextToCaller?: boolean },
+  ): Promise<void> {
     if (this.stopDispatched) {
       // The other path already fired the hook. onTerminal() is idempotent on
       // the manager's active-map delete, so calling it again is safe — but we
@@ -458,23 +576,52 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       this.traceWriter ? { traceWriter: this.traceWriter } : {},
     );
 
-    // Invariant: SubagentStop.injectContext is a framework-generated next-turn
-    // note, not the foreground subagent result and not human-authored text. The
-    // final subagent answer has already returned through the `agent` tool result;
-    // this side-channel queues only supplemental hook context for the parent's
-    // next input-stream read. Abort precedence: if the parent's abortSignal was
-    // provided AND is set, skip injection — the parent's query loop will unwind
-    // before it can consume the message. Matches the abort-graph invariant that
-    // abort is terminal for side effects. Injection failures are logged, not
-    // propagated.
-    if (decision.injectContext && this.parentInputStreamRef) {
+    // Invariant: SubagentStop.injectContext is a framework-generated note, not
+    // the foreground subagent result and not human-authored text. The final
+    // subagent answer has already returned through the `agent` tool result;
+    // this side-channel carries only supplemental hook context for the parent.
+    //
+    // Delivery MUST reach the parent through EXACTLY ONE channel and MUST be
+    // gated by abort precedence — a single ordered decision, checked here in
+    // strict order so the two channels can never both fire and never both drop:
+    //
+    //   1. No injectContext produced        → nothing to deliver.
+    //   2. Parent is aborting                → suppress (both channels). The
+    //        parent's query loop unwinds before it could consume the note;
+    //        queuing OR recording it would be a dead letter. Matches the
+    //        abort-graph.ts "abort-signal check is unconditional" invariant.
+    //   3. deferInjectContextToCaller = true → record on lastStopInjectContext
+    //        for the CALLER to deliver in-turn (foreground agent/skill append
+    //        it to the returned tool_result). SKIP the queue push — this is the
+    //        suppression half of exactly-once. No parentInputStreamRef needed:
+    //        the caller owns delivery.
+    //   4. Otherwise (queue channel)         → ride along with the parent's
+    //        next real user message (queueFrameworkContext). Never a standalone
+    //        input-stream message: the provider consumes exactly one
+    //        input-stream message per turn, so a pushed message that lands after
+    //        the parent's turn ends displaces the user's next real message by
+    //        one queue position — every later send is then answered by the
+    //        message before it, and the injected text never appears in the
+    //        ledger. `pushUserMessage` remains only as a fallback for narrow
+    //        parent refs that predate the queue channel.
+    // Injection failures are logged, not propagated.
+    if (decision.injectContext) {
       if (this.parentAbortSignal?.aborted) {
         debugLog(
           `Skipping SubagentStop injectContext for ${this.id}: parent is aborted`,
         );
-      } else {
+      } else if (options?.deferInjectContextToCaller) {
+        // In-turn delivery: hand the note to the caller (tool_result append)
+        // and deliberately do NOT push to the queue — exactly-once.
+        this.lastStopInjectContext = decision.injectContext;
+      } else if (this.parentInputStreamRef) {
         try {
-          this.parentInputStreamRef.pushUserMessage(decision.injectContext);
+          const ref = this.parentInputStreamRef;
+          if (ref.queueFrameworkContext) {
+            ref.queueFrameworkContext(decision.injectContext);
+          } else {
+            ref.pushUserMessage(decision.injectContext);
+          }
         } catch (err) {
           debugLog(`Failed to inject context from SubagentStop handler: ${String(err)}`);
         }

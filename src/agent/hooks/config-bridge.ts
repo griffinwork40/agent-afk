@@ -7,6 +7,13 @@
  * if it is false, no handlers are registered and a warning naming the skipped
  * hooks is emitted.
  *
+ * A handler registered here for `'Stop'` inherits the harness `Stop` →
+ * next-turn `injectContext` delivery documented in `../hooks.js`: a `Stop`
+ * shell hook's `hookSpecificOutput.additionalContext` (mapped in
+ * `./command-executor.js`) is prepended to the *next* turn's prompt by the
+ * REPL loop. Pre-existing primitive, gated by the trust check above — not a
+ * new trust boundary.
+ *
  * @module agent/hooks/config-bridge
  */
 

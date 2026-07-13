@@ -60,6 +60,8 @@ vi.mock('../shared-helpers.js', () => ({
   // New exports used by buildDaemonSessionFactory (added in daemon.ts).
   parseProvider: vi.fn(() => undefined),
   getDefaultSubagentModel: vi.fn(() => 'sonnet'),
+  // Opt-in top-level tool-round ceiling reader; undefined = unlimited (default).
+  getMaxToolUseIterations: vi.fn(() => undefined),
 }));
 
 vi.mock('../errors/index.js', () => ({

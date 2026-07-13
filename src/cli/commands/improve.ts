@@ -73,6 +73,7 @@ import { scanWitness, parseDuration } from '../../improve/scan/reader.js';
 import { DEFAULT_MIN_REPEATS } from '../../improve/scan/detectors/repeated-tool-use.js';
 import { DEFAULT_CLOSURE_ANOMALY_MIN_OCCURRENCES } from '../../improve/scan/detectors/closure-anomaly.js';
 import { DEFAULT_SUBAGENT_BLOCK_MIN_OCCURRENCES } from '../../improve/scan/detectors/subagent-block.js';
+import { DEFAULT_SUBAGENT_READ_DENIAL_MIN_OCCURRENCES } from '../../improve/scan/detectors/subagent-read-denial.js';
 import {
   DEFAULT_TOOL_FAILURE_MIN_FAILURES,
   DEFAULT_TOOL_FAILURE_MIN_RATE,
@@ -171,6 +172,11 @@ function registerScanSubcommand(improve: Command): void {
       String(DEFAULT_SUBAGENT_BLOCK_MIN_OCCURRENCES),
     )
     .option(
+      '--read-denial-min-occurrences <n>',
+      `subagent-read-denial threshold (default ${DEFAULT_SUBAGENT_READ_DENIAL_MIN_OCCURRENCES})`,
+      String(DEFAULT_SUBAGENT_READ_DENIAL_MIN_OCCURRENCES),
+    )
+    .option(
       '--tool-failure-min-failures <n>',
       `tool-failure-density absolute count threshold (default ${DEFAULT_TOOL_FAILURE_MIN_FAILURES})`,
       String(DEFAULT_TOOL_FAILURE_MIN_FAILURES),
@@ -196,6 +202,7 @@ function registerScanSubcommand(improve: Command): void {
         minRepeats: string;
         closureMinOccurrences: string;
         blockMinOccurrences: string;
+        readDenialMinOccurrences: string;
         toolFailureMinFailures: string;
         toolFailureMinRate: string;
         only?: string;
@@ -209,6 +216,11 @@ function registerScanSubcommand(improve: Command): void {
             1,
           );
           const blockMin = parsePositiveInt(opts.blockMinOccurrences, 'block-min-occurrences', 1);
+          const readDenialMin = parsePositiveInt(
+            opts.readDenialMinOccurrences,
+            'read-denial-min-occurrences',
+            1,
+          );
           const tfMinFailures = parsePositiveInt(
             opts.toolFailureMinFailures,
             'tool-failure-min-failures',
@@ -247,6 +259,7 @@ function registerScanSubcommand(improve: Command): void {
             minRepeats,
             closureAnomalyMinOccurrences: closureMin,
             subagentBlockMinOccurrences: blockMin,
+            subagentReadDenialMinOccurrences: readDenialMin,
             toolFailureMinFailures: tfMinFailures,
             toolFailureMinRate: tfMinRate,
           };

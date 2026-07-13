@@ -86,10 +86,11 @@ function countOccurrences(text: string, substring: string): number {
 /**
  * Execute a string replacement on a file.
  */
-export const editFileHandler: ToolHandler = async (
+const editFileImpl = async (
   input: unknown,
   signal: AbortSignal,
-  context?: ToolHandlerContext,
+  context: ToolHandlerContext | undefined,
+  cwd: string | undefined,
 ): Promise<{ content: string; isError?: boolean }> => {
   // Check if aborted before we start.
   if (signal.aborted) {
@@ -103,7 +104,7 @@ export const editFileHandler: ToolHandler = async (
 
   let file_path: string;
   try {
-    file_path = resolveAndContain(rawFilePath, context, 'write');
+    file_path = resolveAndContain(rawFilePath, context, 'write', cwd);
   } catch (err) {
     return { content: err instanceof Error ? err.message : String(err), isError: true };
   }
@@ -179,3 +180,15 @@ export const editFileHandler: ToolHandler = async (
     };
   }
 };
+
+/**
+ * Create an `edit_file` handler closed over a session-specific base path.
+ * See `createReadFileHandler` — `cwd` is the last resolve-base tier for
+ * out-of-context invocations; a no-op on the dispatcher path. Issue #434.
+ */
+export function createEditFileHandler(cwd?: string): ToolHandler {
+  return (input, signal, context) => editFileImpl(input, signal, context, cwd);
+}
+
+/** Bare `edit_file` handler with no session cwd (`createEditFileHandler()`). */
+export const editFileHandler: ToolHandler = createEditFileHandler();

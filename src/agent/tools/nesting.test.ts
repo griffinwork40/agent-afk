@@ -3,6 +3,7 @@ import {
   CHILD_ALLOWED_TOOLS,
   RECON_ALLOWED_TOOLS,
   DEFAULT_READ_ONLY_SKILLS,
+  buildReadOnlyReconProvider,
   buildSkillRestrictedProvider,
 } from './nesting.js';
 import { checkToolPermission } from './permissions.js';
@@ -168,6 +169,49 @@ describe('RECON_ALLOWED_TOOLS (read-only skill child allowlist)', () => {
   });
 });
 
+describe('buildReadOnlyReconProvider allowlist override (issue #499 finding 2)', () => {
+  // Both provider classes store the resolved allowlist, readOnlyBash, and
+  // readOnlyMemory as private fields. Introspect them directly — the same
+  // no-network seam the baseURL tests use for `providerOpts`.
+  const allowedOf = (provider: unknown): string[] =>
+    (provider as { permissions: { allowedTools: string[] } }).permissions.allowedTools;
+  const readOnlyBashOf = (provider: unknown): boolean =>
+    (provider as { readOnlyBash: boolean }).readOnlyBash;
+  const readOnlyMemoryOf = (provider: unknown): boolean =>
+    (provider as { readOnlyMemory: boolean }).readOnlyMemory;
+
+  it('defaults to the full RECON set when no allowlist is passed (backward compat)', () => {
+    const provider = buildReadOnlyReconProvider('sonnet');
+    expect(allowedOf(provider)).toEqual([...RECON_ALLOWED_TOOLS]);
+  });
+
+  it('restricts to the passed allowlist instead of the full RECON superset', () => {
+    // A `read-only: true` + `tools: [bash]` skill forked at the depth cap must
+    // get ONLY [bash] — not the whole RECON set (which would grant web_scrape
+    // egress, read_file, etc. the SKILL.md never declared).
+    const provider = buildReadOnlyReconProvider('sonnet', undefined, ['bash']);
+    expect(allowedOf(provider)).toEqual(['bash']);
+    expect(allowedOf(provider)).not.toContain('web_scrape');
+    expect(allowedOf(provider)).not.toContain('read_file');
+  });
+
+  it('preserves the readOnlyBash + readOnlyMemory gates when narrowed', () => {
+    // Least-privilege must NOT come at the cost of the mutating-bash gate: a
+    // narrowed `tools: [bash]` child still needs readOnlyBash so the dispatcher
+    // blocks mutating shell commands.
+    const provider = buildReadOnlyReconProvider('sonnet', undefined, ['bash']);
+    expect(readOnlyBashOf(provider)).toBe(true);
+    expect(readOnlyMemoryOf(provider)).toBe(true);
+  });
+
+  it('materializes a fresh array so caller mutation cannot bleed across siblings', () => {
+    const shared = ['read_file', 'bash'];
+    const provider = buildReadOnlyReconProvider('sonnet', undefined, shared);
+    shared.push('write_file');
+    expect(allowedOf(provider)).toEqual(['read_file', 'bash']);
+  });
+});
+
 describe('DEFAULT_READ_ONLY_SKILLS', () => {
   it("contains 'ground-state'", () => {
     expect(DEFAULT_READ_ONLY_SKILLS.has('ground-state')).toBe(true);
@@ -175,5 +219,40 @@ describe('DEFAULT_READ_ONLY_SKILLS', () => {
 
   it('does not contain an arbitrary skill name', () => {
     expect(DEFAULT_READ_ONLY_SKILLS.has('mint')).toBe(false);
+  });
+});
+
+describe('restricted builders thread openaiBaseUrl into the OpenAI client baseURL', () => {
+  // Regression: a deep OpenAI-routed subagent built via these restricted/depth-cap
+  // builders must point at the configured endpoint, not default to api.openai.com
+  // (where a non-OpenAI key 401s as "Incorrect API key provided"). Complements the
+  // query-time fallback in openai-compatible/base-url.ts. Mirrors the providerOpts
+  // baseURL introspection in providers/routing.test.ts.
+  const bakedBaseURL = (provider: unknown): string | undefined =>
+    (provider as { providerOpts: { baseURL?: string } }).providerOpts.baseURL;
+
+  it('buildReadOnlyReconProvider bakes openaiBaseUrl into an OpenAI-routed child', () => {
+    const provider = buildReadOnlyReconProvider('gpt-4o', 'https://opencode.ai/zen/go/v1');
+    expect(bakedBaseURL(provider)).toBe('https://opencode.ai/zen/go/v1');
+  });
+
+  it('buildReadOnlyReconProvider leaves baseURL unset when no openaiBaseUrl is given', () => {
+    const provider = buildReadOnlyReconProvider('gpt-4o');
+    expect(bakedBaseURL(provider)).toBeUndefined();
+  });
+
+  it('buildSkillRestrictedProvider bakes openaiBaseUrl into an OpenAI-routed child', () => {
+    const provider = buildSkillRestrictedProvider(
+      ['read_file'],
+      'gpt-4o',
+      false,
+      'https://opencode.ai/zen/go/v1',
+    );
+    expect(bakedBaseURL(provider)).toBe('https://opencode.ai/zen/go/v1');
+  });
+
+  it('buildSkillRestrictedProvider leaves baseURL unset when no openaiBaseUrl is given', () => {
+    const provider = buildSkillRestrictedProvider(['read_file'], 'gpt-4o');
+    expect(bakedBaseURL(provider)).toBeUndefined();
   });
 });

@@ -24,6 +24,7 @@ import { runWave } from '../../agent/subagent/wave.js';
 import type { IAgentSession } from '../../agent/types.js';
 import type { CanUseTool } from '../../agent/types/sdk-types.js';
 import { researchAgent } from '../_agents/research-agent.js';
+import { vendoredToolAllowlist } from '../_agents/to-definition.js';
 import { getAfkHome, getAgentFrameworkDir, getBriefsDir } from '../../paths.js';
 import {
   discoverUserScope,
@@ -343,15 +344,33 @@ async function handler(
   // Forward the parent's witness writer (when ctx supplies one) so the
   // inspector forks below inherit it and their `canUseTool` permission-denials
   // land in the parent trace. See skills/index.ts SkillExecutionContext.traceWriter.
+  //
+  // Read-scope note (#547): this manager DELIBERATELY passes no `cwd` and no
+  // `parentReadRoots`. Its inspectors roam `~/.afk` user/plugin artifacts that
+  // live OUTSIDE any repo, so a cwd-less manager (→ read-open forks) is
+  // required. Read-open already satisfies the child ⊇ parent read-scope
+  // invariant (#544/#547) for ANY parent, so this is compliant, not a gap:
+  // seeding parentReadRoots from a CONFINED session (e.g. `afk -w`) would
+  // narrow inspectors to the worktree and break `~/.afk` discovery. Do not add
+  // it here — the omission is correct.
   const manager = new SubagentManager({
     apiKey,
+    // `apiKey` is `ctx.apiKey` — resolved by the parent session for
+    // `ctx.defaultModel` — so that model is the provider source of truth for
+    // the fork-time credential fallback (see SubagentManager.parentProvider).
+    ...(ctx?.defaultModel !== undefined ? { parentModel: ctx.defaultModel } : {}),
     ...(ctx?.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
   });
+  // Invariant: the gate receives AFK snake_case runtime tool names (read_file,
+  // grep, …), but researchAgent.allowedTools is upstream PascalCase (Read,
+  // Grep, …). Compare against the normalized AFK names or every read call is
+  // denied. See _agents/to-definition.ts:vendoredToolAllowlist.
+  const inspectorTools = vendoredToolAllowlist(researchAgent.allowedTools);
   const createCanUseTool = (): CanUseTool => async (toolName: string) => {
-    if (!researchAgent.allowedTools.includes(toolName as never)) {
+    if (!inspectorTools.has(toolName)) {
       return {
         behavior: 'deny',
-        message: `Tool ${toolName} not allowed for audit-fit inspectors. Allowed tools: ${researchAgent.allowedTools.join(', ')}`,
+        message: `Tool ${toolName} not allowed for audit-fit inspectors. Allowed tools: ${[...inspectorTools].join(', ')}`,
       };
     }
     return { behavior: 'allow' };

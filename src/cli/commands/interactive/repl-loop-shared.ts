@@ -57,15 +57,26 @@ export interface TurnState {
 }
 
 export function buildPrompt(mode: PermissionMode): string {
-  // The model name lives only in the persistent status line (status-line.ts,
-  // a never-drop field) — the caret carries just the brand + the non-default
-  // permission-mode chip (the gate-check worth confirming at the cursor), so
-  // model + mode aren't redundantly stacked two lines apart.
+  // The model name AND the worded mode chip (`○ default`, `● plan`, `◐ AFK`,
+  // `⚡ bypass`) live only in the persistent status line (status-line.ts) —
+  // the caret carries just the brand + a compact echo of the non-default
+  // permission mode. That echo stays here (rather than moving entirely to
+  // the status line) because the status row is carved out of the scroll
+  // region (see status-line.ts's writeScrollRegion) and never enters
+  // scrollback or piped logs: the prompt is the ONLY mode signal that
+  // survives into the linear transcript. Default mode adds no marker — its
+  // absence is itself the "contained" signal, mirrored at the caret. Plan and
+  // AFK stay glyph-only, but bypass ALSO keeps a short ASCII tag (`bp`): it is
+  // the security-sensitive mode, and an ASCII token is what lets a post-hoc
+  // `grep` of a piped transcript locate the windows where permissions were off
+  // (a bare glyph is not reliably searchable). A post-hoc transcript scan
+  // should grep the spaced token `⚡ bp` (not a bare `bp`), because bare `bp`
+  // also matches unrelated substrings like "subprocess".
   const base = palette.brand('afk');
   const marker =
-    mode === 'plan' ? palette.warning(' ● plan') :
-    mode === 'autonomous' ? palette.info(' ◐ AFK') :
-    mode === 'bypassPermissions' ? palette.bypass(' ⚡ bypass') :
+    mode === 'plan' ? palette.warning(' ●') :
+    mode === 'autonomous' ? palette.info(' ◐') :
+    mode === 'bypassPermissions' ? palette.bypass(' ⚡ bp') :
     '';
   return base + marker + palette.dim('  › ');
 }

@@ -1,18 +1,27 @@
 /**
  * Tests for `createBashRestrictionHook` — pre-tool-use gate that hard-blocks
- * bash invocations referencing restricted paths or evaluating interpreter
- * code.
+ * bash invocations referencing restricted paths, plus interpreter `-c`/`-e`
+ * one-liners whose payload references those same sensitive paths.
  *
  * Threat-model invariant pinned by these tests:
  *   - Substring match catches the cat /restricted/path case we observed.
- *   - The interpreter denylist catches python -c, node -e, ruby -e, sh -c.
- *   - Variable-assembled bypasses are EXPLICITLY out of scope — see
- *     `bash-restriction-hook.ts` module header. The "documented bypass"
+ *   - The interpreter guard is SCOPED to credential-adjacent payloads: it
+ *     catches `python -c`/`node -e`/`sh -c` one-liners that reference a
+ *     sensitive path (`.ssh`, `id_rsa`, `.aws`, `/etc/shadow`, or a
+ *     home path assembled at runtime), but NOT pure-computation one-liners
+ *     (`python -c "1+1"`) — those touch no secret, so blocking them was pure
+ *     friction. See the module-header History note.
+ *   - Variable-assembled / string-split bypasses are EXPLICITLY out of scope —
+ *     see `bash-restriction-hook.ts` module header. The "documented bypass"
  *     test pins that behavior.
  */
 
 import { describe, expect, it } from 'vitest';
-import { createBashRestrictionHook } from './bash-restriction-hook.js';
+import {
+  createBashRestrictionHook,
+  deriveRestrictedSubstrings,
+  SENSITIVE_PATH_SIGNAL,
+} from './bash-restriction-hook.js';
 import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
 import type { PreToolUseContext } from '../../hooks.js';
 import { homedir } from 'os';
@@ -32,41 +41,81 @@ function ctx(command: unknown): PreToolUseContext {
   return { event: 'PreToolUse', toolName: 'bash', input: { command } };
 }
 
-describe('createBashRestrictionHook — interpreter denylist', () => {
+describe('createBashRestrictionHook — interpreter denylist (scoped to credential-adjacent payloads)', () => {
   const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
 
-  it('blocks python -c', () => {
-    const decision = hook(ctx('python -c "import os; print(os.uname())"'));
+  // --- BLOCKS: interpreter one-liners that reference a sensitive path ---
+
+  it('blocks python -c that reads an SSH key', () => {
+    const decision = hook(ctx('python -c "print(open(\'~/.ssh/id_rsa\').read())"'));
     expect(decision.decision).toBe('block');
     expect(decision.reason).toContain('Interpreter');
   });
 
-  it('blocks python3 -c', () => {
-    expect(hook(ctx('python3 -c "1+1"')).decision).toBe('block');
+  it('blocks node -e that references cloud credentials', () => {
+    expect(
+      hook(ctx('node -e "require(\'fs\').readFileSync(process.env.HOME + \'/.aws/credentials\')"'))
+        .decision,
+    ).toBe('block');
   });
 
-  it('blocks node -e', () => {
-    expect(hook(ctx('node -e "console.log(1)"')).decision).toBe('block');
+  it('blocks sh -c that cats an SSH key', () => {
+    expect(hook(ctx('sh -c "cat ~/.ssh/id_ed25519"')).decision).toBe('block');
   });
 
-  it('blocks ruby -e', () => {
-    expect(hook(ctx('ruby -e "puts 1"')).decision).toBe('block');
+  it('blocks a home path the interpreter assembles at runtime (the gap check 2 cannot see)', () => {
+    // check 2's literal-substring scan never sees this — the home dir is built
+    // by expanduser at runtime — but the `.ssh` / `id_rsa` fragments do.
+    expect(
+      hook(ctx('python3 -c "import os; open(os.path.expanduser(\'~/.ssh/id_rsa\'))"')).decision,
+    ).toBe('block');
   });
 
-  it('blocks osascript -e', () => {
-    expect(hook(ctx('osascript -e \'tell app "Finder" to quit\'')).decision).toBe('block');
+  it('blocks an interpreter one-liner assembling a Library/Application Support path', () => {
+    // ~/Library/Application Support holds Chrome "Login Data" (saved passwords)
+    // and Cookies (session tokens) — a deriveRestrictedSubstrings root. The
+    // quote-prefixed `~` is NOT normalized, so check 2's literal scan misses it;
+    // only the SENSITIVE_PATH_SIGNAL fragment (check 1) catches this.
+    expect(
+      hook(
+        ctx(
+          'python3 -c "import os; open(os.path.expanduser(\'~/Library/Application Support/Google/Chrome/Default/Login Data\'))"',
+        ),
+      ).decision,
+    ).toBe('block');
   });
 
-  it('blocks sh -c, bash -c, zsh -c, fish -c', () => {
-    expect(hook(ctx('sh -c "rm x"')).decision).toBe('block');
-    expect(hook(ctx('bash -c "rm x"')).decision).toBe('block');
-    expect(hook(ctx('zsh -c "rm x"')).decision).toBe('block');
-    expect(hook(ctx('fish -c "rm x"')).decision).toBe('block');
+  it('DOES block interpreter reads of /etc/shadow', () => {
+    expect(hook(ctx('sh -c "cat /etc/shadow"')).decision).toBe('block');
   });
 
   it('block message names typed file tools as the proper escape', () => {
-    const decision = hook(ctx('python -c "open(\\"/etc/passwd\\").read()"'));
+    const decision = hook(ctx('python -c "open(\'~/.ssh/id_rsa\').read()"'));
     expect(decision.reason).toMatch(/read_file|write_file|edit_file/);
+  });
+
+  // --- PASSES: pure-computation one-liners touch no sensitive path (the calibration) ---
+
+  it('does NOT block pure-computation python -c', () => {
+    // Previously blocked as blanket friction; now allowed — no secret is touched.
+    expect(hook(ctx('python -c "1+1"')).decision).not.toBe('block');
+    expect(hook(ctx('python3 -c "print(2**64)"')).decision).not.toBe('block');
+  });
+
+  it('does NOT block pure-computation node -e / ruby -e', () => {
+    expect(hook(ctx('node -e "console.log(1)"')).decision).not.toBe('block');
+    expect(hook(ctx('ruby -e "puts 1"')).decision).not.toBe('block');
+  });
+
+  it('does NOT block sh -c / bash -c / zsh -c that touch no sensitive path', () => {
+    expect(hook(ctx('sh -c "rm x"')).decision).not.toBe('block');
+    expect(hook(ctx('bash -c "echo hi"')).decision).not.toBe('block');
+    expect(hook(ctx('zsh -c "ls"')).decision).not.toBe('block');
+  });
+
+  it('does NOT block interpreter reads of world-readable /etc/passwd (no secret)', () => {
+    // /etc/passwd is world-readable and carries no secret; /etc/shadow does.
+    expect(hook(ctx('python -c "print(open(\'/etc/passwd\').read())"')).decision).not.toBe('block');
   });
 
   it('does NOT block paths that just CONTAIN the interpreter name', () => {
@@ -82,14 +131,19 @@ describe('createBashRestrictionHook — interpreter denylist', () => {
 });
 
 describe('createBashRestrictionHook — interpreter guard opt-out (AFK_DISABLE_BASH_INTERPRETER_GUARD)', () => {
-  it('skips the interpreter denylist when disableInterpreterGuard is true', () => {
+  it('skips the interpreter guard when disableInterpreterGuard is true', () => {
     const hook = createBashRestrictionHook({
       getGrantManager: mockGrants,
       disableInterpreterGuard: true,
     });
-    expect(hook(ctx('python -c "1+1"')).decision).not.toBe('block');
-    expect(hook(ctx('sh -c "echo hi"')).decision).not.toBe('block');
-    expect(hook(ctx('node -e "console.log(1)"')).decision).not.toBe('block');
+    // Even credential-adjacent one-liners (which WOULD block by default, and
+    // which check 2 misses because the path is quote-tilde / runtime-assembled)
+    // pass once the interpreter guard is disabled.
+    expect(hook(ctx('python -c "open(\'~/.ssh/id_rsa\').read()"')).decision).not.toBe('block');
+    expect(
+      hook(ctx('node -e "require(\'fs\').readFileSync(process.env.HOME + \'/.aws/credentials\')"'))
+        .decision,
+    ).not.toBe('block');
   });
 
   it('opting out does NOT weaken the restricted-root substring check', () => {
@@ -106,37 +160,55 @@ describe('createBashRestrictionHook — interpreter guard opt-out (AFK_DISABLE_B
 
   it('guard is active by default when the option is omitted', () => {
     const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
-    expect(hook(ctx('python -c "1+1"')).decision).toBe('block');
+    expect(hook(ctx('python -c "open(\'~/.ssh/id_rsa\').read()"')).decision).toBe('block');
   });
 });
 
 describe('createBashRestrictionHook — interpreter guard interactivity gate (H2)', () => {
-  // The interpreter denylist hard-blocks only on INTERACTIVE surfaces (a wired
-  // grant manager), where the model can be redirected to the prompt-able typed
-  // file tools. On HEADLESS surfaces (no grant manager) it fails open by
-  // default so legitimate automation (`python -c`, `sh -c`) is not hard-blocked
-  // with no recourse — the day-one regression this gate fixes.
+  // The interpreter guard hard-blocks credential-adjacent one-liners only on
+  // INTERACTIVE surfaces (a wired grant manager), where the model can be
+  // redirected to the prompt-able typed file tools. On HEADLESS surfaces (no
+  // grant manager) it fails open by default so legitimate automation is not
+  // hard-blocked with no recourse — the day-one regression this gate fixes.
+  //
+  // `cred` is credential-adjacent (matches SENSITIVE_PATH_SIGNAL) AND uses a
+  // quote-prefixed `~` that check 2's literal scan does NOT normalize, so the
+  // interpreter guard (check 1) is the sole decider — isolating this behavior.
+  const cred = 'python -c "open(\'~/.ssh/id_rsa\').read()"';
 
-  it('does NOT block interpreter eval on a headless surface (no grant manager wired)', () => {
+  it('does NOT block a credential-adjacent eval on a headless surface (no grant manager wired)', () => {
     const hook = createBashRestrictionHook({ getGrantManager: () => undefined });
-    expect(hook(ctx('python -c "1+1"')).decision).not.toBe('block');
-    expect(hook(ctx('sh -c "echo hi"')).decision).not.toBe('block');
-    expect(hook(ctx('node -e "console.log(1)"')).decision).not.toBe('block');
+    expect(hook(ctx(cred)).decision).not.toBe('block');
   });
 
-  it('DOES block interpreter eval on an interactive surface (grant manager wired)', () => {
+  it('DOES block a credential-adjacent eval on an interactive surface (grant manager wired)', () => {
     const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
-    expect(hook(ctx('python -c "1+1"')).decision).toBe('block');
+    expect(hook(ctx(cred)).decision).toBe('block');
   });
 
-  it('forceInterpreterGuard re-enables the denylist on headless surfaces', () => {
+  it('never blocks a pure-computation eval, interactive or headless', () => {
+    const interactive = createBashRestrictionHook({ getGrantManager: mockGrants });
+    const headless = createBashRestrictionHook({ getGrantManager: () => undefined });
+    expect(interactive(ctx('python -c "1+1"')).decision).not.toBe('block');
+    expect(headless(ctx('python -c "1+1"')).decision).not.toBe('block');
+  });
+
+  it('forceInterpreterGuard re-enables the guard on headless surfaces', () => {
     const hook = createBashRestrictionHook({
       getGrantManager: () => undefined,
       forceInterpreterGuard: true,
     });
-    const decision = hook(ctx('python -c "1+1"'));
+    const decision = hook(ctx(cred));
     expect(decision.decision).toBe('block');
     expect(decision.reason).toContain('Interpreter');
+  });
+
+  it('forceInterpreterGuard still does NOT block pure computation on headless', () => {
+    const hook = createBashRestrictionHook({
+      getGrantManager: () => undefined,
+      forceInterpreterGuard: true,
+    });
+    expect(hook(ctx('python -c "1+1"')).decision).not.toBe('block');
   });
 
   it('disableInterpreterGuard wins over forceInterpreterGuard (explicit OFF beats opt-in ON)', () => {
@@ -145,7 +217,7 @@ describe('createBashRestrictionHook — interpreter guard interactivity gate (H2
       disableInterpreterGuard: true,
       forceInterpreterGuard: true,
     });
-    expect(hook(ctx('python -c "1+1"')).decision).not.toBe('block');
+    expect(hook(ctx(cred)).decision).not.toBe('block');
   });
 
   it('forcing the guard on headless does not change the substring check (stays open)', () => {
@@ -154,7 +226,7 @@ describe('createBashRestrictionHook — interpreter guard interactivity gate (H2
       forceInterpreterGuard: true,
     });
     // A plain restricted-path cat (no interpreter) stays open on headless —
-    // forceInterpreterGuard only governs the interpreter denylist.
+    // forceInterpreterGuard only governs the interpreter guard.
     expect(hook(ctx(`cat ${homedir()}/.ssh/id_rsa`)).decision).not.toBe('block');
   });
 });
@@ -257,6 +329,64 @@ describe('createBashRestrictionHook — grant containment direction (F4 regressi
   });
 });
 
+describe('createBashRestrictionHook — context.grantManager precedence (#514)', () => {
+  // #514: SessionToolDispatcher injects the EXECUTING session's provider as
+  // context.grantManager (bash-restriction-hook.ts:229 —
+  // `context.grantManager ?? opts.getGrantManager()`), mirroring the same
+  // precedence path-approval-hook.test.ts pins in its own "#514" describe
+  // block ("context.grantManager takes precedence over opts.getGrantManager").
+  // Before this hook read context.grantManager at all, a forked child's
+  // restricted-root view was blind to its OWN grants and pinned to whichever
+  // session's ref happened to construct the hook closure.
+  const home = homedir();
+  const sshPath = `${home}/.ssh`;
+
+  function grantsGranting(extraRoot: string): GrantManager {
+    return {
+      addReadRoot: () => {},
+      addWriteRoot: () => {},
+      revokeRoot: () => {},
+      getGrants() {
+        return {
+          resolveBase: '/tmp/repo',
+          readRoots: ['/tmp/repo', extraRoot],
+          writeRoots: ['/tmp/repo'],
+        };
+      },
+    };
+  }
+
+  it('uses context.grantManager over opts.getGrantManager (the ref) for the restricted-root view (#514)', () => {
+    // Ref (opts.getGrantManager) grants ~/.ssh — permissive: if the hook fell
+    // back to the ref, `.ssh` would be dropped from restrictedSubstrings and
+    // the command would pass through unblocked.
+    const refMgr = grantsGranting(sshPath);
+    // Injected (context.grantManager) grants an UNRELATED root — `.ssh`
+    // remains restricted under its view.
+    const injectedMgr = grantsGranting('/some/other/granted-root');
+    const hook = createBashRestrictionHook({ getGrantManager: () => refMgr });
+
+    // Sanity check: using the ref alone (no injected context), this same
+    // command is NOT blocked — confirms the ref really is the permissive one.
+    const refOnlyDecision = hook(ctx(`cat ${sshPath}/id_rsa`));
+    expect(refOnlyDecision.decision).not.toBe('block');
+
+    // Now fire with the INJECTED (restrictive) manager on the context. If it
+    // wins over the ref, `.ssh` is still restricted under its own grants and
+    // the command blocks — proving the injected manager, not the ref, drove
+    // the decision.
+    const decision = hook({
+      event: 'PreToolUse',
+      toolName: 'bash',
+      input: { command: `cat ${sshPath}/id_rsa` },
+      grantManager: injectedMgr,
+    });
+
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toMatch(/restricted path/);
+  });
+});
+
 describe('createBashRestrictionHook — wiring failsafes', () => {
   it('fails open when grant manager is undefined (bootstrap race)', () => {
     const hook = createBashRestrictionHook({ getGrantManager: () => undefined });
@@ -268,5 +398,26 @@ describe('createBashRestrictionHook — wiring failsafes', () => {
   it('does NOT block on non-bash tools', () => {
     const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
     expect(hook({ event: 'PreToolUse', toolName: 'read_file', input: { file_path: '/etc/passwd' } }).decision).not.toBe('block');
+  });
+});
+
+describe('SENSITIVE_PATH_SIGNAL stays in sync with deriveRestrictedSubstrings', () => {
+  // Invariant: every restricted root check 2 protects must ALSO be matchable by
+  // check 1's lexical signal — otherwise an interpreter one-liner that assembles
+  // that root at runtime (a quote-prefixed `~`, which normalizeHomeRefs leaves
+  // alone) slips past BOTH checks. This test fails if a candidate is added to
+  // deriveRestrictedSubstrings without a corresponding SENSITIVE_PATH_SIGNAL
+  // fragment — the exact drift that once left ~/Library/Application Support
+  // (Chrome saved passwords / cookies) reachable via `python -c`.
+  const allCandidates = deriveRestrictedSubstrings({
+    resolveBase: undefined,
+    readRoots: [],
+    writeRoots: [],
+  });
+
+  it('covers every deriveRestrictedSubstrings candidate root', () => {
+    expect(allCandidates.length).toBeGreaterThan(0);
+    const uncovered = allCandidates.filter((c) => !SENSITIVE_PATH_SIGNAL.test(c));
+    expect(uncovered).toEqual([]);
   });
 });

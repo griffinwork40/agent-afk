@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { formatTokens } from './format-utils.js';
+import { formatTokens, formatToolCallStat } from './format-utils.js';
 
 describe('formatTokens', () => {
   it('renders "0" for non-finite inputs (undefined / NaN / Infinity) instead of "NaNm"', () => {
@@ -36,5 +36,22 @@ describe('formatTokens', () => {
   it('formats millions with an m suffix', () => {
     expect(formatTokens(1_000_000)).toBe('1m');
     expect(formatTokens(1_500_000)).toBe('1.5m');
+  });
+});
+
+describe('formatToolCallStat', () => {
+  it('pluralizes the noun on the count (1 is singular, everything else plural)', () => {
+    expect(formatToolCallStat(1)).toBe('1 tool call');
+    expect(formatToolCallStat(0)).toBe('0 tool calls');
+    expect(formatToolCallStat(2)).toBe('2 tool calls');
+    expect(formatToolCallStat(29)).toBe('29 tool calls');
+  });
+
+  it('uses "tool call(s)" wording — the count of CALLS made, not the tool allowlist size', () => {
+    // Guards the disambiguation this helper exists for: `/info` renders "N tools"
+    // for the AVAILABLE-tool count, so tool-CALL tallies must read "tool calls"
+    // (matching `afk trace show`) to avoid the two metrics colliding on one word.
+    expect(formatToolCallStat(58)).toContain('tool call');
+    expect(formatToolCallStat(58)).not.toBe('58 tools');
   });
 });

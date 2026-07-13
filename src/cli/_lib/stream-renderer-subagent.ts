@@ -62,7 +62,7 @@ export interface SubagentCtx {
    * silently dropping thinking events when the field is omitted by callers
    * (tests, future surfaces).
    */
-  thinkingMode: 'off' | 'summary' | 'live';
+  thinkingMode: 'off' | 'summary' | 'live' | 'digest';
   /**
    * Reference to the parent orchestrator's context. Used by subagent
    * handlers to compose the full overlay frame (stage rail + thinking

@@ -23,6 +23,7 @@
  */
 
 import { existsSync, readFileSync, copyFileSync, chmodSync } from 'fs';
+import type { ModelSlotBinding } from '../agent/session/model-slots.js';
 import { getEnvConfigPath, getJsonConfigPath } from '../paths.js';
 import { getEnvVarMeta, ENV_REGISTRY, isEnvVarSet } from './env.js';
 import { atomicWriteFile, upsertEnvVar, removeEnvVar, readEnvVarFromFile, readEnvFile } from '../utils/envFile.js';
@@ -269,7 +270,7 @@ function assertConfigWritable(path: string, allowHumanOnly: boolean | undefined)
 export interface ConfigWriteResult {
   path: string;
   class: ConfigKeyClass;
-  value: string | number | boolean | number[];
+  value: string | number | boolean | number[] | ModelSlotBinding;
   persistedTo: string;
 }
 

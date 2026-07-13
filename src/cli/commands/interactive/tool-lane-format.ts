@@ -124,6 +124,33 @@ export function formatOutcome(
 }
 
 /**
+ * Concurrency-batch badge for a root tool row: ` ∥i/N` (dim) when the call ran
+ * in a parallel wave of N>1 calls dispatched together, else `''`.
+ *
+ * Sourced from the dispatcher's authoritative post-partition batch (via
+ * `ToolResultChunk.batchIndex`/`.batchSize`), so it is collision-incapable: it
+ * can only appear on a call that genuinely shared a batch, never on a
+ * back-to-back sequential dispatch. Every concurrency-unsafe tool (bash,
+ * write_file, …) is its own singleton batch (batchSize=1) and is never badged.
+ * This is the one signal that tells a parallel wave apart from sequential
+ * dispatch once both have committed to append-only scrollback — where they are
+ * otherwise visually identical (a done ◉ row followed by an in-flight ◉ row).
+ * The `∥` (U+2225 PARALLEL TO) reads as "ran in parallel"; `i/N` is the 1-based
+ * position within the wave.
+ */
+export function batchBadge(chunk: ToolResultChunk | undefined): string {
+  if (
+    !chunk ||
+    typeof chunk.batchSize !== 'number' ||
+    typeof chunk.batchIndex !== 'number' ||
+    chunk.batchSize <= 1
+  ) {
+    return '';
+  }
+  return palette.dim(` ∥${chunk.batchIndex}/${chunk.batchSize}`);
+}
+
+/**
  * Format tool output as a two-line block (emitted together so both render
  * reliably). When `toolPrefix` is present the first line shows the tool
  * call; the second shows the outcome with a `⎿` connector.

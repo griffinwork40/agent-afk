@@ -164,6 +164,55 @@ describe('classifyBashCommand', () => {
     });
   });
 
+  // ── O1 (MED-HIGH): git/gh/curl/pkg verbs inside quoted args must not block ──
+  // Tier-1 fix regression guard: the git/gh/curl/pkg/sed rules were moved from
+  // RAW_RULES to STRIPPED_RULES so a recon command that merely MENTIONS a
+  // mutating verb inside a quoted string is not misread as an invocation. Every
+  // `allowed` case below was BLOCKED before the move (a false positive that hurt
+  // git-history recon in `git-investigator`); every `blocked` case proves a real
+  // (unquoted) invocation — and command substitution — is still caught.
+  describe('git/gh/curl/pkg verbs inside quoted args are not over-blocked', () => {
+    const allowed: string[] = [
+      'rg "git push"',
+      'grep -rn "git commit" .',
+      'echo "remember to git push later"',
+      "grep -rn 'git reset --hard' .",
+      'rg "gh pr create" src',
+      'grep -rn "npm install" .',
+      'rg "sed -i" src',
+      'grep -rn "curl -X POST" .',
+      'git log -S "push"', // quoted pickaxe value — searching history, not pushing
+    ];
+    for (const cmd of allowed) {
+      it(`allows: ${cmd}`, () => {
+        expect(classifyBashCommand(cmd).mutating, `expected "${cmd}" read-only`).toBe(false);
+      });
+    }
+
+    // Regression: real (unquoted) invocations MUST still be caught after the move.
+    // A quoted ARGUMENT (commit message, sed script) does not hide the real verb;
+    // a `$(…)` command substitution is preserved (not stripped) so it is caught.
+    const blocked: Array<[string, string]> = [
+      ['git push origin main', 'real git push'],
+      ['git commit -m "msg"', 'real git commit with quoted message'],
+      ['gh pr create -t t -b b', 'real gh pr create'],
+      ['npm install left-pad', 'real npm install'],
+      ['sed -i "s/a/b/" f', 'real sed -i with quoted script'],
+      ['curl -X POST https://x -d @body', 'real curl POST'],
+      ['echo "$(git push)"', 'git push inside command substitution'],
+    ];
+    for (const [cmd, label] of blocked) {
+      it(`blocks: ${label} (${cmd})`, () => {
+        expect(classifyBashCommand(cmd).mutating, `expected "${cmd}" mutating`).toBe(true);
+      });
+    }
+
+    // Known residual (Tier 2, not fixed here): a BARE unquoted pickaxe/grep value
+    // that collides with a git verb — `git log -S push`, `git log --grep push` —
+    // is still over-blocked, because the arg is unquoted and matches the verb
+    // alternation. Fixing it needs subcommand-position anchoring; tracked separately.
+  });
+
   // ── Finding 2 (MED): git config read forms must pass ──────────────────────
   describe('git config read forms are not over-blocked', () => {
     const allowed: string[] = [

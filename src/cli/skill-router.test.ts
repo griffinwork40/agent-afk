@@ -18,9 +18,10 @@ import { _resetRegistry, registerSkill } from '../skills/index.js';
 import { tryRouteSkill } from './commands/skill-router.js';
 import type { IAgentSession } from '../agent/types.js';
 
-// Import all skill modules to trigger their registerSkill() side-effects
+// Import all skill modules to trigger their registerSkill() side-effects.
+// diagnose is now a bundled-plugin SKILL.md (not a TS registry skill), so it
+// is not imported/registered here — it resolves via the plugin scanner.
 import '../skills/mint/index.js';
-import '../skills/diagnose/index.js';
 
 // Create a mock session
 function createMockSession(): IAgentSession {
@@ -315,7 +316,6 @@ describe('Skill Router', () => {
       it('should have all built-in skills imported and registered', async () => {
         const skillNames = [
           'mint',
-          'diagnose',
         ];
 
         for (const name of skillNames) {

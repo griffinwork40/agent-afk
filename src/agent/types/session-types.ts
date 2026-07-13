@@ -235,12 +235,14 @@ export interface IAgentSession {
   /**
    * Return and CLEAR any implement-turn queued by an approved `exit_plan_mode`
    * tool call. Atomically applies the deferred permission-mode flip (closing the
-   * mid-turn TOCTOU window) then returns the seed message. The REPL drains this
-   * post-turn and auto-submits the message as a fresh user turn (reproducing
+   * mid-turn TOCTOU window) then returns BOTH the seed message AND the mode it
+   * flipped to. The REPL drains this post-turn: it mirrors `mode` onto
+   * `stats.permissionMode` (the value the plan-mode gate and prompt read — see
+   * #495) and auto-submits `message` as a fresh user turn (reproducing
    * `/plan off`'s save-and-implement handoff). Returns `undefined` when nothing
-   * is pending.
+   * is pending (or when the deferred flip rejected and the seed was dropped).
    */
-  takePendingPlanExitSeed(): Promise<string | undefined>;
+  takePendingPlanExitSeed(): Promise<{ message: string; mode: PermissionMode } | undefined>;
 
   waitForInitialization(): Promise<SessionMetadata>;
 
@@ -257,10 +259,14 @@ export interface IAgentSession {
   getOutputStream(): AsyncIterable<OutputEvent>;
 
   /**
-   * Get a narrow reference to the input stream for pushing user messages.
-   * Used by SubagentStop handlers to inject context into the parent's next turn.
+   * Get a narrow reference to the session's input channels.
+   *
+   * `pushUserMessage` starts a standalone turn (live steering);
+   * `queueFrameworkContext` holds hook-generated context (SubagentStop
+   * `injectContext`) to be prepended to the next real user message so it can
+   * never displace one. See `InputStreamRef` for the full contract.
    */
-  getInputStreamRef(): Pick<InputStreamRef, 'pushUserMessage'>;
+  getInputStreamRef(): Pick<InputStreamRef, 'pushUserMessage' | 'queueFrameworkContext'>;
 
   supportedCommands(): Promise<SlashCommand[]>;
   supportedModels(): Promise<ModelInfo[]>;

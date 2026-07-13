@@ -59,10 +59,10 @@ export function setInteractiveUpdateNotices(
 }
 
 function parseThinkingUiMode(raw: string): ThinkingUiMode {
-  if (raw === 'summary' || raw === 'live' || raw === 'off') {
+  if (raw === 'summary' || raw === 'live' || raw === 'digest' || raw === 'off') {
     return raw;
   }
-  throw new Error(`Invalid --thinking-ui value: ${raw}. Expected summary|live|off`);
+  throw new Error(`Invalid --thinking-ui value: ${raw}. Expected summary|live|digest|off`);
 }
 
 /**
@@ -132,6 +132,34 @@ export function isAutonameEnabled(options: CliOptions, config: CliConfig): boole
 }
 
 /**
+ * Resolve the REPL thinking-display mode with precedence:
+ *   1. `--thinking-ui <mode>` CLI flag (already validated by parseThinkingUiMode)
+ *   2. `AFK_THINKING_UI` env (validated here; invalid values ignored, not fatal)
+ *   3. `interactive.thinkingUi` from `afk.config.json`
+ *   4. Default: `'live'`
+ *
+ * Display-only — the mode changes how extended-thinking blocks render in the
+ * REPL, never whether thinking runs. Mirrors `isAutonameEnabled`'s
+ * flag > env > config > default shape so a user can set a persistent default
+ * (env or config) that the per-launch `--thinking-ui` flag still overrides.
+ */
+export function resolveThinkingUi(options: CliOptions, config: CliConfig): ThinkingUiMode {
+  if (options.thinkingUi !== undefined) return options.thinkingUi;
+  const envRaw = env.AFK_THINKING_UI;
+  if (envRaw !== undefined) {
+    const lowered = envRaw.trim().toLowerCase();
+    if (lowered === 'summary' || lowered === 'live' || lowered === 'digest' || lowered === 'off') {
+      return lowered;
+    }
+    // Invalid env value → fall through to config/default rather than throw;
+    // an env typo shouldn't hard-fail an interactive launch.
+  }
+  const fromConfig = config.interactive?.thinkingUi;
+  if (fromConfig !== undefined) return fromConfig;
+  return 'live';
+}
+
+/**
  * The hint line rendered under the welcome banner at session startup.
  *
  * Kept deliberately short and first-session-oriented: it teaches the handful
@@ -153,6 +181,11 @@ export function registerInteractiveCommand(program: Command): void {
   program
     .command('interactive', { isDefault: true })
     .description('Start interactive chat session')
+    .argument(
+      '[input...]',
+      'Optional first message — or a /slash-command — auto-submitted as the opening turn. ' +
+        'E.g. `afk "what does this project do"` or `afk /review`. A bare `afk` starts an empty REPL.',
+    )
     .option(
       '-m, --model <model>',
       'Model to use. Short aliases: opus|opus_1m|sonnet|sonnet_1m|haiku. ' +
@@ -161,7 +194,7 @@ export function registerInteractiveCommand(program: Command): void {
     )
     .option('--max-turns <number>', 'Maximum conversation turns', '100')
     .option('--thinking <mode>', "Thinking mode: 'adaptive' | 'disabled' | 'enabled:<N>'", 'enabled:max')
-    .option('--thinking-ui <mode>', 'Thinking display mode: summary|live|off', parseThinkingUiMode, 'live')
+    .option('--thinking-ui <mode>', 'Thinking display mode: summary|live|digest|off. Default live. Also: AFK_THINKING_UI env, or interactive.thinkingUi in afk.config.json.', parseThinkingUiMode)
     .option('--effort <level>', 'Effort level: low|medium|high|xhigh|max')
     .option('--max-output-tokens <n|max>', "Per-response output cap ('max' = model ceiling). Env: AFK_MAX_OUTPUT_TOKENS")
     .option('--resume <id>', 'Resume a persisted SDK session by id')
@@ -190,7 +223,7 @@ export function registerInteractiveCommand(program: Command): void {
       '--mcp-config <path>',
       'Path to an additional MCP config file (highest priority — merges over ~/.afk/config/mcp.json, project-local .mcp.json, and plugin-contributed configs). File format identical to mcp.json.',
     )
-    .action(async (options: CliOptions) => {
+    .action(async (input: string[], options: CliOptions) => {
       if (options.debug) {
         process.env['AFK_DEBUG'] = '1';
       }
@@ -264,6 +297,12 @@ export function registerInteractiveCommand(program: Command): void {
       // and (later) the first-turn rename use the same value. Env wins
       // over config; both yield to an explicit CLI string in `--worktree`.
       const cliConfig = loadConfig();
+      // Resolve the thinking-display mode (--thinking-ui flag > AFK_THINKING_UI
+      // env > interactive.thinkingUi config > 'live') and assign it back onto
+      // options so the downstream bootstrap seeding (stats.thinkingUi =
+      // options.thinkingUi) and the /thinking runtime toggle start from the
+      // resolved persistent default.
+      options.thinkingUi = resolveThinkingUi(options, cliConfig);
       const branchPrefixOverride =
         env.AFK_WORKTREE_BRANCH_PREFIX ??
         cliConfig.interactive?.worktreeBranchPrefix;
@@ -353,6 +392,16 @@ export function registerInteractiveCommand(program: Command): void {
         spinner.fail('Invalid options');
         handleCommandError(err);
       }
+
+      // Seed the opening turn from the launch argument (`afk "prompt"` or
+      // `afk /review foo`). Variadic operands are joined so an unquoted
+      // slash-command's args survive (`/review foo` → "/review foo"); a bare
+      // `afk` yields "" and seeds nothing. The REPL loop promotes a non-empty
+      // seed into its seedBuffer fast-path (see loop-iteration.ts), so a plain
+      // prompt runs a turn and a /command routes through the slash dispatcher —
+      // identical to the user typing it as the first line.
+      const seed = input.join(' ').trim();
+      if (seed) ctx.initialInput = seed;
 
       // First-turn worktree hook — born-named creation. Wired only on the
       // deferred path (set above iff auto-named `-w` + autoname enabled +

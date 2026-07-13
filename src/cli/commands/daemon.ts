@@ -21,7 +21,7 @@ import {
 import { loadConfig } from '../config.js';
 import type { AgentConfig, ThinkingConfig, EffortLevel, AgentModelInput } from '../../agent/types.js';
 import type { ScheduledTask } from '../../agent/daemon/triggers.js';
-import { parseThinking, parseEffort, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, parseProvider, getDefaultSubagentModel } from '../shared-helpers.js';
+import { parseThinking, parseEffort, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, parseProvider, getDefaultSubagentModel, getMaxToolUseIterations } from '../shared-helpers.js';
 import { loadSchedules, toScheduledTask } from '../../agent/daemon/schedule-store.js';
 import { AgentSession } from '../../agent/session.js';
 import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
@@ -29,8 +29,9 @@ import { SubagentManager } from '../../agent/subagent.js';
 import { SubagentExecutor } from '../../agent/tools/subagent-executor.js';
 import { SkillExecutor } from '../../agent/tools/skill-executor.js';
 import { ComposeExecutor } from '../../agent/tools/compose-executor.js';
-import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
+import { ensurePluginEntrypointsLoaded, discoverPluginAgents } from '../../agent/tools/skill-bridge.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory, createStubParentSession } from '../../agent/tools/nesting.js';
+import { loadAgentRegistry } from '../../agent/agents/index.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import { BUILTIN_TOOL_NAMES } from '../../agent/tools/schemas.js';
 import { MEMORY_TOOL_NAMES } from '../../agent/memory/index.js';
@@ -90,13 +91,27 @@ export function buildDaemonSessionFactory(
 
     const rootManager = new SubagentManager({
       ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
+      // Parent model → provider, so the fork-time credential fallback never
+      // crosses the provider boundary (see SubagentManager.parentProvider).
+      parentModel: opts.model,
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      // Origin attribution: the daemon is a `daemon` entrypoint. Thread the
+      // surface so forked `agent`-tool children inherit origin 'daemon' (not
+      // 'unknown') via forkSubagent's parentSurface fill. Mirrors farm.ts.
+      surface: 'daemon',
     });
 
     const childProviderFactory = createChildProviderFactory(
       opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {},
     );
+
+    // Named-agent registry: session-static scan enabling `agent_type`
+    // dispatch for daemon-run tasks (builtin + user + project scopes).
+    const agentRegistry = loadAgentRegistry({
+      ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      pluginAgents: discoverPluginAgents(),
+    });
 
     const childSkillExecutorFactory = createChildSkillExecutorFactory(
       opts.model,
@@ -112,6 +127,15 @@ export function buildDaemonSessionFactory(
       getApiKeyForModel,
       // Surface: daemon skill executor children inherit origin 'daemon'.
       'daemon',
+      // Resolved default-subagent model threaded into nested skill executors
+      // so skill→skill / skill→agent chains inherit the SAME policy as the
+      // top-level executors — closing the leak where a nested subagent
+      // silently defaulted to Anthropic `sonnet` under an OpenAI-routed parent.
+      getDefaultSubagentModel(opts.model),
+      // Named-agent registry propagates to nested skill executors.
+      agentRegistry,
+      // OpenAI endpoint → nested restricted/depth-cap provider builders.
+      opts.openaiBaseUrl,
     );
 
     const subagentExecutor = new SubagentExecutor({
@@ -122,6 +146,7 @@ export function buildDaemonSessionFactory(
       defaultConfig: {
         ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
         ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
+        ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
       },
       defaultSubagentModel: getDefaultSubagentModel(opts.model),
       childProviderFactory,
@@ -130,6 +155,9 @@ export function buildDaemonSessionFactory(
       resolveApiKeyForModel: getApiKeyForModel,
       depth: 0,
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      // Named-agent dispatch: registry + `inherit` anchor.
+      agentRegistry,
+      parentModel: opts.model,
     });
 
     const skillExecutor = new SkillExecutor({
@@ -141,10 +169,16 @@ export function buildDaemonSessionFactory(
       ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
       childProviderFactory,
       childSkillExecutorFactory,
+      // Named-agent registry for skill-forked orchestrator children.
+      agentRegistry,
       // Per-model credential resolver — mirrors bootstrap.ts / chat.ts.
       resolveApiKeyForModel: getApiKeyForModel,
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
+      ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      // Read-scope inheritance (#547): skill-forked children inherit the parent
+      // session's read scope via the root manager. See bootstrap.ts.
+      getReadScopeInputs: () => rootManager.getReadScopeInputs(),
     });
 
     const composeExecutor = new ComposeExecutor({
@@ -154,6 +188,9 @@ export function buildDaemonSessionFactory(
       ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
       // Per-model credential resolver — mirrors #640 for the compose fork-path.
       resolveApiKeyForModel: getApiKeyForModel,
+      // Read-scope inheritance (#547): DAG nodes inherit the parent session's
+      // read scope via the root manager. See bootstrap.ts.
+      getReadScopeInputs: () => rootManager.getReadScopeInputs(),
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
@@ -187,6 +224,13 @@ export function buildDaemonSessionFactory(
       ...(mcpManager !== undefined ? { mcpManager } : {}),
     });
 
+    // Opt-in top-level tool-use-round ceiling. Explicit caller config wins;
+    // AFK_MAX_TOOL_USE_ITERATIONS is the fallback (undefined/<=0 → unlimited, no
+    // behavior change). Resolved after `...config` so an explicit value on the
+    // caller's config takes precedence over the env default. This is the
+    // production chokepoint the scheduler routes every task through, so it also
+    // caps scheduler/cron-spawned top-level sessions.
+    const daemonMaxToolUseIterations = config.maxToolUseIterations ?? getMaxToolUseIterations();
     return new AgentSession(injectHotMemory({
       ...config,
       provider,
@@ -199,6 +243,9 @@ export function buildDaemonSessionFactory(
       // `...config` for the same reason as `isNonInteractive`: every daemon +
       // scheduler/cron session routes through here → 'daemon'.
       surface: 'daemon',
+      ...(daemonMaxToolUseIterations !== undefined
+        ? { maxToolUseIterations: daemonMaxToolUseIterations }
+        : {}),
     }));
   };
 }

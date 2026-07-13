@@ -122,7 +122,7 @@ optional; unset fields fall through to env vars or built-in defaults.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `model` | `string` | `"sonnet"` | Default model for all surfaces. Accepts Claude short aliases (`sonnet`, `haiku`, `opus`) and full provider-native ids (`gpt-4o`, `mlx-community/Qwen3-30B-A3B-4bit`). Env override: `AFK_MODEL`. |
-| `maxTokens` | `number` | `4096` | Maximum total tokens per turn (input + output). Env override: `AFK_MAX_TOKENS`. |
+| `maxTokens` | `number` | `4096` | **Deprecated / inert** — not read by the generation path. Use `AFK_MAX_OUTPUT_TOKENS` / `--max-output-tokens` to cap per-response output. |
 | `temperature` | `number` | `1.0` | Sampling temperature. Env override: `AFK_TEMPERATURE`. |
 | `systemPrompt` | `string` | — | Operator overlay appended to the framework base prompt (tier 2). When set, `AFK.md` is not loaded. Env override: `AFK_SYSTEM_PROMPT` (tier 1, wins over this). |
 | `updatePolicy` | `"notify" \| "auto" \| "off"` | `"notify"` | Controls how AFK handles available CLI updates. `notify` prints a message; `auto` applies automatically; `off` disables checks. |
@@ -316,12 +316,20 @@ user-global file.
 | `SessionEnd` | When a session finishes. | `hook_event_name`, `session_id`, `reason` | All |
 | `SubagentStart` | When a subagent session is forked. | `hook_event_name`, `session_id` | All |
 | `SubagentStop` | When a subagent session finishes. `hookSpecificOutput.additionalContext` injects text into the parent session. | `hook_event_name`, `session_id` | All |
-| `Stop` | After a main-session turn completes (end of one agent turn). Dispatched from the REPL turn loop only — subagents do not fire it. | `hook_event_name`, `session_id` | REPL only |
-| `UserPromptSubmit` | When the user submits a prompt in the REPL, after shell injection and forward-manifest stitching but before `runTurn`. Handler can return `injectContext` to prepend text to the prompt. | `hook_event_name`, `session_id`, `prompt` | REPL only |
+| `Stop` | After a main-session turn completes (end of one agent turn). Dispatched from the REPL turn loop only — subagents do not fire it. `hookSpecificOutput.additionalContext` is stashed and prepended to the **next** turn's prompt — the same next-turn delivery contract as `UserPromptSubmit` below, but fired from the turn-completion boundary rather than the submission boundary. | `hook_event_name`, `session_id` | REPL only |
+| `UserPromptSubmit` | When the user submits a prompt in the REPL, after shell injection and forward-manifest stitching but before `runTurn`. Handler can return `injectContext` (`hookSpecificOutput.additionalContext`) to prepend text to the prompt. | `hook_event_name`, `session_id`, `prompt` | REPL only |
 | `PreCompact` | Before context compaction runs. `trigger` is `"manual"` (via `/compact` command) or `"auto"` (threshold-based, reserved for future wiring). | `hook_event_name`, `session_id`, `trigger` (`null` when unset) | All |
 | `PostToolUseFailure` | After a tool call throws an error. Distinct from `PostToolUse` — only one fires per call. `tool_input` is intentionally not forwarded to shell hooks to avoid exposing sensitive inputs to arbitrary scripts. | `hook_event_name`, `session_id`, `tool_name`, `error` | All |
 
 Every event's payload also includes `cwd` and `transcript_path` (the latter is `null` when no transcript file is tracked).
+
+**A `Stop` hook's output reaches the model.** Because `Stop` fires after every
+REPL turn, a `Stop` shell hook that returns `hookSpecificOutput.additionalContext`
+feeds that text into the **next** turn's prompt — the same channel
+`UserPromptSubmit` uses. This is the general `injectContext` primitive (see
+`src/agent/hooks.ts`) applied to a config-driven shell hook; it introduces no
+new trust boundary, since it only fires when you have already opted a `Stop`
+hook in under the `enableShellHooks` gate below.
 
 #### Matcher group fields
 
@@ -342,7 +350,7 @@ Every event's payload also includes `cwd` and `transcript_path` (the latter is `
 
 | Exit code | Meaning |
 |-----------|---------|
-| `0` | Continue. Optional JSON stdout may carry `{ "decision": "block", "reason": "…" }` to block, or `{ "hookSpecificOutput": { "additionalContext": "…" } }` for `SubagentStop` context injection. |
+| `0` | Continue. Optional JSON stdout may carry `{ "decision": "block", "reason": "…" }` to block, or `{ "hookSpecificOutput": { "additionalContext": "…" } }` for context injection. Effect depends on the event — see `SubagentStop`, `Stop`, and `UserPromptSubmit` in the Event keys table above. |
 | `2` | Block the operation. `stderr` becomes the reason shown to users. |
 | other | Non-blocking error — logged, operation continues. |
 

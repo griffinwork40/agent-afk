@@ -28,6 +28,7 @@ import { createPlanModeGate } from '../../plan-mode-gate.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import type { ToolHandler } from '../../tools/types.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../anthropic-direct/plan-mode-addendum.js';
+import { AFK_MODE_ADDENDUM_TEXT } from '../anthropic-direct/afk-mode-addendum.js';
 import { computeLineDiff } from '../../../utils/diff.js';
 import type { ToolCall, ToolResult } from '../anthropic-direct/types.js';
 import { setSlotBindings, resetSlotBindings } from '../../session/model-slots.js';
@@ -637,9 +638,9 @@ describe('OpenAICompatibleQuery — model-slot resolution in request body', () =
 
   it('resolves a slot alias to its bound id before sending (closes the subagent-on-ChatGPT-backend gap)', async () => {
     // Bind every tier to gpt-5.5 — the only model a ChatGPT subscription
-    // accepts. A subagent/skill that picks `sonnet` (the alias the LLM copies
-    // from the agent tool's examples) must therefore reach the backend AS
-    // gpt-5.5, not the literal string `sonnet`.
+    // accepts. A subagent/skill that picks `medium` (the tier alias the LLM
+    // copies from the agent tool's examples) must therefore reach the backend AS
+    // gpt-5.5, not the literal string `medium`.
     setSlotBindings({
       local: { id: '' },
       small: { id: 'gpt-5.5' },
@@ -650,11 +651,11 @@ describe('OpenAICompatibleQuery — model-slot resolution in request body', () =
       { choices: [{ delta: { content: 'ok' } }] },
       { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
     ];
-    const q = buildQueryFromConfig(baseConfig({ model: 'sonnet' }), singleInput('hi'));
+    const q = buildQueryFromConfig(baseConfig({ model: 'medium' }), singleInput('hi'));
     const events = await collect(q);
     const sentModel = (createCalls[0]!.args as { model: string }).model;
     expect(sentModel).toBe('gpt-5.5');
-    expect(sentModel).not.toBe('sonnet');
+    expect(sentModel).not.toBe('medium');
     // The normalized session.init reflects the resolved id too.
     const init = events[0];
     if (init?.type === 'session.init') expect(init.info.model).toBe('gpt-5.5');
@@ -1060,7 +1061,7 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
     q.close();
   });
 
-  it('does not expose `compact` (history mgmt deferred)', () => {
+  it('exposes `compact` and no-ops (history-too-short) on an empty session', async () => {
     const q = new OpenAICompatibleQuery({
       auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
       model: 'gpt-4o-mini',
@@ -1068,8 +1069,145 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
       promptStream: singleInput('x'),
       config: baseConfig(),
     });
-    expect(q.compact).toBeUndefined();
+    expect(typeof q.compact).toBe('function');
+    // No turns have run, so there are no fresh user turns older than the keep
+    // window — compaction is a typed no-op and never calls the summarizer.
+    const result = await q.compact();
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe('history-too-short');
     q.close();
+  });
+
+  it('compact bails `unsupported-wire-mode` on a responses-mode (ChatGPT-OAuth) session', async () => {
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'chatgpt-oauth', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('x'),
+      config: baseConfig(),
+    });
+    // A ChatGPT-OAuth session is forced to the responses wire, whose backend
+    // would reject the Chat Completions summarize call — so compact() must bail
+    // early with an actionable reason rather than issue a doomed request.
+    const result = await q.compact();
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe('unsupported-wire-mode');
+    q.close();
+  });
+
+  it("compact bails 'no-usable-auth' when no client was constructed (null auth)", async () => {
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: null, source: 'no-usable-auth' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('x'),
+      config: baseConfig(),
+    });
+    // No usable auth → no client. This is distinct from a closed session
+    // lifecycle, so the reason must be the specific 'no-usable-auth', not the
+    // generic 'session-closed' it previously reused.
+    const result = await q.compact();
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe('no-usable-auth');
+    q.close();
+  });
+
+  it('getContextUsage().isAutoCompactEnabled reflects config.autoCompact', async () => {
+    const on = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('x'),
+      config: baseConfig({ autoCompact: true }),
+    });
+    expect((await on.getContextUsage()).isAutoCompactEnabled).toBe(true);
+    on.close();
+
+    const off = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('x'),
+      config: baseConfig(),
+    });
+    expect((await off.getContextUsage()).isAutoCompactEnabled).toBe(false);
+    off.close();
+  });
+
+  it('auto-compacts at the turn boundary once the context-window threshold is crossed', async () => {
+    // Each streaming turn reports a context-window footprint (~200k) far over
+    // the 90% default threshold for gpt-4o-mini's 128k window. Compaction is
+    // the only thing that issues a NON-streaming Chat Completions call
+    // (the summarize), so recording that call proves the turn-boundary trigger
+    // fired compactHistory('token_threshold'). Three fresh user turns are the
+    // minimum for a real boundary (keepLastN defaults to 2).
+    const summarizeCalls: unknown[] = [];
+    __setOpenAIClientFactory(
+      () =>
+        ({
+          chat: {
+            completions: {
+              create: async (args: { stream?: boolean }) => {
+                if (args.stream) {
+                  return (async function* () {
+                    yield {
+                      choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+                      usage: { prompt_tokens: 200_000, completion_tokens: 10, total_tokens: 200_010 },
+                    } as OpenAIChunk;
+                  })();
+                }
+                summarizeCalls.push(args);
+                return { choices: [{ message: { content: 'AUTO-SUMMARY' } }] };
+              },
+            },
+          },
+        }) as unknown as OpenAI,
+    );
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: multiInput('u1', 'u2', 'u3'),
+      config: baseConfig({ autoCompact: true }),
+    });
+    await collect(q);
+    // Exactly one compaction: history-too-short after turn 1, nothing-to-
+    // summarize after turn 2 (boundary 0), then a real splice after turn 3.
+    expect(summarizeCalls).toHaveLength(1);
+  });
+
+  it('does NOT auto-compact when config.autoCompact is unset (default off)', async () => {
+    const summarizeCalls: unknown[] = [];
+    __setOpenAIClientFactory(
+      () =>
+        ({
+          chat: {
+            completions: {
+              create: async (args: { stream?: boolean }) => {
+                if (args.stream) {
+                  return (async function* () {
+                    yield {
+                      choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+                      usage: { prompt_tokens: 200_000, completion_tokens: 10, total_tokens: 200_010 },
+                    } as OpenAIChunk;
+                  })();
+                }
+                summarizeCalls.push(args);
+                return { choices: [{ message: { content: 'AUTO-SUMMARY' } }] };
+              },
+            },
+          },
+        }) as unknown as OpenAI,
+    );
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: multiInput('u1', 'u2', 'u3'),
+      config: baseConfig(),
+    });
+    await collect(q);
+    expect(summarizeCalls).toHaveLength(0);
   });
 
   it('setCwd forwards cwd to dispatcher.setResolveBase (U1)', () => {
@@ -1159,6 +1297,61 @@ describe('OpenAICompatibleQuery — plan-mode addendum (U2)', () => {
     const args = createCalls[0]!.args as { messages: Array<{ role: string; content: string }> };
     expect(args.messages[0]?.content).toBe('be helpful');
     expect(args.messages[0]?.content).not.toContain(PLAN_MODE_ADDENDUM_TEXT);
+  });
+});
+
+describe('OpenAICompatibleQuery — AFK-mode addendum (U2-afk)', () => {
+  it('appends AFK_MODE_ADDENDUM_TEXT to system message when permissionMode is autonomous', async () => {
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ];
+    const q = buildQueryFromConfig(
+      baseConfig({ permissionMode: 'autonomous', systemPrompt: 'be helpful' }),
+      singleInput('hi'),
+    );
+    await collect(q);
+    expect(createCalls).toHaveLength(1);
+    const args = createCalls[0]!.args as { messages: Array<{ role: string; content: string }> };
+    expect(args.messages[0]?.role).toBe('system');
+    expect(args.messages[0]?.content).toContain('be helpful');
+    expect(args.messages[0]?.content).toContain(AFK_MODE_ADDENDUM_TEXT);
+  });
+
+  it('does not append AFK_MODE_ADDENDUM_TEXT when permissionMode is default', async () => {
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ];
+    const q = buildQueryFromConfig(
+      baseConfig({ systemPrompt: 'be helpful' }),
+      singleInput('hi'),
+    );
+    await collect(q);
+    const args = createCalls[0]!.args as { messages: Array<{ role: string; content: string }> };
+    expect(args.messages[0]?.content).toBe('be helpful');
+    expect(args.messages[0]?.content).not.toContain(AFK_MODE_ADDENDUM_TEXT);
+  });
+
+  it('does not append PLAN_MODE_ADDENDUM_TEXT when permissionMode is autonomous (modes are mutually exclusive)', async () => {
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ];
+    const q = buildQueryFromConfig(
+      baseConfig({ permissionMode: 'autonomous', systemPrompt: 'be helpful' }),
+      singleInput('hi'),
+    );
+    await collect(q);
+    const args = createCalls[0]!.args as { messages: Array<{ role: string; content: string }> };
+    expect(args.messages[0]?.content).not.toContain(PLAN_MODE_ADDENDUM_TEXT);
+    expect(args.messages[0]?.content).toContain(AFK_MODE_ADDENDUM_TEXT);
   });
 });
 
@@ -1467,6 +1660,64 @@ describe('OpenAICompatibleQuery — progress events (I2)', () => {
       // durationMs is a non-negative number
       expect(typeof p0.progress.durationMs).toBe('number');
       expect(p0.progress.durationMs).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  // Regression (PR 508 codex review, P2): a single round that batches multiple
+  // parallel tool_calls must report `toolUses` as the actual number of tool
+  // CALLS — not "1" (the round count). Before the fix `toolUses` carried the
+  // round counter, so 2 parallel calls in round 1 rendered as "1 tool call".
+  it('progress.toolUses reflects actual tool-call count when a round batches parallel calls', async () => {
+    const { dispatcher } = makeDispatcherForPR2();
+    scriptedTurns = [
+      {
+        // Round 1: TWO parallel tool_calls (indices 0 and 1) in one turn.
+        chunks: [
+          {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    { index: 0, id: 'q1', type: 'function', function: { name: 'echo', arguments: '{"msg":"a"}' } },
+                    { index: 1, id: 'q2', type: 'function', function: { name: 'echo', arguments: '{"msg":"b"}' } },
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+            usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+          },
+        ],
+      },
+      {
+        chunks: [
+          {
+            choices: [{ delta: { content: 'all done' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 20, completion_tokens: 2, total_tokens: 22 },
+          },
+        ],
+      },
+    ];
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'test' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('go'),
+      config: baseConfig(),
+      toolDispatcher: dispatcher,
+    });
+    const events = await collect(q);
+    const progressEvents = events.filter((e) => e.type === 'progress');
+    // One progress event (one round), but it dispatched 2 calls.
+    expect(progressEvents).toHaveLength(1);
+    const only = progressEvents[0];
+    if (only?.type === 'progress') {
+      // The fix: toolUses is the cumulative CALL count (2), not the round (1).
+      expect(only.progress.toolUses).toBe(2);
+      // The human-readable summary still names the ROUND, unchanged.
+      expect(only.progress.summary).toContain('round 1');
     }
   });
 

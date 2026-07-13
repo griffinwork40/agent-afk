@@ -5,6 +5,7 @@ import { getVersion } from '../version.js';
 import {
   fetchLatestVersion,
   writePendingUpdateMarker,
+  writeUpdateCache,
 } from '../update-checker.js';
 
 const SEMVER_RE = /^\d+\.\d+\.\d+(-[\da-z.]+)?$/i;
@@ -54,6 +55,10 @@ export function registerUpdateCommand(program: Command): void {
           process.exitCode = 1;
           return;
         }
+        // Keep the passive notifier's cache in sync with what we just learned
+        // from the registry, so the startup banner doesn't render from a stale
+        // latestVersion after the user has explicitly checked.
+        writeUpdateCache(latest);
         if (isNewer(current, latest)) {
           console.log(`${palette.bold('Update available:')} ${palette.dim(current)} → ${palette.bold(latest)}`);
           console.log(palette.dim('  Run `afk update` to install.'));
@@ -80,6 +85,10 @@ export function registerUpdateCommand(program: Command): void {
           process.exitCode = 1;
           return;
         }
+        // Refresh the notifier cache with the registry's current latest so the
+        // banner is honest right after this update (only on the fetched path —
+        // an explicit --pin may target an older version and must not poison it).
+        writeUpdateCache(target);
         if (target === current) {
           console.log(`agent-afk ${palette.bold(current)} is up to date.`);
           return;
