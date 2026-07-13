@@ -166,7 +166,7 @@ describe('MessageHandler — compaction queuing', () => {
       expect(mockStreamResponse).not.toHaveBeenCalled();
 
       // Now drain (simulates what happens after compact() finishes)
-      await handler.drainQueue(chatId);
+      await handler.drainQueue({ chatId });
 
       expect(mockStreamResponse).toHaveBeenCalledOnce();
       expect(mockStreamResponse).toHaveBeenCalledWith(
@@ -199,10 +199,10 @@ describe('MessageHandler — compaction queuing', () => {
       );
 
       const { ctx } = makeCompactCtx(chatId);
-      handler.enqueueCompact(chatId, ctx);
+      handler.enqueueCompact({ chatId }, ctx);
 
       // Drain the queue — processCompactDirect should call session.compact()
-      await handler.drainQueue(chatId);
+      await handler.drainQueue({ chatId });
 
       expect(idleSession.compact).toHaveBeenCalledOnce();
     });
@@ -239,16 +239,16 @@ describe('MessageHandler — compaction queuing', () => {
       );
 
       const { ctx, replies } = makeCompactCtx(chatId);
-      handler.enqueueCompact(chatId, ctx);
-      await handler.drainQueue(chatId);
+      handler.enqueueCompact({ chatId }, ctx);
+      await handler.drainQueue({ chatId });
 
       // compact() was attempted once and returned session-busy
       expect(busySession.compact).toHaveBeenCalledOnce();
       // No misleading no-op reply surfaced to the user
       expect(replies).toHaveLength(0);
       // The compact item is still queued, awaiting the next drain
-      expect((handler as any).messageQueues.get(chatId)).toHaveLength(1);
-      expect((handler as any).messageQueues.get(chatId)[0].type).toBe('compact');
+      expect((handler as any).messageQueues.get(String(chatId))).toHaveLength(1);
+      expect((handler as any).messageQueues.get(String(chatId))[0].type).toBe('compact');
     });
 
     it('completes the re-enqueued compact on a subsequent drain once the session is idle', async () => {
@@ -280,19 +280,19 @@ describe('MessageHandler — compaction queuing', () => {
       );
 
       const { ctx, replies } = makeCompactCtx(chatId);
-      handler.enqueueCompact(chatId, ctx);
+      handler.enqueueCompact({ chatId }, ctx);
 
       // First drain: busy → re-enqueue, no reply.
-      await handler.drainQueue(chatId);
+      await handler.drainQueue({ chatId });
       expect(replies).toHaveLength(0);
 
       // Second drain (session now idle): compact succeeds, success reply sent.
-      await handler.drainQueue(chatId);
+      await handler.drainQueue({ chatId });
       expect(session.compact).toHaveBeenCalledTimes(2);
       expect(replies).toHaveLength(1);
       expect(replies[0]).toContain('📦');
       // Queue is now empty.
-      expect((handler as any).messageQueues.get(chatId) ?? []).toHaveLength(0);
+      expect((handler as any).messageQueues.get(String(chatId)) ?? []).toHaveLength(0);
     });
   });
 });

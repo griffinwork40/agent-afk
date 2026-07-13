@@ -114,7 +114,7 @@ describe('MessageHandler.pendingElicitations intercept', () => {
     const resolvedValues: string[] = [];
 
     // Pre-seed the intercept
-    handler.pendingElicitations.set(chatId, (text) => {
+    handler.pendingElicitations.set(String(chatId), (text) => {
       resolvedValues.push(text);
     });
 
@@ -124,7 +124,7 @@ describe('MessageHandler.pendingElicitations intercept', () => {
     // Resolver must have been called with the message text
     expect(resolvedValues).toEqual(['my answer']);
     // Entry must be deleted after consumption
-    expect(handler.pendingElicitations.has(chatId)).toBe(false);
+    expect(handler.pendingElicitations.has(String(chatId))).toBe(false);
     // streamResponse (processOne) must NOT have been called
     expect(mockStreamResponse).not.toHaveBeenCalled();
     // ctx.reply must NOT have been called (no "Message queued" etc.)
@@ -138,7 +138,7 @@ describe('MessageHandler.pendingElicitations intercept', () => {
 
     // streamResponse may or may not be called depending on session state mocking,
     // but pendingElicitations must not have been modified
-    expect(handler.pendingElicitations.has(chatId)).toBe(false);
+    expect(handler.pendingElicitations.has(String(chatId))).toBe(false);
   });
 
   it('pendingElicitations is a public Map initialized to empty', () => {
@@ -150,13 +150,13 @@ describe('MessageHandler.pendingElicitations intercept', () => {
     const chatId = 7;
     let callCount = 0;
 
-    handler.pendingElicitations.set(chatId, () => { callCount += 1; });
+    handler.pendingElicitations.set(String(chatId), () => { callCount += 1; });
 
     // First message — consumed by resolver
     const { ctx: ctx1 } = makeMessageCtx(chatId, 'first');
     await handler.handle(ctx1);
     expect(callCount).toBe(1);
-    expect(handler.pendingElicitations.has(chatId)).toBe(false);
+    expect(handler.pendingElicitations.has(String(chatId))).toBe(false);
 
     // Second message — NOT intercepted (normal flow)
     const { ctx: ctx2 } = makeMessageCtx(chatId, 'second');
@@ -237,8 +237,8 @@ describe('MessageHandler.ledgerOriginatedPendingChats bypass (C3)', () => {
     const resolved: string[] = [];
 
     // Pre-seed as ledger-originated (as makeTelegramElicitationHandler would do).
-    handler.pendingElicitations.set(chatId, (text) => resolved.push(text));
-    handler.ledgerOriginatedPendingChats.add(chatId);
+    handler.pendingElicitations.set(String(chatId), (text) => resolved.push(text));
+    handler.ledgerOriginatedPendingChats.add(String(chatId));
 
     const { ctx } = makeMessageCtx(chatId, 'ledger answer');
     await handler.handle(ctx);
@@ -246,8 +246,8 @@ describe('MessageHandler.ledgerOriginatedPendingChats bypass (C3)', () => {
     // Resolver must fire even though there is no active session.
     expect(resolved).toEqual(['ledger answer']);
     // Both maps must be cleaned up after consumption.
-    expect(handler.pendingElicitations.has(chatId)).toBe(false);
-    expect(handler.ledgerOriginatedPendingChats.has(chatId)).toBe(false);
+    expect(handler.pendingElicitations.has(String(chatId))).toBe(false);
+    expect(handler.ledgerOriginatedPendingChats.has(String(chatId))).toBe(false);
   });
 
   it('fires a ledger-originated pending resolver even when session is idle', async () => {
@@ -272,15 +272,15 @@ describe('MessageHandler.ledgerOriginatedPendingChats bypass (C3)', () => {
     const chatId = 56;
     const resolved: string[] = [];
 
-    handler.pendingElicitations.set(chatId, (text) => resolved.push(text));
-    handler.ledgerOriginatedPendingChats.add(chatId);
+    handler.pendingElicitations.set(String(chatId), (text) => resolved.push(text));
+    handler.ledgerOriginatedPendingChats.add(String(chatId));
 
     const { ctx } = makeMessageCtx(chatId, 'idle session answer');
     await handler.handle(ctx);
 
     expect(resolved).toEqual(['idle session answer']);
-    expect(handler.pendingElicitations.has(chatId)).toBe(false);
-    expect(handler.ledgerOriginatedPendingChats.has(chatId)).toBe(false);
+    expect(handler.pendingElicitations.has(String(chatId))).toBe(false);
+    expect(handler.ledgerOriginatedPendingChats.has(String(chatId))).toBe(false);
   });
 
   it('still drops a genuinely stale session-local entry (no ledger-origin flag) when session is idle', async () => {
@@ -306,7 +306,7 @@ describe('MessageHandler.ledgerOriginatedPendingChats bypass (C3)', () => {
     let resolverCalled = false;
 
     // Pre-seed WITHOUT the ledger-origin flag (session-local, now stale).
-    handler.pendingElicitations.set(chatId, () => { resolverCalled = true; });
+    handler.pendingElicitations.set(String(chatId), () => { resolverCalled = true; });
     // ledgerOriginatedPendingChats NOT set — this is the stale-session path.
 
     const { ctx } = makeMessageCtx(chatId, 'stale reply');
@@ -315,7 +315,7 @@ describe('MessageHandler.ledgerOriginatedPendingChats bypass (C3)', () => {
     // Resolver must NOT fire — the stale-session guard must drop it.
     expect(resolverCalled).toBe(false);
     // The stale entry must be cleaned up.
-    expect(handler.pendingElicitations.has(chatId)).toBe(false);
+    expect(handler.pendingElicitations.has(String(chatId))).toBe(false);
   });
 
   it('ledgerOriginatedPendingChats is a public Set initialized to empty', () => {

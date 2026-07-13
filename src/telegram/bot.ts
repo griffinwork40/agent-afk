@@ -27,6 +27,7 @@ import { readPresenceFiles } from '../agent/awareness/presence.js';
 import { readSessionKey, signAbortRequest, freshChannelId } from '../agent/afk-channel.js';
 import { SessionLedgerWriter } from '../agent/session-ledger.js';
 import { splitLongMessage } from './formatter.js';
+import { routeFromCtx, sendOptions } from './route.js';
 
 /**
  * Bot configuration options
@@ -100,34 +101,34 @@ export class TelegramBot {
     this.bot.command('start', (ctx) => handleStart(ctx));
     this.bot.command('help', (ctx) => handleHelp(ctx, this.sessionManager));
     this.bot.command('clear', async (ctx) => {
-      const chatId = ctx.chat?.id;
-      if (!chatId) {
+      const route = routeFromCtx(ctx);
+      if (!route) {
         await ctx.reply(formatError('Could not identify chat'));
         return;
       }
-      const session = await this.sessionManager.getSession(chatId);
+      const session = await this.sessionManager.getSession(route);
       if (session.state !== 'idle') {
-        this.messageHandler.enqueueClear(chatId, ctx);
+        this.messageHandler.enqueueClear(route, ctx);
         await ctx.reply('Clear queued.');
       } else {
         await handleClear(ctx, this.sessionManager, this.registeredCommandChats, this.log.bind(this));
       }
     });
     this.bot.command('compact', async (ctx) => {
-      const chatId = ctx.chat?.id;
-      if (!chatId) {
+      const route = routeFromCtx(ctx);
+      if (!route) {
         await ctx.reply(formatError('Could not identify chat'));
         return;
       }
-      const session = await this.sessionManager.getSession(chatId);
+      const session = await this.sessionManager.getSession(route);
       if (session.state !== 'idle') {
-        this.messageHandler.enqueueCompact(chatId, ctx);
+        this.messageHandler.enqueueCompact(route, ctx);
         await ctx.reply('Compact queued.');
       } else {
         try {
           await handleCompact(ctx, this.sessionManager, this.log.bind(this));
         } finally {
-          this.messageHandler.drainQueue(chatId).catch(err => this.log('Drain error:', err));
+          this.messageHandler.drainQueue(route).catch(err => this.log('Drain error:', err));
         }
       }
     });
@@ -157,11 +158,15 @@ export class TelegramBot {
     // written by every top-level AgentSession (CLI REPL, daemon, one-shot),
     // so this is the CLI→Telegram half of cross-surface continuity.
     this.bot.command('watch', async (ctx) => {
-      const chatId = ctx.chat?.id;
-      if (!chatId) {
+      const route = routeFromCtx(ctx);
+      if (!route) {
         await ctx.reply(formatError('Could not identify chat'));
         return;
       }
+      const { chatId } = route;
+      // Pin the streamed watch output to the topic /watch was invoked from
+      // (General omits message_thread_id → default delivery, byte-identical).
+      const watchThreadOpts = sendOptions(route);
       const text = (ctx.message && 'text' in ctx.message ? ctx.message.text : '') ?? '';
       const arg = text.split(/\s+/).slice(1).join(' ').trim();
       try {
@@ -178,7 +183,7 @@ export class TelegramBot {
         }
         const send = async (msg: string): Promise<void> => {
           for (const part of splitLongMessage(msg)) {
-            await ctx.telegram.sendMessage(chatId, part);
+            await ctx.telegram.sendMessage(chatId, part, watchThreadOpts);
           }
         };
         this.watchManager.start(chatId, sessionId, send);
@@ -263,14 +268,16 @@ export class TelegramBot {
           ? (ctx.callbackQuery as { data: string }).data
           : '';
       const alias = data.replace('afk:m:', '') as AgentModelInput;
-      const chatId = ctx.chat?.id;
-      if (!chatId || !alias) return;
+      // routeFromCtx reads the thread id off callbackQuery.message (the §11 fix),
+      // so a /model tap inside a topic switches THAT topic's session, not General.
+      const route = routeFromCtx(ctx);
+      if (!route || !alias) return;
 
       // Validate alias is a known short alias (prevents arbitrary string injection)
       if (!(MODEL_ALIASES_HINT as readonly string[]).includes(alias)) return;
 
       try {
-        await this.sessionManager.switchModel(chatId, alias);
+        await this.sessionManager.switchModel(route, alias);
         const confirmText = formatModelSwitch(alias);
         await ctx.editMessageText(confirmText).catch(() => ctx.reply(confirmText));
       } catch (err) {
@@ -446,14 +453,14 @@ export class TelegramBot {
   }
 
   async handleClear(ctx: Context): Promise<void> {
-    const chatId = ctx.chat?.id;
-    if (!chatId) {
+    const route = routeFromCtx(ctx);
+    if (!route) {
       await ctx.reply(formatError('Could not identify chat'));
       return;
     }
-    const session = await this.sessionManager.getSession(chatId);
+    const session = await this.sessionManager.getSession(route);
     if (session.state !== 'idle') {
-      this.messageHandler.enqueueClear(chatId, ctx);
+      this.messageHandler.enqueueClear(route, ctx);
       await ctx.reply('Clear queued.');
     } else {
       return handleClear(ctx, this.sessionManager, this.registeredCommandChats, this.log.bind(this));
