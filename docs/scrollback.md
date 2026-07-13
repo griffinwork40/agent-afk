@@ -394,15 +394,25 @@ through `@xterm/headless`, and asserts every committed line survives exactly onc
 in commit order and that committed lines in scrollback have no >1-row blank gap.
 It fails hard on the pre-fix code (early markers found 0 times) and passes after.
 
-**Known residuals (NOT fixed here).** (a) Phase 1 still emits one `\n` per commit
-(unchanged), so a band that has not yet filled the viewport leaves at most a
-single blank row between some scrollback entries — cosmetic line-spacing, not a
-massive gap. (b) When content scrolled into scrollback during a tall phase and
-the frame later collapses, the bottom-anchored band can sit below the
-scrolled-off content with blank viewport rows between them. That live-viewport
-"boundary gap" is the bottom-anchored-frame design tension (the frame does not
-float up to meet sparse content) and is a separate, larger item — but see the
-band-hold fix below, which closes the most common manifestation.
+**Known residuals.** (a) Phase 1 still emits one `\n` per commit (unchanged), so a
+band that has not yet filled the viewport leaves at most a single blank row between
+some scrollback entries — cosmetic line-spacing, not a massive gap. (Subsumed by the
+single end-of-turn flush proposed in #540.) (b) **[FIXED — PR #539]** When content
+scrolled into scrollback during a tall phase and the frame later collapsed, the
+bottom-anchored band could sit below the scrolled-off content with blank viewport
+rows between them — the live-viewport "boundary gap." Root cause: the eager
+fits-path archived committed rows to (append-only) scrollback based on the room
+above the *current tall* frame, not the *collapsed* frame; on collapse the surviving
+band re-pinned down to the bottom-pinned frame and stranded the prematurely-archived
+rows. Fixed in `commit-mode.ts`: any run exceeding the current tall-frame room now
+routes through band-hold (retained, capped at `maxBandModel` = the rows that fit
+above the collapsed frame) instead of eager-scrolling, so content that will fit
+post-collapse is retained and painted contiguously; only genuine overflow beyond
+`maxBandModel` is archived, from the top, contiguously. Regression:
+`terminal-compositor.collapse-void.test.ts`; real-PTY A/B: `scripts/visual-void-repro.ts`.
+The fuller commit-model unification that dissolves the whole gap-class
+(render-not-repin + single end-of-turn flush) is tracked in #540; a real-PTY CI
+harness to make this CI-verifiable is #541.
 
 ### Fixed: multi-line block committed under a tall overlay (the overflow path)
 
