@@ -15,6 +15,10 @@ import {
   listSessions,
   sdkSessionIdFor,
   forkStoredSession,
+  storedToHandle,
+  bindingsForStored,
+  storedFieldsFromHandle,
+  type StoredSession,
 } from './session-store.js';
 import { createSessionStats, recordTurn } from './slash/session-stats.js';
 import { useUnsetAfkHome } from '../__test-utils__/unset-afk-home.js';
@@ -480,5 +484,68 @@ describe('session-store — session identity (source / actor)', () => {
 
     const loaded = loadSession('plain-sess');
     expect(loaded!.actor).toBeUndefined();
+  });
+});
+
+describe('session-registry bridge — storedToHandle / bindingsForStored', () => {
+  function makeStored(over: Partial<StoredSession> = {}): StoredSession {
+    return {
+      model: 'sonnet',
+      startedAt: 100,
+      savedAt: 200,
+      totalTurns: 1,
+      totalCostUsd: 0,
+      totalTokens: 0,
+      totalDurationMs: 0,
+      turns: [],
+      ...over,
+    };
+  }
+
+  it('migrates a legacy telegramChatId to one telegram binding', () => {
+    const h = storedToHandle(makeStored({ source: 'telegram', telegramChatId: 42, sessionId: 'sdk-1' }), 'sidecar-1');
+    expect(h.surface).toBe('telegram');
+    expect(h.sdkSessionId).toBe('sdk-1');
+    expect(h.createdAt).toBe(100);
+    expect(h.lastActiveAt).toBe(200);
+    expect(h.bindings).toEqual([
+      { surface: 'telegram', key: '42', boundAt: 100, lastActiveAt: 200 },
+    ]);
+  });
+
+  it('prefers explicit bindings over the legacy telegramChatId', () => {
+    const explicit = [{ surface: 'telegram' as const, key: '42:7', boundAt: 5, lastActiveAt: 9 }];
+    const h = storedToHandle(makeStored({ source: 'telegram', telegramChatId: 42, bindings: explicit }), 'sc');
+    expect(h.bindings).toEqual(explicit);
+  });
+
+  it('defaults surface to cli and yields no binding for a legacy non-telegram sidecar', () => {
+    const h = storedToHandle(makeStored({ name: 'my-repl', cwd: '/repo' }), 'legacy-cli');
+    expect(h.surface).toBe('cli');
+    expect(h.name).toBe('my-repl');
+    expect(h.cwd).toBe('/repo');
+    expect(h.bindings).toEqual([]);
+    expect(h.sdkSessionId).toBeUndefined();
+  });
+
+  it('uses handleId as the id when present, else the sidecar id', () => {
+    expect(storedToHandle(makeStored({ handleId: 'H' }), 'sidecar').id).toBe('H');
+    expect(storedToHandle(makeStored(), 'sidecar').id).toBe('sidecar');
+  });
+
+  it('bindingsForStored returns copies (mutation-safe)', () => {
+    const stored = makeStored({ telegramChatId: 7 });
+    const b = bindingsForStored(stored);
+    b[0]!.key = 'mutated';
+    expect(bindingsForStored(stored)[0]!.key).toBe('7');
+  });
+
+  it('storedFieldsFromHandle round-trips id + bindings back into a StoredSession', () => {
+    const h = storedToHandle(makeStored({ source: 'telegram', telegramChatId: 42, handleId: 'H' }), 'sc');
+    const fields = storedFieldsFromHandle(h);
+    expect(fields.handleId).toBe('H');
+    const reloaded = storedToHandle(makeStored({ source: 'telegram', ...fields }), 'ignored');
+    expect(reloaded.id).toBe('H');
+    expect(reloaded.bindings).toEqual(h.bindings);
   });
 });

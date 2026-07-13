@@ -14,7 +14,21 @@ import {
   asHandleId,
   SessionRegistryError,
   type SessionRegistry,
+  type SessionHandle,
 } from './session-registry.js';
+
+/** Build a fully-formed handle for load() rehydration tests. */
+function makeHandle(over: Partial<SessionHandle> & Pick<SessionHandle, 'id'>): SessionHandle {
+  return {
+    surface: 'telegram',
+    model: 'sonnet',
+    createdAt: 1,
+    lastActiveAt: 1,
+    status: 'active',
+    bindings: [{ surface: 'telegram', key: '42', boundAt: 1, lastActiveAt: 1 }],
+    ...over,
+  };
+}
 
 /** A registry with a controllable clock for deterministic lastActiveAt ordering. */
 function makeReg(start = 1000): { reg: SessionRegistry; tick: (by?: number) => number } {
@@ -209,5 +223,57 @@ describe('fail-loud mutators', () => {
     expect(() => reg.touch(ghost)).toThrow(SessionRegistryError);
     expect(() => reg.archive(ghost)).toThrow(SessionRegistryError);
     expect(() => reg.attachSdkSessionId(ghost, 's')).toThrow(SessionRegistryError);
+  });
+});
+
+describe('load — rehydration from persistence', () => {
+  it('indexes an active handle by every binding + id + sdk id', () => {
+    const { reg } = makeReg();
+    reg.load(
+      makeHandle({
+        id: asHandleId('h1'),
+        sdkSessionId: 'sdk-1',
+        bindings: [
+          { surface: 'telegram', key: '42', boundAt: 1, lastActiveAt: 1 },
+          { surface: 'cli', key: 'my-repl', boundAt: 1, lastActiveAt: 1 },
+        ],
+      }),
+    );
+    expect(reg.resolve('telegram', '42')?.id).toBe('h1');
+    expect(reg.resolve('cli', 'my-repl')?.id).toBe('h1');
+    expect(reg.get(asHandleId('h1'))?.id).toBe('h1');
+    expect(reg.getBySdkSessionId('sdk-1')?.id).toBe('h1');
+  });
+
+  it('an archived handle loads without indexing its keys for routing', () => {
+    const { reg } = makeReg();
+    reg.load(makeHandle({ id: asHandleId('old'), status: 'archived' }));
+    expect(reg.resolve('telegram', '42')).toBeUndefined();
+    expect(reg.get(asHandleId('old'))?.status).toBe('archived');
+    expect(reg.list({ status: 'archived' }).map((h) => h.id)).toContain('old');
+  });
+
+  it('throws on a duplicate id', () => {
+    const { reg } = makeReg();
+    reg.load(makeHandle({ id: asHandleId('dup') }));
+    expect(() => reg.load(makeHandle({ id: asHandleId('dup') }))).toThrow(SessionRegistryError);
+  });
+
+  it('takes a private snapshot (mutating the passed handle is inert)', () => {
+    const { reg } = makeReg();
+    const h = makeHandle({ id: asHandleId('snap') });
+    reg.load(h);
+    h.bindings.push({ surface: 'cli', key: 'evil', boundAt: 0, lastActiveAt: 0 });
+    expect(reg.resolve('cli', 'evil')).toBeUndefined();
+    expect(reg.get(asHandleId('snap'))?.bindings).toHaveLength(1);
+  });
+
+  it('round-trips a created handle snapshot through a fresh registry', () => {
+    const { reg: a } = makeReg();
+    const h = a.create({ surface: 'telegram', model: 'opus', key: '42:7', name: 'x' });
+    const { reg: b } = makeReg();
+    b.load(h); // h is a snapshot from create()
+    expect(b.resolve('telegram', '42:7')?.id).toBe(h.id);
+    expect(b.get(h.id)?.name).toBe('x');
   });
 });

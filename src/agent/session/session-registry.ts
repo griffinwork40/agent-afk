@@ -108,6 +108,12 @@ export interface ListFilter {
  */
 export interface SessionRegistry {
   create(opts: CreateSessionOptions): SessionHandle;
+  /**
+   * Insert a fully-formed handle — rehydration from persistence. Throws on a
+   * duplicate id. An archived handle loads WITHOUT indexing its keys for
+   * routing (its bindings are retained as history but never resolve).
+   */
+  load(handle: SessionHandle): void;
   get(id: HandleId): SessionHandle | undefined;
   getBySdkSessionId(sdkSessionId: string): SessionHandle | undefined;
   /** Router: the active handle bound to (surface, key), or undefined. Never resolves an archived handle. */
@@ -174,6 +180,23 @@ export class InMemorySessionRegistry implements SessionRegistry {
     this.pointBinding(this.bindingKey(binding.surface, binding.key), id);
     if (handle.sdkSessionId !== undefined) this.bySdk.set(handle.sdkSessionId, id);
     return this.clone(handle);
+  }
+
+  load(handle: SessionHandle): void {
+    if (this.byId.has(handle.id)) {
+      throw new SessionRegistryError(`session handle already exists: ${handle.id}`);
+    }
+    // Own a private snapshot so a caller mutating the passed handle can't reach
+    // internal state. Only ACTIVE handles index their keys for routing —
+    // archived handles' keys stay free (parity with archive()).
+    const stored = this.clone(handle);
+    this.byId.set(stored.id, stored);
+    if (stored.status === 'active') {
+      for (const b of stored.bindings) {
+        this.pointBinding(this.bindingKey(b.surface, b.key), stored.id);
+      }
+    }
+    if (stored.sdkSessionId !== undefined) this.bySdk.set(stored.sdkSessionId, stored.id);
   }
 
   get(id: HandleId): SessionHandle | undefined {
