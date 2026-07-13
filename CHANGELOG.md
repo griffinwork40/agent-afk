@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.36.0] - 2026-07-13
+
+### Added
+- Linux systemd --user support behind a platform-neutral ServiceManager (#515) (25bd80c)
+
 ## [5.35.3] - 2026-07-12
 
 ### Fixed
