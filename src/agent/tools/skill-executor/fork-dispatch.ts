@@ -28,6 +28,54 @@ import { buildForkedChildConfig } from './fork-child-config.js';
 import { substituteSkillArgs } from './load-mode.js';
 import type { SkillExecutorInternals } from './types.js';
 
+/**
+ * Build the per-call `SubagentManager` that forks a skill sub-agent. The two
+ * forked-skill paths (`executeForkedRegistrySkill` + `executePluginSkill`)
+ * construct byte-identical managers EXCEPT for the per-child-model credential
+ * (`apiKey`) and the model it was resolved for (`parentModel`) — everything
+ * else (baseUrl / traceWriter / surface / cwd optional spreads, progressSink,
+ * and the read-scope computation) is shared, so it lives here as the single
+ * source of truth. Module-private by design (not exported): the manager is a
+ * fork-wiring implementation detail of this file.
+ *
+ * The load-bearing per-field rationale:
+ * - Trace origin (#469): thread `ctx.surface` so `forkSubagent` fills the skill
+ *   subagent's `config.surface` (subagent.ts parentSurface fill); without it the
+ *   fork's session_init records origin:'unknown' instead of cli/telegram/daemon.
+ * - Read-scope inheritance (#547): the fork's read scope ⊇ the parent session's,
+ *   mirroring the `agent` tool. `childReadRoots` seeds parentReadRoots from the
+ *   session scope + this fork's cwd; forkSubagent folds in the worktree main
+ *   root. Without it the fork narrowed to cwd whenever the parent was read-open /
+ *   `/allow-dir`-widened. Writes stay confined to the worktree.
+ * - Worktree isolation: cwd forwarding is what anchors the skill subagent's
+ *   bash/grep/file tools to the worktree; without it every `/diagnose`, `/mint`,
+ *   etc. runs its first-tier subagents against the host repo.
+ */
+function buildSkillForkManager(
+  internals: SkillExecutorInternals,
+  perPath: {
+    apiKey: string | undefined;
+    // The model `apiKey` was resolved for — the provider source of truth for
+    // the fork-time credential fallback (see SubagentManager.parentProvider).
+    parentModel: string;
+    parentAbortSignal: AbortSignal;
+  },
+): SubagentManager {
+  const { ctx, currentCwd } = internals;
+  const childReadRoots = resolveChildManagerReadRoots(ctx.getReadScopeInputs?.(), currentCwd);
+  return new SubagentManager({
+    parentAbortSignal: perPath.parentAbortSignal,
+    apiKey: perPath.apiKey,
+    parentModel: perPath.parentModel,
+    ...(ctx.baseUrl !== undefined ? { baseUrl: ctx.baseUrl } : {}),
+    ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
+    ...(ctx.surface !== undefined ? { surface: ctx.surface } : {}),
+    progressSink: getCurrentSink(),
+    ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
+    ...(childReadRoots !== undefined ? { parentReadRoots: childReadRoots } : {}),
+  });
+}
+
 export async function executeForkedRegistrySkill(
   internals: SkillExecutorInternals,
   skill: {
@@ -39,7 +87,7 @@ export async function executeForkedRegistrySkill(
   args: string | undefined,
   call: ToolCall,
 ): Promise<ToolResult> {
-  const { ctx, currentCwd } = internals;
+  const { ctx } = internals;
   if (call.signal.aborted) {
     return { content: 'Skill call aborted', isError: true };
   }
@@ -79,36 +127,13 @@ export async function executeForkedRegistrySkill(
     parentApiKey: ctx.apiKey,
   });
 
-  // Read-scope inheritance (#547): the skill-forked child's read scope ⊇ the
-  // parent session's, mirroring the `agent` tool (subagent-executor.ts). Seed
-  // parentReadRoots from the session scope + this fork's cwd; forkSubagent
-  // folds in the worktree main root. Without it the fork derived read scope
-  // from cwd alone and narrowed whenever the parent was read-open /
-  // `/allow-dir`-widened. Writes stay confined to the worktree.
-  const childReadRoots = resolveChildManagerReadRoots(ctx.getReadScopeInputs?.(), currentCwd);
-  const manager = new SubagentManager({
-    parentAbortSignal: call.signal,
+  // Fork manager (shared construction — see buildSkillForkManager for the
+  // #469 surface / #547 read-scope / worktree-cwd rationale). This path differs
+  // from executePluginSkill only in the per-child-model credential + its model.
+  const manager = buildSkillForkManager(internals, {
     apiKey: skillChildApiKey,
-    // `skillChildApiKey` was resolved for `skillChildModel`, so that model is
-    // the provider source of truth for the fork-time credential fallback
-    // (see SubagentManager.parentProvider).
     parentModel: skillChildModel,
-    ...(ctx.baseUrl !== undefined ? { baseUrl: ctx.baseUrl } : {}),
-    ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
-    // Trace origin (#469): thread the owning surface so this manager's
-    // forkSubagent fills the skill subagent's config.surface (subagent.ts
-    // parentSurface fill). Without it the fork's session_init records
-    // origin:'unknown' instead of cli/telegram/daemon — the same class #468
-    // fixed for agent-tool/compose forks and deliberately left as a follow-up.
-    ...(ctx.surface !== undefined ? { surface: ctx.surface } : {}),
-    progressSink: getCurrentSink(),
-    // Worktree isolation: this manager forks the skill subagent. cwd
-    // forwarding here is what gives the skill subagent's bash/grep/file
-    // tools the worktree anchor. Without it, every `/diagnose`, `/mint`,
-    // etc. run their first-tier subagents against the host repo.
-    ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
-    // Read-scope inheritance (#547): see childReadRoots above.
-    ...(childReadRoots !== undefined ? { parentReadRoots: childReadRoots } : {}),
+    parentAbortSignal: call.signal,
   });
 
   // Thread traceWriter into the child's AgentConfig so its tool_use, hook,
@@ -163,7 +188,7 @@ export async function executePluginSkill(
   // Threaded from `pluginSkill.model` at the call site (skill-executor.ts).
   model?: string,
 ): Promise<ToolResult> {
-  const { ctx, currentCwd } = internals;
+  const { ctx } = internals;
   if (call.signal.aborted) {
     return { content: 'Skill call aborted', isError: true };
   }
@@ -187,24 +212,13 @@ export async function executePluginSkill(
     parentApiKey: ctx.apiKey,
   });
 
-  // Read-scope inheritance (#547) — same rationale as executeForkedRegistrySkill.
-  const childReadRoots = resolveChildManagerReadRoots(ctx.getReadScopeInputs?.(), currentCwd);
-  const manager = new SubagentManager({
-    parentAbortSignal: call.signal,
+  // Fork manager (shared construction — see buildSkillForkManager). Same
+  // #469 surface / #547 read-scope / worktree-cwd wiring as
+  // executeForkedRegistrySkill; differs only in the credential + its model.
+  const manager = buildSkillForkManager(internals, {
     apiKey: pluginChildApiKey,
-    // `pluginChildApiKey` was resolved for `pluginChildModel`, so that model
-    // is the provider source of truth for the fork-time credential fallback
-    // (see SubagentManager.parentProvider).
     parentModel: pluginChildModel,
-    ...(ctx.baseUrl !== undefined ? { baseUrl: ctx.baseUrl } : {}),
-    ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
-    // Trace origin (#469) — same rationale as executeForkedRegistrySkill above.
-    ...(ctx.surface !== undefined ? { surface: ctx.surface } : {}),
-    progressSink: getCurrentSink(),
-    // Worktree isolation — same rationale as executeForkedRegistrySkill above.
-    ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
-    // Read-scope inheritance (#547): see childReadRoots above.
-    ...(childReadRoots !== undefined ? { parentReadRoots: childReadRoots } : {}),
+    parentAbortSignal: call.signal,
   });
 
   // PLUGIN_ROOT is injected here so shell commands in the plugin SKILL.md
