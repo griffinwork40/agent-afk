@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.38.5] - 2026-07-13
+
+### Fixed
+- resolve parallelize-dispatch subagent credential per child model (#444) (#569) (e556426)
+
 ## [5.38.4] - 2026-07-13
 
 ### Changed
