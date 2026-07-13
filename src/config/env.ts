@@ -258,12 +258,16 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   {
     name: 'AFK_MODEL_TTFB_TIMEOUT_MS',
     description:
-      'Per-request time-to-first-byte timeout (ms) for the anthropic-direct streaming loop. ' +
-      'Bounds how long a single model call may stall BEFORE its first streamed event; once ' +
-      'streaming starts the timer is cleared, so a legitimately slow-but-progressing response ' +
-      '(long opus_1m prefill, extended thinking) is never aborted. On timeout the request is ' +
-      'aborted and retried once, then surfaces as an error — never a silent ~10-min hang on the ' +
-      'SDK default. Default 180000 (180s ≈ 2× the measured p99 ttfb). Set to 0 to disable.',
+      'Per-request time-to-first-token timeout (ms) for the anthropic-direct streaming loop. ' +
+      'Bounds how long a single model call may stall BEFORE its first streamed CONTENT token ' +
+      '(a text/thinking delta or tool_use); the connection-level message_start and keep-alive ' +
+      'pings do NOT count. Once a content token streams, the timer is cleared and the rest of ' +
+      'the response runs unbounded, so a normal slow call (below the bound) and any actively-' +
+      'streaming extended-thinking response are never aborted. NOTE: a request whose FIRST token ' +
+      'takes longer than the bound — e.g. a very large opus_1m prefill — is aborted, retried ' +
+      'once, then surfaces as an error (raise this value or set 0 for such workloads); this ' +
+      'trims the degrading-call tail instead of a silent ~10-min hang on the SDK default. ' +
+      'Default 180000 (180s ≈ 2× the measured p99 ttfb). Set to 0 to disable.',
     type: 'number',
     required: false,
     default: '180000',

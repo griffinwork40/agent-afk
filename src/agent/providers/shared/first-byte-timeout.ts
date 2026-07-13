@@ -2,14 +2,22 @@
  * Time-to-first-byte (TTFB) stall-timeout helper for streaming model calls.
  *
  * Contract: bound how long a single `messages.create({stream:true})` call may
- * stall BEFORE its first streamed event, WITHOUT aborting a slow-but-
- * progressing stream. The caller arms the timer around request creation +
- * first-event consumption, then calls `firstByteSeen()` the instant the first
- * event arrives — from that point the request runs to completion untouched
- * (long opus_1m prefill / extended thinking are never cut off). If the timer
- * fires first it aborts a PER-REQUEST controller (chained to the caller's turn
- * signal via `AbortSignal.any`), so a TTFB timeout never mutates the caller's
- * own signal and stays distinguishable from a user interrupt.
+ * stall BEFORE its first streamed CONTENT token — a text/thinking delta or a
+ * tool_use start. Connection-level keep-alive (`message_start`, SSE pings) does
+ * NOT count: those arrive early on a healthy socket and are consumed without
+ * producing a content token, so they cannot be told apart from a genuinely
+ * degrading call — and issue #583 targets exactly the latter (a real call slow
+ * to its first token, not a throttle). The caller arms the timer around request
+ * creation + first-token consumption, then calls `firstByteSeen()` the instant
+ * the first content token arrives — from that point the request runs to
+ * completion untouched (an actively-streaming extended-thinking response, or a
+ * long stream after its first token, is never cut off). CAVEAT: the bound DOES
+ * apply to the pre-first-token window, so a prefill whose first token is slower
+ * than the bound (e.g. a very large opus_1m context) is treated as a stall —
+ * raise `AFK_MODEL_TTFB_TIMEOUT_MS` or set it to 0 for such workloads. If the
+ * timer fires first it aborts a PER-REQUEST controller (chained to the caller's
+ * turn signal via `AbortSignal.any`), so a TTFB timeout never mutates the
+ * caller's own signal and stays distinguishable from a user interrupt.
  *
  * Lives in `shared/` (next to {@link sleepWithAbort}) so the analogous
  * openai-compatible streaming path can reuse the exact same mechanism.

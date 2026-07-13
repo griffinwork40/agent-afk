@@ -218,10 +218,11 @@ export async function* runTurn(
   // and reset to 0 after every clean round so each tool-use round gets its own
   // allowance — mirroring createWithRetry's per-call (not per-turn) scope.
   let overloadRetries = 0;
-  // Per-round time-to-first-byte stall bound (issue #583). A degrading upstream
-  // call that never streams a first event is aborted at this bound and retried
-  // ONCE per round, then surfaces as an error — instead of hanging up to the
-  // SDK's ~10-min default. `0` (or AFK_MODEL_TTFB_TIMEOUT_MS=0) disables it.
+  // Per-round time-to-first-token stall bound (issue #583). A degrading upstream
+  // call that never streams a first CONTENT token (text/thinking delta or
+  // tool_use — message_start + pings do NOT count) is aborted at this bound and
+  // retried ONCE per round, then surfaces as an error — instead of hanging up to
+  // the SDK's ~10-min default. `0` (or AFK_MODEL_TTFB_TIMEOUT_MS=0) disables it.
   // The single retry reuses the createWithRetry attempt budget model so it
   // cannot stack on top of the overload backoff into a longer worst case.
   const ttfbTimeoutMs = resolveTtfbTimeoutMs();
@@ -294,10 +295,13 @@ export async function* runTurn(
     const requestStartedAt = Date.now();
     // Arm the TTFB stall timer for THIS round. `ttfb.signal` is the request
     // signal (caller's turn signal chained with the stall timer). We cancel the
-    // timer the instant the first stream event arrives (ttfbEmitted below), so a
-    // slow-but-progressing stream is never aborted; only a call that fails to
-    // stream ANY event within the bound trips it. Disposed in the retry/error
-    // paths below and again defensively per round.
+    // timer the instant the first CONTENT token arrives (ttfbEmitted below), so a
+    // stream that is producing content is never aborted; only a call that fails
+    // to stream any content token (text/thinking delta, tool_use, or the
+    // end-of-stream turn-result) within the bound trips it. message_start and
+    // keep-alive pings yield no translated output, so they do NOT count — a call
+    // whose FIRST token is slower than the bound is treated as a stall. Disposed
+    // in the retry/error paths below and again defensively per round.
     const ttfb = armFirstByteTimeout(input.signal, ttfbTimeoutMs);
     let retryTtfb = false;
     // Definite-assignment: `events` is read only past the `if (retryTtfb)`
@@ -373,9 +377,12 @@ export async function* runTurn(
           (out.kind === 'turn-result' || out.event.type !== 'error');
         if (isFirstByte) {
           ttfbEmitted = true;
-          // First streamed event arrived: cancel the stall timer so the rest of
-          // this (now demonstrably progressing) stream runs unbounded — a long
-          // opus_1m prefill / extended-thinking response is never cut off.
+          // First CONTENT token arrived: cancel the stall timer so the rest of
+          // this (now demonstrably progressing) stream runs unbounded — an
+          // actively-streaming extended-thinking response, or any long stream
+          // after its first token, is never cut off. (The bound still governs
+          // the pre-first-token window, so a prefill slower than the bound is
+          // treated as a stall before we ever reach here.)
           ttfb.firstByteSeen();
           // Time-to-first-byte: request initiation (incl. any auth retries
           // inside createWithRetry) → first translated stream event.
