@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.38.7] - 2026-07-13
+
+### Fixed
+- fail closed on unknown parent provider in fork credential fallback (#438) (#580) (69b0a8b)
+
 ## [5.38.6] - 2026-07-13
 
 ### Fixed
