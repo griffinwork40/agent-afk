@@ -87,7 +87,7 @@ async function resumeFound(
     // Guard against resuming into the live session (PR #355 C2). The swap would
     // otherwise tear down and rebuild the current session from the last on-disk
     // snapshot, silently dropping any turn data accumulated since the last
-    // /save. Match on the SDK session id when available (canonical), falling
+    // autosave. Match on the SDK session id when available (canonical), falling
     // back to the saved file id.
     // External constraint: this comparison is the only barrier between /resume
     // and unintended data loss for users who select their current session.
@@ -133,7 +133,7 @@ async function resumeFound(
 export const resumeCmd: SlashCommand = {
   name: '/resume',
   usage: '/resume [id]',
-  hint: 'When you want to continue a previously /saved session — runs interactively to pick one if no id is given.',
+  hint: 'When you want to continue a previously saved session — runs interactively to pick one if no id is given.',
   summary: 'List saved sessions, or swap the active session for a stored one',
   async handler(ctx, args) {
     const target = args.trim();
@@ -149,7 +149,7 @@ export const resumeCmd: SlashCommand = {
 
     const entries = listSessions();
     if (entries.length === 0) {
-      ctx.out.info('No saved sessions found.  Use /save first.');
+      ctx.out.info('No saved sessions found.  Start a session — it autosaves each turn.');
       return 'continue';
     }
     const currentCwd = ctx.stats.cwd ?? process.cwd();

@@ -172,7 +172,7 @@ describe('afk interactive — early --resume / --continue validation guard', () 
     // is empty. The widened guard's try/catch must catch and surface this
     // before any worktree side-effect.
     mockResolveResumeTarget.mockImplementation(() => {
-      throw new Error('No saved sessions found for --continue. Run a session first or use /save.');
+      throw new Error('No saved sessions found for --continue. Run a session first — sessions autosave automatically.');
     });
 
     const stderr = await captureStderr(() =>
