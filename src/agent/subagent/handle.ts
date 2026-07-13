@@ -10,6 +10,7 @@
 import type { ZodType } from 'zod';
 import { AbortGraph } from '../abort-graph.js';
 import { debugLog } from '../../utils/debug.js';
+import { TimeoutError } from '../../utils/errors.js';
 import type { HookRegistry } from '../hooks.js';
 import { withTimeout } from '../timeout.js';
 import type { IAgentSession, Message } from '../types.js';
@@ -221,19 +222,41 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       return msg;
     } catch (err) {
       this.lastDurationMs = Date.now() - startTime;
+      // Wall-clock budget expiry: withTimeout aborts our controller with the
+      // TimeoutError as the abort REASON before its race rejects, and abort
+      // listeners fire synchronously — so the stream often unwinds with an
+      // incidental AbortError in the same tick. The signal reason, not the
+      // thrown error, is the authoritative cause. Surface the budget error
+      // to callers and classify it as a failure below.
+      const timeoutReason =
+        this.controller.signal.aborted && this.controller.signal.reason instanceof TimeoutError
+          ? this.controller.signal.reason
+          : undefined;
+      const surfacedErr = timeoutReason ?? err;
       // currentStatus is 'cancelled' only when cancel() already ran and
       // emitted its own lifecycle event. In that case we suppress the
       // failed event here to avoid a double-emit for the same termination.
       if ((this.currentStatus as string) !== 'cancelled') {
-        // Cascade classification: when our controller's signal is aborted
-        // at this point AND cancel() didn't fire (otherwise status would
-        // already be 'cancelled'), the throw unwound because an ancestor
-        // cascade hit our controller. Treat this as 'cancelled', not
-        // 'failed' — the subagent did no wrong; it was torn down
-        // externally. The trace and the result-object status must agree so
-        // downstream consumers (operator dashboard, future ActiveWorkRegistry)
-        // can correctly attribute cascade terminations vs. genuine failures.
-        if (this.controller.signal.aborted) {
+        // Invariant: cascade classification. When our controller's signal is
+        // aborted at this point AND cancel() didn't fire (otherwise status
+        // would already be 'cancelled') AND the abort reason is not our own
+        // wall-clock budget, the throw unwound because an ancestor cascade
+        // hit our controller. Treat this as 'cancelled', not 'failed' — the
+        // subagent did no wrong; it was torn down externally. The trace and
+        // the result-object status must agree so downstream consumers
+        // (operator dashboard, future ActiveWorkRegistry) can correctly
+        // attribute cascade terminations vs. genuine failures.
+        //
+        // Budget expiry is the deliberate carve-out: a TimeoutError abort
+        // reason means THIS run exceeded its own budget — a failure of the
+        // run, not an external teardown. Classifying it 'cancelled' made
+        // background timeouts vanish entirely: BgResultNotifier is
+        // notice-only for cancelled jobs (it never injects them into the
+        // parent context), so the timeout error promised by the fork-budget
+        // contract was recorded but never delivered (P2 review finding on
+        // #465). 'failed' flows through runToResult → registry → notifier
+        // injection with partial output intact.
+        if (this.controller.signal.aborted && timeoutReason === undefined) {
           void emitSubagentLifecycle(this.traceWriter, {
             transition: 'cancelled',
             subagentId: this.id,
@@ -245,8 +268,8 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
           void emitSubagentLifecycle(this.traceWriter, {
             transition: 'failed',
             subagentId: this.id,
-            errorClass: err instanceof Error ? err.constructor.name : 'Unknown',
-            errorMessage: err instanceof Error ? err.message : String(err),
+            errorClass: surfacedErr instanceof Error ? surfacedErr.constructor.name : 'Unknown',
+            errorMessage: surfacedErr instanceof Error ? surfacedErr.message : String(surfacedErr),
             partialOutputBytes: Buffer.byteLength(this.lastStreamedContent, 'utf8'),
           });
           this.currentStatus = 'failed';
@@ -254,7 +277,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
         }
       }
       this.onTerminal();
-      throw err;
+      throw surfacedErr;
     } finally {
       this.inFlight = null;
     }
