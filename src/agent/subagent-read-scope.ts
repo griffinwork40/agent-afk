@@ -42,6 +42,59 @@ export function readOpenRootFor(base: string | undefined): string {
   return path.parse(resolved).root || path.sep;
 }
 
+/**
+ * The parent session's read-scope inputs, as returned by
+ * {@link SubagentManager.getReadScopeInputs}. Threaded through the skill /
+ * inline-skill / compose dispatch contexts so those paths compute a forked
+ * child's read scope the same way the `agent` tool does (see
+ * {@link resolveChildManagerReadRoots}). `undefined` in either field carries
+ * the same meaning it does for {@link computeInheritedReadRoots}.
+ */
+export interface ReadScopeInputs {
+  parentReadRoots: string[] | undefined;
+  parentCwd: string | undefined;
+}
+
+/**
+ * Compute the `parentReadRoots` a skill- / inline- / compose-built
+ * {@link SubagentManager} should carry, given the parent session's read scope
+ * ({@link ReadScopeInputs}, from `getReadScopeInputs`) and the child manager's
+ * own cwd.
+ *
+ * This is the single choke point that keeps skill/inline dispatch SYMMETRIC
+ * with the `agent` tool: `subagent-executor.ts` reads `getReadScopeInputs()`
+ * off the parent manager and threads the result through `child-config.ts` as a
+ * grandchild manager's `parentReadRoots`. Skill managers historically passed
+ * only `cwd`, so their forks derived read scope from cwd alone and silently
+ * NARROWED whenever the parent session was read-open (or `/allow-dir`-widened)
+ * beyond `[cwd, mainRoot]` — the residual of #544 this closes (#547). Seeding a
+ * child manager's `parentReadRoots` with the result propagates the parent's
+ * full read scope transitively; `forkSubagent` still folds in the worktree main
+ * root, so callers need not resolve it here.
+ *
+ * Returns `undefined` when there is nothing broader than the child's own cwd to
+ * grant (the caller then omits `parentReadRoots` and the manager's existing
+ * cwd-derivation stands, byte-for-byte unchanged).
+ */
+export function resolveChildManagerReadRoots(
+  parentScope: ReadScopeInputs | undefined,
+  childCwd: string | undefined,
+): string[] | undefined {
+  // `parentScope === undefined` means the caller could not determine the parent
+  // session's scope (getReadScopeInputs unwired — a test stub or a surface that
+  // predates this wiring), NOT that the parent is unconfined. Distinguish the
+  // two: return undefined so the manager's existing cwd-derivation stands
+  // (byte-for-byte pre-#547 behaviour). Only a KNOWN unconfined parent
+  // (`{ parentReadRoots: undefined, parentCwd: undefined }`) yields a read-open
+  // child, via computeInheritedReadRoots below.
+  if (parentScope === undefined) return undefined;
+  return computeInheritedReadRoots({
+    parentReadRoots: parentScope.parentReadRoots,
+    parentCwd: parentScope.parentCwd,
+    childCwd,
+  });
+}
+
 export interface InheritedReadRootsArgs {
   /**
    * The parent session's explicit read roots, or `undefined` to derive the

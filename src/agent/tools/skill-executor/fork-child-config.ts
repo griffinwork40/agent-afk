@@ -12,6 +12,7 @@
  */
 
 import { SubagentManager } from '../../subagent.js';
+import { resolveChildManagerReadRoots } from '../../subagent-read-scope.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import {
   DEFAULT_MAX_NESTING_DEPTH,
@@ -112,6 +113,17 @@ export function buildForkedChildConfig(
     return { childConfig, childManager: undefined };
   }
 
+  // Read-scope inheritance (#547): THIS skill child's inherited read roots,
+  // computed from the parent session scope + the child's cwd — the same value
+  // the child's own fork manager (fork-dispatch.ts) carries. Seeded as the
+  // grandchild manager's parentReadRoots so a read-open (or `/allow-dir`-
+  // widened) scope propagates transitively to grandchild `agent` forks —
+  // notably the hypothesis agents `/diagnose` dispatches via the `agent` tool
+  // with per-call worktree cwds. Mirrors subagent/child-config.ts:305.
+  const childInheritedReadRoots = resolveChildManagerReadRoots(
+    ctx.getReadScopeInputs?.(),
+    currentCwd,
+  );
   const childManager = new SubagentManager({
     parentAbortSignal: signal,
     ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
@@ -120,6 +132,10 @@ export function buildForkedChildConfig(
     // forkSubagent injects cwd into the grandchild's config. Mirrors
     // subagent-executor.ts:294.
     ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
+    // Read-scope inheritance (#547): see childInheritedReadRoots above.
+    ...(childInheritedReadRoots !== undefined
+      ? { parentReadRoots: childInheritedReadRoots }
+      : {}),
   });
   const childExecutor = new SubagentExecutor({
     subagentManager: childManager,
@@ -182,7 +198,13 @@ export function buildForkedChildConfig(
     ...(childConfig.model !== undefined ? { parentModel: childConfig.model } : {}),
   });
   const childSkillExecutor = ctx.childSkillExecutorFactory
-    ? ctx.childSkillExecutorFactory(depth + 1, maxDepth, signal, currentCwd)
+    ? ctx.childSkillExecutorFactory(depth + 1, maxDepth, signal, currentCwd, {
+        // Read-scope inheritance (#547): hand the grandchild SkillExecutor
+        // THIS child's read scope so its own skill forks (great-grandchildren)
+        // inherit ⊇ it instead of the frozen bootstrap session scope.
+        parentReadRoots: childInheritedReadRoots,
+        parentCwd: currentCwd,
+      })
     : undefined;
   // Pass `model` so the factory routes between AnthropicDirect /
   // OpenAICompatible per `providerForModel(model)`. Without this, every

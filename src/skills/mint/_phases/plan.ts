@@ -18,6 +18,10 @@ export async function runPlanPhase(
   // skill's tool-lane entry. See skills/index.ts SkillExecutionContext.callId.
   skillCallId?: string,
   defaultSubagentModel: AgentModelInput = 'sonnet',
+  // Read-scope inheritance (#547): parent session's read roots (resolved once
+  // by the mint handler); seeds the fork manager's parentReadRoots so the phase
+  // subagent's reads ⊇ the parent session's. Undefined leaves cwd-derivation.
+  parentReadRoots?: string[],
 ): Promise<string> {
   const prompts = loadSkillPrompts('mint');
   const planPrompt = prompts['plan.md'];
@@ -27,9 +31,10 @@ export async function runPlanPhase(
   }
 
   // Propagate parent worktree to subagent — see spec.ts for rationale.
-  const manager = new SubagentManager(
-    parentCwd !== undefined ? { cwd: parentCwd } : {},
-  );
+  const manager = new SubagentManager({
+    ...(parentCwd !== undefined ? { cwd: parentCwd } : {}),
+    ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
+  });
   const planHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },
     config: {

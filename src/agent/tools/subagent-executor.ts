@@ -9,7 +9,7 @@
  */
 
 import { SubagentManager, SUBAGENT_BACKGROUND_TIMEOUT_MS } from '../subagent.js';
-import { computeInheritedReadRoots } from '../subagent-read-scope.js';
+import { computeInheritedReadRoots, type ReadScopeInputs } from '../subagent-read-scope.js';
 import { BackgroundAgentRegistry } from '../background-registry.js';
 import type { ModelProvider } from '../provider.js';
 import type { AgentModelInput, IAgentSession } from '../types.js';
@@ -94,7 +94,13 @@ export interface SubagentExecutorContext {
    */
   defaultSubagentModel?: AgentModelInput;
   childProviderFactory?: (args: ChildProviderFactoryArgs) => ModelProvider;
-  childSkillExecutorFactory?: (depth: number, maxDepth: number, signal: AbortSignal, inheritedCwd?: string) => SkillExecutor;
+  childSkillExecutorFactory?: (
+    depth: number,
+    maxDepth: number,
+    signal: AbortSignal,
+    inheritedCwd?: string,
+    inheritedReadScope?: ReadScopeInputs,
+  ) => SkillExecutor;
   /**
    * Nesting depth this executor sits at. **Required** — pass explicit `0`
    * at top-level wiring sites (CLI, telegram, threads) and `parent.depth + 1`
