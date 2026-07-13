@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.37.6] - 2026-07-13
+
+### Fixed
+- stop redacting git object names (SHAs) as opaque secrets (#549) (58e506f)
+
 ## [5.37.5] - 2026-07-13
 
 ### Fixed
