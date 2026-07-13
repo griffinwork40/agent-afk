@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.41.0] - 2026-07-13
+
+### Added
+- first-class per-slot chatgpt-oauth provider (#548) (d3cbf51)
+
+### Changed
+- document Stop shell-hook additionalContext reaching the next-turn prompt (#585) (12cc0f3)
+- cover first-turn image-echo in BOTH headless + real-PTY harness (#509) (#509) (7d2d77e)
+
 ## [5.40.0] - 2026-07-13
 
 ### Added
