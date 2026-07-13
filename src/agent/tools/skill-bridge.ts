@@ -246,6 +246,13 @@ export interface PluginSkillBody {
    * Absent → historical full-write fork.
    */
   readOnly?: boolean;
+  /**
+   * Per-skill model override from SKILL.md frontmatter `model:`. When present,
+   * `executePluginSkill` resolves the forked child's model as
+   * `model ?? defaultSubagentModel ?? defaultModel ?? 'sonnet'` — matching the
+   * registry fork path (`executeForkedRegistrySkill`). Absent → session default.
+   */
+  model?: string;
 }
 
 /**
@@ -282,6 +289,7 @@ export function discoverPluginSkillBodies(
           ...(skill.allowedTools !== undefined ? { allowedTools: skill.allowedTools } : {}),
           ...(skill.context !== undefined ? { context: skill.context } : {}),
           ...(skill.readOnly === true ? { readOnly: true } : {}),
+          ...(skill.model !== undefined ? { model: skill.model } : {}),
         });
       }
     }

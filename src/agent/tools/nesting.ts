@@ -206,7 +206,11 @@ export function createChildProviderFactory(
  * silently defeating read-only enforcement.
  *
  * This helper builds a minimal provider with:
- *   - `permissions.allowedTools = RECON_ALLOWED_TOOLS` (no write_file/edit_file)
+ *   - `permissions.allowedTools = allowedTools ?? RECON_ALLOWED_TOOLS`
+ *     (no write_file/edit_file — the caller passes the read-only-intersected
+ *     `tools:` allowlist so the child is never granted tools the SKILL.md never
+ *     declared; falls back to the full RECON set when the skill declares no
+ *     `tools:`)
  *   - `readOnlyBash: true` (dispatcher blocks mutating bash)
  *   - `readOnlyMemory: true` (consistency with the factory path)
  *   - NO `subagentExecutor` / `skillExecutor` — at the depth cap the child
@@ -222,10 +226,18 @@ export function buildReadOnlyReconProvider(
   // an OpenAICompatibleProvider with no baseURL and POSTs to api.openai.com
   // (defense-in-depth with openai-compatible/base-url.ts's query-time fallback).
   openaiBaseUrl?: string,
+  // Effective read-only allowlist. When the read-only skill declared a `tools:`
+  // list, the caller passes its intersection with RECON_ALLOWED_TOOLS here so
+  // the depth-cap child is restricted to the declared subset — NOT the full
+  // RECON superset (issue #499, finding 2: least-privilege). Undefined → the
+  // full RECON set (a read-only skill with no `tools:` declaration). Every
+  // value is already a subset of RECON, so readOnlyBash/readOnlyMemory below
+  // still hold regardless of what is passed.
+  allowedTools?: readonly string[],
 ): ModelProvider {
   // Materialize the allowlist per call so test/runtime mutation of the shared
   // array doesn't bleed across siblings (mirrors buildPhaseRestrictedProvider).
-  const permissions = { allowedTools: [...RECON_ALLOWED_TOOLS] };
+  const permissions = { allowedTools: [...(allowedTools ?? RECON_ALLOWED_TOOLS)] };
   const route = providerForModel(typeof model === 'string' ? model : undefined);
   if (route === 'openai-compatible') {
     return new OpenAICompatibleProvider({

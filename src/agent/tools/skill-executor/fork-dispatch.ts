@@ -143,6 +143,9 @@ export async function executePluginSkill(
   // body's `readOnly` frontmatter OR DEFAULT_READ_ONLY_SKILLS membership.
   readOnly = false,
   allowedTools?: string[],
+  // Per-skill model override from the SKILL.md `model:` frontmatter field.
+  // Threaded from `pluginSkill.model` at the call site (skill-executor.ts).
+  model?: string,
 ): Promise<ToolResult> {
   const { ctx, currentCwd } = internals;
   if (call.signal.aborted) {
@@ -153,7 +156,13 @@ export async function executePluginSkill(
   // executeForkedRegistrySkill) so we can derive the correct credential.
   // The resolver is now available directly from the agent layer
   // (resolveCredentialForModel), so no injection is required.
-  const pluginChildModel = ctx.defaultSubagentModel ?? ctx.defaultModel ?? 'sonnet';
+  //
+  // The SKILL.md `model:` override (`model`) wins over the session defaults —
+  // mirroring the registry fork path (executeForkedRegistrySkill:72
+  // `skill.model ?? ...`). Without the leading `model ??` term a plugin skill
+  // pinned to e.g. `model: opus` was silently downgraded to the session
+  // default subagent model.
+  const pluginChildModel = model ?? ctx.defaultSubagentModel ?? ctx.defaultModel ?? 'sonnet';
   const pluginChildApiKey = applyParentCredentialFallback({
     childModel: pluginChildModel,
     resolved: ctx.resolveApiKeyForModel

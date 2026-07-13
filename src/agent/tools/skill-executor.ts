@@ -198,6 +198,7 @@ export class SkillExecutor {
           call,
           readOnly,
           pluginSkill.allowedTools,
+          pluginSkill.model,
         );
       }
       // Default: in-context LOAD (2026-06 load-by-default flip). No readOnly —

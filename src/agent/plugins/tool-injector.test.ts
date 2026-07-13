@@ -313,6 +313,84 @@ Content`
     expect(skills[0]!.readOnly).toBeUndefined();
   });
 
+  it('should parse model: frontmatter into metadata.model (issue #499 finding 3)', () => {
+    const skillDir = join(tmpDir, 'skills');
+    const fs = require('fs');
+    fs.mkdirSync(skillDir, { recursive: true });
+
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      `---
+name: pinned-skill
+description: A skill pinned to a specific model
+context: fork
+model: opus
+---
+Content`
+    );
+
+    const skills = extractPluginSkills(tmpDir);
+    expect(skills).toHaveLength(1);
+    expect(skills[0]!.model).toBe('opus');
+  });
+
+  it('should strip surrounding quotes from a quoted model: value', () => {
+    const skillDir = join(tmpDir, 'skills');
+    const fs = require('fs');
+    fs.mkdirSync(skillDir, { recursive: true });
+
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      `---
+name: quoted-model-skill
+description: A skill with a quoted model id
+model: "claude-opus-4-20250514"
+---
+Content`
+    );
+
+    const skills = extractPluginSkills(tmpDir);
+    expect(skills[0]!.model).toBe('claude-opus-4-20250514');
+  });
+
+  it('should leave model undefined when frontmatter omits it', () => {
+    const skillDir = join(tmpDir, 'skills');
+    const fs = require('fs');
+    fs.mkdirSync(skillDir, { recursive: true });
+
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      `---
+name: no-model-skill
+description: A skill with no model override
+---
+Content`
+    );
+
+    const skills = extractPluginSkills(tmpDir);
+    expect(skills[0]!.model).toBeUndefined();
+  });
+
+  it('should leave model undefined for a bare (empty) model: line', () => {
+    const skillDir = join(tmpDir, 'skills');
+    const fs = require('fs');
+    fs.mkdirSync(skillDir, { recursive: true });
+
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      `---
+name: empty-model-skill
+description: A skill with an empty model value
+model:
+---
+Content`
+    );
+
+    const skills = extractPluginSkills(tmpDir);
+    // A bare `model:` must fall through to the session default, not set "".
+    expect(skills[0]!.model).toBeUndefined();
+  });
+
   it('should parse quoted YAML values', () => {
     const skillDir = join(tmpDir, 'skills');
     const fs = require('fs');
