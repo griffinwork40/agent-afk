@@ -635,7 +635,7 @@ export async function runTurn(
     // The SDK's server-side session store preserves the response even
     // when we skip local recordTurn; the REPL session stays live, so the
     // user continues simply by sending the next message — no resume needed.
-    // (/resume and --resume operate on *other* /saved sessions, not the
+    // (/resume and --resume operate on *other* saved sessions, not the
     // live one that was just soft-stopped, so they must NOT be advertised
     // here; doing so sent users down a dead-end. See the onSoftStop doc in
     // terminal-compositor.types.ts: "next Enter starts a new turn in the

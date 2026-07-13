@@ -126,7 +126,7 @@ describe('session-store', () => {
   });
 
   // Regression: /resume returned zero sessions because sidecars were only
-  // written on explicit /save. The interactive close handler now autosaves.
+  // written by per-turn autosave / on graceful close. The interactive close handler now autosaves.
   // This test exercises the persistence contract /resume depends on.
   it('listSessions surfaces a saved session with a mid-session model switch', () => {
     // Start at sonnet, then simulate a /model opus_1m switch: stats.model is
