@@ -160,6 +160,39 @@ describe('TelegramBot', () => {
       expect((options as { reply_markup?: unknown })?.reply_markup).toBeDefined();
     });
 
+    test('/model inline keyboard: annotates unavailable handles additively, callback_data unchanged', async () => {
+      const availability = await import('../agent/auth/model-availability.js');
+      const spy = vi
+        .spyOn(availability, 'isModelAvailable')
+        .mockImplementation((model) => model !== 'opus');
+
+      try {
+        const ctx = createMockContext(12345, '/model');
+        await (bot as any).handleModelSwitch(ctx);
+
+        const [, options] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [
+          string,
+          { reply_markup?: { inline_keyboard?: Array<Array<{ text: string; callback_data: string }>> } },
+        ];
+        const rows = options.reply_markup?.inline_keyboard ?? [];
+        const flat = rows.flat();
+
+        // Every alias handle is still present and selectable (additive-only).
+        expect(flat.length).toBeGreaterThan(0);
+        const opusButton = flat.find((b) => b.callback_data === 'afk:m:opus');
+        expect(opusButton).toBeDefined();
+        // Label carries the marker; callback-data used for routing is untouched.
+        expect(opusButton?.text).toBe('opus — needs sign-in');
+        expect(opusButton?.callback_data).toBe('afk:m:opus');
+
+        // An available handle (e.g. sonnet) keeps its bare label.
+        const sonnetButton = flat.find((b) => b.callback_data === 'afk:m:sonnet');
+        expect(sonnetButton?.text).toBe('sonnet');
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
     test('should handle /model command with valid model', async () => {
       const ctx = createMockContext(12345, '/model opus');
       

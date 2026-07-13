@@ -12,6 +12,7 @@ import { formatCost, formatTokens } from '../../format-utils.js';
 import { contextLimitFor, MODEL_CONTEXT_LIMITS } from '../../model-limits.js';
 import { renderDebugBanner } from '../../debug-banner.js';
 import { providerForModel } from '../../../agent/providers/index.js';
+import { isModelAvailable } from '../../../agent/auth/model-availability.js';
 import {
   MODEL_ALIASES_HINT,
   resolveBinding,
@@ -251,6 +252,11 @@ const modelCmd: SlashCommand = {
     // model + alias list on non-TTY surfaces (Telegram, daemon, tests).
     const compositor = ctx.getCompositor?.() ?? null;
     if (compositor) {
+      // P2 follow-up: runPicker's `options: readonly string[]` uses the same
+      // string as both rendered label and selected value (see `choice` below
+      // fed straight to `switchModel`), so there is no clean label≠value split
+      // to hang an availability marker on without corrupting selection — left
+      // un-annotated; picker would need a { label, value } option shape first.
       const options = [...MODEL_ALIASES_HINT];
       const currentIdx = options.indexOf(ctx.stats.model as (typeof MODEL_ALIASES_HINT)[number]);
       const picked = await runPicker(compositor, {
@@ -269,7 +275,10 @@ const modelCmd: SlashCommand = {
     }
 
     ctx.out.info(`Current model: ${palette.brand(ctx.stats.model)}`);
-    ctx.out.line(palette.dim(`  Aliases: ${MODEL_ALIASES_HINT.join(', ')}  (or any org/model HF id)`));
+    const aliasList = MODEL_ALIASES_HINT.map((alias) =>
+      isModelAvailable(alias) ? alias : `${alias} (needs sign-in)`,
+    ).join(', ');
+    ctx.out.line(palette.dim(`  Aliases: ${aliasList}  (or any org/model HF id)`));
     return 'continue';
   },
 };
