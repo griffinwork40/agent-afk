@@ -150,10 +150,8 @@ export async function handleSwitchCallback(
       await ctx.reply(res.reason === 'already-active' ? formatAlreadyActive() : formatSwitchNotFound());
       return;
     }
-    const name = sessionManager
-      .listChatSessions(chatId)
-      .find((s) => s.sessionId === targetSessionId)?.name;
-    const confirm = formatSwitched(name !== undefined ? { name } : {});
+    // Use the name switchToSession already loaded — no second full-store rescan.
+    const confirm = formatSwitched(res.name !== undefined ? { name: res.name } : {});
     // Edit the /sessions message in place (fall back to a fresh reply).
     await ctx
       .editMessageText(confirm, { parse_mode: 'HTML' })

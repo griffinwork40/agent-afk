@@ -13,6 +13,7 @@ import { injectHotMemory } from '../agent/memory/index.js';
 // only telegram→cli edge and there is no import cycle (they never import telegram).
 import { createSessionStats, recordTurn } from '../cli/slash/session-stats.js';
 import { saveSession, loadSession, listSessions } from '../cli/session-store.js';
+import { resumeConfigFor } from '../cli/resume-session.js';
 import type { SessionStats } from '../cli/slash/types.js';
 import { promises as fs } from 'fs';
 import { join } from 'path';
@@ -218,10 +219,22 @@ export class SessionManager {
 
       // /switch: continue a staged prior conversation instead of starting fresh.
       // Consumed once here — a later /clear (via _resetStats) drops any stale target.
+      // Load the target sidecar and populate the SAME resume fields the CLI does
+      // (resume + sessionId + resumeHistory) so the providers actually replay the
+      // saved transcript. Forwarding only config.resume (the SDK id) resumes an
+      // empty conversation. Mirrors resumeConfigFor (src/cli/resume-session.ts).
       const resumeTarget = this.pendingResume.get(chatId);
       if (resumeTarget !== undefined) {
-        config.resume = resumeTarget;
         this.pendingResume.delete(chatId);
+        const stored = loadSession(resumeTarget);
+        Object.assign(
+          config,
+          resumeConfigFor({
+            id: resumeTarget,
+            resumeId: stored?.sessionId ?? resumeTarget,
+            stored,
+          }),
+        );
       }
 
       const session = await this.options.createSession(injectHotMemory(config));
@@ -626,7 +639,7 @@ export class SessionManager {
   async switchToSession(
     chatId: number,
     targetSessionId: string,
-  ): Promise<{ ok: true } | { ok: false; reason: 'not-found' | 'already-active' }> {
+  ): Promise<{ ok: true; name?: string } | { ok: false; reason: 'not-found' | 'already-active' }> {
     // Already the live active conversation → no-op (avoid a needless rebuild).
     if (this.sessions.has(chatId) && this.sessionData.get(chatId)?.sessionId === targetSessionId) {
       return { ok: false, reason: 'already-active' };
@@ -640,7 +653,10 @@ export class SessionManager {
     // Close the current live session (sidecar already persisted per-turn).
     const old = this.sessions.get(chatId);
     if (old) {
-      await old.close();
+      // Guard the close (mirrors closeAll): a throwing close() must never block
+      // the delete + target-state adoption below, or the stale session stays keyed
+      // in this.sessions and the next getSession returns it unrebuilt.
+      await old.close().catch((err) => console.error('Error closing session on switch:', err));
       this.sessions.delete(chatId);
     }
     // Drop in-memory stats so the resumed session hydrates the TARGET's stats
@@ -664,9 +680,13 @@ export class SessionManager {
       data.lastActivity = new Date().toISOString();
     }
     data.sessionId = targetSessionId;
+    // Adopt the target's cwd, or CLEAR a stale per-chat override when the target
+    // has none — otherwise the resumed session runs + autosaves under the
+    // previously-active conversation's directory (getSession uses data.cwd ?? botCwd).
     if (stored.cwd !== undefined) data.cwd = stored.cwd;
+    else delete data.cwd;
     this.pendingResume.set(chatId, targetSessionId);
-    return { ok: true };
+    return stored.name !== undefined ? { ok: true, name: stored.name } : { ok: true };
   }
 
   /**

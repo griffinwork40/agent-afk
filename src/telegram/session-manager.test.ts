@@ -873,7 +873,7 @@ describe('SessionManager — session switcher (/sessions, /switch, /new)', () =>
     manager.recordTelegramTurn(801, 'second convo', 'b', { sessionId: 'sdk-2' });
 
     const res = await manager.switchToSession(801, 'sdk-1');
-    expect(res).toEqual({ ok: true });
+    expect(res).toEqual({ ok: true, name: 'first-convo' });
     expect(manager.listChatSessions(801).find((s) => s.sessionId === 'sdk-1')?.active).toBe(true);
 
     // The rebuilt session continues the chosen conversation: config.resume === target.
@@ -908,5 +908,44 @@ describe('SessionManager — session switcher (/sessions, /switch, /new)', () =>
     manager.recordTelegramTurn(805, 'new convo', 'b', { sessionId: 'sdk-fresh' });
 
     expect(manager.listChatSessions(805).map((s) => s.sessionId).sort()).toEqual(['sdk-fresh', 'sdk-old']);
+  });
+
+  test('a rejecting close() during switch still deletes the stale session and rebuilds on next getSession', async () => {
+    class RejectingCloseSession extends MockSessionWithId {
+      override async close() { throw new Error('close boom'); }
+    }
+    let created = 0;
+    const m = new SessionManager({
+      dataDir: testDataDir,
+      apiKey: 'test-key',
+      defaultModel: 'sonnet',
+      createSession: async (config: AgentConfig) => {
+        lastConfig = config;
+        created += 1;
+        // The FIRST built session (the one live at switch-time) rejects on
+        // close; the post-switch rebuild closes cleanly. This isolates the
+        // rejecting close to switchToSession's close path (ITEM 3's fix).
+        return created === 1 ? new RejectingCloseSession('sdk-live-default') : new MockSessionWithId('sdk-rebuilt');
+      },
+    });
+    // Record the switch TARGET sidecar with no live session so the passed
+    // metadata id ('sdk-target') sticks — a live session's own sessionId would
+    // otherwise shadow it (recordTelegramTurn copies live.sessionId into stats).
+    m.recordTelegramTurn(900, 'target convo', 'b', { sessionId: 'sdk-target' });
+    await m.resetSession(900); // no live session to close; clears data.sessionId
+    // Establish the live session switchToSession will close — build #1, whose
+    // close() rejects. Its own turn keys it to 'sdk-live-default'.
+    const stale = await m.getSession(900);
+    m.recordTelegramTurn(900, 'live convo', 'a', { sessionId: 'sdk-live-default' });
+
+    const res = await m.switchToSession(900, 'sdk-target');
+    expect(res.ok).toBe(true);
+
+    lastConfig = undefined;
+    const rebuilt = await m.getSession(900);
+    // The stale (reject-on-close) session was still evicted → getSession rebuilt.
+    expect(rebuilt).not.toBe(stale);
+    expect(lastConfig?.resume).toBe('sdk-target');
+    await m.closeAll().catch(() => {});
   });
 });

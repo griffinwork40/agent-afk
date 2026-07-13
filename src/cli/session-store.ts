@@ -218,14 +218,18 @@ export function loadSession(idOrPath: string): StoredSession | undefined {
   let path: string;
   try {
     path = safeResolvePath(idOrPath);
-  } catch {
+  } catch (err) {
+    // Path escaped the session store (traversal probe) — leave an audit trail
+    // instead of silently returning undefined.
+    console.warn(`loadSession: rejected unsafe session id ${JSON.stringify(idOrPath)}: ${(err as Error).message}`);
     return undefined;
   }
   if (!existsSync(path)) return undefined;
   try {
     const raw = readFileSync(path, 'utf-8');
     return JSON.parse(raw) as StoredSession;
-  } catch {
+  } catch (err) {
+    console.warn(`loadSession: failed to read/parse ${path}: ${(err as Error).message}`);
     return undefined;
   }
 }

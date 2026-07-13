@@ -120,6 +120,26 @@ describe('session switcher handlers', () => {
       expect(callbackData).toEqual([`${SWITCH_CALLBACK_PREFIX}sdk-A`, `${SWITCH_CALLBACK_PREFIX}sdk-B`]);
     });
 
+    it('omits the switch button for a session whose id exceeds the callback_data cap, but still lists it', async () => {
+      const longId = 'sdk-' + 'x'.repeat(64); // 68 chars; 'afk:sw:' + id = 75 > 64-byte cap
+      manager.recordTelegramTurn(702, 'short id convo', 'a', { sessionId: 'sdk-short' });
+      await manager.resetSession(702);
+      manager.recordTelegramTurn(702, 'long id convo', 'b', { sessionId: longId });
+
+      const { ctx, reply } = makeCtx(702);
+      await handleSessions(ctx, manager, log);
+
+      const [body, opts] = reply.mock.calls[0] as [string, InlineKeyboardReply];
+      // Both sessions appear in the text list (list uses names, not ids).
+      expect(body).toContain('short-id-convo');
+      expect(body).toContain('long-id-convo');
+      // But only the short-id session gets a switch button.
+      const rows = opts.reply_markup?.inline_keyboard ?? [];
+      const callbackData = rows.map((r) => r[0]!.callback_data);
+      expect(callbackData).toEqual([`${SWITCH_CALLBACK_PREFIX}sdk-short`]);
+      expect(callbackData.some((d) => d.includes(longId))).toBe(false);
+    });
+
     it('replies "Could not identify chat" when the update has no chat', async () => {
       const { ctx, reply } = makeCtx(null);
       await handleSessions(ctx, manager, log);
