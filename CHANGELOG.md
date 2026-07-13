@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.38.2] - 2026-07-13
+
+### Fixed
+- thread surface into skill-fork managers so forked skills get correct trace origin (#469) (#568) (0eed46b)
+
+### Changed
+- add note on using /service-setup for daemon persistence (#567) (3f09eec)
+
 ## [5.38.1] - 2026-07-13
 
 ### Fixed
