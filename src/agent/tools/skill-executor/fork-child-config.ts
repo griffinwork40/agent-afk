@@ -127,6 +127,11 @@ export function buildForkedChildConfig(
   const childManager = new SubagentManager({
     parentAbortSignal: signal,
     ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
+    // Trace origin (#469): inherit the owning surface like traceWriter/cwd so
+    // grandchild forks made directly off this manager report the real origin.
+    // The recursive SubagentExecutor ctx below already carries surface (:157);
+    // this keeps the manager itself consistent, mirroring subagent/child-config.ts.
+    ...(ctx.surface !== undefined ? { surface: ctx.surface } : {}),
     // Worktree isolation: forward cwd so when the skill-forked child
     // dispatches its own `agent` calls (grandchild forks), the manager's
     // forkSubagent injects cwd into the grandchild's config. Mirrors

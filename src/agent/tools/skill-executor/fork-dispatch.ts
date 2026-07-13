@@ -95,6 +95,12 @@ export async function executeForkedRegistrySkill(
     parentModel: skillChildModel,
     ...(ctx.baseUrl !== undefined ? { baseUrl: ctx.baseUrl } : {}),
     ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
+    // Trace origin (#469): thread the owning surface so this manager's
+    // forkSubagent fills the skill subagent's config.surface (subagent.ts
+    // parentSurface fill). Without it the fork's session_init records
+    // origin:'unknown' instead of cli/telegram/daemon — the same class #468
+    // fixed for agent-tool/compose forks and deliberately left as a follow-up.
+    ...(ctx.surface !== undefined ? { surface: ctx.surface } : {}),
     progressSink: getCurrentSink(),
     // Worktree isolation: this manager forks the skill subagent. cwd
     // forwarding here is what gives the skill subagent's bash/grep/file
@@ -192,6 +198,8 @@ export async function executePluginSkill(
     parentModel: pluginChildModel,
     ...(ctx.baseUrl !== undefined ? { baseUrl: ctx.baseUrl } : {}),
     ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
+    // Trace origin (#469) — same rationale as executeForkedRegistrySkill above.
+    ...(ctx.surface !== undefined ? { surface: ctx.surface } : {}),
     progressSink: getCurrentSink(),
     // Worktree isolation — same rationale as executeForkedRegistrySkill above.
     ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
