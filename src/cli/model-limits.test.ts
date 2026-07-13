@@ -30,13 +30,15 @@ describe('model-limits', () => {
   });
 
   it('declares the 1M context window for Claude Sonnet 5 (alias + wire id)', () => {
-    // Sonnet 5 ships 1M natively (no `_1m` opt-in). Both the `sonnet` alias and
-    // the `claude-sonnet-5` wire id must report the full window, not the 200k
-    // Anthropic fallback. `sonnet_1m` stays a redundant back-compat alias.
+    // Sonnet 5 ships 1M natively — no `_1m` opt-in needed for the window. Both
+    // the `sonnet` alias and the `claude-sonnet-5` wire id report the full 1M
+    // window. `sonnet_1m` also reports 1M and additionally opts out of the
+    // default auto-compaction budget (see autoCompactLimitFor).
     expect(MODEL_CONTEXT_LIMITS['sonnet']).toBe(1_000_000);
     expect(MODEL_CONTEXT_LIMITS['claude-sonnet-5']).toBe(1_000_000);
     expect(contextLimitFor('sonnet')).toBe(1_000_000);
     expect(contextLimitFor('claude-sonnet-5')).toBe(1_000_000);
+    expect(contextLimitFor('sonnet_1m')).toBe(1_000_000);
   });
 
   it('contextLimitFor falls back to 200k for unknown Anthropic-style models', () => {

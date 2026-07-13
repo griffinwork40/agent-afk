@@ -35,7 +35,7 @@
  */
 
 import { existsSync, mkdirSync, renameSync, cpSync, rmSync } from 'fs';
-import { join, dirname, isAbsolute } from 'path';
+import { join, dirname, basename, isAbsolute } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
 import { env } from './config/env.js';
@@ -100,16 +100,30 @@ export function getPluginsDir(): string {
 // Project-scope paths (cwd-relative)
 // ---------------------------------------------------------------------------
 
-export function getProjectAfkDir(): string {
-  return join(process.cwd(), '.afk');
+/**
+ * Project-scoped `.afk/` root: `<cwd>/.afk`.
+ *
+ * Takes an explicit `cwd` because long-lived hosts (daemon, Telegram bot) and
+ * the REPL's worktree mode track a *session* working directory that diverges
+ * from the Node host's `process.cwd()` — project-scope artifacts must resolve
+ * against the session's cwd, not the host's. The default keeps parity with
+ * call sites that genuinely mean the host process cwd (mirrors
+ * `getProjectPlansDir` below).
+ */
+export function getProjectAfkDir(cwd: string = process.cwd()): string {
+  return join(cwd, '.afk');
 }
 
-export function getProjectSkillsDir(): string {
-  return join(getProjectAfkDir(), 'skills');
+/**
+ * Project-scoped skills directory: `<cwd>/.afk/skills/`.
+ * See {@link getProjectAfkDir} for why `cwd` is a parameter.
+ */
+export function getProjectSkillsDir(cwd: string = process.cwd()): string {
+  return join(getProjectAfkDir(cwd), 'skills');
 }
 
-export function getProjectPluginsDir(): string {
-  return join(getProjectAfkDir(), 'plugins');
+export function getProjectPluginsDir(cwd: string = process.cwd()): string {
+  return join(getProjectAfkDir(cwd), 'plugins');
 }
 
 /**
@@ -293,6 +307,22 @@ export function validateSessionId(sessionId: string): void {
 export function getTraceDir(sessionId: string): string {
   validateSessionId(sessionId);
   return join(getAfkStateDir(), 'witness', sessionId);
+}
+
+/**
+ * Inverse of {@link getTraceDir}: recover the witness `sessionLabel` from a
+ * trace-file path (`.../witness/<label>/trace.jsonl`).
+ *
+ * Returns `null` for the in-memory writer sentinel (`in-memory://trace`) and
+ * for an absent path, so a caller recording the label can store an explicit
+ * "no trace" marker rather than a bogus directory name. Used to stamp the
+ * witness label into the session ledger's `meta` record — the trace writer
+ * exposes only `getTracePath()` (its label is a random UUID it doesn't surface
+ * directly), so the label is derived from that path.
+ */
+export function sessionLabelFromTracePath(tracePath: string | undefined | null): string | null {
+  if (!tracePath || tracePath.startsWith('in-memory:')) return null;
+  return basename(dirname(tracePath));
 }
 
 /**

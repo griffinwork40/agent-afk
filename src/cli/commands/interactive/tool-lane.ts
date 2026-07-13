@@ -1,7 +1,7 @@
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import { palette } from '../../palette.js';
 import { SUBAGENT_TOOLS, NESTING_TOOLS, SKILL_TOOLS } from '../../tool-category.js';
-import { formatToolLine, formatToolResultLine, formatOutcome, formatDiffBlock, doneGlyph, sanitizeLabel } from './tool-lane-format.js';
+import { formatToolLine, formatToolResultLine, formatOutcome, formatDiffBlock, doneGlyph, sanitizeLabel, batchBadge } from './tool-lane-format.js';
 import type { DiffPayload } from '../../../utils/diff.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 import { truncateDisplayWidth, stripAnsi } from '../../display.js';
@@ -282,6 +282,36 @@ export class ToolLane {
     return undefined;
   }
 
+  /**
+   * Returns the toolName of the trailing completed *flat* root — the most
+   * recent entry (scanning {@link order} newest→oldest) that is a leaf tool
+   * with a result and no `agentContext` — or `undefined` when that trailing
+   * root is in-flight, is a NESTING tool, or the lane has no such root.
+   *
+   * Drives the orchestrator's cross-flush run-accumulation gate: when the
+   * incoming tool matches this name (and no thinking phase is pending), the
+   * eager per-tool flush is skipped so consecutive same-tool roots stay in the
+   * lane and commit as one grouped `toolName ×N` block via
+   * {@link flushCompletedRoots} → {@link renderGroupedRootTools}. Returns
+   * undefined for NESTING roots so dispatch tools (which commit via their own
+   * subagent-done path) never trigger a hold, and undefined for an in-flight
+   * trailing root so parallel blocks keep their existing accumulate-then-flush
+   * behavior untouched.
+   */
+  peekTrailingCompletedRootToolName(): string | undefined {
+    for (let i = this.order.length - 1; i >= 0; i--) {
+      const id = this.order[i]!;
+      const entry = this.entries.get(id);
+      if (!entry || entry.kind !== 'tool') continue; // skip non-tool entries
+      if (entry.agentContext) continue;              // skip nested (non-root) entries
+      // First flat root from the tail decides the verdict:
+      if (entry.result === undefined) return undefined;        // in-flight → don't hold
+      if (NESTING_TOOLS.has(entry.toolName)) return undefined; // nesting → own commit path
+      return entry.toolName;
+    }
+    return undefined;
+  }
+
   getOverlay(): string {
     const childMap = this.buildChildMap();
     const lines: string[] = [];
@@ -466,7 +496,7 @@ export class ToolLane {
         // never carries a `diff` payload (diffs originate from edit/write
         // tool_diff chunks), so no diff block is rendered here.
         if (entry.result) {
-          lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName)));
+          lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName) + batchBadge(entry.result)));
         } else {
           lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' …')));
         }
@@ -479,7 +509,7 @@ export class ToolLane {
         }
       } else {
         if (entry.result) {
-          lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName)));
+          lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName) + batchBadge(entry.result)));
           if (entry.diff && !entry.result.isError) {
             // Diff hangs under the outcome line, indented one level deeper
             // (4 spaces) so it visually attaches to this tool entry.

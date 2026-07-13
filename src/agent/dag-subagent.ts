@@ -13,7 +13,7 @@ import type { ZodType } from 'zod';
 import type { AgentModelInput, CanUseTool, IAgentSession } from './types.js';
 import type { SubagentManager } from './subagent.js';
 import { runDAG, type DAGEdge, type DAGNode, type DAGRunResult } from './dag.js';
-import { attachSubagentContext } from './subagent/result.js';
+import { attachSubagentContext, annotateIfIncomplete } from './subagent/result.js';
 import { TimeoutError } from '../utils/errors.js';
 
 export interface SubagentDAGNode {
@@ -151,7 +151,14 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
             subagentId: result.id,
           });
         }
-        return result.output ?? result.message?.content;
+        // result.output is a structured parse (complete by construction); only
+        // the raw-text fallback can be an incomplete partial, so annotate just
+        // that branch. No-op marker for clean completions.
+        if (result.output !== undefined) return result.output;
+        const text = result.message?.content;
+        return typeof text === 'string'
+          ? annotateIfIncomplete(text, result.stopReason)
+          : text;
       } finally {
         nodeSignal.removeEventListener('abort', onNodeAbort);
         await handle.teardown().catch(() => undefined);

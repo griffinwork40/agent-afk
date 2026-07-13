@@ -12,10 +12,12 @@
  *   /bgsub:join <id>       wait for a job and print its result
  *   /bgsub:cancel <id>     cancel a still-running job
  *
- * Background results are NEVER auto-injected into the conversation. The
- * `/bgsub:join` command prints the result to the operator's terminal but
- * does not push it into the model's context — surfacing the result to the
- * model is the operator's deliberate next message.
+ * In the interactive REPL, settled background results are auto-delivered
+ * into the model's context with the next user message (BgResultNotifier —
+ * see src/cli/commands/interactive/bg-result-notifier.ts; opt out with
+ * AFK_BG_AUTO_DELIVER=0). The `/bgsub:join` command remains the manual
+ * replay path: it prints the result to the operator's terminal but does
+ * not push it into the model's context.
  *
  * @module cli/slash/commands/bgsub
  */

@@ -54,9 +54,11 @@
  * @module agent/tools/hooks/path-approval-hook
  */
 
+import path from 'path';
 import { elicitationRouter } from '../../elicitation-router.js';
 import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
 import { wouldBeRestricted, realpathSafe } from '../handlers/_cwd-utils.js';
+import { isReadDenied } from '../handlers/read-denylist.js';
 import { appendGrant } from '../../permissions-store.js';
 import type { HookContext, HookDecision, HookHandler } from '../../hooks.js';
 
@@ -183,7 +185,14 @@ async function preToolUseImpl(
   // Reproduce the handler's containment check. cwd / readRoots / writeRoots
   // are sampled from the grant manager using the same fresh-snapshot pattern
   // the dispatcher uses on every handler call.
-  const grantManager = opts.getGrantManager();
+  //
+  // Prefer the grant manager injected by the executing session's dispatcher
+  // (context.grantManager) over the process-global ref: for a forked child the
+  // ref is pinned to the TOP-LEVEL session and blind to the child's own
+  // writeRoots, so a writeRoots-granted sibling write would be auto-denied even
+  // though the child's grants permit it (#435/#514). The ref remains the
+  // fallback for non-dispatcher-originated dispatch (tests, SessionEnd).
+  const grantManager = context.grantManager ?? opts.getGrantManager();
   if (!grantManager) {
     // Failsafe — no wired grant manager (headless, one-shot, daemon). Skip
     // the approval pre-check and let the handler's own resolveAndContain
@@ -196,43 +205,104 @@ async function preToolUseImpl(
   // so a cwd change between Pre and Post (worktree rename, /cwd command)
   // cannot cause the revoke to miss the correct key.
   const cwd = opts.getCwd();
+
+  // Resolve the candidate to an absolute path the SAME way resolveAndContain
+  // will (grants.resolveBase, then cwd) — used for the denylist floor below.
+  // Note `cwd` only anchors a RELATIVE candidate here; it is NOT a confinement
+  // base (see the unconfined short-circuit below).
+  const resolvedAbs = path.isAbsolute(candidate)
+    ? candidate
+    : path.resolve(grants.resolveBase ?? cwd ?? process.cwd(), candidate);
+
+  // (1) Unconditional read-denylist floor. Secret/credential paths (~/.ssh,
+  // ~/.afk/config, …) are blocked outright for reads — never prompted, never
+  // bypassed — for top-level sessions and forks alike. Mirrors the floor in
+  // resolveAndContain (_cwd-utils.ts) so the hook blocks cleanly instead of
+  // prompting-then-letting-the-handler-throw. `~/.afk/state` is intentionally
+  // NOT denied (forks legitimately read skill-preflight/todos/transcripts).
+  if (mode === 'read') {
+    const denied = isReadDenied(resolvedAbs);
+    if (denied.denied) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[path-approval] surface=${opts.surface} tool=${context.toolName} path=${resolvedAbs} outcome=read-denylist`,
+      );
+      return {
+        decision: 'block',
+        reason:
+          `Access denied: ${resolvedAbs} is a protected credential/secret path ` +
+          `(read-denylist entry: ${denied.matched}). This path is never readable — ` +
+          `it holds credentials, not task data; do not retry.`,
+      };
+    }
+  }
+
+  // (2) Bypass mode (bypassPermissions): no containment prompt.
+  if (grants.allowAll === true) return {};
+
+  // (3) Unconfined session: `resolveBase` is deliberately unset — a top-level
+  // `afk`/`afk i` with no worktree, or a fork inheriting that read-open scope.
+  // The file-tool HANDLER (resolveAndContain, _cwd-utils.ts:107-119) bypasses
+  // containment for exactly this case, so the hook MUST agree. The prior
+  // `resolveBase: grants.resolveBase ?? cwd` fabricated a concrete base from
+  // getCwd() (the REPL wires it to `effectiveCwd ?? process.cwd()`,
+  // bootstrap.ts), turning an unconfined session into a confined one whose
+  // readRoots were `[]` — so EVERY typed-file read was "restricted", and forks
+  // (which cannot prompt) auto-denied all of them. Honoring undefined
+  // resolveBase here — matching the handler's own documented invariant — is the
+  // fix for the sub-agent deny-all.
+  if (grants.resolveBase === undefined) return {};
+
+  // (4) Confined session: reproduce the handler's containment verdict. Pass
+  // grants.resolveBase directly (no `?? cwd`); it is defined on this branch.
   const result = wouldBeRestricted(
     candidate,
     {
       cwd,
-      resolveBase: grants.resolveBase ?? cwd,
+      resolveBase: grants.resolveBase,
       readRoots: grants.readRoots,
       writeRoots: grants.writeRoots,
-      ...(grants.allowAll === true ? { allowAll: true } : {}),
     },
     mode,
   );
-  // Bypass mode: `allowAll` makes wouldBeRestricted return not-restricted, so
-  // this returns {} here — no prompt. (Belt-and-suspenders with the explicit
-  // flag pass-through above.)
   if (!result.restricted) return {};
 
   // A forked sub-agent has no human relationship of its own and must not prompt
   // the operator for out-of-root access — the prompt would surface on the
   // parent's REPL/Telegram handler (the elicitation router is process-wide),
   // interleaved into the parent's turn with no attribution. Auto-deny instead.
-  // The sub-agent inherits the parent's grants (this hook and its grant-manager
-  // closure are shared via the inherited registry), so any path the parent
-  // already approved still passes the `!restricted` check above; only a
-  // genuinely NEW out-of-root path reaches here, and the sub-agent reports the
-  // requirement back to its parent, which owns the surface and can grant it.
+  // The fork resolves path containment against its OWN grant manager (injected
+  // as `context.grantManager` by the executing session's dispatcher) — the
+  // child's own composed write/read roots, not the parent's. So a path inside
+  // the child's own granted roots still passes the `!restricted` check above;
+  // only a path outside the child's own grants reaches here, and the sub-agent
+  // reports the requirement back to its parent, which owns the surface and can
+  // grant it.
   // Mirrors the `parentSessionId` self-skip used by the memory + plan-mode hooks.
   if (context.parentSessionId !== undefined) {
     // eslint-disable-next-line no-console
     console.error(
       `[path-approval] surface=${opts.surface} tool=${context.toolName} path=${result.resolved} outcome=subagent-autodeny`,
     );
+    // #435: name the concrete remedy rather than implying a grant mechanism the
+    // fork does not have. A fork cannot elicit, so the recovery actor is always
+    // the PARENT: for writes it can re-dispatch with an explicit writeRoots
+    // grant on the `agent` tool (or do the write itself); for reads it owns the
+    // operator surface and can widen readRoots or re-dispatch with the path in cwd.
+    const remedy =
+      mode === 'write'
+        ? `Writes are confined to this fork's granted write roots by design ` +
+          `(worktree isolation). To allow it, the parent must re-dispatch you via ` +
+          `the \`agent\` tool with \`writeRoots: [${JSON.stringify(result.resolved)}]\`, ` +
+          `or perform the write itself. Return this exact path requirement to your parent.`
+        : `Reads are confined to this fork's granted read roots. Return this exact ` +
+          `path requirement to your parent, which owns the operator surface and can ` +
+          `grant access (widen readRoots or re-dispatch with the path inside cwd).`;
     return {
       decision: 'block',
       reason:
-        `Sub-agents cannot access paths outside the session's granted roots ` +
-        `(${result.resolved}). Report this path requirement to the parent ` +
-        `session, which owns the operator surface and can grant access.`,
+        `Sub-agent path access denied: ${result.resolved} is outside the ` +
+        `session's granted ${mode} roots. ${remedy}`,
     };
   }
 
@@ -280,7 +350,9 @@ function postToolUseImpl(
     ? 'write'
     : 'read';
 
-  const grantManager = opts.getGrantManager();
+  // Prefer the dispatcher-injected grant manager (same session as PreToolUse)
+  // so the "Once"-grant revoke targets the manager the Pre check mutated.
+  const grantManager = context.grantManager ?? opts.getGrantManager();
   if (!grantManager) return {};
   const grants = grantManager.getGrants();
 

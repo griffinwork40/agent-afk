@@ -945,3 +945,133 @@ describe('StatusLine narrow-terminal priority drop', () => {
     status.stop();
   });
 });
+
+describe('StatusLine cwd/branch worktree dedupe', () => {
+  let stream: MockStream;
+
+  beforeEach(() => {
+    stream = mockStream({ isTTY: true, rows: 24 });
+  });
+
+  it('renders one merged ⎇ segment when branch matches the cwd basename (afk worktree pattern)', () => {
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({
+      model: 'sonnet',
+      cwd: '/Users/x/proj/.afk-worktrees/afk-20260705-142358-47b3ec',
+      branch: 'afk/20260705-142358-47b3ec',
+    });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    // The branch spelling appears (once, via the merged ⎇ segment)…
+    expect(out).toContain('⎇ afk/20260705-142358-47b3ec');
+    // …and the cwd spelling (slash → dash) does not: the cwd part was omitted.
+    expect(out).not.toContain('afk-20260705-142358-47b3ec');
+    // The shared slug renders exactly once across the whole line.
+    const slug = '20260705-142358-47b3ec';
+    expect(out.indexOf(slug)).toBe(out.lastIndexOf(slug));
+    status.stop();
+  });
+
+  it('sheds the merged location segment before truncating the model on a narrow terminal', () => {
+    // Regression guard for the dedupe model-truncation bug: the merged segment
+    // is drop-last among droppables (droppablePriority 1), NOT never-drop. If
+    // it were never-drop it would stack with the never-drop model, blow maxW at
+    // this width, and the final blind truncation would shear the model 'sonnet'
+    // off the right edge — violating formatLine's "never drop: model" invariant.
+    // So at this pathological width the location sheds and the MODEL survives.
+    stream.columns = 32;
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({
+      model: 'sonnet',
+      cwd: '/Users/x/proj/.afk-worktrees/afk-20260705-142358-47b3ec',
+      branch: 'afk/20260705-142358-47b3ec',
+      cost: 0.05,
+      tokens: 1200,
+    });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    // The model — the never-drop identity — is preserved…
+    expect(out).toContain('sonnet');
+    // …at this width the merged location segment had to shed to make room, so
+    // the full worktree identity does not survive (it drops, like the plain
+    // branch does in the else-branch at the same width).
+    expect(out).not.toContain('afk/20260705-142358-47b3ec');
+    // Lowest-priority droppables (tokens) still shed first.
+    expect(out).not.toContain('tok');
+    status.stop();
+  });
+
+  it('preserves the #PR suffix inside the merged segment', () => {
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({
+      model: 'sonnet',
+      cwd: '/Users/x/proj/.afk-worktrees/afk-20260705-142358-47b3ec',
+      branch: 'afk/20260705-142358-47b3ec',
+      pr: 7,
+    });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('⎇ afk/20260705-142358-47b3ec #7');
+    status.stop();
+  });
+
+  it('renders cwd and branch separately when they do not match', () => {
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', cwd: '/tmp/proj', branch: 'feat/x' });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('proj');
+    expect(out).toContain('⎇ feat/x');
+    status.stop();
+  });
+
+  it('does NOT merge on a name coincidence outside .afk-worktrees (positive worktree signal required)', () => {
+    // cwd basename `redesign` equals the branch, but the parent dir is `/tmp`,
+    // not `.afk-worktrees` — this is a plain checkout, not a managed worktree.
+    // The cwd ("where am I?") must NOT be suppressed on a name coincidence
+    // alone; a positive worktree signal (parent dir) is required to dedupe.
+    stream.columns = 100;
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', cwd: '/tmp/redesign', branch: 'redesign' });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    // Both the cwd and the branch segment render, so the coincident identity
+    // appears twice — it was NOT collapsed into one merged segment (contrast
+    // the afk-worktree dedupe cases, where the shared slug renders exactly once).
+    expect(out).toContain('⎇ redesign');
+    expect(out.indexOf('redesign')).not.toBe(out.lastIndexOf('redesign'));
+    status.stop();
+  });
+
+  it('does NOT merge when the shared identity exceeds the 30-col cap — keeps cwd as a second signal', () => {
+    // A genuine managed-worktree path (parent IS .afk-worktrees) whose identity
+    // is >30 cols. Merging would truncate the branch to 30 cols and drop the
+    // cwd, leaving an ambiguous truncated string as the SOLE location signal —
+    // strictly worse than the un-deduped line. So dedupe falls back and keeps
+    // the cwd leaf as a second signal. Wide terminal so the cwd leaf (which
+    // formatCwd always preserves) isn't itself right-edge truncated.
+    stream.columns = 200;
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    stream.writes.length = 0;
+    status.repaint({
+      model: 'sonnet',
+      cwd: '/Users/x/proj/.afk-worktrees/afk-20260705-142358-verylongsuffix-xy',
+      branch: 'afk/20260705-142358-verylongsuffix-xy',
+    });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    // The cwd leaf (dash-form) is preserved — under the merge path it would be
+    // hidden entirely, so its presence proves the >30-col fallback fired.
+    expect(out).toContain('afk-20260705-142358-verylongsuffix-xy');
+    // The branch segment still renders…
+    expect(out).toContain('⎇');
+    // …but capped at 30 cols, so the full slash-form branch does not appear.
+    expect(out).not.toContain('afk/20260705-142358-verylongsuffix-xy');
+    status.stop();
+  });
+});

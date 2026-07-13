@@ -243,6 +243,14 @@ export type AgentDefinition = {
   skills?: string[];
   initialPrompt?: string;
   maxTurns?: number;
+  /**
+   * Optional per-agent cap on tool-use rounds within the child's single turn
+   * (anti-hang ceiling). Omitted / ≤0 means unlimited. Frontmatter key
+   * `maxToolUseIterations` (alias `max-tool-use-iterations`). Honored on the
+   * `agent`-tool dispatch path (see child-config.ts) and enforced uniformly by
+   * both providers via shared/tool-loop-cap.ts.
+   */
+  maxToolUseIterations?: number;
   background?: boolean;
   memory?: 'user' | 'project' | 'local';
   effort?: EffortLevel | number;

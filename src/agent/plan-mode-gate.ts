@@ -59,6 +59,25 @@ export function createPlanModeGate(
       };
     }
 
+    // `worktree` is action-gated: `list` is a read-only dry-run sweep and
+    // passes; create/keep/release/remove mutate the git worktree registry
+    // and/or filesystem, mirroring the bash classifier's GIT_WORKTREE_MUTATING
+    // rule so the two surfaces cannot disagree about what "mutating" means.
+    if (toolName === 'worktree') {
+      const action =
+        typeof context.input === 'object' && context.input !== null
+          ? String((context.input as Record<string, unknown>)['action'] ?? '')
+          : '';
+      if (action !== 'list') {
+        return {
+          decision: 'block',
+          reason:
+            `plan mode: worktree "${action}" is refused (mutates the worktree ` +
+            `registry). Only action "list" is allowed in plan mode. Use /plan off to act.`,
+        };
+      }
+    }
+
     // `bash` is mutation-gated, not blanket-refused: read-only recon runs,
     // state-mutating commands are refused. Reuses the same best-effort
     // classifier as the read-only skill phases (single source of mutation

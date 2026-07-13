@@ -32,12 +32,14 @@ export interface ResetStateHost {
   canceled: boolean;
   backgrounded: boolean;
   softStopped: boolean;
+  softStopQueueBase: number;
   paused: boolean;
   activeGhost: string | null;
   anchorRow: number | undefined;
   hasCommitted: boolean;
   commitInFlight: boolean;
   pendingResizeErase: { top: number; bottom: number } | null;
+  bandGeometryStale: boolean;
   lastKnownRows: number;
   pickerController: PickerController | null;
   inputMode: CompositorInputMode;
@@ -63,6 +65,7 @@ export function resetState(self: ResetStateHost): void {
   self.canceled = false;
   self.backgrounded = false;
   self.softStopped = false;
+  self.softStopQueueBase = 0;
   self.paused = false;
   // Clear active ghost — stale suggestions must not survive a disarm/rearm
   // cycle. The engine itself is NOT disposed here (only in disarm) since
@@ -86,6 +89,13 @@ export function resetState(self: ResetStateHost): void {
   // the previous arm cycle must not leak into the next one (the first repaint
   // of a fresh arm re-seeds lastKnownRows before any resize can be detected).
   self.pendingResizeErase = null;
+  // F2: a stale-geometry flag from the previous arm cycle must not leak into
+  // the next one either — a fresh arm has no geometry yet (rather than WRONG
+  // geometry), which is the same "genuinely unknown" case BLOCKER-1 already
+  // handles safely, so leaving this true would only over-defer harmlessly —
+  // but resetting it keeps the field's meaning exact: "stale since the last
+  // resize", not "stale forever until any resize happens to occur".
+  self.bandGeometryStale = false;
   self.lastKnownRows = 0;
   // Drop any active picker — a disarm during a picker would leave
   // the controller's resolve callback orphaned. The runPicker abort

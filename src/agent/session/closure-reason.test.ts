@@ -43,6 +43,18 @@ describe('classifyClosureReason', () => {
     expect(classifyClosureReason({ ...base, lastStopReason: 'length' })).toBe('truncated');
   });
 
+  it('reports iteration_cap when the tool-use budget fired', () => {
+    expect(
+      classifyClosureReason({ ...base, lastStopReason: 'tool_use_loop_capped' }),
+    ).toBe('iteration_cap');
+  });
+
+  it('an abort signal outranks the iteration cap', () => {
+    expect(
+      classifyClosureReason({ ...base, abort: 'timeout', lastStopReason: 'tool_use_loop_capped' }),
+    ).toBe('timeout');
+  });
+
   it('reports max_turns_exceeded with the highest precedence', () => {
     expect(classifyClosureReason({ ...base, maxTurnsHit: true })).toBe('max_turns_exceeded');
     // The turn-cap throw surfaces as a generic error/abort — the flag must win.

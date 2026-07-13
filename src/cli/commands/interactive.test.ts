@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { StreamingMarkdownRenderer } from '../markdown-stream.js';
 import { renderMarkdownToTerminal } from '../formatter.js';
 import { palette } from '../palette.js';
-import { formatToolResultLine, isAutonameEnabled, formatAutonameSkipReason, startupHintLine } from './interactive.js';
+import { formatToolResultLine, isAutonameEnabled, resolveThinkingUi, formatAutonameSkipReason, startupHintLine } from './interactive.js';
 import type { ToolResultChunk } from '../../agent/types/message-types.js';
 import type { CliOptions } from './interactive/shared.js';
 import type { CliConfig } from '../config.js';
@@ -509,6 +509,77 @@ describe('interactive command - streaming logic', () => {
       process.env['AFK_WORKTREE_AUTONAME'] = '1';
       const options = { worktreeAutoname: false } as unknown as CliOptions;
       expect(isAutonameEnabled(options, emptyConfig)).toBe(false);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // resolveThinkingUi: --thinking-ui flag > AFK_THINKING_UI env > config > 'live'
+  // ────────────────────────────────────────────────────────────────────────
+  describe('resolveThinkingUi — precedence (flag > env > config > default)', () => {
+    const emptyConfig: CliConfig = {};
+    const noFlagOptions = {} as CliOptions;
+
+    let savedEnv: string | undefined;
+
+    beforeEach(() => {
+      savedEnv = process.env['AFK_THINKING_UI'];
+      delete process.env['AFK_THINKING_UI'];
+    });
+
+    afterEach(() => {
+      if (savedEnv === undefined) {
+        delete process.env['AFK_THINKING_UI'];
+      } else {
+        process.env['AFK_THINKING_UI'] = savedEnv;
+      }
+    });
+
+    it('nothing set → defaults to live', () => {
+      expect(resolveThinkingUi(noFlagOptions, emptyConfig)).toBe('live');
+    });
+
+    it.each(['summary', 'live', 'digest', 'off'] as const)(
+      'CLI flag %s wins over everything',
+      (mode) => {
+        process.env['AFK_THINKING_UI'] = 'off';
+        const options = { thinkingUi: mode } as CliOptions;
+        const config: CliConfig = { interactive: { thinkingUi: 'summary' } };
+        expect(resolveThinkingUi(options, config)).toBe(mode);
+      },
+    );
+
+    it.each(['summary', 'live', 'digest', 'off'])(
+      'env=%s used when no flag (over config)',
+      (envVal) => {
+        process.env['AFK_THINKING_UI'] = envVal;
+        const config: CliConfig = { interactive: { thinkingUi: 'summary' } };
+        expect(resolveThinkingUi(noFlagOptions, config)).toBe(envVal);
+      },
+    );
+
+    it.each(['DIGEST', ' Off ', 'Summary'])(
+      'env is case- and whitespace-insensitive (%s)',
+      (envVal) => {
+        process.env['AFK_THINKING_UI'] = envVal;
+        expect(resolveThinkingUi(noFlagOptions, emptyConfig)).toBe(envVal.trim().toLowerCase());
+      },
+    );
+
+    it.each(['verbose', 'quiet', '', 'liv'])(
+      'invalid env=%j falls through to config/default (not fatal)',
+      (envVal) => {
+        process.env['AFK_THINKING_UI'] = envVal;
+        // No config → default live
+        expect(resolveThinkingUi(noFlagOptions, emptyConfig)).toBe('live');
+        // With config → config wins over the invalid env
+        const config: CliConfig = { interactive: { thinkingUi: 'digest' } };
+        expect(resolveThinkingUi(noFlagOptions, config)).toBe('digest');
+      },
+    );
+
+    it('config used when no flag and no env', () => {
+      const config: CliConfig = { interactive: { thinkingUi: 'summary' } };
+      expect(resolveThinkingUi(noFlagOptions, config)).toBe('summary');
     });
   });
 

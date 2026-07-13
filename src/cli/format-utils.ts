@@ -23,6 +23,15 @@ export function formatCost(usd: number): string {
   return `$${usd.toFixed(2)}`;
 }
 
+export function formatToolCallStat(count: number): string {
+  // Renders a subagent/turn tool-invocation tally as "N tool call(s)" — the
+  // count of tool CALLS made, NOT the size of the tool allowlist. The distinct
+  // wording ("tool calls", matching `afk trace show`) disambiguates from
+  // `/info`'s "N tools" line, which counts AVAILABLE tool definitions. Single
+  // source of truth for the four interactive stat-line renderers.
+  return `${count} tool call${count === 1 ? '' : 's'}`;
+}
+
 export function formatTokens(count: number): string {
   // Defensive backstop: a non-finite count (undefined/NaN slipping through a
   // loosely-typed usage payload) must never render as "NaNm". Render "0"

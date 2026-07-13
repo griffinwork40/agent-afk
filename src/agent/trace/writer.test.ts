@@ -193,6 +193,49 @@ describe('NdjsonTraceWriter', () => {
     expect(seal.seq).toBe(1); // continues the monotonic seq after the phase event
   });
 
+  it('#171: exit backstop still seals when it fires between seal()\'s optimistic flag flip and its queued durable append', async () => {
+    const writer = new NdjsonTraceWriter({ traceDir });
+    await writer.write({
+      kind: 'session_phase',
+      payload: { phase: 'session_init_done', durationMs: 10 },
+    });
+
+    // Start seal() but deliberately do NOT await it yet. `seal()` sets
+    // `sealed = true` synchronously, then enqueues its durable append as a
+    // microtask on the write queue — it has not run by the time this line
+    // returns control to us. This reproduces the exact #171 race window:
+    // the optimistic flag is flipped, but no session_sealed record has
+    // reached disk yet.
+    const sealPromise = writer.seal({
+      status: 'succeeded',
+      finalCostUsd: 0.02,
+      finalTurnCount: 2,
+      closedAt: new Date().toISOString(),
+    });
+
+    // Fire the synchronous process-exit path *before* the queued append
+    // gets a turn on the microtask queue. Pre-fix, this gated on `sealed`
+    // (already true) and returned early, orphaning the trace. Post-fix, it
+    // gates on `sealRecordPersisted` (still false) and writes the backstop
+    // record.
+    writer.sealOnProcessExit();
+
+    // Let the queued seal() append run its course — it must see the
+    // now-true `sealRecordPersisted` and skip rather than appending a
+    // second terminal record.
+    await sealPromise;
+
+    const events = await readTrace(writer.getTracePath());
+    const seals = events.filter((e) => e.kind === 'session_sealed');
+    expect(seals).toHaveLength(1);
+    const seal = seals[0];
+    if (seal?.kind !== 'session_sealed') throw new Error('unreachable');
+    // The exit handler won the race, so the backstop's failed/incomplete
+    // semantics apply — NOT seal()'s intended succeeded payload.
+    expect(seal.payload.status).toBe('failed');
+    expect(seal.payload.incomplete).toBe(true);
+  });
+
   it('sealOnProcessExit() is a no-op after a normal seal() (no double seal)', async () => {
     const writer = new NdjsonTraceWriter({ traceDir });
     await writer.write({

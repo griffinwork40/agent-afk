@@ -2,6 +2,7 @@
 name: automate
 description: "Set up a scheduled headless afk run that pushes a summary to Telegram. Use when the user wants to automate a recurring task via the afk daemon scheduler (cron) with push-notified results."
 disable-model-invocation: true
+context: load
 ---
 
 Set up a recurring headless task using afk's **native** scheduler. Do NOT hand-roll launchd plists or shell scripts — afk has first-class scheduling: the `create_schedule` tool writes `~/.afk/config/schedules.json` entries that `afk daemon` runs on cron.

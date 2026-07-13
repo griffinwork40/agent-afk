@@ -121,8 +121,38 @@ export interface AgentConfig {
    */
   openaiBaseUrl?: string;
 
+  /**
+   * Per-slot signal set by `applySlotCredentials` for a `provider:
+   * 'chatgpt-oauth'` tier: force ChatGPT-subscription OAuth for this session's
+   * openai-compatible provider — selecting the `~/.codex/auth.json` ChatGPT
+   * token over `OPENAI_API_KEY`/`CODEX_API_KEY` and WITHOUT requiring the global
+   * `AFK_OPENAI_CHATGPT_OAUTH` flag. Lets a ChatGPT-subscription model coexist
+   * with a custom keyed OpenAI model in one session. See `resolveOpenAIAuth`.
+   */
+  forceChatgptOAuth?: boolean;
+
   /** Maximum number of conversation turns (optional) */
   maxTurns?: number;
+
+  /**
+   * Hard cap on tool-use rounds within a single user turn. Honored uniformly by
+   * both providers (anthropic-direct and openai-compatible) via the shared
+   * policy in `providers/shared/tool-loop-cap.ts`; when it fires, the provider
+   * runs one tools-stripped "wind-down" round so the model still returns a real
+   * answer. `0` or unset means no cap — the top-level default for both
+   * providers. Subagent forks set a non-zero default (see
+   * `SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS` in subagent.ts) so a runaway
+   * child tool-loop cannot hang the parent, which is suspended awaiting the
+   * child's result.
+   *
+   * Top-level sessions leave this unset by default (unlimited). An operator can
+   * opt into a top-level ceiling with the `AFK_MAX_TOOL_USE_ITERATIONS` env var
+   * (`getMaxToolUseIterations()` in cli/shared-helpers.ts): unset/`<=0` →
+   * unlimited (no change); a positive integer fills this field at every
+   * top-level session surface via `explicit ?? getMaxToolUseIterations()`, so an
+   * explicit config value still wins. The env var never touches subagent forks.
+   */
+  maxToolUseIterations?: number;
 
   /**
    * Controls Claude's extended-thinking / reasoning behavior. When omitted,
@@ -201,11 +231,22 @@ export interface AgentConfig {
   mcpManager?: import('../mcp/index.js').McpManager;
 
   /**
-   * Subagent definitions. NOT currently consumed by AFK's harness — reserved
-   * for future SDK V2 support. AFK's SubagentManager forks via the `agent`/
-   * `skill`/`compose` tools, not this registry, so populating `agents` is a
-   * silent no-op today; do not rely on it for nested dispatch. See
-   * skills/_agents/to-definition.ts (toAgentDefinition).
+   * Programmatic named-agent definitions, merged into the session's
+   * named-agent registry at the HIGHEST precedence (above project/user file
+   * scopes — the analog of Claude Code's `--agents` CLI tier).
+   *
+   * NOT wired into any built-in surface today: the one-shot chat, daemon,
+   * REPL, and Telegram bootstraps all call `loadAgentRegistry({ cwd })`
+   * WITHOUT `configAgents`, and no config-file field populates this — so it
+   * is a no-op unless a programmatic embedder builds the registry itself via
+   * `loadAgentRegistry({ configAgents })`. File-scope agents (`.afk/agents/`,
+   * `.claude/agents/`, `~/.afk/agents/`) are the supported path today.
+   *
+   * The registry powers the `agent` tool's `agent_type` dispatch (see
+   * `src/agent/agents/`). Keys are agent names; values follow the
+   * {@link AgentDefinition} shape (`prompt` = system prompt, `tools`/
+   * `disallowedTools` in Claude Code or AFK tool vocabulary, `model`,
+   * `maxTurns`; long-tail fields are tolerated but not honored yet).
    */
   agents?: Record<string, AgentDefinition>;
 

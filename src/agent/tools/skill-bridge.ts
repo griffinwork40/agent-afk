@@ -14,12 +14,19 @@
 // Barrel import triggers self-registration side-effects for built-in skills.
 import '../../skills/all.js';
 
-import { listSkills, getSkill, registerSkill, isSkillVisible } from '../../skills/index.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { listSkills, getSkill, registerSkill, isSkillVisible, evictSkillsByOrigin } from '../../skills/index.js';
 import { loadSkillPrompts } from '../../skills/_lib/prompt-loader.js';
 import { scanSkillsFromDir } from '../../skills/user-skills.js';
 import { scanLocalPlugins } from '../plugins-scanner.js';
 import { loadPluginEntrypoints } from '../plugins/load-entrypoints.js';
 import { extractPluginSkills } from '../plugins/tool-injector.js';
+import { readPluginManifest } from '../plugins/plugin-manifest.js';
+import { parseAgentMarkdown } from '../agents/parser.js';
+import { collectMarkdownFiles } from '../agents/registry.js';
+import type { RegisteredAgent } from '../agents/types.js';
 import { SubagentManager } from '../subagent.js';
 import { describeFailure } from '../subagent/result.js';
 import {
@@ -38,7 +45,11 @@ import {
   getSkillsDir,
 } from '../../paths.js';
 import { env } from '../../config/env.js';
-import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
+import {
+  loadImportFromConfig,
+  resolveImportedRoots,
+  readSourceEnabledState,
+} from '../../config/import-sources.js';
 
 
 export interface SkillManifestEntry {
@@ -61,8 +72,9 @@ export interface SkillManifestEntry {
  */
 export function buildSkillManifest(
   pluginConfigs?: SdkPluginConfig[],
+  opts?: CollectSkillEntriesOptions,
 ): string {
-  const entries = collectSkillEntries(pluginConfigs);
+  const entries = collectSkillEntries(pluginConfigs, opts);
   if (entries.length === 0) return '';
 
   const lines: string[] = [];
@@ -85,10 +97,28 @@ export function buildSkillManifest(
 }
 
 /**
+ * Options for {@link collectSkillEntries} / {@link buildSkillManifest}.
+ */
+export interface CollectSkillEntriesOptions {
+  /**
+   * Session working directory to resolve `<cwd>/.afk/skills/` against.
+   *
+   * Long-lived hosts (daemon, Telegram bot) run sessions whose configured
+   * cwd differs from the Node host's `process.cwd()` — and the host process
+   * never chdir()s, so without this override those sessions would resolve
+   * project skills against the directory the *process* was launched from,
+   * not the project the *session* is working in. Defaults to
+   * `process.cwd()` for standalone/REPL callers, where the two coincide.
+   */
+  cwd?: string;
+}
+
+/**
  * Collect all skill entries from registry + plugins.
  */
 export function collectSkillEntries(
   pluginConfigs?: SdkPluginConfig[],
+  opts?: CollectSkillEntriesOptions,
 ): SkillManifestEntry[] {
   const entries: SkillManifestEntry[] = [];
   const seen = new Set<string>();
@@ -118,7 +148,18 @@ export function collectSkillEntries(
   //    `project:<name>`. Both lose the bare slot to an already-registered
   //    builtin (origin undefined) via the resolveSkillKey collision logic.
   scanSkillsFromDir(getSkillsDir(), 'user');
-  scanSkillsFromDir(getProjectSkillsDir(), 'project');
+  // Invariant: evict stale project-origin skills before rescanning the
+  // project dir. The effective project scan root can change between calls —
+  // via process.chdir() (REPL worktree auto-naming) or via a different
+  // session cwd (daemon task, Telegram chat after /cd) — and any skills
+  // registered for the old root must not persist into the new project
+  // context. User-origin and built-in skills are deliberately excluded from
+  // eviction — they are cwd-agnostic and must survive across project
+  // boundaries. The eviction cost is O(registry size) and bounded by the
+  // number of registered skills (typically <100), so it is negligible
+  // relative to the disk scan that follows.
+  evictSkillsByOrigin('project');
+  scanSkillsFromDir(getProjectSkillsDir(opts?.cwd), 'project');
   // Imported skills from trusted source binaries (Claude Code, Codex) opted
   // into via `importFrom`. Scanned AFTER native scopes so a native skill keeps
   // the bare name on collision; an imported same-name skill falls back to
@@ -155,7 +196,7 @@ export function collectSkillEntries(
   //    Plugin frontmatter MAY carry `audience: internal` to opt into the
   //    same tier gate — extractPluginSkills() surfaces it as `audience`,
   //    defaulting to 'public' when absent.
-  const plugins = pluginConfigs ?? scanAllPluginRoots();
+  const plugins = pluginConfigs ?? scanAllPluginRoots(opts);
   for (const plugin of plugins) {
     if (plugin.type !== 'local') continue;
     const skills = extractPluginSkills(plugin.path);
@@ -205,6 +246,13 @@ export interface PluginSkillBody {
    * Absent → historical full-write fork.
    */
   readOnly?: boolean;
+  /**
+   * Per-skill model override from SKILL.md frontmatter `model:`. When present,
+   * `executePluginSkill` resolves the forked child's model as
+   * `model ?? defaultSubagentModel ?? defaultModel ?? 'sonnet'` — matching the
+   * registry fork path (`executeForkedRegistrySkill`). Absent → session default.
+   */
+  model?: string;
 }
 
 /**
@@ -220,6 +268,7 @@ export interface PluginSkillBody {
  */
 export function discoverPluginSkillBodies(
   pluginConfigs?: SdkPluginConfig[],
+  opts?: CollectSkillEntriesOptions,
 ): Map<string, PluginSkillBody> {
   // Invariant: no audience filter — dispatch is always available; only surfacing is gated.
   // Do NOT add isSkillVisible() here; see this comment before 'fixing' it.
@@ -227,7 +276,7 @@ export function discoverPluginSkillBodies(
   // Imported plugin roots are resolved inline in the fallback so the
   // loadImportFromConfig() + existsSync work only runs when no pluginConfigs
   // were supplied (a caller passing pluginConfigs skips it entirely).
-  const plugins = pluginConfigs ?? scanAllPluginRoots();
+  const plugins = pluginConfigs ?? scanAllPluginRoots(opts);
 
   for (const plugin of plugins) {
     if (plugin.type !== 'local') continue;
@@ -240,6 +289,7 @@ export function discoverPluginSkillBodies(
           ...(skill.allowedTools !== undefined ? { allowedTools: skill.allowedTools } : {}),
           ...(skill.context !== undefined ? { context: skill.context } : {}),
           ...(skill.readOnly === true ? { readOnly: true } : {}),
+          ...(skill.model !== undefined ? { model: skill.model } : {}),
         });
       }
     }
@@ -249,19 +299,77 @@ export function discoverPluginSkillBodies(
 }
 
 /**
+ * Discover plugin-contributed named agents for the agent registry.
+ *
+ * Scans each local plugin's `agents/` directory recursively for `*.md` files
+ * (Claude Code parity: plugins contribute agents via a bare convention
+ * directory — no manifest field required). Each agent is namespaced
+ * `<plugin>:<agent>` (plugin name from `<path>/.claude-plugin/plugin.json`,
+ * agent name from frontmatter), the same form skills use to address them
+ * (`subagent_type: "example-plugin:research-agent"`). Namespacing means a
+ * plugin agent named `research-agent` never shadows the builtin — the two
+ * coexist, and bundled skills' bare `research-agent` dispatches are unaffected.
+ *
+ * First-wins on a namespaced-name collision (mirrors {@link
+ * discoverPluginSkillBodies}). A plugin whose manifest has no readable `name`
+ * is skipped — its agents would have no stable qualified id to dispatch by.
+ * Cross-scope precedence (plugin < user < project < config) is applied by
+ * {@link import('../agents/registry.js').loadAgentRegistry}, which merges the
+ * returned list just above the builtins. Read/parse failures are contained
+ * per-file: one malformed agent never blocks the rest.
+ */
+export function discoverPluginAgents(
+  pluginConfigs?: SdkPluginConfig[],
+): RegisteredAgent[] {
+  const plugins = pluginConfigs ?? scanAllPluginRoots();
+  const agents: RegisteredAgent[] = [];
+  const seen = new Set<string>(); // qualified name → first wins
+  for (const plugin of plugins) {
+    if (plugin.type !== 'local') continue;
+    const pluginName = readPluginManifest(plugin.path).name;
+    if (pluginName === null) continue;
+    for (const filePath of collectMarkdownFiles(join(plugin.path, 'agents'))) {
+      let content: string;
+      try {
+        content = readFileSync(filePath, 'utf8');
+      } catch {
+        continue; // unreadable file — contained, skip
+      }
+      const parsed = parseAgentMarkdown(content);
+      if (parsed === undefined) continue; // malformed frontmatter — skip
+      const qualifiedName = `${pluginName}:${parsed.name}`;
+      if (seen.has(qualifiedName)) continue; // first plugin wins
+      seen.add(qualifiedName);
+      agents.push({
+        name: qualifiedName,
+        definition: parsed.definition,
+        source: `plugin:${pluginName}`,
+        filePath,
+        ...(parsed.bashReadOnly === true ? { bashReadOnly: true } : {}),
+        ...(parsed.ignoredKeys !== undefined ? { ignoredKeys: parsed.ignoredKeys } : {}),
+      });
+    }
+  }
+  return agents;
+}
+
+/**
  * Aggregate every plugin root AFK loads from, in priority order:
  * project-scope → user-scope → bundled → imported (trusted) roots. Single
  * source of truth for "which plugins exist," shared by skill-manifest
  * collection, plugin-body discovery, and boot-time entrypoint loading so the
  * three never drift apart.
  */
-export function scanAllPluginRoots(): SdkPluginConfig[] {
+export function scanAllPluginRoots(opts?: CollectSkillEntriesOptions): SdkPluginConfig[] {
   return [
-    ...scanLocalPlugins(getProjectPluginsDir()),
+    ...scanLocalPlugins(getProjectPluginsDir(opts?.cwd)),
     ...scanLocalPlugins(),
     ...scanLocalPlugins(getBundledPluginsDir()),
-    ...resolveImportedRoots(loadImportFromConfig()).pluginRoots.flatMap((root) =>
-      scanLocalPlugins(root, { trustAll: true }),
+    ...resolveImportedRoots(loadImportFromConfig()).pluginRoots.flatMap(({ dir, binary }) =>
+      // Mirror the source tool's own enabled/disabled state: a plugin disabled
+      // in Claude Code (its `~/.claude/settings.json` `enabledPlugins`) is
+      // skipped here rather than loaded into every AFK session.
+      scanLocalPlugins(dir, { trustAll: true, sourceEnabled: readSourceEnabledState(binary) }),
     ),
   ];
 }

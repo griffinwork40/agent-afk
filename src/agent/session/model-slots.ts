@@ -4,15 +4,21 @@
  * Three fixed capability tiers — `small`, `medium`, `large` — each bound to a
  * concrete model id chosen by the user. The slot NAMES are the stable anchor
  * the `agent`/`compose`/`skill` tools select among (cheapest / general /
- * most-capable); the BINDINGS are what the user configures. Built-in legacy
- * Claude aliases (`haiku`/`sonnet`/`opus`/`*_1m`) and optional user-defined
- * custom names all resolve onto the same three positions.
+ * most-capable); the BINDINGS are what the user configures. Optional
+ * user-defined custom names also resolve onto these tier positions.
  *
- * Resolution precedence for any model input string (see {@link slotForInput}):
- *   1. custom name   — a user-assigned `name` on a binding
- *   2. neutral name  — `small` | `medium` | `large`
- *   3. legacy alias  — haiku→small, sonnet/sonnet_1m→medium, opus/opus_1m→large
- *   4. otherwise     — raw concrete id or the `auto` sentinel (passthrough)
+ * IDENTITY vs. TIER: the built-in Claude handles (`haiku`/`sonnet`/`opus`/
+ * `fable`/`*_1m`) are FIXED-IDENTITY aliases ({@link DIRECT_MODEL_ALIASES}) that
+ * always resolve to one concrete model — they are NOT tier aliases and are never
+ * rebound by slot config. This prevents rebinding a capability tier (e.g.
+ * `medium` → an OpenAI model) from silently hijacking the `sonnet` handle. Only
+ * the neutral tier names + custom names follow the bindings.
+ *
+ * Resolution precedence for any model input string:
+ *   1. custom name    — a user-assigned `name` on a binding      (tier; {@link slotForInput})
+ *   2. neutral name   — `local` | `small` | `medium` | `large`   (tier; {@link slotForInput})
+ *   3. identity alias — haiku/sonnet/opus/fable/*_1m → fixed id   ({@link resolveBinding})
+ *   4. otherwise      — raw concrete id or the `auto` sentinel (passthrough)
  *
  * Bindings are process-global config (one afk.config.json + env per process),
  * read threadlessly by `providerForModel`/`resolveModelId` via
@@ -44,8 +50,14 @@ export const SLOT_NAMES: readonly SlotName[] = ['local', 'small', 'medium', 'lar
  * with no `gpt-`/`o*`/`org/model` signal, or an Anthropic-compatible shim. The
  * concrete bundled providers are `anthropic-direct` / `openai-compatible`;
  * `anthropic`/`openai` are accepted shorthands.
+ *
+ * `chatgpt-oauth` routes to `openai-compatible` but additionally forces the
+ * ChatGPT-subscription OAuth credential (`~/.codex/auth.json`) + backend for
+ * THIS tier — regardless of `OPENAI_API_KEY` and without the global
+ * `AFK_OPENAI_CHATGPT_OAUTH` flag. This lets a ChatGPT-subscription model, a
+ * custom keyed OpenAI model, and an Anthropic model coexist in one session.
  */
-export type SlotProvider = 'anthropic' | 'openai';
+export type SlotProvider = 'anthropic' | 'openai' | 'chatgpt-oauth';
 
 /**
  * Binding for one capability tier.
@@ -74,29 +86,28 @@ export interface ModelSlotBinding {
 export type ModelSlots = Record<SlotName, ModelSlotBinding>;
 
 /**
- * Default tier bindings — reproduce the pre-slots `MODEL_MAP` exactly so that
- * an unconfigured install behaves identically to before this feature.
- * `model-resolution.ts` derives its `MODEL_MAP` from these values to prevent
- * the two from drifting.
+ * Canonical Anthropic wire ids for the built-in Claude models. Defined once and
+ * referenced by BOTH {@link DEFAULT_SLOT_BINDINGS} (the small/medium/large tier
+ * DEFAULTS) and {@link DIRECT_MODEL_ALIASES} (the stable `haiku`/`sonnet`/`opus`
+ * identity handles) so a tier default and its namesake alias can never drift.
+ */
+export const CLAUDE_HAIKU_ID = 'claude-haiku-4-5-20251001';
+export const CLAUDE_SONNET_ID = 'claude-sonnet-5';
+export const CLAUDE_OPUS_ID = 'claude-opus-4-8';
+/** Claude Fable 5 wire id — Anthropic's most-capable widely-released model. */
+export const CLAUDE_FABLE_5_ID = 'claude-fable-5';
+
+/**
+ * Default tier bindings — an unconfigured install behaves identically to the
+ * pre-slots `MODEL_MAP`. `model-resolution.ts` derives its `MODEL_MAP` from the
+ * canonical id constants above so the alias table and the slot defaults cannot
+ * drift.
  */
 export const DEFAULT_SLOT_BINDINGS: ModelSlots = {
   local: { id: '' },
-  small: { id: 'claude-haiku-4-5-20251001' },
-  medium: { id: 'claude-sonnet-5' },
-  large: { id: 'claude-opus-4-8' },
-};
-
-/**
- * Built-in legacy Claude aliases → tier position. The `*_1m` variants map to
- * the same tier as their base alias; their distinct 1M context window is
- * handled separately in `model-limits.ts`, not here.
- */
-const LEGACY_ALIAS_TO_SLOT: Readonly<Record<string, SlotName>> = {
-  haiku: 'small',
-  sonnet: 'medium',
-  sonnet_1m: 'medium',
-  opus: 'large',
-  opus_1m: 'large',
+  small: { id: CLAUDE_HAIKU_ID },
+  medium: { id: CLAUDE_SONNET_ID },
+  large: { id: CLAUDE_OPUS_ID },
 };
 
 /**
@@ -106,22 +117,48 @@ const LEGACY_ALIAS_TO_SLOT: Readonly<Record<string, SlotName>> = {
  */
 export const AUTO_SENTINEL = 'auto';
 
-/** Claude Fable 5 wire id — Anthropic's most-capable widely-released model. */
-export const CLAUDE_FABLE_5_ID = 'claude-fable-5';
-
 /**
- * Fixed-id model aliases that are NOT capability tiers. Unlike the slot aliases
- * (`small`/`medium`/`large`) and the legacy tier aliases (`haiku`/`sonnet`/
- * `opus`), these name one concrete pinned model and are never rebound by user
- * slot config. `fable` → Claude Fable 5 (`claude-fable-5`), the Mythos-class
- * model GA'd 2026-06-09; it sits above the `large`/opus tier and so has no slot
- * of its own — keeping it a direct alias means adding it does not displace any
- * existing tier binding. Consulted by {@link resolveBinding} after slot
- * resolution and before the raw-id passthrough.
+ * Fixed-identity model aliases that are NOT capability tiers — each names ONE
+ * concrete model and is never rebound by user slot config. This is the stable-
+ * IDENTITY layer: `sonnet` always means Claude Sonnet, `opus` always Claude
+ * Opus, `haiku` always Claude Haiku, regardless of how the small/medium/large
+ * capability TIERS are bound.
+ *
+ * Decoupling identity from tier is deliberate. Previously these were "legacy tier
+ * aliases" (`sonnet` == the `medium` tier), so rebinding `medium` to a non-Claude
+ * model silently hijacked the `sonnet` handle — and the default session model
+ * (the literal `'sonnet'`) flipped with it. Now only the neutral tier names
+ * (`small`/`medium`/`large`) and user custom names follow the bindings.
+ *
+ * The `*_1m` variants pin to the SAME wire id as their base alias; their distinct
+ * 1M context window is applied in `model-limits.ts` off the literal `_1m` suffix
+ * BEFORE resolution, so sharing a wire id here is correct. `fable` → Claude Fable
+ * 5 sits above the opus/large tier and has no slot of its own. Consulted by
+ * {@link resolveBinding} after slot resolution and before the raw-id passthrough.
  */
 export const DIRECT_MODEL_ALIASES: Readonly<Record<string, string>> = {
+  opus: CLAUDE_OPUS_ID,
+  opus_1m: CLAUDE_OPUS_ID,
+  sonnet: CLAUDE_SONNET_ID,
+  sonnet_1m: CLAUDE_SONNET_ID,
+  haiku: CLAUDE_HAIKU_ID,
   fable: CLAUDE_FABLE_5_ID,
 };
+
+/**
+ * User-facing model handles shown by the `/model` picker (REPL + Telegram) and
+ * accepted by name. DERIVED from the two stable layers — the capability TIERS
+ * ({@link SLOT_NAMES}) plus the fixed-identity aliases ({@link DIRECT_MODEL_ALIASES})
+ * — so the discoverable list can never drift from what actually resolves. This
+ * is the single source of truth: both the CLI (`/model`) and Telegram surfaces
+ * import it rather than re-declaring it. Raw wire ids and `org/model` ids are
+ * also accepted at the `/model` surface (this list is the discoverable subset,
+ * not the whole acceptable set).
+ */
+export const MODEL_ALIASES_HINT: readonly string[] = [
+  ...SLOT_NAMES,
+  ...Object.keys(DIRECT_MODEL_ALIASES),
+];
 
 /**
  * Process-global resolved bindings, installed by `loadConfig()` via
@@ -224,9 +261,12 @@ export function getSlotBindings(override?: ModelSlots): ModelSlots {
 }
 
 /**
- * Resolve a model input string to a tier, or `undefined` when it is not a slot
- * alias (a raw concrete id or the `auto` sentinel). Custom names are checked
- * first so a user can shadow the neutral/legacy names; `auto` is never matched.
+ * Resolve a model input string to a capability TIER, or `undefined` when it is
+ * not a tier alias (a fixed-identity alias like `sonnet`/`fable`, a raw concrete
+ * id, or the `auto` sentinel). Custom names are checked first so a user can
+ * shadow the neutral names; `auto` is never matched. Note: the built-in Claude
+ * handles (`haiku`/`sonnet`/`opus`/`*_1m`) are NOT tiers — they resolve via
+ * {@link DIRECT_MODEL_ALIASES} in {@link resolveBinding}, not here.
  */
 export function slotForInput(input: string, bindings: ModelSlots = getSlotBindings()): SlotName | undefined {
   const lowered = input.trim().toLowerCase();
@@ -238,16 +278,17 @@ export function slotForInput(input: string, bindings: ModelSlots = getSlotBindin
   if (lowered === 'local' || lowered === 'small' || lowered === 'medium' || lowered === 'large') {
     return lowered;
   }
-  const legacy = LEGACY_ALIAS_TO_SLOT[lowered];
-  return legacy;
+  return undefined;
 }
 
 /**
- * Resolve a model input string to its full binding. Slot aliases (custom name /
- * neutral name / legacy alias) resolve to the configured `bindings[slot]`
- * (id + any per-slot provider/baseUrl/apiKey); raw ids and the `auto` sentinel
- * resolve to a bare `{ id }` with no credentials. The returned object is the
- * live binding — treat it as read-only.
+ * Resolve a model input string to its full binding. Tier aliases (custom name /
+ * neutral name) resolve to the configured `bindings[slot]` (id + any per-slot
+ * provider/baseUrl/apiKey); fixed-identity aliases ({@link DIRECT_MODEL_ALIASES}
+ * — `sonnet`/`opus`/`haiku`/`fable`/`*_1m`) resolve to a bare `{ id }` pinned to
+ * their canonical wire id; raw ids and the `auto` sentinel also resolve to a bare
+ * `{ id }` with no credentials. The returned object may be the live binding —
+ * treat it as read-only.
  */
 export function resolveBinding(
   input: string | undefined,
@@ -327,12 +368,37 @@ function normalizeSlotProvider(value: unknown): SlotProvider | undefined {
   const lowered = value.trim().toLowerCase();
   if (lowered === 'anthropic' || lowered === 'anthropic-direct') return 'anthropic';
   if (lowered === 'openai' || lowered === 'openai-compatible') return 'openai';
+  if (lowered === 'chatgpt-oauth' || lowered === 'chatgpt') return 'chatgpt-oauth';
   return undefined;
 }
 
 function parseStringField(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
+
+/**
+ * Reject control characters (CRLF, NUL, tab, DEL, etc.) in binding string
+ * fields — mirrors the env-var path's newline rejection in `coerceEnvValue`.
+ * `parseStringField` itself stays lenient (it is shared with the loader path,
+ * which intentionally ignores rather than throws on malformed input).
+ */
+function hasControlChars(value: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  return /[\x00-\x1f\x7f]/.test(value);
+}
+
+/**
+ * Names an agent-assigned binding `name` may not shadow — the built-in slot
+ * keys, the fixed-identity aliases ({@link DIRECT_MODEL_ALIASES}, which now
+ * includes the `haiku`/`sonnet`/`opus`/`*_1m` handles), and the `auto` sentinel.
+ * Without this check an agent could set `models.small.name = "large"` to route
+ * an operator-typed "large" to the cheap tier.
+ */
+const RESERVED_NAMES: ReadonlySet<string> = new Set([
+  ...SLOT_NAMES,
+  AUTO_SENTINEL,
+  ...Object.keys(DIRECT_MODEL_ALIASES),
+]);
 
 function parseBinding(value: unknown): ModelSlotBinding | undefined {
   if (typeof value === 'string') {
@@ -355,4 +421,80 @@ function parseBinding(value: unknown): ModelSlotBinding | undefined {
     return binding;
   }
   return undefined;
+}
+
+/**
+ * Strict WRITER-path validation for a model-slot binding supplied to the config
+ * mutation engine (config_set tool / `afk config set`). Unlike {@link parseBinding}
+ * — which leniently ignores malformed fields when LOADING afk.config.json — this
+ * surfaces actionable errors so a bad `config set models.large {...}` is rejected
+ * rather than silently written.
+ *
+ * Rejects two credential-sensitivity fields from the plaintext-JSON agent-writable path:
+ *   1. `apiKey` — a secret; belongs in afk.env via `afk config env set AFK_MODEL_<TIER>_API_KEY`.
+ *   2. `baseUrl` — an endpoint redirect that carries the paired API key + the full
+ *      conversation to wherever it points; belongs in afk.env via `afk config env set
+ *      AFK_MODEL_<TIER>_BASE_URL` (human-gated, same rule as the `*_BASE_URL` suffix
+ *      protection in {@link ../../config/settable-keys.ts}).
+ *
+ * Without these rejections an agent could silently rewrite runtime credentials or
+ * endpoints into plaintext afk.config.json, bypassing the deliberately human-gated
+ * env-var surface.
+ *
+ * Contract: {@link parseBinding} (the LOADER) still reads `baseUrl`/`apiKey` from
+ * afk.config.json so hand-edited files and env-var overrides remain functional at
+ * runtime — only the agent-writable WRITE path is gated.
+ */
+export function coerceSlotBindingInput(
+  raw: unknown,
+): { ok: true; value: ModelSlotBinding } | { ok: false; error: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, error: 'model binding must be an object with at least an "id"' };
+  }
+  const obj = raw as Record<string, unknown>;
+  if ('apiKey' in obj || 'api_key' in obj) {
+    return {
+      ok: false,
+      error:
+        'per-slot API keys are credentials; set AFK_MODEL_<TIER>_API_KEY via `afk config env set` instead of afk.config.json',
+    };
+  }
+  if ('baseUrl' in obj || 'base_url' in obj) {
+    return {
+      ok: false,
+      error:
+        'per-slot baseUrl is an endpoint-redirect credential vector; set AFK_MODEL_<TIER>_BASE_URL via `afk config env set` instead of afk.config.json',
+    };
+  }
+  const id = parseStringField(obj['id']);
+  if (!id) return { ok: false, error: 'model binding requires a non-empty "id"' };
+  if (hasControlChars(id)) {
+    return { ok: false, error: 'model binding "id" must not contain control characters' };
+  }
+  const binding: ModelSlotBinding = { id };
+  const name = parseStringField(obj['name']);
+  if (name) {
+    if (hasControlChars(name)) {
+      return { ok: false, error: 'model binding "name" must not contain control characters' };
+    }
+    if (RESERVED_NAMES.has(name.trim().toLowerCase())) {
+      return {
+        ok: false,
+        error: `model binding "name" must not shadow a built-in alias ("${name}")`,
+      };
+    }
+    binding.name = name;
+  }
+  if (obj['provider'] !== undefined && obj['provider'] !== '') {
+    const provider = normalizeSlotProvider(obj['provider']);
+    if (!provider) {
+      return {
+        ok: false,
+        error:
+          'model binding "provider" must be one of: anthropic, openai (aliases: anthropic-direct, openai-compatible)',
+      };
+    }
+    binding.provider = provider;
+  }
+  return { ok: true, value: binding };
 }

@@ -194,6 +194,12 @@ export async function runTurn(
     if (completionWriter && armedCompositor) {
       const c = armedCompositor;
       completionWriter.fn = (line) => c.commitAbove(line);
+      // A live overlay now owns subagent rendering (the ToolLane commits the
+      // → Agent(…) Done tree). Suppress the redundant SubagentStop completion
+      // line so its uncoordinated commitAbove can't race the OverlayComposer
+      // and corrupt the compositor's row-accounting (ghost markers + swallowed
+      // committed lines). Reset in the finally below. See CompletionWriter.
+      completionWriter.suppressSubagentCompletion = true;
     }
     h.setActiveCompositor?.(armedCompositor);
     // Publish a notifier so the SIGINT handler can toggle the live
@@ -254,6 +260,24 @@ export async function runTurn(
             console.error('  ' + palette.error('soft-stop session.interrupt() failed:'), err);
           }
         });
+        // A turn suspended on a subagent `await` (the parent tool-use loop is
+        // parked awaiting the subagent tool_result) cannot be halted by
+        // session.interrupt() alone — the parent stream is not what's blocked.
+        // Cancel any in-flight foreground subagent so its runToResult resolves,
+        // the tool_result flows back, and the for-await loop wakes to observe
+        // softStopRequested and stop cleanly — returning the user to the prompt
+        // with context intact. Without this, ESC / Ctrl+C are dead for the
+        // entire subagent run (up to the 2h usage-limit cap): the "stuck
+        // mid-subagent, have to fork the session" bug. Fire-and-forget; the
+        // cancel resolves the await that unblocks the loop.
+        const ctrl = h.subagentControl;
+        if (ctrl?.hasActiveForeground()) {
+          void ctrl.cancelActiveForeground().catch((err) => {
+            if (isDebugEnabled()) {
+              console.error('  ' + palette.error('soft-stop cancelActiveForeground() failed:'), err);
+            }
+          });
+        }
       });
     }
 
@@ -332,6 +356,21 @@ export async function runTurn(
         // already initiated in the handler, the stream's async iterator
         // terminates naturally (no throw), and the post-stream block detects
         // softStopRequested to render the notice and suppress recordTurn.
+        //
+        // History consistency: breaking mid-tool-use (e.g. after
+        // cancelActiveForeground() resolves a stuck subagent's tool_result)
+        // can leave the provider's running history terminating in an assistant
+        // `tool_use` whose `tool_result` was never appended — anthropic-direct
+        // pushes the assistant turn (loop.ts) BEFORE yielding tool output and
+        // appends the tool_result only after. That transient orphan is healed
+        // before the NEXT request: repairOrphanToolUses (anthropic-direct
+        // query.ts) runs before every new-user-turn append and synthesizes
+        // is_error tool_result placeholders, and the abort-path rollback in
+        // loop.ts covers the throw case — so the following turn never 400s with
+        // "tool_use ids ... without tool_result blocks". The OpenAI-compatible
+        // provider appends assistant{tool_calls} + results together (one
+        // synchronous block after the yield loop), so it has no orphan window.
+        // See PR #400 review + query/repair-orphan-tool-uses.ts.
         if (softStopRequested || pauseInterruptRequested) {
           break;
         }
@@ -596,7 +635,7 @@ export async function runTurn(
     // The SDK's server-side session store preserves the response even
     // when we skip local recordTurn; the REPL session stays live, so the
     // user continues simply by sending the next message — no resume needed.
-    // (/resume and --resume operate on *other* /saved sessions, not the
+    // (/resume and --resume operate on *other* saved sessions, not the
     // live one that was just soft-stopped, so they must NOT be advertised
     // here; doing so sent users down a dead-end. See the onSoftStop doc in
     // terminal-compositor.types.ts: "next Enter starts a new turn in the
@@ -670,8 +709,16 @@ export async function runTurn(
       if (verdict) {
         writeAbove(renderVerdictCard(verdict));
         writeAbove('');
+        // One evidence check, two consumers: (1) the onTerminalState callback
+        // forwards it onto the post-turn `Stop` hook's StopContext so the
+        // terminal-state gate can bounce a self-certified `Done` with nothing
+        // behind it (see terminal-state-gate.ts); (2) the Telegram
+        // "Done (unverified)" relabel below. Computed once, here.
+        const hasCorroboratingEvidence = doneHasCorroboratingEvidence(toolEvents);
         if (h.onTerminalState) {
-          try { h.onTerminalState(verdict); } catch { /* ledger update is best-effort */ }
+          try {
+            h.onTerminalState(verdict, { doneHasCorroboratingEvidence: hasCorroboratingEvidence });
+          } catch { /* ledger update is best-effort */ }
         }
         // AFK mode: the operator is away and the transcript is unwatched, so
         // surface the terminal state to them over Telegram. Scrubbed + rate-
@@ -686,7 +733,7 @@ export async function runTurn(
           const unverified =
             verdict.kind === 'done' &&
             loadTelegramConfig().verifyDone === true &&
-            !doneHasCorroboratingEvidence(toolEvents);
+            !hasCorroboratingEvidence;
           void pushTerminalStateToTelegram(verdict, undefined, { unverified });
         }
       }
@@ -721,7 +768,14 @@ export async function runTurn(
     // For the legacy own-compositor / non-TTY path, `idleFn` stays
     // `console.log` (set at bootstrap and never mutated) — the reset
     // is identical to the old behavior.
-    if (completionWriter) completionWriter.fn = completionWriter.idleFn;
+    if (completionWriter) {
+      completionWriter.fn = completionWriter.idleFn;
+      // Turn over: the live overlay is gone, so a subagent that completes
+      // between turns (e.g. a backgrounded job) has no ToolLane tree and no
+      // overlay to race — let its completion line surface again. Pairs with
+      // the armAndWire set above.
+      completionWriter.suppressSubagentCompletion = false;
+    }
     // setActiveCompositor's "active turn" flag is still cleared. For
     // the legacy renderer-own-compositor path, the renderer just
     // disposed its compositor — the SIGINT handler must fall back to

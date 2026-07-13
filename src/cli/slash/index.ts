@@ -12,7 +12,6 @@ import { infoCommands } from './commands/info.js';
 import { planCmd } from './commands/plan.js';
 import { afkCmd } from './commands/afk.js';
 import { todoCmd } from './commands/todo.js';
-import { saveCmd } from './commands/save.js';
 import { nameCmd } from './commands/name.js';
 import { resumeCmd } from './commands/resume.js';
 import { forkCmd } from './commands/fork.js';
@@ -22,6 +21,7 @@ import { shCmd } from './commands/sh.js';
 import { initCmd } from './commands/init.js';
 import { statsCmd } from './commands/stats.js';
 import { fontSizeCmd } from './commands/font-size.js';
+import { thinkingCmd } from './commands/thinking.js';
 import { allowDirCmd } from './commands/allow-dir.js';
 import { keysCmd } from './commands/keys.js';
 import { worktreeCmd } from './commands/worktree.js';
@@ -41,7 +41,6 @@ export function registerAll(): void {
   register(planCmd);
   register(afkCmd);
   register(todoCmd);
-  register(saveCmd);
   register(nameCmd);
   register(resumeCmd);
   register(forkCmd);
@@ -51,6 +50,7 @@ export function registerAll(): void {
   register(initCmd);
   register(statsCmd);
   register(fontSizeCmd);
+  register(thinkingCmd);
   register(allowDirCmd);
   register(worktreeCmd);
   register(reauthCmd);
@@ -69,4 +69,3 @@ export function registerAll(): void {
   registerMarketplaceCommands();
 }
 
-export { registry } from './registry-exports.js';

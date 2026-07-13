@@ -10,6 +10,7 @@
 
 import type { FrameHost } from './terminal-compositor.frame.js';
 import { eraseAndPaintRow } from './terminal-compositor.types.js';
+import { withAutowrapDisabled } from './terminal-compositor.band-reflow.js';
 
 /**
  * Preserve rows that the next compositor frame is about to cover.
@@ -96,8 +97,20 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     ) {
       const overflow = bandLen - room;
       let out = '';
-      // Erase the old painted position (only the materialized suffix).
-      for (let r = Math.max(1, self.committedBandTopRow); r <= self.committedBandBottomRow; r++) {
+      // Invariant (#540 — erase from the geometric floor, not the tracked band
+      // top): clear the above-frame content region from the anchor floor (row 1
+      // here, `!hasBanner` ⇒ anchorFloor === 1 per the branch invariant above)
+      // down through the band's tracked bottom, rather than reading
+      // `committedBandTopRow` for the loop start. This mirrors the Stage-2-core
+      // repin change (#552, committed-band-repin.ts): the FULL model is repainted
+      // top-aligned at [1, bandLen] on the very next lines of the SAME batched
+      // `out` write, so any rows in [1, committedBandTopRow) the widened erase
+      // touches are re-covered with real band content before stdout sees them —
+      // observable output is unchanged (byte-for-byte where committedBandTopRow
+      // was already ≤ 1; a repainted-over transient otherwise). This retires the
+      // `committedBandTopRow` adjacency-coupling READ; the tracked `bottom` stays
+      // (it is the vacated-tail boundary, not derivable from geometry pre-Stage-3).
+      for (let r = 1; r <= self.committedBandBottomRow; r++) {
         out += eraseAndPaintRow(r);
       }
       // Paint the FULL model top-aligned at [1, bandLen] so the scroll evicts
@@ -105,11 +118,19 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
       for (let i = 0; i < bandLen; i++) {
         out += eraseAndPaintRow(1 + i, self.committedBand[i]);
       }
-      try {
-        self.stdout.write(out);
-      } catch {
-        /* terminal closed mid-render — next render's lifecycle tears us down */
-      }
+      // Belt-and-braces DECAWM bracket (see withAutowrapDisabled doc): the band
+      // rows painted here were re-wrapped at the current width by repaint()'s
+      // reflowCommittedBandToWidth call before this function ran; disabling
+      // autowrap defends against a residual ±1-column displayWidth()
+      // measurement gap on ambiguous-width glyphs, which can otherwise
+      // fabricate an unaccounted phantom row.
+      withAutowrapDisabled(self.stdout, () => {
+        try {
+          self.stdout.write(out);
+        } catch {
+          /* terminal closed mid-render — next render's lifecycle tears us down */
+        }
+      });
       evictRowsToScrollback(self, overflow);
       // Survivors physically shifted to [1, room] by the scroll.
       self.committedBand = self.committedBand.slice(overflow);
@@ -129,17 +150,24 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     // real content, never blank rows — into scrollback. The frame render that
     // follows repaints its own (lower) footprint; survivors sit above it.
     let out = '';
-    for (let r = Math.max(1, self.committedBandTopRow); r <= self.committedBandBottomRow; r++) {
+    // #540: erase from the geometric floor (row 1; `!hasBanner` ⇒ anchorFloor
+    // === 1), not the tracked `committedBandTopRow`. The [1, bandLen] repaint
+    // below re-covers the widened prefix on the same `out` write — see the full
+    // invariant on the pending-overflow eviction above.
+    for (let r = 1; r <= self.committedBandBottomRow; r++) {
       out += eraseAndPaintRow(r);
     }
     for (let i = 0; i < bandLen; i++) {
       out += eraseAndPaintRow(1 + i, self.committedBand[i]);
     }
-    try {
-      self.stdout.write(out);
-    } catch {
-      /* terminal closed mid-render — next render's lifecycle tears us down */
-    }
+    // Belt-and-braces DECAWM bracket — see the identical comment above.
+    withAutowrapDisabled(self.stdout, () => {
+      try {
+        self.stdout.write(out);
+      } catch {
+        /* terminal closed mid-render — next render's lifecycle tears us down */
+      }
+    });
     evictRowsToScrollback(self, growOverflow);
     // Survivors physically shifted to [1, growRoom] by the scroll — already
     // hugging the new frame top (growRoom === desiredTopRow - 1). Record that so a
@@ -199,8 +227,14 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
   ) {
     const overflow = bandLenBanner - roomBanner;
     let out = '';
-    // Erase the old painted position (only the materialized suffix).
-    for (let r = Math.max(floorBanner, self.committedBandTopRow); r <= self.committedBandBottomRow; r++) {
+    // #540: erase from the geometric floor (`floorBanner` = max(anchorRow, 1)),
+    // not the tracked `committedBandTopRow`. The banner/anchor rows ABOVE
+    // `floorBanner` are still never touched (the loop starts AT floorBanner); the
+    // top-aligned [floorBanner, floorBanner+bandLen-1] repaint below re-covers the
+    // widened prefix on the same `out` write — see the full invariant on the
+    // !hasBanner pending-overflow eviction above. Retires the adjacency-coupling
+    // READ; the tracked `bottom` (vacated-tail boundary) stays.
+    for (let r = floorBanner; r <= self.committedBandBottomRow; r++) {
       out += eraseAndPaintRow(r);
     }
     // Paint the FULL model top-aligned at [floor, floor+bandLen-1] so the
@@ -210,11 +244,15 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     for (let i = 0; i < bandLenBanner; i++) {
       out += eraseAndPaintRow(floorBanner + i, self.committedBand[i]);
     }
-    try {
-      self.stdout.write(out);
-    } catch {
-      /* terminal closed mid-render — next render's lifecycle tears us down */
-    }
+    // Belt-and-braces DECAWM bracket — see the identical comment earlier in
+    // this file (the !hasBanner pending-overflow eviction).
+    withAutowrapDisabled(self.stdout, () => {
+      try {
+        self.stdout.write(out);
+      } catch {
+        /* terminal closed mid-render — next render's lifecycle tears us down */
+      }
+    });
     evictRowsToScrollback(self, overflow);
     // Survivors physically shifted to [floor, floor+room-1] by the scroll.
     self.committedBand = self.committedBand.slice(overflow);

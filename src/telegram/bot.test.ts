@@ -112,6 +112,19 @@ describe('TelegramBot', () => {
     }
   });
 
+  describe('construction', () => {
+    test('disables Telegraf handlerTimeout so long turns are governed by the streaming watchdog, not a 90s guillotine', () => {
+      // Regression: Telegraf's default handlerTimeout (90_000ms) p-timeouts the
+      // whole turn → bot.catch → generic error, while the AgentSession keeps
+      // running in the background. streaming.ts owns timeout policy instead.
+      const handlerTimeout = (
+        bot as unknown as { bot: { options: { handlerTimeout: number } } }
+      ).bot.options.handlerTimeout;
+      expect(handlerTimeout).toBe(Infinity);
+      expect(handlerTimeout).not.toBe(90_000);
+    });
+  });
+
   describe('commands', () => {
     test('should handle /start command', async () => {
       const ctx = createMockContext(12345, '/start');

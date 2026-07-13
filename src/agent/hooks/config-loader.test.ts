@@ -524,3 +524,59 @@ describe('loadHooksConfig (layered)', () => {
     expect(groups[0]!.hooks[0]!.command).toBe('echo once');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Orphan root settings warning (~/.afk/settings.json misplacement)
+// ---------------------------------------------------------------------------
+
+describe('orphan root settings warning', () => {
+  let afkHome: string;
+  let projectCwd: string;
+  let originalAfkHome: string | undefined;
+
+  beforeEach(() => {
+    afkHome = join(tmp, 'afk-home-orphan');
+    projectCwd = join(tmp, 'project-orphan');
+    mkdirSync(join(afkHome, 'config'), { recursive: true });
+    mkdirSync(projectCwd, { recursive: true });
+    originalAfkHome = process.env['AFK_HOME'];
+    process.env['AFK_HOME'] = afkHome;
+  });
+
+  afterEach(() => {
+    if (originalAfkHome === undefined) delete process.env['AFK_HOME'];
+    else process.env['AFK_HOME'] = originalAfkHome;
+  });
+
+  it('warns when a settings.json sits at the AFK-home root', () => {
+    const orphan = join(afkHome, 'settings.json');
+    writeFileSync(orphan, JSON.stringify({ hooks: {} }), 'utf-8');
+
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.warnings.some((w) => w.includes('AFK-home root'))).toBe(true);
+    // The orphan file contributes nothing: not a source, no hooks.
+    expect(result.sources).not.toContain(orphan);
+  });
+
+  it('does not warn when no root settings.json exists', () => {
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.warnings.some((w) => w.includes('AFK-home root'))).toBe(false);
+  });
+
+  it('still loads the real user-global settings layer alongside the warning', () => {
+    writeFileSync(join(afkHome, 'settings.json'), JSON.stringify({ hooks: {} }), 'utf-8');
+    writeFileSync(
+      join(afkHome, 'config', 'settings.json'),
+      JSON.stringify({
+        enableShellHooks: true,
+        hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo hi' }] }] },
+      }),
+      'utf-8',
+    );
+
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.userGlobalEnabled).toBe(true);
+    expect(result.hooks.SessionStart).toHaveLength(1);
+    expect(result.warnings.some((w) => w.includes('AFK-home root'))).toBe(true);
+  });
+});

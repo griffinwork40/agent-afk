@@ -1,10 +1,3 @@
-export class ClaudeError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = this.constructor.name;
-  }
-}
-
 export class AbortError extends Error {
   constructor(message?: string) {
     super(message);
@@ -40,22 +33,6 @@ export class HookBlockedError extends Error {
     this.name = "HookBlockedError";
     if (options?.cause !== undefined) this.cause = options.cause;
   }
-}
-
-export class ShellError extends Error {
-  constructor(
-    public readonly stdout: string,
-    public readonly stderr: string,
-    public readonly code: number,
-    public readonly interrupted: boolean,
-  ) {
-    super("Shell command failed");
-    this.name = "ShellError";
-  }
-}
-
-export function isAbortError(e: unknown): boolean {
-  return e instanceof AbortError || (e instanceof Error && e.name === "AbortError");
 }
 
 /**
@@ -98,10 +75,3 @@ export class UnsupportedProviderConfigError extends Error {
   }
 }
 
-export function toError(e: unknown): Error {
-  return e instanceof Error ? e : new Error(String(e));
-}
-
-export function errorMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}

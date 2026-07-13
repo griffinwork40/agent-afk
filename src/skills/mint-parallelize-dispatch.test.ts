@@ -16,6 +16,10 @@
  *   5. succeeded but no message    → failed
  *   6. dispatch throws            → failed
  *   7. caller in index.ts distinguishes skipped vs failed via history entries
+ *   8. #444 — the fork's credential is resolved per-model
+ *      (resolveCredentialForModel), not off the ambient top-level model,
+ *      and the manager constructor receives neither `apiKey` nor
+ *      `parentModel` — matching the 7 sibling phases #431 converted.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -36,9 +40,15 @@ let forkBehavior: () => Promise<{
 });
 let forkShouldThrow = false;
 
+// Captures the `forkSubagent` call arg so tests can inspect `config.apiKey`
+// alongside the `SubagentManager` constructor arg (read via
+// `vi.mocked(SubagentManager).mock.calls[0][0]`) — see #444.
+let lastForkSubagentArg: Record<string, unknown> | undefined;
+
 vi.mock('../agent/subagent.js', () => ({
   SubagentManager: vi.fn(() => ({
-    forkSubagent: vi.fn(async () => {
+    forkSubagent: vi.fn(async (arg: Record<string, unknown>) => {
+      lastForkSubagentArg = arg;
       if (forkShouldThrow) throw new Error('synthetic fork failure');
       return {
         id: 'mint-parallelize',
@@ -57,8 +67,17 @@ vi.mock('../agent/tools/skill-bridge.js', () => ({
   discoverPluginSkillBodies: () => pluginBodies,
 }));
 
-vi.mock('../cli/shared-helpers.js', () => ({
-  getApiKey: () => 'test-api-key',
+// #444: parallelize-dispatch resolves the fork's credential off the CHILD's
+// own model via resolveCredentialForModel, not the ambient top-level model
+// (getApiKey()/getModel() from shared-helpers.js — no longer imported).
+// Sentinel derived from the arg so tests can assert per-model selection.
+// vi.hoisted is required because vi.mock factories are hoisted above
+// top-level locals (same pattern as subagent-executor.test.ts).
+const resolveCredentialForModel = vi.hoisted(() =>
+  vi.fn((m: string | undefined) => `resolved-key::${m}`),
+);
+vi.mock('../agent/auth/credential-resolver.js', () => ({
+  resolveCredentialForModel,
 }));
 
 // Mutable registry hit for getSkill('parallelize').
@@ -81,6 +100,7 @@ import {
   runParallelizeDispatch,
   type ParallelizeDispatchResult,
 } from './mint/_phases/parallelize-dispatch.js';
+import { SubagentManager } from '../agent/subagent.js';
 
 function mockSession(): IAgentSession {
   return {
@@ -109,6 +129,7 @@ describe('runParallelizeDispatch — discriminated union', () => {
       ['parallelize', { body: 'PARALLELIZE_BODY_STUB', pluginPath: '/fake/plugin' }],
     ]);
     registryParallelize = null;
+    lastForkSubagentArg = undefined;
   });
 
   afterEach(() => {
@@ -237,6 +258,38 @@ describe('runParallelizeDispatch — discriminated union', () => {
     const THREE_FILES_PROSE = 'Touch src/a.ts, src/b.ts, and src/c.ts please.';
     const result = await runParallelizeDispatch(THREE_FILES_PROSE, mockSession());
     expect(result.kind).toBe('plan');
+  });
+
+  // #444 invariant: parallelize-dispatch resolves the fork's credential off
+  // the CHILD's own model (resolveCredentialForModel), not the ambient
+  // top-level model — matching the 7 sibling mint phases #431 converted.
+  // Uses 'haiku' (distinct from the 'sonnet' default) so the assertion is
+  // meaningful — it proves the CHILD model drives resolution, not a default.
+  it('resolves the forked subagent credential from the child model, not the manager (#444)', async () => {
+    const result = await runParallelizeDispatch(
+      MANY_FILES_PLAN,
+      mockSession(),
+      undefined,
+      'haiku',
+    );
+    expect(result.kind).toBe('plan');
+
+    // (1) resolveCredentialForModel was called with the CHILD's model.
+    expect(resolveCredentialForModel).toHaveBeenCalledWith('haiku');
+
+    // (2) the forkSubagent config carries the resolved sentinel credential.
+    expect(lastForkSubagentArg).toBeDefined();
+    const config = lastForkSubagentArg?.['config'] as { apiKey?: string } | undefined;
+    expect(config?.apiKey).toBe('resolved-key::haiku');
+
+    // (3) the SubagentManager constructor arg has NEITHER `apiKey` NOR
+    // `parentModel` — the credential lives on the fork, not the manager.
+    const managerCtorArg = vi.mocked(SubagentManager).mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(managerCtorArg).toBeDefined();
+    expect(managerCtorArg).not.toHaveProperty('apiKey');
+    expect(managerCtorArg).not.toHaveProperty('parentModel');
   });
 
   it('caller can distinguish skipped from failed at the type level', () => {

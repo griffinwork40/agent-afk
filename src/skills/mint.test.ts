@@ -14,9 +14,15 @@ import { getSkill, registerSkill } from './index.js';
 import type { MintState } from './mint/index.js';
 import type { IAgentSession, OutputEvent, SubagentProgressMeta } from '../agent/types.js';
 import { runWithSink } from '../agent/_lib/skill-sink-channel.js';
+import { useUnsetAfkHome } from '../__test-utils__/unset-afk-home.js';
 
 // Import the skill module to trigger registration
 import './mint/index.js';
+
+// The disk-persisted state cases assert mint-state.json lands under
+// $HOME/.afk (mintStatePath below builds from tmpHome) — drop the global
+// sentinel AFK_HOME per test; HOME is redirected in beforeEach.
+useUnsetAfkHome();
 
 const sharedMintMock = vi.hoisted(() => ({
   forkOptions: [] as Array<Record<string, unknown>>,

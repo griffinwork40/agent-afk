@@ -141,10 +141,18 @@ export function resolveBaseSystemPrompt(): { prompt: string | undefined; source:
  * Callers that explicitly want the Anthropic credential surface (e.g., the
  * `doctor` and `status` diagnostic surfaces) should call `loadCredential()`
  * directly instead.
+ *
+ * Resolves against `getModel()` — not a raw re-read of `AFK_MODEL` /
+ * `CLAUDE_MODEL` — so the credential always matches the same model string the
+ * session actually runs with, including the `'sonnet'` default when both env
+ * vars are unset. Re-reading the raw env pair here previously let this
+ * resolve `undefined` (routing via the `AFK_OPENAI_BASE_URL` Tier-4 hint to
+ * `openai-compatible`) while `getModel()` returned the `'sonnet'` default
+ * (`anthropic-direct`) — an undefined-vs-defaulted divergence that paired an
+ * anthropic-routed model with an OpenAI credential and 401'd.
  */
 export function getApiKey(): string | undefined {
-  const model = env.AFK_MODEL ?? env.CLAUDE_MODEL;
-  return getApiKeyForModel(model);
+  return getApiKeyForModel(getModel());
 }
 
 /**
@@ -176,13 +184,16 @@ export function getApiKeyForModel(model: string | undefined): string | undefined
  * Get the configured model string from the environment.
  *
  * Precedence: `AFK_MODEL` (canonical) → `CLAUDE_MODEL` (legacy alias) →
- * `'sonnet'` (default). The return value is a bare `AgentModelInput` —
- * Claude short aliases and any provider-native id both pass through
- * untouched to the downstream resolver.
+ * `'medium'` (default). Defaulting to the `medium` capability TIER (not the
+ * fixed `'sonnet'` identity alias) is deliberate: a user who rebinds
+ * `AFK_MODEL_MEDIUM` / `models.medium` changes the default session model, while
+ * an unconfigured install still resolves `medium` → Claude Sonnet. The return
+ * value is a bare `AgentModelInput` — tier aliases, Claude identity handles, and
+ * any provider-native id all pass through untouched to the downstream resolver.
  */
 export function getModel(): AgentModelInput {
   const raw = env.AFK_MODEL ?? env.CLAUDE_MODEL;
-  if (!raw || raw.length === 0) return 'sonnet';
+  if (!raw || raw.length === 0) return 'medium';
   return raw;
 }
 
@@ -194,14 +205,16 @@ export function getModel(): AgentModelInput {
  *   2. If the parent session routes to `openai-compatible` (any non-Claude
  *      provider — GPT/o-series, codex-*, HF-style local ids) → return the
  *      parent model. Without this, a local-only setup silently dispatches
- *      subagents to api.anthropic.com because the literal `'sonnet'` fallback
+ *      subagents to api.anthropic.com because the literal `'medium'` fallback
  *      below routes back through `providerForModel` → `anthropic-direct`.
- *   3. `'sonnet'`. Preserved for Claude parents so the historical
- *      cost-management intent — "high-tier parent (e.g. opus) shouldn't auto-
- *      spawn high-tier children" — keeps working.
+ *   3. `'medium'` (the medium capability tier). Preserved for Claude parents so
+ *      the historical cost-management intent — "high-tier parent (e.g. opus)
+ *      shouldn't auto-spawn high-tier children" — keeps working; and because it
+ *      is the rebindable TIER (not the fixed `'sonnet'` identity alias), a user
+ *      who rebinds `medium` redirects default subagents along with it.
  *
  * The `parentModel` arg is what enables (2); callers that don't pass it
- * (legacy / test) get the original env-var-or-`'sonnet'` behavior.
+ * (legacy / test) get the original env-var-or-`'medium'` behavior.
  *
  * Pass-through like `getModel()` — short aliases and provider-native ids both
  * work.
@@ -212,7 +225,7 @@ export function getDefaultSubagentModel(parentModel?: AgentModelInput): AgentMod
   if (typeof parentModel === 'string' && providerForModel(parentModel) === 'openai-compatible') {
     return parentModel;
   }
-  return 'sonnet';
+  return 'medium';
 }
 
 /**
@@ -336,6 +349,36 @@ export function parseMaxOutputTokens(raw: string | undefined): number | undefine
  */
 export function getMaxOutputTokens(): number | undefined {
   return parseMaxOutputTokens(env.AFK_MAX_OUTPUT_TOKENS);
+}
+
+/**
+ * Parse `AFK_MAX_TOOL_USE_ITERATIONS` — the opt-in top-level tool-use-round
+ * ceiling. Lenient by design (this is an operator escape-hatch, not a CLI flag):
+ * `undefined`, empty, non-numeric, or a value `<= 0` all resolve to `undefined`,
+ * meaning "no top-level cap" — identical to leaving `AgentConfig.maxToolUseIterations`
+ * unset (see `resolveMaxToolIterations` in `providers/shared/tool-loop-cap.ts`,
+ * where both `undefined` and `0` mean unlimited). A positive value is floored to
+ * an integer. Returning `undefined` (not `0`) on the unset path keeps the field
+ * ABSENT from the config so there is zero behavior change when the var is unset.
+ */
+export function parseMaxToolUseIterations(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return Math.floor(parsed);
+}
+
+/**
+ * Read the opt-in top-level tool-use-round ceiling from environment. Feeds the
+ * top-level `AgentConfig.maxToolUseIterations` default at every top-level session
+ * surface (chat, interactive, telegram, daemon, scheduler) via
+ * `explicit ?? getMaxToolUseIterations()`, so an explicit config value always
+ * wins. Returns `undefined` when unset/`<=0` (unlimited — no behavior change).
+ * Subagent forks are unaffected: they set their own non-zero default in
+ * `subagent.ts` / `child-config.ts` and never read this.
+ */
+export function getMaxToolUseIterations(): number | undefined {
+  return parseMaxToolUseIterations(env.AFK_MAX_TOOL_USE_ITERATIONS);
 }
 
 const VALID_PROVIDERS: readonly string[] = [

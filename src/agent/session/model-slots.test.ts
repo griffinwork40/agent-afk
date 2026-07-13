@@ -6,10 +6,15 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CLAUDE_FABLE_5_ID,
+  CLAUDE_HAIKU_ID,
+  CLAUDE_OPUS_ID,
+  CLAUDE_SONNET_ID,
+  coerceSlotBindingInput,
   computeSlotBindings,
   DEFAULT_SLOT_BINDINGS,
   DIRECT_MODEL_ALIASES,
   getSlotBindings,
+  MODEL_ALIASES_HINT,
   parseModelsConfig,
   resetSlotBindings,
   resolveBinding,
@@ -73,12 +78,14 @@ describe('slotForInput', () => {
     expect(slotForInput(' large ')).toBe('large');
   });
 
-  it('resolves legacy Claude aliases to tiers', () => {
-    expect(slotForInput('haiku')).toBe('small');
-    expect(slotForInput('sonnet')).toBe('medium');
-    expect(slotForInput('sonnet_1m')).toBe('medium');
-    expect(slotForInput('opus')).toBe('large');
-    expect(slotForInput('opus_1m')).toBe('large');
+  it('does NOT map the Claude identity aliases to tiers (they are fixed-id, not slots)', () => {
+    // The #548 decoupling: sonnet/opus/haiku/*_1m are fixed-identity aliases
+    // (DIRECT_MODEL_ALIASES), never tier pointers — so slotForInput must miss them.
+    expect(slotForInput('haiku')).toBeUndefined();
+    expect(slotForInput('sonnet')).toBeUndefined();
+    expect(slotForInput('sonnet_1m')).toBeUndefined();
+    expect(slotForInput('opus')).toBeUndefined();
+    expect(slotForInput('opus_1m')).toBeUndefined();
   });
 
   it('resolves user custom names (case-insensitive) and prefers them', () => {
@@ -97,16 +104,17 @@ describe('slotForInput', () => {
 });
 
 describe('resolveModelInput', () => {
-  it('resolves slot aliases to the default bound id', () => {
+  it('resolves neutral tier names to the default bound id', () => {
     expect(resolveModelInput('small')).toBe(DEFAULT_SLOT_BINDINGS.small.id);
-    expect(resolveModelInput('sonnet')).toBe(DEFAULT_SLOT_BINDINGS.medium.id);
-    expect(resolveModelInput('opus')).toBe(DEFAULT_SLOT_BINDINGS.large.id);
+    expect(resolveModelInput('medium')).toBe(DEFAULT_SLOT_BINDINGS.medium.id);
+    expect(resolveModelInput('large')).toBe(DEFAULT_SLOT_BINDINGS.large.id);
   });
 
-  it('resolves to a rebound id', () => {
+  it('resolves a rebound TIER to its new id, but leaves identity aliases pinned', () => {
     const bindings = makeSlots({ small: 'gpt-4o-mini' });
     expect(resolveModelInput('small', bindings)).toBe('gpt-4o-mini');
-    expect(resolveModelInput('haiku', bindings)).toBe('gpt-4o-mini');
+    // `haiku` is a fixed identity alias — a rebound `small` tier must NOT drag it.
+    expect(resolveModelInput('haiku', bindings)).toBe(CLAUDE_HAIKU_ID);
   });
 
   it('passes through raw ids, the auto sentinel, and undefined', () => {
@@ -147,6 +155,45 @@ describe('Claude Fable 5 fixed-id alias', () => {
     expect(contextLimitFor('claude-fable-5')).toBe(1_000_000);
     expect(maxOutputTokensFor('fable')).toBe(128_000);
     expect(maxOutputTokensFor('claude-fable-5')).toBe(128_000);
+  });
+});
+
+describe('fixed-identity Claude aliases (sonnet/opus/haiku decoupled from tiers, #548)', () => {
+  it('exposes each identity alias via the direct-alias table', () => {
+    expect(DIRECT_MODEL_ALIASES['sonnet']).toBe(CLAUDE_SONNET_ID);
+    expect(DIRECT_MODEL_ALIASES['opus']).toBe(CLAUDE_OPUS_ID);
+    expect(DIRECT_MODEL_ALIASES['haiku']).toBe(CLAUDE_HAIKU_ID);
+    expect(DIRECT_MODEL_ALIASES['sonnet_1m']).toBe(CLAUDE_SONNET_ID);
+    expect(DIRECT_MODEL_ALIASES['opus_1m']).toBe(CLAUDE_OPUS_ID);
+  });
+
+  it('resolves each identity alias to its pinned wire id (case-insensitive)', () => {
+    expect(resolveModelInput('sonnet')).toBe(CLAUDE_SONNET_ID);
+    expect(resolveModelInput('OPUS')).toBe(CLAUDE_OPUS_ID);
+    expect(resolveBinding('haiku')).toEqual({ id: CLAUDE_HAIKU_ID });
+  });
+
+  it('stays pinned regardless of tier rebindings — the collision fix', () => {
+    // Rebinding medium/small/large to OpenAI ids must NOT hijack the sonnet/
+    // haiku/opus handles (the pre-#548 footgun where `sonnet` == the medium tier).
+    const rebound = makeSlots({ small: 'gpt-4o-mini', medium: 'gpt-5.6', large: 'gpt-5.6' });
+    expect(resolveModelInput('sonnet', rebound)).toBe(CLAUDE_SONNET_ID);
+    expect(resolveModelInput('opus', rebound)).toBe(CLAUDE_OPUS_ID);
+    expect(resolveModelInput('haiku', rebound)).toBe(CLAUDE_HAIKU_ID);
+  });
+
+  it('preserves the *_1m 1M context-window opt-in after decoupling', () => {
+    expect(contextLimitFor('sonnet_1m')).toBe(1_000_000);
+    expect(contextLimitFor('opus_1m')).toBe(1_000_000);
+  });
+});
+
+describe('MODEL_ALIASES_HINT (single source of truth for the /model picker)', () => {
+  it('is derived from the tiers + identity aliases, in the documented order', () => {
+    expect(MODEL_ALIASES_HINT).toEqual([
+      'local', 'small', 'medium', 'large',
+      'opus', 'opus_1m', 'sonnet', 'sonnet_1m', 'haiku', 'fable',
+    ]);
   });
 });
 
@@ -307,6 +354,17 @@ describe('Stage 2: per-slot provider credentials', () => {
     expect(parseModelsConfig({ medium: { id: 'z', provider: 'gemini' } }).medium).toEqual({ id: 'z' });
   });
 
+  it('parseBinding normalizes the chatgpt-oauth provider (+ chatgpt shorthand)', () => {
+    expect(parseModelsConfig({ medium: { id: 'gpt-5.6', provider: 'chatgpt-oauth' } }).medium).toEqual({
+      id: 'gpt-5.6',
+      provider: 'chatgpt-oauth',
+    });
+    expect(parseModelsConfig({ small: { id: 'gpt-5.6', provider: 'ChatGPT' } }).small).toEqual({
+      id: 'gpt-5.6',
+      provider: 'chatgpt-oauth',
+    });
+  });
+
   it('resolveBinding returns per-slot creds for a slot alias, bare {id} for a raw id', () => {
     const bindings = computeSlotBindings({
       small: { id: 'gpt-4o-mini', provider: 'openai', baseUrl: 'http://h/v1', apiKey: 'k' },
@@ -333,5 +391,62 @@ describe('Stage 2: per-slot provider credentials', () => {
       baseUrl: 'http://env/v1',
       apiKey: 'env-key',
     });
+  });
+});
+
+describe('coerceSlotBindingInput', () => {
+  it('accepts a minimal object with just an id', () => {
+    expect(coerceSlotBindingInput({ id: 'glm-5.2' })).toEqual({ ok: true, value: { id: 'glm-5.2' } });
+  });
+  it('accepts an object with id + provider and normalizes provider aliases', () => {
+    expect(coerceSlotBindingInput({ id: 'glm-5.2', provider: 'openai-compatible' })).toEqual(
+      { ok: true, value: { id: 'glm-5.2', provider: 'openai' } },
+    );
+  });
+  it('accepts an object with id + provider + name', () => {
+    expect(coerceSlotBindingInput({ id: 'glm-5.2', provider: 'openai', name: 'fast' })).toEqual(
+      { ok: true, value: { id: 'glm-5.2', provider: 'openai', name: 'fast' } },
+    );
+  });
+  it('rejects a non-object', () => {
+    expect(coerceSlotBindingInput('glm-5.2').ok).toBe(false);
+    expect(coerceSlotBindingInput(null).ok).toBe(false);
+    expect(coerceSlotBindingInput(['glm-5.2']).ok).toBe(false);
+  });
+  it('rejects a missing id', () => {
+    expect(coerceSlotBindingInput({}).ok).toBe(false);
+    expect(coerceSlotBindingInput({ provider: 'openai' }).ok).toBe(false);
+  });
+  it('rejects an unrecognized provider', () => {
+    const res = coerceSlotBindingInput({ id: 'glm-5.2', provider: 'opencode-go' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/provider/);
+  });
+  it('rejects a per-slot apiKey (camelCase and snake_case)', () => {
+    expect(coerceSlotBindingInput({ id: 'glm-5.2', apiKey: 'sk-secret' }).ok).toBe(false);
+    expect(coerceSlotBindingInput({ id: 'glm-5.2', api_key: 'sk-secret' }).ok).toBe(false);
+  });
+  it('rejects a per-slot baseUrl (camelCase and snake_case) as an endpoint-redirect credential vector', () => {
+    const res = coerceSlotBindingInput({ id: 'glm-5.2', baseUrl: 'https://attacker.example/v1' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/AFK_MODEL_.*BASE_URL/);
+    const resSnake = coerceSlotBindingInput({ id: 'glm-5.2', base_url: 'https://attacker.example/v1' });
+    expect(resSnake.ok).toBe(false);
+    if (!resSnake.ok) expect(resSnake.error).toMatch(/AFK_MODEL_.*BASE_URL/);
+  });
+  it('rejects control characters in id and name', () => {
+    const resId = coerceSlotBindingInput({ id: 'glm\r\n-5.2' });
+    expect(resId.ok).toBe(false);
+    if (!resId.ok) expect(resId.error).toMatch(/control characters/);
+    const resName = coerceSlotBindingInput({ id: 'glm-5.2', name: 'evil\ntier' });
+    expect(resName.ok).toBe(false);
+    if (!resName.ok) expect(resName.error).toMatch(/control characters/);
+  });
+  it('rejects names that shadow built-in aliases (slot keys, legacy aliases, auto, direct aliases)', () => {
+    for (const reserved of ['local', 'small', 'medium', 'large', 'haiku', 'sonnet', 'opus', 'auto', 'fable']) {
+      const res = coerceSlotBindingInput({ id: 'glm-5.2', name: reserved });
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toMatch(/shadow a built-in alias/);
+    }
   });
 });

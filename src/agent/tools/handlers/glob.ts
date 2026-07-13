@@ -5,6 +5,9 @@
  * Supports basic glob patterns: * (any filename chars), ** (any path segment),
  * and ? (single char). Returns up to 500 results.
  *
+ * By default, recursion skips node_modules/.git/.hg/.svn; naming such a
+ * directory as a literal pattern segment opts back into searching it.
+ *
  * @module agent/tools/handlers/glob
  */
 
@@ -12,6 +15,29 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { resolveAndContain } from './_cwd-utils.js';
+
+/**
+ * Directory basenames pruned from recursion by default: VCS metadata and
+ * dependency stores that are large and rarely the intended search target.
+ * A caller opts back into any of these by naming it as a literal (non-glob)
+ * segment of the pattern (e.g. `node_modules/**\/*.js`).
+ */
+const DEFAULT_PRUNE_DIRS = new Set(['node_modules', '.git', '.hg', '.svn']);
+
+/**
+ * Extract the literal (no `*`/`?`) path segments of a glob pattern. These are
+ * the directory names the caller has committed to traversing, so they must
+ * never be pruned even when they collide with {@link DEFAULT_PRUNE_DIRS}.
+ */
+function literalPatternSegments(pattern: string): Set<string> {
+  const literals = new Set<string>();
+  for (const segment of pattern.replace(/\\/g, '/').split('/')) {
+    if (segment !== '' && !segment.includes('*') && !segment.includes('?')) {
+      literals.add(segment);
+    }
+  }
+  return literals;
+}
 
 /**
  * Check if a relative path matches a glob pattern.
@@ -78,6 +104,9 @@ function convertGlobPartToRegex(part: string): string {
 async function collectMatches(dir: string, pattern: string): Promise<string[]> {
   const matches: string[] = [];
   const maxResults = 500;
+  // Directory names the caller explicitly named as literal pattern segments
+  // are exempt from default pruning (opt back into node_modules/.git/etc.).
+  const literalSegments = literalPatternSegments(pattern);
 
   async function walk(currentPath: string, relPath: string): Promise<boolean> {
     if (matches.length >= maxResults) {
@@ -100,8 +129,14 @@ async function collectMatches(dir: string, pattern: string): Promise<string[]> {
           matches.push(entryRel);
         }
 
-        // Always recurse into directories to find deeper matches
+        // Recurse into directories to find deeper matches, but skip the
+        // default-pruned dirs (node_modules/.git/.hg/.svn) unless the caller
+        // named them literally in the pattern. The search root itself is
+        // never pruned here (it is walked directly, not as a child entry).
         if (entry.isDirectory()) {
+          if (DEFAULT_PRUNE_DIRS.has(entry.name) && !literalSegments.has(entry.name)) {
+            continue;
+          }
           const shouldStop = await walk(entryPath, entryRel);
           if (shouldStop) {
             return true;

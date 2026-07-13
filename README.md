@@ -55,15 +55,14 @@ afk chat "hello"
 
 > **Agent AFK Pro:** Autonomous skill-generation (`/forge`) and the calibrated skill-qualification rubric (`/qualify`) are reserved for Agent AFK Pro and are not part of the open-source build.
 - **Cross-session memory** — Claude remembers preferences, decisions, and procedures across runs. See [Memory](#memory) below.
-- **Background subagent jobs** — dispatch a subagent with `mode:'background'`; `/bgsub` lists running and completed jobs, `/bgsub:join <id>` retrieves the result.
+- **Background subagent jobs** — dispatch a subagent with `mode:'background'`; results auto-deliver into the model's context when they finish. `/bgsub` lists running and completed jobs, `/bgsub:join <id>` replays a result manually.
 
 ## Four surfaces, one session manager
-
 | Command | Surface |
 |---|---|
 | `afk chat "..."` | One-shot (fire & forget) turn — pipe-friendly, scripts well |
 | `afk` (alias of `afk interactive`) | REPL with slash commands, streaming, plan mode, image paste |
-| `afk daemon` | Long-running headless agent, cron-friendly |
+| `afk daemon` | Long-running headless agent, cron-friendly. For persistence across reboot and crash, use `/service-setup` (launchd on macOS, systemd `--user` on Linux) instead of running in a bare tmux pane. |
 | `afk telegram start` | Telegram bot — same tools, same memory, on your phone |
 
 ## Configuration
@@ -140,11 +139,14 @@ afk chat "refactor this" --model gpt-5.5
 | Slot | Default | Notes |
 |---|---|---|
 | `local` | *(empty — you configure)* | Point at Ollama, LM Studio, or any OpenAI-compatible shim via `AFK_MODEL_LOCAL` + `AFK_MODEL_LOCAL_BASE_URL` |
-| `small` | `claude-haiku-4-5-20251001` | Cheapest/fastest Anthropic tier; `haiku` alias |
-| `medium` | `claude-sonnet-5` | General-use default; `sonnet` alias |
-| `large` | `claude-opus-4-8` | Most capable; `opus` alias |
+| `small` | `claude-haiku-4-5-20251001` | Cheapest/fastest Anthropic tier |
+| `medium` | `claude-sonnet-5` | General-use default |
+| `large` | `claude-opus-4-8` | Most capable |
 
-See [`docs/model-slots.md`](docs/model-slots.md) for the full configuration reference.
+The `haiku`/`sonnet`/`opus`/`fable` handles are **fixed identities**, not tier
+aliases: they always resolve to their Claude model even after you rebind a tier
+(so rebinding `medium` to an OpenAI model won't hijack `sonnet`). See
+[`docs/model-slots.md`](docs/model-slots.md) for the full configuration reference.
 
 MCP servers (tool-providing plugins over stdio/HTTP) — see [`docs/mcp.md`](docs/mcp.md) for config, transports, OAuth, and security notes.
 

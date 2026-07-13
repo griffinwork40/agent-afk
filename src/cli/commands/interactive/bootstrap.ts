@@ -1,4 +1,5 @@
 import * as readline from 'node:readline';
+import { resolve } from 'node:path';
 import { elicitationRouter } from '../../../agent/elicitation-router.js';
 import { makeReplElicitationHandler } from '../../elicitation-repl.js';
 import { AgentSession } from '../../../agent/session.js';
@@ -13,8 +14,8 @@ import type { ModelProvider } from '../../../agent/provider.js';
 import type { HookRegistry } from '../../../agent/hooks.js';
 import type { TraceWriter } from '../../../agent/trace/index.js';
 import {
-  parseThinking, parseEffort, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getThinking, getEffort,
-  getMaxOutputTokens, getDefaultSubagentModel, resolveBaseSystemPrompt, isGrantManager,
+  parseThinking, parseEffort, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort,
+  getMaxOutputTokens, getMaxToolUseIterations, getDefaultSubagentModel, resolveBaseSystemPrompt, isGrantManager,
 } from '../../shared-helpers.js';
 import { topLevelSurfaceAllowedTools } from '../../../agent/tools/top-level-allowlist.js';
 import { loadConfig } from '../../config.js';
@@ -30,6 +31,7 @@ import type { SessionRef } from '../../../agent/session-ref.js';
 import type { CliOptions, CompletionWriter, InteractiveCtx } from './shared.js';
 import { formatStatusFields } from './shared.js';
 import { createReplRenderer } from './repl-renderer.js';
+import { createTerminalStateGate } from './terminal-state-gate.js';
 import { TrustedSkillLedger } from '../../trusted-skill-ledger.js';
 import {
   onTrustedSkillComplete, offTrustedSkillComplete,
@@ -37,7 +39,7 @@ import {
 } from '../../../agent/_lib/trusted-skill-events.js';
 import { formatTrustedSkillCompletion, formatTrustedSkillInFlight } from '../../trusted-skill-badge.js';
 import type { TrustedSkillResult } from '../../../agent/trusted-skill-result.js';
-import { formatSubagentCompletion } from './progress-banner.js';
+import { emitSubagentCompletion } from './progress-banner.js';
 import { ContextSampler } from '../../context-sampler.js';
 import { SubagentManager } from '../../../agent/subagent.js';
 import { SubagentExecutor } from '../../../agent/tools/subagent-executor.js';
@@ -47,11 +49,12 @@ import { setBgsubRegistry, setBgsubSummarizer } from '../../slash/commands/bgsub
 import { SkillExecutor } from '../../../agent/tools/skill-executor.js';
 import { ComposeExecutor } from '../../../agent/tools/compose-executor.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory } from '../../../agent/tools/nesting.js';
+import { loadAgentRegistry } from '../../../agent/agents/index.js';
 import { AnthropicDirectProvider } from '../../../agent/providers/anthropic-direct/index.js';
 import { seedPersistedGrants } from '../../../agent/permissions-store.js';
 import { providerForModel } from '../../../agent/providers/index.js';
 import { createMemoizedProviderFactory } from './provider-factory.js';
-import { ensurePluginEntrypointsLoaded } from '../../../agent/tools/skill-bridge.js';
+import { ensurePluginEntrypointsLoaded, discoverPluginAgents } from '../../../agent/tools/skill-bridge.js';
 import { McpManager, loadMcpConfig, getMcpConfigPath } from '../../../agent/mcp/index.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../../config/import-sources.js';
 import { env } from '../../../config/env.js';
@@ -61,7 +64,7 @@ import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
 import { emitSessionPhase } from '../../../agent/trace/emit.js';
 import { palette } from '../../palette.js';
 import { performResumeSwap, resumeConfigFor } from './resume-swap.js';
-import { reseedStatsFromStored } from './shared.js';
+import { reseedStatsFromStored, resolveResumeCwd } from './shared.js';
 
 /**
  * Dependencies for constructing a fresh `AgentSession`. Captures everything
@@ -76,6 +79,13 @@ interface BuildAgentSessionDeps {
   thinking: ThinkingConfig | undefined;
   effort: EffortLevel | undefined;
   maxOutputTokens: number | undefined;
+  /**
+   * Opt-in top-level tool-use-round ceiling (from AFK_MAX_TOOL_USE_ITERATIONS).
+   * `undefined` = unlimited (no behavior change). Flows to
+   * `AgentConfig.maxToolUseIterations` and hits both providers via
+   * `resolveMaxToolIterations()`. Top-level only — subagent forks set their own.
+   */
+  maxToolUseIterations: number | undefined;
   /**
    * Fully-wired provider factory. Passed as `config.providerFactory` so the
    * ProviderRouter builds a wired provider (with executors, memoryStore,
@@ -119,6 +129,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
     ...(deps.thinking !== undefined ? { thinking: deps.thinking } : {}),
     ...(deps.effort !== undefined ? { effort: deps.effort } : {}),
     ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
+    ...(deps.maxToolUseIterations !== undefined ? { maxToolUseIterations: deps.maxToolUseIterations } : {}),
     ...deps.resumeConfig,
     ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}),
     ...(deps.traceWriter !== undefined ? { traceWriter: deps.traceWriter } : {}),
@@ -150,6 +161,18 @@ export async function bootstrapSession(
   const bootstrapStartedAt = Date.now();
   const resumeTarget = resolveResumeTarget(options);
   const resumeConfig = resumeConfigFor(resumeTarget);
+  // Resume cwd restoration: a resumed session should run in the directory it
+  // was saved in (e.g. an `afk --worktree` session that was later /fork'd or
+  // --resume'd), not wherever the shell happens to be. Precedence: an explicit
+  // --worktree override (extras.cwd) always wins; otherwise fall back to the
+  // stored cwd IFF it still exists on disk as a directory — a cleaned-up
+  // worktree degrades safely to process.cwd(). `effectiveCwd` is threaded
+  // through every cwd-purpose usage below (stats stamp, hook/session cwd,
+  // subagent/skill/compose/MCP cwd) so resumed worktree sessions AND their
+  // children anchor correctly. Defaults to `extras?.cwd` when there is no
+  // resume override, so this is a safe drop-in: behavior only changes for a
+  // resume whose stored cwd still exists.
+  const effectiveCwd = resolveResumeCwd(extras?.cwd, resumeTarget?.stored?.cwd);
   const sessionModel = resumeTarget?.stored?.model ?? options.model;
   // Fail fast on an unconfigured capability tier (e.g. `afk i -m local` with no
   // AFK_MODEL_LOCAL) before building the REPL session — an empty id would
@@ -165,6 +188,9 @@ export async function bootstrapSession(
   thinking = parseThinking(options.thinking) ?? getThinking();
   effort = parseEffort(options.effort) ?? getEffort();
   maxOutputTokens = parseMaxOutputTokens(options.maxOutputTokens) ?? getMaxOutputTokens();
+  // Opt-in top-level tool-use-round ceiling. No CLI flag exists, so this is the
+  // env default only (unset/<=0 → undefined → unlimited; no behavior change).
+  const maxToolUseIterations = getMaxToolUseIterations();
 
   // System-prompt layering: the framework base (`prompts/system-prompt.md`)
   // is unconditional; the operator overlay (env → afk.config.json → AFK.md)
@@ -183,20 +209,10 @@ export async function bootstrapSession(
   // sessionRef is populated after the session is constructed below.
   const sessionRef: SessionRef = { current: null! };
 
-  const apiKey = getApiKey();
-  const rootManager = new SubagentManager({
-    apiKey,
-    ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
-    // Propagate the worktree cwd (when `afk i --worktree` set it) into every
-    // forked subagent so their tool handlers' resolveBase + readRoots anchor
-    // to the worktree, not the Node host's process.cwd(). Without this,
-    // subagents resolve relative paths like `src/foo.ts` against the parent
-    // repo and the `read_file` handler returns parent-repo contents instead
-    // of the worktree's. Mirrors `chat.ts:163` for the one-shot path.
-    ...(extras?.cwd !== undefined ? { cwd: extras.cwd } : {}),
-  });
-
-  // Witness layer: open trace BEFORE the executor so the
+  // Witness layer: open trace BEFORE the root SubagentManager and the
+  // executor so (a) the manager inherits the writer — the `agent`-tool path
+  // relies on manager-level inheritance for its forks' lifecycle events
+  // (see forkSubagent's effectiveTraceWriter) — and (b) the
   // BackgroundAgentRegistry can be constructed with the writer in hand.
   // The trace path is logged after `bootstrapSession` returns (caller-side
   // banner), so we open the file here but defer the log line until later
@@ -205,6 +221,34 @@ export async function bootstrapSession(
   const trace = createDefaultTraceWriter(
     traceSessionLabel ? { sessionLabel: traceSessionLabel } : {},
   );
+
+  const apiKey = getApiKey();
+  const rootManager = new SubagentManager({
+    apiKey,
+    // Provider source of truth for the fork-time credential fallback: `apiKey`
+    // is `getApiKey()`, which keys off `getModel()` (AFK_MODEL), so the parent
+    // key's provider is `providerForModel(getModel())`. Passing that keeps the
+    // fallback from crossing the provider boundary (see parentProvider).
+    parentModel: getModel(),
+    ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
+    // Propagate the worktree cwd (when `afk i --worktree` set it) into every
+    // forked subagent so their tool handlers' resolveBase + readRoots anchor
+    // to the worktree, not the Node host's process.cwd(). Without this,
+    // subagents resolve relative paths like `src/foo.ts` against the parent
+    // repo and the `read_file` handler returns parent-repo contents instead
+    // of the worktree's. Mirrors `chat.ts:163` for the one-shot path.
+    ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
+    // Witness layer: manager-level writer so `agent`-tool forks (which never
+    // set config.traceWriter) still emit subagent_lifecycle events and hand
+    // the writer to their handles. Skill forks already thread it via
+    // SkillExecutorContext; this closes the same gap for raw agent dispatch.
+    ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
+    // Origin attribution: the REPL is a `cli` entrypoint. Threading the surface
+    // into the manager makes forked `agent`-tool children inherit origin 'cli'
+    // (not 'unknown') via forkSubagent's parentSurface fill — mirrors the
+    // traceWriter/cwd inheritance above and farm.ts. See session-identity.ts.
+    surface: 'cli',
+  });
   // Witness layer: trace writer is now live — emit the bootstrap_start marker.
   // (Total bootstrap span is reported by bootstrap_done, measured from the
   // function-entry timestamp captured above.)
@@ -272,6 +316,14 @@ export async function bootstrapSession(
   // depth — root → skill-forked child → skill-forked grandchild. Without
   // this, the dispatch fast-fails with a 163-byte "BackgroundAgentRegistry
   // is not wired" error after ~24ms (no model call).
+  // Named-agent registry: session-static scan (builtin + user ~/.afk/agents
+  // + project .afk/agents & .claude/agents). Enables `agent_type` dispatch
+  // on the `agent` tool at every depth of this REPL session.
+  const agentRegistry = loadAgentRegistry({
+    ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
+    pluginAgents: discoverPluginAgents(),
+  });
+
   const childSkillExecutorFactory = createChildSkillExecutorFactory(
     sessionModel,
     apiKey,
@@ -282,14 +334,24 @@ export async function bootstrapSession(
     // Worktree cwd propagates into every depth of the skill-executor chain
     // (grandchild SkillExecutor → its per-call SubagentManager → forked
     // subagent config). Without this, depth ≥ 1 skill children silently
-    // lose worktree isolation.
-    extras?.cwd,
+    // lose worktree isolation. `effectiveCwd` also carries a resumed
+    // session's restored cwd (see resolveResumeCwd above).
+    effectiveCwd,
     // Per-model credential resolver: resolves credentials by child model
     // rather than forwarding the parent's captured apiKey — fixes Anthropic
     // children starving when the main model is OpenAI-routed.
     getApiKeyForModel,
     // Surface: REPL skill executor children inherit origin 'cli'.
     'cli',
+    // Resolved default-subagent model threaded into nested skill executors so
+    // skill→skill / skill→agent chains inherit the SAME policy as the top-level
+    // executors below — closing the leak where a nested subagent silently
+    // defaulted to Anthropic `sonnet` under an OpenAI-routed parent.
+    getDefaultSubagentModel(sessionModel),
+    // Named-agent registry propagates to nested skill executors.
+    agentRegistry,
+    // OpenAI endpoint → nested restricted/depth-cap provider builders.
+    cliConfig.openaiBaseUrl,
   );
 
   // Pass `sessionModel` to `getDefaultSubagentModel` so OpenAI-routed
@@ -306,6 +368,7 @@ export async function bootstrapSession(
       apiKey,
       systemPrompt: basePrompt,
       ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
+      ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
     },
     defaultSubagentModel: getDefaultSubagentModel(sessionModel),
     childProviderFactory,
@@ -320,7 +383,15 @@ export async function bootstrapSession(
     // Worktree isolation for depth ≥ 2 `agent` dispatch — `rootManager`
     // already carries cwd for depth-1, but the per-call childManager
     // constructed inside SubagentExecutor.execute() needs cwd too.
-    ...(extras?.cwd !== undefined ? { cwd: extras.cwd } : {}),
+    ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
+    // Named-agent dispatch: registry + the session model as the `inherit`
+    // anchor for named-agent model resolution.
+    agentRegistry,
+    parentModel: sessionModel,
+    // Witness layer: thread the writer so depth ≥ 2 `agent` forks (nested
+    // child managers built inside execute()) stay visible in the trace.
+    // Depth-1 forks are covered by rootManager's traceWriter above.
+    ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
   });
 
   const skillExecutor = new SkillExecutor({
@@ -332,6 +403,8 @@ export async function bootstrapSession(
     apiKey,
     childProviderFactory,
     childSkillExecutorFactory,
+    // Named-agent registry for skill-forked orchestrator children.
+    agentRegistry,
     // Background dispatch: a plugin skill's subagent calling `agent` with
     // `mode:"background"` is the SKILL.md "Dispatch N sub-agents in parallel"
     // idiom — `/research`, `/diagnose`, `/shadow-verify`, etc. The registry
@@ -341,6 +414,7 @@ export async function bootstrapSession(
     // Sibling to the SubagentExecutor wiring above.
     backgroundRegistry,
     ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
+    ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
     // Per-model credential resolver — mirrors SubagentExecutor wiring above.
     resolveApiKeyForModel: getApiKeyForModel,
     // Witness layer: without this, skill-forked subagents (every /review,
@@ -352,7 +426,12 @@ export async function bootstrapSession(
     // executor. Without forwarding cwd here, every `/diagnose`, `/mint`,
     // etc. runs its first-tier subagents against the host repo even when
     // `--worktree` was set.
-    ...(extras?.cwd !== undefined ? { cwd: extras.cwd } : {}),
+    ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
+    // Read-scope inheritance (#547): skill-forked children inherit the parent
+    // session's read scope via the root manager — symmetric with the `agent`
+    // tool (subagentManager: rootManager above). Read fresh so mid-session
+    // setCwd re-anchors are reflected.
+    getReadScopeInputs: () => rootManager.getReadScopeInputs(),
   });
 
   // Pass the raw base prompt (pre-assembly) so compose subagents do not
@@ -366,13 +445,18 @@ export async function bootstrapSession(
     apiKey,
     // Per-model credential resolver — mirrors #640 for the compose fork-path.
     resolveApiKeyForModel: getApiKeyForModel,
+    // Read-scope inheritance (#547): DAG nodes inherit the parent session's
+    // read scope via the root manager, symmetric with the `agent`/`skill` tools.
+    getReadScopeInputs: () => rootManager.getReadScopeInputs(),
     ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
     // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
-    ...(extras?.cwd !== undefined ? { cwd: extras.cwd } : {}),
+    ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
     systemPrompt: basePrompt ?? '',
     // Session identity for routing-decision rows (REPL → cli).
     surface: 'cli',
     depth: 0,
+    // Witness layer: DAG nodes emit subagent_lifecycle into the session trace.
+    ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
   });
 
   const sharedMemoryStore = new MemoryStore();
@@ -392,7 +476,7 @@ export async function bootstrapSession(
     // Use the worktree cwd for project-local `.mcp.json` resolution so each
     // worktree can carry its own MCP config (matching how the worktree
     // already isolates everything else under `worktreeCwd`).
-    const projectCwd = extras?.cwd ?? process.cwd();
+    const projectCwd = effectiveCwd ?? process.cwd();
     // Imported MCP servers from trusted source binaries (`importFrom`). Only
     // JSON-format configs (Claude Code) are loadable today; they enter as the
     // lowest-priority layer so AFK's own config always wins. MCP import is
@@ -516,18 +600,39 @@ export async function bootstrapSession(
   if (initialPermissionMode !== undefined) {
     stats.permissionMode = initialPermissionMode;
   }
+  // Seed thinking-UI mode so `/thinking` has a live value to mutate.
+  // `options.thinkingUi` was already resolved by the interactive action handler
+  // via `resolveThinkingUi` (--thinking-ui flag > AFK_THINKING_UI env >
+  // interactive.thinkingUi config > 'live'), so this seeds the persistent
+  // default. `createSessionStats()` pre-seeds 'live' for any path that reaches
+  // bootstrap without that resolution (e.g. tests constructing options directly).
+  if (options.thinkingUi !== undefined) {
+    stats.thinkingUi = options.thinkingUi;
+  }
   // Stamp the effective working directory on stats so the status line can
-  // render it. We capture the same cwd the provider will see: the explicit
-  // `extras.cwd` override (e.g. from `--worktree`) when present, else
+  // render it. We capture the same cwd the provider will see: `effectiveCwd`
+  // (the explicit `--worktree` override when present, else a resumed session's
+  // restored cwd — see resolveResumeCwd above), falling back to
   // `process.cwd()`. Captured once at bootstrap — sessions don't `chdir`
   // mid-run, and the status line treats this as a fixed identity field.
-  stats.cwd = extras?.cwd ?? process.cwd();
+  stats.cwd = effectiveCwd ?? process.cwd();
 
   // Trace was opened earlier (before the executor) so the
   // BackgroundAgentRegistry could be constructed with the writer. Surface
   // the path here so the startup banner ordering is preserved.
   if (trace) {
     console.log(palette.dim(`  trace: ${trace.tracePath}`));
+  }
+  // Make a restored resume cwd legible: only when the cwd came from the stored
+  // session (not an explicit --worktree, which the banner already implies) and
+  // differs from where the shell launched. Printed in the same dim-log style
+  // as the trace line above, before the compositor is armed.
+  if (
+    extras?.cwd === undefined &&
+    effectiveCwd !== undefined &&
+    resolve(effectiveCwd) !== resolve(process.cwd())
+  ) {
+    console.log(palette.dim(`  ↪ resuming in ${effectiveCwd}`));
   }
 
   // Both slots default to `console.log` here; `runReplLoop` mutates them
@@ -552,16 +657,32 @@ export async function bootstrapSession(
   // path-approval hook fails open until then (mirroring `setAllowDirDispatcher`
   // wiring order).
   const hookRegistryBundle = createDefaultHookRegistry(
-    (info) => { completionWriter.fn(formatSubagentCompletion(info)); },
+    (info) => { emitSubagentCompletion(completionWriter, info); },
     'cli',
     sharedMemoryStore,
     () => stats.permissionMode,
-    loadHooksConfig({ cwd: extras?.cwd }),
-    { cwd: extras?.cwd, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}) },
-    () => extras?.cwd ?? process.cwd(),
+    loadHooksConfig({ cwd: effectiveCwd }),
+    { cwd: effectiveCwd, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}) },
+    () => effectiveCwd ?? process.cwd(),
   );
   const hookRegistry = hookRegistryBundle.registry;
   const pathApprovalGrantRef = hookRegistryBundle.pathApprovalGrantRef;
+
+  // Terminal-state gate (issue #237): a post-turn `Stop` hook that bounces a
+  // self-certified `Done` with no corroborating evidence back into the next turn
+  // via the Stop injectContext primitive (wired in loop-iteration.ts). Registered
+  // here rather than in createDefaultHookRegistry because it reads cli-layer
+  // config (`enforceDoneEvidence`, fresh each turn) and the live permission mode;
+  // opt-in + autonomous-only, so it is inert unless the operator enabled it. REPL
+  // surface only — the Stop injectContext delivery it depends on lives in the
+  // REPL loop.
+  hookRegistry.register(
+    'Stop',
+    createTerminalStateGate({
+      getPermissionMode: () => stats.permissionMode,
+      isEnabled: () => loadConfig().enforceDoneEvidence === true,
+    }),
+  );
 
   // Capture deps needed by both the initial build and the swap closure.
   const sharedDeps: BuildAgentSessionDeps = {
@@ -572,11 +693,12 @@ export async function bootstrapSession(
     thinking,
     effort,
     maxOutputTokens,
+    maxToolUseIterations,
     ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
     providerFactory,
     hookRegistry,
     traceWriter: trace?.writer,
-    cwd: extras?.cwd,
+    cwd: effectiveCwd,
     maxTurns: parseInt(options.maxTurns, 10),
     autoResumeOnUsageLimit: cliConfig.autoResumeOnUsageLimit,
     ...(initialPermissionMode !== undefined ? { permissionMode: initialPermissionMode } : {}),
@@ -701,6 +823,11 @@ export async function bootstrapSession(
         // before /resume can fire. Optional — early /resume calls before
         // the ledger is wired are a no-op (safe).
         ctx.clearVerdictLedger?.();
+        // Drop buffered background-subagent results from the outgoing
+        // session — cancelAll ran at the swap commit point, but a job that
+        // settled just before it may already sit in the notifier's buffer
+        // and would otherwise inject into the resumed session's first turn.
+        ctx.clearBgResultBuffer?.();
       },
       buildSession: (t) => buildAgentSession({
         ...sharedDeps,

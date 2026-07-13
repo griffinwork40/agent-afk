@@ -260,6 +260,77 @@ describe('SkillExecutor', () => {
     expect(result.content).toContain('skill boom');
   });
 
+  it('regression: a registry-skill execution error PROPAGATES and is not masked as "not found"', async () => {
+    // Bug (#499 finding 1): `executeRegistrySkill(...)` used to run INSIDE the
+    // try that guards the `getSkill()` lookup, so ANY throw from executing a
+    // registry skill (e.g. a forked/loaded-skill setup failure) was swallowed
+    // by the `catch {}` and misrouted to plugin lookup — surfacing a
+    // misleading `Skill "<name>" not found`. Only the getSkill LOOKUP should be
+    // guarded. Here the skill EXISTS (getSkill succeeds) but its execution
+    // throws; the error must reach the caller intact.
+    registerSkill({
+      name: 'registry-exec-boom',
+      description: 'test',
+      handler: vi.fn(),
+    });
+
+    const executor = new SkillExecutor({
+      parentSession: {
+        sessionId: 'test',
+        getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+        abortSignal,
+      },
+    });
+
+    // Force executeRegistrySkill to throw an *unexpected* error (i.e. one not
+    // internally converted to an error ToolResult), simulating a setup failure
+    // deep in the fork/loaded path. Restore it in `finally` so the spy does not
+    // leak into sibling tests (the top-level afterEach does not restore mocks).
+    const spy = vi
+      .spyOn(
+        SkillExecutor.prototype as unknown as {
+          executeRegistrySkill: (...a: unknown[]) => Promise<unknown>;
+        },
+        'executeRegistrySkill',
+      )
+      .mockRejectedValue(new Error('registry setup exploded'));
+
+    try {
+      // The real error must PROPAGATE (the fix moved executeRegistrySkill
+      // OUTSIDE the getSkill try/catch). Under the old code the throw was
+      // swallowed by `catch {}` and the call resolved to a misleading
+      // "not found" ToolResult.
+      await expect(executor.execute(makeCall({ name: 'registry-exec-boom' }))).rejects.toThrow(
+        'registry setup exploded',
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('regression: a genuinely-unknown skill name still falls through to a "not found" error', async () => {
+    // The other half of the #499 finding-1 contract: the getSkill LOOKUP throw
+    // ("Skill not found") must STILL be caught and fall through to plugin
+    // lookup (→ not found here), so legitimate not-found routing is preserved.
+    registerSkill({
+      name: 'present-skill',
+      description: 'test',
+      handler: vi.fn().mockResolvedValue('ok'),
+    });
+
+    const executor = new SkillExecutor({
+      parentSession: {
+        sessionId: 'test',
+        getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+        abortSignal,
+      },
+    });
+
+    const result = await executor.execute(makeCall({ name: 'no-such-skill-anywhere' }));
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('not found');
+  });
+
   it('regression: trusted skill complete event fires even when handler throws (HIGH fix)', async () => {
     // Register the skill as trusted in the agent-layer registry.
     registerTrustedSkillName('trusted-throwing');
@@ -988,6 +1059,125 @@ describe('SkillExecutor', () => {
     });
   });
 
+  describe('trace origin surface threading (#469)', () => {
+    // Regression (follow-up to #468): skill-forked subagents recorded
+    // origin:'unknown' in the witness trace because the owning surface was
+    // never threaded into the per-call fork manager (fork-dispatch.ts). The
+    // manager must inherit `surface` like traceWriter/cwd so forkSubagent's
+    // parentSurface fill (subagent.ts) stamps the skill subagent's
+    // config.surface → deriveOrigin returns the real cli/telegram/daemon
+    // instead of 'unknown'. Mirrors child-config.test.ts's #468 surface tests.
+    function setupSurfaceCapture(): () => SubagentManager | undefined {
+      registerSkill({
+        name: 'fork-skill-surface',
+        description: 'test',
+        context: 'fork',
+        handler: vi.fn(),
+      });
+      vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({
+        'system.md': 'fake-system-prompt',
+      });
+      let capturedManager: SubagentManager | undefined;
+      vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockImplementation(
+        function (this: SubagentManager) {
+          capturedManager = this;
+          return Promise.resolve({
+            id: 'h',
+            runToResult: vi.fn().mockResolvedValue({
+              status: 'succeeded',
+              message: { content: 'ok' },
+            }),
+            teardown: vi.fn().mockResolvedValue(undefined),
+          }) as any;
+        } as any,
+      );
+      vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
+      return () => capturedManager;
+    }
+
+    it('forwards the owning surface to the per-call fork manager', async () => {
+      const getManager = setupSurfaceCapture();
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'parent-123',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        surface: 'cli',
+      });
+
+      const result = await executor.execute(makeCall({ name: 'fork-skill-surface' }));
+
+      expect(result.isError).toBeUndefined();
+      // parentSurface === 'cli' is what lets forkSubagent fill the skill
+      // subagent's config.surface, so deriveOrigin('cli') → 'cli' in the trace
+      // rather than deriveOrigin(undefined) → 'unknown' (the #469 bug).
+      expect((getManager() as unknown as { parentSurface: string | undefined }).parentSurface)
+        .toBe('cli');
+    });
+
+    it('omits surface from the fork manager when the host surface is unset', async () => {
+      const getManager = setupSurfaceCapture();
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'parent-123',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+      });
+
+      const result = await executor.execute(makeCall({ name: 'fork-skill-surface' }));
+
+      expect(result.isError).toBeUndefined();
+      expect((getManager() as unknown as { parentSurface: unknown }).parentSurface)
+        .toBeUndefined();
+    });
+  });
+
+  describe('getPluginSkillBody — cwd cache invalidation (regression)', () => {
+    // Regression: PR #418 threaded cwd into the FIRST population of the
+    // lazy `pluginBodies` cache but did not invalidate it on setCwd(), so a
+    // plugin skill dispatched after a mid-session cwd change (REPL worktree
+    // auto-naming, `worktree-autoname.ts`) would keep returning a stale
+    // project-A plugin body even though the session has moved to project B.
+    it('setCwd() clears the cached pluginBodies map so the next lookup re-resolves under the new cwd', () => {
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'parent-cwd-invalidate',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        cwd: '/tmp/launch/dir',
+      });
+
+      // Simulate a prior plugin-skill dispatch that already populated the
+      // lazy cache (same cache-injection idiom used elsewhere in this file,
+      // e.g. the `pluginBodies` assignments in the fork-dispatch tests below)
+      // — bypasses the real disk scan so this stays a pure unit test of the
+      // invalidation contract itself.
+      (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
+        new Map([
+          [
+            'stale-plugin',
+            { body: 'stale body from project A', pluginPath: '/tmp/launch/dir/.afk/plugins/stale', context: 'load' },
+          ],
+        ]);
+
+      executor.setCwd('/tmp/launch/dir/.afk-worktrees/afk-xyz');
+
+      // Before the fix, setCwd() only reassigned `currentCwd` and left the
+      // stale Map in place, so a plugin skill dispatched post-cwd-change
+      // would keep resolving project A's body (or wrongly report the new
+      // project's own plugin skill as "not found").
+      expect(
+        (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies,
+      ).toBeNull();
+    });
+  });
+
   describe('resolveApiKeyForModel — per-model credential resolution (skill fork path)', () => {
     // Regression: "Anthropic child starves when parent is OpenAI-routed."
     // Same root cause as subagent-executor.test.ts's block — the skill-dispatch
@@ -1269,6 +1459,174 @@ describe('SkillExecutor', () => {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // In-turn SubagentStop injectContext append (skill-executor.ts:
+  // runForkedSkillToResult finally, ~1178-1192).
+  //
+  // When a forked skill's SubagentStop hook produces injectContext (e.g. the
+  // shadow-verify nudge), that note must be delivered IN-TURN — appended to
+  // THIS skill's tool_result content — not via the parent's deferred
+  // input-stream queue. The driver coordinates this by calling
+  // `teardown({ deferInjectContextToCaller: true })` (suppresses the queue
+  // push and records the note) and then, in its finally, appending
+  // `handle.getLastStopInjectContext()` to the completion ToolResult it
+  // hoisted into `toolResult`. Follow-up to #387; #391.
+  //
+  // Mirrors `subagent-executor.test.ts` ("in-turn SubagentStop injectContext
+  // delivery") — the `agent` tool's analogous append lives in
+  // subagent/foreground-promotion.ts. Keep the two suites in symmetry: the
+  // skill path differs only in that its failure payload is a plain error
+  // string (not the subagent JSON envelope), and its catch-path leaves
+  // `toolResult` unset so the note is intentionally dropped for that stop.
+  // -------------------------------------------------------------------------
+  describe('in-turn SubagentStop injectContext append', () => {
+    // Fork a `context: 'fork'` registry skill (→ executeForkedRegistrySkill →
+    // runForkedSkillToResult) with a handle whose SubagentStop note is
+    // whatever `injectContext` we pass. `injectContext: undefined` (the
+    // default) means the handle still exposes `getLastStopInjectContext` but
+    // it returns undefined — exercising the "no note" branch without removing
+    // the getter (which would instead hit the `?.` short-circuit).
+    function setupForkedSkillWithInject(
+      skillName: string,
+      runResult: unknown,
+      injectContext: string | undefined,
+    ) {
+      registerSkill({
+        name: skillName,
+        description: 'test',
+        context: 'fork',
+        handler: vi.fn(),
+      });
+      vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({
+        'system.md': 'fake-system-prompt',
+      });
+      const teardown = vi.fn().mockResolvedValue(undefined);
+      const getLastStopInjectContext = vi.fn().mockReturnValue(injectContext);
+      vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockResolvedValue({
+        runToResult: vi.fn().mockResolvedValue(runResult),
+        teardown,
+        getLastStopInjectContext,
+      } as never);
+      vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'parent-inject',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+      });
+      return { executor, teardown, getLastStopInjectContext };
+    }
+
+    // CORE ASSERTION: succeeded run + non-empty SubagentStop note ⇒ the
+    // returned tool_result.content ENDS WITH `\n\n<injectContext>` appended
+    // to the skill's own output.
+    it('appends the injectContext to the returned tool_result (success path)', async () => {
+      const nudge = '[framework-generated context: shadow-verify nudge]';
+      const { executor, teardown, getLastStopInjectContext } = setupForkedSkillWithInject(
+        'inject-success',
+        { status: 'succeeded', message: { content: 'skill findings' } },
+        nudge,
+      );
+
+      const result = await executor.execute(makeCall({ name: 'inject-success' }));
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toBe(`skill findings\n\n${nudge}`);
+      expect(result.content.endsWith(`\n\n${nudge}`)).toBe(true);
+      // Delivered exactly once, via the caller-deferred channel.
+      expect(teardown).toHaveBeenCalledWith({ deferInjectContextToCaller: true });
+      expect(getLastStopInjectContext).toHaveBeenCalled();
+    });
+
+    // NEGATIVE: no note produced (getter returns undefined) ⇒ content
+    // unchanged, and no stray `\n\n` separator is introduced.
+    it('leaves content unchanged when no injectContext is produced', async () => {
+      const { executor } = setupForkedSkillWithInject(
+        'inject-none',
+        { status: 'succeeded', message: { content: 'plain body' } },
+        undefined,
+      );
+
+      const result = await executor.execute(makeCall({ name: 'inject-none' }));
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toBe('plain body');
+      expect(result.content).not.toContain('\n\n');
+    });
+
+    // NEGATIVE: empty-string note ⇒ the `injectContext.length > 0` guard
+    // suppresses the append (no trailing separator).
+    it('does not append when getLastStopInjectContext returns an empty string', async () => {
+      const { executor } = setupForkedSkillWithInject(
+        'inject-empty',
+        { status: 'succeeded', message: { content: 'body only' } },
+        '',
+      );
+
+      const result = await executor.execute(makeCall({ name: 'inject-empty' }));
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toBe('body only');
+      expect(result.content).not.toContain('\n\n');
+    });
+
+    // ERROR PATH (failed result, toolResult IS defined): the driver assigns
+    // `toolResult = { content: errorMessage, isError: true }` before the
+    // finally runs, so the note is still appended to the error string.
+    it('appends the injectContext to the error content on a failed result', async () => {
+      const nudge = 'verify: this failure';
+      const { executor } = setupForkedSkillWithInject(
+        'inject-failed',
+        { status: 'failed', error: { message: 'subagent boom' } },
+        nudge,
+      );
+
+      const result = await executor.execute(makeCall({ name: 'inject-failed' }));
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toBe(`subagent boom\n\n${nudge}`);
+    });
+
+    // CATCH PATH (runToResult throws, toolResult stays undefined): the note is
+    // intentionally dropped for that stop — the error string is the signal.
+    // Pins the documented "nothing to append to" branch in the finally.
+    it('does NOT append when runToResult throws (toolResult never assigned)', async () => {
+      const nudge = 'verify: should not appear';
+      const teardown = vi.fn().mockResolvedValue(undefined);
+      const getLastStopInjectContext = vi.fn().mockReturnValue(nudge);
+      registerSkill({
+        name: 'inject-throw',
+        description: 'test',
+        context: 'fork',
+        handler: vi.fn(),
+      });
+      vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({
+        'system.md': 'fake-system-prompt',
+      });
+      vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockResolvedValue({
+        runToResult: vi.fn().mockRejectedValue(new Error('runtime boom')),
+        teardown,
+        getLastStopInjectContext,
+      } as never);
+      vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'parent-inject',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+      });
+
+      const result = await executor.execute(makeCall({ name: 'inject-throw' }));
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('runtime boom');
+      expect(result.content).not.toContain(nudge);
+    });
+  });
+
   describe('renderer-nesting contract (parentId + agentType)', () => {
     // Pins the contract between SkillExecutor and StreamRenderer.process()'s
     // 3-way parentId resolver. Mirrors ComposeExecutor (compose-executor.ts:
@@ -1528,6 +1886,59 @@ describe('SkillExecutor', () => {
       expect(firstCtorCall).toBeDefined();
       const ctorOpts = firstCtorCall?.[0];
       expect(ctorOpts?.defaultConfig).toMatchObject({ baseUrl: LOCAL_BASE_URL });
+    });
+
+    it('propagates openaiBaseUrl into the SubagentExecutor defaultConfig for grandchild sessions (depth ≥ 1)', async () => {
+      // Regression test (PR #413 review): buildForkedChildConfig threaded
+      // baseUrl (anthropic) but DROPPED openaiBaseUrl from the SubagentExecutor
+      // defaultConfig. Because subagent-executor.ts's depth-cap restricted-
+      // provider fallback reads `defaultConfig.openaiBaseUrl`, an OpenAI-routed
+      // great-grandchild dispatched at the cap from inside a forked skill
+      // silently reverted to api.openai.com (where a non-OpenAI key 401s).
+      // Mirrors the baseUrl peer test directly above.
+      captureForkConfig();
+      vi.spyOn(promptLoader, 'loadSkillPrompts').mockReturnValue({
+        'system.md': 'fake prompt',
+      });
+      registerSkill({
+        name: 'openai-baseurl-propagation-skill',
+        description: 'test',
+        context: 'fork',
+        handler: vi.fn(),
+      });
+
+      const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
+      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
+        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+          capturedCtorArgs.push(args);
+          return new OriginalSubagentExecutor(...args);
+        },
+      );
+
+      const OPENAI_BASE_URL = 'https://opencode.ai/zen/go/v1';
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'p',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+        openaiBaseUrl: OPENAI_BASE_URL,
+        childProviderFactory: vi.fn().mockReturnValue({ name: 'sentinel' }) as never,
+      });
+
+      await executor.execute(makeCall({ name: 'openai-baseurl-propagation-skill' }));
+
+      // The SubagentExecutor constructed inside buildForkedChildConfig must
+      // carry openaiBaseUrl in its defaultConfig so an OpenAI-routed grandchild
+      // agent-tool dispatch at the depth cap hits the configured endpoint, not
+      // api.openai.com.
+      expect(capturedCtorArgs.length).toBeGreaterThan(0);
+      const firstCtorCall = capturedCtorArgs[0];
+      expect(firstCtorCall).toBeDefined();
+      const ctorOpts = firstCtorCall?.[0];
+      expect(ctorOpts?.defaultConfig).toMatchObject({ openaiBaseUrl: OPENAI_BASE_URL });
     });
 
     it('propagates backgroundRegistry into the SubagentExecutor for skill-forked subagents', async () => {
@@ -2186,6 +2597,8 @@ describe('SkillExecutor', () => {
       expect(buildRestrictedSpy).toHaveBeenCalledWith(
         ['read_file', 'grep', 'glob', 'list_directory'],
         'sonnet',
+        false,
+        undefined,
       );
     });
 
@@ -2237,8 +2650,54 @@ describe('SkillExecutor', () => {
       expect(result.isError).toBeUndefined();
       // readOnly wins: the recon provider (which keeps readOnlyBash) is used, and
       // the bare restricted provider that would drop the bash gate is NOT.
-      expect(reconSpy).toHaveBeenCalledWith('sonnet');
+      //
+      // issue #499 finding 2: the cap path now threads the EFFECTIVE allowlist —
+      // the RECON intersection of the declared `tools:` — as the third arg, so
+      // the child is restricted to the declared subset (`write_file` dropped: not
+      // in RECON) instead of silently receiving the full RECON superset. The
+      // readOnlyBash + readOnlyMemory gates are still baked in by the builder.
+      expect(reconSpy).toHaveBeenCalledWith('sonnet', undefined, ['read_file', 'bash']);
       expect(restrictedSpy).not.toHaveBeenCalled();
+    });
+
+    it('read-only skill with NO tools: at the depth cap gets the FULL RECON set (backward compat)', async () => {
+      // issue #499 finding 2 (companion to the test above): a read-only skill
+      // that declares no `tools:` must still get the whole RECON allowlist at
+      // the cap — the narrowing only kicks in when a `tools:` list was declared.
+      vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockResolvedValue({
+        runToResult: vi.fn().mockResolvedValue({
+          status: 'succeeded',
+          message: { content: 'recon output' },
+        }),
+        teardown: vi.fn().mockResolvedValue(undefined),
+      } as never);
+      vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
+
+      const reconSpy = vi.spyOn(nestingModule, 'buildReadOnlyReconProvider');
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'test',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        defaultModel: 'sonnet',
+      });
+
+      const skillBody: PluginSkillBody = {
+        body: 'You are a read-only auditor.',
+        pluginPath: '/fake/plugin',
+        context: 'fork',
+        readOnly: true,
+        // no allowedTools — effectiveAllowed resolves to the full RECON set.
+      };
+      (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
+        new Map([['recon-no-tools', skillBody]]);
+
+      const result = await executor.execute(makeCall({ name: 'recon-no-tools' }));
+
+      expect(result.isError).toBeUndefined();
+      expect(reconSpy).toHaveBeenCalledWith('sonnet', undefined, [...RECON_ALLOWED_TOOLS]);
     });
 
     it('does NOT call buildSkillRestrictedProvider when allowedTools is absent', async () => {
@@ -2314,6 +2773,85 @@ describe('SkillExecutor', () => {
       expect(buildRestrictedSpy).toHaveBeenCalledWith(
         ['read_file', 'grep'],
         'sonnet',
+        false,
+        undefined,
+      );
+    });
+  });
+
+  describe('plugin skill model: override (issue #499 finding 3)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function capturePluginFork(skillName: string, body: PluginSkillBody, ctx?: Partial<{ defaultModel: string; defaultSubagentModel: string }>) {
+      const mockForkSubagent = vi.fn().mockResolvedValue({
+        runToResult: vi.fn().mockResolvedValue({
+          status: 'succeeded',
+          message: { content: 'ok' },
+        }),
+        teardown: vi.fn().mockResolvedValue(undefined),
+      });
+      vi.spyOn(SubagentManager.prototype, 'forkSubagent').mockImplementation(mockForkSubagent);
+      vi.spyOn(SubagentManager.prototype, 'teardownAll').mockResolvedValue(undefined);
+
+      const executor = new SkillExecutor({
+        parentSession: {
+          sessionId: 'test',
+          getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+          abortSignal,
+        },
+        ...(ctx?.defaultModel !== undefined ? { defaultModel: ctx.defaultModel } : {}),
+        ...(ctx?.defaultSubagentModel !== undefined ? { defaultSubagentModel: ctx.defaultSubagentModel } : {}),
+      });
+      (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
+        new Map([[skillName, body]]);
+      return { executor, mockForkSubagent };
+    }
+
+    it('forks the plugin skill on its declared model: override', async () => {
+      // Before the fix, executePluginSkill resolved
+      // `defaultSubagentModel ?? defaultModel ?? 'sonnet'` only — the SKILL.md
+      // `model:` was silently ignored. It must now win, mirroring the registry
+      // fork path (executeForkedRegistrySkill honors skill.model).
+      const { executor, mockForkSubagent } = capturePluginFork(
+        'pinned-plugin',
+        { body: 'body', pluginPath: '/fake/plugin', context: 'fork', model: 'opus' },
+        { defaultModel: 'sonnet', defaultSubagentModel: 'haiku' },
+      );
+
+      await executor.execute(makeCall({ name: 'pinned-plugin' }));
+
+      expect(mockForkSubagent).toHaveBeenCalledWith(
+        expect.objectContaining({ config: expect.objectContaining({ model: 'opus' }) }),
+      );
+    });
+
+    it('falls back to defaultSubagentModel when the plugin skill declares no model:', async () => {
+      const { executor, mockForkSubagent } = capturePluginFork(
+        'no-model-plugin',
+        { body: 'body', pluginPath: '/fake/plugin', context: 'fork' },
+        { defaultModel: 'opus', defaultSubagentModel: 'haiku' },
+      );
+
+      await executor.execute(makeCall({ name: 'no-model-plugin' }));
+
+      expect(mockForkSubagent).toHaveBeenCalledWith(
+        expect.objectContaining({ config: expect.objectContaining({ model: 'haiku' }) }),
+      );
+    });
+
+    it('falls back to defaultModel when neither model: nor defaultSubagentModel is set', async () => {
+      const { executor, mockForkSubagent } = capturePluginFork(
+        'default-model-plugin',
+        { body: 'body', pluginPath: '/fake/plugin', context: 'fork' },
+        { defaultModel: 'opus' },
+      );
+
+      await executor.execute(makeCall({ name: 'default-model-plugin' }));
+
+      expect(mockForkSubagent).toHaveBeenCalledWith(
+        expect.objectContaining({ config: expect.objectContaining({ model: 'opus' }) }),
       );
     });
   });

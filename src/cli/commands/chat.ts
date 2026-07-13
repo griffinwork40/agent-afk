@@ -12,7 +12,7 @@ import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import { unconfiguredSlotError } from '../../agent/session/model-slots.js';
 import { formatDuration, formatCost, formatTokens } from '../format-utils.js';
-import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getDefaultSubagentModel, resolveBaseSystemPrompt } from '../shared-helpers.js';
+import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getMaxToolUseIterations, getDefaultSubagentModel, resolveBaseSystemPrompt } from '../shared-helpers.js';
 import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
 import { loadConfig } from '../config.js';
 import { assembleSystemPrompt } from '../../agent/routing-directive.js';
@@ -22,8 +22,9 @@ import { SubagentManager } from '../../agent/subagent.js';
 import { SubagentExecutor } from '../../agent/tools/subagent-executor.js';
 import { SkillExecutor } from '../../agent/tools/skill-executor.js';
 import { ComposeExecutor } from '../../agent/tools/compose-executor.js';
-import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
+import { ensurePluginEntrypointsLoaded, discoverPluginAgents } from '../../agent/tools/skill-bridge.js';
 import { createChildProviderFactory, createChildSkillExecutorFactory } from '../../agent/tools/nesting.js';
+import { loadAgentRegistry } from '../../agent/agents/index.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import { createDefaultTraceWriter } from '../../agent/trace/factory.js';
 import { receiptPathsFor } from '../../agent/trace/receipt.js';
@@ -310,6 +311,11 @@ export function registerChatCommand(program: Command): void {
         let maxBudgetUsd: number | undefined;
         let taskBudget: number | undefined;
         let maxOutputTokens: number | undefined;
+        // Opt-in top-level tool-use-round ceiling. No CLI flag exists, so there
+        // is no explicit value to prefer here — this is purely the env default
+        // (unset/<=0 → undefined → unlimited, i.e. no behavior change). Rides on
+        // AgentConfig and hits both providers via resolveMaxToolIterations().
+        let maxToolUseIterations: number | undefined;
         let provider;
         try {
           thinking = parseThinking(options.thinking) ?? getThinking();
@@ -317,6 +323,7 @@ export function registerChatCommand(program: Command): void {
           maxBudgetUsd = parseBudget(options.maxBudgetUsd) ?? getMaxBudgetUsd();
           taskBudget = parseBudget(options.taskBudget) ?? getTaskBudget();
           maxOutputTokens = parseMaxOutputTokens(options.maxOutputTokens) ?? getMaxOutputTokens();
+          maxToolUseIterations = getMaxToolUseIterations();
           // Will be wired with subagentExecutor below if anthropic-direct
           provider = undefined;
         } catch (err) {
@@ -433,11 +440,25 @@ export function registerChatCommand(program: Command): void {
 
         const rootManager = new SubagentManager({
           apiKey,
+          // Provider source of truth for the fork-time credential fallback:
+          // `apiKey` is `getApiKey()`, which keys off `getModel()` (AFK_MODEL),
+          // so the parent key's provider is `providerForModel(getModel())`.
+          // Passing that keeps the fallback from crossing the provider boundary
+          // (see SubagentManager.parentProvider).
+          parentModel: getModel(),
           ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
           // Propagate the worktree cwd into every forked subagent so their
           // bash/grep run in the isolated tree, not the Node host's
           // process.cwd().
           ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
+          // Witness layer: manager-level writer so `agent`-tool forks (which
+          // never set config.traceWriter) emit subagent_lifecycle events and
+          // hand the writer to their handles. Mirrors bootstrap.ts.
+          ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
+          // Origin attribution: `afk chat` is a `cli` entrypoint. Thread the
+          // surface so forked `agent`-tool children inherit origin 'cli' (not
+          // 'unknown') via forkSubagent's parentSurface fill. Mirrors farm.ts.
+          surface: 'cli',
         });
 
         // Pass openaiBaseUrl so OpenAI-routed children point at the
@@ -470,6 +491,14 @@ export function registerChatCommand(program: Command): void {
         // and `skill` tools, see anthropic-direct/index.ts:108–110) and
         // any SKILL.md instruction to "dispatch sub-agents via the Agent
         // tool" becomes unimplementable.
+        // Named-agent registry: session-static scan (builtin + user
+        // ~/.afk/agents + project .afk/agents & .claude/agents). Enables
+        // `agent_type` dispatch on the `agent` tool at every depth.
+        const agentRegistry = loadAgentRegistry({
+          ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
+          pluginAgents: discoverPluginAgents(),
+        });
+
         const childSkillExecutorFactory = createChildSkillExecutorFactory(
           options.model,
           apiKey,
@@ -486,6 +515,16 @@ export function registerChatCommand(program: Command): void {
           getApiKeyForModel,
           // Surface: chat skill executor children inherit origin 'cli'.
           'cli',
+          // Resolved default-subagent model threaded into nested skill
+          // executors so skill→skill / skill→agent chains inherit the SAME
+          // policy as the top-level executors — closing the leak where a
+          // nested subagent silently defaulted to Anthropic `sonnet` under an
+          // OpenAI-routed parent.
+          getDefaultSubagentModel(options.model),
+          // Named-agent registry propagates to nested skill executors.
+          agentRegistry,
+          // OpenAI endpoint → nested restricted/depth-cap provider builders.
+          cliConfig.openaiBaseUrl,
         );
 
         // Pass `options.model` so `getDefaultSubagentModel` can fall back
@@ -503,6 +542,7 @@ export function registerChatCommand(program: Command): void {
             apiKey,
             systemPrompt: basePrompt,
             ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
+            ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
           },
           defaultSubagentModel: getDefaultSubagentModel(options.model),
           childProviderFactory,
@@ -515,6 +555,13 @@ export function registerChatCommand(program: Command): void {
           // Worktree isolation for depth ≥ 2 `agent` dispatch. See
           // bootstrap.ts for the same wiring.
           ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
+          // Named-agent dispatch: registry + the session model as the
+          // `inherit` anchor for named-agent model resolution.
+          agentRegistry,
+          parentModel: options.model,
+          // Witness layer: thread the writer so depth ≥ 2 `agent` forks stay
+          // visible in the trace. Mirrors bootstrap.ts.
+          ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
         });
 
         const skillExecutor = new SkillExecutor({
@@ -526,7 +573,10 @@ export function registerChatCommand(program: Command): void {
           apiKey,
           childProviderFactory,
           childSkillExecutorFactory,
+          // Named-agent registry for skill-forked orchestrator children.
+          agentRegistry,
           ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
+          ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
           // Per-model credential resolver — mirrors bootstrap.ts wiring.
           resolveApiKeyForModel: getApiKeyForModel,
           // See bootstrap.ts SkillExecutor wiring for rationale: without
@@ -536,6 +586,9 @@ export function registerChatCommand(program: Command): void {
           // Worktree isolation for skill-dispatched subagents. See
           // bootstrap.ts for the same wiring.
           ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
+          // Read-scope inheritance (#547): skill-forked children inherit the
+          // parent session's read scope via the root manager. See bootstrap.ts.
+          getReadScopeInputs: () => rootManager.getReadScopeInputs(),
         });
 
         // Pass the raw base prompt (pre-assembly) so compose subagents do not
@@ -549,6 +602,9 @@ export function registerChatCommand(program: Command): void {
           apiKey,
           // Per-model credential resolver — mirrors #640 for the compose fork-path.
           resolveApiKeyForModel: getApiKeyForModel,
+          // Read-scope inheritance (#547): DAG nodes inherit the parent session's
+          // read scope via the root manager. See bootstrap.ts.
+          getReadScopeInputs: () => rootManager.getReadScopeInputs(),
           ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
           // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
           ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
@@ -556,6 +612,8 @@ export function registerChatCommand(program: Command): void {
           // Session identity for routing-decision rows (afk chat → cli).
           surface: 'cli',
           depth: 0,
+          // Witness layer: DAG nodes emit subagent_lifecycle into the session trace.
+          ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
         });
 
         sharedMemoryStore = new MemoryStore();
@@ -668,6 +726,7 @@ export function registerChatCommand(program: Command): void {
           ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
           ...(taskBudget !== undefined ? { taskBudget } : {}),
           ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+          ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),
           ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
           ...(trace ? { traceWriter: trace.writer } : {}),
           ...(cliConfig.autoResumeOnUsageLimit !== undefined

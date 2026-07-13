@@ -33,7 +33,9 @@ describe('interactive bootstrap status line hooks', () => {
     }));
     vi.doMock('../agent/default-hook-registry.js', () => ({
       createDefaultHookRegistry: vi.fn(() => ({
-        registry: {},
+        // register stub: bootstrap now registers the terminal-state gate (#237)
+        // on the 'Stop' event, so the mock registry must expose `.register`.
+        registry: { register: vi.fn() },
         memoryStore: { close: vi.fn() },
         // Real factory always returns this ref (default-hook-registry.ts:72,125);
         // bootstrap.ts:601 writes `.current` once the provider exists, so the mock
@@ -55,9 +57,11 @@ describe('interactive bootstrap status line hooks', () => {
       parseProvider: vi.fn(() => undefined),
       getApiKey: vi.fn(() => 'test-key'),
       getApiKeyForModel: vi.fn(() => 'test-key'),
+      getModel: vi.fn(() => 'sonnet'),
       getThinking: vi.fn(() => undefined),
       getEffort: vi.fn(() => undefined),
       getMaxOutputTokens: vi.fn(() => undefined),
+      getMaxToolUseIterations: vi.fn(() => undefined),
       getDefaultSubagentModel: vi.fn(() => 'sonnet'),
       findClaudeExecutable: vi.fn(() => '/usr/bin/claude'),
       loadSystemPrompt: vi.fn(() => undefined),
@@ -192,7 +196,9 @@ describe('interactive bootstrap — P1: suggestBaseUrl mirrors openaiBaseUrl', (
     }));
     vi.doMock('../agent/default-hook-registry.js', () => ({
       createDefaultHookRegistry: vi.fn(() => ({
-        registry: {},
+        // register stub: bootstrap now registers the terminal-state gate (#237)
+        // on the 'Stop' event, so the mock registry must expose `.register`.
+        registry: { register: vi.fn() },
         memoryStore: { close: vi.fn() },
         // Real factory always returns this ref (default-hook-registry.ts);
         // bootstrap.ts writes `.current` once the provider exists, so the mock
@@ -215,9 +221,11 @@ describe('interactive bootstrap — P1: suggestBaseUrl mirrors openaiBaseUrl', (
       parseProvider: vi.fn(() => undefined),
       getApiKey: vi.fn(() => 'test-key'),
       getApiKeyForModel: vi.fn(() => 'test-key'),
+      getModel: vi.fn(() => 'sonnet'),
       getThinking: vi.fn(() => undefined),
       getEffort: vi.fn(() => undefined),
       getMaxOutputTokens: vi.fn(() => undefined),
+      getMaxToolUseIterations: vi.fn(() => undefined),
       getDefaultSubagentModel: vi.fn(() => 'sonnet'),
       findClaudeExecutable: vi.fn(() => '/usr/bin/claude'),
       loadSystemPrompt: vi.fn(() => undefined),
@@ -1096,7 +1104,9 @@ describe('interactive bootstrap — path-approval grant wiring for OpenAI-compat
     }));
     vi.doMock('../agent/default-hook-registry.js', () => ({
       createDefaultHookRegistry: vi.fn(() => ({
-        registry: {},
+        // register stub: bootstrap now registers the terminal-state gate (#237)
+        // on the 'Stop' event, so the mock registry must expose `.register`.
+        registry: { register: vi.fn() },
         memoryStore: { close: vi.fn() },
         pathApprovalGrantRef,
       })),
@@ -1119,9 +1129,11 @@ describe('interactive bootstrap — path-approval grant wiring for OpenAI-compat
       parseProvider: vi.fn(() => stub),
       getApiKey: vi.fn(() => 'test-key'),
       getApiKeyForModel: vi.fn(() => 'test-key'),
+      getModel: vi.fn(() => 'sonnet'),
       getThinking: vi.fn(() => undefined),
       getEffort: vi.fn(() => undefined),
       getMaxOutputTokens: vi.fn(() => undefined),
+      getMaxToolUseIterations: vi.fn(() => undefined),
       getDefaultSubagentModel: vi.fn(() => 'sonnet'),
       findClaudeExecutable: vi.fn(() => '/usr/bin/claude'),
       loadSystemPrompt: vi.fn(() => undefined),

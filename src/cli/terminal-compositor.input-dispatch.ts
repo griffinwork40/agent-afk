@@ -108,6 +108,15 @@ export interface KeyDispatchHost {
 
   /** Once-only soft-stop guard for ESC in streaming mode. */
   softStopped: boolean;
+  /**
+   * Snapshot of `pendingSubmissions.length` taken at ESC soft-stop time
+   * (handleEscape). Entries at indices `0..softStopQueueBase-1` were queued
+   * BEFORE esc and are contract-protected (handleEscape comment lines 318-327):
+   * "Already-queued messages: left untouched." Post-ESC Enters coalesce by
+   * MERGING everything at/above this base into one payload, so neither the
+   * pre-ESC queue nor earlier post-ESC messages are ever silently dropped.
+   */
+  softStopQueueBase: number;
   /** Hard-abort flag set by Ctrl+C in streaming mode. */
   canceled: boolean;
   /** Once-only guard for Ctrl+B background in streaming mode. */
@@ -329,6 +338,10 @@ function handleEscape(self: KeyDispatchHost, key: KeyInfo): boolean {
   // committing it would fling it as a turn the user never submitted. Ctrl+C
   // (handleInterrupt below) follows the same no-auto-commit rule.
   self.softStopped = true;
+  // Snapshot the queue length so post-ESC coalesce (handleEnter) can merge
+  // everything at/above this base — preserving pre-ESC payloads per the
+  // contract above while folding post-ESC messages into one next turn.
+  self.softStopQueueBase = self.pendingSubmissions.length;
   if (self.onSoftStop) self.onSoftStop();
   return true;
 }
@@ -473,6 +486,32 @@ function handleVerticalNav(self: KeyDispatchHost, key: KeyInfo): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Merge multiple soft-stop-window submissions into ONE payload.
+ *
+ * Texts join with a newline (empty texts skipped) so every post-ESC message
+ * the user typed survives into the single coalesced next turn; attachments
+ * concatenate in submission order. `displayText` merges the same way — it is
+ * emitted only when at least one constituent carried a distinct displayText
+ * (i.e. a paste placeholder was expanded somewhere), mirroring the
+ * "absent when identical" contract on SubmissionPayload.
+ */
+function mergeSubmissionPayloads(payloads: readonly SubmissionPayload[]): SubmissionPayload {
+  if (payloads.length === 1) return payloads[0]!;
+  const text = payloads
+    .map((p) => p.text)
+    .filter((t) => t.length > 0)
+    .join('\n');
+  const attachments = payloads.flatMap((p) => [...p.attachments]);
+  const hasDisplay = payloads.some((p) => p.displayText !== undefined);
+  if (!hasDisplay) return { text, attachments };
+  const displayText = payloads
+    .map((p) => p.displayText ?? p.text)
+    .filter((t) => t.length > 0)
+    .join('\n');
+  return { text, displayText, attachments };
 }
 
 function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boolean {
@@ -626,11 +665,47 @@ function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boo
   const displayText = self.input.buffer;
   const expandedText = Paste.expandPastePlaceholders(self, displayText);
   const attachments = [...self.attachments];
-  self.pendingSubmissions.push(
+  const payload: SubmissionPayload =
     expandedText === displayText
       ? { text: expandedText, attachments }
-      : { text: expandedText, displayText, attachments },
-  );
+      : { text: expandedText, displayText, attachments };
+  // Invariant: during the ESC soft-stop window — `softStopped` is set by
+  // handleEscape and cleared only at the post-soft-stop `→ idle` transition
+  // (setInputMode, terminal-compositor.input-mode.ts) — Enter must NOT
+  // accumulate a type-ahead backlog. That window is the async turn-teardown
+  // gap: for a subagent turn, cancelActiveForeground() (subagent-executor.ts)
+  // resolves the parent `await` only after the child settles — seconds for a
+  // deep/wide wave — and the compositor lingers in 'streaming' the whole time.
+  // Each Enter would otherwise push onto the FIFO, which drains ONE payload per
+  // turn (the `→ idle` flush), stranding the user one turn behind: the "it
+  // doesn't send, then I keep sending characters to catch up" report. So during
+  // a soft-stop, all post-ESC messages COALESCE into a single payload that runs
+  // as exactly one next turn — no backlog.
+  //
+  // Coalesce = MERGE, not last-wins. The original #403 fix kept only the
+  // latest post-ESC message, which silently DROPPED earlier ones: a user who
+  // typed a real instruction during the settle window and then poked with "."
+  // (because nothing appeared to send) had the instruction replaced by the "."
+  // — the "message → no response → retype it" report, round 2. Merging joins
+  // the post-ESC texts with newlines (and concatenates attachments) so the
+  // user's full post-stop intent survives while the no-backlog invariant —
+  // exactly ONE next turn — still holds.
+  //
+  // Contract preservation: `softStopQueueBase` was snapshotted by handleEscape
+  // at ESC time, capturing the count of pre-ESC payloads already on the FIFO.
+  // Entries below the base are pre-ESC turns and are left untouched (they
+  // drain as their own sequential turns via the `→ idle` flush), so the
+  // handleEscape contract — "Already-queued messages: left untouched" — holds.
+  // Only entries at/above the base participate in the merge. Normal mid-turn
+  // type-ahead (softStopped === false) still accumulates: sequential-turn
+  // delivery is the intended contract there (the "NO ESC" regression tests).
+  if (self.softStopped) {
+    const postEsc = self.pendingSubmissions.slice(self.softStopQueueBase);
+    self.pendingSubmissions.length = self.softStopQueueBase;
+    self.pendingSubmissions.push(mergeSubmissionPayloads([...postEsc, payload]));
+  } else {
+    self.pendingSubmissions.push(payload);
+  }
   self.queued = true; // maintained mirror: pendingSubmissions is now non-empty
   // Clear the compose window for the next message. Mirrors the idle-mode
   // submit reset above so dropdown chrome / paste side-table / attachments

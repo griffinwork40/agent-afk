@@ -54,6 +54,15 @@ function blockLine(reason: string): string {
   });
 }
 
+function readDenialLine(reason: string, blockedTool: string): string {
+  return JSON.stringify({
+    ts: new Date(1_700_000_000_000 + seqCounter * 1000).toISOString(),
+    seq: seqCounter++,
+    kind: 'hook_decision',
+    payload: { hookEvent: 'PreToolUse', decision: 'block', reason, blockedTool },
+  });
+}
+
 function toolPair(toolUseId: string, name: string): string[] {
   const started = JSON.stringify({
     ts: new Date(1_700_000_000_000 + seqCounter * 1000).toISOString(),
@@ -93,8 +102,8 @@ function makeSession(sessionId: string, lines: string[]): SessionRead {
 // ---------------------------------------------------------------------------
 
 describe('DETECTOR_REGISTRY', () => {
-  it('lists four detectors', () => {
-    expect(DETECTOR_REGISTRY).toHaveLength(4);
+  it('lists five detectors', () => {
+    expect(DETECTOR_REGISTRY).toHaveLength(5);
   });
 
   it('all registry names match a value in FailurePatternSchema', () => {
@@ -116,6 +125,7 @@ describe('DETECTOR_REGISTRY', () => {
       'closure-anomaly',
       'subagent-block',
       'tool-failure-density',
+      'subagent-read-denial',
     ]);
   });
 });
@@ -137,6 +147,10 @@ function makeAllPatternSession(id: string): SessionRead {
   // 2 SubagentStart blocks with same reason → subagent-block
   lines.push(blockLine('test block reason'));
   lines.push(blockLine('test block reason'));
+  // 2 PreToolUse read-denials, DIFFERENT paths + tools but same normalized
+  // reason → subagent-read-denial (verifies path-normalization aggregation)
+  lines.push(readDenialLine("Sub-agent path access denied: /a/b.ts is outside the session's granted read roots", 'read_file'));
+  lines.push(readDenialLine("Sub-agent path access denied: /c/d.ts is outside the session's granted read roots", 'grep'));
   // 1 budget_exceeded closure → closure-anomaly
   lines.push(closureLine('budget_exceeded'));
   return makeSession(id, lines);
@@ -190,6 +204,7 @@ describe('runAllDetectors', () => {
         'closure-anomaly',
         'subagent-block',
         'tool-failure-density',
+        'subagent-read-denial',
       ]),
     );
   });
@@ -276,8 +291,8 @@ describe('defaultEnabledDetectorNames', () => {
 });
 
 describe('disabledByDefaultDetectorNames', () => {
-  it('contains closure-anomaly, subagent-block (in any order)', () => {
+  it('contains closure-anomaly, subagent-block, subagent-read-denial (in any order)', () => {
     const names = new Set(disabledByDefaultDetectorNames());
-    expect(names).toEqual(new Set(['closure-anomaly', 'subagent-block']));
+    expect(names).toEqual(new Set(['closure-anomaly', 'subagent-block', 'subagent-read-denial']));
   });
 });
