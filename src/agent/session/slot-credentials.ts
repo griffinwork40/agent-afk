@@ -43,8 +43,10 @@ export interface SlotCredentialTarget {
 /**
  * Apply the resolved model's per-slot credentials onto `config` in place.
  *
- * No-op when `config.model` is not a configured slot (a raw id or `auto` — those
- * are gated correctly upstream without bindings). For a configured slot:
+ * Near-no-op when `config.model` is not a configured slot (a raw id or `auto`):
+ * only clears any inherited `forceChatgptOAuth` so it cannot leak across a
+ * `/model` switch; those tiers are otherwise gated correctly upstream without
+ * bindings. For a configured slot:
  *   - apiKey: the per-slot key when present; otherwise CLEARED for an OpenAI
  *     tier or a custom-`baseUrl` shim (so a global Anthropic credential can't
  *     leak onto it — see the #548 invariant in the module doc). An Anthropic
@@ -59,7 +61,14 @@ export interface SlotCredentialTarget {
 export function applySlotCredentials(config: SlotCredentialTarget, bindings?: ModelSlots): void {
   const table = bindings ?? getSlotBindings();
   const slot = slotForInput(config.model, table);
-  if (!slot) return;
+  if (!slot) {
+    // Not a configured slot (raw id / `auto`): no per-slot force. Clear any
+    // inherited forced-OAuth so a raw id switched to from a chatgpt-oauth
+    // startup slot doesn't keep forcing the ChatGPT token — `resolveInner`
+    // spreads a shared baseConfig for every /model target (#548).
+    config.forceChatgptOAuth = false;
+    return;
+  }
   const binding = table[slot];
 
   const route =
@@ -72,10 +81,12 @@ export function applySlotCredentials(config: SlotCredentialTarget, bindings?: Mo
   // A slot bound `provider: 'chatgpt-oauth'` selects the ChatGPT-subscription
   // token for THIS tier regardless of OPENAI_API_KEY / the global
   // AFK_OPENAI_CHATGPT_OAUTH flag — see resolveOpenAIAuth(..., forceChatgptOAuth).
-  // The apiKey is still cleared below (route === 'openai-compatible').
-  if (binding.provider === 'chatgpt-oauth') {
-    config.forceChatgptOAuth = true;
-  }
+  // Written unconditionally (set AND clear): `resolveInner` spreads a shared
+  // baseConfig for every /model target, so a stale `forceChatgptOAuth: true`
+  // from the startup slot must be cleared when switching to a non-chatgpt slot,
+  // else resolveOpenAIAuth keeps forcing the ChatGPT token and ignores the
+  // tier/env key. The apiKey is still cleared below (route === 'openai-compatible').
+  config.forceChatgptOAuth = binding.provider === 'chatgpt-oauth';
 
   if (binding.apiKey !== undefined) {
     config.apiKey = binding.apiKey;
