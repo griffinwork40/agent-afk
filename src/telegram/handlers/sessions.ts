@@ -15,6 +15,7 @@
 
 import { Context, Markup } from 'telegraf';
 import { SessionManager } from '../session-manager.js';
+import { type TelegramRoute, routeFromCtx } from '../route.js';
 import {
   formatError,
   formatSessionsList,
@@ -40,9 +41,9 @@ function callbackData(ctx: Context): string {
   return typeof cq === 'object' && cq !== null && 'data' in cq ? (cq as { data: string }).data : '';
 }
 
-/** True when the chat has a live session that is NOT idle (mid-turn). */
-function isBusy(sessionManager: SessionManager, chatId: number): boolean {
-  const live = sessionManager.getSessionIfExists(chatId);
+/** True when the route has a live session that is NOT idle (mid-turn). */
+function isBusy(sessionManager: SessionManager, route: TelegramRoute): boolean {
+  const live = sessionManager.getSessionIfExists(route);
   return live !== undefined && live.state !== 'idle';
 }
 
@@ -56,13 +57,13 @@ export async function handleSessions(
   sessionManager: SessionManager,
   _log: LogFn,
 ): Promise<void> {
-  const chatId = ctx.chat?.id;
-  if (!chatId) {
+  const route = routeFromCtx(ctx);
+  if (!route) {
     await ctx.reply(formatError('Could not identify chat'));
     return;
   }
 
-  const sessions = sessionManager.listChatSessions(chatId);
+  const sessions = sessionManager.listChatSessions(route);
   if (sessions.length === 0) {
     await ctx.reply(formatNoSessions());
     return;
@@ -98,19 +99,19 @@ export async function handleNew(
   registeredCommandChats: Set<number>,
   log: LogFn,
 ): Promise<void> {
-  const chatId = ctx.chat?.id;
-  if (!chatId) {
+  const route = routeFromCtx(ctx);
+  if (!route) {
     await ctx.reply(formatError('Could not identify chat'));
     return;
   }
-  if (isBusy(sessionManager, chatId)) {
+  if (isBusy(sessionManager, route)) {
     await ctx.reply(formatSessionBusy());
     return;
   }
   try {
-    await sessionManager.newSession(chatId);
+    await sessionManager.newSession(route);
     // Force per-chat command re-registration for the fresh session (mirrors /clear).
-    registeredCommandChats.delete(chatId);
+    registeredCommandChats.delete(route.chatId);
     await ctx.reply(formatNewSession());
   } catch (error) {
     log('New session error:', error);
@@ -132,26 +133,28 @@ export async function handleSwitchCallback(
   sessionManager: SessionManager,
   log: LogFn,
 ): Promise<void> {
-  const chatId = ctx.chat?.id;
+  // routeFromCtx reads the thread id off callbackQuery.message (the §11 fix),
+  // so a switch tapped inside a topic operates on THAT topic's session.
+  const route = routeFromCtx(ctx);
   const data = callbackData(ctx);
   const targetSessionId = data.startsWith(SWITCH_CALLBACK_PREFIX)
     ? data.slice(SWITCH_CALLBACK_PREFIX.length)
     : '';
-  if (!chatId || !targetSessionId) return;
+  if (!route || !targetSessionId) return;
 
-  if (isBusy(sessionManager, chatId)) {
+  if (isBusy(sessionManager, route)) {
     await ctx.reply(formatSessionBusy());
     return;
   }
 
   try {
-    const res = await sessionManager.switchToSession(chatId, targetSessionId);
+    const res = await sessionManager.switchToSession(route, targetSessionId);
     if (!res.ok) {
       await ctx.reply(res.reason === 'already-active' ? formatAlreadyActive() : formatSwitchNotFound());
       return;
     }
     const name = sessionManager
-      .listChatSessions(chatId)
+      .listChatSessions(route)
       .find((s) => s.sessionId === targetSessionId)?.name;
     const confirm = formatSwitched(name !== undefined ? { name } : {});
     // Edit the /sessions message in place (fall back to a fresh reply).

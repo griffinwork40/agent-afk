@@ -136,7 +136,8 @@ describe('session switcher handlers', () => {
       const { ctx, reply } = makeCtx(710);
       await handleNew(ctx, manager, registered, log);
 
-      expect(spy).toHaveBeenCalledWith(710);
+      // Handler derives a General route (routeFromCtx) — bare chat, no topic.
+      expect(spy).toHaveBeenCalledWith({ chatId: 710 });
       expect(registered.has(710)).toBe(false);
       expect(String(reply.mock.calls[0]![0])).toContain('fresh session');
       // Previous conversation is preserved as resumable.
@@ -164,7 +165,7 @@ describe('session switcher handlers', () => {
 
       await handleSwitchCallback(ctx, manager, log);
 
-      expect(spy).toHaveBeenCalledWith(720, 'sdk-A');
+      expect(spy).toHaveBeenCalledWith({ chatId: 720 }, 'sdk-A');
       const confirmed = String(editMessageText.mock.calls[0]?.[0] ?? reply.mock.calls[0]?.[0] ?? '');
       expect(confirmed).toContain('Switched');
       // sdk-A is now the active conversation.

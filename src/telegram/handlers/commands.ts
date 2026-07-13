@@ -26,6 +26,7 @@ import { slotForInput, unconfiguredSlotError } from '../../agent/session/model-s
 import type { AgentModelInput } from '../../agent/types.js';
 import { slugifySessionName } from '../../cli/session-name.js';
 import { formatResumeCommand } from '../../cli/resume-command.js';
+import { routeFromCtx } from '../route.js';
 
 type LogFn = (...args: unknown[]) => void;
 
@@ -41,15 +42,16 @@ export async function handleClear(
   registeredCommandChats: Set<number>,
   log: LogFn
 ): Promise<void> {
-  const chatId = ctx.chat?.id;
-  if (!chatId) {
+  const route = routeFromCtx(ctx);
+  if (!route) {
     await ctx.reply(formatError('Could not identify chat'));
     return;
   }
 
   try {
-    await sessionManager.resetSession(chatId);
-    registeredCommandChats.delete(chatId);
+    await sessionManager.resetSession(route);
+    // Command re-registration is chat-scoped (setMyCommands per chat).
+    registeredCommandChats.delete(route.chatId);
     await ctx.reply(formatClear());
   } catch (error) {
     log('Clear error:', error);
@@ -67,14 +69,14 @@ export async function handleCompact(
   sessionManager: SessionManager,
   log: LogFn
 ): Promise<void> {
-  const chatId = ctx.chat?.id;
-  if (!chatId) {
+  const route = routeFromCtx(ctx);
+  if (!route) {
     await ctx.reply(formatError('Could not identify chat'));
     return;
   }
 
   try {
-    const session = await sessionManager.getSession(chatId);
+    const session = await sessionManager.getSession(route);
     const hookRegistry = session.hookRegistry;
     // Keep the "typing…" indicator alive across the PreCompact hook and the
     // model-call compaction, which can outlast the ~5s one-shot expiry.
@@ -120,8 +122,8 @@ export async function handleModelSwitch(
   sessionManager: SessionManager,
   log: LogFn
 ): Promise<void> {
-  const chatId = ctx.chat?.id;
-  if (!chatId) {
+  const route = routeFromCtx(ctx);
+  if (!route) {
     await ctx.reply(formatError('Could not identify chat'));
     return;
   }
@@ -130,7 +132,7 @@ export async function handleModelSwitch(
   const args = text.split(/\s+/).slice(1);
 
   if (args.length === 0) {
-    const currentModel = sessionManager.getModel(chatId);
+    const currentModel = sessionManager.getModel(route);
     const buttons = MODEL_ALIASES_HINT.map(alias => [
       Markup.button.callback(alias, `afk:m:${alias}`),
     ]);
@@ -172,7 +174,7 @@ export async function handleModelSwitch(
   }
 
   try {
-    await sessionManager.switchModel(chatId, model);
+    await sessionManager.switchModel(route, model);
     await ctx.reply(formatModelSwitch(model));
   } catch (error) {
     log('Model switch error:', error);
@@ -221,8 +223,8 @@ export async function handleCwd(
   sessionManager: SessionManager,
   log: LogFn,
 ): Promise<void> {
-  const chatId = ctx.chat?.id;
-  if (!chatId) {
+  const route = routeFromCtx(ctx);
+  if (!route) {
     await ctx.reply(formatError('Could not identify chat'));
     return;
   }
@@ -237,7 +239,7 @@ export async function handleCwd(
   // which would orphan a streaming turn. Match the switchModel precedent
   // (unconditional close); the user can re-issue if they hit a race.
   if (args.length === 0) {
-    const currentCwd = sessionManager.getCwd(chatId);
+    const currentCwd = sessionManager.getCwd(route);
     await ctx.reply(formatCwdCurrent(currentCwd));
     return;
   }
@@ -248,7 +250,7 @@ export async function handleCwd(
     return;
   }
 
-  const base = sessionManager.getCwd(chatId) ?? process.cwd();
+  const base = sessionManager.getCwd(route) ?? process.cwd();
   const resolved = resolveCwdInput(pathArg, base);
 
   // Validate BEFORE persisting — a stat failure here means the next
@@ -274,7 +276,7 @@ export async function handleCwd(
   }
 
   try {
-    await sessionManager.setCwd(chatId, resolved);
+    await sessionManager.setCwd(route, resolved);
     await ctx.reply(formatCwdSwitch(resolved));
   } catch (error) {
     log('Cwd switch error:', error);
@@ -303,8 +305,8 @@ export async function handleName(
   sessionManager: SessionManager,
   log: LogFn,
 ): Promise<void> {
-  const chatId = ctx.chat?.id;
-  if (!chatId) {
+  const route = routeFromCtx(ctx);
+  if (!route) {
     await ctx.reply(formatError('Could not identify chat'));
     return;
   }
@@ -314,7 +316,7 @@ export async function handleName(
 
   // No arg → report the current name.
   if (!raw) {
-    await ctx.reply(formatNameCurrent(sessionManager.getSessionName(chatId)));
+    await ctx.reply(formatNameCurrent(sessionManager.getSessionName(route)));
     return;
   }
 
@@ -325,9 +327,9 @@ export async function handleName(
   }
 
   try {
-    const { persisted } = sessionManager.setSessionName(chatId, slug);
+    const { persisted } = sessionManager.setSessionName(route, slug);
     const resumeCommand = persisted
-      ? formatResumeCommand(slug, sessionManager.getModel(chatId))
+      ? formatResumeCommand(slug, sessionManager.getModel(route))
       : undefined;
     await ctx.reply(formatNameSet(slug, resumeCommand));
   } catch (error) {
