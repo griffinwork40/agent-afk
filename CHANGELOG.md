@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.38.6] - 2026-07-13
+
+### Fixed
+- stop over-blocking recon that quotes a git/gh/curl verb (#574) (66a7cf7)
+
 ## [5.38.5] - 2026-07-13
 
 ### Fixed

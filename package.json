@@ -1,6 +1,6 @@
 {
   "name": "agent-afk",
-  "version": "5.38.5",
+  "version": "5.38.6",
   "description": "Open-source coding-agent harness you can actually change — own the loop (prompts, gates, routing, skills, terminal states), use any model, run long tasks while you're away.",
   "main": "dist/index.mjs",
   "types": "dist/index.d.ts",
