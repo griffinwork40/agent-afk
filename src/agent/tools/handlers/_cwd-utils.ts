@@ -224,3 +224,55 @@ export function wouldBeRestricted(
 
   return { restricted: true, resolved: abs, roots };
 }
+
+/**
+ * Best-effort extraction of filesystem path candidates from a raw shell
+ * command string, for the bash handler's advisory containment scan.
+ *
+ * Extracts, by whitespace tokenization:
+ *   - Absolute paths (tokens beginning with `/`), and
+ *   - Home-relative paths (tokens beginning with `~/`, or a bare `~`).
+ * A leading shell redirection/pipe operator glued to the path (`>`, `>>`,
+ * `<`, `|`, `&`, and fd-prefixed forms like `2>`) is stripped first, then a
+ * surrounding single/double quote, then trailing shell punctuation commonly
+ * abutting a path in a command line (`;`, `,`, `)`, `"`, `'`). Relative
+ * tokens, flags (`-x`, `--flag`), and everything else are ignored.
+ *
+ * EXPLICITLY best-effort. This is NOT a shell parser and deliberately does
+ * NOT resolve or catch:
+ *   - command/arithmetic substitution: `$(printf /etc/hosts)`, backticks
+ *   - environment-variable indirection: `$HOME`, `${SECRET_DIR}`
+ *   - glob expansion: `/etc/*`, brace expansion `/a/{b,c}`
+ *   - here-docs (`<<EOF`), paths synthesized across tokens, or quoted paths
+ *     containing whitespace.
+ * Building a real shell parser to close those gaps is a deliberate non-goal
+ * (issue #354 calls it a rathole). The residual gap is the reason the bash
+ * containment scan is advisory-only, documented in
+ * `docs/decisions/0001-bash-tool-path-containment.md`.
+ *
+ * @param command - The raw command string from the bash tool input.
+ * @returns Deduplicated candidate path tokens (order-preserving).
+ */
+export function extractCandidatePaths(command: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const rawToken of command.split(/\s+/)) {
+    if (rawToken.length === 0) continue;
+    // Strip a leading shell redirection/pipe operator glued to the path
+    // (`>`, `>>`, `<`, `|`, `&`, and fd-prefixed forms like `2>`), then a
+    // matching leading quote, then any trailing quote/shell punctuation that
+    // commonly abuts a path token on a command line.
+    let token = rawToken
+      .replace(/^\d*[<>|&]+/, '')
+      .replace(/^['"]/, '')
+      .replace(/['";,)]+$/, '');
+    if (token.length === 0) continue;
+    const isAbsolute = token.startsWith('/');
+    const isHomeRelative = token === '~' || token.startsWith('~/');
+    if (!isAbsolute && !isHomeRelative) continue;
+    if (seen.has(token)) continue;
+    seen.add(token);
+    out.push(token);
+  }
+  return out;
+}

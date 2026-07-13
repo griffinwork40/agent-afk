@@ -11,6 +11,9 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Added
+- **C4** `bash` handler now runs a best-effort, advisory-only `readRoots`/`writeRoots` path-containment scan before spawning: absolute and home-relative path tokens are extracted from the command and checked against the session's write roots, emitting a one-time `[security]` warning + `tool.bash_path_escape` telemetry (counts only, no command string) when one escapes — but never blocking execution (warn-only, to preserve the top-level `afk -w` bypass workflow). Rationale, threat model, and residual gaps documented in `docs/decisions/0001-bash-tool-path-containment.md`. Full `execFile`/sandbox containment remains deferred (tracked C4). (#354)
+
 ## [5.37.2] - 2026-07-13
 
 ### Fixed
