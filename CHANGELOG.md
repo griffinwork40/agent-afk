@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.38.3] - 2026-07-13
+
+### Changed
+- extract buildSkillForkManager to de-dup the two per-call fork managers (follow-up to #469) (#572) (bf1b26e)
+
 ## [5.38.2] - 2026-07-13
 
 ### Fixed
