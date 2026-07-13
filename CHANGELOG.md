@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.36.2] - 2026-07-13
+
+### Fixed
+- eliminate end-of-turn report/table void on overlay collapse (#539) (4898a2c)
+
 ## [5.36.1] - 2026-07-13
 
 ### Fixed
