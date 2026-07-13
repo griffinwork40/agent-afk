@@ -78,10 +78,13 @@ export function applyParentCredentialFallback(args: {
  *
  * Fallback when `parentProvider` is absent (legacy callers / direct
  * construction that didn't pass `parentModel`): infer `'anthropic-direct'`
- * from an `sk-ant-` key so the forward guard still holds, and otherwise leave
- * it unknowable and inherit — exactly the pre-`parentModel` behavior, so no
- * existing caller regresses. The reverse-direction protection activates only
- * where the manager supplies `parentProvider`.
+ * from an `sk-ant-` key so the forward Anthropic-inheritance path still holds;
+ * for any other key the parent provider is unknowable, so FAIL CLOSED — do not
+ * inherit (#438). The pre-#438 fallback inherited here on key-shape, which
+ * silently disabled the reverse-direction (openai→anthropic) leak guard for any
+ * fork whose manager was built without `parentModel`. Refusing instead makes
+ * that guard hold unconditionally; a caller wanting same-provider inheritance
+ * in the unknown-key case must supply `parentModel`.
  *
  * Invariant: `parentProvider` and `providerForModel(childModel)` are both
  * canonical provider names (`'anthropic-direct'` / `'openai-compatible'`), so
@@ -99,6 +102,12 @@ export function applyManagerApiKeyFallback(args: {
   if (parentApiKey === undefined) return undefined;
   const effectiveParent =
     parentProvider ?? (isAnthropicCredential(parentApiKey) ? 'anthropic-direct' : undefined);
-  if (effectiveParent === undefined) return parentApiKey;
+  // Fail closed (#438): provider identity unknowable (no `parentModel`, and a
+  // non-`sk-ant` key whose shape reveals nothing) → do NOT inherit. Returning
+  // `parentApiKey` here (the pre-#438 behavior) silently disabled the
+  // reverse-direction (openai→anthropic) leak guard for any manager built
+  // without `parentModel`; refusing leaves the child credential-less (a loud
+  // pre-flight failure) rather than risk shipping a foreign-provider key.
+  if (effectiveParent === undefined) return undefined;
   return providerForModel(childModel) === effectiveParent ? parentApiKey : undefined;
 }
