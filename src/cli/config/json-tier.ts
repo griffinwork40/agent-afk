@@ -195,6 +195,10 @@ export function loadJsonConfig(): {
           config.autoResumeOnUsageLimit = json.autoResumeOnUsageLimit;
         }
 
+        if (typeof json.enforceDoneEvidence === 'boolean') {
+          config.enforceDoneEvidence = json.enforceDoneEvidence;
+        }
+
         if (typeof json.bgSummaries === 'boolean') {
           config.bgSummaries = json.bgSummaries;
         }

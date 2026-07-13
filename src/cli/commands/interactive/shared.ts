@@ -581,8 +581,17 @@ export interface TurnHandles {
    * The verdict card itself has already been printed to scrollback by the
    * turn handler before this hook fires; the hook is purely for ledger
    * bookkeeping. Best-effort — errors are swallowed by the caller.
+   *
+   * `meta.doneHasCorroboratingEvidence` reports whether the turn produced a
+   * successful file write/edit or executed command (see
+   * `doneHasCorroboratingEvidence` in `afk-push.ts`). The REPL loop forwards it
+   * onto the post-turn `Stop` hook's {@link StopContext} so the terminal-state
+   * gate can flag a self-certified `Done` with nothing behind it.
    */
-  onTerminalState?(state: import('./terminal-state.js').TerminalState): void;
+  onTerminalState?(
+    state: import('./terminal-state.js').TerminalState,
+    meta?: { doneHasCorroboratingEvidence?: boolean },
+  ): void;
   /**
    * Publishes the in-flight turn's active TerminalCompositor (or null when
    * none exists, e.g. on non-TTY surfaces or after dispose). The REPL's

@@ -31,6 +31,7 @@ import type { SessionRef } from '../../../agent/session-ref.js';
 import type { CliOptions, CompletionWriter, InteractiveCtx } from './shared.js';
 import { formatStatusFields } from './shared.js';
 import { createReplRenderer } from './repl-renderer.js';
+import { createTerminalStateGate } from './terminal-state-gate.js';
 import { TrustedSkillLedger } from '../../trusted-skill-ledger.js';
 import {
   onTrustedSkillComplete, offTrustedSkillComplete,
@@ -666,6 +667,22 @@ export async function bootstrapSession(
   );
   const hookRegistry = hookRegistryBundle.registry;
   const pathApprovalGrantRef = hookRegistryBundle.pathApprovalGrantRef;
+
+  // Terminal-state gate (issue #237): a post-turn `Stop` hook that bounces a
+  // self-certified `Done` with no corroborating evidence back into the next turn
+  // via the Stop injectContext primitive (wired in loop-iteration.ts). Registered
+  // here rather than in createDefaultHookRegistry because it reads cli-layer
+  // config (`enforceDoneEvidence`, fresh each turn) and the live permission mode;
+  // opt-in + autonomous-only, so it is inert unless the operator enabled it. REPL
+  // surface only — the Stop injectContext delivery it depends on lives in the
+  // REPL loop.
+  hookRegistry.register(
+    'Stop',
+    createTerminalStateGate({
+      getPermissionMode: () => stats.permissionMode,
+      isEnabled: () => loadConfig().enforceDoneEvidence === true,
+    }),
+  );
 
   // Capture deps needed by both the initial build and the swap closure.
   const sharedDeps: BuildAgentSessionDeps = {

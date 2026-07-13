@@ -178,6 +178,18 @@ export interface CliConfig {
    */
   autoResumeOnUsageLimit?: boolean;
   /**
+   * AFK-mode terminal-state enforcement gate (opt-in; default off when omitted).
+   * When true, in autonomous mode a turn that self-certifies `Done` with no
+   * corroborating evidence — a successful file write/edit or executed command
+   * (see `doneHasCorroboratingEvidence` in `afk-push.ts`) — gets a framework
+   * correction injected into the NEXT turn, which must substantiate or downgrade
+   * the claim (issue #237). Human-tier: a self-honesty check the agent must not
+   * disable on its own config (same rationale as `telegram.verifyDone`). The
+   * sibling `telegram.verifyDone` only relabels the Telegram push; this one
+   * bounces the turn.
+   */
+  enforceDoneEvidence?: boolean;
+  /**
    * When true, the REPL constructs a BackgroundSummarizer that periodically
    * asks Haiku to summarize each running background subagent job's transcript
    * tail. Summaries appear in `/bgsub:list` on an indented second line.
@@ -300,6 +312,8 @@ export interface ConfigFileSchema {
   };
   updatePolicy?: 'notify' | 'auto' | 'off';
   autoResumeOnUsageLimit?: boolean;
+  /** Opt-in AFK terminal-state enforcement gate; default off. See `CliConfig.enforceDoneEvidence`. */
+  enforceDoneEvidence?: boolean;
   bgSummaries?: boolean;
   maxSummaryCallsPerSession?: number;
   hooks?: RawHooksConfig;
