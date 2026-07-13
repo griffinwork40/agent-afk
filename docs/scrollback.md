@@ -8,7 +8,9 @@ This is the single hardest-to-debug mechanism in the TUI because:
 
 - Mock-stdout unit tests can verify bytes were *written* but cannot verify
   they actually *reached scrollback* — that's a property of the real PTY's
-  scroll engine, not of our code.
+  scroll engine, not of our code. (The `tests/pty/` harness closes this gap by
+  driving the compositor through a real pseudo-terminal and asserting on an
+  xterm emulator's scrollback buffer — see "Empirical verification" below.)
 - Multiple prior fixes (6d7cb90, 9690b9f) were validated on byte-level tests
   that passed even though the real-terminal behavior was broken.
 - The mismatch between VT100 sub-region and full-screen DECSTBM scroll
@@ -641,10 +643,18 @@ and `SCROLLBACK_TEST_B` with cursor at `rows` (post-fix behavior). Scroll
 up after the script exits. Only `SCROLLBACK_TEST_B` should appear in
 scrollback.
 
-For future regression-detection in CI: a `node-pty` + `xterm.js`-headless
-integration test could pipe agent-afk output through a real terminal
-emulator and assert that committed lines appear in the emulator's
-scrollback buffer. None exists today.
+For regression-detection in CI: a `node-pty` + `@xterm/headless` integration
+harness drives the real `TerminalCompositor` through a real pseudo-terminal,
+pipes its output into an xterm emulator, and asserts that committed lines
+appear in the emulator's **scrollback** buffer (not just that bytes were
+written). It lives in `tests/pty/` — `scenarios.ts` defines the gap-class
+geometries (multi-commit, collapse-void #539, overflow-gap, shrink-gap,
+first-turn banner echo #509), `harness.ts` spawns the pty and reconstructs the
+emulator buffer, and `compositor-scrollback.pty.test.ts` asserts on the
+scrollback/viewport. Run it with `pnpm test:pty`; CI runs it as the dedicated
+`test-pty` job (kept out of the default `pnpm test` run because it needs the
+native node-pty build). This is the real-terminal net that the two prior
+byte-level failures (6d7cb90, 9690b9f) lacked (issue #541).
 
 ## Don't change without reading this
 

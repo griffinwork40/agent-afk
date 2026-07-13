@@ -327,11 +327,13 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
       // In-turn append: only when this foreground run produced a completion
       // ToolResult (success or structured failure). The error-rethrow path
       // leaves toolResult unset — nothing to append to, note is dropped for
-      // that stop by design (the throw is the parent's signal). Attribution:
-      // the note is appended to THIS subagent's own result, so a parent
-      // batching multiple `agent` calls sees each nudge next to its result.
-      // Optional-chain: real SubagentHandleImpl always defines this; the
-      // `?.()` tolerates narrow handle doubles (returns undefined = no note).
+      // that stop by design (the throw is the parent's signal; keep-drop
+      // confirmed in #392, queue-fallback rejected — rationale in
+      // inject-context.ts). Attribution: the note is appended to THIS
+      // subagent's own result, so a parent batching multiple `agent` calls
+      // sees each nudge next to its result. Optional-chain: real
+      // SubagentHandleImpl always defines this; the `?.()` tolerates narrow
+      // handle doubles (returns undefined = no note).
       const injectContext = handle.getLastStopInjectContext?.();
       appendInjectContext(toolResult, injectContext);
 

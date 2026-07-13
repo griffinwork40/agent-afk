@@ -320,6 +320,13 @@ export class SkillExecutor {
           ...(this.ctx.traceWriter !== undefined
             ? { traceWriter: this.ctx.traceWriter }
             : {}),
+          // Forward the parent session's read-scope reader so inline handlers
+          // that fork their own SubagentManager (e.g. /mint phases, /audit-fit)
+          // seed each fork's parentReadRoots — the child ⊇ parent read-scope
+          // invariant (#547). See SkillExecutionContext.getReadScopeInputs.
+          ...(this.ctx.getReadScopeInputs !== undefined
+            ? { getReadScopeInputs: this.ctx.getReadScopeInputs }
+            : {}),
         },
       );
     } catch (err) {

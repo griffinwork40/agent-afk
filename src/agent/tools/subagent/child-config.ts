@@ -20,6 +20,7 @@
  */
 
 import { SubagentManager } from '../../subagent.js';
+import type { ReadScopeInputs } from '../../subagent-read-scope.js';
 import type { ModelProvider } from '../../provider.js';
 import type { AgentModelInput, IAgentSession } from '../../types.js';
 import type { AgentConfig } from '../../types/config-types.js';
@@ -72,7 +73,13 @@ export interface BuildChildConfigArgs {
   resolveApiKeyForModel?: (model: string) => string | undefined;
   defaultSubagentModel?: AgentModelInput;
   childProviderFactory?: (args: ChildProviderFactoryArgs) => ModelProvider;
-  childSkillExecutorFactory?: (depth: number, maxDepth: number, signal: AbortSignal, inheritedCwd?: string) => SkillExecutor;
+  childSkillExecutorFactory?: (
+    depth: number,
+    maxDepth: number,
+    signal: AbortSignal,
+    inheritedCwd?: string,
+    inheritedReadScope?: ReadScopeInputs,
+  ) => SkillExecutor;
   surface?: Surface;
   allowedTools?: string[];
   readOnlyBash?: boolean;
@@ -365,7 +372,14 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
       parentModel: childModel,
     });
     const childSkillExecutor = args.childSkillExecutorFactory
-      ? args.childSkillExecutorFactory(depth + 1, maxDepth, signal, currentCwd)
+      ? args.childSkillExecutorFactory(depth + 1, maxDepth, signal, currentCwd, {
+          // Read-scope inheritance (#547): hand the grandchild SkillExecutor
+          // this child's inherited read scope (same value seeded on the
+          // grandchild manager above) so a skill dispatched by an `agent`-tool
+          // child inherits ⊇ the child's scope, not the frozen session scope.
+          parentReadRoots: args.childInheritedReadRoots,
+          parentCwd: currentCwd,
+        })
       : undefined;
     // Pass `model` so the factory routes between AnthropicDirect /
     // OpenAICompatible per `providerForModel(model)`. Without this, every

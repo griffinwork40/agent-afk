@@ -2016,6 +2016,58 @@ describe('SubagentExecutor', () => {
       expect(payload.status).toBe('failed');
       expect(payload.error).toBe('kaboom');
     });
+
+    // THROW PATH (runToResult rejects, toolResult stays unset): the recorded
+    // SubagentStop note is dropped for that stop BY DESIGN (#392 keep-drop).
+    // foreground-promotion.ts's catch re-throws, leaving `toolResult`
+    // undefined, so `appendInjectContext` has no result to ride; and because
+    // teardown ran with `deferInjectContextToCaller: true` the queue push was
+    // suppressed at source — so the note reaches NEITHER channel. The throw is
+    // the parent's signal; a supplemental nudge to "verify these findings" is
+    // meaningless when the run threw before producing findings.
+    //
+    // Mirror of skill-executor.test.ts "does NOT append when runToResult
+    // throws" — keeps the two in-turn-delivery suites in symmetry (they differ
+    // only in that the skill catch returns a plain error string while the
+    // `agent` catch re-throws, so here we assert the throw propagates and the
+    // note is delivered through neither channel rather than inspecting content).
+    it('drops the injectContext note when runToResult throws (dropped by design, #392)', async () => {
+      const nudge = 'verify: should not appear';
+      const queueSpy = vi.fn();
+      const pushSpy = vi.fn();
+      const handle: Partial<SubagentHandle> = {
+        id: 'child-throw-inject',
+        status: 'failed' as any,
+        runToResult: vi.fn().mockRejectedValue(new Error('Response timeout')),
+        cancel: vi.fn().mockResolvedValue(undefined),
+        teardown: vi.fn().mockResolvedValue(undefined),
+        // The note IS recorded/available — the drop is deliberate, not absence.
+        getLastStopInjectContext: vi.fn().mockReturnValue(nudge),
+      };
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      const exec = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: {
+          sessionId: 'parent',
+          getInputStreamRef: () => ({ pushUserMessage: pushSpy, queueFrameworkContext: queueSpy }),
+          abortSignal: new AbortController().signal,
+        } as any,
+        defaultConfig: mockConfig,
+        depth: 0,
+      });
+
+      // The throw propagates (re-throw contract preserved) ...
+      await expect(exec.execute(makeCall())).rejects.toThrow('Response timeout');
+      // ... teardown still ran with the defer flag (queue push suppressed at
+      // source) and the note was looked at — proving it was available ...
+      expect(handle.teardown).toHaveBeenCalledWith({ deferInjectContextToCaller: true });
+      expect(handle.getLastStopInjectContext).toHaveBeenCalled();
+      // ... yet it reached NEITHER channel: no tool_result to append to (execute
+      // threw) and the executor never pushed to the parent queue.
+      expect(queueSpy).not.toHaveBeenCalled();
+      expect(pushSpy).not.toHaveBeenCalled();
+    });
   });
 
   // ── Cancellation (soft-stop via SubagentControl) ──────────────────────────

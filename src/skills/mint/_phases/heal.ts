@@ -30,6 +30,11 @@ export async function runHealPhase(
   // callers/tests without a skill-dispatch context degrade gracefully — the
   // heal sub-agent then diagnoses the failures itself from the issue list.
   dispatchSkill?: (name: string, args?: string) => Promise<string>,
+  // Read-scope inheritance (#547): parent session's read roots (resolved once
+  // by the mint handler); seeds the heal fork manager's parentReadRoots and is
+  // forwarded to the re-run verify phase so both inherit reads ⊇ the parent
+  // session's. Undefined leaves cwd-derivation intact.
+  parentReadRoots?: string[],
 ): Promise<{
   healed: boolean;
   newHealIterations: number;
@@ -89,9 +94,10 @@ export async function runHealPhase(
 
     // Propagate parent worktree — heal subagent applies file edits
     // and re-runs tests; must operate on the right working tree.
-    const manager = new SubagentManager(
-      parentSession.cwd !== undefined ? { cwd: parentSession.cwd } : {},
-    );
+    const manager = new SubagentManager({
+      ...(parentSession.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
+      ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
+    });
     const healHandle = await manager.forkSubagent({
       parent: { sessionId: parentSession.sessionId },
       config: {
@@ -147,6 +153,7 @@ export async function runHealPhase(
       parentSession.cwd,
       skillCallId,
       defaultSubagentModel,
+      parentReadRoots,
     );
 
     return {

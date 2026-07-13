@@ -473,6 +473,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_READ_DENYLIST",
+      "description": "Colon-separated list of additional absolute paths the read_file/grep/glob/list_directory tools refuse to read. Built-in credential entries (~/.ssh, ~/.aws, ~/.afk/config, …) always apply on top and cannot be removed.",
+      "type": "string",
+      "required": false,
+      "example": "/Users/me/project/.env:/Users/me/secrets",
+      "category": "misc"
+    },
+    {
       "name": "AFK_RUN_RECEIPT_DISABLED",
       "description": "Disable the post-session run receipt (state/receipts/<label>.json and .md). Set to 1 to skip receipt writes; the underlying witness trace is unaffected. Receipts are also implicitly off when AFK_TRACE_DISABLED=1 (no trace to summarize).",
       "type": "boolean",

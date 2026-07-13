@@ -42,6 +42,59 @@ export function readOpenRootFor(base: string | undefined): string {
   return path.parse(resolved).root || path.sep;
 }
 
+/**
+ * The parent session's read-scope inputs, as returned by
+ * {@link SubagentManager.getReadScopeInputs}. Threaded through the skill /
+ * inline-skill / compose dispatch contexts so those paths compute a forked
+ * child's read scope the same way the `agent` tool does (see
+ * {@link resolveChildManagerReadRoots}). `undefined` in either field carries
+ * the same meaning it does for {@link computeInheritedReadRoots}.
+ */
+export interface ReadScopeInputs {
+  parentReadRoots: string[] | undefined;
+  parentCwd: string | undefined;
+}
+
+/**
+ * Compute the `parentReadRoots` a skill- / inline- / compose-built
+ * {@link SubagentManager} should carry, given the parent session's read scope
+ * ({@link ReadScopeInputs}, from `getReadScopeInputs`) and the child manager's
+ * own cwd.
+ *
+ * This is the single choke point that keeps skill/inline dispatch SYMMETRIC
+ * with the `agent` tool: `subagent-executor.ts` reads `getReadScopeInputs()`
+ * off the parent manager and threads the result through `child-config.ts` as a
+ * grandchild manager's `parentReadRoots`. Skill managers historically passed
+ * only `cwd`, so their forks derived read scope from cwd alone and silently
+ * NARROWED whenever the parent session was read-open (or `/allow-dir`-widened)
+ * beyond `[cwd, mainRoot]` — the residual of #544 this closes (#547). Seeding a
+ * child manager's `parentReadRoots` with the result propagates the parent's
+ * full read scope transitively; `forkSubagent` still folds in the worktree main
+ * root, so callers need not resolve it here.
+ *
+ * Returns `undefined` when there is nothing broader than the child's own cwd to
+ * grant (the caller then omits `parentReadRoots` and the manager's existing
+ * cwd-derivation stands, byte-for-byte unchanged).
+ */
+export function resolveChildManagerReadRoots(
+  parentScope: ReadScopeInputs | undefined,
+  childCwd: string | undefined,
+): string[] | undefined {
+  // `parentScope === undefined` means the caller could not determine the parent
+  // session's scope (getReadScopeInputs unwired — a test stub or a surface that
+  // predates this wiring), NOT that the parent is unconfined. Distinguish the
+  // two: return undefined so the manager's existing cwd-derivation stands
+  // (byte-for-byte pre-#547 behaviour). Only a KNOWN unconfined parent
+  // (`{ parentReadRoots: undefined, parentCwd: undefined }`) yields a read-open
+  // child, via computeInheritedReadRoots below.
+  if (parentScope === undefined) return undefined;
+  return computeInheritedReadRoots({
+    parentReadRoots: parentScope.parentReadRoots,
+    parentCwd: parentScope.parentCwd,
+    childCwd,
+  });
+}
+
 export interface InheritedReadRootsArgs {
   /**
    * The parent session's explicit read roots, or `undefined` to derive the
@@ -67,6 +120,21 @@ export interface InheritedReadRootsArgs {
    * and containment is lexical — every sibling worktree too.
    */
   worktreeMainRoot?: string | undefined;
+  /**
+   * The AFK state directory (`~/.afk/state`, or the `$AFK_STATE_DIR` override).
+   * Folded into a CONFINED fork's read union so it can reach the runtime-state
+   * paths that pervade its prompt/context — skill-preflight staged inputs (e.g.
+   * a PR diff a `/review` fan-out hands its children), todos, transcripts, and
+   * per-session ledgers — none of which a worktree/confined parent's cwd+repo
+   * roots lexically contain, so every such read was hard-denied (forks cannot
+   * prompt) until a wall-clock timeout.
+   *
+   * Pass the STATE dir ONLY — NEVER `~/.afk/config`, which holds `afk.env`
+   * credentials: read scope must not widen to secrets. Ignored by the unconfined
+   * branch (already read-open). `undefined` adds nothing, so a caller that omits
+   * it gets byte-for-byte the pre-fix behaviour.
+   */
+  afkStateRoot?: string | undefined;
 }
 
 /**
@@ -78,16 +146,17 @@ export interface InheritedReadRootsArgs {
  *    the child inherits read-open — `[readOpenRootFor(childCwd)]`. Writes stay
  *    confined to the child's own cwd/writeRoots.
  *  - Parent CONFINED (explicit `parentReadRoots`, or a defined `parentCwd`):
- *    the child gets the UNION of the parent's roots, its own cwd, and the
- *    worktree main root — never narrower than the parent (child read scope ⊇
- *    parent read scope), never write-relevant.
+ *    the child gets the UNION of the parent's roots, its own cwd, the worktree
+ *    main root, and the AFK state dir ({@link InheritedReadRootsArgs.afkStateRoot})
+ *    — never narrower than the parent (child read scope ⊇ parent read scope),
+ *    never write-relevant.
  *
  * Returns a de-duplicated, resolved array. `undefined` only when there is
  * genuinely nothing to grant (no child cwd, no parent scope) — the caller then
  * leaves the provider default untouched.
  */
 export function computeInheritedReadRoots(args: InheritedReadRootsArgs): string[] | undefined {
-  const { parentReadRoots, parentCwd, childCwd, worktreeMainRoot } = args;
+  const { parentReadRoots, parentCwd, childCwd, worktreeMainRoot, afkStateRoot } = args;
   const resolvedChildCwd =
     childCwd !== undefined && childCwd !== '' ? path.resolve(childCwd) : undefined;
 
@@ -112,6 +181,14 @@ export function computeInheritedReadRoots(args: InheritedReadRootsArgs): string[
   }
   if (worktreeMainRoot !== undefined && worktreeMainRoot !== '') {
     roots.add(path.resolve(worktreeMainRoot));
+  }
+  // The AFK state dir (~/.afk/state) — runtime state a confined fork's cwd+repo
+  // roots do not lexically contain (skill-preflight inputs, todos, transcripts,
+  // session ledgers). Callers pass the state dir only, never ~/.afk/config
+  // (credentials). Added AFTER the cwd/parent/worktree roots so the size checks
+  // below correctly see it as a broadening grant.
+  if (afkStateRoot !== undefined && afkStateRoot !== '') {
+    roots.add(path.resolve(afkStateRoot));
   }
 
   // Nothing to grant, OR the only root is the child's own cwd (which equals the

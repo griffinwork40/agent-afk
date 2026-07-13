@@ -18,6 +18,10 @@
 
 import { registerSkill, type SkillExecutionContext, type SkillMetadata } from '../index.js';
 import type { AgentModelInput, IAgentSession } from '../../agent/types.js';
+import {
+  resolveChildManagerReadRoots,
+  type ReadScopeInputs,
+} from '../../agent/subagent-read-scope.js';
 import { runSpecPhase } from './_phases/spec.js';
 import { runResearchPhase } from './_phases/research.js';
 import { runPlanPhase } from './_phases/plan.js';
@@ -179,6 +183,13 @@ async function runPhasesAfterSpec(
   // resume/autoApprove paths and tests without a dispatch context degrade
   // gracefully — heal then self-diagnoses from the verification issues.
   dispatchSkill?: (name: string, args?: string) => Promise<string>,
+  // Read-scope inheritance (#547): the parent session's read scope, from
+  // ctx.getReadScopeInputs() at the handler. Resolved once here (with the mint
+  // worktree as the child cwd) and threaded to every phase so their forked
+  // subagents inherit reads ⊇ the parent session's — the same child ⊇ parent
+  // invariant the `agent` tool enforces (#544). Optional so resume/test paths
+  // without a ctx degrade to cwd-derivation, unchanged.
+  parentReadScope?: ReadScopeInputs,
 ): Promise<MintResult> {
   if (!parentSession.sessionId) {
     throw new Error('runPhasesAfterSpec requires parentSession.sessionId');
@@ -189,13 +200,18 @@ async function runPhasesAfterSpec(
   // falls back to the Node host's process.cwd() — which is shared across
   // concurrent sessions and defeats worktree isolation.
   const parentCwd = parentSession.cwd;
+  // Read-scope inheritance (#547): resolve the phase forks' parentReadRoots
+  // once (child cwd = the mint worktree = parentCwd). Undefined in the common
+  // case (session read scope == [parentCwd, mainRoot]); non-undefined only when
+  // the parent session is read-open or `/allow-dir`-widened beyond its cwd.
+  const parentReadRoots = resolveChildManagerReadRoots(parentReadScope, parentCwd);
   try {
     state.currentPhase = 'research';
-    state.research = await runResearchPhase(state.spec!, parentSessionId, parentCwd, skillCallId, defaultSubagentModel);
+    state.research = await runResearchPhase(state.spec!, parentSessionId, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots);
     appendHistory(state, 'research', state.research);
 
     state.currentPhase = 'plan';
-    state.plan = await runPlanPhase(state.spec!, state.research, parentSessionId, parentCwd, skillCallId, defaultSubagentModel);
+    state.plan = await runPlanPhase(state.spec!, state.research, parentSessionId, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots);
     appendHistory(state, 'plan', state.plan);
 
     state.currentPhase = 'parallelize';
@@ -204,6 +220,7 @@ async function runPhasesAfterSpec(
       parentSession,
       skillCallId,
       defaultSubagentModel,
+      parentReadRoots,
     );
     if (parallelizeResult.kind === 'plan') {
       state.waveOrchestrationPlan = parallelizeResult.plan;
@@ -251,6 +268,7 @@ async function runPhasesAfterSpec(
       parentCwd,
       skillCallId,
       defaultSubagentModel,
+      parentReadRoots,
     );
     appendHistory(state, 'build', JSON.stringify(state.buildResults));
 
@@ -262,6 +280,7 @@ async function runPhasesAfterSpec(
       parentCwd,
       skillCallId,
       defaultSubagentModel,
+      parentReadRoots,
     );
     appendHistory(state, 'verify', JSON.stringify(state.verifyResults));
 
@@ -282,6 +301,7 @@ async function runPhasesAfterSpec(
         skillCallId,
         defaultSubagentModel,
         dispatchSkill,
+        parentReadRoots,
       );
       state.healIterations = healResult.newHealIterations;
       state.verifyResults = healResult.newVerifyResults;
@@ -305,7 +325,7 @@ async function runPhasesAfterSpec(
     }
 
     state.currentPhase = 'ship';
-    const artifact = await runShipPhase(state, parentSessionId, parentCwd, skillCallId, defaultSubagentModel);
+    const artifact = await runShipPhase(state, parentSessionId, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots);
     appendHistory(state, 'ship', artifact);
 
     return { completed: true, artifact, state };
@@ -353,7 +373,7 @@ async function handler(
         'mint: no paused spec found for this session to continue. Run /mint <idea> first, then /mint --continue approved.',
       );
     }
-    const result = await runPhasesAfterSpec(resumeState, parentSession, skillCallId, defaultSubagentModel, ctx?.dispatchSkill);
+    const result = await runPhasesAfterSpec(resumeState, parentSession, skillCallId, defaultSubagentModel, ctx?.dispatchSkill, ctx?.getReadScopeInputs?.());
     return finalizeAfterSpec(parentSessionId, result);
   }
 
@@ -393,7 +413,7 @@ async function handler(
     return pausedResult;
   }
 
-  const result = await runPhasesAfterSpec(state, parentSession, skillCallId, defaultSubagentModel, ctx?.dispatchSkill);
+  const result = await runPhasesAfterSpec(state, parentSession, skillCallId, defaultSubagentModel, ctx?.dispatchSkill, ctx?.getReadScopeInputs?.());
   return finalizeAfterSpec(parentSessionId, result);
 }
 

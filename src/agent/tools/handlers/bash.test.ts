@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import * as os from 'node:os';
@@ -841,6 +841,132 @@ describe('bash SIGKILL — S10', () => {
     },
     5000, // vitest per-test timeout: 5 s (handler kills at 300 ms + 100 ms reap window + headroom)
   );
+});
+
+// ---------------------------------------------------------------------------
+// C4 (#354): best-effort readRoots/writeRoots path-containment scan.
+//
+// The scan is ADVISORY-ONLY: when a command references an absolute/home-relative
+// path outside the session's writeRoots it emits one `[security]` console.warn
+// (and a telemetry row) but STILL executes the command — it never blocks. These
+// tests assert both halves: the warning fires (or is suppressed) as specified,
+// AND the command runs to completion either way.
+//
+// NB: appendRoutingDecision is a no-op under vitest (env.VITEST guard), so we
+// spy on console.warn — the reliable, synchronous signal that the escape path
+// was taken. `warnIfBypassPermissions` also writes a `[security]` line, so we
+// match specifically on the path-escape substring to disambiguate.
+// ---------------------------------------------------------------------------
+describe('bash path-containment scan — C4 (#354)', () => {
+  function createSignal(): AbortSignal {
+    return new AbortController().signal;
+  }
+
+  const ESCAPE_MARKER = 'command references path(s) outside writeRoots';
+
+  let root: string;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    // Real temp dir so realpathSafe (inside wouldBeRestricted) resolves.
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'bash-contain-')));
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  function escapeWarnings(): string[] {
+    return warnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((m) => m.includes(ESCAPE_MARKER));
+  }
+
+  it('warns AND still executes when a command references a path outside writeRoots', async () => {
+    // 'default' mode → allowAll is NOT set, so containment is enforced/advised.
+    const handler = createBashHandler('default', root);
+    const result = await handler(
+      { command: 'echo hi /etc/hosts' },
+      createSignal(),
+      { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false },
+    );
+
+    // Warned about the escape…
+    const warnings = escapeWarnings();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('/etc/hosts');
+    expect(warnings[0]).toContain('best-effort');
+
+    // …but the command STILL ran (advisory-only, not a block).
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('hi');
+  });
+
+  it('expands ~/… and warns when a home-relative path escapes writeRoots', async () => {
+    // End-to-end exercise of scanPathsBestEffort's ~ / ~/… expansion branch:
+    // `~/.ssh/id_rsa` expands to os.homedir()/.ssh/id_rsa — outside the temp-dir
+    // writeRoots — so it warns (and still executes). Had expansion NOT fired, the
+    // token would anchor to resolveBase (in-root) and produce zero warnings, so
+    // the single warning is itself proof the expansion happened.
+    const handler = createBashHandler('default', root);
+    const result = await handler(
+      { command: 'echo hi ~/.ssh/id_rsa' },
+      createSignal(),
+      { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false },
+    );
+
+    const warnings = escapeWarnings();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(join(os.homedir(), '.ssh/id_rsa'));
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('hi');
+  });
+
+  it('does NOT warn when allowAll (bypass) is set, even for an out-of-root path', async () => {
+    const handler = createBashHandler('default', root);
+    const result = await handler(
+      { command: 'echo hi /etc/hosts' },
+      createSignal(),
+      { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: true },
+    );
+
+    expect(escapeWarnings()).toHaveLength(0);
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('hi');
+  });
+
+  it('does NOT warn when the command references only in-root paths', async () => {
+    const inRoot = join(root, 'file.txt');
+    const handler = createBashHandler('default', root);
+    const result = await handler(
+      { command: `echo hi ${inRoot}` },
+      createSignal(),
+      { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false },
+    );
+
+    expect(escapeWarnings()).toHaveLength(0);
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('hi');
+  });
+
+  it('warns at most once per handler instance (one-time latch)', async () => {
+    const handler = createBashHandler('default', root);
+    const ctx = { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false };
+    await handler({ command: 'cat /etc/hosts' }, createSignal(), ctx);
+    await handler({ command: 'cat /etc/passwd' }, createSignal(), ctx);
+
+    // Latch means the second escaping command does not re-warn.
+    expect(escapeWarnings()).toHaveLength(1);
+  });
+
+  it('does NOT warn when no context is supplied (inline/back-compat call)', async () => {
+    const handler = createBashHandler('default', root);
+    const result = await handler({ command: 'echo hi /etc/hosts' }, createSignal());
+    expect(escapeWarnings()).toHaveLength(0);
+    expect(result.isError).toBeFalsy();
+  });
 });
 
 

@@ -13,6 +13,7 @@
  */
 
 import { SubagentManager } from '../../subagent.js';
+import { resolveChildManagerReadRoots } from '../../subagent-read-scope.js';
 import { annotateIfIncomplete } from '../../subagent/result.js';
 import { appendInjectContext } from '../subagent/inject-context.js';
 import type { ToolCall, ToolResult } from '../types.js';
@@ -78,6 +79,13 @@ export async function executeForkedRegistrySkill(
     parentApiKey: ctx.apiKey,
   });
 
+  // Read-scope inheritance (#547): the skill-forked child's read scope ⊇ the
+  // parent session's, mirroring the `agent` tool (subagent-executor.ts). Seed
+  // parentReadRoots from the session scope + this fork's cwd; forkSubagent
+  // folds in the worktree main root. Without it the fork derived read scope
+  // from cwd alone and narrowed whenever the parent was read-open /
+  // `/allow-dir`-widened. Writes stay confined to the worktree.
+  const childReadRoots = resolveChildManagerReadRoots(ctx.getReadScopeInputs?.(), currentCwd);
   const manager = new SubagentManager({
     parentAbortSignal: call.signal,
     apiKey: skillChildApiKey,
@@ -93,6 +101,8 @@ export async function executeForkedRegistrySkill(
     // tools the worktree anchor. Without it, every `/diagnose`, `/mint`,
     // etc. run their first-tier subagents against the host repo.
     ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
+    // Read-scope inheritance (#547): see childReadRoots above.
+    ...(childReadRoots !== undefined ? { parentReadRoots: childReadRoots } : {}),
   });
 
   // Thread traceWriter into the child's AgentConfig so its tool_use, hook,
@@ -171,6 +181,8 @@ export async function executePluginSkill(
     parentApiKey: ctx.apiKey,
   });
 
+  // Read-scope inheritance (#547) — same rationale as executeForkedRegistrySkill.
+  const childReadRoots = resolveChildManagerReadRoots(ctx.getReadScopeInputs?.(), currentCwd);
   const manager = new SubagentManager({
     parentAbortSignal: call.signal,
     apiKey: pluginChildApiKey,
@@ -183,6 +195,8 @@ export async function executePluginSkill(
     progressSink: getCurrentSink(),
     // Worktree isolation — same rationale as executeForkedRegistrySkill above.
     ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
+    // Read-scope inheritance (#547): see childReadRoots above.
+    ...(childReadRoots !== undefined ? { parentReadRoots: childReadRoots } : {}),
   });
 
   // PLUGIN_ROOT is injected here so shell commands in the plugin SKILL.md
@@ -348,7 +362,9 @@ export async function runForkedSkillToResult(
     if (handle) await handle.teardown({ deferInjectContextToCaller: true }).catch(debugLog);
     // In-turn append: only when this run produced a completion ToolResult.
     // The catch path leaves toolResult unset — nothing to append to, note
-    // dropped for that stop by design (the error string is the signal).
+    // dropped for that stop by design (the error string is the signal;
+    // keep-drop confirmed in #392, queue-fallback rejected — rationale in
+    // inject-context.ts).
     const injectContext = handle?.getLastStopInjectContext?.();
     appendInjectContext(toolResult, injectContext);
     await childManager?.teardownAll();

@@ -11,6 +11,41 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.37.5] - 2026-07-13
+
+### Fixed
+- propagate parent read scope to skill/inline/compose forks (#547) (#556) (60f2254)
+
+### Changed
+- lock in injectContext throw-path keep-drop decision (#392) (#550) (225b893)
+
+## [5.37.4] - 2026-07-13
+
+### Changed
+- remove redundant /save slash command (#559) (d005cec)
+
+## [5.37.3] - 2026-07-13
+
+### Added
+- **C4** `bash` handler now runs a best-effort, advisory-only `readRoots`/`writeRoots` path-containment scan before spawning: absolute and home-relative path tokens are extracted from the command and checked against the session's write roots, emitting a one-time `[security]` warning + `tool.bash_path_escape` telemetry (counts only, no command string) when one escapes — but never blocking execution (warn-only, to preserve the top-level `afk -w` bypass workflow). Rationale, threat model, and residual gaps documented in `docs/decisions/0001-bash-tool-path-containment.md`. Full `execFile`/sandbox containment remains deferred (tracked C4). (#354)
+
+### Fixed
+- honor unconfined resolveBase in the hook + add read-denylist floor (#560) (f62a960)
+
+### Changed
+- best-effort readRoots/writeRoots path scan + ADR (closes #354) (#558) (256ccd7)
+- real-PTY scrollback harness for the compositor (#541) (#553) (11fb1eb)
+
+## [5.37.2] - 2026-07-13
+
+### Fixed
+- grant ~/.afk/state to confined forks; harden worktree main-root fallback (#554) (5b63f2b)
+
+## [5.37.1] - 2026-07-13
+
+### Fixed
+- don't cache config past a parse failure; gate importFrom via user-global allowlist (#501) (#551) (a678b81)
+
 ## [5.37.0] - 2026-07-13
 
 ### Added

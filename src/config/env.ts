@@ -1068,6 +1068,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'misc',
   },
   {
+    name: 'AFK_READ_DENYLIST',
+    description: 'Colon-separated list of additional absolute paths the read_file/grep/glob/list_directory tools refuse to read. Built-in credential entries (~/.ssh, ~/.aws, ~/.afk/config, …) always apply on top and cannot be removed.',
+    type: 'string',
+    required: false,
+    example: '/Users/me/project/.env:/Users/me/secrets',
+    category: 'misc',
+  },
+  {
     name: 'AFK_WRITE_DIFF',
     description: 'Show a diff preview before each write_file tool call. Defaults provider-controlled when unset.',
     type: 'boolean',
@@ -1313,6 +1321,7 @@ export const env = {
 
   // Filesystem
   get AFK_WRITE_DENYLIST(): string | undefined { return process.env['AFK_WRITE_DENYLIST']; },
+  get AFK_READ_DENYLIST(): string | undefined { return process.env['AFK_READ_DENYLIST']; },
   get AFK_WRITE_DIFF(): string | undefined { return process.env['AFK_WRITE_DIFF']; },
 
   // CLI / capture-mode

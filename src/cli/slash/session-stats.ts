@@ -127,7 +127,7 @@ export function recordTurn(
   }
 
   // Auto-name the session from the first user message when no name has been
-  // set yet (via /name, /save <name>, or a prior turn). Metadata only — the
+  // set yet (via /name or a prior turn). Metadata only — the
   // sidecar is still keyed by sessionId, so this never forks a second file.
   if (!stats.name) {
     const derived = slugifySessionName(userInput);

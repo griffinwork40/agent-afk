@@ -57,6 +57,11 @@ export async function runParallelizeDispatch(
   // mint skill's tool-lane entry. See skills/index.ts SkillExecutionContext.callId.
   skillCallId?: string,
   defaultSubagentModel: AgentModelInput = 'sonnet',
+  // Read-scope inheritance (#547): parent session's read roots (resolved once
+  // by the mint handler); seeds the fork manager's parentReadRoots so the
+  // parallelize subagent's reads ⊇ the parent session's. Undefined leaves
+  // cwd-derivation intact.
+  parentReadRoots?: string[],
 ): Promise<ParallelizeDispatchResult> {
   const fileCount = countFileReferences(plan);
 
@@ -106,6 +111,7 @@ export async function runParallelizeDispatch(
       // the fork-time credential fallback (see SubagentManager.parentProvider).
       parentModel: getModel(),
       ...(parentSession.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
+      ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
     });
     try {
       // PLUGIN_ROOT injection mirrors `executePluginSkill` — see

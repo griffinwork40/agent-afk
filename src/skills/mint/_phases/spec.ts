@@ -17,6 +17,13 @@ export async function runSpecPhase(
   // under the mint skill's tool-lane entry — see runResearchPhase / skills/index.ts.
   skillCallId?: string,
   defaultSubagentModel: AgentModelInput = 'sonnet',
+  // Read-scope inheritance (#547): the parent session's read roots, resolved
+  // once by the mint handler (resolveChildManagerReadRoots). Seeded as the fork
+  // manager's parentReadRoots so the phase subagent's read scope ⊇ the parent
+  // session's — the same child ⊇ parent invariant the `agent` tool enforces
+  // (#544). Undefined (the common case, where the mint worktree IS the session
+  // cwd) leaves the manager's cwd-derivation intact.
+  parentReadRoots?: string[],
 ): Promise<string> {
   const prompts = loadSkillPrompts('mint');
   const specPrompt = prompts['spec.md'];
@@ -29,9 +36,12 @@ export async function runSpecPhase(
   // so its bash/grep run in the right working tree. Without this, two
   // concurrent `afk interactive -w` terminals running /mint would have
   // their spec subagents both spawn against the host's process.cwd().
-  const manager = new SubagentManager(
-    parentCwd !== undefined ? { cwd: parentCwd } : {},
-  );
+  // `parentReadRoots` (#547) widens the READ axis to the parent session's
+  // scope; writes stay confined to cwd.
+  const manager = new SubagentManager({
+    ...(parentCwd !== undefined ? { cwd: parentCwd } : {}),
+    ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
+  });
   const specHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },
     config: {

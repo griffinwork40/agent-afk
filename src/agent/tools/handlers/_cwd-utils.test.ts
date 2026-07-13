@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it, afterEach } from 'vitest';
-import { resolveAndContain, wouldBeRestricted } from './_cwd-utils.js';
+import { resolveAndContain, wouldBeRestricted, extractCandidatePaths } from './_cwd-utils.js';
 import type { ToolHandlerContext } from '../types.js';
 import os from 'os';
 import fs from 'fs';
@@ -239,6 +239,78 @@ describe('symlink containment', () => {
     // Outside: wouldBeRestricted=true, resolveAndContain throws.
     expect(wouldBeRestricted(outsideFile, c).restricted).toBe(true);
     expect(() => resolveAndContain(outsideFile, c)).toThrow(/outside the allowed/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractCandidatePaths — best-effort path token extractor for the bash
+// handler's advisory containment scan (issue #354). Explicitly NOT a shell
+// parser; these tests pin the documented best-effort contract.
+// ---------------------------------------------------------------------------
+describe('extractCandidatePaths', () => {
+  it('extracts absolute path tokens', () => {
+    expect(extractCandidatePaths('cat /etc/hosts')).toEqual(['/etc/hosts']);
+  });
+
+  it('extracts home-relative tokens (~/… and bare ~)', () => {
+    expect(extractCandidatePaths('cat ~/.ssh/id_rsa')).toEqual(['~/.ssh/id_rsa']);
+    expect(extractCandidatePaths('ls ~')).toEqual(['~']);
+  });
+
+  it('extracts multiple distinct paths and dedupes repeats', () => {
+    expect(extractCandidatePaths('cp /a/b /c/d')).toEqual(['/a/b', '/c/d']);
+    expect(extractCandidatePaths('diff /a /a')).toEqual(['/a']);
+  });
+
+  it('ignores relative tokens, flags, and non-path words', () => {
+    expect(extractCandidatePaths('ls -la src/foo.ts ./bar --color=auto')).toEqual([]);
+    expect(extractCandidatePaths('echo hello world')).toEqual([]);
+  });
+
+  it('strips surrounding quotes from a path token', () => {
+    expect(extractCandidatePaths('cat "/etc/hosts"')).toEqual(['/etc/hosts']);
+    expect(extractCandidatePaths("cat '/etc/hosts'")).toEqual(['/etc/hosts']);
+  });
+
+  it('trims trailing shell punctuation abutting a path', () => {
+    expect(extractCandidatePaths('cd /tmp/foo; ls')).toEqual(['/tmp/foo']);
+    expect(extractCandidatePaths('cat /a/b, /c/d')).toEqual(['/a/b', '/c/d']);
+    expect(extractCandidatePaths('(cat /etc/hosts)')).toEqual(['/etc/hosts']);
+  });
+
+  it('does NOT understand shell constructs (documented best-effort gap)', () => {
+    // The extractor does not resolve/expand shell semantics — it only sees
+    // literal tokens. This is the whole reason the scan is advisory-only.
+    //
+    // env-var indirection: the synthesized path is invisible (no leading / or ~).
+    expect(extractCandidatePaths('cat $HOME/.ssh/id_rsa')).toEqual([]);
+    expect(extractCandidatePaths('cat ${SECRET_DIR}/key')).toEqual([]);
+    // A path whose VALUE is produced by substitution (e.g. `$(cat pathfile)`)
+    // is NOT understood — the extractor cannot see the runtime value:
+    expect(extractCandidatePaths('cat $(cat pathfile)')).toEqual([]);
+  });
+
+  it('picks up literal path tokens inside shell constructs (harmless false-positive)', () => {
+    // Conversely, a LITERAL path appearing inside a $()/backticks IS picked up
+    // naively — the extractor does not know it is inside a substitution. This
+    // is a harmless over-report: it would at worst produce one advisory warning.
+    // It is documented behavior, NOT a guarantee that $()/backticks are parsed.
+    expect(extractCandidatePaths('cat $(printf /etc/hosts)')).toContain('/etc/hosts');
+    expect(extractCandidatePaths('cat `echo /etc/hosts`').length).toBeGreaterThan(0);
+  });
+
+  it('strips a leading redirection/pipe operator glued to a path (#354)', () => {
+    // Operator glued directly to the path with no space — a common redirect
+    // form the earlier extractor dropped (leading `>` failed the `/`/`~` test).
+    expect(extractCandidatePaths('echo x >/etc/passwd')).toEqual(['/etc/passwd']);
+    expect(extractCandidatePaths('echo x >>~/.bashrc')).toEqual(['~/.bashrc']);
+    expect(extractCandidatePaths('cat foo 2>/tmp/err')).toEqual(['/tmp/err']);
+    expect(extractCandidatePaths('a |/tmp/x')).toEqual(['/tmp/x']);
+  });
+
+  it('returns an empty array for a command with no path-like tokens', () => {
+    expect(extractCandidatePaths('git status')).toEqual([]);
+    expect(extractCandidatePaths('')).toEqual([]);
   });
 });
 

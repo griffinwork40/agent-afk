@@ -5,7 +5,7 @@
  * `/resume <current-session-id>` would trigger the full 12-step swap against
  * the live session — cancelling its background jobs, closing it, and
  * rebuilding it from the on-disk snapshot — silently discarding any turn
- * data accumulated since the last /save.
+ * data accumulated since the last autosave.
  *
  * The guard runs BEFORE ctx.requestResume is invoked. We verify both the
  * SDK-id match path and the sidecar-id match path block the swap.
