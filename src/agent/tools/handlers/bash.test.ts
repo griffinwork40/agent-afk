@@ -904,6 +904,26 @@ describe('bash path-containment scan — C4 (#354)', () => {
     expect(result.content).toContain('hi');
   });
 
+  it('expands ~/… and warns when a home-relative path escapes writeRoots', async () => {
+    // End-to-end exercise of scanPathsBestEffort's ~ / ~/… expansion branch:
+    // `~/.ssh/id_rsa` expands to os.homedir()/.ssh/id_rsa — outside the temp-dir
+    // writeRoots — so it warns (and still executes). Had expansion NOT fired, the
+    // token would anchor to resolveBase (in-root) and produce zero warnings, so
+    // the single warning is itself proof the expansion happened.
+    const handler = createBashHandler('default', root);
+    const result = await handler(
+      { command: 'echo hi ~/.ssh/id_rsa' },
+      createSignal(),
+      { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false },
+    );
+
+    const warnings = escapeWarnings();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(join(os.homedir(), '.ssh/id_rsa'));
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('hi');
+  });
+
   it('does NOT warn when allowAll (bypass) is set, even for an out-of-root path', async () => {
     const handler = createBashHandler('default', root);
     const result = await handler(

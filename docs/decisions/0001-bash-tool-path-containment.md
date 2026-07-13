@@ -93,6 +93,9 @@ work.
   before the containment check.
 - Quoted path tokens and paths abutting common shell punctuation
   (`;`, `,`, `)`).
+- Paths glued to a leading redirection/pipe operator with no space
+  (`>/etc/passwd`, `>>~/.bashrc`, `2>/tmp/err`, `|/tmp/x`) — the leading
+  operator run (and any fd prefix) is stripped before the containment check.
 
 **Not covered** (documented limitations — the reason this is advisory, not a
 boundary):
@@ -100,8 +103,8 @@ boundary):
 - Command / arithmetic substitution: `$(printf /etc/hosts)`, backticks.
 - Environment-variable indirection: `$HOME/.ssh`, `${SECRET_DIR}`.
 - Glob and brace expansion: `/etc/*`, `/a/{b,c}`.
-- Paths synthesized across tokens, here-docs, or quoted paths containing
-  whitespace.
+- Here-docs (`<<EOF`), paths synthesized across tokens, or quoted paths
+  containing whitespace.
 
 Operational impact: a confined session that references an out-of-root path via
 bash still runs, but the operator sees a one-time `[security]` warning and a

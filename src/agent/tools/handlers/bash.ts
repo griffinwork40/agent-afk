@@ -189,9 +189,15 @@ export function createBashHandler(
 
     // Advisory-only containment scan (warn + telemetry, never blocks). Only
     // runs when a context is present — inline/back-compat calls without one
-    // have no roots to check against.
+    // have no roots to check against. Wrapped in try/catch so a scan-internal
+    // throw (e.g. os.homedir() failing) can never invert the "never blocks"
+    // guarantee: an advisory failure must not stop the command from spawning.
     if (context !== undefined) {
-      scanPathsBestEffort(command, context);
+      try {
+        scanPathsBestEffort(command, context);
+      } catch {
+        /* advisory-only — swallow and spawn regardless */
+      }
     }
 
   return new Promise((resolve) => {

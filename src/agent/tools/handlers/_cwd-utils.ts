@@ -213,17 +213,18 @@ export function wouldBeRestricted(
  * Extracts, by whitespace tokenization:
  *   - Absolute paths (tokens beginning with `/`), and
  *   - Home-relative paths (tokens beginning with `~/`, or a bare `~`).
- * Surrounding single/double quotes are stripped, and trailing shell
- * punctuation commonly abutting a path in a command line (`;`, `,`, `)`,
- * `"`, `'`) is trimmed from the tail. Relative tokens, flags (`-x`,
- * `--flag`), and everything else are ignored.
+ * A leading shell redirection/pipe operator glued to the path (`>`, `>>`,
+ * `<`, `|`, `&`, and fd-prefixed forms like `2>`) is stripped first, then a
+ * surrounding single/double quote, then trailing shell punctuation commonly
+ * abutting a path in a command line (`;`, `,`, `)`, `"`, `'`). Relative
+ * tokens, flags (`-x`, `--flag`), and everything else are ignored.
  *
  * EXPLICITLY best-effort. This is NOT a shell parser and deliberately does
  * NOT resolve or catch:
  *   - command/arithmetic substitution: `$(printf /etc/hosts)`, backticks
  *   - environment-variable indirection: `$HOME`, `${SECRET_DIR}`
  *   - glob expansion: `/etc/*`, brace expansion `/a/{b,c}`
- *   - here-docs, redirections split across tokens, or quoted paths
+ *   - here-docs (`<<EOF`), paths synthesized across tokens, or quoted paths
  *     containing whitespace.
  * Building a real shell parser to close those gaps is a deliberate non-goal
  * (issue #354 calls it a rathole). The residual gap is the reason the bash
@@ -238,9 +239,14 @@ export function extractCandidatePaths(command: string): string[] {
   const out: string[] = [];
   for (const rawToken of command.split(/\s+/)) {
     if (rawToken.length === 0) continue;
-    // Strip a matching leading quote and any trailing quote/shell punctuation
-    // that commonly abuts a path token on a command line.
-    let token = rawToken.replace(/^['"]/, '').replace(/['";,)]+$/, '');
+    // Strip a leading shell redirection/pipe operator glued to the path
+    // (`>`, `>>`, `<`, `|`, `&`, and fd-prefixed forms like `2>`), then a
+    // matching leading quote, then any trailing quote/shell punctuation that
+    // commonly abuts a path token on a command line.
+    let token = rawToken
+      .replace(/^\d*[<>|&]+/, '')
+      .replace(/^['"]/, '')
+      .replace(/['";,)]+$/, '');
     if (token.length === 0) continue;
     const isAbsolute = token.startsWith('/');
     const isHomeRelative = token === '~' || token.startsWith('~/');

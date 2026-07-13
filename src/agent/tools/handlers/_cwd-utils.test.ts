@@ -299,6 +299,15 @@ describe('extractCandidatePaths', () => {
     expect(extractCandidatePaths('cat `echo /etc/hosts`').length).toBeGreaterThan(0);
   });
 
+  it('strips a leading redirection/pipe operator glued to a path (#354)', () => {
+    // Operator glued directly to the path with no space — a common redirect
+    // form the earlier extractor dropped (leading `>` failed the `/`/`~` test).
+    expect(extractCandidatePaths('echo x >/etc/passwd')).toEqual(['/etc/passwd']);
+    expect(extractCandidatePaths('echo x >>~/.bashrc')).toEqual(['~/.bashrc']);
+    expect(extractCandidatePaths('cat foo 2>/tmp/err')).toEqual(['/tmp/err']);
+    expect(extractCandidatePaths('a |/tmp/x')).toEqual(['/tmp/x']);
+  });
+
   it('returns an empty array for a command with no path-like tokens', () => {
     expect(extractCandidatePaths('git status')).toEqual([]);
     expect(extractCandidatePaths('')).toEqual([]);
