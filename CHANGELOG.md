@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.39.0] - 2026-07-13
+
+### Added
+- multi-session support — session-registry foundation + /sessions switcher (#562) (da1cd03)
+
 ## [5.38.7] - 2026-07-13
 
 ### Fixed
