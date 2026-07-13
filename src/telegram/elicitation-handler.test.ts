@@ -86,10 +86,14 @@ interface MockCallbackCtx {
 // Test factory helpers
 // ---------------------------------------------------------------------------
 
-/** Build a minimal mock MessageHandler with a real pendingElicitations map. */
+/**
+ * Build a minimal mock MessageHandler with a real pendingElicitations map.
+ * The map is keyed by routeKey (string). For the General route these tests use
+ * (CHAT_ID with no topic), the key is String(CHAT_ID) — see ROUTE_KEY below.
+ */
 function makeMockMessageHandler() {
   return {
-    pendingElicitations: new Map<number, (text: string) => void>(),
+    pendingElicitations: new Map<string, (text: string) => void>(),
   };
 }
 
@@ -101,6 +105,8 @@ function makeMockBot() {
 }
 
 const CHAT_ID = 12345;
+/** routeKey for the General route used across these tests (String(CHAT_ID)). */
+const ROUTE_KEY = String(CHAT_ID);
 
 /** Build an AbortController wired with a controllable signal. */
 function makeAbort() {
@@ -207,10 +213,12 @@ function simulateTextReply(
   chatId: number,
   text: string,
 ) {
-  const resolver = messageHandler.pendingElicitations.get(chatId);
+  // Map is keyed by routeKey; a bare chatId here is a General route → String(chatId).
+  const rk = String(chatId);
+  const resolver = messageHandler.pendingElicitations.get(rk);
   if (!resolver) throw new Error(`No pending elicitation for chat ${chatId}`);
   // MessageHandler.handle() deletes the entry before calling the resolver.
-  messageHandler.pendingElicitations.delete(chatId);
+  messageHandler.pendingElicitations.delete(rk);
   resolver(text);
 }
 
@@ -319,7 +327,7 @@ describe('H2: abort-mid-question (text wait)', () => {
     // Allow the handler to register the pending elicitation
     await Promise.resolve();
 
-    expect(messageHandler.pendingElicitations.has(CHAT_ID)).toBe(true);
+    expect(messageHandler.pendingElicitations.has(ROUTE_KEY)).toBe(true);
 
     // Now abort
     ac.abort();
@@ -341,7 +349,7 @@ describe('H2: abort-mid-question (text wait)', () => {
     ac.abort();
     await resultPromise;
 
-    expect(messageHandler.pendingElicitations.has(CHAT_ID)).toBe(false);
+    expect(messageHandler.pendingElicitations.has(ROUTE_KEY)).toBe(false);
   });
 
   it('abort during number wait resolves with { action: "decline" }', async () => {
@@ -377,7 +385,7 @@ describe('H2: number type — re-prompt on invalid then accept on valid', () => 
     // Allow handler to register and send initial prompt
     await Promise.resolve();
 
-    expect(messageHandler.pendingElicitations.has(CHAT_ID)).toBe(true);
+    expect(messageHandler.pendingElicitations.has(ROUTE_KEY)).toBe(true);
 
     // Send invalid input
     simulateTextReply(messageHandler, CHAT_ID, 'not-a-number');
@@ -389,10 +397,11 @@ describe('H2: number type — re-prompt on invalid then accept on valid', () => 
     expect(sendMessage).toHaveBeenCalledWith(
       CHAT_ID,
       expect.stringMatching(/valid number/i),
+      {},
     );
 
     // Handler re-registered a new interceptor
-    expect(messageHandler.pendingElicitations.has(CHAT_ID)).toBe(true);
+    expect(messageHandler.pendingElicitations.has(ROUTE_KEY)).toBe(true);
 
     // Now send valid number
     simulateTextReply(messageHandler, CHAT_ID, '42');
@@ -417,8 +426,9 @@ describe('H2: number type — re-prompt on invalid then accept on valid', () => 
     expect(sendMessage).toHaveBeenCalledWith(
       CHAT_ID,
       expect.stringMatching(/enter a number/i),
+      {},
     );
-    expect(messageHandler.pendingElicitations.has(CHAT_ID)).toBe(true);
+    expect(messageHandler.pendingElicitations.has(ROUTE_KEY)).toBe(true);
 
     // Clean up: cancel so the promise settles
     simulateTextReply(messageHandler, CHAT_ID, ':cancel');
@@ -442,8 +452,9 @@ describe('H2: number type — re-prompt on invalid then accept on valid', () => 
     expect(sendMessage).toHaveBeenCalledWith(
       CHAT_ID,
       expect.stringMatching(/\u2265 10|>=\s*10|≥\s*10/),
+      {},
     );
-    expect(messageHandler.pendingElicitations.has(CHAT_ID)).toBe(true);
+    expect(messageHandler.pendingElicitations.has(ROUTE_KEY)).toBe(true);
 
     // Clean up
     simulateTextReply(messageHandler, CHAT_ID, ':cancel');
@@ -466,6 +477,7 @@ describe('H2: number type — re-prompt on invalid then accept on valid', () => 
     expect(sendMessage).toHaveBeenCalledWith(
       CHAT_ID,
       expect.stringMatching(/\u2264 100|<=\s*100|≤\s*100/),
+      {},
     );
 
     simulateTextReply(messageHandler, CHAT_ID, ':cancel');
@@ -641,7 +653,7 @@ describe('H2: sendMessage failure → decline', () => {
     const ac = makeAbort();
     await handler(textRequest(), { signal: ac.signal });
 
-    expect(messageHandler.pendingElicitations.has(CHAT_ID)).toBe(false);
+    expect(messageHandler.pendingElicitations.has(ROUTE_KEY)).toBe(false);
   });
 
   it('confirm type: sendMessage failure resolves { action: "decline" }', async () => {
@@ -789,7 +801,7 @@ describe('H1: abort race in re-prompt path', () => {
     // Allow the handler to register the initial interceptor
     await Promise.resolve();
 
-    expect(messageHandler.pendingElicitations.has(CHAT_ID)).toBe(true);
+    expect(messageHandler.pendingElicitations.has(ROUTE_KEY)).toBe(true);
 
     // Trigger invalid input → enters the re-prompt branch → sets resolved=false
     // → fires sendMessage (which aborts inside mock) → guard fires → no .set()
@@ -801,7 +813,7 @@ describe('H1: abort race in re-prompt path', () => {
 
     // The H1 guard must have prevented re-registration
     expect(repromptSendCount).toBeGreaterThanOrEqual(1);
-    expect(messageHandler.pendingElicitations.has(CHAT_ID)).toBe(false);
+    expect(messageHandler.pendingElicitations.has(ROUTE_KEY)).toBe(false);
 
     // Give the promise a chance to settle (it may or may not, depending on
     // microtask ordering; we just verify it does not hang the test).
@@ -835,7 +847,7 @@ describe('H1: abort race in re-prompt path', () => {
 
     await Promise.resolve();
 
-    expect(messageHandler.pendingElicitations.has(CHAT_ID)).toBe(true);
+    expect(messageHandler.pendingElicitations.has(ROUTE_KEY)).toBe(true);
 
     // '1abc' is an invalid multi_choice index → re-prompt path → H1 race
     simulateTextReply(messageHandler, CHAT_ID, '1abc');
@@ -844,7 +856,7 @@ describe('H1: abort race in re-prompt path', () => {
     await Promise.resolve();
 
     expect(repromptSendCount).toBeGreaterThanOrEqual(1);
-    expect(messageHandler.pendingElicitations.has(CHAT_ID)).toBe(false);
+    expect(messageHandler.pendingElicitations.has(ROUTE_KEY)).toBe(false);
 
     await Promise.race([
       resultPromise,
@@ -877,8 +889,9 @@ describe('M2/M3: multi_choice — invalid index format → re-prompt', () => {
     expect(sendMessage).toHaveBeenCalledWith(
       CHAT_ID,
       expect.stringMatching(/invalid selection/i),
+      {},
     );
-    expect(messageHandler.pendingElicitations.has(CHAT_ID)).toBe(true);
+    expect(messageHandler.pendingElicitations.has(ROUTE_KEY)).toBe(true);
 
     // Clean up
     simulateTextReply(messageHandler, CHAT_ID, ':cancel');
@@ -905,6 +918,7 @@ describe('M2/M3: multi_choice — invalid index format → re-prompt', () => {
     expect(sendMessage).toHaveBeenCalledWith(
       CHAT_ID,
       expect.stringMatching(/invalid selection/i),
+      {},
     );
 
     simulateTextReply(messageHandler, CHAT_ID, ':cancel');
@@ -930,6 +944,7 @@ describe('M2/M3: multi_choice — invalid index format → re-prompt', () => {
     expect(sendMessage).toHaveBeenCalledWith(
       CHAT_ID,
       expect.stringMatching(/invalid selection/i),
+      {},
     );
 
     simulateTextReply(messageHandler, CHAT_ID, ':cancel');
@@ -1086,8 +1101,9 @@ describe('text type — :cancel and allow_skip', () => {
     expect(sendMessage).toHaveBeenCalledWith(
       CHAT_ID,
       expect.stringMatching(/please enter a response|:cancel/i),
+      {},
     );
-    expect(messageHandler.pendingElicitations.has(CHAT_ID)).toBe(true);
+    expect(messageHandler.pendingElicitations.has(ROUTE_KEY)).toBe(true);
 
     simulateTextReply(messageHandler, CHAT_ID, ':cancel');
     const result = await resultPromise;
@@ -1173,7 +1189,7 @@ describe('resolved guard — no double-resolve', () => {
     await Promise.resolve();
 
     // Pull the resolver directly to simulate simultaneous delivery
-    const resolver = messageHandler.pendingElicitations.get(CHAT_ID)!;
+    const resolver = messageHandler.pendingElicitations.get(ROUTE_KEY)!;
     messageHandler.pendingElicitations.delete(CHAT_ID);
 
     // Call resolver twice (race simulation)

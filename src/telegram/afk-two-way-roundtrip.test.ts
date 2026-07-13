@@ -46,8 +46,8 @@ function sleep(ms: number): Promise<void> {
  * two pending-resolver maps `makeTelegramElicitationHandler` populates.
  */
 function makeElicitStubs(chatId: number) {
-  const pendingElicitations = new Map<number, (text: string) => void>();
-  const ledgerOriginatedPendingChats = new Set<number>();
+  const pendingElicitations = new Map<string, (text: string) => void>();
+  const ledgerOriginatedPendingChats = new Set<string>();
   const sentMessages: string[] = [];
   const bot = {
     action: vi.fn(),
@@ -107,7 +107,7 @@ describe('two-way AFK round-trip (real daemon ↔ real REPL over one ledger)', (
 
     // The daemon tail should observe the elicitation and install the resolver.
     await sleep(300);
-    const resolver = pendingElicitations.get(chatId);
+    const resolver = pendingElicitations.get(String(chatId));
     expect(resolver).toBeDefined();
 
     // Operator answers on the phone. The daemon signs + writes back the response;

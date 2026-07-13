@@ -12,6 +12,7 @@ import { withTypingIndicator } from '../typing-indicator.js';
 import { StreamTimeoutError } from '../stream-timeout-error.js';
 import { registerChatCommands } from './registration.js';
 import { HookBlockedError } from '../../utils/errors.js';
+import { type TelegramRoute, routeFromCtx, routeKey } from '../route.js';
 import { senderPrefix } from '../sender-attribution.js';
 import { replyContextPrefix, type RepliedMessage } from '../reply-context.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
@@ -158,7 +159,14 @@ export class MessageHandler {
   private static readonly MAX_QUEUE_DEPTH = 5;
 
   private sessionManager: SessionManager;
-  private messageQueues = new Map<number, Array<QueueItem>>();
+  /**
+   * Per-ROUTE message queues. Keyed by `routeKey(route)` — General / topics-off
+   * normalizes to `String(chatId)` (byte-identical to the pre-topics key), a
+   * real topic to `${chatId}:${threadId}`. This is a leak-critical map: a
+   * message queued in topic A must never drain into topic B's session.
+   */
+  private messageQueues = new Map<string, Array<QueueItem>>();
+  /** Chats (NOT routes) with dynamic commands registered — Telegram scopes setMyCommands per chat, not per topic. */
   private registeredCommandChats: Set<number>;
   private log: LogFn;
   private bot: Telegraf;
@@ -220,21 +228,26 @@ export class MessageHandler {
 
   /**
    * Active ask_question elicitations waiting for a text reply.
-   * Keys are chat IDs; values are resolver functions that consume
-   * the next plain-text message from that chat.
+   * Keys are ROUTE keys (`routeKey(route)`); values are resolver functions
+   * that consume the next plain-text message from that route.
+   *
+   * Invariant (leak fix): keying by route — not by chatId — is what isolates
+   * topics. An elicitation raised in topic A registers under A's routeKey and
+   * is resolved ONLY by a message whose route also resolves to A; a message in
+   * topic B (or General) resolves to a different key and cannot consume it.
    *
    * Answer consumed by active ask_question elicitation — never reaches
    * session message queue.
    */
-  public pendingElicitations = new Map<number, (text: string) => void>();
+  public pendingElicitations = new Map<string, (text: string) => void>();
 
   /**
-   * Chat IDs whose active pendingElicitations entry was registered by a
+   * Route keys whose active pendingElicitations entry was registered by a
    * ledger-originated (daemon-watch) elicitation rather than a session-local
    * ask_question call.
    *
    * Invariant: the idle-guard in handle() must fire the resolver for these
-   * chats even when no AgentSession is active for the chat (the REPL session
+   * routes even when no AgentSession is active for the route (the REPL session
    * lives in a different process). Without this bypass, every phone reply to a
    * ledger-originated elicitation is silently dropped because the guard sees
    * no in-flight session and treats the pending entry as stale.
@@ -244,7 +257,7 @@ export class MessageHandler {
    * the watch loop), and deleted when the resolver fires or is aborted — exactly
    * mirroring the pendingElicitations Map lifecycle.
    */
-  public ledgerOriginatedPendingChats = new Set<number>();
+  public ledgerOriginatedPendingChats = new Set<string>();
 
   /**
    * Chat IDs under the opt-in "tag-only" response policy. In these chats a
@@ -280,11 +293,12 @@ export class MessageHandler {
    * implemented here.
    */
   async handlePhoto(ctx: Context): Promise<void> {
-    const chatId = ctx.chat?.id;
+    const route = routeFromCtx(ctx);
+    const chatId = route?.chatId;
     const msg = ctx.message as Message.PhotoMessage | undefined;
     const photo = msg?.photo;
 
-    if (!chatId || !photo?.length) {
+    if (!route || !chatId || !photo?.length) {
       this.log(`Photo handling: missing chatId or photo array for chat ${chatId ?? '(unknown)'}`);
       return;
     }
@@ -346,9 +360,10 @@ export class MessageHandler {
       // M3+M6: session lookup and queue-depth check happen before getFileLink /
       // download so that allowlist-burst rejections don't burn Telegram API quota
       // or trigger a full CDN download for a message that will be dropped anyway.
-      const session = await this.sessionManager.getSession(chatId);
+      const session = await this.sessionManager.getSession(route);
 
-      // Register dynamic commands for this chat (non-blocking)
+      // Register dynamic commands for this chat (non-blocking). Chat-scoped, so
+      // keyed by chatId even when the message arrived in a topic.
       registerChatCommands(this.bot, chatId, session, this.registeredCommandChats, this.log).catch(err =>
         this.log('Failed to register chat commands:', err)
       );
@@ -356,7 +371,7 @@ export class MessageHandler {
       if (session.state !== 'idle' || alreadyClaimed) {
         // Check queue capacity before downloading: if the queue is already full we
         // can reject immediately without spending Telegram API quota on getFileLink.
-        const queue = this.messageQueues.get(chatId);
+        const queue = this.messageQueues.get(routeKey(route));
         if ((queue?.length ?? 0) >= MessageHandler.MAX_QUEUE_DEPTH) {
           await ctx.reply('⏳ Queue full. Please wait for your messages to be processed.');
           return;
@@ -477,12 +492,12 @@ export class MessageHandler {
       await registerInboundImageBlocks(contentBlocks, session.sessionId, [{ mediaType: media_type, bytes }]);
 
       if (session.state !== 'idle' || alreadyClaimed) {
-        const depth = this.enqueuePhoto(chatId, ctx, contentBlocks);
+        const depth = this.enqueuePhoto(route, ctx, contentBlocks);
         if (depth !== false) await ctx.reply(formatQueued(depth));
         return;
       }
 
-      await this.processOne(chatId, ctx, contentBlocks);
+      await this.processOne(route, ctx, contentBlocks);
     } catch (error) {
       // Redact any embedded bot token before logging: getFileLink() returns URLs of the form
       // https://api.telegram.org/file/bot<TOKEN>/<path>, and HTTP client errors frequently
@@ -516,12 +531,14 @@ export class MessageHandler {
    * Handle user text messages
    */
   async handle(ctx: Context): Promise<void> {
-    const chatId = ctx.chat?.id;
+    const route = routeFromCtx(ctx);
+    const chatId = route?.chatId;
     const messageText = (ctx.message as Message.TextMessage).text;
 
-    if (!chatId || !messageText) {
+    if (!route || !chatId || !messageText) {
       return;
     }
+    const key = routeKey(route);
 
     this.log(`📬 Message from chat ID: ${chatId}`);
 
@@ -570,25 +587,28 @@ export class MessageHandler {
     //      live session state here catches that case: a freshly-created session
     //      is always 'idle', so we delete the stale entry and fall through to
     //      processOne instead of routing to a dead resolver.
-    const elicitResolver = this.pendingElicitations.get(chatId);
+    // Resolve the elicitation by ROUTE key — this is the topic-isolation seam:
+    // a topic-A elicitation registered under A's key is never consumed by a
+    // topic-B message (which resolves to a different key).
+    const elicitResolver = this.pendingElicitations.get(key);
     if (elicitResolver) {
       // Case 1: ledger-originated bypass — fire resolver without session check.
-      if (this.ledgerOriginatedPendingChats.has(chatId)) {
-        this.pendingElicitations.delete(chatId);
-        this.ledgerOriginatedPendingChats.delete(chatId);
+      if (this.ledgerOriginatedPendingChats.has(key)) {
+        this.pendingElicitations.delete(key);
+        this.ledgerOriginatedPendingChats.delete(key);
         elicitResolver(elicitationAnswer);
         return;
       }
       // Case 2: session-local — fire only when the session is genuinely busy.
-      const existingSession = this.sessionManager.getSessionIfExists(chatId);
+      const existingSession = this.sessionManager.getSessionIfExists(route);
       if (existingSession && existingSession.state !== 'idle') {
-        this.pendingElicitations.delete(chatId);
+        this.pendingElicitations.delete(key);
         elicitResolver(elicitationAnswer);
         return;
       }
       // Stale entry — session was reset while elicitation was in flight.
-      this.log('[message] dropping stale pendingElicitation for chatId', chatId);
-      this.pendingElicitations.delete(chatId);
+      this.log('[message] dropping stale pendingElicitation for route', key);
+      this.pendingElicitations.delete(key);
     }
 
     // Tag-only response policy: in a configured chat, ignore any non-command
@@ -634,9 +654,9 @@ export class MessageHandler {
       alreadyClaimed = this.isClaimed(chatId);
       if (!alreadyClaimed) this.reserveClaim(chatId);
 
-      const session = await this.sessionManager.getSession(chatId);
+      const session = await this.sessionManager.getSession(route);
 
-      // Register dynamic commands for this chat (non-blocking)
+      // Register dynamic commands for this chat (non-blocking). Chat-scoped.
       registerChatCommands(this.bot, chatId, session, this.registeredCommandChats, this.log).catch(err =>
         this.log('Failed to register chat commands:', err)
       );
@@ -644,12 +664,12 @@ export class MessageHandler {
       const content = attributedMessageText;
 
       if (session.state !== 'idle' || alreadyClaimed) {
-        const depth = this.enqueueMessage(chatId, ctx, content);
+        const depth = this.enqueueMessage(route, ctx, content);
         if (depth !== false) await ctx.reply(formatQueued(depth));
         return;
       }
 
-      await this.processOne(chatId, ctx, content);
+      await this.processOne(route, ctx, content);
     } catch (error) {
       this.log('Message handling error:', error);
       // Note: 'session is busy' is no longer handled here — that race is covered
@@ -675,12 +695,15 @@ export class MessageHandler {
   }
 
   /**
-   * Process clear command when already idle (called from handlers)
+   * Process clear command when already idle (called from handlers).
+   * Resets the session for THIS route only; the chat's other topics are
+   * untouched. Command re-registration is chat-scoped (registeredCommandChats
+   * keyed by chatId).
    */
-  async processClearDirect(chatId: number, ctx: Context): Promise<void> {
+  async processClearDirect(route: TelegramRoute, ctx: Context): Promise<void> {
     try {
-      await this.sessionManager.resetSession(chatId);
-      this.registeredCommandChats.delete(chatId);
+      await this.sessionManager.resetSession(route);
+      this.registeredCommandChats.delete(route.chatId);
       await ctx.reply(formatClear());
     } catch (error) {
       this.log('Clear error:', error);
@@ -701,13 +724,13 @@ export class MessageHandler {
    * actually runs once the session is idle, instead of surfacing the misleading
    * "Nothing to compact (session-busy)" no-op and dropping the request.
    */
-  private async processCompactDirect(chatId: number, ctx: Context): Promise<void> {
+  private async processCompactDirect(route: TelegramRoute, ctx: Context): Promise<void> {
     // See processOne: when we re-enqueue because the session is busy, the active
     // turn's own finally will drain the item we pushed. Draining here too would
     // shift that item and re-enter immediately → busy-spin cascade.
     let reEnqueued = false;
     try {
-      const session = await this.sessionManager.getSession(chatId);
+      const session = await this.sessionManager.getSession(route);
       const hookRegistry = session.hookRegistry;
       // Keep the "typing…" indicator alive across the PreCompact hook and the
       // model-call compaction, which can outlast the ~5s one-shot expiry.
@@ -725,7 +748,7 @@ export class MessageHandler {
       if (result.reason === 'session-busy') {
         // Session became busy between drain-start and our compact() call (TOCTOU).
         // Re-enqueue so the compact isn't silently dropped with a confusing no-op.
-        this.enqueueCompact(chatId, ctx);
+        this.enqueueCompact(route, ctx);
         reEnqueued = true;
         return;
       }
@@ -755,21 +778,28 @@ export class MessageHandler {
       // Only drain when we did NOT re-enqueue — the active turn's finally will
       // drain the re-enqueued compact; draining here too causes a cascade.
       if (!reEnqueued) {
-        this.drainQueue(chatId).catch(err => this.log('Drain error:', err));
+        this.drainQueue(route).catch(err => this.log('Drain error:', err));
       }
     }
+  }
+
+  /** The queue for a route, creating it on first use. Keyed by routeKey. */
+  private queueFor(route: TelegramRoute): Array<QueueItem> {
+    const key = routeKey(route);
+    let queue = this.messageQueues.get(key);
+    if (!queue) {
+      queue = [];
+      this.messageQueues.set(key, queue);
+    }
+    return queue;
   }
 
   /**
    * Enqueue a text message for later processing.
    * Returns the 1-based queue depth on success, or false if the queue is full.
    */
-  private enqueueMessage(chatId: number, ctx: Context, text: string): number | false {
-    let queue = this.messageQueues.get(chatId);
-    if (!queue) {
-      queue = [];
-      this.messageQueues.set(chatId, queue);
-    }
+  private enqueueMessage(route: TelegramRoute, ctx: Context, text: string): number | false {
+    const queue = this.queueFor(route);
     if (queue.length >= MessageHandler.MAX_QUEUE_DEPTH) {
       ctx.reply('⏳ Queue full. Please wait for your messages to be processed.').catch(() => {});
       return false;
@@ -782,12 +812,8 @@ export class MessageHandler {
    * Enqueue a photo message for later processing.
    * Returns the 1-based queue depth on success, or false if the queue is full.
    */
-  private enqueuePhoto(chatId: number, ctx: Context, content: ContentBlockParam[]): number | false {
-    let queue = this.messageQueues.get(chatId);
-    if (!queue) {
-      queue = [];
-      this.messageQueues.set(chatId, queue);
-    }
+  private enqueuePhoto(route: TelegramRoute, ctx: Context, content: ContentBlockParam[]): number | false {
+    const queue = this.queueFor(route);
     if (queue.length >= MessageHandler.MAX_QUEUE_DEPTH) {
       ctx.reply('⏳ Queue full. Please wait for your messages to be processed.').catch(() => {});
       return false;
@@ -799,25 +825,15 @@ export class MessageHandler {
   /**
    * Enqueue a clear command for later processing
    */
-  enqueueClear(chatId: number, ctx: Context): void {
-    let queue = this.messageQueues.get(chatId);
-    if (!queue) {
-      queue = [];
-      this.messageQueues.set(chatId, queue);
-    }
-    queue.push({ type: 'clear', ctx });
+  enqueueClear(route: TelegramRoute, ctx: Context): void {
+    this.queueFor(route).push({ type: 'clear', ctx });
   }
 
   /**
    * Enqueue a compact command for later processing
    */
-  enqueueCompact(chatId: number, ctx: Context): void {
-    let queue = this.messageQueues.get(chatId);
-    if (!queue) {
-      queue = [];
-      this.messageQueues.set(chatId, queue);
-    }
-    queue.push({ type: 'compact', ctx });
+  enqueueCompact(route: TelegramRoute, ctx: Context): void {
+    this.queueFor(route).push({ type: 'compact', ctx });
   }
 
   /**
@@ -840,7 +856,8 @@ export class MessageHandler {
    * claimedChats field doc) composes this turn's reservation with the outer
    * handle()/handlePhoto() guard and any drain re-entry.
    */
-  private async processOne(chatId: number, ctx: Context, content: string | ContentBlockParam[]): Promise<void> {
+  private async processOne(route: TelegramRoute, ctx: Context, content: string | ContentBlockParam[]): Promise<void> {
+    const chatId = route.chatId;
     // Reserve this turn's slot synchronously, before the first `await` below, so
     // the slot is held continuously from dispatch through the finally's drain
     // hand-off. Paired 1:1 with the releaseClaim in the finally.
@@ -852,7 +869,7 @@ export class MessageHandler {
     // which shifts the item we just pushed and calls processOne again → cascade.
     let reEnqueued = false;
     try {
-      const session = await this.sessionManager.getSession(chatId);
+      const session = await this.sessionManager.getSession(route);
       // User text for the stored turn record: joined text blocks (caption) for
       // content-block (photo) messages, the raw string otherwise.
       const userText = typeof content === 'string'
@@ -866,7 +883,7 @@ export class MessageHandler {
           // Record the completed turn into the shared session store so the CLI
           // can `--resume <name>` this Telegram conversation. Best-effort inside.
           onComplete: (assistantText, metadata) => {
-            this.sessionManager.recordTelegramTurn(chatId, userText, assistantText, metadata);
+            this.sessionManager.recordTelegramTurn(route, userText, assistantText, metadata);
           },
         }),
       );
@@ -877,8 +894,8 @@ export class MessageHandler {
         // Session became busy between the caller's idle-check and our getSession call.
         // Re-enqueue the item so it isn't silently dropped.
         const depth = typeof content === 'string'
-          ? this.enqueueMessage(chatId, ctx, content)
-          : this.enqueuePhoto(chatId, ctx, content);
+          ? this.enqueueMessage(route, ctx, content)
+          : this.enqueuePhoto(route, ctx, content);
         if (depth !== false) await ctx.reply(formatQueued(depth));
         reEnqueued = true;
         return;
@@ -912,28 +929,28 @@ export class MessageHandler {
       // finally will drain the item we pushed; calling drain here too causes a
       // cascade.
       if (!reEnqueued) {
-        this.drainQueue(chatId).catch(err => this.log('Drain error:', err));
+        this.drainQueue(route).catch(err => this.log('Drain error:', err));
       }
       this.releaseClaim(chatId);
     }
   }
 
   /**
-   * Process the next queued item for this chat, if any.
+   * Process the next queued item for this route, if any.
    * Public so bot.ts can call it directly after /compact completes.
    */
-  async drainQueue(chatId: number): Promise<void> {
-    const queue = this.messageQueues.get(chatId);
+  async drainQueue(route: TelegramRoute): Promise<void> {
+    const queue = this.messageQueues.get(routeKey(route));
     if (!queue?.length) return;
     const item = queue.shift()!;
     if (item.type === 'message') {
-      await this.processOne(chatId, item.ctx, item.text);
+      await this.processOne(route, item.ctx, item.text);
     } else if (item.type === 'photo') {
-      await this.processOne(chatId, item.ctx, item.content);
+      await this.processOne(route, item.ctx, item.content);
     } else if (item.type === 'compact') {
-      await this.processCompactDirect(chatId, item.ctx);
+      await this.processCompactDirect(route, item.ctx);
     } else {
-      await this.processClearDirect(chatId, item.ctx);
+      await this.processClearDirect(route, item.ctx);
     }
   }
 }
