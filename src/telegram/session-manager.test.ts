@@ -912,3 +912,77 @@ describe('SessionManager — session switcher (/sessions, /switch, /new)', () =>
     expect(manager.listChatSessions(805).map((s) => s.sessionId).sort()).toEqual(['sdk-fresh', 'sdk-old']);
   });
 });
+
+describe('SessionManager — per-route isolation (native topics)', () => {
+  // Step 6: two topics in one chat are concurrent, fully-isolated sessions.
+  // RouteTarget = TelegramRoute | number; a bare number === General topic, so
+  // General must stay byte-identical to the pre-topics behavior.
+  useUnsetAfkHome();
+
+  class MockSessionWithId implements IAgentSession {
+    state: SessionState = 'idle';
+    constructor(readonly sessionId?: string) {}
+    async sendMessage(content: string) {
+      return { role: 'assistant' as const, content: `Echo: ${content}`, timestamp: new Date() };
+    }
+    async *getOutputStream() { yield { type: 'done' as const }; }
+    abort(_reason: string): void { /* no-op */ }
+    async close() { /* no-op */ }
+    async reset() { /* no-op */ }
+  }
+
+  let testDataDir: string;
+  let tmpHome: string;
+  let originalHome: string | undefined;
+  let manager: SessionManager;
+
+  beforeEach(() => {
+    const entropy = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    testDataDir = join(tmpdir(), `afk-tg-iso-data-${entropy}`);
+    originalHome = process.env['HOME'];
+    tmpHome = join(tmpdir(), `afk-tg-iso-home-${entropy}`);
+    process.env['HOME'] = tmpHome;
+    let n = 0;
+    manager = new SessionManager({
+      dataDir: testDataDir,
+      apiKey: 'test-key',
+      defaultModel: 'sonnet',
+      createSession: async () => new MockSessionWithId(`sdk-live-${n++}`),
+    });
+  });
+
+  afterEach(async () => {
+    await manager.closeAll().catch(() => {});
+    if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
+    if (existsSync(testDataDir)) rmSync(testDataDir, { recursive: true, force: true });
+    if (originalHome !== undefined) process.env['HOME'] = originalHome;
+  });
+
+  test('two topics in one chat get distinct, concurrent sessions', async () => {
+    const general = { chatId: 900 };
+    const topic = { chatId: 900, threadId: 7 };
+
+    const sGeneral = await manager.getSession(general);
+    const sTopic = await manager.getSession(topic);
+
+    // Distinct live sessions coexist for the same chat — no cross-topic sharing.
+    expect(sGeneral).not.toBe(sTopic);
+    // Both stay live simultaneously (opening the topic did not tear down General).
+    expect(await manager.getSession(general)).toBe(sGeneral);
+    expect(manager.getSessionIfExists(topic)).toBe(sTopic);
+  });
+
+  test('per-route turns persist as separate resumable sidecars under the same chat', () => {
+    manager.recordTelegramTurn({ chatId: 900 }, 'general work', 'a', { sessionId: 'sdk-gen' });
+    manager.recordTelegramTurn({ chatId: 900, threadId: 7 }, 'topic work', 'b', { sessionId: 'sdk-top' });
+
+    // Both belong to chat 900 (listed together) but are distinct conversations.
+    expect(manager.listChatSessions(900).map((s) => s.sessionId).sort()).toEqual(['sdk-gen', 'sdk-top']);
+  });
+
+  test('General route is back-compat with the bare chatId (number === { chatId })', () => {
+    manager.recordTelegramTurn(901, 'hello', 'hi', { sessionId: 'sdk-901' });
+    // The explicit General route resolves the same chat's sessions as the bare number.
+    expect(manager.listChatSessions({ chatId: 901 }).map((s) => s.sessionId)).toEqual(['sdk-901']);
+  });
+});
