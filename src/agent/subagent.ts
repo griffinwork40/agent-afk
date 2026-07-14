@@ -198,6 +198,16 @@ export interface ForkSubagentOptions<T = unknown> {
    */
   parentId?: string;
   /**
+   * Optional first-80-chars slice of the dispatch prompt, forwarded verbatim
+   * into the `subagent_lifecycle.started` trace event's `promptHead` field for
+   * at-a-glance forensics (WHAT was the child asked to do). The prompt itself
+   * is not a `forkSubagent` argument — it arrives later via `handle.run(prompt)`
+   * — so the raw agent-dispatch site (which HAS the prompt) passes this
+   * pre-sliced hint. Purely observational: never affects execution. Omitted for
+   * fork sites with no prompt in scope.
+   */
+  promptHead?: string;
+  /**
    * When true, overrides `config.onElicitation` with `DENY_ELICITATION` so
    * background subagents never stall on an interactive permission prompt.
    * Propagates transitively: a bg parent's DENY_ELICITATION is inherited by
@@ -893,6 +903,15 @@ export class SubagentManager {
       ...(childConfig.tools?.allowedTools
         ? { allowedTools: [...childConfig.tools.allowedTools] }
         : {}),
+      // Observability: WHAT was this child asked to do + WHICH role. promptHead
+      // is the caller-supplied prompt slice (re-clamped to 80 to honour the
+      // payload contract regardless of caller input); agentType is the already-
+      // computed effective render label. Both omitted when unavailable so the
+      // schema's `.optional()` fields stay absent rather than empty-valued.
+      ...(options.promptHead && options.promptHead.trim() !== ''
+        ? { promptHead: options.promptHead.slice(0, 80) }
+        : {}),
+      ...(effectiveAgentType ? { agentType: effectiveAgentType } : {}),
     });
 
     await appendRoutingDecision({

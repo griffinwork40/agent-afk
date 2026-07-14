@@ -73,7 +73,14 @@ export const TOOL_FAILURE_CLASSES = [
  *
  * Set at the site that produced the error:
  *   - `policy-refusal`       — browser handler refused nav (domain allowlist). NOT a bug.
- *   - `timeout`              — browser navigation/action exceeded its deadline.
+ *   - `timeout`              — a bounded operation exceeded its deadline: a browser
+ *                              navigation/action past its per-action timeout, OR a
+ *                              forked sub-agent whose own wall-clock budget
+ *                              (SUBAGENT_DEFAULT_TIMEOUT_MS / config.timeoutMs) expired
+ *                              and `withTimeout` aborted its controller. Annotated on the
+ *                              subagent_lifecycle `failed` payload (own-budget expiry)
+ *                              and, for a cascaded ancestor-timeout, via the `cancelled`
+ *                              payload's `timeout` flag.
  *   - `permission-denied`    — permission gate or read-only-skill bash gate denied the call.
  *   - `hook-block`           — a PreToolUse hook returned `decision: 'block'`.
  *   - `abort`                — the call's AbortSignal was already fired.
@@ -187,6 +194,21 @@ export interface SubagentStartedPayload {
   allowedTools?: readonly string[];
   /** SHA-256 hex digest of the child's system prompt, for audit. */
   systemPromptHash?: string;
+  /**
+   * First 80 chars of the dispatch prompt, for at-a-glance forensics — lets a
+   * trace reader see WHAT a child was asked to do without opening the child's
+   * own transcript. Absent when the fork site had no prompt in scope (e.g. a
+   * skill/compose fork whose prompt is threaded later). Truncated at the
+   * emit site.
+   */
+  promptHead?: string;
+  /**
+   * The effective agent type / render label for this fork (e.g. a named
+   * `research-agent`, a compose node label, or a prompt-derived slice). Present
+   * so a reader can attribute a lifecycle event to a role without cross-refing
+   * the routing telemetry. Absent when no label was resolved.
+   */
+  agentType?: string;
 }
 
 export interface SubagentSucceededPayload {
@@ -212,6 +234,14 @@ export interface SubagentFailedPayload {
   errorMessage: string;
   /** 0 when no partial output was captured before the failure. */
   partialOutputBytes: number;
+  /**
+   * Coarse failure classification, mirroring {@link ToolFailureClass}. Set to
+   * `'timeout'` when this failure is the handle's OWN wall-clock budget expiry
+   * (a `TimeoutError` abort on its controller that is NOT a cascade) — lets a
+   * trace reader tell a guillotined-by-budget child apart from a genuine error.
+   * Absent for unclassified failures (the pre-classification default).
+   */
+  failureClass?: ToolFailureClass;
 }
 
 export interface SubagentCancelledPayload {
@@ -222,6 +252,14 @@ export interface SubagentCancelledPayload {
    * - `'explicit'` — `cancel()` was called directly on this handle.
    */
   source: 'cascade' | 'explicit';
+  /**
+   * `true` when the cascade that cancelled this handle originated from a
+   * `TimeoutError` (an ANCESTOR's wall-clock budget expired and the abort
+   * cascaded down to this descendant). Distinguishes a timeout-driven cascade
+   * cancel from an ordinary explicit/parent cancel. Only ever set on
+   * `source: 'cascade'`; absent otherwise.
+   */
+  timeout?: boolean;
 }
 
 export type SubagentLifecyclePayload =
