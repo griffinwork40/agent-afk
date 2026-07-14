@@ -30,6 +30,7 @@ import { createDefaultHookRegistry } from '../default-hook-registry.js';
 import { loadHooksConfig } from '../hooks/config-loader.js';
 import { createDefaultTraceWriter } from '../trace/factory.js';
 import { MemoryStore, injectHotMemory } from '../memory/index.js';
+import { injectCompanionPrimer } from '../companion/index.js';
 import { McpManager, loadMcpConfig } from '../mcp/index.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
 import { emitSessionPhase } from '../trace/emit.js';
@@ -596,7 +597,7 @@ export class CronScheduler {
     try {
       const session = this.options.sessionFactory
         ? this.options.sessionFactory(config)
-        : new AgentSession(injectHotMemory(config));
+        : new AgentSession(injectCompanionPrimer(injectHotMemory(config)));
       return { session, memoryStore, ...(mcpManager !== undefined ? { mcpManager } : {}) };
     } catch (err) {
       if (mcpManager) {

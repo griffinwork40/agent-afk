@@ -5,6 +5,7 @@
 
 import type { IAgentSession, AgentConfig, AgentModelInput, ThinkingConfig, EffortLevel, ResponseMetadata } from '../agent/types.js';
 import { injectHotMemory } from '../agent/memory/index.js';
+import { injectCompanionPrimer } from '../agent/companion/index.js';
 // Shared session-persistence utilities. These live under src/cli/ but are
 // surface-agnostic (pure functions over SessionStats / sidecar files); the
 // Telegram bot reuses them so a chat session lands in the SAME
@@ -240,7 +241,7 @@ export class SessionManager {
         );
       }
 
-      const session = await this.options.createSession(injectHotMemory(config));
+      const session = await this.options.createSession(injectCompanionPrimer(injectHotMemory(config)));
       this.sessions.set(chatId, session);
       this.sessionData.set(chatId, data);
       // Consume the staged resume only after a successful build: a thrown

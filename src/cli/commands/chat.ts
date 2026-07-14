@@ -9,6 +9,7 @@ import { AgentSession } from '../../agent/session.js';
 import { createDefaultHookRegistry } from '../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
 import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
+import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import { unconfiguredSlotError } from '../../agent/session/model-slots.js';
 import { formatDuration, formatCost, formatTokens } from '../format-utils.js';
@@ -687,7 +688,7 @@ export function registerChatCommand(program: Command): void {
         // Witness layer: `trace` was opened above (before executors) so
         // SkillExecutor could be wired with traceWriter; reuse it here for
         // the AgentSession.
-        session = new AgentSession(injectHotMemory({
+        session = new AgentSession(injectCompanionPrimer(injectHotMemory({
           model: sessionModel,
           // User-facing surface for trace `origin` attribution. One-shot
           // `afk chat` is a CLI entrypoint → 'cli'.
@@ -738,7 +739,7 @@ export function registerChatCommand(program: Command): void {
           // Wire resume/session-id config when a session flag is set.
           ...resumeConfig,
           provider,
-        }));
+        })));
 
         boundSession = session;
 

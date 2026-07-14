@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**123 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**124 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -78,6 +78,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 
 | Name | Type | Required | Default | Example | Description |
 |------|------|----------|---------|---------|-------------|
+| `AFK_COMPANION_PRIMER` | string |  |  | `/Users/me/Projects/afk-companion/PRIMER.md` | Opt-in: absolute path to a single companion-primer file. When set, its content is bounded (capped, fenced as <companion-primer>) and appended to the system prompt at session start for top-level sessions (chat/REPL/telegram/daemon), as lower-authority "reflections, not facts" context. Unset (default) = no-op. Only the one named file is ever read — never a directory or repo walk. |
 | `AFK_FRAMEWORK_DIR` | string |  |  |  | Override the AFK agent-framework directory used for telemetry and briefs. Default: $AFK_HOME/agent-framework/. |
 | `AFK_HOME` | string |  | `~/.afk` | `/opt/afk` | Override the AFK home directory. Default: ~/.afk/. |
 | `AFK_STATE_DIR` | string |  |  |  | Override the entire AFK state tier (sessions/, todos/, transcripts/, memory/, daemon/, etc.), not just one subdirectory. Must be an absolute path (not /). Default: $AFK_HOME/state/. |
