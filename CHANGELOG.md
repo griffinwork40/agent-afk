@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.51.1] - 2026-07-14
+
+### Fixed
+- env-configurable timeout + raise default to 45m; observable forked children (#610) (33bb4bf)
+
+### Changed
+- AFK mode: let an away operator actually go AFK (elicitation fixes + Telegram-native host v1) (#608) (cdff313)
+
 ## [5.51.0] - 2026-07-14
 
 ### Added
