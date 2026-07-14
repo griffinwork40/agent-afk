@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.45.0] - 2026-07-14
+
+### Added
+- auth-aware model availability labeling (Phase 2; follows #548, now merged) (#588) (2c4a723)
+
 ## [5.44.0] - 2026-07-14
 
 ### Added
