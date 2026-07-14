@@ -83,6 +83,7 @@ import {
   SUBAGENT_BACKGROUND_TIMEOUT_MS,
   resolveSubagentTimeoutMs,
 } from './subagent.js';
+import { ENV_REGISTRY } from '../config/env.js';
 
 function lastSessionState(): SessionState {
   return shared.sessions[shared.sessions.length - 1].state;
@@ -846,6 +847,14 @@ describe('SubagentManager', () => {
         process.env[KEY] = 'not-a-number';
         expect(resolveSubagentTimeoutMs()).toBe(SUBAGENT_DEFAULT_TIMEOUT_MS);
       });
+
+      it('keeps the ENV_REGISTRY documented default in lockstep with the constant', () => {
+        // Guards against SUBAGENT_DEFAULT_TIMEOUT_MS drifting from the registry
+        // `default` string that feeds docs/env-registry.{json,md}. A mismatch
+        // means the published default no longer matches the code default.
+        const entry = ENV_REGISTRY.find((e) => e.name === 'AFK_SUBAGENT_TIMEOUT_MS');
+        expect(entry?.default).toBe(String(SUBAGENT_DEFAULT_TIMEOUT_MS));
+      });
     });
 
     // Fork-site precedence: the env default is consulted ONLY when the caller
@@ -907,17 +916,47 @@ describe('SubagentManager', () => {
         }
       });
 
-      it('leaves the background carve-out unaffected (explicit 0 stays unbounded)', async () => {
+      it('lets an explicit timeoutMs:0 stay unbounded regardless of the env override', async () => {
         vi.useFakeTimers();
         try {
           process.env[KEY] = '5000'; // small env default…
           const mgr = new SubagentManager();
           const h = await mgr.forkSubagent({
             parent: { sessionId: 'p' },
-            // Background dispatch stamps timeoutMs:0 (unbounded) — env must not
-            // re-cap it. (0 is the SubagentExecutor's carve-out for bg mode.)
+            // Explicit `0` is the caller's unbounded escape hatch — the env
+            // override must not re-cap it: `0 ?? resolveSubagentTimeoutMs()`
+            // short-circuits on the explicit value, and withTimeout(0) installs
+            // no timer.
             config: { model: 'sonnet', timeoutMs: 0 },
           });
+          lastSessionState().replyDelayMs = 60_000;
+
+          const run = h.run('slow');
+          await vi.advanceTimersByTimeAsync(61_000);
+          const msg = await run;
+          expect(msg.content).toBe('ok:slow');
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('does not let the env override re-cap the background carve-out (SUBAGENT_BACKGROUND_TIMEOUT_MS wins)', async () => {
+        // The real background carve-out: the SubagentExecutor stamps
+        // config.timeoutMs = SUBAGENT_BACKGROUND_TIMEOUT_MS (60 min) for
+        // background dispatches. That explicit value must win over a small
+        // AFK_SUBAGENT_TIMEOUT_MS via the fork-site `??`, so a background child
+        // is NOT guillotined at the (far smaller) env budget. (Distinct from the
+        // explicit-0 case above — background is BOUNDED at 60 min, not unbounded.)
+        vi.useFakeTimers();
+        try {
+          process.env[KEY] = '5000'; // 5s env default — far below the 60-min bg budget
+          const mgr = new SubagentManager();
+          const h = await mgr.forkSubagent({
+            parent: { sessionId: 'p' },
+            config: { model: 'sonnet', timeoutMs: SUBAGENT_BACKGROUND_TIMEOUT_MS },
+          });
+          // Reply lands at 60s — well past the 5s env budget but far inside the
+          // 60-min background budget. Had env re-capped, this would abort at 5s.
           lastSessionState().replyDelayMs = 60_000;
 
           const run = h.run('slow');
