@@ -53,6 +53,14 @@ describe('loadAgentRegistry', () => {
       'WebSearch',
       'Agent(git-investigator)',
     ]);
+    // Anti-runaway bound: the read-only research/review builtins carry an
+    // explicit tool-use-round cap so the uncapped agent-tool dispatch path
+    // cannot let them loop forever and die opaquely when cut off mid-run.
+    expect(registry.get('research-agent')?.definition.maxToolUseIterations).toBe(50);
+    expect(registry.get('Explore')?.definition.maxToolUseIterations).toBe(50);
+    // general-purpose stays UNBOUNDED — a real multi-step worker legitimately
+    // needs an uncapped loop, so it must NOT gain the read-only bound.
+    expect(registry.get('general-purpose')?.definition.maxToolUseIterations).toBeUndefined();
   });
 
   it('strips vendored frontmatter from builtin prompts (body-only system prompt)', () => {

@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { IAgentSession, Message, OutputEvent } from '../types.js';
 import { SubagentHandleImpl } from './handle.js';
+import { STREAM_INCOMPLETE } from './result.js';
 import { AbortGraph } from '../abort-graph.js';
 import { runWithSink, getCurrentSink } from '../_lib/skill-sink-channel.js';
 
@@ -205,7 +206,13 @@ describe('SubagentHandle streaming', () => {
       expect(handle.status).toBe('succeeded');
     });
 
-    it('throws when stream ends with neither message nor streamed content', async () => {
+    it('returns a stream-incomplete partial (not a throw) when the stream ends with neither message nor streamed content', async () => {
+      // Degradation contract: an empty cut-off stream (no terminal message, no
+      // buffered text, no error, and NOT the tool-use cap) must NOT throw an
+      // opaque "produced no terminal message". It returns a STREAM_INCOMPLETE
+      // partial (status 'succeeded') carrying a cut-off marker, so the parent
+      // gets an actionable incomplete result — annotateIfIncomplete flags it at
+      // the consumption boundary — instead of a bare delegation failure.
       const events: OutputEvent[] = [{ type: 'done' }];
       const session = createDeterministicMockSession(events, {
         role: 'assistant',
@@ -223,7 +230,44 @@ describe('SubagentHandle streaming', () => {
         vi.fn(),
       );
 
-      await expect(handle.run('p')).rejects.toThrow(/produced no terminal message/);
+      const result = await handle.runToResult('p');
+      expect(result.status).toBe('succeeded');
+      expect(result.stopReason).toBe(STREAM_INCOMPLETE);
+      expect(result.message?.content).toMatch(/without producing a final message/);
+    });
+
+    it('overwrites a clean terminal stopReason with STREAM_INCOMPLETE on an empty cut-off run', async () => {
+      // Codex PR #597 P2 regression guard. An empty-text turn that ends with a
+      // CLEAN terminal reason (end_turn / max_tokens) is dropped by the stream
+      // consumer before a `message` event is emitted (`assistant.message`:
+      // `if (event.text)`), so the empty-fallback branch is reached with
+      // lastStopReason already set to that clean reason. It MUST be overwritten
+      // to STREAM_INCOMPLETE (assignment, not `??=`): the returned content is a
+      // synthetic "no findings" placeholder, and preserving `end_turn` would let
+      // annotateIfIncomplete report that placeholder as a clean completion with
+      // no partial marker — the exact silent-success this branch exists to kill.
+      const events: OutputEvent[] = [{ type: 'done', metadata: { stopReason: 'end_turn' } }];
+      const session = createDeterministicMockSession(events, {
+        role: 'assistant',
+        content: 'unused',
+        timestamp: new Date(),
+      });
+      const handle = new SubagentHandleImpl(
+        'subagent-empty-cleanreason-test',
+        session,
+        controller,
+        abortGraph,
+        undefined,
+        5000,
+        undefined,
+        vi.fn(),
+      );
+
+      const result = await handle.runToResult('p');
+      expect(result.status).toBe('succeeded');
+      expect(result.stopReason).toBe(STREAM_INCOMPLETE);
+      expect(result.stopReason).not.toBe('end_turn');
+      expect(result.message?.content).toMatch(/without producing a final message/);
     });
 
     it('returns a capped partial result (not a throw) when the tool-use cap fires with no message', async () => {
