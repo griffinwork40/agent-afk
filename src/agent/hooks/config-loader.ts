@@ -23,12 +23,21 @@
  * This prevents a malicious `afk.config.json` in a cloned repo from running
  * arbitrary commands once the user has globally opted into shell hooks.
  *
+ * Plugin-contributed hooks (Claude Code compatibility): installed plugins may
+ * ship a `<plugin>/hooks/hooks.json` (the Claude Code layout). These are
+ * discovered under `~/.afk/plugins/`, tagged `tier: 'plugin'`, and merged
+ * LAST. Because they execute third-party code, they sit behind their OWN
+ * user-global trust gate, `enablePluginHooks: true` — independent of
+ * `enableShellHooks` (which governs the user's own `afk.config.json` hooks).
+ * Only `command`-type entries are honored; other Claude Code hook types
+ * (`http`, `mcp_tool`, `prompt`, `agent`) are skipped with a warning.
+ *
  * @module agent/hooks/config-loader
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, lstatSync } from 'node:fs';
 import { join } from 'node:path';
-import { getAfkHome, getJsonConfigPath, getSettingsPath, getProjectSettingsPath } from '../../paths.js';
+import { getAfkHome, getJsonConfigPath, getSettingsPath, getProjectSettingsPath, getPluginsDir } from '../../paths.js';
 import type { HarnessHookEvent } from '../hooks.js';
 import { HOOK_HANDLER_TIMEOUT_MS } from '../hook-registry.js';
 
@@ -62,6 +71,14 @@ export interface ResolvedCommandHook {
   type: 'command';
   command: string;
   timeoutMs: number;
+  /**
+   * Absolute plugin root, set only for hooks sourced from a plugin's
+   * `hooks/hooks.json`. Threaded into the executor as `CLAUDE_PLUGIN_ROOT`
+   * (and `CLAUDE_PROJECT_DIR`) so plugin hook commands that reference
+   * `${CLAUDE_PLUGIN_ROOT}` resolve their bundled script paths. Undefined for
+   * user-global / project-local config hooks.
+   */
+  pluginRoot?: string;
 }
 
 export interface ResolvedMatcherGroup {
@@ -72,7 +89,7 @@ export interface ResolvedMatcherGroup {
    * Always populated by {@link loadHooksConfigFile}; optional so external
    * callers (e.g. tests constructing synthetic configs) don't need to set it.
    */
-  tier?: 'user-global' | 'project-local';
+  tier?: 'user-global' | 'project-local' | 'plugin';
 }
 
 export type ResolvedHooksConfig = Partial<Record<HarnessHookEvent, ResolvedMatcherGroup[]>>;
@@ -91,6 +108,14 @@ export interface LoadedHooksConfig {
    * a cloned repo's `afk.config.json` from executing arbitrary commands.
    */
   allowProjectHooks: boolean;
+  /**
+   * True iff `enablePluginHooks: true` was found in a user-global file.
+   * When false (the default), hooks discovered in plugin `hooks/hooks.json`
+   * files are excluded from the merged output. This is an independent gate
+   * from `userGlobalEnabled` (`enableShellHooks`): plugin hooks are
+   * third-party code and get their own explicit opt-in.
+   */
+  pluginHooksEnabled: boolean;
   /** Absolute paths of every file that contributed to this config. */
   sources: string[];
   /** Non-fatal validation warnings the caller should surface. */
@@ -147,6 +172,7 @@ interface SingleFileResult {
   hooks: ResolvedHooksConfig;
   enableShellHooks: boolean;
   allowProjectHooks: boolean;
+  enablePluginHooks: boolean;
   sources: string[];
   warnings: string[];
 }
@@ -176,14 +202,15 @@ function validateHook(raw: unknown): ResolvedCommandHook | null {
  */
 export function loadHooksConfigFile(
   path: string,
-  tier: 'user-global' | 'project-local',
+  tier: 'user-global' | 'project-local' | 'plugin',
+  pluginRoot?: string,
 ): SingleFileResult {
   const warnings: string[] = [];
   const sources: string[] = [];
   const hooks: ResolvedHooksConfig = {};
 
   if (!existsSync(path)) {
-    return { hooks, enableShellHooks: false, allowProjectHooks: false, sources, warnings };
+    return { hooks, enableShellHooks: false, allowProjectHooks: false, enablePluginHooks: false, sources, warnings };
   }
   sources.push(path);
 
@@ -193,12 +220,12 @@ export function loadHooksConfigFile(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     warnings.push(`hooks config at ${path}: parse error — ${msg}`);
-    return { hooks, enableShellHooks: false, allowProjectHooks: false, sources, warnings };
+    return { hooks, enableShellHooks: false, allowProjectHooks: false, enablePluginHooks: false, sources, warnings };
   }
 
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     warnings.push(`hooks config at ${path}: top-level must be an object`);
-    return { hooks, enableShellHooks: false, allowProjectHooks: false, sources, warnings };
+    return { hooks, enableShellHooks: false, allowProjectHooks: false, enablePluginHooks: false, sources, warnings };
   }
   const file = parsed as Record<string, unknown>;
 
@@ -208,15 +235,16 @@ export function loadHooksConfigFile(
   // so the value flows cleanly.
   const enableShellHooks = file['enableShellHooks'] === true;
   const allowProjectHooks = file['allowProjectHooks'] === true;
+  const enablePluginHooks = file['enablePluginHooks'] === true;
 
   // Extract hooks block
   const rawHooks = file['hooks'];
   if (rawHooks === undefined || rawHooks === null) {
-    return { hooks, enableShellHooks, allowProjectHooks, sources, warnings };
+    return { hooks, enableShellHooks, allowProjectHooks, enablePluginHooks, sources, warnings };
   }
   if (typeof rawHooks !== 'object' || Array.isArray(rawHooks)) {
     warnings.push(`hooks config at ${path}: "hooks" must be an object`);
-    return { hooks, enableShellHooks, allowProjectHooks, sources, warnings };
+    return { hooks, enableShellHooks, allowProjectHooks, enablePluginHooks, sources, warnings };
   }
 
   const rawHooksObj = rawHooks as Record<string, unknown>;
@@ -266,6 +294,7 @@ export function loadHooksConfigFile(
           );
           continue;
         }
+        if (pluginRoot !== undefined) validated.pluginRoot = pluginRoot;
         resolvedHooks.push(validated);
       }
       if (resolvedHooks.length > 0) {
@@ -281,7 +310,74 @@ export function loadHooksConfigFile(
     }
   }
 
-  return { hooks, enableShellHooks, allowProjectHooks, sources, warnings };
+  return { hooks, enableShellHooks, allowProjectHooks, enablePluginHooks, sources, warnings };
+}
+
+// ---------------------------------------------------------------------------
+// Plugin-contributed hook discovery (Claude Code compatibility)
+// ---------------------------------------------------------------------------
+
+const MAX_PLUGIN_SCAN_DEPTH = 5;
+
+/**
+ * Discover every plugin-contributed `hooks/hooks.json` under `~/.afk/plugins/`.
+ *
+ * A plugin contributes hooks when it ships a `<plugin>/hooks/hooks.json` file
+ * (the Claude Code layout) alongside the standard
+ * `<plugin>/.claude-plugin/plugin.json` manifest. Walks the same two layouts
+ * as `scanLocalPlugins()`:
+ *   - flat:  `<root>/<plugin>/hooks/hooks.json`
+ *   - cache: `<root>/cache/<marketplace>/<plugin>/hooks/hooks.json`
+ *
+ * Returns `{ path, pluginRoot }` pairs — `pluginRoot` is the plugin's install
+ * directory, threaded to the executor as `CLAUDE_PLUGIN_ROOT`. Missing root is
+ * silently ignored (no plugins installed).
+ */
+export function discoverPluginHooksConfigs(
+  pluginsRoot: string = getPluginsDir(),
+): Array<{ path: string; pluginRoot: string }> {
+  if (!existsSync(pluginsRoot)) return [];
+  const out: Array<{ path: string; pluginRoot: string }> = [];
+  walkForPluginHooks(pluginsRoot, 0, out, new Set<string>());
+  return out;
+}
+
+function walkForPluginHooks(
+  dir: string,
+  depth: number,
+  out: Array<{ path: string; pluginRoot: string }>,
+  seen: Set<string>,
+): void {
+  if (depth > MAX_PLUGIN_SCAN_DEPTH) return;
+  if (seen.has(dir)) return;
+  seen.add(dir);
+
+  // A directory is a plugin when it carries `.claude-plugin/plugin.json`.
+  // Check for `hooks/hooks.json` and stop descending — plugins do not nest.
+  const pluginJson = join(dir, '.claude-plugin', 'plugin.json');
+  if (existsSync(pluginJson)) {
+    const hooksJson = join(dir, 'hooks', 'hooks.json');
+    if (existsSync(hooksJson)) out.push({ path: hooksJson, pluginRoot: dir });
+    return;
+  }
+
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    if (name.startsWith('.')) continue;
+    const full = join(dir, name);
+    let s;
+    try {
+      s = lstatSync(full);
+    } catch {
+      continue;
+    }
+    if (s.isDirectory()) walkForPluginHooks(full, depth + 1, out, seen);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -291,6 +387,11 @@ export function loadHooksConfigFile(
 export interface LoadHooksConfigOptions {
   /** Working directory for project-local layers. Defaults to `process.cwd()`. */
   cwd?: string;
+  /**
+   * Plugins root to scan for `<plugin>/hooks/hooks.json`. Defaults to
+   * `getPluginsDir()` (`~/.afk/plugins/`). Injectable for tests.
+   */
+  pluginsDir?: string;
 }
 
 /**
@@ -313,6 +414,7 @@ export function loadHooksConfig(opts: LoadHooksConfigOptions = {}): LoadedHooksC
   const merged: ResolvedHooksConfig = {};
   let userGlobalEnabled = false;
   let allowProjectHooks = false;
+  let pluginHooksEnabled = false;
 
   const allLayers: Array<{ path: string; tier: 'user-global' | 'project-local' }> = [
     { path: getJsonConfigPath(), tier: 'user-global' },
@@ -355,6 +457,7 @@ export function loadHooksConfig(opts: LoadHooksConfigOptions = {}): LoadedHooksC
     const result = loadHooksConfigFile(layer.path, layer.tier);
     if (result.enableShellHooks) userGlobalEnabled = true;
     if (result.allowProjectHooks) allowProjectHooks = true;
+    if (result.enablePluginHooks) pluginHooksEnabled = true;
   }
 
   // Second pass: load all layers and concatenate hooks, filtering out
@@ -397,10 +500,45 @@ export function loadHooksConfig(opts: LoadHooksConfigOptions = {}): LoadedHooksC
     }
   }
 
+  // Third pass: plugin-contributed hooks (Claude Code compat). Discovered from
+  // installed plugins under the plugins root, tagged `tier: 'plugin'`, merged
+  // last. Gated by the independent `enablePluginHooks` trust flag — plugin
+  // hooks execute third-party code, so they never ride on `enableShellHooks`.
+  const pluginConfigs = discoverPluginHooksConfigs(opts.pluginsDir);
+  if (pluginConfigs.length > 0 && !pluginHooksEnabled) {
+    // Don't silently drop plugin hooks — surface the boundary so the user
+    // knows they exist and how to opt in (mirrors the config-bridge warning
+    // for disabled shell hooks).
+    allWarnings.push(
+      `found ${pluginConfigs.length} plugin hooks.json file(s) but plugin hooks are disabled; ` +
+        `set "enablePluginHooks": true in ${getJsonConfigPath()} to run them`,
+    );
+  }
+  if (pluginHooksEnabled) {
+    for (const { path, pluginRoot } of pluginConfigs) {
+      const result = loadHooksConfigFile(path, 'plugin', pluginRoot);
+      for (const src of result.sources) {
+        if (!allSources.includes(src)) allSources.push(src);
+      }
+      for (const w of result.warnings) allWarnings.push(w);
+      for (const event of validEvents) {
+        const incoming = result.hooks[event];
+        if (incoming === undefined || incoming.length === 0) continue;
+        const existing = merged[event];
+        if (existing === undefined) {
+          merged[event] = [...incoming];
+        } else {
+          merged[event] = [...existing, ...incoming];
+        }
+      }
+    }
+  }
+
   return {
     hooks: merged,
     userGlobalEnabled,
     allowProjectHooks,
+    pluginHooksEnabled,
     sources: allSources,
     warnings: allWarnings,
   };

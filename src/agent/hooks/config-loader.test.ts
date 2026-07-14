@@ -11,6 +11,7 @@ import {
   loadHooksConfigFile,
   loadHooksConfig,
   compileMatcher,
+  discoverPluginHooksConfigs,
 } from './config-loader.js';
 
 let tmp: string;
@@ -578,5 +579,149 @@ describe('orphan root settings warning', () => {
     expect(result.userGlobalEnabled).toBe(true);
     expect(result.hooks.SessionStart).toHaveLength(1);
     expect(result.warnings.some((w) => w.includes('AFK-home root'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plugin-contributed hook discovery (Claude Code compat)
+// ---------------------------------------------------------------------------
+
+describe('discoverPluginHooksConfigs', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'plugin-hooks-'));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function makePlugin(base: string, name: string, withHooks: boolean): string {
+    const pluginDir = join(base, name);
+    mkdirSync(join(pluginDir, '.claude-plugin'), { recursive: true });
+    writeFileSync(join(pluginDir, '.claude-plugin', 'plugin.json'), '{}', 'utf-8');
+    if (withHooks) {
+      mkdirSync(join(pluginDir, 'hooks'), { recursive: true });
+      writeFileSync(join(pluginDir, 'hooks', 'hooks.json'), '{"hooks":{}}', 'utf-8');
+    }
+    return pluginDir;
+  }
+
+  it('returns empty when plugins root is missing', () => {
+    expect(discoverPluginHooksConfigs(join(root, 'absent'))).toEqual([]);
+  });
+
+  it('finds <plugin>/hooks/hooks.json in flat layout with pluginRoot', () => {
+    const pluginDir = makePlugin(root, 'my-plugin', true);
+    expect(discoverPluginHooksConfigs(root)).toEqual([
+      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir },
+    ]);
+  });
+
+  it('finds plugins under the marketplace-cache layout', () => {
+    const base = join(root, 'cache', 'official', 'plugins');
+    const pluginDir = makePlugin(base, 'remote-plug', true);
+    expect(discoverPluginHooksConfigs(root)).toEqual([
+      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir },
+    ]);
+  });
+
+  it('skips a plugin manifest that ships no hooks/hooks.json', () => {
+    makePlugin(root, 'plain-plugin', false);
+    expect(discoverPluginHooksConfigs(root)).toEqual([]);
+  });
+
+  it('ignores a hooks/hooks.json under a dir with no plugin.json manifest', () => {
+    // A bare directory that happens to contain hooks/hooks.json but is NOT a
+    // plugin (no .claude-plugin/plugin.json) must not be treated as one.
+    mkdirSync(join(root, 'not-a-plugin', 'hooks'), { recursive: true });
+    writeFileSync(join(root, 'not-a-plugin', 'hooks', 'hooks.json'), '{}', 'utf-8');
+    expect(discoverPluginHooksConfigs(root)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plugin hooks gate (enablePluginHooks) — loadHooksConfig integration
+// ---------------------------------------------------------------------------
+
+describe('loadHooksConfig — plugin hooks gate', () => {
+  let afkHome: string;
+  let projectCwd: string;
+  let pluginsDir: string;
+  let originalAfkHome: string | undefined;
+
+  beforeEach(() => {
+    afkHome = join(tmp, 'afk-home');
+    projectCwd = join(tmp, 'project');
+    pluginsDir = join(tmp, 'plugins');
+    mkdirSync(join(afkHome, 'config'), { recursive: true });
+    mkdirSync(projectCwd, { recursive: true });
+    // Plant a plugin that ships a SessionStart command hook.
+    const pluginDir = join(pluginsDir, 'demo-plugin');
+    mkdirSync(join(pluginDir, '.claude-plugin'), { recursive: true });
+    writeFileSync(join(pluginDir, '.claude-plugin', 'plugin.json'), '{}', 'utf-8');
+    mkdirSync(join(pluginDir, 'hooks'), { recursive: true });
+    writeFileSync(
+      join(pluginDir, 'hooks', 'hooks.json'),
+      JSON.stringify({
+        hooks: {
+          SessionStart: [
+            { hooks: [{ type: 'command', command: 'echo plugin-hook' }] },
+          ],
+        },
+      }),
+      'utf-8',
+    );
+    originalAfkHome = process.env['AFK_HOME'];
+    process.env['AFK_HOME'] = afkHome;
+  });
+
+  afterEach(() => {
+    if (originalAfkHome === undefined) delete process.env['AFK_HOME'];
+    else process.env['AFK_HOME'] = originalAfkHome;
+  });
+
+  function writeUserGlobalConfig(body: unknown): void {
+    writeFileSync(join(afkHome, 'config', 'afk.config.json'), JSON.stringify(body), 'utf-8');
+  }
+
+  it('plugin hooks are dropped and a warning is emitted when enablePluginHooks is unset', () => {
+    const result = loadHooksConfig({ cwd: projectCwd, pluginsDir });
+    expect(result.pluginHooksEnabled).toBe(false);
+    expect(result.hooks.SessionStart).toBeUndefined();
+    expect(result.warnings.some((w) => w.includes('plugin hooks are disabled'))).toBe(true);
+  });
+
+  it('plugin hooks are admitted (tier=plugin, pluginRoot set) when enablePluginHooks is true', () => {
+    writeUserGlobalConfig({ enablePluginHooks: true });
+    const result = loadHooksConfig({ cwd: projectCwd, pluginsDir });
+    expect(result.pluginHooksEnabled).toBe(true);
+    const groups = result.hooks.SessionStart!;
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.tier).toBe('plugin');
+    expect(groups[0]!.hooks[0]!.command).toBe('echo plugin-hook');
+    expect(groups[0]!.hooks[0]!.pluginRoot).toBe(join(pluginsDir, 'demo-plugin'));
+    // No "disabled" warning when the gate is on.
+    expect(result.warnings.some((w) => w.includes('plugin hooks are disabled'))).toBe(false);
+  });
+
+  it('enablePluginHooks is independent of enableShellHooks', () => {
+    // Plugin gate ON, shell gate OFF → plugin hook present, userGlobalEnabled false.
+    writeUserGlobalConfig({ enablePluginHooks: true });
+    const result = loadHooksConfig({ cwd: projectCwd, pluginsDir });
+    expect(result.userGlobalEnabled).toBe(false);
+    expect(result.pluginHooksEnabled).toBe(true);
+    expect(result.hooks.SessionStart).toHaveLength(1);
+  });
+
+  it('enablePluginHooks set in a project-local file does NOT activate plugin hooks', () => {
+    // Only user-global files satisfy the gate (same rule as enableShellHooks).
+    writeFileSync(
+      join(projectCwd, 'afk.config.json'),
+      JSON.stringify({ enablePluginHooks: true }),
+      'utf-8',
+    );
+    const result = loadHooksConfig({ cwd: projectCwd, pluginsDir });
+    expect(result.pluginHooksEnabled).toBe(false);
+    expect(result.hooks.SessionStart).toBeUndefined();
   });
 });

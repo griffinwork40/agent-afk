@@ -230,6 +230,12 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   // (config-loader userGlobalEnabled). Even though the agent cannot define `hooks`,
   // it must not be able to flip the activation gate on its own config — human-only.
   { path: 'enableShellHooks', tier: 'human', type: 'boolean', description: 'Enable shell hooks (trust gate).' },
+  // enablePluginHooks is the TRUST GATE that activates Claude Code
+  // plugin-contributed hooks (<plugin>/hooks/hooks.json). It executes
+  // third-party plugin code, so — like enableShellHooks — the agent must not be
+  // able to flip it on its own config; human-only, and independent of the
+  // enableShellHooks gate.
+  { path: 'enablePluginHooks', tier: 'human', type: 'boolean', description: 'Enable Claude Code plugin-contributed hooks (trust gate for third-party plugin hooks.json; independent of enableShellHooks).' },
   { path: 'interactive.worktreeBranchPrefix', tier: 'human', type: 'string', description: 'Worktree branch prefix (git-flag sensitive).' },
   { path: 'interactive.worktreeBase', tier: 'human', type: 'string', description: 'Worktree base ref (git-flag sensitive).' },
   { path: 'daemon.task', tier: 'human', type: 'string', description: 'Daemon task prompt.' },

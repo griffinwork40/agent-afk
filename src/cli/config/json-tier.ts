@@ -217,6 +217,10 @@ export function loadJsonConfig(): {
           config.enableShellHooks = json.enableShellHooks;
         }
 
+        if (typeof json.enablePluginHooks === 'boolean') {
+          config.enablePluginHooks = json.enablePluginHooks;
+        }
+
         // Security: `importFrom` is a user-global-only trust grant — it lets AFK
         // live-read/execute another tool's assets (see loadImportFromConfig). A
         // project-local afk.config.json must NOT be able to set it, so honor it

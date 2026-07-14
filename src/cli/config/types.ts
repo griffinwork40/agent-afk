@@ -233,6 +233,13 @@ export interface CliConfig {
    */
   enableShellHooks?: boolean;
   /**
+   * User-global trust gate for Claude Code plugin-contributed hooks
+   * (`<plugin>/hooks/hooks.json`). Independent of `enableShellHooks`. Human-tier
+   * (the agent's `config_set` cannot flip it). See
+   * `src/agent/hooks/config-loader.ts`.
+   */
+  enablePluginHooks?: boolean;
+  /**
    * Cross-tool asset import. Maps each trusted source binary to the asset
    * types AFK should live-read from that binary's install location. Populated
    * by `afk migrate`; resolved to concrete scan roots by
@@ -318,6 +325,7 @@ export interface ConfigFileSchema {
   maxSummaryCallsPerSession?: number;
   hooks?: RawHooksConfig;
   enableShellHooks?: boolean;
+  enablePluginHooks?: boolean;
   /**
    * Cross-tool asset import. Each known source binary maps to either a bare
    * `true` (shorthand: import all asset types) or an object with per-asset

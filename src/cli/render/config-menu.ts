@@ -75,6 +75,7 @@ export function categoryOf(path: string): (typeof CATEGORY_ORDER)[number] {
     path === 'systemPrompt' ||
     path === 'permissionMode' ||
     path === 'enableShellHooks' ||
+    path === 'enablePluginHooks' ||
     path === 'updatePolicy'
   ) {
     return 'Advanced';

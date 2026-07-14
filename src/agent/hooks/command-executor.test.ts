@@ -355,6 +355,45 @@ fi
     expect(result.decision.decision).toBe('approve');
   });
 
+  it('CLAUDE_PLUGIN_ROOT is set to pluginRoot for a plugin-contributed hook', async () => {
+    const pluginDir = join(tmp, 'demo-plugin');
+    const scriptPath = join(tmp, 'check-plugin-root.sh');
+    writeFileSync(
+      scriptPath,
+      `#!/bin/sh
+if [ "$CLAUDE_PLUGIN_ROOT" = "${pluginDir}" ]; then
+  echo '{"decision":"approve"}'
+else
+  echo "wrong root: $CLAUDE_PLUGIN_ROOT" >&2
+  exit 2
+fi
+`,
+      'utf-8',
+    );
+    chmodSync(scriptPath, 0o755);
+    const result = await executeCommand({ ...makeOpts(scriptPath), pluginRoot: pluginDir });
+    expect(result.decision.decision).toBe('approve');
+  });
+
+  it('CLAUDE_PLUGIN_ROOT is NOT set for a non-plugin hook (no pluginRoot)', async () => {
+    const scriptPath = join(tmp, 'check-no-plugin-root.sh');
+    writeFileSync(
+      scriptPath,
+      `#!/bin/sh
+if [ -z "$CLAUDE_PLUGIN_ROOT" ]; then
+  echo '{"decision":"approve"}'
+else
+  echo "unexpected root: $CLAUDE_PLUGIN_ROOT" >&2
+  exit 2
+fi
+`,
+      'utf-8',
+    );
+    chmodSync(scriptPath, 0o755);
+    const result = await executeCommand(makeOpts(scriptPath));
+    expect(result.decision.decision).toBe('approve');
+  });
+
   // -----------------------------------------------------------------------
   // F2 regression: secret env vars must NOT be forwarded to hook subprocess
   // -----------------------------------------------------------------------
