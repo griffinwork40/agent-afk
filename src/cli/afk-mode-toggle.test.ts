@@ -261,8 +261,8 @@ describe('toggleAfkMode — AFK ledger channel wiring (scope.lock criterion 1)',
     expect(makeLedgerChannelHandler).not.toHaveBeenCalled();
   });
 
-  it('degrades to keyboard-only when the provider session id is not yet known', async () => {
-    const { ctx, swapCalls } = makeCtx({
+  it('degrades to keyboard-only AND warns when the provider session id is not yet known', async () => {
+    const { ctx, swapCalls, lines } = makeCtx({
       stats: makeStats({ permissionMode: 'default' }),
       // no sessionId → e.g. /afk on before the first turn issued an id
       withChannel: true,
@@ -274,6 +274,29 @@ describe('toggleAfkMode — AFK ledger channel wiring (scope.lock criterion 1)',
     expect(swapCalls).toHaveLength(0);
     expect(setPresenceAfk).not.toHaveBeenCalled();
     // AFK still entered — channel is additive, the keyboard stays live.
+    expect(ctx.stats.permissionMode).toBe('autonomous');
+    // F3 guard: the silent skip is gone — the operator is explicitly warned the
+    // phone relay is NOT armed (and told to re-toggle after a turn), so they
+    // don't walk away trusting a dead phone leg.
+    expect(lines.some((l) => l.startsWith('ERROR:') && /phone relay NOT armed/i.test(l))).toBe(true);
+  });
+
+  it('F3: warns about the missing signing key but STILL arms the channel', async () => {
+    ensureSessionKey.mockReturnValueOnce(null);
+    const { ctx, swapCalls, lines } = makeCtx({
+      stats: makeStats({ permissionMode: 'default' }),
+      sessionId: 's-nokey',
+      withChannel: true,
+    });
+
+    await toggleAfkMode(ctx, true);
+
+    // Warned that phone replies / remote abort won't work without a key ...
+    expect(lines.some((l) => l.startsWith('ERROR:') && /signing key/i.test(l))).toBe(true);
+    // ... but the channel is STILL installed (keyboard fallback races) and AFK
+    // is entered — a null key must not silently disable AFK.
+    expect(makeLedgerChannelHandler).toHaveBeenCalledTimes(1);
+    expect(swapCalls).toHaveLength(1);
     expect(ctx.stats.permissionMode).toBe('autonomous');
   });
 

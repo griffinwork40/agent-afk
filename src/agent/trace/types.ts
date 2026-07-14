@@ -146,6 +146,13 @@ export type HookEventName =
 /**
  * Fine-grained outcome of the AFK high-risk approval gate. Set only by that
  * gate; absent on all other hook_decision events.
+ *
+ * `hard-block` is the no-prompt refusal: the op was blocked WITHOUT soliciting
+ * an operator approval at all — either a forked sub-agent (which must never
+ * prompt, for lack of attribution) or the always-on Telegram host
+ * (`afkPromptForApproval:false`). It is distinct from `denied` (operator saw the
+ * prompt and rejected) so async review can tell a deliberate human deny from an
+ * automatic ceiling refusal.
  */
 export type AfkApprovalOutcome =
   | 'approved'
@@ -153,7 +160,8 @@ export type AfkApprovalOutcome =
   | 'unrecognised'
   | 'timeout'
   | 'decline'
-  | 'cancel';
+  | 'cancel'
+  | 'hard-block';
 
 export interface HookDecisionPayload {
   hookEvent: HookEventName;
