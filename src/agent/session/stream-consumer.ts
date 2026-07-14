@@ -49,6 +49,16 @@ export type TransformDeps = {
    */
   _runningCostUsd?: number;
   /**
+   * Internal per-turn accumulator: names of tools whose `tool.output` event
+   * reported success (`isError !== true`), in observed order. Mutated on each
+   * `tool.output` event and drained onto `ResponseMetadata.successfulToolNames`
+   * at `turn.completed`. Fresh per turn because `buildTransformDeps()` returns a
+   * new object each turn (unlike `_runningCostUsd`, whose cross-turn persistence
+   * is a deliberate exception owned by the same one-deps-per-turn loop), so it
+   * cannot leak across turns.
+   */
+  _successfulToolNames?: string[];
+  /**
    * Witness-layer trace writer. When provided, a `budget` event fires on
    * the same turn that crosses `maxBudgetUsd`, before `abortBudget` runs.
    * The event is the threshold-breach record; the subsequent abort + the
@@ -356,8 +366,18 @@ export function transformProviderEvent(
         },
       };
 
-    case 'tool.output':
+    case 'tool.output': {
+      // Accumulate the name of every tool that reported success this turn, in
+      // observed order, so `turn.completed` can expose them on metadata for
+      // headless surfaces (the daemon) that never see the per-chunk stream.
+      // Policy-free: the allowlist of which tools count as evidence lives with
+      // the consumer (see `doneHasCorroboratingEvidence`), NOT here. A tool with
+      // no name (some OpenAI Codex synthesized events omit it) is skipped.
+      if (event.isError !== true && event.toolName) {
+        (deps._successfulToolNames ??= []).push(event.toolName);
+      }
       return buildToolOutputEvent(event);
+    }
 
     case 'tool.diff':
       // Sidecar render-only event — passes through verbatim. The CLI
@@ -394,6 +414,12 @@ export function transformProviderEvent(
 
     case 'turn.completed': {
       const metadata = usageToMetadata(event.usage, event.sessionId ?? deps.getSessionMetadata().sessionId);
+      // Drain the per-turn successful-tool accumulator onto the metadata so the
+      // returned Message carries the raw observation (empty list ⇒ omit the
+      // field, keeping the shape identical to today for tool-less turns).
+      if (deps._successfulToolNames !== undefined && deps._successfulToolNames.length > 0) {
+        metadata.successfulToolNames = [...deps._successfulToolNames];
+      }
       deps.setLastResponseMetadata(metadata);
 
       for (let i = deps.conversationHistory.length - 1; i >= 0; i--) {

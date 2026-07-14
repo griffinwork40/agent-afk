@@ -27,6 +27,11 @@ vi.mock('../default-hook-registry.js', () => ({
 }));
 
 import { CronScheduler, daemonTraceLabel, resolveWorktreePruneRoot } from './scheduler.js';
+// Reusables imported here (test-only — tests are not bound by the
+// src/agent → src/cli layering invariant that the scheduler source honours) so
+// the injected probe mirrors the production `doneUnverifiedProbe` in daemon.ts.
+import { parseTerminalState } from '../../cli/commands/interactive/terminal-state.js';
+import { DONE_EVIDENCE_TOOLS } from '../../cli/commands/interactive/afk-push.js';
 import { getTraceDir } from '../../paths.js';
 import { AgentSession } from '../session/agent-session.js';
 import { McpManager } from '../mcp/index.js';
@@ -65,13 +70,22 @@ afterEach(() => {
 
 /**
  * Build a minimal fake AgentSession whose sendMessage() either resolves or
- * rejects with the given Error.
+ * rejects with the given Error. `metadata` (e.g. `successfulToolNames`) is
+ * attached to the resolved Message so Done-verification paths can be exercised.
  */
-function makeSession(opts: { throws?: Error; response?: string }): AgentSession {
+function makeSession(opts: {
+  throws?: Error;
+  response?: string;
+  metadata?: Record<string, unknown>;
+}): AgentSession {
   return {
     sendMessage: opts.throws
       ? () => Promise.reject(opts.throws)
-      : () => Promise.resolve({ content: opts.response ?? '' }),
+      : () =>
+          Promise.resolve({
+            content: opts.response ?? '',
+            ...(opts.metadata !== undefined ? { metadata: opts.metadata } : {}),
+          }),
     close: () => Promise.resolve(),
   } as unknown as AgentSession;
 }
@@ -316,6 +330,144 @@ describe('CronScheduler telemetry — errorMessage redaction', () => {
     await scheduler.stop();
   });
 });
+
+describe('CronScheduler — "Done" verification (doneUnverified)', () => {
+  let dir: string;
+  let telemetryPath: string;
+
+  beforeEach(() => {
+    dir = makeTmpDir();
+    telemetryPath = join(dir, 'forge-telemetry.jsonl');
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Mirrors the production probe wired in src/cli/commands/daemon.ts: a `Done`
+  // terminal state with no corroborating evidence tool ⇒ unverified.
+  const probe = ({
+    responseText,
+    successfulToolNames,
+  }: {
+    responseText: string;
+    successfulToolNames: readonly string[];
+  }): boolean => {
+    const verdict = parseTerminalState(responseText);
+    if (verdict === null || verdict.kind !== 'done') return false;
+    return !successfulToolNames.some((name) => DONE_EVIDENCE_TOOLS.has(name));
+  };
+
+  const DONE_RESPONSE = 'Finished the task.\n\n## Done\n- What was done: shipped the change';
+  const BLOCKED_RESPONSE = 'Could not proceed.\n\n## Blocked\n- Blocked by: missing credentials';
+
+  async function runWith(opts: {
+    response: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<TaskCompletionDetails | undefined> {
+    const onTaskComplete = vi.fn();
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () =>
+        makeSession({ response: opts.response, ...(opts.metadata ? { metadata: opts.metadata } : {}) }),
+      onTaskComplete,
+      doneUnverifiedProbe: probe,
+    });
+    scheduler.register({ taskId: 't', command: 'run', trigger: 'cron', cronExpression: '* * * * *' });
+    await scheduler.tick('t');
+    await scheduler.stop();
+    if (!onTaskComplete.mock.calls[0]) return undefined;
+    return onTaskComplete.mock.calls[0][1] as TaskCompletionDetails | undefined;
+  }
+
+  it('Done + no evidence → details.doneUnverified === true', async () => {
+    const details = await runWith({ response: DONE_RESPONSE, metadata: { successfulToolNames: [] } });
+    expect(details?.doneUnverified).toBe(true);
+  });
+
+  it('Done + no metadata (no tools ran) → details.doneUnverified === true', async () => {
+    // Absent metadata is the common tool-less tick; runOnce defaults to [] and
+    // the probe still flags an unbacked Done.
+    const details = await runWith({ response: DONE_RESPONSE });
+    expect(details?.doneUnverified).toBe(true);
+  });
+
+  it('Done + corroborating evidence (write_file) → doneUnverified falsy', async () => {
+    const details = await runWith({
+      response: DONE_RESPONSE,
+      metadata: { successfulToolNames: ['read_file', 'write_file'] },
+    });
+    expect(details?.doneUnverified ?? false).toBe(false);
+  });
+
+  it('Done + only read-only tools → details.doneUnverified === true', async () => {
+    const details = await runWith({
+      response: DONE_RESPONSE,
+      metadata: { successfulToolNames: ['read_file', 'grep', 'glob'] },
+    });
+    expect(details?.doneUnverified).toBe(true);
+  });
+
+  it('non-Done terminal state (Blocked) → doneUnverified falsy even with no evidence', async () => {
+    const details = await runWith({ response: BLOCKED_RESPONSE, metadata: { successfulToolNames: [] } });
+    expect(details?.doneUnverified ?? false).toBe(false);
+  });
+
+  it('no probe injected → doneUnverified never set (fail-open, opt-in)', async () => {
+    const onTaskComplete = vi.fn();
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => makeSession({ response: DONE_RESPONSE, metadata: { successfulToolNames: [] } }),
+      onTaskComplete,
+    });
+    scheduler.register({ taskId: 't', command: 'run', trigger: 'cron', cronExpression: '* * * * *' });
+    await scheduler.tick('t');
+    await scheduler.stop();
+    const details = onTaskComplete.mock.calls[0]?.[1] as TaskCompletionDetails | undefined;
+    expect(details?.doneUnverified).toBeUndefined();
+  });
+
+  it('a throwing probe never crashes the tick (guarded) and yields falsy', async () => {
+    const onTaskComplete = vi.fn();
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => makeSession({ response: DONE_RESPONSE, metadata: { successfulToolNames: [] } }),
+      onTaskComplete,
+      doneUnverifiedProbe: () => {
+        throw new Error('probe boom');
+      },
+    });
+    scheduler.register({ taskId: 't', command: 'run', trigger: 'cron', cronExpression: '* * * * *' });
+    const record = await scheduler.tick('t');
+    await scheduler.stop();
+    // Tick still succeeds; details carry no doneUnverified downgrade.
+    expect(record.status).toBe('success');
+    const details = onTaskComplete.mock.calls[0]?.[1] as TaskCompletionDetails | undefined;
+    expect(details?.doneUnverified).toBeUndefined();
+  });
+
+  it('threads the exact successfulToolNames from Message.metadata into the probe', async () => {
+    const seen: string[][] = [];
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () =>
+        makeSession({ response: DONE_RESPONSE, metadata: { successfulToolNames: ['bash', 'read_file'] } }),
+      onTaskComplete: vi.fn(),
+      doneUnverifiedProbe: ({ successfulToolNames }) => {
+        seen.push([...successfulToolNames]);
+        return false;
+      },
+    });
+    scheduler.register({ taskId: 't', command: 'run', trigger: 'cron', cronExpression: '* * * * *' });
+    await scheduler.tick('t');
+    await scheduler.stop();
+    expect(seen).toEqual([['bash', 'read_file']]);
+  });
+});
+
+// TaskCompletionDetails is imported implicitly through the scheduler module's
+// exported type surface; alias it for the local casts above.
+type TaskCompletionDetails = import('./scheduler.js').TaskCompletionDetails;
 
 describe('CronScheduler — witness trace-writer wiring', () => {
   let dir: string;

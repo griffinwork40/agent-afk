@@ -382,6 +382,11 @@ export class AgentSession implements IAgentSession {
 
   private buildTransformDeps(): TransformDeps {
     return {
+      // Fresh per-turn accumulator for successful tool names (see
+      // TransformDeps._successfulToolNames). Initialized here — one deps object
+      // per turn — so it never leaks across turns; the stream consumer pushes
+      // to it on tool.output and drains it onto metadata at turn.completed.
+      _successfulToolNames: [],
       conversationHistory: this.conversationHistory,
       getSessionMetadata: () => this.stateManager.getSessionMetadata(),
       setSessionMetadata: (updater) => this.stateManager.setSessionMetadata(updater),

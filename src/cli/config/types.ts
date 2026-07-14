@@ -89,6 +89,18 @@ export interface CliConfig {
       maxAgeDaysDirty: number;
       scope: string;
     };
+    /**
+     * Daemon-surface "Done" verification gate (opt-in; default off when
+     * omitted). When true, a cron-tick completion push whose response
+     * self-certifies `Done` is relabelled "⚠️ Done (unverified)" (with a caveat
+     * line) unless the tick produced corroborating evidence — a successful file
+     * write/edit or executed command (see `doneHasCorroboratingEvidence` in
+     * `commands/interactive/afk-push.ts`). The daemon analog of
+     * `telegram.verifyDone` (which is REPL-only): the daemon is single-turn-per-
+     * tick, so the only honest enforcement is relabelling the outgoing push, not
+     * bouncing a next turn. Off ⇒ the push is byte-identical to today.
+     */
+    verifyDone?: boolean;
   };
   /**
    * Telegram outbound notification routing, sourced from afk.config.json
@@ -287,6 +299,7 @@ export interface ConfigFileSchema {
       maxAgeDaysDirty?: number;
       scope?: string;
     };
+    verifyDone?: boolean;
   };
   /**
    * Telegram outbound notification routing. Separate from the inbound allowlist
