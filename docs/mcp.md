@@ -142,11 +142,14 @@ than crashing.
 - **A server entry is arbitrary code execution.** `stdio` servers spawn
   whatever `command` says with the given `args`/`env`; treat `mcp.json`
   contents with the same trust level as a script you'd run yourself.
-- **Project-local config auto-loads by default.** `<cwd>/.mcp.json` is read
-  automatically, which can be a CWD-poisoning vector in shared or CI
-  environments (a checked-out repo can add MCP servers to your session
-  without prompting). Set `AFK_ALLOW_PROJECT_MCP=0` to disable this layer
-  entirely; a warning naming the loaded path is emitted every time it fires.
+- **Project-local config is opt-in (fail-closed).** `<cwd>/.mcp.json` is
+  **not** loaded or spawned unless `AFK_ALLOW_PROJECT_MCP` is truthy
+  (`1`/`true`/`yes`/`on`). Since a project-local server is arbitrary code
+  execution, entering an untrusted repo must never auto-spawn it. When a
+  `.mcp.json` exists but the opt-in is absent, AFK skips it and warns with the
+  skipped server names, their commands, and the opt-in instruction. `=0`
+  remains a hard-off. A `.mcp.json` whose real path escapes the working
+  directory (symlink / `..`) is refused outright (issue #571).
 - **No cleartext remote transports.** Non-loopback `streamable-http`/`sse`
   URLs must be `https:` (see Transports above).
 - **No shell in `${VAR}` expansion.** Expansion reads `process.env` directly;

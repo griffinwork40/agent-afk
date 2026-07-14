@@ -85,7 +85,7 @@ All environment variables recognized by `agent-afk` are listed here, grouped by 
 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
-| `AFK_ALLOW_PROJECT_MCP` | boolean | Controls auto-loading of MCP configuration from &lt;cwd&gt;/.mcp.json. Auto-loaded by default — set to `0` to disable (mitigates config-injection risk in shared/CI environments). | auto-load |
+| `AFK_ALLOW_PROJECT_MCP` | boolean | Opt-in to loading + spawning MCP servers declared in &lt;cwd&gt;/.mcp.json. Fail-closed: unset (or `0`) means project-local servers are **not** spawned; set to a truthy value (`1`/`true`/`yes`/`on`) to load them. Off by default because a project-local `.mcp.json` spawns arbitrary commands on session start (issue #571). | off (opt-in) |
 
 
 ## Daemon

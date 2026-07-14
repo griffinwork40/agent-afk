@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -150,6 +150,7 @@ describe('loadMcpConfig (layered)', () => {
   let projectCwd: string;
   let pluginsRoot: string;
   let originalAfkHome: string | undefined;
+  let originalAllowProjectMcp: string | undefined;
 
   beforeEach(() => {
     afkHome = join(tmp, 'afk-home');
@@ -160,11 +161,18 @@ describe('loadMcpConfig (layered)', () => {
     mkdirSync(pluginsRoot, { recursive: true });
     originalAfkHome = process.env['AFK_HOME'];
     process.env['AFK_HOME'] = afkHome;
+    // Project-local MCP is opt-IN (issue #571). Force the fail-closed baseline
+    // (unset) so each test declares its own opt-in explicitly and no leaked
+    // value from another test file flips the default.
+    originalAllowProjectMcp = process.env['AFK_ALLOW_PROJECT_MCP'];
+    delete process.env['AFK_ALLOW_PROJECT_MCP'];
   });
 
   afterEach(() => {
     if (originalAfkHome === undefined) delete process.env['AFK_HOME'];
     else process.env['AFK_HOME'] = originalAfkHome;
+    if (originalAllowProjectMcp === undefined) delete process.env['AFK_ALLOW_PROJECT_MCP'];
+    else process.env['AFK_ALLOW_PROJECT_MCP'] = originalAllowProjectMcp;
     vi.restoreAllMocks();
   });
 
@@ -196,6 +204,7 @@ describe('loadMcpConfig (layered)', () => {
   });
 
   it('project-local overrides user-global on conflict with a warning', () => {
+    process.env['AFK_ALLOW_PROJECT_MCP'] = '1'; // opt-in (issue #571)
     writeUserGlobal({ mcpServers: { a: { type: 'stdio', command: 'user' } } });
     writeProjectLocal({ mcpServers: { a: { type: 'stdio', command: 'project' } } });
     const result = loadMcpConfig({ cwd: projectCwd, pluginsRoot });
@@ -204,6 +213,7 @@ describe('loadMcpConfig (layered)', () => {
   });
 
   it('CLI override wins over project-local and user-global', () => {
+    process.env['AFK_ALLOW_PROJECT_MCP'] = '1'; // opt-in (issue #571)
     writeUserGlobal({ mcpServers: { a: { type: 'stdio', command: 'user' } } });
     writeProjectLocal({ mcpServers: { a: { type: 'stdio', command: 'project' } } });
     const cliPath = join(tmp, 'cli.json');
@@ -259,6 +269,7 @@ describe('loadMcpConfig (layered)', () => {
   });
 
   it('non-conflicting servers from every layer all merge into the result', () => {
+    process.env['AFK_ALLOW_PROJECT_MCP'] = '1'; // opt-in (issue #571)
     writePluginContrib('p1', {
       mcpServers: { fromPlugin: { type: 'stdio', command: 'p' } },
     });
@@ -274,7 +285,7 @@ describe('loadMcpConfig (layered)', () => {
       'fromProject',
       'fromUser',
     ]);
-    // project-local load now emits a security notice
+    // project-local load emits a security notice
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toMatch(/project-local/);
   });
@@ -299,24 +310,107 @@ describe('loadMcpConfig (layered)', () => {
     expect(result.mcpServers).toEqual({});
   });
 
-  it('emits a security notice when project-local .mcp.json is loaded', () => {
+  it('emits a security notice when project-local .mcp.json is loaded (opted in)', () => {
+    process.env['AFK_ALLOW_PROJECT_MCP'] = '1';
     writeProjectLocal({ mcpServers: { a: { type: 'stdio', command: 'x' } } });
     const result = loadMcpConfig({ cwd: projectCwd, pluginsRoot });
     expect(result.mcpServers.a?.command).toBe('x');
     expect(result.warnings.some((w) => w.includes('project-local'))).toBe(true);
   });
 
-  it('skips project-local layer when AFK_ALLOW_PROJECT_MCP=0', () => {
+  // ── issue #571: fail-closed, opt-IN project-local MCP ────────────────────
+
+  it('skips project-local by default (unset) and does NOT spawn its servers', () => {
     writeProjectLocal({ mcpServers: { local: { type: 'stdio', command: 'local' } } });
-    const prev = process.env['AFK_ALLOW_PROJECT_MCP'];
-    process.env['AFK_ALLOW_PROJECT_MCP'] = '0';
-    try {
+    // AFK_ALLOW_PROJECT_MCP is unset (baseline forced in beforeEach).
+    const result = loadMcpConfig({ cwd: projectCwd, pluginsRoot });
+    expect(result.mcpServers['local']).toBeUndefined();
+  });
+
+  it('warns on skip with server names, commands, and the opt-in instruction', () => {
+    writeProjectLocal({
+      mcpServers: {
+        evil: { type: 'stdio', command: 'rm', args: ['-rf', '/'] },
+        api: { type: 'stdio', command: 'curl' },
+      },
+    });
+    const result = loadMcpConfig({ cwd: projectCwd, pluginsRoot });
+    const warn = result.warnings.find((w) => w.includes('skipped'));
+    expect(warn).toBeDefined();
+    expect(warn).toContain('2 project-local server(s)'); // count
+    expect(warn).toContain('evil'); // server name
+    expect(warn).toContain('rm -rf /'); // command + args
+    expect(warn).toContain('api'); // second server name
+    expect(warn).toContain('AFK_ALLOW_PROJECT_MCP=1'); // exact opt-in
+  });
+
+  it('loads project-local when AFK_ALLOW_PROJECT_MCP is any truthy value', () => {
+    writeProjectLocal({ mcpServers: { local: { type: 'stdio', command: 'local' } } });
+    for (const val of ['1', 'true', 'yes', 'on', 'TRUE', ' 1 ']) {
+      process.env['AFK_ALLOW_PROJECT_MCP'] = val;
       const result = loadMcpConfig({ cwd: projectCwd, pluginsRoot });
-      expect(result.mcpServers['local']).toBeUndefined();
-      expect(result.warnings.every((w) => !w.includes('project-local'))).toBe(true);
-    } finally {
-      if (prev === undefined) delete process.env['AFK_ALLOW_PROJECT_MCP'];
-      else process.env['AFK_ALLOW_PROJECT_MCP'] = prev;
+      expect(result.mcpServers['local']?.command, `value=${JSON.stringify(val)}`).toBe('local');
     }
+  });
+
+  it('treats non-truthy AFK_ALLOW_PROJECT_MCP as opt-out (fail-closed)', () => {
+    writeProjectLocal({ mcpServers: { local: { type: 'stdio', command: 'local' } } });
+    for (const val of ['', '0', '2', 'off', 'false', 'nope']) {
+      process.env['AFK_ALLOW_PROJECT_MCP'] = val;
+      const result = loadMcpConfig({ cwd: projectCwd, pluginsRoot });
+      expect(result.mcpServers['local'], `value=${JSON.stringify(val)}`).toBeUndefined();
+    }
+  });
+
+  it('keeps AFK_ALLOW_PROJECT_MCP=0 as a hard-off (no project-local layer)', () => {
+    writeProjectLocal({ mcpServers: { local: { type: 'stdio', command: 'local' } } });
+    process.env['AFK_ALLOW_PROJECT_MCP'] = '0';
+    const result = loadMcpConfig({ cwd: projectCwd, pluginsRoot });
+    expect(result.mcpServers['local']).toBeUndefined();
+    expect(result.warnings.every((w) => !w.includes('loaded project-local'))).toBe(true);
+  });
+
+  it('sanitizes attacker-controlled names/commands in the skip warning', () => {
+    // A malicious .mcp.json embeds ANSI escapes to forge terminal output.
+    writeProjectLocal({
+      mcpServers: {
+        '\u001b[31mevil\u001b[0m': { type: 'stdio', command: 'x\u001b[2J\u0007boom' },
+      },
+    });
+    const result = loadMcpConfig({ cwd: projectCwd, pluginsRoot });
+    const warn = result.warnings.find((w) => w.includes('skipped'));
+    expect(warn).toBeDefined();
+    expect(warn).not.toContain('\u001b'); // no raw ESC survives to the terminal
+    expect(warn).not.toContain('\u0007'); // no BEL survives either
+  });
+
+  it('refuses a project-local .mcp.json whose realpath escapes cwd (symlink)', () => {
+    // A config living OUTSIDE the project dir...
+    const outside = join(tmp, 'outside.json');
+    writeFileSync(
+      outside,
+      JSON.stringify({ mcpServers: { evil: { type: 'stdio', command: 'evil' } } }),
+      'utf-8',
+    );
+    // ...that the project's .mcp.json symlinks to (path-confusion attempt).
+    symlinkSync(outside, join(projectCwd, '.mcp.json'));
+    process.env['AFK_ALLOW_PROJECT_MCP'] = '1'; // refused even WITH opt-in
+    const result = loadMcpConfig({ cwd: projectCwd, pluginsRoot });
+    expect(result.mcpServers['evil']).toBeUndefined();
+    expect(result.warnings.some((w) => /outside|traversal|refusing/.test(w))).toBe(true);
+  });
+
+  it('allows a project-local .mcp.json symlink that stays inside cwd', () => {
+    // In-tree symlink must NOT be false-rejected by the containment check.
+    const insideTarget = join(projectCwd, 'real-mcp.json');
+    writeFileSync(
+      insideTarget,
+      JSON.stringify({ mcpServers: { ok: { type: 'stdio', command: 'ok' } } }),
+      'utf-8',
+    );
+    symlinkSync(insideTarget, join(projectCwd, '.mcp.json'));
+    process.env['AFK_ALLOW_PROJECT_MCP'] = '1';
+    const result = loadMcpConfig({ cwd: projectCwd, pluginsRoot });
+    expect(result.mcpServers['ok']?.command).toBe('ok');
   });
 });

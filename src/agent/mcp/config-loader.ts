@@ -28,10 +28,11 @@
  */
 
 import { env } from '../../config/env.js';
-import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { isAbsolute, join, relative } from 'node:path';
 
 import { getAfkConfigDir, getPluginsDir } from '../../paths.js';
+import { sanitizeForDisplay } from '../../utils/terminal-sanitize.js';
 import type { McpServerConfig } from './types.js';
 
 /** Shape of `~/.afk/config/mcp.json`. */
@@ -64,9 +65,33 @@ export function getMcpConfigPath(): string {
  * Resolves against the caller's `cwd` so per-worktree configs are honored.
  * Exported for tests and the `/mcp` slash command (so it can show "from
  * <path>" alongside each server's source).
+ *
+ * Security (issue #571): returns `null` when `<cwd>/.mcp.json` exists but its
+ * realpath escapes `cwd` — i.e. it is a symlink pointing out of the tree, or
+ * resolves elsewhere via `..`. A project-local config must be a real file
+ * inside the working directory; anything else is a path-confusion attempt and
+ * is refused (fail-closed) rather than silently followed to an out-of-tree
+ * target. A missing file returns the nominal path — the caller's `existsSync`
+ * check then treats it as "no project-local layer".
  */
-export function getProjectMcpConfigPath(cwd: string = process.cwd()): string {
-  return join(cwd, '.mcp.json');
+export function getProjectMcpConfigPath(cwd: string = process.cwd()): string | null {
+  const nominal = join(cwd, '.mcp.json');
+  if (!existsSync(nominal)) return nominal;
+  try {
+    // Invariant: realpath BOTH sides. On macOS a tmp/worktree cwd is itself
+    // frequently a symlink (/var → /private/var), so the file's resolved path
+    // must be compared against the resolved cwd — not the nominal one — or
+    // legitimate in-tree configs would be falsely rejected. `relative()`
+    // starting with `..` (or being absolute) means the target is out-of-tree.
+    const realCwd = realpathSync(cwd);
+    const realFile = realpathSync(nominal);
+    const rel = relative(realCwd, realFile);
+    if (rel.startsWith('..') || isAbsolute(rel)) return null;
+    return nominal;
+  } catch {
+    // realpath failed (broken symlink, race, permissions) — fail closed.
+    return null;
+  }
 }
 
 /**
@@ -295,6 +320,31 @@ interface TaggedServer {
 }
 
 /**
+ * Parse the `AFK_ALLOW_PROJECT_MCP` opt-in. Project-local `.mcp.json` servers
+ * spawn arbitrary stdio commands on session start, so loading them is OPT-IN
+ * (fail-closed): only an explicit truthy value grants consent. Mirrors the
+ * `1|true|yes|on` idiom used elsewhere (browser/config.ts, providers/
+ * openai-compatible/auth.ts). Unset, `0`, or any other value ⇒ do NOT load.
+ */
+function projectMcpOptIn(raw: string | undefined): boolean {
+  if (raw === undefined) return false;
+  const v = raw.trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
+/**
+ * Sanitise + length-clamp an attacker-controlled label for a single-line
+ * warning. Server names and commands in a project-local `.mcp.json` come from
+ * an untrusted cwd; `sanitizeForDisplay` strips ANSI/OSC escapes and collapses
+ * control bytes (incl. newlines) to spaces so a crafted value cannot forge or
+ * line-break the warning, and the clamp bounds a pathologically long command.
+ */
+function safeLabel(s: string, maxLen: number): string {
+  const clean = sanitizeForDisplay(s);
+  return clean.length > maxLen ? clean.slice(0, maxLen) + '…' : clean;
+}
+
+/**
  * Layered loader. Reads every layer in priority order (lowest first), then
  * folds them so the highest-priority layer wins on per-server-name
  * conflicts. Conflicts are reported as warnings naming the displaced source.
@@ -334,19 +384,54 @@ export function loadMcpConfig(opts: LoadMcpConfigOptions = {}): LoadedMcpConfig 
     layers.push({ path: userPath, loaded: loadMcpConfigFile(userPath) });
   }
 
-  // Layer 2 — project-local.
-  // Security: auto-loading .mcp.json from an arbitrary CWD can enable CWD
-  // poisoning in shared/CI environments.  We emit a notice through the
-  // standard warnings channel every time this layer fires so callers can
-  // surface it to the user.  Set AFK_ALLOW_PROJECT_MCP=0 to disable entirely.
-  if (!opts.skipProjectLocal && env.AFK_ALLOW_PROJECT_MCP !== '0') {
+  // Layer 2 — project-local (issue #571: fail-closed, opt-IN).
+  //
+  // Invariant: a project-local <cwd>/.mcp.json spawns arbitrary stdio commands
+  // on session start (StdioClientTransport → command+args), so cd-ing into an
+  // untrusted repo must NOT auto-spawn anything. This layer loads ONLY when the
+  // operator granted explicit consent via a truthy AFK_ALLOW_PROJECT_MCP. When
+  // a .mcp.json exists but consent is absent, the servers are skipped and a
+  // warning enumerates what WOULD have spawned (names + commands, sanitized —
+  // they are attacker-controlled) plus the exact opt-in, so the operator can
+  // decide with full information. A .mcp.json whose realpath escapes cwd
+  // (symlink / `..`) is refused outright, regardless of consent.
+  if (!opts.skipProjectLocal) {
     const projectPath = getProjectMcpConfigPath(opts.cwd);
-    if (existsSync(projectPath)) {
-      layers.push({ path: projectPath, loaded: loadMcpConfigFile(projectPath) });
+    if (projectPath === null) {
       preWarnings.push(
-        `mcp: loaded project-local config from ${projectPath}` +
-        ` — set AFK_ALLOW_PROJECT_MCP=0 to disable auto-load`,
+        'mcp: refusing to load project-local .mcp.json — it resolves outside ' +
+          'the working directory (symlink or path traversal).',
       );
+    } else if (existsSync(projectPath)) {
+      if (projectMcpOptIn(env.AFK_ALLOW_PROJECT_MCP)) {
+        layers.push({ path: projectPath, loaded: loadMcpConfigFile(projectPath) });
+        preWarnings.push(
+          `mcp: loaded project-local config from ${projectPath} ` +
+            '(AFK_ALLOW_PROJECT_MCP is set).',
+        );
+      } else {
+        // Skip + inform: enumerate the servers that WOULD have spawned so the
+        // operator can make an informed opt-in decision.
+        const skipped = loadMcpConfigFile(projectPath);
+        const entries = Object.entries(skipped.mcpServers);
+        if (entries.length > 0) {
+          const summary = entries
+            .map(([name, cfg]) => {
+              const cmd = cfg.command
+                ? [cfg.command, ...(cfg.args ?? [])].join(' ')
+                : (cfg.url ?? '(no transport)');
+              return `${safeLabel(name, 64)} → ${safeLabel(cmd, 160)}`;
+            })
+            .join('; ');
+          preWarnings.push(
+            `mcp: skipped ${entries.length} project-local server(s) from ` +
+              `${projectPath} — not spawned: [${summary}]. Set ` +
+              `AFK_ALLOW_PROJECT_MCP=1 to load ` +
+              `${entries.length === 1 ? 'it' : `these ${entries.length}`} if ` +
+              'you trust this directory.',
+          );
+        }
+      }
     }
   }
 
