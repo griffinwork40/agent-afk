@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.49.0] - 2026-07-14
+
+### Added
+- opt-in bounded session primer (AFK_COMPANION_PRIMER) (#590) (a708ef4)
+
+### Fixed
+- replay saved transcript on /sessions switch (thread resumeHistory + sessionId) (#604) (b8673b7)
+
 ## [5.48.1] - 2026-07-14
 
 ### Security
