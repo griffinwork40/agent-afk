@@ -142,6 +142,7 @@ export function loadJsonConfig(): {
               maxAgeDaysDirty: number;
               scope: string;
             };
+            verifyDone?: boolean;
           } = {};
           if (typeof json.daemon.task === 'string') {
             daemon.task = json.daemon.task;
@@ -158,6 +159,9 @@ export function loadJsonConfig(): {
               maxAgeDaysDirty: typeof wp.maxAgeDaysDirty === 'number' ? wp.maxAgeDaysDirty : 30,
               scope: typeof wp.scope === 'string' ? wp.scope : 'all',
             };
+          }
+          if (typeof json.daemon.verifyDone === 'boolean') {
+            daemon.verifyDone = json.daemon.verifyDone;
           }
           config.daemon = daemon;
         }

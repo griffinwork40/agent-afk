@@ -318,3 +318,58 @@ describe('afk daemon (CLI integration)', () => {
     );
   });
 });
+
+describe('formatTaskCompletion — "Done" verification downgrade', () => {
+  const successRecord = () => ({
+    taskId: 'nightly',
+    command: 'run',
+    trigger: 'cron' as const,
+    triggeredAt: new Date(0).toISOString(),
+    durationMs: 1200,
+    status: 'success' as const,
+    responseExcerpt: 'shipped it',
+  });
+
+  it('downgrades the header + appends the caveat when doneUnverified AND verifyDone on', () => {
+    const formatted = formatTaskCompletion(
+      successRecord(),
+      { responseText: 'shipped it', doneUnverified: true },
+      true,
+    );
+    expect(formatted).toContain('⚠️ Done (unverified)');
+    expect(formatted).toContain(
+      'no file write/edit or successful command recorded this turn',
+    );
+    // Success ✅ header must be gone (replaced by the downgrade header).
+    expect(formatted).not.toContain('✅ daemon task');
+    // The response body is still present.
+    expect(formatted).toContain('shipped it');
+  });
+
+  it('output is byte-identical to the no-flag call when verifyDone is off', () => {
+    const record = successRecord();
+    const details = { responseText: 'shipped it', doneUnverified: true };
+    // Explicit off, explicit off-via-omitted-arg, and the historical 2-arg call
+    // must all produce exactly the same string as today.
+    const off = formatTaskCompletion(record, details, false);
+    const baseline = formatTaskCompletion(record, { responseText: 'shipped it' });
+    expect(off).toBe(baseline);
+    expect(formatTaskCompletion(record, details)).toBe(baseline);
+    expect(off).not.toContain('unverified');
+    expect(off).toContain('✅ daemon task: nightly (success)');
+  });
+
+  it('does NOT downgrade when verifyDone on but doneUnverified is absent/false', () => {
+    const record = successRecord();
+    const on = formatTaskCompletion(record, { responseText: 'shipped it' }, true);
+    // No doneUnverified ⇒ identical to the plain success push.
+    expect(on).toBe(formatTaskCompletion(record, { responseText: 'shipped it' }));
+    expect(on).not.toContain('unverified');
+    const explicitFalse = formatTaskCompletion(
+      record,
+      { responseText: 'shipped it', doneUnverified: false },
+      true,
+    );
+    expect(explicitFalse).not.toContain('unverified');
+  });
+});

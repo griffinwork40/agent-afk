@@ -90,6 +90,7 @@ describe('classifyConfigKey / specs', () => {
     expect(classifyConfigKey('telegram.notify.targets')).toBe('human');
     expect(classifyConfigKey('telegram.verifyDone')).toBe('human'); // self-honesty gate — agent must not disable its own verification
     expect(classifyConfigKey('enforceDoneEvidence')).toBe('human'); // self-honesty gate — agent must not disable its own enforcement
+    expect(classifyConfigKey('daemon.verifyDone')).toBe('human'); // daemon self-honesty gate — agent must not disable its own push verification
     expect(classifyConfigKey('updatePolicy')).toBe('human'); // auto self-update is scope-widening
     expect(classifyConfigKey('systemPrompt')).toBe('human');
     expect(classifyConfigKey('enableShellHooks')).toBe('human'); // trust gate — agent must not flip it
@@ -104,6 +105,16 @@ describe('coerceConfigValue', () => {
   it('booleans accept typed and string forms', () => {
     const spec = getConfigKeySpec('bgSummaries')!;
     expect(coerceConfigValue(spec, true)).toEqual({ ok: true, value: true });
+    expect(coerceConfigValue(spec, 'off')).toEqual({ ok: true, value: false });
+    expect(coerceConfigValue(spec, 'banana').ok).toBe(false);
+  });
+  it('daemon.verifyDone is a human-tier boolean (true/false/non-boolean)', () => {
+    const spec = getConfigKeySpec('daemon.verifyDone')!;
+    expect(spec.tier).toBe('human');
+    expect(spec.type).toBe('boolean');
+    expect(coerceConfigValue(spec, true)).toEqual({ ok: true, value: true });
+    expect(coerceConfigValue(spec, false)).toEqual({ ok: true, value: false });
+    expect(coerceConfigValue(spec, 'on')).toEqual({ ok: true, value: true });
     expect(coerceConfigValue(spec, 'off')).toEqual({ ok: true, value: false });
     expect(coerceConfigValue(spec, 'banana').ok).toBe(false);
   });

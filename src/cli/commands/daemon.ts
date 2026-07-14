@@ -7,6 +7,8 @@ import os from 'os';
 import { startDaemon } from '../../agent/daemon.js';
 import { getQueueDir } from '../../paths.js';
 import { pushIfConfigured } from '../../telegram/push.js';
+import { parseTerminalState } from './interactive/terminal-state.js';
+import { DONE_EVIDENCE_TOOLS } from './interactive/afk-push.js';
 import type { TaskCompletionDetails, TelemetryRecord } from '../../agent/daemon/scheduler.js';
 import {
   COMPILED_DEFAULT_TASK_ID,
@@ -252,18 +254,44 @@ export function buildDaemonSessionFactory(
 }
 
 /**
+ * Caveat line appended to a downgraded "Done (unverified)" daemon push. Kept
+ * byte-identical to the REPL's afk-push wording (minus that surface's leading
+ * "• " bullet, which the daemon message shape doesn't use) so the operator sees
+ * one consistent self-honesty message across surfaces. See
+ * `formatTerminalStateForTelegram` in `interactive/afk-push.ts`.
+ */
+const DAEMON_DONE_UNVERIFIED_CAVEAT =
+  '⚠️ Unverified: no file write/edit or successful command recorded this turn — confirm before relying on this.';
+
+/**
  * Format a daemon telemetry record for an out-of-band notification
  * (e.g. Telegram push). Short, scannable, status-first.
+ *
+ * `verifyDone` gates the opt-in "Done"-verification downgrade (mirrors
+ * `daemon.verifyDone` in config). When it is `true` AND
+ * `details.doneUnverified` is `true`, the ✅ success header is downgraded to a
+ * "⚠️ Done (unverified)" header and the {@link DAEMON_DONE_UNVERIFIED_CAVEAT}
+ * line is appended. When `verifyDone` is falsy (the default), the output is
+ * byte-identical to before this feature existed — fail-open, opt-in.
  */
 export function formatTaskCompletion(
   record: TelemetryRecord,
   details: TaskCompletionDetails = {},
+  verifyDone = false,
 ): string {
+  // Downgrade only when the config gate is on AND this tick self-certified an
+  // unbacked Done. `doneUnverified` is only ever set on `status: 'success'`
+  // ticks (a `Done` response), so the header swap can't collide with the
+  // skipped/error icons.
+  const downgraded = verifyDone === true && details.doneUnverified === true;
   const icon =
     record.status === 'success' ? '✅' : record.status === 'skipped' ? '⏭️' : '❌';
   const durationSec = (record.durationMs / 1000).toFixed(1);
+  const header = downgraded
+    ? `⚠️ Done (unverified) — daemon task: ${record.taskId} (${record.status})`
+    : `${icon} daemon task: ${record.taskId} (${record.status})`;
   const lines = [
-    `${icon} daemon task: ${record.taskId} (${record.status})`,
+    header,
     `trigger=${record.trigger} duration=${durationSec}s`,
   ];
   if (record.skipReason) lines.push(`skipReason=${record.skipReason}`);
@@ -271,6 +299,9 @@ export function formatTaskCompletion(
   const responseText = details.responseText ?? record.responseExcerpt;
   if (responseText) {
     lines.push('', responseText);
+  }
+  if (downgraded) {
+    lines.push('', DAEMON_DONE_UNVERIFIED_CAVEAT);
   }
   return lines.join('\n');
 }
@@ -483,11 +514,30 @@ export function registerDaemonCommand(program: Command): void {
           ...(cooldownMs !== undefined ? { cooldownMs } : {}),
           ...(trigger === 'pull' ? { pullPollIntervalMs: 30_000, queueDir: getQueueDir() } : {}),
           tasks,
+          // "Done"-verification probe (opt-in via daemon.verifyDone; computed
+          // every tick, acted on only when the config gate is enabled). Composes
+          // the SAME reusables the REPL uses — `parseTerminalState` +
+          // `doneHasCorroboratingEvidence` semantics — so the daemon flags an
+          // unbacked `Done` identically to the interactive surface. Injected
+          // here (the CLI layer) rather than imported by the scheduler, which
+          // lives in `src/agent/` and must not depend on `src/cli/`. Pure + total
+          // (never throws); the scheduler additionally guards it.
+          doneUnverifiedProbe: ({ responseText, successfulToolNames }) => {
+            const verdict = parseTerminalState(responseText);
+            if (verdict === null || verdict.kind !== 'done') return false;
+            const hasEvidence = successfulToolNames.some((name) => DONE_EVIDENCE_TOOLS.has(name));
+            return !hasEvidence;
+          },
           onTaskComplete: (record: TelemetryRecord, details?: TaskCompletionDetails) => {
             // markdown:true — task output is agent-authored markdown; render it
             // to Telegram HTML so **bold**/`code`/headers format instead of
             // showing their literal markers (plain-text fallback on parse error).
-            void pushIfConfigured(formatTaskCompletion(record, details), { markdown: true }).catch(() => undefined);
+            // config.daemon?.verifyDone gates the opt-in Done-verification
+            // downgrade; when unset/false the formatted message is unchanged.
+            void pushIfConfigured(
+              formatTaskCompletion(record, details, config.daemon?.verifyDone === true),
+              { markdown: true },
+            ).catch(() => undefined);
           },
         });
 

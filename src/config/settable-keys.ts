@@ -234,6 +234,7 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'interactive.worktreeBase', tier: 'human', type: 'string', description: 'Worktree base ref (git-flag sensitive).' },
   { path: 'daemon.task', tier: 'human', type: 'string', description: 'Daemon task prompt.' },
   { path: 'daemon.taskId', tier: 'human', type: 'string', description: 'Daemon task id.' },
+  { path: 'daemon.verifyDone', tier: 'human', type: 'boolean', description: 'Opt-in daemon-surface "Done" verification gate: a cron-tick completion push whose response self-certifies "Done" with no corroborating evidence (a successful file write/edit or executed command) is relabelled "⚠️ Done (unverified)" with a caveat line. The daemon analog of telegram.verifyDone (which is REPL-only); the daemon is single-turn-per-tick, so the only honest enforcement is relabelling the outgoing push rather than bouncing a next turn. Human-tier: a self-honesty check on the agent\'s own completion reporting — the agent must not be able to disable it on its own config, same rationale as telegram.verifyDone.' },
 ];
 
 const CONFIG_KEY_BY_PATH = new Map(CONFIG_KEY_SPECS.map((s) => [s.path, s]));

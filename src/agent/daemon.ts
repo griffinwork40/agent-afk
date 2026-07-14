@@ -52,6 +52,13 @@ export interface DaemonOptions {
   /** Optional callback fired after every telemetry record is written. */
   onTaskComplete?: SchedulerOptions['onTaskComplete'];
   /**
+   * "Done"-verification probe. Injected by the CLI daemon wiring (where the
+   * `parseTerminalState` + `doneHasCorroboratingEvidence` reusables are legally
+   * importable — `src/agent/` must not import `src/cli/`). Flows into
+   * `CronScheduler`. See `SchedulerOptions.doneUnverifiedProbe`.
+   */
+  doneUnverifiedProbe?: SchedulerOptions['doneUnverifiedProbe'];
+  /**
    * Poll interval (ms) for pull-trigger mode. When set and > 0, the daemon
    * will call `scheduler.startPullLoop()` after construction and dequeue one
    * task per tick from `queueDir` when idle.
@@ -100,6 +107,7 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
     ...(options.cooldownMs !== undefined ? { cooldownMs: options.cooldownMs } : {}),
     ...(options.now !== undefined ? { now: options.now } : {}),
     ...(options.onTaskComplete !== undefined ? { onTaskComplete: options.onTaskComplete } : {}),
+    ...(options.doneUnverifiedProbe !== undefined ? { doneUnverifiedProbe: options.doneUnverifiedProbe } : {}),
     ...(options.pullPollIntervalMs !== undefined ? { pullPollIntervalMs: options.pullPollIntervalMs } : {}),
     ...(options.queueDir !== undefined ? { queueDir: options.queueDir } : {}),
   });
