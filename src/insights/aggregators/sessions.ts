@@ -10,7 +10,7 @@
  * @module insights/aggregators/sessions
  */
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { getSessionsDir } from '../../paths.js';
 import type { InsightsOptions, SessionAggregates } from '../types.js';
@@ -78,6 +78,20 @@ export function aggregateSessions(options: InsightsOptions): SessionAggregates {
 
   for (const file of files) {
     const filePath = join(sessionsDir, file);
+
+    // Cheap pre-filter (mirrors the traces aggregator): a sidecar's mtime (its
+    // last write) is always >= the session's startedAt, so an mtime before the
+    // cutoff means the session started outside the window — skip WITHOUT reading
+    // the file. The precise startedAt check below stays the authoritative filter
+    // for any file that passes this gate.
+    try {
+      if (statSync(filePath).mtimeMs < cutoffMs) {
+        continue;
+      }
+    } catch {
+      continue; // can't stat — skip
+    }
+
     try {
       const raw = readFileSync(filePath, 'utf-8');
       const session = JSON.parse(raw) as Record<string, unknown>;

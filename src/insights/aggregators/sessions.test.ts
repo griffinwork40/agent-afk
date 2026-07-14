@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { aggregateSessions } from './sessions.js';
@@ -97,6 +97,22 @@ describe('aggregateSessions', () => {
     const result = aggregateSessions({ days: 30, afkHome: tmpRoot });
     expect(result.totalSessions).toBe(1);
     expect(result.totalCostUsd).toBeCloseTo(0.05);
+  });
+
+  it('mtime pre-filter: a sidecar last modified before the cutoff is skipped without being read', () => {
+    // Regression guard for the mtime pre-filter (mirrors the traces aggregator).
+    // A sidecar's mtime is always >= its session's startedAt, so a file whose
+    // mtime predates the window can be skipped without reading it. We give the
+    // file a RECENT startedAt but an OLD mtime: with the pre-filter active the
+    // session is skipped (0); were the pre-filter removed, the file would be
+    // read and the recent startedAt would wrongly include it (1).
+    const filePath = join(tmpRoot, 'state', 'sessions', 'stale-mtime.json');
+    writeFileSync(filePath, JSON.stringify(makeSession({ startedAt: Date.now() })), 'utf-8');
+    const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+    utimesSync(filePath, old, old);
+
+    const result = aggregateSessions({ days: 30, afkHome: tmpRoot });
+    expect(result.totalSessions).toBe(0);
   });
 
   it('two sessions: model breakdown sums correctly', () => {
