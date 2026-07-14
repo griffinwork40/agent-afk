@@ -19,6 +19,7 @@ import { palette } from './palette.js';
 import { ResizeBus } from './terminal-size.js';
 import { formatContextBar } from './context-bar.js';
 import { formatCwd } from './format-cwd.js';
+import { isPlainOutputRequested } from '../config/env.js';
 
 export interface StatusLineFields {
   model: string;
@@ -89,7 +90,15 @@ export class StatusLine {
   }
 
   private get enabled(): boolean {
-    return this.force || !!this.stream.isTTY;
+    // AFK_PLAIN_OUTPUT / --plain is a full render opt-out: a TTY session with
+    // the flag set must behave like a non-TTY surface, so the DECSTBM scroll
+    // region and cursor-positioned status row are suppressed exactly as they
+    // are on a genuine non-TTY stdout (where `isTTY` is false). Every escape-
+    // emitting method routes through this getter, so gating here neutralizes
+    // start/repaint/setExtraRows/onResize/rearm/withFullScrollRegion/stop in
+    // one place. Mirrors the compositor/renderer/input gates that also consult
+    // `isPlainOutputRequested` (config/env.ts). `force` (tests) still wins.
+    return this.force || (!!this.stream.isTTY && !isPlainOutputRequested());
   }
 
   /** Reserve the bottom row by reducing the scroll region. */

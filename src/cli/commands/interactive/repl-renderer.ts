@@ -12,25 +12,20 @@
  *
  * Non-TTY surfaces (pipes, CI) get a simple stdout-only variant. The same
  * plain variant is also selected on a TTY when `AFK_PLAIN_OUTPUT` is truthy
- * — an opt-in escape hatch for tmux/SSH/multiplexer sessions where the live
- * overlay's cursor-up redraws and DECSTBM reserved rows misbehave. Default
- * TTY behavior (the live overlay) is unchanged unless this var is set.
+ * — a full render opt-out for tmux/SSH/multiplexer sessions where the live
+ * overlay's cursor-up redraws and DECSTBM reserved rows misbehave. This is
+ * one of three sites gated on {@link isPlainOutputRequested}: this seam
+ * (between-turn writes), `InputSurface.armCompositor` (the persistent
+ * compositor), and `StreamRenderer`'s `isTTY` computation (the per-turn
+ * overlay) — all three must agree for the TTY session to fully behave like
+ * non-TTY. Default TTY behavior (the live overlay) is unchanged unless this
+ * var is set.
  *
  * The compositor is bound lazily via setCompositor() — mirrors the
  * CompletionWriter pattern already used in shared.ts / turn-handler.ts.
  */
 
-import { env } from '../../../config/env.js';
-
-/** Truthy values recognized for `AFK_PLAIN_OUTPUT`, matching the "1"/"true"
- *  convention used by other boolean-ish opt-in vars in this codebase (see
- *  AFK_AUTO_ROUTING in env-tier.ts). Case-insensitive. */
-function isPlainOutputRequested(): boolean {
-  const raw = env.AFK_PLAIN_OUTPUT;
-  if (raw === undefined) return false;
-  const v = raw.trim().toLowerCase();
-  return v === '1' || v === 'true';
-}
+import { isPlainOutputRequested } from '../../../config/env.js';
 
 interface CompositorRef {
   isArmed(): boolean;

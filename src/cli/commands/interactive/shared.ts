@@ -329,9 +329,14 @@ export interface CliOptions {
    */
   mcpConfig?: string;
   /**
-   * `--plain` — activates AFK_PLAIN_OUTPUT for this session, forcing the
-   * REPL's append-only stdout renderer even when stdout is a TTY. See
-   * `repl-renderer.ts` for the routing decision this flag feeds.
+   * `--plain` — activates AFK_PLAIN_OUTPUT for this session: a full render
+   * opt-out that makes the REPL behave like a non-TTY surface even when
+   * stdout/stdin ARE a TTY. Forces the append-only stdout renderer (no
+   * persistent or per-turn compositor) AND downgrades the input surface to
+   * the simple `readWithAutocomplete` reader. Fed by `isPlainOutputRequested()`
+   * (`config/env.ts`) into three sites: `repl-renderer.ts` (between-turn
+   * writes), `input-surface.ts` (`armCompositor`), and `stream-renderer.ts`
+   * (`isTTY`).
    */
   plain?: boolean;
 }

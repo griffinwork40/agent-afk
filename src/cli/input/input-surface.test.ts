@@ -12,7 +12,7 @@
  * changes.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { PassThrough } from 'node:stream';
 import type { Interface as ReadlineInterface } from 'readline';
 import chalk from 'chalk';
@@ -187,6 +187,88 @@ describe('InputSurface', () => {
       const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
       expect(() => surface.setBackgroundHandler(() => {})).not.toThrow();
       expect(() => surface.setBackgroundHandler(null)).not.toThrow();
+    });
+
+    describe('AFK_PLAIN_OUTPUT full render opt-out (Lever 1)', () => {
+      // Regression for the "--plain doesn't suppress the persistent
+      // compositor" bug. Root cause: armCompositor()'s early-return only
+      // checked `!stdout.isTTY || !stdin.isTTY` — a --plain session on a
+      // real TTY (both streams report isTTY: true) still armed the
+      // persistent compositor, leaving setCompositor() a no-op downstream
+      // (repl-renderer.ts) while the compositor itself stayed live. Adding
+      // isPlainOutputRequested() to the guard makes armCompositor() agree
+      // with the render seam: getCompositor() stays null, so readLine()
+      // falls through to the non-TTY readWithAutocomplete reader — the
+      // intended opt-out tradeoff.
+      afterEach(() => {
+        vi.unstubAllEnvs();
+      });
+
+      it('armCompositor is a no-op when AFK_PLAIN_OUTPUT=1 even though stdout/stdin are TTYs', async () => {
+        vi.stubEnv('AFK_PLAIN_OUTPUT', '1');
+        const stdout = makeMockStdout();
+        const stdin = makeMockStdin();
+        const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+
+        await surface.armCompositor({
+          promptFn: () => '> ',
+          onCancel: () => {},
+          stdout,
+          stdin,
+        });
+
+        expect(surface.getCompositor()).toBeNull();
+      });
+
+      it('armCompositor is a no-op when AFK_PLAIN_OUTPUT=true (case-insensitive) on a TTY', async () => {
+        vi.stubEnv('AFK_PLAIN_OUTPUT', 'TRUE');
+        const stdout = makeMockStdout();
+        const stdin = makeMockStdin();
+        const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+
+        await surface.armCompositor({
+          promptFn: () => '> ',
+          onCancel: () => {},
+          stdout,
+          stdin,
+        });
+
+        expect(surface.getCompositor()).toBeNull();
+      });
+
+      it('arms normally on a TTY when AFK_PLAIN_OUTPUT is unset (no behavior change)', async () => {
+        vi.stubEnv('AFK_PLAIN_OUTPUT', undefined as unknown as string);
+        const stdout = makeMockStdout();
+        const stdin = makeMockStdin();
+        const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+
+        await surface.armCompositor({
+          promptFn: () => '> ',
+          onCancel: () => {},
+          stdout,
+          stdin,
+        });
+
+        expect(surface.getCompositor()).not.toBeNull();
+        await surface.dispose();
+      });
+
+      it('does not suppress arming for unrecognized values (e.g. "0")', async () => {
+        vi.stubEnv('AFK_PLAIN_OUTPUT', '0');
+        const stdout = makeMockStdout();
+        const stdin = makeMockStdin();
+        const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+
+        await surface.armCompositor({
+          promptFn: () => '> ',
+          onCancel: () => {},
+          stdout,
+          stdin,
+        });
+
+        expect(surface.getCompositor()).not.toBeNull();
+        await surface.dispose();
+      });
     });
 
     it('readLine on an armed TTY surface does not call readWithAutocomplete (persistent path)', async () => {

@@ -1075,3 +1075,58 @@ describe('StatusLine cwd/branch worktree dedupe', () => {
     status.stop();
   });
 });
+
+describe('StatusLine — AFK_PLAIN_OUTPUT full render opt-out', () => {
+  // Regression: --plain must make a TTY session behave like a non-TTY surface
+  // for the status line too. Before the fix, `enabled` was `force || isTTY`,
+  // so a --plain TTY (isTTY still true) armed a DECSTBM scroll region and
+  // painted a cursor-positioned status row concurrent with the renderer's raw
+  // stdout writes — the exact corruption class the flag exists to escape.
+  // Streams here are real-TTY-shaped stand-ins so the assertion exercises the
+  // `stream.isTTY` read path, not a `force`/non-TTY shortcut.
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('start()/repaint()/setExtraRows()/stop() emit nothing on a real-TTY stream when AFK_PLAIN_OUTPUT=1', () => {
+    vi.stubEnv('AFK_PLAIN_OUTPUT', '1');
+    const tty = mockStream({ isTTY: true, rows: 24 });
+    const status = new StatusLine({ stream: tty as unknown as NodeJS.WriteStream });
+    status.start();
+    status.repaint({ model: 'sonnet' });
+    status.setExtraRows(2);
+    status.stop();
+    expect(tty.writes).toHaveLength(0);
+  });
+
+  it('still arms the scroll region on a TTY when AFK_PLAIN_OUTPUT is unset (no behavior change)', () => {
+    vi.stubEnv('AFK_PLAIN_OUTPUT', undefined as unknown as string);
+    const tty = mockStream({ isTTY: true, rows: 24 });
+    const status = new StatusLine({ stream: tty as unknown as NodeJS.WriteStream });
+    status.start();
+    // DECSTBM scroll region ESC[1;23r proves the status stack is live.
+    expect(lastJoined(tty)).toContain('\x1b[1;23r');
+    status.stop();
+  });
+
+  it('does not suppress for unrecognized values (e.g. "0")', () => {
+    vi.stubEnv('AFK_PLAIN_OUTPUT', '0');
+    const tty = mockStream({ isTTY: true, rows: 24 });
+    const status = new StatusLine({ stream: tty as unknown as NodeJS.WriteStream });
+    status.start();
+    expect(lastJoined(tty)).toContain('\x1b[1;23r');
+    status.stop();
+  });
+
+  it('force:true still wins over AFK_PLAIN_OUTPUT (explicit test override)', () => {
+    vi.stubEnv('AFK_PLAIN_OUTPUT', '1');
+    const nonTty = mockStream({ isTTY: false, rows: 24 });
+    const status = new StatusLine({
+      stream: nonTty as unknown as NodeJS.WriteStream,
+      force: true,
+    });
+    status.start();
+    expect(lastJoined(nonTty)).toContain('\x1b[1;23r');
+    status.stop();
+  });
+});

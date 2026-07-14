@@ -9,7 +9,7 @@
  * lifecycle, and the structural shape of the output.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { StreamRenderer } from './stream-renderer.js';
 import type { Writer } from '../slash/types.js';
 import type {
@@ -1960,5 +1960,95 @@ describe('StreamRenderer — setInterrupting', () => {
     const r = new StreamRenderer({ out: writer, forceNonTty: true });
     await r.dispose();
     expect(() => r.setInterrupting(true)).not.toThrow();
+  });
+});
+
+describe('StreamRenderer — AFK_PLAIN_OUTPUT full render opt-out (Lever 2)', () => {
+  // Regression for the "--plain doesn't suppress the mid-turn overlay" bug.
+  // Root cause: AFK_PLAIN_OUTPUT was only read by createReplRenderer()
+  // (the between-turn seam) — StreamRenderer computed isTTY purely from
+  // process.stdout/stdin.isTTY, so a --plain session on a real TTY still
+  // got a live overlay for every turn. Folding isPlainOutputRequested()
+  // into the isTTY computation makes StreamRenderer agree with the seam:
+  // when the flag is set, this.isTTY is forced false regardless of the
+  // underlying stream's real TTY-ness, so arm() builds no compositor and
+  // every `if (this.isTTY && ...)` overlay branch is skipped.
+  //
+  // Streams here are real TTY-shaped stand-ins (not `forceNonTty`) so the
+  // test exercises the actual process.stdout/stdin.isTTY read path — using
+  // forceNonTty would make the assertion vacuous (isTTY is already false
+  // for a different reason).
+  type PrivateRenderer = { isTTY: boolean };
+
+  const origStdoutIsTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+  const origStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    if (origStdoutIsTTY) Object.defineProperty(process.stdout, 'isTTY', origStdoutIsTTY);
+    else delete (process.stdout as { isTTY?: boolean }).isTTY;
+    if (origStdinIsTTY) Object.defineProperty(process.stdin, 'isTTY', origStdinIsTTY);
+    else delete (process.stdin as { isTTY?: boolean }).isTTY;
+  });
+
+  function stubProcessTTY(isTTY: boolean): void {
+    Object.defineProperty(process.stdout, 'isTTY', { value: isTTY, configurable: true });
+    Object.defineProperty(process.stdin, 'isTTY', { value: isTTY, configurable: true });
+  }
+
+  it('isTTY is false when AFK_PLAIN_OUTPUT=1 even though process.stdout/stdin.isTTY are true', async () => {
+    stubProcessTTY(true);
+    vi.stubEnv('AFK_PLAIN_OUTPUT', '1');
+
+    const { writer } = makeWriter();
+    const r = new StreamRenderer({ out: writer });
+
+    expect((r as unknown as PrivateRenderer).isTTY).toBe(false);
+    await r.dispose();
+  });
+
+  it('isTTY is false when AFK_PLAIN_OUTPUT=true (case-insensitive) on a real TTY', async () => {
+    stubProcessTTY(true);
+    vi.stubEnv('AFK_PLAIN_OUTPUT', 'TRUE');
+
+    const { writer } = makeWriter();
+    const r = new StreamRenderer({ out: writer });
+
+    expect((r as unknown as PrivateRenderer).isTTY).toBe(false);
+    await r.dispose();
+  });
+
+  it('isTTY stays true on a real TTY when AFK_PLAIN_OUTPUT is unset (no behavior change)', async () => {
+    stubProcessTTY(true);
+    vi.stubEnv('AFK_PLAIN_OUTPUT', undefined as unknown as string);
+
+    const { writer } = makeWriter();
+    const r = new StreamRenderer({ out: writer });
+
+    expect((r as unknown as PrivateRenderer).isTTY).toBe(true);
+    await r.dispose();
+  });
+
+  it('arm() builds no compositor when AFK_PLAIN_OUTPUT=1 forces isTTY false on a real TTY', async () => {
+    stubProcessTTY(true);
+    vi.stubEnv('AFK_PLAIN_OUTPUT', '1');
+
+    const { writer } = makeWriter();
+    const r = new StreamRenderer({ out: writer });
+
+    await r.arm();
+    expect(r.getCompositor()).toBeNull();
+    await r.dispose();
+  });
+
+  it('does not force isTTY false for unrecognized values (e.g. "0")', async () => {
+    stubProcessTTY(true);
+    vi.stubEnv('AFK_PLAIN_OUTPUT', '0');
+
+    const { writer } = makeWriter();
+    const r = new StreamRenderer({ out: writer });
+
+    expect((r as unknown as PrivateRenderer).isTTY).toBe(true);
+    await r.dispose();
   });
 });

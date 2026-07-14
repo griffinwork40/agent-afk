@@ -858,11 +858,16 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   {
     name: 'AFK_PLAIN_OUTPUT',
     description:
-      'Force the interactive REPL to use the append-only plain-stdout renderer instead of the ' +
-      'TerminalCompositor live overlay, even when stdout is a TTY. Same code path already used ' +
-      'for non-TTY surfaces (pipes, CI). Reliability escape hatch for tmux/SSH/multiplexer ' +
-      'sessions where cursor-up redraws and DECSTBM scroll regions misbehave. Opt-in — default TTY ' +
-      'behavior (live overlay) is unchanged. Truthy values: 1, true (case-insensitive).',
+      'Force the interactive REPL to fully behave like a non-TTY surface for rendering purposes, ' +
+      'even when stdout/stdin ARE a TTY: append-only plain-stdout output instead of the ' +
+      'TerminalCompositor live overlay (both the persistent between-turn compositor AND the ' +
+      'per-turn StreamRenderer overlay), AND the input surface downgrades to the simple ' +
+      'non-TTY line reader instead of the fancy compositor-backed input box. Same code path ' +
+      'already used for non-TTY surfaces (pipes, CI). Full opt-out escape hatch for tmux/SSH/' +
+      'multiplexer sessions where cursor-up redraws and DECSTBM scroll regions misbehave — ' +
+      'trades the live overlay and fancy input UX for reliability. Opt-in — default TTY behavior ' +
+      '(live overlay + fancy input) is unchanged unless this var is set. Truthy values: 1, true ' +
+      '(case-insensitive).',
     type: 'boolean',
     required: false,
     example: '1',
@@ -1379,6 +1384,30 @@ export const env = {
   get AFK_SHELL_WRAPPER(): string | undefined { return process.env['AFK_SHELL_WRAPPER']; },
   get AFK_USER_CARD_MAX_ROWS(): string | undefined { return process.env['AFK_USER_CARD_MAX_ROWS']; },
 } as const; // `as const` narrows getter return types — it does NOT call Object.freeze; the object is mutable at runtime.
+
+/**
+ * Truthy-check for `AFK_PLAIN_OUTPUT` (the `--plain` CLI flag's env twin).
+ * Truthy iff `'1'` or `'true'`, case-insensitive, after trimming whitespace —
+ * matching the convention used by other boolean-ish opt-in vars in this
+ * codebase (see AFK_AUTO_ROUTING in env-tier.ts).
+ *
+ * Reads via `env.AFK_PLAIN_OUTPUT` (never `process.env` directly), keeping
+ * this inside the CI-enforced single-read-point boundary (`pnpm audit:env:check`).
+ *
+ * Shared by every render-decision site that must treat a `--plain` /
+ * `AFK_PLAIN_OUTPUT=1` TTY session as non-TTY for rendering purposes: the
+ * REPL renderer seam (`repl-renderer.ts`, between-turn writes), the
+ * persistent input surface's compositor arm (`input-surface.ts`), and the
+ * per-turn StreamRenderer's `isTTY` computation (`stream-renderer.ts`).
+ * Originally module-local to `repl-renderer.ts`; promoted here so all three
+ * sites import one predicate instead of drifting copies.
+ */
+export function isPlainOutputRequested(): boolean {
+  const raw = env.AFK_PLAIN_OUTPUT;
+  if (raw === undefined) return false;
+  const v = raw.trim().toLowerCase();
+  return v === '1' || v === 'true';
+}
 
 // ── Secret hardening ────────────────────────────────────────────────────────
 // Credential-bearing getters (auth keys, OAuth tokens, bot tokens) are
