@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.43.1] - 2026-07-14
+
+### Fixed
+- elicitation URL-mode cancel guard + swallowed errors + UX cleanup (#502) (#589) (3aca90a)
+
 ## [5.43.0] - 2026-07-14
 
 ### Added
