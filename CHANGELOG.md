@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.46.1] - 2026-07-14
+
+### Fixed
+- bound read-only research agents + degrade empty no-terminal run to a marked partial (#597) (a39b1ff)
+
 ## [5.46.0] - 2026-07-14
 
 ### Added
