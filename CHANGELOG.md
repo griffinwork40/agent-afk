@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.46.2] - 2026-07-14
+
+### Fixed
+- classify fork wall-clock timeout as failed, not cancelled, so bg timeouts reach the parent (#465 follow-up) (#596) (61e685e)
+
 ## [5.46.1] - 2026-07-14
 
 ### Fixed
