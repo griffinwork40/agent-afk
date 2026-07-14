@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.49.1] - 2026-07-14
+
+### Changed
+- place # Agent AFK doctrine before memory and skills in assembled prompt (#605) (6def730)
+
 ## [5.49.0] - 2026-07-14
 
 ### Added
