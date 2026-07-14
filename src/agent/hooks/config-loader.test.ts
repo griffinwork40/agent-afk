@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,7 +11,9 @@ import {
   loadHooksConfigFile,
   loadHooksConfig,
   compileMatcher,
+  discoverPluginHooksConfigs,
 } from './config-loader.js';
+import { _resetPluginScanCache } from '../plugins-scanner.js';
 
 let tmp: string;
 
@@ -262,6 +264,10 @@ describe('loadHooksConfigFile', () => {
     // All entries in the group are invalid → group is excluded
     expect(result.hooks.PreToolUse).toBeUndefined();
     expect(result.warnings).toHaveLength(2);
+    // Reason is specific: missing command → malformed; a non-`command` but
+    // well-formed type → unsupported (not conflated with malformed).
+    expect(result.warnings.some((w) => /is malformed/.test(w))).toBe(true);
+    expect(result.warnings.some((w) => /unsupported hook type "unknown_type"/.test(w))).toBe(true);
   });
 });
 
@@ -578,5 +584,208 @@ describe('orphan root settings warning', () => {
     expect(result.userGlobalEnabled).toBe(true);
     expect(result.hooks.SessionStart).toHaveLength(1);
     expect(result.warnings.some((w) => w.includes('AFK-home root'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plugin-contributed hook discovery (Claude Code compat)
+// ---------------------------------------------------------------------------
+
+describe('discoverPluginHooksConfigs', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'plugin-hooks-'));
+    // scanLocalPlugins memoizes per-dir; reset so per-test fixtures aren't stale.
+    _resetPluginScanCache();
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function makePlugin(base: string, name: string, withHooks: boolean): string {
+    const pluginDir = join(base, name);
+    mkdirSync(join(pluginDir, '.claude-plugin'), { recursive: true });
+    writeFileSync(join(pluginDir, '.claude-plugin', 'plugin.json'), '{}', 'utf-8');
+    if (withHooks) {
+      mkdirSync(join(pluginDir, 'hooks'), { recursive: true });
+      writeFileSync(join(pluginDir, 'hooks', 'hooks.json'), '{"hooks":{}}', 'utf-8');
+    }
+    return pluginDir;
+  }
+
+  /** Write a v2 plugin index at `<base>/.index.json` (mirrors scanLocalPlugins). */
+  function writeIndex(base: string, plugins: Record<string, { enabled: boolean }>): void {
+    writeFileSync(join(base, '.index.json'), JSON.stringify({ version: 2, plugins }), 'utf-8');
+  }
+
+  it('returns empty when plugins root is missing', () => {
+    expect(discoverPluginHooksConfigs(join(root, 'absent'))).toEqual([]);
+  });
+
+  it('finds <plugin>/hooks/hooks.json in flat layout with pluginRoot', () => {
+    const pluginDir = makePlugin(root, 'my-plugin', true);
+    expect(discoverPluginHooksConfigs(root)).toEqual([
+      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir },
+    ]);
+  });
+
+  it('finds an installed marketplace-cache plugin (enabled in the index)', () => {
+    // Cache-layout plugins must be explicitly enabled in .index.json — unlike
+    // flat layout, which defaults to enabled. Mirrors scanLocalPlugins.
+    const pluginDir = makePlugin(join(root, 'cache', 'mp1'), 'plugin-a', true);
+    writeIndex(root, { 'mp1:plugin-a': { enabled: true } });
+    expect(discoverPluginHooksConfigs(root)).toEqual([
+      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir },
+    ]);
+  });
+
+  it('skips a plugin manifest that ships no hooks/hooks.json', () => {
+    makePlugin(root, 'plain-plugin', false);
+    expect(discoverPluginHooksConfigs(root)).toEqual([]);
+  });
+
+  it('ignores a hooks/hooks.json under a dir with no plugin.json manifest', () => {
+    // A bare directory that happens to contain hooks/hooks.json but is NOT a
+    // plugin (no .claude-plugin/plugin.json) must not be treated as one.
+    mkdirSync(join(root, 'not-a-plugin', 'hooks'), { recursive: true });
+    writeFileSync(join(root, 'not-a-plugin', 'hooks', 'hooks.json'), '{}', 'utf-8');
+    expect(discoverPluginHooksConfigs(root)).toEqual([]);
+  });
+
+  it('does NOT load hooks from a plugin disabled in the index (PR 607 P1)', () => {
+    // `afk plugin disable <name>` leaves the dir on disk with enabled:false;
+    // its hooks must not run.
+    makePlugin(root, 'off-plugin', true);
+    writeIndex(root, { 'off-plugin': { enabled: false } });
+    expect(discoverPluginHooksConfigs(root)).toEqual([]);
+  });
+
+  it('does NOT load hooks from an uninstalled marketplace-cache plugin (PR 607 P1)', () => {
+    // A marketplace clone drops every listed plugin on disk; only user-installed
+    // (index-enabled) cache plugins may contribute hooks. No index entry → skip.
+    makePlugin(join(root, 'cache', 'mp1'), 'not-installed', true);
+    expect(discoverPluginHooksConfigs(root)).toEqual([]);
+  });
+
+  it('follows a symlinked plugin directory and finds its hooks (PR 607 P2)', () => {
+    // Local plugin installs are symlinked into the plugins root; discovery must
+    // follow directory symlinks (statSync), not skip them (lstatSync).
+    const realBase = mkdtempSync(join(tmpdir(), 'plugin-hooks-real-'));
+    try {
+      const target = makePlugin(realBase, 'linked-plugin', true);
+      const linkPath = join(root, 'linked-plugin');
+      symlinkSync(target, linkPath, 'dir');
+      const found = discoverPluginHooksConfigs(root);
+      expect(found).toHaveLength(1);
+      expect(found[0]!.path).toBe(join(linkPath, 'hooks', 'hooks.json'));
+      expect(found[0]!.pluginRoot).toBe(linkPath);
+    } finally {
+      rmSync(realBase, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plugin hooks gate (enablePluginHooks) — loadHooksConfig integration
+// ---------------------------------------------------------------------------
+
+describe('loadHooksConfig — plugin hooks gate', () => {
+  let afkHome: string;
+  let projectCwd: string;
+  let pluginsDir: string;
+  let originalAfkHome: string | undefined;
+
+  beforeEach(() => {
+    _resetPluginScanCache();
+    afkHome = join(tmp, 'afk-home');
+    projectCwd = join(tmp, 'project');
+    pluginsDir = join(tmp, 'plugins');
+    mkdirSync(join(afkHome, 'config'), { recursive: true });
+    mkdirSync(projectCwd, { recursive: true });
+    // Plant a plugin that ships a SessionStart command hook.
+    const pluginDir = join(pluginsDir, 'demo-plugin');
+    mkdirSync(join(pluginDir, '.claude-plugin'), { recursive: true });
+    writeFileSync(join(pluginDir, '.claude-plugin', 'plugin.json'), '{}', 'utf-8');
+    mkdirSync(join(pluginDir, 'hooks'), { recursive: true });
+    writeFileSync(
+      join(pluginDir, 'hooks', 'hooks.json'),
+      JSON.stringify({
+        hooks: {
+          SessionStart: [
+            { hooks: [{ type: 'command', command: 'echo plugin-hook' }] },
+          ],
+        },
+      }),
+      'utf-8',
+    );
+    originalAfkHome = process.env['AFK_HOME'];
+    process.env['AFK_HOME'] = afkHome;
+  });
+
+  afterEach(() => {
+    if (originalAfkHome === undefined) delete process.env['AFK_HOME'];
+    else process.env['AFK_HOME'] = originalAfkHome;
+  });
+
+  function writeUserGlobalConfig(body: unknown): void {
+    writeFileSync(join(afkHome, 'config', 'afk.config.json'), JSON.stringify(body), 'utf-8');
+  }
+
+  it('plugin hooks are dropped and a warning is emitted when enablePluginHooks is unset', () => {
+    const result = loadHooksConfig({ cwd: projectCwd, pluginsDir });
+    expect(result.pluginHooksEnabled).toBe(false);
+    expect(result.hooks.SessionStart).toBeUndefined();
+    expect(result.warnings.some((w) => w.includes('plugin hooks are disabled'))).toBe(true);
+  });
+
+  it('plugin hooks are admitted (tier=plugin, pluginRoot set) when enablePluginHooks is true', () => {
+    writeUserGlobalConfig({ enablePluginHooks: true });
+    const result = loadHooksConfig({ cwd: projectCwd, pluginsDir });
+    expect(result.pluginHooksEnabled).toBe(true);
+    const groups = result.hooks.SessionStart!;
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.tier).toBe('plugin');
+    expect(groups[0]!.hooks[0]!.command).toBe('echo plugin-hook');
+    expect(groups[0]!.hooks[0]!.pluginRoot).toBe(join(pluginsDir, 'demo-plugin'));
+    // No "disabled" warning when the gate is on.
+    expect(result.warnings.some((w) => w.includes('plugin hooks are disabled'))).toBe(false);
+  });
+
+  it('enablePluginHooks is independent of enableShellHooks', () => {
+    // Plugin gate ON, shell gate OFF → plugin hook present, userGlobalEnabled false.
+    writeUserGlobalConfig({ enablePluginHooks: true });
+    const result = loadHooksConfig({ cwd: projectCwd, pluginsDir });
+    expect(result.userGlobalEnabled).toBe(false);
+    expect(result.pluginHooksEnabled).toBe(true);
+    expect(result.hooks.SessionStart).toHaveLength(1);
+  });
+
+  it('enablePluginHooks set in a project-local file does NOT activate plugin hooks', () => {
+    // Only user-global files satisfy the gate (same rule as enableShellHooks).
+    writeFileSync(
+      join(projectCwd, 'afk.config.json'),
+      JSON.stringify({ enablePluginHooks: true }),
+      'utf-8',
+    );
+    const result = loadHooksConfig({ cwd: projectCwd, pluginsDir });
+    expect(result.pluginHooksEnabled).toBe(false);
+    expect(result.hooks.SessionStart).toBeUndefined();
+  });
+
+  it('drops a non-command plugin hook type with an "unsupported" warning', () => {
+    // Claude Code also ships http/mcp_tool/prompt/agent hooks; AFK honors only
+    // `command`, so a plugin's non-command hook must be dropped (not run) with a
+    // clear warning — verified end-to-end through the plugin discovery path.
+    writeUserGlobalConfig({ enablePluginHooks: true });
+    writeFileSync(
+      join(pluginsDir, 'demo-plugin', 'hooks', 'hooks.json'),
+      JSON.stringify({
+        hooks: { SessionStart: [{ hooks: [{ type: 'http', url: 'https://example.test' }] }] },
+      }),
+      'utf-8',
+    );
+    const result = loadHooksConfig({ cwd: projectCwd, pluginsDir });
+    expect(result.hooks.SessionStart).toBeUndefined();
+    expect(result.warnings.some((w) => /unsupported hook type "http"/.test(w))).toBe(true);
   });
 });
