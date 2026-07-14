@@ -54,6 +54,7 @@ import { list as listSlashCommands } from '../slash/registry.js';
 import { formatSubmittedEcho } from './echo.js';
 import { describeAttachmentSummary } from './attachments.js';
 import { commitBlockAbove } from '../_lib/commit-block.js';
+import { isPlainOutputRequested } from '../../config/env.js';
 
 /**
  * Minimal StatusLine surface used by InputSurface — kept structural
@@ -282,13 +283,17 @@ export class InputSurface {
    * Arm a persistent TerminalCompositor in idle mode. Idempotent —
    * subsequent calls are no-ops. Skipped silently on non-TTY surfaces
    * (no `process.stdout.isTTY`); callers can detect this via
-   * {@link getCompositor} returning null.
+   * {@link getCompositor} returning null. Also skipped when
+   * `AFK_PLAIN_OUTPUT` / `--plain` is truthy — the full-opt-out escape
+   * hatch downgrades a TTY session to the non-TTY `readWithAutocomplete`
+   * input path (see `isPlainOutputRequested` in `config/env.ts`), matching
+   * the render seam's own plain-path gate in `repl-renderer.ts`.
    */
   async armCompositor(opts: InputSurfaceArmOpts): Promise<void> {
     if (this.compositor) return;
     const stdout = opts.stdout ?? process.stdout;
     const stdin = opts.stdin ?? process.stdin;
-    if (!stdout.isTTY || !stdin.isTTY) return;
+    if (!stdout.isTTY || !stdin.isTTY || isPlainOutputRequested()) return;
     const compositor = new TerminalCompositor({
       stdout,
       stdin,

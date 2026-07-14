@@ -225,7 +225,7 @@ export function registerInteractiveCommand(program: Command): void {
     )
     .option(
       '--plain',
-      'Force append-only plain-stdout output instead of the live-overlay renderer, even on a TTY. Reliability escape hatch for tmux/SSH/multiplexer sessions. Also: AFK_PLAIN_OUTPUT=1. Non-TTY sessions (pipes, CI) already use this path by default.',
+      'Force the session to fully behave like a non-TTY surface for rendering: append-only plain-stdout output instead of the live-overlay renderer (no persistent or per-turn compositor), AND the input surface downgrades to the simple line reader — even when stdout/stdin ARE a TTY. Full opt-out escape hatch for tmux/SSH/multiplexer sessions where cursor-up redraws and DECSTBM reserved rows misbehave. Also: AFK_PLAIN_OUTPUT=1. Non-TTY sessions (pipes, CI) already use this path by default.',
     )
     .action(async (input: string[], options: CliOptions) => {
       if (options.debug) {
