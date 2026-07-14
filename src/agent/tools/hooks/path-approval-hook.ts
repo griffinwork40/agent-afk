@@ -298,6 +298,11 @@ async function preToolUseImpl(
         : `Reads are confined to this fork's granted read roots. Return this exact ` +
           `path requirement to your parent, which owns the operator surface and can ` +
           `grant access (widen readRoots or re-dispatch with the path inside cwd).`;
+    // Contract: the "Sub-agent path access denied:" prefix is load-bearing —
+    // the `subagent-read-denial` telemetry detector (improve/scan/detectors)
+    // and the denial circuit breaker (tools/denial-circuit-breaker.ts,
+    // `SUBAGENT_PATH_DENIAL_REASON_PREFIX`) both key on it to recognise this
+    // exact containment auto-deny. If you reword it, update those consumers too.
     return {
       decision: 'block',
       reason:
