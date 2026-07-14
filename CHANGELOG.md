@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.49.2] - 2026-07-14
+
+### Fixed
+- make --plain / AFK_PLAIN_OUTPUT a full render opt-out on TTY (#606) (b1347d2)
+
 ## [5.49.1] - 2026-07-14
 
 ### Changed
