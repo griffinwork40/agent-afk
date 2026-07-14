@@ -395,7 +395,34 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
         timestamp: new Date(),
       };
     }
-    throw new Error(`Subagent ${this.id} produced no terminal message`);
+    // Invariant: a cancelled subagent must NEVER resolve as a succeeded partial.
+    // Reaching here means no terminal message, no buffered text, no stream
+    // error, and not the tool-use cap — two sub-cases, split by whether the run
+    // was cancelled/aborted (mirroring run()'s own catch classification):
+    //   - CANCELLED/ABORTED (explicit cancel() sets currentStatus 'cancelled';
+    //     an ancestor cascade sets controller.signal.aborted): preserve the
+    //     throw so run()'s catch classifies the termination as 'cancelled' —
+    //     not a success, not a plain failure.
+    //   - Otherwise (an abnormal provider-stream close, or a mid-loop cutoff
+    //     with an empty buffer — the failure mode of an unbounded read-only
+    //     agent that tool-loops without ever emitting a final turn): degrade to
+    //     a STREAM_INCOMPLETE partial, the same treatment the buffered-text
+    //     branch above gives, so the consumption boundary (annotateIfIncomplete)
+    //     marks it as an incomplete result the parent can act on (retry / fall
+    //     back) instead of an opaque "produced no terminal message" delegation
+    //     failure after (often) a long run.
+    if (this.controller.signal.aborted || this.currentStatus === 'cancelled') {
+      throw new Error(`Subagent ${this.id} produced no terminal message`);
+    }
+    this.lastStopReason ??= STREAM_INCOMPLETE;
+    return {
+      role: 'assistant',
+      content:
+        `[subagent ${this.id} ended without producing a final message or any ` +
+        `streamed output — it was cut off mid-run (an abnormal stream close), ` +
+        `so no findings were produced.]`,
+      timestamp: new Date(),
+    };
   }
 
   async runToResult(prompt: string, sinkOverride?: SubagentProgressSink): Promise<SubagentResult<T>> {
