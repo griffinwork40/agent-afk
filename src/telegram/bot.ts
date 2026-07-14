@@ -233,12 +233,31 @@ export class TelegramBot {
       await ctx.reply(`✋ Abort sent to session ${sessionId}.`);
     });
 
-    this.bot.on('text', (ctx) => this.messageHandler.handle(ctx));
+    // Invariant: a message update handler MUST NOT await the agent turn.
+    // Telegraf's long-poll loop is `for await (updates) await Promise.all(
+    // updates.map(handleUpdate))` (telegraf/lib/core/network/polling.js): it does
+    // NOT fetch the next getUpdates batch until every handler in the current
+    // batch settles. Awaiting the full turn here froze the poller for the turn's
+    // entire lifetime, so a mid-turn elicitation (path-approval / ask_question)
+    // could never receive the callback_query (button tap) or the text reply that
+    // resolves it — the turn blocked on an update the frozen poller refused to
+    // fetch, a deadlock broken only when the streaming watchdog timed the turn
+    // out (~11 min later). Running the turn DETACHED frees the poller immediately;
+    // per-chat ordering + one-turn-at-a-time are still enforced by
+    // MessageHandler's queue + session busy-state (message.ts), exactly as they
+    // already are for turns dispatched from processOne's finally→drainQueue.
+    // handle()/handlePhoto() own their user-facing error handling, so
+    // `runDetached`'s .catch is only a last-resort guard against an unhandled
+    // rejection (e.g. a reply that throws after the bot is stopped).
+    const runDetached = (work: Promise<void>): void => {
+      void work.catch((err) => this.log('Detached update handler error:', err));
+    };
+    this.bot.on('text', (ctx) => runDetached(this.messageHandler.handle(ctx)));
 
     // Photo updates carry `message.photo[]` not `message.text` — they require
     // their own listener since Telegraf's filter is exact (a photo update never
     // matches the 'text' filter even if the user added a caption).
-    this.bot.on('photo', (ctx) => this.messageHandler.handlePhoto(ctx));
+    this.bot.on('photo', (ctx) => runDetached(this.messageHandler.handlePhoto(ctx)));
     // Note: documents, voice notes, video, and stickers remain unhandled.
     // They can be added with the same pattern (download → build content blocks → processOne).
 
