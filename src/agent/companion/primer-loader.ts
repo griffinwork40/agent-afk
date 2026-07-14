@@ -30,7 +30,7 @@
  * @module agent/companion/primer-loader
  */
 
-import { readFileSync } from 'fs';
+import { readFileSync, statSync } from 'fs';
 import { env } from '../../config/env.js';
 import type { AgentConfig } from '../types/config-types.js';
 
@@ -42,6 +42,17 @@ import type { AgentConfig } from '../types/config-types.js';
  * the primer can never silently balloon the system prompt.
  */
 export const MAX_PRIMER_CHARS = 6000;
+
+/**
+ * Hard cap on the primer FILE SIZE read from disk, in bytes. Distinct from
+ * {@link MAX_PRIMER_CHARS}: the char cap bounds PROMPT cost (applied after the
+ * read); this bounds READ cost — a pathological multi-GB or otherwise oversized
+ * file at `AFK_COMPANION_PRIMER` is skipped via a `statSync` pre-check and never
+ * buffered into memory on the session-bootstrap path. Mirrors
+ * `AT_FILE_MAX_SIZE_BYTES` (at-file-inject.ts); 100 KB comfortably fits any
+ * reasonable primer (the 6000-char cap is ~24 KB even in multibyte UTF-8).
+ */
+export const MAX_PRIMER_FILE_BYTES = 100 * 1024;
 
 /** Tag the primer content is fenced in. Stable; used by the sanitizer. */
 const PRIMER_TAG = 'companion-primer';
@@ -60,22 +71,49 @@ const PRIMER_FRAMING =
   'Constraints already stated.';
 
 /**
+ * Debug-gated diagnostic (stderr). Silent unless `AFK_DEBUG` is set, matching
+ * the repo convention (write-file.ts). Lets an operator tell a mis-pointed
+ * `AFK_COMPANION_PRIMER` apart from the feature simply being off, without
+ * weakening the never-throw / return-null contract.
+ */
+function debugPrimer(msg: string): void {
+  if (env.AFK_DEBUG) process.stderr.write(`[companion-primer] ${msg}\n`);
+}
+
+/**
  * Load the companion primer from the path in `AFK_COMPANION_PRIMER`.
  *
  * Returns `null` when the env var is unset/empty, the path is missing, the path
- * is a directory, the file is unreadable (permissions / I/O), or the file is
- * whitespace-only. Never reads anything other than the single named path.
+ * is not a regular file (directory / device / FIFO / socket), the file exceeds
+ * {@link MAX_PRIMER_FILE_BYTES}, the file is unreadable (permissions / I/O), or
+ * the file is whitespace-only. Never reads anything other than the single named
+ * path. Failures are silent by default (a bad path must not crash bootstrap);
+ * set `AFK_DEBUG=1` to surface the reason on stderr.
  */
 export function loadCompanionPrimer(): string | null {
   const path = env.AFK_COMPANION_PRIMER;
   if (path === undefined || path.trim().length === 0) return null;
 
   try {
-    // Single-file read. A directory path throws EISDIR here → caught → null,
-    // which is what structurally prevents any "read the whole repo" behavior.
+    // Bound the READ before it happens: the MAX_PRIMER_CHARS cap only bounds
+    // PROMPT cost (applied after readFileSync has already buffered the whole
+    // file). A statSync pre-check lets us skip a directory / special file
+    // (which could hang or throw) and refuse a pathologically large file, so an
+    // oversized primer is never buffered into memory on the bootstrap path.
+    // Mirrors at-file-inject.ts. A missing path throws ENOENT here → caught → null.
+    const stat = statSync(path);
+    if (!stat.isFile()) {
+      debugPrimer(`skipped: not a regular file: ${path}`);
+      return null;
+    }
+    if (stat.size > MAX_PRIMER_FILE_BYTES) {
+      debugPrimer(`skipped: file is ${stat.size} bytes (cap ${MAX_PRIMER_FILE_BYTES}): ${path}`);
+      return null;
+    }
     const content = readFileSync(path, 'utf-8');
     return content.trim().length > 0 ? content : null;
-  } catch {
+  } catch (err) {
+    debugPrimer(`failed to load ${path}: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }

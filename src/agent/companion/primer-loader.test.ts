@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -6,6 +6,7 @@ import {
   loadCompanionPrimer,
   injectCompanionPrimer,
   MAX_PRIMER_CHARS,
+  MAX_PRIMER_FILE_BYTES,
 } from './primer-loader.js';
 import type { AgentConfig } from '../types/config-types.js';
 
@@ -23,16 +24,20 @@ function baseConfig(systemPrompt?: AgentConfig['systemPrompt']): AgentConfig {
 describe('companion primer-loader', () => {
   let dir: string;
   const prev = process.env[ENV];
+  const prevDebug = process.env['AFK_DEBUG'];
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'afk-primer-'));
     delete process.env[ENV];
+    delete process.env['AFK_DEBUG'];
   });
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
     if (prev === undefined) delete process.env[ENV];
     else process.env[ENV] = prev;
+    if (prevDebug === undefined) delete process.env['AFK_DEBUG'];
+    else process.env['AFK_DEBUG'] = prevDebug;
   });
 
   // ── optional (default off) ───────────────────────────────────────────────
@@ -183,5 +188,69 @@ describe('companion primer-loader', () => {
     const out = injectCompanionPrimer(cfg);
     expect(cfg.systemPrompt).toBe('BASE'); // original untouched
     expect(out).not.toBe(cfg);
+  });
+
+  // ── read bound (M1): stat-guard the read BEFORE buffering the file ─────────
+  it('skips a file larger than MAX_PRIMER_FILE_BYTES without reading it', () => {
+    const p = join(dir, 'oversized.md');
+    writeFileSync(p, 'z'.repeat(MAX_PRIMER_FILE_BYTES + 1));
+    process.env[ENV] = p;
+    expect(loadCompanionPrimer()).toBeNull();
+    expect(injectCompanionPrimer(baseConfig('BASE'))).toEqual(baseConfig('BASE'));
+  });
+
+  it('still reads and truncates a long-but-reasonable file under the byte cap', () => {
+    // Over the CHAR cap but well under the BYTE cap ⇒ must still be read + truncated,
+    // proving the read-size guard did not regress the prompt-cost truncation path.
+    const chars = MAX_PRIMER_CHARS + 2000;
+    expect(chars).toBeLessThan(MAX_PRIMER_FILE_BYTES); // ascii ⇒ 1 byte/char
+    const p = join(dir, 'longish.md');
+    writeFileSync(p, 'q'.repeat(chars));
+    process.env[ENV] = p;
+    const sp = injectCompanionPrimer(baseConfig('BASE')).systemPrompt as string;
+    expect(sp).toContain(`[…companion primer truncated at ${MAX_PRIMER_CHARS} chars…]`);
+  });
+
+  // ── diagnosability (L2): AFK_DEBUG surfaces the failure reason on stderr ───
+  it('is silent on a failed load by default (no AFK_DEBUG)', () => {
+    process.env[ENV] = join(dir, 'missing.md');
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(loadCompanionPrimer()).toBeNull();
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('surfaces the failed path on stderr when AFK_DEBUG is set', () => {
+    const missing = join(dir, 'missing.md');
+    process.env[ENV] = missing;
+    process.env['AFK_DEBUG'] = '1';
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(loadCompanionPrimer()).toBeNull();
+      const output = spy.mock.calls.map((c) => String(c[0])).join('');
+      expect(output).toContain('companion-primer');
+      expect(output).toContain(missing);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('logs a diagnostic naming the byte cap when skipping an oversized file (AFK_DEBUG)', () => {
+    const p = join(dir, 'oversized.md');
+    writeFileSync(p, 'z'.repeat(MAX_PRIMER_FILE_BYTES + 1));
+    process.env[ENV] = p;
+    process.env['AFK_DEBUG'] = '1';
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(loadCompanionPrimer()).toBeNull();
+      const output = spy.mock.calls.map((c) => String(c[0])).join('');
+      expect(output).toContain('skipped');
+      expect(output).toContain(String(MAX_PRIMER_FILE_BYTES));
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
