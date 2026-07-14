@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { runTurn } from './turn-handler.js';
+import { runTurn, formatContextUsage } from './turn-handler.js';
 import { getCurrentSink } from '../../../agent/_lib/skill-sink-channel.js';
 import type { AgentSession } from '../../../agent/session.js';
 import type { OutputEvent } from '../../../agent/types.js';
@@ -2019,5 +2019,47 @@ describe('runTurn — mid-turn context progress', () => {
     const stats = makeStats();
 
     await expect(runTurn({ text: 'q', attachments: [] }, session, stats, h)).resolves.toBeUndefined();
+  });
+});
+
+describe('formatContextUsage — proactive escalating context tiers', () => {
+  const LIMIT = 200_000;
+
+  it('is quiet (no line) at or below 50%', () => {
+    expect(formatContextUsage(0.4, LIMIT)).toEqual({ tier: 'quiet', text: null });
+    expect(formatContextUsage(0.5, LIMIT)).toEqual({ tier: 'quiet', text: null });
+  });
+
+  it('shows a plain normal line above 50% and below 80%', () => {
+    const r = formatContextUsage(0.6, LIMIT);
+    expect(r.tier).toBe('normal');
+    expect(r.text).toContain('60% used');
+    expect(r.text).not.toContain('approaching');
+    expect(r.text).not.toContain('near limit');
+    expect(r.text).not.toContain('OVER');
+  });
+
+  it('boundary: 0.79 stays normal, 0.80 escalates to caution', () => {
+    expect(formatContextUsage(0.79, LIMIT).tier).toBe('normal');
+    const caution = formatContextUsage(0.8, LIMIT);
+    expect(caution.tier).toBe('caution');
+    expect(caution.text).toContain('80% used');
+    expect(caution.text).toContain('approaching limit');
+  });
+
+  it('boundary: 0.94 stays caution, 0.95 escalates to near with an actionable hint', () => {
+    expect(formatContextUsage(0.94, LIMIT).tier).toBe('caution');
+    const near = formatContextUsage(0.95, LIMIT);
+    expect(near.tier).toBe('near');
+    expect(near.text).toContain('near limit');
+    expect(near.text).toContain('/clear');
+  });
+
+  it('boundary: 1.00 and above is the over tier with the truncation warning', () => {
+    const over = formatContextUsage(1.0, LIMIT);
+    expect(over.tier).toBe('over');
+    expect(over.text).toContain('OVER');
+    expect(over.text).toContain('silently truncated');
+    expect(formatContextUsage(1.05, LIMIT).tier).toBe('over');
   });
 });
