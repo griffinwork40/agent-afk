@@ -328,10 +328,10 @@
     },
     {
       "name": "AFK_MODEL",
-      "description": "Default model for agent turns. Accepts slot names (local, small, medium, large), legacy aliases (opus, sonnet, haiku), the fixed-id fable alias (Claude Fable 5), or full model IDs.",
+      "description": "Default model for agent turns. Accepts slot names (local, small, medium, large), fixed-identity aliases (opus, sonnet, haiku, fable), or full model IDs. Migration: AFK_MODEL=sonnet now pins the fixed Sonnet identity rather than following a rebound medium tier.",
       "type": "string",
       "required": false,
-      "default": "sonnet",
+      "default": "medium",
       "example": "claude-opus-4-5",
       "category": "model"
     },
@@ -463,6 +463,14 @@
       "required": false,
       "example": "1",
       "category": "model"
+    },
+    {
+      "name": "AFK_PLAIN_OUTPUT",
+      "description": "Force the interactive REPL to use the append-only plain-stdout renderer instead of the TerminalCompositor live overlay, even when stdout is a TTY. Same code path already used for non-TTY surfaces (pipes, CI). Reliability escape hatch for tmux/SSH/multiplexer sessions where cursor-up redraws and DECSTBM scroll regions misbehave. Opt-in — default TTY behavior (live overlay) is unchanged. Truthy values: 1, true (case-insensitive).",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "misc"
     },
     {
       "name": "AFK_PROMPT_CACHE_TTL",

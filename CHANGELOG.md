@@ -16,6 +16,18 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ### Changed
 - **BREAKING**: `AFK_ALLOW_PROJECT_MCP` default flipped from opt-out to opt-in. Previously `<cwd>/.mcp.json` auto-loaded unless set to `0`; it now loads only when the variable is explicitly truthy. Users who relied on auto-loading must set `AFK_ALLOW_PROJECT_MCP=1`. (#571)
+## [5.48.0] - 2026-07-14
+
+### Added
+- local usage-analytics report (afk insights) (#353) (ff78f72)
+
+## [5.47.0] - 2026-07-14
+
+### Added
+- add opt-in plain/append-only output mode (AFK_PLAIN_OUTPUT) (#593) (ce0480a)
+
+### Changed
+- sync model-slots & providers pages with #548 (#601) (2b19808)
 
 ## [5.46.2] - 2026-07-14
 

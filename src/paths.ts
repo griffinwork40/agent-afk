@@ -68,6 +68,10 @@ export function getTelemetryPath(): string {
   return join(getAgentFrameworkDir(), 'forge-telemetry.jsonl');
 }
 
+export function getRoutingDecisionsPath(): string {
+  return join(getAgentFrameworkDir(), 'routing-decisions.jsonl');
+}
+
 export function getSdkSchemaViolationsPath(): string {
   return join(getAgentFrameworkDir(), 'sdk-schema-violations.jsonl');
 }

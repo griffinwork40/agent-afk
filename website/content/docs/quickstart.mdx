@@ -92,7 +92,8 @@ with no subcommand also starts the REPL.
 
 ## Choose a model
 
-The default model is `sonnet`. Override per-command:
+The default model is the `medium` capability tier — Claude Sonnet on an
+unconfigured install. Override per-command:
 
 ```bash
 afk chat "explain this stack trace" --model opus
@@ -103,7 +104,7 @@ afk i --model haiku
 |---|---|
 | `fable` | Most capable — hardest reasoning, 1M context |
 | `opus` | Complex reasoning, multi-step planning |
-| `sonnet` | Balanced speed and capability (default) |
+| `sonnet` | Balanced speed and capability |
 | `haiku` | Fast and cheap, good for simple tasks |
 
 ## Coming from Claude Code or Codex?
