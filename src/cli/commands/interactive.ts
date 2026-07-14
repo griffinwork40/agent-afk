@@ -223,9 +223,16 @@ export function registerInteractiveCommand(program: Command): void {
       '--mcp-config <path>',
       'Path to an additional MCP config file (highest priority — merges over ~/.afk/config/mcp.json, project-local .mcp.json, and plugin-contributed configs). File format identical to mcp.json.',
     )
+    .option(
+      '--plain',
+      'Force append-only plain-stdout output instead of the live-overlay renderer, even on a TTY. Reliability escape hatch for tmux/SSH/multiplexer sessions. Also: AFK_PLAIN_OUTPUT=1. Non-TTY sessions (pipes, CI) already use this path by default.',
+    )
     .action(async (input: string[], options: CliOptions) => {
       if (options.debug) {
         process.env['AFK_DEBUG'] = '1';
+      }
+      if (options.plain) {
+        process.env['AFK_PLAIN_OUTPUT'] = '1';
       }
 
       // --- prompt-dump activation ---

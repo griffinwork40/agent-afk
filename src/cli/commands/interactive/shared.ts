@@ -328,6 +328,12 @@ export interface CliOptions {
    * layers. The file format is identical to `~/.afk/config/mcp.json`.
    */
   mcpConfig?: string;
+  /**
+   * `--plain` — activates AFK_PLAIN_OUTPUT for this session, forcing the
+   * REPL's append-only stdout renderer even when stdout is a TTY. See
+   * `repl-renderer.ts` for the routing decision this flag feeds.
+   */
+  plain?: boolean;
 }
 
 /**
