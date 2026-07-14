@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.51.0] - 2026-07-14
+
+### Added
+- discover and run Claude Code plugin hooks.json (#70) (#607) (930a5c2)
+
 ## [5.50.0] - 2026-07-14
 
 ### Added
