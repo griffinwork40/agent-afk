@@ -414,7 +414,22 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     if (this.controller.signal.aborted || this.currentStatus === 'cancelled') {
       throw new Error(`Subagent ${this.id} produced no terminal message`);
     }
-    this.lastStopReason ??= STREAM_INCOMPLETE;
+    // Invariant: this fallback stamps STREAM_INCOMPLETE UNCONDITIONALLY (`=`,
+    // not `??=`) — the content below is a synthetic placeholder, never the
+    // model's real output, so its stop reason must mark it incomplete. This
+    // differs from the buffered-text branch above, which uses `??=` deliberately:
+    // a capped run that also streamed text reaches there with
+    // `tool_use_loop_capped` already set and must keep it. Nothing worth
+    // preserving can reach HERE — the cap case returned at the
+    // tool_use_loop_capped branch, and cancel/abort threw just above. Any
+    // stopReason still set is therefore a clean terminal one (end_turn /
+    // max_tokens / interrupted), none of which isIncompleteStopReason flags,
+    // reached via an empty-text turn the stream consumer drops before emitting a
+    // `message` event (see stream-consumer 'assistant.message': `if (event.text)`).
+    // Preserving it would let annotateIfIncomplete report this synthetic
+    // "no findings" placeholder as a clean completion — defeating the whole
+    // point of this branch. Overwrite it.
+    this.lastStopReason = STREAM_INCOMPLETE;
     return {
       role: 'assistant',
       content:
