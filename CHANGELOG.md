@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.46.0] - 2026-07-14
+
+### Added
+- proactive escalating context-window warnings (#594) (291b73f)
+
 ## [5.45.0] - 2026-07-14
 
 ### Added
