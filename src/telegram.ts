@@ -438,8 +438,18 @@ async function main() {
           ...(sessionConfig.apiKey !== undefined ? { apiKey: sessionConfig.apiKey } : {}),
           model: sessionConfig.model,
           // /switch resumes a prior conversation: thread the target SDK session
-          // id so the AgentSession continues it (see SessionManager.switchToSession).
+          // id AND the saved transcript so the AgentSession actually replays it
+          // (see SessionManager.switchToSession + resumeConfigFor). Forwarding
+          // only `resume` (the SDK id) resumes an EMPTY conversation — the
+          // provider replays prior turns solely from resumeHistory
+          // (anthropic-direct/index.ts resumeHistoryToMessages). sessionId is
+          // threaded too because the provider prefers config.sessionId over
+          // config.resume as the resumed id.
           ...(sessionConfig.resume !== undefined ? { resume: sessionConfig.resume } : {}),
+          ...(sessionConfig.sessionId !== undefined ? { sessionId: sessionConfig.sessionId } : {}),
+          ...(sessionConfig.resumeHistory !== undefined
+            ? { resumeHistory: sessionConfig.resumeHistory }
+            : {}),
           ...(systemPromptInner !== undefined ? { systemPrompt: systemPromptInner } : {}),
           maxTurns: 100,
           ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
@@ -502,8 +512,15 @@ async function main() {
       const session = attachMcpCleanup(constructTelegramSession({
         ...(sessionConfig.apiKey !== undefined ? { apiKey: sessionConfig.apiKey } : {}),
         model: sessionConfig.model,
-        // /switch resume: continue the target SDK session (parity with the Anthropic branch).
+        // /switch resume: continue the target SDK session AND replay its saved
+        // transcript (parity with the Anthropic branch). The openai-compatible
+        // provider seeds prior turns from resumeHistory (messages.ts / query.ts),
+        // so omitting it resumes an empty conversation.
         ...(sessionConfig.resume !== undefined ? { resume: sessionConfig.resume } : {}),
+        ...(sessionConfig.sessionId !== undefined ? { sessionId: sessionConfig.sessionId } : {}),
+        ...(sessionConfig.resumeHistory !== undefined
+          ? { resumeHistory: sessionConfig.resumeHistory }
+          : {}),
         ...(systemPrompt !== undefined ? { systemPrompt } : {}),
         maxTurns: 100,
         ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),

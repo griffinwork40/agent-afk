@@ -879,12 +879,20 @@ describe('SessionManager — session switcher (/sessions, /switch, /new)', () =>
     // The rebuilt session continues the chosen conversation: config.resume === target.
     await manager.getSession(801);
     expect(lastConfig?.resume).toBe('sdk-1');
+    // ...AND the saved transcript is threaded through so the provider actually
+    // replays prior turns. Forwarding only `resume` (the SDK id) resumes an
+    // EMPTY conversation — the provider seeds history solely from resumeHistory
+    // (see anthropic-direct/index.ts resumeHistoryToMessages). Guards the bug
+    // where the Telegram createSession closure dropped resumeHistory/sessionId.
+    expect(lastConfig?.sessionId).toBe('sdk-1');
+    expect(lastConfig?.resumeHistory).toEqual([{ user: 'first convo', assistant: 'a' }]);
 
     // A subsequent /clear starts fresh — the staged resume is dropped.
     await manager.resetSession(801);
     lastConfig = undefined;
     await manager.getSession(801);
     expect(lastConfig?.resume).toBeUndefined();
+    expect(lastConfig?.resumeHistory).toBeUndefined();
   });
 
   test('switchToSession rejects an unknown or cross-chat target', async () => {
