@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.48.0] - 2026-07-14
+
+### Added
+- local usage-analytics report (afk insights) (#353) (ff78f72)
+
 ## [5.47.0] - 2026-07-14
 
 ### Added
