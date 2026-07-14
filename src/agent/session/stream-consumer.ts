@@ -468,6 +468,15 @@ export function transformProviderEvent(
     case 'stream.retry':
       return { type: 'stream_retry' };
 
+    case 'rate_limit':
+      // Live backoff signal — pass the retry-after through so the surface can
+      // render `rate-limited · retrying in ~Ns`. Fields beyond retryAfterMs
+      // (status/attempt) are trace-only and intentionally dropped here.
+      return {
+        type: 'rate_limit',
+        ...(event.retryAfterMs !== undefined ? { retryAfterMs: event.retryAfterMs } : {}),
+      };
+
     default:
       return null;
   }
