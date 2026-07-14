@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Security
+- project-local `.mcp.json` is now opt-in (fail-closed): its MCP servers are no longer auto-spawned on any surface unless `AFK_ALLOW_PROJECT_MCP` is truthy (`1`/`true`/`yes`/`on`); when present but not opted in, the skipped server names + commands are listed in a startup warning with the opt-in instruction. A `.mcp.json` whose real path escapes the working directory (symlink / `..`) is refused outright. (#571)
+
+### Changed
+- **BREAKING**: `AFK_ALLOW_PROJECT_MCP` default flipped from opt-out to opt-in. Previously `<cwd>/.mcp.json` auto-loaded unless set to `0`; it now loads only when the variable is explicitly truthy. Users who relied on auto-loading must set `AFK_ALLOW_PROJECT_MCP=1`. (#571)
+
 ## [5.46.2] - 2026-07-14
 
 ### Fixed

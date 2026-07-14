@@ -14,7 +14,7 @@ MCP server configuration is loaded from four sources, merged in priority order (
 | Priority | Source | Notes |
 |---|---|---|
 | 4 (highest) | `--mcp-config <path>` flag | Per-run override |
-| 3 | `<cwd>/.mcp.json` | Project-local config — auto-loaded by default; set `AFK_ALLOW_PROJECT_MCP=0` to disable |
+| 3 | `<cwd>/.mcp.json` | Project-local config — **not loaded by default** (opt-in); set `AFK_ALLOW_PROJECT_MCP=1` to load |
 | 2 | `~/.afk/config/mcp.json` | User-global config |
 | 1 (lowest) | Plugin-contributed `<plugin>/.claude-plugin/mcp.json` | Per-plugin servers |
 
@@ -22,7 +22,7 @@ Source: `docs/architecture.md` (MCP client section).
 
 If two config files define a server with the same name, the higher-priority one wins. The other is logged as a warning — nothing is silently dropped.
 
-Project-local `.mcp.json` is **auto-loaded by default**. Because auto-loading config from an arbitrary working directory carries a config-injection risk in shared/CI environments, AFK emits a warning every time it loads one. Set `AFK_ALLOW_PROJECT_MCP=0` to disable this layer entirely.
+Project-local `.mcp.json` is **not loaded by default** — it is opt-in. A project-local config can spawn arbitrary commands on session start, so entering an untrusted repository must never auto-spawn its servers. When a `.mcp.json` is present but the opt-in is absent, AFK skips it and prints a warning listing the skipped server names, their commands, and the exact opt-in instruction. Set `AFK_ALLOW_PROJECT_MCP=1` (or `true`/`yes`/`on`) to load this layer for a directory you trust. A `.mcp.json` whose real path resolves outside the working directory (via a symlink or `..`) is refused outright.
 
 ### `mcp.json` schema
 
