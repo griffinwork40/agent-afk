@@ -25,6 +25,7 @@ import { findSession, listSessions } from '../cli/session-store.js';
 import { readPresenceFiles } from '../agent/awareness/presence.js';
 import { readSessionKey, signElicitationResponse } from '../agent/afk-channel.js';
 import { makeTelegramElicitationHandler } from './elicitation-handler.js';
+import { createTelegramElicitationHandler, composeTelegramElicitation } from './elicitation-telegram.js';
 import type { MessageHandler } from './handlers/message.js';
 import type { Telegraf } from 'telegraf';
 
@@ -37,6 +38,19 @@ const FLUSH_INTERVAL_MS = 1_500;
 const WATCH_TEXT_PREVIEW = 700;
 /** Max characters of a tool input preview shown per record. */
 const WATCH_TOOL_PREVIEW = 160;
+
+/**
+ * Keep-alive heartbeat for a PENDING AFK elicitation. AFK deliberately imposes
+ * NO deadline on the operator's answer (elicitation-router.ts) — they may be
+ * away for minutes or hours and must be able to answer WHENEVER. But a silent
+ * multi-hour wait reads like a hang, so while a question is pending we re-nudge
+ * the chat on this interval: reassurance that the run is parked ON the operator,
+ * not stuck, and the prompt resurfaces above newer chatter. The nudges TAPER
+ * (cap below) and NEVER shorten or cancel the wait — only remind.
+ */
+const DEFAULT_ELICIT_HEARTBEAT_MS = 15 * 60_000;
+/** Max keep-alive nudges before going quiet (the wait itself stays uncapped). */
+const MAX_ELICIT_NUDGES = 4;
 
 function preview(text: string, max: number): string {
   const flat = text.replace(/\s+/g, ' ').trim();
@@ -154,11 +168,18 @@ export class SessionWatchManager {
   private readonly log: LogFn;
   private readonly bot: Telegraf | undefined;
   private readonly messageHandler: MessageHandler | undefined;
+  private readonly elicitHeartbeatMs: number;
 
-  constructor(log: LogFn = () => {}, bot?: Telegraf, messageHandler?: MessageHandler) {
+  constructor(
+    log: LogFn = () => {},
+    bot?: Telegraf,
+    messageHandler?: MessageHandler,
+    elicitHeartbeatMs: number = DEFAULT_ELICIT_HEARTBEAT_MS,
+  ) {
     this.log = log;
     this.bot = bot;
     this.messageHandler = messageHandler;
+    this.elicitHeartbeatMs = elicitHeartbeatMs;
   }
 
   /** The session id this chat is watching, if any. */
@@ -216,18 +237,35 @@ export class SessionWatchManager {
     let flushTimer: NodeJS.Timeout | null = null;
     let sending = Promise.resolve();
 
-    // Contract: build a per-run elicitation handler only when bot + messageHandler
-    // are available (they are injected from bot.ts but absent in legacy tests).
-    // The handler is created lazily once and reused across multiple elicitation
-    // records in the same watch run so the wildcard bot.action dispatch table
-    // is only registered once.
-    // ledgerOriginated:true tells the handler to register the chatId in
-    // messageHandler.ledgerOriginatedPendingChats alongside pendingElicitations,
-    // so the message-handler idle-guard fires the resolver even with no active
-    // AgentSession for this chat (the REPL runs in a separate process).
+    // Invariant: the ledger relay MUST mirror bot.ts's native install — a
+    // COMPOSED handler, not the ask handler alone. ask_question shapes carry a
+    // `type` and route to the ask handler (confirm/choice→buttons; text/number/
+    // multi_choice→typed reply). But the afk-mode-gate high-risk approval prompt
+    // and MCP form/url elicitations carry mode:'form' with NO `type`: the ask
+    // handler defaults those to a free-text prompt (no buttons) and returns
+    // content.value, while the afk-mode-gate consumer reads content.choice →
+    // 'unrecognised' → the op is refused. So an away operator literally could not
+    // approve a high-risk op from the phone. The form handler (afk:pa: enum
+    // keyboard) renders tappable buttons and returns content.choice. Composing
+    // them (disjoint afk:e: / afk:pa: callback prefixes) is exactly what bot.ts
+    // does for the native surface — the relay must not diverge. Built only when
+    // bot + messageHandler are present (absent in legacy tests); reused across
+    // records in the run so each factory's wildcard bot.action registers once.
+    // ledgerOriginated:true keeps the ask handler's typed-reply idle-guard firing
+    // with no local AgentSession (the REPL runs in a separate process); the form
+    // handler resolves via bot.action button taps and needs no such wiring.
     const elicitHandler =
       this.bot !== undefined && this.messageHandler !== undefined
-        ? makeTelegramElicitationHandler(this.messageHandler, this.bot, chatId, { ledgerOriginated: true })
+        ? composeTelegramElicitation(
+            makeTelegramElicitationHandler(this.messageHandler, this.bot, chatId, {
+              ledgerOriginated: true,
+            }),
+            createTelegramElicitationHandler(
+              this.bot,
+              new Set([chatId]),
+              (...args) => this.log('[elicitation]', ...args),
+            ),
+          )
         : undefined;
 
     const flush = (): void => {
@@ -258,7 +296,36 @@ export class SessionWatchManager {
           // Await the operator's answer (or abort). The per-run signal bounds
           // the wait: if the user /unwatches or the bot shuts down, the abort
           // propagates through the handler and we get { action: 'decline' }.
-          const result = await elicitHandler(rec.request, { signal });
+          //
+          // Keep-alive: AFK imposes NO time deadline on the answer (the operator
+          // may be away for hours and must answer WHENEVER), so while we await we
+          // re-nudge the chat on a heartbeat — reassurance the run is parked ON
+          // the operator, not hung. The nudges taper (MAX_ELICIT_NUDGES) and
+          // NEVER shorten the wait; the interval is unref'd so it can't hold the
+          // process open, and is always cleared when the answer settles.
+          const elicitStartedAt = Date.now();
+          let nudges = 0;
+          const heartbeat = setInterval(() => {
+            if (nudges >= MAX_ELICIT_NUDGES) {
+              clearInterval(heartbeat);
+              return;
+            }
+            nudges += 1;
+            const mins = Math.round((Date.now() - elicitStartedAt) / 60_000);
+            void send(
+              `⏳ Still waiting on your answer (${mins}m elapsed). Reply above, or send /abort to cancel.`,
+            ).catch(() => {});
+          }, this.elicitHeartbeatMs);
+          heartbeat.unref?.();
+          // IIFE keeps `result` const with its inferred type AND guarantees the
+          // heartbeat is cleared on every exit path (answer, decline, or throw).
+          const result = await (async () => {
+            try {
+              return await elicitHandler(rec.request, { signal });
+            } finally {
+              clearInterval(heartbeat);
+            }
+          })();
 
           // Invariant: write-back MUST be HMAC-signed (invariant #4). If the
           // key is absent (REPL has not enabled AFK mode), skip silently — an

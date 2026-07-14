@@ -73,6 +73,18 @@ export async function toggleAfkMode(
       const fallback = ctx.stdinElicitationHandler;
       if (id && swap && fallback) {
         const key = ensureSessionKey(id);
+        if (key === null) {
+          // F3 guard: with no per-session HMAC key we cannot verify a phone reply
+          // or a remote /abort, so the ledger channel silently ignores both
+          // (afk-ledger-channel.ts key===null branch). Install the channel anyway
+          // (the keyboard fallback still races) but WARN — otherwise the operator
+          // believes the phone can answer/abort when it cannot. Usually means the
+          // AFK state dir is unwritable.
+          ctx.out.error(
+            'AFK: could not establish a signing key — phone replies and remote ' +
+            '/abort will NOT work (keyboard only). Check that the AFK state dir is writable.',
+          );
+        }
         const ledgerHandler = makeLedgerChannelHandler({
           sessionId: id,
           key,
@@ -89,6 +101,19 @@ export async function toggleAfkMode(
           onAbort: (reason) => sess.abort(reason),
         });
         void setPresenceAfk(id, true);
+      } else {
+        // F3 guard: the ledger channel binds to the provider session id, which is
+        // unknown until the first turn completes. Toggling AFK before the first
+        // turn leaves the session KEYBOARD-ONLY — no phone relay, no abort-watcher,
+        // no presence marker — while "AFK mode ON" still prints below, silently
+        // stranding an operator who walks away trusting the phone. Warn explicitly
+        // and say how to arm it. (swap/fallback are always wired in the REPL, so
+        // in practice this branch means "no session id yet".)
+        ctx.out.error(
+          'AFK: phone relay NOT armed — the session has no id until your first ' +
+          'message completes. Running keyboard-only; re-run /afk on after a turn to ' +
+          'enable phone questions/approvals and remote /abort.',
+        );
       }
       ctx.out.success(
         palette.info('◐ AFK mode ON') +

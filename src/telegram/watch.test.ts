@@ -424,6 +424,194 @@ describe('SessionWatchManager — elicitation intercept + signed write-back (cri
 });
 
 // ---------------------------------------------------------------------------
+// F1 regression: high-risk approval FORM must render as buttons over the relay
+// ---------------------------------------------------------------------------
+
+/**
+ * Like makeElicitStubs, but also captures sendMessage OPTIONS (reply_markup) and
+ * the bot.action registrations, so a form-mode elicitation's inline keyboard and
+ * its button-tap round-trip can be asserted.
+ *
+ * Regression guard: the ledger relay (watch.ts) once installed the ask-ONLY
+ * handler. An untyped `mode:'form'` request (what afk-mode-gate.buildApprovalRequest
+ * emits) then defaulted to a plain text prompt (NO buttons) and returned
+ * content.value, which the afk-mode-gate consumer (reads content.choice) rejected
+ * as 'unrecognised' — so an away operator could not approve a high-risk op from
+ * Telegram. The relay must install the COMPOSED handler (like bot.ts) so form
+ * requests render via the afk:pa: enum keyboard and return content.choice.
+ */
+function makeFormElicitStubs(chatId: number) {
+  const pendingElicitations = new Map<number, (text: string) => void>();
+  const ledgerOriginatedPendingChats = new Set<number>();
+  const sent: Array<{ text: string; options?: { reply_markup?: unknown } }> = [];
+  const actions: Array<{ matcher: unknown; handler: (ctx: unknown) => unknown }> = [];
+  const bot = {
+    action: vi.fn().mockImplementation((matcher: unknown, handler: (ctx: unknown) => unknown) => {
+      actions.push({ matcher, handler });
+    }),
+    telegram: {
+      sendMessage: vi.fn().mockImplementation(
+        (_chatId: number, text: string, options?: { reply_markup?: unknown }) => {
+          sent.push({ text, options });
+          return Promise.resolve({ message_id: sent.length });
+        },
+      ),
+    },
+  };
+  const messageHandler = {
+    pendingElicitations,
+    ledgerOriginatedPendingChats,
+  } as unknown as MessageHandler;
+  return { bot, messageHandler, sent, actions, chatId };
+}
+
+interface InlineButton { text: string; callback_data: string }
+
+describe('SessionWatchManager — F1 regression: form-mode approval renders buttons', () => {
+  it('renders a mode:form approval as an inline keyboard and writes back content.choice', async () => {
+    const id = freshId();
+    const chatId = 77;
+    const key = ensureSessionKey(id);
+    expect(key).toBeTruthy();
+
+    const { bot, messageHandler, sent, actions } = makeFormElicitStubs(chatId);
+
+    const writer = new SessionLedgerWriter(id);
+    writer.recordUser('setup');
+    await sleep(50);
+
+    const manager = new SessionWatchManager(
+      () => {},
+      bot as unknown as import('telegraf').Telegraf,
+      messageHandler,
+    );
+    manager.start(chatId, id, async () => {});
+    await sleep(100);
+
+    // The exact shape afk-mode-gate.buildApprovalRequest emits: mode:'form',
+    // enum approve/deny, NO `type`.
+    const reqId = freshChannelId();
+    writer.record({
+      kind: 'elicitation',
+      reqId,
+      request: {
+        serverName: 'agent-afk',
+        message: 'AFK: `bash` is high-risk / irreversible. Approve this single call?',
+        mode: 'form',
+        title: 'AFK high-risk approval',
+        requestedSchema: {
+          type: 'object',
+          properties: {
+            choice: { type: 'string', title: 'Approve?', enum: ['approve', 'deny'] },
+          },
+          required: ['choice'],
+        },
+      },
+    });
+
+    await sleep(250);
+
+    // ASSERTION 1: the prompt rendered with an inline keyboard whose buttons carry
+    // afk:pa: callback_data. The ask-only handler would send a plain text prompt
+    // with NO reply_markup — this find() would be undefined and the test fails.
+    const formMsg = sent.find((m) => m.options?.reply_markup !== undefined);
+    expect(formMsg, 'form-mode approval must render with an inline keyboard (buttons)').toBeDefined();
+    const keyboard = (formMsg!.options!.reply_markup as { inline_keyboard: InlineButton[][] }).inline_keyboard;
+    const buttons = keyboard.flat();
+    const approveBtn = buttons.find((b) => b.callback_data.endsWith(':approve'));
+    expect(approveBtn, 'must offer an Approve button').toBeDefined();
+    expect(approveBtn!.callback_data.startsWith('afk:pa:')).toBe(true);
+
+    // Simulate the operator tapping "Approve": invoke the afk:pa: action handler.
+    const paAction = actions.find(
+      (a) => a.matcher instanceof RegExp && (a.matcher as RegExp).test('afk:pa:x:approve'),
+    );
+    expect(paAction, 'the afk:pa: action handler must be registered').toBeDefined();
+    const answerCbQuery = vi.fn().mockResolvedValue(undefined);
+    await paAction!.handler({ callbackQuery: { data: approveBtn!.callback_data }, answerCbQuery });
+
+    await sleep(200);
+
+    // ASSERTION 2: the written-back response carries content.choice (what
+    // afk-mode-gate reads) — NOT content.value. Under the ask-only handler this
+    // would be content.value and the gate would refuse the op.
+    const ledgerPath = path.join(tmpDir, 'state', 'sessions', id, 'events.jsonl');
+    const lines = fs.readFileSync(ledgerPath, 'utf8').trim().split('\n');
+    const responseRecord = lines
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .find((r) => r?.kind === 'elicitation_response');
+    expect(responseRecord).toBeDefined();
+    expect(responseRecord.reqId).toBe(reqId);
+    const result: ElicitationResult = responseRecord.result;
+    expect(result.action).toBe('accept');
+    expect((result.content as { choice?: string } | undefined)?.choice).toBe('approve');
+
+    // HMAC verifies with the real verifier.
+    const readKey = readSessionKey(id);
+    expect(readKey).toBeTruthy();
+    const valid = verifyElicitationResponse(readKey!, id, reqId, result, responseRecord.hmac);
+    expect(valid).toBe(true);
+
+    await writer.close();
+    manager.stop(chatId);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Keep-alive: heartbeat for a pending elicitation (answer-whenever, no cutoff)
+// ---------------------------------------------------------------------------
+
+describe('SessionWatchManager — keep-alive heartbeat for a pending elicitation', () => {
+  it('re-nudges (capped) while pending without cutting off the wait, and stops after the answer', async () => {
+    const id = freshId();
+    const chatId = 88;
+    ensureSessionKey(id);
+
+    const { bot, messageHandler, pendingElicitations } = makeElicitStubs(chatId);
+
+    const writer = new SessionLedgerWriter(id);
+    writer.recordUser('setup');
+    await sleep(50);
+
+    const sent: string[] = [];
+    // Tiny heartbeat interval (25ms) so the test doesn't wait 15 minutes.
+    const manager = new SessionWatchManager(
+      () => {},
+      bot as unknown as import('telegraf').Telegraf,
+      messageHandler,
+      25,
+    );
+    manager.start(chatId, id, async (text) => { sent.push(text); });
+    await sleep(100);
+
+    writer.record({
+      kind: 'elicitation',
+      reqId: 'req-hb',
+      request: { type: 'text', message: 'name?' },
+    });
+
+    // Wait through many heartbeat intervals WITHOUT answering.
+    await sleep(400);
+    const nudges = () => sent.filter((t) => /still waiting/i.test(t)).length;
+    // Fired at least once, but capped (MAX_ELICIT_NUDGES = 4) — never spams forever ...
+    expect(nudges()).toBeGreaterThanOrEqual(1);
+    expect(nudges()).toBeLessThanOrEqual(4);
+    // ... and the wait is STILL open — answer whenever (resolver live, NOT cut off).
+    const resolver = pendingElicitations.get(chatId);
+    expect(resolver).toBeDefined();
+
+    // Answer → the wait resolves, the heartbeat is cleared, nudges stop.
+    const beforeAnswer = nudges();
+    resolver!('Alice');
+    await sleep(150);
+    expect(nudges()).toBe(beforeAnswer);
+
+    await writer.close();
+    manager.stop(chatId);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Criterion 4: getWatched() getter + daemon abort-record signing
 // ---------------------------------------------------------------------------
 
