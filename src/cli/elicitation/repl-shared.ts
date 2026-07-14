@@ -62,7 +62,6 @@ export interface ReplElicitationDeps {
    */
   readTextOverlay?: (opts: {
     header: readonly string[];
-    initial?: string;
     help?: string;
     validate?: (value: string) => string | null;
     signal: AbortSignal;

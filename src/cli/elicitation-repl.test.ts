@@ -92,6 +92,52 @@ describe('makeReplElicitationHandler', () => {
     expect(reader).not.toHaveBeenCalled();
   });
 
+  // Issue #502 F1: URL mode was the ONLY elicitation path with no try/catch
+  // around its readLine await — a rejection (Ctrl+C, session teardown mid-
+  // prompt) propagated out of the handler and was reinterpreted as DECLINE
+  // by the router's outer `.catch(() => DECLINE)` (elicitation-router.ts)
+  // instead of CANCEL like every other path in this module. Before the fix
+  // this test failed with an unhandled rejection, not a wrong assertion.
+  it('maps a readLine rejection to cancel — matches every other elicitation path (#502 F1)', async () => {
+    const reader = vi.fn().mockRejectedValue(new Error('SIGINT'));
+    const handler = makeReplElicitationHandler({
+      readLine: reader,
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+    });
+    const result = await handler(urlRequest(), { signal: NO_SIGNAL });
+    expect(result.action).toBe('cancel');
+  });
+
+  // Issue #502 F2: the rejection above is still swallowed as far as the
+  // caller's return value is concerned (CANCEL is the correct, safe outcome
+  // either way) — but it must no longer be INVISIBLE. Under AFK_DEBUG=1 the
+  // underlying error is now observable, distinguishing a genuine dependency
+  // failure from a plain user cancel.
+  it('logs the underlying error via debugLog under AFK_DEBUG=1 (#502 F2)', async () => {
+    const prevDebug = process.env['AFK_DEBUG'];
+    process.env['AFK_DEBUG'] = '1';
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const reader = vi.fn().mockRejectedValue(new Error('boom'));
+      const handler = makeReplElicitationHandler({
+        readLine: reader,
+        writer: { line: vi.fn() },
+        pendingCount: () => 0,
+      });
+      const result = await handler(urlRequest(), { signal: NO_SIGNAL });
+      expect(result.action).toBe('cancel');
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[elicitation]'),
+        expect.objectContaining({ message: 'boom' }),
+      );
+    } finally {
+      logSpy.mockRestore();
+      if (prevDebug === undefined) delete process.env['AFK_DEBUG'];
+      else process.env['AFK_DEBUG'] = prevDebug;
+    }
+  });
+
   describe('form mode', () => {
     // SC1: accept happy path — all three field types coerced correctly
     it('collects string, number, and boolean fields and returns accept', async () => {
@@ -177,6 +223,36 @@ describe('makeReplElicitationHandler', () => {
       );
 
       expect(result.action).toBe('cancel');
+    });
+
+    // Issue #502 F2: the same swallowed-error observability gap existed in
+    // form mode's readLine catch. Verify the pattern was applied here too,
+    // not just in url-mode.
+    it('logs the underlying readLine error via debugLog under AFK_DEBUG=1 (#502 F2)', async () => {
+      const prevDebug = process.env['AFK_DEBUG'];
+      process.env['AFK_DEBUG'] = '1';
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        const reader = vi.fn().mockRejectedValue(new Error('dependency exploded'));
+        const handler = makeReplElicitationHandler({
+          readLine: reader,
+          writer: { line: vi.fn() },
+          pendingCount: () => 0,
+        });
+        const result = await handler(
+          formRequest({ token: { type: 'string' } }),
+          { signal: NO_SIGNAL },
+        );
+        expect(result.action).toBe('cancel');
+        expect(logSpy).toHaveBeenCalledWith(
+          expect.stringContaining('[elicitation]'),
+          expect.objectContaining({ message: 'dependency exploded' }),
+        );
+      } finally {
+        logSpy.mockRestore();
+        if (prevDebug === undefined) delete process.env['AFK_DEBUG'];
+        else process.env['AFK_DEBUG'] = prevDebug;
+      }
     });
 
     // SC4: optional-field skip — empty enter omits field, loop continues
@@ -723,6 +799,71 @@ describe('agent-question mode', () => {
     );
     expect(result.action).toBe('accept');
     expect(result.content?.['value']).toEqual(['choice-a', 'choice-c']);
+  });
+
+  // Issue #502 F8: the multi_choice numbered-list fallback omitted the \x07
+  // bell that the choice/confirm fallbacks already emit.
+  it('multi_choice type: rings the bell before the numbered fallback list (parity with choice) (#502 F8)', async () => {
+    const lines: string[] = [];
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn().mockResolvedValueOnce('1,2'),
+      writer: { line: (t = '') => lines.push(t) },
+      pendingCount: () => 0,
+    });
+    const result = await handler(
+      agentRequest({ type: 'multi_choice', choices: ['a', 'b', 'c'] }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('accept');
+    expect(lines).toContain('\x07');
+  });
+
+  // Issue #502 F8: the invalid-selection message omitted the custom-answer
+  // upper bound that `choice`'s equivalent message already includes.
+  it('multi_choice type: invalid-selection message includes the custom-answer slot when allowCustom is set (#502 F8)', async () => {
+    const lines: string[] = [];
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn()
+        .mockResolvedValueOnce('9')   // out of range even counting the custom slot
+        .mockResolvedValueOnce('1'),
+      writer: { line: (t = '') => lines.push(t) },
+      pendingCount: () => 0,
+    });
+    const result = await handler(
+      agentRequest({ type: 'multi_choice', choices: ['a', 'b', 'c'], allowCustom: true }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('accept');
+    // 3 real choices + 1 custom slot = upper bound 4 — matches `choice`'s
+    // equivalent message (`Please enter a number between 1 and 4.`).
+    expect(lines.join('\n')).toMatch(/between 1 and 4\b/);
+  });
+
+  // Issue #502 F2: same swallowed-error observability gap in agent-question's
+  // readLine catches. One representative site (the default text fallback)
+  // confirms the pattern generalizes here too.
+  it('logs the underlying readLine error via debugLog under AFK_DEBUG=1 (#502 F2)', async () => {
+    const prevDebug = process.env['AFK_DEBUG'];
+    process.env['AFK_DEBUG'] = '1';
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const reader = vi.fn().mockRejectedValue(new Error('picker dependency crashed'));
+      const handler = makeReplElicitationHandler({
+        readLine: reader,
+        writer: { line: vi.fn() },
+        pendingCount: () => 0,
+      });
+      const result = await handler(agentRequest({ type: 'text' }), { signal: NO_SIGNAL });
+      expect(result.action).toBe('cancel');
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[elicitation]'),
+        expect.objectContaining({ message: 'picker dependency crashed' }),
+      );
+    } finally {
+      logSpy.mockRestore();
+      if (prevDebug === undefined) delete process.env['AFK_DEBUG'];
+      else process.env['AFK_DEBUG'] = prevDebug;
+    }
   });
 
   it('number type: non-numeric re-prompts then accepts valid number', async () => {
@@ -1403,7 +1544,7 @@ describe('agent-question mode — picker path', () => {
 // allow_custom — overlay path (choice/multi_choice via pickFromList)
 // ---------------------------------------------------------------------------
 
-import { CUSTOM_ANSWER_SENTINEL, renderMultiSelector } from './input/selectors.js';
+import { CUSTOM_ANSWER_SENTINEL, renderMultiSelector, renderSelector } from './input/selectors.js';
 
 describe('allow_custom — overlay path (choice)', () => {
   it('sentinel selected → readTextOverlay called → returns { value: null, custom_value }', async () => {
@@ -1769,6 +1910,27 @@ describe('allow_custom — TTY multi-selector path (renderMultiSelector)', () =>
   });
 });
 
+// Issue #502 F3: renderSelector should only ever return an index inside
+// choices[], but a genuine selector/choices-array desync previously returned
+// CANCEL with no diagnostic — indistinguishable from a normal user cancel.
+// Reuses the module-mock scaffold declared above (defaults to the real,
+// non-TTY-null implementation for every other test in this file).
+describe('TTY single-selector path (renderSelector) — out-of-range index', () => {
+  it('choice TTY selector returning an out-of-range index cancels (not a throw) (#502 F3)', async () => {
+    vi.mocked(renderSelector).mockResolvedValueOnce(99);
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+    });
+    const result = await handler(
+      agentRequest({ type: 'choice', choices: ['a', 'b'] }),
+      { signal: NO_SIGNAL },
+    );
+    expect(result.action).toBe('cancel');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Form mode — picker path (enum / boolean fields + pickFromList, TTY surfaces)
 // ---------------------------------------------------------------------------
@@ -1912,5 +2074,155 @@ describe('form mode — picker path (enum/boolean)', () => {
     expect(result.content && 'mode' in result.content).toBe(false);
     // Sentinel was appended after the real options.
     expect(pickFromList.mock.calls[0]?.[0]?.options.length).toBe(3);
+  });
+
+  // Issue #502 F4: two distinct enum values can stringify/sanitize to the
+  // same display label (numeric 1 vs string "1"). Before the fix,
+  // `indexOf` always resolved to the FIRST matching label, so picking the
+  // second "1" silently returned the value at the first "1"'s index instead.
+  it('enum field with colliding labels: resolves to the ORIGINAL value at the picked index, not the first match (#502 F4)', async () => {
+    const lines: string[] = [];
+    // enumValues = [1, "1", 2] → labels before disambiguation = ["1", "1", "2"].
+    const pickFromList = vi.fn().mockImplementationOnce(async (opts: { options: readonly string[] }) => {
+      // Options are disambiguated: ["1 (1)", "1 (2)", "2"]. Pick the SECOND
+      // "1" — the one that maps back to the string enum entry, not the
+      // numeric one at index 0.
+      expect(opts.options).toEqual(['1 (1)', '1 (2)', '2']);
+      return [opts.options[1]];
+    });
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: (t = '') => lines.push(t) },
+      pendingCount: () => 0,
+      pickFromList,
+    });
+
+    const result = await handler(
+      formRequest({ field: { type: 'string', enum: [1, '1', 2] } }, ['field']),
+      { signal: NO_SIGNAL },
+    );
+
+    expect(result.action).toBe('accept');
+    // Must be the STRING "1" (index 1), not the number 1 (index 0) that an
+    // indexOf-on-colliding-labels bug would have silently substituted.
+    expect(result.content?.['field']).toBe('1');
+    expect(typeof result.content?.['field']).toBe('string');
+    // The disambiguated label is what actually got echoed — documents the
+    // (unavoidable) echo-format change the fix introduces for this rare case.
+    expect(lines.some((l) => l.includes('1 (2)'))).toBe(true);
+  });
+
+  // Issue #502 F4 hardening: a raw enum value can itself look like a
+  // disambiguated suffix. A naive single-pass scheme (count original
+  // duplicates, suffix each occurrence from that count alone) suffixes the
+  // second 'dup' to 'dup (2)', which then collides with the third, distinct
+  // raw entry that already reads 'dup (2)' — reintroducing the exact
+  // ambiguity the fix exists to remove, one level deeper. Every option must
+  // stay globally unique and round-trip to its own original enum index.
+  it('enum field with a nested label collision (a raw value that already looks like a disambiguated suffix): every option stays unique (#502 F4 hardening)', async () => {
+    const pickFromList = vi.fn().mockImplementationOnce(async (opts: { options: readonly string[] }) => {
+      expect(new Set(opts.options).size).toBe(opts.options.length);
+      // Pick the LAST rendered option — it must resolve back to the LAST
+      // enum entry (the literal string 'dup (2)'), never to the second
+      // 'dup' that a naive suffix scheme would alias it with.
+      return [opts.options[opts.options.length - 1]];
+    });
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      pickFromList,
+    });
+
+    const result = await handler(
+      formRequest({ field: { type: 'string', enum: ['dup', 'dup', 'dup (2)'] } }, ['field']),
+      { signal: NO_SIGNAL },
+    );
+
+    expect(result.action).toBe('accept');
+    expect(result.content?.['field']).toBe('dup (2)');
+  });
+
+  // Issue #502 F4: non-colliding enums (the overwhelming common case) must
+  // render EXACTLY as before — disambiguation should be invisible unless a
+  // collision actually exists.
+  it('enum field WITHOUT colliding labels: renders unmodified options (#502 F4 regression guard)', async () => {
+    const pickFromList = vi.fn().mockImplementationOnce(async (opts: { options: readonly string[] }) => {
+      expect(opts.options).toEqual(['once', 'session', 'persist', 'deny']);
+      return ['persist'];
+    });
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      pickFromList,
+    });
+
+    const result = await handler(pathApprovalForm(), { signal: NO_SIGNAL });
+    expect(result.action).toBe('accept');
+    expect(result.content?.['choice']).toBe('persist');
+  });
+
+  // Issue #502 F4: an enum value that literally equals the FORM_SKIP_SENTINEL
+  // string made the real enum value unselectable — both it and the actual
+  // skip option rendered identically, and the code always treated a pick of
+  // that label as skip. After the fix the colliding enum entry gets a
+  // disambiguating suffix, so it is selectable and distinct from real skip.
+  it('optional enum field with a value equal to the skip sentinel: stays selectable and distinct from real skip (#502 F4)', async () => {
+    const SKIP_SENTINEL_TEXT = '\u2014 skip (optional) \u2014';
+    const pickFromList = vi.fn().mockImplementationOnce(async (opts: { options: readonly string[] }) => {
+      // 2 enum values + 1 real trailing skip sentinel.
+      expect(opts.options.length).toBe(3);
+      // The colliding enum entry must be disambiguated (not textually equal
+      // to the plain sentinel) so it never gets misread as the skip action...
+      expect(opts.options[0]).not.toBe(SKIP_SENTINEL_TEXT);
+      // ...while the TRUE trailing skip option keeps its exact, unmodified
+      // meaning.
+      expect(opts.options[2]).toBe(SKIP_SENTINEL_TEXT);
+      // Pick the disambiguated enum entry — NOT the real skip option.
+      return [opts.options[0]];
+    });
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      pickFromList,
+    });
+
+    // `weird` optional (not in required[]) so the skip sentinel is appended.
+    const result = await handler(
+      formRequest({ weird: { type: 'string', enum: [SKIP_SENTINEL_TEXT, 'other'] } }),
+      { signal: NO_SIGNAL },
+    );
+
+    expect(result.action).toBe('accept');
+    // The real enum value was returned — NOT the skip/default outcome a
+    // label collision would previously have forced.
+    expect(result.content?.['weird']).toBe(SKIP_SENTINEL_TEXT);
+  });
+
+  // Issue #502 F4: the real skip action must still work when a colliding
+  // enum value has been pushed aside by disambiguation.
+  it('optional enum field with a value equal to the skip sentinel: the real skip option still skips (#502 F4)', async () => {
+    const SKIP_SENTINEL_TEXT = '\u2014 skip (optional) \u2014';
+    const pickFromList = vi.fn().mockImplementationOnce(async (opts: { options: readonly string[] }) => {
+      // Pick the LAST option — the real, unmodified skip sentinel.
+      return [opts.options[opts.options.length - 1]];
+    });
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn(),
+      writer: { line: vi.fn() },
+      pendingCount: () => 0,
+      pickFromList,
+    });
+
+    const result = await handler(
+      formRequest({ weird: { type: 'string', enum: [SKIP_SENTINEL_TEXT, 'other'] } }),
+      { signal: NO_SIGNAL },
+    );
+
+    expect(result.action).toBe('accept');
+    // Skipped optional field with no declared default is omitted entirely.
+    expect(result.content && 'weird' in result.content).toBe(false);
   });
 });

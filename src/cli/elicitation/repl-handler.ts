@@ -10,6 +10,7 @@
  */
 
 import type { ElicitationRequest, ElicitationResult } from '../../agent/types/sdk-types.js';
+import { debugLog } from '../../utils/debug.js';
 import { ringBellIfEnabled } from '../_lib/capture-mode.js';
 import { sanitizeSchemaString } from '../_lib/sanitize.js';
 import { palette } from '../palette.js';
@@ -146,7 +147,21 @@ export function makeReplElicitationHandler(
       // URL mode (also the default when mode is omitted — most MCP OAuth
       // flows surface a URL to visit).
       renderUrlRequest(deps.writer, request);
-      const reply = (await deps.readLine(palette.dim('Continue? [y/N] '))).trim().toLowerCase();
+      // Invariant: every readLine/pickFromList await in this module maps a
+      // rejection (Ctrl+C, session teardown mid-prompt) to CANCEL — this was
+      // previously the ONLY such await left unguarded, so a rejection here
+      // propagated past this handler's `finally` and was reinterpreted as
+      // DECLINE by the router's outer `.catch(() => DECLINE)`
+      // (elicitation-router.ts) instead of CANCEL. DECLINE and CANCEL are
+      // different signals to the MCP server; an interrupted prompt must
+      // report the same outcome every other path already does.
+      let reply: string;
+      try {
+        reply = (await deps.readLine(palette.dim('Continue? [y/N] '))).trim().toLowerCase();
+      } catch (err) {
+        debugLog('[elicitation] url-mode readLine failed:', err);
+        return CANCEL;
+      }
       if (reply === '') return CANCEL;
       if (reply === 'y' || reply === 'yes') return ACCEPT;
       return DECLINE;
