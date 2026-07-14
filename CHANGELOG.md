@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.47.0] - 2026-07-14
+
+### Added
+- add opt-in plain/append-only output mode (AFK_PLAIN_OUTPUT) (#593) (ce0480a)
+
+### Changed
+- sync model-slots & providers pages with #548 (#601) (2b19808)
+
 ## [5.46.2] - 2026-07-14
 
 ### Fixed
