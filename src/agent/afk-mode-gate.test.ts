@@ -596,6 +596,52 @@ describe('createAfkModeGate — high-risk approval round-trip (v1.5)', () => {
       const [event] = calls.mock.calls[0] as [{ kind: string; payload: Record<string, unknown> }];
       expect(event.payload['approvalOutcome']).toBe('unrecognised');
     });
+
+    it('emits hook_decision with approvalOutcome:hard-block when promptForApproval:false (no prompt)', async () => {
+      // The always-on Telegram-host posture: high-risk ops hard-refuse WITHOUT
+      // soliciting an approval. Regression guard for the forensic gap — before
+      // this the hard-block branch returned before requestApproval's decide(),
+      // so an unattended refusal left no durable hook_decision record.
+      const { writer, calls } = fakeWriter();
+      const route = vi.fn(
+        async (): Promise<ElicitationResult> => ({ action: 'accept', content: { choice: 'approve' } }),
+      );
+      const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, {
+        route,
+        promptForApproval: false,
+        traceWriter: writer,
+      });
+      const result = await gate({ ...HIGH_RISK });
+      expect(result.decision).toBe('block');
+      expect(route).not.toHaveBeenCalled(); // never solicited an approval
+      expect(calls).toHaveBeenCalledTimes(1);
+      const [event] = calls.mock.calls[0] as [{ kind: string; payload: Record<string, unknown> }];
+      expect(event.kind).toBe('hook_decision');
+      expect(event.payload['approvalOutcome']).toBe('hard-block');
+      expect(event.payload['decision']).toBe('block');
+      expect(typeof event.payload['blockedTool']).toBe('string');
+      expect(typeof event.payload['durationMs']).toBe('number');
+    });
+
+    it('emits hook_decision with approvalOutcome:hard-block for a high-risk SUBAGENT op (parentSessionId set)', async () => {
+      // The sub-agent branch shares the same no-prompt hard-block and needs the
+      // same audit record — a forked agent's refused high-risk op must not be
+      // invisible on resume either.
+      const { writer, calls } = fakeWriter();
+      const route = vi.fn(
+        async (): Promise<ElicitationResult> => ({ action: 'accept', content: { choice: 'approve' } }),
+      );
+      const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, {
+        route,
+        traceWriter: writer,
+      });
+      const result = await gate({ ...HIGH_RISK, parentSessionId: 'parent-1' });
+      expect(result.decision).toBe('block');
+      expect(route).not.toHaveBeenCalled();
+      expect(calls).toHaveBeenCalledTimes(1);
+      const [event] = calls.mock.calls[0] as [{ kind: string; payload: Record<string, unknown> }];
+      expect(event.payload['approvalOutcome']).toBe('hard-block');
+    });
   });
 
   // Finding 2: deny-on-timeout timer starts only after onActive fires

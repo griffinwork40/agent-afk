@@ -247,6 +247,10 @@ export function createAfkModeGate(
 
     const { toolName } = context;
 
+    // Wall-clock start for the hook_decision audit trace (gate entry → decision),
+    // parity with requestApproval's own timing on the prompt paths.
+    const start = Date.now();
+
     // The operator's channel is never gated — the posture relies on it to
     // surface Asking states from an unattended run.
     if (toolName === 'send_telegram') return {};
@@ -295,7 +299,23 @@ export function createAfkModeGate(
     // prompt would surface on the parent's surface with no attribution), and the
     // approval path can be opted out — both degrade to the legacy hard block.
     if (context.parentSessionId !== undefined || !promptForApproval) {
-      return blockDecision(toolName, 'AFK mode runs autonomously without a human watching');
+      const decision = blockDecision(toolName, 'AFK mode runs autonomously without a human watching');
+      // Emit the audit trace on the no-prompt refusal too. requestApproval's
+      // decide() helper centralises the emit for the prompt paths, but this
+      // branch returns BEFORE requestApproval — so without this emit an always-on
+      // Telegram host (afkPromptForApproval:false) or a sub-agent hard-refusing a
+      // high-risk op left NO durable hook_decision record, exactly the forensic
+      // gap an away operator needs on resume. approvalOutcome:'hard-block' marks
+      // it as an automatic ceiling refusal, distinct from an operator 'denied'.
+      void emitHookDecision(traceWriter, {
+        hookEvent: 'PreToolUse',
+        decision: 'block',
+        ...(decision.reason !== undefined ? { reason: decision.reason } : {}),
+        blockedTool: toolName,
+        durationMs: Date.now() - start,
+        approvalOutcome: 'hard-block',
+      });
+      return decision;
     }
 
     // Main session: ask the operator to approve/deny (deny-on-timeout). Returns

@@ -82,4 +82,27 @@ describe('handleAfk (/afk on Telegram)', () => {
     expect(s.setPermissionMode).not.toHaveBeenCalled();
     expect(replies.join('\n')).toMatch(/already ON/i);
   });
+
+  it('restart safe-degrades to default: a fresh session for the same chat needs re-arming (handler holds no cross-restart mode state)', async () => {
+    // handlers/afk.ts documents the mode is runtime-only and NOT persisted, so a
+    // bot restart brings the chat back to 'default' and never silently resumes
+    // autonomous. Model a restart of the SAME chat (id 555): arm session1, then
+    // hand /afk a FRESH session at 'default' (exactly what constructTelegramSession
+    // yields — permissionMode omitted). It must RE-ARM (call setPermissionMode +
+    // print the ON copy), NOT report "already ON". A regression that cached the
+    // flip in module/chat state would wrongly short-circuit here.
+    const armed = makeSession('default');
+    await handleAfk(makeCtx('/afk on').ctx, makeSM(armed.session), () => {});
+    expect(armed.setPermissionMode).toHaveBeenCalledWith('autonomous');
+
+    // --- bot restart: a brand-new session for the same chat, mode 'default' ---
+    const afterRestart = makeSession('default');
+    const { ctx, replies } = makeCtx('/afk on');
+    await handleAfk(ctx, makeSM(afterRestart.session), () => {});
+
+    expect(afterRestart.setPermissionMode).toHaveBeenCalledWith('autonomous');
+    const joined = replies.join('\n');
+    expect(joined).toMatch(/AFK mode ON/i);
+    expect(joined).not.toMatch(/already ON/i);
+  });
 });
