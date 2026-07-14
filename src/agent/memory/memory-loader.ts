@@ -36,12 +36,21 @@ export function loadHotMemory(): string | null {
 }
 
 /**
- * Inject HOT.md into an AgentConfig's system prompt.
+ * Inject HOT.md into an AgentConfig as the dedicated `hotMemory` field.
  *
  * If HOT.md doesn't exist or is empty, returns the config unchanged.
- * Otherwise, wraps the hot memory in `<cross-session-memory>` tags
- * and prepends (or appends, depending on systemPrompt shape) to the
- * config's systemPrompt field.
+ * Otherwise, wraps the hot memory in `<cross-session-memory>` tags and stores
+ * it on `config.hotMemory` — a field the provider places in the
+ * cross-session-memory region of the assembled system prompt (after the memory
+ * instructions).
+ *
+ * Invariant: hot memory is carried as its own field rather than prepended into
+ * `systemPrompt`. `systemPrompt` holds the `# Agent AFK` doctrine + operator
+ * overlay + routing/end-of-turn directives, which the provider now places
+ * EARLY (right after the tool conventions); welding hot memory onto the front
+ * of that string would drag the cross-session-memory block ahead of the
+ * doctrine. Keeping the two separate lets the assembler order them
+ * independently. See `providers/anthropic-direct/query/system-prompt.ts`.
  *
  * Does not mutate the original config — returns a shallow copy.
  */
@@ -51,23 +60,5 @@ export function injectHotMemory(config: AgentConfig): AgentConfig {
 
   const sanitized = hot.replace(/<\/?cross-session-memory\b[^>]*>/gi, '');
   const memoryBlock = `<cross-session-memory>\n${sanitized}\n</cross-session-memory>`;
-  const sp = config.systemPrompt;
-
-  if (typeof sp === 'string') {
-    return { ...config, systemPrompt: `${memoryBlock}\n\n${sp}` };
-  }
-
-  if (sp && typeof sp === 'object' && 'type' in sp && sp.type === 'preset') {
-    const existingAppend = sp.append ?? '';
-    return {
-      ...config,
-      systemPrompt: {
-        ...sp,
-        append: `${memoryBlock}\n\n${existingAppend}`,
-      },
-    };
-  }
-
-  // No system prompt set — just set it as the memory block
-  return { ...config, systemPrompt: memoryBlock };
+  return { ...config, hotMemory: memoryBlock };
 }

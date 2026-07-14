@@ -318,6 +318,53 @@ describe('OpenAICompatibleProvider — readOnlyMemory option', () => {
   });
 });
 
+describe('OpenAICompatibleProvider — system-prompt assembly order', () => {
+  // Mirrors the anthropic-direct assembler: the # Agent AFK doctrine
+  // (config.systemPrompt) is placed EARLY — after the tool conventions and
+  // before the cross-session memory (instructions + the <cross-session-memory>
+  // hot-memory block carried on config.hotMemory) and the # Environment
+  // reference. Manifest ordering (pushed last) is locked with deterministic
+  // sentinels in query/system-prompt.test.ts.
+  it('places the doctrine after tool conventions but before cross-session memory and hot memory', async () => {
+    pendingChunks = [
+      {
+        choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ];
+    const provider = new OpenAICompatibleProvider();
+    const q = provider.query({
+      prompt: singleInput('hi'),
+      config: {
+        model: 'gpt-4o-mini',
+        apiKey: 'sk-test-key',
+        systemPrompt: 'DOCTRINE_SENTINEL',
+        hotMemory: 'HOT_SENTINEL',
+      } as AgentConfig,
+    });
+    await collect(q);
+
+    expect(createCalls).toHaveLength(1);
+    const args = createCalls[0]!.args as { messages: Array<{ role: string; content: string }> };
+    expect(args.messages[0]!.role).toBe('system');
+    const s = args.messages[0]!.content;
+    const iTool = s.indexOf('You have access to tools for working with the filesystem');
+    const iDoctrine = s.indexOf('DOCTRINE_SENTINEL');
+    const iMem = s.indexOf('# Cross-Session Memory');
+    const iHot = s.indexOf('HOT_SENTINEL');
+    const iEnv = s.indexOf('Working directory');
+    expect(iTool).toBeGreaterThanOrEqual(0);
+    expect(iDoctrine).toBeGreaterThanOrEqual(0);
+    expect(iMem).toBeGreaterThanOrEqual(0);
+    expect(iHot).toBeGreaterThanOrEqual(0);
+    expect(iEnv).toBeGreaterThanOrEqual(0);
+    expect(iTool).toBeLessThan(iDoctrine); // after essential runtime/tool conventions
+    expect(iDoctrine).toBeLessThan(iMem); // before cross-session memory instructions
+    expect(iDoctrine).toBeLessThan(iHot); // before hot-memory project context
+    expect(iDoctrine).toBeLessThan(iEnv); // before the # Environment reference block
+  });
+});
+
 describe('OpenAICompatibleProvider — plan-mode gate via config.hookRegistry', () => {
   // Mirrors the anthropic-direct gate-wiring regression: a provider built
   // WITHOUT a constructor-time hookRegistry (production shape) must still

@@ -1,5 +1,12 @@
 /**
- * Tests for src/agent/memory/memory-loader.ts — hot memory injection into system prompt.
+ * Tests for src/agent/memory/memory-loader.ts — hot memory injection.
+ *
+ * Invariant: hot memory (HOT.md) is carried on the dedicated `config.hotMemory`
+ * field, NOT prepended into `config.systemPrompt`. The provider assembler then
+ * places the `<cross-session-memory>` block in the cross-session-memory region
+ * (after the memory instructions) while the `# Agent AFK` doctrine + operator
+ * overlay (systemPrompt) is placed early — see
+ * `providers/anthropic-direct/query/system-prompt.ts`.
  *
  * Points HOME at a tmp dir so nothing touches the real ~/.afk.
  */
@@ -75,17 +82,18 @@ describe('loadHotMemory', () => {
 });
 
 describe('injectHotMemory', () => {
-  it('returns config unchanged when no HOT.md exists', () => {
+  it('returns config unchanged (no hotMemory) when no HOT.md exists', () => {
     const config: AgentConfig = {
       model: 'sonnet',
       systemPrompt: 'Base prompt',
     };
 
     const result = injectHotMemory(config);
-    expect(result).toEqual(config);
+    expect(result).toBe(config);
+    expect(result.hotMemory).toBeUndefined();
   });
 
-  it('prepends memory block to string systemPrompt', () => {
+  it('stores the memory block on config.hotMemory, NOT prepended into systemPrompt', () => {
     const hotPath = join(tmpHome, '.afk', 'state', 'memory', 'HOT.md');
     const hotContent = 'Previous session: user prefers brevity';
     writeFileSync(hotPath, hotContent, 'utf-8');
@@ -96,55 +104,36 @@ describe('injectHotMemory', () => {
     };
 
     const result = injectHotMemory(config);
-    expect(result.systemPrompt).toBe(
-      `<cross-session-memory>\n${hotContent}\n</cross-session-memory>\n\nBase system prompt`,
+    // Hot memory rides its own field so the assembler can place it in the
+    // cross-session-memory region rather than ahead of the # Agent AFK doctrine.
+    expect(result.hotMemory).toBe(
+      `<cross-session-memory>\n${hotContent}\n</cross-session-memory>`,
     );
+    // systemPrompt (the doctrine + operator overlay) is left untouched.
+    expect(result.systemPrompt).toBe('Base system prompt');
+    expect(result.systemPrompt).not.toContain('<cross-session-memory>');
   });
 
-  it('appends to append field when systemPrompt is preset', () => {
+  it('leaves a preset systemPrompt untouched and carries hot memory on config.hotMemory', () => {
     const hotPath = join(tmpHome, '.afk', 'state', 'memory', 'HOT.md');
     const hotContent = 'Important context from previous session';
     writeFileSync(hotPath, hotContent, 'utf-8');
 
-    const config: AgentConfig = {
-      model: 'sonnet',
-      systemPrompt: {
-        type: 'preset',
-        preset: 'claude_code',
-        append: 'Extra instructions',
-      },
+    const preset = {
+      type: 'preset' as const,
+      preset: 'claude_code' as const,
+      append: 'Extra instructions',
     };
+    const config: AgentConfig = { model: 'sonnet', systemPrompt: { ...preset } };
 
     const result = injectHotMemory(config);
-    expect(result.systemPrompt).toEqual({
-      type: 'preset',
-      preset: 'claude_code',
-      append: `<cross-session-memory>\n${hotContent}\n</cross-session-memory>\n\nExtra instructions`,
-    });
+    expect(result.systemPrompt).toEqual(preset);
+    expect(result.hotMemory).toBe(
+      `<cross-session-memory>\n${hotContent}\n</cross-session-memory>`,
+    );
   });
 
-  it('appends to append field when no append exists', () => {
-    const hotPath = join(tmpHome, '.afk', 'state', 'memory', 'HOT.md');
-    const hotContent = 'Context data';
-    writeFileSync(hotPath, hotContent, 'utf-8');
-
-    const config: AgentConfig = {
-      model: 'sonnet',
-      systemPrompt: {
-        type: 'preset',
-        preset: 'claude_code',
-      },
-    };
-
-    const result = injectHotMemory(config);
-    expect(result.systemPrompt).toEqual({
-      type: 'preset',
-      preset: 'claude_code',
-      append: `<cross-session-memory>\n${hotContent}\n</cross-session-memory>\n\n`,
-    });
-  });
-
-  it('sets systemPrompt when undefined', () => {
+  it('carries hot memory on config.hotMemory when systemPrompt is undefined (systemPrompt stays undefined)', () => {
     const hotPath = join(tmpHome, '.afk', 'state', 'memory', 'HOT.md');
     const hotContent = 'Memory block content';
     writeFileSync(hotPath, hotContent, 'utf-8');
@@ -154,9 +143,22 @@ describe('injectHotMemory', () => {
     };
 
     const result = injectHotMemory(config);
-    expect(result.systemPrompt).toBe(
+    expect(result.systemPrompt).toBeUndefined();
+    expect(result.hotMemory).toBe(
       `<cross-session-memory>\n${hotContent}\n</cross-session-memory>`,
     );
+  });
+
+  it('strips any pre-existing <cross-session-memory> tags before re-wrapping (no double-wrap)', () => {
+    const hotPath = join(tmpHome, '.afk', 'state', 'memory', 'HOT.md');
+    writeFileSync(hotPath, '<cross-session-memory>\nInner\n</cross-session-memory>', 'utf-8');
+
+    const config: AgentConfig = { model: 'sonnet', systemPrompt: 'Base' };
+    const result = injectHotMemory(config);
+    const opens = (result.hotMemory?.match(/<cross-session-memory>/g) ?? []).length;
+    const closes = (result.hotMemory?.match(/<\/cross-session-memory>/g) ?? []).length;
+    expect(opens).toBe(1);
+    expect(closes).toBe(1);
   });
 
   it('does not mutate the original config', () => {
@@ -170,9 +172,9 @@ describe('injectHotMemory', () => {
     const configBefore = JSON.stringify(config);
 
     injectHotMemory(config);
-    const configAfter = JSON.stringify(config);
 
-    expect(configBefore).toBe(configAfter);
+    expect(JSON.stringify(config)).toBe(configBefore);
+    expect(config.hotMemory).toBeUndefined();
   });
 
   it('preserves all other config fields', () => {
@@ -192,5 +194,6 @@ describe('injectHotMemory', () => {
     expect(result.apiKey).toBe('sk-test');
     expect(result.maxTurns).toBe(100);
     expect(result.timeoutMs).toBe(5000);
+    expect(result.systemPrompt).toBe('Base');
   });
 });

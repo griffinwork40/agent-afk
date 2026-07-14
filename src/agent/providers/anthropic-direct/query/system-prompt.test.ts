@@ -1,10 +1,15 @@
 /**
  * Unit tests for the shared system-prompt assembler
- * (query/system-prompt.ts). These lock the seam that closes the
- * "assembled twice" duplication (#362): the first-turn path (index.ts) and the
- * on-cwd-change rebuild (cwd-dependents.ts) both route through
- * `assembleSystemPrompt`, so the env fragment lands at the same position and
- * the stable prefix is built identically on both paths.
+ * (query/system-prompt.ts). These lock two things:
+ *
+ *  1. The "assembled twice" seam (#362): the first-turn path (index.ts) and the
+ *     on-cwd-change rebuild (cwd-dependents.ts) both route through
+ *     `assembleSystemPrompt`, so the env fragment lands at the same position and
+ *     the stable parts are built identically on both paths.
+ *  2. The top-level ORDER: the `# Agent AFK` doctrine (carried in `userSystem`)
+ *     appears after the tool/runtime conventions but BEFORE the cross-session
+ *     memory (instructions + `<cross-session-memory>` hot-memory block) and the
+ *     skill manifest. This is the ordering guarantee this module owns.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -22,64 +27,99 @@ const IDENTITY: EnvironmentIdentity = {
   workspace: null,
 };
 
+/** Distinct, collision-free sentinels for each top-level part. */
+const FULL = {
+  toolBase: 'TOOL',
+  memoryPrompt: 'MEM',
+  hotMemory: 'HOT',
+  manifest: 'MANIFEST',
+  userSystem: 'DOCTRINE',
+};
+
 describe('buildStableSystemPrefix', () => {
-  it('always includes toolBase + memoryPrompt in order', () => {
-    const parts = buildStableSystemPrefix({
-      toolBase: 'TOOL',
-      memoryPrompt: 'MEM',
-      manifest: '',
-      userSystem: null,
-    });
-    expect(parts).toEqual(['TOOL', 'MEM']);
-  });
-
-  it('omits empty manifest and null/empty userSystem', () => {
-    expect(
-      buildStableSystemPrefix({ toolBase: 'T', memoryPrompt: 'M', manifest: '', userSystem: '' }),
-    ).toEqual(['T', 'M']);
-    expect(
-      buildStableSystemPrefix({ toolBase: 'T', memoryPrompt: 'M', manifest: '', userSystem: null }),
-    ).toEqual(['T', 'M']);
-  });
-
-  it('appends manifest then userSystem when present, in that order', () => {
-    const parts = buildStableSystemPrefix({
-      toolBase: 'T',
-      memoryPrompt: 'M',
-      manifest: 'MANIFEST',
-      userSystem: 'USER',
-    });
-    expect(parts).toEqual(['T', 'M', 'MANIFEST', 'USER']);
+  it('captures the cwd-independent named parts', () => {
+    expect(buildStableSystemPrefix(FULL)).toEqual(FULL);
   });
 });
 
-describe('assembleSystemPrompt', () => {
-  it('splices the # Environment fragment at index 2 (between memoryPrompt and the rest)', () => {
-    const prefix = buildStableSystemPrefix({
-      toolBase: 'TOOL',
-      memoryPrompt: 'MEM',
-      manifest: 'MANIFEST',
-      userSystem: 'USER',
-    });
-    const out = assembleSystemPrompt(prefix, '/tmp/work', IDENTITY);
+describe('assembleSystemPrompt — top-level order', () => {
+  it('orders: toolBase, userSystem (doctrine), memoryPrompt, hotMemory, # Environment, manifest', () => {
+    const out = assembleSystemPrompt(buildStableSystemPrefix(FULL), '/tmp/work', IDENTITY);
+    const sections = out.split('\n\n');
+    expect(sections[0]).toBe('TOOL');
+    expect(sections[1]).toBe('DOCTRINE');
+    expect(sections[2]).toBe('MEM');
+    expect(sections[3]).toBe('HOT');
+    // formatEnvironmentFragment always emits the working-directory line.
+    expect(sections[4]).toContain('Working directory: /tmp/work');
+    expect(sections[5]).toBe('MANIFEST');
+  });
+
+  it('places the doctrine after tool conventions but before cross-session memory and the skill manifest', () => {
+    const out = assembleSystemPrompt(buildStableSystemPrefix(FULL), '/x', IDENTITY);
+    const iTool = out.indexOf('TOOL');
+    const iDoctrine = out.indexOf('DOCTRINE');
+    const iMemInstructions = out.indexOf('MEM');
+    const iHotMemory = out.indexOf('HOT');
+    const iManifest = out.indexOf('MANIFEST');
+    // after essential runtime/tool conventions
+    expect(iTool).toBeGreaterThanOrEqual(0);
+    expect(iTool).toBeLessThan(iDoctrine);
+    // before cross-session memory (instructions AND hot-memory project context)
+    expect(iDoctrine).toBeLessThan(iMemInstructions);
+    expect(iDoctrine).toBeLessThan(iHotMemory);
+    // before the skills catalog
+    expect(iDoctrine).toBeLessThan(iManifest);
+  });
+
+  it('keeps # Environment before the manifest even when userSystem/hotMemory are absent', () => {
+    const out = assembleSystemPrompt(
+      buildStableSystemPrefix({
+        toolBase: 'TOOL',
+        memoryPrompt: 'MEM',
+        hotMemory: '',
+        manifest: 'MANIFEST',
+        userSystem: null,
+      }),
+      '/x',
+      IDENTITY,
+    );
     const sections = out.split('\n\n');
     expect(sections[0]).toBe('TOOL');
     expect(sections[1]).toBe('MEM');
-    // formatEnvironmentFragment always emits the working-directory line.
-    expect(sections[2]).toContain('Working directory: /tmp/work');
+    expect(sections[2]).toContain('Working directory: /x');
     expect(sections[3]).toBe('MANIFEST');
-    expect(sections[4]).toBe('USER');
+  });
+
+  it('omits empty optional parts (userSystem, hotMemory, manifest)', () => {
+    const out = assembleSystemPrompt(
+      buildStableSystemPrefix({
+        toolBase: 'TOOL',
+        memoryPrompt: 'MEM',
+        hotMemory: '',
+        manifest: '',
+        userSystem: null,
+      }),
+      '/x',
+      IDENTITY,
+    );
+    const sections = out.split('\n\n');
+    expect(sections).toHaveLength(3);
+    expect(sections[0]).toBe('TOOL');
+    expect(sections[1]).toBe('MEM');
+    expect(sections[2]).toContain('Working directory: /x');
   });
 
   it('reflects the cwd in the environment fragment (only the env line changes across cwds)', () => {
-    const prefix = buildStableSystemPrefix({
+    const parts = buildStableSystemPrefix({
       toolBase: 'TOOL',
       memoryPrompt: 'MEM',
+      hotMemory: '',
       manifest: '',
       userSystem: null,
     });
-    const a = assembleSystemPrompt(prefix, '/repo/a', IDENTITY);
-    const b = assembleSystemPrompt(prefix, '/repo/b', IDENTITY);
+    const a = assembleSystemPrompt(parts, '/repo/a', IDENTITY);
+    const b = assembleSystemPrompt(parts, '/repo/b', IDENTITY);
     expect(a).toContain('Working directory: /repo/a');
     expect(b).toContain('Working directory: /repo/b');
     // Stable parts are byte-identical; only the env fragment differs.
@@ -88,29 +128,18 @@ describe('assembleSystemPrompt', () => {
     expect(a).not.toBe(b);
   });
 
-  it('handles a minimal prefix (toolBase + memoryPrompt only)', () => {
-    const prefix = buildStableSystemPrefix({
-      toolBase: 'TOOL',
-      memoryPrompt: 'MEM',
-      manifest: '',
-      userSystem: null,
-    });
-    const out = assembleSystemPrompt(prefix, '/x', IDENTITY);
-    const sections = out.split('\n\n');
-    expect(sections).toHaveLength(3);
-    expect(sections[0]).toBe('TOOL');
-    expect(sections[1]).toBe('MEM');
-    expect(sections[2]).toContain('Working directory: /x');
-  });
-
   it('appends a Session line when an identity field is known', () => {
-    const prefix = buildStableSystemPrefix({
-      toolBase: 'T',
-      memoryPrompt: 'M',
-      manifest: '',
-      userSystem: null,
-    });
-    const out = assembleSystemPrompt(prefix, '/x', { ...IDENTITY, sessionId: 'sess-123' });
+    const out = assembleSystemPrompt(
+      buildStableSystemPrefix({
+        toolBase: 'T',
+        memoryPrompt: 'M',
+        hotMemory: '',
+        manifest: '',
+        userSystem: null,
+      }),
+      '/x',
+      { ...IDENTITY, sessionId: 'sess-123' },
+    );
     expect(out).toContain('sess-123');
   });
 });
