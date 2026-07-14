@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.43.0] - 2026-07-14
+
+### Added
+- fail-fast denial circuit breaker for forked read-denial spins (#546) (#592) (d2cff2f)
+
 ## [5.42.1] - 2026-07-13
 
 ### Changed
