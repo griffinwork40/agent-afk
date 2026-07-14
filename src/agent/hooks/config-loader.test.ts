@@ -264,6 +264,10 @@ describe('loadHooksConfigFile', () => {
     // All entries in the group are invalid → group is excluded
     expect(result.hooks.PreToolUse).toBeUndefined();
     expect(result.warnings).toHaveLength(2);
+    // Reason is specific: missing command → malformed; a non-`command` but
+    // well-formed type → unsupported (not conflated with malformed).
+    expect(result.warnings.some((w) => /is malformed/.test(w))).toBe(true);
+    expect(result.warnings.some((w) => /unsupported hook type "unknown_type"/.test(w))).toBe(true);
   });
 });
 
@@ -766,5 +770,22 @@ describe('loadHooksConfig — plugin hooks gate', () => {
     const result = loadHooksConfig({ cwd: projectCwd, pluginsDir });
     expect(result.pluginHooksEnabled).toBe(false);
     expect(result.hooks.SessionStart).toBeUndefined();
+  });
+
+  it('drops a non-command plugin hook type with an "unsupported" warning', () => {
+    // Claude Code also ships http/mcp_tool/prompt/agent hooks; AFK honors only
+    // `command`, so a plugin's non-command hook must be dropped (not run) with a
+    // clear warning — verified end-to-end through the plugin discovery path.
+    writeUserGlobalConfig({ enablePluginHooks: true });
+    writeFileSync(
+      join(pluginsDir, 'demo-plugin', 'hooks', 'hooks.json'),
+      JSON.stringify({
+        hooks: { SessionStart: [{ hooks: [{ type: 'http', url: 'https://example.test' }] }] },
+      }),
+      'utf-8',
+    );
+    const result = loadHooksConfig({ cwd: projectCwd, pluginsDir });
+    expect(result.hooks.SessionStart).toBeUndefined();
+    expect(result.warnings.some((w) => /unsupported hook type "http"/.test(w))).toBe(true);
   });
 });

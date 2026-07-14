@@ -288,10 +288,23 @@ export function loadHooksConfigFile(
       const rawHookEntries = groupObj['hooks'] as unknown[];
       const resolvedHooks: ResolvedCommandHook[] = [];
       for (let hi = 0; hi < rawHookEntries.length; hi++) {
-        const validated = validateHook(rawHookEntries[hi]);
+        const rawHookEntry = rawHookEntries[hi];
+        const validated = validateHook(rawHookEntry);
         if (validated === null) {
+          // Distinguish a well-formed but UNSUPPORTED hook type (Claude Code
+          // also ships http/mcp_tool/prompt/agent hooks; AFK honors only
+          // `command`) from a genuinely malformed entry — so a plugin author
+          // gets an accurate reason rather than a misleading "malformed".
+          const rawType =
+            rawHookEntry !== null && typeof rawHookEntry === 'object' && !Array.isArray(rawHookEntry)
+              ? (rawHookEntry as Record<string, unknown>)['type']
+              : undefined;
+          const reason =
+            typeof rawType === 'string' && rawType !== 'command'
+              ? `has unsupported hook type "${rawType}" (only "command" is honored)`
+              : 'is malformed (must have type="command" and non-empty command)';
           warnings.push(
-            `hooks config at ${path}: hooks.${event}[${gi}].hooks[${hi}] is malformed (must have type="command" and non-empty command) — skipping`,
+            `hooks config at ${path}: hooks.${event}[${gi}].hooks[${hi}] ${reason} — skipping`,
           );
           continue;
         }

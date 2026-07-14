@@ -377,9 +377,12 @@ Code's plugin-hook layout so plugins are portable across both runtimes.
   plugin's `hooks.json` executes third-party code. When plugin `hooks.json`
   files are present but the gate is off, AFK emits a one-line warning naming how
   to enable them (it never runs them silently). Set it with
-  `afk config set enablePluginHooks true`.
+  `afk config set enablePluginHooks true`. Because the two gates are independent,
+  **turning `enableShellHooks` off does _not_ disable plugin hooks** — to run no
+  third-party hooks, leave `enablePluginHooks` unset (or set it to `false`).
 - **Supported types.** Only `command`-type hooks run. Claude Code's other hook
-  types (`http`, `mcp_tool`, `prompt`, `agent`) are skipped.
+  types (`http`, `mcp_tool`, `prompt`, `agent`) are skipped with a warning that
+  names the unsupported type.
 - **Environment.** Plugin hook commands receive `CLAUDE_PLUGIN_ROOT` (the
   plugin's install directory) and `CLAUDE_PROJECT_DIR`, so commands like
   `python3 "${CLAUDE_PLUGIN_ROOT}/hooks/on_start.py"` resolve. The same secret
