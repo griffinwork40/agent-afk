@@ -1432,6 +1432,49 @@ describe('SubagentExecutor', () => {
     });
   });
 
+  // promptHead wiring (PR #610 review): the agent-tool dispatch site must
+  // forward a sanitized/sliced promptHead into forkSubagent so the
+  // subagent_lifecycle.started event carries WHAT the child was asked to do in
+  // real CLI/daemon dispatches — not just the render label. Guards against the
+  // field silently regressing to absent (schematized + unit-tested downstream,
+  // but previously never passed at any production call site).
+  describe('promptHead wiring (PR #610)', () => {
+    it('forwards a non-empty, sanitized 80-char promptHead slice to forkSubagent', async () => {
+      // Prompt > 80 chars with a leading ANSI escape + embedded newline so the
+      // assertion exercises the full sanitize pipeline (strip ANSI, collapse
+      // newlines, slice to 80, trim) — the same derivation as agentType but at 80.
+      const prompt =
+        '\x1b[31mInvestigate the failing auth test\x1b[0m\nand report the root cause with file:line citations plus a recommended fix';
+      // Expected = the first 80 sanitized chars, derived by the same transform
+      // the production site applies (strip ANSI, collapse newlines, slice 80,
+      // trim). Computed here rather than hand-counted so the expectation cannot
+      // silently drift from the code under test.
+      const expected = prompt
+        .replace(/\x1b\[[0-9;]*m/g, '') // eslint-disable-line no-control-regex
+        .replace(/[\r\n]+/g, ' ')
+        .slice(0, 80)
+        .trim();
+
+      const handle = mockHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      await executor.execute(makeCall({ input: { prompt } }));
+
+      const forkArg = (mockSubagentMgr.forkSubagent as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+        promptHead: string;
+      };
+      // Core regression guard: the field actually reaches forkSubagent non-empty.
+      expect(forkArg.promptHead.length).toBeGreaterThan(0);
+      // Matches the first 80 sanitized chars of the dispatch prompt.
+      expect(forkArg.promptHead).toBe(expected);
+      expect(forkArg.promptHead.length).toBeLessThanOrEqual(80);
+      // Sanitized: no raw ANSI escape or newline survives into the slice.
+      // eslint-disable-next-line no-control-regex
+      expect(forkArg.promptHead).not.toMatch(/\x1b/);
+      expect(forkArg.promptHead).not.toMatch(/[\r\n]/);
+    });
+  });
+
   // -----------------------------------------------------------------------
   // mode: 'background'
   //

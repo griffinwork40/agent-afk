@@ -608,6 +608,11 @@ export class SubagentExecutor implements SubagentControl {
           : (parsed.id_prefix && parsed.id_prefix !== 'agent-tool')
             ? stripEscapeSequences(parsed.id_prefix).replace(/[\r\n]+/g, ' ').trim() || 'agent'
             : stripEscapeSequences(parsed.prompt).replace(/[\r\n]+/g, ' ').slice(0, 40).trim() || 'agent',
+        // Forensic prompt slice for the `subagent_lifecycle.started` event: sanitized
+        // like agentType but kept at 80 chars (the emit in subagent.ts re-clamps to
+        // 80 and drops it when blank), so real CLI/daemon dispatches carry WHAT the
+        // child was asked to do — not just the render label.
+        promptHead: stripEscapeSequences(parsed.prompt).replace(/[\r\n]+/g, ' ').slice(0, 80).trim(),
         // A forked sub-agent has no human relationship of its own: it returns
         // findings (including Blocked/Asking) to its PARENT, which owns the
         // operator surface. Deny MCP elicitation for BOTH foreground and
