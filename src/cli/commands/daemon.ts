@@ -99,6 +99,15 @@ export function buildDaemonSessionFactory(
       parentModel: opts.model,
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      // Witness layer: manager-level writer so daemon-forked `agent`-tool
+      // children (which never set config.timeoutMs / config.traceWriter) still
+      // emit subagent_lifecycle events and hand the writer to their handles.
+      // The scheduler (scheduler.ts:spawnSession) already opened a per-tick
+      // trace and threaded it in as config.traceWriter — reuse THAT SAME
+      // instance here (do not create a duplicate). Mirrors bootstrap.ts:246.
+      // Undefined under AFK_TRACE_DISABLED=1, in which case the spread is
+      // absent and behaviour is unchanged.
+      ...(config.traceWriter !== undefined ? { traceWriter: config.traceWriter } : {}),
       // Origin attribution: the daemon is a `daemon` entrypoint. Thread the
       // surface so forked `agent`-tool children inherit origin 'daemon' (not
       // 'unknown') via forkSubagent's parentSurface fill. Mirrors farm.ts.
@@ -121,8 +130,10 @@ export function buildDaemonSessionFactory(
       opts.apiKey,
       childProviderFactory,
       opts.baseUrl,
-      // traceWriter: daemon has no trace writer — pass undefined
-      undefined,
+      // traceWriter: reuse the scheduler's per-tick writer (threaded in as
+      // config.traceWriter) so depth>0 skill forks stay visible in the witness
+      // trace. Undefined under AFK_TRACE_DISABLED=1. Mirrors bootstrap.ts:333.
+      config.traceWriter,
       // backgroundRegistry: daemon has no background registry — pass undefined
       undefined,
       opts.cwd,
@@ -161,6 +172,11 @@ export function buildDaemonSessionFactory(
       // Named-agent dispatch: registry + `inherit` anchor.
       agentRegistry,
       parentModel: opts.model,
+      // Witness layer: thread the scheduler's per-tick writer so depth ≥ 2
+      // `agent` forks (nested child managers built inside execute()) stay
+      // visible. Depth-1 forks are covered by rootManager above. Mirrors
+      // bootstrap.ts:395.
+      ...(config.traceWriter !== undefined ? { traceWriter: config.traceWriter } : {}),
     });
 
     const skillExecutor = new SkillExecutor({
@@ -179,6 +195,10 @@ export function buildDaemonSessionFactory(
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      // Witness layer: without this, daemon skill-forked subagents (every
+      // /forge-friction, /review, etc. fired by a task) emit zero trace events,
+      // making subagent failures undebuggable from disk. Mirrors bootstrap.ts:424.
+      ...(config.traceWriter !== undefined ? { traceWriter: config.traceWriter } : {}),
       // Read-scope inheritance (#547): skill-forked children inherit the parent
       // session's read scope via the root manager. See bootstrap.ts.
       getReadScopeInputs: () => rootManager.getReadScopeInputs(),
@@ -201,6 +221,9 @@ export function buildDaemonSessionFactory(
       // Session identity for routing-decision rows (daemon/scheduler → daemon).
       surface: 'daemon',
       depth: 0,
+      // Witness layer: DAG nodes emit subagent_lifecycle into the session
+      // trace. Reuses the scheduler's per-tick writer. Mirrors bootstrap.ts:460.
+      ...(config.traceWriter !== undefined ? { traceWriter: config.traceWriter } : {}),
     });
 
     memoryStore ??= new MemoryStore();
