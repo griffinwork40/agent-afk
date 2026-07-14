@@ -9,6 +9,7 @@ import type { IAgentSession, Message, OutputEvent } from '../types.js';
 import { SubagentHandleImpl } from './handle.js';
 import { STREAM_INCOMPLETE } from './result.js';
 import { AbortGraph } from '../abort-graph.js';
+import { TimeoutError } from '../../utils/errors.js';
 import { runWithSink, getCurrentSink } from '../_lib/skill-sink-channel.js';
 
 /**
@@ -710,6 +711,114 @@ describe('SubagentHandle streaming', () => {
       childController.abort(new Error('parent cascade'));
 
       // Release the hung promise so the stream can throw.
+      holdResolve();
+
+      const result = await resultPromise;
+      expect(result.status).toBe('cancelled');
+      expect(handle.status).toBe('cancelled');
+    });
+
+    it('classifies a cascaded TimeoutError abort as cancelled (inherited budget, not own)', async () => {
+      // Regression guard for the isCascading origin-check (PR #596, #465
+      // follow-up). An ANCESTOR's wall-clock timeout cascades down THROUGH the
+      // AbortGraph: the child's node gets cascading=true and its controller is
+      // aborted with the ancestor's TimeoutError reason (reused, unwrapped).
+      // Even though the abort reason is a TimeoutError, this handle did not
+      // blow its OWN budget — it was torn down externally — so it must
+      // classify 'cancelled', not 'failed'. Without the isCascading guard the
+      // TimeoutError reason alone would wrongly take the 'failed' branch.
+      // NOTE: unlike the sibling direct-abort test above, this cascades via
+      // localGraph.abort() so `cascading` is actually set — a bare
+      // childController.abort(new TimeoutError(...)) would leave it false and
+      // the fork WOULD be its own budget expiry.
+      let holdResolve: () => void = () => {};
+      const localGraph = new AbortGraph();
+      const parentController = new AbortController();
+      const childController = new AbortController();
+      localGraph.register('cascade-timeout-parent', parentController);
+      localGraph.register('cascade-timeout-child', childController);
+      localGraph.linkChild('cascade-timeout-parent', 'cascade-timeout-child');
+
+      const session: IAgentSession = {
+        sessionId: 'mock-session',
+        state: 'idle',
+        abortSignal: childController.signal,
+        async sendMessage() {
+          return { role: 'assistant', content: '', timestamp: new Date() };
+        },
+        async *sendMessageStream() {
+          // Hang until the test cascades the abort, then surface the abort
+          // reason the same way a cut HTTP stream throws mid-iteration.
+          await new Promise<void>((resolve) => {
+            holdResolve = resolve;
+          });
+          if (childController.signal.aborted) {
+            throw childController.signal.reason ?? new Error('aborted');
+          }
+        },
+        async interrupt() {},
+        async close() {},
+        async reset() {},
+        async setModel() {},
+        async setPermissionMode() {},
+        waitForInitialization: async () => ({
+          sessionId: 'mock-session',
+          model: 'test-model',
+          persistSession: true,
+        }),
+        getSessionIdentity: () => ({ persistSession: true }),
+        getSessionMetadata: () => ({
+          sessionId: 'mock-session',
+          model: 'test-model',
+          persistSession: true,
+        }),
+        getQuery: () => {
+          throw new Error('not implemented');
+        },
+        getLastResponseMetadata: () => null,
+        getOutputStream: async function* () {},
+        getInputStreamRef: () => ({ pushUserMessage: vi.fn() }),
+        supportedCommands: async () => [],
+        supportedModels: async () => [],
+        supportedAgents: async () => [],
+        getContextUsage: async () => ({ contextLimitTokens: 0, contextUsedTokens: 0 }),
+        mcpServerStatus: async () => [],
+        accountInfo: async () => ({ name: 'test', email: 'test@example.com' }),
+      } as unknown as IAgentSession;
+
+      const onTerminal = vi.fn();
+      const handle = new SubagentHandleImpl(
+        'cascade-timeout-child',
+        session,
+        childController,
+        localGraph,
+        undefined,
+        // Large budget so withTimeout's own timer never fires during the test;
+        // the abort arrives via the cascade below, not this handle's timer.
+        5000,
+        undefined,
+        onTerminal,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+      );
+
+      const resultPromise = handle.runToResult('test');
+
+      // Let the stream begin its hung await.
+      await new Promise((r) => setImmediate(r));
+
+      // Cascade an ANCESTOR wall-clock timeout through the graph: the BFS in
+      // abort() marks the child cascading=true and aborts childController with
+      // this exact TimeoutError reason (see abort-graph.ts).
+      localGraph.abort(
+        'cascade-timeout-parent',
+        new TimeoutError('parent budget', 1000),
+        'timeout',
+      );
+
+      // Release the hung promise so the stream observes the abort and throws.
       holdResolve();
 
       const result = await resultPromise;
