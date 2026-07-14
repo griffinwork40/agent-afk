@@ -234,14 +234,26 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       return msg;
     } catch (err) {
       this.lastDurationMs = Date.now() - startTime;
-      // Wall-clock budget expiry: withTimeout aborts our controller with the
-      // TimeoutError as the abort REASON before its race rejects, and abort
-      // listeners fire synchronously — so the stream often unwinds with an
-      // incidental AbortError in the same tick. The signal reason, not the
-      // thrown error, is the authoritative cause. Surface the budget error
-      // to callers and classify it as a failure below.
+      // Invariant: own-budget timeouts classify 'failed', inherited (cascaded)
+      // timeouts stay 'cancelled'. Wall-clock budget expiry — withTimeout
+      // aborts our controller with the TimeoutError as the abort REASON before
+      // its race rejects, and abort listeners fire synchronously — so the
+      // stream often unwinds with an incidental AbortError in the same tick.
+      // The signal reason, not the thrown error, is the authoritative cause.
+      // Surface the budget error to callers and classify it as a failure below.
+      //
+      // Origin guard: only OUR OWN budget expiry counts. An ancestor's
+      // TimeoutError cascades down UNWRAPPED (AbortGraph.linkChild / abort()
+      // reuse the same reason object), so an inherited timeout would otherwise
+      // be misread as this handle's own budget and wrongly classified 'failed'
+      // — a nested subagent torn down because an ANCESTOR timed out did no
+      // wrong. isCascading(this.id) is true exactly when the graph aborted us
+      // as a descendant; exclude that case so cascaded timeouts stay
+      // 'cancelled'.
       const timeoutReason =
-        this.controller.signal.aborted && this.controller.signal.reason instanceof TimeoutError
+        this.controller.signal.aborted &&
+        this.controller.signal.reason instanceof TimeoutError &&
+        !this.abortGraph.isCascading(this.id)
           ? this.controller.signal.reason
           : undefined;
       const surfacedErr = timeoutReason ?? err;
