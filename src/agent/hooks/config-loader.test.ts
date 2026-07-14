@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,6 +13,7 @@ import {
   compileMatcher,
   discoverPluginHooksConfigs,
 } from './config-loader.js';
+import { _resetPluginScanCache } from '../plugins-scanner.js';
 
 let tmp: string;
 
@@ -590,6 +591,8 @@ describe('discoverPluginHooksConfigs', () => {
   let root: string;
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'plugin-hooks-'));
+    // scanLocalPlugins memoizes per-dir; reset so per-test fixtures aren't stale.
+    _resetPluginScanCache();
   });
   afterEach(() => {
     rmSync(root, { recursive: true, force: true });
@@ -606,6 +609,11 @@ describe('discoverPluginHooksConfigs', () => {
     return pluginDir;
   }
 
+  /** Write a v2 plugin index at `<base>/.index.json` (mirrors scanLocalPlugins). */
+  function writeIndex(base: string, plugins: Record<string, { enabled: boolean }>): void {
+    writeFileSync(join(base, '.index.json'), JSON.stringify({ version: 2, plugins }), 'utf-8');
+  }
+
   it('returns empty when plugins root is missing', () => {
     expect(discoverPluginHooksConfigs(join(root, 'absent'))).toEqual([]);
   });
@@ -617,9 +625,11 @@ describe('discoverPluginHooksConfigs', () => {
     ]);
   });
 
-  it('finds plugins under the marketplace-cache layout', () => {
-    const base = join(root, 'cache', 'official', 'plugins');
-    const pluginDir = makePlugin(base, 'remote-plug', true);
+  it('finds an installed marketplace-cache plugin (enabled in the index)', () => {
+    // Cache-layout plugins must be explicitly enabled in .index.json — unlike
+    // flat layout, which defaults to enabled. Mirrors scanLocalPlugins.
+    const pluginDir = makePlugin(join(root, 'cache', 'mp1'), 'plugin-a', true);
+    writeIndex(root, { 'mp1:plugin-a': { enabled: true } });
     expect(discoverPluginHooksConfigs(root)).toEqual([
       { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir },
     ]);
@@ -637,6 +647,38 @@ describe('discoverPluginHooksConfigs', () => {
     writeFileSync(join(root, 'not-a-plugin', 'hooks', 'hooks.json'), '{}', 'utf-8');
     expect(discoverPluginHooksConfigs(root)).toEqual([]);
   });
+
+  it('does NOT load hooks from a plugin disabled in the index (PR 607 P1)', () => {
+    // `afk plugin disable <name>` leaves the dir on disk with enabled:false;
+    // its hooks must not run.
+    makePlugin(root, 'off-plugin', true);
+    writeIndex(root, { 'off-plugin': { enabled: false } });
+    expect(discoverPluginHooksConfigs(root)).toEqual([]);
+  });
+
+  it('does NOT load hooks from an uninstalled marketplace-cache plugin (PR 607 P1)', () => {
+    // A marketplace clone drops every listed plugin on disk; only user-installed
+    // (index-enabled) cache plugins may contribute hooks. No index entry → skip.
+    makePlugin(join(root, 'cache', 'mp1'), 'not-installed', true);
+    expect(discoverPluginHooksConfigs(root)).toEqual([]);
+  });
+
+  it('follows a symlinked plugin directory and finds its hooks (PR 607 P2)', () => {
+    // Local plugin installs are symlinked into the plugins root; discovery must
+    // follow directory symlinks (statSync), not skip them (lstatSync).
+    const realBase = mkdtempSync(join(tmpdir(), 'plugin-hooks-real-'));
+    try {
+      const target = makePlugin(realBase, 'linked-plugin', true);
+      const linkPath = join(root, 'linked-plugin');
+      symlinkSync(target, linkPath, 'dir');
+      const found = discoverPluginHooksConfigs(root);
+      expect(found).toHaveLength(1);
+      expect(found[0]!.path).toBe(join(linkPath, 'hooks', 'hooks.json'));
+      expect(found[0]!.pluginRoot).toBe(linkPath);
+    } finally {
+      rmSync(realBase, { recursive: true, force: true });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -650,6 +692,7 @@ describe('loadHooksConfig — plugin hooks gate', () => {
   let originalAfkHome: string | undefined;
 
   beforeEach(() => {
+    _resetPluginScanCache();
     afkHome = join(tmp, 'afk-home');
     projectCwd = join(tmp, 'project');
     pluginsDir = join(tmp, 'plugins');

@@ -35,9 +35,10 @@
  * @module agent/hooks/config-loader
  */
 
-import { existsSync, readFileSync, readdirSync, lstatSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getAfkHome, getJsonConfigPath, getSettingsPath, getProjectSettingsPath, getPluginsDir } from '../../paths.js';
+import { scanLocalPlugins } from '../plugins-scanner.js';
 import type { HarnessHookEvent } from '../hooks.js';
 import { HOOK_HANDLER_TIMEOUT_MS } from '../hook-registry.js';
 
@@ -317,67 +318,33 @@ export function loadHooksConfigFile(
 // Plugin-contributed hook discovery (Claude Code compatibility)
 // ---------------------------------------------------------------------------
 
-const MAX_PLUGIN_SCAN_DEPTH = 5;
-
 /**
  * Discover every plugin-contributed `hooks/hooks.json` under `~/.afk/plugins/`.
  *
- * A plugin contributes hooks when it ships a `<plugin>/hooks/hooks.json` file
- * (the Claude Code layout) alongside the standard
- * `<plugin>/.claude-plugin/plugin.json` manifest. Walks the same two layouts
- * as `scanLocalPlugins()`:
- *   - flat:  `<root>/<plugin>/hooks/hooks.json`
- *   - cache: `<root>/cache/<marketplace>/<plugin>/hooks/hooks.json`
- *
- * Returns `{ path, pluginRoot }` pairs — `pluginRoot` is the plugin's install
- * directory, threaded to the executor as `CLAUDE_PLUGIN_ROOT`. Missing root is
- * silently ignored (no plugins installed).
+ * Enumeration is delegated to {@link scanLocalPlugins} — the single source of
+ * truth for "which plugins are installed and enabled" — so hook discovery
+ * inherits its enabled-index (`.index.json`) filtering (disabled and
+ * uninstalled marketplace-cache plugins contribute no hooks) and its symlink
+ * following (local installs are symlinked into the plugins root). A plugin
+ * contributes hooks when it ships `<plugin>/hooks/hooks.json` (the Claude Code
+ * layout). Returns `{ path, pluginRoot }` pairs; `pluginRoot` is the plugin's
+ * install directory, threaded to the executor as `CLAUDE_PLUGIN_ROOT`. Missing
+ * root → `[]`.
  */
 export function discoverPluginHooksConfigs(
   pluginsRoot: string = getPluginsDir(),
 ): Array<{ path: string; pluginRoot: string }> {
   if (!existsSync(pluginsRoot)) return [];
   const out: Array<{ path: string; pluginRoot: string }> = [];
-  walkForPluginHooks(pluginsRoot, 0, out, new Set<string>());
+  // Reuse scanLocalPlugins (index-honoring, symlink-following, realpath-keyed)
+  // rather than a bespoke walk — see PR 607 review: a private walk diverged on
+  // all three, running disabled/uninstalled plugins' hooks while dropping
+  // symlinked local plugins' hooks.
+  for (const plugin of scanLocalPlugins(pluginsRoot)) {
+    const hooksJson = join(plugin.path, 'hooks', 'hooks.json');
+    if (existsSync(hooksJson)) out.push({ path: hooksJson, pluginRoot: plugin.path });
+  }
   return out;
-}
-
-function walkForPluginHooks(
-  dir: string,
-  depth: number,
-  out: Array<{ path: string; pluginRoot: string }>,
-  seen: Set<string>,
-): void {
-  if (depth > MAX_PLUGIN_SCAN_DEPTH) return;
-  if (seen.has(dir)) return;
-  seen.add(dir);
-
-  // A directory is a plugin when it carries `.claude-plugin/plugin.json`.
-  // Check for `hooks/hooks.json` and stop descending — plugins do not nest.
-  const pluginJson = join(dir, '.claude-plugin', 'plugin.json');
-  if (existsSync(pluginJson)) {
-    const hooksJson = join(dir, 'hooks', 'hooks.json');
-    if (existsSync(hooksJson)) out.push({ path: hooksJson, pluginRoot: dir });
-    return;
-  }
-
-  let entries: string[];
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return;
-  }
-  for (const name of entries) {
-    if (name.startsWith('.')) continue;
-    const full = join(dir, name);
-    let s;
-    try {
-      s = lstatSync(full);
-    } catch {
-      continue;
-    }
-    if (s.isDirectory()) walkForPluginHooks(full, depth + 1, out, seen);
-  }
 }
 
 // ---------------------------------------------------------------------------
