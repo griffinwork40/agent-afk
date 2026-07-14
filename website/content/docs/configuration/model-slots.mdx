@@ -14,11 +14,11 @@ same process.
 
 An unconfigured install uses these defaults:
 
-| Tier | Default model ID | Legacy aliases |
+| Tier | Default model ID | Identity alias (fixed) |
 |------|-----------------|----------------|
 | `local` | _(unset — configure via `AFK_MODEL_LOCAL`)_ | — |
 | `small` | `claude-haiku-4-5-20251001` | `haiku` |
-| `medium` | `claude-sonnet-4-6` | `sonnet`, `sonnet_1m` |
+| `medium` | `claude-sonnet-5` | `sonnet`, `sonnet_1m` |
 | `large` | `claude-opus-4-8` | `opus`, `opus_1m` |
 
 **Note:** These default model IDs reflect the latest available models as of this writing. As new versions ship, these defaults are updated in the codebase (`src/agent/session/model-slots.ts`). You can override any slot via environment variables (`AFK_MODEL_SMALL`, `AFK_MODEL_MEDIUM`, `AFK_MODEL_LARGE`) or `afk.config.json` — see [Configuring slots](/docs/configuration/model-slots#configuring-slots-in-afkconfigjson) for details.
@@ -29,13 +29,13 @@ If you never touch slots, behavior is identical to before this feature existed.
 
 Each slot accepts a bare model ID string, or an object with optional per-slot
 provider credentials. The full object shape (`ModelSlotConfigEntry`, source:
-`src/cli/config.ts:229`) is:
+`src/cli/config/types.ts:246`) is:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | string | Concrete model ID this tier resolves to (e.g. `claude-sonnet-4-6`, `gpt-4o-mini`). Required when using the object form. |
-| `name` | string | Optional user-defined alias. When set, you can select this tier by name (case-insensitive) anywhere a model is named — `AFK_MODEL`, `--model`, `/model`, or the `agent`/`skill` tools' `model` parameter. Custom names take priority over neutral tier names (`small`/`medium`/`large`) and legacy aliases. |
-| `provider` | `"anthropic"` \| `"openai"` | Explicit provider override. Inferred from the model ID when omitted. Use when a bare shim ID (no `gpt-`/`org/model` signal) must route to a specific provider. |
+| `id` | string | Concrete model ID this tier resolves to (e.g. `claude-sonnet-5`, `gpt-4o-mini`). Required when using the object form. |
+| `name` | string | Optional user-defined alias. When set, you can select this tier by name (case-insensitive) anywhere a model is named — `AFK_MODEL`, `--model`, `/model`, or the `agent`/`skill` tools' `model` parameter. Custom names take priority over neutral tier names (`small`/`medium`/`large`) and identity aliases. |
+| `provider` | `"anthropic"` \| `"openai"` \| `"chatgpt-oauth"` | Explicit provider override. Inferred from the model ID when omitted. Use when a bare shim ID (no `gpt-`/`org/model` signal) must route to a specific provider. `"chatgpt-oauth"` (or the `"chatgpt"` shorthand) forces the ChatGPT-subscription OAuth credential (`~/.codex/auth.json`) for this tier only — see [Per-slot ChatGPT-subscription OAuth](/configuration/models-providers#chatgpt-oauth-per-slot). |
 | `baseUrl` | string | Per-slot endpoint. For Anthropic-routed tiers, the Messages API base; for OpenAI-routed tiers, the Chat Completions base. Wins over global `AFK_OPENAI_BASE_URL` / `AFK_LOCAL_BASE_URL` for this tier only. |
 | `apiKey` | string | Per-slot API key. Wins over global credentials for this tier only. |
 
@@ -60,7 +60,9 @@ provider credentials. The full object shape (`ModelSlotConfigEntry`, source:
 }
 ```
 
-`provider` is `anthropic` or `openai` (inferred from the ID when omitted).
+`provider` is `anthropic`, `openai`, or `chatgpt-oauth` (inferred from the ID
+when omitted; `chatgpt-oauth` must be set explicitly — see
+[Models & Providers](/configuration/models-providers#chatgpt-oauth-per-slot)).
 For an Anthropic-routed tier, `baseUrl` is the Messages API base; for an
 OpenAI-routed tier it is the Chat Completions base. A per-slot value wins over
 the corresponding global (`AFK_OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, etc.) for
@@ -105,19 +107,26 @@ Anywhere a model is named — `AFK_MODEL`, `--model`, the REPL's `/model`
 command, and the `agent`/`compose`/`skill` tools' `model` parameter — you can
 pass:
 
-- A **tier name**: `small`, `medium`, `large`
+- A **tier name**: `local`, `small`, `medium`, `large`
 - A **custom name** you set in the binding's `name` field (case-insensitive)
-- A **legacy alias**: `haiku` → small, `sonnet`/`sonnet_1m` → medium,
-  `opus`/`opus_1m` → large
+- An **identity alias**: `haiku`, `sonnet`/`sonnet_1m`, `opus`/`opus_1m`, `fable`
 - The `auto` sentinel (passthrough — picks the session model)
 - A raw concrete model ID
 
 Resolution order (first match wins):
 
-1. Custom name (user-assigned `name` on a binding)
-2. Neutral name (`small` | `medium` | `large`)
-3. Legacy alias
-4. Raw model ID or `auto` sentinel
+1. Custom name (user-assigned `name` on a binding) → tier
+2. Neutral name (`local` | `small` | `medium` | `large`) → tier
+3. Identity alias (`haiku`/`sonnet`/`opus`/`fable`/`*_1m`) → its own fixed model ID — **never** a tier
+4. Raw model ID or `auto` sentinel (passthrough)
+
+**Identity aliases are decoupled from capability tiers.** `sonnet` always names
+Claude Sonnet, `opus` always Claude Opus, and so on, regardless of how you've
+rebound the `small`/`medium`/`large` tiers. Rebinding `medium` to a non-Claude
+model changes the `medium` tier — and the session default, since `AFK_MODEL`
+defaults to the `medium` tier, not the `sonnet` identity — but it does **not**
+change what `sonnet` means. Only the neutral tier names and your custom names
+follow tier bindings; identity aliases never do.
 
 ## How routing works
 
@@ -130,4 +139,7 @@ Each tier's credentials are applied automatically — an Anthropic key can't lea
 - All bound tiers on Anthropic — `small`/`medium`/`large` by default; `local` is unset until you configure it (unchanged default behavior).
 - Each tier on a different provider, endpoint, and key — e.g. Anthropic on
   large, a local MLX shim on small, hosted OpenAI on medium.
+- A ChatGPT-subscription model (`provider: "chatgpt-oauth"`), a separately-keyed
+  OpenAI model, and an Anthropic model, all coexisting in the same session —
+  see [Per-slot ChatGPT-subscription OAuth](/configuration/models-providers#chatgpt-oauth-per-slot).
 - Per-tier credentials via `afk.config.json` or `AFK_MODEL_*` env vars.

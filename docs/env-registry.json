@@ -328,10 +328,10 @@
     },
     {
       "name": "AFK_MODEL",
-      "description": "Default model for agent turns. Accepts slot names (local, small, medium, large), legacy aliases (opus, sonnet, haiku), the fixed-id fable alias (Claude Fable 5), or full model IDs.",
+      "description": "Default model for agent turns. Accepts slot names (local, small, medium, large), fixed-identity aliases (opus, sonnet, haiku, fable), or full model IDs. Migration: AFK_MODEL=sonnet now pins the fixed Sonnet identity rather than following a rebound medium tier.",
       "type": "string",
       "required": false,
-      "default": "sonnet",
+      "default": "medium",
       "example": "claude-opus-4-5",
       "category": "model"
     },
