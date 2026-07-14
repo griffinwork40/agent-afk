@@ -209,6 +209,36 @@ export type ProviderEvent =
       type: 'stream.retry';
       sessionId?: string;
     }
+  | {
+      /**
+       * Live rate-limit / backoff signal. Emitted when the Anthropic provider
+       * is throttled (HTTP 429/503/529 with a `retry-after` header) and the
+       * SDK is about to sleep-and-retry INSIDE a single `messages.create`
+       * call. Because that backoff happens deep inside the wrapped `fetch`
+       * (see `providers/anthropic-direct/tracing-fetch.ts`), the per-turn loop
+       * is blocked awaiting the SDK and yields nothing — so a healthy session
+       * waiting out a 70s `retry-after` (retried twice ≈ 140s) looks frozen.
+       * This event is pushed out-of-band from the fetch throttle callback into
+       * the loop's yield stream so the UI can surface a live
+       * `rate-limited · retrying in ~70s` banner during the wait; the normal
+       * activity resumes once the retried request streams.
+       *
+       * Distinct from `stream.retry` (a MID-stream 529 re-drive that discards
+       * partial text) — this is a CONNECTION-phase throttle observed from
+       * inside fetch, and it does NOT invalidate any already-streamed text. It
+       * is purely observational: the SDK still owns the retry policy and
+       * timing (this feature does not change either). Consumers that don't
+       * render a live banner may ignore it. `retryAfterMs` is the parsed
+       * `retry-after` value when present; `status` is the throttled HTTP
+       * status; `attempt` is the 1-based throttle count within the call when
+       * the emitter can supply it.
+       */
+      type: 'rate_limit';
+      sessionId: string;
+      retryAfterMs?: number;
+      status?: number;
+      attempt?: number;
+    }
   | { type: 'error'; error: Error }
   | {
       type: 'paused';

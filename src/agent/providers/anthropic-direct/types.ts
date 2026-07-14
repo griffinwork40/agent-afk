@@ -257,6 +257,18 @@ export interface RunTurnInput {
    * the loop never awaits it.
    */
   onUsageProgress?: (usage: ProviderUsage) => void;
+  /**
+   * Optional out-of-band mailbox for live throttle (rate-limit/backoff)
+   * signals pushed from the wrapped `fetch` (see `tracing-fetch.ts`). When
+   * present, the loop RACES its `messages.create` await against this queue so
+   * a 429/503/529 backoff observed INSIDE the SDK call surfaces as a
+   * `rate_limit` ProviderEvent LIVE — the loop is otherwise parked on the
+   * await and cannot yield during the wait. The same queue instance is wired
+   * to the client's fetch callback at query construction. Absent for the
+   * external-dispatcher / local-shim paths and in unit tests that don't
+   * exercise throttling.
+   */
+  throttleQueue?: import('./throttle-queue.js').ThrottleQueue;
 }
 
 /**

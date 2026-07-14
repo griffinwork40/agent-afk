@@ -7,6 +7,13 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+
+// Deterministic availability stub: "large"/"opus" are reported unavailable so
+// the non-TTY alias-list annotation test doesn't depend on real credentials.
+vi.mock('../../../agent/auth/model-availability.js', () => ({
+  isModelAvailable: (model: string | undefined) => model !== 'large' && model !== 'opus',
+}));
+
 import { infoCommands } from './info.js';
 import type { SlashContext, SessionStats } from '../types.js';
 import type { PickerController, TerminalCompositor } from '../../terminal-compositor.js';
@@ -133,5 +140,22 @@ describe('/model', () => {
 
     expect(setModel).not.toHaveBeenCalled();
     expect(lines.join('\n')).toMatch(/Current model/);
+  });
+
+  it('non-TTY alias list annotates unavailable handles additively (never removes them)', async () => {
+    const { ctx, lines } = makeCtx(false);
+    await modelCmd.handler(ctx, '');
+
+    const aliasLine = lines.join('\n');
+    // Unavailable (per the mock above) → annotated, but still present.
+    expect(aliasLine).toMatch(/large \(needs sign-in\)/);
+    expect(aliasLine).toMatch(/opus \(needs sign-in\)/);
+    // Available handles are listed bare, with no marker.
+    expect(aliasLine).toMatch(/(?:^|, )haiku(?:,|\s|$)/);
+    expect(aliasLine).not.toMatch(/haiku \(needs sign-in\)/);
+    // Every alias remains listed — additive-only guarantee.
+    for (const alias of ['local', 'small', 'medium', 'large', 'opus', 'sonnet', 'haiku', 'fable']) {
+      expect(aliasLine).toContain(alias);
+    }
   });
 });

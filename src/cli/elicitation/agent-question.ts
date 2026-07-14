@@ -6,6 +6,7 @@
  */
 
 import type { ElicitationRequest, ElicitationResult } from '../../agent/types/sdk-types.js';
+import { debugLog } from '../../utils/debug.js';
 import { renderMultiSelector, renderSelector, CUSTOM_ANSWER_SENTINEL } from '../input/selectors.js';
 import { sanitizeSchemaString } from '../_lib/sanitize.js';
 import { palette } from '../palette.js';
@@ -164,7 +165,8 @@ export async function renderAgentQuestion(
         multi: qType === 'multi_choice',
         signal,
       });
-    } catch {
+    } catch (err) {
+      debugLog('[elicitation] choice/multi_choice pickFromList failed:', err);
       return CANCEL;
     }
     if (signal.aborted) return CANCEL;
@@ -223,7 +225,8 @@ export async function renderAgentQuestion(
         multi: false,
         signal,
       });
-    } catch {
+    } catch (err) {
+      debugLog('[elicitation] confirm pickFromList failed:', err);
       return CANCEL;
     }
     if (signal.aborted) return CANCEL;
@@ -251,9 +254,14 @@ export async function renderAgentQuestion(
       ? sanitizeSchemaString(result.value, 256)
       : String(result.value);
     writer.line(palette.dim('  ✓ ') + palette.brand(echo));
+    // result.value is a plain accessor here — both remaining union members
+    // (`text` and `number`; `skip` already returned above) carry a `value`
+    // property, so there is no type-narrowing reason to branch on `.tag`
+    // like the `echo` computation above does (that branch calls a
+    // DIFFERENT function per arm — sanitizeSchemaString vs String).
     return {
       action: 'accept',
-      content: { value: result.tag === 'text' ? result.value : result.value },
+      content: { value: result.value },
     };
   }
 
@@ -277,7 +285,8 @@ export async function renderAgentQuestion(
       let input: string;
       try {
         input = (await readLine(palette.dim(`  Continue? [${defaultHint}] `))).trim().toLowerCase();
-      } catch {
+      } catch (err) {
+        debugLog('[elicitation] confirm readLine failed:', err);
         return CANCEL;
       }
       if (signal.aborted) return CANCEL;
@@ -310,7 +319,12 @@ export async function renderAgentQuestion(
       // Sentinel index = original choices.length
       if (request.allowCustom && selectorResult === choices.length) {
         let input: string;
-        try { input = (await readLine(palette.dim('  Type your answer: '))).trim(); } catch { return CANCEL; }
+        try {
+          input = (await readLine(palette.dim('  Type your answer: '))).trim();
+        } catch (err) {
+          debugLog('[elicitation] custom-answer readLine failed:', err);
+          return CANCEL;
+        }
         if (input === ':cancel' || signal.aborted) return CANCEL;
         return { action: 'accept', content: { value: null, custom_value: input } };
       }
@@ -319,6 +333,13 @@ export async function renderAgentQuestion(
         writer.line(palette.dim(`  Selected: ${sanitizeSchemaString(chosen, 128)}`));
         return { action: 'accept', content: { value: chosen } };
       }
+      // Defensive: renderSelector should only ever return an index inside
+      // choices[]. Reaching this with no message previously made a genuine
+      // selector/choices-array desync indistinguishable from a normal cancel.
+      debugLog('[elicitation] choice selector returned an out-of-range index:', {
+        selectorResult,
+        choicesLength: choices.length,
+      });
       return CANCEL;
     }
 
@@ -334,14 +355,20 @@ export async function renderAgentQuestion(
       let input: string;
       try {
         input = (await readLine(palette.dim('  Enter number: '))).trim();
-      } catch {
+      } catch (err) {
+        debugLog('[elicitation] choice readLine failed:', err);
         return CANCEL;
       }
       if (signal.aborted) return CANCEL;
       if (input === ':cancel') return CANCEL;
       if (request.allowCustom && input === String(choices.length + 1)) {
         let custom: string;
-        try { custom = (await readLine(palette.dim('  Type your answer: '))).trim(); } catch { return CANCEL; }
+        try {
+          custom = (await readLine(palette.dim('  Type your answer: '))).trim();
+        } catch (err) {
+          debugLog('[elicitation] custom-answer readLine failed:', err);
+          return CANCEL;
+        }
         if (custom === ':cancel') return CANCEL;
         return { action: 'accept', content: { value: null, custom_value: custom } };
       }
@@ -356,6 +383,7 @@ export async function renderAgentQuestion(
   }
 
   if (qType === 'multi_choice') {
+    writer.line('\x07');
     const choices = request.choices ?? [];
 
     // Interactive arrow-key multi-selector (TTY path)
@@ -368,7 +396,12 @@ export async function renderAgentQuestion(
       // undefined and leaks into `values` / throws in sanitizeSchemaString.
       if (request.allowCustom && selectorResult.includes(choices.length)) {
         let input: string;
-        try { input = (await readLine(palette.dim('  Type your answer: '))).trim(); } catch { return CANCEL; }
+        try {
+          input = (await readLine(palette.dim('  Type your answer: '))).trim();
+        } catch (err) {
+          debugLog('[elicitation] custom-answer readLine failed:', err);
+          return CANCEL;
+        }
         if (input === ':cancel' || signal.aborted) return CANCEL;
         return { action: 'accept', content: { value: null, custom_value: input } };
       }
@@ -393,14 +426,20 @@ export async function renderAgentQuestion(
       let input: string;
       try {
         input = (await readLine(palette.dim('  Enter numbers (comma-separated): '))).trim();
-      } catch {
+      } catch (err) {
+        debugLog('[elicitation] multi_choice readLine failed:', err);
         return CANCEL;
       }
       if (signal.aborted) return CANCEL;
       if (input === ':cancel') return CANCEL;
       if (request.allowCustom && input === String(choices.length + 1)) {
         let custom: string;
-        try { custom = (await readLine(palette.dim('  Type your answer: '))).trim(); } catch { return CANCEL; }
+        try {
+          custom = (await readLine(palette.dim('  Type your answer: '))).trim();
+        } catch (err) {
+          debugLog('[elicitation] custom-answer readLine failed:', err);
+          return CANCEL;
+        }
         if (custom === ':cancel') return CANCEL;
         return { action: 'accept', content: { value: null, custom_value: custom } };
       }
@@ -415,7 +454,7 @@ export async function renderAgentQuestion(
       for (const part of parts) {
         const idx = parseInt(part, 10);
         if (!isFinite(idx) || String(idx) !== part || idx < 1 || idx > choices.length) {
-          writer.line(palette.warning(`  Invalid selection "${sanitizeSchemaString(part, 32)}". Enter numbers between 1 and ${choices.length}.`));
+          writer.line(palette.warning(`  Invalid selection "${sanitizeSchemaString(part, 32)}". Enter numbers between 1 and ${choices.length + (request.allowCustom ? 1 : 0)}.`));
           valid = false;
           break;
         }
@@ -442,7 +481,8 @@ export async function renderAgentQuestion(
       let input: string;
       try {
         input = (await readLine(palette.dim(`  Enter a number${boundsHint}: `))).trim();
-      } catch {
+      } catch (err) {
+        debugLog('[elicitation] number readLine failed:', err);
         return CANCEL;
       }
       if (signal.aborted) return CANCEL;
@@ -470,7 +510,8 @@ export async function renderAgentQuestion(
     let input: string;
     try {
       input = (await readLine(palette.dim('  > '))).trim();
-    } catch {
+    } catch (err) {
+      debugLog('[elicitation] text readLine failed:', err);
       return CANCEL;
     }
     if (signal.aborted) return CANCEL;

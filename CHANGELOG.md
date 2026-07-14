@@ -11,6 +11,46 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.46.1] - 2026-07-14
+
+### Fixed
+- bound read-only research agents + degrade empty no-terminal run to a marked partial (#597) (a39b1ff)
+
+## [5.46.0] - 2026-07-14
+
+### Added
+- proactive escalating context-window warnings (#594) (291b73f)
+
+## [5.45.0] - 2026-07-14
+
+### Added
+- auth-aware model availability labeling (Phase 2; follows #548, now merged) (#588) (2c4a723)
+
+## [5.44.0] - 2026-07-14
+
+### Added
+- surface provider rate-limit/backoff live in the progress banner (#595) (08b47a7)
+
+## [5.43.1] - 2026-07-14
+
+### Fixed
+- elicitation URL-mode cancel guard + swallowed errors + UX cleanup (#502) (#589) (3aca90a)
+
+## [5.43.0] - 2026-07-14
+
+### Added
+- fail-fast denial circuit breaker for forked read-denial spins (#546) (#592) (d2cff2f)
+
+## [5.42.1] - 2026-07-13
+
+### Changed
+- lazy-load jsdom to cut ~35% off CLI cold-start (#587) (0e9198e)
+
+## [5.42.0] - 2026-07-13
+
+### Added
+- OSC 52 clipboard fallback for SSH+tmux (closes #563) (#582) (f9f84d9)
+
 ## [5.41.0] - 2026-07-13
 
 ### Added

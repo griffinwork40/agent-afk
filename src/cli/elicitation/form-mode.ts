@@ -9,10 +9,14 @@
  *   3. Coerce values to the declared type; re-prompt on invalid input.
  *   4. Required fields re-prompt on empty; optional fields skip on empty.
  *   5. User can type :cancel or :decline at any prompt to abort.
- *   6. If schema has no properties, fall back to a single free-text prompt.
+ *   6. If schema has no properties, decline — see the guard in
+ *      `repl-handler.ts` (an earlier fallback invented an undocumented
+ *      `response` key that neither the MCP spec nor the URL-mode contract
+ *      recognises; declining is safer and prompts the server to fix itself).
  */
 
 import type { ElicitationRequest } from '../../agent/types/sdk-types.js';
+import { debugLog } from '../../utils/debug.js';
 import { sanitizeSchemaString } from '../_lib/sanitize.js';
 import { palette } from '../palette.js';
 import type { ReplElicitationDeps } from './repl-shared.js';
@@ -119,6 +123,54 @@ export function renderFormHeader(
 const FORM_SKIP_SENTINEL = '\u2014 skip (optional) \u2014';
 
 /**
+ * Disambiguate a list of display labels so every one is unique — both
+ * against each other AND against any `reserved` string (the FORM_SKIP_SENTINEL
+ * appended for optional fields). Two distinct enum values can stringify /
+ * sanitize to the same label (numeric `1` vs string `"1"`, or two long values
+ * truncated identically at the 64-char `sanitizeSchemaString` cap); an enum
+ * value can also happen to literally equal the reserved skip sentinel. Either
+ * collision makes the caller's `indexOf`-based resolution ambiguous: a picked
+ * label could originate from more than one index (always resolving to the
+ * FIRST match, silently returning the wrong original value), or — for the
+ * reserved case — a real enum value becomes indistinguishable from, and
+ * therefore unselectable next to, the skip action.
+ *
+ * Only labels that actually collide are touched — the non-colliding common
+ * case renders identically to before. A colliding label is suffixed with the
+ * first `(1)`, `(2)`, … candidate not already claimed — checked against a
+ * running set, NOT just the original input — because a raw label can itself
+ * look like a suffixed form (e.g. `['dup', 'dup', 'dup (2)']`: a naive
+ * single-pass "count original duplicates, suffix each" scheme suffixes the
+ * second `dup` to `dup (2)`, which then COLLIDES with the third, unrelated
+ * raw label that already read `dup (2)` — reintroducing the exact ambiguity
+ * this function exists to remove, just one level deeper). Checking against
+ * the running set closes that gap: every emitted candidate, before being
+ * accepted, is guaranteed distinct from every reserved string AND every
+ * label already emitted earlier in this same pass.
+ */
+function disambiguateLabels(labels: readonly string[], reserved: readonly string[]): string[] {
+  const used = new Set<string>(reserved);
+  const rawCounts = new Map<string, number>();
+  for (const label of labels) rawCounts.set(label, (rawCounts.get(label) ?? 0) + 1);
+
+  const result: string[] = [];
+  for (const label of labels) {
+    const mustDisambiguate = (rawCounts.get(label) ?? 0) > 1 || used.has(label);
+    let candidate = label;
+    if (mustDisambiguate) {
+      let n = 0;
+      do {
+        n += 1;
+        candidate = `${label} (${n})`;
+      } while (used.has(candidate));
+    }
+    used.add(candidate);
+    result.push(candidate);
+  }
+  return result;
+}
+
+/**
  * Render an `enum` / `boolean` form field as an arrow-key picker — the same
  * `PickerController` overlay the `ask_question` choice path uses — instead of a
  * typed `readLine` prompt. Only reached when a `pickFromList` dep is wired
@@ -148,7 +200,10 @@ async function pickFormField(
   let resolveValue: (picked: string) => unknown;
   if (fieldDef.enum !== undefined) {
     const enumValues = fieldDef.enum.slice(0, MAX_ENUM_VALUES);
-    baseLabels = enumValues.map((v) => sanitizeSchemaString(String(v), 64));
+    const rawLabels = enumValues.map((v) => sanitizeSchemaString(String(v), 64));
+    // Disambiguate against each other AND against the skip sentinel this
+    // field will append below when optional — see disambiguateLabels for why.
+    baseLabels = disambiguateLabels(rawLabels, isRequired ? [] : [FORM_SKIP_SENTINEL]);
     resolveValue = (picked: string): unknown => {
       const idx = baseLabels.indexOf(picked);
       return idx >= 0 ? enumValues[idx] : picked;
@@ -168,7 +223,8 @@ async function pickFormField(
   let selected: readonly string[] | null;
   try {
     selected = await pickFromList({ header, options, multi: false, signal });
-  } catch {
+  } catch (err) {
+    debugLog('[elicitation] form pickFromList failed:', err);
     return { tag: 'cancel' };
   }
   if (signal.aborted) return { tag: 'cancel' };
@@ -262,7 +318,8 @@ export async function promptField(
     let input: string;
     try {
       input = await readLine(palette.dim('  > '));
-    } catch {
+    } catch (err) {
+      debugLog('[elicitation] form readLine failed:', err);
       return { tag: 'cancel' };
     }
 

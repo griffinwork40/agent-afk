@@ -221,6 +221,61 @@ describe('scrapeToMarkdown — cancellation', () => {
       }),
     ).rejects.toThrow(/render aborted/);
   });
+
+  it('honors an abort that fires during the fetch-path extraction await', async () => {
+    // Regression for the lazy-jsdom async boundary (PR #587): safeExtract /
+    // extractReadableMarkdown do not observe the signal, so an abort landing
+    // while the fetched HTML is being extracted must be caught by the post-await
+    // guard. Here fetch resolves normally with rich (non-thin) HTML but the
+    // signal aborts as the body is read; without the guard scrapeToMarkdown
+    // would return a successful result after cancellation.
+    const ac = new AbortController();
+    const fetchFn = vi.fn(async () => {
+      const res = makeResponse({ contentType: 'text/html', body: richHtml() });
+      (res as { text: () => Promise<string> }).text = async () => {
+        ac.abort(new Error('cancelled during extraction'));
+        return richHtml();
+      };
+      return res;
+    });
+    const renderFn = vi.fn<RenderFn>(async () => ({ html: '', finalUrl: '', httpStatus: 200 }));
+
+    await expect(
+      scrapeToMarkdown('https://example.com/a', {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        renderFn,
+        timeoutMs: 5000,
+        signal: ac.signal,
+      }),
+    ).rejects.toThrow();
+    // The abort must short-circuit before any render escalation.
+    expect(renderFn).not.toHaveBeenCalled();
+  });
+
+  it('honors an abort that fires during the render-path extraction await', async () => {
+    // Regression for the lazy-jsdom async boundary (PR #587), Phase 3: the thin
+    // fetch escalates to render, render resolves normally with rich HTML, but
+    // the signal aborts around the render/extraction boundary. Only the
+    // post-await guard catches this — the existing catch fires solely when
+    // render or extraction throws. Without the guard the rich render result
+    // would be returned as a success after cancellation.
+    const ac = new AbortController();
+    const fetchFn = vi.fn(async () => makeResponse({ contentType: 'text/html', body: SHELL_HTML }));
+    const renderFn = vi.fn<RenderFn>(async () => {
+      ac.abort(new Error('cancelled during render extraction'));
+      return { html: richHtml('rendered'), finalUrl: 'https://example.com/a', httpStatus: 200 };
+    });
+
+    await expect(
+      scrapeToMarkdown('https://example.com/a', {
+        fetchFn: fetchFn as unknown as typeof fetch,
+        renderFn,
+        timeoutMs: 5000,
+        signal: ac.signal,
+      }),
+    ).rejects.toThrow();
+    expect(renderFn).toHaveBeenCalledOnce();
+  });
 });
 
 describe('scrapeToMarkdown — render produces fewer chars than thin fetch', () => {

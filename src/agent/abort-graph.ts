@@ -78,6 +78,19 @@ export class AbortGraph {
   }
 
   /**
+   * Whether `id` was aborted as part of an ancestor cascade — its `cascading`
+   * flag is set by {@link linkChild} (parent already/becomes aborted) or by
+   * {@link abort}'s BFS over descendants. Lets a node distinguish an INHERITED
+   * abort reason (cascaded from an ancestor, e.g. an ancestor's wall-clock
+   * TimeoutError) from its OWN directly-fired abort (its own budget expiry).
+   * Returns false for unknown ids and for a node that fired its own abort.
+   * Observational only — does not change cascade behavior.
+   */
+  isCascading(id: string): boolean {
+    return this.nodes.get(id)?.cascading ?? false;
+  }
+
+  /**
    * Link a registered child to a registered parent.
    * - If the parent is already aborted, the child aborts synchronously with the same reason.
    * - Parent abort propagates to this child with `cascading=true`.
