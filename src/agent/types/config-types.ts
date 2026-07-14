@@ -214,6 +214,19 @@ export interface AgentConfig {
   systemPromptSource?: string;
 
   /**
+   * Hot-memory block (HOT.md wrapped in `<cross-session-memory>` tags),
+   * populated by {@link injectHotMemory} at the top-level surfaces. Carried
+   * as its own field — NOT prepended into {@link systemPrompt} — so the
+   * provider can place it in the cross-session-memory region of the assembled
+   * prompt (after the memory instructions) independently of where the
+   * `# Agent AFK` doctrine + operator overlay (`systemPrompt`) is placed.
+   *
+   * Unset for child sessions (subagents / skills never inject hot memory).
+   * Empty / whitespace is treated as absent by the provider assembler.
+   */
+  hotMemory?: string;
+
+  /**
    * MCP server config — typed entry-point for `~/.afk/config/mcp.json`.
    *
    * Populated by `loadMcpConfig()` and consumed by the bootstrap path

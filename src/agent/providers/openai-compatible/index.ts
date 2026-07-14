@@ -313,15 +313,25 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // slash/bash) envelopes mean. The tool/memory fragments are resolved via
     // the shared helpers in tools/system-prompt.ts so the set cannot drift from
     // anthropic-direct. Ordering mirrors AnthropicDirectProvider.query():
-    // [toolBase, memoryPrompt, env, manifest?, userSystem?].
+    // [toolBase, userSystem?, memoryPrompt, hotMemory?, env, manifest?]. The
+    // `# Agent AFK` doctrine + operator overlay (`existingSys`) is placed EARLY
+    // — right after the tool conventions and before the cross-session memory
+    // (instructions + hot-memory project context) and the skill manifest. Hot
+    // memory rides `config.hotMemory` (a dedicated field), not prepended into
+    // systemPrompt, so it can sit after the memory instructions rather than
+    // ahead of the doctrine.
     const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
     const memoryPrompt = resolveMemorySystemPrompt(this.providerOpts.readOnlyMemory);
     const manifest = this.providerOpts.skillExecutor ? buildSkillManifest() : '';
+    const hotMemory = typeof config.hotMemory === 'string' ? config.hotMemory : '';
     const existingSys =
       typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined;
-    const systemParts = [toolBase, memoryPrompt, envFragment];
-    if (manifest.length > 0) systemParts.push(manifest);
+    const systemParts = [toolBase];
     if (existingSys !== undefined && existingSys.length > 0) systemParts.push(existingSys);
+    systemParts.push(memoryPrompt);
+    if (hotMemory.length > 0) systemParts.push(hotMemory);
+    systemParts.push(envFragment);
+    if (manifest.length > 0) systemParts.push(manifest);
     const patchedConfig: typeof config = {
       ...config,
       systemPrompt: systemParts.join('\n\n'),

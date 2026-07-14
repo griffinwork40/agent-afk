@@ -802,6 +802,11 @@ export class AnthropicDirectProvider implements ModelProvider {
     const stableSystemPrefix = buildStableSystemPrefix({
       toolBase,
       memoryPrompt,
+      // Hot memory (HOT.md) rides its own config field, NOT prepended into
+      // systemPrompt, so the assembler can place it after the memory
+      // instructions rather than ahead of the # Agent AFK doctrine. Unset for
+      // child sessions (subagents never inject hot memory) → treated as absent.
+      hotMemory: config.hotMemory ?? '',
       manifest,
       userSystem,
     });

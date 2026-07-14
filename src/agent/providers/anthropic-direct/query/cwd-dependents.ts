@@ -15,7 +15,7 @@ import type { SkillExecutor } from '../../../tools/skill-executor.js';
 import type { ComposeExecutor } from '../../../tools/compose-executor.js';
 import type { ToolDispatcher } from '../tool-dispatcher.js';
 import type { RuntimeStateSource } from '../../../awareness/index.js';
-import { assembleSystemPrompt } from './system-prompt.js';
+import { assembleSystemPrompt, type StableSystemParts } from './system-prompt.js';
 
 export type CwdDependentsFactory = (newCwd: string) => {
   userSystem: string;
@@ -23,7 +23,7 @@ export type CwdDependentsFactory = (newCwd: string) => {
 };
 
 export interface CwdDependentsFactoryArgs {
-  stableSystemPrefix: string[];
+  stableSystemPrefix: StableSystemParts;
   config: AgentConfig;
   surface: string;
   runtimeStateSource: RuntimeStateSource;
