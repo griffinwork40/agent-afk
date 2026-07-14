@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.44.0] - 2026-07-14
+
+### Added
+- surface provider rate-limit/backoff live in the progress banner (#595) (08b47a7)
+
 ## [5.43.1] - 2026-07-14
 
 ### Fixed
