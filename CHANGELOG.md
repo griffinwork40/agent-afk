@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.50.0] - 2026-07-14
+
+### Added
+- opt-in "Done" verification — downgrade unbacked daemon completion pushes (daemon.verifyDone) (#609) (e8a5ea5)
+
 ## [5.49.2] - 2026-07-14
 
 ### Fixed
