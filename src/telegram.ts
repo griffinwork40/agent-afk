@@ -422,16 +422,29 @@ async function main() {
           ? assembleSystemPrompt(rawPromptInner, telegramAutoRoutingInner, 'telegram')
           : rawPromptInner;
 
-        // permissionMode is intentionally omitted here: AgentSession defaults
-        // to 'default' (post-C2 fix), which is the correct mode for Telegram
-        // sessions that run under the operator's explicit allowedTools list.
+        // permissionMode is omitted from session CONSTRUCTION: AgentSession
+        // defaults to 'default'. A Telegram session becomes 'autonomous' only via
+        // an explicit `/afk on` (handlers/afk.ts) calling setPermissionMode —
+        // never at construction. The hook registry below now receives a LIVE mode
+        // getter (reading the session's own metadata) so the afk-mode safety gate
+        // is actually registered on Telegram and tracks that toggle; without it
+        // (the prior `undefined`) the gate was never registered and an autonomous
+        // Telegram session would have had NO risk ceiling. afkPromptForApproval:
+        // false makes the always-on host HARD-REFUSE high-risk / irreversible ops
+        // (+ Asking summary) rather than accept a one-tap phone approval — see
+        // docs/afk-telegram-native-host.md.
+        let telegramSessionForMode: AgentSession | undefined;
         const telegramHookBundle = createDefaultHookRegistry(
           undefined,
           'telegram',
           sharedMemoryStore,
-          undefined,
+          () => telegramSessionForMode?.getSessionMetadata().permissionMode ?? 'default',
           loadHooksConfig(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
-          { cwd: sessionCwd !== undefined && sessionCwd.length > 0 ? sessionCwd : undefined, ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}) },
+          {
+            cwd: sessionCwd !== undefined && sessionCwd.length > 0 ? sessionCwd : undefined,
+            ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
+            afkPromptForApproval: false,
+          },
           () => sessionCwd,
         );
         const session = attachMcpCleanup(constructTelegramSession({
@@ -451,6 +464,10 @@ async function main() {
           provider: directProvider,
           hookRegistry: telegramHookBundle.registry,
         }, { traceWriter: telegramTraceWriter }), mcpManager);
+        // Late-bind the mode source so the registry's getPermissionMode getter
+        // (built above, before the session existed) reads this session's LIVE
+        // permission mode — flipped by /afk on (handlers/afk.ts).
+        telegramSessionForMode = session;
         returnedSession = session;
         // Wire the path-approval grant ref to the provider so elicitation
         // approvals mutate readRoots / writeRoots on the right backend.
@@ -490,13 +507,22 @@ async function main() {
         surface: 'telegram',
         ...(mcpManager !== undefined ? { mcpManager } : {}),
       });
+      // See the Anthropic branch above: a LIVE mode getter registers the
+      // afk-mode safety gate on Telegram and tracks `/afk on`; afkPromptForApproval
+      // false makes the always-on host hard-refuse high-risk ops rather than accept
+      // a one-tap phone approval (docs/afk-telegram-native-host.md).
+      let codexSessionForMode: AgentSession | undefined;
       const codexHookBundle = createDefaultHookRegistry(
         undefined,
         'telegram',
         sharedMemoryStore,
-        undefined,
+        () => codexSessionForMode?.getSessionMetadata().permissionMode ?? 'default',
         loadHooksConfig(codexSessionCwd !== undefined && codexSessionCwd.length > 0 ? { cwd: codexSessionCwd } : {}),
-        { cwd: codexSessionCwd !== undefined && codexSessionCwd.length > 0 ? codexSessionCwd : undefined, ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}) },
+        {
+          cwd: codexSessionCwd !== undefined && codexSessionCwd.length > 0 ? codexSessionCwd : undefined,
+          ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
+          afkPromptForApproval: false,
+        },
         () => codexSessionCwd,
       );
       const session = attachMcpCleanup(constructTelegramSession({
@@ -518,6 +544,9 @@ async function main() {
         provider: codexProvider,
         hookRegistry: codexHookBundle.registry,
       }, { traceWriter: telegramTraceWriter }), mcpManager);
+      // Late-bind the mode source (see Anthropic branch) so the gate's getter
+      // reads this session's live permission mode.
+      codexSessionForMode = session;
       returnedSession = session;
       // Wire the path-approval grant ref + seed persisted `persist` grants so
       // the OpenAI Telegram surface gets the same restricted-path prompts and

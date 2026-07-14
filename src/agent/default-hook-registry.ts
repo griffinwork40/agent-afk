@@ -98,7 +98,7 @@ export function createDefaultHookRegistry(
   memoryStore?: MemoryStore,
   getPermissionMode?: () => PermissionMode,
   hookConfig?: LoadedHooksConfig,
-  agentOptions?: { cwd?: string; sessionId?: string; traceWriter?: TraceWriter },
+  agentOptions?: { cwd?: string; sessionId?: string; traceWriter?: TraceWriter; afkPromptForApproval?: boolean },
   getCwd?: () => string | undefined,
 ): DefaultHookRegistryResult {
   const registry = createHookRegistry();
@@ -152,6 +152,16 @@ export function createDefaultHookRegistry(
       // via allowAll for 'autonomous'; see agent/permission-policy.ts).
       createAfkModeGate(getPermissionMode, agentOptions?.cwd, getCwd, {
         ...(agentOptions?.traceWriter !== undefined ? { traceWriter: agentOptions.traceWriter } : {}),
+        // Surface-scoped approval posture. The REPL leaves this default (true =
+        // keep-and-fix: a high-risk op is approvable from phone/keyboard for a
+        // bounded, deliberately-armed laptop session in a trusted worktree). The
+        // always-on Telegram host passes false → high-risk / irreversible ops
+        // HARD-REFUSE + Asking summary instead of being one-tap-approvable from a
+        // standing phone surface with a possibly-broad cwd (no bounded scope, no
+        // deliberate arming). See docs/afk-telegram-native-host.md.
+        ...(agentOptions?.afkPromptForApproval !== undefined
+          ? { promptForApproval: agentOptions.afkPromptForApproval }
+          : {}),
       }),
       // Longrunning: on a high-risk op the gate awaits an operator approve/deny
       // via elicitationRouter.route() (deny-on-timeout). Bypass the 30s per-

@@ -10,6 +10,7 @@ import { handleStart } from './handlers/start.js';
 import { handleHelp } from './handlers/help.js';
 import { handleClear, handleCompact, handleCwd, handleModelSwitch, handleName, MODEL_ALIASES_HINT } from './handlers/commands.js';
 import { handleSessions, handleNew, handleSwitchCallback } from './handlers/sessions.js';
+import { handleAfk } from './handlers/afk.js';
 import type { AgentModelInput } from '../agent/types.js';
 import { handleFarmCallback } from './handlers/farm-callbacks.js';
 import { MessageHandler } from './handlers/message.js';
@@ -141,6 +142,12 @@ export class TelegramBot {
     );
     this.bot.command('name', (ctx) =>
       handleName(ctx, this.sessionManager, this.log.bind(this))
+    );
+    // /afk [on|off] — toggle autonomous mode for this chat's session. On the
+    // always-on host, high-risk ops hard-refuse (not phone-approvable); see
+    // handlers/afk.ts + docs/afk-telegram-native-host.md.
+    this.bot.command('afk', (ctx) =>
+      handleAfk(ctx, this.sessionManager, this.log.bind(this))
     );
     // /sessions — list this chat's resumable conversations with tap-to-switch
     // buttons; /new — start a fresh conversation (previous preserved). One
@@ -372,6 +379,7 @@ export class TelegramBot {
       { command: 'model', description: 'Switch Claude model (opus/sonnet/haiku)' },
       { command: 'cd', description: 'Show or change session working directory' },
       { command: 'name', description: 'Show or set the session name' },
+      { command: 'afk', description: 'Toggle autonomous (AFK) mode for this chat' },
       { command: 'watch', description: 'Live-tail a CLI session from this chat' },
       { command: 'unwatch', description: 'Stop watching a session' },
     ]);
