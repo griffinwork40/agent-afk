@@ -130,6 +130,54 @@ describe('formatTrace — default human view', () => {
   });
 });
 
+describe('formatTrace — subagent timeout markers', () => {
+  // PR (observable forked children): the reader must surface the new lifecycle
+  // timeout signals — `[timeout]` on a failed child that blew its OWN budget
+  // (failureClass:'timeout'), and `(timeout)` on a cancelled child whose
+  // ancestor's budget expired (source:'cascade' + timeout:true).
+  it("renders [timeout] on a failed subagent with failureClass 'timeout'", () => {
+    const events: EventObj[] = [
+      { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'subagent_lifecycle', payload: { transition: 'failed', subagentId: 'sub-to', errorClass: 'TimeoutError', errorMessage: 'timed out after 2700000ms', partialOutputBytes: 12, failureClass: 'timeout' } },
+      { ts: '2026-06-05T12:35:00.000Z', seq: 1, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+    ];
+    const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+    expect(out).toContain('FAILED');
+    expect(out).toContain('[timeout]');
+    expect(out).toContain('[sub-to]');
+  });
+
+  it('does NOT render [timeout] on an ordinary failed subagent (no failureClass)', () => {
+    const events: EventObj[] = [
+      { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'subagent_lifecycle', payload: { transition: 'failed', subagentId: 'sub-err', errorClass: 'Error', errorMessage: 'boom', partialOutputBytes: 0 } },
+      { ts: '2026-06-05T12:35:00.000Z', seq: 1, kind: 'session_sealed', payload: { status: 'failed', finalCostUsd: 0, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+    ];
+    const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+    expect(out).toContain('FAILED');
+    expect(out).not.toContain('[timeout]');
+  });
+
+  it('renders (timeout) on a cascade-cancelled subagent with the timeout flag', () => {
+    const events: EventObj[] = [
+      { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'subagent_lifecycle', payload: { transition: 'cancelled', subagentId: 'sub-casc', source: 'cascade', timeout: true } },
+      { ts: '2026-06-05T12:35:00.000Z', seq: 1, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+    ];
+    const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+    expect(out).toContain('cancelled (cascade)');
+    expect(out).toContain('(timeout)');
+    expect(out).toContain('[sub-casc]');
+  });
+
+  it('does NOT render (timeout) on an ordinary cancel (no timeout flag)', () => {
+    const events: EventObj[] = [
+      { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'subagent_lifecycle', payload: { transition: 'cancelled', subagentId: 'sub-cx', source: 'explicit' } },
+      { ts: '2026-06-05T12:35:00.000Z', seq: 1, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+    ];
+    const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+    expect(out).toContain('cancelled (explicit)');
+    expect(out).not.toContain('(timeout)');
+  });
+});
+
 describe('formatTrace — rate_limit is high-signal (shown by default)', () => {
   // Regression: a rate_limit event is a session_phase, and session_phase is
   // hidden by default (latency waterfall). But throttling is the whole reason a

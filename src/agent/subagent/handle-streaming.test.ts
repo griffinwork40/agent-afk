@@ -825,6 +825,191 @@ describe('SubagentHandle streaming', () => {
       expect(result.status).toBe('cancelled');
       expect(handle.status).toBe('cancelled');
     });
+
+    // Canonical-timeout guard (PR: env-configurable timeout + observability).
+    // Two invariants the trace consumers depend on:
+    //   1. OWN wall-clock budget expiry → transition:'failed' + failureClass:
+    //      'timeout' (a legible guillotined-by-budget signal, still 'failed' so
+    //      the notifier injects the error).
+    //   2. CASCADED ancestor-timeout → transition:'cancelled' + timeout:true
+    //      (torn down externally; NOT reclassified to 'failed').
+    // The classification (failed vs cancelled) is asserted elsewhere; here we
+    // pin the ADDED annotations on the emitted lifecycle payloads.
+
+    it("emits failed + failureClass:'timeout' when the handle blows its OWN budget", async () => {
+      vi.useFakeTimers();
+      try {
+        const localGraph = new AbortGraph();
+        const controller = new AbortController();
+        localGraph.register('own-budget-child', controller);
+
+        // Session that hangs forever — only the handle's own withTimeout timer
+        // aborts it. No cascade (no ancestor in the graph aborts it).
+        const session = {
+          sessionId: 'mock-session',
+          state: 'idle',
+          abortSignal: controller.signal,
+          async sendMessage() {
+            return { role: 'assistant', content: '', timestamp: new Date() };
+          },
+          async *sendMessageStream() {
+            await new Promise<void>((resolve, reject) => {
+              controller.signal.addEventListener(
+                'abort',
+                () => reject(controller.signal.reason ?? new Error('aborted')),
+                { once: true },
+              );
+              // never resolves on its own
+              void resolve;
+            });
+          },
+          async interrupt() {},
+          async close() {},
+          async reset() {},
+          async setModel() {},
+          async setPermissionMode() {},
+          waitForInitialization: async () => ({ sessionId: 'mock-session', model: 'm', persistSession: true }),
+          getSessionIdentity: () => ({ persistSession: true }),
+          getSessionMetadata: () => ({ sessionId: 'mock-session', model: 'm', persistSession: true }),
+          getQuery: () => { throw new Error('not implemented'); },
+          getLastResponseMetadata: () => null,
+          getOutputStream: async function* () {},
+          getInputStreamRef: () => ({ pushUserMessage: vi.fn() }),
+          supportedCommands: async () => [],
+          supportedModels: async () => [],
+          supportedAgents: async () => [],
+          getContextUsage: async () => ({ contextLimitTokens: 0, contextUsedTokens: 0 }),
+          mcpServerStatus: async () => [],
+          accountInfo: async () => ({ name: 'test', email: 'test@example.com' }),
+        } as unknown as IAgentSession;
+
+        const events: Array<{ kind: string; payload: Record<string, unknown> }> = [];
+        const traceWriter = {
+          write: vi.fn(async (e: { kind: string; payload: Record<string, unknown> }) => {
+            events.push(e);
+          }),
+          getTracePath: () => 'in-memory://trace',
+        } as unknown as import('../trace/writer.js').TraceWriter;
+
+        const handle = new SubagentHandleImpl(
+          'own-budget-child',
+          session,
+          controller,
+          localGraph,
+          undefined,
+          1000, // small OWN budget → withTimeout fires
+          undefined,
+          vi.fn(),
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          traceWriter, // position 14
+        );
+
+        const resultPromise = handle.runToResult('test');
+        await vi.advanceTimersByTimeAsync(1000);
+        const result = await resultPromise;
+
+        expect(result.status).toBe('failed');
+        expect(handle.status).toBe('failed');
+        const failed = events.find(
+          (e) => e.kind === 'subagent_lifecycle' && e.payload.transition === 'failed',
+        );
+        expect(failed).toBeDefined();
+        expect(failed!.payload.failureClass).toBe('timeout');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('emits cancelled + timeout:true when a cascaded ancestor timeout tears it down', async () => {
+      let holdResolve: () => void = () => {};
+      const localGraph = new AbortGraph();
+      const parentController = new AbortController();
+      const childController = new AbortController();
+      localGraph.register('cascade-to-parent', parentController);
+      localGraph.register('cascade-to-child', childController);
+      localGraph.linkChild('cascade-to-parent', 'cascade-to-child');
+
+      const session = {
+        sessionId: 'mock-session',
+        state: 'idle',
+        abortSignal: childController.signal,
+        async sendMessage() {
+          return { role: 'assistant', content: '', timestamp: new Date() };
+        },
+        async *sendMessageStream() {
+          await new Promise<void>((resolve) => {
+            holdResolve = resolve;
+          });
+          if (childController.signal.aborted) {
+            throw childController.signal.reason ?? new Error('aborted');
+          }
+        },
+        async interrupt() {},
+        async close() {},
+        async reset() {},
+        async setModel() {},
+        async setPermissionMode() {},
+        waitForInitialization: async () => ({ sessionId: 'mock-session', model: 'm', persistSession: true }),
+        getSessionIdentity: () => ({ persistSession: true }),
+        getSessionMetadata: () => ({ sessionId: 'mock-session', model: 'm', persistSession: true }),
+        getQuery: () => { throw new Error('not implemented'); },
+        getLastResponseMetadata: () => null,
+        getOutputStream: async function* () {},
+        getInputStreamRef: () => ({ pushUserMessage: vi.fn() }),
+        supportedCommands: async () => [],
+        supportedModels: async () => [],
+        supportedAgents: async () => [],
+        getContextUsage: async () => ({ contextLimitTokens: 0, contextUsedTokens: 0 }),
+        mcpServerStatus: async () => [],
+        accountInfo: async () => ({ name: 'test', email: 'test@example.com' }),
+      } as unknown as IAgentSession;
+
+      const events: Array<{ kind: string; payload: Record<string, unknown> }> = [];
+      const traceWriter = {
+        write: vi.fn(async (e: { kind: string; payload: Record<string, unknown> }) => {
+          events.push(e);
+        }),
+        getTracePath: () => 'in-memory://trace',
+      } as unknown as import('../trace/writer.js').TraceWriter;
+
+      const handle = new SubagentHandleImpl(
+        'cascade-to-child',
+        session,
+        childController,
+        localGraph,
+        undefined,
+        5000, // large OWN budget so only the cascade aborts it
+        undefined,
+        vi.fn(),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        traceWriter, // position 14
+      );
+
+      const resultPromise = handle.runToResult('test');
+      await new Promise((r) => setImmediate(r));
+      // Cascade an ANCESTOR wall-clock timeout: BFS marks child cascading=true
+      // and aborts childController with this TimeoutError reason.
+      localGraph.abort('cascade-to-parent', new TimeoutError('parent budget', 1000), 'timeout');
+      holdResolve();
+
+      const result = await resultPromise;
+      expect(result.status).toBe('cancelled');
+      expect(handle.status).toBe('cancelled');
+      const cancelled = events.find(
+        (e) => e.kind === 'subagent_lifecycle' && e.payload.transition === 'cancelled',
+      );
+      expect(cancelled).toBeDefined();
+      expect(cancelled!.payload.source).toBe('cascade');
+      expect(cancelled!.payload.timeout).toBe(true);
+    });
   });
 
   describe('Error event in stream propagates', () => {

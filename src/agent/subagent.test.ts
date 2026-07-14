@@ -3,7 +3,7 @@
  * Zod output schemas, transitive cancel.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 import type { Message } from './types.js';
 
@@ -81,6 +81,7 @@ import {
   SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS,
   SUBAGENT_DEFAULT_TIMEOUT_MS,
   SUBAGENT_BACKGROUND_TIMEOUT_MS,
+  resolveSubagentTimeoutMs,
 } from './subagent.js';
 
 function lastSessionState(): SessionState {
@@ -741,8 +742,15 @@ describe('SubagentManager', () => {
     // wedged stream, a slow-grinding tool loop — park its parent at
     // `await runToResult` indefinitely (observed in production: 4 parallel
     // children spun 29 minutes under a 429 cascade until manually cancelled).
-    it('pins the fork budget defaults (20 min foreground / 60 min background)', () => {
-      expect(SUBAGENT_DEFAULT_TIMEOUT_MS).toBe(20 * 60_000);
+    it('pins the fork budget defaults (45 min foreground / 60 min background)', () => {
+      // Raised 20m → 45m (PR: env-configurable timeout): the 20-min wall
+      // guillotined genuinely-working read-only research/review children
+      // (e.g. /review's research-agent nesting git-investigator on a large
+      // diff). 45m gives headroom over the longest healthy child observed
+      // while still guaranteeing every fork terminates. Background is
+      // unchanged. The foreground default is now also env-tunable via
+      // AFK_SUBAGENT_TIMEOUT_MS (see resolveSubagentTimeoutMs tests below).
+      expect(SUBAGENT_DEFAULT_TIMEOUT_MS).toBe(45 * 60_000);
       expect(SUBAGENT_BACKGROUND_TIMEOUT_MS).toBe(60 * 60_000);
     });
 
@@ -759,7 +767,11 @@ describe('SubagentManager', () => {
         const signal = lastSessionAbortSignal();
 
         const run = h.run('slow');
-        const rejection = expect(run).rejects.toThrow(/timed out after 1200000ms/);
+        // Reference the constant so this stays in lockstep with the default
+        // (was hardcoded 1200000ms for the 20-min default; now 2700000ms).
+        const rejection = expect(run).rejects.toThrow(
+          new RegExp(`timed out after ${SUBAGENT_DEFAULT_TIMEOUT_MS}ms`),
+        );
         await vi.advanceTimersByTimeAsync(SUBAGENT_DEFAULT_TIMEOUT_MS);
         await rejection;
         expect(signal.aborted).toBe(true);
@@ -786,6 +798,136 @@ describe('SubagentManager', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    // resolveSubagentTimeoutMs is the DEFAULT resolver consulted by the fork
+    // site (`config.timeoutMs ?? resolveSubagentTimeoutMs()`). Pure-function
+    // contract, mirroring resolveTtfbTimeoutMs: unset/empty/invalid → default,
+    // valid finite int >= 0 → that value, 0 → 0 (unbounded).
+    describe('resolveSubagentTimeoutMs (AFK_SUBAGENT_TIMEOUT_MS)', () => {
+      const KEY = 'AFK_SUBAGENT_TIMEOUT_MS';
+      let original: string | undefined;
+      beforeEach(() => {
+        original = process.env[KEY];
+        delete process.env[KEY];
+      });
+      afterEach(() => {
+        if (original !== undefined) process.env[KEY] = original;
+        else delete process.env[KEY];
+      });
+
+      it('returns SUBAGENT_DEFAULT_TIMEOUT_MS when unset', () => {
+        expect(resolveSubagentTimeoutMs()).toBe(SUBAGENT_DEFAULT_TIMEOUT_MS);
+      });
+
+      it('returns SUBAGENT_DEFAULT_TIMEOUT_MS when empty / whitespace', () => {
+        process.env[KEY] = '';
+        expect(resolveSubagentTimeoutMs()).toBe(SUBAGENT_DEFAULT_TIMEOUT_MS);
+        process.env[KEY] = '   ';
+        expect(resolveSubagentTimeoutMs()).toBe(SUBAGENT_DEFAULT_TIMEOUT_MS);
+      });
+
+      it('parses a valid integer', () => {
+        process.env[KEY] = '600000';
+        expect(resolveSubagentTimeoutMs()).toBe(600_000);
+      });
+
+      it('treats 0 as the explicit unbounded escape hatch', () => {
+        process.env[KEY] = '0';
+        expect(resolveSubagentTimeoutMs()).toBe(0);
+      });
+
+      it('falls back to the default on a negative value', () => {
+        process.env[KEY] = '-1';
+        expect(resolveSubagentTimeoutMs()).toBe(SUBAGENT_DEFAULT_TIMEOUT_MS);
+      });
+
+      it('falls back to the default on unparseable garbage', () => {
+        process.env[KEY] = 'not-a-number';
+        expect(resolveSubagentTimeoutMs()).toBe(SUBAGENT_DEFAULT_TIMEOUT_MS);
+      });
+    });
+
+    // Fork-site precedence: the env default is consulted ONLY when the caller
+    // omits config.timeoutMs. An explicit config.timeoutMs (including 0 and the
+    // background SUBAGENT_BACKGROUND_TIMEOUT_MS) still wins via the `??`.
+    describe('AFK_SUBAGENT_TIMEOUT_MS at the fork site', () => {
+      const KEY = 'AFK_SUBAGENT_TIMEOUT_MS';
+      let original: string | undefined;
+      beforeEach(() => {
+        original = process.env[KEY];
+      });
+      afterEach(() => {
+        if (original !== undefined) process.env[KEY] = original;
+        else delete process.env[KEY];
+      });
+
+      it('applies the env override as the fork default when config omits timeoutMs', async () => {
+        vi.useFakeTimers();
+        try {
+          process.env[KEY] = '5000'; // 5s — far below the 45m default
+          const mgr = new SubagentManager();
+          const h = await mgr.forkSubagent({
+            parent: { sessionId: 'p' },
+            config: { model: 'sonnet' }, // no timeoutMs → env override applies
+          });
+          // Never replies within the env budget.
+          lastSessionState().replyDelayMs = 60_000;
+          const signal = lastSessionAbortSignal();
+
+          const run = h.run('slow');
+          const rejection = expect(run).rejects.toThrow(/timed out after 5000ms/);
+          await vi.advanceTimersByTimeAsync(5000);
+          await rejection;
+          expect(signal.aborted).toBe(true);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('lets an explicit config.timeoutMs win over the env override', async () => {
+        vi.useFakeTimers();
+        try {
+          process.env[KEY] = '5000'; // env says 5s…
+          const mgr = new SubagentManager();
+          const h = await mgr.forkSubagent({
+            parent: { sessionId: 'p' },
+            config: { model: 'sonnet', timeoutMs: 20_000 }, // …explicit 20s wins
+          });
+          // Reply lands after the env budget but before the explicit one.
+          lastSessionState().replyDelayMs = 10_000;
+
+          const run = h.run('slow');
+          // Advancing past the env budget (5s) must NOT time out — explicit wins.
+          await vi.advanceTimersByTimeAsync(11_000);
+          const msg = await run;
+          expect(msg.content).toBe('ok:slow');
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('leaves the background carve-out unaffected (explicit 0 stays unbounded)', async () => {
+        vi.useFakeTimers();
+        try {
+          process.env[KEY] = '5000'; // small env default…
+          const mgr = new SubagentManager();
+          const h = await mgr.forkSubagent({
+            parent: { sessionId: 'p' },
+            // Background dispatch stamps timeoutMs:0 (unbounded) — env must not
+            // re-cap it. (0 is the SubagentExecutor's carve-out for bg mode.)
+            config: { model: 'sonnet', timeoutMs: 0 },
+          });
+          lastSessionState().replyDelayMs = 60_000;
+
+          const run = h.run('slow');
+          await vi.advanceTimersByTimeAsync(61_000);
+          const msg = await run;
+          expect(msg.content).toBe('ok:slow');
+        } finally {
+          vi.useRealTimers();
+        }
+      });
     });
   });
 
