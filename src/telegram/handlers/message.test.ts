@@ -210,6 +210,74 @@ describe('MessageHandler queue-depth acknowledgment', () => {
 });
 
 // ---------------------------------------------------------------------------
+// TOCTOU regression: two near-simultaneous same-chat updates must not both
+// become the active turn (PR #602 review — Codex P1).
+//
+// bot.ts now dispatches the Telegraf 'text'/'photo' handlers detached, so a
+// second update for the same chat can be fetched and run concurrently with
+// the first, before the first's `session.state` has actually flipped away
+// from 'idle' (that flip happens deep inside sendMessageStream, after
+// getSession() and streaming.ts's "Thinking…" placeholder send). The mocked
+// sessionManager here always resolves `{ state: 'idle' }` regardless of how
+// many times it is called — exactly modeling that window — so without the
+// synchronous `claimedChats` reservation, BOTH concurrent handle() calls
+// would see 'idle' and both would reach processOne/streamResponse.
+// ---------------------------------------------------------------------------
+
+describe('MessageHandler concurrent same-chat dispatch (TOCTOU regression — PR #602 Codex P1)', () => {
+  const CHAT_ID = 2002;
+
+  beforeEach(() => {
+    mockStreamResponse.mockClear();
+  });
+
+  it('a second concurrent update for the same chat is queued, not processed concurrently', async () => {
+    // getSession always resolves { state: 'idle' } — never reflects a real
+    // busy transition — so this reproduces exactly the unprotected window:
+    // only the claimedChats guard (not session.state) can serialize these.
+    const handler = makeHandler();
+    const { ctx: ctx1, replies: replies1 } = makeMessageCtx(CHAT_ID, 'first');
+    const { ctx: ctx2, replies: replies2 } = makeMessageCtx(CHAT_ID, 'second');
+
+    // Dispatch both without awaiting between them — exactly what bot.ts's
+    // runDetached now allows via two back-to-back polling batches.
+    await Promise.all([handler.handle(ctx1), handler.handle(ctx2)]);
+
+    // Exactly one of the two `handle()` calls must have gone straight to
+    // processOne; the other must have been queued (a "Queued #1" reply) —
+    // never both racing into processOne directly from their own idle-check.
+    // (The queued item may then be drained and processed SEQUENTIALLY once
+    // the winner's turn finishes — that pre-existing drainQueue behavior is
+    // expected and is not what this test guards against; only CONCURRENT
+    // double-entry from two independent handle() calls is the regression.)
+    const queuedReplies = [...replies1, ...replies2].filter((r) => r.includes('#1'));
+    expect(queuedReplies).toHaveLength(1);
+
+    // The winning call's own replies stay empty — handle()'s direct-process
+    // path never calls ctx.reply itself (only the enqueue path does).
+    const winnerReplies = queuedReplies[0] && replies1.includes(queuedReplies[0]) ? replies2 : replies1;
+    expect(winnerReplies).toHaveLength(0);
+
+    // streamResponse must have fired at least once (the winner's own turn).
+    expect(mockStreamResponse).toHaveBeenCalled();
+  });
+
+  it('releases the claim after the turn completes so a later message for the same chat still processes normally', async () => {
+    const handler = makeHandler();
+    const { ctx: ctx1 } = makeMessageCtx(CHAT_ID, 'first');
+    await handler.handle(ctx1);
+    expect(mockStreamResponse).toHaveBeenCalledTimes(1);
+
+    // A subsequent, non-concurrent message must process normally — the
+    // claim must not leak past the turn that reserved it.
+    const { ctx: ctx2, replies: replies2 } = makeMessageCtx(CHAT_ID, 'second');
+    await handler.handle(ctx2);
+    expect(mockStreamResponse).toHaveBeenCalledTimes(2);
+    expect(replies2).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Criterion 3 (C3): ledger-originated pending resolver bypass (idle-guard fix)
 // ---------------------------------------------------------------------------
 
