@@ -266,6 +266,72 @@ describe('TelegramBot', () => {
     });
   });
 
+  describe('polling loop is not blocked by an in-flight turn (elicitation deadlock regression)', () => {
+    test('the registered text update handler returns before the turn completes', async () => {
+      // Regression for the path-approval "buttons do nothing" deadlock:
+      // Telegraf's long-poll loop awaits every handler in a batch before it
+      // fetches the next getUpdates batch. If the 'text' handler AWAITS the agent
+      // turn, a turn wedged on a mid-turn elicitation (waiting for a button tap /
+      // text reply that only arrives on a LATER update) freezes the poller — the
+      // resolving update can never be fetched. The turn must run DETACHED so
+      // handleUpdate resolves immediately and the poller keeps polling.
+      const neverResolves = new Promise<void>(() => {
+        /* a turn blocked forever on an unanswerable elicitation */
+      });
+      const handleSpy = vi
+        .spyOn((bot as any).messageHandler, 'handle')
+        .mockReturnValue(neverResolves);
+
+      // Pre-seed botInfo so Telegraf's handleUpdate does not call getMe() over
+      // the network (offline test) before running the middleware chain.
+      (bot as any).bot.botInfo = {
+        id: 42,
+        is_bot: true,
+        first_name: 'Test',
+        username: 'test_bot',
+        can_join_groups: true,
+        can_read_all_group_messages: false,
+        supports_inline_queries: false,
+      };
+
+      const update = {
+        update_id: 1,
+        message: {
+          message_id: 1,
+          text: 'read /tmp/x',
+          date: Math.floor(Date.now() / 1000),
+          chat: { id: 12345, type: 'private' },
+          from: { id: 12345, is_bot: false, first_name: 'T' },
+        },
+      };
+
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const guard = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(
+                'handleUpdate blocked on the in-flight turn — polling deadlock regression',
+              ),
+            ),
+          500,
+        );
+      });
+      try {
+        // If the handler awaited the turn, this race would reject via `guard`.
+        await expect(
+          Promise.race([(bot as any).bot.handleUpdate(update), guard]),
+        ).resolves.toBeUndefined();
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+
+      // The turn WAS dispatched (not dropped) — just not awaited by the poller.
+      expect(handleSpy).toHaveBeenCalledTimes(1);
+      handleSpy.mockRestore();
+    });
+  });
+
   describe('error handling', () => {
     test('should detect rate limit errors', () => {
       const error = new Error('Rate limit exceeded');
