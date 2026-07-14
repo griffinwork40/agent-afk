@@ -11,6 +11,74 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.48.1] - 2026-07-14
+
+### Security
+- project-local `.mcp.json` is now opt-in (fail-closed): its MCP servers are no longer auto-spawned on any surface unless `AFK_ALLOW_PROJECT_MCP` is truthy (`1`/`true`/`yes`/`on`); when present but not opted in, the skipped server names + commands are listed in a startup warning with the opt-in instruction. A `.mcp.json` whose real path escapes the working directory (symlink / `..`) is refused outright. (#571)
+
+### Changed
+- **BREAKING**: `AFK_ALLOW_PROJECT_MCP` default flipped from opt-out to opt-in. Previously `<cwd>/.mcp.json` auto-loaded unless set to `0`; it now loads only when the variable is explicitly truthy. Users who relied on auto-loading must set `AFK_ALLOW_PROJECT_MCP=1`. (#571)
+
+### Fixed
+- run agent turn detached so mid-turn elicitations don't deadlock the poller (#602) (8146958)
+
+### Changed
+- gate project-local .mcp.json spawn behind opt-in consent (#571) (#600) (bab9887)
+- cover teardown error paths — spawn-failure disconnect, telegram catch, fromConfig throw (#247) (#591) (2accc48)
+
+## [5.48.0] - 2026-07-14
+
+### Added
+- local usage-analytics report (afk insights) (#353) (ff78f72)
+
+## [5.47.0] - 2026-07-14
+
+### Added
+- add opt-in plain/append-only output mode (AFK_PLAIN_OUTPUT) (#593) (ce0480a)
+
+### Changed
+- sync model-slots & providers pages with #548 (#601) (2b19808)
+
+## [5.46.2] - 2026-07-14
+
+### Fixed
+- classify fork wall-clock timeout as failed, not cancelled, so bg timeouts reach the parent (#465 follow-up) (#596) (61e685e)
+
+## [5.46.1] - 2026-07-14
+
+### Fixed
+- bound read-only research agents + degrade empty no-terminal run to a marked partial (#597) (a39b1ff)
+
+## [5.46.0] - 2026-07-14
+
+### Added
+- proactive escalating context-window warnings (#594) (291b73f)
+
+## [5.45.0] - 2026-07-14
+
+### Added
+- auth-aware model availability labeling (Phase 2; follows #548, now merged) (#588) (2c4a723)
+
+## [5.44.0] - 2026-07-14
+
+### Added
+- surface provider rate-limit/backoff live in the progress banner (#595) (08b47a7)
+
+## [5.43.1] - 2026-07-14
+
+### Fixed
+- elicitation URL-mode cancel guard + swallowed errors + UX cleanup (#502) (#589) (3aca90a)
+
+## [5.43.0] - 2026-07-14
+
+### Added
+- fail-fast denial circuit breaker for forked read-denial spins (#546) (#592) (d2cff2f)
+
+## [5.42.1] - 2026-07-13
+
+### Changed
+- lazy-load jsdom to cut ~35% off CLI cold-start (#587) (0e9198e)
+
 ## [5.42.0] - 2026-07-13
 
 ### Added

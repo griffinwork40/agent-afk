@@ -248,10 +248,10 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'AFK_MODEL',
-    description: 'Default model for agent turns. Accepts slot names (local, small, medium, large), legacy aliases (opus, sonnet, haiku), the fixed-id fable alias (Claude Fable 5), or full model IDs.',
+    description: 'Default model for agent turns. Accepts slot names (local, small, medium, large), fixed-identity aliases (opus, sonnet, haiku, fable), or full model IDs. Migration: AFK_MODEL=sonnet now pins the fixed Sonnet identity rather than following a rebound medium tier.',
     type: 'string',
     required: false,
-    default: 'sonnet',
+    default: 'medium',
     example: 'claude-opus-4-5',
     category: 'model',
   },
@@ -801,10 +801,10 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   // ── MCP ───────────────────────────────────────────────────────────────────
   {
     name: 'AFK_ALLOW_PROJECT_MCP',
-    description: 'Controls auto-loading of MCP configuration from <cwd>/.mcp.json. Auto-loaded by default — set to 0 to disable (mitigates config-injection risk in shared/CI environments).',
+    description: 'Opt-in to loading + spawning MCP servers declared in <cwd>/.mcp.json. Fail-closed: when unset (or 0), project-local servers are NOT spawned; set to a truthy value (1/true/yes/on) to load them. A project-local .mcp.json spawns arbitrary commands on session start, so it is off by default to prevent code execution when entering an untrusted repo (issue #571). Skipped servers are listed in a startup warning with the opt-in instruction.',
     type: 'boolean',
     required: false,
-    example: '0',
+    example: '1',
     category: 'mcp',
   },
 
@@ -850,6 +850,19 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   {
     name: 'AFK_BANNER_PLAIN',
     description: 'Suppress the ANSI-colored banner at REPL startup. Useful for non-TTY captures and CI logs.',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_PLAIN_OUTPUT',
+    description:
+      'Force the interactive REPL to use the append-only plain-stdout renderer instead of the ' +
+      'TerminalCompositor live overlay, even when stdout is a TTY. Same code path already used ' +
+      'for non-TTY surfaces (pipes, CI). Reliability escape hatch for tmux/SSH/multiplexer ' +
+      'sessions where cursor-up redraws and DECSTBM scroll regions misbehave. Opt-in — default TTY ' +
+      'behavior (live overlay) is unchanged. Truthy values: 1, true (case-insensitive).',
     type: 'boolean',
     required: false,
     example: '1',
@@ -1313,6 +1326,7 @@ export const env = {
 
   // UI / output
   get AFK_BANNER_PLAIN(): string | undefined { return process.env['AFK_BANNER_PLAIN']; },
+  get AFK_PLAIN_OUTPUT(): string | undefined { return process.env['AFK_PLAIN_OUTPUT']; },
   get AFK_SPINNER_TIPS(): string | undefined { return process.env['AFK_SPINNER_TIPS']; },
   get AFK_SHOW_DIFFS(): string | undefined { return process.env['AFK_SHOW_DIFFS']; },
   get AFK_SKILL_STREAM_VERBOSE(): string | undefined { return process.env['AFK_SKILL_STREAM_VERBOSE']; },

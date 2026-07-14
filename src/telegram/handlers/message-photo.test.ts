@@ -250,6 +250,53 @@ describe('handlePhoto: session busy — enqueue', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// TOCTOU regression: two near-simultaneous same-chat photo updates must not
+// both become the active turn (PR #602 review — Codex P1).
+//
+// bot.ts now dispatches the Telegraf 'photo' handler detached, so a second
+// photo update for the same chat can be fetched and run concurrently with
+// the first, before the first's `session.state` has actually flipped away
+// from 'idle'. The download + base64-encode pipeline here widens that window
+// far beyond the text path's `ctx.react`, so this is the more realistic
+// trigger for the race. `getSession` below always resolves the SAME idle
+// session regardless of call count — modeling that window — so without the
+// synchronous `claimedChats` reservation, BOTH concurrent handlePhoto() calls
+// would see 'idle' and both would reach processOne/streamResponse.
+// ---------------------------------------------------------------------------
+
+describe('handlePhoto: concurrent same-chat dispatch (TOCTOU regression — PR #602 Codex P1)', () => {
+  it('a second concurrent photo update for the same chat is queued, not processed concurrently', async () => {
+    const session = makeSession('idle');
+    const handler = makeHandler(session);
+    const { ctx: ctx1, replies: replies1 } = makePhotoCtx({ caption: 'first' });
+    const { ctx: ctx2, replies: replies2 } = makePhotoCtx({ caption: 'second' });
+
+    // Dispatch both without awaiting between them — exactly what bot.ts's
+    // runDetached now allows via two back-to-back polling batches.
+    await Promise.all([handler.handlePhoto(ctx1), handler.handlePhoto(ctx2)]);
+
+    // Exactly one of the two `handlePhoto()` calls must have gone straight to
+    // processOne; the other must have been queued (a "Queued #1" reply) —
+    // never both racing into processOne directly from their own idle-check.
+    // (The queued item may then be drained and processed SEQUENTIALLY once
+    // the winner's turn finishes — that pre-existing drainQueue behavior is
+    // expected and is not what this test guards against; only CONCURRENT
+    // double-entry from two independent handlePhoto() calls is the regression.)
+    const queuedReplies = [...replies1, ...replies2].filter((r) => r.includes('#1'));
+    expect(queuedReplies).toHaveLength(1);
+
+    // The winning call's own replies stay empty — handlePhoto()'s
+    // direct-process path never calls ctx.reply itself (only the
+    // enqueue/error paths do).
+    const winnerReplies = queuedReplies[0] && replies1.includes(queuedReplies[0]) ? replies2 : replies1;
+    expect(winnerReplies).toHaveLength(0);
+
+    // streamResponse must have fired at least once (the winner's own turn).
+    expect(mockStreamResponse).toHaveBeenCalled();
+  });
+});
+
 describe('handlePhoto: chat undefined (early return)', () => {
   it('returns silently without reply when ctx.chat is undefined', async () => {
     const session = makeSession('idle');

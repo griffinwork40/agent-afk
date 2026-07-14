@@ -22,6 +22,7 @@ import {
   formatSystemError,
 } from '../formatter.js';
 import { providerForModel } from '../../agent/providers/index.js';
+import { isModelAvailable } from '../../agent/auth/model-availability.js';
 import {
   MODEL_ALIASES_HINT,
   resolveBinding,
@@ -141,7 +142,10 @@ export async function handleModelSwitch(
   if (args.length === 0) {
     const currentModel = sessionManager.getModel(chatId);
     const buttons = MODEL_ALIASES_HINT.map(alias => [
-      Markup.button.callback(alias, `afk:m:${alias}`),
+      Markup.button.callback(
+        isModelAvailable(alias) ? alias : `${alias} — needs sign-in`,
+        `afk:m:${alias}`,
+      ),
     ]);
     await ctx.reply(
       `Current model: <b>${escapeHtml(currentModel.toUpperCase())}</b>\n\nSwitch to:`,

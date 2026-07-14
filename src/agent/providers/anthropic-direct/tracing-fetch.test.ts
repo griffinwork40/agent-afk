@@ -77,4 +77,56 @@ describe('makeTracingFetch', () => {
     expect(events).toHaveLength(1);
     expect(events[0]!.payload['durationMs']).toBeUndefined();
   });
+
+  it('invokes onThrottle with status + parsed retryAfterMs, AND still writes the trace', async () => {
+    const { writer, events } = mockWriter();
+    const seen: Array<{ status: number; retryAfterMs?: number }> = [];
+    const base = vi.fn(async () => res(429, { 'retry-after': '70' })) as unknown as typeof fetch;
+    const r = await makeTracingFetch(writer, base, (info) => seen.push(info))('u');
+    await Promise.resolve();
+    expect(r.status).toBe(429);
+    // Live callback fired with the parsed values.
+    expect(seen).toEqual([{ status: 429, retryAfterMs: 70_000 }]);
+    // Trace emission is UNCHANGED (both channels fire).
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload['phase']).toBe('rate_limit');
+  });
+
+  it('omits retryAfterMs in the onThrottle payload when the header is absent', async () => {
+    const seen: Array<{ status: number; retryAfterMs?: number }> = [];
+    const base = vi.fn(async () => res(503)) as unknown as typeof fetch;
+    await makeTracingFetch(undefined, base, (info) => seen.push(info))('u');
+    await Promise.resolve();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.status).toBe(503);
+    expect('retryAfterMs' in seen[0]!).toBe(false);
+  });
+
+  it('wraps fetch when only onThrottle is provided (no writer) and does NOT fire on 200', async () => {
+    const seen: unknown[] = [];
+    const base = vi.fn(async () => res(200)) as unknown as typeof fetch;
+    const wrapped = makeTracingFetch(undefined, base, (info) => seen.push(info));
+    expect(wrapped).not.toBe(base); // wrapped because a live observer wants throttles
+    const r = await wrapped('u');
+    expect(r.status).toBe(200);
+    await Promise.resolve();
+    expect(seen).toHaveLength(0);
+  });
+
+  it('a throwing onThrottle never disturbs the request path (response still returned)', async () => {
+    const { writer, events } = mockWriter();
+    const base = vi.fn(async () => res(429, { 'retry-after': '5' })) as unknown as typeof fetch;
+    const r = await makeTracingFetch(writer, base, () => {
+      throw new Error('observer boom');
+    })('u');
+    await Promise.resolve();
+    // The throttled response is returned unchanged and the trace still fires.
+    expect(r.status).toBe(429);
+    expect(events).toHaveLength(1);
+  });
+
+  it('returns the base fetch unchanged only when BOTH writer and onThrottle are undefined', () => {
+    const base = vi.fn() as unknown as typeof fetch;
+    expect(makeTracingFetch(undefined, base, undefined)).toBe(base);
+  });
 });

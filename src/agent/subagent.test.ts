@@ -727,6 +727,12 @@ describe('SubagentManager', () => {
 
       await expect(h.run('slow')).rejects.toThrow(/timed out/);
       expect(signal.aborted).toBe(true);
+      // Own-budget timeout is a failure of THIS run, not an external teardown:
+      // status must be 'failed' so runToResult → registry → notifier injection
+      // delivers the timeout error the fork-budget contract promised (PR #596,
+      // #465 follow-up). Cascaded (inherited) timeouts differ — see the
+      // "cascaded TimeoutError abort" test in handle-streaming.test.ts.
+      expect(h.status).toBe('failed');
     });
 
     // Anti-hang: forks default to a BOUNDED wall-clock budget. The session

@@ -202,3 +202,98 @@ describe('attachMcpCleanup', () => {
     expect(session.close).toBe(close);
   });
 });
+
+describe('Telegram construction-failure cleanup contract (#247)', () => {
+  /**
+   * telegram.ts main()'s `createSession` closure (~L239-461) is private and
+   * inline inside `main()` — unreachable from a test (main() also validates
+   * the bot token over the network and calls process.exit on config errors).
+   * hook-wiring.test.ts and presence-surface.test.ts hit the same wall for
+   * sibling logic in this closure and pin the CONTRACT instead of the
+   * closure itself; this does the same for the trailing catch block:
+   *
+   *   let returnedSession: AgentSession | undefined;
+   *   try {
+   *     const session = attachMcpCleanup(constructTelegramSession(...), mcpManager);
+   *     returnedSession = session;
+   *     ...
+   *     return session;
+   *   } catch (error) {
+   *     if (returnedSession !== undefined) {
+   *       await returnedSession.close().catch(() => undefined);
+   *     } else if (mcpManager !== undefined) {
+   *       await mcpManager.disconnectAll();
+   *     }
+   *     throw error;
+   *   }
+   *
+   * Reproduces that exact branching with the REAL `attachMcpCleanup` (imported
+   * above, not reimplemented) wired to a mocked McpManager/session — the same
+   * mock shape `attachMcpCleanup`'s own describe block above uses (prior art:
+   * 77e92fe). Proves the two failure windows the catch exists for:
+   *   1. construction throws AFTER attachMcpCleanup wrapped the session — the
+   *      catch's `returnedSession.close()` must be the ONLY thing that
+   *      disconnects (attachMcpCleanup's wrapped close already does it; the
+   *      catch's `else if` must not double-fire).
+   *   2. construction throws BEFORE any session was built (e.g. provider
+   *      construction) — the catch must disconnect the manager directly,
+   *      exactly once, since there is no wrapped session to do it.
+   */
+  async function simulateTelegramCreateSessionCatch(
+    mcpManager: McpManager | undefined,
+    opts: { failBeforeSessionBuilt?: boolean; failAfterSessionBuilt?: boolean; close?: () => Promise<void> },
+  ): Promise<IAgentSession> {
+    let returnedSession: IAgentSession | undefined;
+    try {
+      if (opts.failBeforeSessionBuilt) {
+        throw new Error('construction failed before any session was built');
+      }
+      const bareSession = { close: opts.close ?? (async () => {}) } as unknown as IAgentSession;
+      const session = attachMcpCleanup(bareSession, mcpManager);
+      returnedSession = session;
+      if (opts.failAfterSessionBuilt) {
+        throw new Error('construction failed after the session was built');
+      }
+      return session;
+    } catch (error) {
+      if (returnedSession !== undefined) {
+        await returnedSession.close().catch(() => undefined);
+      } else if (mcpManager !== undefined) {
+        await mcpManager.disconnectAll();
+      }
+      throw error;
+    }
+  }
+
+  it('disconnects the manager via returnedSession.close() exactly once when construction fails AFTER the session was built', async () => {
+    const disconnectAll = vi.fn(async () => {});
+    const manager = { disconnectAll } as unknown as McpManager;
+    const close = vi.fn(async () => {});
+
+    await expect(
+      simulateTelegramCreateSessionCatch(manager, { failAfterSessionBuilt: true, close }),
+    ).rejects.toThrow('construction failed after the session was built');
+
+    expect(close).toHaveBeenCalledTimes(1);
+    // attachMcpCleanup's wrapped close() is the ONLY disconnect path here —
+    // the catch's `else if (mcpManager)` branch must not also fire.
+    expect(disconnectAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('disconnects the manager directly, exactly once, when construction fails BEFORE any session was built', async () => {
+    const disconnectAll = vi.fn(async () => {});
+    const manager = { disconnectAll } as unknown as McpManager;
+
+    await expect(
+      simulateTelegramCreateSessionCatch(manager, { failBeforeSessionBuilt: true }),
+    ).rejects.toThrow('construction failed before any session was built');
+
+    expect(disconnectAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('still propagates the original error when there is no manager to disconnect', async () => {
+    await expect(
+      simulateTelegramCreateSessionCatch(undefined, { failBeforeSessionBuilt: true }),
+    ).rejects.toThrow('construction failed before any session was built');
+  });
+});

@@ -666,6 +666,7 @@ describe('handleOrchestratorEvent — tool-use-loop scrollback (no content emiss
       thinkingLane: new ThinkingLane(),
       thinkingMode: 'off',
       streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
     };
     const source: SourceState = freshSourceState('__main__');
 
@@ -1085,6 +1086,7 @@ function makeSkillCtx(
     thinkingLane: new ThinkingLane(),
     thinkingMode: 'off',
     streamingMarkdown: { current: null },
+    lastProgressByTask: new Map(),
     activeSkillName,
   };
 }
@@ -1300,5 +1302,138 @@ describe('handleOrchestratorEvent — cross-flush tool grouping (run accumulatio
     const scrollback = commitAboveCalls.join('\n');
     expect(scrollback).not.toContain('DIGEST_PROOF');          // reasoning NOT persisted in summary mode
     expect(scrollback.toLowerCase()).toContain('thought for');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// rate_limit arm — live backoff banner via synthetic progress injection
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('handleOrchestratorEvent — rate_limit arm', () => {
+  function rateLimitEvent(retryAfterMs?: number): OutputEvent {
+    return retryAfterMs === undefined
+      ? { type: 'rate_limit' }
+      : { type: 'rate_limit', retryAfterMs };
+  }
+
+  function progressEvent(taskId: string): OutputEvent {
+    return {
+      type: 'progress',
+      progress: {
+        taskId,
+        description: 'Working',
+        summary: 'round 1: bash',
+        totalTokens: 100,
+        toolUses: 1,
+        durationMs: 500,
+      },
+    };
+  }
+
+  function ttyCtx(): { ctx: OrchestratorCtx; setOverlay: ReturnType<typeof vi.fn> } {
+    const setOverlay = vi.fn();
+    const compositor = {
+      setOverlay,
+      commitAbove: vi.fn(),
+      setSpinner: vi.fn(),
+    } as unknown as OrchestratorCtx['compositor'];
+    const ctx = makeCtx(new ToolLane(), { isTTY: true, compositor });
+    return { ctx, setOverlay };
+  }
+
+  it('injects a synthetic progress entry whose description is the formatted backoff string', () => {
+    const { ctx, setOverlay } = ttyCtx();
+    const source = freshSourceState('__main__');
+
+    handleOrchestratorEvent(rateLimitEvent(70_000), source, ctx);
+
+    // A single synthetic entry lands under the reserved key.
+    expect(ctx.lastProgressByTask.size).toBe(1);
+    const entry = ctx.lastProgressByTask.get('__rate_limit__');
+    expect(entry).toBeDefined();
+    expect(entry!.description).toBe('rate-limited · retrying in ~70s');
+    // TTY repaint fired so the banner shows immediately.
+    expect(setOverlay).toHaveBeenCalled();
+  });
+
+  it('uses the no-ETA copy when retryAfterMs is absent', () => {
+    const { ctx } = ttyCtx();
+    const source = freshSourceState('__main__');
+
+    handleOrchestratorEvent(rateLimitEvent(undefined), source, ctx);
+
+    expect(ctx.lastProgressByTask.get('__rate_limit__')!.description).toBe(
+      'rate-limited · retrying…',
+    );
+  });
+
+  it('is a no-op on non-TTY surfaces (no synthetic entry, no repaint)', () => {
+    const ctx = makeCtx(new ToolLane(), { isTTY: false });
+    const source = freshSourceState('__main__');
+
+    handleOrchestratorEvent(rateLimitEvent(70_000), source, ctx);
+
+    expect(ctx.lastProgressByTask.size).toBe(0);
+  });
+
+  it('the next real progress event evicts the synthetic backoff entry', () => {
+    const { ctx } = ttyCtx();
+    const source = freshSourceState('__main__');
+
+    handleOrchestratorEvent(rateLimitEvent(70_000), source, ctx);
+    expect(ctx.lastProgressByTask.has('__rate_limit__')).toBe(true);
+
+    // Real progress arrives once the retried request streams — its clear()+set()
+    // drops the synthetic entry and installs the genuine one.
+    handleOrchestratorEvent(progressEvent('real-task-uuid'), source, ctx);
+    expect(ctx.lastProgressByTask.has('__rate_limit__')).toBe(false);
+    expect(ctx.lastProgressByTask.has('real-task-uuid')).toBe(true);
+  });
+
+  it('a resumed text-only stream (content chunk, no progress event) evicts the backoff banner and repaints', () => {
+    const { ctx, setOverlay } = ttyCtx();
+    const source = freshSourceState('__main__');
+
+    handleOrchestratorEvent(rateLimitEvent(70_000), source, ctx);
+    expect(ctx.lastProgressByTask.has('__rate_limit__')).toBe(true);
+    const callsBefore = setOverlay.mock.calls.length;
+
+    // The retried request resolves into a plain-text answer: content streams
+    // with NO preceding `progress` event (a no-tool-use turn never emits one —
+    // loop.ts yields progress only per tool-use round), so the chunk arm itself
+    // must drop the stale banner. Without this the overlay keeps reading
+    // `rate-limited · retrying…` under the streamed answer until turn-end.
+    handleOrchestratorEvent(
+      { type: 'chunk', chunk: { type: 'content', content: 'the answer' } },
+      source,
+      ctx,
+    );
+    expect(ctx.lastProgressByTask.has('__rate_limit__')).toBe(false);
+    // A repaint fired so the stale banner is removed immediately.
+    expect(setOverlay.mock.calls.length).toBeGreaterThan(callsBefore);
+  });
+
+  it('stream_retry clears a stale backoff banner and repaints', () => {
+    const { ctx, setOverlay } = ttyCtx();
+    const source = freshSourceState('__main__');
+
+    handleOrchestratorEvent(rateLimitEvent(70_000), source, ctx);
+    expect(ctx.lastProgressByTask.has('__rate_limit__')).toBe(true);
+    const callsBefore = setOverlay.mock.calls.length;
+
+    handleOrchestratorEvent({ type: 'stream_retry' }, source, ctx);
+    expect(ctx.lastProgressByTask.has('__rate_limit__')).toBe(false);
+    // A repaint fired to remove the stale banner.
+    expect(setOverlay.mock.calls.length).toBeGreaterThan(callsBefore);
+  });
+
+  it('stream_retry with no active backoff banner does not force an extra repaint', () => {
+    const { ctx, setOverlay } = ttyCtx();
+    const source = freshSourceState('__main__');
+
+    const callsBefore = setOverlay.mock.calls.length;
+    handleOrchestratorEvent({ type: 'stream_retry' }, source, ctx);
+    // No synthetic entry existed → delete() returns false → no repaint.
+    expect(setOverlay.mock.calls.length).toBe(callsBefore);
   });
 });

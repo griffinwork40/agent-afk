@@ -57,6 +57,24 @@ export class BudgetExceededError extends Error {
 }
 
 /**
+ * Thrown (surfaced as a loop `error` event, never a raw throw the dispatcher
+ * would swallow) when a forked sub-agent accumulates
+ * {@link import('../agent/tools/denial-circuit-breaker.js').DENIAL_CIRCUIT_BREAKER_THRESHOLD}
+ * consecutive path-approval READ denials with no intervening successful tool
+ * call. A fork cannot approve its own reads, so once it is provably spinning on
+ * unrecoverable denials, continuing only burns its wall-clock budget. The
+ * message names the accumulated denied paths + the grant remedy so the parent
+ * orchestrator can re-dispatch with a corrected read scope. See
+ * `src/agent/tools/denial-circuit-breaker.ts`.
+ */
+export class DenialCircuitBreakerError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DenialCircuitBreakerError";
+  }
+}
+
+/**
  * Thrown when an AgentConfig field is set that the selected provider does
  * not support (e.g. `thinking` on the OpenAI Codex backend). The field name
  * makes it easy for CLI / bridge wrappers to translate into a friendly

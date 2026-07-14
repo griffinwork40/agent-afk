@@ -161,9 +161,33 @@ falls back to defaults + env when constructed without the CLI config loader.
   (own key) on a third.
 - Per-tier credentials via afk.config.json or the `AFK_MODEL_*` env vars.
 
+## Availability
+
+`src/agent/auth/model-availability.ts` exports a read-only, synchronous
+`modelAvailability(model, bindings?)` predicate (and its boolean shorthand
+`isModelAvailable`) used purely to **label** model picker handles with an
+auth hint — e.g. a tier bound to an OpenAI id with no `OPENAI_API_KEY`
+resolvable, or a `chatgpt-oauth` slot with no `~/.codex/auth.json` token.
+
+Guarantees:
+
+- **Additive only.** Labeling never filters, reorders, or removes a handle,
+  and never blocks selection — every alias in `MODEL_ALIASES_HINT` stays
+  listed and selectable regardless of its computed availability. Only the
+  Telegram `/model` inline-keyboard button text and the CLI `/model`
+  non-TTY alias list are annotated today; callback data / selected values
+  are unchanged. The interactive arrow-key picker (`runPicker`) is not yet
+  annotated — see the code comment at its call site in
+  `src/cli/slash/commands/info.ts`.
+- **Conservative.** Any uncertainty (an unrecognized provider shape, a
+  custom `baseUrl` endpoint whose key requirement can't be known from here,
+  or an internal error) resolves to `available: true` — a working model is
+  never hidden behind a false negative.
+
 ## See also
 
 - `src/agent/session/model-slots.ts` — bindings, resolver, defaults, config parse.
 - `src/agent/session/slot-credentials.ts` — per-slot credential application.
 - `src/agent/providers/index.ts` — `providerForModel` resolution-before-routing.
+- `src/agent/auth/model-availability.ts` — additive, conservative availability labeling.
 - `docs/env-registry.md` — `AFK_MODEL_{LOCAL,SMALL,MEDIUM,LARGE}{,_BASE_URL,_API_KEY}`.

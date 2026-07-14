@@ -21,6 +21,7 @@ import {
   deriveProgressActivity,
   formatProgressBanner,
   formatProgressSummary,
+  formatRateLimitActivity,
   formatSubagentCompletion,
   emitSubagentCompletion,
 } from './progress-banner.js';
@@ -346,6 +347,38 @@ describe('progress-banner — terminal width clamping', () => {
       emitSubagentCompletion(writer, info('sa-default'));
       expect(committed).toHaveLength(1);
     });
+  });
+});
+
+describe('formatRateLimitActivity', () => {
+  it('rounds a whole-second retry-after to ~Ns', () => {
+    expect(formatRateLimitActivity(70_000)).toBe('rate-limited · retrying in ~70s');
+  });
+
+  it('rounds a fractional retry-after UP to the next whole second', () => {
+    // 70_001ms → 71s (ceil), so a partial second is never under-reported.
+    expect(formatRateLimitActivity(70_001)).toBe('rate-limited · retrying in ~71s');
+    // 29_500ms → 30s.
+    expect(formatRateLimitActivity(29_500)).toBe('rate-limited · retrying in ~30s');
+  });
+
+  it('shows ~1s for a sub-second retry-after rather than ~0s', () => {
+    expect(formatRateLimitActivity(500)).toBe('rate-limited · retrying in ~1s');
+    expect(formatRateLimitActivity(1)).toBe('rate-limited · retrying in ~1s');
+  });
+
+  it('drops the ETA when retryAfterMs is undefined', () => {
+    expect(formatRateLimitActivity(undefined)).toBe('rate-limited · retrying…');
+  });
+
+  it('drops the ETA for a zero or negative delay (no positive time to show)', () => {
+    expect(formatRateLimitActivity(0)).toBe('rate-limited · retrying…');
+    expect(formatRateLimitActivity(-5_000)).toBe('rate-limited · retrying…');
+  });
+
+  it('drops the ETA for a non-finite delay (defensive)', () => {
+    expect(formatRateLimitActivity(Number.NaN)).toBe('rate-limited · retrying…');
+    expect(formatRateLimitActivity(Number.POSITIVE_INFINITY)).toBe('rate-limited · retrying…');
   });
 });
 

@@ -121,7 +121,7 @@ optional; unset fields fall through to env vars or built-in defaults.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `model` | `string` | `"sonnet"` | Default model for all surfaces. Accepts Claude short aliases (`sonnet`, `haiku`, `opus`) and full provider-native ids (`gpt-4o`, `mlx-community/Qwen3-30B-A3B-4bit`). Env override: `AFK_MODEL`. |
+| `model` | `string` | `"medium"` (CLI) / `"sonnet"` (Telegram) | Default model — varies by surface. CLI commands resolve via `getModel()`, defaulting to the **`medium` capability tier** (Claude Sonnet on an unconfigured install; rebinding `models.medium` changes the CLI default). Surfaces that read `loadConfig().model` directly instead — notably the **Telegram bot** — fall back to the literal `DEFAULT_CONFIG.model` (`"sonnet"`), so rebinding `medium` alone does not affect them. Accepts tier names (`small`/`medium`/`large`), fixed-identity aliases (`sonnet`, `haiku`, `opus`, `fable`), and full provider-native ids (`gpt-4o`, `mlx-community/Qwen3-30B-A3B-4bit`). Env override: `AFK_MODEL`. Migration: `AFK_MODEL=sonnet` now pins the fixed Sonnet identity rather than following a rebound `medium` tier. |
 | `maxTokens` | `number` | `4096` | **Deprecated / inert** — not read by the generation path. Use `AFK_MAX_OUTPUT_TOKENS` / `--max-output-tokens` to cap per-response output. |
 | `temperature` | `number` | `1.0` | Sampling temperature. Env override: `AFK_TEMPERATURE`. |
 | `systemPrompt` | `string` | — | Operator overlay appended to the framework base prompt (tier 2). When set, `AFK.md` is not loaded. Env override: `AFK_SYSTEM_PROMPT` (tier 1, wins over this). |
@@ -143,7 +143,7 @@ an object with optional provider credentials.
 {
   "models": {
     "small": "claude-haiku-4-5-20251001",
-    "medium": "claude-sonnet-4-6",
+    "medium": "claude-sonnet-5",
     "large": {
       "id": "claude-opus-4-8",
       "name": "big",
@@ -167,7 +167,7 @@ When using the object form, each slot accepts:
 |-----------|------|-------------|
 | `id` | `string` | Provider-native model id. |
 | `name` | `string` | Human-readable alias for this slot (cosmetic). |
-| `provider` | `string` | Provider name (e.g. `"anthropic"`, `"openai-compatible"`). |
+| `provider` | `string` | Provider name: `"anthropic"`, `"openai"`, or `"chatgpt-oauth"` (forces per-slot ChatGPT-subscription OAuth — see [Models & Providers](/configuration/models-providers#chatgpt-oauth-per-slot)). Inferred from `id` when omitted. |
 | `baseUrl` | `string` | Endpoint base URL for this slot (e.g. a local shim). |
 | `apiKey` | `string` | API key for this slot's endpoint. |
 

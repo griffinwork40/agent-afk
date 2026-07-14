@@ -63,6 +63,7 @@ export const TOOL_FAILURE_CLASSES = [
   'hook-block',
   'abort',
   'elicitation-declined',
+  'denial-breaker',
 ] as const;
 
 /**
@@ -80,11 +81,17 @@ export const TOOL_FAILURE_CLASSES = [
  *                              cannot reach a human) or `cancel` (operator dismissed the
  *                              prompt). An unanswered question is an expected outcome on a
  *                              non-interactive or AFK surface, NOT a tool fault.
+ *   - `denial-breaker`       — a forked sub-agent tripped the denial circuit breaker
+ *                              (`denial-circuit-breaker.ts`): N consecutive path-approval
+ *                              read denials with no progress, so it was aborted fast rather
+ *                              than at its wall-clock budget. Deliberately NOT exempt below
+ *                              — a fork torn down for spinning is a review-worthy event the
+ *                              parent should act on (re-dispatch with a wider read scope).
  *
  * The `tool-failure-density` detector treats `policy-refusal`, `permission-denied`,
  * `hook-block`, `abort`, and `elicitation-declined` as "the system correctly said no" —
- * excluded from failure stats entirely — while `timeout` and unclassified failures still
- * count.
+ * excluded from failure stats entirely — while `timeout`, `denial-breaker`, and
+ * unclassified failures still count.
  */
 export type ToolFailureClass = (typeof TOOL_FAILURE_CLASSES)[number];
 
