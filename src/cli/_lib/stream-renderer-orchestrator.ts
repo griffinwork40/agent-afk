@@ -165,6 +165,18 @@ export function handleOrchestratorEvent(
 
     case 'chunk': {
       const chunk = event.chunk;
+      // Streaming resumed: the SDK's throttle backoff (see the 'rate_limit'
+      // case) is over the instant the first stream chunk lands. On a text-only
+      // turn NO `progress` event follows to evict the synthetic backoff banner,
+      // so it would otherwise linger under the streamed answer until turn-end
+      // finalization — the status line reading `rate-limited · retrying…` while
+      // the retried response is already streaming. Drop it here on the first
+      // chunk (any type) so the banner covers only the real wait window. The
+      // `delete()` returns true only while the entry exists, so the repaint
+      // fires at most once per backoff, not on every chunk.
+      if (ctx.lastProgressByTask.delete(RATE_LIMIT_TASK_ID) && ctx.isTTY) {
+        setComposedOverlay(ctx);
+      }
       if (chunk.type === 'tool_use_detail') {
         // Thinking→acting boundary: the model has finished reasoning for the
         // moment and is dispatching a tool. Cap the thinking-duration window

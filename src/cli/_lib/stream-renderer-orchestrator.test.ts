@@ -666,6 +666,7 @@ describe('handleOrchestratorEvent — tool-use-loop scrollback (no content emiss
       thinkingLane: new ThinkingLane(),
       thinkingMode: 'off',
       streamingMarkdown: { current: null },
+      lastProgressByTask: new Map(),
     };
     const source: SourceState = freshSourceState('__main__');
 
@@ -1085,6 +1086,7 @@ function makeSkillCtx(
     thinkingLane: new ThinkingLane(),
     thinkingMode: 'off',
     streamingMarkdown: { current: null },
+    lastProgressByTask: new Map(),
     activeSkillName,
   };
 }
@@ -1386,6 +1388,29 @@ describe('handleOrchestratorEvent — rate_limit arm', () => {
     handleOrchestratorEvent(progressEvent('real-task-uuid'), source, ctx);
     expect(ctx.lastProgressByTask.has('__rate_limit__')).toBe(false);
     expect(ctx.lastProgressByTask.has('real-task-uuid')).toBe(true);
+  });
+
+  it('a resumed text-only stream (content chunk, no progress event) evicts the backoff banner and repaints', () => {
+    const { ctx, setOverlay } = ttyCtx();
+    const source = freshSourceState('__main__');
+
+    handleOrchestratorEvent(rateLimitEvent(70_000), source, ctx);
+    expect(ctx.lastProgressByTask.has('__rate_limit__')).toBe(true);
+    const callsBefore = setOverlay.mock.calls.length;
+
+    // The retried request resolves into a plain-text answer: content streams
+    // with NO preceding `progress` event (a no-tool-use turn never emits one —
+    // loop.ts yields progress only per tool-use round), so the chunk arm itself
+    // must drop the stale banner. Without this the overlay keeps reading
+    // `rate-limited · retrying…` under the streamed answer until turn-end.
+    handleOrchestratorEvent(
+      { type: 'chunk', chunk: { type: 'content', content: 'the answer' } },
+      source,
+      ctx,
+    );
+    expect(ctx.lastProgressByTask.has('__rate_limit__')).toBe(false);
+    // A repaint fired so the stale banner is removed immediately.
+    expect(setOverlay.mock.calls.length).toBeGreaterThan(callsBefore);
   });
 
   it('stream_retry clears a stale backoff banner and repaints', () => {
