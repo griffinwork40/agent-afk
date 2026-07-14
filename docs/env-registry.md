@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**124 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**125 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -39,6 +39,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_OPENAI_USE_RESPONSES` | boolean |  |  | `1` | Opt the OpenAI-compatible provider into the OpenAI Responses API instead of Chat Completions for API-key sessions. Truthy values: 1, true, yes, on. The ChatGPT-subscription OAuth path uses Responses automatically regardless of this flag. |
 | `AFK_PROMPT_CACHE_TTL` | string |  | `1h` | `1h` | TTL for Anthropic prompt-cache blocks. Accepts 5m or 1h. |
 | `AFK_PROVIDER` | string |  |  | `openai-compatible` | Force provider selection (anthropic \| anthropic-direct \| openai \| openai-compatible \| openai-codex). Overrides the model-name heuristic. Same surface as the --provider CLI flag; CLI flag wins when both are set. |
+| `AFK_SUBAGENT_TIMEOUT_MS` | number |  | `2700000` | `3600000` | Foreground forked-subagent wall-clock budget in ms; 0 disables the cap; explicit per-fork config.timeoutMs and the 60-min background mode still win. Bounds how long a single forked child turn may run before `withTimeout` aborts its controller (cascading through the AbortGraph to descendants) and the parent receives a legible TimeoutError tool_result instead of hanging. Default 2700000 (45 min ≈ headroom over the longest healthy review/research agent observed in production). Unset, empty, or unparseable input falls back to the default; a negative value is treated as invalid and also falls back. Set to 0 to opt a whole session back into unbounded child turns. Does NOT affect the background dispatch budget (SUBAGENT_BACKGROUND_TIMEOUT_MS) or a per-fork config.timeoutMs — both take precedence. |
 | `AFK_SUGGEST_ENABLED` | boolean |  |  |  | Enable the LLM-backed ghost-text suggestion tier in the interactive REPL. Set to 1/true/yes/on to activate. Off by default. |
 | `AFK_SUGGEST_GHOST` | boolean |  | `1` | `0` | Enable REPL ghost-text inline suggestions (Tier-1 history/dropdown + optional Tier-2 LLM). 1 = on (default), 0 = off. Set 0/false/off/no to disable all ghost text. Tier-2 LLM is separately gated by AFK_SUGGEST_ENABLED. |
 | `AFK_SUGGEST_MODEL` | string |  |  |  | Override the small model used for REPL ghost-text suggestions. Falls back to AFK_COMPACT_MODEL or haiku-class for anthropic, or the session model for other providers. |

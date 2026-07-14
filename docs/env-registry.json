@@ -583,6 +583,15 @@
       "category": "paths"
     },
     {
+      "name": "AFK_SUBAGENT_TIMEOUT_MS",
+      "description": "Foreground forked-subagent wall-clock budget in ms; 0 disables the cap; explicit per-fork config.timeoutMs and the 60-min background mode still win. Bounds how long a single forked child turn may run before `withTimeout` aborts its controller (cascading through the AbortGraph to descendants) and the parent receives a legible TimeoutError tool_result instead of hanging. Default 2700000 (45 min ≈ headroom over the longest healthy review/research agent observed in production). Unset, empty, or unparseable input falls back to the default; a negative value is treated as invalid and also falls back. Set to 0 to opt a whole session back into unbounded child turns. Does NOT affect the background dispatch budget (SUBAGENT_BACKGROUND_TIMEOUT_MS) or a per-fork config.timeoutMs — both take precedence.",
+      "type": "number",
+      "required": false,
+      "default": "2700000",
+      "example": "3600000",
+      "category": "model"
+    },
+    {
       "name": "AFK_SUGGEST_ENABLED",
       "description": "Enable the LLM-backed ghost-text suggestion tier in the interactive REPL. Set to 1/true/yes/on to activate. Off by default.",
       "type": "boolean",
