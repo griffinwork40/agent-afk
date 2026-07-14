@@ -28,6 +28,7 @@ import type { AgentConfig } from '../types/config-types.js';
 import type { ToolCall } from './types.js';
 import type { ModelProvider } from '../provider.js';
 import { SubagentExecutor, DEFAULT_MAX_NESTING_DEPTH, type SubagentExecutorContext } from './subagent-executor.js';
+import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
 
 function mockHandle(
   overrides?: Partial<{
@@ -1429,6 +1430,52 @@ describe('SubagentExecutor', () => {
           expect.objectContaining({ agentType: 'agent' }),
         );
       }
+    });
+  });
+
+  // promptHead wiring (PR #610 review): the agent-tool dispatch site must
+  // forward a sanitized/sliced promptHead into forkSubagent so the
+  // subagent_lifecycle.started event carries WHAT the child was asked to do in
+  // real CLI/daemon dispatches — not just the render label. Guards against the
+  // field silently regressing to absent (schematized + unit-tested downstream,
+  // but previously never passed at any production call site).
+  describe('promptHead wiring (PR #610)', () => {
+    it('forwards a non-empty, sanitized 80-char promptHead slice to forkSubagent', async () => {
+      // Prompt > 80 chars mixing a non-SGR OSC escape (set-window-title,
+      // BEL-terminated) with SGR color codes and an embedded newline, so the
+      // assertion exercises the FULL sanitize pipeline (strip ALL escape
+      // families, collapse newlines, slice to 80, trim). The OSC prefix is the
+      // load-bearing part: a weaker SGR-only stripper would leave its \x1b in
+      // the slice and fail the no-escape assertion below — this guards against
+      // a stripper downgrade at the production site.
+      const prompt =
+        '\x1b]0;title\x07\x1b[31mInvestigate the failing auth test\x1b[0m\nand report the root cause with file:line citations plus a recommended fix';
+      // Expected = the first 80 chars under the SAME production transform
+      // (stripEscapeSequences → collapse newlines → slice 80 → trim), derived
+      // via the real shared stripper (not a hand-rolled regex) so this oracle
+      // can never be weaker than the code under test.
+      const expected = stripEscapeSequences(prompt)
+        .replace(/[\r\n]+/g, ' ')
+        .slice(0, 80)
+        .trim();
+
+      const handle = mockHandle();
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      await executor.execute(makeCall({ input: { prompt } }));
+
+      const forkArg = (mockSubagentMgr.forkSubagent as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+        promptHead: string;
+      };
+      // Core regression guard: the field actually reaches forkSubagent non-empty.
+      expect(forkArg.promptHead.length).toBeGreaterThan(0);
+      // Matches the first 80 sanitized chars of the dispatch prompt.
+      expect(forkArg.promptHead).toBe(expected);
+      expect(forkArg.promptHead.length).toBeLessThanOrEqual(80);
+      // Sanitized: no raw ANSI escape or newline survives into the slice.
+      // eslint-disable-next-line no-control-regex
+      expect(forkArg.promptHead).not.toMatch(/\x1b/);
+      expect(forkArg.promptHead).not.toMatch(/[\r\n]/);
     });
   });
 

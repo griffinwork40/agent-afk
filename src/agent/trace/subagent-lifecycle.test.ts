@@ -130,6 +130,53 @@ describe('subagent_lifecycle trace events', () => {
       expect(started.payload.allowedTools).toEqual(['bash', 'read_file']);
     });
 
+    // Observability: promptHead + agentType (PR: observable forked children).
+    it('records agentType and a re-clamped promptHead when supplied', async () => {
+      const writer = new InMemoryTraceWriter();
+      const mgr = new SubagentManager();
+      // 100-char prompt head; the emit re-clamps to 80 to honour the payload
+      // contract regardless of caller input.
+      const longHead = 'x'.repeat(100);
+      await mgr.forkSubagent({
+        parent: { sessionId: 'parent-3' },
+        config: { model: 'sonnet', traceWriter: writer },
+        agentType: 'research-agent',
+        promptHead: longHead,
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const started = writer.events.find(
+        (e) => e.kind === 'subagent_lifecycle' && e.payload.transition === 'started',
+      );
+      if (started?.kind !== 'subagent_lifecycle' || started.payload.transition !== 'started') {
+        throw new Error('expected started event');
+      }
+      expect(started.payload.agentType).toBe('research-agent');
+      expect(started.payload.promptHead).toBe('x'.repeat(80));
+      expect(started.payload.promptHead?.length).toBe(80);
+    });
+
+    it('omits promptHead when blank/whitespace and agentType when unset', async () => {
+      const writer = new InMemoryTraceWriter();
+      const mgr = new SubagentManager();
+      await mgr.forkSubagent({
+        parent: { sessionId: 'parent-4' },
+        config: { model: 'sonnet', traceWriter: writer },
+        promptHead: '   ', // whitespace-only → treated as absent
+        // no agentType
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const started = writer.events.find(
+        (e) => e.kind === 'subagent_lifecycle' && e.payload.transition === 'started',
+      );
+      if (started?.kind !== 'subagent_lifecycle' || started.payload.transition !== 'started') {
+        throw new Error('expected started event');
+      }
+      expect(started.payload.promptHead).toBeUndefined();
+      expect(started.payload.agentType).toBeUndefined();
+    });
+
     it('falls back to manager rootId when parent has no sessionId', async () => {
       const writer = new InMemoryTraceWriter();
       const mgr = new SubagentManager();

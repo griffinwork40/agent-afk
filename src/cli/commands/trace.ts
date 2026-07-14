@@ -336,13 +336,22 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
             `succeeded  ${fmtDuration(p.durationMs)}  ${p.turnCount} turns  ${fmtBytes(p.outputBytes)}${cost}  [${p.subagentId}]`,
           );
         }
-        case 'failed':
+        case 'failed': {
+          // `[timeout]` marks a child killed by its own wall-clock budget
+          // (failureClass:'timeout') vs an ordinary error — see the subagent
+          // lifecycle failed payload.
+          const to = p.failureClass === 'timeout' ? '  [timeout]' : '';
           return line(
             'subagent',
-            `FAILED  ${p.errorClass}: ${truncate(p.errorMessage, 80)}  [${p.subagentId}]`,
+            `FAILED  ${p.errorClass}: ${truncate(p.errorMessage, 80)}${to}  [${p.subagentId}]`,
           );
-        case 'cancelled':
-          return line('subagent', `cancelled (${p.source})  [${p.subagentId}]`);
+        }
+        case 'cancelled': {
+          // `(timeout)` marks a cascade that originated from an ancestor's
+          // wall-clock budget expiry vs an ordinary parent/explicit cancel.
+          const to = p.timeout ? ' (timeout)' : '';
+          return line('subagent', `cancelled (${p.source})${to}  [${p.subagentId}]`);
+        }
       }
       return null;
     }

@@ -256,6 +256,57 @@ describe('subagent_lifecycle payload', () => {
       }),
     ).toThrow();
   });
+
+  // Observability additions (PR: env-configurable timeout + observable forks).
+  it('accepts started variant with promptHead + agentType', () => {
+    const parsed = SubagentLifecyclePayloadSchema.parse({
+      transition: 'started',
+      subagentId: 'child-1',
+      parentId: 'root',
+      model: 'claude-sonnet-4',
+      promptHead: 'Investigate the failing auth test and report root cause',
+      agentType: 'research-agent',
+    });
+    expect(parsed).toMatchObject({
+      promptHead: 'Investigate the failing auth test and report root cause',
+      agentType: 'research-agent',
+    });
+  });
+
+  it("accepts failed variant with failureClass 'timeout'", () => {
+    const parsed = SubagentLifecyclePayloadSchema.parse({
+      transition: 'failed',
+      subagentId: 'child-1',
+      errorClass: 'TimeoutError',
+      errorMessage: 'timed out after 2700000ms',
+      partialOutputBytes: 42,
+      failureClass: 'timeout',
+    });
+    expect(parsed).toMatchObject({ failureClass: 'timeout' });
+  });
+
+  it('rejects an unknown failureClass on the failed variant', () => {
+    expect(() =>
+      SubagentLifecyclePayloadSchema.parse({
+        transition: 'failed',
+        subagentId: 'child-1',
+        errorClass: 'Error',
+        errorMessage: 'boom',
+        partialOutputBytes: 0,
+        failureClass: 'made-up-class',
+      }),
+    ).toThrow();
+  });
+
+  it('accepts cancelled variant with the timeout flag', () => {
+    const parsed = SubagentLifecyclePayloadSchema.parse({
+      transition: 'cancelled',
+      subagentId: 'child-1',
+      source: 'cascade',
+      timeout: true,
+    });
+    expect(parsed).toMatchObject({ source: 'cascade', timeout: true });
+  });
 });
 
 describe('budget payload', () => {

@@ -37,6 +37,7 @@
     "telegram:restart": "node dist/cli/index.js telegram restart",
     "telegram:logs": "node dist/cli/index.js telegram logs",
     "test": "vitest run",
+    "test:file": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest watch",
     "test:pty": "vitest run --config vitest.pty.config.ts",

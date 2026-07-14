@@ -106,6 +106,8 @@ export const SubagentStartedPayloadSchema = z.object({
   model: z.string(),
   allowedTools: z.array(z.string()).readonly().optional(),
   systemPromptHash: z.string().optional(),
+  promptHead: z.string().optional(),
+  agentType: z.string().optional(),
 });
 
 export const SubagentSucceededPayloadSchema = z.object({
@@ -124,12 +126,14 @@ export const SubagentFailedPayloadSchema = z.object({
   errorClass: z.string(),
   errorMessage: z.string(),
   partialOutputBytes: z.number().int().nonnegative(),
+  failureClass: ToolFailureClassSchema.optional(),
 });
 
 export const SubagentCancelledPayloadSchema = z.object({
   transition: z.literal('cancelled'),
   subagentId: z.string(),
   source: z.enum(['cascade', 'explicit']),
+  timeout: z.boolean().optional(),
 });
 
 export const SubagentLifecyclePayloadSchema = z.discriminatedUnion('transition', [

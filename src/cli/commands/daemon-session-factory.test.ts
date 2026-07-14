@@ -185,4 +185,44 @@ describe('buildDaemonSessionFactory', () => {
     expect(typeof session.sendMessage).toBe('function');
     void session.close().catch(() => undefined);
   });
+
+  // Surface-parity guard (PR: observable forked children). The scheduler
+  // (scheduler.ts:spawnSession) opens a per-tick trace and threads it in as
+  // config.traceWriter. The daemon factory must forward THAT SAME instance into
+  // its fork executors + root manager (mirroring bootstrap.ts) — otherwise
+  // daemon-forked children emit zero subagent_lifecycle events and the new
+  // timeout/prompt-head observability is invisible on the AFK surface where it
+  // matters most. Regression guard against a reintroduction of the old
+  // `traceWriter: undefined` wiring.
+  it('threads config.traceWriter into the fork executors and root manager', () => {
+    const traceWriter = {
+      write: async () => undefined,
+      getTracePath: () => 'in-memory://trace',
+      seal: async () => undefined,
+    } as unknown as NonNullable<AgentConfig['traceWriter']>;
+
+    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const session = factory(makeConfig({ traceWriter }));
+    const internals = session as unknown as { config?: { provider?: unknown } };
+    const provider = internals.config?.provider as AnthropicDirectProvider;
+    expect(provider).toBeInstanceOf(AnthropicDirectProvider);
+
+    // Each executor stores its context as `this.ctx`, whose `traceWriter` field
+    // is the writer forwarded at construction.
+    const subExec = readSubagentExecutor(provider) as { ctx?: { traceWriter?: unknown; subagentManager?: unknown } };
+    const skillExec = readSkillExecutor(provider) as { ctx?: { traceWriter?: unknown } };
+    const composeExec = readComposeExecutor(provider) as { ctx?: { traceWriter?: unknown } };
+
+    expect(subExec.ctx?.traceWriter, 'SubagentExecutor traceWriter').toBe(traceWriter);
+    expect(skillExec.ctx?.traceWriter, 'SkillExecutor traceWriter').toBe(traceWriter);
+    expect(composeExec.ctx?.traceWriter, 'ComposeExecutor traceWriter').toBe(traceWriter);
+
+    // The load-bearing path: the root SubagentManager's parentTraceWriter is
+    // what forkSubagent hands to every depth-1 `agent`-tool child's handle
+    // (subagent.ts: effectiveTraceWriter = config.traceWriter ?? parentTraceWriter).
+    const mgr = subExec.ctx?.subagentManager as { parentTraceWriter?: unknown } | undefined;
+    expect(mgr?.parentTraceWriter, 'root SubagentManager parentTraceWriter').toBe(traceWriter);
+
+    void session.close().catch(() => undefined);
+  });
 });

@@ -111,6 +111,13 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
         prompt: vendoredPromptBody(gitInvestigator.systemPrompt),
         tools: [...gitInvestigator.allowedTools],
         model: gitInvestigator.model,
+        // Same anti-runaway bound as research-agent / Explore: git-investigator
+        // is a read-only git-archaeology leaf (dispatched by research-agent),
+        // so it never needs an unbounded tool-use loop. Without a cap it can
+        // spin on a hard task until an external wall-clock cutoff kills it
+        // mid-loop and it surfaces as an opaque failure rather than a graceful
+        // capped-partial wind-down. See READONLY_AGENT_MAX_TOOL_USE_ITERATIONS.
+        maxToolUseIterations: READONLY_AGENT_MAX_TOOL_USE_ITERATIONS,
       },
       // The vendored definition grants Bash for git archaeology; its contract
       // is read-only ("Runs git commands only — no mutations"). Enforce that

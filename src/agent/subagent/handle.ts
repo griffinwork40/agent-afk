@@ -286,10 +286,19 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
         // seal that lands before this write is enqueued would drop the terminal
         // record. Awaiting guarantees the event is persisted first.
         if (this.controller.signal.aborted && timeoutReason === undefined) {
+          // Annotate a timeout-driven cascade: `timeoutReason` is undefined here
+          // (this branch's guard), so a TimeoutError on the signal means the
+          // origin guard above classified it as CASCADED (isCascading true) —
+          // i.e. an ANCESTOR's wall-clock budget expired and the abort came down
+          // to us. Flag it so a trace reader can tell a timeout cascade from an
+          // ordinary parent/explicit cancel. Not our own budget → still
+          // 'cancelled', not 'failed'.
+          const cascadeTimedOut = this.controller.signal.reason instanceof TimeoutError;
           await emitSubagentLifecycle(this.traceWriter, {
             transition: 'cancelled',
             subagentId: this.id,
             source: 'cascade',
+            ...(cascadeTimedOut ? { timeout: true } : {}),
           });
           this.currentStatus = 'cancelled';
           this.latestTerminalStatus = 'cancelled';
@@ -300,6 +309,12 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
             errorClass: surfacedErr instanceof Error ? surfacedErr.constructor.name : 'Unknown',
             errorMessage: surfacedErr instanceof Error ? surfacedErr.message : String(surfacedErr),
             partialOutputBytes: Buffer.byteLength(this.lastStreamedContent, 'utf8'),
+            // Classify our OWN wall-clock budget expiry as a timeout failure.
+            // `timeoutReason` is set (see the origin-guarded detection above)
+            // exactly when THIS handle's controller was aborted with a
+            // TimeoutError that is NOT a cascade — the guillotined-by-budget
+            // case #583/this PR targets. Absent for any other failure.
+            ...(timeoutReason !== undefined ? { failureClass: 'timeout' as const } : {}),
           });
           this.currentStatus = 'failed';
           this.latestTerminalStatus = 'failed';

@@ -38,6 +38,7 @@ import { touchWorktreeOccupancy } from './worktree-occupancy.js';
 import { resolveWorktreeMainRoot } from './worktree-read-root.js';
 import { computeInheritedReadRoots, type ReadScopeInputs } from './subagent-read-scope.js';
 import { getAfkStateDir } from '../paths.js';
+import { env } from '../config/env.js';
 import { buildPhaseRestrictedProvider, type PhaseRole } from './tools/nesting.js';
 import { applyManagerApiKeyFallback } from './tools/child-credential.js';
 import { providerForModel, type BundledProviderName } from './providers/index.js';
@@ -82,14 +83,48 @@ export const SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS = 50;
  * its parent at `await runToResult` indefinitely (observed 2026-07-07: four
  * parallel children spun 29 minutes under a 429 cascade until the operator
  * manually cancelled). The tool-iteration cap above bounds ROUNDS but not
- * TIME — throttled rounds can each take minutes. 20 minutes is ~2× the
- * longest healthy child observed in production traces (~10 min review
- * agents). On expiry `withTimeout` aborts the child's controller, cascading
- * through the AbortGraph to its descendants, and the parent receives a
- * legible TimeoutError tool_result instead of hanging. Callers may override
- * per-fork via `config.timeoutMs` (`0` restores unbounded).
+ * TIME — throttled rounds can each take minutes. On expiry `withTimeout`
+ * aborts the child's controller, cascading through the AbortGraph to its
+ * descendants, and the parent receives a legible TimeoutError tool_result
+ * instead of hanging.
+ *
+ * 45 minutes (raised from an earlier 20 min): the 20-min cap was a BLUNT wall
+ * that guillotined genuinely-working read-only research/review children —
+ * `/review`'s `research-agent` (which nests `git-investigator`) does continuous
+ * grep/read archaeology that legitimately exceeds 20 min on a large diff, so a
+ * healthy child was being killed mid-work rather than a hung one relieved.
+ * 45 min gives real headroom over the longest healthy child observed while
+ * still guaranteeing every fork terminates. Operators can tune per-environment
+ * via `AFK_SUBAGENT_TIMEOUT_MS` (see {@link resolveSubagentTimeoutMs}); callers
+ * may override per-fork via `config.timeoutMs` (`0` restores unbounded).
+ *
+ * NOTE: a follow-up will add a progress-aware idle watchdog (reset the budget
+ * on observable child progress) so an ACTIVELY-working child is never cut off
+ * regardless of total wall-clock; this raised blunt cap is the interim relief.
  */
-export const SUBAGENT_DEFAULT_TIMEOUT_MS = 20 * 60_000;
+export const SUBAGENT_DEFAULT_TIMEOUT_MS = 45 * 60_000;
+
+/**
+ * Resolve the foreground forked-subagent wall-clock budget from
+ * `AFK_SUBAGENT_TIMEOUT_MS`.
+ *
+ * Mirrors {@link resolveTtfbTimeoutMs}: returns the parsed value when it is a
+ * finite integer `>= 0`. A value of `0` is the explicit disable escape hatch
+ * (returned as `0` = unbounded). Unset, empty, or unparseable input falls back
+ * to {@link SUBAGENT_DEFAULT_TIMEOUT_MS}; negative values are treated as invalid
+ * and also fall back to the default.
+ *
+ * Only consulted for the DEFAULT budget: an explicit per-fork `config.timeoutMs`
+ * (including the background {@link SUBAGENT_BACKGROUND_TIMEOUT_MS} set by the
+ * SubagentExecutor) still wins via the `??` at the fork site.
+ */
+export function resolveSubagentTimeoutMs(): number {
+  const raw = env.AFK_SUBAGENT_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === '') return SUBAGENT_DEFAULT_TIMEOUT_MS;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) return SUBAGENT_DEFAULT_TIMEOUT_MS;
+  return n;
+}
 
 /**
  * Wall-clock budget for BACKGROUND-mode agent dispatches (fire-and-forget
@@ -162,6 +197,16 @@ export interface ForkSubagentOptions<T = unknown> {
    * siblings. Does not affect execution — purely a rendering hint.
    */
   parentId?: string;
+  /**
+   * Optional first-80-chars slice of the dispatch prompt, forwarded verbatim
+   * into the `subagent_lifecycle.started` trace event's `promptHead` field for
+   * at-a-glance forensics (WHAT was the child asked to do). The prompt itself
+   * is not a `forkSubagent` argument — it arrives later via `handle.run(prompt)`
+   * — so the raw agent-dispatch site (which HAS the prompt) passes this
+   * pre-sliced hint. Purely observational: never affects execution. Omitted for
+   * fork sites with no prompt in scope.
+   */
+  promptHead?: string;
   /**
    * When true, overrides `config.onElicitation` with `DENY_ELICITATION` so
    * background subagents never stall on an interactive permission prompt.
@@ -801,8 +846,13 @@ export class SubagentManager {
       this.abortGraph,
       options.outputSchema,
       // Wall-clock budget for the child's turn (see SUBAGENT_DEFAULT_TIMEOUT_MS
-      // above). Explicit caller values win, including `0` for unbounded.
-      options.config.timeoutMs ?? SUBAGENT_DEFAULT_TIMEOUT_MS,
+      // above). Explicit caller values win, including `0` for unbounded and the
+      // background SUBAGENT_BACKGROUND_TIMEOUT_MS the SubagentExecutor stamps —
+      // `??` preserves that precedence. The default is env-tunable via
+      // AFK_SUBAGENT_TIMEOUT_MS (resolveSubagentTimeoutMs); an unset/invalid
+      // env value returns SUBAGENT_DEFAULT_TIMEOUT_MS, so behaviour is unchanged
+      // when the var is not set.
+      options.config.timeoutMs ?? resolveSubagentTimeoutMs(),
       registry,
       () => {
         this.active.delete(id);
@@ -853,6 +903,15 @@ export class SubagentManager {
       ...(childConfig.tools?.allowedTools
         ? { allowedTools: [...childConfig.tools.allowedTools] }
         : {}),
+      // Observability: WHAT was this child asked to do + WHICH role. promptHead
+      // is the caller-supplied prompt slice (re-clamped to 80 to honour the
+      // payload contract regardless of caller input); agentType is the already-
+      // computed effective render label. Both omitted when unavailable so the
+      // schema's `.optional()` fields stay absent rather than empty-valued.
+      ...(options.promptHead && options.promptHead.trim() !== ''
+        ? { promptHead: options.promptHead.slice(0, 80) }
+        : {}),
+      ...(effectiveAgentType ? { agentType: effectiveAgentType } : {}),
     });
 
     await appendRoutingDecision({
