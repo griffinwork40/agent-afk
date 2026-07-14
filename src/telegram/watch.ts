@@ -313,7 +313,11 @@ export class SessionWatchManager {
             nudges += 1;
             const mins = Math.round((Date.now() - elicitStartedAt) / 60_000);
             void send(
-              `⏳ Still waiting on your answer (${mins}m elapsed). Reply above, or send /abort to cancel.`,
+              // NB: do NOT advertise /abort here — over the watch relay /abort only
+              // writes an abort_request to the ledger for the REPL; it does NOT
+              // settle this awaited elicitation (only /unwatch or shutdown fires the
+              // per-run signal → decline). Advertising it would wedge the chat.
+              `⏳ Still waiting on your answer (${mins}m elapsed) — no deadline, reply above whenever you're ready. (Send /unwatch to stop watching this session.)`,
             ).catch(() => {});
           }, this.elicitHeartbeatMs);
           heartbeat.unref?.();

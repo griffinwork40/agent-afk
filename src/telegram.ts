@@ -35,9 +35,8 @@ import { parseAllowedChatIds } from './telegram/allowlist.js';
 import { validateBotToken } from './telegram/setup-wizard.js';
 import { AgentSession } from './agent/session.js';
 import { constructTelegramSession, createTelegramTraceWriter } from './telegram/construct-session.js';
-import { createDefaultHookRegistry } from './agent/default-hook-registry.js';
+import { createTelegramAfkHookBundle } from './telegram/afk-hook-bundle.js';
 import { seedPersistedGrants } from './agent/permissions-store.js';
-import { loadHooksConfig } from './agent/hooks/config-loader.js';
 import { MemoryStore } from './agent/memory/index.js';
 import { providerForModel, AnthropicDirectProvider, OpenAICompatibleProvider } from './agent/providers/index.js';
 import { detectAuthMode } from './agent/providers/anthropic-direct/auth.js';
@@ -425,28 +424,17 @@ async function main() {
         // permissionMode is omitted from session CONSTRUCTION: AgentSession
         // defaults to 'default'. A Telegram session becomes 'autonomous' only via
         // an explicit `/afk on` (handlers/afk.ts) calling setPermissionMode —
-        // never at construction. The hook registry below now receives a LIVE mode
-        // getter (reading the session's own metadata) so the afk-mode safety gate
-        // is actually registered on Telegram and tracks that toggle; without it
-        // (the prior `undefined`) the gate was never registered and an autonomous
-        // Telegram session would have had NO risk ceiling. afkPromptForApproval:
-        // false makes the always-on host HARD-REFUSE high-risk / irreversible ops
-        // (+ Asking summary) rather than accept a one-tap phone approval — see
-        // docs/afk-telegram-native-host.md.
+        // never at construction. The hook bundle carries the AFK autonomous-safety
+        // wiring (live mode getter → registers the afk-mode gate + tracks `/afk
+        // on`; afkPromptForApproval:false → hard-refuse high-risk ops) — see
+        // createTelegramAfkHookBundle + docs/afk-telegram-native-host.md.
         let telegramSessionForMode: AgentSession | undefined;
-        const telegramHookBundle = createDefaultHookRegistry(
-          undefined,
-          'telegram',
-          sharedMemoryStore,
-          () => telegramSessionForMode?.getSessionMetadata().permissionMode ?? 'default',
-          loadHooksConfig(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
-          {
-            cwd: sessionCwd !== undefined && sessionCwd.length > 0 ? sessionCwd : undefined,
-            ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
-            afkPromptForApproval: false,
-          },
-          () => sessionCwd,
-        );
+        const telegramHookBundle = createTelegramAfkHookBundle({
+          memoryStore: sharedMemoryStore,
+          getSession: () => telegramSessionForMode,
+          cwd: sessionCwd,
+          traceWriter: telegramTraceWriter,
+        });
         const session = attachMcpCleanup(constructTelegramSession({
           ...(sessionConfig.apiKey !== undefined ? { apiKey: sessionConfig.apiKey } : {}),
           model: sessionConfig.model,
@@ -507,24 +495,17 @@ async function main() {
         surface: 'telegram',
         ...(mcpManager !== undefined ? { mcpManager } : {}),
       });
-      // See the Anthropic branch above: a LIVE mode getter registers the
-      // afk-mode safety gate on Telegram and tracks `/afk on`; afkPromptForApproval
-      // false makes the always-on host hard-refuse high-risk ops rather than accept
-      // a one-tap phone approval (docs/afk-telegram-native-host.md).
+      // Same AFK autonomous-safety wiring as the Anthropic branch above (live
+      // mode getter registers the afk-mode gate + tracks `/afk on`;
+      // afkPromptForApproval:false hard-refuses high-risk ops) — see
+      // createTelegramAfkHookBundle + docs/afk-telegram-native-host.md.
       let codexSessionForMode: AgentSession | undefined;
-      const codexHookBundle = createDefaultHookRegistry(
-        undefined,
-        'telegram',
-        sharedMemoryStore,
-        () => codexSessionForMode?.getSessionMetadata().permissionMode ?? 'default',
-        loadHooksConfig(codexSessionCwd !== undefined && codexSessionCwd.length > 0 ? { cwd: codexSessionCwd } : {}),
-        {
-          cwd: codexSessionCwd !== undefined && codexSessionCwd.length > 0 ? codexSessionCwd : undefined,
-          ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}),
-          afkPromptForApproval: false,
-        },
-        () => codexSessionCwd,
-      );
+      const codexHookBundle = createTelegramAfkHookBundle({
+        memoryStore: sharedMemoryStore,
+        getSession: () => codexSessionForMode,
+        cwd: codexSessionCwd,
+        traceWriter: telegramTraceWriter,
+      });
       const session = attachMcpCleanup(constructTelegramSession({
         ...(sessionConfig.apiKey !== undefined ? { apiKey: sessionConfig.apiKey } : {}),
         model: sessionConfig.model,
