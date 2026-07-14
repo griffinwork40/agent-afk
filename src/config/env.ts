@@ -275,6 +275,25 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_SUBAGENT_TIMEOUT_MS',
+    description:
+      'Foreground forked-subagent wall-clock budget in ms; 0 disables the cap; explicit ' +
+      'per-fork config.timeoutMs and the 60-min background mode still win. Bounds how long a ' +
+      'single forked child turn may run before `withTimeout` aborts its controller (cascading ' +
+      'through the AbortGraph to descendants) and the parent receives a legible TimeoutError ' +
+      'tool_result instead of hanging. Default 2700000 (45 min ≈ headroom over the longest ' +
+      'healthy review/research agent observed in production). Unset, empty, or unparseable input ' +
+      'falls back to the default; a negative value is treated as invalid and also falls back. ' +
+      'Set to 0 to opt a whole session back into unbounded child turns. Does NOT affect the ' +
+      'background dispatch budget (SUBAGENT_BACKGROUND_TIMEOUT_MS) or a per-fork ' +
+      'config.timeoutMs — both take precedence.',
+    type: 'number',
+    required: false,
+    default: '2700000',
+    example: '3600000',
+    category: 'model',
+  },
+  {
     name: 'AFK_VISION_MODELS',
     description: 'Comma-separated override for image (vision) capability detection on the openai-compatible provider. Each token force-enables a model id by exact or substring match (e.g. "qwen2.5-vl" matches a local VL id); prefix a token with "!" to force-disable. Use to send images to a local vision-language model AFK does not recognise by name, or to blacklist a mis-detected id. Built-in detection already covers gpt-4o/4.1/5.x, o1/o3/o4-mini, Claude, and common VL families.',
     type: 'string',
@@ -1259,6 +1278,7 @@ export const env = {
   get AFK_SUGGEST_ENABLED(): string | undefined { return process.env['AFK_SUGGEST_ENABLED']; },
   get AFK_SUGGEST_GHOST(): string | undefined { return process.env['AFK_SUGGEST_GHOST']; },
   get AFK_SUGGEST_MODEL(): string | undefined { return process.env['AFK_SUGGEST_MODEL']; },
+  get AFK_SUBAGENT_TIMEOUT_MS(): string | undefined { return process.env['AFK_SUBAGENT_TIMEOUT_MS']; },
   get AFK_TASK_BUDGET(): string | undefined { return process.env['AFK_TASK_BUDGET']; },
   get AFK_TEMPERATURE(): string | undefined { return process.env['AFK_TEMPERATURE']; },
   get AFK_THINKING(): string | undefined { return process.env['AFK_THINKING']; },
