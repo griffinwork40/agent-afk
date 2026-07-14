@@ -734,3 +734,49 @@ describe('BackgroundStatusBar resize-immediate channel', () => {
     bar.stop();
   });
 });
+
+describe('BackgroundStatusBar — AFK_PLAIN_OUTPUT full render opt-out', () => {
+  // Regression: --plain must make a TTY session behave like a non-TTY surface,
+  // so the reserved-row painter stays fully inert (no ResizeBus subscription,
+  // no spinner timer, no CUP writes) even though `stream.isTTY` is still true.
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('start() stays inert on a real-TTY stream when AFK_PLAIN_OUTPUT=1', () => {
+    vi.stubEnv('AFK_PLAIN_OUTPUT', '1');
+    const registry = new FakeRegistry();
+    const mockStream = makeMockStream(); // isTTY: true
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
+      stream: mockStream,
+      throttleMs: 0,
+    });
+    const rowHandler = vi.fn();
+    bar.setRowCountChangeHandler(rowHandler);
+    bar.start();
+    // start() returned before subscribing, so a job event triggers no paint.
+    registry.fireStarted(makeJob('j1'));
+    const writeFn = mockStream.write as unknown as ReturnType<typeof vi.fn>;
+    expect(rowHandler).not.toHaveBeenCalled();
+    expect(writeFn).not.toHaveBeenCalled();
+    bar.stop();
+  });
+
+  it('start() arms normally on a TTY when AFK_PLAIN_OUTPUT is unset (no behavior change)', () => {
+    vi.stubEnv('AFK_PLAIN_OUTPUT', undefined as unknown as string);
+    const registry = new FakeRegistry();
+    const mockStream = makeMockStream();
+    const bar = new BackgroundStatusBar(registry as unknown as BackgroundAgentRegistry, {
+      stream: mockStream,
+      throttleMs: 0,
+    });
+    const rowHandler = vi.fn();
+    bar.setRowCountChangeHandler(rowHandler);
+    bar.start();
+    registry.fireStarted(makeJob('j1'));
+    const writeFn = mockStream.write as unknown as ReturnType<typeof vi.fn>;
+    expect(rowHandler).toHaveBeenCalledWith(1);
+    expect(writeFn).toHaveBeenCalled();
+    bar.stop();
+  });
+});

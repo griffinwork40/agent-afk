@@ -26,6 +26,7 @@
 
 import { readNonTty } from './input/non-tty.js';
 import { readWithAutocompleteTty } from './input/reader.js';
+import { isPlainOutputRequested } from '../config/env.js';
 import type {
   ReadWithAutocompleteOpts,
   ReadWithAutocompleteResult,
@@ -41,8 +42,14 @@ export type {
 export async function readWithAutocomplete(
   opts: ReadWithAutocompleteOpts,
 ): Promise<ReadWithAutocompleteResult> {
-  // Non-TTY fallback: delegate to multi-line-reader (with SIGINT bridging)
-  if (!process.stdout.isTTY || !process.stdin.isTTY) {
+  // Non-TTY fallback: delegate to multi-line-reader (with SIGINT bridging).
+  // AFK_PLAIN_OUTPUT / --plain forces this same simple line reader on a REAL
+  // TTY too: the full render opt-out downgrades the fancy raw-mode input box
+  // (raw mode + cursor accounting + autocomplete-dropdown repaint) to the
+  // plain reader, so a --plain TTY behaves like a non-TTY surface for input
+  // exactly as it now does for the renderer, compositor, and status/footer
+  // stack (all gated on isPlainOutputRequested — config/env.ts).
+  if (!process.stdout.isTTY || !process.stdin.isTTY || isPlainOutputRequested()) {
     return readNonTty(opts);
   }
   return readWithAutocompleteTty(opts);

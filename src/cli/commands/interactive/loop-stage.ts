@@ -46,6 +46,7 @@
 import type { OutputEvent } from '../../../agent/types.js';
 import { ResizeBus } from '../../terminal-size.js';
 import { palette } from '../../palette.js';
+import { isPlainOutputRequested } from '../../../config/env.js';
 
 export type LoopStage = 'observing' | 'modeling' | 'choosing' | 'acting' | 'updating';
 
@@ -244,6 +245,12 @@ export class LoopStageBar {
 
   start(): void {
     if (this.started) return;
+    // AFK_PLAIN_OUTPUT / --plain is a full render opt-out: stay inert so a
+    // --plain TTY behaves like a non-TTY surface — no 1-row DECSTBM
+    // reservation, no ResizeBus subscription, no CUP paint (every paint path
+    // is gated on `started`). Mirrors the status-line/compositor/renderer/
+    // input gates on `isPlainOutputRequested` (config/env.ts).
+    if (isPlainOutputRequested()) return;
     this.started = true;
     // Reserve 1 row first so the DECSTBM is updated before we paint.
     this.onRowCountChange?.(1);
