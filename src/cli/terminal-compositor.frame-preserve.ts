@@ -6,6 +6,27 @@
  *
  * `import type` for FrameHost keeps this a TYPE-ONLY dependency on frame.ts
  * so there is no runtime circular import between the two siblings.
+ *
+ * #540 axis-2 scope note (logical-line scrollback flush): the two OTHER sites
+ * that push committed content into native scrollback — the band-hold archive
+ * (committed-band-commit.ts) and disarm's flushPendingCommittedBand
+ * (lifecycle.ts) — now emit SOFT-WRAPPABLE logical lines (via committedBandMeta
+ * + buildScrollbackArchiveEscape) so scrolled-off content reflows cleanly on a
+ * width change. The eviction paths HERE deliberately still emit pre-wrapped
+ * PHYSICAL rows: they are the load-bearing height/void-class machinery
+ * (#539/#552/#573), and their paint-full-band-then-scroll mechanism is tightly
+ * coupled to repositionCommittedBand's stateless re-pin and the exact
+ * painted/pending accounting — converting them to the top-paint-logical-then-
+ * scroll mechanism regressed the verdict-card overflow case (the card's closing
+ * border was dropped on a growth eviction). The band-hold archive is the site
+ * that actually carries the width-resize content in practice (verified by
+ * instrumenting the #540 PTY guards), so retaining physical emission here does
+ * NOT reintroduce the fragmentation those guards check. The committedBandMeta
+ * array IS still sliced in lockstep at every eviction below so the 1:1
+ * band↔meta invariant (relied on by reflow and the two logical-flush sites)
+ * holds. A full turnModel rewrite (docs/proposals/tui-compositor-rewrite.md §5
+ * A2) would unify all three sites onto one logical archive; that is the
+ * documented follow-up, out of scope for this targeted fix.
  */
 
 import type { FrameHost } from './terminal-compositor.frame.js';
@@ -134,6 +155,7 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
       evictRowsToScrollback(self, overflow);
       // Survivors physically shifted to [1, room] by the scroll.
       self.committedBand = self.committedBand.slice(overflow);
+      self.committedBandMeta = self.committedBandMeta.slice(overflow); // #540: keep 1:1
       self.committedBandTopRow = 1;
       self.committedBandBottomRow = room;
       self.committedBandPaintedRows = self.committedBand.length;
@@ -173,6 +195,7 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     // hugging the new frame top (growRoom === desiredTopRow - 1). Record that so a
     // later shrink re-pins from the right place.
     self.committedBand = self.committedBand.slice(growOverflow);
+    self.committedBandMeta = self.committedBandMeta.slice(growOverflow); // #540: keep 1:1
     self.committedBandTopRow = 1;
     self.committedBandBottomRow = growRoom;
     // The full band was re-painted top-aligned above before the scroll, so
@@ -256,6 +279,7 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     evictRowsToScrollback(self, overflow);
     // Survivors physically shifted to [floor, floor+room-1] by the scroll.
     self.committedBand = self.committedBand.slice(overflow);
+    self.committedBandMeta = self.committedBandMeta.slice(overflow); // #540: keep 1:1
     self.committedBandTopRow = floorBanner;
     self.committedBandBottomRow = floorBanner + roomBanner - 1;
     self.committedBandPaintedRows = self.committedBand.length;
@@ -292,6 +316,7 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
       if (self.committedBandTopRow < floor) {
         const lost = floor - self.committedBandTopRow;
         self.committedBand = self.committedBand.slice(lost);
+        self.committedBandMeta = self.committedBandMeta.slice(lost); // #540: keep 1:1
         self.committedBandTopRow = floor;
       }
       if (self.committedBand.length === 0 || self.committedBandBottomRow < floor) {

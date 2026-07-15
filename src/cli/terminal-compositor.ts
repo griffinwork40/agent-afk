@@ -25,6 +25,7 @@ import { SpinnerController } from './input/spinner.js';
 import { CaretBlinkController, DEFAULT_CARET_BLINK_INTERVAL_MS } from './input/caret-blink.js';
 import type { StdinClaimHandle } from './input/stdin-claim.js';
 import {
+  type BandRowMeta,
   type CompositorInputMode,
   type CompositorScrollRegionGuard,
   type KeyInfo,
@@ -343,6 +344,24 @@ export class TerminalCompositor {
   // 1-based screen positions; 0 means "unset". See repositionCommittedBand().
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   committedBand: string[] = [];
+  // #540 axis-2 (retained logical source): per-physical-row provenance, index-
+  // aligned 1:1 with committedBand (committedBandMeta.length === committedBand
+  // .length, always). Each entry is the FULL pre-hard-wrap logical line that
+  // physical row is a fragment of, plus an isHead flag marking a logical line's
+  // first physical row (see BandRowMeta). committedBand stays POST-hard-wrap
+  // physical rows for the LIVE band's one-terminal-row-per-entry math; this
+  // retains the logical form the physical rows cannot reconstruct (a soft-wrap
+  // break and a hard paragraph break are indistinguishable once flattened), so
+  // the three scrollback-flush sites (committed-band-commit band-hold archive,
+  // frame-preserve eviction, lifecycle flushPendingCommittedBand) can emit
+  // LOGICAL lines — which the terminal soft-wraps and reflows cleanly on a
+  // width change — instead of pre-wrapped physical rows that fragment
+  // (docs/tui-resize-reflow.md, the width-resize-fragment-* PTY guards). Kept
+  // in lockstep with committedBand at every mutation: reflow re-derives it,
+  // commit Phase 3 merge/cap slices it in parallel, frame-preserve eviction
+  // slices it in parallel. clearCommittedBand()/resetState() empty it.
+  /** @internal Relaxed from `private` for the committed-band + frame + reflow modules. */
+  committedBandMeta: BandRowMeta[] = [];
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   committedBandTopRow = 0;
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */

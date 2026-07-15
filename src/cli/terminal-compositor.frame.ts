@@ -23,6 +23,7 @@ import { palette } from './palette.js';
 import { renderStatusLine, type ImageAttachment } from './input/attachments.js';
 import type { SpinnerController } from './input/spinner.js';
 import type {
+  BandRowMeta,
   CompositorInputMode,
   CompositorScrollRegionGuard,
   LogUpdateFn,
@@ -70,6 +71,8 @@ export interface FrameHost {
   clipboardFailureMsg: string | null;
   // ── committed-band tracking (mutated by preserveRowsBeforeFrameRender) ──
   committedBand: string[];
+  /** #540: per-physical-row logical provenance, index-aligned 1:1 with committedBand. */
+  committedBandMeta: BandRowMeta[];
   committedBandTopRow: number;
   committedBandBottomRow: number;
   /** Real unpadded frame top; written here by repaint(), read by commitAbove's
