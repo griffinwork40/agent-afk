@@ -5,9 +5,10 @@
  * `OPENAI_API_KEY` is set (the most common case) OR when `~/.codex/auth.json`
  * contains an API key. Network access required; not part of CI by default.
  *
- * To run manually:
+ * To run manually (RUN_LIVE_API=1 lifts the config-level *.live.test.ts
+ * exclude — a bare `pnpm test <file>` can't, and prints "No test files found"):
  *
- *   OPENAI_API_KEY=sk-... pnpm test src/agent/providers/openai-compatible/openai-compatible.live.test.ts
+ *   RUN_LIVE_API=1 OPENAI_API_KEY=sk-... pnpm vitest run src/agent/providers/openai-compatible/openai-compatible.live.test.ts
  *
  * What this verifies that the stubbed tests cannot:
  *   - The OpenAI SDK actually accepts the request shape we build

@@ -68,8 +68,8 @@ Tests are colocated as `*.test.ts` next to the implementation under `src/`, plus
 
 ```bash
 pnpm test                                   # all
-pnpm test -- src/agent/session.test.ts      # single file
-pnpm test -- -t "sends a message"           # single test by name
+pnpm test src/agent/session.test.ts         # single file
+pnpm test -t "sends a message"              # single test by name
 pnpm test:watch                             # watch
 pnpm test:coverage                          # with coverage
 ```

@@ -22,13 +22,20 @@ export default defineConfig({
     // A 15s ceiling still catches real hangs without false-positive timeouts.
     testTimeout: 15_000,
     include: ['src/**/*.test.ts', 'tests/**/*.test.ts'],
-    // Exclude live/network tests from the default run — they require RUN_LIVE_API=1
-    // and real credentials. Run them explicitly:
-    //   RUN_LIVE_API=1 pnpm vitest run src/agent/providers/anthropic-direct.live.test.ts
     // Exclude the real-PTY harness (*.pty.test.ts) — it needs the native
     // node-pty build and a real pseudo-terminal; run it via `pnpm test:pty`
     // (vitest.pty.config.ts). See tests/pty/ and issue #541.
-    exclude: ['**/node_modules/**', '**/dist/**', '**/*.live.test.ts', '**/*.pty.test.ts'],
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      // Live/network tests (*.live.test.ts) need real credentials + network, so
+      // they are excluded from the default run. Opt in with RUN_LIVE_API=1 — a
+      // bare `pnpm test <file>` / `pnpm vitest run <file>` can't override a
+      // config-level exclude, so the env flag is the supported way in, e.g.
+      //   RUN_LIVE_API=1 OPENAI_API_KEY=sk-... pnpm vitest run src/agent/providers/openai-compatible/openai-compatible.live.test.ts
+      ...(process.env['RUN_LIVE_API'] === '1' ? [] : ['**/*.live.test.ts']),
+      '**/*.pty.test.ts',
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
