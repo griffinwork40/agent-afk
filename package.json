@@ -19,7 +19,8 @@
   "files": [
     "dist/",
     "scripts/postinstall.mjs",
-    "NOTICE"
+    "NOTICE",
+    "assets/demo-placeholder.png"
   ],
   "scripts": {
     "postinstall": "node dist/postinstall.mjs || node scripts/postinstall.mjs || true",
