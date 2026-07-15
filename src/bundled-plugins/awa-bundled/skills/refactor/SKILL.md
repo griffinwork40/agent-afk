@@ -50,7 +50,7 @@ Dispatch both agents simultaneously in a single response turn.
 - inputs: site list (from site-finder, passed inline if available; if not yet available, derive from change type + scope)
 - artifacts:
   - `contracts`: array of `{symbol, signature_before, exported_by, consumed_by[]}`
-  - `test_commands`: array of shell commands that exercise the affected contracts (e.g., `pnpm test -- --grep "AuthService"`)
+  - `test_commands`: array of shell commands that SCOPE to the affected contracts — target the specific test files or a name pattern, never the whole suite (e.g., `pnpm test src/auth/auth-service.test.ts` or `pnpm test -t "AuthService"`). Under pnpm, `pnpm test -- <file>` drops the file arg and runs the entire suite — never emit that form.
   - `test_coverage_verdict`: "adequate" | "partial" | "absent"
   - `confidence`: low | medium | high
   - `coverage_gaps`: test paths not reachable by the identified commands

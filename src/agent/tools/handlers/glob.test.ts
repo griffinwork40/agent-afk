@@ -1,7 +1,7 @@
 /**
  * Tests for the glob tool handler.
  *
- * Run with: pnpm test -- tests/agent/tools/handlers/glob.test.ts
+ * Run with: pnpm test src/agent/tools/handlers/glob.test.ts
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
