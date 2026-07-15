@@ -56,7 +56,8 @@ jobs:
         run: pnpm audit:sdk:check
 
       - name: Audit dependency CVEs (critical severity in prod deps)
-        # Gates on critical-severity CVEs in production dependencies only.
+        # Gates on critical-severity CVEs in production dependencies only, via
+        # `scripts/audit-deps.ts` (wraps `pnpm audit --audit-level=critical --prod`).
         # --audit-level=critical: only fail on critical advisories (not high/moderate).
         # --prod: exclude devDependencies (vitest, coverage-v8, esbuild, etc.) which
         #   carry several high/moderate unfixable transitive advisories that are dev-
@@ -65,6 +66,9 @@ jobs:
         # Non-critical prod advisories (4 high via jsdom>undici and
         #   @modelcontextprotocol/sdk>hono) are acknowledged; upstream fixes are
         #   tracked in pnpm-lock.yaml — tighten to --audit-level=high once resolved.
+        # Endpoint outage tolerance (2026-07-15): npm retired the legacy audit API
+        #   (HTTP 410); the wrapper warns + exits 0 on a transport failure so the
+        #   outage can't block merges, while a genuine critical advisory still fails.
         run: pnpm audit:deps
 
       - name: Build
