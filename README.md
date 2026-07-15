@@ -250,7 +250,13 @@ Recent releases at [`CHANGELOG.md`](CHANGELOG.md), also viewable in-REPL via `/c
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=griffinwork40/agent-afk&type=Date)](https://star-history.com/#griffinwork40/agent-afk&Date)
+<a href="https://www.star-history.com/?type=date&repos=griffinwork40%2Fagent-afk">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=griffinwork40/agent-afk&type=date&theme=dark&legend=top-left&sealed_token=0JyTRyQ55uvLCrhjSrDS7mq_ztnj8HQ19fDUsbUF0GuO1-REfAFV4OGbrgoH11e-eMbpDr_rq7qhipj2Ch-gUR50ayL2tr7889lkW87yr1RSpDe7qgNQg9c14OCFni9jsbpVxW_QvzkP3YuAjCWKfPYrSi8VIQvhSSMzZXmb-v2luuafNiza3TaIOE_K" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=griffinwork40/agent-afk&type=date&legend=top-left&sealed_token=0JyTRyQ55uvLCrhjSrDS7mq_ztnj8HQ19fDUsbUF0GuO1-REfAFV4OGbrgoH11e-eMbpDr_rq7qhipj2Ch-gUR50ayL2tr7889lkW87yr1RSpDe7qgNQg9c14OCFni9jsbpVxW_QvzkP3YuAjCWKfPYrSi8VIQvhSSMzZXmb-v2luuafNiza3TaIOE_K" />
+    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=griffinwork40/agent-afk&type=date&legend=top-left&sealed_token=0JyTRyQ55uvLCrhjSrDS7mq_ztnj8HQ19fDUsbUF0GuO1-REfAFV4OGbrgoH11e-eMbpDr_rq7qhipj2Ch-gUR50ayL2tr7889lkW87yr1RSpDe7qgNQg9c14OCFni9jsbpVxW_QvzkP3YuAjCWKfPYrSi8VIQvhSSMzZXmb-v2luuafNiza3TaIOE_K" />
+  </picture>
+</a>
 
 If Agent AFK saves you time, **[⭐ star the repo](https://github.com/griffinwork40/agent-afk/stargazers)** — it's the single best way to help it reach more people.
 
