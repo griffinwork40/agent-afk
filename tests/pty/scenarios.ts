@@ -24,6 +24,7 @@ import { LoopStageBar } from '../../src/cli/commands/interactive/loop-stage.js';
 import { renderMarkdownToTerminal } from '../../src/cli/formatter.js';
 import { formatSubmittedEcho } from '../../src/cli/input/echo.js';
 import { commitBlockAbove } from '../../src/cli/_lib/commit-block.js';
+import { buildResizeMarker } from './constants.js';
 
 /** Runtime handed to a scenario's drive() from inside the pty child. */
 export interface PtyDriveCtx {
@@ -65,6 +66,20 @@ export interface PtyExpect {
    * strictly above the first row containing `b` across the whole buffer.
    */
   order?: [string, string][];
+  /**
+   * Soft-wrap rejoinability of ONE logical line (issue #540 axis-2). The parent
+   * takes the buffer span from the first row containing `from` to the first row
+   * at/after it containing `to`, and counts rows that are NOT soft-wrap
+   * continuations (emulator isWrapped=false). A logical line the terminal
+   * reflowed cleanly has exactly ONE such row (its head) → `tmux -J` rejoins it;
+   * an app-hard-wrapped line flushed to scrollback shows interior non-wrapped
+   * rows. `maxNonWrappedRows` asserts the rejoined property (1 = clean);
+   * `minNonWrappedRows` asserts the fragmented property (2+ = the axis-2 bug).
+   * `minSpanRows` asserts the span occupies >= N rows — used to PROVE a resize
+   * actually took effect (e.g. a line that is 1 row wide but must become 2 rows
+   * once the pane narrows), so a silently no-op'd resize handshake fails loudly.
+   */
+  logicalSpan?: { from: string; to: string; maxNonWrappedRows?: number; minNonWrappedRows?: number; minSpanRows?: number };
 }
 
 export interface PtyScenario {
@@ -81,6 +96,35 @@ export interface PtyScenario {
 
 /** Let the frame's async spinner/flush settle before the next step. */
 const settle = (ms = 40): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Request a mid-scenario width resize from INSIDE the pty child. Emits the
+ * resize-handshake marker (which the parent watches for → calls node-pty
+ * child.resize → SIGWINCH), then waits for this process's OWN 'resize' event
+ * (how the driver learns the new winsize landed) before returning, so the
+ * caller can repaint at the new geometry. A 2s timeout guards against a parent
+ * that never resizes (e.g. a non-resize run) so drive() can never hang.
+ */
+async function requestResize(ctx: PtyDriveCtx, cols: number, rows: number): Promise<void> {
+  const { stdout } = ctx;
+  const landed = new Promise<void>((resolve) => {
+    let done = false;
+    const finish = (): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      stdout.removeListener('resize', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, 2000);
+    stdout.once('resize', finish);
+  });
+  stdout.write(buildResizeMarker(cols, rows));
+  await landed;
+  // Give the compositor's own SIGWINCH handler a beat to re-render at the new
+  // width before the caller repaints / the driver emits the DONE sentinel.
+  await settle(60);
+}
 
 /** Cast to reach the compositor's internal repaint() (as the unit tests do). */
 type Repaintable = { repaint(): void };
@@ -362,6 +406,138 @@ export const SCENARIOS: Record<string, PtyScenario> = {
         ['india', '[image attached]'],
         ['[image attached]', 'RESPONSE_OK'],
       ],
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // width-resize-reflow-sanity: HARNESS SELF-CHECK for the resize handshake
+  // (#541 extension). A SHORT committed line (fits at both widths → always one
+  // row) scrolls into scrollback, then the pane WIDENS mid-scenario. It must
+  // survive the resize as exactly one rejoinable row. This is GREEN before AND
+  // after the axis-2 fix — it certifies the resize marker → child.resize →
+  // emulator.resize replay path moves content faithfully, so a broken handshake
+  // fails HERE (loudly) rather than silently masking the RED guards below.
+  // ─────────────────────────────────────────────────────────────────────────
+  'width-resize-reflow-sanity': {
+    description: 'harness resize handshake: a scrolled-off line that fits wide re-wraps to 2 rows when narrowed',
+    cols: 80,
+    rows: 24,
+    ref: '#541 resize-handshake self-check',
+    async drive(ctx): Promise<void> {
+      const { stdout, stdin } = ctx;
+      const statusLine = wireProductionFooter(stdout, 'M');
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      await c.arm();
+      const ix = c as unknown as Repaintable;
+      c.setSpinner({ enabled: true });
+      const overlay = Array.from({ length: 12 }, (_, i) => `thinking ${i}`).join('\n');
+      // ~62 cols: ONE row at 80 (fits, so afk stores it un-hard-wrapped — this
+      // property is stable across PR 2), but must soft-wrap to 2 rows at 40.
+      c.setOverlay(overlay); c.commitAbove(`SANITYSTART_${'y'.repeat(40)}_SANITYEND\n`);
+      for (let k = 0; k < 24; k++) { c.setOverlay(overlay); c.commitAbove(`PAD_${String(k).padStart(2, '0')}\n`); }
+      c.setOverlay(''); ix.repaint(); ix.repaint();
+      await settle();
+      await requestResize(ctx, 40, 24); // NARROW 80 → 40
+      ix.repaint(); ix.repaint();
+      await settle();
+    },
+    expect: {
+      inScrollback: ['SANITYSTART'], // precondition: the line scrolled off screen
+      // maxNonWrappedRows:1 = the terminal cleanly soft-wrapped it (rejoinable);
+      // minSpanRows:2 = it actually re-wrapped, PROVING child.resize fired (a
+      // no-op'd resize would leave it 1 row at width 80 and fail here).
+      logicalSpan: { from: 'SANITYSTART', to: 'SANITYEND', maxNonWrappedRows: 1, minSpanRows: 2 },
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // width-resize-fragment-narrow (#540 axis-2 · RED GUARD): a long LOGICAL line
+  // committed WIDE (100 cols) is hard-wrapped to physical rows at commit time
+  // (terminal-compositor.committed-band-commit.ts:165) and flushed to native
+  // scrollback as hard-newline rows. On a NARROWER resize the terminal reflows
+  // each hard row independently, so the one logical line shows ≥2 non-wrapped
+  // (isWrapped=false) rows in its span — it is NOT `tmux -J`-rejoinable. This is
+  // the user's screenshot. It is GREEN NOW (documents the bug); when PR 2 (#540
+  // Stage 3 logical flush) makes the flush emit logical lines, the count drops
+  // to 1 and THIS ASSERTION WILL FAIL — the signal to flip minNonWrappedRows →
+  // maxNonWrappedRows: 1 and retire this as the GREEN regression guard.
+  // ─────────────────────────────────────────────────────────────────────────
+  'width-resize-fragment-narrow': {
+    description: 'wide-committed logical line in scrollback fragments on a NARROWER resize (RED guard, #540 axis-2)',
+    cols: 120,
+    rows: 24,
+    ref: '#540 axis-2 · terminal-compositor.committed-band-commit.ts:165',
+    async drive(ctx): Promise<void> {
+      const { stdout, stdin } = ctx;
+      const statusLine = wireProductionFooter(stdout, 'M');
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      await c.arm();
+      const ix = c as unknown as Repaintable;
+      c.setSpinner({ enabled: true });
+      const overlay = Array.from({ length: 12 }, (_, i) => `thinking ${i} keeping the frame tall`).join('\n');
+      // One long logical line (186 cols, no interior break points) → hard-wraps
+      // to 2 physical rows at 120 cols ([120,66]); committed first so it
+      // overflows to scrollback under the tall overlay. Target width 68 is NOT a
+      // divisor of 120, so the char-100 hard break lands mid-wrap → a visibly
+      // ragged short row, exactly the user's screenshot.
+      const longLine = `LOGSTART_${'x'.repeat(170)}_LOGEND`;
+      c.setOverlay(overlay); c.commitAbove(longLine + '\n');
+      for (let k = 0; k < 24; k++) { c.setOverlay(overlay); c.commitAbove(`FILLER_${String(k).padStart(2, '0')}\n`); }
+      c.setOverlay(''); ix.repaint(); ix.repaint();
+      await settle();
+      await requestResize(ctx, 68, 24); // NARROW 120 → 68 (non-divisor → ragged)
+      ix.repaint(); ix.repaint();
+      await settle();
+    },
+    expect: {
+      inScrollback: ['LOGSTART'], // precondition: the long line scrolled off screen
+      // minSpanRows:3 PROVES the narrow fired (the line is 2 rows at 120, 3 at
+      // 68) and is stable across PR 2; minNonWrappedRows:2 is the RED flip signal.
+      logicalSpan: { from: 'LOGSTART', to: 'LOGEND', minNonWrappedRows: 2, minSpanRows: 3 },
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // width-resize-fragment-widen (#540 axis-2 · RED GUARD): the widen twin. A
+  // long logical line committed NARROW (50 cols) hard-wraps to several physical
+  // rows and flushes to scrollback. On a WIDER resize the terminal cannot rejoin
+  // app hard-newlines, so the rows stay ragged/short — ≥2 non-wrapped rows in
+  // the span (each afk row is ≤50 ≤100 so none even soft-wraps). GREEN NOW; flips
+  // to FAIL when PR 2 emits one logical line (which the widen reflows to fewer
+  // rows with a single non-wrapped head). See the narrow twin's note.
+  // ─────────────────────────────────────────────────────────────────────────
+  'width-resize-fragment-widen': {
+    description: 'narrow-committed logical line in scrollback stays ragged on a WIDER resize (RED guard, #540 axis-2)',
+    cols: 48,
+    rows: 24,
+    ref: '#540 axis-2 · terminal-compositor.committed-band-commit.ts:165',
+    async drive(ctx): Promise<void> {
+      const { stdout, stdin } = ctx;
+      const statusLine = wireProductionFooter(stdout, 'M');
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      await c.arm();
+      const ix = c as unknown as Repaintable;
+      c.setSpinner({ enabled: true });
+      const overlay = Array.from({ length: 12 }, (_, i) => `thinking ${i} tall`).join('\n');
+      // 186 cols → hard-wraps to 4 physical rows at 48 cols. On a WIDEN to 110
+      // those 4 rows stay separate (each <=48 fits at 110, so the terminal never
+      // rejoins the app hard-newlines) → 4 ragged non-wrapped rows.
+      const longLine = `LOGSTART_${'x'.repeat(170)}_LOGEND`;
+      c.setOverlay(overlay); c.commitAbove(longLine + '\n');
+      for (let k = 0; k < 24; k++) { c.setOverlay(overlay); c.commitAbove(`FILLER_${String(k).padStart(2, '0')}\n`); }
+      c.setOverlay(''); ix.repaint(); ix.repaint();
+      await settle();
+      await requestResize(ctx, 110, 24); // WIDEN 48 → 110
+      ix.repaint(); ix.repaint();
+      await settle();
+    },
+    expect: {
+      inScrollback: ['LOGSTART'],
+      // minNonWrappedRows:2 is the RED flip signal (4 ragged rows now → 1 after
+      // PR 2 rejoins the logical line). The resize MECHANISM is certified by the
+      // sanity scenario; a widen cannot prove itself via row count (it is
+      // unchanged pre-fix), so no minSpanRows here.
+      logicalSpan: { from: 'LOGSTART', to: 'LOGEND', minNonWrappedRows: 2 },
     },
   },
 };
