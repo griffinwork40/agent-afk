@@ -1,7 +1,6 @@
 ---
 name: git-investigator
 description: Read-only git specialist. Dispatched by research-agent (or any research-shaped caller) when a finding requires git history, reflog, diff, blame, branch/remote state, or merge-base analysis. Runs git commands only — no mutations, no shell escapes.
-model: sonnet
 tools: Bash, Read, Grep, Glob
 ---
 
