@@ -30,8 +30,10 @@
  *   - **Opt-in, default off.** Gated on the human-tier `enforceDoneEvidence`
  *     config key (a self-honesty check the agent must not disable on its own —
  *     same rationale as `telegram.verifyDone`).
- *   - **Loop-guarded.** Bounded corrections per session; once exhausted the gate
- *     lets the `Done` stand (fails open) rather than burning turns re-injecting.
+ *   - **Loop-guarded.** Bounded corrections; once exhausted the gate lets the
+ *     `Done` stand (fails open) rather than burning turns re-injecting. The budget
+ *     is process-lifetime scoped and is deliberately NOT reset by `/clear` — see
+ *     the `Invariant:` note on {@link createTerminalStateGate} (issue #565).
  *
  * The gate NEVER blocks the turn and never throws — the worst case is one extra
  * framework note on the next prompt.
@@ -41,6 +43,7 @@
 
 import type { HookContext, HookDecision, HookHandler } from '../../../agent/hooks.js';
 import type { PermissionMode } from '../../../agent/types/sdk-types.js';
+import { debugLog } from '../../../utils/debug.js';
 
 /**
  * Default per-session cap on injected corrections. Bounds the "re-prompts too
@@ -96,6 +99,27 @@ export interface TerminalStateGateOptions {
  */
 export function createTerminalStateGate(opts: TerminalStateGateOptions): HookHandler {
   const cap = opts.maxInjectionsPerSession ?? DEFAULT_MAX_TERMINAL_STATE_INJECTIONS;
+  // Invariant: the injection budget (`injections`) is PROCESS-LIFETIME scoped, not
+  // per-conversation. This counter is created once when the gate is constructed
+  // (bootstrap.ts registers the gate once per process, on the shared hookRegistry)
+  // and persists for the life of the process. `/clear` — which rotates the
+  // transcript and resets the conversation-scoped `verdictLedger` and
+  // `pendingStopInjection` in loop-iteration.ts — deliberately does NOT reset this
+  // budget: the gate has no /clear hook, and none is wired.
+  //
+  // This is an intentional decision (issue #565), not an oversight. The gate's
+  // "bounded corrections per session" contract is read as per-PROCESS here. The
+  // failure direction is safe: an unreset counter can only make the gate go quiet
+  // EARLIER (fewer corrections after several unbacked-`Done`s across /clears),
+  // which fails toward the gate's existing fail-open model — it never injects more
+  // than `cap` times per process, never blocks, never loops. A conversation reset
+  // does not "refund" correction budget.
+  //
+  // Alternative deferred to the maintainer (issue #565 option (b)): reset
+  // `injections = 0` from the /clear branch in loop-iteration.ts (e.g. via a
+  // reset callback exposed on the gate), making the budget per-conversation. That
+  // is a behavior change — a fresh conversation would regain the full correction
+  // budget — and is intentionally NOT implemented in this PR.
   let injections = 0;
 
   return (context: HookContext): HookDecision => {
@@ -109,8 +133,26 @@ export function createTerminalStateGate(opts: TerminalStateGateOptions): HookHan
     if (context.doneHasCorroboratingEvidence !== false) return {};
     // Loop-guard: bounded corrections per session. Once spent, let the Done
     // stand rather than re-injecting forever.
-    if (injections >= cap) return {};
+    if (injections >= cap) {
+      // Observability (#565): the budget is spent — this unbacked `Done` stands
+      // (fail open). Logged so an operator diagnosing a slipped-through `Done`
+      // can see the gate deliberately went quiet rather than never firing.
+      debugLog(
+        `[terminal-state gate] injection budget exhausted (cap=${cap}); ` +
+          `letting unbacked Done stand (fail open)`,
+        { sessionId: context.sessionId },
+      );
+      return {};
+    }
     injections += 1;
+    // Observability (#565): the gate is bouncing this unbacked `Done` back into
+    // the next turn. Mirrors sibling debug-log convention (`[module-tag] …`,
+    // structured payload) — inert unless AFK_DEBUG/DEBUG is set.
+    debugLog(
+      `[terminal-state gate] injecting Done-evidence correction ` +
+        `(${injections}/${cap})`,
+      { sessionId: context.sessionId },
+    );
     return { injectContext: TERMINAL_STATE_GATE_CORRECTION };
   };
 }
