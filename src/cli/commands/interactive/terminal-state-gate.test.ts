@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   createTerminalStateGate,
   TERMINAL_STATE_GATE_CORRECTION,
@@ -110,5 +110,77 @@ describe('createTerminalStateGate', () => {
     enabled = true;
     mode = AUTONOMOUS;
     expect((await unbacked()).injectContext).toBe(TERMINAL_STATE_GATE_CORRECTION);
+  });
+});
+
+// Item 3 (#565): the gate emits a debug log on BOTH injection and
+// cap-exhaustion, via the shared `debugLog` facility (console.log gated on
+// AFK_DEBUG/DEBUG). These pin that observability — inert unless debug is on,
+// tagged with the gate's `[terminal-state gate]` prefix and carrying the
+// sessionId — without changing the gate's decision behavior.
+describe('createTerminalStateGate — firing observability (#565)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env['AFK_DEBUG'];
+  });
+
+  it('logs a debug line naming the budget position on each injection', async () => {
+    process.env['AFK_DEBUG'] = '1';
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const gate = armedGate({ maxInjectionsPerSession: 3 });
+
+    await gate(stop({ terminalState: 'done', doneHasCorroboratingEvidence: false }));
+    await gate(stop({ terminalState: 'done', doneHasCorroboratingEvidence: false }));
+
+    // One log per injection, tagged + carrying the sessionId; the budget
+    // position (n/cap) advances across calls so an operator can see the count.
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('[terminal-state gate] injecting Done-evidence correction (1/3)'),
+      expect.objectContaining({ sessionId: 's' }),
+    );
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('[terminal-state gate] injecting Done-evidence correction (2/3)'),
+      expect.objectContaining({ sessionId: 's' }),
+    );
+  });
+
+  it('logs a distinct debug line when the budget is exhausted (fail open)', async () => {
+    process.env['AFK_DEBUG'] = '1';
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const gate = armedGate({ maxInjectionsPerSession: 1 });
+    const unbacked = () => gate(stop({ terminalState: 'done', doneHasCorroboratingEvidence: false }));
+
+    await unbacked(); // spends the single-slot budget (logs the injection)
+    log.mockClear();
+    const decision = await unbacked(); // over budget now
+
+    // The Done stands (fail open) AND the exhaustion is observable.
+    expect(decision.injectContext).toBeUndefined();
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('[terminal-state gate] injection budget exhausted (cap=1)'),
+      expect.objectContaining({ sessionId: 's' }),
+    );
+  });
+
+  it('emits NO log when AFK_DEBUG is unset (debugLog is inert)', async () => {
+    delete process.env['AFK_DEBUG'];
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const gate = armedGate({ maxInjectionsPerSession: 1 });
+    const unbacked = () => gate(stop({ terminalState: 'done', doneHasCorroboratingEvidence: false }));
+
+    await unbacked(); // injection
+    await unbacked(); // exhaustion
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it('does not log for a no-op decision (disabled gate never touches the budget)', async () => {
+    process.env['AFK_DEBUG'] = '1';
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const gate = createTerminalStateGate({
+      getPermissionMode: () => AUTONOMOUS,
+      isEnabled: () => false,
+    });
+    await gate(stop({ terminalState: 'done', doneHasCorroboratingEvidence: false }));
+    expect(log).not.toHaveBeenCalled();
   });
 });
