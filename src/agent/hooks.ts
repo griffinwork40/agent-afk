@@ -50,8 +50,12 @@
  * queues it via `queueFrameworkContext` so it prepends to the session's FIRST
  * outbound user message. SessionStart fires before any turn exists, so there is
  * no in-flight prompt to prepend to — the queue (drained behind `initPromise`
- * in `sendMessageStreamInternal`) bridges init to the first send. The remaining
- * hook events ignore `injectContext` entirely.
+ * in `sendMessageStreamInternal`) bridges init to the first send. Delivery is
+ * scoped to the top-level (parent) session: subagent forks run the same init
+ * path with the bubbled registry, so `AgentSession` skips the queue when
+ * `parentSessionId` is set rather than prepending priming context to every
+ * subagent's first prompt. The remaining hook events ignore `injectContext`
+ * entirely.
  *
  * @module agent/hooks
  */
@@ -102,8 +106,10 @@ export interface HookDecision {
    *
    * For **SessionStart**: returned by `dispatchSessionStart` during init and
    * queued via `queueFrameworkContext` so it prepends to the session's FIRST
-   * outbound user message (SessionStart fires before any turn exists). Same
-   * concatenation merge policy across handlers.
+   * outbound user message (SessionStart fires before any turn exists).
+   * Delivered to the top-level (parent) session ONLY — subagent forks skip it
+   * (see `AgentSession.pullInitialization`). Same concatenation merge policy
+   * across handlers.
    *
    * Ignored for all other hook events.
    */
@@ -116,6 +122,15 @@ export type SubagentHookStatus = 'idle' | 'running' | 'succeeded' | 'failed' | '
 export interface SessionStartContext {
   event: 'SessionStart';
   sessionId?: string;
+  /**
+   * Parent session id when this SessionStart belongs to a forked subagent
+   * (set from {@link AgentConfig.parentSessionId}). Top-level sessions leave
+   * this undefined. `AgentSession` delivers SessionStart `injectContext` to the
+   * parent's first turn ONLY — gated on this being undefined — never to
+   * subagent forks; programmatic handlers can also read it to self-skip
+   * subagent starts, mirroring the {@link SessionEndContext} convention.
+   */
+  parentSessionId?: string;
 }
 
 export interface SessionEndContext {

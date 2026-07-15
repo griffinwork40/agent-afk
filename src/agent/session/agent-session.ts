@@ -327,7 +327,11 @@ export class AgentSession implements IAgentSession {
     try {
       const sessionStartInjectContext = await dispatchSessionStart(
         this._hookRegistry,
-        { event: 'SessionStart', sessionId: this.sessionId },
+        {
+          event: 'SessionStart',
+          sessionId: this.sessionId,
+          parentSessionId: this.config.parentSessionId,
+        },
         {
           signal: this.abortController.signal,
           ...(this.config.traceWriter ? { traceWriter: this.config.traceWriter } : {}),
@@ -339,7 +343,17 @@ export class AgentSession implements IAgentSession {
       // so this queued context is guaranteed to ride the session's FIRST
       // outbound user message. Queued (not pushed) to avoid the one-turn
       // displacement documented on `queueFrameworkContext`.
-      if (sessionStartInjectContext) {
+      //
+      // Parent-only: subagent forks run this same init path with the bubbled
+      // hook registry (see subagent.ts), so an unconditional queue would prepend
+      // session-priming context to EVERY subagent's first prompt — token cost
+      // multiplied across a fan-out, plus contamination of narrowly-scoped
+      // subagent tasks. Gate on the top-level predicate used elsewhere in this
+      // file (parentSessionId undefined; see the ledger/actor checks above) so
+      // only the parent session delivers it. This mirrors the self-skip
+      // convention SessionEnd already documents and Claude Code's own behavior
+      // (SessionStart is a per-session, not per-subagent, injection point).
+      if (sessionStartInjectContext && this.config.parentSessionId === undefined) {
         this.queueFrameworkContext(sessionStartInjectContext);
       }
 

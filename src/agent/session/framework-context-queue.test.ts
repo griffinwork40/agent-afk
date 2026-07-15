@@ -162,6 +162,26 @@ describe('AgentSession framework-context queue', () => {
     await session.close();
   });
 
+  it('does NOT deliver SessionStart injectContext for subagent (forked) sessions', async () => {
+    // Subagent forks run the same init path with the bubbled registry, so the
+    // SessionStart handler still fires — but delivery is parent-only. Gating on
+    // `parentSessionId` keeps priming context off every subagent's first prompt
+    // (token cost × fan-out + contamination of narrow tasks).
+    const registry = createHookRegistry();
+    registry.register('SessionStart', () => ({ injectContext: NUDGE }));
+    const session = new AgentSession({
+      ...config,
+      hookRegistry: registry,
+      parentSessionId: 'parent-session-id',
+    });
+
+    await drain(session.sendMessageStream('/resolve'));
+
+    expect(capturedTurns).toHaveLength(1);
+    expect(capturedTurns[0]!.content).toBe('/resolve');
+    await session.close();
+  });
+
   it('drops queued context when reset starts a fresh conversation', async () => {
     const session = new AgentSession(config);
     session.queueFrameworkContext(NUDGE);
