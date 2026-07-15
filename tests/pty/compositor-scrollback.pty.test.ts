@@ -82,6 +82,37 @@ function assertExpectations(res: PtyRunResult, exp: PtyExpect): void {
       ).toBeLessThanOrEqual(exp.maxViewportBlankRun);
     }
   }
+  if (exp.logicalSpan) {
+    const { from, to, minNonWrappedRows, maxNonWrappedRows, minSpanRows } = exp.logicalSpan;
+    const fromIdx = firstIndex(res.lines, from);
+    expect(fromIdx, `logicalSpan.from "${from}" not found:\n${dump}`).toBeGreaterThanOrEqual(0);
+    const toIdx = res.lines.findIndex((l, i) => i >= fromIdx && l.includes(to));
+    expect(toIdx, `logicalSpan.to "${to}" not found at/after "${from}":\n${dump}`).toBeGreaterThanOrEqual(fromIdx);
+    const spanRows = toIdx - fromIdx + 1;
+    if (minSpanRows !== undefined) {
+      expect(
+        spanRows,
+        `logical span ["${from}".."${to}"] should occupy >=${minSpanRows} rows (proves the resize took effect) but had ${spanRows}:\n${dump}`,
+      ).toBeGreaterThanOrEqual(minSpanRows);
+    }
+    // Count rows in the [from..to] span that are NOT soft-wrap continuations.
+    // One = the terminal reflowed a single logical line cleanly (tmux -J rejoins
+    // it); ≥2 = interior app hard-newlines fragmented it (the axis-2 bug).
+    let nonWrapped = 0;
+    for (let i = fromIdx; i <= toIdx; i++) if (!(res.wrapped[i] ?? false)) nonWrapped += 1;
+    if (minNonWrappedRows !== undefined) {
+      expect(
+        nonWrapped,
+        `logical line ["${from}".."${to}"] should have >=${minNonWrappedRows} non-wrapped (hard-break) rows — the axis-2 fragmentation RED guard (#540); found ${nonWrapped}. If this dropped to 1 the flush now emits logical lines: flip minNonWrappedRows -> maxNonWrappedRows: 1.\n${dump}`,
+      ).toBeGreaterThanOrEqual(minNonWrappedRows);
+    }
+    if (maxNonWrappedRows !== undefined) {
+      expect(
+        nonWrapped,
+        `logical line ["${from}".."${to}"] should rejoin to <=${maxNonWrappedRows} non-wrapped row(s) but had ${nonWrapped}:\n${dump}`,
+      ).toBeLessThanOrEqual(maxNonWrappedRows);
+    }
+  }
 }
 
 describe('TerminalCompositor scrollback over a real pty (issue #541)', () => {

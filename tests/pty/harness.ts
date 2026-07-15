@@ -22,7 +22,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { existsSync, chmodSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { PTY_DONE_SENTINEL } from './constants.js';
+import { PTY_DONE_SENTINEL, findResizeMarker, type ResizeMarker } from './constants.js';
 
 const require = createRequire(import.meta.url);
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
@@ -32,6 +32,8 @@ const DRIVER_PATH = fileURLToPath(new URL('./driver.ts', import.meta.url));
 interface IPtyProcess {
   onData(cb: (data: string) => void): void;
   onExit(cb: (e: { exitCode: number; signal?: number }) => void): void;
+  /** Change the pty winsize — SIGWINCHes the child (drives the resize handshake). */
+  resize(cols: number, rows: number): void;
   kill(signal?: string): void;
 }
 interface NodePtyModule {
@@ -95,6 +97,16 @@ export interface PtyRunResult {
   exitCode: number | 'timeout';
   /** All emulator buffer lines, top (oldest scrollback) → bottom. */
   lines: string[];
+  /**
+   * Per-line soft-wrap flag, index-aligned with {@link lines}: true when the
+   * emulator marked the row a soft-wrap CONTINUATION of the row above (xterm
+   * `IBufferLine.isWrapped`). A logical line the terminal reflowed cleanly is
+   * ONE non-wrapped head row followed by wrapped continuations — exactly what
+   * `tmux capture-pane -J` rejoins. An app hard-newline is never `isWrapped`,
+   * so interior non-wrapped rows inside one logical line are the width-resize
+   * fragmentation signature (issue #540 axis-2).
+   */
+  wrapped: boolean[];
   /** First visible row index — lines[0..baseY) are scrollback. */
   baseY: number;
   /** Scrollback region (rows above the viewport), blank rows preserved. */
@@ -131,8 +143,20 @@ export async function runScenarioInPty(opts: RunScenarioOpts): Promise<PtyRunRes
 
   let buf = '';
   let captured: string | null = null;
+  // The FIRST resize marker seen in the stream: on detection we SIGWINCH the
+  // child (child.resize) so the driver's own 'resize' fires and the compositor
+  // re-renders, and we keep the marker's byte span so the emulator replay below
+  // can split the captured stream into old-width / new-width halves.
+  let resizeAt: ResizeMarker | null = null;
   child.onData((d) => {
     buf += d;
+    if (resizeAt === null) {
+      const marker = findResizeMarker(buf);
+      if (marker) {
+        resizeAt = marker;
+        try { child.resize(marker.cols, marker.rows); } catch { /* child already gone */ }
+      }
+    }
     if (captured === null) {
       const idx = buf.indexOf(PTY_DONE_SENTINEL);
       if (idx >= 0) captured = buf.slice(0, idx);
@@ -159,20 +183,34 @@ export async function runScenarioInPty(opts: RunScenarioOpts): Promise<PtyRunRes
   const raw = captured ?? buf;
 
   // Real pty output already carries CRLF (kernel ONLCR), so do NOT set
-  // convertEol — that would double-translate and desync every row.
+  // convertEol — that would double-translate and desync every row. The emulator
+  // is constructed at the scenario's ORIGINAL geometry; a mid-stream resize is
+  // modelled by writing pre-resize bytes, calling term.resize() (which reflows
+  // the buffer exactly as a real terminal does), then writing post-resize bytes.
   const term = new (Terminal as new (o: Record<string, unknown>) => {
     write(d: string, cb: () => void): void;
-    buffer: { active: { baseY: number; length: number; getLine(i: number): { translateToString(trim: boolean): string } | undefined } };
+    resize(cols: number, rows: number): void;
+    buffer: { active: { baseY: number; length: number; getLine(i: number): { translateToString(trim: boolean): string; isWrapped: boolean } | undefined } };
     dispose(): void;
   })({ cols, rows, scrollback: 1000, allowProposedApi: true });
-  await new Promise<void>((r) => term.write(raw, r));
+  if (resizeAt) {
+    const pre = raw.slice(0, resizeAt.start);
+    const post = raw.slice(resizeAt.end); // marker bytes themselves are dropped
+    await new Promise<void>((r) => term.write(pre, r));
+    term.resize(resizeAt.cols, resizeAt.rows);
+    await new Promise<void>((r) => term.write(post, r));
+  } else {
+    await new Promise<void>((r) => term.write(raw, r));
+  }
 
   const b = term.buffer.active;
   const baseY = b.baseY;
   const lines: string[] = [];
+  const wrapped: boolean[] = [];
   for (let i = 0; i < b.length; i++) {
     const l = b.getLine(i);
     lines.push(l ? l.translateToString(true).replace(/\s+$/, '') : '');
+    wrapped.push(l ? l.isWrapped : false);
   }
   term.dispose();
 
@@ -184,12 +222,15 @@ export async function runScenarioInPty(opts: RunScenarioOpts): Promise<PtyRunRes
     sawSentinel,
     exitCode,
     lines,
+    wrapped,
     baseY,
     scrollback,
     viewport,
     dump(): string {
+      // '↩' marks a soft-wrap continuation row (isWrapped) so a fragmentation
+      // failure message shows at a glance where hard breaks fall.
       return lines
-        .map((l, i) => `[${i < baseY ? 'SB' : 'VP'} ${String(i).padStart(3)}] ${JSON.stringify(l)}`)
+        .map((l, i) => `[${i < baseY ? 'SB' : 'VP'} ${String(i).padStart(3)}]${wrapped[i] ? '↩' : ' '}${JSON.stringify(l)}`)
         .join('\n');
     },
   };
