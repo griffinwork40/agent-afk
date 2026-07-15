@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { streamResponse, StreamTimeoutError, renderSubagentFooter } from './streaming.js';
+import { streamResponse, StreamTimeoutError, renderSubagentFooter, replyWithFloodRetry } from './streaming.js';
 import { TelegramError } from 'telegraf';
 import type { Context } from 'telegraf';
 import type { IAgentSession, OutputEvent } from '../agent/types.js';
@@ -383,6 +383,58 @@ describe('streamResponse', () => {
     // No fresh-send swap, no preview deletion.
     expect(deletes.length).toBe(0);
   });
+
+  it('no `done` event: delivers the full streamed answer as a fresh message and removes the frozen preview', async () => {
+    // Regression (long-reply cutoff): if the provider stream ends WITHOUT a
+    // terminal `done` event, the clean-final delivery never ran and the user was
+    // stranded on the in-place preview — which is edit-throttled + edit-flood-
+    // controlled, so it can freeze mid-stream and show LESS than what streamed.
+    // The fix finalizes on ANY non-terminal exit: re-deliver the full answer as a
+    // fresh message and delete the preview.
+    const { ctx, replies, deletes } = makeCtx();
+    const answerNoDone = makeSession(async function* () {
+      yield { type: 'chunk', chunk: { type: 'content', content: 'Complete answer that never received a done event.' } };
+      // NO done event — the generator simply returns (provider closed the stream).
+    });
+
+    await streamResponse(ctx, answerNoDone, 'go', undefined, { cleanFinal: true });
+
+    // The full streamed text is delivered as a fresh reply, not left in the preview…
+    expect(replies.some((r) => r.includes('Complete answer that never received a done event.'))).toBe(true);
+    // …and the frozen preview was removed so the chat doesn't end on stale content.
+    expect(deletes.length).toBe(1);
+  });
+
+  it('cleanFinal: surfaces a visible truncation notice instead of silently dropping the tail on a transport error', async () => {
+    // Regression (silent tail-drop): a long reply fans out into several sends; if
+    // Telegram refuses a chunk mid-delivery (flood-control 429 past our retries, or
+    // another transport error), the old code re-threw and the handler swallowed it
+    // silently — the tail vanished with no indication. The fix keeps the delivered
+    // chunks and posts a visible notice.
+    const { ctx, replies } = makeCtx();
+    const transportError = new TelegramError({ error_code: 400, description: 'Bad Request: message is too long' });
+    (ctx.reply as ReturnType<typeof vi.fn>).mockImplementation(async (text: string, extra?: { parse_mode?: string }) => {
+      // Fail the tail chunk ("second …") — a non-parse-entities transport error, so
+      // it exercises the visible-notice branch (not the plaintext-fallback branch).
+      if (extra?.parse_mode === 'HTML' && text.startsWith('second ')) throw transportError;
+      replies.push(text);
+      return { message_id: replies.length, text, chat: { id: 12345, type: 'private' as const }, date: 0 };
+    });
+    const first = `first ${'a'.repeat(4080)}`;
+    const second = `second ${'b'.repeat(200)}`;
+    const longAnswer = [first, second].join('\n');
+    const session = makeSession(async function* () {
+      yield { type: 'chunk', chunk: { type: 'content', content: longAnswer } };
+      yield { type: 'done', metadata: undefined };
+    });
+
+    // Never rejects — a transport failure mid-delivery is handled, not thrown.
+    await expect(streamResponse(ctx, session, 'go', undefined, { cleanFinal: true })).resolves.toBeUndefined();
+
+    // The first chunk landed, and the dropped tail is announced (not silent).
+    expect(replies.some((r) => r.startsWith('first '))).toBe(true);
+    expect(replies.some((r) => r.includes('Telegram dropped'))).toBe(true);
+  });
 });
 
 describe('generator finalizer cleanup', () => {
@@ -652,4 +704,43 @@ describe('provider-turn interrupt on incomplete exit (stale-buffer guard)', () =
       vi.useRealTimers();
     }
   }, 15_000);
+});
+
+describe('replyWithFloodRetry (flood-control 429 backoff)', () => {
+  const flood429 = (retryAfter: number) =>
+    new TelegramError({
+      error_code: 429,
+      description: `Too Many Requests: retry after ${retryAfter}`,
+      parameters: { retry_after: retryAfter },
+    });
+
+  it('retries a 429 (honoring retry_after) then succeeds', async () => {
+    const sleeps: number[] = [];
+    let calls = 0;
+    const reply = vi.fn(async () => {
+      calls++;
+      if (calls === 1) throw flood429(2);
+      return {};
+    });
+    await replyWithFloodRetry(reply, 'hi', undefined, { sleep: async (ms) => { sleeps.push(ms); } });
+    expect(calls).toBe(2);
+    expect(sleeps).toEqual([2000]); // honored retry_after=2s (converted to ms)
+  });
+
+  it('throws after exhausting retries on a persistent 429', async () => {
+    const reply = vi.fn(async () => { throw flood429(1); });
+    await expect(
+      replyWithFloodRetry(reply, 'hi', undefined, { maxRetries: 2, sleep: async () => {} }),
+    ).rejects.toBeInstanceOf(TelegramError);
+    expect(reply).toHaveBeenCalledTimes(3); // initial attempt + 2 retries
+  });
+
+  it('propagates a non-429 error immediately without retrying', async () => {
+    const err = new TelegramError({ error_code: 400, description: "Bad Request: can't parse entities" });
+    const reply = vi.fn(async () => { throw err; });
+    await expect(
+      replyWithFloodRetry(reply, 'hi', { parse_mode: 'HTML' }, { sleep: async () => {} }),
+    ).rejects.toBe(err);
+    expect(reply).toHaveBeenCalledTimes(1);
+  });
 });
