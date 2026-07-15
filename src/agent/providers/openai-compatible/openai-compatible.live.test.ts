@@ -7,7 +7,7 @@
  *
  * To run manually:
  *
- *   OPENAI_API_KEY=sk-... pnpm test -- src/agent/providers/openai-compatible/openai-compatible.live.test.ts
+ *   OPENAI_API_KEY=sk-... pnpm test src/agent/providers/openai-compatible/openai-compatible.live.test.ts
  *
  * What this verifies that the stubbed tests cannot:
  *   - The OpenAI SDK actually accepts the request shape we build
