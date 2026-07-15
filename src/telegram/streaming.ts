@@ -241,7 +241,7 @@ export async function streamResponse(
       try {
         sentMessage = await ctx.reply(chunks[0] ?? '…', { parse_mode: 'HTML' });
       } catch (e) {
-        if (e instanceof TelegramError && e.code === 400 && /can't parse entities/i.test(e.description)) {
+        if (e instanceof TelegramError && e.code === 400 && /can't parse entities/i.test(e.description ?? '')) {
           // Malformed HTML from formatter — retry without parse_mode using raw text as fallback
           sentMessage = await ctx.reply(text || '…');
         } else {
@@ -265,7 +265,7 @@ export async function streamResponse(
         { parse_mode: 'HTML' }
       );
     } catch (e) {
-      if (e instanceof TelegramError && e.code === 400 && /can't parse entities/i.test(e.description)) {
+      if (e instanceof TelegramError && e.code === 400 && /can't parse entities/i.test(e.description ?? '')) {
         // Malformed HTML from formatter — retry without parse_mode using raw text as fallback
         try {
           await ctx.telegram.editMessageText(
@@ -289,29 +289,44 @@ export async function streamResponse(
   // (retries exhausted, or another non-recoverable transport error), the chunks
   // already sent stand and a VISIBLE truncation notice is posted — never the old
   // silent `throw` that dropped the tail and showed the user nothing.
-  const deliverClean = async (text: string): Promise<void> => {
+  //
+  // Returns whether ANY content actually landed. Callers use this to gate
+  // deleting the live preview: if the very first chunk fails, `delivered` is
+  // still false and the preview must survive so the user is never left with
+  // zero visible content (see the `done` and non-terminal-exit call sites).
+  const deliverClean = async (text: string): Promise<boolean> => {
+    let delivered = false;
     const reply = (t: string, extra?: { parse_mode?: 'HTML' }): Promise<unknown> => ctx.reply(t, extra);
     for (const chunk of splitLongMessage(text)) {
       if (!chunk) continue;
       try {
         for (const htmlChunk of splitLongMessage(markdownToTelegramHtml(chunk))) {
-          if (htmlChunk) await replyWithFloodRetry(reply, htmlChunk, { parse_mode: 'HTML' });
+          if (htmlChunk) {
+            await replyWithFloodRetry(reply, htmlChunk, { parse_mode: 'HTML' });
+            delivered = true;
+          }
         }
       } catch (e) {
-        if (e instanceof TelegramError && e.code === 400 && /can't parse entities/i.test(e.description)) {
+        if (e instanceof TelegramError && e.code === 400 && /can't parse entities/i.test(e.description ?? '')) {
           // Malformed HTML from the formatter — resend the raw chunk plain.
-          await replyWithFloodRetry(reply, chunk).catch(() => {});
+          try {
+            await replyWithFloodRetry(reply, chunk);
+            delivered = true;
+          } catch {
+            // plain retry failed; ignore
+          }
         } else if (e instanceof TelegramError) {
           // Flood-control that outlived our retries, or another Telegram transport
           // failure: the chunks before this one are delivered; the tail is not.
           // Announce it instead of silently dropping, then stop.
           await ctx.reply(DELIVERY_TRUNCATED_NOTICE).catch(() => {});
-          return;
+          return delivered;
         } else {
           throw e;
         }
       }
     }
+    return delivered;
   };
 
   // Live preview = answer/content buffer + bounded sub-agent footer. Used for
@@ -601,9 +616,12 @@ export async function streamResponse(
           }
           if (cleanFinal && answerText.trim()) {
             // Deliver the answer as a fresh, noise-free message, then remove the
-            // live preview so the conversation ends on a single clean reply.
-            await deliverClean(answerText);
-            if (sentMessage) {
+            // live preview so the conversation ends on a single clean reply. Only
+            // delete the preview if something actually landed — if the very first
+            // chunk failed, `delivered` is false and the frozen preview must
+            // survive so the user is never left with zero visible content.
+            const delivered = await deliverClean(answerText);
+            if (delivered && sentMessage) {
               await ctx.telegram.deleteMessage?.(chatId, sentMessage.message_id).catch(() => {});
               // Null the preview ref so the post-loop overflow block (which would
               // otherwise re-send the noisy `accumulated` buffer) is skipped.
@@ -660,17 +678,35 @@ export async function streamResponse(
       if (preview && !sawTerminalEvent) {
         const full = cleanFinal && answerText.trim() ? answerText : accumulated;
         if (full.trim()) {
-          await deliverClean(full);
-          await ctx.telegram.deleteMessage?.(chatId, preview.message_id).catch(() => {});
-          sentMessage = null;
+          // Only delete the preview if delivery actually produced content — a
+          // failed first chunk must leave the frozen preview in place rather
+          // than removing it and showing the user nothing.
+          const delivered = await deliverClean(full);
+          if (delivered) {
+            await ctx.telegram.deleteMessage?.(chatId, preview.message_id).catch(() => {});
+            sentMessage = null;
+          }
         }
       } else if (accumulated && preview) {
         const chunks = splitLongMessage(markdownToTelegramHtml(accumulated));
         if (chunks.length > 1) {
           const reply = (t: string, extra?: { parse_mode?: 'HTML' }): Promise<unknown> => ctx.reply(t, extra);
-          for (let i = 1; i < chunks.length; i++) {
-            const chunk = chunks[i];
-            if (chunk) await replyWithFloodRetry(reply, chunk, { parse_mode: 'HTML' });
+          try {
+            for (let i = 1; i < chunks.length; i++) {
+              const chunk = chunks[i];
+              if (chunk) await replyWithFloodRetry(reply, chunk, { parse_mode: 'HTML' });
+            }
+          } catch (e) {
+            if (e instanceof TelegramError) {
+              // Flood-control that outlived our retries, or another Telegram
+              // transport failure: chunk[0] already lives in the (undeleted)
+              // preview, so announce the dropped tail instead of throwing it
+              // uncaught into the `finally` and silently losing it — the exact
+              // bug this PR set out to kill, for the non-cleanFinal path.
+              await ctx.reply(DELIVERY_TRUNCATED_NOTICE).catch(() => {});
+            } else {
+              throw e;
+            }
           }
         }
       }

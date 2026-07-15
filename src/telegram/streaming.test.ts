@@ -435,6 +435,40 @@ describe('streamResponse', () => {
     expect(replies.some((r) => r.startsWith('first '))).toBe(true);
     expect(replies.some((r) => r.includes('Telegram dropped'))).toBe(true);
   });
+
+  it('cleanFinal: does NOT delete the frozen preview when the FIRST clean chunk fails (never zero content)', async () => {
+    // Regression (PR #620 review, High): deliverClean posted the truncation notice
+    // and returned on a transport error, but both callers deleted the live preview
+    // unconditionally. So if the VERY FIRST fresh chunk failed, the user was left
+    // with the preview gone AND zero answer content. deliverClean now reports
+    // whether anything landed; the preview must survive when nothing replaced it.
+    const { ctx, replies, deletes } = makeCtx();
+    const transportError = new TelegramError({ error_code: 400, description: 'Bad Request: message is too long' });
+    let htmlReplies = 0;
+    (ctx.reply as ReturnType<typeof vi.fn>).mockImplementation(async (text: string, extra?: { parse_mode?: string }) => {
+      if (extra?.parse_mode === 'HTML') {
+        htmlReplies++;
+        // Reply #1 is the live-preview creation (must succeed so a preview exists);
+        // reply #2 is deliverClean's FIRST fresh chunk — fail it so nothing lands.
+        if (htmlReplies >= 2) throw transportError;
+      }
+      replies.push(text);
+      return { message_id: replies.length, text, chat: { id: 12345, type: 'private' as const }, date: 0 };
+    });
+    const answer = 'Complete answer that must survive as the frozen preview.';
+    const session = makeSession(async function* () {
+      yield { type: 'chunk', chunk: { type: 'content', content: answer } };
+      yield { type: 'done', metadata: undefined };
+    });
+
+    // Never rejects — a first-chunk transport failure is handled, not thrown.
+    await expect(streamResponse(ctx, session, 'go', undefined, { cleanFinal: true })).resolves.toBeUndefined();
+
+    // Nothing replaced the preview, so it must NOT be deleted (user keeps content)…
+    expect(deletes.length).toBe(0);
+    // …and the failure is announced, not silent.
+    expect(replies.some((r) => r.includes('Telegram dropped'))).toBe(true);
+  });
 });
 
 describe('generator finalizer cleanup', () => {
