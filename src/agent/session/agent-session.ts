@@ -325,7 +325,7 @@ export class AgentSession implements IAgentSession {
    */
   private async pullInitialization(): Promise<void> {
     try {
-      await dispatchSessionStart(
+      const sessionStartInjectContext = await dispatchSessionStart(
         this._hookRegistry,
         { event: 'SessionStart', sessionId: this.sessionId },
         {
@@ -333,6 +333,15 @@ export class AgentSession implements IAgentSession {
           ...(this.config.traceWriter ? { traceWriter: this.config.traceWriter } : {}),
         },
       );
+      // Invariant: queue SessionStart injectContext HERE — before the init loop
+      // below resolves initPromise. `sendMessageStreamInternal` awaits
+      // initPromise before draining the queue via `withPendingFrameworkContext`,
+      // so this queued context is guaranteed to ride the session's FIRST
+      // outbound user message. Queued (not pushed) to avoid the one-turn
+      // displacement documented on `queueFrameworkContext`.
+      if (sessionStartInjectContext) {
+        this.queueFrameworkContext(sessionStartInjectContext);
+      }
 
       while (true) {
         const result = await this.providerIterator.next();

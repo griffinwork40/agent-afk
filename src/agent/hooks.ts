@@ -18,7 +18,7 @@
  * with the original error attached as `cause`. This prevents a bug in one
  * handler from silently skipping policy enforcement.
  *
- * **Context injection (SubagentStop, UserPromptSubmit, and Stop):** Foreground
+ * **Context injection (SubagentStop, UserPromptSubmit, Stop, and SessionStart):** Foreground
  * subagents hand their final assistant output to the parent through the normal
  * `agent` tool result; `injectContext` is a separate hook-generated framework
  * note, not text typed by the human user. When a `SubagentStop` handler returns
@@ -43,8 +43,15 @@
  * boundary rather than the submission boundary. This is the "bounce the turn
  * back" primitive: a post-turn policy handler (e.g. the terminal-state gate)
  * can read the parsed verdict on {@link StopContext} and inject a correction
- * the next turn must address. The remaining hook events ignore `injectContext`
- * entirely.
+ * the next turn must address.
+ *
+ * For `SessionStart`, `injectContext` is delivered during session init:
+ * `dispatchSessionStart` returns the merged string to `AgentSession`, which
+ * queues it via `queueFrameworkContext` so it prepends to the session's FIRST
+ * outbound user message. SessionStart fires before any turn exists, so there is
+ * no in-flight prompt to prepend to — the queue (drained behind `initPromise`
+ * in `sendMessageStreamInternal`) bridges init to the first send. The remaining
+ * hook events ignore `injectContext` entirely.
  *
  * @module agent/hooks
  */
@@ -73,7 +80,7 @@ export interface HookDecision {
   /** Human-readable rationale for blocking or approving. */
   reason?: string;
   /**
-   * (SubagentStop, UserPromptSubmit, and Stop) Framework-generated context to inject.
+   * (SessionStart, SubagentStop, UserPromptSubmit, and Stop) Framework-generated context to inject.
    *
    * For **SubagentStop**: queued to the parent session's input stream after
    * dispatch completes; dropped if the parent is aborting. DAG/compose and
@@ -92,6 +99,11 @@ export interface HookDecision {
    * prompt text (same next-turn delivery as UserPromptSubmit, fired from the
    * post-turn boundary). Lets a post-turn policy handler bounce a correction
    * into the next turn. Same concatenation merge policy across handlers.
+   *
+   * For **SessionStart**: returned by `dispatchSessionStart` during init and
+   * queued via `queueFrameworkContext` so it prepends to the session's FIRST
+   * outbound user message (SessionStart fires before any turn exists). Same
+   * concatenation merge policy across handlers.
    *
    * Ignored for all other hook events.
    */
