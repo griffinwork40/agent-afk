@@ -215,6 +215,96 @@ describe('runReplLoop — seed-buffer auto-submit fast-path (multi-iteration)', 
   });
 });
 
+describe('runReplLoop — launch-argument seed (afk "prompt" / afk /command)', () => {
+  it('auto-submits a plain-text launch arg as the opening turn without a readLine', async () => {
+    // ctx.initialInput simulates `afk "what does this project do"`. The loop
+    // pre-seeds seedBuffer from it, so iteration 1 takes the fast-path (echo +
+    // runTurn) with NO readLine; iteration 2 reads the (empty) queue → '/exit'.
+    const ctx = makeCtx({ initialInput: 'what does this project do' });
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    // The turn ran once with the launch prompt (not a readLine value).
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
+    const firstArg = vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string };
+    expect(firstArg.text).toBe('what does this project do');
+    // Plain text is NOT routed through the slash dispatcher — only the later
+    // '/exit' read reaches it, never the seed.
+    const dispatchInputs = vi.mocked(slashMod.dispatch).mock.calls.map((c) => c[0]);
+    expect(dispatchInputs).not.toContain('what does this project do');
+    // Only ONE readLine — the exit read; iteration 1 consumed the pre-seed.
+    expect(surfaceState.readLineCalls).toBe(1);
+    // The launch prompt was echoed to the renderer (auto-submit affordance).
+    const echoes = vi.mocked(ctx.replRenderer.writeLine).mock.calls.map((c) => String(c[0]));
+    expect(echoes.some((line) => line.includes('what does this project do'))).toBe(true);
+  });
+
+  it('routes a /slash launch arg through the slash dispatcher on the opening turn', async () => {
+    // ctx.initialInput simulates `afk /review`. The pre-seed fast-path echoes
+    // it and, because it starts with '/', hands it to the slash dispatcher —
+    // exactly as if the user typed `/review` as their first line.
+    const ctx = makeCtx({ initialInput: '/review' });
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    // The launch arg reached the slash dispatcher first, before any readLine.
+    const dispatchInputs = vi.mocked(slashMod.dispatch).mock.calls.map((c) => c[0]);
+    expect(dispatchInputs[0]).toBe('/review');
+    // No readLine was needed to dispatch the seed; readLine #1 is the exit read.
+    expect(surfaceState.readLineCalls).toBe(1);
+  });
+
+  it('a bare launch (no initialInput) reads the first turn from input as before', async () => {
+    // Regression guard: absent initialInput, the loop must NOT auto-submit —
+    // iteration 1 reads from the surface exactly as a plain `afk` launch does.
+    surfaceState.readLineQueue = [
+      { text: 'typed first turn', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+    const ctx = makeCtx();
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
+    const firstArg = vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string };
+    expect(firstArg.text).toBe('typed first turn');
+    // Both lines were read — nothing was pre-seeded.
+    expect(surfaceState.readLineCalls).toBe(2);
+  });
+});
+
+describe('runReplLoop — exit_plan_mode drain mirrors the applied mode onto stats (#495)', () => {
+  it('after draining an approved plan-exit seed, stats.permissionMode reflects the flipped mode', async () => {
+    // Regression for #495. takePendingPlanExitSeed applies the deferred flip to
+    // the SESSION's mode internally, but the plan-mode gate and the REPL prompt
+    // read ctx.stats.permissionMode (bootstrap wires the gate to
+    // `() => stats.permissionMode`). The drain MUST mirror the returned mode onto
+    // stats — otherwise the gate stays plan-locked and the operator's prompt
+    // never flips, even though exit_plan_mode reported success.
+    const ctx = makeCtx();
+    ctx.stats.permissionMode = 'plan';
+    // Single-shot seed: first drain yields the approved seed + mode, then undefined.
+    let drained = false;
+    (
+      ctx.session.current as unknown as {
+        takePendingPlanExitSeed: () => Promise<{ message: string; mode: string } | undefined>;
+      }
+    ).takePendingPlanExitSeed = vi.fn(async () => {
+      if (drained) return undefined;
+      drained = true;
+      return { message: 'IMPLEMENT-SEED', mode: 'bypassPermissions' };
+    });
+    // Iteration 1 drains the seed + auto-submits (no readLine); iteration 2 reads '/exit'.
+    surfaceState.readLineQueue = [{ text: '/exit', attachments: [] }];
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    // The applied mode is mirrored onto stats — the gate + prompt now see bypass.
+    expect(ctx.stats.permissionMode).toBe('bypassPermissions');
+    // The seed's message was auto-submitted as the implement turn.
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
+    const firstArg = vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string };
+    expect(firstArg.text).toBe('IMPLEMENT-SEED');
+  });
+});
+
 describe('runReplLoop — shell-passthrough dispatch branch', () => {
   it('routes a `!cmd` line to ShellPassthrough.dispatch and does not run a model turn', async () => {
     // Iteration 1: readLine → '!echo hi' → shell dispatch handles it, continue.
@@ -501,6 +591,141 @@ describe('runReplLoop -- Stop hook fires after runTurn completes', () => {
     expect(stopCall).toBeDefined();
     // Third positional arg must be the explicit 5s timeout.
     expect(stopCall?.[2]).toBe(5000);
+  });
+
+  it('delivers a Stop handler injectContext into the NEXT turn\'s prompt', async () => {
+    surfaceState.readLineQueue = [
+      { text: 'first turn', attachments: [] },
+      { text: 'second turn', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const registry = createHookRegistry();
+    let stopCount = 0;
+    // Return a correction only after the FIRST turn.
+    registry.register('Stop', async () => {
+      stopCount += 1;
+      return stopCount === 1 ? { injectContext: 'CORRECTION: substantiate your Done' } : {};
+    });
+
+    const ctx = makeCtx();
+    ctx.hookRegistry = registry;
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(2);
+    const firstText = (vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string }).text;
+    const secondText = (vi.mocked(runTurn).mock.calls[1]?.[0] as { text: string }).text;
+    // First turn: no injection yet (Stop hasn't fired).
+    expect(firstText).toBe('first turn');
+    // Second turn: the correction was prepended, user text preserved at the tail.
+    expect(secondText).toContain('CORRECTION: substantiate your Done');
+    expect(secondText.trimEnd().endsWith('second turn')).toBe(true);
+  });
+
+  it('consumes a Stop injectContext exactly once (not re-delivered next turn)', async () => {
+    surfaceState.readLineQueue = [
+      { text: 'turn one', attachments: [] },
+      { text: 'turn two', attachments: [] },
+      { text: 'turn three', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const registry = createHookRegistry();
+    let stopCount = 0;
+    registry.register('Stop', async () => {
+      stopCount += 1;
+      return stopCount === 1 ? { injectContext: 'ONE-SHOT-CORRECTION' } : {};
+    });
+
+    const ctx = makeCtx();
+    ctx.hookRegistry = registry;
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(3);
+    const texts = vi.mocked(runTurn).mock.calls.map((c) => (c[0] as { text: string }).text);
+    // Only the SECOND turn carries the correction; the third is clean.
+    expect(texts[0]).toBe('turn one');
+    expect(texts[1]).toContain('ONE-SHOT-CORRECTION');
+    expect(texts[2]).toBe('turn three');
+    expect(texts[2]).not.toContain('ONE-SHOT-CORRECTION');
+  });
+
+  it('ignores a whitespace-only Stop injectContext', async () => {
+    surfaceState.readLineQueue = [
+      { text: 'alpha', attachments: [] },
+      { text: 'beta', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const registry = createHookRegistry();
+    registry.register('Stop', async () => ({ injectContext: '   \n  ' }));
+
+    const ctx = makeCtx();
+    ctx.hookRegistry = registry;
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    const secondText = (vi.mocked(runTurn).mock.calls[1]?.[0] as { text: string }).text;
+    expect(secondText).toBe('beta');
+  });
+
+  it('carries the parsed verdict + evidence onto StopContext (from onTerminalState)', async () => {
+    surfaceState.readLineQueue = [
+      { text: 'do the thing', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    // Make runTurn invoke the loop's onTerminalState callback, as the real
+    // turn-handler does when it parses a Done verdict with no evidence.
+    vi.mocked(runTurn).mockImplementationOnce(
+      async (_input: unknown, _session: unknown, _stats: unknown, handlers: unknown) => {
+        (handlers as { onTerminalState?: (s: unknown, m?: unknown) => void }).onTerminalState?.(
+          { kind: 'done', rawBody: '' },
+          { doneHasCorroboratingEvidence: false },
+        );
+      },
+    );
+
+    const registry = createHookRegistry();
+    const stopHandler = vi.fn(async () => ({}));
+    registry.register('Stop', stopHandler);
+
+    const ctx = makeCtx();
+    ctx.hookRegistry = registry;
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    const received = stopHandler.mock.calls[0]?.[0];
+    expect(received).toMatchObject({
+      event: 'Stop',
+      terminalState: 'done',
+      doneHasCorroboratingEvidence: false,
+    });
+  });
+
+  it('omits verdict fields from StopContext when the turn parsed no terminal state', async () => {
+    // runTurn does NOT call onTerminalState (verdict-less turn) → the loop must
+    // not carry a stale kind onto the Stop context.
+    surfaceState.readLineQueue = [
+      { text: 'chatty turn', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const registry = createHookRegistry();
+    const stopHandler = vi.fn(async () => ({}));
+    registry.register('Stop', stopHandler);
+
+    const ctx = makeCtx();
+    ctx.hookRegistry = registry;
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    const received = stopHandler.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(received.event).toBe('Stop');
+    expect(received.terminalState).toBeUndefined();
+    expect(received.doneHasCorroboratingEvidence).toBeUndefined();
   });
 });
 

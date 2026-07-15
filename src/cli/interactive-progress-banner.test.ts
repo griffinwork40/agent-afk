@@ -66,7 +66,7 @@ describe('interactive REPL — progress banner rendering', () => {
     expect(joined).toMatch(/◦ Researching codebase/);
     // `via {glyph} {ToolName}` — Grep is read-category (● glyph)
     expect(joined).toContain('via ● Grep');
-    expect(joined).toContain('3 tools');
+    expect(joined).toContain('3 tool calls');
     expect(joined).toContain('1.2k tok');
     expect(joined).toContain('5s');
   });
@@ -150,7 +150,7 @@ describe('interactive REPL — progress banner rendering', () => {
     expect(strip(lines[1]!)).toContain('Reading package.json');
     // Read is read-category (● glyph)
     expect(strip(lines[1]!)).toContain('via ● Read');
-    expect(strip(lines[1]!)).toContain('2 tools');
+    expect(strip(lines[1]!)).toContain('2 tool calls');
   });
 
   it('colorizes the via segment by tool category and uses a category-specific glyph', () => {
@@ -207,7 +207,7 @@ describe('formatProgressSummary — one-line summary committed on task completio
     });
     const line = strip(formatProgressSummary(event));
     expect(line).toMatch(/◦ Researching codebase/);
-    expect(line).toContain('7 tools');
+    expect(line).toContain('7 tool calls');
     expect(line).toContain('12k tok');
     expect(line).toContain('15s');
   });
@@ -221,7 +221,7 @@ describe('formatProgressSummary — one-line summary committed on task completio
   it('uses singular tool form for a single tool use', () => {
     const event = mkEvent({ taskId: 't1', description: 'Quick check', toolUses: 1 });
     const line = strip(formatProgressSummary(event));
-    expect(line).toContain('1 tool)');
+    expect(line).toContain('1 tool call)');
     expect(line).not.toContain('1 tools');
   });
 
@@ -237,6 +237,6 @@ describe('formatProgressSummary — one-line summary committed on task completio
     const line = strip(formatProgressSummary(event));
     expect(line).not.toContain('Read');
     expect(line).not.toContain('via');
-    expect(line).toContain('3 tools');
+    expect(line).toContain('3 tool calls');
   });
 });

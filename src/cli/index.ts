@@ -72,13 +72,21 @@ import { registerBrowserCommand } from './commands/browser.js';
 import { registerImproveCommand } from './commands/improve.js';
 import { registerShellInitCommand } from './commands/shell-init.js';
 import { registerTranscriptCommand } from './commands/transcript.js';
+import { registerInsightsCommand } from './commands/insights.js';
 import { setInteractiveUpdateNotices } from './commands/interactive.js';
 import { loadConfig, loadCredential } from './config.js';
 import { providerForModel } from '../agent/providers/index.js';
 import { getModel } from './shared-helpers.js';
 import { runAuthWizard } from './auth-wizard.js';
 import { getVersion } from './version.js';
-import { checkForUpdates, printUpdateBanner, triggerAutoUpdate, checkPendingUpdate } from './update-checker.js';
+import {
+  checkForUpdates,
+  coldStartUpdateCheck,
+  hasUpdateCache,
+  printUpdateBanner,
+  triggerAutoUpdate,
+  checkPendingUpdate,
+} from './update-checker.js';
 
 // Re-export shared helpers for tests
 export {
@@ -125,6 +133,7 @@ registerBrowserCommand(program);
 registerImproveCommand(program);
 registerShellInitCommand(program);
 registerTranscriptCommand(program);
+registerInsightsCommand(program);
 
 // Add aliases
 program.commands.find((c) => c.name() === 'chat')?.alias('c');
@@ -137,8 +146,10 @@ program.addHelpText(
   `
 Examples:
   $ afk                          # start interactive REPL
+  $ afk "what does this do?"     # REPL, auto-submits the prompt as the first turn
+  $ afk /review                  # REPL, runs a slash command / skill on launch
   $ afk --model opus             # REPL with specific model
-  $ afk chat "What is 2+2?"     # one-shot message
+  $ afk chat "What is 2+2?"     # one-shot message (prints and exits)
   $ afk status --format json`,
 );
 
@@ -220,7 +231,15 @@ if (isDirectRun) {
     const config = loadConfig();
     const noCheckArg = process.argv.slice(2).some((a) => a === '--no-update-check');
     const policy = noCheckArg ? ('off' as const) : config.updatePolicy;
-    const updateInfo = checkForUpdates(policy);
+    // Warm cache: the fully synchronous fast path (may spawn a background
+    // refresh if the cache is stale). Cold cache: checkForUpdates() could only
+    // fire a detached fetch and return null, so the banner would never appear
+    // on the very first run — await one short bounded inline fetch instead so
+    // that first run can surface it. Guards (off/CI/NO_UPDATE_NOTIFIER) are
+    // applied inside both functions.
+    const updateInfo = hasUpdateCache()
+      ? checkForUpdates(policy)
+      : await coldStartUpdateCheck(policy);
 
     // Intercept the pending-update message that checkPendingUpdate() would
     // write to stderr, so we can re-emit it AFTER the interactive mode screen

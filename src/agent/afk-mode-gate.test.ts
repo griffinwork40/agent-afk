@@ -171,6 +171,178 @@ describe('createAfkModeGate', () => {
     expect(result.decision).toBeUndefined();
   });
 
+  it('classifies subagent writes against the per-call cwd when hook registry is shared', async () => {
+    // A forked subagent shares the parent hook registry but runs in a sibling
+    // worktree. The per-call cwd (context.cwd, from the child dispatcher's
+    // resolveBase) must classify the child's in-worktree write as inside its
+    // workspace, while an absolute write escaping into the parent tree stays
+    // blocked — proving the gate reads context.cwd ahead of the static cwd.
+    const { gate } = makeGate('autonomous', '/Users/dev/project');
+
+    const allowed = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: 'src/feature.ts' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/Users/dev/project/.afk-worktrees/fix-201',
+    });
+    expect(allowed.decision).toBeUndefined();
+
+    const blocked = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: '/Users/dev/project/src/feature.ts' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/Users/dev/project/.afk-worktrees/fix-201',
+    });
+    expect(blocked.decision).toBe('block');
+  });
+
+  // ---- SECURITY: per-call cwd must not widen the containment ceiling ---------
+  it('SECURITY: refuses a subagent write anchored at an untrusted per-call cwd', async () => {
+    // A forked subagent's cwd is caller-supplied via the `agent` tool and only
+    // format-validated. A child dispatched at an out-of-tree absolute path
+    // (`/tmp`) must NOT have that path trusted as the containment boundary — its
+    // writes are measured against the trusted session root, escape it, and are
+    // flagged high (blocked; subagents never prompt).
+    const { gate } = makeGate('autonomous', '/Users/dev/project');
+
+    // relative write resolves under the untrusted /tmp base → escapes session root
+    const relative = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: 'evil.sh' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/tmp',
+    });
+    expect(relative.decision).toBe('block');
+
+    // absolute write under the untrusted base → escapes session root
+    const absolute = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: '/tmp/evil.sh' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/tmp',
+    });
+    expect(absolute.decision).toBe('block');
+  });
+
+  it('SECURITY: refuses a per-call cwd spoofing an .afk-worktrees/ tree of another repo', async () => {
+    // trustedChildRoot must not trust ANY path containing an `.afk-worktrees/`
+    // segment — only a sibling under the SAME worktrees dir as the session. A
+    // child cwd at `/tmp/.afk-worktrees/evil` (a different repo family) is
+    // untrusted, so its write is measured against the session root and blocked.
+    const { gate } = makeGate('autonomous', '/Users/dev/project');
+    const spoofed = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: 'evil.sh' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/tmp/.afk-worktrees/evil',
+    });
+    expect(spoofed.decision).toBe('block');
+  });
+
+  it('classifies a sibling managed-worktree write as in-workspace when the parent runs in a worktree', async () => {
+    // isolation:"worktree" case: the parent session itself runs in a worktree
+    // (/repo/.afk-worktrees/parent) and dispatches a child into a SIBLING worktree
+    // (/repo/.afk-worktrees/child). The child is not a descendant of the parent
+    // but shares the same .afk-worktrees/ dir, so its in-worktree write is trusted
+    // (allowed) while an escape into the parent's tree stays blocked.
+    const { gate } = makeGate('autonomous', '/repo/.afk-worktrees/parent');
+
+    const inSibling = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: 'src/feature.ts' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/repo/.afk-worktrees/child',
+    });
+    expect(inSibling.decision).toBeUndefined();
+
+    const escaping = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: '/repo/.afk-worktrees/parent/src/feature.ts' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/repo/.afk-worktrees/child',
+    });
+    expect(escaping.decision).toBe('block');
+  });
+
+  it('contains a subagent to its whole worktree when the per-call cwd is a sub-directory of it', async () => {
+    // Regression (over-restriction): when the child's per-call cwd is a SUB-DIR of
+    // a sibling managed worktree, the containment boundary must normalize to the
+    // worktree ROOT (not the sub-dir), so a legitimate write elsewhere in the same
+    // worktree is allowed rather than wrongly flagged high. Before the normalization
+    // the boundary was the raw sub-dir cwd and this write was blocked.
+    const { gate } = makeGate('autonomous', '/repo/.afk-worktrees/parent');
+
+    // absolute write OUTSIDE the sub-dir cwd but INSIDE the child worktree
+    const inWorktree = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: '/repo/.afk-worktrees/child/other.ts' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/repo/.afk-worktrees/child/packages/app',
+    });
+    expect(inWorktree.decision).toBeUndefined();
+
+    // escape out of the child worktree entirely stays blocked
+    const escaping = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: '/repo/.afk-worktrees/parent/x.ts' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/repo/.afk-worktrees/child/packages/app',
+    });
+    expect(escaping.decision).toBe('block');
+  });
+
+  it('SECURITY: refuses a foreign-repo .afk-worktrees/ child even when the session runs in a worktree', async () => {
+    // Exercises the sibling branch's real dirname-inequality path (not the
+    // sessionWt===undefined short-circuit): the session itself runs in a worktree,
+    // and the child cwd sits in a DIFFERENT repo's `.afk-worktrees/` dir. The two
+    // worktree parents differ, so the child is untrusted, its write is measured
+    // against the session root, escapes it, and is blocked.
+    const { gate } = makeGate('autonomous', '/repo/.afk-worktrees/parent');
+    const foreign = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: 'evil.sh' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/other-repo/.afk-worktrees/evil',
+    });
+    expect(foreign.decision).toBe('block');
+  });
+
+  it('classifies a top-level write against the session root when the per-call cwd equals it', async () => {
+    // perCall === sessionRoot (the top-level session, where context.cwd tracks
+    // getCwd() in lockstep): the trust check short-circuits on child===root, the
+    // boundary is the session root, so an in-tree write is allowed and an absolute
+    // escape out of the session tree is blocked.
+    const { gate } = makeGate('autonomous', '/Users/dev/project');
+
+    const inTree = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: 'src/feature.ts' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/Users/dev/project',
+    });
+    expect(inTree.decision).toBeUndefined();
+
+    const escaping = await gate({
+      event: 'PreToolUse',
+      toolName: 'write_file',
+      input: { file_path: '/Users/dev/elsewhere/evil.ts' },
+      parentSessionId: 'parent-session-123',
+      cwd: '/Users/dev/project',
+    });
+    expect(escaping.decision).toBe('block');
+  });
+
   it('getter-at-call-time: gate respects mode changes after construction', async () => {
     const { gate, setMode } = makeGate('autonomous');
     expect(
@@ -423,6 +595,52 @@ describe('createAfkModeGate — high-risk approval round-trip (v1.5)', () => {
       await gate({ ...HIGH_RISK });
       const [event] = calls.mock.calls[0] as [{ kind: string; payload: Record<string, unknown> }];
       expect(event.payload['approvalOutcome']).toBe('unrecognised');
+    });
+
+    it('emits hook_decision with approvalOutcome:hard-block when promptForApproval:false (no prompt)', async () => {
+      // The always-on Telegram-host posture: high-risk ops hard-refuse WITHOUT
+      // soliciting an approval. Regression guard for the forensic gap — before
+      // this the hard-block branch returned before requestApproval's decide(),
+      // so an unattended refusal left no durable hook_decision record.
+      const { writer, calls } = fakeWriter();
+      const route = vi.fn(
+        async (): Promise<ElicitationResult> => ({ action: 'accept', content: { choice: 'approve' } }),
+      );
+      const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, {
+        route,
+        promptForApproval: false,
+        traceWriter: writer,
+      });
+      const result = await gate({ ...HIGH_RISK });
+      expect(result.decision).toBe('block');
+      expect(route).not.toHaveBeenCalled(); // never solicited an approval
+      expect(calls).toHaveBeenCalledTimes(1);
+      const [event] = calls.mock.calls[0] as [{ kind: string; payload: Record<string, unknown> }];
+      expect(event.kind).toBe('hook_decision');
+      expect(event.payload['approvalOutcome']).toBe('hard-block');
+      expect(event.payload['decision']).toBe('block');
+      expect(typeof event.payload['blockedTool']).toBe('string');
+      expect(typeof event.payload['durationMs']).toBe('number');
+    });
+
+    it('emits hook_decision with approvalOutcome:hard-block for a high-risk SUBAGENT op (parentSessionId set)', async () => {
+      // The sub-agent branch shares the same no-prompt hard-block and needs the
+      // same audit record — a forked agent's refused high-risk op must not be
+      // invisible on resume either.
+      const { writer, calls } = fakeWriter();
+      const route = vi.fn(
+        async (): Promise<ElicitationResult> => ({ action: 'accept', content: { choice: 'approve' } }),
+      );
+      const gate = createAfkModeGate(() => 'autonomous' as PermissionMode, undefined, undefined, {
+        route,
+        traceWriter: writer,
+      });
+      const result = await gate({ ...HIGH_RISK, parentSessionId: 'parent-1' });
+      expect(result.decision).toBe('block');
+      expect(route).not.toHaveBeenCalled();
+      expect(calls).toHaveBeenCalledTimes(1);
+      const [event] = calls.mock.calls[0] as [{ kind: string; payload: Record<string, unknown> }];
+      expect(event.payload['approvalOutcome']).toBe('hard-block');
     });
   });
 

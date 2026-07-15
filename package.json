@@ -1,6 +1,6 @@
 {
   "name": "agent-afk",
-  "version": "5.25.8",
+  "version": "5.51.1",
   "description": "Open-source coding-agent harness you can actually change — own the loop (prompts, gates, routing, skills, terminal states), use any model, run long tasks while you're away.",
   "main": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -37,8 +37,10 @@
     "telegram:restart": "node dist/cli/index.js telegram restart",
     "telegram:logs": "node dist/cli/index.js telegram logs",
     "test": "vitest run",
+    "test:file": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest watch",
+    "test:pty": "vitest run --config vitest.pty.config.ts",
     "lint": "tsc --noEmit",
     "audit:sdk": "tsx scripts/audit-sdk-dependency.ts",
     "audit:sdk:check": "tsx scripts/audit-sdk-dependency.ts --check",
@@ -98,7 +100,8 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "better-sqlite3"
+      "better-sqlite3",
+      "node-pty"
     ]
   },
   "dependencies": {
@@ -134,6 +137,7 @@
     "@vitest/coverage-v8": "^2.1.8",
     "@xterm/headless": "^6.0.0",
     "esbuild": "^0.28.0",
+    "node-pty": "^1.1.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"

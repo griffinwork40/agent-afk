@@ -30,6 +30,7 @@ import { createDefaultHookRegistry } from '../default-hook-registry.js';
 import { loadHooksConfig } from '../hooks/config-loader.js';
 import { createDefaultTraceWriter } from '../trace/factory.js';
 import { MemoryStore, injectHotMemory } from '../memory/index.js';
+import { injectCompanionPrimer } from '../companion/index.js';
 import { McpManager, loadMcpConfig } from '../mcp/index.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
 import { emitSessionPhase } from '../trace/emit.js';
@@ -120,6 +121,26 @@ export interface SchedulerOptions {
   pullPollIntervalMs?: number;
   /** Override the queue directory for pull-mode dequeue (defaults to `getQueueDir()`). */
   queueDir?: string;
+  /**
+   * "Done"-verification probe (opt-in; injected by the CLI daemon wiring).
+   *
+   * Given a tick's `responseText` and the names of the tools that ran
+   * successfully this turn (from `Message.metadata.successfulToolNames`),
+   * returns `true` when the response self-certifies a `Done` terminal state
+   * with NO corroborating evidence — the daemon analog of the REPL's
+   * terminal-state gate. Result is threaded onto `TaskCompletionDetails.
+   * doneUnverified` for the push formatter to act on.
+   *
+   * INJECTED (not imported) because the real implementation composes
+   * `parseTerminalState` + `doneHasCorroboratingEvidence`, both of which live in
+   * `src/cli/commands/interactive/` — and `src/agent/` must never import from
+   * `src/cli/` (layering invariant; see `agent/facets/schema.ts`). The CLI
+   * daemon command supplies the wired probe; when omitted (standalone scheduler,
+   * most tests), `runOnce` simply never computes `doneUnverified` (fail-open,
+   * push unchanged). The probe MUST be pure and MUST NOT throw — `runOnce` still
+   * guards it defensively so a bug can never crash a tick.
+   */
+  doneUnverifiedProbe?: (args: { responseText: string; successfulToolNames: readonly string[] }) => boolean;
 }
 
 export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
@@ -143,6 +164,17 @@ export interface TelemetryRecord {
 export interface TaskCompletionDetails {
   /** Full successful task response for out-of-band notifications; not persisted to telemetry. */
   responseText?: string;
+  /**
+   * True when this tick's response self-certified a `Done` terminal state with
+   * NO corroborating evidence this turn (no successful file write/edit or
+   * executed command — the daemon analog of the REPL's terminal-state gate).
+   * Additive/optional: absent on non-`Done` ticks, on ticks with evidence, and
+   * on any parse failure (fail-open). The push formatter downgrades the
+   * completion message to "⚠️ Done (unverified)" only when this is `true` AND
+   * `daemon.verifyDone` is enabled — see `formatTaskCompletion` in
+   * `src/cli/commands/daemon.ts`. Never persisted to telemetry.
+   */
+  doneUnverified?: boolean;
 }
 
 interface RegisteredEntry {
@@ -332,13 +364,32 @@ export class CronScheduler {
       mcpManager = spawned.mcpManager ?? null;
       const response = await session.sendMessage(task.command);
       const responseText = redactInlineSecrets(response.content);
+      // "Done"-verification probe (opt-in via injected `doneUnverifiedProbe`,
+      // ultimately gated on `daemon.verifyDone` at the push layer). Fully
+      // guarded: a probe bug or a metadata surprise must NEVER crash a tick, so
+      // any throw is swallowed and treated as "not unverified" (push unchanged,
+      // fail-open). Feeds the probe the SAME text the notification sees (already
+      // secret-redacted) plus the raw successful-tool names the stream consumer
+      // recorded on the returned Message's metadata.
+      let doneUnverified = false;
+      try {
+        const probe = this.options.doneUnverifiedProbe;
+        if (probe !== undefined) {
+          const successfulToolNames = Array.isArray(response.metadata?.successfulToolNames)
+            ? response.metadata.successfulToolNames
+            : [];
+          doneUnverified = probe({ responseText, successfulToolNames });
+        }
+      } catch {
+        doneUnverified = false;
+      }
       const record: TelemetryRecord = {
         ...baseRecord,
         durationMs: this.now() - startTimeMs,
         status: 'success',
         responseExcerpt: responseText.slice(0, 280),
       };
-      this.writeTelemetry(record, task, { responseText });
+      this.writeTelemetry(record, task, { responseText, ...(doneUnverified ? { doneUnverified: true } : {}) });
       return record;
     } catch (err) {
       const record: TelemetryRecord = {
@@ -596,7 +647,7 @@ export class CronScheduler {
     try {
       const session = this.options.sessionFactory
         ? this.options.sessionFactory(config)
-        : new AgentSession(injectHotMemory(config));
+        : new AgentSession(injectCompanionPrimer(injectHotMemory(config)));
       return { session, memoryStore, ...(mcpManager !== undefined ? { mcpManager } : {}) };
     } catch (err) {
       if (mcpManager) {

@@ -23,7 +23,19 @@ describe('supportsVision', () => {
   });
 
   it('recognises OpenAI vision flagships and the gpt-5.x line', () => {
-    for (const m of ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4-turbo', 'gpt-5', 'gpt-5.5']) {
+    for (const m of [
+      'gpt-4o',
+      'gpt-4o-mini',
+      'gpt-4.1',
+      'gpt-4.1-mini',
+      'gpt-4-turbo',
+      'gpt-5',
+      'gpt-5.5',
+      'gpt-5.6',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+    ]) {
       expect(supportsVision(m), m).toBe(true);
     }
   });
@@ -124,7 +136,17 @@ describe('isReasoningModel', () => {
   });
 
   it('matches gpt-5.x reasoning models (the non-o-series families)', () => {
-    for (const m of ['gpt-5', 'gpt-5.1', 'gpt-5.5', 'gpt-5-mini', 'gpt-5-codex']) {
+    for (const m of [
+      'gpt-5',
+      'gpt-5.1',
+      'gpt-5.5',
+      'gpt-5.6',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'gpt-5-mini',
+      'gpt-5-codex',
+    ]) {
       expect(isReasoningModel(m), m).toBe(true);
     }
   });

@@ -10,10 +10,6 @@
  * @module agent/tools/dispatcher
  */
 
-import path from 'path';
-import { appendFileSync, mkdirSync } from 'fs';
-import { dirname } from 'path';
-import { createHash } from 'node:crypto';
 import { debugLog } from '../../utils/debug.js';
 import { HookBlockedError } from '../../utils/errors.js';
 import { settleWithConcurrencyLimit } from '../concurrency-pool.js';
@@ -29,38 +25,24 @@ import type { ToolHandler, ToolHandlerContext, ConcurrencyClassifier } from './t
 import { checkToolPermission, type ToolPermissionConfig } from './permissions.js';
 import type { CanUseTool, PermissionResult } from '../types/sdk-types.js';
 import { classifyBashCommand } from './readonly-bash.js';
-import { getSessionGrantsPath } from '../../paths.js';
+import { PathGrantManager, type GrantSnapshot } from './grant-manager.js';
+import type { GrantManager } from '../../cli/slash/commands/allow-dir.js';
 import { emitHookDecision } from '../trace/emit.js';
 import type { TraceWriter } from '../trace/index.js';
-import { builtinToolSchemas, agentTool, skillTool, composeTool } from './schemas.js';
-import { memoryToolSchemas } from '../memory/memory-tools.js';
-import { getRuntimeStateTool } from '../awareness/index.js';
+import { defaultConcurrencyClassifier, partitionIntoBatches } from './dispatch-batching.js';
+import { repeatCallFingerprint } from './repeat-circuit-breaker.js';
+import {
+  DENIAL_CIRCUIT_BREAKER_THRESHOLD,
+  DENIAL_BREAKER_FAILURE_CLASS,
+  READ_PATH_TOOLS,
+  isSubagentContainmentDenial,
+  extractDeniedReadPath,
+  buildDenialBreakerMessage,
+} from './denial-circuit-breaker.js';
 
-/**
- * Derived at module load from the union of all built-in tool schemas.
- * A tool is concurrency-safe when its schema declares `concurrencySafe: true`.
- * This replaces the former hand-maintained list and stays automatically in sync
- * with schema changes.
- *
- * External constraint: schemas.ts and memory-tools.ts are the single source
- * of truth. Mutations to those files propagate here without any secondary edit.
- */
-const SAFE_TOOLS: ReadonlySet<string> = new Set(
-  [
-    ...builtinToolSchemas,
-    agentTool,
-    skillTool,
-    composeTool,
-    ...memoryToolSchemas,
-    getRuntimeStateTool,
-  ]
-    .filter((s) => s.concurrencySafe === true)
-    .map((s) => s.name),
-);
-
-export function defaultConcurrencyClassifier(toolName: string): boolean {
-  return SAFE_TOOLS.has(toolName);
-}
+// Re-exported for backward compatibility: external importers (dispatcher.test.ts,
+// schema-classification.test.ts) historically import this from './dispatcher.js'.
+export { defaultConcurrencyClassifier } from './dispatch-batching.js';
 
 /**
  * Repeat-loop circuit breaker threshold.
@@ -85,43 +67,6 @@ export const REPEAT_CIRCUIT_BREAKER_THRESHOLD = 8;
  * current tool. Add a name here only if a real false-trip surfaces.
  */
 const REPEAT_BREAKER_EXEMPT_TOOLS: ReadonlySet<string> = new Set<string>();
-
-/**
- * Stable fingerprint of a tool call for repeat detection: sha256 over
- * `name \0 JSON(input)`. Hashing bounds retained state to 64 hex chars
- * regardless of input size. Identical tool_use blocks from the model
- * serialize identically, so byte-identical calls collide as intended.
- */
-function repeatCallFingerprint(call: ToolCall): string {
-  let input: string;
-  try {
-    input = JSON.stringify(call.input) ?? 'null';
-  } catch {
-    input = String(call.input);
-  }
-  return createHash('sha256').update(call.name).update('\u0000').update(input).digest('hex');
-}
-
-interface Batch {
-  isConcurrencySafe: boolean;
-  indices: number[];
-}
-
-function partitionIntoBatches(
-  calls: ToolCall[],
-  classifier: ConcurrencyClassifier,
-): Batch[] {
-  return calls.reduce<Batch[]>((acc, call, i) => {
-    const safe = classifier(call.name, call.input);
-    const last = acc[acc.length - 1];
-    if (last && safe && last.isConcurrencySafe) {
-      last.indices.push(i);
-    } else {
-      acc.push({ isConcurrencySafe: safe, indices: [i] });
-    }
-    return acc;
-  }, []);
-}
 
 /**
  * Default ceiling on concurrency-safe tool calls run simultaneously within one
@@ -208,6 +153,17 @@ export interface SessionToolDispatcherOptions {
    * calls. Undefined for top-level sessions.
    */
   parentSessionId?: string;
+  /**
+   * The PROVIDER that owns this dispatcher (it implements {@link GrantManager}).
+   * The provider's `buildDispatcher` passes `this`; the dispatcher injects it
+   * onto every PreToolUse/PostToolUse context as `context.grantManager` so
+   * path-scoped hooks resolve THIS session's live grants instead of the
+   * process-global `pathApprovalGrantRef` — which is pinned to the top-level
+   * session and blind to a forked child's own writeRoots (#435/#514). Optional:
+   * test dispatchers that construct directly leave it unset and the hooks fall
+   * back to their ref, preserving prior behavior.
+   */
+  sessionGrantManager?: GrantManager;
   /** Witness-layer trace writer. When provided, every PreToolUse and
    *  PostToolUse dispatch records a `hook_decision` event. */
   traceWriter?: TraceWriter;
@@ -262,6 +218,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly _env: Record<string, string> | undefined;
   private readonly sessionId: string | undefined;
   private readonly parentSessionId: string | undefined;
+  /**
+   * Provider that owns this dispatcher (implements GrantManager). Injected onto
+   * PreToolUse/PostToolUse contexts so path-scoped hooks read THIS session's
+   * live grants. See {@link SessionToolDispatcherOptions.sessionGrantManager}.
+   */
+  private readonly sessionGrantManager: GrantManager | undefined;
   private readonly traceWriter: TraceWriter | undefined;
   /** When true, mutating `bash` commands are blocked (read-only skill child). */
   private readonly readOnlyBash: boolean;
@@ -272,6 +234,26 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * dispatcher reconstruction. See {@link checkRepeatCircuitBreaker}.
    */
   private repeatBreaker: { fingerprint: string; count: number } | null = null;
+
+  /**
+   * Denial circuit breaker state (#546). Counts CONSECUTIVE path-approval READ
+   * denials on a FORKED child (one dispatcher per forked `query()`), reset to
+   * `null` on any successful tool result — so only a fork making zero progress
+   * trips. When `count` reaches {@link DENIAL_CIRCUIT_BREAKER_THRESHOLD} the
+   * dispatcher tags the tripping result `failureClass: 'denial-breaker'`, which
+   * the provider loop surfaces as a loud `error` event. `null` when no denial
+   * has been seen since the last success. See {@link recordForkReadDenial}.
+   */
+  private denialBreaker: { count: number; deniedPaths: string[] } | null = null;
+
+  /**
+   * Shared grant-state machine (issues #361/#362). The hooks bind the
+   * dispatcher's per-consumer behavior: CURRENT `resolveBase` as the
+   * non-revocable anchor (migrates on `setResolveBase`), live `_allowAll`
+   * boolean for the bypass flag, and the construction-bound `sessionId` for
+   * audit entries. See grant-manager.ts for the divergence catalogue.
+   */
+  private readonly grantManager: PathGrantManager;
 
   constructor(opts: SessionToolDispatcherOptions) {
     this.handlers = opts.handlers;
@@ -293,6 +275,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this._env = opts.env;
     this.sessionId = opts.sessionId;
     this.parentSessionId = opts.parentSessionId;
+    this.sessionGrantManager = opts.sessionGrantManager;
     this.traceWriter = opts.traceWriter;
     this.readOnlyBash = opts.readOnlyBash === true;
     this._allowAll = opts.allowAll === true;
@@ -303,6 +286,17 @@ export class SessionToolDispatcher implements ToolDispatcher {
     const defaultRoots = opts.cwd ? [opts.cwd] : [];
     this._readRoots = opts.readRoots ?? defaultRoots.slice();
     this._writeRoots = opts.writeRoots ?? defaultRoots.slice();
+
+    this.grantManager = new PathGrantManager({
+      getReadRoots: () => this._readRoots,
+      getWriteRoots: () => this._writeRoots,
+      // Dispatcher semantics: the CURRENT resolveBase is the non-revocable
+      // anchor (and the getGrants() display base) — after a setResolveBase
+      // migration the NEW cwd is protected, not the launch dir.
+      getProtectedRoot: () => this.resolveBase,
+      getAllowAll: () => this._allowAll,
+      getDefaultSessionId: () => this.sessionId,
+    });
   }
 
   /**
@@ -339,70 +333,43 @@ export class SessionToolDispatcher implements ToolDispatcher {
   }
 
   // ---------------------------------------------------------------------------
-  // Grant API
+  // Grant API — delegates to the shared PathGrantManager (see grant-manager.ts).
   // ---------------------------------------------------------------------------
 
   /**
    * Grant read access to `absPath`. No-op if already present.
    * `resolveBase` is always implicitly readable and need not be added.
    *
-   * Invariant: the audit append fires ONLY when `p` is newly added. Re-granting
-   * an already-granted path is a state no-op and must not emit a duplicate
-   * ledger record — the previous unconditional append let per-tool-call
-   * re-grants of the same root balloon `session-grants.jsonl` ~196x (1,143
-   * unique grants → 224k rows before this fix).
+   * Invariant: the audit append fires ONLY when the path is newly added —
+   * see {@link PathGrantManager.addReadRoot} for the 196x dedup rationale.
    */
   addReadRoot(absPath: string, source: 'slash' | 'tool' = 'slash'): void {
-    const p = path.resolve(absPath);
-    if (!this._readRoots.includes(p)) {
-      this._readRoots.push(p);
-      this.appendAuditLog({ action: 'grant-read', path: p, source });
-    }
+    this.grantManager.addReadRoot(absPath, source);
   }
 
   /**
    * Grant read + write access to `absPath`. Ensures path is in BOTH lists.
-   * Audits `grant-write` only when `p` is newly added to `_writeRoots`, so a
-   * read→write upgrade still records (new to writeRoots) while a repeat
-   * write-grant is silent. See `addReadRoot` for the dedup rationale.
+   * Audits `grant-write` only when the path is newly added to `_writeRoots` —
+   * see {@link PathGrantManager.addWriteRoot}.
    */
   addWriteRoot(absPath: string, source: 'slash' | 'tool' = 'slash'): void {
-    const p = path.resolve(absPath);
-    if (!this._readRoots.includes(p)) {
-      this._readRoots.push(p);
-    }
-    if (!this._writeRoots.includes(p)) {
-      this._writeRoots.push(p);
-      this.appendAuditLog({ action: 'grant-write', path: p, source });
-    }
+    this.grantManager.addWriteRoot(absPath, source);
   }
 
   /**
-   * Remove `absPath` from both root lists. The initial `resolveBase` is
-   * non-revocable: attempts to revoke it are silently ignored.
+   * Remove `absPath` from both root lists. The CURRENT `resolveBase` is
+   * non-revocable: attempts to revoke it are silently ignored. (Note: after a
+   * `setResolveBase` migration the protected anchor is the NEW cwd — this
+   * differs from the providers, which protect the session's INITIAL
+   * resolveBase; see grant-manager.ts module header, divergence #2.)
    */
   revokeRoot(absPath: string, source: 'slash' | 'tool' = 'slash'): void {
-    const p = path.resolve(absPath);
-    // resolveBase is non-revocable
-    if (p === this.resolveBase) return;
-
-    const rIdx = this._readRoots.indexOf(p);
-    if (rIdx !== -1) this._readRoots.splice(rIdx, 1);
-
-    const wIdx = this._writeRoots.indexOf(p);
-    if (wIdx !== -1) this._writeRoots.splice(wIdx, 1);
-
-    this.appendAuditLog({ action: 'revoke', path: p, source });
+    this.grantManager.revokeRoot(absPath, source);
   }
 
   /** Returns a snapshot of current grant state (for /allow-dir display). */
-  getGrants(): { resolveBase: string | undefined; readRoots: string[]; writeRoots: string[]; allowAll: boolean } {
-    return {
-      resolveBase: this.resolveBase,
-      readRoots: this._readRoots.slice(),
-      writeRoots: this._writeRoots.slice(),
-      allowAll: this._allowAll,
-    };
+  getGrants(): GrantSnapshot {
+    return this.grantManager.getGrants();
   }
 
   /**
@@ -482,31 +449,6 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this.subagentExecutor?.setCwd(newCwd);
     this.skillExecutor?.setCwd(newCwd);
     this.composeExecutor?.setCwd(newCwd);
-  }
-
-  private appendAuditLog(entry: {
-    action: 'grant-read' | 'grant-write' | 'revoke';
-    path: string;
-    source: 'slash' | 'tool';
-  }): void {
-    try {
-      const logPath = getSessionGrantsPath();
-      mkdirSync(dirname(logPath), { recursive: true });
-      // Schema symmetry with AnthropicDirectProvider.appendProviderAuditLog:
-      // coalesce missing sessionId to `null` so consumers see a stable
-      // `{ timestamp, sessionId, action, path, source }` shape from both
-      // emission sites — `sessionId` key is always present.
-      const line = JSON.stringify({
-        timestamp: new Date().toISOString(),
-        sessionId: this.sessionId ?? null,
-        action: entry.action,
-        path: entry.path,
-        source: entry.source,
-      });
-      appendFileSync(logPath, line + '\n');
-    } catch {
-      // Audit log is best-effort — never fail a grant operation due to log I/O.
-    }
   }
 
   // Contract: advertised schema MUST mirror the enforced allowlist.
@@ -591,6 +533,61 @@ export class SessionToolDispatcher implements ToolDispatcher {
   }
 
   /**
+   * Denial circuit breaker (#546). Called from the `HookBlockedError` catch with
+   * the block `reason` and the just-built `hook-block` result. Counts the denial
+   * ONLY when ALL of:
+   *   - it is a forked child (`parentSessionId` set — only forks auto-deny reads;
+   *     an interactive session gets a prompt instead), AND
+   *   - the tool is a {@link READ_PATH_TOOLS} read (so write-confinement is never
+   *     counted), AND
+   *   - the block is a genuine path-approval CONTAINMENT denial per {@link
+   *     isSubagentContainmentDenial} — NOT the credential/secret read-denylist
+   *     floor or an arbitrary user-defined `PreToolUse` hook, whose denials the
+   *     breaker's "widen readRoots" remedy would misdirect.
+   * Below the threshold the original block result is returned unchanged; at the
+   * threshold a `denial-breaker` result is returned instead, which the provider
+   * loop converts into a loud `error` event so the parent gets a structured,
+   * actionable failure rather than a fork that burns its wall-clock budget.
+   *
+   * Invariant: consecutive — {@link resetDenialBreaker} clears the count on any
+   * successful tool result, so a fork that probes a couple of out-of-scope
+   * paths and then makes progress never trips.
+   */
+  private recordForkReadDenial(
+    call: ToolCall,
+    blockReason: string | undefined,
+    blockResult: ToolResult,
+  ): ToolResult {
+    if (
+      this.parentSessionId === undefined ||
+      !READ_PATH_TOOLS.has(call.name) ||
+      !isSubagentContainmentDenial(blockReason)
+    ) {
+      return blockResult;
+    }
+    const breaker = this.denialBreaker ?? { count: 0, deniedPaths: [] };
+    breaker.count += 1;
+    const deniedPath = extractDeniedReadPath(call);
+    if (!breaker.deniedPaths.includes(deniedPath)) breaker.deniedPaths.push(deniedPath);
+    this.denialBreaker = breaker;
+    if (breaker.count < DENIAL_CIRCUIT_BREAKER_THRESHOLD) return blockResult;
+    return {
+      content: buildDenialBreakerMessage(breaker.deniedPaths, breaker.count),
+      isError: true,
+      failureClass: DENIAL_BREAKER_FAILURE_CLASS,
+    };
+  }
+
+  /**
+   * Clear the denial breaker's consecutive-denial count. Called on any
+   * successful tool result so the breaker tracks "read denials since the last
+   * progress", not lifetime denials. See {@link recordForkReadDenial}.
+   */
+  private resetDenialBreaker(): void {
+    this.denialBreaker = null;
+  }
+
+  /**
    * Consult the optional `canUseTool` permission callback for a single call.
    * Returns a permission-denied {@link ToolResult} to short-circuit when the
    * policy denies (or throws — fail-closed), or `null` to proceed. On an
@@ -660,8 +657,14 @@ export class SessionToolDispatcher implements ToolDispatcher {
         event: 'PreToolUse',
         toolName: call.name,
         input: call.input,
+        ...(this.resolveBase !== undefined ? { cwd: this.resolveBase } : {}),
         ...(this.parentSessionId !== undefined
           ? { parentSessionId: this.parentSessionId }
+          : {}),
+        // Inject THIS session's provider so path-scoped hooks resolve the real
+        // (possibly forked-child) grants instead of the process-global ref.
+        ...(this.sessionGrantManager !== undefined
+          ? { grantManager: this.sessionGrantManager }
           : {}),
       };
       try {
@@ -671,11 +674,11 @@ export class SessionToolDispatcher implements ToolDispatcher {
         });
       } catch (err) {
         if (err instanceof HookBlockedError) {
-          return {
+          return this.recordForkReadDenial(call, err.reason, {
             content: `Tool "${call.name}" blocked by PreToolUse hook: ${err.message}`,
             isError: true,
             failureClass: 'hook-block',
-          };
+          });
         }
         throw err;
       }
@@ -714,7 +717,11 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // that body (agent/skill/compose special-cases + handler lookup +
     // PostToolUse firing); the duplicate only added drift risk with no
     // behavioral difference, so the single-call path now delegates too.
-    return this.executeCore(call);
+    const coreResult = await this.executeCore(call);
+    // Reset-on-success: a completed (non-error) tool call is progress, so the
+    // denial breaker's consecutive-denial count restarts. See recordForkReadDenial.
+    if (coreResult.isError !== true) this.resetDenialBreaker();
+    return coreResult;
   }
 
   /**
@@ -749,8 +756,13 @@ export class SessionToolDispatcher implements ToolDispatcher {
           event: 'PreToolUse',
           toolName: call.name,
           input: call.input,
+          ...(this.resolveBase !== undefined ? { cwd: this.resolveBase } : {}),
           ...(this.parentSessionId !== undefined
             ? { parentSessionId: this.parentSessionId }
+            : {}),
+          // See execute(): inject THIS session's provider grant manager.
+          ...(this.sessionGrantManager !== undefined
+            ? { grantManager: this.sessionGrantManager }
             : {}),
         };
         try {
@@ -760,11 +772,11 @@ export class SessionToolDispatcher implements ToolDispatcher {
           });
         } catch (err) {
           if (err instanceof HookBlockedError) {
-            results[i] = {
+            results[i] = this.recordForkReadDenial(call, err.reason, {
               content: `Tool "${call.name}" blocked by PreToolUse hook: ${err.message}`,
               isError: true,
               failureClass: 'hook-block',
-            };
+            });
             blocked.add(i);
             continue;
           }
@@ -894,6 +906,34 @@ export class SessionToolDispatcher implements ToolDispatcher {
           results[originalIndex] = await this.executeCore(call);
         }
       }
+
+      // Stamp batch membership onto each result so downstream consumers
+      // (TUI tool-lane render + `tool_call` completed trace event) can tell a
+      // genuine parallel wave apart from back-to-back sequential dispatches —
+      // which are otherwise indistinguishable once a fast root commits to
+      // scrollback ahead of a slow one. 1-based `batchIndex` = ordinal within
+      // the batch; `batchSize` = number of calls dispatched together. A
+      // concurrency-unsafe tool (bash, write_file, …) is always its own
+      // singleton batch, so it lands batchSize=1 and is never badged. Blocked
+      // / short-circuited calls (permission, read-only-bash gate, circuit
+      // breaker) are excluded from `executableCalls`, so they correctly carry
+      // no batch info at all.
+      const batchSize = batch.indices.length;
+      batch.indices.forEach((batchIdx, pos) => {
+        const r = results[executableCalls[batchIdx]!.originalIndex];
+        if (r) {
+          r.batchIndex = pos + 1;
+          r.batchSize = batchSize;
+        }
+      });
+    }
+
+    // Reset-on-success (#546): if any call in this batch executed successfully,
+    // the fork made progress, so the denial breaker's consecutive-denial count
+    // restarts. Blocked/denied calls carry isError:true and never reset. See
+    // recordForkReadDenial.
+    if (results.some((r) => r !== undefined && r.isError !== true)) {
+      this.resetDenialBreaker();
     }
 
     return results;
@@ -1027,6 +1067,11 @@ export class SessionToolDispatcher implements ToolDispatcher {
       output,
       ...(input !== undefined ? { input } : {}),
       ...(this.parentSessionId !== undefined ? { parentSessionId: this.parentSessionId } : {}),
+      // Mirror PreToolUse so the path-approval "Once"-grant revoke mutates the
+      // SAME grant manager the Pre containment check consulted.
+      ...(this.sessionGrantManager !== undefined
+        ? { grantManager: this.sessionGrantManager }
+        : {}),
     };
     void dispatchPostToolUse(this.hookRegistry, postCtx, {
       signal,

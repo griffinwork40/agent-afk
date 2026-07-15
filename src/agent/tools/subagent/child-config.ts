@@ -20,6 +20,7 @@
  */
 
 import { SubagentManager } from '../../subagent.js';
+import type { ReadScopeInputs } from '../../subagent-read-scope.js';
 import type { ModelProvider } from '../../provider.js';
 import type { AgentModelInput, IAgentSession } from '../../types.js';
 import type { AgentConfig } from '../../types/config-types.js';
@@ -58,13 +59,27 @@ export interface BuildChildConfigArgs {
   depth: number;
   maxDepth: number;
   currentCwd: string | undefined;
+  /**
+   * This child's own inherited read roots, precomputed by the dispatching
+   * executor from the manager that forks it (see ../subagent-read-scope). Passed
+   * to the nested grandchild {@link SubagentManager} as its `parentReadRoots` so
+   * a read-open (or `/allow-dir`-widened) read scope propagates transitively
+   * instead of being silently re-narrowed to the child's cwd one level down.
+   */
+  childInheritedReadRoots?: string[];
   /** The dispatching tool-call's abort signal (owns the child manager lifetime). */
   signal: AbortSignal;
   defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl'>;
   resolveApiKeyForModel?: (model: string) => string | undefined;
   defaultSubagentModel?: AgentModelInput;
   childProviderFactory?: (args: ChildProviderFactoryArgs) => ModelProvider;
-  childSkillExecutorFactory?: (depth: number, maxDepth: number, signal: AbortSignal, inheritedCwd?: string) => SkillExecutor;
+  childSkillExecutorFactory?: (
+    depth: number,
+    maxDepth: number,
+    signal: AbortSignal,
+    inheritedCwd?: string,
+    inheritedReadScope?: ReadScopeInputs,
+  ) => SkillExecutor;
   surface?: Surface;
   allowedTools?: string[];
   readOnlyBash?: boolean;
@@ -99,6 +114,13 @@ export interface BuildChildConfigResult {
    * the run was promoted — the registry then owns the detached lifetime.
    */
   childManager: SubagentManager | undefined;
+  /**
+   * Whether the dispatched child can mutate the filesystem (write/edit files
+   * or run mutating bash). The executor reads this to decide whether
+   * `isolation:"worktree"` is meaningful — a read-only child has nothing to
+   * isolate, so its worktree is skipped with a debug note.
+   */
+  childWriteCapable: boolean;
 }
 
 /**
@@ -165,6 +187,20 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
   }
   const effectiveReadOnlyBash =
     args.readOnlyBash === true || resolvedAccess?.bashReadOnly === true;
+
+  // Write-capability — read by the executor to decide whether
+  // isolation:"worktree" is meaningful. A child can mutate the tree when it
+  // can write/edit files OR run non-read-only bash. An unrestricted allowlist
+  // (undefined) is full access → write-capable; a read-only agent
+  // (research-agent, recon fan-out) is not, so its isolation is skipped.
+  const canWriteFiles =
+    effectiveAllowedTools === undefined ||
+    effectiveAllowedTools.includes('write_file') ||
+    effectiveAllowedTools.includes('edit_file');
+  const canMutateViaBash =
+    (effectiveAllowedTools === undefined || effectiveAllowedTools.includes('bash')) &&
+    effectiveReadOnlyBash !== true;
+  const childWriteCapable = canWriteFiles || canMutateViaBash;
   if (resolvedAccess !== undefined && resolvedAccess.droppedTokens.length > 0) {
     // Fail-closed token drops silently NARROW the child's tool surface, so a
     // misconfigured agent file must be visible by default — not only under
@@ -245,6 +281,9 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     // resolveBase + read/write roots anchor at this path. When omitted,
     // the parent inheritance chain stays intact.
     ...(parsed.cwd !== undefined ? { cwd: parsed.cwd } : {}),
+    // #435: pass raw writeRoots through; SubagentManager.forkSubagent composes
+    // them with the child's effective cwd so the child never loses its own tree.
+    ...(parsed.writeRoots !== undefined ? { writeRoots: parsed.writeRoots } : {}),
   } as AgentConfig;
 
   // Wire nesting: give the child its own executor + provider so it can
@@ -266,6 +305,12 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     childManager = new SubagentManager({
       parentAbortSignal: signal,
       ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
+      // Transitive read-scope: seed the grandchild manager with THIS child's
+      // inherited read roots (see ../subagent-read-scope) so a read-open child
+      // does not re-confine its own grandchildren to `[cwd]`.
+      ...(args.childInheritedReadRoots !== undefined
+        ? { parentReadRoots: args.childInheritedReadRoots }
+        : {}),
       // Witness layer: without this, depth-2+ `agent` forks emit no
       // subagent_lifecycle events — the nested manager had no writer and
       // agent-tool dispatches never set config.traceWriter. Mirrors the
@@ -327,7 +372,14 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
       parentModel: childModel,
     });
     const childSkillExecutor = args.childSkillExecutorFactory
-      ? args.childSkillExecutorFactory(depth + 1, maxDepth, signal, currentCwd)
+      ? args.childSkillExecutorFactory(depth + 1, maxDepth, signal, currentCwd, {
+          // Read-scope inheritance (#547): hand the grandchild SkillExecutor
+          // this child's inherited read scope (same value seeded on the
+          // grandchild manager above) so a skill dispatched by an `agent`-tool
+          // child inherits ⊇ the child's scope, not the frozen session scope.
+          parentReadRoots: args.childInheritedReadRoots,
+          parentCwd: currentCwd,
+        })
       : undefined;
     // Pass `model` so the factory routes between AnthropicDirect /
     // OpenAICompatible per `providerForModel(model)`. Without this, every
@@ -362,5 +414,5 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     );
   }
 
-  return { childConfig, childParentSession, childManager };
+  return { childConfig, childParentSession, childManager, childWriteCapable };
 }

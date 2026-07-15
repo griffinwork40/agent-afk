@@ -121,6 +121,16 @@ export interface AgentConfig {
    */
   openaiBaseUrl?: string;
 
+  /**
+   * Per-slot signal set by `applySlotCredentials` for a `provider:
+   * 'chatgpt-oauth'` tier: force ChatGPT-subscription OAuth for this session's
+   * openai-compatible provider — selecting the `~/.codex/auth.json` ChatGPT
+   * token over `OPENAI_API_KEY`/`CODEX_API_KEY` and WITHOUT requiring the global
+   * `AFK_OPENAI_CHATGPT_OAUTH` flag. Lets a ChatGPT-subscription model coexist
+   * with a custom keyed OpenAI model in one session. See `resolveOpenAIAuth`.
+   */
+  forceChatgptOAuth?: boolean;
+
   /** Maximum number of conversation turns (optional) */
   maxTurns?: number;
 
@@ -202,6 +212,19 @@ export interface AgentConfig {
    * SDK options object in `buildQueryOptions`.
    */
   systemPromptSource?: string;
+
+  /**
+   * Hot-memory block (HOT.md wrapped in `<cross-session-memory>` tags),
+   * populated by {@link injectHotMemory} at the top-level surfaces. Carried
+   * as its own field — NOT prepended into {@link systemPrompt} — so the
+   * provider can place it in the cross-session-memory region of the assembled
+   * prompt (after the memory instructions) independently of where the
+   * `# Agent AFK` doctrine + operator overlay (`systemPrompt`) is placed.
+   *
+   * Unset for child sessions (subagents / skills never inject hot memory).
+   * Empty / whitespace is treated as absent by the provider assembler.
+   */
+  hotMemory?: string;
 
   /**
    * MCP server config — typed entry-point for `~/.afk/config/mcp.json`.

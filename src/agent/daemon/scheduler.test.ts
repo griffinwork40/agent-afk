@@ -27,8 +27,14 @@ vi.mock('../default-hook-registry.js', () => ({
 }));
 
 import { CronScheduler, daemonTraceLabel, resolveWorktreePruneRoot } from './scheduler.js';
+// Reusables imported here (test-only — tests are not bound by the
+// src/agent → src/cli layering invariant that the scheduler source honours) so
+// the injected probe mirrors the production `doneUnverifiedProbe` in daemon.ts.
+import { parseTerminalState } from '../../cli/commands/interactive/terminal-state.js';
+import { DONE_EVIDENCE_TOOLS } from '../../cli/commands/interactive/afk-push.js';
 import { getTraceDir } from '../../paths.js';
 import { AgentSession } from '../session/agent-session.js';
+import { McpManager } from '../mcp/index.js';
 import type { AgentConfig } from '../types.js';
 import type { ModelProvider, ProviderEvent, ProviderQuery, ProviderQueryArgs, ProviderUserTurn } from '../provider.js';
 import type { ExecFileFn } from '../worktree-sweep.js';
@@ -64,13 +70,22 @@ afterEach(() => {
 
 /**
  * Build a minimal fake AgentSession whose sendMessage() either resolves or
- * rejects with the given Error.
+ * rejects with the given Error. `metadata` (e.g. `successfulToolNames`) is
+ * attached to the resolved Message so Done-verification paths can be exercised.
  */
-function makeSession(opts: { throws?: Error; response?: string }): AgentSession {
+function makeSession(opts: {
+  throws?: Error;
+  response?: string;
+  metadata?: Record<string, unknown>;
+}): AgentSession {
   return {
     sendMessage: opts.throws
       ? () => Promise.reject(opts.throws)
-      : () => Promise.resolve({ content: opts.response ?? '' }),
+      : () =>
+          Promise.resolve({
+            content: opts.response ?? '',
+            ...(opts.metadata !== undefined ? { metadata: opts.metadata } : {}),
+          }),
     close: () => Promise.resolve(),
   } as unknown as AgentSession;
 }
@@ -316,6 +331,144 @@ describe('CronScheduler telemetry — errorMessage redaction', () => {
   });
 });
 
+describe('CronScheduler — "Done" verification (doneUnverified)', () => {
+  let dir: string;
+  let telemetryPath: string;
+
+  beforeEach(() => {
+    dir = makeTmpDir();
+    telemetryPath = join(dir, 'forge-telemetry.jsonl');
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Mirrors the production probe wired in src/cli/commands/daemon.ts: a `Done`
+  // terminal state with no corroborating evidence tool ⇒ unverified.
+  const probe = ({
+    responseText,
+    successfulToolNames,
+  }: {
+    responseText: string;
+    successfulToolNames: readonly string[];
+  }): boolean => {
+    const verdict = parseTerminalState(responseText);
+    if (verdict === null || verdict.kind !== 'done') return false;
+    return !successfulToolNames.some((name) => DONE_EVIDENCE_TOOLS.has(name));
+  };
+
+  const DONE_RESPONSE = 'Finished the task.\n\n## Done\n- What was done: shipped the change';
+  const BLOCKED_RESPONSE = 'Could not proceed.\n\n## Blocked\n- Blocked by: missing credentials';
+
+  async function runWith(opts: {
+    response: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<TaskCompletionDetails | undefined> {
+    const onTaskComplete = vi.fn();
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () =>
+        makeSession({ response: opts.response, ...(opts.metadata ? { metadata: opts.metadata } : {}) }),
+      onTaskComplete,
+      doneUnverifiedProbe: probe,
+    });
+    scheduler.register({ taskId: 't', command: 'run', trigger: 'cron', cronExpression: '* * * * *' });
+    await scheduler.tick('t');
+    await scheduler.stop();
+    if (!onTaskComplete.mock.calls[0]) return undefined;
+    return onTaskComplete.mock.calls[0][1] as TaskCompletionDetails | undefined;
+  }
+
+  it('Done + no evidence → details.doneUnverified === true', async () => {
+    const details = await runWith({ response: DONE_RESPONSE, metadata: { successfulToolNames: [] } });
+    expect(details?.doneUnverified).toBe(true);
+  });
+
+  it('Done + no metadata (no tools ran) → details.doneUnverified === true', async () => {
+    // Absent metadata is the common tool-less tick; runOnce defaults to [] and
+    // the probe still flags an unbacked Done.
+    const details = await runWith({ response: DONE_RESPONSE });
+    expect(details?.doneUnverified).toBe(true);
+  });
+
+  it('Done + corroborating evidence (write_file) → doneUnverified falsy', async () => {
+    const details = await runWith({
+      response: DONE_RESPONSE,
+      metadata: { successfulToolNames: ['read_file', 'write_file'] },
+    });
+    expect(details?.doneUnverified ?? false).toBe(false);
+  });
+
+  it('Done + only read-only tools → details.doneUnverified === true', async () => {
+    const details = await runWith({
+      response: DONE_RESPONSE,
+      metadata: { successfulToolNames: ['read_file', 'grep', 'glob'] },
+    });
+    expect(details?.doneUnverified).toBe(true);
+  });
+
+  it('non-Done terminal state (Blocked) → doneUnverified falsy even with no evidence', async () => {
+    const details = await runWith({ response: BLOCKED_RESPONSE, metadata: { successfulToolNames: [] } });
+    expect(details?.doneUnverified ?? false).toBe(false);
+  });
+
+  it('no probe injected → doneUnverified never set (fail-open, opt-in)', async () => {
+    const onTaskComplete = vi.fn();
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => makeSession({ response: DONE_RESPONSE, metadata: { successfulToolNames: [] } }),
+      onTaskComplete,
+    });
+    scheduler.register({ taskId: 't', command: 'run', trigger: 'cron', cronExpression: '* * * * *' });
+    await scheduler.tick('t');
+    await scheduler.stop();
+    const details = onTaskComplete.mock.calls[0]?.[1] as TaskCompletionDetails | undefined;
+    expect(details?.doneUnverified).toBeUndefined();
+  });
+
+  it('a throwing probe never crashes the tick (guarded) and yields falsy', async () => {
+    const onTaskComplete = vi.fn();
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => makeSession({ response: DONE_RESPONSE, metadata: { successfulToolNames: [] } }),
+      onTaskComplete,
+      doneUnverifiedProbe: () => {
+        throw new Error('probe boom');
+      },
+    });
+    scheduler.register({ taskId: 't', command: 'run', trigger: 'cron', cronExpression: '* * * * *' });
+    const record = await scheduler.tick('t');
+    await scheduler.stop();
+    // Tick still succeeds; details carry no doneUnverified downgrade.
+    expect(record.status).toBe('success');
+    const details = onTaskComplete.mock.calls[0]?.[1] as TaskCompletionDetails | undefined;
+    expect(details?.doneUnverified).toBeUndefined();
+  });
+
+  it('threads the exact successfulToolNames from Message.metadata into the probe', async () => {
+    const seen: string[][] = [];
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () =>
+        makeSession({ response: DONE_RESPONSE, metadata: { successfulToolNames: ['bash', 'read_file'] } }),
+      onTaskComplete: vi.fn(),
+      doneUnverifiedProbe: ({ successfulToolNames }) => {
+        seen.push([...successfulToolNames]);
+        return false;
+      },
+    });
+    scheduler.register({ taskId: 't', command: 'run', trigger: 'cron', cronExpression: '* * * * *' });
+    await scheduler.tick('t');
+    await scheduler.stop();
+    expect(seen).toEqual([['bash', 'read_file']]);
+  });
+});
+
+// TaskCompletionDetails is imported implicitly through the scheduler module's
+// exported type surface; alias it for the local casts above.
+type TaskCompletionDetails = import('./scheduler.js').TaskCompletionDetails;
+
 describe('CronScheduler — witness trace-writer wiring', () => {
   let dir: string;
   let telemetryPath: string;
@@ -480,6 +633,153 @@ describe('CronScheduler — MCP fixture wiring', () => {
         ]);
         expect(schedulerTestState.cleanupOrder).toEqual(['session.close', 'mcp.disconnect', 'memory.close']);
       } finally {
+        await scheduler?.stop();
+        if (savedHome === undefined) delete process.env['AFK_HOME'];
+        else process.env['AFK_HOME'] = savedHome;
+        if (savedTraceDisabled === undefined) delete process.env['AFK_TRACE_DISABLED'];
+        else process.env['AFK_TRACE_DISABLED'] = savedTraceDisabled;
+        if (savedAllowProjectMcp === undefined) delete process.env['AFK_ALLOW_PROJECT_MCP'];
+        else process.env['AFK_ALLOW_PROJECT_MCP'] = savedAllowProjectMcp;
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    { timeout: 15_000 },
+  );
+});
+
+describe('CronScheduler — spawnSession error-path cleanup (#247)', () => {
+  it(
+    // Covers scheduler.ts spawnSession's first catch (~537-544): McpManager
+    // .fromConfig re-throws when an alwaysLoad server fails to connect.
+    // runOnce()'s own finally cannot close this tick's MemoryStore (its local
+    // stays null — the destructuring assignment from spawnSession never runs
+    // because the awaited call threw), so spawnSession must close it itself
+    // before rethrowing. Assert the tick records the error and no session is
+    // ever constructed (nothing else to leak).
+    'fromConfig throw (alwaysLoad bad command) closes the MemoryStore and records a tick error',
+    async () => {
+      const dir = makeTmpDir();
+      const telemetryPath = join(dir, 'forge-telemetry.jsonl');
+      const savedHome = process.env['AFK_HOME'];
+      const savedTraceDisabled = process.env['AFK_TRACE_DISABLED'];
+      const savedAllowProjectMcp = process.env['AFK_ALLOW_PROJECT_MCP'];
+      process.env['AFK_HOME'] = dir;
+      process.env['AFK_TRACE_DISABLED'] = '1';
+      process.env['AFK_ALLOW_PROJECT_MCP'] = '1';
+      writeFileSync(
+        join(dir, '.mcp.json'),
+        JSON.stringify({
+          mcpServers: {
+            required: {
+              type: 'stdio',
+              command: '/this/path/does/not/exist-mcp',
+              alwaysLoad: true,
+            },
+          },
+        }),
+        'utf-8',
+      );
+
+      schedulerTestState.cleanupOrder.length = 0;
+
+      let scheduler: CronScheduler | undefined;
+      let sessionFactoryCalled = false;
+      try {
+        scheduler = new CronScheduler({
+          telemetryPath,
+          sessionConfig: { cwd: dir },
+          sessionFactory: (config) => {
+            sessionFactoryCalled = true;
+            return new AgentSession(config);
+          },
+        });
+        scheduler.register({
+          taskId: 'scheduler-mcp-fromconfig-throw',
+          command: 'hello',
+          trigger: 'cron',
+          cronExpression: '* * * * *',
+        });
+
+        const record = await scheduler.tick('scheduler-mcp-fromconfig-throw');
+
+        expect(record.status).toBe('error');
+        expect(record.errorMessage).toMatch(/alwaysLoad/);
+        // Only the spawnSession catch's manual memoryStore.close() should
+        // fire — no orphaned SQLite handle, and nothing else to clean up.
+        expect(schedulerTestState.cleanupOrder).toEqual(['memory.close']);
+        // fromConfig throws before spawnSession ever reaches session
+        // construction.
+        expect(sessionFactoryCalled).toBe(false);
+      } finally {
+        await scheduler?.stop();
+        if (savedHome === undefined) delete process.env['AFK_HOME'];
+        else process.env['AFK_HOME'] = savedHome;
+        if (savedTraceDisabled === undefined) delete process.env['AFK_TRACE_DISABLED'];
+        else process.env['AFK_TRACE_DISABLED'] = savedTraceDisabled;
+        if (savedAllowProjectMcp === undefined) delete process.env['AFK_ALLOW_PROJECT_MCP'];
+        else process.env['AFK_ALLOW_PROJECT_MCP'] = savedAllowProjectMcp;
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    { timeout: 15_000 },
+  );
+
+  it(
+    // Covers spawnSession's second catch (~577-591): session construction
+    // throwing AFTER McpManager connected successfully. The partially-built
+    // manager must be disconnected exactly once and this tick's MemoryStore
+    // must still be closed so neither leaks.
+    'session-construction throw after MCP connect disconnects the manager exactly once and closes the MemoryStore',
+    async () => {
+      const dir = makeTmpDir();
+      const telemetryPath = join(dir, 'forge-telemetry.jsonl');
+      const savedHome = process.env['AFK_HOME'];
+      const savedTraceDisabled = process.env['AFK_TRACE_DISABLED'];
+      const savedAllowProjectMcp = process.env['AFK_ALLOW_PROJECT_MCP'];
+      process.env['AFK_HOME'] = dir;
+      process.env['AFK_TRACE_DISABLED'] = '1';
+      process.env['AFK_ALLOW_PROJECT_MCP'] = '1';
+      writeFileSync(
+        join(dir, '.mcp.json'),
+        JSON.stringify({
+          mcpServers: {
+            testsrv: {
+              type: 'stdio',
+              command: process.execPath,
+              args: [MCP_FIXTURE],
+            },
+          },
+        }),
+        'utf-8',
+      );
+
+      schedulerTestState.cleanupOrder.length = 0;
+      const disconnectSpy = vi.spyOn(McpManager.prototype, 'disconnectAll');
+
+      let scheduler: CronScheduler | undefined;
+      try {
+        scheduler = new CronScheduler({
+          telemetryPath,
+          sessionConfig: { cwd: dir },
+          sessionFactory: () => {
+            throw new Error('boom-session-construction');
+          },
+        });
+        scheduler.register({
+          taskId: 'scheduler-mcp-session-throw',
+          command: 'hello',
+          trigger: 'cron',
+          cronExpression: '* * * * *',
+        });
+
+        const record = await scheduler.tick('scheduler-mcp-session-throw');
+
+        expect(record.status).toBe('error');
+        expect(record.errorMessage).toMatch(/boom-session-construction/);
+        expect(disconnectSpy).toHaveBeenCalledTimes(1);
+        expect(schedulerTestState.cleanupOrder).toEqual(['memory.close']);
+      } finally {
+        disconnectSpy.mockRestore();
         await scheduler?.stop();
         if (savedHome === undefined) delete process.env['AFK_HOME'];
         else process.env['AFK_HOME'] = savedHome;

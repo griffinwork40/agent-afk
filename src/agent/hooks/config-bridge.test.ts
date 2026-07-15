@@ -34,6 +34,7 @@ function makeEnabledConfig(overrides: Partial<LoadedHooksConfig> = {}): LoadedHo
     hooks: {},
     userGlobalEnabled: true,
     allowProjectHooks: false,
+    pluginHooksEnabled: false,
     sources: [],
     warnings: [],
     ...overrides,
@@ -45,6 +46,7 @@ function makeDisabledConfig(overrides: Partial<LoadedHooksConfig> = {}): LoadedH
     hooks: {},
     userGlobalEnabled: false,
     allowProjectHooks: false,
+    pluginHooksEnabled: false,
     sources: [],
     warnings: [],
     ...overrides,
@@ -53,8 +55,8 @@ function makeDisabledConfig(overrides: Partial<LoadedHooksConfig> = {}): LoadedH
 
 /** Helper: build a ResolvedMatcherGroup with a default tier. */
 function makeGroup(
-  hooks: Array<{ type: 'command'; command: string; timeoutMs: number }>,
-  opts: { matcher?: string; tier?: 'user-global' | 'project-local' } = {},
+  hooks: Array<{ type: 'command'; command: string; timeoutMs: number; pluginRoot?: string }>,
+  opts: { matcher?: string; tier?: 'user-global' | 'project-local' | 'plugin' } = {},
 ) {
   return {
     ...(opts.matcher !== undefined ? { matcher: opts.matcher } : {}),
@@ -369,9 +371,12 @@ describe('createDefaultHookRegistry integration', () => {
 
   it('createDefaultHookRegistry without hookConfig → 0 config hooks registered', () => {
     const { registry } = createDefaultHookRegistry();
-    // Built-in handlers exist for SubagentStop and SessionEnd, but NO PreToolUse
-    // config hooks since we passed no hookConfig (path-approval disabled above).
-    expect(registry.count('PreToolUse')).toBe(0);
+    // Built-in handlers exist for SubagentStop and SessionEnd, plus the THREE
+    // always-on built-in PreToolUse handlers (the ask-question gate, the
+    // observe-only safe-destruct detector, and the observe-only release-boundary
+    // detector), all registered unconditionally. No further PreToolUse hooks
+    // since we passed no hookConfig (path-approval disabled above).
+    expect(registry.count('PreToolUse')).toBe(3);
   });
 
   it('createDefaultHookRegistry with hookConfig → config hooks ARE registered', () => {
@@ -396,8 +401,9 @@ describe('createDefaultHookRegistry integration', () => {
       hookConfig,
       { cwd: projectCwd },
     );
-    // 1 config hook for PreToolUse
-    expect(registry.count('PreToolUse')).toBe(1);
+    // 3 built-ins (ask-question gate + safe-destruct detector + release-boundary
+    // detector) + 1 config hook
+    expect(registry.count('PreToolUse')).toBe(4);
   });
 
   it('built-in SubagentStop handler still present when hookConfig is provided', () => {
@@ -452,5 +458,82 @@ describe('createDefaultHookRegistry integration', () => {
       { cwd: projectCwd },
     );
     expect(registry.count('SessionStart')).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plugin-tier hooks (Claude Code compat) — independent of enableShellHooks
+// ---------------------------------------------------------------------------
+
+describe('plugin-tier hooks', () => {
+  it('plugin-tier group registers even when userGlobalEnabled is false', () => {
+    const registry = createHookRegistry();
+    const config = makeDisabledConfig({
+      pluginHooksEnabled: true,
+      hooks: {
+        SessionStart: [
+          makeGroup(
+            [{ type: 'command', command: 'exit 0', timeoutMs: 3000 }],
+            { tier: 'plugin' },
+          ),
+        ],
+      },
+    });
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+    expect(registry.count('SessionStart')).toBe(1);
+  });
+
+  it('non-plugin hooks stay gated while a plugin hook registers (mixed config)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const registry = createHookRegistry();
+    const config = makeDisabledConfig({
+      pluginHooksEnabled: true,
+      hooks: {
+        SessionStart: [
+          // user-global group — gated behind enableShellHooks (off) → skipped
+          makeGroup([{ type: 'command', command: 'echo shell', timeoutMs: 3000 }], {
+            tier: 'user-global',
+          }),
+          // plugin group — registers regardless
+          makeGroup([{ type: 'command', command: 'exit 0', timeoutMs: 3000 }], {
+            tier: 'plugin',
+          }),
+        ],
+      },
+    });
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+    // Only the plugin hook registered; the shell hook was skipped.
+    expect(registry.count('SessionStart')).toBe(1);
+    // Warning names the skipped shell hook (not the plugin one).
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('echo shell'));
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('exit 0'));
+  });
+
+  it('CLAUDE_PLUGIN_ROOT is exported to a plugin hook command', async () => {
+    const pluginRoot = join(tmp, 'demo-plugin');
+    // Script echoes $CLAUDE_PLUGIN_ROOT back as additionalContext.
+    const scriptPath = writeScript(
+      'emit-root.sh',
+      '#!/bin/sh\necho "{\\"hookSpecificOutput\\":{\\"additionalContext\\":\\"$CLAUDE_PLUGIN_ROOT\\"}}"\n',
+    );
+    const registry = createHookRegistry();
+    const config = makeDisabledConfig({
+      pluginHooksEnabled: true,
+      hooks: {
+        SubagentStop: [
+          makeGroup(
+            [{ type: 'command', command: scriptPath, timeoutMs: 5000, pluginRoot }],
+            { tier: 'plugin' },
+          ),
+        ],
+      },
+    });
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+    const result = await registry.dispatch({
+      event: 'SubagentStop',
+      subagentId: 'sa-1',
+      status: 'succeeded',
+    });
+    expect(result.injectContext).toBe(pluginRoot);
   });
 });

@@ -116,6 +116,21 @@ export class MessageHandler {
   private bot: Telegraf;
 
   /**
+   * Invariant: chat IDs with a turn claimed by an in-flight handle()/
+   * handlePhoto() call not yet reflected in `session.state`. bot.ts now runs
+   * 'text'/'photo' detached, so a second same-chat update can be dispatched
+   * while the first is still between `getSession()` and the point deep in
+   * `sendMessageStream` where `currentState` actually flips (streaming.ts
+   * sends the "Thinking…" placeholder — a real Telegram round-trip — before
+   * that generator body ever runs `assertCanSend()`). `session.state` alone
+   * misses that window: both updates would see 'idle' and race out of
+   * arrival order (PR #602 review — Codex P1). Checked-and-added
+   * synchronously (no `await` in between) so only the first arrival wins;
+   * released in `finally` once that call's own turn concludes.
+   */
+  private claimedChats = new Set<number>();
+
+  /**
    * Active ask_question elicitations waiting for a text reply.
    * Keys are chat IDs; values are resolver functions that consume
    * the next plain-text message from that chat.
@@ -198,7 +213,17 @@ export class MessageHandler {
 
     const caption = msg?.caption;
 
+    let alreadyClaimed = false;
     try {
+      // Invariant: reserve this chat's turn slot SYNCHRONOUSLY (no `await`
+      // between the check and the add), before the async `getSession()` call
+      // below — see the `claimedChats` field doc for the exact race this
+      // closes. Photos widen the pre-fix race further than text messages
+      // (the CDN download + base64 encode below is a much larger gap than
+      // `ctx.react`), so this check matters even more here.
+      alreadyClaimed = this.claimedChats.has(chatId);
+      if (!alreadyClaimed) this.claimedChats.add(chatId);
+
       // M3+M6: session lookup and queue-depth check happen before getFileLink /
       // download so that allowlist-burst rejections don't burn Telegram API quota
       // or trigger a full CDN download for a message that will be dropped anyway.
@@ -209,7 +234,7 @@ export class MessageHandler {
         this.log('Failed to register chat commands:', err)
       );
 
-      if (session.state !== 'idle') {
+      if (session.state !== 'idle' || alreadyClaimed) {
         // Check queue capacity before downloading: if the queue is already full we
         // can reject immediately without spending Telegram API quota on getFileLink.
         const queue = this.messageQueues.get(chatId);
@@ -317,7 +342,7 @@ export class MessageHandler {
         source: { type: 'base64', media_type, data: base64 },
       });
 
-      if (session.state !== 'idle') {
+      if (session.state !== 'idle' || alreadyClaimed) {
         const depth = this.enqueuePhoto(chatId, ctx, contentBlocks);
         if (depth !== false) await ctx.reply(formatQueued(depth));
         return;
@@ -344,6 +369,10 @@ export class MessageHandler {
       } else {
         await ctx.reply(formatInternalError());
       }
+    } finally {
+      // Only the call that actually reserved the slot releases it — see the
+      // matching comment in handle().
+      if (!alreadyClaimed) this.claimedChats.delete(chatId);
     }
   }
 
@@ -406,11 +435,22 @@ export class MessageHandler {
       this.pendingElicitations.delete(chatId);
     }
 
+    let alreadyClaimed = false;
     try {
       // Ack the inbound message immediately (best-effort) so the user gets
       // instant feedback even while a prior turn is still streaming and this
       // message is queued. Mirrors the best-effort typing-indicator pattern.
       await ctx.react?.('👀').catch(() => {});
+
+      // Invariant: reserve this chat's turn slot SYNCHRONOUSLY (no `await`
+      // between the check and the add) before the async `session.state` check
+      // below. See the `claimedChats` field doc for the exact race this
+      // closes. `ctx.react` above is side-effect-free w.r.t. session state, so
+      // reserving after it (rather than at function entry) is equivalent and
+      // keeps the reaction-ack behavior unchanged for a losing call.
+      alreadyClaimed = this.claimedChats.has(chatId);
+      if (!alreadyClaimed) this.claimedChats.add(chatId);
+
       const session = await this.sessionManager.getSession(chatId);
 
       // Register dynamic commands for this chat (non-blocking)
@@ -418,7 +458,7 @@ export class MessageHandler {
         this.log('Failed to register chat commands:', err)
       );
 
-      if (session.state !== 'idle') {
+      if (session.state !== 'idle' || alreadyClaimed) {
         const depth = this.enqueueMessage(chatId, ctx, messageText);
         if (depth !== false) await ctx.reply(formatQueued(depth));
         return;
@@ -439,6 +479,11 @@ export class MessageHandler {
       } else {
         await ctx.reply(formatInternalError());
       }
+    } finally {
+      // Only the call that actually reserved the slot releases it — a losing
+      // (already-claimed) call never owned it and must not clear the winner's
+      // still-in-flight claim out from under it.
+      if (!alreadyClaimed) this.claimedChats.delete(chatId);
     }
   }
 

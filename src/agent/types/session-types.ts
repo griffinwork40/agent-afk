@@ -98,6 +98,13 @@ export type OutputEvent =
   // on this event so the re-streamed text does not visibly duplicate. See
   // ProviderEvent 'stream.retry' for the full contract.
   | { type: 'stream_retry' }
+  // Live rate-limit / backoff marker. Emitted while the anthropic-direct
+  // provider is throttled (429/503/529 + retry-after) and the SDK is sleeping
+  // out the backoff inside a single request. Surfaces that render a live status
+  // banner show `rate-limited · retrying in ~Ns` for the duration; unlike
+  // `stream_retry` it does NOT invalidate already-streamed text. See
+  // ProviderEvent 'rate_limit' for the full contract.
+  | { type: 'rate_limit'; retryAfterMs?: number }
   // Skill-emitted panel/card payload. Skills call `emitCard(spec)` from
   // `src/skills/_lib/emit-card.ts`; the renderer flushes pending content
   // and renders via `card(spec)` from `src/cli/render.ts`.
@@ -235,12 +242,14 @@ export interface IAgentSession {
   /**
    * Return and CLEAR any implement-turn queued by an approved `exit_plan_mode`
    * tool call. Atomically applies the deferred permission-mode flip (closing the
-   * mid-turn TOCTOU window) then returns the seed message. The REPL drains this
-   * post-turn and auto-submits the message as a fresh user turn (reproducing
+   * mid-turn TOCTOU window) then returns BOTH the seed message AND the mode it
+   * flipped to. The REPL drains this post-turn: it mirrors `mode` onto
+   * `stats.permissionMode` (the value the plan-mode gate and prompt read — see
+   * #495) and auto-submits `message` as a fresh user turn (reproducing
    * `/plan off`'s save-and-implement handoff). Returns `undefined` when nothing
-   * is pending.
+   * is pending (or when the deferred flip rejected and the seed was dropped).
    */
-  takePendingPlanExitSeed(): Promise<string | undefined>;
+  takePendingPlanExitSeed(): Promise<{ message: string; mode: PermissionMode } | undefined>;
 
   waitForInitialization(): Promise<SessionMetadata>;
 

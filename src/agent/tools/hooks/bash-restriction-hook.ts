@@ -153,7 +153,12 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     // approval path exists that the model can be redirected to. Headless
     // surfaces (afk chat, daemon, threads, subagents of headless sessions)
     // never wire it.
-    const grantManager = opts.getGrantManager();
+    //
+    // Prefer the dispatcher-injected grant manager (this session's provider)
+    // over the process-global ref so a forked child's restricted-root view is
+    // derived from ITS own grants, not the top-level session's (#435/#514).
+    // The ref remains the fallback when no dispatcher injected one.
+    const grantManager = context.grantManager ?? opts.getGrantManager();
     const interactiveSurface = grantManager !== undefined;
 
     // Precompute the sensitive-path view ONCE — both checks below consume it.

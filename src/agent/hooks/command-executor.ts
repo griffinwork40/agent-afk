@@ -15,6 +15,12 @@
  *   `decision: "block", reason: "…"`          → block with explanation
  *   `hookSpecificOutput.additionalContext`     → `injectContext` in result
  *
+ * This module is event-agnostic: it maps `additionalContext` into
+ * `HookDecision.injectContext` regardless of which event triggered it. What
+ * happens to that value next is caller-defined per event — see `../hooks.js`
+ * for the full contract (notably `Stop`, where a config-driven shell hook's
+ * `additionalContext` ends up prepended to the *next* turn's prompt).
+ *
  * @module agent/hooks/command-executor
  */
 
@@ -33,6 +39,14 @@ export interface ExecuteCommandOptions {
   agentCwd: string;
   sessionId?: string;
   timeoutMs: number;
+  /**
+   * Absolute plugin root for a plugin-contributed hook (Claude Code compat).
+   * When set, the executor exports `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PROJECT_DIR`
+   * so plugin hook commands referencing `${CLAUDE_PLUGIN_ROOT}` resolve their
+   * bundled script paths. Undefined for user-global / project-local config
+   * hooks (they use AFK's own `AFK_PROJECT_DIR`).
+   */
+  pluginRoot?: string;
 }
 
 export interface CommandExecutorResult {
@@ -148,6 +162,14 @@ export async function executeCommand(
   childEnv['AFK_SESSION_ID'] = sessionId ?? '';
   childEnv['AFK_HOOK_EVENT'] = context.event;
   childEnv['AFK_TOOL_NAME'] = toolName;
+  // Claude Code plugin-hook compatibility: when this hook was contributed by a
+  // plugin, export the documented plugin path vars so `${CLAUDE_PLUGIN_ROOT}`
+  // (and `${CLAUDE_PROJECT_DIR}`) in the command resolve. These are non-secret
+  // paths, safe to forward, and set only for plugin-sourced hooks.
+  if (opts.pluginRoot !== undefined) {
+    childEnv['CLAUDE_PLUGIN_ROOT'] = opts.pluginRoot;
+    childEnv['CLAUDE_PROJECT_DIR'] = agentCwd;
+  }
   // Deliberate omission: no AFK_TOOL_ERROR env var for PostToolUseFailure.
   // The error string is available in the stdin JSON payload under the 'error'
   // key. Injecting it as an env var risks shell-injection if the error message

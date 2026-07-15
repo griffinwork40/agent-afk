@@ -83,34 +83,48 @@ knobs.)
 
 An unconfigured install behaves exactly as before this feature:
 
-| Tier     | Default id                      | Legacy aliases            |
+| Tier     | Default id                      | Identity alias (fixed)    |
 | -------- | ------------------------------- | ------------------------- |
 | `local`  | `` (empty — user-configured)    | —                         |
 | `small`  | `claude-haiku-4-5-20251001`     | `haiku`                   |
 | `medium` | `claude-sonnet-5`             | `sonnet`, `sonnet_1m`     |
 | `large`  | `claude-opus-4-8`               | `opus`, `opus_1m`         |
 
-## Selecting a tier
+## Identity aliases vs. capability tiers
+
+The built-in Claude handles (`haiku`/`sonnet`/`opus`/`fable`/`*_1m`) are
+**fixed-identity aliases**, not tier aliases: they resolve to their concrete
+model **regardless of how the tiers are bound**. Rebinding `medium` to (say) an
+OpenAI model therefore does NOT change what `sonnet` means — only the neutral
+tier names (`local`/`small`/`medium`/`large`) and your custom names follow the
+bindings. (Before this split, `sonnet` was a mere alias for the `medium` tier,
+so rebinding `medium` silently hijacked the `sonnet` handle — and flipped the
+default session model with it, since the default is the `medium` tier.)
+
+## Selecting a model
 
 Anywhere a model is named — `AFK_MODEL` / `afk -m <…>`, the REPL/Telegram
 `/model` command, and the `agent`/`compose`/`skill` tools' `model` parameter —
 you may pass a **tier name** (`local`/`small`/`medium`/`large`), your **custom
-name**, a **legacy alias** (`haiku`/`sonnet`/`opus`), the `auto` sentinel, or a
-**raw model id**.
+name**, an **identity alias** (`haiku`/`sonnet`/`opus`/`fable`/`*_1m` — always
+the fixed model), a **raw model id** (including a full `claude-…` wire id or an
+`org/model` id), or the `auto` sentinel.
 
 ## Resolution precedence
 
-For any model input string (`slotForInput` / `resolveModelInput` in
+For any model input string (`slotForInput` / `resolveBinding` in
 `src/agent/session/model-slots.ts`):
 
-1. **custom name** — a user-assigned `name` on a binding (case-insensitive)
-2. **neutral name** — `local` | `small` | `medium` | `large`
-3. **legacy alias** — `haiku`→small, `sonnet`/`sonnet_1m`→medium, `opus`/`opus_1m`→large
+1. **custom name** — a user-assigned `name` on a binding (case-insensitive) → tier
+2. **neutral name** — `local` | `small` | `medium` | `large` → tier
+3. **identity alias** — `haiku`/`sonnet`/`opus`/`fable`/`*_1m` → their fixed wire id (never a tier)
 4. otherwise — a raw concrete id or the `auto` sentinel (passthrough, unchanged)
 
-A resolved slot expands to `bindings[slot].id`. The concrete id is what reaches
-the provider SDK **and** what `providerForModel` routes on — so a tier rebound to
-a non-Anthropic id (e.g. `small → gpt-4o-mini`) routes to `openai-compatible`.
+A resolved TIER expands to `bindings[slot].id`; an identity alias expands to its
+fixed wire id. The concrete id is what reaches the provider SDK **and** what
+`providerForModel` routes on — so a tier rebound to a non-Anthropic id (e.g.
+`small → gpt-4o-mini`) routes to `openai-compatible`, while an identity alias
+always routes to its own model's provider.
 
 ## How it works
 
@@ -147,9 +161,33 @@ falls back to defaults + env when constructed without the CLI config loader.
   (own key) on a third.
 - Per-tier credentials via afk.config.json or the `AFK_MODEL_*` env vars.
 
+## Availability
+
+`src/agent/auth/model-availability.ts` exports a read-only, synchronous
+`modelAvailability(model, bindings?)` predicate (and its boolean shorthand
+`isModelAvailable`) used purely to **label** model picker handles with an
+auth hint — e.g. a tier bound to an OpenAI id with no `OPENAI_API_KEY`
+resolvable, or a `chatgpt-oauth` slot with no `~/.codex/auth.json` token.
+
+Guarantees:
+
+- **Additive only.** Labeling never filters, reorders, or removes a handle,
+  and never blocks selection — every alias in `MODEL_ALIASES_HINT` stays
+  listed and selectable regardless of its computed availability. Only the
+  Telegram `/model` inline-keyboard button text and the CLI `/model`
+  non-TTY alias list are annotated today; callback data / selected values
+  are unchanged. The interactive arrow-key picker (`runPicker`) is not yet
+  annotated — see the code comment at its call site in
+  `src/cli/slash/commands/info.ts`.
+- **Conservative.** Any uncertainty (an unrecognized provider shape, a
+  custom `baseUrl` endpoint whose key requirement can't be known from here,
+  or an internal error) resolves to `available: true` — a working model is
+  never hidden behind a false negative.
+
 ## See also
 
 - `src/agent/session/model-slots.ts` — bindings, resolver, defaults, config parse.
 - `src/agent/session/slot-credentials.ts` — per-slot credential application.
 - `src/agent/providers/index.ts` — `providerForModel` resolution-before-routing.
+- `src/agent/auth/model-availability.ts` — additive, conservative availability labeling.
 - `docs/env-registry.md` — `AFK_MODEL_{LOCAL,SMALL,MEDIUM,LARGE}{,_BASE_URL,_API_KEY}`.

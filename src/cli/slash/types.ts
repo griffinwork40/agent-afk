@@ -52,7 +52,7 @@ export interface ToolEvent {
   isError?: boolean;
 }
 
-/** A single stored user/assistant exchange — used by /history and /save. */
+/** A single stored user/assistant exchange — used by /history. */
 export interface TurnRecord {
   user: string;
   assistant: string;
@@ -81,7 +81,7 @@ export interface SessionStats {
    * input+output+cache (which mixes cumulative input with last-round cache).
    */
   turnTokens: Array<{ input: number; output: number; cache: number; footprint?: number }>;
-  /** Full turn records (user + assistant pair) for /history and /save. */
+  /** Full turn records (user + assistant pair) for /history. */
   turns: TurnRecord[];
   /**
    * Current active model. Holds the exact string the user supplied (short
@@ -112,8 +112,8 @@ export interface SessionStats {
   sessionId?: string;
   /**
    * Human-readable session name (kebab-case slug). Auto-derived from the
-   * first user message by `recordTurn`, or set explicitly via `/name` (or
-   * `/save <name>`). Persisted as metadata on the <sessionId>.json sidecar —
+   * first user message by `recordTurn`, or set explicitly via `/name`.
+   * Persisted as metadata on the <sessionId>.json sidecar —
    * never used as the filename — so `/resume` can show it instead of a UUID
    * and `--resume <name>` / `/resume <name>` can resolve by it.
    */

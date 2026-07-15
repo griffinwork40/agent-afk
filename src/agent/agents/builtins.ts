@@ -51,6 +51,24 @@ Rules:
 Reply compactly: the answer first, then evidence as file:line citations, then open questions or paths not checked. No preamble.`;
 
 /**
+ * Anti-runaway tool-use-round bound for the read-only research/review builtins.
+ *
+ * The `agent`-tool dispatch path is unlimited-by-default: `child-config.ts`
+ * resolves a named dispatch's `maxToolUseIterations` to 0 (no cap) when neither
+ * the call-site nor the definition sets one, deliberately bypassing
+ * SubagentManager's `SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS` (50) — which only
+ * guards internal skill/compose forks. Unbounded is defensible for a real
+ * multi-step worker (`general-purpose`), but a READ-ONLY research/review agent
+ * never legitimately needs many rounds; without a bound it can loop on a hard
+ * task until an external cutoff aborts it mid-loop, surfacing as an opaque
+ * failure. Bounding it routes a runaway through the graceful capped-partial
+ * wind-down instead. Value mirrors `SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS`;
+ * duplicated (not imported) to keep `agents/` off the `subagent.ts` module
+ * graph — same rationale as the KNOWN_AFK_TOOL_NAMES dup in resolve.ts.
+ */
+const READONLY_AGENT_MAX_TOOL_USE_ITERATIONS = 50;
+
+/**
  * Build the built-in agents, keyed by name.
  *
  * A fresh map per call — callers merge it into a mutable registry under
@@ -78,6 +96,11 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
         // research-agent to dispatching ONLY git-investigator (no bare/other
         // dispatch), so the read-only contract can't be escalated.
         tools: [...researchAgent.allowedTools, 'Agent(git-investigator)'],
+        // Anti-runaway bound (see READONLY_AGENT_MAX_TOOL_USE_ITERATIONS): a
+        // read-only research/review agent that keeps tool-calling without ever
+        // emitting a final message otherwise runs unbounded on the (uncapped)
+        // agent-tool dispatch path and dies opaquely when cut off mid-loop.
+        maxToolUseIterations: READONLY_AGENT_MAX_TOOL_USE_ITERATIONS,
       },
     },
     {
@@ -88,6 +111,13 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
         prompt: vendoredPromptBody(gitInvestigator.systemPrompt),
         tools: [...gitInvestigator.allowedTools],
         model: gitInvestigator.model,
+        // Same anti-runaway bound as research-agent / Explore: git-investigator
+        // is a read-only git-archaeology leaf (dispatched by research-agent),
+        // so it never needs an unbounded tool-use loop. Without a cap it can
+        // spin on a hard task until an external wall-clock cutoff kills it
+        // mid-loop and it surfaces as an opaque failure rather than a graceful
+        // capped-partial wind-down. See READONLY_AGENT_MAX_TOOL_USE_ITERATIONS.
+        maxToolUseIterations: READONLY_AGENT_MAX_TOOL_USE_ITERATIONS,
       },
       // The vendored definition grants Bash for git archaeology; its contract
       // is read-only ("Runs git commands only — no mutations"). Enforce that
@@ -117,6 +147,9 @@ export function builtinAgents(): Map<string, RegisteredAgent> {
         prompt: EXPLORE_PROMPT,
         tools: ['Read', 'Grep', 'Glob', 'list_directory'],
         model: 'haiku',
+        // Same anti-runaway bound as research-agent: Explore is a read-only
+        // search leaf, so it never needs an unbounded tool-use loop.
+        maxToolUseIterations: READONLY_AGENT_MAX_TOOL_USE_ITERATIONS,
       },
     },
   ];

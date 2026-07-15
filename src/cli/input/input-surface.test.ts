@@ -12,7 +12,7 @@
  * changes.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { PassThrough } from 'node:stream';
 import type { Interface as ReadlineInterface } from 'readline';
 import chalk from 'chalk';
@@ -187,6 +187,88 @@ describe('InputSurface', () => {
       const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
       expect(() => surface.setBackgroundHandler(() => {})).not.toThrow();
       expect(() => surface.setBackgroundHandler(null)).not.toThrow();
+    });
+
+    describe('AFK_PLAIN_OUTPUT full render opt-out (Lever 1)', () => {
+      // Regression for the "--plain doesn't suppress the persistent
+      // compositor" bug. Root cause: armCompositor()'s early-return only
+      // checked `!stdout.isTTY || !stdin.isTTY` — a --plain session on a
+      // real TTY (both streams report isTTY: true) still armed the
+      // persistent compositor, leaving setCompositor() a no-op downstream
+      // (repl-renderer.ts) while the compositor itself stayed live. Adding
+      // isPlainOutputRequested() to the guard makes armCompositor() agree
+      // with the render seam: getCompositor() stays null, so readLine()
+      // falls through to the non-TTY readWithAutocomplete reader — the
+      // intended opt-out tradeoff.
+      afterEach(() => {
+        vi.unstubAllEnvs();
+      });
+
+      it('armCompositor is a no-op when AFK_PLAIN_OUTPUT=1 even though stdout/stdin are TTYs', async () => {
+        vi.stubEnv('AFK_PLAIN_OUTPUT', '1');
+        const stdout = makeMockStdout();
+        const stdin = makeMockStdin();
+        const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+
+        await surface.armCompositor({
+          promptFn: () => '> ',
+          onCancel: () => {},
+          stdout,
+          stdin,
+        });
+
+        expect(surface.getCompositor()).toBeNull();
+      });
+
+      it('armCompositor is a no-op when AFK_PLAIN_OUTPUT=true (case-insensitive) on a TTY', async () => {
+        vi.stubEnv('AFK_PLAIN_OUTPUT', 'TRUE');
+        const stdout = makeMockStdout();
+        const stdin = makeMockStdin();
+        const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+
+        await surface.armCompositor({
+          promptFn: () => '> ',
+          onCancel: () => {},
+          stdout,
+          stdin,
+        });
+
+        expect(surface.getCompositor()).toBeNull();
+      });
+
+      it('arms normally on a TTY when AFK_PLAIN_OUTPUT is unset (no behavior change)', async () => {
+        vi.stubEnv('AFK_PLAIN_OUTPUT', undefined as unknown as string);
+        const stdout = makeMockStdout();
+        const stdin = makeMockStdin();
+        const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+
+        await surface.armCompositor({
+          promptFn: () => '> ',
+          onCancel: () => {},
+          stdout,
+          stdin,
+        });
+
+        expect(surface.getCompositor()).not.toBeNull();
+        await surface.dispose();
+      });
+
+      it('does not suppress arming for unrecognized values (e.g. "0")', async () => {
+        vi.stubEnv('AFK_PLAIN_OUTPUT', '0');
+        const stdout = makeMockStdout();
+        const stdin = makeMockStdin();
+        const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+
+        await surface.armCompositor({
+          promptFn: () => '> ',
+          onCancel: () => {},
+          stdout,
+          stdin,
+        });
+
+        expect(surface.getCompositor()).not.toBeNull();
+        await surface.dispose();
+      });
     });
 
     it('readLine on an armed TTY surface does not call readWithAutocomplete (persistent path)', async () => {
@@ -622,6 +704,110 @@ describe('InputSurface', () => {
       expect(surface.getCompositor()).toBe(compositor);
 
       await surface.dispose();
+    });
+  });
+
+  /**
+   * Auto-resume wake support — the seam that lets a settled background
+   * subagent wake an idle prompt without a keystroke (see
+   * loop-iteration.ts `onInjectable` wiring). `abortPendingRead()` resolves
+   * an in-flight compositor read with an EMPTY payload; `isAwaitingInput()`
+   * and `bufferIsEmpty()` gate that wake so it never clobbers a half-typed
+   * line or fires when no read is blocked.
+   */
+  describe('auto-resume wake support (abortPendingRead / isAwaitingInput / bufferIsEmpty)', () => {
+    it('isAwaitingInput() tracks the in-flight compositor read: false → true → false', async () => {
+      const stdout = makeMockStdout();
+      const stdin = makeMockStdin();
+      const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+      await surface.armCompositor({ promptFn: () => 'afk › ', onCancel: () => {}, stdout, stdin });
+
+      expect(surface.isAwaitingInput()).toBe(false);
+      const readPromise = surface.readLine({ promptFn: () => 'afk › ' });
+      expect(surface.isAwaitingInput()).toBe(true);
+
+      surface.abortPendingRead();
+      await readPromise;
+      expect(surface.isAwaitingInput()).toBe(false);
+
+      await surface.dispose();
+    });
+
+    it('abortPendingRead() resolves the in-flight read with an empty payload (no keypress)', async () => {
+      const stdout = makeMockStdout();
+      const stdin = makeMockStdin();
+      const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+      await surface.armCompositor({ promptFn: () => 'afk › ', onCancel: () => {}, stdout, stdin });
+
+      const readPromise = surface.readLine({ promptFn: () => 'afk › ' });
+      surface.abortPendingRead();
+      const result = await readPromise;
+
+      expect(result).toEqual({ text: '', attachments: [] });
+      await surface.dispose();
+    });
+
+    it('abortPendingRead() clears onSubmit so a later Enter cannot double-fire, and the NEXT read works normally', async () => {
+      const stdout = makeMockStdout();
+      const stdin = makeMockStdin();
+      const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+      await surface.armCompositor({ promptFn: () => 'afk › ', onCancel: () => {}, stdout, stdin });
+
+      // Wake-abort the first read.
+      const first = surface.readLine({ promptFn: () => 'afk › ' });
+      surface.abortPendingRead();
+      expect(await first).toEqual({ text: '', attachments: [] });
+
+      // A stray Enter arriving before the next read must be a no-op (onSubmit
+      // was cleared by abortPendingRead) — it must not resolve anything.
+      stdin.emit('keypress', undefined, { name: 'return' });
+
+      // The next real read wires a fresh handler and resolves with typed text.
+      const second = surface.readLine({ promptFn: () => 'afk › ' });
+      for (const ch of 'again') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      stdin.emit('keypress', undefined, { name: 'return' });
+      expect((await second).text).toBe('again');
+
+      await surface.dispose();
+    });
+
+    it('abortPendingRead() is a no-op when no read is in flight', async () => {
+      const stdout = makeMockStdout();
+      const stdin = makeMockStdin();
+      const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+      await surface.armCompositor({ promptFn: () => 'afk › ', onCancel: () => {}, stdout, stdin });
+
+      // No readLine outstanding — must not throw.
+      expect(() => surface.abortPendingRead()).not.toThrow();
+      expect(surface.isAwaitingInput()).toBe(false);
+
+      await surface.dispose();
+    });
+
+    it('bufferIsEmpty() is true on a fresh idle prompt and false once text is typed', async () => {
+      const stdout = makeMockStdout();
+      const stdin = makeMockStdin();
+      const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+      await surface.armCompositor({ promptFn: () => 'afk › ', onCancel: () => {}, stdout, stdin });
+
+      const readPromise = surface.readLine({ promptFn: () => 'afk › ' });
+      expect(surface.bufferIsEmpty()).toBe(true);
+
+      for (const ch of 'half') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      expect(surface.bufferIsEmpty()).toBe(false);
+
+      // Cleanup: dispose rejects the in-flight read.
+      await surface.dispose();
+      await expect(readPromise).rejects.toThrow('disposed');
+    });
+
+    it('isAwaitingInput() and bufferIsEmpty() are inert on a never-armed (non-TTY) surface', () => {
+      const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+      // No compositor: no wake seam. isAwaitingInput must be false (so the
+      // wake path self-gates off) and bufferIsEmpty defaults true.
+      expect(surface.isAwaitingInput()).toBe(false);
+      expect(surface.bufferIsEmpty()).toBe(true);
+      expect(() => surface.abortPendingRead()).not.toThrow();
     });
   });
 });

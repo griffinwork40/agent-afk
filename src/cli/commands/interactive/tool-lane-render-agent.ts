@@ -1,6 +1,7 @@
 import { palette } from '../../palette.js';
 import { styleForToolName } from '../../tool-category.js';
 import { getTerminalWidth } from '../../terminal-size.js';
+import { formatToolCallStat } from '../../format-utils.js';
 import {
   MAX_VISIBLE_CHILDREN,
   formatOutcome,
@@ -8,10 +9,57 @@ import {
   doneGlyph,
   sanitizeLabel,
   shortenPaths,
+  batchBadge,
 } from './tool-lane-format.js';
 import type { ToolEntry, Entry } from './tool-lane-render.js';
 import { getGlyphs, clampLineToTerminal } from './tool-lane-render.js';
 import { renderFlushChildren } from './tool-lane-render-children.js';
+
+/**
+ * Compose a NESTING root's committed-scrollback closer — the `Done (…)` line —
+ * as a fully-styled string: the dimmed result-summary followed by the
+ * concurrency-batch badge (` ∥i/N`) when the root ran in a parallel wave
+ * (`agent.result.batchSize > 1`). Returns `undefined`/empty as-is for a falsy
+ * summary so no phantom closer is synthesized (`addResultSummarySynthetic` skips
+ * a falsy summary).
+ *
+ * Styling ownership (why this dims the base HERE): the render sites in
+ * tool-lane-render-children.ts emit a `resultSummary` sibling's `.summary`
+ * VERBATIM — they no longer wrap it in `palette.dim()`. A NESTING closer has two
+ * differently-styled parts (a dim base + a self-dimmed badge from `batchBadge`),
+ * so a single outer dim would nest the badge's own dim codes. Dimming the base
+ * here and letting `batchBadge` self-dim keeps each part dimmed exactly once.
+ * `summaryWithBatchBadge` is the SOLE feeder of `addResultSummarySynthetic` (via
+ * renderFlushChildren), so the "summary is pre-styled" invariant holds for every
+ * `resultSummary` item. For a non-parallel closer `batchBadge` returns `''`, so
+ * the output is `palette.dim(summary)` — byte-identical to the prior behavior.
+ *
+ * Contract (issue #532 — scrollback NESTING-root badge): the closer, NOT the
+ * head row, is the correct anchor for a NESTING root's badge in committed
+ * scrollback:
+ *  - A NESTING head row (`◉ → agent(…)`) carries NO outcome — the outcome lives
+ *    on the `agentResultSummary` closer, so the closer is the nesting-root analog
+ *    of a flat root's outcome row (where the badge already lives after #520).
+ *  - The head row may be committed EAGERLY by {@link formatAgentHeader} (via
+ *    flushSource's ancestor walk) BEFORE the root completes, when `batchSize` is
+ *    not yet known; that path sets `headerEmitted=true` and routes the completion
+ *    emit to {@link formatAgentChildren} (closer only, no head row). The closer is
+ *    the one row emitted at completion time in BOTH the headerEmitted=false
+ *    ({@link formatAgentSummary}) and headerEmitted=true ({@link formatAgentChildren})
+ *    paths, and `agent.result.batchSize` is available at that point.
+ *  - `batchBadge` returns `''` for singleton batches (batchSize<=1) and when
+ *    `result` is absent, so a sequential dispatch is never badged (parity with
+ *    flat roots / bash).
+ *
+ * The badge changes no indent, connector, or spine glyph — it is text appended
+ * to the closer's content only, so the severed-spine dual-encoding invariant
+ * between formatAgentHeader/formatAgentSummary is untouched.
+ */
+function summaryWithBatchBadge(agent: ToolEntry): string | undefined {
+  return agent.agentResultSummary
+    ? palette.dim(agent.agentResultSummary) + batchBadge(agent.result)
+    : agent.agentResultSummary;
+}
 
 /**
  * Render an Agent (subagent) entry plus its tree of children as a scrollback
@@ -54,7 +102,7 @@ function formatAgentSummary(
   // increments source.stats.toolUses (both increment-only paths).
   const stats: string[] = [];
   if (toolChildren.length > MAX_VISIBLE_CHILDREN) {
-    stats.push(`${toolChildren.length} tools`);
+    stats.push(formatToolCallStat(toolChildren.length));
     if (totalLines > 0) stats.push(`${totalLines} lines`);
   }
 
@@ -99,7 +147,9 @@ function formatAgentSummary(
     children,
     childMap,
     homeDir,
-    agent.agentResultSummary,
+    // #532: badge the closer (Done line) when this NESTING root ran in a
+    // parallel wave. See summaryWithBatchBadge for why the closer, not the head.
+    summaryWithBatchBadge(agent),
     getTerminalWidth(),
     externalAncestors,
     g,
@@ -186,7 +236,11 @@ function formatAgentChildren(
     children,
     childMap,
     homeDir,
-    agent.agentResultSummary,
+    // #532: badge the closer (Done line) when this NESTING root ran in a
+    // parallel wave. In this (headerEmitted) path the head row was already
+    // committed eagerly by formatAgentHeader without the badge (batchSize was
+    // unknown then), so the closer is the only completion-time anchor.
+    summaryWithBatchBadge(agent),
     getTerminalWidth(),
     externalAncestors,
     g,
@@ -209,7 +263,7 @@ function renderGroupedRootTools(
     if (entries.length === 1) {
       const e = entries[0]!;
       if (e.result) {
-        lines.push('  ' + e.prefix + palette.dim(' — ') + doneGlyph(e.result.isError) + ' ' + formatOutcome(e.result, homeDir, 60, e.toolName));
+        lines.push('  ' + e.prefix + palette.dim(' — ') + doneGlyph(e.result.isError) + ' ' + formatOutcome(e.result, homeDir, 60, e.toolName) + batchBadge(e.result));
         if (e.diff && !e.result.isError) {
           // Root-level scrollback diff: indent 4 spaces so it sits under
           // the outcome line (2 for the row indent, 2 more to clear the

@@ -3,7 +3,7 @@ import type { ProgressEvent } from '../../../agent/types.js';
 import type { CompletionWriter } from './shared.js';
 import { extractLatestThinkingClause } from '../../_lib/stream-renderer-subagent-helpers.js';
 import { truncateDisplayWidth } from '../../display.js';
-import { formatDuration, formatTokens } from '../../format-utils.js';
+import { formatDuration, formatTokens, formatToolCallStat } from '../../format-utils.js';
 import { palette } from '../../palette.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 import { styleForToolName } from '../../tool-category.js';
@@ -49,6 +49,31 @@ export function deriveProgressActivity(
 }
 
 /**
+ * Format the live rate-limit / backoff banner activity clause.
+ *
+ * Contract: converts the provider's `rate_limit` signal into the short string
+ * the progress banner shows WHILE the SDK sleeps out a `retry-after` backoff
+ * (the session is healthy-but-waiting, not hung). `retryAfterMs` is rounded up
+ * to whole seconds so a sub-second hint still reads `~1s` rather than `~0s`;
+ * when the header carried no delay the copy drops the ETA. Pure and
+ * side-effect-free so it is trivially unit-testable and safe to call at render
+ * time.
+ *
+ *   70000  → `rate-limited · retrying in ~70s`
+ *   500    → `rate-limited · retrying in ~1s`
+ *   0      → `rate-limited · retrying…`   (no positive delay to show)
+ *   undef  → `rate-limited · retrying…`
+ */
+export function formatRateLimitActivity(retryAfterMs?: number): string {
+  if (retryAfterMs === undefined || !Number.isFinite(retryAfterMs) || retryAfterMs <= 0) {
+    return 'rate-limited · retrying…';
+  }
+  // Round UP so a sub-second retry-after never displays `~0s`.
+  const seconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+  return `rate-limited · retrying in ~${seconds}s`;
+}
+
+/**
  * Render a progress event into one or two CLI lines.
  *
  * Line 0 is the task's stable description (invariant across ticks for a
@@ -88,7 +113,7 @@ export function formatProgressBanner(
     const { color, glyph } = styleForToolName(lastToolName);
     stats.push(`via ${color(`${glyph} ${sanitizeLabel(lastToolName)}`)}`);
   }
-  if (toolUses) stats.push(`${toolUses} tool${toolUses === 1 ? '' : 's'}`);
+  if (toolUses) stats.push(formatToolCallStat(toolUses));
   if (totalTokens) stats.push(`${formatTokens(totalTokens)} tok`);
   if (durationMs) stats.push(formatDuration(durationMs));
   stats.push('esc to interrupt · ctrl+b background');
@@ -116,7 +141,7 @@ export function formatProgressBanner(
 export function formatProgressSummary(event: ProgressEvent, columns?: number): string {
   const { description, totalTokens, toolUses, durationMs } = event;
   const stats: string[] = [];
-  if (toolUses) stats.push(`${toolUses} tool${toolUses === 1 ? '' : 's'}`);
+  if (toolUses) stats.push(formatToolCallStat(toolUses));
   if (totalTokens) stats.push(`${formatTokens(totalTokens)} tok`);
   if (durationMs) stats.push(formatDuration(durationMs));
   const statsStr = stats.length > 0 ? ` (${stats.join(' · ')})` : '';

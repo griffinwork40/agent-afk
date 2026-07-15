@@ -63,6 +63,7 @@ export const TOOL_FAILURE_CLASSES = [
   'hook-block',
   'abort',
   'elicitation-declined',
+  'denial-breaker',
 ] as const;
 
 /**
@@ -72,7 +73,14 @@ export const TOOL_FAILURE_CLASSES = [
  *
  * Set at the site that produced the error:
  *   - `policy-refusal`       — browser handler refused nav (domain allowlist). NOT a bug.
- *   - `timeout`              — browser navigation/action exceeded its deadline.
+ *   - `timeout`              — a bounded operation exceeded its deadline: a browser
+ *                              navigation/action past its per-action timeout, OR a
+ *                              forked sub-agent whose own wall-clock budget
+ *                              (SUBAGENT_DEFAULT_TIMEOUT_MS / config.timeoutMs) expired
+ *                              and `withTimeout` aborted its controller. Annotated on the
+ *                              subagent_lifecycle `failed` payload (own-budget expiry)
+ *                              and, for a cascaded ancestor-timeout, via the `cancelled`
+ *                              payload's `timeout` flag.
  *   - `permission-denied`    — permission gate or read-only-skill bash gate denied the call.
  *   - `hook-block`           — a PreToolUse hook returned `decision: 'block'`.
  *   - `abort`                — the call's AbortSignal was already fired.
@@ -80,11 +88,17 @@ export const TOOL_FAILURE_CLASSES = [
  *                              cannot reach a human) or `cancel` (operator dismissed the
  *                              prompt). An unanswered question is an expected outcome on a
  *                              non-interactive or AFK surface, NOT a tool fault.
+ *   - `denial-breaker`       — a forked sub-agent tripped the denial circuit breaker
+ *                              (`denial-circuit-breaker.ts`): N consecutive path-approval
+ *                              read denials with no progress, so it was aborted fast rather
+ *                              than at its wall-clock budget. Deliberately NOT exempt below
+ *                              — a fork torn down for spinning is a review-worthy event the
+ *                              parent should act on (re-dispatch with a wider read scope).
  *
  * The `tool-failure-density` detector treats `policy-refusal`, `permission-denied`,
  * `hook-block`, `abort`, and `elicitation-declined` as "the system correctly said no" —
- * excluded from failure stats entirely — while `timeout` and unclassified failures still
- * count.
+ * excluded from failure stats entirely — while `timeout`, `denial-breaker`, and
+ * unclassified failures still count.
  */
 export type ToolFailureClass = (typeof TOOL_FAILURE_CLASSES)[number];
 
@@ -104,6 +118,18 @@ export interface ToolCallCompletedPayload {
   /** Coarse failure classification when `isError` is true. Absent on success
    *  and on unclassified failures. See {@link ToolFailureClass}. */
   failureClass?: ToolFailureClass;
+  /**
+   * Concurrency-batch membership: 1-based position (`batchIndex`) and total
+   * size (`batchSize`) of the batch this call was dispatched in, set by the
+   * dispatcher's `executeBatch`. `batchSize > 1` means the call ran in a
+   * parallel wave; `batchSize === 1` means it ran alone in its own sequential
+   * batch (always the case for concurrency-unsafe tools like bash). Lets
+   * `afk trace show` and failure-analysis distinguish real parallelism from
+   * back-to-back sequential dispatch. Absent on the single-tool `execute()`
+   * path and on blocked/short-circuited calls.
+   */
+  batchIndex?: number;
+  batchSize?: number;
   subagentId?: string;
 }
 
@@ -127,6 +153,13 @@ export type HookEventName =
 /**
  * Fine-grained outcome of the AFK high-risk approval gate. Set only by that
  * gate; absent on all other hook_decision events.
+ *
+ * `hard-block` is the no-prompt refusal: the op was blocked WITHOUT soliciting
+ * an operator approval at all — either a forked sub-agent (which must never
+ * prompt, for lack of attribution) or the always-on Telegram host
+ * (`afkPromptForApproval:false`). It is distinct from `denied` (operator saw the
+ * prompt and rejected) so async review can tell a deliberate human deny from an
+ * automatic ceiling refusal.
  */
 export type AfkApprovalOutcome =
   | 'approved'
@@ -134,7 +167,8 @@ export type AfkApprovalOutcome =
   | 'unrecognised'
   | 'timeout'
   | 'decline'
-  | 'cancel';
+  | 'cancel'
+  | 'hard-block';
 
 export interface HookDecisionPayload {
   hookEvent: HookEventName;
@@ -168,6 +202,21 @@ export interface SubagentStartedPayload {
   allowedTools?: readonly string[];
   /** SHA-256 hex digest of the child's system prompt, for audit. */
   systemPromptHash?: string;
+  /**
+   * First 80 chars of the dispatch prompt, for at-a-glance forensics — lets a
+   * trace reader see WHAT a child was asked to do without opening the child's
+   * own transcript. Absent when the fork site had no prompt in scope (e.g. a
+   * skill/compose fork whose prompt is threaded later). Truncated at the
+   * emit site.
+   */
+  promptHead?: string;
+  /**
+   * The effective agent type / render label for this fork (e.g. a named
+   * `research-agent`, a compose node label, or a prompt-derived slice). Present
+   * so a reader can attribute a lifecycle event to a role without cross-refing
+   * the routing telemetry. Absent when no label was resolved.
+   */
+  agentType?: string;
 }
 
 export interface SubagentSucceededPayload {
@@ -193,6 +242,14 @@ export interface SubagentFailedPayload {
   errorMessage: string;
   /** 0 when no partial output was captured before the failure. */
   partialOutputBytes: number;
+  /**
+   * Coarse failure classification, mirroring {@link ToolFailureClass}. Set to
+   * `'timeout'` when this failure is the handle's OWN wall-clock budget expiry
+   * (a `TimeoutError` abort on its controller that is NOT a cascade) — lets a
+   * trace reader tell a guillotined-by-budget child apart from a genuine error.
+   * Absent for unclassified failures (the pre-classification default).
+   */
+  failureClass?: ToolFailureClass;
 }
 
 export interface SubagentCancelledPayload {
@@ -203,6 +260,14 @@ export interface SubagentCancelledPayload {
    * - `'explicit'` — `cancel()` was called directly on this handle.
    */
   source: 'cascade' | 'explicit';
+  /**
+   * `true` when the cascade that cancelled this handle originated from a
+   * `TimeoutError` (an ANCESTOR's wall-clock budget expired and the abort
+   * cascaded down to this descendant). Distinguishes a timeout-driven cascade
+   * cancel from an ordinary explicit/parent cancel. Only ever set on
+   * `source: 'cascade'`; absent otherwise.
+   */
+  timeout?: boolean;
 }
 
 export type SubagentLifecyclePayload =

@@ -9,6 +9,7 @@ import { AgentSession } from '../../agent/session.js';
 import { createDefaultHookRegistry } from '../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
 import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
+import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import { unconfiguredSlotError } from '../../agent/session/model-slots.js';
 import { formatDuration, formatCost, formatTokens } from '../format-utils.js';
@@ -586,6 +587,9 @@ export function registerChatCommand(program: Command): void {
           // Worktree isolation for skill-dispatched subagents. See
           // bootstrap.ts for the same wiring.
           ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
+          // Read-scope inheritance (#547): skill-forked children inherit the
+          // parent session's read scope via the root manager. See bootstrap.ts.
+          getReadScopeInputs: () => rootManager.getReadScopeInputs(),
         });
 
         // Pass the raw base prompt (pre-assembly) so compose subagents do not
@@ -599,6 +603,9 @@ export function registerChatCommand(program: Command): void {
           apiKey,
           // Per-model credential resolver — mirrors #640 for the compose fork-path.
           resolveApiKeyForModel: getApiKeyForModel,
+          // Read-scope inheritance (#547): DAG nodes inherit the parent session's
+          // read scope via the root manager. See bootstrap.ts.
+          getReadScopeInputs: () => rootManager.getReadScopeInputs(),
           ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
           // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
           ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
@@ -681,7 +688,7 @@ export function registerChatCommand(program: Command): void {
         // Witness layer: `trace` was opened above (before executors) so
         // SkillExecutor could be wired with traceWriter; reuse it here for
         // the AgentSession.
-        session = new AgentSession(injectHotMemory({
+        session = new AgentSession(injectCompanionPrimer(injectHotMemory({
           model: sessionModel,
           // User-facing surface for trace `origin` attribution. One-shot
           // `afk chat` is a CLI entrypoint → 'cli'.
@@ -732,7 +739,7 @@ export function registerChatCommand(program: Command): void {
           // Wire resume/session-id config when a session flag is set.
           ...resumeConfig,
           provider,
-        }));
+        })));
 
         boundSession = session;
 

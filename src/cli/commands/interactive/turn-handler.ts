@@ -635,7 +635,7 @@ export async function runTurn(
     // The SDK's server-side session store preserves the response even
     // when we skip local recordTurn; the REPL session stays live, so the
     // user continues simply by sending the next message — no resume needed.
-    // (/resume and --resume operate on *other* /saved sessions, not the
+    // (/resume and --resume operate on *other* saved sessions, not the
     // live one that was just soft-stopped, so they must NOT be advertised
     // here; doing so sent users down a dead-end. See the onSoftStop doc in
     // terminal-compositor.types.ts: "next Enter starts a new turn in the
@@ -709,8 +709,16 @@ export async function runTurn(
       if (verdict) {
         writeAbove(renderVerdictCard(verdict));
         writeAbove('');
+        // One evidence check, two consumers: (1) the onTerminalState callback
+        // forwards it onto the post-turn `Stop` hook's StopContext so the
+        // terminal-state gate can bounce a self-certified `Done` with nothing
+        // behind it (see terminal-state-gate.ts); (2) the Telegram
+        // "Done (unverified)" relabel below. Computed once, here.
+        const hasCorroboratingEvidence = doneHasCorroboratingEvidence(toolEvents);
         if (h.onTerminalState) {
-          try { h.onTerminalState(verdict); } catch { /* ledger update is best-effort */ }
+          try {
+            h.onTerminalState(verdict, { doneHasCorroboratingEvidence: hasCorroboratingEvidence });
+          } catch { /* ledger update is best-effort */ }
         }
         // AFK mode: the operator is away and the transcript is unwatched, so
         // surface the terminal state to them over Telegram. Scrubbed + rate-
@@ -725,7 +733,7 @@ export async function runTurn(
           const unverified =
             verdict.kind === 'done' &&
             loadTelegramConfig().verifyDone === true &&
-            !doneHasCorroboratingEvidence(toolEvents);
+            !hasCorroboratingEvidence;
           void pushTerminalStateToTelegram(verdict, undefined, { unverified });
         }
       }
@@ -804,6 +812,45 @@ export async function runTurn(
   }
 }
 
+export type ContextTier = 'quiet' | 'normal' | 'caution' | 'near' | 'over';
+
+// Contract: maps a context-window usage ratio to an escalating footer line +
+// tier so the REPL warns *proactively* as a session approaches the model's
+// limit, not only once truncation is already happening. `text` is null for the
+// quiet tier (<=50% — no line, keeps short sessions uncluttered). The caller
+// maps tier -> palette color: over/near -> error, caution -> warning,
+// normal -> dim. Pure and color-free so it is unit-testable without a palette
+// or terminal. Thresholds are intentionally hardcoded (not config): 80% =
+// approaching, 95% = near, 100%+ = over.
+export function formatContextUsage(
+  contextPct: number,
+  contextLimit: number,
+): { tier: ContextTier; text: string | null } {
+  const pct = Math.round(contextPct * 100);
+  const limitStr = formatTokens(contextLimit);
+  if (contextPct >= 1.0) {
+    const overByTok = Math.round((contextPct - 1.0) * contextLimit);
+    const limitK = Math.round(contextLimit / 1000);
+    return {
+      tier: 'over',
+      text: `  context OVER ${limitK}k tok by ~${formatTokens(overByTok)} tok — model output may be silently truncated`,
+    };
+  }
+  if (contextPct >= 0.95) {
+    return {
+      tier: 'near',
+      text: `  context ${pct}% used of ${limitStr} — near limit; output may soon truncate (consider /clear or a fresh session)`,
+    };
+  }
+  if (contextPct >= 0.8) {
+    return { tier: 'caution', text: `  context ${pct}% used of ${limitStr} — approaching limit` };
+  }
+  if (contextPct > 0.5) {
+    return { tier: 'normal', text: `  context ${pct}% used of ${limitStr}` };
+  }
+  return { tier: 'quiet', text: null };
+}
+
 export function printTurnFooter(
   meta: { durationMs?: number; totalCostUsd?: number; usage?: Record<string, unknown> } | undefined,
   stats: SessionStats,
@@ -827,15 +874,18 @@ export function printTurnFooter(
   }
   const contextPct = contextRatio(stats);
   const contextLimit = contextLimitFor(stats.model);
-  if (contextPct >= 1.0) {
-    const overByTok = Math.round((contextPct - 1.0) * contextLimit);
-    const limitK = Math.round(contextLimit / 1000);
-    write(palette.error(
-      `  context OVER ${limitK}k tok by ~${formatTokens(overByTok)} tok — model output may be silently truncated`
-    ));
-  } else if (contextPct > 0.5) {
-    const color = contextPct > 0.8 ? palette.error : palette.warning;
-    write(color(`  context ${Math.round(contextPct * 100)}% used of ${formatTokens(contextLimit)}`));
+  const usage = formatContextUsage(contextPct, contextLimit);
+  if (usage.text !== null) {
+    // Escalation is by severity/color, not by suppression: the footer already
+    // renders once per turn, so a single tier-colored line per turn is the
+    // expected cadence (no cross-turn tier tracking needed).
+    const colorFn =
+      usage.tier === 'over' || usage.tier === 'near'
+        ? palette.error
+        : usage.tier === 'caution'
+          ? palette.warning
+          : palette.dim;
+    write(colorFn(usage.text));
   }
   write('');
 }

@@ -10,11 +10,22 @@
  * xterm-derived terminals silently discards lines that exit the top of
  * the active region).
  *
- * Non-TTY surfaces (pipes, CI) get a simple stdout-only variant.
+ * Non-TTY surfaces (pipes, CI) get a simple stdout-only variant. The same
+ * plain variant is also selected on a TTY when `AFK_PLAIN_OUTPUT` is truthy
+ * — a full render opt-out for tmux/SSH/multiplexer sessions where the live
+ * overlay's cursor-up redraws and DECSTBM reserved rows misbehave. This is
+ * one of three sites gated on {@link isPlainOutputRequested}: this seam
+ * (between-turn writes), `InputSurface.armCompositor` (the persistent
+ * compositor), and `StreamRenderer`'s `isTTY` computation (the per-turn
+ * overlay) — all three must agree for the TTY session to fully behave like
+ * non-TTY. Default TTY behavior (the live overlay) is unchanged unless this
+ * var is set.
  *
  * The compositor is bound lazily via setCompositor() — mirrors the
  * CompletionWriter pattern already used in shared.ts / turn-handler.ts.
  */
+
+import { isPlainOutputRequested } from '../../../config/env.js';
 
 interface CompositorRef {
   isArmed(): boolean;
@@ -50,13 +61,17 @@ export function createReplRenderer(
   stdout: NodeJS.WriteStream,
   opts: CreateReplRendererOpts = {},
 ): ReplRenderer {
-  if (!stdout.isTTY) {
+  // Plain/append-only path: non-TTY surfaces (pipes, CI) always take it;
+  // AFK_PLAIN_OUTPUT lets a real TTY opt into the same path (reliability
+  // escape hatch — see module doc above). Strictly additive: this OR only
+  // ever widens which sessions get the plain path, never narrows it.
+  if (!stdout.isTTY || isPlainOutputRequested()) {
     return {
       writeLine: (text) => {
         stdout.write(text + '\n');
       },
       setCompositor: () => {
-        // no-op on non-TTY surfaces
+        // no-op on the plain path — there is no live overlay to bind to.
       },
     };
   }

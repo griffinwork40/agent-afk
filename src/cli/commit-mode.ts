@@ -202,7 +202,21 @@ export function decideCommitMode(input: CommitModeInput): CommitMode {
   // committedBand empty, so repositionCommittedBand had nothing to re-pin when
   // the overlay collapsed — the freed viewport rows stayed blank (the
   // "end-of-turn viewport void" bug, terminal-compositor.endturn-overflow-gap).
-  const useBandHold = overflowHasPending || (!fitsAboveFrame && maxBandModel > 0);
+  // A2 (spike — unified retained model): retain against the COLLAPSED-frame
+  // budget (maxBandModel), not the current tall-frame room. The eager fits-path
+  // scrolls the band overflow into scrollback whenever the accumulated run
+  // exceeds `room` (the room above the CURRENT, possibly tall, frame) — even
+  // when those rows would fit above the collapsed frame. Once in native
+  // scrollback they are frozen (C1), so on collapse the re-pinned short band
+  // strands them → the void. Routing every run that exceeds the current room
+  // through band-hold (capped at maxBandModel) keeps them in the model until
+  // collapse, where the whole run paints contiguously. Only the genuine
+  // overflow beyond maxBandModel is archived, from the top, contiguously.
+  const runExceedsCurrentRoom = overflowRun.length > room;
+  const useBandHold =
+    overflowHasPending ||
+    (!fitsAboveFrame && maxBandModel > 0) ||
+    (runExceedsCurrentRoom && maxBandModel > 0);
 
   return {
     fitsAboveFrame,

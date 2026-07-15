@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { loadAgentRegistry } from './registry.js';
+import { builtinAgents } from './builtins.js';
 
 let tmp: string;
 let prevAfkHome: string | undefined;
@@ -53,6 +54,50 @@ describe('loadAgentRegistry', () => {
       'WebSearch',
       'Agent(git-investigator)',
     ]);
+    // Anti-runaway bound: the read-only research/review builtins carry an
+    // explicit tool-use-round cap so the uncapped agent-tool dispatch path
+    // cannot let them loop forever and die opaquely when cut off mid-run.
+    expect(registry.get('research-agent')?.definition.maxToolUseIterations).toBe(50);
+    expect(registry.get('Explore')?.definition.maxToolUseIterations).toBe(50);
+    // git-investigator is a read-only git-archaeology leaf (dispatched by
+    // research-agent) and must carry the same cap.
+    expect(registry.get('git-investigator')?.definition.maxToolUseIterations).toBe(50);
+    // general-purpose stays UNBOUNDED — a real multi-step worker legitimately
+    // needs an uncapped loop, so it must NOT gain the read-only bound.
+    expect(registry.get('general-purpose')?.definition.maxToolUseIterations).toBeUndefined();
+  });
+
+  // Drift-catcher: iterate the BUILTIN registry (not the vendored consts) so a
+  // newly-added read-only builtin that forgets the anti-runaway cap fails here.
+  // Structural predicate (no hardcoded per-agent list): a builtin with an
+  // explicit `tools` allowlist is a restricted/read-only leaf and MUST carry
+  // maxToolUseIterations; a builtin that OMITS `tools` (inherit-all, the full
+  // tool surface — only general-purpose today) is the uncapped exemption.
+  it('every read-only builtin (explicit tools) carries the anti-runaway cap; inherit-all exempt', () => {
+    const builtins = builtinAgents();
+    // Guard the guard: ensure we actually iterated real builtins and covered
+    // BOTH arms (at least one capped read-only leaf and the inherit-all worker),
+    // so a future refactor that empties the map can't make this vacuously pass.
+    let sawRestricted = false;
+    let sawInheritAll = false;
+    for (const [name, entry] of builtins) {
+      const hasExplicitTools = entry.definition.tools !== undefined;
+      if (hasExplicitTools) {
+        sawRestricted = true;
+        expect(
+          entry.definition.maxToolUseIterations,
+          `read-only builtin ${name} (explicit tools) is missing the anti-runaway cap`,
+        ).toBe(50);
+      } else {
+        sawInheritAll = true;
+        expect(
+          entry.definition.maxToolUseIterations,
+          `inherit-all builtin ${name} must stay uncapped (full tool surface)`,
+        ).toBeUndefined();
+      }
+    }
+    expect(sawRestricted, 'expected ≥1 restricted read-only builtin').toBe(true);
+    expect(sawInheritAll, 'expected the inherit-all worker (general-purpose)').toBe(true);
   });
 
   it('strips vendored frontmatter from builtin prompts (body-only system prompt)', () => {

@@ -1,67 +1,50 @@
 /**
- * Pure helpers for in-place history compaction in the `anthropic-direct`
- * provider. Kept side-effect-free so they can be unit-tested without an
- * Anthropic client.
+ * Anthropic-direct compaction: the `CompactionOps<MessageParam>` implementation
+ * plus back-compatible wrappers over the provider-neutral core in
+ * `shared/compaction.ts`.
  *
- * The provider's `messages: MessageParam[]` array grows unbounded across
- * turns. Compaction summarizes older turns into a short preamble while
- * preserving the last `keepLastN` raw user turns plus their tool rounds.
+ * The generic algorithm (boundary walk, transcript render, preamble splice,
+ * saved-tokens estimate) and the summarization prompt now live in shared/ so
+ * every provider can reuse them. This file supplies only the Anthropic message
+ * representation (`MessageParam`) — how a tool round renders to text, which
+ * turns are "fresh user turns", and the shape of the synthetic preamble.
  *
- * Key invariant: every `tool_use` block must travel with its matching
- * `tool_result`. The boundary rule never splits a tool round because it
- * lands on a "fresh user turn" — a `role: 'user'` message whose content
+ * Invariant: every `tool_use` block travels with its matching `tool_result`.
+ * The boundary rule (via {@link isFreshUserTurn}) never splits a tool round
+ * because it lands the kept tail on a `role: 'user'` message whose content
  * carries no `tool_result` blocks.
+ *
+ * The exported `findCompactionBoundary` / `applyCompaction` / `estimateTokensSaved`
+ * / `buildSummarizationRequest` keep their original signatures so existing
+ * callers (`query/compact-handler.ts`) and tests resolve unchanged — they are
+ * thin adapters binding the shared generics to {@link anthropicCompactionOps}.
  *
  * @module agent/providers/anthropic-direct/compact
  */
 import type { ContentBlockParam, MessageParam } from '@anthropic-ai/sdk/resources';
 import type { AnthropicMessagesCreateParams } from './types.js';
+import {
+  COMPACT_ACK_TEXT,
+  COMPACT_SUMMARY_HEADER,
+  COMPACT_SYSTEM_PROMPT,
+  applyCompaction as sharedApplyCompaction,
+  estimateTokensSaved as sharedEstimateTokensSaved,
+  findCompactionBoundary as sharedFindCompactionBoundary,
+  renderTranscript as sharedRenderTranscript,
+  wrapTranscriptForSummary,
+  type CompactionOps,
+} from '../shared/compaction.js';
+
+// Re-export the shared constants so existing importers (compact-handler.ts,
+// compact.test.ts) keep resolving them from this module.
+export { COMPACT_ACK_TEXT, COMPACT_SUMMARY_HEADER, COMPACT_SYSTEM_PROMPT };
 
 /**
- * System instruction for the summarization call. Crafted to preserve what a
- * future turn actually needs: user intent and corrections, tool decisions
- * and outcomes, current state and next action, open questions, and key
- * facts discovered.
- */
-export const COMPACT_SYSTEM_PROMPT = [
-  'You are a conversation-summarization assistant. The user will paste a',
-  'prior conversation between a user and an AI assistant that includes tool',
-  'calls and tool results. Produce a concise but complete summary that lets',
-  'the AI continue the conversation without losing track.',
-  '',
-  'Preserve, in this priority order:',
-  '1. The user\'s original intent, explicit asks, constraints, corrections,',
-  '   and preferences stated during the conversation.',
-  '2. Tool decisions and their outcomes — file paths read or written, shell',
-  '   commands run, search queries, URLs fetched, code edits made, tests',
-  '   run, errors observed, and whether each action succeeded or failed.',
-  '3. Current state: what has been completed, what remains unresolved, and',
-  '   the safest next action.',
-  '4. Open questions, pending decisions, blockers, and assumptions.',
-  '5. Key facts the assistant discovered (function locations, schemas,',
-  '   observed behaviors, important external findings).',
-  '',
-  'Drop prose narration, conversational filler, and exploratory dead-ends.',
-  'Drop verbatim tool output unless an exact snippet, error, path, command,',
-  'or result is needed for continuation.',
-  'Do not invent details. If something is uncertain, mark it explicitly.',
-  'Output plain text, no markdown headers. Aim for ~250 words; use up to',
-  '~400 only when needed to preserve tool state or unresolved tasks.',
-].join('\n');
-
-/** Default key the summary message uses to flag itself in history. */
-export const COMPACT_SUMMARY_HEADER = '[Compacted summary of earlier conversation]';
-
-/** Default acknowledgement the synthetic assistant turn returns. */
-export const COMPACT_ACK_TEXT =
-  'Acknowledged. Continuing from the summary above.';
-
-/**
- * Test whether a `MessageParam` represents a fresh user turn — i.e., real
- * user input rather than a tool-result follow-up the loop synthesized.
+ * Test whether a `MessageParam` represents a fresh user turn — real user input
+ * rather than a tool-result follow-up the loop synthesized.
  *
- * String content is always fresh. Array content is fresh only if no block
- * is a `tool_result`.
+ * String content is always fresh. Array content is fresh only if no block is a
+ * `tool_result`.
  */
 export function isFreshUserTurn(msg: MessageParam): boolean {
   if (msg.role !== 'user') return false;
@@ -76,143 +59,128 @@ export function isFreshUserTurn(msg: MessageParam): boolean {
 }
 
 /**
- * Find the index in `messages` that marks the start of the kept tail. Walk
- * backwards counting fresh user turns; the boundary is the index of the
- * `keepLastN`-th fresh user turn from the end.
+ * Render one Anthropic message as a transcript block: a speaker label followed
+ * by its content. `tool_use` blocks become `[tool call: NAME args]`;
+ * `tool_result` blocks become `[tool result: <text>]`; images/documents become
+ * short placeholders. Kept side-effect-free and stable so the summarizer input
+ * (and thus summary quality) does not drift.
+ */
+function renderMessage(msg: MessageParam): string {
+  const speaker = msg.role === 'user' ? 'User' : 'Assistant';
+  const lines: string[] = [speaker + ':'];
+  if (typeof msg.content === 'string') {
+    lines.push(msg.content);
+  } else if (Array.isArray(msg.content)) {
+    for (const block of msg.content as ContentBlockParam[]) {
+      const t = (block as { type?: string }).type;
+      if (t === 'text' && 'text' in block) {
+        lines.push((block as { text: string }).text);
+      } else if (t === 'tool_use') {
+        const name = (block as { name?: string }).name ?? 'unknown';
+        const inputJson = safeJson((block as { input?: unknown }).input);
+        lines.push(`[tool call: ${name} ${inputJson}]`);
+      } else if (t === 'tool_result') {
+        const content = (block as { content?: unknown }).content;
+        lines.push(`[tool result: ${stringifyToolResultContent(content)}]`);
+      } else if (t === 'image') {
+        lines.push('[image]');
+      } else if (t === 'document') {
+        lines.push('[document]');
+      }
+    }
+  }
+  return lines.join('\n');
+}
+
+/** Approximate content-character count for one message (saved-tokens estimate). */
+function countChars(msg: MessageParam): number {
+  let total = 0;
+  if (typeof msg.content === 'string') {
+    total += msg.content.length;
+  } else if (Array.isArray(msg.content)) {
+    for (const block of msg.content as ContentBlockParam[]) {
+      const t = (block as { type?: string }).type;
+      if (t === 'text' && 'text' in block) {
+        total += (block as { text: string }).text.length;
+      } else if (t === 'tool_use') {
+        total += safeJson((block as { input?: unknown }).input).length;
+      } else if (t === 'tool_result') {
+        total += stringifyToolResultContent((block as { content?: unknown }).content).length;
+      }
+    }
+  }
+  return total;
+}
+
+/** Anthropic message-representation primitives for the shared compaction core. */
+export const anthropicCompactionOps: CompactionOps<MessageParam> = {
+  isFreshUserTurn,
+  renderMessage,
+  buildPreamble(summaryText: string): [MessageParam, MessageParam] {
+    return [
+      { role: 'user', content: COMPACT_SUMMARY_HEADER + '\n\n' + summaryText },
+      { role: 'assistant', content: COMPACT_ACK_TEXT },
+    ];
+  },
+  countChars,
+};
+
+/**
+ * Find the index in `messages` that marks the start of the kept tail. Thin
+ * adapter over the shared generic bound to {@link anthropicCompactionOps}.
  *
- * Returns:
- *   - `-1` when there are fewer than `keepLastN` fresh user turns (caller
- *     should treat this as "history too short — no compaction").
- *   - An index `>= 0` otherwise. `messages.slice(boundary)` is the kept
- *     tail; `messages.slice(0, boundary)` is what gets summarized.
- *
- * The kept tail always starts with a fresh user turn so the synthetic
- * `[user_summary, assistant_ack]` preamble can be prepended without
- * breaking user/assistant alternation.
+ * Returns `-1` when there are fewer than `keepLastN` fresh user turns; an index
+ * `>= 0` otherwise (`messages.slice(boundary)` is the kept tail).
  */
 export function findCompactionBoundary(
   messages: ReadonlyArray<MessageParam>,
   keepLastN: number,
 ): number {
-  if (keepLastN <= 0) return messages.length;
-  let count = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg && isFreshUserTurn(msg)) {
-      count += 1;
-      if (count === keepLastN) return i;
-    }
-  }
-  return -1;
+  return sharedFindCompactionBoundary(messages, keepLastN, anthropicCompactionOps);
 }
 
 /**
- * Build the summarization request body. The older messages travel as the
- * conversation to summarize, prefixed by a single user instruction so the
- * model knows what to do.
- *
- * The returned params are non-streaming, tool-less, and suitable for a
- * one-shot `messages.create` call.
+ * Build the summarization request body. The older messages travel as a rendered
+ * transcript, prefixed by a single user instruction. Non-streaming-safe,
+ * tool-less, suitable for a one-shot `messages.create` call.
  */
 export function buildSummarizationRequest(
   olderMessages: ReadonlyArray<MessageParam>,
   model: string,
   maxTokens: number,
 ): AnthropicMessagesCreateParams {
-  // Render older messages as a plain transcript so the summarizer doesn't
-  // need to interpret tool_use/tool_result block shapes — those are noise
-  // for summarization and can confuse small models.
-  const transcript = renderTranscript(olderMessages);
+  const transcript = sharedRenderTranscript(olderMessages, anthropicCompactionOps);
   return {
     model,
     max_tokens: maxTokens,
     system: COMPACT_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: 'user',
-        content:
-          'Summarize the following conversation transcript. Follow the ' +
-          'system instructions exactly.\n\n' +
-          '<transcript>\n' +
-          transcript +
-          '\n</transcript>',
-      },
-    ],
+    messages: [{ role: 'user', content: wrapTranscriptForSummary(transcript) }],
     stream: true,
   };
 }
 
 /**
- * Splice in the synthetic preamble. Returns a new array; the caller decides
- * whether to assign it back to the provider's mutable `messages` slot.
+ * Splice in the synthetic preamble. Thin adapter over the shared generic bound
+ * to {@link anthropicCompactionOps}. Returns a new array.
  */
 export function applyCompaction(
   messages: ReadonlyArray<MessageParam>,
   boundary: number,
   summaryText: string,
 ): MessageParam[] {
-  const summaryBlock: MessageParam = {
-    role: 'user',
-    content: COMPACT_SUMMARY_HEADER + '\n\n' + summaryText,
-  };
-  const ackBlock: MessageParam = {
-    role: 'assistant',
-    content: COMPACT_ACK_TEXT,
-  };
-  return [summaryBlock, ackBlock, ...messages.slice(boundary)];
+  return sharedApplyCompaction(messages, boundary, summaryText, anthropicCompactionOps);
 }
 
 /**
- * Estimate input tokens saved by replacing `[0, boundary)` with the
- * synthetic preamble. Rough char/4 heuristic — good enough for a UX hint,
- * not for billing.
+ * Estimate input tokens saved by replacing `[0, boundary)` with the synthetic
+ * preamble. Thin adapter over the shared generic.
  */
 export function estimateTokensSaved(
   before: ReadonlyArray<MessageParam>,
   boundary: number,
   summaryText: string,
 ): number {
-  const droppedChars = countContentChars(before.slice(0, boundary));
-  const addedChars =
-    COMPACT_SUMMARY_HEADER.length + 2 + summaryText.length + COMPACT_ACK_TEXT.length;
-  const delta = Math.max(0, droppedChars - addedChars);
-  return Math.round(delta / 4);
-}
-
-/**
- * Render a slice of `MessageParam`s as a plain text transcript for the
- * summarizer. Tool-use blocks become `[tool: NAME args]`; tool-result
- * blocks become `[tool result: <text>]`; image blocks become `[image]`.
- */
-function renderTranscript(messages: ReadonlyArray<MessageParam>): string {
-  const lines: string[] = [];
-  for (const msg of messages) {
-    const speaker = msg.role === 'user' ? 'User' : 'Assistant';
-    lines.push(speaker + ':');
-    if (typeof msg.content === 'string') {
-      lines.push(msg.content);
-    } else if (Array.isArray(msg.content)) {
-      for (const block of msg.content as ContentBlockParam[]) {
-        const t = (block as { type?: string }).type;
-        if (t === 'text' && 'text' in block) {
-          lines.push((block as { text: string }).text);
-        } else if (t === 'tool_use') {
-          const name = (block as { name?: string }).name ?? 'unknown';
-          const inputJson = safeJson((block as { input?: unknown }).input);
-          lines.push(`[tool call: ${name} ${inputJson}]`);
-        } else if (t === 'tool_result') {
-          const content = (block as { content?: unknown }).content;
-          lines.push(`[tool result: ${stringifyToolResultContent(content)}]`);
-        } else if (t === 'image') {
-          lines.push('[image]');
-        } else if (t === 'document') {
-          lines.push('[document]');
-        }
-      }
-    }
-    lines.push('');
-  }
-  return lines.join('\n').trim();
+  return sharedEstimateTokensSaved(before, boundary, summaryText, anthropicCompactionOps);
 }
 
 function safeJson(v: unknown): string {
@@ -241,27 +209,4 @@ function stringifyToolResultContent(content: unknown): string {
     return joined.length > 320 ? joined.slice(0, 317) + '...' : joined;
   }
   return '';
-}
-
-function countContentChars(messages: ReadonlyArray<MessageParam>): number {
-  let total = 0;
-  for (const msg of messages) {
-    if (typeof msg.content === 'string') {
-      total += msg.content.length;
-    } else if (Array.isArray(msg.content)) {
-      for (const block of msg.content as ContentBlockParam[]) {
-        const t = (block as { type?: string }).type;
-        if (t === 'text' && 'text' in block) {
-          total += (block as { text: string }).text.length;
-        } else if (t === 'tool_use') {
-          total += safeJson((block as { input?: unknown }).input).length;
-        } else if (t === 'tool_result') {
-          total += stringifyToolResultContent(
-            (block as { content?: unknown }).content,
-          ).length;
-        }
-      }
-    }
-  }
-  return total;
 }

@@ -31,6 +31,7 @@ import { debugLog } from '../../utils/debug.js';
 import type { Message } from '../../agent/types/message-types.js';
 import type { Writer } from '../slash/types.js';
 import { TerminalCompositor } from '../terminal-compositor.js';
+import { isPlainOutputRequested } from '../../config/env.js';
 import type { IHistoryRing } from '../input/types.js';
 import type { AutocompleteState } from '../input/autocomplete-state.js';
 import { colorizeInputBuffer, type SlashRegistryView } from '../input-highlight.js';
@@ -330,7 +331,16 @@ export class StreamRenderer {
     this.onCancel = opts.onCancel;
     this.onBackground = opts.onBackground;
 
+    // AFK_PLAIN_OUTPUT / --plain is a full render opt-out: folding the
+    // predicate into isTTY makes every downstream `if (this.isTTY && ...)`
+    // branch (compositor construction in arm(), overlay repaints, TTY-only
+    // formatting) treat this session as non-TTY, matching the plain path
+    // already taken by createReplRenderer() and InputSurface.armCompositor().
+    // Reading env here (at construction) is fine — a StreamRenderer is
+    // constructed fresh per turn, so a mid-session env change takes effect
+    // on the next turn, and the unset case is `false` (zero behavior change).
     this.isTTY = !(opts.forceNonTty ?? false)
+      && !isPlainOutputRequested()
       && Boolean(process.stdout.isTTY)
       && Boolean(process.stdin.isTTY);
     this.activeSkillName = opts.activeSkillName;

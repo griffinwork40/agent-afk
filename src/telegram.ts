@@ -35,9 +35,8 @@ import { parseAllowedChatIds } from './telegram/allowlist.js';
 import { validateBotToken } from './telegram/setup-wizard.js';
 import { AgentSession } from './agent/session.js';
 import { constructTelegramSession, createTelegramTraceWriter } from './telegram/construct-session.js';
-import { createDefaultHookRegistry } from './agent/default-hook-registry.js';
+import { createTelegramAfkHookBundle } from './telegram/afk-hook-bundle.js';
 import { seedPersistedGrants } from './agent/permissions-store.js';
-import { loadHooksConfig } from './agent/hooks/config-loader.js';
 import { MemoryStore } from './agent/memory/index.js';
 import { providerForModel, AnthropicDirectProvider, OpenAICompatibleProvider } from './agent/providers/index.js';
 import { detectAuthMode } from './agent/providers/anthropic-direct/auth.js';
@@ -369,6 +368,9 @@ async function main() {
           resolveApiKeyForModel: getApiKeyForModel,
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
           ...(telegramOpenaiBaseUrl !== undefined ? { openaiBaseUrl: telegramOpenaiBaseUrl } : {}),
+          // Read-scope inheritance (#547): skill-forked children inherit the
+          // parent session's read scope via the root manager. See bootstrap.ts.
+          getReadScopeInputs: () => rootManager.getReadScopeInputs(),
         });
 
         // Compose subagents inherit the framework base + operator overlay
@@ -382,6 +384,9 @@ async function main() {
           apiKey: telegramApiKey,
           // Per-model credential resolver — mirrors #640 for the compose fork-path.
           resolveApiKeyForModel: getApiKeyForModel,
+          // Read-scope inheritance (#547): DAG nodes inherit the parent session's
+          // read scope via the root manager. See bootstrap.ts.
+          getReadScopeInputs: () => rootManager.getReadScopeInputs(),
           ...(telegramBaseUrl !== undefined ? { baseUrl: telegramBaseUrl } : {}),
           // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
           ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
@@ -416,21 +421,36 @@ async function main() {
           ? assembleSystemPrompt(rawPromptInner, telegramAutoRoutingInner, 'telegram')
           : rawPromptInner;
 
-        // permissionMode is intentionally omitted here: AgentSession defaults
-        // to 'default' (post-C2 fix), which is the correct mode for Telegram
-        // sessions that run under the operator's explicit allowedTools list.
-        const telegramHookBundle = createDefaultHookRegistry(
-          undefined,
-          'telegram',
-          sharedMemoryStore,
-          undefined,
-          loadHooksConfig(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
-          { cwd: sessionCwd !== undefined && sessionCwd.length > 0 ? sessionCwd : undefined, ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}) },
-          () => sessionCwd,
-        );
+        // permissionMode is omitted from session CONSTRUCTION: AgentSession
+        // defaults to 'default'. A Telegram session becomes 'autonomous' only via
+        // an explicit `/afk on` (handlers/afk.ts) calling setPermissionMode —
+        // never at construction. The hook bundle carries the AFK autonomous-safety
+        // wiring (live mode getter → registers the afk-mode gate + tracks `/afk
+        // on`; afkPromptForApproval:false → hard-refuse high-risk ops) — see
+        // createTelegramAfkHookBundle + docs/afk-telegram-native-host.md.
+        let telegramSessionForMode: AgentSession | undefined;
+        const telegramHookBundle = createTelegramAfkHookBundle({
+          memoryStore: sharedMemoryStore,
+          getSession: () => telegramSessionForMode,
+          cwd: sessionCwd,
+          traceWriter: telegramTraceWriter,
+        });
         const session = attachMcpCleanup(constructTelegramSession({
           ...(sessionConfig.apiKey !== undefined ? { apiKey: sessionConfig.apiKey } : {}),
           model: sessionConfig.model,
+          // /switch resumes a prior conversation: thread the target SDK session
+          // id AND the saved transcript so the AgentSession actually replays it
+          // (see SessionManager.switchToSession + resumeConfigFor). Forwarding
+          // only `resume` (the SDK id) resumes an EMPTY conversation — the
+          // provider replays prior turns solely from resumeHistory
+          // (anthropic-direct/index.ts resumeHistoryToMessages). sessionId is
+          // threaded too because the provider prefers config.sessionId over
+          // config.resume as the resumed id.
+          ...(sessionConfig.resume !== undefined ? { resume: sessionConfig.resume } : {}),
+          ...(sessionConfig.sessionId !== undefined ? { sessionId: sessionConfig.sessionId } : {}),
+          ...(sessionConfig.resumeHistory !== undefined
+            ? { resumeHistory: sessionConfig.resumeHistory }
+            : {}),
           ...(systemPromptInner !== undefined ? { systemPrompt: systemPromptInner } : {}),
           maxTurns: 100,
           ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
@@ -442,6 +462,10 @@ async function main() {
           provider: directProvider,
           hookRegistry: telegramHookBundle.registry,
         }, { traceWriter: telegramTraceWriter }), mcpManager);
+        // Late-bind the mode source so the registry's getPermissionMode getter
+        // (built above, before the session existed) reads this session's LIVE
+        // permission mode — flipped by /afk on (handlers/afk.ts).
+        telegramSessionForMode = session;
         returnedSession = session;
         // Wire the path-approval grant ref to the provider so elicitation
         // approvals mutate readRoots / writeRoots on the right backend.
@@ -481,18 +505,29 @@ async function main() {
         surface: 'telegram',
         ...(mcpManager !== undefined ? { mcpManager } : {}),
       });
-      const codexHookBundle = createDefaultHookRegistry(
-        undefined,
-        'telegram',
-        sharedMemoryStore,
-        undefined,
-        loadHooksConfig(codexSessionCwd !== undefined && codexSessionCwd.length > 0 ? { cwd: codexSessionCwd } : {}),
-        { cwd: codexSessionCwd !== undefined && codexSessionCwd.length > 0 ? codexSessionCwd : undefined, ...(telegramTraceWriter !== null ? { traceWriter: telegramTraceWriter } : {}) },
-        () => codexSessionCwd,
-      );
+      // Same AFK autonomous-safety wiring as the Anthropic branch above (live
+      // mode getter registers the afk-mode gate + tracks `/afk on`;
+      // afkPromptForApproval:false hard-refuses high-risk ops) — see
+      // createTelegramAfkHookBundle + docs/afk-telegram-native-host.md.
+      let codexSessionForMode: AgentSession | undefined;
+      const codexHookBundle = createTelegramAfkHookBundle({
+        memoryStore: sharedMemoryStore,
+        getSession: () => codexSessionForMode,
+        cwd: codexSessionCwd,
+        traceWriter: telegramTraceWriter,
+      });
       const session = attachMcpCleanup(constructTelegramSession({
         ...(sessionConfig.apiKey !== undefined ? { apiKey: sessionConfig.apiKey } : {}),
         model: sessionConfig.model,
+        // /switch resume: continue the target SDK session AND replay its saved
+        // transcript (parity with the Anthropic branch). The openai-compatible
+        // provider seeds prior turns from resumeHistory (messages.ts / query.ts),
+        // so omitting it resumes an empty conversation.
+        ...(sessionConfig.resume !== undefined ? { resume: sessionConfig.resume } : {}),
+        ...(sessionConfig.sessionId !== undefined ? { sessionId: sessionConfig.sessionId } : {}),
+        ...(sessionConfig.resumeHistory !== undefined
+          ? { resumeHistory: sessionConfig.resumeHistory }
+          : {}),
         ...(systemPrompt !== undefined ? { systemPrompt } : {}),
         maxTurns: 100,
         ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
@@ -507,6 +542,9 @@ async function main() {
         provider: codexProvider,
         hookRegistry: codexHookBundle.registry,
       }, { traceWriter: telegramTraceWriter }), mcpManager);
+      // Late-bind the mode source (see Anthropic branch) so the gate's getter
+      // reads this session's live permission mode.
+      codexSessionForMode = session;
       returnedSession = session;
       // Wire the path-approval grant ref + seed persisted `persist` grants so
       // the OpenAI Telegram surface gets the same restricted-path prompts and

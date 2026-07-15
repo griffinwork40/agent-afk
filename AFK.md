@@ -10,8 +10,9 @@ Standalone TypeScript CLI + daemon + Telegram bot built on `@anthropic-ai/sdk`. 
 pnpm install                                       # pnpm exclusively
 pnpm build                                         # tsc + copy *.md prompts → dist/
 pnpm test                                          # vitest run (all)
-pnpm test -- src/agent/session.test.ts             # single file
-pnpm test -- -t "sends a message"                  # single test by name
+pnpm test src/agent/session.test.ts                # single file (NO --; pnpm 10 drops args after -- and runs ALL files)
+pnpm test src/agent/session.test.ts -t "sends a message"   # single test by name (scope to a file, then filter by -t)
+pnpm test:file src/agent/session.test.ts           # --proof alias for a scoped run (script: vitest run)
 pnpm test:watch                                    # vitest watch
 pnpm lint                                          # tsc --noEmit (strict)
 
@@ -70,7 +71,7 @@ Key layers under `src/`:
 | `src/bundled-plugins/` | Plugins shipped with the package (copied at install; `tests/copy-bundled-plugins.test.ts`). |
 | `website/` | Next.js docs site (separate package, npm-locked; CI typechecks + builds it). |
 
-Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/session/stream-consumer.ts`. **No model SDK is imported for runtime use outside `src/agent/providers/`** — the rest of the tree imports only the SDK's `ContentBlockParam` *type*, with one legacy runtime `Anthropic` import in `src/cli/interactive.ts` as a known exception.
+Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/session/stream-consumer.ts`. **No model SDK is imported for runtime use outside `src/agent/providers/`** — the rest of the tree imports only the SDK's `ContentBlockParam` *type*. The only runtime `import Anthropic from '@anthropic-ai/sdk'` statements live in `src/agent/providers/anthropic-direct/` (`index.ts`, `oneshot.ts`).
 
 ### Cross-cutting subsystems
 

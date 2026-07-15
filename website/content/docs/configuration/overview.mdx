@@ -121,8 +121,8 @@ optional; unset fields fall through to env vars or built-in defaults.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `model` | `string` | `"sonnet"` | Default model for all surfaces. Accepts Claude short aliases (`sonnet`, `haiku`, `opus`) and full provider-native ids (`gpt-4o`, `mlx-community/Qwen3-30B-A3B-4bit`). Env override: `AFK_MODEL`. |
-| `maxTokens` | `number` | `4096` | Maximum total tokens per turn (input + output). Env override: `AFK_MAX_TOKENS`. |
+| `model` | `string` | `"medium"` (CLI) / `"sonnet"` (Telegram) | Default model — varies by surface. CLI commands resolve via `getModel()`, defaulting to the **`medium` capability tier** (Claude Sonnet on an unconfigured install; rebinding `models.medium` changes the CLI default). Surfaces that read `loadConfig().model` directly instead — notably the **Telegram bot** — fall back to the literal `DEFAULT_CONFIG.model` (`"sonnet"`), so rebinding `medium` alone does not affect them. Accepts tier names (`small`/`medium`/`large`), fixed-identity aliases (`sonnet`, `haiku`, `opus`, `fable`), and full provider-native ids (`gpt-4o`, `mlx-community/Qwen3-30B-A3B-4bit`). Env override: `AFK_MODEL`. Migration: `AFK_MODEL=sonnet` now pins the fixed Sonnet identity rather than following a rebound `medium` tier. |
+| `maxTokens` | `number` | `4096` | **Deprecated / inert** — not read by the generation path. Use `AFK_MAX_OUTPUT_TOKENS` / `--max-output-tokens` to cap per-response output. |
 | `temperature` | `number` | `1.0` | Sampling temperature. Env override: `AFK_TEMPERATURE`. |
 | `systemPrompt` | `string` | — | Operator overlay appended to the framework base prompt (tier 2). When set, `AFK.md` is not loaded. Env override: `AFK_SYSTEM_PROMPT` (tier 1, wins over this). |
 | `updatePolicy` | `"notify" \| "auto" \| "off"` | `"notify"` | Controls how AFK handles available CLI updates. `notify` prints a message; `auto` applies automatically; `off` disables checks. |
@@ -130,6 +130,7 @@ optional; unset fields fall through to env vars or built-in defaults.
 | `bgSummaries` | `boolean` | `false` | When `true`, the REPL summarizes running background jobs and shows them in `/bgsub:list`. **Caution:** this sends transcript data to the Anthropic API — don't enable it in air-gapped or sensitive environments. |
 | `maxSummaryCallsPerSession` | `number` | `200` | Session-wide budget for background summarizer LLM calls. Clamped to `[1, 500]`. Has no effect unless `bgSummaries` is `true`. |
 | `enableShellHooks` | `boolean` | `false` | Master switch for shell-command hooks. **Must be set in a user-global file** (`~/.afk/config/afk.config.json`); project-local values are silently ignored to prevent cloned repos from auto-executing scripts. Set it with `afk config set enableShellHooks true` — it is human-gated, so the agent's `config_set` tool cannot flip it. |
+| `enablePluginHooks` | `boolean` | `false` | Master switch for **Claude Code plugin-contributed hooks** (`<plugin>/hooks/hooks.json`). Independent of `enableShellHooks`. **Must be set in a user-global file**; human-gated (the agent's `config_set` cannot flip it). See [Plugin-contributed hooks](#plugin-contributed-hooks). |
 
 ---
 
@@ -143,7 +144,7 @@ an object with optional provider credentials.
 {
   "models": {
     "small": "claude-haiku-4-5-20251001",
-    "medium": "claude-sonnet-4-6",
+    "medium": "claude-sonnet-5",
     "large": {
       "id": "claude-opus-4-8",
       "name": "big",
@@ -167,7 +168,7 @@ When using the object form, each slot accepts:
 |-----------|------|-------------|
 | `id` | `string` | Provider-native model id. |
 | `name` | `string` | Human-readable alias for this slot (cosmetic). |
-| `provider` | `string` | Provider name (e.g. `"anthropic"`, `"openai-compatible"`). |
+| `provider` | `string` | Provider name: `"anthropic"`, `"openai"`, or `"chatgpt-oauth"` (forces per-slot ChatGPT-subscription OAuth — see [Models & Providers](/configuration/models-providers#chatgpt-oauth-per-slot)). Inferred from `id` when omitted. |
 | `baseUrl` | `string` | Endpoint base URL for this slot (e.g. a local shim). |
 | `apiKey` | `string` | API key for this slot's endpoint. |
 
@@ -316,12 +317,20 @@ user-global file.
 | `SessionEnd` | When a session finishes. | `hook_event_name`, `session_id`, `reason` | All |
 | `SubagentStart` | When a subagent session is forked. | `hook_event_name`, `session_id` | All |
 | `SubagentStop` | When a subagent session finishes. `hookSpecificOutput.additionalContext` injects text into the parent session. | `hook_event_name`, `session_id` | All |
-| `Stop` | After a main-session turn completes (end of one agent turn). Dispatched from the REPL turn loop only — subagents do not fire it. | `hook_event_name`, `session_id` | REPL only |
-| `UserPromptSubmit` | When the user submits a prompt in the REPL, after shell injection and forward-manifest stitching but before `runTurn`. Handler can return `injectContext` to prepend text to the prompt. | `hook_event_name`, `session_id`, `prompt` | REPL only |
+| `Stop` | After a main-session turn completes (end of one agent turn). Dispatched from the REPL turn loop only — subagents do not fire it. `hookSpecificOutput.additionalContext` is stashed and prepended to the **next** turn's prompt — the same next-turn delivery contract as `UserPromptSubmit` below, but fired from the turn-completion boundary rather than the submission boundary. | `hook_event_name`, `session_id` | REPL only |
+| `UserPromptSubmit` | When the user submits a prompt in the REPL, after shell injection and forward-manifest stitching but before `runTurn`. Handler can return `injectContext` (`hookSpecificOutput.additionalContext`) to prepend text to the prompt. | `hook_event_name`, `session_id`, `prompt` | REPL only |
 | `PreCompact` | Before context compaction runs. `trigger` is `"manual"` (via `/compact` command) or `"auto"` (threshold-based, reserved for future wiring). | `hook_event_name`, `session_id`, `trigger` (`null` when unset) | All |
 | `PostToolUseFailure` | After a tool call throws an error. Distinct from `PostToolUse` — only one fires per call. `tool_input` is intentionally not forwarded to shell hooks to avoid exposing sensitive inputs to arbitrary scripts. | `hook_event_name`, `session_id`, `tool_name`, `error` | All |
 
 Every event's payload also includes `cwd` and `transcript_path` (the latter is `null` when no transcript file is tracked).
+
+**A `Stop` hook's output reaches the model.** Because `Stop` fires after every
+REPL turn, a `Stop` shell hook that returns `hookSpecificOutput.additionalContext`
+feeds that text into the **next** turn's prompt — the same channel
+`UserPromptSubmit` uses. This is the general `injectContext` primitive (see
+`src/agent/hooks.ts`) applied to a config-driven shell hook; it introduces no
+new trust boundary, since it only fires when you have already opted a `Stop`
+hook in under the `enableShellHooks` gate below.
 
 #### Matcher group fields
 
@@ -342,7 +351,7 @@ Every event's payload also includes `cwd` and `transcript_path` (the latter is `
 
 | Exit code | Meaning |
 |-----------|---------|
-| `0` | Continue. Optional JSON stdout may carry `{ "decision": "block", "reason": "…" }` to block, or `{ "hookSpecificOutput": { "additionalContext": "…" } }` for `SubagentStop` context injection. |
+| `0` | Continue. Optional JSON stdout may carry `{ "decision": "block", "reason": "…" }` to block, or `{ "hookSpecificOutput": { "additionalContext": "…" } }` for context injection. Effect depends on the event — see `SubagentStop`, `Stop`, and `UserPromptSubmit` in the Event keys table above. |
 | `2` | Block the operation. `stderr` becomes the reason shown to users. |
 | other | Non-blocking error — logged, operation continues. |
 
@@ -352,3 +361,32 @@ Every event's payload also includes `cwd` and `transcript_path` (the latter is `
 |-------|-------|-------------|
 | `enableShellHooks` | User-global only | Master switch. Without it, no shell hooks run regardless of what `hooks` defines. |
 | `allowProjectHooks` | User-global only | When `true`, hook definitions from project-local `afk.config.json` files are admitted. Defaults to `false` — without this, a cloned repo's hook definitions are silently dropped even when `enableShellHooks` is on. |
+| `enablePluginHooks` | User-global only | When `true`, hooks contributed by installed plugins (`<plugin>/hooks/hooks.json`) are discovered and run. **Independent** of `enableShellHooks` — plugin hooks are third-party code and get their own opt-in. Defaults to `false`. |
+
+#### Plugin-contributed hooks
+
+AFK discovers and runs hooks shipped by installed plugins, matching Claude
+Code's plugin-hook layout so plugins are portable across both runtimes.
+
+- **Location.** Any installed plugin under `~/.afk/plugins/` that ships a
+  `<plugin>/hooks/hooks.json` (alongside its `.claude-plugin/plugin.json`
+  manifest) contributes hooks. Both the flat and marketplace-cache layouts are
+  scanned. Plugin hooks merge **after** your own config hooks.
+- **Trust gate.** Plugin hooks run only when `enablePluginHooks: true` is set in
+  a **user-global** file — a separate opt-in from `enableShellHooks`, because a
+  plugin's `hooks.json` executes third-party code. When plugin `hooks.json`
+  files are present but the gate is off, AFK emits a one-line warning naming how
+  to enable them (it never runs them silently). Set it with
+  `afk config set enablePluginHooks true`. Because the two gates are independent,
+  **turning `enableShellHooks` off does _not_ disable plugin hooks** — to run no
+  third-party hooks, leave `enablePluginHooks` unset (or set it to `false`).
+- **Supported types.** Only `command`-type hooks run. Claude Code's other hook
+  types (`http`, `mcp_tool`, `prompt`, `agent`) are skipped with a warning that
+  names the unsupported type.
+- **Environment.** Plugin hook commands receive `CLAUDE_PLUGIN_ROOT` (the
+  plugin's install directory) and `CLAUDE_PROJECT_DIR`, so commands like
+  `python3 "${CLAUDE_PLUGIN_ROOT}/hooks/on_start.py"` resolve. The same secret
+  redaction as shell hooks applies — no API keys or tokens are forwarded.
+- **Scope.** Discovery covers user-global installed plugins only. Project-scoped
+  and bundled plugin hooks, inline `hooks` in `plugin.json`, and the non-command
+  hook types are not yet honored.

@@ -17,6 +17,7 @@ import { truncateDisplayWidth } from './display.js';
 import { palette } from './palette.js';
 import { formatDuration } from './format-utils.js';
 import { ResizeBus } from './terminal-size.js';
+import { isPlainOutputRequested } from '../config/env.js';
 
 const SPINNER_FRAMES = ['◐', '◑', '◒', '◓'] as const;
 
@@ -77,6 +78,12 @@ export class BackgroundStatusBar {
 
   start(): void {
     if (this.started) return;
+    // AFK_PLAIN_OUTPUT / --plain is a full render opt-out: stay inert so a
+    // --plain TTY behaves like a non-TTY surface. Never arm the ResizeBus
+    // subscription, the spinner interval, or the reserved-row painter (every
+    // paint path is gated on `started`). Mirrors the status-line/compositor/
+    // renderer/input gates on `isPlainOutputRequested` (config/env.ts).
+    if (isPlainOutputRequested()) return;
     this.started = true;
 
     if (this.registry) {

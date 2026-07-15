@@ -209,7 +209,7 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'AFK_MAX_TOKENS',
-    description: 'Cap on total tokens per turn (input + output). Default 4096.',
+    description: 'Deprecated and inert: not read by the generation path. Use AFK_MAX_OUTPUT_TOKENS (or --max-output-tokens) to cap per-response output tokens; falls back to the model output ceiling when unset.',
     type: 'number',
     required: false,
     default: '4096',
@@ -248,11 +248,49 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   },
   {
     name: 'AFK_MODEL',
-    description: 'Default model for agent turns. Accepts slot names (local, small, medium, large), legacy aliases (opus, sonnet, haiku), the fixed-id fable alias (Claude Fable 5), or full model IDs.',
+    description: 'Default model for agent turns. Accepts slot names (local, small, medium, large), fixed-identity aliases (opus, sonnet, haiku, fable), or full model IDs. Migration: AFK_MODEL=sonnet now pins the fixed Sonnet identity rather than following a rebound medium tier.',
     type: 'string',
     required: false,
-    default: 'sonnet',
+    default: 'medium',
     example: 'claude-opus-4-5',
+    category: 'model',
+  },
+  {
+    name: 'AFK_MODEL_TTFB_TIMEOUT_MS',
+    description:
+      'Per-request time-to-first-token timeout (ms) for the anthropic-direct streaming loop. ' +
+      'Bounds how long a single model call may stall BEFORE its first streamed CONTENT token ' +
+      '(a text/thinking delta or tool_use); the connection-level message_start and keep-alive ' +
+      'pings do NOT count. Once a content token streams, the timer is cleared and the rest of ' +
+      'the response runs unbounded, so a normal slow call (below the bound) and any actively-' +
+      'streaming extended-thinking response are never aborted. NOTE: a request whose FIRST token ' +
+      'takes longer than the bound — e.g. a very large opus_1m prefill — is aborted, retried ' +
+      'once, then surfaces as an error (raise this value or set 0 for such workloads); this ' +
+      'trims the degrading-call tail instead of a silent ~10-min hang on the SDK default. ' +
+      'Default 180000 (180s ≈ 2× the measured p99 ttfb). Set to 0 to disable.',
+    type: 'number',
+    required: false,
+    default: '180000',
+    example: '120000',
+    category: 'model',
+  },
+  {
+    name: 'AFK_SUBAGENT_TIMEOUT_MS',
+    description:
+      'Foreground forked-subagent wall-clock budget in ms; 0 disables the cap; explicit ' +
+      'per-fork config.timeoutMs and the 60-min background mode still win. Bounds how long a ' +
+      'single forked child turn may run before `withTimeout` aborts its controller (cascading ' +
+      'through the AbortGraph to descendants) and the parent receives a legible TimeoutError ' +
+      'tool_result instead of hanging. Default 2700000 (45 min ≈ headroom over the longest ' +
+      'healthy review/research agent observed in production). Unset, empty, or unparseable input ' +
+      'falls back to the default; a negative value is treated as invalid and also falls back. ' +
+      'Set to 0 to opt a whole session back into unbounded child turns. Does NOT affect the ' +
+      'background dispatch budget (SUBAGENT_BACKGROUND_TIMEOUT_MS) or a per-fork ' +
+      'config.timeoutMs — both take precedence.',
+    type: 'number',
+    required: false,
+    default: '2700000',
+    example: '3600000',
     category: 'model',
   },
   {
@@ -654,6 +692,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'paths',
   },
   {
+    name: 'AFK_COMPANION_PRIMER',
+    description: 'Opt-in: absolute path to a single companion-primer file. When set, its content is bounded (capped, fenced as <companion-primer>) and appended to the system prompt at session start for top-level sessions (chat/REPL/telegram/daemon), as lower-authority "reflections, not facts" context. Unset (default) = no-op. Only the one named file is ever read — never a directory or repo walk.',
+    type: 'string',
+    required: false,
+    example: '/Users/me/Projects/afk-companion/PRIMER.md',
+    category: 'paths',
+  },
+  {
     name: 'HOME',
     description: 'Standard Unix home directory. Used as the fallback when AFK_HOME is unset.',
     type: 'string',
@@ -774,10 +820,10 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   // ── MCP ───────────────────────────────────────────────────────────────────
   {
     name: 'AFK_ALLOW_PROJECT_MCP',
-    description: 'Controls auto-loading of MCP configuration from <cwd>/.mcp.json. Auto-loaded by default — set to 0 to disable (mitigates config-injection risk in shared/CI environments).',
+    description: 'Opt-in to loading + spawning MCP servers declared in <cwd>/.mcp.json. Fail-closed: when unset (or 0), project-local servers are NOT spawned; set to a truthy value (1/true/yes/on) to load them. A project-local .mcp.json spawns arbitrary commands on session start, so it is off by default to prevent code execution when entering an untrusted repo (issue #571). Skipped servers are listed in a startup warning with the opt-in instruction.',
     type: 'boolean',
     required: false,
-    example: '0',
+    example: '1',
     category: 'mcp',
   },
 
@@ -823,6 +869,24 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
   {
     name: 'AFK_BANNER_PLAIN',
     description: 'Suppress the ANSI-colored banner at REPL startup. Useful for non-TTY captures and CI logs.',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_PLAIN_OUTPUT',
+    description:
+      'Force the interactive REPL to fully behave like a non-TTY surface for rendering purposes, ' +
+      'even when stdout/stdin ARE a TTY: append-only plain-stdout output instead of the ' +
+      'TerminalCompositor live overlay (both the persistent between-turn compositor AND the ' +
+      'per-turn StreamRenderer overlay), AND the input surface downgrades to the simple ' +
+      'non-TTY line reader instead of the fancy compositor-backed input box. Same code path ' +
+      'already used for non-TTY surfaces (pipes, CI). Full opt-out escape hatch for tmux/SSH/' +
+      'multiplexer sessions where cursor-up redraws and DECSTBM scroll regions misbehave — ' +
+      'trades the live overlay and fancy input UX for reliability. Opt-in — default TTY behavior ' +
+      '(live overlay + fancy input) is unchanged unless this var is set. Truthy values: 1, true ' +
+      '(case-insensitive).',
     type: 'boolean',
     required: false,
     example: '1',
@@ -1076,6 +1140,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'misc',
   },
   {
+    name: 'AFK_READ_DENYLIST',
+    description: 'Colon-separated list of additional absolute paths the read_file/grep/glob/list_directory tools refuse to read. Built-in credential entries (~/.ssh, ~/.aws, ~/.afk/config, …) always apply on top and cannot be removed.',
+    type: 'string',
+    required: false,
+    example: '/Users/me/project/.env:/Users/me/secrets',
+    category: 'misc',
+  },
+  {
     name: 'AFK_WRITE_DIFF',
     description: 'Show a diff preview before each write_file tool call. Defaults provider-controlled when unset.',
     type: 'boolean',
@@ -1182,6 +1254,7 @@ export const env = {
   // Model / agent runtime
   get AFK_COMPACT_KEEP_LAST_TURNS(): string | undefined { return process.env['AFK_COMPACT_KEEP_LAST_TURNS']; },
   get AFK_COMPACT_MODEL(): string | undefined { return process.env['AFK_COMPACT_MODEL']; },
+  get AFK_COMPANION_PRIMER(): string | undefined { return process.env['AFK_COMPANION_PRIMER']; },
   get AFK_DEFAULT_SUBAGENT_MODEL(): string | undefined { return process.env['AFK_DEFAULT_SUBAGENT_MODEL']; },
   get AFK_DIAGNOSE_BASELINE(): string | undefined { return process.env['AFK_DIAGNOSE_BASELINE']; },
   get AFK_DISABLE_BASH_INTERPRETER_GUARD(): string | undefined { return process.env['AFK_DISABLE_BASH_INTERPRETER_GUARD']; },
@@ -1195,6 +1268,7 @@ export const env = {
   get AFK_MAX_TOOL_USE_ITERATIONS(): string | undefined { return process.env['AFK_MAX_TOOL_USE_ITERATIONS']; },
   get AFK_MEMORY_EVIDENCE_GATE(): string | undefined { return process.env['AFK_MEMORY_EVIDENCE_GATE']; },
   get AFK_MODEL(): string | undefined { return process.env['AFK_MODEL']; },
+  get AFK_MODEL_TTFB_TIMEOUT_MS(): string | undefined { return process.env['AFK_MODEL_TTFB_TIMEOUT_MS']; },
   get AFK_MODEL_LARGE(): string | undefined { return process.env['AFK_MODEL_LARGE']; },
   get AFK_MODEL_LARGE_API_KEY(): string | undefined { return process.env['AFK_MODEL_LARGE_API_KEY']; },
   get AFK_MODEL_LARGE_BASE_URL(): string | undefined { return process.env['AFK_MODEL_LARGE_BASE_URL']; },
@@ -1212,6 +1286,7 @@ export const env = {
   get AFK_SUGGEST_ENABLED(): string | undefined { return process.env['AFK_SUGGEST_ENABLED']; },
   get AFK_SUGGEST_GHOST(): string | undefined { return process.env['AFK_SUGGEST_GHOST']; },
   get AFK_SUGGEST_MODEL(): string | undefined { return process.env['AFK_SUGGEST_MODEL']; },
+  get AFK_SUBAGENT_TIMEOUT_MS(): string | undefined { return process.env['AFK_SUBAGENT_TIMEOUT_MS']; },
   get AFK_TASK_BUDGET(): string | undefined { return process.env['AFK_TASK_BUDGET']; },
   get AFK_TEMPERATURE(): string | undefined { return process.env['AFK_TEMPERATURE']; },
   get AFK_THINKING(): string | undefined { return process.env['AFK_THINKING']; },
@@ -1284,6 +1359,7 @@ export const env = {
 
   // UI / output
   get AFK_BANNER_PLAIN(): string | undefined { return process.env['AFK_BANNER_PLAIN']; },
+  get AFK_PLAIN_OUTPUT(): string | undefined { return process.env['AFK_PLAIN_OUTPUT']; },
   get AFK_SPINNER_TIPS(): string | undefined { return process.env['AFK_SPINNER_TIPS']; },
   get AFK_GOBLIN_SPINNER(): string | undefined { return process.env['AFK_GOBLIN_SPINNER']; },
   get AFK_SHOW_DIFFS(): string | undefined { return process.env['AFK_SHOW_DIFFS']; },
@@ -1322,6 +1398,7 @@ export const env = {
 
   // Filesystem
   get AFK_WRITE_DENYLIST(): string | undefined { return process.env['AFK_WRITE_DENYLIST']; },
+  get AFK_READ_DENYLIST(): string | undefined { return process.env['AFK_READ_DENYLIST']; },
   get AFK_WRITE_DIFF(): string | undefined { return process.env['AFK_WRITE_DIFF']; },
 
   // CLI / capture-mode
@@ -1336,6 +1413,30 @@ export const env = {
   get AFK_SHELL_WRAPPER(): string | undefined { return process.env['AFK_SHELL_WRAPPER']; },
   get AFK_USER_CARD_MAX_ROWS(): string | undefined { return process.env['AFK_USER_CARD_MAX_ROWS']; },
 } as const; // `as const` narrows getter return types — it does NOT call Object.freeze; the object is mutable at runtime.
+
+/**
+ * Truthy-check for `AFK_PLAIN_OUTPUT` (the `--plain` CLI flag's env twin).
+ * Truthy iff `'1'` or `'true'`, case-insensitive, after trimming whitespace —
+ * matching the convention used by other boolean-ish opt-in vars in this
+ * codebase (see AFK_AUTO_ROUTING in env-tier.ts).
+ *
+ * Reads via `env.AFK_PLAIN_OUTPUT` (never `process.env` directly), keeping
+ * this inside the CI-enforced single-read-point boundary (`pnpm audit:env:check`).
+ *
+ * Shared by every render-decision site that must treat a `--plain` /
+ * `AFK_PLAIN_OUTPUT=1` TTY session as non-TTY for rendering purposes: the
+ * REPL renderer seam (`repl-renderer.ts`, between-turn writes), the
+ * persistent input surface's compositor arm (`input-surface.ts`), and the
+ * per-turn StreamRenderer's `isTTY` computation (`stream-renderer.ts`).
+ * Originally module-local to `repl-renderer.ts`; promoted here so all three
+ * sites import one predicate instead of drifting copies.
+ */
+export function isPlainOutputRequested(): boolean {
+  const raw = env.AFK_PLAIN_OUTPUT;
+  if (raw === undefined) return false;
+  const v = raw.trim().toLowerCase();
+  return v === '1' || v === 'true';
+}
 
 // ── Secret hardening ────────────────────────────────────────────────────────
 // Credential-bearing getters (auth keys, OAuth tokens, bot tokens) are

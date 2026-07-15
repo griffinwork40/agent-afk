@@ -4,7 +4,6 @@
  * Re-runs verification after applying fixes.
  */
 
-import { getSkill } from '../../index.js';
 import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
 import { SubagentManager } from '../../../agent/subagent.js';
 import { describeFailure } from '../../../agent/subagent/result.js';
@@ -25,6 +24,17 @@ export async function runHealPhase(
   // skills/index.ts SkillExecutionContext.callId.
   skillCallId?: string,
   defaultSubagentModel: AgentModelInput = 'sonnet',
+  // Dispatches the agent-driven `/diagnose` skill (bundled plugin SKILL.md,
+  // context: fork) and returns its prose root-cause report. Threaded from the
+  // mint handler's SkillExecutionContext (`ctx.dispatchSkill`). Optional so
+  // callers/tests without a skill-dispatch context degrade gracefully — the
+  // heal sub-agent then diagnoses the failures itself from the issue list.
+  dispatchSkill?: (name: string, args?: string) => Promise<string>,
+  // Read-scope inheritance (#547): parent session's read roots (resolved once
+  // by the mint handler); seeds the heal fork manager's parentReadRoots and is
+  // forwarded to the re-run verify phase so both inherit reads ⊇ the parent
+  // session's. Undefined leaves cwd-derivation intact.
+  parentReadRoots?: string[],
 ): Promise<{
   healed: boolean;
   newHealIterations: number;
@@ -52,9 +62,12 @@ export async function runHealPhase(
     };
   }
 
-  // Diagnose failures
+  // Diagnose failures via the agent-driven `/diagnose` skill. The vendored TS
+  // diagnose orchestrator was retired in favor of the bundled-plugin SKILL.md
+  // (context: fork): dispatchSkill forks a diagnose sub-agent that runs the
+  // parallel-hypothesis root-cause analysis and returns a prose report, which
+  // the heal sub-agent below reads and acts on — no structured-output coupling.
   try {
-    const diagnoseSkill = getSkill('diagnose');
     const failureDescription =
       `Verification failures:\n` +
       `Tests: ${verifyResults.testsPassed ? 'PASS' : 'FAIL'}\n` +
@@ -62,28 +75,14 @@ export async function runHealPhase(
       `Design: ${verifyResults.designReviewPassed ? 'PASS' : 'FAIL'}\n` +
       `Issues: ${verifyResults.issues?.join('\n') || 'none'}`;
 
-    const diagnosis = await diagnoseSkill.handler({
-      failure: failureDescription,
-      // Honor the session's worktree (e.g. afk interactive -w). Falls
-      // back to process.cwd() only when no worktree is configured.
-      repoPath: parentSession.cwd ?? process.cwd(),
-      context: plan,
-    });
-
-    // Extract proposed fix from diagnosis
-    let proposedFix = '';
-    if (
-      typeof diagnosis === 'object' &&
-      diagnosis !== null &&
-      'winner' in diagnosis &&
-      typeof diagnosis.winner === 'object' &&
-      diagnosis.winner !== null
-    ) {
-      const winner = diagnosis.winner as Record<string, unknown>;
-      if (typeof winner['proposed_fix'] === 'string') {
-        proposedFix = winner['proposed_fix'];
-      }
-    }
+    // The forked diagnose inherits the parent's worktree cwd (anchored by the
+    // skill executor), so it inspects the same tree the heal sub-agent edits.
+    const diagnosisReport = dispatchSkill
+      ? await dispatchSkill(
+          'diagnose',
+          `${failureDescription}\n\nContext (implementation plan):\n${plan}`,
+        )
+      : '';
 
     // Apply fix via heal subagent
     const prompts = loadSkillPrompts('mint');
@@ -95,9 +94,10 @@ export async function runHealPhase(
 
     // Propagate parent worktree — heal subagent applies file edits
     // and re-runs tests; must operate on the right working tree.
-    const manager = new SubagentManager(
-      parentSession.cwd !== undefined ? { cwd: parentSession.cwd } : {},
-    );
+    const manager = new SubagentManager({
+      ...(parentSession.cwd !== undefined ? { cwd: parentSession.cwd } : {}),
+      ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
+    });
     const healHandle = await manager.forkSubagent({
       parent: { sessionId: parentSession.sessionId },
       config: {
@@ -113,7 +113,8 @@ export async function runHealPhase(
     const issuesList: string = verifyResults.issues?.join('\n') ?? 'none';
     const healInput =
       `Plan:\n${plan}\n\n` +
-      `Proposed fix from diagnosis:\n${proposedFix}\n\n` +
+      `Failure diagnosis (from /diagnose):\n` +
+      `${diagnosisReport || '(diagnosis unavailable — diagnose the failures yourself from the verification issues below)'}\n\n` +
       `Verification issues:\n${issuesList}\n\n` +
       `Apply the fix and update the implementation.`;
 
@@ -152,6 +153,7 @@ export async function runHealPhase(
       parentSession.cwd,
       skillCallId,
       defaultSubagentModel,
+      parentReadRoots,
     );
 
     return {

@@ -7,6 +7,8 @@ import os from 'os';
 import { startDaemon } from '../../agent/daemon.js';
 import { getQueueDir } from '../../paths.js';
 import { pushIfConfigured } from '../../telegram/push.js';
+import { parseTerminalState } from './interactive/terminal-state.js';
+import { DONE_EVIDENCE_TOOLS } from './interactive/afk-push.js';
 import type { TaskCompletionDetails, TelemetryRecord } from '../../agent/daemon/scheduler.js';
 import {
   COMPILED_DEFAULT_TASK_ID,
@@ -25,6 +27,7 @@ import { parseThinking, parseEffort, getApiKey, getApiKeyForModel, getModel, get
 import { loadSchedules, toScheduledTask } from '../../agent/daemon/schedule-store.js';
 import { AgentSession } from '../../agent/session.js';
 import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
+import { injectCompanionPrimer } from '../../agent/companion/index.js';
 import { SubagentManager } from '../../agent/subagent.js';
 import { SubagentExecutor } from '../../agent/tools/subagent-executor.js';
 import { SkillExecutor } from '../../agent/tools/skill-executor.js';
@@ -96,6 +99,15 @@ export function buildDaemonSessionFactory(
       parentModel: opts.model,
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      // Witness layer: manager-level writer so daemon-forked `agent`-tool
+      // children (which never set config.timeoutMs / config.traceWriter) still
+      // emit subagent_lifecycle events and hand the writer to their handles.
+      // The scheduler (scheduler.ts:spawnSession) already opened a per-tick
+      // trace and threaded it in as config.traceWriter — reuse THAT SAME
+      // instance here (do not create a duplicate). Mirrors bootstrap.ts:246.
+      // Undefined under AFK_TRACE_DISABLED=1, in which case the spread is
+      // absent and behaviour is unchanged.
+      ...(config.traceWriter !== undefined ? { traceWriter: config.traceWriter } : {}),
       // Origin attribution: the daemon is a `daemon` entrypoint. Thread the
       // surface so forked `agent`-tool children inherit origin 'daemon' (not
       // 'unknown') via forkSubagent's parentSurface fill. Mirrors farm.ts.
@@ -118,8 +130,10 @@ export function buildDaemonSessionFactory(
       opts.apiKey,
       childProviderFactory,
       opts.baseUrl,
-      // traceWriter: daemon has no trace writer — pass undefined
-      undefined,
+      // traceWriter: reuse the scheduler's per-tick writer (threaded in as
+      // config.traceWriter) so depth>0 skill forks stay visible in the witness
+      // trace. Undefined under AFK_TRACE_DISABLED=1. Mirrors bootstrap.ts:333.
+      config.traceWriter,
       // backgroundRegistry: daemon has no background registry — pass undefined
       undefined,
       opts.cwd,
@@ -158,6 +172,11 @@ export function buildDaemonSessionFactory(
       // Named-agent dispatch: registry + `inherit` anchor.
       agentRegistry,
       parentModel: opts.model,
+      // Witness layer: thread the scheduler's per-tick writer so depth ≥ 2
+      // `agent` forks (nested child managers built inside execute()) stay
+      // visible. Depth-1 forks are covered by rootManager above. Mirrors
+      // bootstrap.ts:395.
+      ...(config.traceWriter !== undefined ? { traceWriter: config.traceWriter } : {}),
     });
 
     const skillExecutor = new SkillExecutor({
@@ -176,6 +195,13 @@ export function buildDaemonSessionFactory(
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+      // Witness layer: without this, daemon skill-forked subagents (every
+      // /forge-friction, /review, etc. fired by a task) emit zero trace events,
+      // making subagent failures undebuggable from disk. Mirrors bootstrap.ts:424.
+      ...(config.traceWriter !== undefined ? { traceWriter: config.traceWriter } : {}),
+      // Read-scope inheritance (#547): skill-forked children inherit the parent
+      // session's read scope via the root manager. See bootstrap.ts.
+      getReadScopeInputs: () => rootManager.getReadScopeInputs(),
     });
 
     const composeExecutor = new ComposeExecutor({
@@ -185,6 +211,9 @@ export function buildDaemonSessionFactory(
       ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
       // Per-model credential resolver — mirrors #640 for the compose fork-path.
       resolveApiKeyForModel: getApiKeyForModel,
+      // Read-scope inheritance (#547): DAG nodes inherit the parent session's
+      // read scope via the root manager. See bootstrap.ts.
+      getReadScopeInputs: () => rootManager.getReadScopeInputs(),
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       // Anchor DAG nodes to the worktree (re-anchored via composeExecutor.setCwd).
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
@@ -192,6 +221,9 @@ export function buildDaemonSessionFactory(
       // Session identity for routing-decision rows (daemon/scheduler → daemon).
       surface: 'daemon',
       depth: 0,
+      // Witness layer: DAG nodes emit subagent_lifecycle into the session
+      // trace. Reuses the scheduler's per-tick writer. Mirrors bootstrap.ts:460.
+      ...(config.traceWriter !== undefined ? { traceWriter: config.traceWriter } : {}),
     });
 
     memoryStore ??= new MemoryStore();
@@ -225,7 +257,7 @@ export function buildDaemonSessionFactory(
     // production chokepoint the scheduler routes every task through, so it also
     // caps scheduler/cron-spawned top-level sessions.
     const daemonMaxToolUseIterations = config.maxToolUseIterations ?? getMaxToolUseIterations();
-    return new AgentSession(injectHotMemory({
+    return new AgentSession(injectCompanionPrimer(injectHotMemory({
       ...config,
       provider,
       // Daemon sessions are headless: no human watches to answer ask_question.
@@ -240,23 +272,49 @@ export function buildDaemonSessionFactory(
       ...(daemonMaxToolUseIterations !== undefined
         ? { maxToolUseIterations: daemonMaxToolUseIterations }
         : {}),
-    }));
+    })));
   };
 }
 
 /**
+ * Caveat line appended to a downgraded "Done (unverified)" daemon push. Kept
+ * byte-identical to the REPL's afk-push wording (minus that surface's leading
+ * "• " bullet, which the daemon message shape doesn't use) so the operator sees
+ * one consistent self-honesty message across surfaces. See
+ * `formatTerminalStateForTelegram` in `interactive/afk-push.ts`.
+ */
+const DAEMON_DONE_UNVERIFIED_CAVEAT =
+  '⚠️ Unverified: no file write/edit or successful command recorded this turn — confirm before relying on this.';
+
+/**
  * Format a daemon telemetry record for an out-of-band notification
  * (e.g. Telegram push). Short, scannable, status-first.
+ *
+ * `verifyDone` gates the opt-in "Done"-verification downgrade (mirrors
+ * `daemon.verifyDone` in config). When it is `true` AND
+ * `details.doneUnverified` is `true`, the ✅ success header is downgraded to a
+ * "⚠️ Done (unverified)" header and the {@link DAEMON_DONE_UNVERIFIED_CAVEAT}
+ * line is appended. When `verifyDone` is falsy (the default), the output is
+ * byte-identical to before this feature existed — fail-open, opt-in.
  */
 export function formatTaskCompletion(
   record: TelemetryRecord,
   details: TaskCompletionDetails = {},
+  verifyDone = false,
 ): string {
+  // Downgrade only when the config gate is on AND this tick self-certified an
+  // unbacked Done. `doneUnverified` is only ever set on `status: 'success'`
+  // ticks (a `Done` response), so the header swap can't collide with the
+  // skipped/error icons.
+  const downgraded = verifyDone === true && details.doneUnverified === true;
   const icon =
     record.status === 'success' ? '✅' : record.status === 'skipped' ? '⏭️' : '❌';
   const durationSec = (record.durationMs / 1000).toFixed(1);
+  const header = downgraded
+    ? `⚠️ Done (unverified) — daemon task: ${record.taskId} (${record.status})`
+    : `${icon} daemon task: ${record.taskId} (${record.status})`;
   const lines = [
-    `${icon} daemon task: ${record.taskId} (${record.status})`,
+    header,
     `trigger=${record.trigger} duration=${durationSec}s`,
   ];
   if (record.skipReason) lines.push(`skipReason=${record.skipReason}`);
@@ -264,6 +322,9 @@ export function formatTaskCompletion(
   const responseText = details.responseText ?? record.responseExcerpt;
   if (responseText) {
     lines.push('', responseText);
+  }
+  if (downgraded) {
+    lines.push('', DAEMON_DONE_UNVERIFIED_CAVEAT);
   }
   return lines.join('\n');
 }
@@ -476,11 +537,30 @@ export function registerDaemonCommand(program: Command): void {
           ...(cooldownMs !== undefined ? { cooldownMs } : {}),
           ...(trigger === 'pull' ? { pullPollIntervalMs: 30_000, queueDir: getQueueDir() } : {}),
           tasks,
+          // "Done"-verification probe (opt-in via daemon.verifyDone; computed
+          // every tick, acted on only when the config gate is enabled). Composes
+          // the SAME reusables the REPL uses — `parseTerminalState` +
+          // `doneHasCorroboratingEvidence` semantics — so the daemon flags an
+          // unbacked `Done` identically to the interactive surface. Injected
+          // here (the CLI layer) rather than imported by the scheduler, which
+          // lives in `src/agent/` and must not depend on `src/cli/`. Pure + total
+          // (never throws); the scheduler additionally guards it.
+          doneUnverifiedProbe: ({ responseText, successfulToolNames }) => {
+            const verdict = parseTerminalState(responseText);
+            if (verdict === null || verdict.kind !== 'done') return false;
+            const hasEvidence = successfulToolNames.some((name) => DONE_EVIDENCE_TOOLS.has(name));
+            return !hasEvidence;
+          },
           onTaskComplete: (record: TelemetryRecord, details?: TaskCompletionDetails) => {
             // markdown:true — task output is agent-authored markdown; render it
             // to Telegram HTML so **bold**/`code`/headers format instead of
             // showing their literal markers (plain-text fallback on parse error).
-            void pushIfConfigured(formatTaskCompletion(record, details), { markdown: true }).catch(() => undefined);
+            // config.daemon?.verifyDone gates the opt-in Done-verification
+            // downgrade; when unset/false the formatted message is unchanged.
+            void pushIfConfigured(
+              formatTaskCompletion(record, details, config.daemon?.verifyDone === true),
+              { markdown: true },
+            ).catch(() => undefined);
           },
         });
 

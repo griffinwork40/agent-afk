@@ -14,7 +14,7 @@ name — no global `AFK_PROVIDER` needed in the common case.
 Wraps the `@anthropic-ai/sdk` Messages API. Selected automatically for:
 
 - `claude-*` model IDs
-- Legacy aliases: `opus`, `sonnet`, `haiku`, `fable`
+- Identity aliases (fixed): `opus`/`opus_1m`, `sonnet`/`sonnet_1m`, `haiku`, `fable`
 - `'anthropic'` (silent alias)
 
 ### openai-compatible
@@ -31,6 +31,43 @@ endpoint via `AFK_OPENAI_BASE_URL`). Selected automatically for:
   underlying `@openai/codex-sdk` harness has been removed and this now
   resolves to the same `openai-compatible` provider. Still accepted for
   back-compat; will be removed in a future major release.
+
+### chatgpt-oauth (per-slot)
+
+Not a name-based routing rule like the two families above — an explicit
+per-slot `provider` override set in `afk.config.json`'s `models` block (see
+[Model Slots](/configuration/model-slots)). A tier bound
+`provider: "chatgpt-oauth"` (or the `"chatgpt"` shorthand) still routes to
+`openai-compatible`, but additionally forces the ChatGPT-subscription OAuth
+credential (`~/.codex/auth.json`, written by `codex login` — see
+[ChatGPT-subscription OAuth](/configuration/api-keys#chatgpt-subscription-oauth-opt-in))
+for **that tier only** — regardless of `OPENAI_API_KEY` / `CODEX_API_KEY`, and
+without setting the global `AFK_OPENAI_CHATGPT_OAUTH` flag.
+
+This lets a ChatGPT-subscription model, a separately-keyed OpenAI model, and
+an Anthropic model coexist in the same session and `/model`-switch between
+them cleanly:
+
+```jsonc
+{
+  "models": {
+    // ChatGPT subscription — forces ~/.codex/auth.json for this tier only.
+    "medium": { "id": "gpt-5.6", "provider": "chatgpt-oauth" },
+    // A separately-keyed OpenAI model, unaffected by the tier above.
+    "small": { "id": "qwen3.7-plus", "provider": "openai" }
+    // (+ AFK_MODEL_SMALL_API_KEY / AFK_MODEL_SMALL_BASE_URL)
+  }
+}
+// The main model stays Anthropic (sonnet/opus) — all three coexist and
+// /model-switch cleanly between them.
+```
+
+Before this, ChatGPT-subscription OAuth was selectable only via the global
+`AFK_OPENAI_CHATGPT_OAUTH` flag, which sat at the lowest tier of a single
+global OpenAI auth chain — an ambient `OPENAI_API_KEY` blocked the OAuth
+fall-through entirely, so a subscription model and a custom-keyed OpenAI
+model could not be used side by side. The global flag is unchanged and still
+works for a single-model setup.
 
 ## Selecting a model
 
@@ -83,13 +120,15 @@ router pick automatically per model.
 |-------|-----------|----------|
 | `fable` | Most capable — Claude Fable 5 (Mythos-class), 1M context | anthropic-direct |
 | `opus` / `opus_1m` | Complex reasoning, multi-step planning, long contexts | anthropic-direct |
-| `sonnet` / `sonnet_1m` | Balanced — default | anthropic-direct |
+| `sonnet` / `sonnet_1m` | Balanced — the `medium` tier's default model | anthropic-direct |
 | `haiku` | Fast and cheap, best for simple tasks | anthropic-direct |
 
-`sonnet_1m` and `opus_1m` resolve to the same tier as their base alias
-(`medium` and `large` respectively). The 1M context window is handled by the
-model itself; passing the `_1m` suffix routes to the same bound model ID.
-Source: `src/agent/session/model-slots.ts` (`LEGACY_ALIAS_TO_SLOT`).
+`sonnet_1m` and `opus_1m` resolve to the same fixed model ID as their base
+alias (`sonnet`/`opus` respectively) — like all identity aliases, they are not
+tiers, so "resolve to the same tier" no longer applies. The 1M context window
+is handled by the model itself; passing the `_1m` suffix routes to the same
+pinned model ID. Source: `src/agent/session/model-slots.ts`
+(`DIRECT_MODEL_ALIASES`).
 
 You can also pass any raw model ID accepted by the provider (e.g.
 `claude-opus-4-8`, `gpt-5`, `claude-haiku-4-5-20251001`).

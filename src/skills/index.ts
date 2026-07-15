@@ -8,6 +8,7 @@
 
 import type { AgentModelInput, IAgentSession } from '../agent/types.js';
 import type { TraceWriter } from '../agent/trace/index.js';
+import type { ReadScopeInputs } from '../agent/subagent-read-scope.js';
 
 /**
  * Execution context handed to inline-registry skill handlers by the
@@ -81,6 +82,24 @@ export interface SkillExecutionContext {
    * do not provide it). In that case forking proceeds untraced, as before.
    */
   traceWriter?: TraceWriter;
+  /**
+   * Reads the parent session's read scope ({@link ReadScopeInputs}) at
+   * dispatch time (wired to the root
+   * {@link SubagentManager.getReadScopeInputs}). Inline handlers that fork
+   * sub-agents via their OWN `new SubagentManager(...)` (e.g. `/mint` phases,
+   * `/audit-fit`) MUST use this to seed each manager's `parentReadRoots` via
+   * {@link resolveChildManagerReadRoots}, so the forked sub-agent inherits the
+   * parent session's full read scope — the same `child ⊇ parent` invariant the
+   * `agent` tool enforces (#544), extended to inline-skill dispatch (#547).
+   * Without it, an inline fork derives read scope from its cwd alone and
+   * silently narrows whenever the parent session is read-open or
+   * `/allow-dir`-widened beyond `[cwd, mainRoot]`.
+   *
+   * Optional: callers must handle `undefined` (older SkillExecutor versions or
+   * test stubs). In that case forking falls back to cwd-only derivation, as
+   * before.
+   */
+  getReadScopeInputs?: () => ReadScopeInputs;
 }
 
 export interface SkillMetadata {

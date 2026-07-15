@@ -30,6 +30,7 @@ import type { TerminalKind, TerminalState } from './terminal-state.js';
 import { palette } from '../../palette.js';
 import { displayWidth, truncateDisplayWidth } from '../../display.js';
 import { getTerminalWidth, ResizeBus } from '../../terminal-size.js';
+import { isPlainOutputRequested } from '../../../config/env.js';
 
 /** Compact glyph + tone for a terminal kind on the ledger rail. */
 const KIND_PILL: Record<TerminalKind, { glyph: string; color: (s: string) => string; label: string }> = {
@@ -221,6 +222,12 @@ export function createVerdictLedger(opts: VerdictLedgerOptions = {}): VerdictLed
 
     start(startOpts) {
       if (started) return;
+      // AFK_PLAIN_OUTPUT / --plain is a full render opt-out: stay inert so a
+      // --plain TTY behaves like a non-TTY surface — no reserved row, no
+      // ResizeBus subscription, no CUP paint (push/repaint/reset are all gated
+      // on `started`). Mirrors the status-line/compositor/renderer/input gates
+      // on `isPlainOutputRequested` (config/env.ts).
+      if (isPlainOutputRequested()) return;
       started = true;
       stream = startOpts.stream ?? process.stdout;
       getAdjacentRows = startOpts.getAdjacentRows ?? (() => 0);

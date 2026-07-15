@@ -9,6 +9,8 @@ import { formatError, formatModelSwitch } from './formatter.js';
 import { handleStart } from './handlers/start.js';
 import { handleHelp } from './handlers/help.js';
 import { handleClear, handleCompact, handleCwd, handleModelSwitch, handleName, MODEL_ALIASES_HINT } from './handlers/commands.js';
+import { handleSessions, handleNew, handleSwitchCallback } from './handlers/sessions.js';
+import { handleAfk } from './handlers/afk.js';
 import type { AgentModelInput } from '../agent/types.js';
 import { handleFarmCallback } from './handlers/farm-callbacks.js';
 import { MessageHandler } from './handlers/message.js';
@@ -63,7 +65,15 @@ export class TelegramBot {
 
   constructor(options: BotOptions) {
     this.options = options;
-    this.bot = new Telegraf(options.botToken);
+    // Disable Telegraf's default handlerTimeout (90_000ms). It wraps the ENTIRE
+    // update handler — a full agent turn — in a p-timeout, so any turn over 90s
+    // total (sub-agents, web_scrape, long bash) rejects to `bot.catch` as a
+    // generic "unexpected error" even though the AgentSession keeps running
+    // (p-timeout does not abort the underlying promise). src/telegram/streaming.ts
+    // is the real timeout authority: an inter-event, tool-in-flight-aware,
+    // usage-limit-pause-aware watchdog that throws a handled StreamTimeoutError.
+    // p-timeout short-circuits on Infinity, handing it sole timeout control.
+    this.bot = new Telegraf(options.botToken, { handlerTimeout: Infinity });
     this.sessionManager = new SessionManager(options);
     this.messageHandler = new MessageHandler(
       this.bot,
@@ -132,6 +142,22 @@ export class TelegramBot {
     );
     this.bot.command('name', (ctx) =>
       handleName(ctx, this.sessionManager, this.log.bind(this))
+    );
+    // /afk [on|off] — toggle autonomous mode for this chat's session. On the
+    // always-on host, high-risk ops hard-refuse (not phone-approvable); see
+    // handlers/afk.ts + docs/afk-telegram-native-host.md.
+    this.bot.command('afk', (ctx) =>
+      handleAfk(ctx, this.sessionManager, this.log.bind(this))
+    );
+    // /sessions — list this chat's resumable conversations with tap-to-switch
+    // buttons; /new — start a fresh conversation (previous preserved). One
+    // active session per chat; switching stages a resume that continues on the
+    // next message (see handlers/sessions.ts + SessionManager.switchToSession).
+    this.bot.command('sessions', (ctx) =>
+      handleSessions(ctx, this.sessionManager, this.log.bind(this))
+    );
+    this.bot.command('new', (ctx) =>
+      handleNew(ctx, this.sessionManager, this.registeredCommandChats, this.log.bind(this))
     );
     // /watch <session> — live-tail another surface's session ledger into
     // this chat. /watch with no arg lists watchable sessions. The ledger is
@@ -214,12 +240,31 @@ export class TelegramBot {
       await ctx.reply(`✋ Abort sent to session ${sessionId}.`);
     });
 
-    this.bot.on('text', (ctx) => this.messageHandler.handle(ctx));
+    // Invariant: a message update handler MUST NOT await the agent turn.
+    // Telegraf's long-poll loop is `for await (updates) await Promise.all(
+    // updates.map(handleUpdate))` (telegraf/lib/core/network/polling.js): it does
+    // NOT fetch the next getUpdates batch until every handler in the current
+    // batch settles. Awaiting the full turn here froze the poller for the turn's
+    // entire lifetime, so a mid-turn elicitation (path-approval / ask_question)
+    // could never receive the callback_query (button tap) or the text reply that
+    // resolves it — the turn blocked on an update the frozen poller refused to
+    // fetch, a deadlock broken only when the streaming watchdog timed the turn
+    // out (~11 min later). Running the turn DETACHED frees the poller immediately;
+    // per-chat ordering + one-turn-at-a-time are still enforced by
+    // MessageHandler's queue + session busy-state (message.ts), exactly as they
+    // already are for turns dispatched from processOne's finally→drainQueue.
+    // handle()/handlePhoto() own their user-facing error handling, so
+    // `runDetached`'s .catch is only a last-resort guard against an unhandled
+    // rejection (e.g. a reply that throws after the bot is stopped).
+    const runDetached = (work: Promise<void>): void => {
+      void work.catch((err) => this.log('Detached update handler error:', err));
+    };
+    this.bot.on('text', (ctx) => runDetached(this.messageHandler.handle(ctx)));
 
     // Photo updates carry `message.photo[]` not `message.text` — they require
     // their own listener since Telegraf's filter is exact (a photo update never
     // matches the 'text' filter even if the user added a caption).
-    this.bot.on('photo', (ctx) => this.messageHandler.handlePhoto(ctx));
+    this.bot.on('photo', (ctx) => runDetached(this.messageHandler.handlePhoto(ctx)));
     // Note: documents, voice notes, video, and stickers remain unhandled.
     // They can be added with the same pattern (download → build content blocks → processOne).
 
@@ -257,6 +302,15 @@ export class TelegramBot {
       } catch (err) {
         this.log('Model action error:', err);
       }
+    });
+
+    // Inline-keyboard session-switch callbacks from the /sessions reply. Prefix
+    // afk:sw: is disjoint from afk:m: / afk:e: / afk:pa: / the farm prefix, so
+    // taps never cross-route. Allowlist-guarded like the model action.
+    this.bot.action(/^afk:sw:/, async (ctx) => {
+      await ctx.answerCbQuery().catch(() => {});
+      if (ctx.chat?.id !== undefined && !this.options.allowedChatIds.has(ctx.chat.id)) return;
+      await handleSwitchCallback(ctx, this.sessionManager, this.log.bind(this));
     });
 
     this.bot.catch((err, ctx) => {
@@ -325,6 +379,7 @@ export class TelegramBot {
       { command: 'model', description: 'Switch Claude model (opus/sonnet/haiku)' },
       { command: 'cd', description: 'Show or change session working directory' },
       { command: 'name', description: 'Show or set the session name' },
+      { command: 'afk', description: 'Toggle autonomous (AFK) mode for this chat' },
       { command: 'watch', description: 'Live-tail a CLI session from this chat' },
       { command: 'unwatch', description: 'Stop watching a session' },
     ]);

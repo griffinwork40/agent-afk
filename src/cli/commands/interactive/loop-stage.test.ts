@@ -401,3 +401,37 @@ describe('LoopStageBar', () => {
     bar.stop();
   });
 });
+
+describe('LoopStageBar — AFK_PLAIN_OUTPUT full render opt-out', () => {
+  // Regression: --plain must make a TTY session behave like a non-TTY surface,
+  // so the loop-stage rail reserves no DECSTBM row and paints nothing even
+  // though `stream.isTTY` is still true.
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('reserves no row and paints nothing on a real TTY when AFK_PLAIN_OUTPUT=1', () => {
+    vi.stubEnv('AFK_PLAIN_OUTPUT', '1');
+    const stream = makeMockStream(); // isTTY: true
+    const rowHandler = vi.fn();
+    const bar = new LoopStageBar({ getExtraRows: () => 1, stream });
+    bar.setRowCountChangeHandler(rowHandler);
+    bar.start();
+    bar.repaint('acting');
+    expect(rowHandler).not.toHaveBeenCalled();
+    expect(joinWrites(stream)).toBe('');
+    bar.stop();
+  });
+
+  it('reserves its row and paints on a TTY when AFK_PLAIN_OUTPUT is unset (no behavior change)', () => {
+    vi.stubEnv('AFK_PLAIN_OUTPUT', undefined as unknown as string);
+    const stream = makeMockStream();
+    const rowHandler = vi.fn();
+    const bar = new LoopStageBar({ getExtraRows: () => 1, stream });
+    bar.setRowCountChangeHandler(rowHandler);
+    bar.start();
+    expect(rowHandler).toHaveBeenCalledWith(1);
+    expect(joinWrites(stream)).not.toBe('');
+    bar.stop();
+  });
+});

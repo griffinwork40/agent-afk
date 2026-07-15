@@ -355,6 +355,64 @@ fi
     expect(result.decision.decision).toBe('approve');
   });
 
+  it('CLAUDE_PLUGIN_ROOT is set to pluginRoot for a plugin-contributed hook', async () => {
+    const pluginDir = join(tmp, 'demo-plugin');
+    const scriptPath = join(tmp, 'check-plugin-root.sh');
+    writeFileSync(
+      scriptPath,
+      `#!/bin/sh
+if [ "$CLAUDE_PLUGIN_ROOT" = "${pluginDir}" ]; then
+  echo '{"decision":"approve"}'
+else
+  echo "wrong root: $CLAUDE_PLUGIN_ROOT" >&2
+  exit 2
+fi
+`,
+      'utf-8',
+    );
+    chmodSync(scriptPath, 0o755);
+    const result = await executeCommand({ ...makeOpts(scriptPath), pluginRoot: pluginDir });
+    expect(result.decision.decision).toBe('approve');
+  });
+
+  it('CLAUDE_PROJECT_DIR is set to agentCwd for a plugin-contributed hook', async () => {
+    const scriptPath = join(tmp, 'check-project-dir.sh');
+    writeFileSync(
+      scriptPath,
+      `#!/bin/sh
+if [ "$CLAUDE_PROJECT_DIR" = "${tmp}" ]; then
+  echo '{"decision":"approve"}'
+else
+  echo "wrong project dir: $CLAUDE_PROJECT_DIR" >&2
+  exit 2
+fi
+`,
+      'utf-8',
+    );
+    chmodSync(scriptPath, 0o755);
+    const result = await executeCommand({ ...makeOpts(scriptPath), pluginRoot: join(tmp, 'demo-plugin') });
+    expect(result.decision.decision).toBe('approve');
+  });
+
+  it('CLAUDE_PLUGIN_ROOT and CLAUDE_PROJECT_DIR are NOT set for a non-plugin hook (no pluginRoot)', async () => {
+    const scriptPath = join(tmp, 'check-no-plugin-root.sh');
+    writeFileSync(
+      scriptPath,
+      `#!/bin/sh
+if [ -z "$CLAUDE_PLUGIN_ROOT" ] && [ -z "$CLAUDE_PROJECT_DIR" ]; then
+  echo '{"decision":"approve"}'
+else
+  echo "unexpected plugin vars: root=$CLAUDE_PLUGIN_ROOT dir=$CLAUDE_PROJECT_DIR" >&2
+  exit 2
+fi
+`,
+      'utf-8',
+    );
+    chmodSync(scriptPath, 0o755);
+    const result = await executeCommand(makeOpts(scriptPath));
+    expect(result.decision.decision).toBe('approve');
+  });
+
   // -----------------------------------------------------------------------
   // F2 regression: secret env vars must NOT be forwarded to hook subprocess
   // -----------------------------------------------------------------------

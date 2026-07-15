@@ -60,13 +60,17 @@ describe('providerForModel — slot resolution', () => {
   it('routes a tier rebound to an OpenAI id via hints.slots', () => {
     const slots = makeSlots({ small: { id: 'gpt-4o-mini' } });
     expect(providerForModel('small', { slots })).toBe('openai-compatible');
-    expect(providerForModel('haiku', { slots })).toBe('openai-compatible');
+    // `haiku` is a fixed identity alias (#548) — a rebound `small` tier must NOT
+    // drag it off Claude.
+    expect(providerForModel('haiku', { slots })).toBe('anthropic-direct');
   });
 
   it('routes a tier rebound to a local HF-style id', () => {
     const slots = makeSlots({ medium: { id: 'mlx-community/Qwen3-32B-4bit' } });
     expect(providerForModel('medium', { slots })).toBe('openai-compatible');
-    expect(providerForModel('sonnet', { slots })).toBe('openai-compatible');
+    // `sonnet` is a fixed identity alias (#548) — a rebound `medium` tier must NOT
+    // hijack it (the pre-#548 collision).
+    expect(providerForModel('sonnet', { slots })).toBe('anthropic-direct');
   });
 
   it('routes by the bound id when matching a user custom name', () => {
@@ -77,7 +81,9 @@ describe('providerForModel — slot resolution', () => {
   it('honors the process-global installed bindings', () => {
     setSlotBindings(makeSlots({ large: { id: 'o3' } }));
     expect(providerForModel('large')).toBe('openai-compatible');
-    expect(providerForModel('opus')).toBe('openai-compatible');
+    // `opus` is a fixed identity alias (#548) — a rebound `large` tier must NOT
+    // drag it off Claude.
+    expect(providerForModel('opus')).toBe('anthropic-direct');
   });
 
   it('keeps the auto sentinel on anthropic-direct even with rebindings', () => {

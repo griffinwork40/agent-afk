@@ -24,6 +24,118 @@ function makeResult(content: string, isError = false): ToolResultChunk {
   };
 }
 
+describe('ToolLane — batch (parallel-wave) badge on root rows', () => {
+  const batchResult = (content: string, batchIndex: number, batchSize: number): ToolResultChunk => ({
+    type: 'tool_result',
+    toolUseId: 'unused',
+    content,
+    isError: false,
+    batchIndex,
+    batchSize,
+  });
+
+  it('flush() badges each root of a parallel safe wave with ∥i/N', () => {
+    const lane = new ToolLane();
+    lane.addStart('r1', 'Read', '("a.ts")');
+    lane.addStart('g1', 'Grep', '("foo")');
+    lane.addResult('r1', batchResult('10 lines', 1, 2));
+    lane.addResult('g1', batchResult('3 matches', 2, 2));
+
+    const joined = stripAnsi(lane.flush().join('\n'));
+    expect(joined).toContain('∥1/2');
+    expect(joined).toContain('∥2/2');
+  });
+
+  it('does NOT badge a singleton batch (batchSize === 1) — the sequential-dispatch case', () => {
+    const lane = new ToolLane();
+    lane.addStart('b1', 'Bash', '("echo hi")');
+    lane.addResult('b1', batchResult('hi', 1, 1));
+
+    expect(stripAnsi(lane.flush().join('\n'))).not.toContain('∥');
+  });
+
+  it('badges the live overlay too, not just committed scrollback', () => {
+    const lane = new ToolLane();
+    lane.addStart('r1', 'Read', '("a.ts")');
+    lane.addStart('g1', 'Grep', '("foo")');
+    lane.addResult('r1', batchResult('10 lines', 1, 2));
+    lane.addResult('g1', batchResult('3 matches', 2, 2));
+
+    const overlay = stripAnsi(lane.getOverlay());
+    expect(overlay).toContain('∥1/2');
+    expect(overlay).toContain('∥2/2');
+  });
+
+  // ── NESTING-root badge in committed scrollback (issue #532) ──────────────
+  //
+  // #520 badged flat roots in both overlay and scrollback, and NESTING roots
+  // (agent/skill/compose) in the live overlay only. These assert the deferred
+  // path: a NESTING root that ran in a parallel wave carries the badge once
+  // committed to scrollback, on its `Done (…)` closer line (the nesting-root
+  // analog of a flat root's badged outcome row). The head row is NOT the anchor
+  // — it may be committed eagerly before batchSize is known (see
+  // summaryWithBatchBadge in tool-lane-render-agent.ts).
+
+  it('flush() badges a NESTING root closer with ∥i/N for a parallel wave (formatAgentSummary path)', () => {
+    const lane = new ToolLane();
+    // Two agent roots dispatched together (batchSize=2), each with a child +
+    // a Done summary. No flushSource ran, so each root commits via
+    // formatAgentSummary (headerEmitted=false) with result+batchSize present.
+    lane.addStartWithAgentContext('agent-1', 'Agent', '(researcher)', undefined);
+    lane.addStartWithAgentContext('c1', 'Read', '("a.ts")', 'agent-1');
+    lane.addResult('c1', makeResult('10 lines'));
+    lane.setAgentResultSummary('agent-1', 'Done (1 tool · 2.0s)');
+    lane.addResult('agent-1', batchResult('done', 1, 2));
+
+    lane.addStartWithAgentContext('agent-2', 'Agent', '(verifier)', undefined);
+    lane.addStartWithAgentContext('c2', 'Grep', '("foo")', 'agent-2');
+    lane.addResult('c2', makeResult('3 matches'));
+    lane.setAgentResultSummary('agent-2', 'Done (1 tool · 1.5s)');
+    lane.addResult('agent-2', batchResult('done', 2, 2));
+
+    const joined = stripAnsi(lane.flush().join('\n'));
+    // Badge lands on the Done closer of each nesting root, not the head row.
+    expect(joined).toMatch(/Done \(1 tool · 2\.0s\) ∥1\/2/);
+    expect(joined).toMatch(/Done \(1 tool · 1\.5s\) ∥2\/2/);
+  });
+
+  it('flush() does NOT badge a singleton NESTING root (batchSize === 1)', () => {
+    const lane = new ToolLane();
+    lane.addStartWithAgentContext('agent-1', 'Agent', '(researcher)', undefined);
+    lane.addStartWithAgentContext('c1', 'Read', '("a.ts")', 'agent-1');
+    lane.addResult('c1', makeResult('10 lines'));
+    lane.setAgentResultSummary('agent-1', 'Done (1 tool · 2.0s)');
+    lane.addResult('agent-1', batchResult('done', 1, 1));
+
+    expect(stripAnsi(lane.flush().join('\n'))).not.toContain('∥');
+  });
+
+  it('eager-header (flushSource) path: NESTING root badge lands on the closer via formatAgentChildren', () => {
+    const lane = new ToolLane();
+    // skill root dispatched in a parallel wave (batchSize=2) with an agent child
+    // that itself owns a tool. The agent completes first → flushSource walks up
+    // and EAGERLY emits skill-1's header (headerEmitted=true, no badge yet —
+    // skill-1 has not completed, batchSize unknown). skill-1 then completes and
+    // flushes via formatAgentChildren (closer only), which carries the badge.
+    lane.addStartWithAgentContext('skill-1', 'skill', '(review)', undefined);
+    lane.addStartWithAgentContext('agent-a', 'Agent', '(reviewer)', 'skill-1');
+    lane.addStartWithAgentContext('c1', 'Read', '("a.ts")', 'agent-a');
+    lane.addResult('c1', makeResult('10 lines'));
+    lane.setAgentResultSummary('agent-a', 'Done (1 tool)');
+    lane.addResult('agent-a', makeResult('done'));
+
+    const eager = stripAnsi(lane.flushSource('agent-a').join('\n'));
+    // The eagerly-committed skill-1 head row is unbadged (batchSize not yet known).
+    expect(eager).not.toContain('∥');
+
+    lane.setAgentResultSummary('skill-1', 'Done (1 subagent · 3.0s)');
+    lane.addResult('skill-1', batchResult('done', 1, 2));
+    const rest = stripAnsi(lane.flush().join('\n'));
+    // Badge lands on skill-1's Done closer, committed at completion time.
+    expect(rest).toMatch(/Done \(1 subagent · 3\.0s\) ∥1\/2/);
+  });
+});
+
 describe('ToolLane.addStartWithAgentContext', () => {
   it('creates an entry with the given agentContext (does not consult agentIdStack)', () => {
     const lane = new ToolLane();
@@ -854,11 +966,11 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
     }
 
     // Attach the Done summary (as finalizeSubagent does)
-    lane.setAgentResultSummary(agentId, 'Done (4 tools · 2.5s)');
+    lane.setAgentResultSummary(agentId, 'Done (4 tool calls · 2.5s)');
     lane.addResult(agentId, {
       type: 'tool_result',
       toolUseId: 'synthetic',
-      content: 'Done (4 tools · 2.5s)',
+      content: 'Done (4 tool calls · 2.5s)',
       isError: false,
     });
 
@@ -869,7 +981,7 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
     // Find overflow line: matches "… +N" pattern from formatCategoricalOverflow
     const overflowIdx = allLines.findIndex((l) => /….*\+\d+/.test(l));
     // Find result summary line
-    const doneIdx = allLines.findIndex((l) => l.includes('Done (4 tools'));
+    const doneIdx = allLines.findIndex((l) => l.includes('Done (4 tool calls'));
 
     // Both lines must exist
     expect(overflowIdx, 'overflow ellipsis line must exist').toBeGreaterThanOrEqual(0);
@@ -894,7 +1006,7 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
     expect(overflowLine.indexOf('├')).toBe(2);
     expect(overflowLine.indexOf('…')).toBe(5);
     expect(doneLine.indexOf('╰')).toBe(2);
-    expect(doneLine.indexOf('Done (4 tools')).toBe(5);
+    expect(doneLine.indexOf('Done (4 tool calls')).toBe(5);
 
     // Assertion 4 (full-topology snapshot): locks the entire overlay shape.
     // Any structural drift — column position, sibling ordering, glyph
@@ -902,12 +1014,12 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
     // as a visible inline-snapshot diff instead of slipping past a
     // single-glyph toContain. Populated by `pnpm test -u` on first run.
     expect(stripped).toMatchInlineSnapshot(`
-      "◉ → Agent(overflow-tester) [subagent] — 4 tools
+      "◉ → Agent(overflow-tester) [subagent] — 4 tool calls
       │ ├─ … +1 (1 Read)
       │ ├─ $ Bash("file1.ts") — ✓ result1
       │ ├─ ● Grep("file2.ts") — ✓ result2
       │ ├─ ● Glob("file3.ts") — ✓ result3
-      │ ╰─ Done (4 tools · 2.5s)"
+      │ ╰─ Done (4 tool calls · 2.5s)"
     `);
   });
 
@@ -1551,9 +1663,9 @@ describe('Snapshot pins — tool-lane-render.ts representative outputs', () => {
       lane.addStartWithAgentContext(`sc${i}`, names[i]!, `("snap${i}.ts")`, agentId);
       lane.addResult(`sc${i}`, makeResult(`snap-result-${i}`));
     }
-    lane.setAgentResultSummary(agentId, 'Done (4 tools · 4.0s)');
+    lane.setAgentResultSummary(agentId, 'Done (4 tool calls · 4.0s)');
     lane.addResult(agentId, {
-      type: 'tool_result', toolUseId: 'synthetic', content: 'Done (4 tools · 4.0s)', isError: false,
+      type: 'tool_result', toolUseId: 'synthetic', content: 'Done (4 tool calls · 4.0s)', isError: false,
     });
     expect(stripAnsi(lane.flush().join('\n'))).toMatchSnapshot();
   });

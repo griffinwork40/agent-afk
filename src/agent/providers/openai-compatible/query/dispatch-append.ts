@@ -5,6 +5,7 @@ import type { ProviderEvent } from '../../../provider.js';
 import { extractRawToolInput } from '../../../facets/raw-input.js';
 import type { ToolDispatcher } from '../../anthropic-direct/tool-dispatcher.js';
 import type { ToolResult } from '../../anthropic-direct/types.js';
+import { DENIAL_BREAKER_FAILURE_CLASS } from '../../../tools/denial-circuit-breaker.js';
 import { summarizeToolInput } from '../../shared/tool-input-summary.js';
 import type { OpenAIMessage } from '../messages.js';
 import type { StreamState } from '../translate.js';
@@ -32,6 +33,11 @@ export interface DispatchAndAppendInput {
  * permission checks + the actual handler + PostToolUse hooks), then emit
  * `tool.output` per result, then append the assistant{tool_calls} +
  * tool{result} messages to running history for the next iteration.
+ *
+ * Returns the tripping {@link ToolResult} when a forked child hit the denial
+ * circuit breaker (#546) this round — the caller yields a loud `error` event
+ * and ends the turn — or `undefined` otherwise. History is appended before the
+ * return either way, so the trip surfaces on a consistent transcript.
  */
 export async function* dispatchAndAppendToolCalls({
   state,
@@ -41,12 +47,12 @@ export async function* dispatchAndAppendToolCalls({
   traceWriter,
   priorTurns,
   sessionId,
-}: DispatchAndAppendInput): AsyncGenerator<ProviderEvent> {
+}: DispatchAndAppendInput): AsyncGenerator<ProviderEvent, ToolResult | undefined> {
   if (!toolDispatcher) {
     // Shouldn't reach here — runIteration won't return needsToolDispatch=true
     // when we have no dispatcher because we don't send `tools[]` — but
     // belt-and-braces against a misbehaving model.
-    return;
+    return undefined;
   }
 
   const accumulated = finalizedToolCalls(state);
@@ -176,6 +182,9 @@ export async function* dispatchAndAppendToolCalls({
         durationMs,
         ...(result.circuitBreaker === true ? { circuitBreaker: true } : {}),
         ...(result.failureClass ? { failureClass: result.failureClass } : {}),
+        ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
+          ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
+          : {}),
       });
 
       yield {
@@ -185,6 +194,13 @@ export async function* dispatchAndAppendToolCalls({
         content: result.content,
         ...(result.isError === true ? { isError: true } : {}),
         ...(result.truncated === true ? { truncated: true } : {}),
+        // Plumb concurrency-batch membership onto the render-facing event, not
+        // just the trace event above, so the TUI `∥i/N` badge works here too.
+        // Parity with anthropic-direct/loop.ts's tool.output yield — omitting it
+        // silently drops the badge for every openai-compatible session.
+        ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
+          ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
+          : {}),
         sessionId,
       };
       if (result.render?.diff) {
@@ -222,4 +238,9 @@ export async function* dispatchAndAppendToolCalls({
   // model lacks vision or no result carried an image. See issue #127.
   const imageFollowup = toolImageFollowupMessage(results, { vision });
   if (imageFollowup) priorTurns.push(imageFollowup);
+
+  // Denial circuit breaker (#546): if the dispatcher tripped this round, hand
+  // the tripping result back so the caller can surface a loud `error` event and
+  // stop — matching anthropic-direct/loop.ts. History is already appended above.
+  return results.find((r) => r.result.failureClass === DENIAL_BREAKER_FAILURE_CLASS)?.result;
 }

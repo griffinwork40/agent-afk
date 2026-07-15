@@ -10,6 +10,7 @@
 import type { ZodType } from 'zod';
 import { AbortGraph } from '../abort-graph.js';
 import { debugLog } from '../../utils/debug.js';
+import { TimeoutError } from '../../utils/errors.js';
 import type { HookRegistry } from '../hooks.js';
 import { withTimeout } from '../timeout.js';
 import type { IAgentSession, Message } from '../types.js';
@@ -233,27 +234,71 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       return msg;
     } catch (err) {
       this.lastDurationMs = Date.now() - startTime;
+      // Invariant: own-budget timeouts classify 'failed', inherited (cascaded)
+      // timeouts stay 'cancelled'. Wall-clock budget expiry — withTimeout
+      // aborts our controller with the TimeoutError as the abort REASON before
+      // its race rejects, and abort listeners fire synchronously — so the
+      // stream often unwinds with an incidental AbortError in the same tick.
+      // The signal reason, not the thrown error, is the authoritative cause.
+      // Surface the budget error to callers and classify it as a failure below.
+      //
+      // Origin guard: only OUR OWN budget expiry counts. An ancestor's
+      // TimeoutError cascades down UNWRAPPED (AbortGraph.linkChild / abort()
+      // reuse the same reason object), so an inherited timeout would otherwise
+      // be misread as this handle's own budget and wrongly classified 'failed'
+      // — a nested subagent torn down because an ANCESTOR timed out did no
+      // wrong. isCascading(this.id) is true exactly when the graph aborted us
+      // as a descendant; exclude that case so cascaded timeouts stay
+      // 'cancelled'.
+      const timeoutReason =
+        this.controller.signal.aborted &&
+        this.controller.signal.reason instanceof TimeoutError &&
+        !this.abortGraph.isCascading(this.id)
+          ? this.controller.signal.reason
+          : undefined;
+      const surfacedErr = timeoutReason ?? err;
       // currentStatus is 'cancelled' only when cancel() already ran and
       // emitted its own lifecycle event. In that case we suppress the
       // failed event here to avoid a double-emit for the same termination.
       if ((this.currentStatus as string) !== 'cancelled') {
-        // Cascade classification: when our controller's signal is aborted
-        // at this point AND cancel() didn't fire (otherwise status would
-        // already be 'cancelled'), the throw unwound because an ancestor
-        // cascade hit our controller. Treat this as 'cancelled', not
-        // 'failed' — the subagent did no wrong; it was torn down
-        // externally. The trace and the result-object status must agree so
-        // downstream consumers (operator dashboard, future ActiveWorkRegistry)
-        // can correctly attribute cascade terminations vs. genuine failures.
+        // Invariant: cascade classification. When our controller's signal is
+        // aborted at this point AND cancel() didn't fire (otherwise status
+        // would already be 'cancelled') AND the abort reason is not our own
+        // wall-clock budget, the throw unwound because an ancestor cascade
+        // hit our controller. Treat this as 'cancelled', not 'failed' — the
+        // subagent did no wrong; it was torn down externally. The trace and
+        // the result-object status must agree so downstream consumers
+        // (operator dashboard, future ActiveWorkRegistry) can correctly
+        // attribute cascade terminations vs. genuine failures.
+        //
+        // Budget expiry is the deliberate carve-out: a TimeoutError abort
+        // reason means THIS run exceeded its own budget — a failure of the
+        // run, not an external teardown. Classifying it 'cancelled' made
+        // background timeouts vanish entirely: BgResultNotifier is
+        // notice-only for cancelled jobs (it never injects them into the
+        // parent context), so the timeout error promised by the fork-budget
+        // contract was recorded but never delivered (P2 review finding on
+        // #465). 'failed' flows through runToResult → registry → notifier
+        // injection with partial output intact.
+        //
         // Awaited (not fire-and-forget) for the same reason as the success
         // path: onTerminal() below may seal the owning session's trace, and a
         // seal that lands before this write is enqueued would drop the terminal
         // record. Awaiting guarantees the event is persisted first.
-        if (this.controller.signal.aborted) {
+        if (this.controller.signal.aborted && timeoutReason === undefined) {
+          // Annotate a timeout-driven cascade: `timeoutReason` is undefined here
+          // (this branch's guard), so a TimeoutError on the signal means the
+          // origin guard above classified it as CASCADED (isCascading true) —
+          // i.e. an ANCESTOR's wall-clock budget expired and the abort came down
+          // to us. Flag it so a trace reader can tell a timeout cascade from an
+          // ordinary parent/explicit cancel. Not our own budget → still
+          // 'cancelled', not 'failed'.
+          const cascadeTimedOut = this.controller.signal.reason instanceof TimeoutError;
           await emitSubagentLifecycle(this.traceWriter, {
             transition: 'cancelled',
             subagentId: this.id,
             source: 'cascade',
+            ...(cascadeTimedOut ? { timeout: true } : {}),
           });
           this.currentStatus = 'cancelled';
           this.latestTerminalStatus = 'cancelled';
@@ -261,16 +306,22 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
           await emitSubagentLifecycle(this.traceWriter, {
             transition: 'failed',
             subagentId: this.id,
-            errorClass: err instanceof Error ? err.constructor.name : 'Unknown',
-            errorMessage: err instanceof Error ? err.message : String(err),
+            errorClass: surfacedErr instanceof Error ? surfacedErr.constructor.name : 'Unknown',
+            errorMessage: surfacedErr instanceof Error ? surfacedErr.message : String(surfacedErr),
             partialOutputBytes: Buffer.byteLength(this.lastStreamedContent, 'utf8'),
+            // Classify our OWN wall-clock budget expiry as a timeout failure.
+            // `timeoutReason` is set (see the origin-guarded detection above)
+            // exactly when THIS handle's controller was aborted with a
+            // TimeoutError that is NOT a cascade — the guillotined-by-budget
+            // case #583/this PR targets. Absent for any other failure.
+            ...(timeoutReason !== undefined ? { failureClass: 'timeout' as const } : {}),
           });
           this.currentStatus = 'failed';
           this.latestTerminalStatus = 'failed';
         }
       }
       this.onTerminal();
-      throw err;
+      throw surfacedErr;
     } finally {
       this.inFlight = null;
     }
@@ -395,7 +446,49 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
         timestamp: new Date(),
       };
     }
-    throw new Error(`Subagent ${this.id} produced no terminal message`);
+    // Invariant: a cancelled subagent must NEVER resolve as a succeeded partial.
+    // Reaching here means no terminal message, no buffered text, no stream
+    // error, and not the tool-use cap — two sub-cases, split by whether the run
+    // was cancelled/aborted (mirroring run()'s own catch classification):
+    //   - CANCELLED/ABORTED (explicit cancel() sets currentStatus 'cancelled';
+    //     an ancestor cascade sets controller.signal.aborted): preserve the
+    //     throw so run()'s catch classifies the termination as 'cancelled' —
+    //     not a success, not a plain failure.
+    //   - Otherwise (an abnormal provider-stream close, or a mid-loop cutoff
+    //     with an empty buffer — the failure mode of an unbounded read-only
+    //     agent that tool-loops without ever emitting a final turn): degrade to
+    //     a STREAM_INCOMPLETE partial, the same treatment the buffered-text
+    //     branch above gives, so the consumption boundary (annotateIfIncomplete)
+    //     marks it as an incomplete result the parent can act on (retry / fall
+    //     back) instead of an opaque "produced no terminal message" delegation
+    //     failure after (often) a long run.
+    if (this.controller.signal.aborted || this.currentStatus === 'cancelled') {
+      throw new Error(`Subagent ${this.id} produced no terminal message`);
+    }
+    // Invariant: this fallback stamps STREAM_INCOMPLETE UNCONDITIONALLY (`=`,
+    // not `??=`) — the content below is a synthetic placeholder, never the
+    // model's real output, so its stop reason must mark it incomplete. This
+    // differs from the buffered-text branch above, which uses `??=` deliberately:
+    // a capped run that also streamed text reaches there with
+    // `tool_use_loop_capped` already set and must keep it. Nothing worth
+    // preserving can reach HERE — the cap case returned at the
+    // tool_use_loop_capped branch, and cancel/abort threw just above. Any
+    // stopReason still set is therefore a clean terminal one (end_turn /
+    // max_tokens / interrupted), none of which isIncompleteStopReason flags,
+    // reached via an empty-text turn the stream consumer drops before emitting a
+    // `message` event (see stream-consumer 'assistant.message': `if (event.text)`).
+    // Preserving it would let annotateIfIncomplete report this synthetic
+    // "no findings" placeholder as a clean completion — defeating the whole
+    // point of this branch. Overwrite it.
+    this.lastStopReason = STREAM_INCOMPLETE;
+    return {
+      role: 'assistant',
+      content:
+        `[subagent ${this.id} ended without producing a final message or any ` +
+        `streamed output — it was cut off mid-run (an abnormal stream close), ` +
+        `so no findings were produced.]`,
+      timestamp: new Date(),
+    };
   }
 
   async runToResult(prompt: string, sinkOverride?: SubagentProgressSink): Promise<SubagentResult<T>> {

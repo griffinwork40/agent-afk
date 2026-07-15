@@ -83,10 +83,13 @@ import { spawn } from 'child_process';
 import { getVersion } from './version.js';
 import {
   checkForUpdates,
+  coldStartUpdateCheck,
+  hasUpdateCache,
   printUpdateBanner,
   triggerAutoUpdate,
   checkPendingUpdate,
   writePendingUpdateMarker,
+  writeUpdateCache,
   fetchLatestVersion,
 } from './update-checker.js';
 
@@ -97,6 +100,7 @@ const mockUnlinkSync = vi.mocked(unlinkSync);
 const mockSpawn = vi.mocked(spawn);
 const mockGetVersion = vi.mocked(getVersion);
 const pendingFile = join(FAKE_CACHE_DIR, 'pending-update.json');
+const cacheFile = join(FAKE_CACHE_DIR, 'update-check.json');
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
 describe('update-checker', () => {
@@ -180,6 +184,32 @@ describe('update-checker', () => {
 
     it('does not spawn background check when cache is fresh', () => {
       const freshCache = JSON.stringify({ latestVersion: '1.11.0', checkedAt: Date.now() });
+      mockReadFileSync.mockReturnValue(freshCache);
+
+      checkForUpdates('notify');
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    // --- cache TTL (A) --------------------------------------------------------
+    // The TTL was shortened from 24h → 3h so the passive banner tracks a
+    // several-releases-per-day cadence instead of going blind for up to a day.
+
+    it('spawns background check when cache is older than the 3h TTL', () => {
+      const staleCache = JSON.stringify({
+        latestVersion: '1.11.0',
+        checkedAt: Date.now() - 4 * 60 * 60 * 1000, // 4h: past 3h TTL, within old 24h
+      });
+      mockReadFileSync.mockReturnValue(staleCache);
+
+      checkForUpdates('notify');
+      expect(mockSpawn).toHaveBeenCalled();
+    });
+
+    it('does not spawn background check for a cache younger than the 3h TTL', () => {
+      const freshCache = JSON.stringify({
+        latestVersion: '1.11.0',
+        checkedAt: Date.now() - 2 * 60 * 60 * 1000, // 2h: within the 3h TTL
+      });
       mockReadFileSync.mockReturnValue(freshCache);
 
       checkForUpdates('notify');
@@ -451,6 +481,109 @@ describe('update-checker', () => {
       buildFakeHttp(200, JSON.stringify({ version: 'not-a-semver' }));
       const result = await fetchLatestVersion();
       expect(result).toBeUndefined();
+    });
+  });
+
+  // --- writeUpdateCache (B) ---------------------------------------------------
+
+  describe('writeUpdateCache', () => {
+    it('writes the update-check cache for a valid semver', () => {
+      writeUpdateCache('1.12.0');
+      expect(mockWriteFileSync).toHaveBeenCalledWith(
+        cacheFile,
+        expect.stringContaining('"latestVersion":"1.12.0"'),
+      );
+    });
+
+    it('rejects a non-semver version without writing', () => {
+      writeUpdateCache('1.0.0; rm -rf /');
+      expect(mockWriteFileSync).not.toHaveBeenCalled();
+    });
+
+    it('silently swallows writeFileSync errors (best-effort)', () => {
+      mockWriteFileSync.mockImplementation(() => {
+        throw new Error('EACCES: permission denied');
+      });
+      expect(() => writeUpdateCache('1.12.0')).not.toThrow();
+      // Reset the throwing impl so it does not leak into later tests
+      // (the suite uses clearAllMocks, which keeps implementations).
+      mockWriteFileSync.mockReset();
+    });
+  });
+
+  // --- hasUpdateCache (C) -----------------------------------------------------
+
+  describe('hasUpdateCache', () => {
+    it('returns true when a parseable cache exists', () => {
+      mockReadFileSync.mockReturnValue(
+        JSON.stringify({ latestVersion: '1.11.0', checkedAt: Date.now() }),
+      );
+      expect(hasUpdateCache()).toBe(true);
+    });
+
+    it('returns false when the cache is missing', () => {
+      mockReadFileSync.mockImplementation(() => {
+        throw new Error('ENOENT');
+      });
+      expect(hasUpdateCache()).toBe(false);
+    });
+  });
+
+  // --- coldStartUpdateCheck (C) -----------------------------------------------
+  // First-launch path: awaits ONE bounded inline registry fetch so the banner
+  // can appear on the very first run instead of only on a second invocation.
+
+  describe('coldStartUpdateCheck', () => {
+    beforeEach(() => {
+      mockHttpsGet.mockReset();
+    });
+
+    it('returns UpdateInfo and persists the cache when a newer version exists', async () => {
+      buildFakeHttp(200, JSON.stringify({ version: '1.12.0' }));
+      const result = await coldStartUpdateCheck('notify');
+      expect(result).toEqual({ currentVersion: '1.10.1', latestVersion: '1.12.0' });
+      expect(mockWriteFileSync).toHaveBeenCalledWith(
+        cacheFile,
+        expect.stringContaining('"latestVersion":"1.12.0"'),
+      );
+    });
+
+    it('returns null but still persists the cache when already up to date', async () => {
+      buildFakeHttp(200, JSON.stringify({ version: '1.10.1' }));
+      const result = await coldStartUpdateCheck('notify');
+      expect(result).toBeNull();
+      expect(mockWriteFileSync).toHaveBeenCalledWith(
+        cacheFile,
+        expect.stringContaining('"latestVersion":"1.10.1"'),
+      );
+    });
+
+    it('returns null and falls back to a background refresh when the fetch fails', async () => {
+      buildFakeHttp(500, null);
+      const result = await coldStartUpdateCheck('notify');
+      expect(result).toBeNull();
+      expect(mockWriteFileSync).not.toHaveBeenCalled();
+      expect(mockSpawn).toHaveBeenCalled();
+    });
+
+    it('returns null without fetching when policy is off', async () => {
+      const result = await coldStartUpdateCheck('off');
+      expect(result).toBeNull();
+      expect(mockHttpsGet).not.toHaveBeenCalled();
+    });
+
+    it('returns null without fetching when CI is set', async () => {
+      process.env['CI'] = 'true';
+      const result = await coldStartUpdateCheck('notify');
+      expect(result).toBeNull();
+      expect(mockHttpsGet).not.toHaveBeenCalled();
+    });
+
+    it('returns null without fetching when NO_UPDATE_NOTIFIER is set', async () => {
+      process.env['NO_UPDATE_NOTIFIER'] = '1';
+      const result = await coldStartUpdateCheck('notify');
+      expect(result).toBeNull();
+      expect(mockHttpsGet).not.toHaveBeenCalled();
     });
   });
 });

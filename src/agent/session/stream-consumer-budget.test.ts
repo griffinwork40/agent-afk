@@ -86,6 +86,17 @@ function makeTurnCompleted(
   return { type: 'turn.completed', usage, sessionId };
 }
 
+/** Build a minimal `tool.output` provider event. */
+function makeToolOutput(toolName: string | undefined, isError = false): ProviderEvent {
+  return {
+    type: 'tool.output',
+    toolUseId: `tu-${toolName ?? 'x'}-${Math.random().toString(36).slice(2, 7)}`,
+    content: 'ok',
+    ...(toolName !== undefined ? { toolName } : {}),
+    ...(isError ? { isError: true } : {}),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -202,5 +213,61 @@ describe('tool.diff event transform', () => {
         expect(result!.chunk.diff).toEqual(minimalDiff);
       }
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// successfulToolNames metadata accumulation (daemon Done-verification signal)
+// ---------------------------------------------------------------------------
+
+/** Read successfulToolNames off a `done` OutputEvent's metadata. */
+function doneToolNames(result: ReturnType<typeof transformProviderEvent>): string[] | undefined {
+  if (result?.type !== 'done') return undefined;
+  return result.metadata.successfulToolNames;
+}
+
+describe('transformProviderEvent — successfulToolNames accumulation', () => {
+  it('accumulates successful evidence-tool names in call order and stamps them on turn.completed', () => {
+    const deps = makeDeps();
+    deps._successfulToolNames = []; // buildTransformDeps() initializes this per turn
+    transformProviderEvent(makeToolOutput('write_file'), deps);
+    transformProviderEvent(makeToolOutput('bash'), deps);
+    const result = transformProviderEvent(makeTurnCompleted(0), deps);
+    expect(doneToolNames(result)).toEqual(['write_file', 'bash']);
+  });
+
+  it('records read-only tools too (policy-free — the CONSUMER decides evidence)', () => {
+    const deps = makeDeps();
+    deps._successfulToolNames = [];
+    transformProviderEvent(makeToolOutput('read_file'), deps);
+    transformProviderEvent(makeToolOutput('grep'), deps);
+    const result = transformProviderEvent(makeTurnCompleted(0), deps);
+    // The field is the raw observation; it is NOT filtered to evidence tools.
+    expect(doneToolNames(result)).toEqual(['read_file', 'grep']);
+  });
+
+  it('excludes tools whose output reported an error', () => {
+    const deps = makeDeps();
+    deps._successfulToolNames = [];
+    transformProviderEvent(makeToolOutput('write_file', true), deps); // errored — excluded
+    transformProviderEvent(makeToolOutput('bash'), deps); // ok — included
+    const result = transformProviderEvent(makeTurnCompleted(0), deps);
+    expect(doneToolNames(result)).toEqual(['bash']);
+  });
+
+  it('skips tool.output events with no toolName (e.g. some Codex-synthesized events)', () => {
+    const deps = makeDeps();
+    deps._successfulToolNames = [];
+    transformProviderEvent(makeToolOutput(undefined), deps);
+    const result = transformProviderEvent(makeTurnCompleted(0), deps);
+    // No named successful tools ⇒ field omitted (shape unchanged for such turns).
+    expect(doneToolNames(result)).toBeUndefined();
+  });
+
+  it('omits successfulToolNames when the turn ran no successful tools (shape parity)', () => {
+    const deps = makeDeps();
+    deps._successfulToolNames = [];
+    const result = transformProviderEvent(makeTurnCompleted(0), deps);
+    expect(doneToolNames(result)).toBeUndefined();
   });
 });

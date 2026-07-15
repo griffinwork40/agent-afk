@@ -120,4 +120,29 @@ describe('loadConfig — daemon block round-trip', () => {
     const config = loadConfig();
     expect(config.daemon).toBeUndefined();
   });
+
+  it('round-trips daemon.verifyDone: true', () => {
+    writeJsonConfig(JSON.stringify({ daemon: { verifyDone: true } }));
+    const config = loadConfig();
+    expect(config.daemon?.verifyDone).toBe(true);
+  });
+
+  it('round-trips daemon.verifyDone: false', () => {
+    writeJsonConfig(JSON.stringify({ daemon: { verifyDone: false } }));
+    const config = loadConfig();
+    expect(config.daemon?.verifyDone).toBe(false);
+  });
+
+  it('leaves daemon.verifyDone undefined (off) when absent', () => {
+    writeJsonConfig(JSON.stringify({ daemon: { task: '/x' } }));
+    const config = loadConfig();
+    expect(config.daemon?.task).toBe('/x');
+    expect(config.daemon?.verifyDone).toBeUndefined();
+  });
+
+  it('ignores a non-boolean daemon.verifyDone (defensive parse → undefined)', () => {
+    writeJsonConfig(JSON.stringify({ daemon: { verifyDone: 'yes' } }));
+    const config = loadConfig();
+    expect(config.daemon?.verifyDone).toBeUndefined();
+  });
 });

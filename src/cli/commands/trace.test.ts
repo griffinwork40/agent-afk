@@ -27,7 +27,7 @@ import {
   listTraces,
   resolveLatestSession,
 } from './trace.js';
-import { getTraceDir } from '../../paths.js';
+import { getTraceDir, getSessionLedgerDir, getSessionLedgerPath } from '../../paths.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -127,6 +127,54 @@ describe('formatTrace — default human view', () => {
   it('hides low-signal events by default (latency phases, paired tool starts)', () => {
     expect(out).not.toContain('model_ttfb');
     expect(out).not.toContain('started (no completion recorded)');
+  });
+});
+
+describe('formatTrace — subagent timeout markers', () => {
+  // PR (observable forked children): the reader must surface the new lifecycle
+  // timeout signals — `[timeout]` on a failed child that blew its OWN budget
+  // (failureClass:'timeout'), and `(timeout)` on a cancelled child whose
+  // ancestor's budget expired (source:'cascade' + timeout:true).
+  it("renders [timeout] on a failed subagent with failureClass 'timeout'", () => {
+    const events: EventObj[] = [
+      { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'subagent_lifecycle', payload: { transition: 'failed', subagentId: 'sub-to', errorClass: 'TimeoutError', errorMessage: 'timed out after 2700000ms', partialOutputBytes: 12, failureClass: 'timeout' } },
+      { ts: '2026-06-05T12:35:00.000Z', seq: 1, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+    ];
+    const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+    expect(out).toContain('FAILED');
+    expect(out).toContain('[timeout]');
+    expect(out).toContain('[sub-to]');
+  });
+
+  it('does NOT render [timeout] on an ordinary failed subagent (no failureClass)', () => {
+    const events: EventObj[] = [
+      { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'subagent_lifecycle', payload: { transition: 'failed', subagentId: 'sub-err', errorClass: 'Error', errorMessage: 'boom', partialOutputBytes: 0 } },
+      { ts: '2026-06-05T12:35:00.000Z', seq: 1, kind: 'session_sealed', payload: { status: 'failed', finalCostUsd: 0, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+    ];
+    const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+    expect(out).toContain('FAILED');
+    expect(out).not.toContain('[timeout]');
+  });
+
+  it('renders (timeout) on a cascade-cancelled subagent with the timeout flag', () => {
+    const events: EventObj[] = [
+      { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'subagent_lifecycle', payload: { transition: 'cancelled', subagentId: 'sub-casc', source: 'cascade', timeout: true } },
+      { ts: '2026-06-05T12:35:00.000Z', seq: 1, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+    ];
+    const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+    expect(out).toContain('cancelled (cascade)');
+    expect(out).toContain('(timeout)');
+    expect(out).toContain('[sub-casc]');
+  });
+
+  it('does NOT render (timeout) on an ordinary cancel (no timeout flag)', () => {
+    const events: EventObj[] = [
+      { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'subagent_lifecycle', payload: { transition: 'cancelled', subagentId: 'sub-cx', source: 'explicit' } },
+      { ts: '2026-06-05T12:35:00.000Z', seq: 1, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T12:35:00.000Z' } },
+    ];
+    const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+    expect(out).toContain('cancelled (explicit)');
+    expect(out).not.toContain('(timeout)');
   });
 });
 
@@ -333,5 +381,48 @@ describe('witness discovery', () => {
 
   it('throws a helpful error for a missing session', async () => {
     await expect(loadTrace('does-not-exist-xyz')).rejects.toThrow(/No trace found/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ledger fallback: fresh sessions label the witness dir with a random UUID
+// (not the session id), so loadTrace(sessionId) must recover the real label
+// from the session ledger's `meta.traceLabel`.
+// ---------------------------------------------------------------------------
+
+async function writeLedger(sessionId: string, records: EventObj[]): Promise<void> {
+  await mkdir(getSessionLedgerDir(sessionId), { recursive: true });
+  await writeFile(getSessionLedgerPath(sessionId), toJsonl(records), 'utf8');
+}
+
+describe('loadTrace ledger fallback', () => {
+  it('resolves a trace whose witness label differs from the session id', async () => {
+    // Trace lives under a random-UUID label; nothing under <witness>/<sessionId>/.
+    await writeTrace('random-label-abc123', sampleEvents());
+    await writeLedger('sess-fresh-a', [
+      { v: 1, ts: 1000, kind: 'meta', sessionId: 'sess-fresh-a', model: 'sonnet', traceLabel: 'random-label-abc123' },
+      { v: 1, ts: 1001, kind: 'user', text: 'hi' },
+    ]);
+
+    const loaded = await loadTrace('sess-fresh-a');
+    expect(loaded.sessionId).toBe('sess-fresh-a');
+    expect(loaded.tracePath).toContain('random-label-abc123');
+    expect(loaded.events).toHaveLength(10);
+  });
+
+  it('reports tracing-disabled when the ledger meta records traceLabel: null', async () => {
+    await writeLedger('sess-notrace', [
+      { v: 1, ts: 1000, kind: 'meta', sessionId: 'sess-notrace', model: 'sonnet', traceLabel: null },
+    ]);
+
+    await expect(loadTrace('sess-notrace')).rejects.toThrow(/tracing disabled/);
+  });
+
+  it('falls through to "No trace found" when the ledger meta predates the field', async () => {
+    await writeLedger('sess-legacy', [
+      { v: 1, ts: 1000, kind: 'meta', sessionId: 'sess-legacy', model: 'sonnet' },
+    ]);
+
+    await expect(loadTrace('sess-legacy')).rejects.toThrow(/No trace found/);
   });
 });

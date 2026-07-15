@@ -48,6 +48,11 @@ export const ToolCallCompletedPayloadSchema = z.object({
   circuitBreaker: z.boolean().optional(),
   /** Coarse failure classification when `isError` is true. Absent otherwise. */
   failureClass: ToolFailureClassSchema.optional(),
+  /** Concurrency-batch membership (1-based index + total size). `batchSize > 1`
+   *  ⇒ ran in a parallel wave; `=== 1` ⇒ ran alone. Absent on the single-tool
+   *  `execute()` path and on blocked/short-circuited calls. */
+  batchIndex: z.number().int().positive().optional(),
+  batchSize: z.number().int().positive().optional(),
   subagentId: z.string().optional(),
 });
 
@@ -85,7 +90,9 @@ export const HookDecisionPayloadSchema = z.object({
   /** Set only by the AFK high-risk approval gate. Wall-clock ms from gate entry to decision. */
   durationMs: z.number().nonnegative().optional(),
   /** Set only by the AFK high-risk approval gate. Fine-grained approval outcome. */
-  approvalOutcome: z.enum(['approved', 'denied', 'unrecognised', 'timeout', 'decline', 'cancel']).optional(),
+  approvalOutcome: z
+    .enum(['approved', 'denied', 'unrecognised', 'timeout', 'decline', 'cancel', 'hard-block'])
+    .optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -99,6 +106,8 @@ export const SubagentStartedPayloadSchema = z.object({
   model: z.string(),
   allowedTools: z.array(z.string()).readonly().optional(),
   systemPromptHash: z.string().optional(),
+  promptHead: z.string().optional(),
+  agentType: z.string().optional(),
 });
 
 export const SubagentSucceededPayloadSchema = z.object({
@@ -117,12 +126,14 @@ export const SubagentFailedPayloadSchema = z.object({
   errorClass: z.string(),
   errorMessage: z.string(),
   partialOutputBytes: z.number().int().nonnegative(),
+  failureClass: ToolFailureClassSchema.optional(),
 });
 
 export const SubagentCancelledPayloadSchema = z.object({
   transition: z.literal('cancelled'),
   subagentId: z.string(),
   source: z.enum(['cascade', 'explicit']),
+  timeout: z.boolean().optional(),
 });
 
 export const SubagentLifecyclePayloadSchema = z.discriminatedUnion('transition', [

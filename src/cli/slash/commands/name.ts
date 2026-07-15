@@ -7,8 +7,8 @@
  * it by name instead of a UUID. The name is metadata on the single
  * <sessionId>.json sidecar; setting it never creates a duplicate file.
  *
- * This is the primary rename command. `/save <name>` remains a
- * backward-compatible way to do the same thing alongside an explicit flush.
+ * This is the rename command: it sets the session name and persists it once
+ * the session has turns.
  */
 
 import { palette } from '../../palette.js';

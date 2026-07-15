@@ -194,6 +194,16 @@ export interface AnthropicDirectQueryOptions {
    * turn without surfacing an error to the caller.
    */
   hookRegistry?: HookRegistry;
+  /**
+   * Out-of-band mailbox for live throttle (rate-limit/backoff) signals. The
+   * SAME instance is wired to the SDK client's `fetch` throttle callback at
+   * query construction (`index.ts`); threaded into each per-turn `runTurn`
+   * via `RunTurnInput.throttleQueue` so the loop can surface a `rate_limit`
+   * ProviderEvent LIVE while parked on a throttled `messages.create`. Absent
+   * for local-shim / external-dispatcher paths where the tracing fetch is not
+   * installed.
+   */
+  throttleQueue?: import('./throttle-queue.js').ThrottleQueue;
 }
 
 /**
@@ -256,6 +266,8 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private readonly onPermissionMode?: (mode: string) => void;
   private readonly mcpManager?: import('../../mcp/index.js').McpManager;
   private readonly hookRegistry?: HookRegistry;
+  /** Shared live-throttle mailbox; wired to the client fetch callback. See options doc. */
+  private readonly throttleQueue?: import('./throttle-queue.js').ThrottleQueue;
 
   constructor(opts: AnthropicDirectQueryOptions) {
     this.initSessionId = opts.sessionId ?? randomUUID();
@@ -273,6 +285,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
     this.onPermissionMode = opts.onPermissionMode;
     this.mcpManager = opts.mcpManager;
     if (opts.hookRegistry !== undefined) this.hookRegistry = opts.hookRegistry;
+    if (opts.throttleQueue !== undefined) this.throttleQueue = opts.throttleQueue;
     this.retry = new RetryLayer({
       client: opts.client,
       authMode: opts.authMode,
@@ -401,6 +414,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
             ? { maxToolUseIterations: this.maxToolUseIterations }
             : {}),
           ...(this.traceWriter ? { traceWriter: this.traceWriter } : {}),
+          ...(this.throttleQueue ? { throttleQueue: this.throttleQueue } : {}),
           onUsageProgress: (usage) => { this.state.lastUsage = usage; },
         };
 

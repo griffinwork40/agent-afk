@@ -157,6 +157,41 @@ describe('buildChildConfig', () => {
     });
   });
 
+  describe('childWriteCapable (isolation gating)', () => {
+    it('is true for an unrestricted dispatch (no cage → full write surface)', () => {
+      const { childWriteCapable } = buildChildConfig(baseArgs());
+      expect(childWriteCapable).toBe(true);
+    });
+
+    it('is false for a read-only cage (no write/edit, no bash)', () => {
+      const { childWriteCapable } = buildChildConfig(
+        baseArgs({ allowedTools: ['read_file', 'grep', 'glob', 'web_scrape'] }),
+      );
+      expect(childWriteCapable).toBe(false);
+    });
+
+    it('is false when bash is allowed but read-only', () => {
+      const { childWriteCapable } = buildChildConfig(
+        baseArgs({ allowedTools: ['read_file', 'grep', 'bash'], readOnlyBash: true }),
+      );
+      expect(childWriteCapable).toBe(false);
+    });
+
+    it('is true when the cage includes write_file', () => {
+      const { childWriteCapable } = buildChildConfig(
+        baseArgs({ allowedTools: ['read_file', 'write_file'] }),
+      );
+      expect(childWriteCapable).toBe(true);
+    });
+
+    it('is true when the cage includes mutating (non-read-only) bash', () => {
+      const { childWriteCapable } = buildChildConfig(
+        baseArgs({ allowedTools: ['read_file', 'bash'] }),
+      );
+      expect(childWriteCapable).toBe(true);
+    });
+  });
+
   describe('systemPrompt selection', () => {
     it('uses the parent base prompt for an unnamed dispatch', () => {
       const { childConfig } = buildChildConfig(baseArgs({ namedAgent: undefined }));

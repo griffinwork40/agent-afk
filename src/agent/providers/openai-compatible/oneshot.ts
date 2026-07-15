@@ -57,6 +57,16 @@ export interface OpenAIOneShotInput {
    * hook. Lets callers inject a pre-built client without touching module state.
    */
   clientFactory?: OneShotOpenAIClientFactory;
+  /**
+   * Pre-built client to use verbatim. When provided, auth resolution and client
+   * construction are skipped entirely — the caller's client (with its own
+   * baseURL, headers, and credentials) is used as-is. This lets a live session
+   * reuse `this.client` for an in-session one-shot (e.g. history compaction)
+   * so the summarize call lands on the SAME custom endpoint / ChatGPT backend
+   * as the conversation, without re-resolving auth. Takes precedence over
+   * `apiKey` / `baseURL` / `clientFactory`.
+   */
+  client?: OpenAI;
 }
 
 /**
@@ -79,15 +89,22 @@ export interface OpenAIOneShotInput {
 export async function oneShotChatCompletion(input: OpenAIOneShotInput): Promise<string> {
   const { apiKey, baseURL, model, system, user, maxTokens = 64, signal, clientFactory } = input;
 
-  const auth = resolveOpenAIAuth(apiKey);
-  if (auth.apiKey === null) {
-    throw new Error('oneShotChatCompletion: no usable OpenAI auth (set OPENAI_API_KEY or pass apiKey)');
+  // A caller-supplied client (a live session reusing `this.client`) is used
+  // verbatim — no auth resolution, no reconstruction — so the call inherits the
+  // session's endpoint, headers, and credentials.
+  let client: OpenAI;
+  if (input.client !== undefined) {
+    client = input.client;
+  } else {
+    const auth = resolveOpenAIAuth(apiKey);
+    if (auth.apiKey === null) {
+      throw new Error('oneShotChatCompletion: no usable OpenAI auth (set OPENAI_API_KEY or pass apiKey)');
+    }
+    const clientOpts: { apiKey: string; baseURL?: string } = { apiKey: auth.apiKey };
+    if (baseURL !== undefined) clientOpts.baseURL = baseURL;
+    const factory = clientFactory ?? oneShotClientFactory;
+    client = factory ? factory(clientOpts) : new OpenAI(clientOpts);
   }
-
-  const clientOpts: { apiKey: string; baseURL?: string } = { apiKey: auth.apiKey };
-  if (baseURL !== undefined) clientOpts.baseURL = baseURL;
-  const factory = clientFactory ?? oneShotClientFactory;
-  const client = factory ? factory(clientOpts) : new OpenAI(clientOpts);
 
   // Reasoning models (o-series ∪ gpt-5.x) reject `max_tokens` and require
   // `max_completion_tokens`; everything else (chat models + local shims) wants
