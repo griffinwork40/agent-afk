@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.54.0] - 2026-07-16
+
+### Added
+- tag forked-child tool_call events with subagentId (#612) (#629) (972b109)
+
 ## [5.53.0] - 2026-07-16
 
 ### Added
