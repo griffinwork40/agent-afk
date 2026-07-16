@@ -144,6 +144,13 @@ export interface AnthropicDirectQueryOptions {
   /** Witness-layer trace writer threaded into each per-turn run. */
   traceWriter?: import('../../trace/index.js').TraceWriter;
   /**
+   * Owning subagent id when this query runs inside a forked child
+   * (`AgentConfig.subagentId`). Threaded into `RunTurnInput.subagentId` so the
+   * loop's `tool_call` events are attributable in the shared parent trace.
+   * Absent for a top-level session. See issue #612.
+   */
+  subagentId?: string;
+  /**
    * When true (default), the query automatically waits for the OAuth
    * subscription reset and replays the in-flight turn on 429 usage-limit
    * errors instead of surfacing them immediately.
@@ -232,6 +239,8 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private readonly baseUrl?: string;
   private readonly maxToolUseIterations?: number;
   private readonly traceWriter?: import('../../trace/index.js').TraceWriter;
+  /** Owning subagent id (fork only); stamped onto tool_call trace events. */
+  private readonly subagentId?: string;
 
   /**
    * Per-session mutable state — see {@link SessionState}. Held as a
@@ -281,6 +290,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
     if (opts.maxToolUseIterations !== undefined)
       this.maxToolUseIterations = opts.maxToolUseIterations;
     this.traceWriter = opts.traceWriter;
+    if (opts.subagentId !== undefined) this.subagentId = opts.subagentId;
     this.cwdDependentsFactory = opts.cwdDependentsFactory;
     this.onPermissionMode = opts.onPermissionMode;
     this.mcpManager = opts.mcpManager;
@@ -414,6 +424,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
             ? { maxToolUseIterations: this.maxToolUseIterations }
             : {}),
           ...(this.traceWriter ? { traceWriter: this.traceWriter } : {}),
+          ...(this.subagentId !== undefined ? { subagentId: this.subagentId } : {}),
           ...(this.throttleQueue ? { throttleQueue: this.throttleQueue } : {}),
           onUsageProgress: (usage) => { this.state.lastUsage = usage; },
         };

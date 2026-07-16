@@ -494,6 +494,41 @@ describe('SubagentManager — hook integration', () => {
     );
   });
 
+  it('stamps the fork\'s own id onto child config.subagentId, equal to the handle id (issue #612)', async () => {
+    // The child's provider loop reads AgentConfig.subagentId to tag every
+    // tool_call trace event so a fork's work is attributable in the shared
+    // parent trace. The stamped id MUST equal the returned handle id (the id
+    // used by subagent_lifecycle.started), or a reader could not correlate a
+    // tagged tool_call with the child that emitted it.
+    const mgr = new SubagentManager();
+    shared.lastConfig = null;
+    const handle = await mgr.forkSubagent({
+      parent: { sessionId: 'parent-xyz' },
+      config: { model: 'sonnet' },
+    });
+
+    expect(shared.lastConfig).toEqual(
+      expect.objectContaining({ subagentId: handle.id }),
+    );
+  });
+
+  it('the fork-assigned subagentId wins over any inherited config.subagentId (nested fork safety)', async () => {
+    // A nested fork (child forks grandchild) must not inherit the parent's
+    // subagentId via the `...options.config` spread — the manager-assigned id
+    // is authoritative. Simulate a config that already carries a stale id.
+    const mgr = new SubagentManager();
+    shared.lastConfig = null;
+    const handle = await mgr.forkSubagent({
+      parent: { sessionId: 'parent-xyz' },
+      config: { model: 'sonnet', subagentId: 'stale-parent-id' },
+    });
+
+    expect((shared.lastConfig as { subagentId?: string } | null)?.subagentId).toBe(handle.id);
+    expect((shared.lastConfig as { subagentId?: string } | null)?.subagentId).not.toBe(
+      'stale-parent-id',
+    );
+  });
+
   it('child config.hookRegistry takes precedence over manager-level registry', async () => {
     const managerRegistry = createHookRegistry();
     const childRegistry = createHookRegistry();

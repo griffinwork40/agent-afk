@@ -273,6 +273,99 @@ describe('loop.ts runTurn — witness-layer tool_call emission', () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(writer.events).toHaveLength(0);
   });
+
+  // Issue #612: a forked child resumes the parent's sessionId and writes into
+  // the SHARED parent trace file, so its tool_call events must carry the fork's
+  // `subagentId` to be attributable in `afk trace show`. `RunTurnInput.subagentId`
+  // is the loop-level end of the thread AgentConfig.subagentId → provider query.
+  it('tags tool_call started+completed with subagentId when the loop runs inside a fork', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    let callIdx = 0;
+    const streams = [
+      () => fromArray(makeToolUseStream('tu_child', 'bash', '{}')),
+      () => fromArray(makeTextStream('done', 'end_turn')),
+    ];
+    const client: AnthropicClientLike = {
+      messages: {
+        create: vi.fn(() => streams[callIdx++ % streams.length]!()),
+      },
+    };
+    const dispatcher = makeDispatcher(async () => ({ content: 'ok', isError: false }));
+
+    await collect(
+      runTurn({
+        client,
+        messages: [{ role: 'user', content: 'run the suite' }],
+        system: null,
+        tools: [{ name: 'bash', input_schema: { type: 'object' } }],
+        toolDispatcher: dispatcher,
+        model: 'claude-test',
+        maxTokens: 1024,
+        headers: {},
+        signal: new AbortController().signal,
+        ctx,
+        traceWriter: writer,
+        subagentId: 'research-agent-1700000000000-3',
+      }),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const toolCalls = writer.events.filter((e) => e.kind === 'tool_call');
+    expect(toolCalls).toHaveLength(2);
+    if (toolCalls[0]?.kind !== 'tool_call' || toolCalls[1]?.kind !== 'tool_call') {
+      throw new Error('unreachable');
+    }
+    // Both phases carry the fork id, so a reader can attribute the started AND
+    // completed halves of the same call to the child that made it.
+    expect(toolCalls[0].payload.subagentId).toBe('research-agent-1700000000000-3');
+    expect(toolCalls[1].payload.subagentId).toBe('research-agent-1700000000000-3');
+  });
+
+  it('omits subagentId from tool_call events for a top-level (non-fork) loop', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    let callIdx = 0;
+    const streams = [
+      () => fromArray(makeToolUseStream('tu_root', 'search', '{}')),
+      () => fromArray(makeTextStream('done', 'end_turn')),
+    ];
+    const client: AnthropicClientLike = {
+      messages: {
+        create: vi.fn(() => streams[callIdx++ % streams.length]!()),
+      },
+    };
+    const dispatcher = makeDispatcher(async () => ({ content: 'r', isError: false }));
+
+    await collect(
+      runTurn({
+        client,
+        messages: [{ role: 'user', content: 'x' }],
+        system: null,
+        tools: [{ name: 'search', input_schema: { type: 'object' } }],
+        toolDispatcher: dispatcher,
+        model: 'claude-test',
+        maxTokens: 1024,
+        headers: {},
+        signal: new AbortController().signal,
+        ctx,
+        traceWriter: writer,
+        // subagentId omitted intentionally — this is a root session.
+      }),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const toolCalls = writer.events.filter((e) => e.kind === 'tool_call');
+    expect(toolCalls).toHaveLength(2);
+    for (const tc of toolCalls) {
+      if (tc.kind !== 'tool_call') throw new Error('unreachable');
+      // The key must be ABSENT (not present-with-undefined) so JSONL lines stay
+      // clean and the reader renders no orphan `[subagentId]` on root calls.
+      expect('subagentId' in tc.payload).toBe(false);
+    }
+  });
 });
 
 describe('loop.ts runTurn — render-only diff sidecar', () => {
