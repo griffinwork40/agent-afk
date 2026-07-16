@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.54.1] - 2026-07-16
+
+### Fixed
+- reserve claimedChats in processOne to close drain-path TOCTOU (#603) (#630) (23aa604)
+
 ## [5.54.0] - 2026-07-16
 
 ### Added
