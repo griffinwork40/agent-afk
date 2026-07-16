@@ -257,7 +257,16 @@ export class TelegramBot {
     // `runDetached`'s .catch is only a last-resort guard against an unhandled
     // rejection (e.g. a reply that throws after the bot is stopped).
     const runDetached = (work: Promise<void>): void => {
-      void work.catch((err) => this.log('Detached update handler error:', err));
+      void work.catch((err) => {
+        // Redact any embedded bot token before logging — getFileLink() URLs
+        // (https://api.telegram.org/file/bot<TOKEN>/<path>) can ride along in
+        // an error string, and this last-resort catch would otherwise leak the
+        // live token to the log. Same pattern handlePhoto's own catch applies
+        // (#603 Item 2). Stringify safely first: `err` may be a non-Error.
+        const rawErrStr = err instanceof Error ? err.message : String(err);
+        const sanitizedErr = rawErrStr.replace(/\/bot[^/]+\//g, '/bot[REDACTED]/');
+        this.log('Detached update handler error:', sanitizedErr);
+      });
     };
     this.bot.on('text', (ctx) => runDetached(this.messageHandler.handle(ctx)));
 

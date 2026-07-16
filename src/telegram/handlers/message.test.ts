@@ -6,7 +6,7 @@
  * the session message queue or processOne.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Context } from 'telegraf';
 import type { Message } from 'telegraf/types';
 
@@ -231,6 +231,15 @@ describe('MessageHandler concurrent same-chat dispatch (TOCTOU regression — PR
     mockStreamResponse.mockClear();
   });
 
+  // Restore the shared mock's implementation unconditionally — the drain-race
+  // test below installs a blocking mockImplementation, and if any of its
+  // assertions throw first, an inline restore would be skipped and the blocking
+  // gate would leak into later suites (hang). afterEach always runs.
+  afterEach(() => {
+    mockStreamResponse.mockReset();
+    mockStreamResponse.mockImplementation(async () => { /* no-op */ });
+  });
+
   it('a second concurrent update for the same chat is queued, not processed concurrently', async () => {
     // getSession always resolves { state: 'idle' } — never reflects a real
     // busy transition — so this reproduces exactly the unprotected window:
@@ -274,6 +283,101 @@ describe('MessageHandler concurrent same-chat dispatch (TOCTOU regression — PR
     await handler.handle(ctx2);
     expect(mockStreamResponse).toHaveBeenCalledTimes(2);
     expect(replies2).toHaveLength(0);
+  });
+
+  // Residual drain-path TOCTOU (#603 Item 1): a turn dispatched by
+  // processOne's un-awaited `finally → drainQueue` used to run WITHOUT a
+  // claimedChats reservation of its own. handle() reserved only for the FIRST
+  // turn and released in its finally, but that finally fires while the drained
+  // turn is still between getSession() and its lazy sendMessageStream flipping
+  // `session.state` to 'streaming'. A fresh handle() landing in that gap saw
+  // both `state === 'idle'` (getSession here always resolves idle) AND an empty
+  // claim, so it wrongly entered processOne concurrently with the drained turn.
+  //
+  // With Item 1, processOne reserves the slot synchronously at entry and
+  // releases it only AFTER firing drainQueue, so the drained turn's own
+  // reservation is live before the outer turn's release drops the count — the
+  // slot never goes empty while the drained turn is in flight, and the fresh
+  // handle() is serialized (queued) instead of racing into streamResponse.
+  //
+  // Red/green: without the processOne reservation this asserts streamResponse
+  // runs concurrently (maxConcurrentStreams === 2) and fires 3 times; with it,
+  // the fresh handle enqueues, so streams never overlap (max 1) and fire twice.
+  it('a fresh handle racing a detached drain turn does not enter streamResponse concurrently', async () => {
+    const handler = makeHandler();
+    const sessionManager = (handler as unknown as {
+      sessionManager: { getSession: ReturnType<typeof vi.fn> };
+    }).sessionManager;
+
+    // First inbound message is enqueued (getSession reports busy exactly once),
+    // so a drain target exists; every later getSession resolves idle — modeling
+    // the window where `session.state` never reflects the in-flight turn and
+    // only the claimedChats reservation can serialize dispatch.
+    sessionManager.getSession
+      .mockResolvedValueOnce({ state: 'streaming' })
+      .mockResolvedValue({ state: 'idle' });
+
+    let concurrentStreams = 0;
+    let maxConcurrentStreams = 0;
+    let releaseDrainedTurn: (() => void) | undefined;
+    const drainedTurnEntered = new Promise<void>((resolve) => {
+      // The drained (second) streamResponse call blocks here so it stays
+      // in flight while we fire the fresh handle() below.
+      mockStreamResponse.mockImplementation(async () => {
+        concurrentStreams += 1;
+        maxConcurrentStreams = Math.max(maxConcurrentStreams, concurrentStreams);
+        const callIndex = mockStreamResponse.mock.calls.length;
+        if (callIndex === 1) {
+          // Winner turn: resolve immediately so its finally fires drainQueue.
+          concurrentStreams -= 1;
+          return;
+        }
+        // Drained turn (and, in the buggy path, the fresh turn) block on the
+        // gate so overlap is observable.
+        resolve();
+        await new Promise<void>((r) => { releaseDrainedTurn = r; });
+        concurrentStreams -= 1;
+      });
+    });
+
+    // Enqueue a message while "busy" (getSession → streaming) — becomes the
+    // drain target.
+    const { ctx: queuedCtx } = makeMessageCtx(CHAT_ID, 'queued');
+    await handler.handle(queuedCtx);
+    expect(mockStreamResponse).not.toHaveBeenCalled();
+
+    // Winner turn: idle session → processOne → streamResponse[0] resolves →
+    // finally fires drainQueue un-awaited → processOne(drained) reserves its
+    // slot and enters streamResponse[1] (blocks on the gate).
+    const { ctx: winnerCtx } = makeMessageCtx(CHAT_ID, 'winner');
+    await handler.handle(winnerCtx);
+    await drainedTurnEntered; // the drained turn is now in flight (gated)
+
+    // Fresh message for the SAME chat, dispatched WITHOUT awaiting — exactly
+    // the detached-drain idle-window the fix must cover. With Item 1 the claim
+    // from the drained turn serializes this into the queue; without it, this
+    // races into streamResponse concurrently.
+    const { ctx: freshCtx, replies: freshReplies } = makeMessageCtx(CHAT_ID, 'fresh');
+    void handler.handle(freshCtx);
+    // Let the fresh handle() run its full synchronous + microtask path.
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Core assertion: the fresh handle must NOT have entered streamResponse
+    // while the drained turn is still in flight.
+    expect(maxConcurrentStreams).toBe(1);
+    // Only the winner + drained turns reached streamResponse; the fresh handle
+    // was queued (a "#1" reply), not processed.
+    expect(mockStreamResponse).toHaveBeenCalledTimes(2);
+    expect(freshReplies.some((r) => r.includes('#1'))).toBe(true);
+
+    // Release the gated drained turn and let everything settle so no timer or
+    // pending promise leaks into the next test. The shared mock's
+    // implementation is restored by the describe's afterEach (runs even if an
+    // assertion above throws).
+    releaseDrainedTurn?.();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
   });
 });
 
