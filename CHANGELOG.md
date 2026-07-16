@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.54.2] - 2026-07-16
+
+### Changed
+- extract shared tool_call payload builders (#631) (edc8734)
+
 ## [5.54.1] - 2026-07-16
 
 ### Fixed
