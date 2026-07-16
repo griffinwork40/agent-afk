@@ -164,7 +164,7 @@ function renderLegacyBoxBanner(opts: WelcomeBannerOpts): string {
  * cols so it also survives the compact, mascot-less fallback at ~44 cols without
  * truncation (render.test.ts pins it at 44, 64, 80, and 100).
  */
-const BANNER_TAGLINE = 'Run coding agents without babysitting them';
+const BANNER_TAGLINE = 'run coding agents without babysitting them';
 
 /**
  * Project links surfaced in the hybrid banner footer. These are the DISPLAY
@@ -338,6 +338,11 @@ function renderHybridBanner(opts: WelcomeBannerOpts): string {
       lines.push((LEFT_PAD + row).trimEnd());
     }
   }
+
+  // Blank spacer between the composition (goblin + info stack) and the tagline
+  // band, so the thesis reads as a distinct hero subhead rather than crowding
+  // the last fact row. Applies to both the mascot and compact-fallback layouts.
+  lines.push('');
 
   // Product tagline — a full-width row below the composition, in an italic brand
   // tint so the thesis reads as a hero subhead. Rendered full-width (not the
