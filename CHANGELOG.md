@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.52.0] - 2026-07-16
+
+### Added
+- deliver SessionStart injectContext to the first turn (#618) (d0dbdc4)
+
+### Changed
+- remove inert model: frontmatter from vendored agent prompts (#625) (a34216f)
+- switch star history to sealed-token chart embed (3164563)
+- add placeholder demo image above the fold (#624) (172253d)
+- real-PTY width-resize harness + RED axis-2 fragmentation guards (#540, #541) (#621) (c64b69f)
+
 ## [5.51.2] - 2026-07-15
 
 ### Fixed
