@@ -7,6 +7,8 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import stringWidth from 'string-width';
 import {
   statusPanel,
@@ -147,6 +149,217 @@ describe('welcomeBanner', () => {
     expect(out).toContain('opus_1m');
     expect(out).toContain('Interactive Mode');
     expect(out).toContain('/help · /model');
+  });
+
+  it('renders the product tagline full-width in the hybrid banner', () => {
+    Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
+    const out = strip(welcomeBanner({
+      mode: 'Interactive Mode',
+      model: 'sonnet',
+      version: '5.10.1',
+      cwd: '/tmp/agent-afk',
+    }));
+    // Tagline present (first-run identity). It renders as a full-width row below
+    // the composition, so it spans the terminal rather than the narrow sprite-
+    // side column.
+    expect(out).toContain('run coding agents without babysitting them');
+    // The weight-accented wordmark ("Agent " regular + "AFK" bold) must still
+    // strip to the contiguous product name — the accent is a weight step, not
+    // a fragmenting insertion.
+    expect(out).toContain('Agent AFK');
+  });
+
+  it('keeps the full tagline un-truncated in the mid-width band beside the sprite', () => {
+    // Regression guard for the 55–72-col "dead zone": the mascot still renders
+    // here (drops only below 55 cols), but the 42-col tagline used to live in
+    // the ~(cols−31) column beside the 27-col sprite — only ~33 cols at 64 — and
+    // truncated to "Run coding agents without ba…". Hoisting it to a full-width
+    // row fixed that; assert the whole thesis survives, un-ellipsized, WITH the
+    // goblin present.
+    Object.defineProperty(process.stdout, 'columns', { value: 64, configurable: true });
+    const out = strip(welcomeBanner({
+      mode: 'Interactive Mode',
+      model: 'opus_1m',
+      version: '5.52.0',
+      worktree: 'afk/polish-goblin-banner',
+      cwd: '/Users/example/projects/agent-afk',
+    }));
+    // Mascot is present at 64 cols (proves we're in the previously-broken band).
+    expect(/[▀▄]/.test(out)).toBe(true);
+    // The full tagline survives with no ellipsis eating the tail.
+    expect(out).toContain('run coding agents without babysitting them');
+    expect(out).not.toContain('without ba…');
+  });
+
+  describe('block-art AFK logo + footer links', () => {
+    // The gradient-shaded "AFK" logo leaves a run of full blocks that the plain
+    // text name caption never would. (Gradient color itself is not asserted —
+    // these tests strip ANSI to stay chalk-level-independent, as elsewhere.)
+    const hasBlockArt = (s: string): boolean => /█{3,}/.test(s);
+
+    it('renders the block-art AFK logo on a wide terminal, keeping the readable name as a caption', () => {
+      Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
+      const out = strip(welcomeBanner({
+        mode: 'Interactive Mode',
+        model: 'opus_1m',
+        version: '5.25.8',
+        cwd: '/tmp/agent-afk',
+      }));
+      expect(hasBlockArt(out)).toBe(true);
+      // Readable identity survives the block art (grep / screen-reader / tests).
+      expect(out).toContain('Agent AFK');
+      expect(out).toContain('v5.25.8');
+      expect(out).toContain('run coding agents without babysitting them');
+    });
+
+    it('keeps the compact AFK logo (no text fallback) even when the mascot is dropped on a narrow terminal', () => {
+      // The "AFK" acronym logo is only ~14 cols, so — unlike the retired full
+      // "AGENT AFK" header — it survives narrow terminals that drop the goblin,
+      // rather than degrading to a plain text wordmark.
+      Object.defineProperty(process.stdout, 'columns', { value: 48, configurable: true });
+      const out = strip(welcomeBanner({
+        mode: 'Interactive Mode',
+        model: 'opus_1m',
+        version: '5.25.8',
+        cwd: '/tmp/agent-afk',
+      }));
+      expect(hasBlockArt(out)).toBe(true);
+      // No goblin at this width, but the readable name is still present.
+      expect(/[▀▄]/.test(out)).toBe(false);
+      expect(out).toContain('Agent AFK');
+    });
+
+    it('surfaces the docs + github links in the footer', () => {
+      Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
+      const out = strip(welcomeBanner({
+        mode: 'Interactive Mode',
+        model: 'opus_1m',
+        version: '5.25.8',
+        cwd: '/tmp/agent-afk',
+      }));
+      expect(out).toContain('docs.agentafk.com');
+      expect(out).toContain('github.com/griffinwork40/agent-afk');
+    });
+
+    it('keeps the banner links in sync with package.json (drift guard)', () => {
+      const pkgPath = fileURLToPath(new URL('../../package.json', import.meta.url));
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as {
+        homepage: string;
+        repository: { url: string };
+      };
+      Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
+      const out = strip(welcomeBanner({ mode: 'Interactive Mode', model: 'opus_1m', cwd: '/tmp' }));
+      // Display forms: scheme stripped from homepage; `git+`/scheme/`.git`
+      // stripped from repository.url.
+      const docsDisplay = pkg.homepage.replace(/^https?:\/\//, '').replace(/\/$/, '');
+      const repoDisplay = pkg.repository.url
+        .replace(/^git\+/, '')
+        .replace(/^https?:\/\//, '')
+        .replace(/\.git$/, '');
+      expect(out).toContain(docsDisplay);
+      expect(out).toContain(repoDisplay);
+    });
+  });
+
+  describe('responsive mascot layout', () => {
+    // The sprite is rendered with half-block glyphs; their presence is a
+    // reliable proxy for "the goblin is drawn".
+    const hasSprite = (s: string): boolean => /[▀▄]/.test(s);
+
+    it('keeps the mascot sprite on a standard-width terminal', () => {
+      Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
+      const out = strip(welcomeBanner({
+        mode: 'Interactive Mode',
+        model: 'opus_1m',
+        version: '5.11.0',
+        worktree: 'afk/polish-goblin-banner',
+        cwd: '/Users/example/projects/agent-afk',
+      }));
+      expect(hasSprite(out)).toBe(true);
+      expect(out).toContain('Agent AFK');
+    });
+
+    it('drops the mascot and stacks info flush-left on a very narrow terminal', () => {
+      // Below the sprite budget (cols − 2 − 27 − 2 < 24, i.e. cols < 55) the
+      // 27-col goblin would crush every info row into a one-char sliver. The
+      // compact fallback drops the sprite and stacks the info full-width so the
+      // identity signals stay legible instead of ellipsizing to nothing.
+      Object.defineProperty(process.stdout, 'columns', { value: 44, configurable: true });
+      const out = strip(welcomeBanner({
+        mode: 'Interactive Mode',
+        model: 'opus_1m',
+        version: '5.11.0',
+        worktree: 'afk/polish-goblin-banner',
+        cwd: '/Users/example/projects/agent-afk',
+        hintLine: '/help · /model · /exit to quit',
+      }));
+      // No sprite glyphs — the goblin is suppressed at this width.
+      expect(hasSprite(out)).toBe(false);
+      // …but every identity signal still survives, full-width.
+      expect(out).toContain('Agent AFK');
+      expect(out).toContain('run coding agents without babysitting them');
+      expect(out).toContain('opus_1m');
+      expect(out).toContain('afk/polish-goblin-banner');
+    });
+
+    it('keeps every compact-banner row within the terminal width', () => {
+      Object.defineProperty(process.stdout, 'columns', { value: 44, configurable: true });
+      const out = strip(welcomeBanner({
+        mode: 'Interactive Mode',
+        model: 'claude-opus-4-very-long-model-name',
+        version: '5.11.0',
+        worktree: 'a-very-long-worktree-branch-name-that-overflows',
+        cwd: '/Users/example/projects/agent-afk/very/deep/path',
+        hintLine: '/help · /model · /resume · Esc to interrupt · /exit to quit',
+      }));
+      const maxLine = Math.max(...out.split('\n').map((l) => stringWidth(l)));
+      expect(maxLine).toBeLessThanOrEqual(44);
+    });
+  });
+
+  describe('right-column vertical centering', () => {
+    // The block-art hero is the ONLY source of full-block (█) glyphs — the
+    // sprite is drawn with half-blocks (▀▄) only — so the first output line
+    // carrying a █ marks where the right column begins, i.e. its top pad.
+    const heroTopRow = (s: string): number =>
+      s.split('\n').findIndex((l) => /█/.test(l));
+
+    it('centers the right column onto the sprite, round-biased DOWN (not floor)', () => {
+      // A full column — model·mode + worktree + cwd + metaLine — is 12 rows
+      // against the 13-row sprite. (13−12)/2 = 0.5, so Math.round lands the top
+      // pad at 1, where Math.floor would strand the column at the cap tip (row
+      // 0). Pinning the exact top row is the direct guard for the round-not-floor
+      // bias the layout comment promises (welcome-banner.ts renderHybridBanner).
+      Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
+      const out = strip(welcomeBanner({
+        mode: 'Interactive Mode',
+        model: 'opus_1m',
+        version: '5.11.0',
+        worktree: 'afk/polish-goblin-banner',
+        cwd: '/Users/example/projects/agent-afk',
+        metaLine: 'Resuming abc123',
+      }));
+      expect(/[▀▄]/.test(out)).toBe(true); // sprite present → mascot layout
+      expect(heroTopRow(out)).toBe(1); // padded DOWN by one row (round, not floor)
+    });
+
+    it('pushes the hero lower when the info column is shorter', () => {
+      // Centering responds to column height: a minimal column (model·mode only)
+      // is shorter than a full one, so it earns a larger top pad and its hero
+      // sits strictly lower. This exercises the round-biased centering across
+      // two different column heights without over-pinning either exact value.
+      Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
+      const fuller = strip(welcomeBanner({
+        mode: 'Interactive Mode',
+        model: 'opus_1m',
+        version: '5.11.0',
+        worktree: 'afk/polish-goblin-banner',
+        cwd: '/Users/example/projects/agent-afk',
+        metaLine: 'Resuming abc123',
+      }));
+      const minimal = strip(welcomeBanner({ mode: 'Interactive Mode', model: 'opus_1m' }));
+      expect(heroTopRow(minimal)).toBeGreaterThan(heroTopRow(fuller));
+    });
   });
 
   describe('AFK_BANNER_PLAIN=1 fallback', () => {

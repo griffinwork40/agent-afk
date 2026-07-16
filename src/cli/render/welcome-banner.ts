@@ -1,11 +1,13 @@
 import { sep } from 'node:path';
+import chalk from 'chalk';
 import { displayWidth, padDisplayRight } from '../display.js';
 import { env } from '../../config/env.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import { wrapToWidth } from '../wrap.js';
 import { palette } from '../palette.js';
-import { renderMascotLines, MASCOT_WIDTH, MASCOT_HEIGHT, mascotSuppressed } from '../mascot.js';
+import { renderMascotLines, MASCOT_WIDTH, mascotSuppressed } from '../mascot.js';
 import { maxInnerBoxWidth, truncateDisplay } from './utils.js';
+import { renderAsciiWordmark, asciiWordmarkWidth } from './ascii-wordmark.js';
 
 // ─── Welcome Banner ───────────────────────────────────────────────────────────
 
@@ -150,69 +152,217 @@ function renderLegacyBoxBanner(opts: WelcomeBannerOpts): string {
 }
 
 /**
- * Hybrid mascot-left / info-stack-right banner. Borderless. Composed row by
- * row so the sprite and text stay aligned while each info row is truncated to
- * the available terminal width.
+ * One-line product tagline — a punchy first-run identity subhead. Distinct from
+ * the fuller package.json / README thesis ("…harness you can actually change");
+ * it no longer mirrors that verbatim. Rendered as a full-width row BELOW the
+ * hybrid composition (just above the resource links), so it spans the whole
+ * terminal (`cols − LEFT_PAD`) and only ellipsizes on very narrow windows.
+ * History: it used to ride inside the narrow ~(cols−31) column beside the
+ * 27-col sprite, where — needing 42 display cols but only getting the column's
+ * width — it truncated to "…without ba…" across the entire 55–72-col band while
+ * the goblin kept full width; the full-width row fixes that. Kept ≤42 display
+ * cols so it also survives the compact, mascot-less fallback at ~44 cols without
+ * truncation (render.test.ts pins it at 44, 64, 80, and 100).
+ */
+const BANNER_TAGLINE = 'run coding agents without babysitting them';
+
+/**
+ * Project links surfaced in the hybrid banner footer. These are the DISPLAY
+ * forms (scheme + `.git` stripped) of package.json `homepage` and
+ * `repository.url` respectively; render.test.ts drift-guards them against
+ * package.json so a repo/docs move can't silently strand a stale banner link.
+ */
+const DOCS_URL = 'docs.agentafk.com';
+const REPO_URL = 'github.com/griffinwork40/agent-afk';
+
+/**
+ * The block-art hero rendered beside the goblin. Just the acronym — "AFK" is
+ * the logo (the full "Agent AFK" lives in the readable caption beneath it), so
+ * the hero stays compact enough to sit in the right column without crowding the
+ * sprite. Rendered with the vertical gradient below rather than a flat tone.
+ */
+const HERO_TEXT = 'AFK';
+
+/**
+ * Warm vertical gradient applied down the block-art hero — a light peach top
+ * fading to a deep burnt orange, both bracketing the brand orange (#E67E4C), so
+ * the wordmark reads as "lit from above" and carries the same depth as the
+ * shaded goblin instead of a flat fill. chalk downsamples the truecolor stops
+ * to 256/16-color automatically, and passes the rows through uncolored when the
+ * terminal has no color — the block art stays legible either way.
+ */
+const HERO_GRADIENT_TOP: readonly [number, number, number] = [242, 174, 116];
+const HERO_GRADIENT_BOTTOM: readonly [number, number, number] = [199, 84, 42];
+
+/** Interpolate the hero gradient over `rows` (top → bottom) and colorize each. */
+function shadeWordmark(rows: string[]): string[] {
+  const n = rows.length;
+  const lerp = (a: number, b: number, t: number): number => Math.round(a + (b - a) * t);
+  return rows.map((row, i) => {
+    const t = n <= 1 ? 0 : i / (n - 1);
+    const r = lerp(HERO_GRADIENT_TOP[0], HERO_GRADIENT_BOTTOM[0], t);
+    const g = lerp(HERO_GRADIENT_TOP[1], HERO_GRADIENT_BOTTOM[1], t);
+    const b = lerp(HERO_GRADIENT_TOP[2], HERO_GRADIENT_BOTTOM[2], t);
+    return chalk.rgb(r, g, b)(row);
+  });
+}
+
+/**
+ * Hybrid banner: a PORTRAIT composition — the pixel-art goblin anchors the left
+ * as the visual hero; a right column carries the gradient-shaded "AFK" block-art
+ * logo, the readable name/version caption, and the session facts; a full-width
+ * BAND (tagline + project links + hint) closes it. Borderless, composed row by
+ * row so the sprite and the right column stay on one grid.
  *
- * Layout (MASCOT_HEIGHT rows of sprite; info column extends below if it
- * has more lines). The mascot is a half-block pixel-art goblin (see
- * mascot.ts for the design rationale); the info column carries the
- * wordmark, model/mode, worktree, cwd, and hint row.
+ * Layout (no ANSI; goblin drawn as a solid block here, colored in reality):
+ * ```
+ *   ████████████
+ *   ████████████  ██  ████ █  █     ← shaded block-art logo (right column)
+ *   ████████████ █  █ █    █ █
+ *   ████████████ ████ ███  ██
+ *   ████████████ █  █ █    █ █
+ *   ████████████ █  █ █    █  █
+ *   ████████████ Agent AFK · v5.25.8   ← readable name + version caption
+ *   ████████████
+ *   ████████████ opus_1m · Interactive Mode   ← session facts
+ *   ████████████ branch afk/…
+ *   ████████████ ~/path/to/cwd
+ *   Run coding agents without babysitting them   ← tagline (full width)
+ *   docs.agentafk.com · github.com/…   ← footer links (full width)
+ *   /help · /model · …                 ← hint row (full width)
+ * ```
+ *
+ * History: an earlier design promoted the full "AGENT AFK" wordmark to a
+ * full-width header above the goblin to escape a ragged "moat" (the silhouette
+ * reaches MASCOT_WIDTH only at the swept ears, so text beside the narrow cap
+ * stranded against empty columns). Feedback found the full header "too much";
+ * this design shrinks the hero to the "AFK" acronym, shades it with a warm
+ * vertical gradient (matching the goblin's depth), and moves it into the right
+ * column — vertically centered (round-biased) so the compact logo lands beside
+ * the goblin's wider face rather than the cap tip. The full name survives as the
+ * readable caption. Below MIN_INFO_COLS the sprite drops and the right column
+ * stacks full-width. The mascot is a half-block pixel-art goblin (see mascot.ts);
+ * the logo font is in ascii-wordmark.ts.
  */
 function renderHybridBanner(opts: WelcomeBannerOpts): string {
   const cols = getTerminalWidth();
-  const GUTTER = cols >= 42 ? '   ' : ' ';
-  const LEFT_PAD = cols >= 42 ? '  ' : ' ';
-  const infoMaxW = Math.max(1, cols - LEFT_PAD.length - MASCOT_WIDTH - GUTTER.length);
+  // Two-space left frame; two-space gutter between the sprite and the right
+  // column. The goblin reaches MASCOT_WIDTH only at its swept ears, so the right
+  // column is vertically centered (round-biased) to land beside that widest
+  // band rather than stranding against the narrow cap.
+  const LEFT_PAD = '  ';
+  const GUTTER = '  ';
 
-  // Build info-column rows.
-  const infoRows: string[] = [];
-  const pushInfoRow = (row: string): void => {
-    infoRows.push(truncateDisplay(row, infoMaxW));
+  // Below this width the 27-col sprite would crush the right column into a
+  // sliver; drop the mascot and stack the column full-width instead so the
+  // banner stays legible at any narrow window size.
+  const MIN_INFO_COLS = 24;
+  const spriteBudget = cols - LEFT_PAD.length - MASCOT_WIDTH - GUTTER.length;
+  const showMascot = spriteBudget >= MIN_INFO_COLS;
+
+  // Right-column width: beside the sprite when shown, else the full terminal
+  // width (minus the left pad) in the compact, mascot-less fallback.
+  const headerMaxW = Math.max(1, cols - LEFT_PAD.length);
+  const colMaxW = showMascot ? spriteBudget : headerMaxW;
+
+  const versionText = opts.version !== undefined ? formatVersion(opts.version) : undefined;
+
+  // ── Right column, composed top → bottom. ──
+  const col: string[] = [];
+
+  // Hero: the gradient-shaded block-art "AFK" logo. Defensive text fallback
+  // only on a pathologically narrow terminal that can't hold the 14-col mark.
+  if (asciiWordmarkWidth(HERO_TEXT) <= colMaxW) {
+    col.push(...shadeWordmark(renderAsciiWordmark(HERO_TEXT)));
+  } else {
+    col.push(palette.brand('Agent ') + palette.bold(palette.brand('AFK')));
+  }
+
+  // Readable name + version caption: keeps the full "Agent AFK" greppable and
+  // screen-reader-visible beneath the block-art acronym (tests assert this).
+  // The bold title anchors identity; the version rides dim beside it, sharing
+  // the same single-middot ( · ) rhythm as the mode/hint rows below rather than
+  // the airier double-middot it used to carry. The product tagline is NOT pushed
+  // here — it is emitted full-width below the whole composition (see the tagline
+  // row just above the footer) so the 42-col thesis can never truncate mid-word
+  // in the narrow ~(cols−31) column beside the 27-col sprite.
+  const nameChip =
+    palette.heading('Agent AFK') +
+    (versionText !== undefined ? palette.dim(' · ' + versionText) : '');
+  col.push('');
+  col.push(truncateDisplay(nameChip, colMaxW));
+
+  // Session-identity facts, each truncated to the column width.
+  const factRows: string[] = [];
+  const pushFact = (row: string): void => {
+    factRows.push(truncateDisplay(row, colMaxW));
   };
-
-  // Row A: wordmark + optional version chip.
-  const wordmark = palette.bold(palette.brand('Agent AFK'));
-  const versionChip =
-    opts.version !== undefined ? palette.dim('  ' + formatVersion(opts.version)) : '';
-  pushInfoRow(wordmark + versionChip);
-
-  // Row B: model · mode.
   const modeBits: string[] = [];
   if (opts.model !== undefined) modeBits.push(palette.heading(opts.model));
   if (opts.mode.length > 0) modeBits.push(palette.dim(opts.mode));
-  if (modeBits.length > 0) {
-    pushInfoRow(modeBits.join(palette.dim(' · ')));
+  if (modeBits.length > 0) pushFact(modeBits.join(palette.dim(' · ')));
+  // worktree (only in a worktree session — an AFK-native signal).
+  if (opts.worktree !== undefined) pushFact(palette.dim('branch  ') + palette.goblin(opts.worktree));
+  // cwd (home-tilde'd + middle-truncated to fit).
+  if (opts.cwd !== undefined) pushFact(palette.dim(truncateMiddle(tildifyHome(opts.cwd), colMaxW)));
+  // metaLine (caller-supplied, e.g. a /resume "Resuming <id>" cue).
+  if (opts.metaLine !== undefined) pushFact(palette.dim(opts.metaLine));
+  if (factRows.length > 0) {
+    col.push('');
+    col.push(...factRows);
   }
 
-  // Row C: worktree (only when in a worktree session — AFK-native signal).
-  if (opts.worktree !== undefined) {
-    pushInfoRow(
-      palette.dim('branch  ') + palette.goblin(opts.worktree),
-    );
-  }
-
-  // Row D: cwd (home-tilde'd + middle-truncated to fit).
-  if (opts.cwd !== undefined) {
-    const tilde = tildifyHome(opts.cwd);
-    pushInfoRow(palette.dim(truncateMiddle(tilde, infoMaxW)));
-  }
-
-  // Row E: metaLine (caller-supplied, e.g. legacy "Model: x · Max tokens: y").
-  if (opts.metaLine !== undefined) {
-    pushInfoRow(palette.dim(opts.metaLine));
-  }
-
-  // Compose mascot + info rows. Sprite is MASCOT_HEIGHT rows; pad whichever
-  // column is shorter with blank lines so the two columns terminate together.
-  const sprite = renderMascotLines('idle');
-  const totalRows = Math.max(sprite.length, infoRows.length);
   const lines: string[] = [];
-  for (let i = 0; i < totalRows; i++) {
-    const left = sprite[i] ?? ' '.repeat(MASCOT_WIDTH);
-    const right = infoRows[i] ?? '';
-    lines.push(LEFT_PAD + left + GUTTER + right);
+
+  if (showMascot) {
+    // Compose sprite (left) + right column, the column vertically centered onto
+    // the goblin's widest rows. ROUND (not floor) the top pad so a column
+    // shorter than the 13-row sprite biases DOWN onto the ear/eye band. When
+    // the column is taller (e.g. a /resume metaLine) the pad collapses to 0 and
+    // the tail flows below the sprite.
+    const sprite = renderMascotLines('idle');
+    const colTopPad = Math.max(0, Math.round((sprite.length - col.length) / 2));
+    const totalRows = Math.max(sprite.length, colTopPad + col.length);
+    for (let i = 0; i < totalRows; i++) {
+      const left = sprite[i] ?? ' '.repeat(MASCOT_WIDTH);
+      const idx = i - colTopPad;
+      const right = idx >= 0 ? (col[idx] ?? '') : '';
+      // trimEnd drops the trailing gutter + transparent sprite columns on rows
+      // with no right-column text, leaving no selectable trailing whitespace.
+      lines.push((LEFT_PAD + left + GUTTER + right).trimEnd());
+    }
+  } else {
+    // Compact fallback (terminal too narrow for the sprite): stack the column
+    // flush-left with no mascot. Rows are pre-truncated so nothing overflows.
+    for (const row of col) {
+      lines.push((LEFT_PAD + row).trimEnd());
+    }
   }
+
+  // Blank spacer between the composition (goblin + info stack) and the tagline
+  // band, so the thesis reads as a distinct hero subhead rather than crowding
+  // the last fact row. Applies to both the mascot and compact-fallback layouts.
+  lines.push('');
+
+  // Product tagline — a full-width row below the composition, in an italic brand
+  // tint so the thesis reads as a hero subhead. Rendered full-width (not the
+  // sprite-side column) so it can never truncate mid-word: the line needs 42
+  // display cols, but the column beside the 27-col sprite only clears that at
+  // ≥73 cols, stranding the thesis as "…without ba…" across the whole 55–72
+  // band. Sits just above the resource links so the bottom band reads
+  // "thesis → where to go next".
+  lines.push(
+    LEFT_PAD + truncateDisplay(palette.italic(palette.brand(BANNER_TAGLINE)), headerMaxW),
+  );
+
+  // Project links — full-width footer, flush-left, grouped just above the hint
+  // line so docs + source are always one glance away at startup. Truncated to
+  // the header width (then left-padded) so a narrow terminal clips with an
+  // ellipsis instead of overflowing the row. Single-middot ( · ) to match the
+  // tagline, mode, and hint rhythm.
+  lines.push(
+    LEFT_PAD + truncateDisplay(palette.dim(`${DOCS_URL} · ${REPO_URL}`), headerMaxW),
+  );
 
   // Hint line sits flush-left below the whole composition.
   if (opts.hintLine !== undefined) {
@@ -220,8 +370,6 @@ function renderHybridBanner(opts: WelcomeBannerOpts): string {
       ...wrapToWidth(palette.dim(LEFT_PAD + normalizeHintLine(opts.hintLine)), cols).split('\n'),
     );
   }
-  // Silence unused-symbol warning when sprite height eq info rows.
-  void MASCOT_HEIGHT;
 
   return lines.join('\n');
 }
