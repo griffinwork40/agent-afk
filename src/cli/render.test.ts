@@ -161,7 +161,7 @@ describe('welcomeBanner', () => {
     }));
     // Tagline present (first-run identity), and short enough to survive the
     // 49-col info column at an 80-col terminal without truncation.
-    expect(out).toContain('the agent harness you can actually change');
+    expect(out).toContain('Run coding agents without babysitting them');
     // The weight-accented wordmark ("Agent " regular + "AFK" bold) must still
     // strip to the contiguous product name — the accent is a weight step, not
     // a fragmenting insertion.
@@ -186,7 +186,7 @@ describe('welcomeBanner', () => {
       // Readable identity survives the block art (grep / screen-reader / tests).
       expect(out).toContain('Agent AFK');
       expect(out).toContain('v5.25.8');
-      expect(out).toContain('the agent harness you can actually change');
+      expect(out).toContain('Run coding agents without babysitting them');
     });
 
     it('keeps the compact AFK logo (no text fallback) even when the mascot is dropped on a narrow terminal', () => {
@@ -274,7 +274,7 @@ describe('welcomeBanner', () => {
       expect(hasSprite(out)).toBe(false);
       // …but every identity signal still survives, full-width.
       expect(out).toContain('Agent AFK');
-      expect(out).toContain('the agent harness you can actually change');
+      expect(out).toContain('Run coding agents without babysitting them');
       expect(out).toContain('opus_1m');
       expect(out).toContain('afk/polish-goblin-banner');
     });

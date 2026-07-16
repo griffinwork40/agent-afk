@@ -152,15 +152,16 @@ function renderLegacyBoxBanner(opts: WelcomeBannerOpts): string {
 }
 
 /**
- * One-line product tagline rendered (dim) directly under the wordmark in the
- * header band of the hybrid banner. Mirrors the package.json description /
- * README thesis ("the harness you can actually change") to give first-run
- * identity. Because the header band spans the full terminal (it sits ABOVE the
- * sprite, not beside it), the tagline has the whole width to breathe and only
- * ellipsizes on very narrow windows (`cols − LEFT_PAD`); kept short so it also
- * survives the compact, mascot-less fallback at ~44 cols without truncation.
+ * One-line product tagline rendered directly under the wordmark in the header
+ * band of the hybrid banner — a punchy first-run identity subhead. Distinct
+ * from the fuller package.json / README thesis ("…harness you can actually
+ * change"); it no longer mirrors that verbatim. Because the header band spans
+ * the full terminal (it sits ABOVE the sprite, not beside it), the tagline has
+ * the whole width to breathe and only ellipsizes on very narrow windows
+ * (`cols − LEFT_PAD`); kept ≤42 display cols so it also survives the compact,
+ * mascot-less fallback at ~44 cols without truncation (render.test.ts pins it).
  */
-const BANNER_TAGLINE = 'the agent harness you can actually change';
+const BANNER_TAGLINE = 'Run coding agents without babysitting them';
 
 /**
  * Project links surfaced in the hybrid banner footer. These are the DISPLAY
@@ -219,7 +220,7 @@ function shadeWordmark(rows: string[]): string[] {
  *   ████████████ █  █ █    █ █
  *   ████████████ █  █ █    █  █
  *   ████████████ Agent AFK · v5.25.8   ← readable name + version caption
- *   ████████████ the agent harness you can actually change   ← tagline
+ *   ████████████ Run coding agents without babysitting them   ← tagline
  *   ████████████
  *   ████████████ opus_1m · Interactive Mode   ← session facts
  *   ████████████ branch afk/…
