@@ -469,6 +469,110 @@ describe('streamResponse', () => {
     // …and the failure is announced, not silent.
     expect(replies.some((r) => r.includes('Telegram dropped'))).toBe(true);
   });
+
+  it('cleanFinal: a long-answer first-chunk failure does NOT re-send a contradictory chunks[1..] fragment (#623)', async () => {
+    // Regression (#623, medium): on a LONG cleanFinal answer, if deliverClean's FIRST
+    // fresh chunk fails past retries it posts the truncation notice and returns
+    // delivered=false, leaving `sentMessage` set. The post-loop overflow branch used to
+    // fire on ANY terminal exit with a surviving preview and re-send chunks[1..] of the
+    // noisy `accumulated` buffer — immediately contradicting the "dropped, ask me to
+    // resend" notice it had just posted. Gating that branch on `!cleanFinal` keeps the
+    // cleanFinal failure path from falling through to it. The pre-existing short
+    // first-chunk-fail test could not catch this: a single-chunk answer never satisfies
+    // the overflow branch's `chunks.length > 1` guard.
+    const { ctx, replies, deletes } = makeCtx();
+    const transportError = new TelegramError({ error_code: 400, description: 'Bad Request: message is too long' });
+    let htmlReplies = 0;
+    (ctx.reply as ReturnType<typeof vi.fn>).mockImplementation(async (text: string, extra?: { parse_mode?: string }) => {
+      if (extra?.parse_mode === 'HTML') {
+        htmlReplies++;
+        // Reply #1 creates the live preview (must succeed so a preview exists); reply #2
+        // is deliverClean's FIRST fresh chunk — fail it (and everything after) so nothing
+        // clean lands and the frozen preview must survive.
+        if (htmlReplies >= 2) throw transportError;
+      }
+      replies.push(text);
+      return { message_id: replies.length, text, chat: { id: 12345, type: 'private' as const }, date: 0 };
+    });
+    const first = `first ${'a'.repeat(4080)}`;
+    const second = `second ${'b'.repeat(200)}`;
+    const longAnswer = [first, second].join('\n');
+    const session = makeSession(async function* () {
+      yield { type: 'chunk', chunk: { type: 'content', content: longAnswer } };
+      yield { type: 'done', metadata: undefined };
+    });
+
+    await expect(streamResponse(ctx, session, 'go', undefined, { cleanFinal: true })).resolves.toBeUndefined();
+
+    // The frozen preview survives (nothing clean replaced it)…
+    expect(deletes.length).toBe(0);
+    // …and the failure is announced EXACTLY once. The buggy overflow re-send posted a
+    // SECOND contradictory notice (and re-delivered chunks[1..] of the noisy buffer).
+    expect(replies.filter((r) => r.includes('Telegram dropped'))).toHaveLength(1);
+  });
+
+  it('default (no cleanFinal): a multi-chunk answer delivers chunks[1..] as fresh replies (tail not dropped)', async () => {
+    // Guard for the #623 fix CHOICE. `sendOrEdit` only ever renders chunk[0] into the
+    // single preview message, so on the non-cleanFinal `done` path (sawTerminalEvent=true)
+    // chunks[1..] can reach the user ONLY via the post-loop overflow branch. Gating that
+    // branch on `!sawTerminalEvent` (the rejected alternative fix) makes it dead code and
+    // silently drops the tail — reintroducing the #620 bug. Gating on `!cleanFinal` keeps
+    // it reachable here. This test fails under `!sawTerminalEvent` and passes under
+    // `!cleanFinal`.
+    const { ctx, replies, deletes } = makeCtx();
+    const first = `first ${'a'.repeat(4080)}`;
+    const second = `second ${'b'.repeat(200)}`;
+    const longAnswer = [first, second].join('\n');
+    const session = makeSession(async function* () {
+      yield { type: 'chunk', chunk: { type: 'content', content: longAnswer } };
+      yield { type: 'done', metadata: undefined };
+    });
+
+    await expect(streamResponse(ctx, session, 'go')).resolves.toBeUndefined();
+
+    // The overflow tail was delivered as a fresh reply (not stranded in the preview)…
+    expect(replies.some((r) => r.startsWith('second '))).toBe(true);
+    // …and the non-cleanFinal path never deletes the preview.
+    expect(deletes.length).toBe(0);
+  });
+
+  it('default (no cleanFinal): a failed overflow tail chunk posts a visible notice and never rethrows', async () => {
+    // Coverage gap (#623): the non-cleanFinal overflow catch — which posts
+    // DELIVERY_TRUNCATED_NOTICE when a chunks[1..] send fails — had NO test; every
+    // throwing-reply test used cleanFinal. Here a multi-chunk answer reaches `done`,
+    // chunk[0] sits in the preview, and the overflow send fails with a transport error:
+    // the notice must post and nothing may rethrow uncaught into the finally.
+    const { ctx, replies, edits, deletes } = makeCtx();
+    const transportError = new TelegramError({ error_code: 400, description: 'Bad Request: message is too long' });
+    let htmlReplies = 0;
+    (ctx.reply as ReturnType<typeof vi.fn>).mockImplementation(async (text: string, extra?: { parse_mode?: string }) => {
+      if (extra?.parse_mode === 'HTML') {
+        htmlReplies++;
+        // Reply #1 creates the preview (chunk[0], must succeed); reply #2 is the overflow
+        // chunks[1] send — fail it so the non-cleanFinal notice branch runs.
+        if (htmlReplies >= 2) throw transportError;
+      }
+      replies.push(text);
+      return { message_id: replies.length, text, chat: { id: 12345, type: 'private' as const }, date: 0 };
+    });
+    const first = `first ${'a'.repeat(4080)}`;
+    const second = `second ${'b'.repeat(200)}`;
+    const longAnswer = [first, second].join('\n');
+    const session = makeSession(async function* () {
+      yield { type: 'chunk', chunk: { type: 'content', content: longAnswer } };
+      yield { type: 'done', metadata: undefined };
+    });
+
+    // A transport failure on the overflow tail is handled, not thrown.
+    await expect(streamResponse(ctx, session, 'go')).resolves.toBeUndefined();
+
+    // chunk[0] is rendered into the preview via edit (the non-cleanFinal path edits
+    // the live message rather than re-sending it), and the dropped tail is announced…
+    expect(edits.some((e) => e.startsWith('first '))).toBe(true);
+    expect(replies.filter((r) => r.includes('Telegram dropped'))).toHaveLength(1);
+    // …and the non-cleanFinal path never deletes the preview.
+    expect(deletes.length).toBe(0);
+  });
 });
 
 describe('generator finalizer cleanup', () => {

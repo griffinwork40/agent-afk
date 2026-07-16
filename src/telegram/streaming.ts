@@ -661,13 +661,14 @@ export async function streamResponse(
       //
       // The in-place preview is edited under EDIT_THROTTLE_MS and Telegram edit
       // flood-control, so it can freeze mid-stream and show LESS than what actually
-      // streamed. A `done` event already handled delivery above (clean-final nulls
-      // `sentMessage`; the legacy branch left chunk[0] in the preview and needs only
-      // chunks[1..]). Any OTHER exit — `sawTerminalEvent` false: the provider closed
-      // the stream without a terminal event, or an early break — previously stranded
-      // the user on that frozen, partial preview (the long-reply "cut off mid-sentence"
-      // bug). Re-deliver everything as fresh message(s) so nothing that streamed is
-      // lost to a stale preview, then remove the preview.
+      // streamed. A `done` event already handled delivery above: on the cleanFinal
+      // path deliverClean ran and (on success) nulled `sentMessage`; on the legacy
+      // non-cleanFinal path `sendOrEdit(accumulated)` edited chunk[0] into the preview
+      // and only chunks[1..] remain to send. Any OTHER exit — `sawTerminalEvent` false:
+      // the provider closed the stream without a terminal event, or an early break —
+      // previously stranded the user on that frozen, partial preview (the long-reply
+      // "cut off mid-sentence" bug). Re-deliver everything as fresh message(s) so
+      // nothing that streamed is lost to a stale preview, then remove the preview.
 
       // Snapshot the preview ref. `sentMessage` is assigned only inside the
       // `sendOrEdit` closure (invisible to linear CFA), so post-loop TS narrows it to
@@ -687,7 +688,15 @@ export async function streamResponse(
             sentMessage = null;
           }
         }
-      } else if (accumulated && preview) {
+      } else if (!cleanFinal && accumulated && preview) {
+        // Legacy non-cleanFinal overflow: `done` fired (`sawTerminalEvent` true, so the
+        // branch above is skipped) and `sendOrEdit` left only chunk[0] in the preview —
+        // send the remaining chunks[1..] here. Gated on `!cleanFinal`: on the cleanFinal
+        // path a FAILED deliverClean (first chunk fails past retries) posts the truncation
+        // notice and leaves `sentMessage` set, which would otherwise re-fire this branch and
+        // re-send chunks[1..] of the noisy `accumulated` buffer — directly contradicting the
+        // "dropped, ask me to resend" notice just posted (issue #623). cleanFinal owns its own
+        // delivery + notice entirely, so it must never fall through to this legacy path.
         const chunks = splitLongMessage(markdownToTelegramHtml(accumulated));
         if (chunks.length > 1) {
           const reply = (t: string, extra?: { parse_mode?: 'HTML' }): Promise<unknown> => ctx.reply(t, extra);
