@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.54.3] - 2026-07-16
+
+### Fixed
+- surface stream-incomplete as an error, not a silent truncated turn (#635) (efe7ed0)
+
 ## [5.54.2] - 2026-07-16
 
 ### Changed
