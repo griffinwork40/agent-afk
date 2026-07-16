@@ -11,6 +11,13 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.52.1] - 2026-07-16
+
+### Fixed
+- hard-fail phases on incomplete subagent result (capped / stream_incomplete) (#627) (8ac9b40)
+- failed cleanFinal delivery no longer re-sends a contradictory overflow tail (#623) (#626) (e2bd0bd)
+- resolve zero-output stream-incomplete run as failed, not succeeded (#628) (99952ee)
+
 ## [5.52.0] - 2026-07-16
 
 ### Added
