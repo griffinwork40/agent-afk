@@ -573,6 +573,57 @@ describe('streamResponse', () => {
     // …and the non-cleanFinal path never deletes the preview.
     expect(deletes.length).toBe(0);
   });
+
+  it('cleanFinal: a progress-only turn (no assistant answer) still delivers a long accumulated buffer\'s overflow tail (#623 follow-up)', async () => {
+    // Regression (#623 follow-up — flagged independently by this repo's own review
+    // pipeline AND by Codex on PR #626): when cleanFinal===true but the turn produces
+    // NO final assistant text (a subagent-heavy turn with only `◦` progress lines,
+    // `answerText` stays ''), the `done` handler's `if (cleanFinal && answerText.trim())`
+    // guard is false, so it falls to `sendOrEdit(accumulated, true)` — which, like the
+    // non-cleanFinal path, renders only chunk[0] into the preview. The post-loop overflow
+    // branch must still fire to deliver chunks[1..] of that (long, progress-only)
+    // `accumulated` buffer. Gating that branch on bare `!cleanFinal` (the original #623
+    // fix) wrongly excluded this case too, silently truncating the tail. The refined gate
+    // — the exact negation of the `done` handler's own `cleanFinal && answerText.trim()`
+    // guard — restores delivery here while still suppressing the original #623
+    // contradictory-resend bug (see the cleanFinal first-chunk-failure test above).
+    const { ctx, replies, deletes } = makeCtx();
+    const firstDescription = `first ${'a'.repeat(4080)}`;
+    const secondDescription = 'second progress marker';
+    const session = makeSession(async function* () {
+      yield {
+        type: 'progress',
+        progress: {
+          taskId: 't1',
+          description: firstDescription,
+          totalTokens: 100,
+          toolUses: 1,
+          durationMs: 100,
+        },
+      };
+      yield {
+        type: 'progress',
+        progress: {
+          taskId: 't2',
+          description: secondDescription,
+          totalTokens: 100,
+          toolUses: 1,
+          durationMs: 100,
+        },
+      };
+      yield { type: 'done', metadata: undefined };
+    });
+
+    await expect(streamResponse(ctx, session, 'go', undefined, { cleanFinal: true })).resolves.toBeUndefined();
+
+    // No clean answer text ever existed to replace the preview, so it is never deleted…
+    expect(deletes.length).toBe(0);
+    // …but the overflow tail — the second progress line — still reaches the user as a
+    // fresh reply instead of being silently stranded behind the frozen chunk[0] preview.
+    expect(replies.some((r) => r.includes(secondDescription))).toBe(true);
+    // Nothing failed, so no truncation notice fires.
+    expect(replies.some((r) => r.includes('Telegram dropped'))).toBe(false);
+  });
 });
 
 describe('generator finalizer cleanup', () => {

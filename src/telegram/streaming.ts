@@ -661,10 +661,11 @@ export async function streamResponse(
       //
       // The in-place preview is edited under EDIT_THROTTLE_MS and Telegram edit
       // flood-control, so it can freeze mid-stream and show LESS than what actually
-      // streamed. A `done` event already handled delivery above: on the cleanFinal
-      // path deliverClean ran and (on success) nulled `sentMessage`; on the legacy
-      // non-cleanFinal path `sendOrEdit(accumulated)` edited chunk[0] into the preview
-      // and only chunks[1..] remain to send. Any OTHER exit — `sawTerminalEvent` false:
+      // streamed. A `done` event already handled delivery above: when `cleanFinal` had
+      // non-empty `answerText`, `deliverClean` ran and (on success) nulled `sentMessage`;
+      // otherwise (plain non-cleanFinal, OR a cleanFinal turn with empty `answerText`)
+      // `sendOrEdit(accumulated)` edited only chunk[0] into the preview and chunks[1..]
+      // remain to send. Any OTHER exit — `sawTerminalEvent` false:
       // the provider closed the stream without a terminal event, or an early break —
       // previously stranded the user on that frozen, partial preview (the long-reply
       // "cut off mid-sentence" bug). Re-deliver everything as fresh message(s) so
@@ -688,15 +689,24 @@ export async function streamResponse(
             sentMessage = null;
           }
         }
-      } else if (!cleanFinal && accumulated && preview) {
-        // Legacy non-cleanFinal overflow: `done` fired (`sawTerminalEvent` true, so the
-        // branch above is skipped) and `sendOrEdit` left only chunk[0] in the preview —
-        // send the remaining chunks[1..] here. Gated on `!cleanFinal`: on the cleanFinal
-        // path a FAILED deliverClean (first chunk fails past retries) posts the truncation
-        // notice and leaves `sentMessage` set, which would otherwise re-fire this branch and
-        // re-send chunks[1..] of the noisy `accumulated` buffer — directly contradicting the
-        // "dropped, ask me to resend" notice just posted (issue #623). cleanFinal owns its own
-        // delivery + notice entirely, so it must never fall through to this legacy path.
+      } else if (!(cleanFinal && answerText.trim()) && accumulated && preview) {
+        // Overflow send: `done` fired (`sawTerminalEvent` true, so the branch above is
+        // skipped) and the `done` handler used `sendOrEdit`, which only ever renders
+        // chunk[0] into the preview — send the remaining chunks[1..] here.
+        //
+        // The gate is the exact negation of the `done` handler's own
+        // `cleanFinal && answerText.trim()` guard: it fires for every case where that
+        // handler took its `sendOrEdit` branch instead of `deliverClean` — the plain
+        // non-cleanFinal path, AND a cleanFinal turn whose `answerText` is empty (e.g. a
+        // progress-only turn that produced no final assistant text, only accumulated `◦`
+        // status lines). A bare `!cleanFinal` gate (the original #623 fix) wrongly excluded
+        // that second case too, silently truncating a long progress-only cleanFinal turn to
+        // chunk[0] — flagged independently by this repo's own review pipeline and Codex
+        // (PR #626 review). It still correctly excludes a FAILED deliverClean (first chunk
+        // fails past retries): that case has `cleanFinal && answerText.trim()` true
+        // regardless of delivery outcome, so `!(...)` is false and this branch is skipped —
+        // preserving the original #623 fix (no contradictory resend after the truncation
+        // notice `deliverClean` already posted).
         const chunks = splitLongMessage(markdownToTelegramHtml(accumulated));
         if (chunks.length > 1) {
           const reply = (t: string, extra?: { parse_mode?: 'HTML' }): Promise<unknown> => ctx.reply(t, extra);
