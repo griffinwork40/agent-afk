@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.55.0] - 2026-07-16
+
+### Added
+- feed redacted session context to Tier-2 ghost-text suggester (#636) (c66e724)
+
 ## [5.54.3] - 2026-07-16
 
 ### Fixed
