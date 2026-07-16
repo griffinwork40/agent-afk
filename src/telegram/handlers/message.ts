@@ -117,18 +117,58 @@ export class MessageHandler {
 
   /**
    * Invariant: chat IDs with a turn claimed by an in-flight handle()/
-   * handlePhoto() call not yet reflected in `session.state`. bot.ts now runs
+   * handlePhoto()/drain call not yet reflected in `session.state`. bot.ts runs
    * 'text'/'photo' detached, so a second same-chat update can be dispatched
-   * while the first is still between `getSession()` and the point deep in
-   * `sendMessageStream` where `currentState` actually flips (streaming.ts
-   * sends the "Thinking…" placeholder — a real Telegram round-trip — before
-   * that generator body ever runs `assertCanSend()`). `session.state` alone
-   * misses that window: both updates would see 'idle' and race out of
-   * arrival order (PR #602 review — Codex P1). Checked-and-added
-   * synchronously (no `await` in between) so only the first arrival wins;
-   * released in `finally` once that call's own turn concludes.
+   * while the first is still between `getSession()` and the point where
+   * `currentState` actually flips to 'streaming'.
+   *
+   * That flip is deferred because `session.sendMessageStream` is a LAZY
+   * `async*` generator: its body — `assertCanSend()` then
+   * `currentState = 'streaming'` (agent-session.ts) — runs only on the
+   * consumer's first `iter.next()`, not when the generator is constructed.
+   * streaming.ts constructs the generator, awaits the "Thinking…" placeholder
+   * (a real Telegram round-trip), and only then pulls the first value — so the
+   * state flip lands well after `getSession()` returns. `session.state` alone
+   * misses that window: two updates would both see 'idle' and race out of
+   * arrival order (PR #602 review — Codex P1).
+   *
+   * Reference-counted (chatId → live claim count) rather than a plain Set so
+   * the reservation survives the hand-off across `processOne`'s un-awaited
+   * `finally → drainQueue`: the drained turn takes its own +1 synchronously
+   * before the outer turn's release drops back to 0, so the slot is never
+   * momentarily empty while a detached drain turn is still in flight (#603
+   * Item 1). Reserved/released synchronously (no `await` in between) via the
+   * claim* helpers below, so only the first arrival wins; `isClaimed` sees any
+   * live count. See {@link reserveClaim}/{@link releaseClaim}.
    */
-  private claimedChats = new Set<number>();
+  private claimedChats = new Map<number, number>();
+
+  /**
+   * Reserve this chat's turn slot (synchronous). Increments the live claim
+   * count so overlapping reservations — handle()'s outer guard plus
+   * processOne's own reservation plus a drain re-entry — compose instead of
+   * clobbering a single boolean flag. Must be called with NO `await` between
+   * the deciding `isClaimed` read and this call.
+   */
+  private reserveClaim(chatId: number): void {
+    this.claimedChats.set(chatId, (this.claimedChats.get(chatId) ?? 0) + 1);
+  }
+
+  /**
+   * Release one reservation taken by {@link reserveClaim}. Deletes the entry
+   * once the count reaches zero so `isClaimed` reports false again. Balanced:
+   * each reserveClaim has exactly one releaseClaim on every code path.
+   */
+  private releaseClaim(chatId: number): void {
+    const next = (this.claimedChats.get(chatId) ?? 0) - 1;
+    if (next <= 0) this.claimedChats.delete(chatId);
+    else this.claimedChats.set(chatId, next);
+  }
+
+  /** True while any turn holds a slot for this chat (see {@link claimedChats}). */
+  private isClaimed(chatId: number): boolean {
+    return (this.claimedChats.get(chatId) ?? 0) > 0;
+  }
 
   /**
    * Active ask_question elicitations waiting for a text reply.
@@ -216,13 +256,16 @@ export class MessageHandler {
     let alreadyClaimed = false;
     try {
       // Invariant: reserve this chat's turn slot SYNCHRONOUSLY (no `await`
-      // between the check and the add), before the async `getSession()` call
-      // below — see the `claimedChats` field doc for the exact race this
+      // between the check and the reserve), before the async `getSession()`
+      // call below — see the `claimedChats` field doc for the exact race this
       // closes. Photos widen the pre-fix race further than text messages
       // (the CDN download + base64 encode below is a much larger gap than
-      // `ctx.react`), so this check matters even more here.
-      alreadyClaimed = this.claimedChats.has(chatId);
-      if (!alreadyClaimed) this.claimedChats.add(chatId);
+      // `ctx.react`), so this check matters even more here. Only reserve when
+      // not already claimed so a losing concurrent call doesn't inflate the
+      // count it never releases; processOne takes its own reservation for the
+      // turn it actually runs (drain-path coverage, #603 Item 1).
+      alreadyClaimed = this.isClaimed(chatId);
+      if (!alreadyClaimed) this.reserveClaim(chatId);
 
       // M3+M6: session lookup and queue-depth check happen before getFileLink /
       // download so that allowlist-burst rejections don't burn Telegram API quota
@@ -371,8 +414,10 @@ export class MessageHandler {
       }
     } finally {
       // Only the call that actually reserved the slot releases it — see the
-      // matching comment in handle().
-      if (!alreadyClaimed) this.claimedChats.delete(chatId);
+      // matching comment in handle(). processOne holds its own reservation for
+      // the turn it runs, so releasing this outer guard here never drops the
+      // slot out from under an in-flight (possibly drained) turn.
+      if (!alreadyClaimed) this.releaseClaim(chatId);
     }
   }
 
@@ -443,13 +488,17 @@ export class MessageHandler {
       await ctx.react?.('👀').catch(() => {});
 
       // Invariant: reserve this chat's turn slot SYNCHRONOUSLY (no `await`
-      // between the check and the add) before the async `session.state` check
-      // below. See the `claimedChats` field doc for the exact race this
+      // between the check and the reserve) before the async `session.state`
+      // check below. See the `claimedChats` field doc for the exact race this
       // closes. `ctx.react` above is side-effect-free w.r.t. session state, so
       // reserving after it (rather than at function entry) is equivalent and
-      // keeps the reaction-ack behavior unchanged for a losing call.
-      alreadyClaimed = this.claimedChats.has(chatId);
-      if (!alreadyClaimed) this.claimedChats.add(chatId);
+      // keeps the reaction-ack behavior unchanged for a losing call. Only
+      // reserve when not already claimed so a losing concurrent call doesn't
+      // inflate a count it never releases; processOne takes its own
+      // reservation for the turn it actually runs (drain-path coverage,
+      // #603 Item 1).
+      alreadyClaimed = this.isClaimed(chatId);
+      if (!alreadyClaimed) this.reserveClaim(chatId);
 
       const session = await this.sessionManager.getSession(chatId);
 
@@ -482,8 +531,10 @@ export class MessageHandler {
     } finally {
       // Only the call that actually reserved the slot releases it — a losing
       // (already-claimed) call never owned it and must not clear the winner's
-      // still-in-flight claim out from under it.
-      if (!alreadyClaimed) this.claimedChats.delete(chatId);
+      // still-in-flight claim out from under it. processOne holds its own
+      // reservation for the turn it runs, so this release never drops the slot
+      // while a turn (first or drained) is still streaming.
+      if (!alreadyClaimed) this.releaseClaim(chatId);
     }
   }
 
@@ -636,8 +687,24 @@ export class MessageHandler {
    * can transition from idle → busy in the window between the caller's state-check
    * and this method's own getSession call (TOCTOU). Catching it here ensures the
    * item is re-enqueued regardless of which caller triggered processOne.
+   *
+   * Invariant: processOne reserves a `claimedChats` slot SYNCHRONOUSLY at entry
+   * (below) and releases it only AFTER firing `drainQueue` in its finally. This
+   * is what makes drain-dispatched turns get the same one-turn-at-a-time slot as
+   * first turns (#603 Item 1): drainQueue is fired un-awaited from the finally,
+   * so the drained turn's own processOne reservation must be taken (its
+   * synchronous entry runs during the fire) BEFORE this turn's release drops the
+   * count — otherwise the slot would be momentarily empty between the outer
+   * turn's release and the drained turn flipping `session.state`, and a fresh
+   * handle() landing in that gap would double-enter. Reference counting (see the
+   * claimedChats field doc) composes this turn's reservation with the outer
+   * handle()/handlePhoto() guard and any drain re-entry.
    */
   private async processOne(chatId: number, ctx: Context, content: string | ContentBlockParam[]): Promise<void> {
+    // Reserve this turn's slot synchronously, before the first `await` below, so
+    // the slot is held continuously from dispatch through the finally's drain
+    // hand-off. Paired 1:1 with the releaseClaim in the finally.
+    this.reserveClaim(chatId);
     // Guard against a busy-spin cascade: if the catch block re-enqueues the item
     // because the session is busy, we must NOT also drain — the re-enqueued item will
     // be picked up by the active session's own drain cycle. Without this flag, the
@@ -693,11 +760,21 @@ export class MessageHandler {
         await ctx.reply(formatInternalError());
       }
     } finally {
-      // Only drain when we did NOT just re-enqueue — the active session's own finally
-      // will drain the item we pushed; calling drain here too causes a cascade.
+      // Order matters (#603 Item 1): fire drainQueue FIRST, then release. The
+      // fire is un-awaited, so it runs the drained turn's own processOne up to
+      // its first `await` — including that turn's synchronous reserveClaim —
+      // before releaseClaim below drops this turn's count. Reference counting
+      // means the slot stays held (count > 0) across the hand-off, so a fresh
+      // handle() arriving while the drained turn is still starting sees the
+      // chat as claimed and enqueues instead of double-entering.
+      //
+      // Only drain when we did NOT just re-enqueue — the active session's own
+      // finally will drain the item we pushed; calling drain here too causes a
+      // cascade.
       if (!reEnqueued) {
         this.drainQueue(chatId).catch(err => this.log('Drain error:', err));
       }
+      this.releaseClaim(chatId);
     }
   }
 

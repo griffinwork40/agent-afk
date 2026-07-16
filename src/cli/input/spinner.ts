@@ -1,5 +1,5 @@
 import { palette } from '../palette.js';
-import { pickRandomVerb } from '../constants.js';
+import { pickRandomVerb, pickRandomGoblinVerb } from '../constants.js';
 import { buildTipPool, selectTip } from '../loading-tips.js';
 import {
   SPINNER_FRAMES,
@@ -21,6 +21,12 @@ export interface SpinnerControllerOptions {
    * The controller owns no terminal — this callback is its sole render path.
    */
   onTick: () => void;
+  /**
+   * Goblin theme: olive frames + goblin verb pool. Default false so direct/test
+   * constructions keep the classic dim noir spinner; the live surfaces pass
+   * {@link goblinSpinnerEnabled}. Purely cosmetic — no timer/width change.
+   */
+  goblin?: boolean;
 }
 
 /**
@@ -41,10 +47,17 @@ export class SpinnerController {
   private interval: ReturnType<typeof setInterval> | null = null;
   private readonly captureMode: boolean;
   private readonly onTick: () => void;
+  private readonly goblin: boolean;
 
   constructor(opts: SpinnerControllerOptions) {
     this.captureMode = opts.captureMode;
     this.onTick = opts.onTick;
+    this.goblin = opts.goblin ?? false;
+  }
+
+  /** Pick a verb from the active theme's pool. */
+  private pickVerb(): string {
+    return this.goblin ? pickRandomGoblinVerb() : pickRandomVerb();
   }
 
   /**
@@ -84,7 +97,7 @@ export class SpinnerController {
     // and the tip row never renders.
     this.state = {
       frameIndex: 0,
-      verb: pickRandomVerb(),
+      verb: this.pickVerb(),
       nextVerbRotateAt: now + rotateMs,
       startedAt: now,
       tipPool: buildTipPool(),
@@ -108,10 +121,12 @@ export class SpinnerController {
 
   /** The composed spinner row, or null when no spinner is active. */
   renderSpinnerRow(): string | null {
-    return this.state
-      ? palette.meta(`${SPINNER_FRAMES[this.state.frameIndex]!} ${this.state.verb}...`)
-          + formatElapsed(this.state.startedAt)
-      : null;
+    if (!this.state) return null;
+    // Goblin theme tints the frame+verb olive; classic stays dim. Width is
+    // unchanged (single braille glyph), so no compositor row-budget impact.
+    const tint = this.goblin ? palette.goblin : palette.meta;
+    return tint(`${SPINNER_FRAMES[this.state.frameIndex]!} ${this.state.verb}...`)
+      + formatElapsed(this.state.startedAt);
   }
 
   /**
@@ -130,7 +145,7 @@ export class SpinnerController {
     this.state.frameIndex = (this.state.frameIndex + 1) % SPINNER_FRAMES.length;
     const now = Date.now();
     if (now >= this.state.nextVerbRotateAt) {
-      this.state.verb = pickRandomVerb();
+      this.state.verb = this.pickVerb();
       this.state.nextVerbRotateAt = now + rotateMs;
     }
     // Refresh the tip slot every tick. `selectTip` is time-stable — it returns

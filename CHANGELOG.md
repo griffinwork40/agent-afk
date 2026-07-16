@@ -11,6 +11,19 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.54.0] - 2026-07-16
+
+### Added
+- tag forked-child tool_call events with subagentId (#612) (#629) (972b109)
+
+## [5.53.0] - 2026-07-16
+
+### Added
+- welcome-banner polish — v14 goblin, tagline, reacting spinner (#239) (b8815b8)
+
+### Changed
+- Delete docs/telegram-bug-investigation.md (1fb2aa6)
+
 ## [5.52.1] - 2026-07-16
 
 ### Fixed

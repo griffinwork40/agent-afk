@@ -49,7 +49,7 @@ import {
   type SuggestContext,
 } from '../terminal-compositor.js';
 import { colorizeInputBuffer, type SlashRegistryView } from '../input-highlight.js';
-import { detectCaptureMode, detectCaretBlink, detectReducedMotion } from '../_lib/capture-mode.js';
+import { detectCaptureMode, detectCaretBlink, detectReducedMotion, detectGoblinSpinner } from '../_lib/capture-mode.js';
 import { list as listSlashCommands } from '../slash/registry.js';
 import { formatSubmittedEcho } from './echo.js';
 import { describeAttachmentSummary } from './attachments.js';
@@ -327,6 +327,10 @@ export class InputSurface {
       // compositor so recordings show a steady caret.
       caretBlink: detectCaretBlink() && !detectReducedMotion(),
       captureMode: detectCaptureMode(),
+      // Goblin spinner: olive frames + goblin verbs while the agent works.
+      // Opt-out via AFK_GOBLIN_SPINNER=0. Resolved here (caller-side) like the
+      // other motion/capture flags so the compositor/controller stay env-free.
+      goblinSpinner: detectGoblinSpinner(),
       ...(opts.scrollRegion ? { scrollRegion: opts.scrollRegion } : {}),
       ...(opts.anchorRow !== undefined ? { anchorRow: opts.anchorRow } : {}),
       ...(opts.suggest ? { suggest: opts.suggest } : {}),

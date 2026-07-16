@@ -257,6 +257,14 @@
       "category": "paths"
     },
     {
+      "name": "AFK_GOBLIN_SPINNER",
+      "description": "Goblin-themed working spinner (olive frames + goblin verbs) while the agent runs tools. 1 = on (default), 0 = classic dim spinner.",
+      "type": "boolean",
+      "required": false,
+      "example": "0",
+      "category": "misc"
+    },
+    {
       "name": "AFK_HOME",
       "description": "Override the AFK home directory. Default: ~/.afk/.",
       "type": "string",

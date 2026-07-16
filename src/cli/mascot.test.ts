@@ -1,5 +1,9 @@
 /**
  * Tests for src/cli/mascot.ts — the welcome-banner sprite + fallback ladder.
+ *
+ * Pins the load-bearing shape of the v14 "sadistic code goblin" without
+ * over-pinning every pixel: dimensions, palette presence, the symmetric
+ * face, the single pointed fang overlay, and the fallback ladder.
  */
 
 import { describe, it, expect, afterEach, beforeAll } from 'vitest';
@@ -11,6 +15,7 @@ import {
   MASCOT_HEIGHT,
   mascotSuppressed,
   __GOBLIN_GRID_FOR_TESTS,
+  __GLYPH_OVERLAY_FOR_TESTS,
 } from './mascot.js';
 
 // Force truecolor for color-channel assertions below. Vitest runs without a
@@ -47,7 +52,7 @@ describe('mascot sprite', () => {
     }
   });
 
-  it('renders using half-block characters (▀/▄)', () => {
+  it('renders the body with half-block characters (▀/▄), no heavy blocks', () => {
     const joined = strip(renderMascotLines('idle').join(''));
     expect(joined).toMatch(/[▀▄]/);
     expect(joined).not.toMatch(/[█▟▙▜▛◥◤◢◣●]/);
@@ -62,14 +67,15 @@ describe('mascot sprite', () => {
 
   it('pixel grid contains the expected palette tokens', () => {
     const flat = __GOBLIN_GRID_FOR_TESTS.join('');
-    expect(flat).toMatch(/Y/); // eyes present
-    expect(flat).toMatch(/M/); // body present
-    expect(flat).toMatch(/L/); // highlight present
-    expect(flat).toMatch(/K/); // nose/mouth present
-    expect(flat).toMatch(/W/); // fangs present
+    expect(flat).toMatch(/Y/); // eyes + hatband
+    expect(flat).toMatch(/M/); // body
+    expect(flat).toMatch(/L/); // highlights
+    expect(flat).toMatch(/K/); // brow / mouth / outline
+    expect(flat).toMatch(/D/); // ears + under-eye bags
+    expect(flat).toMatch(/B/); // brown cap
   });
 
-  it('no red tongue and no upward ear tips', () => {
+  it('no red tongue and no upward ear tips at the very top row', () => {
     const flat = __GOBLIN_GRID_FOR_TESTS.join('');
     expect(flat).not.toMatch(/R/);
 
@@ -78,89 +84,86 @@ describe('mascot sprite', () => {
     expect(topRow[MASCOT_WIDTH - 1]).toBe('.');
   });
 
-  it('side ears form wider dark-outlined bracket shapes', () => {
-    const upperEarRow = __GOBLIN_GRID_FOR_TESTS[3] ?? '';
-    const earTipRow = __GOBLIN_GRID_FOR_TESTS[4] ?? '';
-    const lowerEarRow = __GOBLIN_GRID_FOR_TESTS[5] ?? '';
-    const browRow = __GOBLIN_GRID_FOR_TESTS[6] ?? '';
+  it('wears a brown cap (cone rows) above a gold hatband', () => {
+    const grid = __GOBLIN_GRID_FOR_TESTS;
+    // brown cone present in the upper cap rows
+    expect(grid.slice(0, 7).join('')).toMatch(/B/);
+    // gold hatband: a run of yellow framed by the dark outline
+    expect(grid[7] ?? '').toMatch(/KY+K/);
+    // cap colour does not bleed into the face below the band
+    expect(grid.slice(8).join('')).not.toMatch(/B/);
+  });
 
-    expect(upperEarRow[0]).toBe('.');
-    expect(upperEarRow[1]).toBe('.');
-    expect(upperEarRow[2]).toBe('D');
-    expect(upperEarRow[3]).toBe('D');
-    expect(upperEarRow[4]).toBe('K');
-    expect(upperEarRow[MASCOT_WIDTH - 1]).toBe('.');
-    expect(upperEarRow[MASCOT_WIDTH - 2]).toBe('.');
-    expect(upperEarRow[MASCOT_WIDTH - 3]).toBe('D');
-    expect(upperEarRow[MASCOT_WIDTH - 4]).toBe('D');
-    expect(upperEarRow[MASCOT_WIDTH - 5]).toBe('K');
+  it('has dark-outlined ears flanking the head at their widest row', () => {
+    // ears reach their widest at the hooded-lid row (grid row 13)
+    const widest = __GOBLIN_GRID_FOR_TESTS[13] ?? '';
+    expect(widest[0]).toBe('D');
+    expect(widest[MASCOT_WIDTH - 1]).toBe('D');
+  });
 
-    expect(earTipRow[0]).toBe('D');
-    expect(earTipRow[1]).toBe('D');
-    expect(earTipRow[2]).toBe('D');
-    expect(earTipRow[3]).toBe('.');
-    expect(earTipRow[4]).toBe('.');
-    expect(earTipRow[5]).toBe('K');
-    expect(earTipRow[MASCOT_WIDTH - 1]).toBe('D');
-    expect(earTipRow[MASCOT_WIDTH - 2]).toBe('D');
-    expect(earTipRow[MASCOT_WIDTH - 3]).toBe('D');
-    expect(earTipRow[MASCOT_WIDTH - 4]).toBe('.');
-    expect(earTipRow[MASCOT_WIDTH - 5]).toBe('.');
-    expect(earTipRow[MASCOT_WIDTH - 6]).toBe('K');
+  it('has yellow eyes with dark forward pupils', () => {
+    const eyeRow = __GOBLIN_GRID_FOR_TESTS[14] ?? ''; // yellow eye band
+    const pupilRow = __GOBLIN_GRID_FOR_TESTS[15] ?? ''; // pupils gaze forward
+    expect(eyeRow).toMatch(/Y/);
+    expect(pupilRow).toMatch(/YKY/); // dark pupil framed by yellow
+  });
 
-    expect(lowerEarRow[0]).toBe('.');
-    expect(lowerEarRow[1]).toBe('.');
-    expect(lowerEarRow[2]).toBe('D');
-    expect(lowerEarRow[3]).toBe('D');
-    expect(lowerEarRow[4]).toBe('K');
-    expect(lowerEarRow[MASCOT_WIDTH - 1]).toBe('.');
-    expect(lowerEarRow[MASCOT_WIDTH - 2]).toBe('.');
-    expect(lowerEarRow[MASCOT_WIDTH - 3]).toBe('D');
-    expect(lowerEarRow[MASCOT_WIDTH - 4]).toBe('D');
-    expect(lowerEarRow[MASCOT_WIDTH - 5]).toBe('K');
+  it('hangs a single pointed ▼ fang as one white-on-dark overlay cell', () => {
+    const overlay = __GLYPH_OVERLAY_FOR_TESTS;
+    // The fang is the original pointed ▼ glyph, restored as a single overlay
+    // cell. It is allowed here (unlike a general ban on shape glyphs) ONLY
+    // because it renders white-on-dark against a dark mouth notch: the glyph
+    // seats low and font-dependently, but with bg 'K' and a dark notch carved
+    // into grid row 22 behind it, the empty top of the cell is dark and the old
+    // "green space" gap cannot appear. See GLYPH_OVERLAY's invariant.
+    expect(Object.keys(overlay)).toHaveLength(1);
 
-    expect(browRow[0]).toBe('.');
-    expect(browRow[1]).toBe('.');
+    const fang = overlay['11,11'];
+    expect(fang).toBeDefined();
+    expect(fang!.char).toBe('▼'); // the original pointed glyph, back on purpose
+    expect(fang!.fg).toBe('W'); // white tooth
+    expect(fang!.bg).toBe('K'); // dark backing — the gap-killer
+
+    // the fang sits at the viewer's-left canine (left of the centre column)
+    const fangCol = Number(Object.keys(overlay)[0]!.split(',')[1]);
+    expect(fangCol).toBeLessThan((MASCOT_WIDTH - 1) / 2);
+
+    // the dark notch that backs the fang: grid row 22 is dark (K) at and around
+    // the fang column, so nothing light shows above the tooth across fonts.
+    const jaw = __GOBLIN_GRID_FOR_TESTS[22] ?? '';
+    expect(jaw[fangCol]).toBe('K');
+    expect(jaw[fangCol - 1]).toBe('K');
+    expect(jaw[fangCol + 1]).toBe('K');
+
+    // the tooth lives only in the overlay — no off-white W in the grid
+    expect(__GOBLIN_GRID_FOR_TESTS.join('')).not.toMatch(/W/);
+  });
+
+  it('renders the fang as a white ▼ glyph in the sprite', () => {
+    // W (238,238,222) appears nowhere in the grid, so a white FOREGROUND escape
+    // in the rendered output proves the fang overlay is drawn (the ▼ glyph is
+    // white-on-dark, so white is now the fg). chalk.level is pinned to 3 above.
+    const joined = renderMascotLines('idle').join('');
+    expect(joined).toMatch(/\x1B\[38;2;238;238;222m/);
+    expect(strip(joined)).toMatch(/▼/);
+  });
+
+  it('the face below the cap is left-right symmetric', () => {
+    // Rows 0–6 are the brown cap cone, which deliberately leans right.
+    // Everything from the hatband (row 7) down must be a palindrome.
+    for (const row of __GOBLIN_GRID_FOR_TESTS.slice(7)) {
+      const reversed = row.split('').reverse().join('');
+      expect(row).toBe(reversed);
+    }
   });
 
   it('rendered sprite carries the yellow eye color (#F5D547)', async () => {
     chalk.level = 3;
     const { renderMascotLines: renderColored } = await import(
-      './mascot.js?colored=v12'
+      './mascot.js?colored=v14'
     );
     const joined = renderColored('idle').join('');
     expect(joined).toMatch(/\x1B\[(?:38|48);2;245;213;71m/);
-  });
-
-  it('head is symmetric except for the intentional offset fang pixels', () => {
-    for (const [i, row] of __GOBLIN_GRID_FOR_TESTS.entries()) {
-      const comparable =
-        i === 11 ? row.replaceAll('W', 'X') :
-        i === 12 ? row.replaceAll('W', 'M') :
-        row;
-      const reversed = comparable.split('').reverse().join('');
-      expect(comparable).toBe(reversed);
-    }
-  });
-
-  it('renders one offset 2-pixel fang and no extra mouth teeth', () => {
-    const shadowRow = __GOBLIN_GRID_FOR_TESTS[10] ?? '';
-    const mouthRow = __GOBLIN_GRID_FOR_TESTS[11] ?? '';
-    const fangTipRow = __GOBLIN_GRID_FOR_TESTS[12] ?? '';
-
-    expect(shadowRow.slice(7, 12)).toBe('XXXXX');
-    expect(mouthRow[8]).toBe('W');
-    expect(fangTipRow[8]).toBe('W');
-    expect(mouthRow[9]).toBe('X'); // center stays dark; fang is offset left
-
-    const mouthAndJaw = __GOBLIN_GRID_FOR_TESTS.slice(10, 14).join('');
-    expect((mouthAndJaw.match(/W/g) ?? [])).toHaveLength(2);
-
-    for (const [i, row] of __GOBLIN_GRID_FOR_TESTS.entries()) {
-      if (i === 11 || i === 12) continue;
-      const reversed = row.split('').reverse().join('');
-      expect(row).toBe(reversed);
-    }
   });
 
   it('chin tapers to a rounded base in the bottom 2 pixel rows (no protrusions)', () => {

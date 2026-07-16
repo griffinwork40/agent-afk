@@ -478,6 +478,7 @@ export class TerminalCompositor {
     this.scrollRegion = opts.scrollRegion;
     this.spinnerController = new SpinnerController({
       captureMode: opts.captureMode ?? false,
+      goblin: opts.goblinSpinner ?? false,
       onTick: () => this.repaint(),
     });
     // Caret blink defaults OFF: enablement (incl. reduced-motion) is resolved
