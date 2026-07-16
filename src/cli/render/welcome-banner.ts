@@ -277,10 +277,17 @@ function renderHybridBanner(opts: WelcomeBannerOpts): string {
   // Readable name + version caption: keeps the full "Agent AFK" greppable and
   // screen-reader-visible beneath the block-art acronym (tests assert this).
   // The tagline stays on its own row so narrow-column truncation can't eat it.
-  const nameChip = 'Agent AFK' + (versionText !== undefined ? '  ·  ' + versionText : '');
+  // Name + version caption. The bold title anchors identity; the version rides
+  // dim beside it. The tagline below is lifted OUT of the uniform dim grey into
+  // an italic brand tint so the product thesis reads as a hero subhead (and
+  // echoes the shaded AFK logo above it) rather than weighing the same as the
+  // cwd path beneath it.
+  const nameChip =
+    palette.heading('Agent AFK') +
+    (versionText !== undefined ? palette.dim('  ·  ' + versionText) : '');
   col.push('');
-  col.push(truncateDisplay(palette.dim(nameChip), colMaxW));
-  col.push(truncateDisplay(palette.dim(BANNER_TAGLINE), colMaxW));
+  col.push(truncateDisplay(nameChip, colMaxW));
+  col.push(truncateDisplay(palette.italic(palette.brand(BANNER_TAGLINE)), colMaxW));
 
   // Session-identity facts, each truncated to the column width.
   const factRows: string[] = [];

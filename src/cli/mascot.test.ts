@@ -3,7 +3,7 @@
  *
  * Pins the load-bearing shape of the v14 "sadistic code goblin" without
  * over-pinning every pixel: dimensions, palette presence, the symmetric
- * face, the single fang glyph overlay, and the fallback ladder.
+ * face, the single pointed fang overlay, and the fallback ladder.
  */
 
 import { describe, it, expect, afterEach, beforeAll } from 'vitest';
@@ -108,28 +108,44 @@ describe('mascot sprite', () => {
     expect(pupilRow).toMatch(/YKY/); // dark pupil framed by yellow
   });
 
-  it('hangs a single fang as a glyph overlay (not a grid pixel)', () => {
-    const entries = Object.entries(__GLYPH_OVERLAY_FOR_TESTS);
-    expect(entries).toHaveLength(1);
+  it('hangs a single pointed ▼ fang as one white-on-dark overlay cell', () => {
+    const overlay = __GLYPH_OVERLAY_FOR_TESTS;
+    // The fang is the original pointed ▼ glyph, restored as a single overlay
+    // cell. It is allowed here (unlike a general ban on shape glyphs) ONLY
+    // because it renders white-on-dark against a dark mouth notch: the glyph
+    // seats low and font-dependently, but with bg 'K' and a dark notch carved
+    // into grid row 22 behind it, the empty top of the cell is dark and the old
+    // "green space" gap cannot appear. See GLYPH_OVERLAY's invariant.
+    expect(Object.keys(overlay)).toHaveLength(1);
 
-    const entry = entries[0];
-    expect(entry).toBeDefined();
-    const [key, glyph] = entry!;
-    expect(glyph.char).toBe('▾'); // small down-pointing triangle
-    expect(glyph.fg).toBe('W'); // off-white tooth
-    expect(glyph.bg).toBe('M'); // olive skin behind it (no dark socket)
+    const fang = overlay['11,11'];
+    expect(fang).toBeDefined();
+    expect(fang!.char).toBe('▼'); // the original pointed glyph, back on purpose
+    expect(fang!.fg).toBe('W'); // white tooth
+    expect(fang!.bg).toBe('K'); // dark backing — the gap-killer
 
-    // hung at the viewer's-left canine position (left of centre)
-    const col = Number(key.split(',')[1]);
-    expect(col).toBeLessThan((MASCOT_WIDTH - 1) / 2);
+    // the fang sits at the viewer's-left canine (left of the centre column)
+    const fangCol = Number(Object.keys(overlay)[0]!.split(',')[1]);
+    expect(fangCol).toBeLessThan((MASCOT_WIDTH - 1) / 2);
+
+    // the dark notch that backs the fang: grid row 22 is dark (K) at and around
+    // the fang column, so nothing light shows above the tooth across fonts.
+    const jaw = __GOBLIN_GRID_FOR_TESTS[22] ?? '';
+    expect(jaw[fangCol]).toBe('K');
+    expect(jaw[fangCol - 1]).toBe('K');
+    expect(jaw[fangCol + 1]).toBe('K');
 
     // the tooth lives only in the overlay — no off-white W in the grid
     expect(__GOBLIN_GRID_FOR_TESTS.join('')).not.toMatch(/W/);
   });
 
-  it('renders the fang glyph into the sprite', () => {
-    const joined = strip(renderMascotLines('idle').join(''));
-    expect(joined).toContain('▾');
+  it('renders the fang as a white ▼ glyph in the sprite', () => {
+    // W (238,238,222) appears nowhere in the grid, so a white FOREGROUND escape
+    // in the rendered output proves the fang overlay is drawn (the ▼ glyph is
+    // white-on-dark, so white is now the fg). chalk.level is pinned to 3 above.
+    const joined = renderMascotLines('idle').join('');
+    expect(joined).toMatch(/\x1B\[38;2;238;238;222m/);
+    expect(strip(joined)).toMatch(/▼/);
   });
 
   it('the face below the cap is left-right symmetric', () => {

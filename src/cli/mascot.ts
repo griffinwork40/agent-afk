@@ -44,16 +44,20 @@ const PIXEL_PALETTE: Record<string, [number, number, number] | null> = {
  * even — paired into MASCOT_HEIGHT half-block rows); every row's length
  * must equal MASCOT_WIDTH. The face (rows 7+) is left-right symmetric; the
  * brown cap cone (rows 0–6) deliberately leans right, and the lone fang is
- * an asymmetric glyph overlay (see GLYPH_OVERLAY), not a grid pixel.
+ * an asymmetric overlay (see GLYPH_OVERLAY), not grid pixels — the face grid
+ * is enforced left-right symmetric, so a single-side fang cannot live in it.
  * `mascot.test.ts` pins the load-bearing shape.
  *
- * v14 "sadistic code goblin": a brown leather cap (rows 0–6) over a gold
- * hatband (row 7); plain olive forehead; big swept dark-olive ears
- * (rows 10–17) flanking the temples; a heavy dark brow over yellow eyes
- * with forward pupils and dark under-eye bags (rows 12–16); a shaded
- * protruding nose (rows 15–18); and a symmetric closed grin (rows 20–21)
- * with a single short fang hung at the viewer's-left canine position via
- * the glyph overlay. Supersedes the hooded "wide-eyed gremlin" (v13).
+ * v16 "goblin, refined fang": v14's polished portrait — a brown leather cap
+ * (rows 0–6) over a gold hatband (row 7); plain olive forehead; a heavy dark
+ * brow over yellow eyes with forward pupils and dark under-eye bags (rows
+ * 12–16); a shaded protruding nose (rows 15–18); solid dark-olive swept ears
+ * widest at cols 0/26 (rows 12–13); and a symmetric closed grin (rows 20–21).
+ * A single pointed ▼ fang hangs at the viewer's-left canine (overlay, col 11)
+ * against a small dark notch carved into the jaw row (row 22) — the notch is
+ * what keeps the pointy glyph gap-free (see GLYPH_OVERLAY). Reverts v15's
+ * hollow-bracket ears (they read as monkey ears) to v14's solid blobs and
+ * restores the original pointed fang. Supersedes v14/v15.
  */
 const GOBLIN_GRID: readonly string[] = [
   // pointed goblin cap (brown leather) — clean cone, tip leans right
@@ -71,22 +75,22 @@ const GOBLIN_GRID: readonly string[] = [
   '.....KMMMMMMMMMMMMMMMK.....',
   // upper face
   '.....KMMMMMMMMMMMMMMMK.....',
-  // big ears begin (D) flanking the temples
+  // ears — solid dark-olive swept triangles, tapering in toward the head top
   '....DKMMMMMMMMMMMMMMMKD....',
-  // ears growing outward
+  // upper ear body widening
   '...DDKMMMMMMMMMMMMMMMKDD...',
-  // brow ridge — heavy dark, over the eyes; ears wider
+  // brow ridge — heavy dark over the eyes; ears widening
   '.DDDDKMKKKKKMMMKKKKKMKDDDD.',
-  // heavy hooded lids + ears at their widest points
+  // heavy hooded lids + ears at their widest point (cols 0/26)
   'DDDDDKMMKKKMMMMMKKKMMKDDDDD',
-  // eyes — yellow slit peering out; ears taper
+  // eyes — yellow slit peering out; ears tapering back in
   '.DDDDKMMYYYMMMMMYYYMMKDDDD.',
-  // pupils gaze forward from under the lids + lit nose bridge
+  // pupils gaze forward from under the lids; ear tip meets the head
   '..DDDKMMYKYMMLMMYKYMMKDDD..',
-  // under-eye bags (dark-olive) + nose bridge; ears end
-  '...DDKMMDDDMMLMMDDDMMKDD...',
+  // under-eye bags (dark-olive) + nose bridge; brackets closed below here
+  '.....KMMDDDMMLMMDDDMMK.....',
   // nose widens — lit ridge, shadowed sides; gaunt cheek hollows
-  '....DKMDMMMMDLDMMMMDMKD....',
+  '.....KMDMMMMDLDMMMMDMK.....',
   // bulbous nose tip (dark underside) + cheek hollows
   '.....KMDMMMMDDDMMMMDMK.....',
   // upper lip / cheeks
@@ -95,8 +99,9 @@ const GOBLIN_GRID: readonly string[] = [
   '.....KMMKKMMMMMMMKKMMK.....',
   // grin — low curve across the middle (mouth stays closed)
   '.....KMMMKKKKKKKKKMMMK.....',
-  // jaw — fang (▼ glyph overlay) pokes down out of the grin here
-  '.....KMMMMMMMMMMMMMMMK.....',
+  // jaw + a small dark notch under the grin's centre (cols 10–16): the dark
+  // backing the ▼ fang overlay sits against so no olive shows above the tooth
+  '.....KMMMMKKKKKKKMMMMK.....',
   // jaw narrowing
   '......KMMMMMMMMMMMMMK......',
   // chin
@@ -109,23 +114,34 @@ export const MASCOT_WIDTH = 27;
 export const MASCOT_HEIGHT = 13;
 
 /**
- * Glyph overlays — whole-character-cell overrides applied on top of the
- * half-block pass, for accent shapes the half-block pixel grid cannot express
- * (a pointed fang). Keyed `"charRow,col"` in CHARACTER coordinates (one cell ==
- * two stacked grid pixels). `fg`/`bg` are PIXEL_PALETTE tokens; `'.'` = none.
- * Invariant: triangle/diagonal glyphs live in the Geometric-Shapes Unicode
- * block and render less consistently across terminal fonts (size, offset, and
- * ambiguous display width) than the Block-Elements half-blocks — confine
- * overlays to small accents (teeth), never load-bearing silhouette.
+ * Cell overlays — whole-cell overrides on top of the half-block pass. They
+ * exist for one reason: the face grid is enforced left-right symmetric (see
+ * the palindrome test), so the intentionally asymmetric lone fang cannot be a
+ * grid pixel. Keyed `"charRow,col"` in CHARACTER coords (one cell == two
+ * stacked grid pixels); `fg`/`bg` are PIXEL_PALETTE tokens, `'.'` = none.
+ *
+ * Invariant: the Geometric-Shapes glyph ▼ is allowed for the fang ONLY as
+ * white-on-dark (fg 'W', bg 'K') sitting against a dark mouth notch. Such
+ * glyphs seat low and font-dependently in their cell, so the empty top of the
+ * cell shows the cell background. An earlier design put the ▼ on olive skin
+ * (bg 'M') and that padding read as a green gap above the tooth — the "green
+ * space" bug. The fix is NOT to ban the glyph (a pixel triangle can't match its
+ * point at this size) but to darken what is behind it: bg 'K' PLUS a dark notch
+ * carved into the jaw row (grid row 22, cols 10–16) around the fang, so wherever
+ * the triangle seats, its padding is dark and invisible. Two rules keep the gap
+ * gone: never place the ▼ on a light bg, and never remove the notch. The glyph's
+ * exact size/seating still varies by font, but that is cosmetic now — it can
+ * never resurrect the olive gap. The `▼` is deliberately absent from the
+ * render-guard's forbidden-glyph set in mascot.test.ts for this reason.
  */
 const GLYPH_OVERLAY: Readonly<
   Record<string, { char: string; fg: string; bg: string }>
 > = {
-  // single short fang — small off-white triangle hanging from the LEFT side of
-  // the grin (viewer's left, canine position col 11); flat top flush against the
-  // dark mouth band above it (rooted at the gumline), olive bg so the face skin
-  // shows behind/around the tooth (no dark socket).
-  '11,11': { char: '▾', fg: 'W', bg: 'M' },
+  // single POINTED fang, hung from the grin's viewer-LEFT canine, on col 11
+  // (left of centre col 13), one char row below the dark grin band. grid row 22
+  // carries a dark notch (cols 10–16) and the cell's own bg is 'K', so the ▼
+  // sits fully against dark — pointy like the original, with no olive gap.
+  '11,11': { char: '▼', fg: 'W', bg: 'K' },
 };
 
 /** Colorize one overlay glyph with optional fg/bg palette tokens. */
