@@ -1,7 +1,6 @@
 ---
 name: research-agent
 description: Read-only sub-agent for research, validation, verification, and codebase inspection. Mechanically locked to Read, Grep, Glob, WebFetch, WebSearch — cannot Edit, Write, Bash, commit, or push. Delegates git queries to `git-investigator`. Use when the dispatched task is findings-only.
-model: sonnet
 tools: Read, Grep, Glob, WebFetch, WebSearch, Agent(git-investigator)
 ---
 

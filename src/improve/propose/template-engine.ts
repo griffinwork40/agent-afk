@@ -121,8 +121,8 @@ const TEMPLATES: Record<FailureCard['pattern'], PatternTemplate> = {
     riskFloor: 'medium',
     validationPlan: {
       unitTests: [
-        'pnpm test -- src/improve/scan/detectors/repeated-tool-use',
-        'pnpm test -- src/agent/providers/anthropic-direct',
+        'pnpm test src/improve/scan/detectors/repeated-tool-use',
+        'pnpm test src/agent/providers/anthropic-direct',
       ],
       evalCases: [],
       smokeChecks: [
@@ -199,9 +199,9 @@ const TEMPLATES: Record<FailureCard['pattern'], PatternTemplate> = {
     riskFloor: 'medium',
     validationPlan: {
       unitTests: [
-        'pnpm test -- src/agent/hooks',
-        'pnpm test -- src/agent/subagent-hooks',
-        'pnpm test -- src/improve/scan/detectors/subagent-block',
+        'pnpm test src/agent/hooks',
+        'pnpm test src/agent/subagent-hooks',
+        'pnpm test src/improve/scan/detectors/subagent-block',
       ],
       evalCases: [],
       smokeChecks: [
@@ -263,9 +263,9 @@ const TEMPLATES: Record<FailureCard['pattern'], PatternTemplate> = {
     riskFloor: 'medium',
     validationPlan: {
       unitTests: [
-        'pnpm test -- src/agent/subagent-read-scope',
-        'pnpm test -- src/agent/subagent-worktree-readroot',
-        'pnpm test -- src/improve/scan/detectors/subagent-read-denial',
+        'pnpm test src/agent/subagent-read-scope',
+        'pnpm test src/agent/subagent-worktree-readroot',
+        'pnpm test src/improve/scan/detectors/subagent-read-denial',
       ],
       evalCases: [],
       smokeChecks: [
@@ -350,8 +350,8 @@ const TEMPLATES: Record<FailureCard['pattern'], PatternTemplate> = {
     riskFloor: 'medium',
     validationPlan: {
       unitTests: [
-        'pnpm test -- src/improve/scan/detectors/tool-failure-density',
-        'pnpm test -- src/agent/tools/dispatcher',
+        'pnpm test src/improve/scan/detectors/tool-failure-density',
+        'pnpm test src/agent/tools/dispatcher',
       ],
       evalCases: [],
       smokeChecks: [
@@ -421,8 +421,8 @@ const TEMPLATES: Record<FailureCard['pattern'], PatternTemplate> = {
     riskFloor: 'medium',
     validationPlan: {
       unitTests: [
-        'pnpm test -- src/agent/session',
-        'pnpm test -- src/improve/scan/detectors/closure-anomaly',
+        'pnpm test src/agent/session',
+        'pnpm test src/improve/scan/detectors/closure-anomaly',
       ],
       evalCases: [],
       smokeChecks: ['pnpm lint'],

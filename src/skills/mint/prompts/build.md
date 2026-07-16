@@ -22,9 +22,13 @@ You are given:
 4. Run tests and type-checks frequently
 
 **Verification:**
-- Run all specified test commands
+- Run the specified test commands, but SCOPE each run to the files you changed — pass the test path directly: `pnpm test <path>` (or `pnpm test:file <path>` / `pnpm exec vitest run <path>`). Under pnpm, `pnpm test -- <path>` DROPS the path arg and silently runs the entire suite — never use that form.
+- Never re-run the full test suite as your iteration loop. Scope verification to the changed files; run the full suite (if at all) only once at the end, not on every edit.
 - Run linting and type-checking
 - Build the project if applicable
+
+**Commit incrementally:**
+- Commit working increments as you go (a passing module, a green test file) rather than saving one big commit for the end. If the phase is interrupted or times out, committed work is preserved instead of lost.
 
 ## Output
 
@@ -38,7 +42,7 @@ Respond with a single fenced JSON code block and no prose outside it. The JSON m
   "tests_passed": true,
   "build_passed": true,
   "verification_passed": true,
-  "notes": "Built the X module. Ran `pnpm test -- src/x.test.ts` → 12 passed, exit 0. Ran `pnpm lint` → exit 0. Ran `pnpm build` → exit 0."
+  "notes": "Built the X module. Ran `pnpm test src/x.test.ts` → 12 passed, exit 0. Ran `pnpm lint` → exit 0. Ran `pnpm build` → exit 0."
 }
 ```
 

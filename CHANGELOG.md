@@ -11,6 +11,19 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.51.2] - 2026-07-15
+
+### Fixed
+- stop long replies being silently truncated mid-sentence (#620) (920bd6f)
+
+### Changed
+- docs/skills: scope test commands in fix briefs + templates (avoid pnpm test -- footgun) (#611) (#617) (137ce5e)
+- terminal-state gate integration + /clear-budget scope doc + firing observability (#565) (#616) (8eb0396)
+- cover disconnectAll swallow + telegram/daemon construction-throw teardown (#247) (#615) (c9450af)
+- e2e read_file/glob/grep + write-confinement through live child dispatcher (#440) (#614) (8ed1053)
+- add unit tests for closure-emitter and ledger-lifecycle (#526) (#613) (a16e515)
+- tolerate npm's retired audit endpoint (HTTP 410) in audit:deps gate (#619) (afb51a9)
+
 ## [5.51.1] - 2026-07-14
 
 ### Fixed

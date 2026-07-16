@@ -12,8 +12,8 @@ agent-afk is a standalone TypeScript CLI + daemon + Telegram bot that uses `@ant
 pnpm install              # Use pnpm exclusively — lockfile is pnpm-specific
 pnpm build                # tsc + copies *.md prompt files into dist/
 pnpm test                 # vitest run (all tests)
-pnpm test -- src/agent/session.test.ts            # single test file (unit tests co-located with src)
-pnpm test -- -t "sends a message"                 # single test by name
+pnpm test src/agent/session.test.ts               # single test file (unit tests co-located with src)
+pnpm test -t "sends a message"                     # single test by name
 pnpm test:watch           # vitest watch mode
 pnpm lint                 # tsc --noEmit (strict, no unused locals/params)
 

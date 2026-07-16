@@ -153,7 +153,7 @@ Resolution (`src/telegram/notify-routing.ts`), highest precedence first:
 
 ```bash
 # All telegram unit tests
-pnpm test -- tests/telegram
+pnpm test tests/telegram
 
 # Integration tests
 pnpm test:integration

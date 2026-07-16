@@ -77,7 +77,13 @@ const PINNED_HASHES = {
     'be8b2a301fe35d86d96d4be6f8418bf497dd9050767a3837cf057d7d5a1cd719',
   // refactor is bundled-only (no upstream example-plugin counterpart); verbatim
   // copy of the user-scope /refactor at ~/.afk/skills/.
-  refactor: '9cb84710ddf2cf63e1a648460a64656d3f4a9aae8e21753b031556070740c51e',
+  // Hash bumped (#611): the contract-extractor's `test_commands` example was
+  // changed from the pnpm footgun form `pnpm test -- --grep "AuthService"` (under
+  // pnpm 10 the `--` drops the arg and runs the FULL suite) to scoped forms
+  // (`pnpm test <file>` / `pnpm test -t "AuthService"`) plus a note to never emit
+  // the `--` form. Bundled-only — mirror into the user-scope /refactor at
+  // ~/.afk/skills/ if it drifts back.
+  refactor: '3adf801b9a61eba80afd34fef1e8c78a892ec07256dabb073370622a62d1b40f',
   research: 'abe79d75a5f3c74696ef002293dbe8714e446f8955de97089d1005f1e70bc269',
   review: 'f313e3779af068a623692473abab2300938db8da3ebf3e2998d47fcb21ee9627',
   // Hash bumped 2026-06-09 (PR #52): records the confidence-trigger enhancement

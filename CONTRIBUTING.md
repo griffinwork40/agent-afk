@@ -18,12 +18,12 @@ pnpm lint           # tsc --noEmit (strict type-check, no emit)
 
 Run a single test file:
 ```bash
-pnpm test -- src/agent/session.test.ts
+pnpm test src/agent/session.test.ts
 ```
 
 Run a single test by name:
 ```bash
-pnpm test -- -t "sends a message"
+pnpm test -t "sends a message"
 ```
 
 ## TypeScript — strict mode
