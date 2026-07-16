@@ -22,6 +22,7 @@ vi.mock('../../utils/debug.js', () => ({
 }));
 
 import { AgentSession } from '../session.js';
+import { createHookRegistry } from '../hooks.js';
 
 const NUDGE = '[framework-generated context: test nudge]\n\nConsider verifying.';
 
@@ -131,6 +132,53 @@ describe('AgentSession framework-context queue', () => {
 
     expect(capturedTurns).toHaveLength(1);
     expect(capturedTurns[0]!.content).toBe(`${NUDGE}\n\nnext real message`);
+    await session.close();
+  });
+
+  it('delivers a SessionStart hook injectContext on the first outbound message', async () => {
+    // SessionStart fires during init, before any turn exists. dispatchSessionStart
+    // returns the merged injectContext and AgentSession queues it so it rides the
+    // FIRST real user message — the queue bridges init to the first send.
+    const registry = createHookRegistry();
+    registry.register('SessionStart', () => ({ injectContext: NUDGE }));
+    const session = new AgentSession({ ...config, hookRegistry: registry });
+
+    await drain(session.sendMessageStream('/resolve'));
+
+    expect(capturedTurns).toHaveLength(1);
+    expect(capturedTurns[0]!.content).toBe(`${NUDGE}\n\n/resolve`);
+    await session.close();
+  });
+
+  it('leaves the first message unprefixed when no SessionStart hook injects context', async () => {
+    const registry = createHookRegistry();
+    registry.register('SessionStart', () => ({}));
+    const session = new AgentSession({ ...config, hookRegistry: registry });
+
+    await drain(session.sendMessageStream('/resolve'));
+
+    expect(capturedTurns).toHaveLength(1);
+    expect(capturedTurns[0]!.content).toBe('/resolve');
+    await session.close();
+  });
+
+  it('does NOT deliver SessionStart injectContext for subagent (forked) sessions', async () => {
+    // Subagent forks run the same init path with the bubbled registry, so the
+    // SessionStart handler still fires — but delivery is parent-only. Gating on
+    // `parentSessionId` keeps priming context off every subagent's first prompt
+    // (token cost × fan-out + contamination of narrow tasks).
+    const registry = createHookRegistry();
+    registry.register('SessionStart', () => ({ injectContext: NUDGE }));
+    const session = new AgentSession({
+      ...config,
+      hookRegistry: registry,
+      parentSessionId: 'parent-session-id',
+    });
+
+    await drain(session.sendMessageStream('/resolve'));
+
+    expect(capturedTurns).toHaveLength(1);
+    expect(capturedTurns[0]!.content).toBe('/resolve');
     await session.close();
   });
 
