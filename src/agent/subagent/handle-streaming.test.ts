@@ -207,13 +207,56 @@ describe('SubagentHandle streaming', () => {
       expect(handle.status).toBe('succeeded');
     });
 
-    it('returns a stream-incomplete partial (not a throw) when the stream ends with neither message nor streamed content', async () => {
-      // Degradation contract: an empty cut-off stream (no terminal message, no
-      // buffered text, no error, and NOT the tool-use cap) must NOT throw an
-      // opaque "produced no terminal message". It returns a STREAM_INCOMPLETE
-      // partial (status 'succeeded') carrying a cut-off marker, so the parent
-      // gets an actionable incomplete result — annotateIfIncomplete flags it at
-      // the consumption boundary — instead of a bare delegation failure.
+    it('BUFFERED-PARTIAL branch STILL resolves SUCCEEDED (partial) with stopReason preserved — regression guard', async () => {
+      // Regression guard for the false-success fix: the fix throws ONLY on the
+      // ZERO-OUTPUT branch. A stream that ended with real buffered text but no
+      // terminal `message` event (a cut-off mid-output) MUST keep its prior
+      // contract — status:'succeeded' with stopReason:STREAM_INCOMPLETE — so its
+      // partial work is salvaged and flagged (via annotateIfIncomplete) at the
+      // consumption boundary, NOT reclassified as a failure. Only the
+      // empty-buffer case became a failure.
+      const events: OutputEvent[] = [
+        { type: 'chunk', chunk: { type: 'content', content: 'salvageable ' } },
+        { type: 'chunk', chunk: { type: 'content', content: 'partial findings' } },
+        { type: 'done' },
+      ];
+      const session = createDeterministicMockSession(events, {
+        role: 'assistant',
+        content: 'unused',
+        timestamp: new Date(),
+      });
+      const handle = new SubagentHandleImpl(
+        'subagent-buffered-partial-test',
+        session,
+        controller,
+        abortGraph,
+        undefined,
+        5000,
+        undefined,
+        vi.fn(),
+      );
+
+      const result = await handle.runToResult('p');
+      expect(result.status).toBe('succeeded');
+      expect(result.stopReason).toBe(STREAM_INCOMPLETE);
+      // The buffered text is preserved as the (partial) message content.
+      expect(result.message?.content).toBe('salvageable partial findings');
+      // Not a failure — no error attached on the succeeded-partial path.
+      expect(result.error).toBeUndefined();
+    });
+
+    it('resolves a ZERO-OUTPUT cut-off run as FAILED with stopReason preserved (not a false success)', async () => {
+      // False-success contract fix: an empty cut-off stream (no terminal
+      // message, no buffered text, no error, and NOT the tool-use cap — e.g. a
+      // first-token/TTFB timeout guillotines a connection stalled in the
+      // provider SDK's retry-backoff) must NOT resolve as status:'succeeded'.
+      // A zero-output timeout previously fell through to a synthetic-placeholder
+      // RETURN, which set status:'succeeded' — fooling every consumer whose only
+      // gate is `status === 'succeeded'`. It now THROWS a distinct
+      // StreamIncompleteError, so runToResult builds a status:'failed' result
+      // that carries the informative error message AND preserves
+      // stopReason:'stream_incomplete'. A consumer's natural `status !==
+      // 'succeeded'` check now catches it.
       const events: OutputEvent[] = [{ type: 'done' }];
       const session = createDeterministicMockSession(events, {
         role: 'assistant',
@@ -232,21 +275,31 @@ describe('SubagentHandle streaming', () => {
       );
 
       const result = await handle.runToResult('p');
-      expect(result.status).toBe('succeeded');
+      expect(result.status).toBe('failed');
+      // stopReason must survive on the failed result so callers can distinguish
+      // a stream-incomplete failure from an ordinary error.
       expect(result.stopReason).toBe(STREAM_INCOMPLETE);
-      expect(result.message?.content).toMatch(/without producing a final message/);
+      // The failure cause is informative (describeFailure(result) reads sensibly),
+      // not an opaque "produced no terminal message".
+      expect(result.error).toBeDefined();
+      expect(result.error?.name).toBe('StreamIncompleteError');
+      expect(result.error?.message).toMatch(/produced no output/);
+      // Zero output => no partial to salvage.
+      expect(result.partialOutput).toBeUndefined();
+      // The handle's own terminal status agrees.
+      expect(handle.status).toBe('failed');
     });
 
-    it('overwrites a clean terminal stopReason with STREAM_INCOMPLETE on an empty cut-off run', async () => {
-      // Codex PR #597 P2 regression guard. An empty-text turn that ends with a
-      // CLEAN terminal reason (end_turn / max_tokens) is dropped by the stream
-      // consumer before a `message` event is emitted (`assistant.message`:
-      // `if (event.text)`), so the empty-fallback branch is reached with
-      // lastStopReason already set to that clean reason. It MUST be overwritten
-      // to STREAM_INCOMPLETE (assignment, not `??=`): the returned content is a
-      // synthetic "no findings" placeholder, and preserving `end_turn` would let
-      // annotateIfIncomplete report that placeholder as a clean completion with
-      // no partial marker — the exact silent-success this branch exists to kill.
+    it('resolves FAILED with stopReason overwritten to STREAM_INCOMPLETE even when a clean terminal reason was set', async () => {
+      // Codex PR #597 P2 regression guard, updated for the failed-semantics fix.
+      // An empty-text turn that ends with a CLEAN terminal reason (end_turn /
+      // max_tokens) is dropped by the stream consumer before a `message` event
+      // is emitted (`assistant.message`: `if (event.text)`), so the zero-output
+      // branch is reached with lastStopReason already set to that clean reason.
+      // It MUST be overwritten to STREAM_INCOMPLETE (assignment, not `??=`)
+      // before the throw, so the FAILED result surfaces stopReason
+      // 'stream_incomplete' — never a clean 'end_turn' that would misreport the
+      // zero-output cutoff as a completed turn.
       const events: OutputEvent[] = [{ type: 'done', metadata: { stopReason: 'end_turn' } }];
       const session = createDeterministicMockSession(events, {
         role: 'assistant',
@@ -265,10 +318,10 @@ describe('SubagentHandle streaming', () => {
       );
 
       const result = await handle.runToResult('p');
-      expect(result.status).toBe('succeeded');
+      expect(result.status).toBe('failed');
       expect(result.stopReason).toBe(STREAM_INCOMPLETE);
       expect(result.stopReason).not.toBe('end_turn');
-      expect(result.message?.content).toMatch(/without producing a final message/);
+      expect(result.error?.name).toBe('StreamIncompleteError');
     });
 
     it('returns a capped partial result (not a throw) when the tool-use cap fires with no message', async () => {

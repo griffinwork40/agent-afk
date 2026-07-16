@@ -36,6 +36,35 @@ export class HookBlockedError extends Error {
 }
 
 /**
+ * Thrown by a forked sub-agent's `streamToFinalMessage` when its model stream
+ * ends with NO terminal assistant message AND an EMPTY streamed buffer, and the
+ * run was NOT user-cancelled or cascade-aborted (e.g. the first-token/TTFB
+ * timeout guillotines a connection stalled inside the provider SDK's internal
+ * 429/503/529 retry-backoff). The child produced zero output, so there is
+ * nothing to salvage as a partial.
+ *
+ * This is thrown — not returned as a synthetic-placeholder "success" — so the
+ * termination classifies as `status: 'failed'` (via `run()`'s catch → the
+ * non-cascade `else` branch), letting any consumer's natural `status !==
+ * 'succeeded'` check catch the zero-output timeout instead of being fooled by a
+ * false success. It is deliberately DISTINCT from `AbortError` (which the catch
+ * would classify `'cancelled'`) and carries an actionable, non-opaque message
+ * so the parent can act (retry / fall back) rather than see a bare failure.
+ * `SubagentResult.stopReason` is preserved as `'stream_incomplete'` alongside
+ * this error (see {@link import('../agent/subagent/result.js').STREAM_INCOMPLETE}).
+ *
+ * Contrast: a stream that ended with buffered partial text (real streamed
+ * output) is NOT this — it stays a succeeded-partial so its work is salvaged
+ * and annotated at the consumption boundary.
+ */
+export class StreamIncompleteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StreamIncompleteError";
+  }
+}
+
+/**
  * Thrown by {@link consumeSdkStream} when the session's cumulative cost
  * crosses the `maxBudgetUsd` ceiling. The throw propagates through
  * `runSessionLifecycle`'s catch block, which ensures `messageQueue` is
