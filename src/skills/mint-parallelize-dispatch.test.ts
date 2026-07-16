@@ -24,6 +24,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { IAgentSession } from '../agent/types.js';
+import { TOOL_USE_LOOP_CAPPED } from '../agent/providers/shared/tool-loop-cap.js';
+import { STREAM_INCOMPLETE } from '../agent/subagent/result.js';
 
 // ---- Mocks ---------------------------------------------------------------
 
@@ -32,6 +34,7 @@ let forkBehavior: () => Promise<{
   id: string;
   status: string;
   message: { content: string } | undefined;
+  stopReason?: string;
   error?: { message: string };
 }> = async () => ({
   id: 'mint-parallelize',
@@ -203,6 +206,41 @@ describe('runParallelizeDispatch — discriminated union', () => {
     expect(result.kind).toBe('failed');
     if (result.kind === 'failed') {
       expect(result.error).toMatch(/no message/);
+    }
+  });
+
+  // A `succeeded` result can still be an incomplete partial — the tool-use cap
+  // fired or the stream closed without a terminal message. Its `.message.content`
+  // is a truncated placeholder, not a usable wave plan, so the phase must NOT
+  // return `{ kind: 'plan' }` — it must surface a dispatch failure. Without the
+  // isIncompleteStopReason guard this returned a "plan" built from the partial.
+  it('returns failed when subagent succeeded but the result is a tool_use_loop_capped partial', async () => {
+    forkBehavior = async () => ({
+      id: 'mint-parallelize',
+      status: 'succeeded',
+      message: { content: 'partial wave plan (truncated)' },
+      stopReason: TOOL_USE_LOOP_CAPPED,
+    });
+    const result = await runParallelizeDispatch(MANY_FILES_PLAN, mockSession());
+    expect(result.kind).toBe('failed');
+    if (result.kind === 'failed') {
+      expect(result.error).toMatch(/incomplete result/);
+      expect(result.error).toMatch(/tool_use_loop_capped/);
+    }
+  });
+
+  it('returns failed when subagent succeeded but the result is a stream_incomplete partial', async () => {
+    forkBehavior = async () => ({
+      id: 'mint-parallelize',
+      status: 'succeeded',
+      message: { content: 'partial wave plan (truncated)' },
+      stopReason: STREAM_INCOMPLETE,
+    });
+    const result = await runParallelizeDispatch(MANY_FILES_PLAN, mockSession());
+    expect(result.kind).toBe('failed');
+    if (result.kind === 'failed') {
+      expect(result.error).toMatch(/incomplete result/);
+      expect(result.error).toMatch(/stream_incomplete/);
     }
   });
 

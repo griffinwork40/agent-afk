@@ -17,6 +17,7 @@
 import { getSkill } from '../../index.js';
 import { discoverPluginSkillBodies } from '../../../agent/tools/skill-bridge.js';
 import { SubagentManager } from '../../../agent/subagent.js';
+import { isIncompleteStopReason } from '../../../agent/subagent/result.js';
 import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
 
@@ -138,6 +139,16 @@ export async function runParallelizeDispatch(
         ...(skillCallId ? { parentId: skillCallId } : {}),
       });
       const result = await handle.runToResult(JSON.stringify({ plan }));
+      // A `succeeded` result can still be an incomplete partial — the tool-use
+      // cap fired or the stream closed without a terminal message. Its
+      // `.message.content` is a truncated placeholder, not a usable wave plan,
+      // so surface it as a dispatch failure rather than returning the partial.
+      if (isIncompleteStopReason(result.stopReason)) {
+        return {
+          kind: 'failed',
+          error: `parallelize subagent returned an incomplete result (stopReason=${result.stopReason})`,
+        };
+      }
       if (result.status === 'succeeded' && result.message) {
         return { kind: 'plan', plan: result.message.content };
       }
