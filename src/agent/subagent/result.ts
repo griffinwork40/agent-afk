@@ -16,24 +16,43 @@ import { TOOL_USE_LOOP_CAPPED } from '../providers/shared/tool-loop-cap.js';
 export type SubagentStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 /**
- * Synthetic `stopReason` set by {@link SubagentHandle} when a run resolves with
- * partial assistant text but NO terminal `message` event — i.e. the child was
- * cut off mid-output (an abort, an early/abnormal provider-stream close, or a
- * provider that ended the stream without a final message). Distinct from
- * {@link TOOL_USE_LOOP_CAPPED} (the tool-use iteration cap). Both mean the
- * result the parent receives is an INCOMPLETE partial, not a final answer.
+ * Synthetic `stopReason` set by {@link SubagentHandle} when a run ends with NO
+ * terminal `message` event — the child was cut off mid-output (an abort, an
+ * early/abnormal provider-stream close, or a provider that ended the stream
+ * without a final message). Distinct from {@link TOOL_USE_LOOP_CAPPED} (the
+ * tool-use iteration cap).
+ *
+ * It surfaces on the result in TWO distinct shapes, split by whether any text
+ * was streamed before the cutoff:
+ *
+ *   - BUFFERED PARTIAL (`status: 'succeeded'`): the child streamed real
+ *     assistant text before being cut off. The partial work is salvaged and the
+ *     result stays succeeded; consumers prepend a parent-visible marker via
+ *     {@link annotateIfIncomplete} so the model treats it as an incomplete
+ *     intermediate finding rather than a final answer.
+ *   - ZERO OUTPUT (`status: 'failed'`): the stream ended with an EMPTY buffer
+ *     (no terminal message, no streamed text) and the run was NOT
+ *     cancelled/cascade-aborted — e.g. a first-token/TTFB timeout guillotines a
+ *     connection stalled in the provider SDK's retry-backoff. There is nothing
+ *     to salvage, so the run resolves FAILED (via a thrown
+ *     {@link import('../../utils/errors.js').StreamIncompleteError}) with this
+ *     stopReason preserved. A consumer's `status !== 'succeeded'` check catches
+ *     it; {@link describeFailure} reads the actionable error message.
  *
  * Kept a distinct sentinel (not a provider stop reason) so callers can
- * recognise it: a clean turn always sets a real terminal message, so this
- * value only ever appears on a genuinely truncated run.
+ * recognise it: a clean turn always sets a real terminal message, so this value
+ * only ever appears on a genuinely truncated run.
  */
 export const STREAM_INCOMPLETE = 'stream_incomplete';
 
 /**
  * True when `stopReason` indicates the subagent did NOT reach a clean final
- * answer — it was capped by the tool-use budget or cut off mid-stream. A
- * `status: 'succeeded'` result with such a stopReason carries partial content
- * that consumers must NOT present to the parent model as a complete answer.
+ * answer — it was capped by the tool-use budget ({@link TOOL_USE_LOOP_CAPPED})
+ * or cut off mid-stream ({@link STREAM_INCOMPLETE}). Applies to a
+ * `status: 'succeeded'` result whose content is a partial that consumers must
+ * NOT present to the parent model as a complete answer. Note: the ZERO-OUTPUT
+ * {@link STREAM_INCOMPLETE} case resolves `status: 'failed'` (nothing to
+ * salvage) and so is surfaced through the failure path — not annotated here.
  */
 export function isIncompleteStopReason(stopReason: string | undefined): boolean {
   return stopReason === TOOL_USE_LOOP_CAPPED || stopReason === STREAM_INCOMPLETE;
@@ -44,8 +63,10 @@ export function isIncompleteStopReason(stopReason: string | undefined): boolean 
  * {@link isIncompleteStopReason}), prepend a parent-visible marker so the model
  * consuming the tool result treats the text as a truncated intermediate finding
  * rather than a conclusion. No-op for clean completions — returns `content`
- * unchanged. This is the single consumption-boundary fix for the
- * "subagent returns a partial result reported as success" class.
+ * unchanged. This is the consumption-boundary fix for the "subagent returns a
+ * partial result reported as success" class (the buffered-partial case). The
+ * zero-output {@link STREAM_INCOMPLETE} case resolves `status: 'failed'` and is
+ * handled by each caller's failure path, not by this annotate helper.
  */
 export function annotateIfIncomplete(content: string, stopReason: string | undefined): string {
   if (!isIncompleteStopReason(stopReason)) return content;

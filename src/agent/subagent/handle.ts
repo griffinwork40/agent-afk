@@ -10,7 +10,7 @@
 import type { ZodType } from 'zod';
 import { AbortGraph } from '../abort-graph.js';
 import { debugLog } from '../../utils/debug.js';
-import { TimeoutError } from '../../utils/errors.js';
+import { StreamIncompleteError, TimeoutError } from '../../utils/errors.js';
 import type { HookRegistry } from '../hooks.js';
 import { withTimeout } from '../timeout.js';
 import type { IAgentSession, Message } from '../types.js';
@@ -455,40 +455,57 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     //     throw so run()'s catch classifies the termination as 'cancelled' —
     //     not a success, not a plain failure.
     //   - Otherwise (an abnormal provider-stream close, or a mid-loop cutoff
-    //     with an empty buffer — the failure mode of an unbounded read-only
-    //     agent that tool-loops without ever emitting a final turn): degrade to
-    //     a STREAM_INCOMPLETE partial, the same treatment the buffered-text
-    //     branch above gives, so the consumption boundary (annotateIfIncomplete)
-    //     marks it as an incomplete result the parent can act on (retry / fall
-    //     back) instead of an opaque "produced no terminal message" delegation
-    //     failure after (often) a long run.
+    //     with an empty buffer — e.g. the first-token/TTFB timeout guillotines a
+    //     connection stalled in the provider SDK's internal 429/503/529
+    //     retry-backoff, or an unbounded read-only agent tool-loops without ever
+    //     emitting a final turn): throw a distinct StreamIncompleteError (below)
+    //     so run()'s catch classifies the termination as 'failed' — NOT a
+    //     succeeded-partial. See the History note below.
     if (this.controller.signal.aborted || this.currentStatus === 'cancelled') {
       throw new Error(`Subagent ${this.id} produced no terminal message`);
     }
-    // Invariant: this fallback stamps STREAM_INCOMPLETE UNCONDITIONALLY (`=`,
-    // not `??=`) — the content below is a synthetic placeholder, never the
-    // model's real output, so its stop reason must mark it incomplete. This
-    // differs from the buffered-text branch above, which uses `??=` deliberately:
-    // a capped run that also streamed text reaches there with
-    // `tool_use_loop_capped` already set and must keep it. Nothing worth
-    // preserving can reach HERE — the cap case returned at the
+    // History: this ZERO-OUTPUT branch previously stamped STREAM_INCOMPLETE and
+    // RETURNED a synthetic "[… ended without producing a final message …]"
+    // placeholder assistant message. Because it RETURNED (not threw), run()'s
+    // success path set currentStatus 'succeeded' and runToResult built a
+    // status:'succeeded' result — a zero-output timeout reported as a SUCCESS.
+    // That false success fooled every consumer whose only gate is
+    // `status === 'succeeded'` (it bit the forge skill and mint's phases); the
+    // sole thing protecting core consumers was the opt-in annotateIfIncomplete
+    // helper. Fix: THROW a distinct, non-opaque StreamIncompleteError. run()'s
+    // catch (signal NOT aborted here, status still 'running') takes its
+    // non-cascade `else` branch → currentStatus 'failed', and runToResult →
+    // buildResultFromError carries this error's message + the preserved
+    // stopReason. A consumer's natural `status !== 'succeeded'` check now catches
+    // the zero-output run, while describeFailure(result) still reads sensibly.
+    //
+    // Invariant: stamp STREAM_INCOMPLETE UNCONDITIONALLY (`=`, not `??=`) before
+    // the throw so buildResultFromError surfaces stopReason:'stream_incomplete'
+    // on the failed result (letting callers distinguish a stream-incomplete
+    // failure from an ordinary error). This differs from the buffered-text branch
+    // above, which uses `??=` deliberately: a capped run that also streamed text
+    // reaches there with `tool_use_loop_capped` already set and must keep it.
+    // Nothing worth preserving can reach HERE — the cap case returned at the
     // tool_use_loop_capped branch, and cancel/abort threw just above. Any
-    // stopReason still set is therefore a clean terminal one (end_turn /
-    // max_tokens / interrupted), none of which isIncompleteStopReason flags,
-    // reached via an empty-text turn the stream consumer drops before emitting a
-    // `message` event (see stream-consumer 'assistant.message': `if (event.text)`).
-    // Preserving it would let annotateIfIncomplete report this synthetic
-    // "no findings" placeholder as a clean completion — defeating the whole
-    // point of this branch. Overwrite it.
+    // stopReason still set is a clean terminal one (end_turn / max_tokens /
+    // interrupted) reached via an empty-text turn the stream consumer drops
+    // before emitting a `message` event (see stream-consumer 'assistant.message':
+    // `if (event.text)`); none of those describe this zero-output cutoff, so
+    // overwrite it.
+    //
+    // Do NOT downgrade this to a returned placeholder to "keep return, don't
+    // throw" — throwing is precisely what makes the run classify 'failed'. The
+    // original authors' concern (an OPAQUE failure the parent can't act on) is
+    // met by StreamIncompleteError's informative, actionable message, not by
+    // masking the failure as a success.
     this.lastStopReason = STREAM_INCOMPLETE;
-    return {
-      role: 'assistant',
-      content:
-        `[subagent ${this.id} ended without producing a final message or any ` +
-        `streamed output — it was cut off mid-run (an abnormal stream close), ` +
-        `so no findings were produced.]`,
-      timestamp: new Date(),
-    };
+    throw new StreamIncompleteError(
+      `subagent ${this.id} produced no output — its model stream ended without a ` +
+        `terminal message (stream_incomplete), and no partial text was streamed. ` +
+        `This is typically a first-token timeout while the provider was overloaded ` +
+        `(the connection was aborted mid retry-backoff). No findings were produced; ` +
+        `the parent should retry or fall back.`,
+    );
   }
 
   async runToResult(prompt: string, sinkOverride?: SubagentProgressSink): Promise<SubagentResult<T>> {
