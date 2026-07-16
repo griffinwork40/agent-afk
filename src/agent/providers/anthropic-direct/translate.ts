@@ -21,6 +21,7 @@ import type {
 } from '@anthropic-ai/sdk/resources';
 import type { TranslateCtx, TranslateOutput, TurnResult } from './types.js';
 import { env } from '../../../config/env.js';
+import { StreamIncompleteError } from '../../../utils/errors.js';
 
 /**
  * Per-block accumulator. The block kind dictates which fields are populated
@@ -299,6 +300,34 @@ export async function* translateMessageStream(
     if (traceEnabled) console.log('[translate] SDK iteration threw:', (err as Error).message);
     const error = err instanceof Error ? err : new Error(String(err));
     yield { kind: 'event', event: { type: 'error', error } };
+    return;
+  }
+
+  // Invariant: a stream that ends with NO terminal signal — neither a
+  // `message_stop` event (`stopped`) NOR a `stop_reason` from `message_delta`
+  // (`stopReason`) — was cut off mid-response (typically an intermediary such as
+  // a proxy/gateway/LB gracefully closing the connection before completion; the
+  // raw SDK Stream ends cleanly without throwing, so the catch above never
+  // fires). Yielding a turn-result here would present the partial as a clean,
+  // complete answer: silent truncation. Surface an error instead so the
+  // incomplete turn is legible to BOTH the top-level session and the subagent
+  // consumer (which routes it through its StreamIncompleteError → status:'failed'
+  // handling), mirroring the #628 "fail loudly, don't silently succeed" fix.
+  // Guard is `stopReason === null` (not merely `!stopped`) so a stream that
+  // delivered a real stop_reason but lost only the framing `message_stop` — the
+  // model DID signal why it stopped — is still treated as complete.
+  if (!stopped && stopReason === null) {
+    yield {
+      kind: 'event',
+      event: {
+        type: 'error',
+        error: new StreamIncompleteError(
+          'the model stream ended without a terminal message (no message_stop ' +
+            'and no stop_reason): the response was cut off mid-stream, typically ' +
+            'an intermediary closing the connection. The turn is incomplete.',
+        ),
+      },
+    };
     return;
   }
 
