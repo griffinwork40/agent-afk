@@ -22,6 +22,7 @@ import { emitSessionPhase } from '../../../trace/emit.js';
 import type { TraceWriter } from '../../../trace/index.js';
 import { sleepWithAbort } from '../../shared/sleep-with-abort.js';
 import { createStreamState, isToolCallStop, type StreamState } from '../translate.js';
+import { StreamIncompleteError } from '../../../../utils/errors.js';
 import {
   MAX_CONNECTION_RETRIES,
   MAX_STREAM_RETRIES,
@@ -173,6 +174,40 @@ export async function* driveStream<TEvent>(
 
     if (streamError !== null) {
       yield { type: 'error', error: strategy.clarifyError(streamError) };
+      return null;
+    }
+
+    // Invariant: the stream iterator completed WITHOUT throwing but produced no
+    // content AND no terminal finish_reason — nothing was generated and the wire
+    // never signaled completion (a stream cut off before any output arrived, e.g.
+    // an intermediary closing the connection at a graceful boundary; a hard drop
+    // would have thrown and been surfaced above). Returning a clean completion
+    // here delivers an empty turn as success — a silent failure. Surface an error
+    // instead, mirroring anthropic-direct's stream-incomplete handling and the
+    // #628 "fail loudly, don't silently succeed" fix.
+    //
+    // Scope: ZERO-OUTPUT only. We deliberately do NOT flag a clean end that
+    // produced text / tool-calls but no finish_reason: some OpenAI-compatible
+    // endpoints (local MLX / llama.cpp shims) legitimately OMIT finish_reason on
+    // complete turns (see translate.ts:isToolCallStop), so treating "content
+    // present + no finish_reason" as incomplete would false-positive real
+    // completions. finish_reason is not a reliable terminal signal on this wire
+    // (unlike anthropic-direct's protocol-guaranteed message_stop), so the
+    // partial-truncation case cannot be safely distinguished here.
+    if (
+      state.finishReason === null &&
+      state.assistantText.length === 0 &&
+      state.reasoningText.length === 0 &&
+      state.toolCallsByIndex.size === 0
+    ) {
+      yield {
+        type: 'error',
+        error: new StreamIncompleteError(
+          'the model stream ended without producing any output and without a ' +
+            'finish_reason: the response was empty or cut off before any content ' +
+            'arrived. The turn is incomplete.',
+        ),
+      };
       return null;
     }
 
