@@ -7,6 +7,10 @@ import type { ToolDispatcher } from '../../anthropic-direct/tool-dispatcher.js';
 import type { ToolResult } from '../../anthropic-direct/types.js';
 import { DENIAL_BREAKER_FAILURE_CLASS } from '../../../tools/denial-circuit-breaker.js';
 import { summarizeToolInput } from '../../shared/tool-input-summary.js';
+import {
+  buildToolCallCompletedPayload,
+  buildToolCallStartedPayload,
+} from '../../shared/tool-call-trace.js';
 import type { OpenAIMessage } from '../messages.js';
 import type { StreamState } from '../translate.js';
 import { finalizedToolCalls } from '../translate.js';
@@ -82,25 +86,28 @@ export async function* dispatchAndAppendToolCalls({
 
   // Witness layer: per-call start timestamps keyed by toolUseId so the
   // completed trace event carries an accurate durationMs. Mirrors
-  // anthropic-direct/loop.ts:524-525. Lives within this dispatchAndAppend
-  // invocation only — the next tool-use round starts fresh.
+  // anthropic-direct/loop.ts's per-round `startTimes` map. Lives within this
+  // dispatchAndAppend invocation only — the next tool-use round starts fresh.
   const startTimes = new Map<string, number>();
 
   // Emit tool.use.start BEFORE dispatching, matching anthropic-direct.
   // Witness layer: tool_call.started fires here too — BEFORE dispatch so
-  // even a crashing tool leaves evidence that it was attempted. Mirrors
-  // anthropic-direct/loop.ts:535-543.
+  // even a crashing tool leaves evidence that it was attempted. Payload
+  // built by the shared `buildToolCallStartedPayload` (providers/shared/
+  // tool-call-trace.ts) so both providers construct this event identically.
   for (const call of calls) {
     const now = Date.now();
     startTimes.set(call.id, now);
     // Fire-and-forget — emitToolCall swallows writer errors internally.
-    void emitToolCall(traceWriter, {
-      phase: 'started',
-      toolUseId: call.id,
-      name: call.name,
-      inputBytes: Buffer.byteLength(JSON.stringify(call.input ?? {}), 'utf8'),
-      ...(subagentId !== undefined ? { subagentId } : {}),
-    });
+    void emitToolCall(
+      traceWriter,
+      buildToolCallStartedPayload({
+        toolUseId: call.id,
+        name: call.name,
+        input: call.input,
+        subagentId,
+      }),
+    );
     yield {
       type: 'tool.use.start',
       toolUseId: call.id,
@@ -176,26 +183,24 @@ export async function* dispatchAndAppendToolCalls({
       results.push({ call, result });
 
       // Witness layer: tool_call.completed pairs with the .started event
-      // emitted above. Mirrors anthropic-direct/loop.ts:605-624.
-      // Fire-and-forget to keep the loop iteration cheap.
+      // emitted above. Payload built by the shared
+      // `buildToolCallCompletedPayload` (providers/shared/tool-call-trace.ts)
+      // so both providers construct this event identically. Fire-and-forget
+      // to keep the loop iteration cheap.
       const startedAt = startTimes.get(call.id);
       const durationMs = typeof startedAt === 'number' ? Date.now() - startedAt : 0;
       const truncated = result.truncated === true || result.content.includes('[output truncated');
-      void emitToolCall(traceWriter, {
-        phase: 'completed',
-        toolUseId: call.id,
-        name: call.name,
-        resultBytes: Buffer.byteLength(result.content, 'utf8'),
-        isError: result.isError === true,
-        truncated,
-        durationMs,
-        ...(result.circuitBreaker === true ? { circuitBreaker: true } : {}),
-        ...(result.failureClass ? { failureClass: result.failureClass } : {}),
-        ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
-          ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
-          : {}),
-        ...(subagentId !== undefined ? { subagentId } : {}),
-      });
+      void emitToolCall(
+        traceWriter,
+        buildToolCallCompletedPayload({
+          toolUseId: call.id,
+          name: call.name,
+          result,
+          truncated,
+          durationMs,
+          subagentId,
+        }),
+      );
 
       yield {
         type: 'tool.output',

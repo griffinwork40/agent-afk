@@ -63,6 +63,10 @@ import {
   resolveMaxToolIterations,
   shouldWindDown,
 } from '../shared/tool-loop-cap.js';
+import {
+  buildToolCallCompletedPayload,
+  buildToolCallStartedPayload,
+} from '../shared/tool-call-trace.js';
 import { DENIAL_BREAKER_FAILURE_CLASS } from '../../tools/denial-circuit-breaker.js';
 import { DenialCircuitBreakerError } from '../../../utils/errors.js';
 
@@ -779,13 +783,15 @@ export async function* runTurn(
       // Witness layer: tool_call.started fires BEFORE dispatch so even a
       // crashing tool leaves evidence that it was attempted. Fire-and-
       // forget — emitToolCall swallows writer errors internally.
-      void emitToolCall(input.traceWriter, {
-        phase: 'started',
-        toolUseId: block.id,
-        name: block.name,
-        inputBytes: Buffer.byteLength(JSON.stringify(block.input ?? {}), 'utf8'),
-        ...(input.subagentId !== undefined ? { subagentId: input.subagentId } : {}),
-      });
+      void emitToolCall(
+        input.traceWriter,
+        buildToolCallStartedPayload({
+          toolUseId: block.id,
+          name: block.name,
+          input: block.input,
+          subagentId: input.subagentId,
+        }),
+      );
       yield {
         type: 'tool.use.start',
         toolUseId: block.id,
@@ -856,21 +862,17 @@ export async function* runTurn(
       const startedAt = startTimes.get(call.id);
       const durationMs = typeof startedAt === 'number' ? Date.now() - startedAt : 0;
       const truncated = result.truncated === true || result.content.includes('[output truncated');
-      void emitToolCall(input.traceWriter, {
-        phase: 'completed',
-        toolUseId: call.id,
-        name: call.name,
-        resultBytes: Buffer.byteLength(result.content, 'utf8'),
-        isError: result.isError === true,
-        truncated,
-        durationMs,
-        ...(result.circuitBreaker === true ? { circuitBreaker: true } : {}),
-        ...(result.failureClass ? { failureClass: result.failureClass } : {}),
-        ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
-          ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
-          : {}),
-        ...(input.subagentId !== undefined ? { subagentId: input.subagentId } : {}),
-      });
+      void emitToolCall(
+        input.traceWriter,
+        buildToolCallCompletedPayload({
+          toolUseId: call.id,
+          name: call.name,
+          result,
+          truncated,
+          durationMs,
+          subagentId: input.subagentId,
+        }),
+      );
 
       yield {
         type: 'tool.output',
