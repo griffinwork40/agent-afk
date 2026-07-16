@@ -152,14 +152,17 @@ function renderLegacyBoxBanner(opts: WelcomeBannerOpts): string {
 }
 
 /**
- * One-line product tagline rendered directly under the wordmark in the header
- * band of the hybrid banner — a punchy first-run identity subhead. Distinct
- * from the fuller package.json / README thesis ("…harness you can actually
- * change"); it no longer mirrors that verbatim. Because the header band spans
- * the full terminal (it sits ABOVE the sprite, not beside it), the tagline has
- * the whole width to breathe and only ellipsizes on very narrow windows
- * (`cols − LEFT_PAD`); kept ≤42 display cols so it also survives the compact,
- * mascot-less fallback at ~44 cols without truncation (render.test.ts pins it).
+ * One-line product tagline — a punchy first-run identity subhead. Distinct from
+ * the fuller package.json / README thesis ("…harness you can actually change");
+ * it no longer mirrors that verbatim. Rendered as a full-width row BELOW the
+ * hybrid composition (just above the resource links), so it spans the whole
+ * terminal (`cols − LEFT_PAD`) and only ellipsizes on very narrow windows.
+ * History: it used to ride inside the narrow ~(cols−31) column beside the
+ * 27-col sprite, where — needing 42 display cols but only getting the column's
+ * width — it truncated to "…without ba…" across the entire 55–72-col band while
+ * the goblin kept full width; the full-width row fixes that. Kept ≤42 display
+ * cols so it also survives the compact, mascot-less fallback at ~44 cols without
+ * truncation (render.test.ts pins it at 44, 64, 80, and 100).
  */
 const BANNER_TAGLINE = 'Run coding agents without babysitting them';
 
@@ -207,9 +210,9 @@ function shadeWordmark(rows: string[]): string[] {
 /**
  * Hybrid banner: a PORTRAIT composition — the pixel-art goblin anchors the left
  * as the visual hero; a right column carries the gradient-shaded "AFK" block-art
- * logo, the readable name/version caption, the tagline, and the session facts;
- * a full-width FOOTER (project links + hint) closes it. Borderless, composed row
- * by row so the sprite and the right column stay on one grid.
+ * logo, the readable name/version caption, and the session facts; a full-width
+ * BAND (tagline + project links + hint) closes it. Borderless, composed row by
+ * row so the sprite and the right column stay on one grid.
  *
  * Layout (no ANSI; goblin drawn as a solid block here, colored in reality):
  * ```
@@ -220,11 +223,11 @@ function shadeWordmark(rows: string[]): string[] {
  *   ████████████ █  █ █    █ █
  *   ████████████ █  █ █    █  █
  *   ████████████ Agent AFK · v5.25.8   ← readable name + version caption
- *   ████████████ Run coding agents without babysitting them   ← tagline
  *   ████████████
  *   ████████████ opus_1m · Interactive Mode   ← session facts
  *   ████████████ branch afk/…
  *   ████████████ ~/path/to/cwd
+ *   Run coding agents without babysitting them   ← tagline (full width)
  *   docs.agentafk.com · github.com/…   ← footer links (full width)
  *   /help · /model · …                 ← hint row (full width)
  * ```
@@ -277,18 +280,17 @@ function renderHybridBanner(opts: WelcomeBannerOpts): string {
 
   // Readable name + version caption: keeps the full "Agent AFK" greppable and
   // screen-reader-visible beneath the block-art acronym (tests assert this).
-  // The tagline stays on its own row so narrow-column truncation can't eat it.
-  // Name + version caption. The bold title anchors identity; the version rides
-  // dim beside it. The tagline below is lifted OUT of the uniform dim grey into
-  // an italic brand tint so the product thesis reads as a hero subhead (and
-  // echoes the shaded AFK logo above it) rather than weighing the same as the
-  // cwd path beneath it.
+  // The bold title anchors identity; the version rides dim beside it, sharing
+  // the same single-middot ( · ) rhythm as the mode/hint rows below rather than
+  // the airier double-middot it used to carry. The product tagline is NOT pushed
+  // here — it is emitted full-width below the whole composition (see the tagline
+  // row just above the footer) so the 42-col thesis can never truncate mid-word
+  // in the narrow ~(cols−31) column beside the 27-col sprite.
   const nameChip =
     palette.heading('Agent AFK') +
-    (versionText !== undefined ? palette.dim('  ·  ' + versionText) : '');
+    (versionText !== undefined ? palette.dim(' · ' + versionText) : '');
   col.push('');
   col.push(truncateDisplay(nameChip, colMaxW));
-  col.push(truncateDisplay(palette.italic(palette.brand(BANNER_TAGLINE)), colMaxW));
 
   // Session-identity facts, each truncated to the column width.
   const factRows: string[] = [];
@@ -337,12 +339,24 @@ function renderHybridBanner(opts: WelcomeBannerOpts): string {
     }
   }
 
+  // Product tagline — a full-width row below the composition, in an italic brand
+  // tint so the thesis reads as a hero subhead. Rendered full-width (not the
+  // sprite-side column) so it can never truncate mid-word: the line needs 42
+  // display cols, but the column beside the 27-col sprite only clears that at
+  // ≥73 cols, stranding the thesis as "…without ba…" across the whole 55–72
+  // band. Sits just above the resource links so the bottom band reads
+  // "thesis → where to go next".
+  lines.push(
+    LEFT_PAD + truncateDisplay(palette.italic(palette.brand(BANNER_TAGLINE)), headerMaxW),
+  );
+
   // Project links — full-width footer, flush-left, grouped just above the hint
   // line so docs + source are always one glance away at startup. Truncated to
   // the header width (then left-padded) so a narrow terminal clips with an
-  // ellipsis instead of overflowing the row.
+  // ellipsis instead of overflowing the row. Single-middot ( · ) to match the
+  // tagline, mode, and hint rhythm.
   lines.push(
-    LEFT_PAD + truncateDisplay(palette.dim(`${DOCS_URL}  ·  ${REPO_URL}`), headerMaxW),
+    LEFT_PAD + truncateDisplay(palette.dim(`${DOCS_URL} · ${REPO_URL}`), headerMaxW),
   );
 
   // Hint line sits flush-left below the whole composition.

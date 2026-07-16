@@ -151,7 +151,7 @@ describe('welcomeBanner', () => {
     expect(out).toContain('/help · /model');
   });
 
-  it('renders the dim product tagline under the wordmark in the hybrid banner', () => {
+  it('renders the product tagline full-width in the hybrid banner', () => {
     Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
     const out = strip(welcomeBanner({
       mode: 'Interactive Mode',
@@ -159,13 +159,36 @@ describe('welcomeBanner', () => {
       version: '5.10.1',
       cwd: '/tmp/agent-afk',
     }));
-    // Tagline present (first-run identity), and short enough to survive the
-    // 49-col info column at an 80-col terminal without truncation.
+    // Tagline present (first-run identity). It renders as a full-width row below
+    // the composition, so it spans the terminal rather than the narrow sprite-
+    // side column.
     expect(out).toContain('Run coding agents without babysitting them');
     // The weight-accented wordmark ("Agent " regular + "AFK" bold) must still
     // strip to the contiguous product name — the accent is a weight step, not
     // a fragmenting insertion.
     expect(out).toContain('Agent AFK');
+  });
+
+  it('keeps the full tagline un-truncated in the mid-width band beside the sprite', () => {
+    // Regression guard for the 55–72-col "dead zone": the mascot still renders
+    // here (drops only below 55 cols), but the 42-col tagline used to live in
+    // the ~(cols−31) column beside the 27-col sprite — only ~33 cols at 64 — and
+    // truncated to "Run coding agents without ba…". Hoisting it to a full-width
+    // row fixed that; assert the whole thesis survives, un-ellipsized, WITH the
+    // goblin present.
+    Object.defineProperty(process.stdout, 'columns', { value: 64, configurable: true });
+    const out = strip(welcomeBanner({
+      mode: 'Interactive Mode',
+      model: 'opus_1m',
+      version: '5.52.0',
+      worktree: 'afk/polish-goblin-banner',
+      cwd: '/Users/example/projects/agent-afk',
+    }));
+    // Mascot is present at 64 cols (proves we're in the previously-broken band).
+    expect(/[▀▄]/.test(out)).toBe(true);
+    // The full tagline survives with no ellipsis eating the tail.
+    expect(out).toContain('Run coding agents without babysitting them');
+    expect(out).not.toContain('without ba…');
   });
 
   describe('block-art AFK logo + footer links', () => {
