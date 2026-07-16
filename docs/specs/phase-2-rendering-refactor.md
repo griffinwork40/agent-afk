@@ -329,8 +329,8 @@ Grepped all readers of `stats.toolUses` across `src/`. Four readers, all safe:
 In the Phase 1 commit, add `toMatchSnapshot()` assertions on representative `tool-lane-render.ts` outputs (≥5 scenarios: single tool, multi-tool, overflow, error result, subagent with children). These pin the visual baseline. Run existing tests and confirm green.
 
 ```
-pnpm test -- src/cli/commands/interactive/tool-lane.test.ts
-pnpm test -- src/cli/commands/interactive/tool-lane-format.test.ts
+pnpm test src/cli/commands/interactive/tool-lane.test.ts
+pnpm test src/cli/commands/interactive/tool-lane-format.test.ts
 ```
 
 ### Phase 1: Write failing tests (RED commit)

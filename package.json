@@ -1,6 +1,6 @@
 {
   "name": "agent-afk",
-  "version": "5.51.1",
+  "version": "5.52.0",
   "description": "Open-source coding-agent harness you can actually change — own the loop (prompts, gates, routing, skills, terminal states), use any model, run long tasks while you're away.",
   "main": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -19,7 +19,8 @@
   "files": [
     "dist/",
     "scripts/postinstall.mjs",
-    "NOTICE"
+    "NOTICE",
+    "assets/demo-placeholder.png"
   ],
   "scripts": {
     "postinstall": "node dist/postinstall.mjs || node scripts/postinstall.mjs || true",
@@ -45,7 +46,7 @@
     "audit:sdk": "tsx scripts/audit-sdk-dependency.ts",
     "audit:sdk:check": "tsx scripts/audit-sdk-dependency.ts --check",
     "audit:sdk:update-lock": "tsx scripts/audit-sdk-dependency.ts --update-lock",
-    "audit:deps": "pnpm audit --audit-level=critical --prod",
+    "audit:deps": "tsx scripts/audit-deps.ts",
     "audit:env": "tsx scripts/audit-env-access.ts",
     "audit:env:check": "tsx scripts/audit-env-access.ts --check",
     "audit:env:list": "tsx scripts/audit-env-access.ts --list",

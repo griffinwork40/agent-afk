@@ -229,4 +229,91 @@ describe('McpManager (integration: stdio fixture)', () => {
     },
     { timeout: 5_000 },
   );
+
+  it(
+    // Issue #247: disconnectAll()'s per-server error-swallow (manager.ts
+    // ~508-519). Each `rec.client.disconnect()` is wrapped in a `.catch()`
+    // that logs `[mcp:<server>] disconnect error: <msg>` via console.warn and
+    // lets `Promise.all` resolve anyway — so ONE server's teardown failure
+    // never aborts the sweep or orphans the OTHER servers' children. Pins the
+    // swallow so a regression that lets a teardown rejection escape (turning
+    // the warning into a thrown error) is caught. NOTE: the real
+    // `McpClient.disconnect()` swallows `client.close()` errors internally
+    // (client.ts ~404-408), so to make `disconnect()` itself REJECT we must
+    // stub the client method — stubbing the underlying transport would be
+    // swallowed before it ever reaches disconnectAll()'s catch.
+    'disconnectAll swallows a per-server disconnect rejection, warns, and still tears down the other servers (#247)',
+    async () => {
+      manager = await McpManager.fromConfig({
+        // Two independently-connected fixture servers. Map insertion order is
+        // preserved, so disconnectAll() iterates good→bad — but the assertions
+        // below are order-independent (they key on serverName).
+        good: {
+          type: 'stdio',
+          command: process.execPath,
+          args: [FIXTURE],
+        },
+        bad: {
+          type: 'stdio',
+          command: process.execPath,
+          args: [FIXTURE],
+        },
+      });
+
+      // Both connected before we touch teardown.
+      const states = manager.getServerStates();
+      const byName = new Map(states.map((s) => [s.serverName, s.status]));
+      expect(byName.get('good')).toBe('connected');
+      expect(byName.get('bad')).toBe('connected');
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      // Capture the REAL disconnect before spying so the 'good' server can
+      // still tear its child down for real (no orphaned process) while 'bad'
+      // rejects. `serverName` is private on McpClient — read it off `this`.
+      const originalDisconnect = McpClient.prototype.disconnect;
+      const disconnectedForReal: string[] = [];
+      const disconnectSpy = vi
+        .spyOn(McpClient.prototype, 'disconnect')
+        .mockImplementation(async function (this: McpClient): Promise<void> {
+          const name = (this as unknown as { serverName: string }).serverName;
+          if (name === 'bad') {
+            throw new Error('simulated transport close failure');
+          }
+          disconnectedForReal.push(name);
+          // Delegate to the real teardown so the good child is actually reaped.
+          await originalDisconnect.call(this);
+        });
+
+      try {
+        // (a) MUST resolve — the rejection is swallowed, Promise.all still settles.
+        await expect(manager.disconnectAll()).resolves.toBeUndefined();
+
+        // (b) Both servers' disconnect() was attempted — the failing one did
+        // not short-circuit the sweep before the sibling ran.
+        expect(disconnectSpy).toHaveBeenCalledTimes(2);
+
+        // (c) The OTHER (good) server's real teardown ran despite bad's throw.
+        expect(disconnectedForReal).toEqual(['good']);
+
+        // (d) The warn fired for the FAILING server with the documented shape,
+        // and NOT for the good one.
+        const warnLines = warnSpy.mock.calls.map((c) => String(c[0]));
+        expect(warnLines).toContainEqual(
+          '[mcp:bad] disconnect error: simulated transport close failure',
+        );
+        expect(warnLines.some((l) => l.startsWith('[mcp:good] disconnect error'))).toBe(false);
+      } finally {
+        // Restore BEFORE afterEach's disconnectAll() so cleanup uses the real
+        // method (and restoring clears recorded calls — assert above first).
+        disconnectSpy.mockRestore();
+        warnSpy.mockRestore();
+        // The good child was already torn down for real above; drop the manager
+        // so afterEach doesn't double-disconnect. 'bad' never really closed, so
+        // give it one honest teardown here now that the stub is gone.
+        await manager.disconnectAll();
+        manager = undefined;
+      }
+    },
+    { timeout: 15_000 },
+  );
 });

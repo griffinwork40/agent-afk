@@ -70,15 +70,29 @@ async function emitSessionHookDecision(
   });
 }
 
+/**
+ * Dispatch the SessionStart hook chain during session init.
+ *
+ * Blocking: a blocked SessionStart throws {@link HookBlockedError} (propagated
+ * by `AgentSession` so init fails cleanly without invoking the SDK).
+ *
+ * Returns the merged `injectContext` string — concatenated across all
+ * non-blocking handlers by the registry — or `undefined` when no handler
+ * injected context. SessionStart fires before any turn exists, so there is no
+ * in-flight prompt to prepend to (unlike UserPromptSubmit/Stop); the caller
+ * queues the returned string via `queueFrameworkContext` so it rides the
+ * session's FIRST outbound user message.
+ */
 export async function dispatchSessionStart(
   registry: HookRegistry | undefined,
   context: SessionStartContext,
   options: SessionHookDispatchOptions = {},
-): Promise<void> {
-  if (!registry) return;
+): Promise<string | undefined> {
+  if (!registry) return undefined;
   try {
     const decision = await registry.dispatch(context, options.signal);
     await emitSessionHookDecision(options.traceWriter, 'SessionStart', { kind: 'decision', decision });
+    return decision.injectContext;
   } catch (err) {
     if (err instanceof HookBlockedError) {
       await emitSessionHookDecision(options.traceWriter, 'SessionStart', { kind: 'blocked', err });

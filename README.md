@@ -12,7 +12,11 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/griffinwork40/agent-afk?style=social)](https://github.com/griffinwork40/agent-afk/stargazers)
 
-<!-- DEMO GIF GOES HERE ▸ drop a 20–30s screen recording of one autonomous AFK run (e.g. kick off `afk daemon` / `afk mint "..."`, walk away, get the Telegram ping, come back done). Drag-and-drop the file into a GitHub issue/PR to host it on GitHub's CDN, then paste the URL as ![demo](URL) right here. This is the single biggest star-conversion lever — keep it above the fold. -->
+<!-- DEMO PLACEHOLDER ▸ the image below is a static stand-in. Replace it with a 20–30s screen recording of one autonomous AFK run (e.g. kick off `afk daemon` / `afk mint "..."`, walk away, get the Telegram ping, come back done). Drag-and-drop the recording into a GitHub issue/PR to host it on GitHub's CDN, then swap the URL below. This is the single biggest star-conversion lever — keep it above the fold. -->
+
+<p align="center">
+  <img src="assets/demo-placeholder.png" alt="Agent AFK interactive mode" width="820">
+</p>
 
 > ⭐ **Like the idea of an agent loop you fully own? [Star the repo](https://github.com/griffinwork40/agent-afk/stargazers)** — it's the fastest way to help other people find it.
 
@@ -246,7 +250,13 @@ Recent releases at [`CHANGELOG.md`](CHANGELOG.md), also viewable in-REPL via `/c
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=griffinwork40/agent-afk&type=Date)](https://star-history.com/#griffinwork40/agent-afk&Date)
+<a href="https://www.star-history.com/?type=date&repos=griffinwork40%2Fagent-afk">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=griffinwork40/agent-afk&type=date&theme=dark&legend=top-left&sealed_token=0JyTRyQ55uvLCrhjSrDS7mq_ztnj8HQ19fDUsbUF0GuO1-REfAFV4OGbrgoH11e-eMbpDr_rq7qhipj2Ch-gUR50ayL2tr7889lkW87yr1RSpDe7qgNQg9c14OCFni9jsbpVxW_QvzkP3YuAjCWKfPYrSi8VIQvhSSMzZXmb-v2luuafNiza3TaIOE_K" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=griffinwork40/agent-afk&type=date&legend=top-left&sealed_token=0JyTRyQ55uvLCrhjSrDS7mq_ztnj8HQ19fDUsbUF0GuO1-REfAFV4OGbrgoH11e-eMbpDr_rq7qhipj2Ch-gUR50ayL2tr7889lkW87yr1RSpDe7qgNQg9c14OCFni9jsbpVxW_QvzkP3YuAjCWKfPYrSi8VIQvhSSMzZXmb-v2luuafNiza3TaIOE_K" />
+    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=griffinwork40/agent-afk&type=date&legend=top-left&sealed_token=0JyTRyQ55uvLCrhjSrDS7mq_ztnj8HQ19fDUsbUF0GuO1-REfAFV4OGbrgoH11e-eMbpDr_rq7qhipj2Ch-gUR50ayL2tr7889lkW87yr1RSpDe7qgNQg9c14OCFni9jsbpVxW_QvzkP3YuAjCWKfPYrSi8VIQvhSSMzZXmb-v2luuafNiza3TaIOE_K" />
+  </picture>
+</a>
 
 If Agent AFK saves you time, **[⭐ star the repo](https://github.com/griffinwork40/agent-afk/stargazers)** — it's the single best way to help it reach more people.
 

@@ -120,6 +120,10 @@ import * as slashMod from '../../slash/registry.js';
 import { createHookRegistry } from '../../../agent/hooks.js';
 import { HookBlockedError } from '../../../utils/errors.js';
 import { HookHandlerTimeoutError } from '../../../agent/hook-registry.js';
+import {
+  createTerminalStateGate,
+  TERMINAL_STATE_GATE_CORRECTION,
+} from './terminal-state-gate.js';
 
 function makeCtx(overrides?: Partial<InteractiveCtx>): InteractiveCtx {
   return {
@@ -831,5 +835,184 @@ describe('runReplLoop — UserPromptSubmit hook integration', () => {
     expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
     const firstArg = vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string };
     expect(firstArg.text).toBe('normal prompt');
+  });
+});
+
+// Item 2 (#565): integration coverage for the REAL terminal-state gate driven
+// through the registered Stop path (runReplLoop → runInputLoop → hookRegistry
+// dispatch), not the stub Stop handler the tests above use. This exercises the
+// actual `createTerminalStateGate` closure — the gate whose behavior ships —
+// through the loop's onTerminalState → StopContext → injectContext wiring, and
+// pins the /clear-budget decision chosen in Item 1 (the process-lifetime budget
+// is NOT reset by /clear).
+describe('runReplLoop — terminal-state gate integration (#565)', () => {
+  /**
+   * Make a turn self-certify `Done` with no corroborating evidence, exactly as
+   * the real turn-handler does when it parses an unbacked Done: it invokes the
+   * loop's `onTerminalState` callback with a `done` verdict and
+   * `doneHasCorroboratingEvidence: false`. The loop carries those onto the Stop
+   * context the gate reads.
+   */
+  function mockUnbackedDoneTurn(): void {
+    vi.mocked(runTurn).mockImplementationOnce(
+      async (_input: unknown, _session: unknown, _stats: unknown, handlers: unknown) => {
+        (handlers as { onTerminalState?: (s: unknown, m?: unknown) => void }).onTerminalState?.(
+          { kind: 'done', rawBody: '' },
+          { doneHasCorroboratingEvidence: false },
+        );
+      },
+    );
+  }
+
+  it('the registered gate injects its correction into the next turn on an unbacked Done', async () => {
+    // Turn 1 self-certifies an unbacked Done → the REAL gate fires and stashes
+    // its correction; turn 2 must carry TERMINAL_STATE_GATE_CORRECTION as a
+    // prepended framework note (user text preserved at the tail).
+    surfaceState.readLineQueue = [
+      { text: 'ship it', attachments: [] },
+      { text: 'next turn', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+    mockUnbackedDoneTurn();
+
+    const registry = createHookRegistry();
+    // The gate as it ships: enabled + autonomous, reading the live permission
+    // mode off ctx.stats (matching bootstrap.ts's `() => stats.permissionMode`).
+    const ctx = makeCtx();
+    ctx.stats.permissionMode = 'autonomous';
+    registry.register(
+      'Stop',
+      createTerminalStateGate({
+        getPermissionMode: () => ctx.stats.permissionMode,
+        isEnabled: () => true,
+      }),
+    );
+    ctx.hookRegistry = registry;
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(2);
+    const firstText = (vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string }).text;
+    const secondText = (vi.mocked(runTurn).mock.calls[1]?.[0] as { text: string }).text;
+    // Turn 1 ran clean (the gate acts AFTER, on the Stop dispatch).
+    expect(firstText).toBe('ship it');
+    // Turn 2 carries the real gate's correction, user text preserved at the tail.
+    expect(secondText).toContain(TERMINAL_STATE_GATE_CORRECTION);
+    expect(secondText.trimEnd().endsWith('next turn')).toBe(true);
+  });
+
+  it('the registered gate stays silent outside autonomous mode (human watching)', async () => {
+    // Same unbacked-Done shape, but the session is in 'default' mode — the gate
+    // must NOT fire (it is autonomous-only), so the next turn is clean. This
+    // proves the integration path honors the mode gate, not just the unit test.
+    surfaceState.readLineQueue = [
+      { text: 'ship it', attachments: [] },
+      { text: 'next turn', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+    mockUnbackedDoneTurn();
+
+    const registry = createHookRegistry();
+    const ctx = makeCtx();
+    ctx.stats.permissionMode = 'default';
+    registry.register(
+      'Stop',
+      createTerminalStateGate({
+        getPermissionMode: () => ctx.stats.permissionMode,
+        isEnabled: () => true,
+      }),
+    );
+    ctx.hookRegistry = registry;
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    const secondText = (vi.mocked(runTurn).mock.calls[1]?.[0] as { text: string }).text;
+    expect(secondText).toBe('next turn');
+    expect(secondText).not.toContain(TERMINAL_STATE_GATE_CORRECTION);
+  });
+
+  it('does NOT reset the gate injection budget across /clear (Item 1 decision pinned)', async () => {
+    // Item 1 (#565): the gate's injection budget is PROCESS-LIFETIME scoped and
+    // deliberately NOT reset by /clear. Pin that here through the real loop:
+    //
+    //   Turn 1 (unbacked Done) → gate returns injectContext, budget spent (cap=1).
+    //   /clear                 → rotates transcript, resets the conversation-
+    //                            scoped verdictLedger + pendingStopInjection,
+    //                            but must NOT refund the gate's budget closure.
+    //   Turn 2 (unbacked Done) → SAME gate instance, over budget → returns {}.
+    //
+    // We assert on the GATE'S RETURN VALUE per Stop dispatch (via a spy wrapping
+    // the real gate), NOT on the delivered prompt: /clear intentionally wipes
+    // `pendingStopInjection`, so turn 1's injection never reaches turn 2's prompt
+    // regardless of the budget — the prompt cannot isolate the budget decision.
+    // The gate's own return value can. If /clear reset the budget (deferred
+    // option (b)), turn 2's gate call would return injectContext again and the
+    // `secondCorrection` assertion below would fail — so this is a true guard.
+    surfaceState.readLineQueue = [
+      { text: 'first done', attachments: [] }, // turn 1 → gate injects
+      { text: '/clear', attachments: [] }, // reset conversation state, not budget
+      { text: 'second done', attachments: [] }, // turn 2 → over budget, gate silent
+      { text: '/exit', attachments: [] },
+    ];
+    // Both real turns self-certify an unbacked Done.
+    mockUnbackedDoneTurn();
+    mockUnbackedDoneTurn();
+
+    // /clear must reach the reset branch: dispatch returns handled + a non-submit
+    // result so the loop rotates the transcript and continues (see loop-iteration
+    // ~L386). '/exit' ends the loop; everything else falls through to the model.
+    vi.mocked(slashMod.dispatch).mockImplementation(async (text: string) => {
+      if (text === '/exit') return { handled: true, result: 'exit' as const };
+      if (text === '/clear') return { handled: true, result: null };
+      return { handled: false as const };
+    });
+
+    const ctx = makeCtx();
+    ctx.stats.permissionMode = 'autonomous';
+    // The real gate, cap=1. Wrap it in a spy so we can read what it RETURNS on
+    // each Stop dispatch — the direct observable for the budget decision.
+    const realGate = createTerminalStateGate({
+      getPermissionMode: () => ctx.stats.permissionMode,
+      isEnabled: () => true,
+      maxInjectionsPerSession: 1, // single-slot budget: exhausted by turn 1
+    });
+    const gateReturns: Array<string | undefined> = [];
+    const registry = createHookRegistry();
+    registry.register('Stop', async (hookCtx) => {
+      const decision = await realGate(hookCtx);
+      // Record the gate's verdict only for the Stop dispatches that carry an
+      // unbacked Done (the ones the gate acts on) — i.e. every turn here.
+      if ((hookCtx as { terminalState?: string }).terminalState === 'done') {
+        gateReturns.push(decision.injectContext);
+      }
+      return decision;
+    });
+    ctx.hookRegistry = registry;
+
+    const transcript = makeTranscript();
+    await runReplLoop(ctx, transcript as never, makeTurnState(), vi.fn());
+
+    // Two model turns ran (the /clear iteration continues without a runTurn).
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(2);
+    // Sanity: /clear actually hit its reset branch (transcript rotated).
+    expect(transcript.rotateOnClear).toHaveBeenCalledTimes(1);
+    // Sanity: the gate was consulted for exactly the two unbacked-Done turns.
+    expect(gateReturns).toHaveLength(2);
+
+    // Turn 1's Stop: the gate spent its single-slot budget and returned the
+    // correction.
+    expect(gateReturns[0]).toBe(TERMINAL_STATE_GATE_CORRECTION);
+    // Turn 2's Stop, AFTER /clear: the SAME gate instance was over budget and
+    // returned no correction — the budget was NOT refunded by /clear. This is
+    // the crux of the Item 1 decision (a budget reset would make this the
+    // correction string again).
+    expect(gateReturns[1]).toBeUndefined();
+
+    // Secondary: turn 2's delivered prompt is clean (belt-and-suspenders — true
+    // here both because the budget is spent AND because /clear wiped any pending
+    // injection; the gate-return assertions above are what isolate the budget).
+    const secondText = (vi.mocked(runTurn).mock.calls[1]?.[0] as { text: string }).text;
+    expect(secondText).toBe('second done');
+    expect(secondText).not.toContain(TERMINAL_STATE_GATE_CORRECTION);
   });
 });

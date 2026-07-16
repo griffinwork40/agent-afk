@@ -53,6 +53,70 @@ const MAX_SUBAGENT_PREVIEW_LINES = 4;
 // module keep working.
 export { StreamTimeoutError };
 
+/** Max flood-control (429) retries per outbound message before giving up. */
+const MAX_FLOOD_RETRIES = 2;
+/** Upper bound on how long we honor a single Telegram `retry_after`. */
+const MAX_RETRY_AFTER_MS = 30_000;
+/** Fallback backoff when a 429 carries no `retry_after`. */
+const DEFAULT_FLOOD_BACKOFF_MS = 1_000;
+
+/** Real wall-clock sleep; injectable in tests via `replyWithFloodRetry` opts. */
+const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Shown as a fresh message when Telegram refuses part of a multi-message reply
+ * (flood-control that outlived our retries, or another transport failure) so the
+ * dropped tail is VISIBLE instead of silently lost — the long-reply cutoff bug.
+ */
+const DELIVERY_TRUNCATED_NOTICE =
+  '⚠️ Telegram dropped part of this reply (rate limit) — ask me to resend it.';
+
+/**
+ * Telegram flood-control (429) retry-after in ms, or `null` when `e` is not a
+ * 429. Prefers the structured `parameters.retry_after`, falls back to parsing
+ * the "retry after N" description, then to a small default — always capped.
+ */
+function floodRetryAfterMs(e: unknown): number | null {
+  if (!(e instanceof TelegramError) || e.code !== 429) return null;
+  const fromParams = e.parameters?.retry_after;
+  const fromText = Number(/retry after (\d+)/i.exec(e.description ?? '')?.[1]);
+  const secs =
+    typeof fromParams === 'number' && fromParams > 0
+      ? fromParams
+      : Number.isFinite(fromText) && fromText > 0
+        ? fromText
+        : 0;
+  return Math.min(secs > 0 ? secs * 1_000 : DEFAULT_FLOOD_BACKOFF_MS, MAX_RETRY_AFTER_MS);
+}
+
+/**
+ * Send one message via `reply`, retrying on Telegram flood-control (429) up to
+ * `maxRetries` times and honoring the server's `retry_after`. A long reply fans
+ * out into several back-to-back sends; without this a single 429 aborted the
+ * whole delivery and the tail was dropped silently. Non-429 errors (including the
+ * 400 "can't parse entities" the caller handles specially) propagate immediately.
+ * Exported for unit tests; `sleep` is injectable so tests never wait real seconds.
+ */
+export async function replyWithFloodRetry(
+  reply: (text: string, extra?: { parse_mode?: 'HTML' }) => Promise<unknown>,
+  text: string,
+  extra?: { parse_mode?: 'HTML' },
+  opts: { maxRetries?: number; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<void> {
+  const maxRetries = opts.maxRetries ?? MAX_FLOOD_RETRIES;
+  const sleep = opts.sleep ?? realSleep;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await reply(text, extra);
+      return;
+    } catch (e) {
+      const waitMs = floodRetryAfterMs(e);
+      if (waitMs === null || attempt >= maxRetries) throw e;
+      await sleep(waitMs);
+    }
+  }
+}
+
 /**
  * Render a compact, BOUNDED footer summarizing sub-agent tool activity for the
  * live preview. Returns '' when there is no activity. Pure + exported for unit
@@ -177,7 +241,7 @@ export async function streamResponse(
       try {
         sentMessage = await ctx.reply(chunks[0] ?? '…', { parse_mode: 'HTML' });
       } catch (e) {
-        if (e instanceof TelegramError && e.code === 400 && /can't parse entities/i.test(e.description)) {
+        if (e instanceof TelegramError && e.code === 400 && /can't parse entities/i.test(e.description ?? '')) {
           // Malformed HTML from formatter — retry without parse_mode using raw text as fallback
           sentMessage = await ctx.reply(text || '…');
         } else {
@@ -201,7 +265,7 @@ export async function streamResponse(
         { parse_mode: 'HTML' }
       );
     } catch (e) {
-      if (e instanceof TelegramError && e.code === 400 && /can't parse entities/i.test(e.description)) {
+      if (e instanceof TelegramError && e.code === 400 && /can't parse entities/i.test(e.description ?? '')) {
         // Malformed HTML from formatter — retry without parse_mode using raw text as fallback
         try {
           await ctx.telegram.editMessageText(
@@ -220,22 +284,49 @@ export async function streamResponse(
 
   // Deliver `text` as one or more fresh messages (used for cleanFinal). Mirrors
   // sendOrEdit's HTML-then-plaintext fallback so a formatter bug can never
-  // swallow the final answer.
-  const deliverClean = async (text: string): Promise<void> => {
+  // swallow the final answer, and retries flood-control (429) so a long reply's
+  // back-to-back sends aren't dropped mid-way. If Telegram still refuses a chunk
+  // (retries exhausted, or another non-recoverable transport error), the chunks
+  // already sent stand and a VISIBLE truncation notice is posted — never the old
+  // silent `throw` that dropped the tail and showed the user nothing.
+  //
+  // Returns whether ANY content actually landed. Callers use this to gate
+  // deleting the live preview: if the very first chunk fails, `delivered` is
+  // still false and the preview must survive so the user is never left with
+  // zero visible content (see the `done` and non-terminal-exit call sites).
+  const deliverClean = async (text: string): Promise<boolean> => {
+    let delivered = false;
+    const reply = (t: string, extra?: { parse_mode?: 'HTML' }): Promise<unknown> => ctx.reply(t, extra);
     for (const chunk of splitLongMessage(text)) {
       if (!chunk) continue;
       try {
         for (const htmlChunk of splitLongMessage(markdownToTelegramHtml(chunk))) {
-          if (htmlChunk) await ctx.reply(htmlChunk, { parse_mode: 'HTML' });
+          if (htmlChunk) {
+            await replyWithFloodRetry(reply, htmlChunk, { parse_mode: 'HTML' });
+            delivered = true;
+          }
         }
       } catch (e) {
-        if (e instanceof TelegramError && e.code === 400 && /can't parse entities/i.test(e.description)) {
-          await ctx.reply(chunk).catch(() => {});
+        if (e instanceof TelegramError && e.code === 400 && /can't parse entities/i.test(e.description ?? '')) {
+          // Malformed HTML from the formatter — resend the raw chunk plain.
+          try {
+            await replyWithFloodRetry(reply, chunk);
+            delivered = true;
+          } catch {
+            // plain retry failed; ignore
+          }
+        } else if (e instanceof TelegramError) {
+          // Flood-control that outlived our retries, or another Telegram transport
+          // failure: the chunks before this one are delivered; the tail is not.
+          // Announce it instead of silently dropping, then stop.
+          await ctx.reply(DELIVERY_TRUNCATED_NOTICE).catch(() => {});
+          return delivered;
         } else {
           throw e;
         }
       }
     }
+    return delivered;
   };
 
   // Live preview = answer/content buffer + bounded sub-agent footer. Used for
@@ -525,9 +616,12 @@ export async function streamResponse(
           }
           if (cleanFinal && answerText.trim()) {
             // Deliver the answer as a fresh, noise-free message, then remove the
-            // live preview so the conversation ends on a single clean reply.
-            await deliverClean(answerText);
-            if (sentMessage) {
+            // live preview so the conversation ends on a single clean reply. Only
+            // delete the preview if something actually landed — if the very first
+            // chunk failed, `delivered` is false and the frozen preview must
+            // survive so the user is never left with zero visible content.
+            const delivered = await deliverClean(answerText);
+            if (delivered && sentMessage) {
               await ctx.telegram.deleteMessage?.(chatId, sentMessage.message_id).catch(() => {});
               // Null the preview ref so the post-loop overflow block (which would
               // otherwise re-send the noisy `accumulated` buffer) is skipped.
@@ -560,17 +654,59 @@ export async function streamResponse(
       }
       }); // end runWithSink
 
-      // Send overflow chunks BEFORE closing the generator so the session's
-      // currentState stays 'streaming' while Telegram messages are in flight.
-      // Moving this inside the try block (before the finally) prevents the race
-      // where a new user message sees state='idle' and bypasses the queue while
-      // overflow chunks are still being delivered.
-      if (accumulated && sentMessage) {
+      // Invariant: finalize BEFORE closing the generator so the session's
+      // currentState stays 'streaming' while Telegram messages are in flight —
+      // running this inside the try (before the finally) prevents the race where a
+      // new user message sees state='idle' and bypasses the queue mid-delivery.
+      //
+      // The in-place preview is edited under EDIT_THROTTLE_MS and Telegram edit
+      // flood-control, so it can freeze mid-stream and show LESS than what actually
+      // streamed. A `done` event already handled delivery above (clean-final nulls
+      // `sentMessage`; the legacy branch left chunk[0] in the preview and needs only
+      // chunks[1..]). Any OTHER exit — `sawTerminalEvent` false: the provider closed
+      // the stream without a terminal event, or an early break — previously stranded
+      // the user on that frozen, partial preview (the long-reply "cut off mid-sentence"
+      // bug). Re-deliver everything as fresh message(s) so nothing that streamed is
+      // lost to a stale preview, then remove the preview.
+
+      // Snapshot the preview ref. `sentMessage` is assigned only inside the
+      // `sendOrEdit` closure (invisible to linear CFA), so post-loop TS narrows it to
+      // literal `null` — which would type `preview` as `never` in the branch below.
+      // The `as` re-anchors it to its true DECLARED type (a sound no-op cast), and the
+      // `const` keeps the narrowing across the awaits below.
+      const preview = sentMessage as Message.TextMessage | null;
+      if (preview && !sawTerminalEvent) {
+        const full = cleanFinal && answerText.trim() ? answerText : accumulated;
+        if (full.trim()) {
+          // Only delete the preview if delivery actually produced content — a
+          // failed first chunk must leave the frozen preview in place rather
+          // than removing it and showing the user nothing.
+          const delivered = await deliverClean(full);
+          if (delivered) {
+            await ctx.telegram.deleteMessage?.(chatId, preview.message_id).catch(() => {});
+            sentMessage = null;
+          }
+        }
+      } else if (accumulated && preview) {
         const chunks = splitLongMessage(markdownToTelegramHtml(accumulated));
         if (chunks.length > 1) {
-          for (let i = 1; i < chunks.length; i++) {
-            const chunk = chunks[i];
-            if (chunk) await ctx.reply(chunk, { parse_mode: 'HTML' });
+          const reply = (t: string, extra?: { parse_mode?: 'HTML' }): Promise<unknown> => ctx.reply(t, extra);
+          try {
+            for (let i = 1; i < chunks.length; i++) {
+              const chunk = chunks[i];
+              if (chunk) await replyWithFloodRetry(reply, chunk, { parse_mode: 'HTML' });
+            }
+          } catch (e) {
+            if (e instanceof TelegramError) {
+              // Flood-control that outlived our retries, or another Telegram
+              // transport failure: chunk[0] already lives in the (undeleted)
+              // preview, so announce the dropped tail instead of throwing it
+              // uncaught into the `finally` and silently losing it — the exact
+              // bug this PR set out to kill, for the non-cleanFinal path.
+              await ctx.reply(DELIVERY_TRUNCATED_NOTICE).catch(() => {});
+            } else {
+              throw e;
+            }
           }
         }
       }

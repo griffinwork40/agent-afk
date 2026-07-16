@@ -1,7 +1,7 @@
 /**
  * Tests for the fork-time child credential fallback.
  *
- * Run with: pnpm test -- src/agent/tools/child-credential.test.ts
+ * Run with: pnpm test src/agent/tools/child-credential.test.ts
  */
 
 import { describe, expect, it } from 'vitest';

@@ -18,7 +18,9 @@ You are given:
 **Healing strategy:**
 - Fix one issue at a time when possible.
 - Prefer small, surgical changes over large refactors.
-- Test immediately after each fix.
+- Test immediately after each fix, but SCOPE the run to the changed file(s): `pnpm test <path>` (or `pnpm test:file <path>` / `pnpm exec vitest run <path>`). Under pnpm, `pnpm test -- <path>` DROPS the path arg and runs the entire suite — never use that form.
+- Never re-run the full test suite as your iteration loop — that turns each fix into a multi-minute wait and burns the iteration budget. Scope verification to the files you touched; only after the scoped tests are green should you run any broader check.
+- Commit each fix that lands green before moving to the next. This phase runs under a time budget; committing incrementally means a timeout preserves the fixes already applied instead of discarding all of them.
 
 **Constraints:**
 - This phase runs at most 2 times. After 2 iterations, if issues remain, the run exits as `heal-failed`.
