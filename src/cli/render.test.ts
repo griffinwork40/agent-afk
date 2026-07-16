@@ -317,6 +317,51 @@ describe('welcomeBanner', () => {
     });
   });
 
+  describe('right-column vertical centering', () => {
+    // The block-art hero is the ONLY source of full-block (█) glyphs — the
+    // sprite is drawn with half-blocks (▀▄) only — so the first output line
+    // carrying a █ marks where the right column begins, i.e. its top pad.
+    const heroTopRow = (s: string): number =>
+      s.split('\n').findIndex((l) => /█/.test(l));
+
+    it('centers the right column onto the sprite, round-biased DOWN (not floor)', () => {
+      // A full column — model·mode + worktree + cwd + metaLine — is 12 rows
+      // against the 13-row sprite. (13−12)/2 = 0.5, so Math.round lands the top
+      // pad at 1, where Math.floor would strand the column at the cap tip (row
+      // 0). Pinning the exact top row is the direct guard for the round-not-floor
+      // bias the layout comment promises (welcome-banner.ts renderHybridBanner).
+      Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
+      const out = strip(welcomeBanner({
+        mode: 'Interactive Mode',
+        model: 'opus_1m',
+        version: '5.11.0',
+        worktree: 'afk/polish-goblin-banner',
+        cwd: '/Users/example/projects/agent-afk',
+        metaLine: 'Resuming abc123',
+      }));
+      expect(/[▀▄]/.test(out)).toBe(true); // sprite present → mascot layout
+      expect(heroTopRow(out)).toBe(1); // padded DOWN by one row (round, not floor)
+    });
+
+    it('pushes the hero lower when the info column is shorter', () => {
+      // Centering responds to column height: a minimal column (model·mode only)
+      // is shorter than a full one, so it earns a larger top pad and its hero
+      // sits strictly lower. This exercises the round-biased centering across
+      // two different column heights without over-pinning either exact value.
+      Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
+      const fuller = strip(welcomeBanner({
+        mode: 'Interactive Mode',
+        model: 'opus_1m',
+        version: '5.11.0',
+        worktree: 'afk/polish-goblin-banner',
+        cwd: '/Users/example/projects/agent-afk',
+        metaLine: 'Resuming abc123',
+      }));
+      const minimal = strip(welcomeBanner({ mode: 'Interactive Mode', model: 'opus_1m' }));
+      expect(heroTopRow(minimal)).toBeGreaterThan(heroTopRow(fuller));
+    });
+  });
+
   describe('AFK_BANNER_PLAIN=1 fallback', () => {
     const prevPlain = process.env['AFK_BANNER_PLAIN'];
 
