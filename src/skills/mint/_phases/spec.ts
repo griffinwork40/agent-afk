@@ -4,7 +4,7 @@
  */
 
 import { SubagentManager } from '../../../agent/subagent.js';
-import { describeFailure } from '../../../agent/subagent/result.js';
+import { describeFailure, isIncompleteStopReason } from '../../../agent/subagent/result.js';
 import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
 import type { AgentModelInput } from '../../../agent/types.js';
@@ -59,6 +59,15 @@ export async function runSpecPhase(
 
   if (specResult.status !== 'succeeded' || !specResult.message) {
     throw new Error(`spec phase failed: ${describeFailure(specResult)}`);
+  }
+  // A `succeeded` result can still be an incomplete partial — the tool-use cap
+  // fired or the stream closed without a terminal message. Its `.message.content`
+  // is a truncated placeholder, not the real spec; the phase output feeds the
+  // next phase programmatically, so hard-fail rather than forward a partial.
+  if (isIncompleteStopReason(specResult.stopReason)) {
+    throw new Error(
+      `spec phase returned an incomplete result (stopReason=${specResult.stopReason})`,
+    );
   }
 
   return specResult.message.content;

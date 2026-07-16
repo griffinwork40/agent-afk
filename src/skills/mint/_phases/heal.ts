@@ -6,7 +6,7 @@
 
 import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
 import { SubagentManager } from '../../../agent/subagent.js';
-import { describeFailure } from '../../../agent/subagent/result.js';
+import { describeFailure, isIncompleteStopReason } from '../../../agent/subagent/result.js';
 import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
 import type { VerifyResult } from './verify.js';
@@ -122,6 +122,16 @@ export async function runHealPhase(
 
     if (healResult.status !== 'succeeded' || !healResult.message) {
       throw new Error(`heal phase failed: ${describeFailure(healResult)}`);
+    }
+    // A `succeeded` result can still be an incomplete partial — the tool-use cap
+    // fired or the stream closed without a terminal message. Its `.message.content`
+    // is a truncated placeholder, so the `FIX_APPLIED:` marker below cannot be
+    // trusted; hard-fail (the surrounding catch counts this as a non-healed
+    // iteration) rather than reading a partial as if a fix had landed.
+    if (isIncompleteStopReason(healResult.stopReason)) {
+      throw new Error(
+        `heal phase returned an incomplete result (stopReason=${healResult.stopReason})`,
+      );
     }
 
     // The heal prompt requires a `FIX_APPLIED: true|false` marker on the first

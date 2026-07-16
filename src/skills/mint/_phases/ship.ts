@@ -4,7 +4,7 @@
  */
 
 import { SubagentManager } from '../../../agent/subagent.js';
-import { describeFailure } from '../../../agent/subagent/result.js';
+import { describeFailure, isIncompleteStopReason } from '../../../agent/subagent/result.js';
 import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
 import type { AgentModelInput } from '../../../agent/types.js';
@@ -62,6 +62,15 @@ export async function runShipPhase(
 
   if (shipResult.status !== 'succeeded' || !shipResult.message) {
     throw new Error(`ship phase failed: ${describeFailure(shipResult)}`);
+  }
+  // A `succeeded` result can still be an incomplete partial — the tool-use cap
+  // fired or the stream closed without a terminal message. Its `.message.content`
+  // is a truncated placeholder, not the real ship summary, so hard-fail before
+  // emitting the card or returning the partial as the phase output.
+  if (isIncompleteStopReason(shipResult.stopReason)) {
+    throw new Error(
+      `ship phase returned an incomplete result (stopReason=${shipResult.stopReason})`,
+    );
   }
 
   const filesChanged = state.buildResults?.filesChanged.length ?? 0;
