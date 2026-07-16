@@ -154,8 +154,26 @@ export async function setupSurface(
                   ? top.value
                   : null;
               },
-              getTranscriptTail: () => '',
-              getRecentCommands: () => [],
+              getTranscriptTail: () => {
+                // Last 1-2 completed turns, newest-first so the freshest
+                // exchange wins buildUser's 200-char context budget. slice(-2)
+                // returns a fresh array, so reverse() never mutates stats.turns.
+                // Secrets are scrubbed downstream at the suggester egress
+                // boundary (buildUser -> redactSecrets), not here.
+                const turns = ctx.stats.turns;
+                if (turns.length === 0) return '';
+                return turns
+                  .slice(-2)
+                  .reverse()
+                  .map((t) => `user: ${t.user}\nassistant: ${t.assistant}`)
+                  .join('\n');
+              },
+              getRecentCommands: () => {
+                // Reuse the same ReplHistory ring as getHistory above
+                // (getEntries() is newest-first); buildUser slices to 5.
+                const ring = surface.history as { getEntries?: () => readonly string[] };
+                return ring.getEntries ? [...ring.getEntries()] : [];
+              },
               // Parse as a boolean, not raw truthiness: only the documented
               // activations (1/true/yes/on — see docs/env-registry.md) enable the
               // Tier-2 LLM. A non-empty falsy value like `0` or `false` must keep

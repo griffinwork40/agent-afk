@@ -26,6 +26,7 @@
 
 import { providerForModel, resolveProvider, type ProviderRouteHints } from '../../agent/providers/index.js';
 import type { ModelProvider } from '../../agent/provider.js';
+import { redactSecrets } from '../../agent/redact-secrets.js';
 import { env } from '../../config/env.js';
 import { list as listSlashCommands, aliasEntries } from '../slash/registry.js';
 
@@ -109,7 +110,18 @@ function buildUser(buffer: string, ctx: SuggestContext): string {
     parts.push(`context: ${transcript.slice(0, 200)}`);
   }
   parts.push(`input: ${buffer}`);
-  return parts.join('\n');
+  // DATA-EGRESS CONTRACT: this assembled prompt is the only content sent to the
+  // Tier-2 suggestion model, which may be a cheaper model at a DIFFERENT endpoint
+  // (baseUrl override) than the session. Scrub secrets from the whole prompt —
+  // cwd + recent commands + transcript + input — before it leaves the process,
+  // mirroring background-summarizer.ts's redactSecrets() egress boundary. This is
+  // the single chokepoint covering BOTH the completeFn (test) and real-provider
+  // dispatch paths, since both build their `user` field here.
+  // Invariant: redact the RETURNED prompt only — never the raw `buffer`, which is
+  // the result-cache key and the isValidContinuation(buffer, reply) guard input.
+  // Redacting `buffer` would collapse distinct prefixes onto one poisoned cache
+  // key and make every real completion fail the prefix guard (silent no-ghost).
+  return redactSecrets(parts.join('\n'));
 }
 
 // ── Sanitization ────────────────────────────────────────────────────────────
