@@ -178,6 +178,43 @@ describe('formatTrace — subagent timeout markers', () => {
   });
 });
 
+describe('formatTrace — subagentId attribution on tool_call (issue #612)', () => {
+  // A forked child resumes the parent's sessionId and writes into the shared
+  // parent trace, so `afk trace show` must render `[subagentId]` on the child's
+  // tool_call lines — otherwise a timed-out child's actual work is unattributable.
+  it('renders [subagentId] on a completed tool_call emitted by a fork', () => {
+    const events: EventObj[] = [
+      { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'tool_call', payload: { phase: 'completed', toolUseId: 'tu-child', name: 'bash', resultBytes: 40, isError: false, truncated: false, durationMs: 20, subagentId: 'research-agent-1700000000000-3' } },
+    ];
+    const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+    expect(out).toContain('bash');
+    expect(out).toContain('[research-agent-1700000000000-3]');
+  });
+
+  it('renders an orphan started tool_call from a fork with its [subagentId]', () => {
+    // An orphaned `started` (no matching completed) is shown by default — the
+    // exact "child crashed/timed out mid-tool" case issue #612 is about.
+    const events: EventObj[] = [
+      { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'tool_call', payload: { phase: 'started', toolUseId: 'tu-orphan', name: 'bash', inputBytes: 30, subagentId: 'research-agent-1700000000000-3' } },
+    ];
+    const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+    expect(out).toContain('started (no completion recorded)');
+    expect(out).toContain('[research-agent-1700000000000-3]');
+  });
+
+  it('renders no [subagentId] suffix for a root (non-fork) tool_call', () => {
+    const events: EventObj[] = [
+      { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'tool_call', payload: { phase: 'completed', toolUseId: 'tu-root', name: 'read_file', resultBytes: 40, isError: false, truncated: false, durationMs: 20 } },
+    ];
+    const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+    // Target the tool line specifically — the header may legitimately contain
+    // brackets, but a root tool_call line must carry no `[id]` suffix.
+    const toolLine = out.split('\n').find((l) => l.includes('read_file'));
+    expect(toolLine).toBeDefined();
+    expect(toolLine).not.toContain('[');
+  });
+});
+
 describe('formatTrace — rate_limit is high-signal (shown by default)', () => {
   // Regression: a rate_limit event is a session_phase, and session_phase is
   // hidden by default (latency waterfall). But throttling is the whole reason a

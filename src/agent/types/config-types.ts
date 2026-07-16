@@ -527,6 +527,19 @@ export interface AgentConfig {
   /** Parent session ID when this session was forked as a subagent. */
   parentSessionId?: string;
 
+  /**
+   * This session's own subagent id when it was forked as a subagent — the
+   * `SubagentHandle.id` assigned by `SubagentManager.forkSubagent`. Set on the
+   * child config at the fork site (subagent.ts); undefined for a top-level
+   * session. Threaded into the provider loop so the witness `tool_call`
+   * started/completed events emitted by this session carry `subagentId`,
+   * letting `afk trace show` attribute which child ran which tool when a fork
+   * writes into the shared parent trace file (a child resumes the parent's
+   * sessionId, so `sessionId` alone cannot disambiguate). Matches the id on the
+   * `subagent_lifecycle.started` event for cross-correlation.
+   */
+  subagentId?: string;
+
   /** Nesting depth assigned at fork (0-indexed). Top-level → undefined. */
   depth?: number;
 

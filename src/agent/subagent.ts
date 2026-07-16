@@ -671,6 +671,16 @@ export class SubagentManager {
       ...options.config,
       resume,
       forkSession: resume ? true : options.config.forkSession,
+      // Witness attribution: stamp THIS fork's own id onto its config so the
+      // child's provider loop tags every `tool_call` started/completed event
+      // with `subagentId: id`. Placed AFTER the `...options.config` spread so
+      // the manager-assigned `id` (line ~550) always wins — it is authoritative
+      // and MUST match the id on the `subagent_lifecycle.started` emit below,
+      // or a trace reader could not correlate a tool call with its child. A
+      // child resumes the parent's sessionId and writes into the SHARED parent
+      // trace file, so without this tag the parent trace cannot say which fork
+      // ran which tool (issue #612).
+      subagentId: id,
       abortSignal: childController.signal,
       // Invariant (cross-provider credential anti-leak): the parent-credential
       // fallback below must never hand a credential across the provider

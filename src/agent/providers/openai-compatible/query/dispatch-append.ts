@@ -25,6 +25,13 @@ export interface DispatchAndAppendInput {
   traceWriter: TraceWriter | undefined;
   priorTurns: OpenAIMessage[];
   sessionId: string;
+  /**
+   * Owning subagent id when this dispatch runs inside a forked child
+   * (`AgentConfig.subagentId`). Stamped onto every `tool_call` started/completed
+   * event so a fork's tool calls are attributable in the shared parent trace
+   * (a child resumes the parent's sessionId). Absent for a top-level session.
+   * See issue #612. */
+  subagentId?: string | undefined;
 }
 
 /**
@@ -47,6 +54,7 @@ export async function* dispatchAndAppendToolCalls({
   traceWriter,
   priorTurns,
   sessionId,
+  subagentId,
 }: DispatchAndAppendInput): AsyncGenerator<ProviderEvent, ToolResult | undefined> {
   if (!toolDispatcher) {
     // Shouldn't reach here — runIteration won't return needsToolDispatch=true
@@ -91,6 +99,7 @@ export async function* dispatchAndAppendToolCalls({
       toolUseId: call.id,
       name: call.name,
       inputBytes: Buffer.byteLength(JSON.stringify(call.input ?? {}), 'utf8'),
+      ...(subagentId !== undefined ? { subagentId } : {}),
     });
     yield {
       type: 'tool.use.start',
@@ -185,6 +194,7 @@ export async function* dispatchAndAppendToolCalls({
         ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
           ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
           : {}),
+        ...(subagentId !== undefined ? { subagentId } : {}),
       });
 
       yield {

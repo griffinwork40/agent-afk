@@ -820,6 +820,10 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       traceWriter: this.traceWriter,
       priorTurns: this.priorTurns,
       sessionId: this.initSessionId,
+      // Owning subagent id (fork only) so tool_call trace events are
+      // attributable in the shared parent trace — issue #612. Read from
+      // config, the same source this query reads autoCompact/permissionMode.
+      subagentId: this.opts.config.subagentId,
     });
   }
 

@@ -920,6 +920,7 @@ export class AnthropicDirectProvider implements ModelProvider {
       ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
       ...(localMode ? { baseUrl: config.baseUrl } : {}),
       ...(config.traceWriter ? { traceWriter: config.traceWriter } : {}),
+      ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
       ...(config.autoResumeOnUsageLimit !== undefined
         ? { autoResumeOnUsageLimit: config.autoResumeOnUsageLimit }
         : {}),

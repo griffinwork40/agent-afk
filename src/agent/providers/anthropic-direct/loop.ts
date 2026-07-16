@@ -784,6 +784,7 @@ export async function* runTurn(
         toolUseId: block.id,
         name: block.name,
         inputBytes: Buffer.byteLength(JSON.stringify(block.input ?? {}), 'utf8'),
+        ...(input.subagentId !== undefined ? { subagentId: input.subagentId } : {}),
       });
       yield {
         type: 'tool.use.start',
@@ -868,6 +869,7 @@ export async function* runTurn(
         ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
           ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
           : {}),
+        ...(input.subagentId !== undefined ? { subagentId: input.subagentId } : {}),
       });
 
       yield {

@@ -2505,6 +2505,52 @@ describe('OpenAICompatibleQuery — witness-layer trace emission', () => {
     expect(completed.payload.truncated).toBe(false);
     expect(completed.payload.durationMs).toBeGreaterThanOrEqual(0);
     expect(completed.payload.resultBytes).toBeGreaterThan(0);
+
+    // Issue #612: a top-level session must NOT tag its tool_call events — the
+    // key stays absent so the reader renders no orphan `[subagentId]`.
+    expect('subagentId' in started.payload).toBe(false);
+    expect('subagentId' in completed.payload).toBe(false);
+  });
+
+  // Issue #612: when the query runs inside a forked child, `config.subagentId`
+  // is set at the fork site (subagent.ts) and must flow onto every tool_call
+  // trace event so the child's work is attributable in the shared parent trace.
+  it('tags tool_call events with config.subagentId when running inside a fork', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    installToolThenTextClient('call_bash_1', 'bash', '{"cmd":"pnpm test"}');
+
+    const { dispatcher } = makeDispatcherForPR2();
+    (dispatcher as unknown as { handlers: Map<string, unknown> }).handlers?.set(
+      'bash',
+      async () => ({ content: 'suite passed' }),
+    );
+
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-test', source: 'env:OPENAI_API_KEY' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'parent-session',
+      promptStream: singleInput('run the suite'),
+      // A forked child carries its own subagentId on the config.
+      config: {
+        model: 'gpt-4o-mini',
+        apiKey: 'sk-test',
+        subagentId: 'research-agent-1700000000000-3',
+      } as AgentConfig,
+      toolDispatcher: dispatcher,
+      traceWriter: writer,
+    });
+
+    await collect(q);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const toolCallEvents = writer.events.filter((e) => e.kind === 'tool_call');
+    expect(toolCallEvents).toHaveLength(2);
+    for (const e of toolCallEvents) {
+      if (e.kind !== 'tool_call') throw new Error('unreachable');
+      expect(e.payload.subagentId).toBe('research-agent-1700000000000-3');
+    }
   });
 
   it('emits session_phase loop_start and loop_end for each turn', async () => {

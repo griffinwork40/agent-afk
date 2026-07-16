@@ -248,6 +248,13 @@ export interface RunTurnInput {
    *  after each result. See `docs/philosophy/afk-contract.md`. */
   traceWriter?: import('../../trace/index.js').TraceWriter;
   /**
+   * This loop's owning subagent id, present only when the loop runs inside a
+   * forked child (`AgentConfig.subagentId`). Stamped onto every `tool_call`
+   * started/completed event so a fork's tool calls are attributable in the
+   * shared parent trace. Absent for a top-level session — its tool calls stay
+   * untagged. See issue #612. */
+  subagentId?: string;
+  /**
    * Optional hook fired once per completed round (both tool-use rounds
    * and the terminal end_turn round) with the cumulative usage so far,
    * so the REPL status line can show live mid-turn context usage. The
