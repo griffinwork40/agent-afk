@@ -495,4 +495,68 @@ describe('anthropic-direct translateMessageStream', () => {
     expect(u.output_tokens).toBe(25);
     expect(u.cache_read_input_tokens).toBe(50);
   });
+
+  it('stream ending with no message_stop and no stop_reason surfaces an error (P0: no silent truncation)', async () => {
+    // Regression guard for the parent-facing "silent truncation" gap: when a
+    // model stream is cut off before completion (e.g. an intermediary gracefully
+    // closing the connection mid-response), neither `message_stop` nor a
+    // `message_delta` stop_reason arrives. Before the fix, translate yielded a
+    // `turn-result` with stopReason=null carrying the partial text, so the turn
+    // was delivered as a clean, complete answer. It must surface an error so the
+    // partial is never silently presented as final.
+    async function* cutOff(): AsyncIterable<RawMessageStreamEvent> {
+      yield messageStart();
+      yield textBlockStart(0);
+      yield textDelta(0, 'Partial answer that got ');
+      // stream ends here — NO message_delta, NO message_stop
+    }
+
+    const out = await collect(
+      translateMessageStream(cutOff(), { sessionId: SESSION_ID }),
+    );
+
+    // The partial text still streams as a delta event...
+    const textDeltas = out.filter(
+      (o) => o.kind === 'event' && o.event.type === 'delta.text',
+    );
+    expect(textDeltas).toHaveLength(1);
+
+    // ...but the turn must NOT resolve as a (silent) turn-result.
+    const turnResults = out.filter((o) => o.kind === 'turn-result');
+    expect(turnResults).toHaveLength(0);
+
+    // It surfaces as an error event instead.
+    const last = out[out.length - 1];
+    if (!last || last.kind !== 'event' || last.event.type !== 'error') {
+      throw new Error('expected an error event when the stream ends without a terminal signal');
+    }
+    expect(last.event.error).toBeInstanceOf(Error);
+    expect(last.event.error.message).toMatch(/message_stop|incomplete|cut off/i);
+  });
+
+  it('stream that loses only message_stop but has a real stop_reason still yields a turn-result', async () => {
+    // Negative guard: the incomplete-detection must NOT false-positive when the
+    // model DID signal completion (message_delta carried a stop_reason) and only
+    // the framing `message_stop` event was lost. That turn is substantively
+    // complete and must resolve normally.
+    const events: RawMessageStreamEvent[] = [
+      messageStart(),
+      textBlockStart(0),
+      textDelta(0, 'Complete answer'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      // NO message_stop
+    ];
+
+    const out = await collect(
+      translateMessageStream(fromArray(events), { sessionId: SESSION_ID }),
+    );
+
+    const last = out[out.length - 1];
+    if (!last || last.kind !== 'turn-result') {
+      throw new Error('expected a turn-result when a real stop_reason was received');
+    }
+    expect(last.result.stopReason).toBe('end_turn');
+    expect(last.result.text).toBe('Complete answer');
+  });
 });

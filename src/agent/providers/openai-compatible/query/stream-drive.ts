@@ -22,6 +22,7 @@ import { emitSessionPhase } from '../../../trace/emit.js';
 import type { TraceWriter } from '../../../trace/index.js';
 import { sleepWithAbort } from '../../shared/sleep-with-abort.js';
 import { createStreamState, isToolCallStop, type StreamState } from '../translate.js';
+import { StreamIncompleteError } from '../../../../utils/errors.js';
 import {
   MAX_CONNECTION_RETRIES,
   MAX_STREAM_RETRIES,
@@ -176,12 +177,66 @@ export async function* driveStream<TEvent>(
       return null;
     }
 
+    // Tool-dispatch intent, computed once: the incomplete-stream guard below and
+    // the clean-completion return value both key off it. `isToolCallStop` is a
+    // pure read of the now-fully-accumulated `state`.
+    const needsToolDispatch = isToolCallStop(state) && state.toolCallsByIndex.size > 0;
+
+    // Invariant: the stream iterator completed WITHOUT throwing but produced no
+    // DISPATCHABLE response AND no terminal finish_reason — the wire never
+    // signaled completion and nothing usable was generated (a stream cut off
+    // before the answer arrived, e.g. an intermediary closing the connection at a
+    // graceful boundary; a hard drop would have thrown and been surfaced above).
+    // Returning a clean completion here delivers an empty turn as success — a
+    // silent failure. Surface an error instead, mirroring anthropic-direct's
+    // stream-incomplete handling and the #628 "fail loudly, don't silently
+    // succeed" fix.
+    //
+    // Scope: NO VISIBLE ANSWER AND NO DISPATCHABLE TOOL CALL (with no
+    // finish_reason). This catches three truncation shapes that all reduce to
+    // "empty turn presented as success":
+    //   1. truly-empty streams (no content at all);
+    //   2. reasoning-only cut-offs — reasoning deltas arrived but the stream was
+    //      cut before any visible answer (reasoningText > 0, assistantText empty);
+    //   3. cut-off / non-dispatchable partial tool calls — an accumulated call is
+    //      missing its id or name, so isToolCallStop() is false (see
+    //      translate.ts:218) and it can never round-trip.
+    // All three leave runTurn with text === '' and needsToolDispatch === false,
+    // so it would otherwise emit an empty assistant.message + turn.completed as a
+    // clean success — the exact silent-truncation failure this guard exists to
+    // prevent.
+    //
+    // We deliberately do NOT flag a clean end that produced VISIBLE TEXT or a
+    // DISPATCHABLE tool call but omitted finish_reason: some OpenAI-compatible
+    // endpoints (local MLX / llama.cpp shims) legitimately OMIT finish_reason on
+    // complete turns, so treating "usable content present + no finish_reason" as
+    // incomplete would false-positive real completions. finish_reason is not a
+    // reliable terminal signal on this wire (unlike anthropic-direct's
+    // protocol-guaranteed message_stop), so the content-present partial-truncation
+    // case still cannot be safely distinguished here and is left unflagged.
+    if (
+      state.finishReason === null &&
+      state.assistantText.length === 0 &&
+      !needsToolDispatch
+    ) {
+      yield {
+        type: 'error',
+        error: new StreamIncompleteError(
+          'the model stream ended without a finish_reason and without a ' +
+            'dispatchable response (no visible answer text and no complete tool ' +
+            'call): the response was empty or cut off before any usable content ' +
+            'arrived. The turn is incomplete.',
+        ),
+      };
+      return null;
+    }
+
     // Clean completion — return the result.
     return {
       state,
       events: [],
       text: state.assistantText,
-      needsToolDispatch: isToolCallStop(state) && state.toolCallsByIndex.size > 0,
+      needsToolDispatch,
     };
   }
 }
