@@ -55,6 +55,9 @@ jobs:
       - name: Audit SDK dependency surface (no unlocked @anthropic-ai/sdk imports)
         run: pnpm audit:sdk:check
 
+      - name: Audit chalk discipline (no raw chalk styling outside the palette)
+        run: pnpm audit:chalk:check
+
       - name: Audit dependency CVEs (critical severity in prod deps)
         # Gates on critical-severity CVEs in production dependencies only, via
         # `scripts/audit-deps.ts` (wraps `pnpm audit --audit-level=critical --prod`).

@@ -10,8 +10,8 @@
  */
 
 import type { Command } from 'commander';
-import chalk from 'chalk';
 import ora from 'ora';
+import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
 import {
   installMarketplace,
@@ -80,11 +80,11 @@ export function registerMarketplaceCommand(
           const result = await installMarketplace(source, opts, moduleDeps);
           const refTag = result.entry.ref ? ` (ref: ${result.entry.ref})` : '';
           spinner.succeed(
-            chalk.green(`Installed marketplace ${chalk.bold(result.name)}`) +
-              chalk.gray(`${refTag} at ${result.dir}`),
+            palette.success(`Installed marketplace ${palette.bold(result.name)}`) +
+              palette.meta(`${refTag} at ${result.dir}`),
           );
           logger.log(
-            chalk.gray(`  ${result.plugins.length} plugin(s) available — run \`afk marketplace plugins ${result.name}\` to list.`),
+            palette.meta(`  ${result.plugins.length} plugin(s) available — run \`afk marketplace plugins ${result.name}\` to list.`),
           );
         } catch (err) {
           spinner.fail('Failed');
@@ -118,17 +118,17 @@ export function registerMarketplaceCommand(
         return;
       }
       if (marketplaces.length === 0) {
-        logger.log(chalk.gray('No marketplaces installed.'));
+        logger.log(palette.meta('No marketplaces installed.'));
         logger.log(
-          chalk.gray('  Try: afk marketplace install <org>/<marketplace>'),
+          palette.meta('  Try: afk marketplace install <org>/<marketplace>'),
         );
         return;
       }
-      logger.log(chalk.cyan.bold('\nInstalled marketplaces:'));
+      logger.log(palette.heading('\nInstalled marketplaces:'));
       for (const [name, entry] of marketplaces.sort()) {
-        const ref = entry.ref ? chalk.blue(entry.ref) : chalk.gray('(local)');
-        const src = chalk.gray(entry.source);
-        logger.log(`  ${chalk.bold(name.padEnd(30))} ${ref.padEnd(12)}  ${src}`);
+        const ref = entry.ref ? palette.info(entry.ref) : palette.meta('(local)');
+        const src = palette.meta(entry.source);
+        logger.log(`  ${palette.bold(name.padEnd(30))} ${ref.padEnd(12)}  ${src}`);
       }
       logger.log('');
     });
@@ -145,17 +145,17 @@ export function registerMarketplaceCommand(
           return;
         }
         if (plugins.length === 0) {
-          logger.log(chalk.gray(`Marketplace "${name}" lists no plugins.`));
+          logger.log(palette.meta(`Marketplace "${name}" lists no plugins.`));
           return;
         }
-        logger.log(chalk.cyan.bold(`\nPlugins in ${name}:`));
+        logger.log(palette.heading(`\nPlugins in ${name}:`));
         plugins.forEach((p, i) => {
-          const marker = p.installed ? chalk.green('[✓]') : chalk.gray('[ ]');
-          const desc = p.description ? chalk.gray(` — ${p.description}`) : '';
-          logger.log(`  ${marker} ${chalk.bold((i + 1).toString().padStart(2))}. ${chalk.bold(p.name)}${desc}`);
+          const marker = p.installed ? palette.success('[✓]') : palette.meta('[ ]');
+          const desc = p.description ? palette.meta(` — ${p.description}`) : '';
+          logger.log(`  ${marker} ${palette.bold((i + 1).toString().padStart(2))}. ${palette.bold(p.name)}${desc}`);
         });
         logger.log(
-          chalk.gray(
+          palette.meta(
             `\n  Install one: afk plugin install ${name}:<plugin>`,
           ),
         );
@@ -192,8 +192,8 @@ export function registerMarketplaceCommand(
             { ...moduleDeps, confirm: isInteractive },
           );
           spinner.succeed(
-            chalk.green(`Installed ${chalk.bold(result.key)}`) +
-              chalk.gray(` at ${result.dir}`),
+            palette.success(`Installed ${palette.bold(result.key)}`) +
+              palette.meta(` at ${result.dir}`),
           );
         } catch (err) {
           spinner.fail('Failed');
@@ -212,7 +212,7 @@ export function registerMarketplaceCommand(
         !result.removedIndexEntry &&
         result.removedPluginEntries.length === 0
       ) {
-        logger.log(chalk.gray(`No marketplace named "${name}" to remove.`));
+        logger.log(palette.meta(`No marketplace named "${name}" to remove.`));
         return;
       }
       const bits = [
@@ -222,10 +222,10 @@ export function registerMarketplaceCommand(
           ? `${result.removedPluginEntries.length} plugin entry`
           : null,
       ].filter(Boolean);
-      logger.log(chalk.green(`Removed ${name}: ${bits.join(' + ')}`));
+      logger.log(palette.success(`Removed ${name}: ${bits.join(' + ')}`));
       if (result.removedPluginEntries.length > 0) {
         for (const key of result.removedPluginEntries) {
-          logger.log(chalk.gray(`  - ${key}`));
+          logger.log(palette.meta(`  - ${key}`));
         }
       }
     });
@@ -245,10 +245,10 @@ export function registerMarketplaceCommand(
           );
           printOutcome(outcome, spinner);
         } else {
-          logger.log(chalk.cyan('Updating all marketplaces…'));
+          logger.log(palette.info('Updating all marketplaces…'));
           const outcomes = await updateAllMarketplaces(moduleDeps);
           if (outcomes.length === 0) {
-            logger.log(chalk.gray('  (no marketplaces installed)'));
+            logger.log(palette.meta('  (no marketplaces installed)'));
             return;
           }
           for (const o of outcomes) {
@@ -277,15 +277,15 @@ function formatOutcome(o: UpdateMarketplaceOutcome): string {
         .filter((p): p is { name: string; version: string } => p.version !== null)
         .map((p) => `${p.name} ${p.version}`)
         .join(', ');
-      const vPart = versions ? chalk.gray(`  [${versions}]`) : '';
-      return `${chalk.green('✓')} ${chalk.bold(o.name)}: ${refPart}${chalk.gray(added + removed)}${vPart}`;
+      const vPart = versions ? palette.meta(`  [${versions}]`) : '';
+      return `${palette.success('✓')} ${palette.bold(o.name)}: ${refPart}${palette.meta(added + removed)}${vPart}`;
     }
     case 'up-to-date':
-      return `${chalk.gray('·')} ${chalk.bold(o.name)}: up-to-date (${o.ref})`;
+      return `${palette.meta('·')} ${palette.bold(o.name)}: up-to-date (${o.ref})`;
     case 'skipped-local':
-      return `${chalk.gray('·')} ${chalk.bold(o.name)}: skipped (local source)`;
+      return `${palette.meta('·')} ${palette.bold(o.name)}: skipped (local source)`;
     case 'missing-dir':
-      return `${chalk.yellow('!')} ${chalk.bold(o.name)}: marketplace dir missing (${o.dir})`;
+      return `${palette.warning('!')} ${palette.bold(o.name)}: marketplace dir missing (${o.dir})`;
   }
 }
 

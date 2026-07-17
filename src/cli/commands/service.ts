@@ -21,7 +21,6 @@
  */
 
 import { Command } from 'commander';
-import chalk from 'chalk';
 import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
 import {
@@ -69,15 +68,15 @@ export function registerServiceCommand(program: Command): void {
           dryRun: Boolean(opts.dryRun),
         });
         if (result.kind === 'already-installed') {
-          console.log(chalk.yellow(`⚠ ${result.label} already installed at ${result.configPath}`));
+          console.log(palette.warning(`⚠ ${result.label} already installed at ${result.configPath}`));
           console.log(palette.meta(`  Run 'afk service uninstall ${name}' first to reinstall.`));
           process.exit(1);
         }
         if (result.kind === 'failed') {
-          console.error(chalk.red(`✗ Install failed: ${result.reason}`));
+          console.error(palette.error(`✗ Install failed: ${result.reason}`));
           process.exit(1);
         }
-        console.log(chalk.green(`✓ Installed ${result.label}`));
+        console.log(palette.success(`✓ Installed ${result.label}`));
         console.log(palette.meta(`  Config:  ${result.configPath}  (${mgr.configKind})`));
         console.log(palette.meta(`  Log:     ${mgr.logPath(name)}`));
         if (result.autoRestartOnRebuild) {
@@ -105,14 +104,14 @@ export function registerServiceCommand(program: Command): void {
         const name = parseServiceName(nameArg);
         const result = mgr.uninstall(name);
         if (result.kind === 'not-installed') {
-          console.log(chalk.yellow(`⚠ ${mgr.label(name)} is not installed (no config at ${result.configPath})`));
+          console.log(palette.warning(`⚠ ${mgr.label(name)} is not installed (no config at ${result.configPath})`));
           return;
         }
         if (result.kind === 'failed') {
-          console.error(chalk.red(`✗ Uninstall failed: ${result.reason}`));
+          console.error(palette.error(`✗ Uninstall failed: ${result.reason}`));
           process.exit(1);
         }
-        console.log(chalk.green(`✓ Uninstalled ${mgr.label(name)}`));
+        console.log(palette.success(`✓ Uninstalled ${mgr.label(name)}`));
         console.log(palette.meta(`  Removed: ${result.configPath}`));
       } catch (err) {
         handleCommandError(err);
@@ -144,10 +143,10 @@ export function registerServiceCommand(program: Command): void {
     .action(() => {
       try {
         const mgr = resolveManager();
-        console.log(chalk.bold(`AFK services (${mgr.backend}):`));
+        console.log(palette.heading(`AFK services (${mgr.backend}):`));
         for (const name of SERVICE_NAMES) {
           const installed = mgr.isInstalled(name);
-          const marker = installed ? chalk.green('●') : chalk.dim('○');
+          const marker = installed ? palette.success('●') : palette.dim('○');
           const tag = installed ? palette.meta('installed') : palette.meta('not installed');
           console.log(`  ${marker} ${name.padEnd(10)}  ${tag}  ${palette.meta(mgr.configPath(name))}`);
         }
@@ -165,14 +164,14 @@ export function registerServiceCommand(program: Command): void {
         const name = parseServiceName(nameArg);
         const result = mgr.restart(name);
         if (result.kind === 'not-installed') {
-          console.error(chalk.red(`✗ ${mgr.label(name)} is not installed. Run 'afk service install ${name}' first.`));
+          console.error(palette.error(`✗ ${mgr.label(name)} is not installed. Run 'afk service install ${name}' first.`));
           process.exit(1);
         }
         if (result.kind === 'failed') {
-          console.error(chalk.red(`✗ Restart failed: ${result.reason}`));
+          console.error(palette.error(`✗ Restart failed: ${result.reason}`));
           process.exit(1);
         }
-        console.log(chalk.green(`✓ Restarted ${result.label}`));
+        console.log(palette.success(`✓ Restarted ${result.label}`));
       } catch (err) {
         handleCommandError(err);
       }
@@ -180,17 +179,17 @@ export function registerServiceCommand(program: Command): void {
 }
 
 function printStatus(s: ServiceStatus, configKind: string): void {
-  console.log(chalk.bold(`${s.label}`));
+  console.log(palette.heading(`${s.label}`));
   if (!s.installed) {
-    console.log(`  ${chalk.dim('○')} Not installed`);
+    console.log(`  ${palette.dim('○')} Not installed`);
     console.log(palette.meta(`  Config:  ${s.configPath}  (${configKind})`));
     console.log(palette.meta(`  Install: afk service install ${s.name}`));
     return;
   }
   if (s.pid !== undefined) {
-    console.log(`  ${chalk.green('●')} Running  (PID ${s.pid})`);
+    console.log(`  ${palette.success('●')} Running  (PID ${s.pid})`);
   } else {
-    console.log(`  ${chalk.yellow('●')} Installed but not running`);
+    console.log(`  ${palette.warning('●')} Installed but not running`);
     if (s.lastExitStatus !== undefined && s.lastExitStatus !== 0) {
       console.log(palette.meta(`  Last exit status: ${s.lastExitStatus}`));
     }

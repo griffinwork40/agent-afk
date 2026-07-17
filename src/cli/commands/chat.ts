@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import chalk from 'chalk';
+import { palette } from '../palette.js';
 import ora from 'ora';
 import { handleCommandError } from '../errors/index.js';
 import * as os from 'node:os';
@@ -857,7 +857,7 @@ export function registerChatCommand(program: Command): void {
             ...(jsonOutputTokens > 0 ? { outputTokens: jsonOutputTokens } : {}),
           }, null, 2));
         } else {
-          console.log(chalk.cyan('\n🤖 Claude:'));
+          console.log(palette.heading('\n🤖 Claude:'));
           console.log(renderMarkdownToTerminal(response.content));
           // Turn summary
           if (responseMeta) {
@@ -868,7 +868,7 @@ export function registerChatCommand(program: Command): void {
             const chatOutputTokens = Number(responseMeta.usage?.['output_tokens'] ?? 0);
             if (chatInputTokens + chatOutputTokens > 0) chatParts.push(formatTokens(chatInputTokens + chatOutputTokens) + ' tokens');
             if (chatParts.length > 0) {
-              console.log(chalk.dim('  · ' + chatParts.join(' · ')));
+              console.log(palette.dim('  · ' + chatParts.join(' · ')));
             }
           }
           console.log('');

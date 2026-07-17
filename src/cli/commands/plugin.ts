@@ -9,8 +9,8 @@
  */
 
 import type { Command } from 'commander';
-import chalk from 'chalk';
 import ora from 'ora';
+import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
 import { installPlugin, type InstallDeps, type InstallOptions } from '../../agent/plugins/install.js';
 import {
@@ -88,8 +88,8 @@ export function registerPluginCommand(program: Command, deps: PluginCommandDeps 
             { ...moduleDeps, confirm: isInteractive },
           );
           spinner.succeed(
-            chalk.green(`Installed ${chalk.bold(result.key)}`) +
-              chalk.gray(` at ${result.dir}`),
+            palette.success(`Installed ${palette.bold(result.key)}`) +
+              palette.meta(` at ${result.dir}`),
           );
         } catch (err) {
           spinner.fail('Failed');
@@ -110,8 +110,8 @@ export function registerPluginCommand(program: Command, deps: PluginCommandDeps 
           confirm: isInteractive,
         });
         spinner.succeed(
-          chalk.green(`Installed ${chalk.bold(result.name)}`) +
-            chalk.gray(
+          palette.success(`Installed ${palette.bold(result.name)}`) +
+            palette.meta(
               ` at ${result.dir}${result.entry.ref ? ` (ref: ${result.entry.ref})` : ''}`,
             ),
         );
@@ -136,10 +136,10 @@ export function registerPluginCommand(program: Command, deps: PluginCommandDeps 
           );
           printOutcome(outcome, spinner);
         } else {
-          logger.log(chalk.cyan('Updating all plugins…'));
+          logger.log(palette.info('Updating all plugins…'));
           const outcomes = await updateAll(moduleDeps);
           if (outcomes.length === 0) {
-            logger.log(chalk.gray('  (nothing installed)'));
+            logger.log(palette.meta('  (nothing installed)'));
             return;
           }
           for (const o of outcomes) {
@@ -176,14 +176,14 @@ export function registerPluginCommand(program: Command, deps: PluginCommandDeps 
     .action((name: string) => {
       const result = removePlugin(name, { pluginsDir, indexPath });
       if (!result.removedDir && !result.removedIndexEntry) {
-        logger.log(chalk.gray(`No plugin named "${name}" to remove.`));
+        logger.log(palette.meta(`No plugin named "${name}" to remove.`));
         return;
       }
       const bits = [
         result.removedDir ? 'directory' : null,
         result.removedIndexEntry ? 'index entry' : null,
       ].filter(Boolean);
-      logger.log(chalk.green(`Removed ${name}: ${bits.join(' + ')}`));
+      logger.log(palette.success(`Removed ${name}: ${bits.join(' + ')}`));
     });
 
   plugin
@@ -192,7 +192,7 @@ export function registerPluginCommand(program: Command, deps: PluginCommandDeps 
     .action((name: string) => {
       try {
         setEnabled(name, true, indexPath);
-        logger.log(chalk.green(`Enabled ${name}`));
+        logger.log(palette.success(`Enabled ${name}`));
       } catch (err) {
         handleCommandError(err);
       }
@@ -204,7 +204,7 @@ export function registerPluginCommand(program: Command, deps: PluginCommandDeps 
     .action((name: string) => {
       try {
         setEnabled(name, false, indexPath);
-        logger.log(chalk.yellow(`Disabled ${name} (dir preserved at ${pluginsDir}/${name})`));
+        logger.log(palette.warning(`Disabled ${name} (dir preserved at ${pluginsDir}/${name})`));
       } catch (err) {
         handleCommandError(err);
       }
@@ -214,18 +214,18 @@ export function registerPluginCommand(program: Command, deps: PluginCommandDeps 
 function renderList(index: PluginIndex, logger: Pick<Console, 'log'>): void {
   const names = Object.keys(index.plugins).sort();
   if (names.length === 0) {
-    logger.log(chalk.gray('No plugins installed.'));
-    logger.log(chalk.gray('  Try: afk plugin install anthropics/claude-plugins-official'));
+    logger.log(palette.meta('No plugins installed.'));
+    logger.log(palette.meta('  Try: afk plugin install anthropics/claude-plugins-official'));
     return;
   }
-  logger.log(chalk.cyan.bold('\nInstalled plugins:'));
+  logger.log(palette.heading('\nInstalled plugins:'));
   for (const name of names) {
     const e = index.plugins[name];
     if (!e) continue;
-    const state = e.enabled ? chalk.green('enabled ') : chalk.yellow('disabled');
-    const version = e.ref ? chalk.blue(e.ref) : chalk.gray('(local)');
-    const source = chalk.gray(e.source);
-    logger.log(`  ${chalk.bold(name.padEnd(30))} ${state}  ${version.padEnd(12)}  ${source}`);
+    const state = e.enabled ? palette.success('enabled ') : palette.warning('disabled');
+    const version = e.ref ? palette.info(e.ref) : palette.meta('(local)');
+    const source = palette.meta(e.source);
+    logger.log(`  ${palette.bold(name.padEnd(30))} ${state}  ${version.padEnd(12)}  ${source}`);
   }
   logger.log('');
 }
@@ -239,17 +239,17 @@ function formatOutcome(o: UpdateOutcome): string {
         o.fromRef === o.toRef
           ? `${o.toRef} @ ${o.commit.slice(0, 7)}`
           : `${o.fromRef ?? '(none)'} → ${o.toRef}`;
-      const vPart = o.version ? chalk.gray(`  [v${o.version.replace(/^v/i, '')}]`) : '';
-      return `${chalk.green('✓')} ${chalk.bold(o.name)}: ${refPart}${vPart}`;
+      const vPart = o.version ? palette.meta(`  [v${o.version.replace(/^v/i, '')}]`) : '';
+      return `${palette.success('✓')} ${palette.bold(o.name)}: ${refPart}${vPart}`;
     }
     case 'up-to-date': {
-      const vPart = o.version ? chalk.gray(` [v${o.version.replace(/^v/i, '')}]`) : '';
-      return `${chalk.gray('·')} ${chalk.bold(o.name)}: up-to-date (${o.ref})${vPart}`;
+      const vPart = o.version ? palette.meta(` [v${o.version.replace(/^v/i, '')}]`) : '';
+      return `${palette.meta('·')} ${palette.bold(o.name)}: up-to-date (${o.ref})${vPart}`;
     }
     case 'skipped-local':
-      return `${chalk.gray('·')} ${chalk.bold(o.name)}: skipped (local source)`;
+      return `${palette.meta('·')} ${palette.bold(o.name)}: skipped (local source)`;
     case 'missing-dir':
-      return `${chalk.yellow('!')} ${chalk.bold(o.name)}: plugin dir missing (${o.dir})`;
+      return `${palette.warning('!')} ${palette.bold(o.name)}: plugin dir missing (${o.dir})`;
   }
 }
 

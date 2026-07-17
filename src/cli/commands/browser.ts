@@ -29,7 +29,6 @@
  */
 
 import { Command } from 'commander';
-import chalk from 'chalk';
 import { execFileSync } from 'child_process';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { basename, dirname, join } from 'path';
@@ -167,11 +166,11 @@ function printSetupGuidance(): void {
   const major = detectChromeMajorVersion();
 
   console.log('');
-  console.log(chalk.bold('Drive your real Chrome — one-time setup:'));
+  console.log(palette.heading('Drive your real Chrome — one-time setup:'));
   if (major === null) {
     console.log(palette.meta('  • Chrome not detected. autoConnect requires Chrome ≥ 144.'));
   } else if (major < 144) {
-    console.log(chalk.yellow(`  • Detected Chrome ${major} — autoConnect requires ≥ 144. Please update Chrome.`));
+    console.log(palette.warning(`  • Detected Chrome ${major} — autoConnect requires ≥ 144. Please update Chrome.`));
   } else {
     console.log(palette.meta(`  • Detected Chrome ${major} ✓ (autoConnect needs ≥ 144)`));
   }
@@ -208,13 +207,13 @@ export function registerBrowserCommand(program: Command): void {
         const existing = cfg.mcpServers[CHROME_DEVTOOLS_SERVER_NAME];
 
         if (existing !== undefined && JSON.stringify(existing) === JSON.stringify(entry)) {
-          console.log(chalk.green(`✓ "${CHROME_DEVTOOLS_SERVER_NAME}" already configured`));
+          console.log(palette.success(`✓ "${CHROME_DEVTOOLS_SERVER_NAME}" already configured`));
           console.log(palette.meta(`  Config: ${path}`));
         } else {
           cfg.mcpServers[CHROME_DEVTOOLS_SERVER_NAME] = entry;
           writeMcpConfigFileAtomic(path, cfg);
           const verb = existing === undefined ? 'Added' : 'Updated';
-          console.log(chalk.green(`✓ ${verb} "${CHROME_DEVTOOLS_SERVER_NAME}" MCP server`));
+          console.log(palette.success(`✓ ${verb} "${CHROME_DEVTOOLS_SERVER_NAME}" MCP server`));
           console.log(palette.meta(`  Config: ${path}`));
           console.log(palette.meta(`  Runs:   npx ${entry.args?.join(' ') ?? ''}`));
         }
@@ -232,17 +231,17 @@ export function registerBrowserCommand(program: Command): void {
       try {
         const path = getMcpConfigPath();
         if (!existsSync(path)) {
-          console.log(chalk.yellow(`⚠ No MCP config at ${path} — nothing to remove.`));
+          console.log(palette.warning(`⚠ No MCP config at ${path} — nothing to remove.`));
           return;
         }
         const cfg = readMcpConfigFile(path);
         if (cfg.mcpServers === undefined || cfg.mcpServers[CHROME_DEVTOOLS_SERVER_NAME] === undefined) {
-          console.log(chalk.yellow(`⚠ "${CHROME_DEVTOOLS_SERVER_NAME}" is not configured — nothing to remove.`));
+          console.log(palette.warning(`⚠ "${CHROME_DEVTOOLS_SERVER_NAME}" is not configured — nothing to remove.`));
           return;
         }
         delete cfg.mcpServers[CHROME_DEVTOOLS_SERVER_NAME];
         writeMcpConfigFileAtomic(path, cfg);
-        console.log(chalk.green(`✓ Removed "${CHROME_DEVTOOLS_SERVER_NAME}" from ${path}`));
+        console.log(palette.success(`✓ Removed "${CHROME_DEVTOOLS_SERVER_NAME}" from ${path}`));
       } catch (err) {
         handleCommandError(err);
       }
@@ -284,7 +283,7 @@ export function registerBrowserCommand(program: Command): void {
         });
 
         console.log('');
-        console.log(chalk.bold('Log in to the site in the opened browser window.'));
+        console.log(palette.heading('Log in to the site in the opened browser window.'));
         console.log(palette.meta('When fully logged in, return here and press Enter to save the session.'));
         console.log(palette.meta('(Do NOT close the browser window yourself — this command closes it for you.)'));
         await waitForEnter('Press Enter to save the session… ');
@@ -303,7 +302,7 @@ export function registerBrowserCommand(program: Command): void {
         renameSync(tmp, statePath);
         await browserInstance.close().catch(() => undefined);
 
-        console.log(chalk.green(`✓ Saved session for profile "${profile}"`));
+        console.log(palette.success(`✓ Saved session for profile "${profile}"`));
         console.log(palette.meta(`  Vault: ${statePath} (0600 — treat as a credential)`));
         console.log(palette.meta('  Point the agent at it:'));
         console.log(palette.meta(`    export AFK_BROWSER_DEFAULT_PROFILE=${profile}`));
@@ -325,10 +324,10 @@ export function registerBrowserCommand(program: Command): void {
           console.log(palette.meta('No saved profiles. Create one with `afk browser login <url> --profile <name>`.'));
           return;
         }
-        console.log(chalk.bold('Saved browser profiles:'));
+        console.log(palette.heading('Saved browser profiles:'));
         for (const d of dirs) {
           const hasState = existsSync(join(root, d.name, 'storageState.json'));
-          const marker = hasState ? chalk.green('●') : palette.meta('○');
+          const marker = hasState ? palette.success('●') : palette.meta('○');
           const note = hasState ? '' : palette.meta(' (no saved session)');
           console.log(`  ${marker} ${d.name}${note}`);
         }

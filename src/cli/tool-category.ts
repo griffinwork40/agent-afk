@@ -14,6 +14,14 @@
  * single-cell Unicode that renders in macOS Terminal, iTerm2, Alacritty,
  * Kitty, and Windows Terminal without custom fonts.
  *
+ * NOTE: this file is a SANCTIONED chalk owner. The per-category hues live here
+ * (not in palette.ts) so each category's color stays colocated with its glyph
+ * in `CATEGORY_GLYPH` below — splitting color from glyph would scatter one
+ * concept across two files. `subagent`/`planning`/`other` still borrow semantic
+ * palette roles. The chalk-discipline guard (scripts/audit-chalk-usage.ts)
+ * allowlists this file for that reason; new raw-chalk owners should be rare and
+ * carry a documented justification like this one.
+ *
  * @module cli/tool-category
  */
 
@@ -49,9 +57,14 @@ const CATEGORY_COLOR: Record<ToolCategory, ChalkInstance> = {
   shell: chalk.hex('#A8E060'),
   subagent: palette.plan,
   skill: chalk.hex('#F08AC4'),
-  // teal — distinct from skill pink, subagent purple, mcp mint, and web sage.
+  // dag — teal. Distinct from skill pink, subagent purple, mcp cyan, and web sage.
   dag: chalk.hex('#4EC9B0'),
-  mcp: chalk.hex('#5FE0C0'),
+  // mcp — cyan. Shifted off the original mint #5FE0C0, which sat only ~7° in hue
+  // from dag's teal (both glyphs ⬡/⊡ are low-contrast too) and was hard to tell
+  // apart from it in a dense tool lane. Cyan pulls mcp ~24° clear of dag while
+  // reading as "external protocol / server," and never collides with user-cyan
+  // (palette.user), which never renders in the tool lane.
+  mcp: chalk.hex('#49C2E0'),
   // Web — desaturated sage. Shifted from the original #7FCDC0 so that
   // dag/mcp/web/fileRef (four teal-adjacent hues) remain perceptually
   // separable in dense tool turns.

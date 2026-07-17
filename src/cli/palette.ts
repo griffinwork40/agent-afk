@@ -33,7 +33,7 @@ export const palette = {
   user: chalk.cyan,
   /** Caret — thin vertical-bar cursor rendered in the input field. Distinct from `user` (cyan) so the cursor style can evolve independently of user-identity chrome. Soft cornflower blue pairs cleanly with JetBrains Mono dark themes and contrasts the warm brand orange without competing with info sky-blue or fileRef teal. */
   caret: chalk.hex('#7AA2F7'),
-  /** Tool name — steel blue, used as the syntax-theme color for functions / classes / titles in fenced code blocks. Originally also drove `● ToolName` bullet chrome; that role moved to `chrome` so syntax and chrome can evolve independently. */
+  /** Tool name — warm white / soft khaki (#DCDCAA), the VSCode default-dark function color; used as the syntax-theme tone for functions / classes / titles in fenced code blocks. (This is a pale yellow, NOT a blue — an earlier comment mislabeled it "steel blue".) Originally also drove `● ToolName` bullet chrome; that role moved to `chrome` so syntax and chrome can evolve independently. */
   tool: chalk.hex('#DCDCAA'),
   /** Bullet chrome — slate grey, used for the `● ToolName` glyph + name itself when no per-tool category color overrides it. Recedes visually so the category-colored variants carry the salience. */
   chrome: chalk.hex('#B0B8C2'),
@@ -69,6 +69,8 @@ export const palette = {
   bold: chalk.bold,
   /** Italic — used for emphasized prose; also paired with thinking tone. */
   italic: chalk.italic,
+  /** Inverse — reverse-video (swaps fg/bg); used for the selected row in the @-file autocomplete dropdown. A modifier alias so the render layer never reaches for raw chalk. */
+  inverse: chalk.inverse,
   /** Diff insertion — green, used for `+` lines in render-only diff blocks. */
   diffAdd: chalk.green,
   /** Diff deletion — red, used for `-` lines in render-only diff blocks. */
