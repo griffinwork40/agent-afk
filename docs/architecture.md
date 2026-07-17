@@ -162,7 +162,7 @@ A read-only skill's forked child uses the tighter `RECON_ALLOWED_TOOLS` instead 
 For embedding `agent-afk` programmatically:
 
 ```typescript
-import { AgentSession } from './agent/session.js';
+import { AgentSession } from 'agent-afk';
 
 const session = new AgentSession({
   model: 'sonnet',
@@ -178,9 +178,11 @@ const session = new AgentSession({
 const response = await session.sendMessage('Hello!');
 console.log(response.content);
 
-// Streaming (async iterator)
+// Streaming (async iterator) — text arrives as `content` chunks
 for await (const event of session.sendMessageStream('Tell me a story')) {
-  process.stdout.write(event.text ?? '');
+  if (event.type === 'chunk' && event.chunk.type === 'content') {
+    process.stdout.write(event.chunk.content);
+  }
 }
 
 // Runtime control
@@ -221,4 +223,4 @@ interface Message {
 type SessionState = 'idle' | 'processing' | 'streaming' | 'closed';
 ```
 
-Note: this API surface is not exposed as a public import from the npm package (`files: ["dist/"]` ships only the binary, not the type-level entry). To use the API programmatically, build from source.
+This API surface is a public import from the npm package: `package.json` declares `main`, `types`, and an `exports` map, so `import { AgentSession, query, tool } from 'agent-afk'` resolves against the published `dist/` without building from source. For a task-oriented walkthrough (one-shot `query*`, custom tools, subagents, providers, permission hooks) see the [Build with the SDK](https://docs.agentafk.com/sdk) guide.

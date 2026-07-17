@@ -1,0 +1,449 @@
+---
+title: "Build with the SDK"
+description: "Use Agent AFK as a library — drive the agent loop from your own code with query(), AgentSession, custom tools, subagents, providers, and permission hooks."
+---
+
+Agent AFK is not just a CLI. The `agent-afk` package ships a typed programmatic surface, so
+you can embed the same agent loop the `afk` binary runs — multi-provider routing, tools,
+subagents, permissions, structured output — directly inside your own TypeScript.
+
+The npm package declares a proper library entry (`main`, `types`, and an `exports` map), so a
+plain `import { query } from 'agent-afk'` resolves without building from source.
+
+<Callout type="info">
+This is a real agent harness, not a thin API wrapper. You own the loop: prompts, gates,
+routing, tools, and terminal behavior are all yours to configure. Unlike a vendor SDK, nothing
+here is a closed binary — the same code you import is the code you can read and change.
+</Callout>
+
+## Install
+
+```bash
+npm install agent-afk
+```
+
+Set a provider credential the same way the CLI does — the simplest path is an environment
+variable that the default (Anthropic) provider reads when you don't pass `apiKey` explicitly:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Requires **Node.js ≥ 22**. See the [Quickstart](/quickstart) for OAuth and alternative
+credential paths, and [Models & Providers](/configuration/models-providers) for non-Anthropic
+backends.
+
+## Two entry points
+
+There are two ways to drive the loop. Pick by whether you need conversation state.
+
+| | `query()` / `queryText()` / `queryStructured()` | `new AgentSession(...)` |
+|---|---|---|
+| Shape | One-shot functions | Long-lived object |
+| State | None — constructs, runs, and closes a session for you | Holds history across turns |
+| Lifecycle | Managed automatically (always closes) | You call `close()` |
+| Use when | A single prompt-to-answer call | Multi-turn conversations, runtime control, hot model swaps |
+
+Both accept the same options bag and route through the same provider layer.
+
+## One-shot queries
+
+### queryText — prompt in, string out
+
+The simplest possible call. Returns the final assistant text as a `Promise<string>`:
+
+```ts
+import { queryText } from 'agent-afk';
+
+const answer = await queryText('Summarize the last 10 git commits in this repo.', {
+  model: 'sonnet',
+});
+console.log(answer);
+```
+
+If you omit `model`, the one-shot helpers default to `sonnet`. If you omit `apiKey`, the
+Anthropic provider reads `ANTHROPIC_API_KEY` from the environment.
+
+### query — stream events as they arrive
+
+`query()` returns an async generator of `OutputEvent`s. Text arrives as `chunk` events; iterate
+and print the content deltas as they stream:
+
+```ts
+import { query } from 'agent-afk';
+
+for await (const event of query('Write a haiku about async generators.', { model: 'sonnet' })) {
+  if (event.type === 'chunk' && event.chunk.type === 'content') {
+    process.stdout.write(event.chunk.content);
+  }
+}
+```
+
+<Callout type="warn">
+The streamed text lives at `event.chunk.content` on `{ type: 'chunk' }` events whose
+`chunk.type === 'content'`. This is the `OutputEvent` union (see the
+[event reference](#streaming-event-reference) below) — not the lower-level provider event
+stream. Guard on both discriminants before reading `content`.
+</Callout>
+
+The generator **always** closes the underlying session when the loop ends — on normal
+completion, an early `break`, or a thrown error — so you never leak a session.
+
+### queryStructured — validated JSON out
+
+Pass a [Zod](https://zod.dev) schema and get back a parsed, validated value of that type. AFK
+extracts JSON from the response and, if it fails validation, re-prompts with the validation
+error up to `maxRetries` times (default `2`) before throwing:
+
+```ts
+import { queryStructured } from 'agent-afk';
+import { z } from 'zod';
+
+const Review = z.object({
+  sentiment: z.enum(['positive', 'neutral', 'negative']),
+  score: z.number().min(0).max(1),
+  themes: z.array(z.string()),
+});
+
+const result = await queryStructured(
+  'Classify this review: "The battery dies in an hour but the screen is gorgeous."',
+  Review,
+  { model: 'sonnet', maxRetries: 3 },
+);
+
+result.sentiment; // typed as 'positive' | 'neutral' | 'negative'
+```
+
+### Query options
+
+Every one-shot helper takes the same options bag: it is the full [`AgentConfig`](#agentconfig)
+with `model` made optional. `queryStructured` additionally accepts `maxRetries` and
+`injectSchemaPrompt`.
+
+```ts
+await queryText('...', {
+  model: 'opus',            // AgentModelInput — alias or full id; defaults to 'sonnet'
+  systemPrompt: 'You are a terse assistant.',
+  maxTurns: 20,
+  tools: { allowedTools: ['read_file', 'grep', 'glob'] },
+  customTools: [getWeather],  // in-process tools — see "Custom tools" below
+  canUseTool,                 // permission hook — see "Permissions" below
+  maxBudgetUsd: 0.50,
+});
+```
+
+## Stateful sessions
+
+`AgentSession` holds conversation state across turns. **The constructor is synchronous** —
+initialization runs internally and every `send*` call awaits it, so you can construct and
+immediately send:
+
+```ts
+import { AgentSession } from 'agent-afk';
+
+const session = new AgentSession({
+  model: 'sonnet',                          // required
+  systemPrompt: 'You are a pair-programming assistant.',
+  tools: { allowedTools: ['read_file', 'bash', 'edit_file'] },
+  // apiKey is optional — falls back to ANTHROPIC_API_KEY
+});
+```
+
+<Callout type="info">
+`model` is required for `AgentSession` (there is no default, unlike the one-shot helpers).
+</Callout>
+
+### Sending messages
+
+Three ways to send a turn, mirroring the one-shot helpers:
+
+```ts
+// 1. Await the final message
+const reply = await session.sendMessage('What does src/index.ts export?');
+console.log(reply.content); // string
+
+// 2. Stream the turn (same OutputEvent shape as query())
+for await (const event of session.sendMessageStream('Now explain the provider layer.')) {
+  if (event.type === 'chunk' && event.chunk.type === 'content') {
+    process.stdout.write(event.chunk.content);
+  }
+}
+
+// 3. Validated structured output on the live turn
+import { z } from 'zod';
+const files = await session.sendMessageStructured(
+  'List the TypeScript files you touched, as JSON.',
+  z.object({ files: z.array(z.string()) }),
+);
+
+await session.close(); // release the session when done
+```
+
+Conversation state accumulates across all three — turn 2 sees turn 1.
+
+### Runtime control
+
+```ts
+await session.interrupt();                      // cancel the in-flight turn
+await session.setModel('opus');                 // hot-swap the model mid-conversation
+await session.setPermissionMode('acceptEdits'); // change the permission posture
+await session.close();                          // tear down and free resources
+```
+
+### Budgets and cancellation
+
+Cap spend with `maxBudgetUsd` — the session throws a `BudgetExceededError` once the running
+cost crosses the ceiling. Wire an `AbortSignal` to cancel externally:
+
+```ts
+const controller = new AbortController();
+
+const session = new AgentSession({
+  model: 'sonnet',
+  maxBudgetUsd: 1.00,
+  abortSignal: controller.signal,
+});
+
+// elsewhere: controller.abort() cancels any in-flight work
+```
+
+## Custom tools
+
+The `tool()` helper builds an in-process tool from a name, description, Zod input schema, and a
+handler. The handler receives the **parsed and validated** input plus an `AbortSignal`, and
+returns a result object:
+
+```ts
+import { tool, queryText } from 'agent-afk';
+import { z } from 'zod';
+
+const getWeather = tool(
+  'get_weather',
+  'Get the current temperature for a city.',
+  z.object({ city: z.string() }),
+  async ({ city }, _signal) => {
+    const tempC = await lookupTemp(city);
+    return { content: `It is ${tempC}°C in ${city}.` };
+  },
+);
+
+const answer = await queryText('What should I wear in Oslo today?', {
+  customTools: [getWeather],
+});
+```
+
+Return `{ content: string }` on success, or `{ isError: true, content: string }` to signal a
+failure the model can react to. Input validation happens for you — the wrapper safe-parses and
+returns a structured error rather than throwing on a bad payload.
+
+Pass custom tools via `customTools` on either `AgentConfig` (for `AgentSession`) or the one-shot
+options bag. They also work with a live session:
+
+```ts
+const session = new AgentSession({ model: 'sonnet', customTools: [getWeather] });
+```
+
+<Callout type="warn">
+Built-in tools win on name collision. A custom tool named `bash` or `write_file` cannot shadow
+the built-in of the same name — choose a distinct name. Custom tools are gated by the same
+`PreToolUse`/`PostToolUse` permission checks as built-ins.
+</Callout>
+
+## Subagents
+
+Fork isolated child sessions programmatically with `SubagentManager`. Each child starts with
+zero conversation context and returns a compressed result to the parent. Give the fork an
+optional Zod `outputSchema` to get validated structured output back:
+
+```ts
+import { AgentSession, SubagentManager } from 'agent-afk';
+import { z } from 'zod';
+
+const parent = new AgentSession({ model: 'sonnet' });
+const manager = new SubagentManager({ parentModel: 'sonnet' });
+
+const handle = await manager.forkSubagent({
+  parent,                                   // provides session identity to fork from
+  agentType: 'todo-scanner',                // required display label
+  config: {
+    model: 'haiku',                         // right-size the child
+    tools: { allowedTools: ['read_file', 'grep', 'glob'] },
+  },
+  outputSchema: z.object({ todos: z.array(z.string()) }),
+  phaseRole: 'read-only',                   // optional: hard read-only tool boundary
+});
+
+// Drive the child with its task prompt:
+const result = await handle.runToResult('Find every TODO comment under src/ and list them.');
+
+if (result.status === 'succeeded') {
+  console.log(result.output?.todos);        // validated against outputSchema
+}
+
+await handle.teardown();
+```
+
+`handle.run(prompt)` returns the final `Message`; `handle.runToResult(prompt)` returns a
+`SubagentResult<T>` with `status`, the validated `output`, the raw `message`, and any `error` or
+`schemaError`. Passing `phaseRole: 'read-only'` enforces a read-only tool allowlist at the
+dispatcher gate — the child physically cannot mutate the repo.
+
+For the higher-level `agent` tool, background dispatch, and the `compose` DAG that the CLI
+exposes, see the [Subagents & Delegation guide](/guides/subagents).
+
+## Providers and models
+
+AFK routes each session to a provider based on the model id. You rarely need to touch this — the
+model string is enough — but the routing is inspectable:
+
+```ts
+import { providerForModel, resolveProvider } from 'agent-afk';
+
+providerForModel('sonnet');            // 'anthropic-direct'
+providerForModel('gpt-4o');            // 'openai-compatible'
+providerForModel('Qwen/Qwen2.5-72B');  // 'openai-compatible' (any org/model id)
+```
+
+| Model id pattern | Routes to |
+|---|---|
+| `claude-*`, `opus`, `sonnet`, `haiku`, `auto`, `local-*` | `anthropic-direct` |
+| `gpt-*`, `o1*` / `o3*` / `o4*`, `codex-*`, and any `org/model` id (contains `/`) | `openai-compatible` |
+
+`resolveProvider()` returns a fresh provider instance for a model; `providerForModel()` returns
+just the provider name. To inject your own backend (or a mock in tests), pass a `provider`
+instance directly on the config:
+
+```ts
+import { AgentSession } from 'agent-afk';
+import { myCustomProvider } from './my-provider.js';
+
+const session = new AgentSession({ model: 'sonnet', provider: myCustomProvider });
+```
+
+See [Models & Providers](/configuration/models-providers) for the full routing rules and local
+OpenAI-compatible runners (MLX, llama.cpp, vLLM, Ollama).
+
+## Permissions
+
+Intercept every tool call with a `canUseTool` hook. The `createCanUseToolHook()` helper builds
+one from simple allow/deny/ask rules and returns a function you pass straight to the config:
+
+```ts
+import { AgentSession, createCanUseToolHook } from 'agent-afk';
+
+const canUseTool = createCanUseToolHook({
+  rules: {
+    defaultMode: 'allow',
+    tools: {
+      bash: 'deny',            // runtime tool names (snake_case) — not "Bash"
+      edit_file: 'deny',
+      write_file: 'ask',
+    },
+  },
+  onAsk: async ({ toolName, input }) => {
+    // resolve interactively, from a policy, etc.
+    return { behavior: 'allow' };
+  },
+  onDecision: (ctx, decision) => log(ctx.toolName, decision.behavior),
+});
+
+const session = new AgentSession({ model: 'sonnet', canUseTool });
+```
+
+<Callout type="warn">
+Rule keys must be AFK **runtime** tool names in snake_case — `bash`, `edit_file`, `write_file`,
+`read_file` — not the PascalCase display names. A key that doesn't match a real runtime name
+silently falls through to `defaultMode`; a `Bash` key with `defaultMode: 'allow'` **fails open**
+and the tool you meant to block still runs.
+</Callout>
+
+For coarser control, set `permissionMode` on the config (`'default'`, `'acceptEdits'`,
+`'plan'`, `'bypassPermissions'`). See [Permissions](/configuration/permissions) for the full
+model.
+
+## Streaming event reference
+
+Both `query()` and `session.sendMessageStream()` yield the `OutputEvent` union. The most common
+variants:
+
+| `event.type` | Payload | Meaning |
+|---|---|---|
+| `chunk` | `event.chunk` (a `MessageChunk`) | Streaming delta. Text is `chunk.type === 'content'` → `chunk.content`; also `'thinking'`, `'tool_use'`, `'tool_result'` |
+| `message` | `event.message` (a `Message`) | A complete message emitted during the turn |
+| `done` | `event.metadata?` | The turn finished; metadata carries usage/cost |
+| `error` | `event.error` (an `Error`) | The turn failed |
+| `paused` / `resumed` | reason / account info | Provider hit a usage limit and is waiting to auto-resume |
+
+Read text with the two-level guard shown throughout this page:
+
+```ts
+if (event.type === 'chunk' && event.chunk.type === 'content') {
+  process.stdout.write(event.chunk.content);
+}
+```
+
+## AgentConfig
+
+The config object accepted by `AgentSession` (and, with `model` optional, by the one-shot
+helpers). Commonly used fields:
+
+| Field | Type | Notes |
+|---|---|---|
+| `model` | `AgentModelInput` | Required for `AgentSession`. Alias (`sonnet`) or full id |
+| `apiKey` | `string` | Optional — falls back to the provider's env credential |
+| `systemPrompt` | `string` | Appended to the framework base as an operator overlay |
+| `maxTurns` | `number` | Cap the agentic loop length |
+| `tools` | `{ allowedTools?, disallowedTools? }` | Tool allow/deny lists (runtime names) |
+| `customTools` | `CustomToolDef[]` | In-process tools from `tool()` |
+| `mcpServers` | record | External MCP servers (stdio / http / sse) |
+| `canUseTool` | `CanUseTool` | Per-call permission hook |
+| `permissionMode` | `PermissionMode` | `default` / `acceptEdits` / `plan` / `bypassPermissions` |
+| `maxBudgetUsd` | `number` | Throw `BudgetExceededError` past this spend |
+| `abortSignal` | `AbortSignal` | External cancellation |
+| `provider` | `ModelProvider` | Inject a custom/mock backend |
+| `resume` / `forkSession` / `persistSession` | — | Session continuity controls |
+
+The full type (with ~40 exported type aliases) ships with the package — your editor's
+autocomplete on the `agent-afk` import is the authoritative reference.
+
+## Full example
+
+A minimal multi-turn program with a custom tool and a budget cap:
+
+```ts
+import { AgentSession, tool } from 'agent-afk';
+import { z } from 'zod';
+
+const now = tool(
+  'now',
+  'Return the current ISO timestamp.',
+  z.object({}),
+  async () => ({ content: new Date().toISOString() }),
+);
+
+const session = new AgentSession({
+  model: 'sonnet',
+  systemPrompt: 'You are a concise assistant. Use tools when useful.',
+  customTools: [now],
+  maxBudgetUsd: 0.25,
+});
+
+try {
+  const a = await session.sendMessage('What time is it right now?');
+  console.log(a.content);
+
+  const b = await session.sendMessage('How many minutes until the next hour?');
+  console.log(b.content);
+} finally {
+  await session.close();
+}
+```
+
+## Next steps
+
+<Cards>
+  <Card title="Subagents & Delegation" href="/guides/subagents" description="The agent tool, background mode, and the compose DAG." />
+  <Card title="Models & Providers" href="/configuration/models-providers" description="Routing rules and local OpenAI-compatible runners." />
+  <Card title="Permissions" href="/configuration/permissions" description="Permission modes and the canUseTool gate in full." />
+  <Card title="How It Works" href="/how-it-works" description="Session lifecycle, provider routing, terminal states." />
+</Cards>
