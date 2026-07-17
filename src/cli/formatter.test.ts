@@ -520,6 +520,11 @@ describe('renderMarkdownToTerminal', () => {
       const m = tagged.match(/^(\x1b\[[0-9;]*m)/);
       return m ? m[1] : null;
     };
+    const getToolEscape = () => {
+      const tagged = palette.tool('SENTINEL');
+      const m = tagged.match(/^(\x1b\[[0-9;]*m)/);
+      return m ? m[1] : null;
+    };
     const userEscape = '\x1b[36m'; // chalk.cyan is always \x1b[36m at any level ≥ 1
 
     it('codespan containing a slash command gets brand color, not cyan', () => {
@@ -534,11 +539,16 @@ describe('renderMarkdownToTerminal', () => {
       expect(stripAnsi(out).trim()).toBe('/mint');
     });
 
-    it('codespan without slash keeps cyan color', () => {
+    it('codespan without slash gets tool color, not cyan', () => {
       const out = renderMarkdownToTerminal('`someFunction`');
       const brandEscape = getBrandEscape();
-      // Must contain cyan escape
-      expect(out).toContain(userEscape);
+      const toolEscape = getToolEscape();
+      // Must contain the tool ANSI escape (cyan is reserved for user identity;
+      // non-slash codespans now share the fenced-code/function tone).
+      expect(toolEscape).not.toBeNull();
+      expect(out).toContain(toolEscape!);
+      // Must NOT contain cyan escape
+      expect(out).not.toContain(userEscape);
       // Must not contain brand color
       if (brandEscape) {
         expect(out).not.toContain(brandEscape);

@@ -31,7 +31,7 @@ function renderInlineTokens(tokens?: Tokens.Generic[]): string {
     switch (token.type) {
       case 'codespan': {
         const csText = (token as Tokens.Codespan).text;
-        return SLASH_CODESPAN_RE.test(csText) ? palette.brand(csText) : palette.user(csText);
+        return SLASH_CODESPAN_RE.test(csText) ? palette.brand(csText) : palette.tool(csText);
       }
       case 'strong': {
         const strong = token as Tokens.Strong;
@@ -192,7 +192,7 @@ export function renderMarkdownToTerminal(text: string, opts: RenderMarkdownOptio
         }
         case 'codespan': {
           const raw = (token as Tokens.Codespan).text;
-          return SLASH_CODESPAN_RE.test(raw) ? palette.brand(raw) : palette.user(raw);
+          return SLASH_CODESPAN_RE.test(raw) ? palette.brand(raw) : palette.tool(raw);
         }
         case 'strong': {
           const strong = token as Tokens.Strong;
