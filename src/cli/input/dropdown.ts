@@ -41,12 +41,18 @@ export function formatDropdownRow(
   const truncated = truncateToWidth(combined, maxWidth - 4);
 
   const row = `  ${marker} ${truncated}`;
-  // Single muted base tone across trigger kinds. The earlier yellow accent for
-  // flag rows clashed with the cyan inverse on the selected row and the orange
-  // brand prompt above the dropdown — uniform gray reads as a quiet menu chrome
-  // and lets the selection highlight be the only thing competing for attention.
+  // Selection style mirrors the arrow-key picker (src/cli/render/picker.ts):
+  // a brand-orange marker + bold label, NOT a reverse-video fill band. Cyan is
+  // reserved for user identity only (see palette.ts) — the previous
+  // `inverse(user(...))` borrowed it for menu chrome, which both broke that
+  // rule and diverged from the picker's selection idiom. Unselected rows stay
+  // uniform muted gray so the selected row is the only thing competing for
+  // attention; the earlier per-trigger-kind yellow accent was dropped for the
+  // same salience reason.
   void triggerKind;
-  return isSelected ? palette.inverse(palette.user(row)) : palette.meta(row);
+  return isSelected
+    ? `  ${palette.brand(marker)} ${palette.bold(truncated)}`
+    : palette.meta(row);
 }
 
 /**
