@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.56.2] - 2026-07-17
+
+### Fixed
+- make the REPL status line legible — visible context bar, brand caret, tiered tones (#641) (5f404ae)
+
+### Changed
+- add "Build with the SDK" guide for the programmatic library surface (#640) (02e44f1)
+
 ## [5.56.1] - 2026-07-17
 
 ### Fixed
