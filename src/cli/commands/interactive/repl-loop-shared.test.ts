@@ -11,7 +11,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import chalk from 'chalk';
 import { buildPrompt } from './repl-loop-shared.js';
+import { palette } from '../../palette.js';
 
 const BROAD_ANSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 
@@ -50,6 +52,21 @@ describe('buildPrompt', () => {
   it('always ends with the caret', () => {
     for (const mode of ['default', 'plan', 'autonomous', 'bypassPermissions'] as const) {
       expect(strip(buildPrompt(mode))).toMatch(/› $/);
+    }
+  });
+
+  it('renders the caret in the brand tone, not dim', () => {
+    // The caret was lifted from `dim` to `brand` so the input point reads as a
+    // deliberate affordance. Lock the tone (glyph is covered by the tests above)
+    // so a future change cannot silently re-dim it back to receding chrome.
+    const prev = chalk.level;
+    chalk.level = 3;
+    try {
+      const out = buildPrompt('default');
+      expect(out).toContain(palette.brand('  › '));
+      expect(out).not.toContain(palette.dim('  › '));
+    } finally {
+      chalk.level = prev;
     }
   });
 });

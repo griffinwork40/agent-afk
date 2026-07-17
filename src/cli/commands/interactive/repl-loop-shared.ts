@@ -78,5 +78,9 @@ export function buildPrompt(mode: PermissionMode): string {
     mode === 'autonomous' ? palette.info(' ◐') :
     mode === 'bypassPermissions' ? palette.bypass(' ⚡ bp') :
     '';
-  return base + marker + palette.dim('  › ');
+  // Caret is brand-toned (not dim) so the input point reads as a deliberate
+  // affordance rather than receding chrome — matches the "the caret carries the
+  // brand" intent above. Glyph unchanged (`›`) so piped/stripped transcripts and
+  // the strip-based buildPrompt tests are unaffected.
+  return base + marker + palette.brand('  › ');
 }

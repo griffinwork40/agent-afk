@@ -378,6 +378,16 @@ export class StatusLine {
       droppablePriority?: number; // undefined = never drop, higher = drop first
     }
 
+    // Tone hierarchy (all existing palette roles — no new hex): the row earns a
+    // "finished" read from CONTRAST between tiers, not uniform brightness.
+    //   primary   — model (brand) + mode chip (plan/AFK/bypass): already colored.
+    //   secondary — branch, cost, tokens, context %: readable `chrome` slate
+    //               (lifted from near-invisible `meta`/`dim`) so they're legible.
+    //   recessive — cwd path, separators, `⎇`/bar-track glyphs: stay `dim`/`meta`.
+    // cwd deliberately stays recessive: it is the longest field, and lifting it
+    // too would flatten the hierarchy back into a wash and compete with the
+    // conversation above. Tone is width-neutral (ANSI is stripped by displayWidth),
+    // so none of the drop/truncate math below is affected.
     let parts: Part[] = [];
     const maxW = Math.max(4, (this.stream.columns ?? 80) - 2);
 
@@ -425,7 +435,7 @@ export class StatusLine {
       // forcing the final blind truncation to shear the model off the right
       // edge. Drop-last means the location sheds before the model is ever cut.
       const branchText = truncateDisplayWidth(f.branch!, 30);
-      let gitText = `${palette.dim('⎇')} ${palette.dim(branchText)}`;
+      let gitText = `${palette.dim('⎇')} ${palette.chrome(branchText)}`;
       if (f.pr !== undefined) gitText += ` ${palette.meta(`#${f.pr}`)}`;
       parts.push({ text: gitText, droppablePriority: 1 }); // drop last among droppables — matches the plain branch; keeps the model never-drop
     } else {
@@ -443,7 +453,7 @@ export class StatusLine {
       // line; the whole segment is droppable (lowest priority ⇒ dropped last).
       if (f.branch) {
         const branchText = truncateDisplayWidth(f.branch, 30);
-        let gitText = `${palette.dim('⎇')} ${palette.dim(branchText)}`;
+        let gitText = `${palette.dim('⎇')} ${palette.chrome(branchText)}`;
         if (f.pr !== undefined) gitText += ` ${palette.meta(`#${f.pr}`)}`;
         parts.push({ text: gitText, droppablePriority: 1 }); // drop last among droppables
       }
@@ -480,11 +490,11 @@ export class StatusLine {
     }
 
     if (f.cost !== undefined) {
-      parts.push({ text: palette.meta(`$${f.cost.toFixed(2)}`), droppablePriority: 3 }); // drop 2nd
+      parts.push({ text: palette.chrome(`$${f.cost.toFixed(2)}`), droppablePriority: 3 }); // drop 2nd
     }
 
     if (f.tokens !== undefined) {
-      parts.push({ text: palette.meta(`${formatTokens(f.tokens)} tok`), droppablePriority: 4 }); // drop 1st
+      parts.push({ text: palette.chrome(`${formatTokens(f.tokens)} tok`), droppablePriority: 4 }); // drop 1st
     }
 
     // Join with separator and measure the result.
