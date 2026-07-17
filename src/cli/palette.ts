@@ -18,11 +18,37 @@
  * messages, status cards, daemon banners). It is NOT a generic "secondary
  * blue" — anything that wants a second blue should use `fileRef` (teal)
  * or `tool` (steel) instead.
+ *
+ * ## Theming (dark / light)
+ *
+ * `palette` is a LIVE view over the active theme. Two theme maps are
+ * defined — `darkPalette` (the canonical tones documented below) and
+ * `lightPalette` (the same roles retuned for light-background terminals).
+ * `applyTheme()` in `./theme.ts` rewrites `palette`'s members in place, so
+ * the ~100 modules that already `import { palette }` pick up the new tones
+ * on their next render with zero code changes.
+ *
+ * Invariant: `palette` keeps the SAME object identity across a theme swap —
+ * only its member chalk instances change. Consumers therefore MUST access
+ * `palette.<role>` at render time (call site) and MUST NOT capture a member
+ * into a module-level const at import time, or they will freeze to whatever
+ * theme was active at module load. The sole historical exception was
+ * `syntax-theme.ts`, which was made lazy (`buildSyntaxTheme()`) for exactly
+ * this reason.
+ *
+ * Invariant: every theme is built from the shared default `chalk` export
+ * (never `new Chalk({ level })`), so `chalk.level = 0` (NO_COLOR / CI /
+ * non-TTY, set in `color-config.ts`) strips color from light-theme
+ * instances too — chalk builders read the global level at call time.
  */
 
-import chalk from 'chalk';
+import chalk, { type ChalkInstance } from 'chalk';
 
-export const palette = {
+/**
+ * Dark theme — the canonical tones, unchanged from the original palette.
+ * This is the default; every existing user sees exactly this.
+ */
+const darkPaletteDef = {
   /** Brand accent — warm orange, used for the banner title, prompt prefix, and top-level (H1) markdown headings. */
   brand: chalk.hex('#E67E4C'),
   /** Mint accent — cool mint green, used by the input-buffer highlighter as a per-command override for `/mint` (and its namespaced forms, e.g. `/example-plugin:mint`). A playful color pun on the skill name; treats `/mint` as a chip distinct from the brand-orange chip every other registered command renders as. Distinct from `success` (saturated ANSI green), `fileRef` (teal), `goblin` (olive), and `syntaxString` (warm sage). */
@@ -77,4 +103,92 @@ export const palette = {
   diffRemove: chalk.red,
   /** Diff hunk header — dim grey, used for `@@ -a,b +c,d @@` lines. Structural scaffolding, not user-side, so it lives in the meta family. */
   diffHunk: chalk.blackBright,
-} as const;
+};
+
+/**
+ * The role set every theme must implement. Derived from the dark theme so
+ * the two maps can never drift apart in shape — a missing role in
+ * `lightPaletteDef` is a compile error.
+ */
+export type ThemePalette = { [K in keyof typeof darkPaletteDef]: ChalkInstance };
+
+/**
+ * Light theme — the same semantic roles retuned for light-background
+ * terminals. Each colored role keeps its dark-theme HUE IDENTITY (brand is
+ * still orange, user is still cyan-ish, success still green) but darkens /
+ * saturates so it stays legible on a white-to-pale background where the
+ * dark theme's pale tones (warm-white, bright-black, dim-white) would wash
+ * out. Pure modifiers (bold / italic / inverse / dim) are theme-agnostic
+ * and shared verbatim.
+ *
+ * Values are a considered first cut and are safe to retune in isolation —
+ * the theming mechanism does not depend on any specific hex.
+ */
+const lightPaletteDef: ThemePalette = {
+  /** Burnt orange — brand identity, darkened for white-bg contrast. */
+  brand: chalk.hex('#C0562A'),
+  /** Deeper mint-green (the pale dark-theme mint vanishes on white). */
+  mint: chalk.hex('#1B9E63'),
+  /** Darker olive — mascot identity on light. */
+  goblin: chalk.hex('#6B7D2A'),
+  /** Dark cyan/teal — bright cyan is illegible on white; keeps user-identity hue. */
+  user: chalk.hex('#0E7490'),
+  /** Deeper cornflower — cursor visible on white. */
+  caret: chalk.hex('#3B5BDB'),
+  /** Dark khaki-gold — the light-bg equivalent of the warm-white function tone. */
+  tool: chalk.hex('#7A6E00'),
+  /** Dark slate — bullet chrome that recedes but stays visible on white. */
+  chrome: chalk.hex('#5A6470'),
+  /** Darker green italic — code strings on white (italic colorblind cue preserved). */
+  syntaxString: chalk.italic.hex('#3F7A3F'),
+  /** Mid grey — dim-white washes out on white, so use an explicit legible grey. */
+  toolArg: chalk.hex('#6B7280'),
+  /** Darker mauve italic — thinking blocks on white. */
+  thinking: chalk.italic.hex('#6D5B8E'),
+  /** Dark green — success on white. */
+  success: chalk.hex('#2E7D32'),
+  /** Dark red — errors on white. */
+  error: chalk.hex('#C62828'),
+  /** Dark goldenrod/amber — ANSI yellow is near-illegible on white. */
+  warning: chalk.hex('#B8860B'),
+  /** Deeper purple — plan chrome on white. */
+  plan: chalk.hex('#7048C0'),
+  /** Deeper synthwave pink, bold — bypass chip on white. */
+  bypass: chalk.bold.hex('#D6297F'),
+  /** Mid grey — bright-black reads as light-grey on white; use an explicit mid-grey. */
+  meta: chalk.hex('#6B7280'),
+  /** Deeper sky blue — ambient-notice channel on white. */
+  info: chalk.hex('#1D6FD6'),
+  /** Dark teal — file refs on white. */
+  fileRef: chalk.hex('#0F766E'),
+  /** Bold near-black — H2 headings; white heading is invisible on white. */
+  heading: chalk.bold.hex('#1F2937'),
+  /** Dim (relative modifier — theme-agnostic). */
+  label: chalk.dim,
+  /** Dim (theme-agnostic). */
+  dim: chalk.dim,
+  /** Bold (theme-agnostic). */
+  bold: chalk.bold,
+  /** Italic (theme-agnostic). */
+  italic: chalk.italic,
+  /** Inverse (theme-agnostic). */
+  inverse: chalk.inverse,
+  /** Dark green — diff insertions on white. */
+  diffAdd: chalk.hex('#2E7D32'),
+  /** Dark red — diff deletions on white. */
+  diffRemove: chalk.hex('#C62828'),
+  /** Mid grey — diff hunk headers on white. */
+  diffHunk: chalk.hex('#6B7280'),
+};
+
+/** Canonical dark tones (named export for `theme.ts` + tests). */
+export const darkPalette: ThemePalette = darkPaletteDef;
+/** Light-background tones (named export for `theme.ts` + tests). */
+export const lightPalette: ThemePalette = lightPaletteDef;
+
+/**
+ * The live palette every consumer imports. Starts on the dark theme;
+ * `applyTheme()` (./theme.ts) mutates these members in place on a swap.
+ * Keeps a stable object identity — do NOT reassign it.
+ */
+export const palette: ThemePalette = { ...darkPaletteDef };

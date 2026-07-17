@@ -13,7 +13,7 @@
 
 import chalk from 'chalk';
 import { createEmphasize, common } from 'emphasize';
-import { defaultSyntaxTheme } from './syntax-theme.js';
+import { buildSyntaxTheme } from './syntax-theme.js';
 
 const emphasize = createEmphasize(common);
 
@@ -22,6 +22,15 @@ const MAX_CACHE_LEN = 512;
 const MAX_CACHE_ENTRIES = 32;
 
 const cache = new Map<string, string>();
+
+/**
+ * Drop all memoized styled output. Called by `applyTheme()` (./theme.ts) on
+ * a theme swap so already-highlighted snippets are re-highlighted with the
+ * new palette instead of served from the cache in the previous theme's tones.
+ */
+export function clearHighlightCache(): void {
+  cache.clear();
+}
 
 function cacheGet(key: string): string | undefined {
   const hit = cache.get(key);
@@ -61,7 +70,7 @@ export function highlightCode(text: string, lang: string): string {
     if (!lang || !emphasize.registered(lang)) {
       out = text;
     } else {
-      const result = emphasize.highlight(lang, text, defaultSyntaxTheme);
+      const result = emphasize.highlight(lang, text, buildSyntaxTheme());
       out = typeof result?.value === 'string' ? result.value : text;
     }
   } catch {

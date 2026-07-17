@@ -23,6 +23,7 @@ import { getApiKey } from '../shared-helpers.js';
 import { loadConfig, type CliConfig } from '../config.js';
 import { resolveResumeTarget } from '../resume-session.js';
 import type { CliOptions, InteractiveCtx, ThinkingUiMode } from './interactive/shared.js';
+import { applyTheme, resolveTheme, resolveThemeMode, parseThemeFlag } from '../theme.js';
 import { REPL_SPINNER_OPTIONS, printResumeBanner } from './interactive/shared.js';
 import { handleCommandError } from '../errors/index.js';
 import { type UpdateInfo, printUpdateBanner } from '../update-checker.js';
@@ -64,6 +65,8 @@ function parseThinkingUiMode(raw: string): ThinkingUiMode {
   }
   throw new Error(`Invalid --thinking-ui value: ${raw}. Expected summary|live|digest|off`);
 }
+
+
 
 /**
  * Resolve the worktree-autoname enable flag with precedence:
@@ -195,6 +198,7 @@ export function registerInteractiveCommand(program: Command): void {
     .option('--max-turns <number>', 'Maximum conversation turns', '100')
     .option('--thinking <mode>', "Thinking mode: 'adaptive' | 'disabled' | 'enabled:<N>'", 'enabled:max')
     .option('--thinking-ui <mode>', 'Thinking display mode: summary|live|digest|off. Default live. Also: AFK_THINKING_UI env, or interactive.thinkingUi in afk.config.json.', parseThinkingUiMode)
+    .option('--theme <mode>', 'TUI color palette: dark|light|auto. Default dark. Also: AFK_THEME env, or theme in afk.config.json. Toggle live with /theme.', parseThemeFlag)
     .option('--effort <level>', 'Effort level: low|medium|high|xhigh|max')
     .option('--max-output-tokens <n|max>', "Per-response output cap ('max' = model ceiling). Env: AFK_MAX_OUTPUT_TOKENS")
     .option('--resume <id>', 'Resume a persisted SDK session by id')
@@ -310,6 +314,10 @@ export function registerInteractiveCommand(program: Command): void {
       // options.thinkingUi) and the /thinking runtime toggle start from the
       // resolved persistent default.
       options.thinkingUi = resolveThinkingUi(options, cliConfig);
+      // Apply the color theme (--theme flag > AFK_THEME env > config.theme >
+      // auto-detect > dark). Refines the env/default baseline applied at
+      // startup (index.ts) now that config is loaded and the flag is parsed.
+      applyTheme(resolveTheme(resolveThemeMode(options.theme, cliConfig.theme)));
       const branchPrefixOverride =
         env.AFK_WORKTREE_BRANCH_PREFIX ??
         cliConfig.interactive?.worktreeBranchPrefix;
