@@ -1,4 +1,3 @@
-import chalk from 'chalk';
 import { palette } from './palette.js';
 import { getEnvConfigPath } from '../paths.js';
 import { upsertEnvVar } from '../utils/envFile.js';
@@ -31,7 +30,7 @@ export function promptToken(): Promise<string> {
 export async function runAuthWizard(token?: string): Promise<void> {
   const inputToken = token ?? (await promptToken());
   if (!inputToken) {
-    console.error(chalk.red('No token provided. Nothing saved.'));
+    console.error(palette.error('No token provided. Nothing saved.'));
     process.exit(1);
   }
 
@@ -49,6 +48,6 @@ export async function runAuthWizard(token?: string): Promise<void> {
 
   upsertEnvVar(envPath, envVarName, inputToken, keysToRemove);
 
-  console.log(chalk.green(`✓ Saved ${envVarName} to ${envPath}`));
+  console.log(palette.success(`✓ Saved ${envVarName} to ${envPath}`));
   console.log(palette.meta('Restart any running afk daemon to pick up the new token.'));
 }

@@ -6,7 +6,6 @@
  * and tracking the row count for redraw.
  */
 
-import chalk from 'chalk';
 import stringWidth from 'string-width';
 import { palette } from '../palette.js';
 import type { Candidate, Trigger } from './types.js';
@@ -47,7 +46,7 @@ export function formatDropdownRow(
   // brand prompt above the dropdown — uniform gray reads as a quiet menu chrome
   // and lets the selection highlight be the only thing competing for attention.
   void triggerKind;
-  return isSelected ? chalk.inverse(palette.user(row)) : palette.meta(row);
+  return isSelected ? palette.inverse(palette.user(row)) : palette.meta(row);
 }
 
 /**

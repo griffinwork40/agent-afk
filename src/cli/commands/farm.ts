@@ -10,7 +10,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Command } from 'commander';
-import chalk from 'chalk';
+import { palette } from '../palette.js';
 import { createFarm, setFarmMemoryFactId } from '../../agent/worktree.js';
 import { runSubagentDAG } from '../../agent/dag-subagent.js';
 import { SubagentManager } from '../../agent/subagent.js';
@@ -88,19 +88,19 @@ function pad(s: string, n: number): string {
 }
 
 function formatScore(score: BranchScore | null | undefined): string {
-  if (score === undefined) return chalk.dim('—');
-  if (score === null) return chalk.dim('skipped');
+  if (score === undefined) return palette.dim('—');
+  if (score === null) return palette.dim('skipped');
   // Compact: tests + lint + LoC. Test signal is binary in v1.
   const testIcon = score.fail === 0 && score.pass > 0
-    ? chalk.green('tests✓')
-    : chalk.red('tests✗');
+    ? palette.success('tests✓')
+    : palette.error('tests✗');
   const lintIcon = score.lint_ok === true
-    ? chalk.green('lint✓')
+    ? palette.success('lint✓')
     : score.lint_ok === false
-    ? chalk.red('lint✗')
-    : chalk.dim('lint?');
+    ? palette.error('lint✗')
+    : palette.dim('lint?');
   const sign = score.loc_delta > 0 ? '+' : '';
-  const loc = chalk.dim(`${sign}${score.loc_delta} LoC`);
+  const loc = palette.dim(`${sign}${score.loc_delta} LoC`);
   return `${testIcon} ${lintIcon} ${loc}`;
 }
 
@@ -111,7 +111,7 @@ function printSummary(
   branchResults: BranchResult[],
 ): void {
   const line = '─'.repeat(45);
-  console.log(chalk.dim(line));
+  console.log(palette.dim(line));
   console.log(`farm:    ${taskName}`);
   console.log(`slug:    ${taskSlug}`);
   console.log('');
@@ -127,18 +127,18 @@ function printSummary(
   for (let i = 0; i < orderedResults.length; i++) {
     const r = orderedResults[i]!;
     const branch = branches.find((b) => b.index === r.index)!;
-    const icon = r.ok ? chalk.green('✓') : chalk.red('✗');
+    const icon = r.ok ? palette.success('✓') : palette.error('✗');
     const ref = pad(branch.branch, 40);
     const detail = r.ok
-      ? chalk.dim(`(${r.commitCount} commit${r.commitCount === 1 ? '' : 's'})`)
-      : chalk.red(`[error: ${r.error}]`);
-    const rank = anyScored ? chalk.cyan(`#${i + 1} `) : '';
+      ? palette.dim(`(${r.commitCount} commit${r.commitCount === 1 ? '' : 's'})`)
+      : palette.error(`[error: ${r.error}]`);
+    const rank = anyScored ? palette.brand(`#${i + 1} `) : '';
     const scoreCol = anyScored ? `  ${formatScore(r.score)}` : '';
     console.log(`${rank}branch-${r.index}  ${icon}  ${ref}   ${detail}${scoreCol}`);
-    console.log(chalk.dim(`        worktree: ${branch.path}`));
+    console.log(palette.dim(`        worktree: ${branch.path}`));
   }
 
-  console.log(chalk.dim(line));
+  console.log(palette.dim(line));
   const succeeded = branchResults.filter((r) => r.ok).length;
   const total = branchResults.length;
   console.log(`${succeeded}/${total} branches completed.`);
@@ -148,7 +148,7 @@ function printSummary(
     (r) => r.score != null && r.score.pass > 0,
   );
   if (anyScored && !anyTestsPassed) {
-    console.log(chalk.yellow('⚠  no branch passed tests — ranking falls back to lint + LoC'));
+    console.log(palette.warning('⚠  no branch passed tests — ranking falls back to lint + LoC'));
   }
 }
 
@@ -297,12 +297,12 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
 
   // -- Validation --
   if (!Number.isInteger(count) || count < 1 || count > 16) {
-    console.error(chalk.red(`--branches must be between 1 and 16 (got ${count})`));
+    console.error(palette.error(`--branches must be between 1 and 16 (got ${count})`));
     process.exit(1);
   }
   if (labels !== undefined && labels.length !== count) {
     console.error(
-      chalk.red(
+      palette.error(
         `--labels count (${labels.length}) must equal --branches (${count})`,
       ),
     );
@@ -321,7 +321,7 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
       taskSlug,
     });
   } catch (err) {
-    console.error(chalk.red(`Farm creation failed: ${err instanceof Error ? err.message : String(err)}`));
+    console.error(palette.error(`Farm creation failed: ${err instanceof Error ? err.message : String(err)}`));
     process.exit(1);
   }
 
@@ -395,7 +395,7 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
     // abortController.abort() cleanup is never reached, leaking the
     // AbortController. throw unwinds through finally first, then propagates
     // to the Commander action handler which sets the exit code.
-    console.error(chalk.red(`Farm dispatch failed: ${err instanceof Error ? err.message : String(err)}`));
+    console.error(palette.error(`Farm dispatch failed: ${err instanceof Error ? err.message : String(err)}`));
     throw err;
   } finally {
     abortController.abort(); // ensure cleanup — runs on both success and throw
@@ -455,7 +455,7 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
         // Score persistence failure is non-fatal — the in-memory score still
         // ranks the branch for printSummary. Surface for visibility.
         console.error(
-          chalk.yellow(`[branch-${r.index}] score.json write failed: ${err instanceof Error ? err.message : String(err)}`),
+          palette.warning(`[branch-${r.index}] score.json write failed: ${err instanceof Error ? err.message : String(err)}`),
         );
       }
     }
@@ -474,7 +474,7 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
     if (memoryWriteEnabled) {
       const memResult = writeFarmFactFn(farmRecord);
       if ('skipped' in memResult) {
-        console.error(chalk.yellow(`[memory] write skipped: ${memResult.reason}`));
+        console.error(palette.warning(`[memory] write skipped: ${memResult.reason}`));
       } else {
         // Thread the returned factId back into the manifest so the Telegram
         // Respawn handler can cross-reference this run in memory.
@@ -483,16 +483,16 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
           await setFarmMemoryFactIdFn(manifest.taskSlug, factId);
         } catch (err) {
           // Best-effort: manifest is not the source of truth for factId; log and continue.
-          console.error(chalk.yellow(`[memory] setFarmMemoryFactId failed: ${(err as Error).message}`));
+          console.error(palette.warning(`[memory] setFarmMemoryFactId failed: ${(err as Error).message}`));
         }
       }
     }
     if (digestEnabled) {
       const digestResult = await sendFarmDigestFn(farmRecord);
       if (digestResult.sent) {
-        console.log(chalk.dim(`[telegram] digest sent (${digestResult.chatCount} chat${digestResult.chatCount === 1 ? '' : 's'})`));
+        console.log(palette.dim(`[telegram] digest sent (${digestResult.chatCount} chat${digestResult.chatCount === 1 ? '' : 's'})`));
       } else if (digestResult.reason && digestResult.reason !== 'telegram unconfigured') {
-        console.error(chalk.yellow(`[telegram] digest failed: ${digestResult.reason}`));
+        console.error(palette.warning(`[telegram] digest failed: ${digestResult.reason}`));
       }
     }
   }
@@ -500,8 +500,8 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
   // -- Exit handling --
   if (dirtyFiles.length > 0) {
     const violation = new FarmIsolationViolation(dirtyFiles);
-    console.error(chalk.red('\n⚠  ISOLATION VIOLATION'));
-    console.error(chalk.red(violation.message));
+    console.error(palette.error('\n⚠  ISOLATION VIOLATION'));
+    console.error(palette.error(violation.message));
     process.exit(1);
   }
 
@@ -551,7 +551,7 @@ export function registerFarmCommand(program: Command): void {
         ? parseInt(options.scoreTimeout, 10)
         : undefined;
       if (scoreTimeoutMs !== undefined && (!Number.isFinite(scoreTimeoutMs) || scoreTimeoutMs < 1)) {
-        console.error(chalk.red(`--score-timeout must be a positive integer (got "${options.scoreTimeout}")`));
+        console.error(palette.error(`--score-timeout must be a positive integer (got "${options.scoreTimeout}")`));
         process.exit(1);
       }
 

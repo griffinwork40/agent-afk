@@ -17,12 +17,12 @@
 
 import { existsSync, readFileSync } from 'fs';
 import { createInterface } from 'readline';
-import chalk from 'chalk';
 import { upsertEnvVar } from '../utils/envFile.js';
 import { getEnvConfigPath } from '../paths.js';
 import { env } from '../config/env.js';
 import { withStdinClaim } from '../cli/input/stdin-claim.js';
 import { promptSecret } from '../utils/prompt-secret.js';
+import { palette } from '../cli/palette.js';
 
 const TELEGRAM_API = 'https://api.telegram.org';
 
@@ -239,9 +239,9 @@ export async function runTelegramSetup(): Promise<{
 }> {
   const envPath = getEnvConfigPath();
   console.log('');
-  console.log(chalk.bold('🤖 Telegram bot setup'));
+  console.log(palette.heading('🤖 Telegram bot setup'));
   console.log('');
-  console.log(chalk.gray(`Config will be written to ${envPath}`));
+  console.log(palette.meta(`Config will be written to ${envPath}`));
   console.log('');
 
   // 1. Bot token: env first, then prompt.
@@ -249,12 +249,12 @@ export async function runTelegramSetup(): Promise<{
   let bot: BotIdentity | null = null;
 
   if (token) {
-    console.log(chalk.gray('Validating existing TELEGRAM_BOT_TOKEN...'));
+    console.log(palette.meta('Validating existing TELEGRAM_BOT_TOKEN...'));
     bot = await validateBotToken(token);
     if (bot) {
-      console.log(chalk.green(`✓ Token valid for @${bot.username ?? bot.firstName} (id ${bot.id})`));
+      console.log(palette.success(`✓ Token valid for @${bot.username ?? bot.firstName} (id ${bot.id})`));
     } else {
-      console.log(chalk.yellow('⚠ Existing TELEGRAM_BOT_TOKEN is invalid; prompting for a new one'));
+      console.log(palette.warning('⚠ Existing TELEGRAM_BOT_TOKEN is invalid; prompting for a new one'));
       token = '';
     }
   }
@@ -262,46 +262,46 @@ export async function runTelegramSetup(): Promise<{
   while (!bot) {
     token = await promptSecret('Paste your bot token (from @BotFather): ');
     if (!token) {
-      console.error(chalk.red('No token provided. Aborting.'));
+      console.error(palette.error('No token provided. Aborting.'));
       process.exit(1);
     }
     bot = await validateBotToken(token);
     if (!bot) {
-      console.log(chalk.red('✗ Token rejected by getMe. Try again or Ctrl-C to abort.'));
+      console.log(palette.error('✗ Token rejected by getMe. Try again or Ctrl-C to abort.'));
     }
   }
 
   upsertEnvVar(envPath, 'TELEGRAM_BOT_TOKEN', token);
-  console.log(chalk.green(`✓ Saved TELEGRAM_BOT_TOKEN → ${envPath}`));
+  console.log(palette.success(`✓ Saved TELEGRAM_BOT_TOKEN → ${envPath}`));
   console.log('');
 
   // 2. Chat ID: poll getUpdates.
-  console.log(chalk.bold('Now DM your bot to authorize your account.'));
+  console.log(palette.heading('Now DM your bot to authorize your account.'));
   const handle = bot.username ? `@${bot.username}` : `"${bot.firstName}"`;
-  console.log(`  1. Open Telegram and find ${chalk.cyan(handle)}`);
+  console.log(`  1. Open Telegram and find ${palette.brand(handle)}`);
   console.log(`  2. Send any message (e.g. "hi")`);
   console.log('');
-  console.log(chalk.gray('Polling for your chat ID (up to 60s)...'));
+  console.log(palette.meta('Polling for your chat ID (up to 60s)...'));
 
   const chats = await pollForChats(token);
   if (chats.length === 0) {
-    console.error(chalk.red('✗ No chats found after 60s.'));
-    console.error(chalk.gray('  Send a message to the bot and run `afk telegram setup` again,'));
-    console.error(chalk.gray('  or paste your chat ID manually:'));
+    console.error(palette.error('✗ No chats found after 60s.'));
+    console.error(palette.meta('  Send a message to the bot and run `afk telegram setup` again,'));
+    console.error(palette.meta('  or paste your chat ID manually:'));
     const manual = await prompt('Chat ID: ');
     const parsed = Number.parseInt(manual, 10);
     if (!Number.isFinite(parsed)) {
-      console.error(chalk.red('Invalid chat ID. Aborting.'));
+      console.error(palette.error('Invalid chat ID. Aborting.'));
       process.exit(1);
     }
     upsertEnvVar(envPath, 'AFK_TELEGRAM_ALLOWED_CHAT_IDS', String(parsed));
-    console.log(chalk.green(`✓ Saved AFK_TELEGRAM_ALLOWED_CHAT_IDS=${parsed}`));
+    console.log(palette.success(`✓ Saved AFK_TELEGRAM_ALLOWED_CHAT_IDS=${parsed}`));
     return { envPath, bot, chatId: parsed };
   }
 
   let pick = chats[0]!;
   if (chats.length > 1) {
-    console.log(chalk.bold('\nMultiple chats found:'));
+    console.log(palette.heading('\nMultiple chats found:'));
     chats.forEach((c, i) => {
       const who = c.username ? `@${c.username}` : c.firstName ?? c.type;
       console.log(`  [${i + 1}] ${who} (id ${c.chatId}, ${c.type})`);
@@ -313,14 +313,14 @@ export async function runTelegramSetup(): Promise<{
     }
   } else {
     const who = pick.username ? `@${pick.username}` : pick.firstName ?? pick.type;
-    console.log(chalk.green(`✓ Found chat with ${who} (id ${pick.chatId})`));
+    console.log(palette.success(`✓ Found chat with ${who} (id ${pick.chatId})`));
   }
 
   upsertEnvVar(envPath, 'AFK_TELEGRAM_ALLOWED_CHAT_IDS', String(pick.chatId));
-  console.log(chalk.green(`✓ Saved AFK_TELEGRAM_ALLOWED_CHAT_IDS=${pick.chatId} → ${envPath}`));
+  console.log(palette.success(`✓ Saved AFK_TELEGRAM_ALLOWED_CHAT_IDS=${pick.chatId} → ${envPath}`));
   console.log('');
-  console.log(chalk.bold('Setup complete. Start the bot with:'));
-  console.log(chalk.cyan('  afk telegram start'));
+  console.log(palette.heading('Setup complete. Start the bot with:'));
+  console.log(palette.brand('  afk telegram start'));
   console.log('');
 
   return { envPath, bot, chatId: pick.chatId };

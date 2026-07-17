@@ -10,7 +10,7 @@
 
 import { Command } from 'commander';
 import { env } from '../../config/env.js';
-import chalk from 'chalk';
+import { palette } from '../palette.js';
 import { execFile as execFileCallback } from 'node:child_process';
 import { handleCommandError } from '../errors/index.js';
 import { promisify } from 'node:util';
@@ -34,10 +34,10 @@ function verdictWouldPrune(v: string): string {
   // 'stale-clean' is preserved + warned by the sweep engine (commits ahead
   // of base), so it renders as 'warn' alongside 'stale-dirty'.
   if (['empty', 'orphaned-dir', 'orphaned-registration', 'dead-owner'].includes(v)) {
-    return chalk.red('yes');
+    return palette.error('yes');
   }
-  if (v === 'stale-dirty' || v === 'stale-clean') return chalk.yellow('warn');
-  return chalk.green('no');
+  if (v === 'stale-dirty' || v === 'stale-clean') return palette.warning('warn');
+  return palette.success('no');
 }
 
 const VALID_SCOPES = ['interactive', 'diagnose', 'all'] as const;
@@ -95,7 +95,7 @@ export function registerWorktreeCommand(program: Command): void {
         'STATUS'.padEnd(22),
         'PRUNE?',
       ].join(' | ');
-      console.log(chalk.bold(header));
+      console.log(palette.heading(header));
       console.log('-'.repeat(header.length));
 
       for (const c of result.candidates) {
@@ -110,13 +110,13 @@ export function registerWorktreeCommand(program: Command): void {
       }
 
       if (result.candidates.length === 0) {
-        console.log(chalk.dim('  (no afk-managed worktrees found)'));
+        console.log(palette.dim('  (no afk-managed worktrees found)'));
       }
 
       if (result.warnings.length > 0) {
         console.log('');
         for (const w of result.warnings) {
-          console.log(chalk.yellow(w));
+          console.log(palette.warning(w));
         }
       }
     });
@@ -182,7 +182,7 @@ export function registerWorktreeCommand(program: Command): void {
       }
 
       if (result.dryRun) {
-        console.log(chalk.yellow(`🔍 Dry-run mode — no changes made.`));
+        console.log(palette.warning(`🔍 Dry-run mode — no changes made.`));
       }
 
       // Tally per-verdict instead of an arithmetic subtraction. Orphaned-
@@ -205,7 +205,7 @@ export function registerWorktreeCommand(program: Command): void {
 
       for (const c of result.candidates) {
         const isRemoved = result.removed.includes(c.path);
-        const icon = isRemoved ? chalk.red('✗') : chalk.green('✓');
+        const icon = isRemoved ? palette.error('✗') : palette.success('✓');
         console.log(`  ${icon} [${c.verdict.padEnd(22)}] ${c.path}`);
       }
 
@@ -213,9 +213,9 @@ export function registerWorktreeCommand(program: Command): void {
         console.log('');
         for (const w of result.warnings) {
           if (w.startsWith('[ERROR]')) {
-            console.error(chalk.red(w));
+            console.error(palette.error(w));
           } else {
-            console.log(chalk.yellow(w));
+            console.log(palette.warning(w));
           }
         }
       }

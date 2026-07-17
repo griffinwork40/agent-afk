@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import chalk from 'chalk';
+import { palette } from '../palette.js';
 import { providerForModel } from '../../agent/providers/index.js';
 import { getModel } from '../shared-helpers.js';
 import { promptToken, runAuthWizard } from '../auth-wizard.js';
@@ -28,20 +28,20 @@ export function registerLoginCommand(program: Command): void {
     .action(async (token?: string) => {
       const provider = providerForModel(getModel() as string);
       if (provider === 'openai-compatible' || provider === 'openai-codex') {
-        console.log(chalk.yellow('`afk login` is Anthropic-only.'));
+        console.log(palette.warning('`afk login` is Anthropic-only.'));
         console.log('');
         console.log('For OpenAI-backed models (gpt-*, o1*, o3*, o4*, codex-*), authenticate with one of:');
-        console.log(chalk.cyan('  export OPENAI_API_KEY=sk-proj-...'));
-        console.log(chalk.cyan('  # or: export CODEX_API_KEY=...'));
-        console.log(chalk.cyan('  codex login --api-key sk-proj-...'));
+        console.log(palette.brand('  export OPENAI_API_KEY=sk-proj-...'));
+        console.log(palette.meta('  # or: export CODEX_API_KEY=...'));
+        console.log(palette.brand('  codex login --api-key sk-proj-...'));
         console.log('');
         console.log(
-          chalk.gray(
+          palette.meta(
             'Run `afk provider auth diagnose` to see which auth source AFK will use.',
           ),
         );
         console.log(
-          chalk.gray(
+          palette.meta(
             'To save an Anthropic key for Claude models instead, re-run with AFK_MODEL=sonnet (or similar) first.',
           ),
         );
