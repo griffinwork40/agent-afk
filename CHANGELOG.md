@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.56.3] - 2026-07-17
+
+### Fixed
+- reserve cyan for user identity (dropdown selection + inline code) (#642) (34dc3e2)
+
 ## [5.56.2] - 2026-07-17
 
 ### Fixed
