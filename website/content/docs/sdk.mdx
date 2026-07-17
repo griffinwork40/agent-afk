@@ -191,8 +191,12 @@ await session.close();                          // tear down and free resources
 
 ### Budgets and cancellation
 
-Cap spend with `maxBudgetUsd` — the session throws a `BudgetExceededError` once the running
-cost crosses the ceiling. Wire an `AbortSignal` to cancel externally:
+Cap spend with `maxBudgetUsd`. Once cumulative cost crosses the ceiling, AFK raises a
+`BudgetExceededError` (exported from `agent-afk`; it carries `runningCostUsd` and
+`maxBudgetUsd`). How it reaches you depends on how you drive the turn: `sendMessage` and
+`sendMessageStructured` **throw** it, while the streaming paths — `query()` and
+`sendMessageStream()` — surface it as an `error` event (`event.type === 'error'`) instead of
+throwing. Wire an `AbortSignal` to cancel externally:
 
 ```ts
 const controller = new AbortController();

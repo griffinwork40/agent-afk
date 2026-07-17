@@ -6,6 +6,7 @@
 
 export {
   AgentSession,
+  BudgetExceededError,
   query,
   queryText,
   queryStructured,
