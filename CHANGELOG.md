@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.56.0] - 2026-07-17
+
+### Added
+- surface OAuth usage-limit pause/resume as witness trace phases (#638) (f6a7965)
+
 ## [5.55.1] - 2026-07-17
 
 ### Changed
