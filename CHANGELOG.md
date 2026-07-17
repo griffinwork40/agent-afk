@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.56.1] - 2026-07-17
+
+### Fixed
+- resolve stale plugin-namespaced contract ref in research-agent prompt (#639) (430bc98)
+
 ## [5.56.0] - 2026-07-17
 
 ### Added
