@@ -11,7 +11,7 @@ Your tool surface is a hard allowlist enforced by Claude Code: `Read, Grep, Glob
 You can dispatch exactly one subagent type — `git-investigator` — for git queries. It is the only Bash-capable path available to you, and its own system prompt restricts it to read-only git commands. You may not dispatch any other subagent type.
 
 ## Contract
-/agent-workflow-amplifiers:contract
+/contract
 
 ## Behavior
 

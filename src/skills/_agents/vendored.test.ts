@@ -10,7 +10,7 @@ const __dirname = dirname(__filename);
 
 // Pinned hashes — guard against undocumented edits to the vendored copy
 const PINNED_HASHES = {
-  'research-agent': 'de1c6bedaf07f0fb7a159be3af3a13e27d31ee3c0e73dbcd34a741661f5abc04',
+  'research-agent': '80993a5f28dbcc9fd447a5bf022fc2ae14307d4af21fcaa0900a0b135515db0a',
   contract: '0b7febafec024e8dd4404f75e84d21ee72b1b1846d6e2610aaa82ba77f9d6f2d',
   'git-investigator': 'd1f186b82574641a4cb616990cee70a36f95a109b3688f59c07d12d26de60c03',
 } as const;
