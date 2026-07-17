@@ -636,7 +636,15 @@ export type SessionPhaseName =
   | 'loop_start'
   | 'loop_end'
   | 'model_ttfb'
-  | 'rate_limit';
+  | 'rate_limit'
+  // OAuth subscription usage-limit park/unpark. Unlike `rate_limit` (a short,
+  // bounded retry-after backoff), these bracket a potentially multi-HOUR pause
+  // while the turn waits for the subscription window to reset (or a keychain
+  // hot-swap). `usage_limit_resume` carries the parked `durationMs`. Emitted as
+  // a pair, but a pause may end without a resume (auto-resume off, abort, or the
+  // 2-hour cap surfacing the error) — so a lone `usage_limit_pause` is expected.
+  | 'usage_limit_pause'
+  | 'usage_limit_resume';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

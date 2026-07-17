@@ -22,6 +22,7 @@ import {
   AnthropicDirectProvider,
   __setAnthropicClientFactory,
 } from './index.js';
+import { InMemoryTraceWriter } from '../../trace/writer.js';
 
 // --- Mock SDK plumbing ---
 
@@ -678,6 +679,47 @@ describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
     expect(types).toContain('turn.completed');
     expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
     expect(messagesCreateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('records usage_limit_pause + usage_limit_resume trace phases across the park', async () => {
+    // Same happy-path 429+ts → paused → resumed cycle, but assert the WITNESS
+    // TRACE now brackets the park. Before this fix the multi-hour pause left no
+    // trace event — the turn just stopped emitting (the documented silent gap).
+    let callIdx = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callIdx += 1;
+      if (callIdx === 1) throw make429UsageLimitError(5 * 60 * 1_000);
+      return fromArray(makeTextStream('resumed successfully'));
+    });
+
+    const traceWriter = new InMemoryTraceWriter();
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('hello'),
+      config: {
+        model: 'claude-sonnet-5',
+        apiKey: 'sk-ant-oat01-test',
+        autoResumeOnUsageLimit: true,
+        traceWriter,
+      },
+    });
+
+    const collectPromise = collect(query);
+    await vi.runAllTimersAsync();
+    await collectPromise;
+
+    const phases: string[] = [];
+    let resumeDurationMs: number | undefined;
+    for (const e of traceWriter.events) {
+      if (e.kind !== 'session_phase') continue;
+      phases.push(e.payload.phase);
+      if (e.payload.phase === 'usage_limit_resume') resumeDurationMs = e.payload.durationMs;
+    }
+    expect(phases).toContain('usage_limit_pause');
+    expect(phases).toContain('usage_limit_resume');
+    // The resume phase carries the parked duration (>= 0, mirrors *_done events).
+    expect(resumeDurationMs).toBeTypeOf('number');
+    expect(resumeDurationMs).toBeGreaterThanOrEqual(0);
   });
 
   it('auto-resume=false: 429+ts → paused → original error, no resumed', async () => {

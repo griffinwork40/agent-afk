@@ -321,6 +321,19 @@ export class RetryLayer {
     if (noTimestamp) {
       const accountId = parseAccountIdentifier(loadClaudeCodeOauthToken() ?? '');
       yield { type: 'paused', reason: 'usage-limit', accountId, autoResume: this.autoResumeOnUsageLimit };
+      // Witness layer: a usage-limit park is otherwise invisible in the trace —
+      // the turn simply stops emitting for up to two hours. Record it so the
+      // stall is legible (mirrors the `rate_limit` phase for transient backoff).
+      // Fire-and-forget; trace latency must never stall the pause/resume.
+      void emitSessionPhase(runInput.traceWriter, {
+        phase: 'usage_limit_pause',
+        metadata: {
+          reason: 'usage-limit',
+          source: 'retry-layer',
+          hasResetTimestamp: false,
+          autoResume: this.autoResumeOnUsageLimit,
+        },
+      });
 
       if (!this.autoResumeOnUsageLimit) {
         yield pendingErrorEvent;
@@ -384,6 +397,11 @@ export class RetryLayer {
           }
           if (!resumeEmitted) {
             yield { type: 'resumed', hotSwapped: noTsResult === 'hot-swap', accountId: resumedAccountId };
+            void emitSessionPhase(runInput.traceWriter, {
+              phase: 'usage_limit_resume',
+              durationMs: Date.now() - startedAt,
+              metadata: { source: 'retry-layer', hotSwapped: noTsResult === 'hot-swap' },
+            });
             resumeEmitted = true;
           }
           yield event;
@@ -413,6 +431,7 @@ export class RetryLayer {
     }
 
     const accountId = parseAccountIdentifier(loadClaudeCodeOauthToken() ?? '');
+    const pausedAt = Date.now();
     // External constraint: this event must carry `autoResume` BEFORE the
     // autoResumeOnUsageLimit branch below decides what comes next, so the UI
     // layer can render truthful copy on the very first paint of the panel.
@@ -425,6 +444,18 @@ export class RetryLayer {
       accountId,
       autoResume: this.autoResumeOnUsageLimit,
     };
+    // Witness layer: bracket the park so `afk trace show` explains the stall
+    // (see the no-ts pause above). Carries the reset deadline for context.
+    void emitSessionPhase(runInput.traceWriter, {
+      phase: 'usage_limit_pause',
+      metadata: {
+        reason: 'usage-limit',
+        source: 'retry-layer',
+        hasResetTimestamp: true,
+        autoResume: this.autoResumeOnUsageLimit,
+        resetsAt: resetsAt.toISOString(),
+      },
+    });
 
     if (!this.autoResumeOnUsageLimit) {
       yield pendingErrorEvent;
@@ -467,6 +498,11 @@ export class RetryLayer {
       randomUUID(),
     );
     yield { type: 'resumed', hotSwapped: result === 'hot-swap', accountId: resumedAccountId };
+    void emitSessionPhase(runInput.traceWriter, {
+      phase: 'usage_limit_resume',
+      durationMs: Date.now() - pausedAt,
+      metadata: { source: 'retry-layer', hotSwapped: result === 'hot-swap' },
+    });
 
     yield* this.turnWithAuthRetry(runInput, isClosed);
   }

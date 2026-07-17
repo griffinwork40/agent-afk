@@ -137,6 +137,33 @@ describe('session_phase payload schema — acceptance', () => {
       SessionPhasePayloadSchema.parse({ phase: 'loop_end', durationMs: 0 }),
     ).not.toThrow();
   });
+
+  it('accepts the usage_limit_pause / usage_limit_resume phases', () => {
+    // Pause: no durationMs, park metadata (both the reset-ts and no-ts shapes).
+    expect(() =>
+      SessionPhasePayloadSchema.parse({
+        phase: 'usage_limit_pause',
+        metadata: {
+          reason: 'usage-limit',
+          source: 'retry-layer',
+          hasResetTimestamp: true,
+          autoResume: true,
+          resetsAt: new Date().toISOString(),
+        },
+      }),
+    ).not.toThrow();
+    // Resume: carries the parked durationMs + hot-swap flag.
+    expect(() =>
+      SessionPhasePayloadSchema.parse({
+        phase: 'usage_limit_resume',
+        durationMs: 300_000,
+        metadata: { source: 'retry-layer', hotSwapped: false },
+      }),
+    ).not.toThrow();
+    // Bare name-schema acceptance.
+    expect(() => SessionPhaseNameSchema.parse('usage_limit_pause')).not.toThrow();
+    expect(() => SessionPhaseNameSchema.parse('usage_limit_resume')).not.toThrow();
+  });
 });
 
 // ---------------------------------------------------------------------------
