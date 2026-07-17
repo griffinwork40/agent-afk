@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import chalk from 'chalk';
 import { formatContextBar } from './context-bar.js';
+import { palette } from './palette.js';
 
 /** Strip ANSI escape sequences from output. */
 function stripAnsi(s: string): string {
@@ -59,9 +60,22 @@ describe('formatContextBar', () => {
     expect(result).toContain('\x1b[33m');
   });
 
-  it('includes dim color code when ratio <= 0.5', () => {
+  it('keeps the empty track dim (meta) at a low ratio', () => {
     const result = formatContextBar({ ratio: 0.2, width: 200 });
-    // Should contain dim ANSI code (90m is the standard bright-black/dim)
+    // The brackets + empty track always recede in the dim `meta` tone
+    // (90m = bright-black), regardless of ratio.
+    expect(result).toContain('\x1b[90m');
+  });
+
+  it('renders the filled run in a visible tone distinct from the track at a low ratio', () => {
+    // Regression: a low-context bar used to wrap the ENTIRE `[bar] NN% counts`
+    // string in the dimmest `meta` tone, so e.g. 6% looked like an empty box.
+    // The filled run + percent now carry a visible `chrome` tone while only the
+    // brackets/track recede, so a nearly-empty bar still reads as a real control.
+    const result = formatContextBar({ ratio: 0.06, used: 62400, limit: 1_000_000, width: 200 });
+    // filled = round(0.06 * 20) = 1 → exactly one '█' wrapped in the chrome tone.
+    expect(result).toContain(palette.chrome('█'));
+    // …and the track stays dim, so fill and track are visually distinguishable.
     expect(result).toContain('\x1b[90m');
   });
 
