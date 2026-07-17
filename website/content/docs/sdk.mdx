@@ -11,9 +11,8 @@ The npm package declares a proper library entry (`main`, `types`, and an `export
 plain `import { query } from 'agent-afk'` resolves without building from source.
 
 <Callout type="info">
-This is a real agent harness, not a thin API wrapper. You own the loop: prompts, gates,
-routing, tools, and terminal behavior are all yours to configure. Unlike a vendor SDK, nothing
-here is a closed binary — the same code you import is the code you can read and change.
+You configure the whole loop — prompts, gates, routing, tools, and terminal behavior. The
+package is plain TypeScript: the code you import is the code you can read and change.
 </Callout>
 
 ## Install
