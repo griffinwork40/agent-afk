@@ -12,7 +12,7 @@ export { AbortGraph } from './abort-graph.js';
 export { DEFAULT_SESSION_TIMEOUT_MS, RESET_DRAIN_TIMEOUT_MS, withTimeout } from './timeout.js';
 export { extractStructuredOutput } from './output-extractor.js';
 export { createHookRegistry } from './hooks.js';
-export { HookBlockedError } from '../utils/errors.js';
+export { HookBlockedError, BudgetExceededError } from '../utils/errors.js';
 export { OpenAICompatibleProvider, openaiCompatibleProvider } from './providers/openai-compatible/index.js';
 export { providerForModel, resolveProvider } from './providers/index.js';
 export type { BundledProviderName } from './providers/index.js';
