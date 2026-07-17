@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.55.1] - 2026-07-17
+
+### Changed
+- route CLI/TUI styling through the semantic palette + guard against drift (#637) (12bcf9c)
+
 ## [5.55.0] - 2026-07-16
 
 ### Added
