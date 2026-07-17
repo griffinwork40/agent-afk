@@ -69,7 +69,7 @@ export const palette = {
   bold: chalk.bold,
   /** Italic — used for emphasized prose; also paired with thinking tone. */
   italic: chalk.italic,
-  /** Inverse — reverse-video (swaps fg/bg); used for the selected row in the @-file autocomplete dropdown. A modifier alias so the render layer never reaches for raw chalk. */
+  /** Inverse — reverse-video (swaps fg/bg). A modifier alias so the render layer never reaches for raw chalk. Currently unused: the @-file autocomplete dropdown that formerly used it now matches the arrow-key picker's brand-marker + bold-label selection idiom. */
   inverse: chalk.inverse,
   /** Diff insertion — green, used for `+` lines in render-only diff blocks. */
   diffAdd: chalk.green,
