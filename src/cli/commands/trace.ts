@@ -449,6 +449,21 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
         const head = reason !== undefined ? String(reason) : 'throttled';
         return line('throttle', `${head}${statusBit}${wait}${srcBit}`);
       }
+      // Usage-limit park/unpark is the highest-signal stall of all — a
+      // multi-hour subscription pause, not a per-minute backoff. Render in the
+      // DEFAULT view (before the showAll gate) so the trace explains the gap.
+      if (p.phase === 'usage_limit_pause') {
+        const md = p.metadata ?? {};
+        const resetsAt = md['resetsAt'];
+        const resetBit = resetsAt !== undefined ? `  resets ${resetsAt}` : '  no reset ts';
+        return line('paused', `usage-limit${resetBit}`);
+      }
+      if (p.phase === 'usage_limit_resume') {
+        const md = p.metadata ?? {};
+        const parked = p.durationMs !== undefined ? `  parked ${fmtDuration(p.durationMs)}` : '';
+        const hotSwap = md['hotSwapped'] === true ? '  (hot-swap)' : '';
+        return line('resumed', `usage-limit${parked}${hotSwap}`);
+      }
       if (!ctx.showAll) return null; // latency waterfall — low signal by default
       const dur = p.durationMs !== undefined ? `  ${fmtDuration(p.durationMs)}` : '';
       // Prefer the operator alias (session_init_start); fall back to the

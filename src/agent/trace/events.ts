@@ -396,6 +396,8 @@ export const SessionPhaseNameSchema = z.enum([
   'loop_end',
   'model_ttfb',
   'rate_limit',
+  'usage_limit_pause',
+  'usage_limit_resume',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

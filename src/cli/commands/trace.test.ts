@@ -258,6 +258,35 @@ describe('formatTrace — rate_limit is high-signal (shown by default)', () => {
   });
 });
 
+describe('formatTrace — usage-limit pause/resume is high-signal (shown by default)', () => {
+  // A usage-limit park is the highest-signal stall of all: a multi-HOUR OAuth
+  // subscription pause. Like rate_limit, it must render WITHOUT --all so the
+  // trace explains the otherwise-invisible gap (the turn just stops emitting).
+  const events: EventObj[] = [
+    { ts: '2026-06-05T12:30:00.000Z', seq: 0, kind: 'session_phase', payload: { phase: 'usage_limit_pause', metadata: { reason: 'usage-limit', source: 'retry-layer', hasResetTimestamp: true, autoResume: true, resetsAt: '2026-06-05T14:30:00.000Z' } } },
+    { ts: '2026-06-05T14:30:05.000Z', seq: 1, kind: 'session_phase', payload: { phase: 'usage_limit_resume', durationMs: 7_205_000, metadata: { source: 'retry-layer', hotSwapped: false } } },
+    { ts: '2026-06-05T14:35:00.000Z', seq: 2, kind: 'session_sealed', payload: { status: 'succeeded', finalCostUsd: 0.01, finalTurnCount: 1, closedAt: '2026-06-05T14:35:00.000Z' } },
+  ];
+  const out = formatTrace('s', '/p', parseTrace(toJsonl(events)));
+
+  it('renders the pause in the DEFAULT view with its reset deadline', () => {
+    expect(out).toContain('paused');
+    expect(out).toContain('usage-limit');
+    expect(out).toContain('resets 2026-06-05T14:30:00.000Z');
+  });
+
+  it('renders the resume in the DEFAULT view with the parked duration', () => {
+    expect(out).toContain('resumed');
+    expect(out).toContain('parked');
+  });
+
+  it('still hides the low-signal model_ttfb phase by default', () => {
+    // Same isolation guarantee as the rate_limit block: high-signal pause/resume
+    // surface, ordinary latency phases stay behind --all.
+    expect(out).not.toContain('model_ttfb');
+  });
+});
+
 describe('formatTrace — closure stop_reason rendering', () => {
   const seal: EventObj = {
     ts: '2026-06-05T12:35:00.500Z',
