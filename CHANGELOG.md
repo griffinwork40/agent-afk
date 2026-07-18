@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.58.0] - 2026-07-18
+
+### Added
+- terminal title (OSC 2) + opt-in completion notification (OSC 9) (#647) (3d1d451)
+
 ## [5.57.0] - 2026-07-18
 
 ### Added
