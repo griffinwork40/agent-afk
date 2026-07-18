@@ -448,6 +448,11 @@ function handleVerticalNav(self: KeyDispatchHost, key: KeyInfo): boolean {
     // commit time are restored to the live list so re-Enter re-captures them.
     if (self.pendingSubmissions.length > 0 && self.input.buffer.length === 0) {
       const payload = self.pendingSubmissions.pop()!;
+      // If this was the post-ESC epoch's merge target, clear the reference so
+      // the next Enter treats the edited buffer as a FRESH payload (the `else
+      // if (postEscCoalesce)` branch) instead of re-merging this stale, now-
+      // popped text via the `idx < 0` defensive path. The epoch itself stays armed.
+      if (payload === self.postEscPayload) self.postEscPayload = null;
       self.queued = self.pendingSubmissions.length > 0; // maintain the mirror
       self.attachments = [...payload.attachments];
       self.history?.resetRecall();

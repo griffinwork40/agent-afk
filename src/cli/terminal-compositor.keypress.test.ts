@@ -826,6 +826,46 @@ describe('TerminalCompositor — keypress + history + buffer + spinner', () => {
         }
         expect(c.getPendingCount()).toBe(2); // sequential — not coalesced into one
       });
+
+      it('↑-recall of the post-ESC merge target does NOT resurrect stale text on re-send', async () => {
+        // Regression guard (P2/medium review finding on PR #644): popping a
+        // payload off pendingSubmissions for ↑-recall left postEscPayload
+        // pointing at it. Without the fix, the re-Enter below hits the merge
+        // branch's `idx < 0` defensive path (the popped payload is no longer
+        // in the queue) and resurrects the stale pre-edit text, submitting
+        // "redirect\nredirectX" instead of just the edited "redirectX".
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
+        await c.arm();
+        c.setInputMode('idle');
+        c.setInputMode('streaming'); // turn arm
+
+        stdin.emit('keypress', undefined, { name: 'escape' });
+        for (const ch of 'redirect') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+        stdin.emit('keypress', undefined, { name: 'return' });
+        expect(c.getPendingCount()).toBe(1);
+
+        // ↑ recalls the just-committed payload (also the epoch's merge target)
+        // back into the live buffer for editing; the FIFO empties.
+        stdin.emit('keypress', undefined, { name: 'up' });
+        expect(c.getBuffer().text).toBe('redirect');
+        expect(c.getPendingCount()).toBe(0);
+
+        // Edit the recalled draft (grow the buffer — the exact suffix doesn't
+        // matter, only that the re-sent text differs from the popped one).
+        stdin.emit('keypress', 'X', { name: 'X', sequence: 'X' });
+
+        // Re-Enter: still inside the post-ESC epoch (postEscCoalesce stays
+        // armed). Fixed behavior: postEscPayload was cleared on pop above, so
+        // this becomes a fresh single entry — NOT a merge with the stale text.
+        stdin.emit('keypress', undefined, { name: 'return' });
+        expect(c.getPendingCount()).toBe(1);
+
+        const onSubmit = vi.fn();
+        c.setOnSubmit(onSubmit);
+        c.setInputMode('idle');
+        expect(onSubmit).toHaveBeenCalledTimes(1);
+        expect(onSubmit).toHaveBeenCalledWith({ text: 'redirectX', attachments: [] });
+      });
     });
 
     it('printable chars grow buffer', async () => {
