@@ -7,7 +7,7 @@
  */
 
 import stringWidth from 'string-width';
-import { stripAnsi } from '../display.js';
+import { splitGraphemes, stripAnsi } from '../display.js';
 import { palette } from '../palette.js';
 import { card } from '../render.js';
 import { getTerminalWidth } from '../terminal-size.js';
@@ -188,4 +188,108 @@ export function visualCursorPos(
   }
   // Unreachable for valid cursorIdx, but fall back to the end of the block.
   return { row, col: 0 };
+}
+
+/**
+ * Precomputed visual (row, col) for every UTF-16 index `0..buffer.length`.
+ * `rowAt[i]` / `colAt[i]` give the position of index `i`; `totalRows` is the
+ * row of the buffer-end index (`buffer.length`), i.e. the last visual row.
+ */
+export interface VisualPositionMap {
+  readonly rowAt: readonly number[];
+  readonly colAt: readonly number[];
+  readonly totalRows: number;
+}
+
+// Contract: `buildVisualPositionMap` returns, for EVERY UTF-16 index in
+// `0..buffer.length`, the SAME (row, col) that `visualCursorPos(buffer, idx,
+// promptVisibleLen, cols)` returns for that idx — but computed in a single
+// O(buffer.length) forward pass instead of one O(idx) `visualCursorPos` probe
+// per index (which makes an all-index scan O(n^2)).
+//
+// Invariant (semantic anchor): the visible width of a prefix must match
+// `stringWidth(stripAnsi(prefix))` at EVERY index, including UTF-16 offsets
+// that fall INSIDE a multi-code-unit grapheme (a lone surrogate contributes
+// 0; a half-formed flag/ZWJ sequence measures as its partial slice). We
+// reproduce that exactly by (a) accumulating the width of each COMPLETE
+// grapheme via `stringWidth(grapheme)`, and (b) for offsets interior to a
+// grapheme cluster spanning `[a, b)`, measuring `stringWidth(line.slice(a,
+// off))` — the same partial-slice `string-width` yields. Because grapheme
+// boundaries never merge under concatenation, `completedWidth + partial`
+// equals `stringWidth(line.slice(0, off))`. This equivalence is exercised by
+// the golden-master parity matrix in input-core.parity.test.ts across ASCII,
+// emoji, CJK, flags, ZWJ families, and combining marks — a divergence there
+// means this accumulation drifted from the `visualCursorPos` semantics.
+//
+// History: extracted so InputCore.moveUpLine / moveDownLine can walk the
+// row/col mapping once (PERF: O(n) instead of O(n^2)) while sharing the exact
+// width primitive `visualCursorPos` measures with, so cursor semantics cannot
+// drift between the repaint layer and the line-navigation layer.
+export function buildVisualPositionMap(
+  buffer: string,
+  promptVisibleLen: number,
+  cols: number,
+): VisualPositionMap {
+  const columnWidth = cols || 80;
+  const n = buffer.length;
+  const rowAt = new Array<number>(n + 1);
+  const colAt = new Array<number>(n + 1);
+
+  const lines = buffer.split('\n');
+  let baseRow = 0; // visual row at which the current logical line begins
+  let consumed = 0; // UTF-16 index (in RAW buffer coords) of this line's start
+
+  for (let li = 0; li < lines.length; li++) {
+    // RAW line — index arithmetic (offsets, `\n` span) is in raw buffer
+    // coordinates, exactly like `visualCursorPos`. ANSI is stripped ONLY for
+    // width measurement below (the input buffer carries no ANSI in practice —
+    // it is colorized at write time — but we mirror the repaint layer so the
+    // two measurement paths cannot diverge on an ANSI-bearing buffer).
+    const rawLine = lines[li]!;
+    const promptLead = li === 0 ? promptVisibleLen : 0;
+
+    const setAt = (globalIdx: number, visiblePrefix: number): void => {
+      rowAt[globalIdx] = baseRow + Math.floor(visiblePrefix / columnWidth);
+      colAt[globalIdx] = visiblePrefix % columnWidth;
+    };
+
+    // Offset 0 of this line (the line-start index in buffer coordinates).
+    setAt(consumed, promptLead);
+
+    // Walk the RAW line's graphemes, accumulating completed-grapheme visible
+    // width and re-measuring only the partial slice of the in-progress
+    // cluster. `stringWidth(stripAnsi(prefix))` == completedWidth +
+    // stringWidth(stripAnsi(partial)) because grapheme boundaries never merge
+    // under concatenation — the equivalence to `visualCursorPos` is locked by
+    // the golden-master parity matrix.
+    let completedWidth = 0;
+    let a = 0; // UTF-16 offset (within rawLine) where the current grapheme starts
+    for (const grapheme of splitGraphemes(rawLine)) {
+      const b = a + grapheme.length;
+      const graphemeWidth = stringWidth(stripAnsi(grapheme));
+      for (let off = a + 1; off <= b; off++) {
+        const partialWidth =
+          off === b ? graphemeWidth : stringWidth(stripAnsi(rawLine.slice(a, off)));
+        setAt(consumed + off, promptLead + completedWidth + partialWidth);
+      }
+      completedWidth += graphemeWidth;
+      a = b;
+    }
+
+    // Advance to the next logical line. Its base row sits below all visual
+    // rows this line occupies — mirror `visualCursorPos`'s row accounting,
+    // which uses the full (stripped) line width.
+    if (li < lines.length - 1) {
+      const lineVisibleWidth = promptLead + stringWidth(stripAnsi(rawLine));
+      baseRow += Math.max(1, Math.ceil(lineVisibleWidth / columnWidth));
+      // +1 for the '\n' separator that follows this (non-last) logical line.
+      consumed += rawLine.length + 1;
+    }
+  }
+
+  return {
+    rowAt,
+    colAt,
+    totalRows: rowAt[n]!,
+  };
 }

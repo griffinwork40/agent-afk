@@ -33,6 +33,16 @@ import { palette } from './palette.js';
  */
 export interface SlashRegistryView {
   has(name: string): boolean;
+  /**
+   * Optional opaque, monotonic token that changes whenever registry
+   * membership changes (see `slash/registry.ts#registryVersion`). When
+   * supplied, `colorizeInputBuffer` memoizes identical consecutive calls
+   * keyed on it, so a plugin/skill hot-swap invalidates the cache and never
+   * serves a stale-colored buffer. When ABSENT, the memo is disabled for
+   * that call (falls back to recomputation) — a correct-but-uncached result
+   * is always safer than a stale one.
+   */
+  version?(): number;
 }
 
 // Slash token anywhere in buffer. Must sit at the start of the string or
@@ -105,6 +115,39 @@ function toneForKnownToken(name: string): ((s: string) => string) | null {
   return null;
 }
 
+// Invariant: single-entry memo for `colorizeInputBuffer`. The colorizer runs
+// three whole-buffer regex `.replace` passes and is called on EVERY keystroke
+// (per repaint), yet the buffer is usually identical between consecutive
+// repaints (cursor moves, no-op keys, dropdown navigation). Caching the last
+// (input, chalk.level, registry-version) → output collapses those repeats to
+// an O(1) equality check.
+//
+// Honesty of the key — the output is a pure function of exactly three inputs,
+// and the memo keys on all three:
+//   1. `buffer`      — the token text being colored;
+//   2. `chalk.level` — 0 short-circuits to the raw buffer; any nonzero level
+//                      emits ANSI, and chalk bakes the level into the escape
+//                      it produces, so a level change must miss the cache;
+//   3. registry membership — a token colors brand/mint (known) vs meta
+//                      (unknown) purely by `registry.has(name)`. We capture
+//                      this via the registry's monotonic `version()`; when a
+//                      command is registered/replaced/reset the version moves
+//                      and the cache misses. Without a `version()` the memo is
+//                      DISABLED (recompute every call) — never risk staleness.
+// We ALSO key on the registry-view object identity: two distinct views can
+// legitimately report the same `version()` while answering `has()` differently
+// (each carries its own monotonic counter), so identity guards against one
+// view serving another's cached output. In production there is a single shared
+// registry, so this is belt-and-suspenders — but it keeps the memo sound if a
+// second view is ever introduced. The palette tones are module-frozen (see
+// palette.ts), so they are not part of the key. A single entry suffices
+// (consecutive repaints share one buffer) and cannot grow unbounded.
+let memoBuffer: string | null = null;
+let memoLevel: number | null = null;
+let memoVersion: number | null = null;
+let memoRegistry: SlashRegistryView | null = null;
+let memoOutput = '';
+
 /**
  * Return `buffer` with every recognized trigger token wrapped in palette
  * colors. The output's printable length matches the input — only ANSI
@@ -115,6 +158,21 @@ export function colorizeInputBuffer(
   registry: SlashRegistryView,
 ): string {
   if (chalk.level === 0) return buffer;
+
+  // Only memoize when the registry exposes a version — otherwise we cannot
+  // honestly know whether membership changed since the last call, so we
+  // recompute (correct, just uncached).
+  const version = registry.version?.();
+  const canMemo = version !== undefined;
+  if (
+    canMemo &&
+    memoRegistry === registry &&
+    memoBuffer === buffer &&
+    memoLevel === chalk.level &&
+    memoVersion === version
+  ) {
+    return memoOutput;
+  }
 
   // Order matters for nesting safety, not semantics: the three regexes
   // match disjoint shapes (slash starts with `/`, file with `@`, paste
@@ -127,5 +185,14 @@ export function colorizeInputBuffer(
     return tone(token);
   });
   const withFile = withSlash.replace(FILE_TOKEN_RE, (token) => palette.fileRef(token));
-  return withFile.replace(PASTE_PLACEHOLDER_RE, (token) => palette.meta(token));
+  const output = withFile.replace(PASTE_PLACEHOLDER_RE, (token) => palette.meta(token));
+
+  if (canMemo) {
+    memoRegistry = registry;
+    memoBuffer = buffer;
+    memoLevel = chalk.level;
+    memoVersion = version!;
+    memoOutput = output;
+  }
+  return output;
 }
