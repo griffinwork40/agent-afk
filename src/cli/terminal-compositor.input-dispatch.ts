@@ -46,8 +46,14 @@ import type {
  * mutated/invoked through it).
  */
 export interface KeyDispatchHost {
-  /** Re-render the live frame. */
+  /** Re-render the live frame synchronously. */
   repaint(): void;
+  /**
+   * Coalescing repaint for the per-keystroke edit path: leading edge paints
+   * synchronously, subsequent same-tick edits defer to one trailing microtask
+   * paint. See {@link TerminalCompositor.scheduleRepaint}.
+   */
+  scheduleRepaint(): void;
   /**
    * Clear the terminal viewport (erase entire screen + cursor home) and
    * repaint the live compositor frame. Used by the Ctrl+L binding.
@@ -162,7 +168,14 @@ export function applyEdit(self: KeyDispatchHost, next: InputCoreState): boolean 
   // guard), so this per-character ghost refresh never fires mid-paste —
   // it would be stale by paste end anyway.
   self.updateGhost();
-  self.repaint();
+  // Coalesce per-keystroke repaints: the first edit in an event-loop tick
+  // paints synchronously (leading edge — buffer STATE is already mutated above,
+  // so single-keystroke sync contracts hold); subsequent edits in the same tick
+  // defer to ONE trailing microtask paint. A rapid-typing burst of N keys thus
+  // costs 2 frame writes instead of N. Autocomplete/ghost state is updated
+  // synchronously above regardless, so a coalesced frame always renders the
+  // latest buffer + dropdown state.
+  self.scheduleRepaint();
   return true;
 }
 
@@ -384,9 +397,12 @@ function handleClipboardImageKey(self: KeyDispatchHost, key: KeyInfo): boolean {
   // for users on terminals where bracketed-paste is disabled or who
   // prefer the keyboard binding. Ported from reader.ts:464-479.
   // In-flight guard prevents concurrent osascript spawns from key
-  // repeats. schedulePaint() in reader.ts is replaced here by
-  // self.repaint() because the compositor's log-update frame is
-  // burst-coalesced internally.
+  // repeats. reader.ts's schedulePaint() is replaced here by a plain
+  // self.repaint(): this paint fires from the clipboard probe's async
+  // `.then` (its own event-loop turn, one probe at a time via the
+  // in-flight guard), so there is no synchronous burst to coalesce — a
+  // direct repaint is correct. (Per-keystroke TYPING repaints ARE
+  // coalesced, but through applyEdit → scheduleRepaint, not this path.)
   if (key?.ctrl && key?.name === 'v') {
     if (!self.clipboardInFlight) {
       self.clipboardInFlight = true;

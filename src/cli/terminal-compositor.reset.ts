@@ -35,6 +35,8 @@ export interface ResetStateHost {
   postEscCoalesce: boolean;
   postEscPayload: SubmissionPayload | null;
   paused: boolean;
+  pendingTrailingRepaint: boolean;
+  burstActive: boolean;
   activeGhost: string | null;
   anchorRow: number | undefined;
   hasCommitted: boolean;
@@ -69,6 +71,13 @@ export function resetState(self: ResetStateHost): void {
   self.postEscCoalesce = false;
   self.postEscPayload = null;
   self.paused = false;
+  // Cancel any pending coalesced keystroke repaint and close the burst window
+  // so a trailing microtask queued in the previous arm cycle cannot paint a
+  // fresh/torn-down frame. disarm() sets armed=false before calling resetState,
+  // so flushPendingRepaint would already short-circuit — clearing the flags
+  // here also keeps a rearm's first keystroke on the leading edge.
+  self.pendingTrailingRepaint = false;
+  self.burstActive = false;
   // Clear active ghost — stale suggestions must not survive a disarm/rearm
   // cycle. The engine itself is NOT disposed here (only in disarm) since
   // resetState() is called by both disarm() AND internal state-resets that

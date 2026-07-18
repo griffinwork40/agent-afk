@@ -410,6 +410,14 @@ describe('TerminalCompositor — formatInputBuffer callback', () => {
     stdin.emit('keypress', undefined, { name: 'left' });
     stdin.emit('keypress', undefined, { name: 'left' });
 
+    // Same-tick keystroke repaints coalesce: only the leading edge painted
+    // synchronously (rendering an intermediate buffer state), and the rest of
+    // this synchronous burst deferred to one trailing microtask paint. Drain
+    // it so the FINAL render — cursor on 'b', pre='a', post='c' — runs and
+    // invokes the formatter with both segment shapes. (See the same-tick
+    // coalescing block in terminal-compositor.keypress.test.ts.)
+    await Promise.resolve();
+
     // The formatter must have been called with both segment shapes by the
     // final render — 'a' as the pre-cursor segment and 'c' as the post-cursor
     // segment after the second left arrow.
@@ -446,6 +454,10 @@ describe('TerminalCompositor — formatInputBuffer callback', () => {
     stdin.emit('keypress', 'a', { name: 'a', sequence: 'a' });
     stdin.emit('keypress', 'b', { name: 'b', sequence: 'b' });
     stdin.emit('keypress', undefined, { name: 'left' });
+    // Same-tick keystroke repaints coalesce — drain the trailing microtask so
+    // the FINAL frame (buffer='ab', cursor=1) renders and its formatter calls
+    // land in `seen`. (See terminal-compositor.keypress.test.ts.)
+    await Promise.resolve();
     // Now buffer='ab', cursor=1 → cursorText='b', before='a', after=''
     // The formatter must have received 'a' and '' but never 'b' (the cursor char).
     const lastTwoCalls = seen.slice(-2);

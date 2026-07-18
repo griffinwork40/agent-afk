@@ -317,15 +317,43 @@ export class TerminalCompositor {
    */
   readonly caretBlinkController: CaretBlinkController;
   /**
-   * Monotonic frame counter, bumped once per {@link repaint}. Read by the
+   * Monotonic LOGICAL-paint counter, bumped once per repaint REQUEST — both an
+   * immediate {@link repaint} and a coalesced {@link scheduleRepaint} (whose
+   * physical frame write is deferred to a microtask) increment it. Read by the
    * lifecycle keypress handler (`LifecycleHost.repaintCount`) to tell whether
-   * dispatchKey already painted a frame this keystroke, so the caret-blink
+   * dispatchKey already requested a paint this keystroke, so the caret-blink
    * un-hide repaint is issued only when nothing else painted — avoiding a double
-   * frame on an off-phase keystroke. Plain counter; wraparound is unreachable in
-   * a session (Number.MAX_SAFE_INTEGER frames).
+   * frame on an off-phase keystroke. Counting the coalesced request here (not
+   * just the physical write) is what keeps a deferred edit-paint registering as
+   * "painted" for caret purposes, so a burst's non-leading keys don't each
+   * trigger a spurious synchronous un-hide repaint. Plain counter; wraparound is
+   * unreachable in a session (Number.MAX_SAFE_INTEGER frames).
    * @internal Relaxed from `private` for the lifecycle module (LifecycleHost).
    */
   repaintCount = 0;
+  // Contract (same-tick keystroke repaint coalescing): a synchronous burst of
+  // keypresses (rapid typing in one event-loop tick) must cost 2 physical frame
+  // writes, not one-per-key. The FIRST edit-repaint in a tick paints
+  // synchronously (leading edge — preserves every single-keystroke synchronous
+  // write/getBuffer contract the test suite asserts); subsequent edit-repaints
+  // in the SAME tick set `pendingTrailingRepaint` and coalesce into ONE trailing
+  // paint fired on a queueMicrotask. `burstActive` marks that a microtask window
+  // is open for the current tick; it is reset when that microtask drains. Only
+  // the keystroke edit path (applyEdit → scheduleRepaint) coalesces — every
+  // other caller (spinner tick, setOverlay, commitAbove, resize, mode
+  // transitions, Ctrl+L, dropdown/ghost apply) calls repaint() directly and
+  // stays synchronous. Any direct repaint() clears `pendingTrailingRepaint`
+  // (buffer STATE is always mutated synchronously, so a direct paint of current
+  // state supersedes a pending coalesced one). flushPendingRepaint() is the
+  // synchronous escape hatch lifecycle points call to force the trailing paint
+  // before an await; it is idempotent and a no-op once disarmed, so a stale
+  // pending paint can never fire against a torn-down compositor. Both flags are
+  // cleared by resetState() (disarm/rearm) so a stale burst window never
+  // survives a lifecycle boundary.
+  /** @internal Relaxed from `private` for the lifecycle module (LifecycleHost). */
+  pendingTrailingRepaint = false;
+  /** @internal Relaxed from `private` for the lifecycle module (LifecycleHost). */
+  burstActive = false;
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   committing = false;
   /**
@@ -675,6 +703,12 @@ export class TerminalCompositor {
    * for the full ordered-operation and flush-semantics invariants.
    */
   setInputMode(mode: CompositorInputMode): void {
+    // A mode transition is a lifecycle boundary: the → idle drain hands a
+    // payload to a (potentially reentrant, await-crossing) onSubmit, and turn
+    // arm/teardown callers expect the on-screen frame to be current. Flush any
+    // pending coalesced keystroke paint synchronously first so no deferred
+    // edit-frame is stranded behind the transition. No-op when nothing pends.
+    this.flushPendingRepaint();
     InputMode.setInputMode(this, mode);
   }
 
@@ -736,6 +770,12 @@ export class TerminalCompositor {
   // test suite reaches into it; these delegators forward to the module.
 
   commitAbove(text: string): void {
+    // Materialize any pending coalesced keystroke frame FIRST: commitAbove
+    // clears + re-tracks the live frame region, and the on-screen input line
+    // must reflect the current buffer (not a mid-burst intermediate) before it
+    // is captured/re-pinned. flushPendingRepaint is a no-op when nothing is
+    // pending, so this is free on the common (non-typing) commit path.
+    this.flushPendingRepaint();
     CommittedBand.commitAbove(this, text);
   }
 
@@ -873,6 +913,62 @@ export class TerminalCompositor {
     // Bump BEFORE painting so the lifecycle keypress handler's post-dispatch
     // comparison sees the increment from any repaint dispatchKey triggered.
     this.repaintCount++;
+    // A direct (synchronous) paint always renders CURRENT state, which
+    // supersedes any pending coalesced edit-paint — clear the pending flag so
+    // the trailing microtask does not fire a redundant second frame.
+    this.pendingTrailingRepaint = false;
+    Frame.repaint(this);
+  }
+
+  /**
+   * Coalescing entry point for the per-keystroke edit path (applyEdit). The
+   * FIRST call in an event-loop tick paints synchronously (leading edge);
+   * subsequent calls in the SAME tick defer to ONE trailing paint on a
+   * microtask, so a burst of N keystrokes costs 2 physical frame writes instead
+   * of N. See the Contract on {@link pendingTrailingRepaint}. Every logical
+   * request bumps {@link repaintCount} (caret-blink coherence); only the leading
+   * edge and the single trailing flush perform a physical {@link Frame.repaint}.
+   * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
+   */
+  scheduleRepaint(): void {
+    // Logical paint request — always counted so the caret-blink un-hide check
+    // in the lifecycle keypress handler treats a coalesced paint as "painted".
+    this.repaintCount++;
+    if (!this.burstActive) {
+      // Leading edge: first edit-repaint this tick paints immediately, and we
+      // open a microtask window that will flush any trailing paint at tick end.
+      this.burstActive = true;
+      this.pendingTrailingRepaint = false;
+      Frame.repaint(this);
+      queueMicrotask(() => {
+        this.burstActive = false;
+        this.flushPendingRepaint();
+      });
+      return;
+    }
+    // Subsequent edit-repaint in the same tick: mark dirty; the open microtask
+    // window will paint the final frame once.
+    this.pendingTrailingRepaint = true;
+  }
+
+  /**
+   * Force the pending coalesced trailing repaint to fire NOW, synchronously.
+   * Lifecycle points that must observe a current frame before yielding to an
+   * await (mode transitions, commit, resize, teardown) call this so a deferred
+   * edit-paint is not stranded behind the await. Idempotent (a no-op when
+   * nothing is pending) and disarm-safe (a no-op once torn down), so a stale
+   * pending paint can never render against a disarmed compositor.
+   * @internal Public for the lifecycle/input-mode modules and test casts.
+   */
+  flushPendingRepaint(): void {
+    if (!this.pendingTrailingRepaint) return;
+    this.pendingTrailingRepaint = false;
+    // Disarm-safety: never paint a torn-down compositor. Frame.repaint guards
+    // on `armed` too, but clearing the flag above + this early return make the
+    // cancellation explicit and keep the method a pure no-op post-disarm.
+    if (!this.armed) return;
+    // Physical paint of the already-counted trailing request — do NOT re-bump
+    // repaintCount (the logical request was counted at scheduleRepaint time).
     Frame.repaint(this);
   }
 
