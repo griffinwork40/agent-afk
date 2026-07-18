@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.56.4] - 2026-07-18
+
+### Fixed
+- coalesce post-ESC type-ahead across the teardown boundary (kill lone-"." input lag) (#644) (607c052)
+
 ## [5.56.3] - 2026-07-17
 
 ### Fixed
