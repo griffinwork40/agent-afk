@@ -109,14 +109,15 @@ export interface KeyDispatchHost {
   /** Once-only soft-stop guard for ESC in streaming mode. */
   softStopped: boolean;
   /**
-   * Snapshot of `pendingSubmissions.length` taken at ESC soft-stop time
-   * (handleEscape). Entries at indices `0..softStopQueueBase-1` were queued
-   * BEFORE esc and are contract-protected (handleEscape comment lines 318-327):
-   * "Already-queued messages: left untouched." Post-ESC Enters coalesce by
-   * MERGING everything at/above this base into one payload, so neither the
-   * pre-ESC queue nor earlier post-ESC messages are ever silently dropped.
+   * Post-ESC coalesce epoch — armed at ESC soft-stop, held until the coalesced
+   * redirect payload drains (authoritative field docs on the class in
+   * terminal-compositor.ts). While true, handleEnter MERGES each new message
+   * into {@link postEscPayload} rather than pushing a separate FIFO entry, so
+   * post-ESC pokes fold into ONE next turn instead of stranding one-per-turn.
    */
-  softStopQueueBase: number;
+  postEscCoalesce: boolean;
+  /** Merge target for the {@link postEscCoalesce} epoch (by reference), or null before the first post-ESC Enter / after it drains. */
+  postEscPayload: SubmissionPayload | null;
   /** Hard-abort flag set by Ctrl+C in streaming mode. */
   canceled: boolean;
   /** Once-only guard for Ctrl+B background in streaming mode. */
@@ -338,10 +339,15 @@ function handleEscape(self: KeyDispatchHost, key: KeyInfo): boolean {
   // committing it would fling it as a turn the user never submitted. Ctrl+C
   // (handleInterrupt below) follows the same no-auto-commit rule.
   self.softStopped = true;
-  // Snapshot the queue length so post-ESC coalesce (handleEnter) can merge
-  // everything at/above this base — preserving pre-ESC payloads per the
-  // contract above while folding post-ESC messages into one next turn.
-  self.softStopQueueBase = self.pendingSubmissions.length;
+  // Arm the post-ESC coalesce epoch. Unlike `softStopped` (cleared at the first
+  // teardown → idle), this is held until the coalesced redirect payload drains,
+  // so pokes typed AFTER teardown but before the redirect runs still merge in
+  // (the residual the softStopped-window coalesce missed — the lone-"." symptom).
+  // A fresh epoch starts with NO merge target: any pre-ESC payloads already on
+  // the FIFO stay as their own entries (handleEscape contract — "already-queued
+  // messages: left untouched"), and the first post-ESC Enter creates the target.
+  self.postEscCoalesce = true;
+  self.postEscPayload = null;
   if (self.onSoftStop) self.onSoftStop();
   return true;
 }
@@ -669,40 +675,49 @@ function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boo
     expandedText === displayText
       ? { text: expandedText, attachments }
       : { text: expandedText, displayText, attachments };
-  // Invariant: during the ESC soft-stop window — `softStopped` is set by
-  // handleEscape and cleared only at the post-soft-stop `→ idle` transition
-  // (setInputMode, terminal-compositor.input-mode.ts) — Enter must NOT
-  // accumulate a type-ahead backlog. That window is the async turn-teardown
-  // gap: for a subagent turn, cancelActiveForeground() (subagent-executor.ts)
-  // resolves the parent `await` only after the child settles — seconds for a
-  // deep/wide wave — and the compositor lingers in 'streaming' the whole time.
-  // Each Enter would otherwise push onto the FIFO, which drains ONE payload per
-  // turn (the `→ idle` flush), stranding the user one turn behind: the "it
-  // doesn't send, then I keep sending characters to catch up" report. So during
-  // a soft-stop, all post-ESC messages COALESCE into a single payload that runs
-  // as exactly one next turn — no backlog.
+  // Invariant: after an ESC soft-stop, Enter must NOT accumulate a type-ahead
+  // backlog. The teardown gap — the async window between ESC and the turn loop
+  // actually breaking (for a subagent turn, cancelActiveForeground() in
+  // subagent-executor.ts resolves the parent `await` only after the child
+  // settles, seconds for a deep/wide wave) — keeps the compositor in 'streaming'
+  // while the user, seeing no new turn, types a redirect and pokes ".". If each
+  // Enter pushed its own FIFO entry, the queue would drain ONE payload per turn
+  // (the `→ idle` flush), stranding the user one turn behind: the "it doesn't
+  // send, then I keep sending characters to catch up" report — the lone-"."
+  // messages. So across the whole post-ESC epoch, messages COALESCE into a
+  // single payload that runs as exactly one next turn — no backlog.
   //
-  // Coalesce = MERGE, not last-wins. The original #403 fix kept only the
-  // latest post-ESC message, which silently DROPPED earlier ones: a user who
-  // typed a real instruction during the settle window and then poked with "."
-  // (because nothing appeared to send) had the instruction replaced by the "."
-  // — the "message → no response → retype it" report, round 2. Merging joins
-  // the post-ESC texts with newlines (and concatenates attachments) so the
-  // user's full post-stop intent survives while the no-backlog invariant —
-  // exactly ONE next turn — still holds.
+  // Epoch, not just the softStopped window. `postEscCoalesce` is armed at ESC
+  // and held until the coalesced payload DRAINS (setInputMode's `→ idle` shift),
+  // NOT cleared at the first teardown `→ idle` the way `softStopped` is. This
+  // covers the residual #81/#403/#467 missed: a poke that lands AFTER teardown
+  // (softStopped already false) but before the redirect visibly starts. It used
+  // to strand as a separate turn; now it merges.
   //
-  // Contract preservation: `softStopQueueBase` was snapshotted by handleEscape
-  // at ESC time, capturing the count of pre-ESC payloads already on the FIFO.
-  // Entries below the base are pre-ESC turns and are left untouched (they
-  // drain as their own sequential turns via the `→ idle` flush), so the
-  // handleEscape contract — "Already-queued messages: left untouched" — holds.
-  // Only entries at/above the base participate in the merge. Normal mid-turn
-  // type-ahead (softStopped === false) still accumulates: sequential-turn
-  // delivery is the intended contract there (the "NO ESC" regression tests).
-  if (self.softStopped) {
-    const postEsc = self.pendingSubmissions.slice(self.softStopQueueBase);
-    self.pendingSubmissions.length = self.softStopQueueBase;
-    self.pendingSubmissions.push(mergeSubmissionPayloads([...postEsc, payload]));
+  // Merge target by REFERENCE (`postEscPayload`), not a FIFO index. Any pre-ESC
+  // payloads stay their own entries (handleEscape leaves postEscPayload null, so
+  // they are never the merge target) and drain as their own sequential turns —
+  // the handleEscape contract ("already-queued messages: left untouched") holds.
+  // A reference survives those pre-ESC entries draining ahead of it, whereas the
+  // old index (`softStopQueueBase`) went stale after any `shift()`.
+  //
+  // Merge joins texts with newlines + concatenates attachments (never last-wins,
+  // which silently dropped earlier post-ESC messages — the #467 regression).
+  // Normal mid-turn type-ahead (no ESC, postEscCoalesce === false) still
+  // accumulates one payload per message: sequential-turn delivery is the intended
+  // contract there (the "NO ESC" regression tests).
+  if (self.postEscCoalesce && self.postEscPayload !== null) {
+    // Merge into the still-pending redirect in place (same FIFO slot) so the
+    // whole post-stop burst becomes ONE next turn.
+    const idx = self.pendingSubmissions.indexOf(self.postEscPayload);
+    const merged = mergeSubmissionPayloads([self.postEscPayload, payload]);
+    if (idx >= 0) self.pendingSubmissions[idx] = merged;
+    else self.pendingSubmissions.push(merged); // defensive: target already drained
+    self.postEscPayload = merged;
+  } else if (self.postEscCoalesce) {
+    // First post-ESC message this epoch — it becomes the merge target.
+    self.postEscPayload = payload;
+    self.pendingSubmissions.push(payload);
   } else {
     self.pendingSubmissions.push(payload);
   }
