@@ -565,3 +565,39 @@ describe('runReplLoop — Shift+Tab wired to cyclePermissionMode (persistent com
     expect(ctx.statusLine.rearm).toHaveBeenCalled();
   });
 });
+
+/**
+ * Wiring test — Ctrl+O routes to the $EDITOR handoff (the /editor chord).
+ *
+ * `setupSurface` hands the persistent compositor an `onOpenEditor` closure that
+ * calls the shared `openEditorForBuffer` with the live compositor. This test
+ * fires the REAL captured closure (not a re-implementation) to lock the
+ * keypress→handler wiring: it must be present as a function and must never
+ * throw synchronously into the keypress dispatch (the closure is fire-and-forget
+ * async — it swallows the handoff promise). The handoff's full behavior is
+ * covered by editor.test.ts; here we only guard the wiring so a silent repoint
+ * regression (closure dropped or renamed) is caught.
+ */
+describe('runReplLoop — Ctrl+O wired to the $EDITOR handoff (persistent compositor)', () => {
+  it('the armCompositor onOpenEditor closure is a function and does not throw into dispatch', async () => {
+    fakeCompositorState.commitAbove = vi.fn();
+
+    const ctx = makeMinimalCtx(new BackgroundAgentRegistry({}));
+    const turnState: TurnState = {
+      turnInFlight: false,
+      lastSigintAt: 0,
+      activeCompositor: null,
+    } as TurnState;
+
+    await runReplLoop(ctx, makeTranscript() as never, turnState, vi.fn());
+
+    const armOpts = fakeCompositorState.lastArmOpts as { onOpenEditor?: () => void };
+    expect(typeof armOpts.onOpenEditor).toBe('function');
+
+    // Fire the captured handler — exercises the REAL surface-setup.ts closure.
+    // Fire-and-forget: it must not throw synchronously regardless of env/TTY
+    // state. Flush microtasks so the swallowed async settles without leaking.
+    expect(() => armOpts.onOpenEditor!()).not.toThrow();
+    await new Promise((r) => setTimeout(r, 5));
+  });
+});

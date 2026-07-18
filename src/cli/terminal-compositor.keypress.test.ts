@@ -951,6 +951,45 @@ describe('TerminalCompositor — keypress + history + buffer + spinner', () => {
       expect(c.getBuffer().text).toBe('');
     });
 
+    it('Ctrl+O fires onOpenEditor and does not leak the control byte into the buffer', async () => {
+      const onOpenEditor = vi.fn();
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onOpenEditor });
+      await c.arm();
+      stdin.emit('keypress', 'a', { name: 'a', sequence: 'a' });
+      stdin.emit('keypress', undefined, { name: 'o', ctrl: true });
+      expect(onOpenEditor).toHaveBeenCalledTimes(1);
+      // The chord is consumed — 'o' is NOT inserted into the buffer.
+      expect(c.getBuffer().text).toBe('a');
+    });
+
+    it('Ctrl+O without onOpenEditor is consumed (no throw, no buffer mutation)', async () => {
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      stdin.emit('keypress', undefined, { name: 'o', ctrl: true });
+      expect(c.getBuffer().text).toBe('');
+    });
+
+    it('setOnOpenEditor installs and clears the Ctrl+O handler', async () => {
+      const onOpenEditor = vi.fn();
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      c.setOnOpenEditor(onOpenEditor);
+      stdin.emit('keypress', undefined, { name: 'o', ctrl: true });
+      expect(onOpenEditor).toHaveBeenCalledTimes(1);
+      c.setOnOpenEditor(null);
+      stdin.emit('keypress', undefined, { name: 'o', ctrl: true });
+      expect(onOpenEditor).toHaveBeenCalledTimes(1);
+    });
+
+    it('a plain "o" (no ctrl) still types into the buffer', async () => {
+      const onOpenEditor = vi.fn();
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onOpenEditor });
+      await c.arm();
+      stdin.emit('keypress', 'o', { name: 'o', sequence: 'o' });
+      expect(onOpenEditor).not.toHaveBeenCalled();
+      expect(c.getBuffer().text).toBe('o');
+    });
+
     it('ignores ctrl/meta modifiers that are not cancel-combos', async () => {
       const onCancel = vi.fn();
       const c = new TerminalCompositor({ stdout, stdin, onCancel });

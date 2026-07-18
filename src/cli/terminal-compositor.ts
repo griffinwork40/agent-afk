@@ -102,6 +102,13 @@ export class TerminalCompositor {
   /** @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost). */
   onShiftTab?: () => void;
   /**
+   * Ctrl+O "open $EDITOR" handler — see
+   * {@link TerminalCompositorOptions.onOpenEditor}. Installed once at REPL
+   * arm time (the handoff is REPL-global, not per-turn).
+   * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
+   */
+  onOpenEditor?: () => void;
+  /**
    * Resolved prompt accessor. Always a function — strings supplied at
    * construction are wrapped in a constant-returning closure so the
    * downstream code path is uniform.
@@ -461,6 +468,7 @@ export class TerminalCompositor {
     this.onBackground = opts.onBackground;
     this.onPauseInterrupt = opts.onPauseInterrupt;
     this.onShiftTab = opts.onShiftTab;
+    this.onOpenEditor = opts.onOpenEditor;
     // Normalize promptText to a function: string → constant closure;
     // function → use as-is; falsy → dim-chevron fallback.
     const promptOpt = opts.promptText;
@@ -615,6 +623,16 @@ export class TerminalCompositor {
    */
   setOnShiftTab(handler: (() => void) | null): void {
     this.onShiftTab = handler ?? undefined;
+  }
+
+  /**
+   * Install or clear the Ctrl+O "open $EDITOR" handler — see
+   * {@link TerminalCompositorOptions.onOpenEditor}. Like Shift+Tab, the
+   * persistent InputSurface installs this once at REPL start (the editor
+   * handoff is REPL-global, not per-turn).
+   */
+  setOnOpenEditor(handler: (() => void) | null): void {
+    this.onOpenEditor = handler ?? undefined;
   }
 
   /**

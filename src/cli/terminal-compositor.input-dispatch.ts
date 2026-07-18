@@ -131,6 +131,7 @@ export interface KeyDispatchHost {
   /** Submitted-line-during-pause handler — see {@link TerminalCompositorOptions.onPauseInterrupt}. */
   readonly onPauseInterrupt?: () => void;
   readonly onShiftTab?: () => void;
+  readonly onOpenEditor?: () => void;
   readonly onSubmit?: (payload: SubmissionPayload) => void;
 }
 
@@ -187,6 +188,7 @@ export function dispatchKey(self: KeyDispatchHost, char: string | undefined, key
   if (handleBackspace(self, key)) return;
   if (handleCursorAndEdit(self, key)) return;
   if (handleBackground(self, key)) return;
+  if (handleOpenEditor(self, key)) return;
   if (handleTab(self, key)) return;
   handlePrintable(self, char, key);
 }
@@ -968,6 +970,22 @@ function handleBackground(self: KeyDispatchHost, key: KeyInfo): boolean {
     if (self.backgrounded) return true;
     self.backgrounded = true;
     if (self.onBackground) self.onBackground();
+    return true;
+  }
+  return false;
+}
+
+function handleOpenEditor(self: KeyDispatchHost, key: KeyInfo): boolean {
+  // Ctrl+O → open $EDITOR seeded with the current buffer (the /editor chord).
+  // We ALWAYS consume Ctrl+O when armed — even with no handler wired — so the
+  // raw control byte (0x0f) never leaks into the buffer via handlePrintable
+  // (which drops ctrl combos anyway, but consuming here is explicit + testable).
+  // The handler owns the async suspend/spawn/restore + buffer load internally;
+  // dispatch just fires it and returns. Fire in any input mode: composing a
+  // prompt (idle) is the primary case, and firing mid-stream is harmless — the
+  // handler reads the live buffer regardless of turn state.
+  if (key?.ctrl && key?.name === 'o') {
+    if (self.onOpenEditor) self.onOpenEditor();
     return true;
   }
   return false;

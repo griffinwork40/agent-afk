@@ -143,6 +143,12 @@ export interface InputSurfaceArmOpts {
    */
   onShiftTab?: () => void;
   /**
+   * Stable Ctrl+O handler — wired to the $EDITOR handoff (the /editor
+   * chord). Like onShiftTab, installed once at arm time and fires in both
+   * idle and streaming modes since the editor handoff is REPL-global.
+   */
+  onOpenEditor?: () => void;
+  /**
    * Optional DECSTBM scroll-region guard (typically the active
    * StatusLine). Forwarded to the compositor so `commitAbove`'s
    * scrollback writes use full-screen scroll semantics.
@@ -318,6 +324,7 @@ export class InputSurface {
       // the user submits a line during a usage-limit pause.
       onPauseInterrupt: () => { this.pauseInterruptHandler?.(); },
       ...(opts.onShiftTab ? { onShiftTab: opts.onShiftTab } : {}),
+      ...(opts.onOpenEditor ? { onOpenEditor: opts.onOpenEditor } : {}),
       history: this.history,
       autocompleteState: this.autocompleteState,
       formatInputBuffer: (segment) => colorizeInputBuffer(segment, this.slashRegistryView),
