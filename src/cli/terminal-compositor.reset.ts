@@ -32,7 +32,8 @@ export interface ResetStateHost {
   canceled: boolean;
   backgrounded: boolean;
   softStopped: boolean;
-  softStopQueueBase: number;
+  postEscCoalesce: boolean;
+  postEscPayload: SubmissionPayload | null;
   paused: boolean;
   pendingTrailingRepaint: boolean;
   burstActive: boolean;
@@ -67,7 +68,8 @@ export function resetState(self: ResetStateHost): void {
   self.canceled = false;
   self.backgrounded = false;
   self.softStopped = false;
-  self.softStopQueueBase = 0;
+  self.postEscCoalesce = false;
+  self.postEscPayload = null;
   self.paused = false;
   // Cancel any pending coalesced keystroke repaint and close the burst window
   // so a trailing microtask queued in the previous arm cycle cannot paint a

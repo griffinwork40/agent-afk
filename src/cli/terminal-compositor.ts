@@ -82,13 +82,29 @@ export class TerminalCompositor {
    */
   softStopped = false;
   /**
-   * Snapshot of `pendingSubmissions.length` at ESC soft-stop time. Post-ESC
-   * Enters merge everything at/above this base into one payload, so pre-ESC
-   * payloads are preserved (handleEscape contract) while post-ESC type-ahead
-   * coalesces into a single merged next turn. Reset alongside `softStopped`.
+   * Post-ESC coalesce epoch. Armed by an ESC soft-stop (handleEscape) and — unlike
+   * {@link softStopped}, which is cleared at the first teardown `→ idle` — held
+   * until the coalesced redirect payload actually DRAINS to a running turn
+   * ({@link ./terminal-compositor.input-mode.ts | setInputMode}'s `→ idle` shift).
+   * While armed, every streaming-mode Enter MERGES into {@link postEscPayload}
+   * instead of pushing a separate FIFO entry, so a user who ESCs then types a
+   * redirect + "." pokes (because the redirect hasn't visibly started yet) gets ONE
+   * next turn — not a one-drain-per-turn backlog stranded one turn behind. This is
+   * the residual #81/#403/#467 never covered: those coalesced only within the
+   * narrow softStopped window, so a poke landing after teardown stranded as its own
+   * turn (the lone-"." symptom). Reset in `resetState()` and on idle→streaming.
    * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
    */
-  softStopQueueBase = 0;
+  postEscCoalesce = false;
+  /**
+   * Merge target for the {@link postEscCoalesce} epoch: the single coalesced
+   * post-ESC payload currently in {@link pendingSubmissions}, or null before the
+   * first post-ESC Enter / after it drains. Tracked by REFERENCE (not a FIFO
+   * index) so it survives pre-ESC payloads draining ahead of it — the index-based
+   * `softStopQueueBase` it replaces went stale after any `shift()`.
+   * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
+   */
+  postEscPayload: SubmissionPayload | null = null;
   /** @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost). */
   onBackground?: () => void;
   /**
