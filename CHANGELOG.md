@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.57.0] - 2026-07-18
+
+### Added
+- /search over session turns with jump-to-last-error (#650) (145dc22)
+
 ## [5.56.4] - 2026-07-18
 
 ### Fixed
