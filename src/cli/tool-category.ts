@@ -47,42 +47,56 @@ export {
   type ToolCategory,
 };
 
-const CATEGORY_COLOR: Record<ToolCategory, ChalkInstance> = {
-  // Read — soft sand. Reads are the highest-frequency tool category (every
-  // turn involves grep/read/glob), so they need a distinct hue that isn't
-  // in the blue family (which is already crowded by info/tool/fileRef).
-  // Sand = "data at rest," warm and earthy.
-  read: chalk.hex('#C9B584'),
-  write: chalk.hex('#E8A33D'),
-  shell: chalk.hex('#A8E060'),
-  subagent: palette.plan,
-  skill: chalk.hex('#F08AC4'),
-  // dag — teal. Distinct from skill pink, subagent purple, mcp cyan, and web sage.
-  dag: chalk.hex('#4EC9B0'),
-  // mcp — cyan. Shifted off the original mint #5FE0C0, which sat only ~7° in hue
-  // from dag's teal (both glyphs ⬡/⊡ are low-contrast too) and was hard to tell
-  // apart from it in a dense tool lane. Cyan pulls mcp ~24° clear of dag while
-  // reading as "external protocol / server," and never collides with user-cyan
-  // (palette.user), which never renders in the tool lane.
-  mcp: chalk.hex('#49C2E0'),
-  // Web — desaturated sage. Shifted from the original #7FCDC0 so that
-  // dag/mcp/web/fileRef (four teal-adjacent hues) remain perceptually
-  // separable in dense tool turns.
-  web: chalk.hex('#A0C4C0'),
-  // Browser — bright coral/orange. Distinct from web (sage) because browser
-  // tools drive a stateful headed session, not a one-shot HTTP request —
-  // operators reading the tool lane should see "this is a different class of
-  // I/O than web_scrape" at a glance.
-  browser: chalk.hex('#FF8A65'),
-  planning: palette.meta,
-  // Schedule — daemon-management tools. Amber-adjacent to distinguish from
-  // write (orange) without clashing with planning (meta-grey).
-  schedule: chalk.hex('#D4A84B'),
-  // "Other" — unknown/uncategorized tools. Routed to meta-grey rather
-  // than info-sky so that an unrecognized tool name doesn't visually
-  // assert the same salience as an ℹ ambient notice.
-  other: palette.meta,
-};
+/**
+ * Resolve the color for a tool category.
+ *
+ * Invariant: this MUST be a function, not a module-level const lookup.
+ * `palette` is a live view over the active theme (see palette.ts) —
+ * capturing `palette.plan` / `palette.meta` into a const at import time
+ * would freeze those entries to whatever theme was active at module load,
+ * so a `light` swap would leave them showing stale dark-theme hues. The
+ * `chalk.hex(...)` entries are theme-agnostic literals and stay as-is.
+ * Resolving per call (mirrors `buildSyntaxTheme()` in syntax-theme.ts)
+ * keeps the palette-sourced entries in lock-step with `applyTheme()`.
+ */
+function categoryColor(cat: ToolCategory): ChalkInstance {
+  switch (cat) {
+    // Read — soft sand. Reads are the highest-frequency tool category (every
+    // turn involves grep/read/glob), so they need a distinct hue that isn't
+    // in the blue family (which is already crowded by info/tool/fileRef).
+    // Sand = "data at rest," warm and earthy.
+    case 'read': return chalk.hex('#C9B584');
+    case 'write': return chalk.hex('#E8A33D');
+    case 'shell': return chalk.hex('#A8E060');
+    case 'subagent': return palette.plan;
+    case 'skill': return chalk.hex('#F08AC4');
+    // dag — teal. Distinct from skill pink, subagent purple, mcp cyan, and web sage.
+    case 'dag': return chalk.hex('#4EC9B0');
+    // mcp — cyan. Shifted off the original mint #5FE0C0, which sat only ~7° in hue
+    // from dag's teal (both glyphs ⬡/⊡ are low-contrast too) and was hard to tell
+    // apart from it in a dense tool lane. Cyan pulls mcp ~24° clear of dag while
+    // reading as "external protocol / server," and never collides with user-cyan
+    // (palette.user), which never renders in the tool lane.
+    case 'mcp': return chalk.hex('#49C2E0');
+    // Web — desaturated sage. Shifted from the original #7FCDC0 so that
+    // dag/mcp/web/fileRef (four teal-adjacent hues) remain perceptually
+    // separable in dense tool turns.
+    case 'web': return chalk.hex('#A0C4C0');
+    // Browser — bright coral/orange. Distinct from web (sage) because browser
+    // tools drive a stateful headed session, not a one-shot HTTP request —
+    // operators reading the tool lane should see "this is a different class of
+    // I/O than web_scrape" at a glance.
+    case 'browser': return chalk.hex('#FF8A65');
+    case 'planning': return palette.meta;
+    // Schedule — daemon-management tools. Amber-adjacent to distinguish from
+    // write (orange) without clashing with planning (meta-grey).
+    case 'schedule': return chalk.hex('#D4A84B');
+    // "Other" — unknown/uncategorized tools. Routed to meta-grey rather
+    // than info-sky so that an unrecognized tool name doesn't visually
+    // assert the same salience as an ℹ ambient notice.
+    case 'other': return palette.meta;
+  }
+}
 
 const CATEGORY_GLYPH: Record<ToolCategory, string> = {
   read: '●',
@@ -109,7 +123,7 @@ export interface CategoryStyle {
 }
 
 export function styleForCategory(cat: ToolCategory): CategoryStyle {
-  return { color: CATEGORY_COLOR[cat], glyph: CATEGORY_GLYPH[cat] };
+  return { color: categoryColor(cat), glyph: CATEGORY_GLYPH[cat] };
 }
 
 export function styleForToolName(name: string): CategoryStyle {

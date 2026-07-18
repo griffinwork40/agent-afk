@@ -777,6 +777,53 @@ describe('Config Loader', () => {
       expect(loadConfig().enforceDoneEvidence).toBeUndefined();
     });
   });
+
+  describe('theme (afk.config.json parsing)', () => {
+    // Regression: `merged.theme` was correctly populated by the json tier but
+    // the final `config` object literal in `loadConfig()` never copied it
+    // through, so a persisted `theme` had zero effect. See PR #643 review.
+    const mockedExistsSync = () => vi.mocked(fs.existsSync);
+    const mockedReadFileSync = () => vi.mocked(fs.readFileSync);
+    const cwdConfigJson = join(process.cwd(), 'afk.config.json');
+
+    function mockConfig(json: unknown): void {
+      mockedExistsSync().mockImplementation((p) => {
+        const s = String(p);
+        if (s === cwdConfigJson) return true;
+        if (s.endsWith('AFK.md') || s.endsWith('afk.config.json')) return false;
+        return realFsModule.__realExistsSync(p as fs.PathLike);
+      });
+      mockedReadFileSync().mockImplementation((p, ...args) => {
+        if (String(p) === cwdConfigJson) return JSON.stringify(json);
+        return (realFsModule.__realReadFileSync as Function)(p, ...args);
+      });
+    }
+
+    beforeEach(() => {
+      _resetConfigCache();
+    });
+
+    afterEach(() => {
+      _resetConfigCache();
+      mockedExistsSync().mockImplementation(realFsModule.__realExistsSync);
+      mockedReadFileSync().mockImplementation(realFsModule.__realReadFileSync);
+    });
+
+    it.each(['dark', 'light', 'auto'] as const)('round-trips theme=%s from afk.config.json into CliConfig.theme', (theme) => {
+      mockConfig({ theme });
+      expect(loadConfig().theme).toBe(theme);
+    });
+
+    it('defaults to undefined (no theme forced) when absent', () => {
+      mockConfig({ telegram: { notify: { mode: 'primary' } } });
+      expect(loadConfig().theme).toBeUndefined();
+    });
+
+    it('ignores an invalid theme value (defensive parse → undefined)', () => {
+      mockConfig({ theme: 'neon' });
+      expect(loadConfig().theme).toBeUndefined();
+    });
+  });
 });
 
 describe('loadJsonConfig() — parse-failure cache invalidation (#501-F2)', () => {

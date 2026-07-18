@@ -57,12 +57,25 @@ export interface CardSpec {
   leftPad?: number;
 }
 
-const CARD_BORDERS: Record<Exclude<CardKind, 'user'>, ChalkInstance> = {
-  plan: palette.plan,
-  status: palette.info,
-  checkpoint: palette.success,
-  diagnosis: palette.warning,
-};
+/**
+ * Resolve the border color for a bordered card kind.
+ *
+ * Invariant: this MUST be a function, not a module-level const lookup.
+ * `palette` is a live view over the active theme (see palette.ts) —
+ * capturing `palette.plan` etc. into a const at import time would freeze
+ * the border color to whatever theme was active at module load, so a
+ * `light` swap would leave stale dark-theme borders on screen. Resolving
+ * per call (mirrors `buildSyntaxTheme()` in syntax-theme.ts) keeps the
+ * border in lock-step with `applyTheme()`.
+ */
+function cardBorder(kind: Exclude<CardKind, 'user'>): ChalkInstance {
+  switch (kind) {
+    case 'plan': return palette.plan;
+    case 'status': return palette.info;
+    case 'checkpoint': return palette.success;
+    case 'diagnosis': return palette.warning;
+  }
+}
 
 const CARD_DEFAULT_TITLE: Record<Exclude<CardKind, 'user'>, string> = {
   plan: 'PLAN',
@@ -194,7 +207,7 @@ function renderBorderedCard(
   title: string,
   bodyLines: string[],
 ): string {
-  const c = CARD_BORDERS[kind];
+  const c = cardBorder(kind);
   const styledLines = bodyLines.map(renderCardLine);
 
   // Inner width: title chip + body content + 4-char padding, capped to the

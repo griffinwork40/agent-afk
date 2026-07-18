@@ -13,6 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import chalk from 'chalk';
 import { highlightCode } from './syntax-highlight.js';
+import { applyTheme } from './theme.js';
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 const stripAnsi = (s: string): string => s.replace(ANSI_RE, '');
@@ -64,5 +65,25 @@ describe('highlightCode', () => {
     const big = 'x'.repeat(3000);
     const out = highlightCode(big, 'typescript');
     expect(out).toBe(big);
+  });
+
+  it('re-highlights with new tones after a theme swap (cache invalidation actually changes rendered output)', () => {
+    // applyTheme() calls clearHighlightCache() so a swap doesn't serve a
+    // stale cache hit, but nothing previously asserted the highlighted
+    // OUTPUT actually differs afterward — only that the cache didn't short-
+    // circuit. This closes that gap: same snippet, dark then light, must
+    // render distinct ANSI. See PR #643 review (nice-to-have item).
+    try {
+      const snippet = 'const x: number = 1; // hi';
+      applyTheme('dark');
+      const dark = highlightCode(snippet, 'typescript');
+      applyTheme('light');
+      const light = highlightCode(snippet, 'typescript');
+      expect(light).not.toBe(dark);
+      // Sanity: both still round-trip the original text under strip-ansi.
+      expect(stripAnsi(dark)).toBe(stripAnsi(light));
+    } finally {
+      applyTheme('dark'); // restore the default so later tests/files see dark
+    }
   });
 });

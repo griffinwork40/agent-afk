@@ -22,11 +22,18 @@ export {
   formatDiffBlock,
 } from './tool-lane-format-diff.js';
 
-export const DONE_GLYPH = palette.success('✓');
-export const ERROR_GLYPH = palette.error('✗');
-
+/**
+ * Invariant: the glyphs MUST be resolved inside the function body, not
+ * hoisted into module-level consts. `palette` is a live view over the
+ * active theme (see palette.ts) — capturing `palette.success('✓')` etc.
+ * into a const at import time would freeze the glyph to whatever theme
+ * was active at module load, so a `light` swap would leave a stale
+ * dark-theme glyph on screen. Resolving per call (mirrors
+ * `buildSyntaxTheme()` in syntax-theme.ts) keeps the glyph in lock-step
+ * with `applyTheme()`.
+ */
 export function doneGlyph(isError: boolean | undefined): string {
-  return isError ? ERROR_GLYPH : DONE_GLYPH;
+  return isError ? palette.error('✗') : palette.success('✓');
 }
 
 export const MAX_VISIBLE_CHILDREN = 3;

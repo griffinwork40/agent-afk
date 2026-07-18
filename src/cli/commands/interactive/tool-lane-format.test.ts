@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
+import type { ChalkInstance } from 'chalk';
 import {
   summarizeToolArgs,
   formatOutcome,
@@ -17,13 +18,26 @@ import {
   sanitizeTextParagraph,
   shortenPaths,
   batchBadge,
+  doneGlyph,
   MAX_OVERLAY_DIFF_LINES,
   FLUSH_DIFF_LINES_DEFAULT,
 } from './tool-lane-format.js';
 import { resetHyperlinksEnabledForTest } from '../../hyperlink.js';
 import { stripAnsi, displayWidth } from '../../display.js';
+import { palette } from '../../palette.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import type { DiffPayload } from '../../../utils/diff.js';
+
+/**
+ * A stand-in `ChalkInstance` that renders `<tag>:<text>` uncolored. Used to
+ * prove a "read `palette.<role>` at call time" invariant deterministically,
+ * sidestepping chalk's own ANSI-downsample quantization (which bakes in at
+ * `hex()` property-access time and can make two distinct tones coincidentally
+ * render identical bytes at a low color level).
+ */
+function sentinelChalk(tag: string): ChalkInstance {
+  return ((...text: unknown[]) => `${tag}:${text.join(' ')}`) as ChalkInstance;
+}
 
 function makeResult(opts: {
   content?: string;
@@ -69,6 +83,40 @@ describe('batchBadge — parallel-wave indicator', () => {
   it('is empty when only one of the index/size pair is present (defensive)', () => {
     expect(batchBadge(chunk({ batchSize: 2 }))).toBe('');
     expect(batchBadge(chunk({ batchIndex: 1 }))).toBe('');
+  });
+});
+
+describe('doneGlyph — theme-live glyph resolution', () => {
+  it('picks the success glyph for a passing result and the error glyph for a failing one', () => {
+    expect(stripAnsi(doneGlyph(false))).toBe('✓');
+    expect(stripAnsi(doneGlyph(true))).toBe('✗');
+    expect(stripAnsi(doneGlyph(undefined))).toBe('✓');
+  });
+
+  it('resolves the glyph from `palette` at call time, not at module load (no theme-swap freeze)', () => {
+    // Regression: DONE_GLYPH/ERROR_GLYPH used to be module-level consts built
+    // from `palette.<role>` at import time, so a theme swap (which mutates
+    // `palette`'s members in place — see applyTheme()) left them frozen to
+    // whatever theme was active at module load. Swapping `palette.success`/
+    // `palette.error` to distinct sentinel renderers directly (the same
+    // mechanism applyTheme uses) proves the glyph is re-read on every call
+    // rather than captured once. See PR #643 review.
+    const savedSuccess = palette.success;
+    const savedError = palette.error;
+    try {
+      palette.success = sentinelChalk('OK-A');
+      palette.error = sentinelChalk('ERR-A');
+      expect(doneGlyph(false)).toBe('OK-A:✓');
+      expect(doneGlyph(true)).toBe('ERR-A:✗');
+
+      palette.success = sentinelChalk('OK-B');
+      palette.error = sentinelChalk('ERR-B');
+      expect(doneGlyph(false)).toBe('OK-B:✓');
+      expect(doneGlyph(true)).toBe('ERR-B:✗');
+    } finally {
+      palette.success = savedSuccess;
+      palette.error = savedError;
+    }
   });
 });
 
