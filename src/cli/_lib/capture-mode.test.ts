@@ -14,7 +14,17 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { detectCaptureMode, detectBell, detectReducedMotion, ringBellIfEnabled } from './capture-mode.js';
+import {
+  detectCaptureMode,
+  detectBell,
+  detectReducedMotion,
+  ringBellIfEnabled,
+  detectTermTitle,
+  detectNotify,
+  formatTerminalTitle,
+  setTerminalTitleIfEnabled,
+  notifyIfEnabled,
+} from './capture-mode.js';
 
 describe('detectCaptureMode', () => {
   it('returns false for an empty env', () => {
@@ -133,6 +143,136 @@ describe('ringBellIfEnabled', () => {
     const mockStream = { write: vi.fn(() => true), isTTY: true };
     // Just verify it doesn't throw and respects the bell logic
     ringBellIfEnabled(mockStream as any);
+    expect(typeof mockStream.write.mock.calls.length).toBe('number');
+  });
+});
+
+describe('detectTermTitle', () => {
+  it('returns true by default (unset — ON)', () => {
+    expect(detectTermTitle({})).toBe(true);
+  });
+
+  it('returns false only for the literal "0"', () => {
+    expect(detectTermTitle({ AFK_TERM_TITLE: '0' })).toBe(false);
+  });
+
+  it('returns true for any other value (1, true, empty)', () => {
+    expect(detectTermTitle({ AFK_TERM_TITLE: '1' })).toBe(true);
+    expect(detectTermTitle({ AFK_TERM_TITLE: 'true' })).toBe(true);
+    expect(detectTermTitle({ AFK_TERM_TITLE: '' })).toBe(true);
+  });
+
+  it('reads from process.env when no argument is passed', () => {
+    expect(typeof detectTermTitle()).toBe('boolean');
+  });
+});
+
+describe('detectNotify', () => {
+  it('returns false by default (unset — opt-in OFF)', () => {
+    expect(detectNotify({})).toBe(false);
+  });
+
+  it('returns true only for the literal "1"', () => {
+    expect(detectNotify({ AFK_NOTIFY: '1' })).toBe(true);
+  });
+
+  it('returns false for other strings (0, true, empty)', () => {
+    expect(detectNotify({ AFK_NOTIFY: '0' })).toBe(false);
+    expect(detectNotify({ AFK_NOTIFY: 'true' })).toBe(false);
+    expect(detectNotify({ AFK_NOTIFY: '' })).toBe(false);
+  });
+
+  it('reads from process.env when no argument is passed', () => {
+    expect(typeof detectNotify()).toBe('boolean');
+  });
+});
+
+describe('formatTerminalTitle', () => {
+  it('appends " · running" when running is true', () => {
+    expect(formatTerminalTitle('/home/user/my-project', true)).toBe('afk — my-project · running');
+  });
+
+  it('omits the running badge when running is false', () => {
+    expect(formatTerminalTitle('/home/user/my-project', false)).toBe('afk — my-project');
+  });
+
+  it('uses the last path segment as the basename', () => {
+    expect(formatTerminalTitle('/a/b/c/deep', false)).toBe('afk — deep');
+  });
+
+  it('tolerates a trailing slash', () => {
+    expect(formatTerminalTitle('/home/user/proj/', false)).toBe('afk — proj');
+  });
+});
+
+describe('setTerminalTitleIfEnabled', () => {
+  it('writes OSC 2 (ESC ] 2 ; <title> BEL) when enabled and TTY', () => {
+    const mockStream = { write: vi.fn(() => true), isTTY: true };
+    setTerminalTitleIfEnabled(mockStream as any, 'afk — repo · running', {});
+    expect(mockStream.write).toHaveBeenCalledWith('\x1b]2;afk — repo · running\x07');
+    expect(mockStream.write).toHaveBeenCalledTimes(1);
+  });
+
+  it('writes the empty-title reset form when title is ""', () => {
+    const mockStream = { write: vi.fn(() => true), isTTY: true };
+    setTerminalTitleIfEnabled(mockStream as any, '', {});
+    expect(mockStream.write).toHaveBeenCalledWith('\x1b]2;\x07');
+  });
+
+  it('does NOT write when AFK_TERM_TITLE=0', () => {
+    const mockStream = { write: vi.fn(() => true), isTTY: true };
+    setTerminalTitleIfEnabled(mockStream as any, 'afk — repo', { AFK_TERM_TITLE: '0' });
+    expect(mockStream.write).not.toHaveBeenCalled();
+  });
+
+  it('does NOT write when the stream is not a TTY', () => {
+    const mockStream = { write: vi.fn(() => true), isTTY: false };
+    setTerminalTitleIfEnabled(mockStream as any, 'afk — repo', {});
+    expect(mockStream.write).not.toHaveBeenCalled();
+  });
+
+  it('does NOT write when stream.isTTY is undefined', () => {
+    const mockStream = { write: vi.fn(() => true) };
+    setTerminalTitleIfEnabled(mockStream as any, 'afk — repo', {});
+    expect(mockStream.write).not.toHaveBeenCalled();
+  });
+
+  it('reads from process.env when no env is passed', () => {
+    const mockStream = { write: vi.fn(() => true), isTTY: true };
+    setTerminalTitleIfEnabled(mockStream as any, 'afk — repo');
+    expect(typeof mockStream.write.mock.calls.length).toBe('number');
+  });
+});
+
+describe('notifyIfEnabled', () => {
+  it('writes OSC 9 (ESC ] 9 ; <message> BEL) when AFK_NOTIFY=1 and TTY', () => {
+    const mockStream = { write: vi.fn(() => true), isTTY: true };
+    notifyIfEnabled(mockStream as any, 'afk: turn complete', { AFK_NOTIFY: '1' });
+    expect(mockStream.write).toHaveBeenCalledWith('\x1b]9;afk: turn complete\x07');
+    expect(mockStream.write).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT write when AFK_NOTIFY is unset (opt-in default off)', () => {
+    const mockStream = { write: vi.fn(() => true), isTTY: true };
+    notifyIfEnabled(mockStream as any, 'afk: turn complete', {});
+    expect(mockStream.write).not.toHaveBeenCalled();
+  });
+
+  it('does NOT write when AFK_NOTIFY=0', () => {
+    const mockStream = { write: vi.fn(() => true), isTTY: true };
+    notifyIfEnabled(mockStream as any, 'afk: turn complete', { AFK_NOTIFY: '0' });
+    expect(mockStream.write).not.toHaveBeenCalled();
+  });
+
+  it('does NOT write when enabled but the stream is not a TTY', () => {
+    const mockStream = { write: vi.fn(() => true), isTTY: false };
+    notifyIfEnabled(mockStream as any, 'afk: turn complete', { AFK_NOTIFY: '1' });
+    expect(mockStream.write).not.toHaveBeenCalled();
+  });
+
+  it('reads from process.env when no env is passed', () => {
+    const mockStream = { write: vi.fn(() => true), isTTY: true };
+    notifyIfEnabled(mockStream as any, 'afk: turn complete');
     expect(typeof mockStream.write.mock.calls.length).toBe('number');
   });
 });

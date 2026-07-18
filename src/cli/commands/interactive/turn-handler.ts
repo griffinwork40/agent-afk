@@ -21,7 +21,12 @@ import {
 } from './shared.js';
 import { StreamRenderer } from '../../_lib/stream-renderer.js';
 import { createConsoleWriter } from '../../slash/writer.js';
-import { ringBellIfEnabled } from '../../_lib/capture-mode.js';
+import {
+  ringBellIfEnabled,
+  setTerminalTitleIfEnabled,
+  notifyIfEnabled,
+  formatTerminalTitle,
+} from '../../_lib/capture-mode.js';
 import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import { parseTerminalState, type TerminalState } from './terminal-state.js';
 import { renderVerdictCard } from './verdict-card.js';
@@ -57,6 +62,13 @@ export async function runTurn(
   }
 
   h.setInFlight(true);
+
+  // Terminal title (OSC 2): flip to the running state as the turn starts, so a
+  // backgrounded/inactive tab reads "afk — <cwd> · running". Reset to idle at
+  // turn end (below, beside the bell). TTY-gated + AFK_TERM_TITLE-gated inside
+  // the helper; a no-op otherwise. Zero-width/cursor-neutral escape, so it is
+  // frame-safe against the persistent compositor even though it is armed here.
+  setTerminalTitleIfEnabled(process.stdout, formatTerminalTitle(process.cwd(), true));
 
   let responseText = '';
   // Byte length of `responseText` at the start of the current tool-use round,
@@ -671,6 +683,21 @@ export async function runTurn(
       // Ring the terminal bell on turn completion when enabled (AFK_BELL=1,
       // TTY-only) — an away-from-keyboard completion cue. No-op otherwise.
       ringBellIfEnabled(process.stdout);
+
+      // Terminal title (OSC 2): drop the "· running" badge now the turn is
+      // done. Emitted here (not on any early-return path) so a soft-stopped /
+      // pause-interrupted / errored turn keeps the running title until its own
+      // next turn resets it — matching the bell, which also only fires on a
+      // clean completion. The per-turn renderer was disposed at
+      // disposeRendererOnce() above, so this raw write matches the bell's
+      // frame-safe lifecycle point. TTY + AFK_TERM_TITLE gated inside.
+      setTerminalTitleIfEnabled(process.stdout, formatTerminalTitle(process.cwd(), false));
+
+      // Desktop completion notification (OSC 9): opt-in (AFK_NOTIFY=1, TTY-only)
+      // sibling of the bell for terminals that surface OSC 9 as a system banner
+      // (iTerm2 / kitty / WezTerm). No-op otherwise. Same disposed-renderer
+      // lifecycle point as the bell; zero-width escape.
+      notifyIfEnabled(process.stdout, 'afk: turn complete');
 
       // Stage 3e — post-stream writes between `disposeRendererOnce()` and
       // the finally block run while the borrowed persistent compositor is

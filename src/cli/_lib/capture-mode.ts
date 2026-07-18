@@ -1,3 +1,5 @@
+import * as path from 'node:path';
+
 /**
  * Capture-mode detection.
  *
@@ -125,5 +127,110 @@ export function ringBellIfEnabled(
 ): void {
   if (detectBell(env) && stream.isTTY) {
     stream.write('\x07');
+  }
+}
+
+/**
+ * Decide whether the terminal/tab title should track afk state via OSC 2.
+ *
+ * ON by default; `AFK_TERM_TITLE=0` opts OUT (leave the title alone). Only the
+ * literal string "0" disables — any other value (or unset) leaves it on. This
+ * matches the opt-OUT convention of the other default-ON UX detectors here
+ * (detectCaretBlink / detectGoblinSpinner) rather than the opt-IN bell.
+ *
+ * The escape itself is only emitted when the stream is also a TTY — see
+ * `setTerminalTitleIfEnabled`. This detector answers only "is the feature
+ * enabled", never "is it safe to write" (that is the caller's isTTY check).
+ *
+ * Reads `process.env` at call time. Pure function with no side effects.
+ */
+export function detectTermTitle(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env['AFK_TERM_TITLE'] !== '0';
+}
+
+/**
+ * Decide whether a desktop completion notification should be emitted via OSC 9
+ * when a turn completes.
+ *
+ * OFF by default; `AFK_NOTIFY=1` opts IN. Desktop notifications are intrusive
+ * (they pop a system banner outside the terminal), so — like the audible bell
+ * (detectBell) — this is strictly opt-in: only the literal "1" enables. Any
+ * other value (or unset) leaves it off.
+ *
+ * Reads `process.env` at call time. Pure function with no side effects.
+ */
+export function detectNotify(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env['AFK_NOTIFY'] === '1';
+}
+
+/**
+ * Compose the OSC 2 terminal-title string for a given working directory and
+ * running state. Pure string builder — no I/O, no TTY/env gating.
+ *
+ *   running=true  → `afk — <basename(cwd)> · running`
+ *   running=false → `afk — <basename(cwd)>`
+ *
+ * Uses an em dash (—) as the brand separator and a middle dot (·) before the
+ * running badge, matching the status-line / footer typography used elsewhere
+ * in the REPL. `basename` is computed with `path.basename`, so a trailing
+ * slash or a root path collapses to a sensible label.
+ */
+export function formatTerminalTitle(cwd: string, running: boolean): string {
+  const base = path.basename(cwd) || cwd;
+  return running ? `afk — ${base} · running` : `afk — ${base}`;
+}
+
+// Contract: OSC 2/9 emitters below own the TTY + feature gate for the two
+// terminal-integration escapes. Both mirror `ringBellIfEnabled`:
+//   - they take the target `stream` (so tests inject a spy and production
+//     passes `process.stdout`);
+//   - they no-op unless the feature is enabled AND `stream.isTTY` is truthy,
+//     so escape bytes never leak into pipes, files, or non-TTY CI logs;
+//   - they read `env` via the same injectable-default pattern.
+// OSC 2 (`ESC ] 2 ; <text> BEL`) and OSC 9 (`ESC ] 9 ; <text> BEL`) are both
+// zero-width, cursor-neutral, non-scrolling control strings: they set window
+// state without moving the cursor or emitting a newline. That is why they are
+// safe to write raw to `process.stdout` at the SAME lifecycle points the bell
+// is (turn start/end after the per-turn renderer is disposed, REPL start
+// before the compositor arms, clean exit after it is disarmed) without
+// corrupting the persistent compositor's log-update row accounting — the same
+// invariant that lets `ringBellIfEnabled` write `\x07` raw.
+
+/**
+ * Set the terminal/tab title to `title` via OSC 2 (`ESC ] 2 ; <title> BEL`)
+ * when the title feature is enabled and the stream is a TTY. No-op otherwise.
+ *
+ * Pass the empty string to CLEAR the title (terminals reset the tab label to
+ * their default). Non-printing; does not disturb a live overlay frame.
+ *
+ * No-op when AFK_TERM_TITLE === '0' or when stream.isTTY is falsy.
+ * Reads from process.env if env is not provided.
+ */
+export function setTerminalTitleIfEnabled(
+  stream: { write(s: string): unknown; isTTY?: boolean },
+  title: string,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (detectTermTitle(env) && stream.isTTY) {
+    stream.write(`\x1b]2;${title}\x07`);
+  }
+}
+
+/**
+ * Emit a desktop completion notification via OSC 9 (`ESC ] 9 ; <message> BEL`)
+ * when notifications are enabled and the stream is a TTY. No-op otherwise.
+ * Terminals that map OSC 9 to the desktop notification service (iTerm2, kitty,
+ * WezTerm) raise a system banner; terminals that do not simply ignore it.
+ *
+ * No-op when AFK_NOTIFY !== '1' or when stream.isTTY is falsy.
+ * Reads from process.env if env is not provided.
+ */
+export function notifyIfEnabled(
+  stream: { write(s: string): unknown; isTTY?: boolean },
+  message: string,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (detectNotify(env) && stream.isTTY) {
+    stream.write(`\x1b]9;${message}\x07`);
   }
 }
