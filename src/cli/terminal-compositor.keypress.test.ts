@@ -975,6 +975,153 @@ describe('TerminalCompositor — keypress + history + buffer + spinner', () => {
     });
   });
 
+  // ── Same-tick keystroke repaint coalescing (perf) ──────────────────────
+  //
+  // A synchronous burst of keypresses (rapid typing delivered in one
+  // event-loop tick — the common paste-into-a-non-bracketed-paste-terminal
+  // and fast-typist case) used to cost one FULL-frame repaint per key. The
+  // compositor now coalesces: the FIRST edit in a tick paints synchronously
+  // (leading edge — every single-keystroke sync contract above is preserved),
+  // and subsequent edits in the SAME tick mark the frame dirty and defer to a
+  // single trailing repaint on a microtask. A burst of N keys therefore costs
+  // 2 physical frame writes (1 leading + 1 trailing) instead of N.
+  //
+  // Physical frames are counted via the synchronized-output start marker
+  // (`\x1b[?2026h`), which CupFrameRenderer.render() emits exactly once per
+  // frame write (mock stdout is a TTY, so sync output is on). Buffer STATE
+  // stays fully synchronous — getBuffer() reads self.input, mutated per key —
+  // so the deferral is invisible to every existing state assertion.
+  describe('same-tick repaint coalescing', () => {
+    const SYNC_FRAME = '\x1b[?2026h';
+    const countFrames = (s: string): number => s.split(SYNC_FRAME).length - 1;
+
+    it('a same-tick burst of ≥3 keypresses produces ≤2 frame paints', async () => {
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      writes.clear(); // isolate the paints produced by the burst alone
+      // Five printable keys delivered synchronously (one libuv read tick).
+      for (const ch of 'hello') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      // Synchronously (before any await drains the microtask): the leading
+      // edge painted once; the other four coalesced into at most one pending
+      // trailing paint that has not fired yet. So ≤1 frame is on the wire now.
+      const framesSync = countFrames(writes.all());
+      expect(framesSync).toBeLessThanOrEqual(1);
+      // State is fully synchronous regardless of paint deferral.
+      expect(c.getBuffer().text).toBe('hello');
+      // Drain the microtask so the trailing repaint fires.
+      await Promise.resolve();
+      const framesAfterFlush = countFrames(writes.all());
+      // ≤2 total: one leading + one trailing. Far fewer than the 5 a
+      // per-key repaint would have produced.
+      expect(framesAfterFlush).toBeLessThanOrEqual(2);
+      expect(framesAfterFlush).toBeGreaterThanOrEqual(1);
+      c.disarm();
+    });
+
+    it('the final coalesced frame reflects the LAST keystroke of the burst', async () => {
+      const chalkModule = await import('chalk');
+      const priorLevel = chalkModule.default.level;
+      chalkModule.default.level = 1;
+      try {
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+        await c.arm();
+        for (const ch of 'abcde') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+        // Isolate the trailing repaint: clear everything painted synchronously,
+        // then drain the microtask so ONLY the coalesced trailing frame lands.
+        writes.clear();
+        await Promise.resolve();
+        const frame = writes.all();
+        // The trailing frame renders the full buffer including the last key.
+        expect(frame).toContain('abcde');
+        // Buffer state matches the painted frame.
+        expect(c.getBuffer().text).toBe('abcde');
+        c.disarm();
+      } finally {
+        chalkModule.default.level = priorLevel;
+      }
+    });
+
+    it('a lone keystroke still paints synchronously (leading edge, no deferral needed)', async () => {
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      writes.clear();
+      stdin.emit('keypress', 'z', { name: 'z', sequence: 'z' });
+      // Single key = first-in-tick = leading edge: the frame is on the wire
+      // immediately, no await required (preserves the synchronous-write
+      // contract the caret/queue suites rely on).
+      expect(countFrames(writes.all())).toBe(1);
+      expect(c.getBuffer().text).toBe('z');
+      c.disarm();
+    });
+
+    it('flushPendingRepaint() forces the coalesced trailing frame synchronously', async () => {
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      writes.clear();
+      for (const ch of 'sync') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      // Leading edge painted once; trailing is pending on the microtask.
+      writes.clear();
+      // flushPendingRepaint drains the pending trailing paint WITHOUT waiting
+      // for the microtask — the synchronous flush lifecycle points rely on.
+      c.flushPendingRepaint();
+      expect(countFrames(writes.all())).toBe(1);
+      // A second flush is a no-op — nothing is pending anymore (idempotent).
+      writes.clear();
+      c.flushPendingRepaint();
+      expect(writes.all()).toBe('');
+      // And the microtask that was already queued must not double-paint.
+      await Promise.resolve();
+      expect(writes.all()).toBe('');
+      c.disarm();
+    });
+
+    it('flushPendingRepaint() is idempotent and safe with nothing pending', async () => {
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      writes.clear();
+      // No burst — nothing pending. Flushing must not paint or throw.
+      expect(() => c.flushPendingRepaint()).not.toThrow();
+      expect(writes.all()).toBe('');
+      c.disarm();
+    });
+
+    it('flushPendingRepaint() is safe after disarm and a stale pending paint never fires', async () => {
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      // Start a burst so a trailing paint is pending, then tear down BEFORE
+      // the microtask drains — the classic use-after-teardown hazard.
+      for (const ch of 'abc') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      c.disarm();
+      writes.clear();
+      // Explicit flush after disarm must be a no-op (never paints a torn-down
+      // compositor, never throws).
+      expect(() => c.flushPendingRepaint()).not.toThrow();
+      expect(writes.all()).toBe('');
+      // The microtask queued during the burst now drains — it must NOT paint
+      // either (the disarm cancelled the pending trailing repaint).
+      await Promise.resolve();
+      expect(writes.all()).toBe('');
+      expect(c.isArmed()).toBe(false);
+    });
+
+    it('a printable keystroke bumps repaintCount exactly once (coalesced-away paint still counts)', async () => {
+      // The caret-blink un-hide logic keys off repaintCount to tell whether
+      // dispatchKey already painted this keystroke. A coalesced (deferred)
+      // paint must still register as a logical paint so the caret logic stays
+      // coherent — otherwise every non-leading key in a burst would trigger a
+      // spurious synchronous un-hide repaint, defeating the coalescing.
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      // Second key in the tick is the coalesced case.
+      stdin.emit('keypress', 'a', { name: 'a', sequence: 'a' });
+      const before = c.repaintCount;
+      stdin.emit('keypress', 'b', { name: 'b', sequence: 'b' });
+      // Exactly one logical paint for the coalesced key — no extra un-hide frame.
+      expect(c.repaintCount - before).toBe(1);
+      c.disarm();
+    });
+  });
+
   describe('history navigation', () => {
     function makeHistory(entries: string[]): {
       back(draft: string): string | null;
