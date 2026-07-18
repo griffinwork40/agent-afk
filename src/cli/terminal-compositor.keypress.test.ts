@@ -554,9 +554,10 @@ describe('TerminalCompositor — keypress + history + buffer + spinner', () => {
         // `pendingSubmissions = [payload]` reassignment silently dropped any
         // message committed via Enter BEFORE pressing ESC — violating the
         // handleEscape contract ("Already-queued messages: left untouched").
-        // The fix snapshots the queue length at ESC time (softStopQueueBase)
-        // and truncates back to that base before pushing, so pre-ESC payloads
-        // drain as their own turns while post-ESC type-ahead still coalesces.
+        // The fix leaves pre-ESC payloads as their own FIFO entries (they are
+        // never the post-ESC merge target — handleEscape arms the epoch with a
+        // null target), so they drain as their own turns while post-ESC
+        // type-ahead coalesces into one payload.
         const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
         await c.arm();
         c.setInputMode('idle');
@@ -567,10 +568,10 @@ describe('TerminalCompositor — keypress + history + buffer + spinner', () => {
         stdin.emit('keypress', undefined, { name: 'return' });
         expect(c.getPendingCount()).toBe(1);
 
-        // 2. ESC → softStopped=true, softStopQueueBase=1, queue untouched.
+        // 2. ESC → softStopped=true, post-ESC epoch armed (no merge target yet), queue untouched.
         stdin.emit('keypress', undefined, { name: 'escape' });
 
-        // 3. Enter "msg2" during linger → truncate-to-base(1) + push → queue=[msg1, msg2].
+        // 3. Enter "msg2" during linger → becomes the epoch merge target, pushed → queue=[msg1, msg2].
         for (const ch of 'msg2') stdin.emit('keypress', ch, { name: ch, sequence: ch });
         stdin.emit('keypress', undefined, { name: 'return' });
         expect(c.getPendingCount()).toBe(2); // pre-ESC msg1 is NOT dropped
@@ -608,8 +609,8 @@ describe('TerminalCompositor — keypress + history + buffer + spinner', () => {
           for (const ch of msg) stdin.emit('keypress', ch, { name: ch, sequence: ch });
           stdin.emit('keypress', undefined, { name: 'return' });
         }
-        // pre-ESC "pre" survives (base=1); three post-ESC Enters coalesce into
-        // ONE merged payload → total queue = 2, NOT 1 (pre not dropped) and NOT 4.
+        // pre-ESC "pre" survives (never the merge target); three post-ESC Enters
+        // coalesce into ONE merged payload → total queue = 2, NOT 1 (pre not dropped) and NOT 4.
         expect(c.getPendingCount()).toBe(2);
 
         c.setInputMode('idle'); // dispose → no drain (onSubmit null)
@@ -760,6 +761,157 @@ describe('TerminalCompositor — keypress + history + buffer + spinner', () => {
         expect(onSubmit).toHaveBeenCalledTimes(1);
         expect(onSubmit).toHaveBeenCalledWith({ text: 'next', attachments: [] });
         expect(c.getBuffer()).toEqual({ text: '', queued: false });
+      });
+
+      it('post-ESC poke typed AFTER the teardown → idle still MERGES into the redirect (no stranded turn)', async () => {
+        // The residual #81/#403/#467 missed (the lone-"." field report): softStopped
+        // clears at the first → idle, but the user is still WAITING for the redirect
+        // to run. A poke ("." to test liveness) typed after that boundary used to push
+        // a SEPARATE payload → a one-drain-per-turn backlog → the lone-"." turns. The
+        // post-ESC coalesce EPOCH persists until the redirect actually drains, so the
+        // poke merges in. Pre-fix: getPendingCount() === 2 here; post-fix: 1.
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
+        await c.arm();
+        c.setInputMode('idle');
+        c.setInputMode('streaming'); // turn arm
+
+        // ESC + a real redirect during the interrupt window (softStopped true).
+        stdin.emit('keypress', undefined, { name: 'escape' });
+        for (const ch of 'redirect') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+        stdin.emit('keypress', undefined, { name: 'return' });
+        expect(c.getPendingCount()).toBe(1);
+
+        // Teardown completes: dispose → idle CLEARS softStopped (existing contract).
+        c.setInputMode('idle');
+
+        // The redirect has NOT drained yet (onSubmit null). softStopped is now false —
+        // a poke typed here previously stranded as a 2nd payload (one turn behind).
+        stdin.emit('keypress', '.', { name: '.', sequence: '.' });
+        stdin.emit('keypress', undefined, { name: 'return' });
+        // FIXED: the poke merges into the still-pending redirect → ONE payload.
+        expect(c.getPendingCount()).toBe(1);
+
+        const onSubmit = vi.fn();
+        c.setOnSubmit(onSubmit);
+        c.setInputMode('idle');
+        expect(onSubmit).toHaveBeenCalledTimes(1);
+        expect(onSubmit).toHaveBeenCalledWith({ text: 'redirect\n.', attachments: [] });
+      });
+
+      it('post-ESC epoch ENDS when the redirect drains — later type-ahead is sequential again (no leak)', async () => {
+        // The epoch must not leak past the redirect. Once the coalesced payload
+        // drains to a running turn, subsequent mid-turn type-ahead accumulates one
+        // payload per message again (normal sequential delivery) — NOT folded into
+        // the already-running redirect.
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
+        await c.arm();
+        c.setInputMode('idle');
+        c.setInputMode('streaming'); // turn arm
+
+        stdin.emit('keypress', undefined, { name: 'escape' });
+        for (const ch of 'redirect') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+        stdin.emit('keypress', undefined, { name: 'return' });
+
+        // Drain the redirect → it runs as a turn (idle→streaming), ending the epoch.
+        const onSubmit = vi.fn();
+        c.setOnSubmit(onSubmit);
+        c.setInputMode('idle'); // drain redirect
+        expect(onSubmit).toHaveBeenNthCalledWith(1, { text: 'redirect', attachments: [] });
+        c.setInputMode('streaming'); // the redirect's turn starts
+
+        // Two fresh mid-turn messages (no new ESC) must accumulate as TWO payloads.
+        for (const msg of ['one', 'two']) {
+          for (const ch of msg) stdin.emit('keypress', ch, { name: ch, sequence: ch });
+          stdin.emit('keypress', undefined, { name: 'return' });
+        }
+        expect(c.getPendingCount()).toBe(2); // sequential — not coalesced into one
+      });
+
+      it('↑-recall of the post-ESC merge target does NOT resurrect stale text on re-send', async () => {
+        // Regression guard (P2/medium review finding on PR #644): popping a
+        // payload off pendingSubmissions for ↑-recall left postEscPayload
+        // pointing at it. Without the fix, the re-Enter below hits the merge
+        // branch's `idx < 0` defensive path (the popped payload is no longer
+        // in the queue) and resurrects the stale pre-edit text, submitting
+        // "redirect\nredirectX" instead of just the edited "redirectX".
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
+        await c.arm();
+        c.setInputMode('idle');
+        c.setInputMode('streaming'); // turn arm
+
+        stdin.emit('keypress', undefined, { name: 'escape' });
+        for (const ch of 'redirect') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+        stdin.emit('keypress', undefined, { name: 'return' });
+        expect(c.getPendingCount()).toBe(1);
+
+        // ↑ recalls the just-committed payload (also the epoch's merge target)
+        // back into the live buffer for editing; the FIFO empties.
+        stdin.emit('keypress', undefined, { name: 'up' });
+        expect(c.getBuffer().text).toBe('redirect');
+        expect(c.getPendingCount()).toBe(0);
+
+        // Edit the recalled draft (grow the buffer — the exact suffix doesn't
+        // matter, only that the re-sent text differs from the popped one).
+        stdin.emit('keypress', 'X', { name: 'X', sequence: 'X' });
+
+        // Re-Enter: still inside the post-ESC epoch (postEscCoalesce stays
+        // armed). Fixed behavior: postEscPayload was cleared on pop above, so
+        // this becomes a fresh single entry — NOT a merge with the stale text.
+        stdin.emit('keypress', undefined, { name: 'return' });
+        expect(c.getPendingCount()).toBe(1);
+
+        const onSubmit = vi.fn();
+        c.setOnSubmit(onSubmit);
+        c.setInputMode('idle');
+        expect(onSubmit).toHaveBeenCalledTimes(1);
+        expect(onSubmit).toHaveBeenCalledWith({ text: 'redirectX', attachments: [] });
+      });
+
+      it('dangling post-ESC merge target: loud in dev/test, safe-degrade in prod (invariant guard)', async () => {
+        // Defense-in-depth for the #644 class. The merge branch must NEVER feed
+        // an ABSENT postEscPayload back through mergeSubmissionPayloads — that
+        // resurrects stale text. All real removal sites (pop/shift/reset) clear
+        // the reference, so this dangling state is unreachable via normal input;
+        // we FORCE it by setting the (module-internal) field directly to prove
+        // the guard behaves — this tests the invariant guard, not a real path.
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
+        await c.arm();
+        c.setInputMode('idle');
+        c.setInputMode('streaming'); // turn arm
+
+        // Arm the epoch via a real ESC, then force a DANGLING target: a payload
+        // reference that is NOT present in pendingSubmissions (simulating a
+        // future removal site that popped/shifted it without clearing the ref).
+        stdin.emit('keypress', undefined, { name: 'escape' });
+        c.postEscPayload = { text: 'ghost', attachments: [] };
+
+        // Dev/test: the next committing Enter must THROW (loud CI signal) rather
+        // than silently merge the ghost text.
+        stdin.emit('keypress', 'x', { name: 'x', sequence: 'x' });
+        expect(() => stdin.emit('keypress', undefined, { name: 'return' })).toThrow(/dangling/);
+        c.disarm();
+
+        // Production: the SAME dangling state degrades safely — no throw, a fresh
+        // target, and the ghost text is NEVER resurrected into the submission.
+        vi.stubEnv('NODE_ENV', 'production');
+        try {
+          const c2 = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
+          await c2.arm();
+          c2.setInputMode('idle');
+          c2.setInputMode('streaming');
+          stdin.emit('keypress', undefined, { name: 'escape' });
+          c2.postEscPayload = { text: 'ghost', attachments: [] };
+          stdin.emit('keypress', 'x', { name: 'x', sequence: 'x' });
+          stdin.emit('keypress', undefined, { name: 'return' });
+          const onSubmit = vi.fn();
+          c2.setOnSubmit(onSubmit);
+          c2.setInputMode('idle');
+          expect(onSubmit).toHaveBeenCalledTimes(1);
+          expect(onSubmit).toHaveBeenCalledWith({ text: 'x', attachments: [] });
+          c2.disarm();
+        } finally {
+          vi.unstubAllEnvs();
+        }
       });
     });
 
