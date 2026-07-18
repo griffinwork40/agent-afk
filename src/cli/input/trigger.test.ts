@@ -12,11 +12,22 @@
  * to 12, so a cwd with >12 entries silently hid the rest.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdirSync, writeFileSync, rmSync, existsSync, promises as fsp } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { detectTrigger, filterFileCandidates, filterSlashCandidates } from './trigger.js';
+import {
+  detectTrigger,
+  filterFileCandidates,
+  filterFileCandidatesAsync,
+  filterFileCandidatesCached,
+  filterSlashCandidates,
+  buildFileCandidates,
+  invalidateFileScanCache,
+  __fileScanCacheSize,
+  FILE_SCAN_TTL_MS,
+  type FileDirent,
+} from './trigger.js';
 import { MAX_FILE_MATCHES } from '../multi-line-reader.js';
 import { resetRegistry } from '../slash/registry.js';
 import { registerAll } from '../slash/index.js';
@@ -30,13 +41,21 @@ beforeEach(() => {
   writeFileSync(join(tmpRoot, 'beta.ts'), 'b');
   mkdirSync(join(tmpRoot, 'src'));
   writeFileSync(join(tmpRoot, 'src', 'index.ts'), 'c');
+  invalidateFileScanCache();
   resetRegistry();
   registerAll();
 });
 
 afterEach(() => {
+  invalidateFileScanCache();
+  vi.restoreAllMocks();
   if (existsSync(tmpRoot)) rmSync(tmpRoot, { recursive: true, force: true });
 });
+
+/** Build a plain FileDirent for pure-core tests (no fs). */
+function dirent(name: string, isDir = false): FileDirent {
+  return { name, isDirectory: () => isDir };
+}
 
 describe('detectTrigger — @ file paths', () => {
   it('fires for @~/ (tilde), passing the ~/ query through unchanged', () => {
@@ -156,5 +175,124 @@ describe('filterSlashCandidates', () => {
     const vals = filterSlashCandidates('').map((c) => c.value);
     expect(vals.length).toBeGreaterThan(0);
     expect(vals).toContain('/config');
+  });
+});
+
+describe('buildFileCandidates — pure core (no I/O)', () => {
+  it('filters by leaf prefix, keeps the @ prefix, and sorts', () => {
+    const entries = [dirent('beta.ts'), dirent('alpha.txt'), dirent('gamma.md')];
+    const vals = buildFileCandidates(entries, 'al', tmpRoot).map((c) => c.value);
+    expect(vals).toEqual(['@alpha.txt']);
+  });
+
+  it('appends a trailing slash for directory Dirents (from isDirectory), no statSync', () => {
+    const entries = [dirent('src', true), dirent('readme.md')];
+    const vals = buildFileCandidates(entries, '', tmpRoot).map((c) => c.value);
+    expect(vals).toContain('@src/');
+    expect(vals).toContain('@readme.md');
+  });
+
+  it('hides dotfiles unless the leaf prefix itself starts with a dot', () => {
+    const entries = [dirent('.hidden'), dirent('visible.ts')];
+    expect(buildFileCandidates(entries, '', tmpRoot).map((c) => c.value)).toEqual(['@visible.ts']);
+    expect(buildFileCandidates(entries, '.h', tmpRoot).map((c) => c.value)).toEqual(['@.hidden']);
+  });
+
+  it('is bounded by MAX_FILE_MATCHES (single upstream cap, applied after sort)', () => {
+    const entries: FileDirent[] = [];
+    for (let i = 0; i < MAX_FILE_MATCHES + 10; i++) {
+      entries.push(dirent(`f${String(i).padStart(3, '0')}.txt`));
+    }
+    expect(buildFileCandidates(entries, 'f', tmpRoot)).toHaveLength(MAX_FILE_MATCHES);
+  });
+});
+
+describe('filterFileCandidatesAsync', () => {
+  it('resolves candidates from a fresh directory scan', async () => {
+    const vals = (await filterFileCandidatesAsync('al', tmpRoot)).map((c) => c.value);
+    expect(vals).toContain('@alpha.txt');
+  });
+
+  it('directory entries get a trailing slash (Dirent-derived, no statSync)', async () => {
+    const vals = (await filterFileCandidatesAsync('sr', tmpRoot)).map((c) => c.value);
+    expect(vals).toContain('@src/');
+  });
+
+  it('fs error → empty candidates, promise does NOT reject', async () => {
+    await expect(filterFileCandidatesAsync('/no/such/dir/x', '/nonexistent-cwd')).resolves.toEqual([]);
+  });
+
+  it('caches the listing: a second query against the same dir within TTL does NOT re-read fs', async () => {
+    const spy = vi.spyOn(fsp, 'readdir');
+    // First scan populates the cache (one readdir).
+    await filterFileCandidatesAsync('al', tmpRoot);
+    expect(spy).toHaveBeenCalledTimes(1);
+    // Second scan of the SAME scanDir (different leaf prefix) is served from
+    // cache — no additional readdir.
+    const vals = (await filterFileCandidatesAsync('be', tmpRoot)).map((c) => c.value);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(vals).toContain('@beta.ts');
+  });
+
+  it('re-reads fs once the cached entry is older than the TTL', async () => {
+    const spy = vi.spyOn(fsp, 'readdir');
+    const now = 1_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+    await filterFileCandidatesAsync('al', tmpRoot);
+    expect(spy).toHaveBeenCalledTimes(1);
+    // Advance past the TTL — the cached entry is now stale and must be re-read.
+    nowSpy.mockReturnValue(now + FILE_SCAN_TTL_MS + 1);
+    await filterFileCandidatesAsync('al', tmpRoot);
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('filterFileCandidatesCached — synchronous cache lookup', () => {
+  it('returns null on a cold cache (miss) without reading fs', () => {
+    const spy = vi.spyOn(fsp, 'readdir');
+    expect(filterFileCandidatesCached('al', tmpRoot)).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('returns candidates synchronously after the dir has been scanned (hit)', async () => {
+    await filterFileCandidatesAsync('al', tmpRoot);
+    const cached = filterFileCandidatesCached('be', tmpRoot);
+    expect(cached).not.toBeNull();
+    expect(cached!.map((c) => c.value)).toContain('@beta.ts');
+  });
+
+  it('returns null once the cached entry has expired (TTL)', async () => {
+    const now = 2_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+    await filterFileCandidatesAsync('al', tmpRoot);
+    expect(filterFileCandidatesCached('al', tmpRoot)).not.toBeNull();
+    nowSpy.mockReturnValue(now + FILE_SCAN_TTL_MS + 1);
+    expect(filterFileCandidatesCached('al', tmpRoot)).toBeNull();
+  });
+});
+
+describe('invalidateFileScanCache', () => {
+  it('clears cached listings so the next scan re-reads fs', async () => {
+    const spy = vi.spyOn(fsp, 'readdir');
+    await filterFileCandidatesAsync('al', tmpRoot);
+    expect(__fileScanCacheSize()).toBe(1);
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    invalidateFileScanCache();
+    expect(__fileScanCacheSize()).toBe(0);
+
+    await filterFileCandidatesAsync('al', tmpRoot);
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('filterFileCandidates — sync path warms the shared cache', () => {
+  it('a sync scan populates the cache so a later async lookup is a hit', async () => {
+    filterFileCandidates('al', tmpRoot);
+    const spy = vi.spyOn(fsp, 'readdir');
+    // Async lookup for the same dir now hits the cache the sync call warmed.
+    const vals = (await filterFileCandidatesAsync('be', tmpRoot)).map((c) => c.value);
+    expect(spy).not.toHaveBeenCalled();
+    expect(vals).toContain('@beta.ts');
   });
 });
