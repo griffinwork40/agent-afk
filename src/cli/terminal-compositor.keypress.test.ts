@@ -866,6 +866,53 @@ describe('TerminalCompositor — keypress + history + buffer + spinner', () => {
         expect(onSubmit).toHaveBeenCalledTimes(1);
         expect(onSubmit).toHaveBeenCalledWith({ text: 'redirectX', attachments: [] });
       });
+
+      it('dangling post-ESC merge target: loud in dev/test, safe-degrade in prod (invariant guard)', async () => {
+        // Defense-in-depth for the #644 class. The merge branch must NEVER feed
+        // an ABSENT postEscPayload back through mergeSubmissionPayloads — that
+        // resurrects stale text. All real removal sites (pop/shift/reset) clear
+        // the reference, so this dangling state is unreachable via normal input;
+        // we FORCE it by setting the (module-internal) field directly to prove
+        // the guard behaves — this tests the invariant guard, not a real path.
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
+        await c.arm();
+        c.setInputMode('idle');
+        c.setInputMode('streaming'); // turn arm
+
+        // Arm the epoch via a real ESC, then force a DANGLING target: a payload
+        // reference that is NOT present in pendingSubmissions (simulating a
+        // future removal site that popped/shifted it without clearing the ref).
+        stdin.emit('keypress', undefined, { name: 'escape' });
+        c.postEscPayload = { text: 'ghost', attachments: [] };
+
+        // Dev/test: the next committing Enter must THROW (loud CI signal) rather
+        // than silently merge the ghost text.
+        stdin.emit('keypress', 'x', { name: 'x', sequence: 'x' });
+        expect(() => stdin.emit('keypress', undefined, { name: 'return' })).toThrow(/dangling/);
+        c.disarm();
+
+        // Production: the SAME dangling state degrades safely — no throw, a fresh
+        // target, and the ghost text is NEVER resurrected into the submission.
+        vi.stubEnv('NODE_ENV', 'production');
+        try {
+          const c2 = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
+          await c2.arm();
+          c2.setInputMode('idle');
+          c2.setInputMode('streaming');
+          stdin.emit('keypress', undefined, { name: 'escape' });
+          c2.postEscPayload = { text: 'ghost', attachments: [] };
+          stdin.emit('keypress', 'x', { name: 'x', sequence: 'x' });
+          stdin.emit('keypress', undefined, { name: 'return' });
+          const onSubmit = vi.fn();
+          c2.setOnSubmit(onSubmit);
+          c2.setInputMode('idle');
+          expect(onSubmit).toHaveBeenCalledTimes(1);
+          expect(onSubmit).toHaveBeenCalledWith({ text: 'x', attachments: [] });
+          c2.disarm();
+        } finally {
+          vi.unstubAllEnvs();
+        }
+      });
     });
 
     it('printable chars grow buffer', async () => {

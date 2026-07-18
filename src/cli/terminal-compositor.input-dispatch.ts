@@ -23,6 +23,7 @@ import { isSoftNewlineEnter, endsWithBackslashContinuation } from './input/enter
 import { readClipboardImage } from './input/clipboard-image.js';
 import { MAX_DROPDOWN_ROWS } from './terminal-compositor.autocomplete.js';
 import * as Paste from './terminal-compositor.paste.js';
+import { env } from '../config/env.js';
 import type { AutocompleteState } from './input/autocomplete-state.js';
 import type { IHistoryRing } from './input/types.js';
 import type { ImageAttachment } from './input/attachments.js';
@@ -711,19 +712,55 @@ function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boo
   // Normal mid-turn type-ahead (no ESC, postEscCoalesce === false) still
   // accumulates one payload per message: sequential-turn delivery is the intended
   // contract there (the "NO ESC" regression tests).
-  if (self.postEscCoalesce && self.postEscPayload !== null) {
-    // Merge into the still-pending redirect in place (same FIFO slot) so the
-    // whole post-stop burst becomes ONE next turn.
-    const idx = self.pendingSubmissions.indexOf(self.postEscPayload);
-    const merged = mergeSubmissionPayloads([self.postEscPayload, payload]);
-    if (idx >= 0) self.pendingSubmissions[idx] = merged;
-    else self.pendingSubmissions.push(merged); // defensive: target already drained
-    self.postEscPayload = merged;
-  } else if (self.postEscCoalesce) {
-    // First post-ESC message this epoch — it becomes the merge target.
-    self.postEscPayload = payload;
-    self.pendingSubmissions.push(payload);
+  if (self.postEscCoalesce) {
+    // Invariant: while the coalesce epoch is armed, `postEscPayload` is either
+    // null (no target committed yet this epoch) OR a reference that is PRESENT
+    // in `pendingSubmissions`. Every site that removes the tracked payload
+    // clears this reference — with DELIBERATELY asymmetric epoch semantics that
+    // must NOT be collapsed into one shared helper:
+    //   • ↑-recall pop (handleVerticalNav) clears `postEscPayload` ONLY and
+    //     leaves the epoch armed, so the edited draft re-establishes a fresh
+    //     target on re-Enter.
+    //   • drain shift (input-mode `→ idle`) clears BOTH — the target is now a
+    //     running turn, so the epoch is over.
+    //   • resetState clears everything on disarm/rearm.
+    // Therefore a NON-null `postEscPayload` that is ABSENT from the queue is an
+    // invariant violation (a future removal site that forgot to clear it),
+    // never a normal state. We must NOT feed an absent reference back into
+    // mergeSubmissionPayloads — doing so resurrects stale, already-recalled text
+    // (the exact PR #644 ↑-recall bug). So: merge only a target that is actually
+    // present; otherwise start a FRESH target. Worst case under a future
+    // violation is a stranded extra turn — never resurrected text.
+    const target = self.postEscPayload;
+    const idx = target !== null ? self.pendingSubmissions.indexOf(target) : -1;
+    if (target !== null && idx >= 0) {
+      // Live target present — merge in place (same FIFO slot) so the whole
+      // post-stop burst becomes ONE next turn. Merge joins texts with newlines +
+      // concatenates attachments (never last-wins, which silently dropped
+      // earlier post-ESC messages — the #467 regression).
+      const merged = mergeSubmissionPayloads([target, payload]);
+      self.pendingSubmissions[idx] = merged;
+      self.postEscPayload = merged;
+    } else {
+      // Either the first message this epoch (target === null — the normal case)
+      // or, under a FUTURE invariant violation, a dangling reference. Fail loud
+      // in dev/test so CI catches the offending removal site; production
+      // degrades safely by starting a fresh target rather than re-merging the
+      // absent reference.
+      if (target !== null && env.NODE_ENV !== 'production') {
+        throw new Error(
+          'terminal-compositor: post-ESC coalesce reference is dangling ' +
+            '(postEscPayload non-null but absent from pendingSubmissions) — a ' +
+            'pendingSubmissions removal site failed to clear the epoch reference.',
+        );
+      }
+      self.postEscPayload = payload;
+      self.pendingSubmissions.push(payload);
+    }
   } else {
+    // Normal mid-turn type-ahead (no ESC, postEscCoalesce === false): accumulate
+    // one payload per message — sequential-turn delivery is the intended
+    // contract there (the "NO ESC" regression tests).
     self.pendingSubmissions.push(payload);
   }
   self.queued = true; // maintained mirror: pendingSubmissions is now non-empty
