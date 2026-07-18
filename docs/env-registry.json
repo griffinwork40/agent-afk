@@ -457,6 +457,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_NOTIFY",
+      "description": "Emit a desktop completion notification (OSC 9) on turn completion, for terminals that map OSC 9 to system notifications (iTerm2, kitty, WezTerm). Opt-in and off by default (intrusive). 1 = on. TTY-only.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "misc"
+    },
+    {
       "name": "AFK_OPENAI_BASE_URL",
       "description": "Base URL override for the OpenAI-compatible provider. Used for local shims (mlx_lm.server, Ollama, vLLM, LM Studio). The OpenAI SDK appends `/chat/completions` itself — a value ending in `/chat/completions` will be stripped at config-load time with a one-shot warning.",
       "type": "string",
@@ -693,6 +701,14 @@
       "required": false,
       "example": "0.7",
       "category": "model"
+    },
+    {
+      "name": "AFK_TERM_TITLE",
+      "description": "Set the terminal/tab title (OSC 2) to reflect afk state — \"afk — <cwd> · running\" during a turn, \"afk — <cwd>\" when idle, cleared on exit. 1 = on (default when stdout is a TTY), 0 = leave the title alone. TTY-only.",
+      "type": "boolean",
+      "required": false,
+      "example": "0",
+      "category": "misc"
     },
     {
       "name": "AFK_THINKING",

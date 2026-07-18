@@ -27,6 +27,18 @@ describe('env / ENV_REGISTRY consistency', () => {
     const blank = ENV_REGISTRY.filter((e) => !e.description || e.description.trim() === '');
     expect(blank.map((e) => e.name)).toEqual([]);
   });
+
+  it('registers the terminal-title (OSC 2) and completion-notify (OSC 9) vars', () => {
+    for (const name of ['AFK_TERM_TITLE', 'AFK_NOTIFY']) {
+      const meta = getEnvVarMeta(name);
+      expect(meta, `${name} must be in ENV_REGISTRY`).toBeDefined();
+      expect(meta?.type).toBe('boolean');
+      expect(meta?.required).toBe(false);
+      // Both have a matching lazy getter (bidirectional parity also checks
+      // this, but assert here so a missing getter fails with a clear name).
+      expect(Object.getOwnPropertyNames(env)).toContain(name);
+    }
+  });
 });
 
 describe('env lazy getters', () => {
