@@ -100,11 +100,27 @@ export function formatRateLimitActivity(retryAfterMs?: number): string {
  * Each returned line is clamped to the terminal width (or `columns` when
  * provided) so long descriptions and summaries never wrap onto a second row
  * and corrupt multi-line REPL layout.
+ *
+ * Contract (stopping state): when `stopping` is true the user has pressed ESC
+ * to soft-stop the turn and the teardown is still in flight (which can take
+ * seconds while subagents cancel). The banner then swaps its glyph to `◌` and
+ * replaces the per-tick detail — the model's in-flight activity clause and the
+ * tool-derived summary, i.e. the "what it WAS doing" signal — with a
+ * `stopping…` clause rendered in the warning tone, and DROPS the
+ * `esc to interrupt` hint (the interrupt has already been accepted; re-offering
+ * it is misleading). The stats tail (tokens/tools/duration) is preserved so
+ * the frozen progress numbers stay visible while the turn winds down. `stopping`
+ * is a pure render input — the caller (the progress-banner overlay slot) reads
+ * the StreamRenderer's live `softStopping` flag (set by `setSoftStopping` from
+ * the ESC handler) and passes it through, so the flip lands on the first
+ * repaint after the ESC keypress. See stream-renderer's `setSoftStopping` and
+ * the soft-stop handler in turn-handler.ts.
  */
 export function formatProgressBanner(
   event: ProgressEvent,
   columns?: number,
   activity?: string,
+  stopping?: boolean,
 ): string[] {
   const { description, summary, lastToolName, totalTokens, toolUses, durationMs } = event;
   const stats: string[] = [];
@@ -116,21 +132,30 @@ export function formatProgressBanner(
   if (toolUses) stats.push(formatToolCallStat(toolUses));
   if (totalTokens) stats.push(`${formatTokens(totalTokens)} tok`);
   if (durationMs) stats.push(formatDuration(durationMs));
-  stats.push('esc to interrupt · ctrl+b background');
+  // Drop the interrupt hint once a stop is already in flight — the ESC has been
+  // accepted, so "esc to interrupt" would misrepresent the current state.
+  if (!stopping) stats.push('esc to interrupt · ctrl+b background');
 
   const statsStr = stats.length > 0 ? ` (${stats.join(' · ')})` : '';
 
+  const glyph = stopping ? '◌' : '◦';
   const cleanDescription = sanitizeLabel(description);
-  const detailRaw = activity?.trim() ? activity : summary;
-  const detail = detailRaw ? sanitizeLabel(detailRaw) : '';
+  // In the stopping state the detail clause becomes the stop indicator (warning
+  // tone), overriding whatever activity/summary the turn was last showing.
+  const detail = stopping
+    ? palette.warning('stopping…')
+    : (() => {
+        const detailRaw = activity?.trim() ? activity : summary;
+        return detailRaw ? sanitizeLabel(detailRaw) : '';
+      })();
 
   if (detail) {
     return [
-      clampToTerminal(palette.dim(`  ◦ ${cleanDescription}`), columns),
+      clampToTerminal(palette.dim(`  ${glyph} ${cleanDescription}`), columns),
       clampToTerminal(palette.dim(`    ${detail}${statsStr}`), columns),
     ];
   }
-  return [clampToTerminal(palette.dim(`  ◦ ${cleanDescription}${statsStr}`), columns)];
+  return [clampToTerminal(palette.dim(`  ${glyph} ${cleanDescription}${statsStr}`), columns)];
 }
 
 /**

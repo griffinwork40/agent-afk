@@ -70,6 +70,14 @@ export function registerOverlaySlots(
   ctx: Readonly<Pick<LifecycleContext, 'stageTracker' | 'thinkingMode' | 'thinkingLane' | 'streamingMarkdownRef' | 'toolLane' | 'lastProgressByTask'>> & {
     /** Live interrupt state — true while a Ctrl+C interrupt is being processed. */
     getInterrupting: () => boolean;
+    /**
+     * Live soft-stop state — true once ESC has requested a soft-stop but the
+     * turn has not finished tearing down. Reads the StreamRenderer's
+     * `softStopping` flag (mirrors {@link getInterrupting}); drives the progress
+     * banner's `stopping…` swap so ESC gives visible feedback on the next
+     * repaint. See stream-renderer's `setSoftStopping`.
+     */
+    getSoftStopping: () => boolean;
   },
 ): void {
   // Register overlay slots (thinking-live, markdown-pending, tool-lane,
@@ -123,13 +131,29 @@ export function registerOverlaySlots(
     key: 'progress-banner',
     render: () => {
       const bannerLines: string[] = [];
+      const stopping = ctx.getSoftStopping();
       // Grounded activity: the model's in-flight thinking clause (current
       // uncommitted phase only — peekPhase clears at each seal boundary, so
       // a stale clause never outlives the phase that produced it). Falls
       // back to the event's tool-derived summary inside formatProgressBanner.
       const activity = deriveProgressActivity(ctx.thinkingLane.peekPhase());
       for (const progress of ctx.lastProgressByTask.values()) {
-        bannerLines.push(...formatProgressBanner(progress, undefined, activity));
+        bannerLines.push(...formatProgressBanner(progress, undefined, activity, stopping));
+      }
+      // ESC soft-stop must give visible feedback even on a text-only turn that
+      // never emitted a `progress` event (lastProgressByTask empty). Synthesize
+      // a minimal banner so the `stopping…` state always paints; the synthetic
+      // event carries no stats, so formatProgressBanner renders just the glyph +
+      // description + stopping clause.
+      if (stopping && bannerLines.length === 0) {
+        bannerLines.push(
+          ...formatProgressBanner(
+            { taskId: '__soft_stop__', description: 'Turn', totalTokens: 0, toolUses: 0, durationMs: 0 },
+            undefined,
+            undefined,
+            true,
+          ),
+        );
       }
       return bannerLines.length > 0 ? bannerLines.join('\n') : '';
     },

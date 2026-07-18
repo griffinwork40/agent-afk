@@ -1675,6 +1675,98 @@ describe('runTurn — ESC soft-stop', () => {
     expect(setInFlight).toHaveBeenCalledWith(false);
     expect(session.interrupt).not.toHaveBeenCalled();
   });
+
+  // ---------------------------------------------------------------------------
+  // Queued-count in the stop notice
+  // ---------------------------------------------------------------------------
+  //
+  // Spec: the ESC soft-stop preserves Enter-committed type-ahead messages. The
+  // teardown notice must surface how many are queued so the user knows work is
+  // waiting. Count comes from the persistent (borrowed) compositor's
+  // getPendingCount(); the notice reads `⏸ Stopped · N queued …`. Zero pending
+  // omits the suffix.
+  // ---------------------------------------------------------------------------
+
+  /** Stub compositor exposing a fixed pending count for the notice path. */
+  function makeStubCompositorWithPending(pending: number) {
+    return {
+      isArmed: () => true,
+      commitAbove: vi.fn(),
+      getPendingCount: () => pending,
+      setInputMode: vi.fn(),
+      setSpinner: vi.fn(),
+      setOverlay: vi.fn(),
+    };
+  }
+
+  /**
+   * Run a soft-stopped turn with a borrowed compositor reporting `pending`
+   * queued submissions, capturing the completionWriter output. Fires ESC after
+   * the first stream event (before done) via the installed soft-stop handler.
+   */
+  async function runSoftStoppedTurnCapturing(pending: number): Promise<string[]> {
+    const events: OutputEvent[] = [
+      { type: 'chunk', chunk: { type: 'content', content: 'partial' } },
+      { type: 'done', metadata: { durationMs: 5 } },
+    ];
+    const session = streamFrom(events);
+
+    let installedHandler: (() => void) | null = null;
+    const setSoftStopHandler = vi.fn((hh: (() => void) | null) => {
+      if (hh !== null) installedHandler = hh;
+    });
+
+    let callCount = 0;
+    const realStream = session.sendMessageStream;
+    session.sendMessageStream = async function* (payload: unknown) {
+      for await (const event of (realStream as typeof session.sendMessageStream).call(session, payload)) {
+        yield event;
+        callCount++;
+        if (callCount === 1 && installedHandler) installedHandler();
+      }
+    };
+
+    const writerCalls: string[] = [];
+    const completionWriter = { fn: (line: string) => { writerCalls.push(line); } };
+    const { h } = makeHandles();
+    const handles: TurnHandles = {
+      ...h,
+      setSoftStopHandler,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      getCompositor: () => makeStubCompositorWithPending(pending) as any,
+    };
+
+    await runTurn(
+      { text: 'q', attachments: [] },
+      session,
+      makeStats(),
+      handles,
+      'summary',
+      completionWriter,
+    );
+    return writerCalls;
+  }
+
+  it("stop notice includes '1 queued' when a single submission is pending", async () => {
+    const writerCalls = await runSoftStoppedTurnCapturing(1);
+    const notice = writerCalls.find((l) => l.includes('Stopped'));
+    expect(notice).toBeDefined();
+    expect(notice).toContain('1 queued');
+  });
+
+  it("stop notice includes 'N queued' when multiple submissions are pending", async () => {
+    const writerCalls = await runSoftStoppedTurnCapturing(3);
+    const notice = writerCalls.find((l) => l.includes('Stopped'));
+    expect(notice).toBeDefined();
+    expect(notice).toContain('3 queued');
+  });
+
+  it('stop notice OMITS the queued suffix when nothing is pending', async () => {
+    const writerCalls = await runSoftStoppedTurnCapturing(0);
+    const notice = writerCalls.find((l) => l.includes('Stopped'));
+    expect(notice).toBeDefined();
+    expect(notice).not.toContain('queued');
+  });
 });
 
 // ---------------------------------------------------------------------------
