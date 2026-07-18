@@ -63,10 +63,22 @@ function makeHost(ac: AutocompleteState, buffer: string, repaint: () => void = (
  * Wait until `predicate` holds, polling across macro/microtask boundaries.
  * The @-file scan awaits a real `fs.promises.readdir`, which can take more
  * than one microtask tick to settle, so a single `setImmediate` flush is not
- * enough — poll (bounded) until the fire-and-forget resolution has applied.
+ * enough — poll until the fire-and-forget resolution has applied.
+ *
+ * Bounded by WALL-CLOCK time, not a fixed iteration count. A fixed tries=N
+ * bounds against event-loop *turns*, which has no reliable relationship to
+ * real elapsed time: under CI/full-suite CPU contention a single `readdir`
+ * can take many milliseconds to actually settle even though each
+ * `setImmediate` turn itself is "instant," so a fixed small tries count can
+ * give up before the real I/O ever completes (observed in CI: "expected
+ * false to be true" on `ac.dropdownOpen` — issue #657-adjacent flake class).
+ * A time budget scales with however slow the environment actually is, while
+ * staying just as fast as before in the common case (the loop still exits
+ * the instant the predicate flips true).
  */
-async function waitFor(predicate: () => boolean, tries = 50): Promise<void> {
-  for (let i = 0; i < tries && !predicate(); i++) {
+async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) {
     await new Promise((r) => setImmediate(r));
   }
 }
