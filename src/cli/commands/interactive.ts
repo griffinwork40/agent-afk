@@ -9,6 +9,7 @@ import { formatDuration, formatCost, formatTokens } from '../format-utils.js';
 import { registerCleanup, runCleanupFunctions } from '../../utils/cleanupRegistry.js';
 import { getModel } from '../shared-helpers.js';
 import { palette } from '../palette.js';
+import { setTerminalTitleIfEnabled, formatTerminalTitle } from '../_lib/capture-mode.js';
 import { saveSession } from '../session-store.js';
 import { formatResumeCommand } from '../resume-command.js';
 import { formatCwd } from '../format-cwd.js';
@@ -771,11 +772,26 @@ export function registerInteractiveCommand(program: Command): void {
       // must not overwrite via CUP positioning.
       ctx.preArmAnchorRow = preArmAnchorRow;
 
+      // Terminal title (OSC 2): set the idle title once as the REPL becomes
+      // ready. Per-turn transitions to/from "· running" happen in the turn
+      // handler; this is the baseline. Emitted BEFORE statusLine.start() and
+      // BEFORE runReplLoop arms the persistent compositor, so it is a plain
+      // pre-arm raw write — no live frame to disturb. TTY + AFK_TERM_TITLE
+      // gated inside the helper; a no-op on non-TTY / opt-out.
+      setTerminalTitleIfEnabled(process.stdout, formatTerminalTitle(process.cwd(), false));
+
       ctx.statusLine.start();
       ctx.slashCtx.ui.repaintStatusLine();
 
       ctx.rl.on('close', async () => {
         ctx.statusLine.stop();
+        // Terminal title (OSC 2): reset to empty on clean exit so the tab
+        // label reverts to the terminal's default. This handler is the clean-
+        // exit path (Ctrl+D / EOF / rl.close from /exit); by the time it runs
+        // runReplLoop's finally has already disposed the persistent compositor
+        // (repl-loop.ts), so raw stdout is safe. No-op when AFK_TERM_TITLE=0 or
+        // non-TTY. The empty title ('' → ESC ] 2 ; BEL) is the documented reset.
+        setTerminalTitleIfEnabled(process.stdout, '');
         // printExitSummary is synchronous (execFileSync for git stat) so
         // order is guaranteed without an await on this particular call.
         printExitSummary(ctx, worktreeHandle, saveCurrentSession);
