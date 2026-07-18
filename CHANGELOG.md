@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.58.1] - 2026-07-18
+
+### Changed
+- coalesce same-tick keystroke repaints with sync flush (#645) (d15db56)
+
 ## [5.58.0] - 2026-07-18
 
 ### Added
