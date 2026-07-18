@@ -247,6 +247,62 @@ describe('ProviderRouter', () => {
     await router.close();
   });
 
+  it('injects a one-turn model-switch notice into the first turn a swapped inner serves', async () => {
+    const { router, outer } = makeRouter({ model: 'sonnet', apiKey: 'key-anthropic' });
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+
+    await driveTurn(iter, outer, 'first'); // anthropic
+    await router.setModel('gpt-5.5'); // cross-family
+    const events = await driveTurn(iter, outer, 'second'); // swaps to openai
+
+    // The FakeQuery echoes the pushed user content, so the notice + real text
+    // both surface in the swapped inner's first-turn output.
+    const delta = events.find((e) => e.type === 'delta.text');
+    const text = delta && delta.type === 'delta.text' ? delta.text : '';
+    expect(text).toContain('Your model was switched');
+    expect(text).toContain('sonnet → gpt-5.5');
+    expect(text).toContain('anthropic-direct → openai-compatible');
+    // The user's real message still rides the same turn, after the notice.
+    expect(text).toContain('second');
+    await router.close();
+  });
+
+  it('does NOT inject a switch notice on a same-family forward (no rebuild)', async () => {
+    const { router, outer } = makeRouter({ model: 'sonnet', apiKey: 'key-anthropic' });
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+
+    await driveTurn(iter, outer, 'first');
+    await router.setModel('opus'); // same family (anthropic) → forwarded, not rebuilt
+    const events = await driveTurn(iter, outer, 'second');
+
+    const delta = events.find((e) => e.type === 'delta.text');
+    const text = delta && delta.type === 'delta.text' ? delta.text : '';
+    expect(text).not.toContain('Your model was switched');
+    expect(text).toContain('second'); // plain user turn forwarded unchanged
+    await router.close();
+  });
+
+  it('keeps the switch notice out of the carried shadow history (records user text only)', async () => {
+    const { router, outer, anthropic } = makeRouter({ model: 'sonnet', apiKey: 'key-anthropic' });
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+
+    await driveTurn(iter, outer, 'alpha'); // anthropic#0
+    await router.setModel('gpt-5.5');
+    await driveTurn(iter, outer, 'beta'); // swap → openai#0 (notice injected on this turn)
+    await router.setModel('sonnet');
+    await driveTurn(iter, outer, 'gamma'); // swap → anthropic#1 (seeded from shadow history)
+
+    // The rebuilt anthropic inner is seeded with prior turns as TEXT. The 'beta'
+    // turn must be recorded as the user's real text, never the injected notice.
+    const seeded = anthropic.queries[1]!.rec.config.resumeHistory ?? [];
+    expect(seeded.find((t) => t.user === 'beta'), 'beta recorded as clean user text').toBeDefined();
+    expect(seeded.some((t) => t.user.includes('Your model was switched'))).toBe(false);
+    await router.close();
+  });
+
   it('resolves credentials per-family on swap and never leaks the anthropic key to openai', async () => {
     const { router, outer, anthropic, openai } = makeRouter({ model: 'sonnet', apiKey: 'key-anthropic' });
     const iter = router[Symbol.asyncIterator]();
