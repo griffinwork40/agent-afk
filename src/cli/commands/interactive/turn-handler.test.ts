@@ -1975,6 +1975,72 @@ describe('runTurn — terminal title (OSC 2) + completion notify (OSC 9)', () =>
     await runTurn({ text: 'test', attachments: [] }, session, makeStats(), h);
     expect(stdoutWriteSpy).not.toHaveBeenCalledWith('\x1b]9;afk: turn complete\x07');
   });
+
+  // PR #647 review finding M1: pre-fix, the idle-title reset lived ONLY
+  // inside the `doneFired && !softStopRequested && !pauseInterruptRequested`
+  // clean-completion block, so a soft-stopped / errored turn left the tab
+  // stuck reading "· running" indefinitely (only a LATER clean turn would
+  // reset it — after first re-setting it to running). Post-fix, the reset
+  // lives in `finally` and fires on every exit path. These two tests pin
+  // that fix against the two non-clean exit shapes runTurn actually has:
+  // (a) the for-await loop ends without a `done` event (soft-stop / in-band
+  // stream `error`), and (b) a synchronously thrown exception (`catch`).
+  it('resets the idle title even when the turn is soft-stopped mid-stream', async () => {
+    stubEnv('AFK_TERM_TITLE', undefined);
+    const events: OutputEvent[] = [
+      { type: 'chunk', chunk: { type: 'content', content: 'partial' } },
+      { type: 'done', metadata: { durationMs: 5 } },
+    ];
+    const session = streamFrom(events);
+
+    // Same soft-stop simulation pattern as 'runTurn — ESC soft-stop' above:
+    // patch sendMessageStream to fire the installed handler after the first
+    // event, so the for-await loop breaks before `done` is ever observed.
+    let installedHandler: (() => void) | null = null;
+    const setSoftStopHandler = vi.fn((hh: (() => void) | null) => { installedHandler = hh; });
+    const realStream = session.sendMessageStream;
+    let callCount = 0;
+    session.sendMessageStream = async function* (payload: unknown) {
+      for await (const event of (realStream as typeof session.sendMessageStream).call(session, payload)) {
+        yield event;
+        callCount++;
+        if (callCount === 1 && installedHandler) {
+          installedHandler();
+        }
+      }
+    };
+
+    const { h } = makeHandles();
+    const handles: TurnHandles = { ...h, setSoftStopHandler };
+    await runTurn({ text: 'test', attachments: [] }, session, makeStats(), handles);
+
+    // Turn-start running title still fires unconditionally...
+    expect(stdoutWriteSpy).toHaveBeenCalledWith(runningTitle);
+    // ...and — the fix under test — the idle title is restored in `finally`
+    // even though `doneFired` never became true on this soft-stopped turn.
+    expect(stdoutWriteSpy).toHaveBeenCalledWith(idleTitle);
+    // The OSC 9 completion notification must NOT fire on a non-clean exit —
+    // it stays clean-completion-only inside the doneFired block.
+    expect(stdoutWriteSpy).not.toHaveBeenCalledWith('\x1b]9;afk: turn complete\x07');
+  });
+
+  it('resets the idle title even when sendMessageStream throws synchronously', async () => {
+    stubEnv('AFK_TERM_TITLE', undefined);
+    const session = {
+      sessionId: 'mock-throw',
+      sendMessageStream: () => {
+        throw new Error('stream construction failed');
+      },
+      interrupt: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AgentSession;
+    const { h } = makeHandles();
+
+    await runTurn({ text: 'test', attachments: [] }, session, makeStats(), h);
+
+    expect(stdoutWriteSpy).toHaveBeenCalledWith(runningTitle);
+    expect(stdoutWriteSpy).toHaveBeenCalledWith(idleTitle);
+    expect(stdoutWriteSpy).not.toHaveBeenCalledWith('\x1b]9;afk: turn complete\x07');
+  });
 });
 
 describe('runTurn — mid-turn context progress', () => {

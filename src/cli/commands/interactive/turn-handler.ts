@@ -684,19 +684,14 @@ export async function runTurn(
       // TTY-only) — an away-from-keyboard completion cue. No-op otherwise.
       ringBellIfEnabled(process.stdout);
 
-      // Terminal title (OSC 2): drop the "· running" badge now the turn is
-      // done. Emitted here (not on any early-return path) so a soft-stopped /
-      // pause-interrupted / errored turn keeps the running title until its own
-      // next turn resets it — matching the bell, which also only fires on a
-      // clean completion. The per-turn renderer was disposed at
-      // disposeRendererOnce() above, so this raw write matches the bell's
-      // frame-safe lifecycle point. TTY + AFK_TERM_TITLE gated inside.
-      setTerminalTitleIfEnabled(process.stdout, formatTerminalTitle(process.cwd(), false));
-
       // Desktop completion notification (OSC 9): opt-in (AFK_NOTIFY=1, TTY-only)
       // sibling of the bell for terminals that surface OSC 9 as a system banner
       // (iTerm2 / kitty / WezTerm). No-op otherwise. Same disposed-renderer
-      // lifecycle point as the bell; zero-width escape.
+      // lifecycle point as the bell; zero-width escape. Intentionally
+      // clean-completion-only (unlike the title reset, which now lives in the
+      // `finally` block below and fires on EVERY exit path) — a "turn
+      // complete" desktop banner would be misleading after a soft-stop,
+      // pause-interrupt, or error, none of which mean the turn is done.
       notifyIfEnabled(process.stdout, 'afk: turn complete');
 
       // Stage 3e — post-stream writes between `disposeRendererOnce()` and
@@ -781,6 +776,17 @@ export async function runTurn(
     }
   } finally {
     await disposeRendererOnce();
+    // Terminal title (OSC 2): drop the "· running" badge on EVERY exit path —
+    // clean completion, soft-stop, pause-interrupt, or a thrown error (PR #647
+    // review finding M1: the title previously reset only inside the
+    // doneFired-and-clean block, so ESC / errors left the tab stuck reading
+    // "· running" indefinitely). `disposeRendererOnce()` immediately above is
+    // idempotent and has already run at least once on every path into this
+    // block (inline in the try's normal flow, or in the `catch` handler), so
+    // this write matches the same post-dispose, frame-safe lifecycle point the
+    // bell and the (now turn-start-only) running-title set already rely on.
+    // TTY + AFK_TERM_TITLE gated inside the helper; a no-op otherwise.
+    setTerminalTitleIfEnabled(process.stdout, formatTerminalTitle(process.cwd(), false));
     // Restore the IDLE sink — NOT a hardcoded `console.log`.
     //
     // For the borrowed/persistent compositor path (Stage 3e, set up by
