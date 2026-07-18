@@ -756,6 +756,17 @@ export class StreamRenderer {
     // overlay flushes below never repaint a stale progress banner.
     this.lastProgressByTask.clear();
 
+    // Reset the soft-stop flag too — without this, an ESC that landed just
+    // before dispose() leaves `softStopping=true` past teardown. The
+    // borrowed-compositor path below invalidates + flushes the overlay
+    // composer to clear the live frame; with lastProgressByTask now empty but
+    // getSoftStopping() still true, the 'progress-banner' slot's synthetic
+    // fallback (stream-renderer-lifecycle.ts) recreates a `Turn / stopping…`
+    // banner instead of contributing '' — painting a stale banner into the
+    // idle prompt until the next unrelated repaint overwrites it. Clearing
+    // here BEFORE that flush guarantees the slot renders empty.
+    this.softStopping = false;
+
     // CommitCoordinator.flushAll() is the single async owner at turn end.
     // It drains all scheduled commit batches in fixed anchor order:
     //   1. before-content (orchestrator tool-lane entries that precede prose)

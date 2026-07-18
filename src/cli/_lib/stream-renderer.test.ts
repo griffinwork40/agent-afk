@@ -1963,6 +1963,26 @@ describe('StreamRenderer — setInterrupting', () => {
   });
 });
 
+describe('StreamRenderer — dispose() resets softStopping', () => {
+  // Regression for the Codex review comment on stream-renderer-lifecycle.ts:155
+  // (PR #646, dispose()/soft-stop interaction). Root cause: dispose() cleared
+  // lastProgressByTask but left softStopping untouched, so a borrowed-
+  // compositor's post-dispose overlay flush (which recomposes with
+  // lastProgressByTask now empty) still saw getSoftStopping() === true and hit
+  // the 'progress-banner' slot's synthetic fallback — repainting a fresh
+  // `Turn / stopping…` banner into what should be a cleared idle frame.
+  type PrivateRenderer = { softStopping: boolean };
+
+  it('resets the softStopping flag during dispose() so a late ESC cannot leak into the idle frame', async () => {
+    const { writer } = makeWriter();
+    const r = new StreamRenderer({ out: writer, forceNonTty: true });
+    r.setSoftStopping(true);
+    expect((r as unknown as PrivateRenderer).softStopping).toBe(true);
+    await r.dispose();
+    expect((r as unknown as PrivateRenderer).softStopping).toBe(false);
+  });
+});
+
 describe('StreamRenderer — AFK_PLAIN_OUTPUT full render opt-out (Lever 2)', () => {
   // Regression for the "--plain doesn't suppress the mid-turn overlay" bug.
   // Root cause: AFK_PLAIN_OUTPUT was only read by createReplRenderer()
