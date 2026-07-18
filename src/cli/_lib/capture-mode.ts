@@ -197,11 +197,42 @@ export function formatTerminalTitle(cwd: string, running: boolean): string {
 // invariant that lets `ringBellIfEnabled` write `\x07` raw.
 
 /**
+ * Strip every C0 (`\x00`-`\x1F`, `\x7F`) and C1 (`\x80`-`\x9F`) control byte
+ * from `s` — not just *recognized* escape sequences.
+ *
+ * PR #647 review (finding M2): `setTerminalTitleIfEnabled` / `notifyIfEnabled`
+ * interpolate `path.basename(process.cwd())` into a raw OSC write. POSIX
+ * filenames forbid only `/` and NUL, so a directory literally named with a
+ * raw BEL (`\x07`) or ESC (`\x1B`) byte is legal — and a bare control byte
+ * with no surrounding escape structure still terminates our own OSC wrapper
+ * early (an OSC sequence ends at the first BEL, full stop) and can splice a
+ * further, fully attacker-controlled escape sequence onto stdout.
+ *
+ * Deliberately NOT `sanitizeSchemaString` (`./sanitize.ts`): that helper only
+ * strips *well-formed* OSC/CSI escape sequences (built for MCP schema text,
+ * where the threat is a complete forged escape, not a lone byte) — verified
+ * empirically that a bare, structure-less BEL/ESC survives it untouched,
+ * which is exactly the injection primitive here. Every control byte is
+ * removed regardless of surrounding structure; ordinary Unicode (accents, em
+ * dash, middle dot, CJK, emoji) is unaffected — none of it falls in the
+ * stripped ranges.
+ */
+export function stripControlBytes(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
+}
+
+/**
  * Set the terminal/tab title to `title` via OSC 2 (`ESC ] 2 ; <title> BEL`)
  * when the title feature is enabled and the stream is a TTY. No-op otherwise.
  *
  * Pass the empty string to CLEAR the title (terminals reset the tab label to
  * their default). Non-printing; does not disturb a live overlay frame.
+ *
+ * `title` is passed through `stripControlBytes` before interpolation (PR #647
+ * review finding M2) so a control byte embedded in the input — e.g. via
+ * `formatTerminalTitle(process.cwd(), …)` on a maliciously-named directory —
+ * cannot terminate the OSC wrapper early or splice in a further escape.
  *
  * No-op when AFK_TERM_TITLE === '0' or when stream.isTTY is falsy.
  * Reads from process.env if env is not provided.
@@ -212,7 +243,7 @@ export function setTerminalTitleIfEnabled(
   env: NodeJS.ProcessEnv = process.env,
 ): void {
   if (detectTermTitle(env) && stream.isTTY) {
-    stream.write(`\x1b]2;${title}\x07`);
+    stream.write(`\x1b]2;${stripControlBytes(title)}\x07`);
   }
 }
 
@@ -221,6 +252,11 @@ export function setTerminalTitleIfEnabled(
  * when notifications are enabled and the stream is a TTY. No-op otherwise.
  * Terminals that map OSC 9 to the desktop notification service (iTerm2, kitty,
  * WezTerm) raise a system banner; terminals that do not simply ignore it.
+ *
+ * `message` is passed through `stripControlBytes` before interpolation (PR
+ * #647 review finding M2) — see `setTerminalTitleIfEnabled` for the threat
+ * model; today's only call site passes a fixed literal, but the emitter
+ * itself should not depend on that staying true.
  *
  * No-op when AFK_NOTIFY !== '1' or when stream.isTTY is falsy.
  * Reads from process.env if env is not provided.
@@ -231,6 +267,6 @@ export function notifyIfEnabled(
   env: NodeJS.ProcessEnv = process.env,
 ): void {
   if (detectNotify(env) && stream.isTTY) {
-    stream.write(`\x1b]9;${message}\x07`);
+    stream.write(`\x1b]9;${stripControlBytes(message)}\x07`);
   }
 }
