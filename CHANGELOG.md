@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.59.1] - 2026-07-19
+
+### Changed
+- bump the fumadocs group in /website with 3 updates (#658) (b6e99dc)
+- single-pass line nav + memoized input colorization (#649) (10787a8)
+
 ## [5.59.0] - 2026-07-19
 
 ### Added
