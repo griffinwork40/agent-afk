@@ -13,6 +13,20 @@ import type { ImageAttachment } from '../input/attachments.js';
 const commands: Map<string, SlashCommand> = new Map();
 const aliases: Map<string, string> = new Map();
 
+// Monotonic mutation counter. Bumped on every structural change to the
+// registry (register / registerOrReplace / registerIfAbsent-that-adds /
+// resetRegistry). Consumers that MEMOIZE work keyed on registry membership
+// (e.g. `colorizeInputBuffer`, which colors a token by whether it is a known
+// command) read `registryVersion()` so their cache invalidates the instant a
+// plugin/skill command is hot-swapped in — a stale-colored buffer is worse
+// than no memo. Not a semantic version; purely an opaque change token.
+let version = 0;
+
+/** Opaque monotonic token that changes whenever the registry membership changes. */
+export function registryVersion(): number {
+  return version;
+}
+
 /** Register a command. Throws on name collision to catch duplicates early. */
 export function register(cmd: SlashCommand): void {
   if (commands.has(cmd.name)) {
@@ -25,6 +39,7 @@ export function register(cmd: SlashCommand): void {
     }
     aliases.set(alias, cmd.name);
   }
+  version++;
 }
 
 /**
@@ -65,6 +80,7 @@ export function has(nameOrAlias: string): boolean {
 export function resetRegistry(): void {
   commands.clear();
   aliases.clear();
+  version++;
 }
 
 /** List all commands in deterministic name order. */

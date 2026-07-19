@@ -50,7 +50,7 @@ import {
 } from '../terminal-compositor.js';
 import { colorizeInputBuffer, type SlashRegistryView } from '../input-highlight.js';
 import { detectCaptureMode, detectCaretBlink, detectReducedMotion, detectGoblinSpinner } from '../_lib/capture-mode.js';
-import { list as listSlashCommands } from '../slash/registry.js';
+import { list as listSlashCommands, registryVersion } from '../slash/registry.js';
 import { formatSubmittedEcho } from './echo.js';
 import { describeAttachmentSummary } from './attachments.js';
 import { commitBlockAbove } from '../_lib/commit-block.js';
@@ -273,6 +273,9 @@ export class InputSurface {
    */
   private readonly slashRegistryView: SlashRegistryView = {
     has: (name) => listSlashCommands().some((c) => c.name === `/${name}`),
+    // Enables the `colorizeInputBuffer` memo (per-keystroke repaints share a
+    // buffer) while still invalidating on any mid-session command hot-swap.
+    version: registryVersion,
   };
 
   constructor(opts: InputSurfaceOptions) {

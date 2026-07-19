@@ -35,7 +35,7 @@ import { isPlainOutputRequested } from '../../config/env.js';
 import type { IHistoryRing } from '../input/types.js';
 import type { AutocompleteState } from '../input/autocomplete-state.js';
 import { colorizeInputBuffer, type SlashRegistryView } from '../input-highlight.js';
-import { list as listSlashCommands } from '../slash/registry.js';
+import { list as listSlashCommands, registryVersion } from '../slash/registry.js';
 import { ToolLane } from '../commands/interactive/tool-lane.js';
 import { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import { StreamingMarkdownRenderer } from '../markdown-stream.js';
@@ -405,6 +405,10 @@ export class StreamRenderer {
       // re-add the prefix in the predicate.
       const slashRegistryView: SlashRegistryView = {
         has: (name) => listSlashCommands().some((c) => c.name === `/${name}`),
+        // Enables the `colorizeInputBuffer` single-entry memo across repaints;
+        // the version bumps on any mid-session command registration so the
+        // cache never serves a stale-colored buffer.
+        version: registryVersion,
       };
       compositor = new TerminalCompositor({
         stdout: process.stdout,
