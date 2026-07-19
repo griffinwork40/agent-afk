@@ -61,6 +61,7 @@ const BINDINGS: Array<{ group: string; rows: Array<[string, string]> }> = [
   {
     group: 'Misc',
     rows: [
+      ['ctrl+o', 'Compose the prompt in your external $EDITOR (also /editor)'],
       ['ctrl+l', 'Clear screen and repaint'],
       ['ctrl+c', 'Interrupt running turn / exit (second press)'],
       ['ctrl+d', 'EOF / exit (when buffer is empty)'],

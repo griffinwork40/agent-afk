@@ -1230,6 +1230,22 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'process',
   },
   {
+    name: 'VISUAL',
+    description: 'Standard POSIX env var naming the user\'s preferred full-screen editor (with optional flags). Consulted FIRST by the /editor slash command (and its key chord) to compose a long prompt externally; takes precedence over EDITOR. No fallback editor is assumed — if neither VISUAL nor EDITOR is set, /editor prints a hint instead of guessing.',
+    type: 'string',
+    required: false,
+    example: 'nvim',
+    category: 'process',
+  },
+  {
+    name: 'EDITOR',
+    description: 'Standard POSIX env var naming the user\'s preferred editor (with optional flags). Consulted by the /editor slash command AFTER VISUAL, as the standard fallback. No default editor is assumed when both are unset — /editor prints a hint telling the user to set one.',
+    type: 'string',
+    required: false,
+    example: 'vim',
+    category: 'process',
+  },
+  {
     name: 'AFK_DIFF_LINES',
     description: 'Maximum number of diff lines shown in the inline diff render during write_file tool calls. Set to 0 for no cap. Non-integer values are silently ignored and the default applies.',
     type: 'number',
@@ -1427,6 +1443,8 @@ export const env = {
   // CLI / shell integration
   get SHELL(): string | undefined { return process.env['SHELL']; },
   get PAGER(): string | undefined { return process.env['PAGER']; },
+  get VISUAL(): string | undefined { return process.env['VISUAL']; },
+  get EDITOR(): string | undefined { return process.env['EDITOR']; },
   get AFK_DIFF_LINES(): string | undefined { return process.env['AFK_DIFF_LINES']; },
   get AFK_SHELL_WRAPPER(): string | undefined { return process.env['AFK_SHELL_WRAPPER']; },
   get AFK_USER_CARD_MAX_ROWS(): string | undefined { return process.env['AFK_USER_CARD_MAX_ROWS']; },

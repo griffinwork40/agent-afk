@@ -910,6 +910,14 @@
       "category": "debug"
     },
     {
+      "name": "EDITOR",
+      "description": "Standard POSIX env var naming the user's preferred editor (with optional flags). Consulted by the /editor slash command AFTER VISUAL, as the standard fallback. No default editor is assumed when both are unset — /editor prints a hint telling the user to set one.",
+      "type": "string",
+      "required": false,
+      "example": "vim",
+      "category": "process"
+    },
+    {
       "name": "EXA_API_KEY",
       "description": "Exa (exa.ai) search API key, enabling web_scrape search mode. Free tier (20k requests/month) available at https://exa.ai. When unset, search mode returns an actionable error; markdown and raw modes are unaffected.",
       "type": "string",
@@ -1016,6 +1024,14 @@
       "required": false,
       "example": "1",
       "category": "telegram"
+    },
+    {
+      "name": "VISUAL",
+      "description": "Standard POSIX env var naming the user's preferred full-screen editor (with optional flags). Consulted FIRST by the /editor slash command (and its key chord) to compose a long prompt externally; takes precedence over EDITOR. No fallback editor is assumed — if neither VISUAL nor EDITOR is set, /editor prints a hint instead of guessing.",
+      "type": "string",
+      "required": false,
+      "example": "nvim",
+      "category": "process"
     },
     {
       "name": "VITEST",
