@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.59.2] - 2026-07-19
+
+### Fixed
+- eliminate scheduler.test.ts cron-timer leak causing flaky duplicate mcp_connect_done (#657) (#659) (0639378)
+
 ## [5.59.1] - 2026-07-19
 
 ### Changed
