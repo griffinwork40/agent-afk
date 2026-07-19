@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as path from 'node:path';
 import { runTurn, formatContextUsage } from './turn-handler.js';
 import { getCurrentSink } from '../../../agent/_lib/skill-sink-channel.js';
 import type { AgentSession } from '../../../agent/session.js';
@@ -1879,6 +1880,167 @@ describe('runTurn — bell emission', () => {
     }
   });
 
+});
+
+describe('runTurn — terminal title (OSC 2) + completion notify (OSC 9)', () => {
+  let stdoutWriteSpy: ReturnType<typeof vi.fn>;
+  let originalWrite: NodeJS.WriteStream['write'];
+  let originalIsTTY: boolean | undefined;
+  const savedEnv: Record<string, string | undefined> = {};
+
+  function stubEnv(key: string, value: string | undefined): void {
+    if (!(key in savedEnv)) savedEnv[key] = process.env[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+
+  beforeEach(() => {
+    originalWrite = process.stdout.write;
+    originalIsTTY = process.stdout.isTTY;
+    stdoutWriteSpy = vi.fn(() => true);
+    (process.stdout as any).write = stdoutWriteSpy;
+    (process.stdout as any).isTTY = true;
+  });
+
+  afterEach(() => {
+    (process.stdout as any).write = originalWrite;
+    (process.stdout as any).isTTY = originalIsTTY;
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    for (const k of Object.keys(savedEnv)) delete savedEnv[k];
+  });
+
+  function doneEvents(): OutputEvent[] {
+    return [
+      { type: 'chunk', chunk: { type: 'content', content: 'done' } },
+      { type: 'done', metadata: { durationMs: 10 } },
+    ];
+  }
+
+  const base = path.basename(process.cwd());
+  const runningTitle = `\x1b]2;afk — ${base} · running\x07`;
+  const idleTitle = `\x1b]2;afk — ${base}\x07`;
+
+  it('sets the running title on turn start and the idle title on turn end (TTY, default on)', async () => {
+    stubEnv('AFK_TERM_TITLE', undefined);
+    const session = streamFrom(doneEvents());
+    const { h } = makeHandles();
+    await runTurn({ text: 'test', attachments: [] }, session, makeStats(), h);
+    expect(stdoutWriteSpy).toHaveBeenCalledWith(runningTitle);
+    expect(stdoutWriteSpy).toHaveBeenCalledWith(idleTitle);
+  });
+
+  it('suppresses the title escapes when AFK_TERM_TITLE=0', async () => {
+    stubEnv('AFK_TERM_TITLE', '0');
+    const session = streamFrom(doneEvents());
+    const { h } = makeHandles();
+    await runTurn({ text: 'test', attachments: [] }, session, makeStats(), h);
+    expect(stdoutWriteSpy).not.toHaveBeenCalledWith(runningTitle);
+    expect(stdoutWriteSpy).not.toHaveBeenCalledWith(idleTitle);
+  });
+
+  it('suppresses the title escapes when stdout is not a TTY', async () => {
+    stubEnv('AFK_TERM_TITLE', undefined);
+    (process.stdout as any).isTTY = false;
+    const session = streamFrom(doneEvents());
+    const { h } = makeHandles();
+    await runTurn({ text: 'test', attachments: [] }, session, makeStats(), h);
+    expect(stdoutWriteSpy).not.toHaveBeenCalledWith(runningTitle);
+    expect(stdoutWriteSpy).not.toHaveBeenCalledWith(idleTitle);
+  });
+
+  it('emits the OSC 9 completion notification only when AFK_NOTIFY=1 and TTY', async () => {
+    stubEnv('AFK_NOTIFY', '1');
+    const session = streamFrom(doneEvents());
+    const { h } = makeHandles();
+    await runTurn({ text: 'test', attachments: [] }, session, makeStats(), h);
+    expect(stdoutWriteSpy).toHaveBeenCalledWith('\x1b]9;afk: turn complete\x07');
+  });
+
+  it('does NOT emit OSC 9 when AFK_NOTIFY is unset (opt-in default off)', async () => {
+    stubEnv('AFK_NOTIFY', undefined);
+    const session = streamFrom(doneEvents());
+    const { h } = makeHandles();
+    await runTurn({ text: 'test', attachments: [] }, session, makeStats(), h);
+    expect(stdoutWriteSpy).not.toHaveBeenCalledWith('\x1b]9;afk: turn complete\x07');
+  });
+
+  it('does NOT emit OSC 9 when AFK_NOTIFY=1 but stdout is not a TTY', async () => {
+    stubEnv('AFK_NOTIFY', '1');
+    (process.stdout as any).isTTY = false;
+    const session = streamFrom(doneEvents());
+    const { h } = makeHandles();
+    await runTurn({ text: 'test', attachments: [] }, session, makeStats(), h);
+    expect(stdoutWriteSpy).not.toHaveBeenCalledWith('\x1b]9;afk: turn complete\x07');
+  });
+
+  // PR #647 review finding M1: pre-fix, the idle-title reset lived ONLY
+  // inside the `doneFired && !softStopRequested && !pauseInterruptRequested`
+  // clean-completion block, so a soft-stopped / errored turn left the tab
+  // stuck reading "· running" indefinitely (only a LATER clean turn would
+  // reset it — after first re-setting it to running). Post-fix, the reset
+  // lives in `finally` and fires on every exit path. These two tests pin
+  // that fix against the two non-clean exit shapes runTurn actually has:
+  // (a) the for-await loop ends without a `done` event (soft-stop / in-band
+  // stream `error`), and (b) a synchronously thrown exception (`catch`).
+  it('resets the idle title even when the turn is soft-stopped mid-stream', async () => {
+    stubEnv('AFK_TERM_TITLE', undefined);
+    const events: OutputEvent[] = [
+      { type: 'chunk', chunk: { type: 'content', content: 'partial' } },
+      { type: 'done', metadata: { durationMs: 5 } },
+    ];
+    const session = streamFrom(events);
+
+    // Same soft-stop simulation pattern as 'runTurn — ESC soft-stop' above:
+    // patch sendMessageStream to fire the installed handler after the first
+    // event, so the for-await loop breaks before `done` is ever observed.
+    let installedHandler: (() => void) | null = null;
+    const setSoftStopHandler = vi.fn((hh: (() => void) | null) => { installedHandler = hh; });
+    const realStream = session.sendMessageStream;
+    let callCount = 0;
+    session.sendMessageStream = async function* (payload: unknown) {
+      for await (const event of (realStream as typeof session.sendMessageStream).call(session, payload)) {
+        yield event;
+        callCount++;
+        if (callCount === 1 && installedHandler) {
+          installedHandler();
+        }
+      }
+    };
+
+    const { h } = makeHandles();
+    const handles: TurnHandles = { ...h, setSoftStopHandler };
+    await runTurn({ text: 'test', attachments: [] }, session, makeStats(), handles);
+
+    // Turn-start running title still fires unconditionally...
+    expect(stdoutWriteSpy).toHaveBeenCalledWith(runningTitle);
+    // ...and — the fix under test — the idle title is restored in `finally`
+    // even though `doneFired` never became true on this soft-stopped turn.
+    expect(stdoutWriteSpy).toHaveBeenCalledWith(idleTitle);
+    // The OSC 9 completion notification must NOT fire on a non-clean exit —
+    // it stays clean-completion-only inside the doneFired block.
+    expect(stdoutWriteSpy).not.toHaveBeenCalledWith('\x1b]9;afk: turn complete\x07');
+  });
+
+  it('resets the idle title even when sendMessageStream throws synchronously', async () => {
+    stubEnv('AFK_TERM_TITLE', undefined);
+    const session = {
+      sessionId: 'mock-throw',
+      sendMessageStream: () => {
+        throw new Error('stream construction failed');
+      },
+      interrupt: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AgentSession;
+    const { h } = makeHandles();
+
+    await runTurn({ text: 'test', attachments: [] }, session, makeStats(), h);
+
+    expect(stdoutWriteSpy).toHaveBeenCalledWith(runningTitle);
+    expect(stdoutWriteSpy).toHaveBeenCalledWith(idleTitle);
+    expect(stdoutWriteSpy).not.toHaveBeenCalledWith('\x1b]9;afk: turn complete\x07');
+  });
 });
 
 describe('runTurn — mid-turn context progress', () => {

@@ -21,7 +21,12 @@ import {
 } from './shared.js';
 import { StreamRenderer } from '../../_lib/stream-renderer.js';
 import { createConsoleWriter } from '../../slash/writer.js';
-import { ringBellIfEnabled } from '../../_lib/capture-mode.js';
+import {
+  ringBellIfEnabled,
+  setTerminalTitleIfEnabled,
+  notifyIfEnabled,
+  formatTerminalTitle,
+} from '../../_lib/capture-mode.js';
 import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import { parseTerminalState, type TerminalState } from './terminal-state.js';
 import { renderVerdictCard } from './verdict-card.js';
@@ -57,6 +62,13 @@ export async function runTurn(
   }
 
   h.setInFlight(true);
+
+  // Terminal title (OSC 2): flip to the running state as the turn starts, so a
+  // backgrounded/inactive tab reads "afk — <cwd> · running". Reset to idle at
+  // turn end (below, beside the bell). TTY-gated + AFK_TERM_TITLE-gated inside
+  // the helper; a no-op otherwise. Zero-width/cursor-neutral escape, so it is
+  // frame-safe against the persistent compositor even though it is armed here.
+  setTerminalTitleIfEnabled(process.stdout, formatTerminalTitle(process.cwd(), true));
 
   let responseText = '';
   // Byte length of `responseText` at the start of the current tool-use round,
@@ -672,6 +684,16 @@ export async function runTurn(
       // TTY-only) — an away-from-keyboard completion cue. No-op otherwise.
       ringBellIfEnabled(process.stdout);
 
+      // Desktop completion notification (OSC 9): opt-in (AFK_NOTIFY=1, TTY-only)
+      // sibling of the bell for terminals that surface OSC 9 as a system banner
+      // (iTerm2 / kitty / WezTerm). No-op otherwise. Same disposed-renderer
+      // lifecycle point as the bell; zero-width escape. Intentionally
+      // clean-completion-only (unlike the title reset, which now lives in the
+      // `finally` block below and fires on EVERY exit path) — a "turn
+      // complete" desktop banner would be misleading after a soft-stop,
+      // pause-interrupt, or error, none of which mean the turn is done.
+      notifyIfEnabled(process.stdout, 'afk: turn complete');
+
       // Stage 3e — post-stream writes between `disposeRendererOnce()` and
       // the finally block run while the borrowed persistent compositor is
       // STILL armed (dispose only flipped it back to idle; the surface
@@ -754,6 +776,17 @@ export async function runTurn(
     }
   } finally {
     await disposeRendererOnce();
+    // Terminal title (OSC 2): drop the "· running" badge on EVERY exit path —
+    // clean completion, soft-stop, pause-interrupt, or a thrown error (PR #647
+    // review finding M1: the title previously reset only inside the
+    // doneFired-and-clean block, so ESC / errors left the tab stuck reading
+    // "· running" indefinitely). `disposeRendererOnce()` immediately above is
+    // idempotent and has already run at least once on every path into this
+    // block (inline in the try's normal flow, or in the `catch` handler), so
+    // this write matches the same post-dispose, frame-safe lifecycle point the
+    // bell and the (now turn-start-only) running-title set already rely on.
+    // TTY + AFK_TERM_TITLE gated inside the helper; a no-op otherwise.
+    setTerminalTitleIfEnabled(process.stdout, formatTerminalTitle(process.cwd(), false));
     // Restore the IDLE sink — NOT a hardcoded `console.log`.
     //
     // For the borrowed/persistent compositor path (Stage 3e, set up by

@@ -38,6 +38,11 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       writes.clear();
       stdin.emit('keypress', 'h', { name: 'h', sequence: 'h' });
       stdin.emit('keypress', 'i', { name: 'i', sequence: 'i' });
+      // Same-tick keystroke repaints coalesce: 'h' paints on the leading edge,
+      // 'i' defers to one trailing microtask paint. Drain it so the assertion
+      // observes the final frame that reflects the full buffer. (See the
+      // same-tick coalescing block in terminal-compositor.keypress.test.ts.)
+      await Promise.resolve();
       expect(writes.all()).toContain('hi');
     });
 

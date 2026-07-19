@@ -554,9 +554,10 @@ describe('TerminalCompositor — keypress + history + buffer + spinner', () => {
         // `pendingSubmissions = [payload]` reassignment silently dropped any
         // message committed via Enter BEFORE pressing ESC — violating the
         // handleEscape contract ("Already-queued messages: left untouched").
-        // The fix snapshots the queue length at ESC time (softStopQueueBase)
-        // and truncates back to that base before pushing, so pre-ESC payloads
-        // drain as their own turns while post-ESC type-ahead still coalesces.
+        // The fix leaves pre-ESC payloads as their own FIFO entries (they are
+        // never the post-ESC merge target — handleEscape arms the epoch with a
+        // null target), so they drain as their own turns while post-ESC
+        // type-ahead coalesces into one payload.
         const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
         await c.arm();
         c.setInputMode('idle');
@@ -567,10 +568,10 @@ describe('TerminalCompositor — keypress + history + buffer + spinner', () => {
         stdin.emit('keypress', undefined, { name: 'return' });
         expect(c.getPendingCount()).toBe(1);
 
-        // 2. ESC → softStopped=true, softStopQueueBase=1, queue untouched.
+        // 2. ESC → softStopped=true, post-ESC epoch armed (no merge target yet), queue untouched.
         stdin.emit('keypress', undefined, { name: 'escape' });
 
-        // 3. Enter "msg2" during linger → truncate-to-base(1) + push → queue=[msg1, msg2].
+        // 3. Enter "msg2" during linger → becomes the epoch merge target, pushed → queue=[msg1, msg2].
         for (const ch of 'msg2') stdin.emit('keypress', ch, { name: ch, sequence: ch });
         stdin.emit('keypress', undefined, { name: 'return' });
         expect(c.getPendingCount()).toBe(2); // pre-ESC msg1 is NOT dropped
@@ -608,8 +609,8 @@ describe('TerminalCompositor — keypress + history + buffer + spinner', () => {
           for (const ch of msg) stdin.emit('keypress', ch, { name: ch, sequence: ch });
           stdin.emit('keypress', undefined, { name: 'return' });
         }
-        // pre-ESC "pre" survives (base=1); three post-ESC Enters coalesce into
-        // ONE merged payload → total queue = 2, NOT 1 (pre not dropped) and NOT 4.
+        // pre-ESC "pre" survives (never the merge target); three post-ESC Enters
+        // coalesce into ONE merged payload → total queue = 2, NOT 1 (pre not dropped) and NOT 4.
         expect(c.getPendingCount()).toBe(2);
 
         c.setInputMode('idle'); // dispose → no drain (onSubmit null)
@@ -760,6 +761,157 @@ describe('TerminalCompositor — keypress + history + buffer + spinner', () => {
         expect(onSubmit).toHaveBeenCalledTimes(1);
         expect(onSubmit).toHaveBeenCalledWith({ text: 'next', attachments: [] });
         expect(c.getBuffer()).toEqual({ text: '', queued: false });
+      });
+
+      it('post-ESC poke typed AFTER the teardown → idle still MERGES into the redirect (no stranded turn)', async () => {
+        // The residual #81/#403/#467 missed (the lone-"." field report): softStopped
+        // clears at the first → idle, but the user is still WAITING for the redirect
+        // to run. A poke ("." to test liveness) typed after that boundary used to push
+        // a SEPARATE payload → a one-drain-per-turn backlog → the lone-"." turns. The
+        // post-ESC coalesce EPOCH persists until the redirect actually drains, so the
+        // poke merges in. Pre-fix: getPendingCount() === 2 here; post-fix: 1.
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
+        await c.arm();
+        c.setInputMode('idle');
+        c.setInputMode('streaming'); // turn arm
+
+        // ESC + a real redirect during the interrupt window (softStopped true).
+        stdin.emit('keypress', undefined, { name: 'escape' });
+        for (const ch of 'redirect') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+        stdin.emit('keypress', undefined, { name: 'return' });
+        expect(c.getPendingCount()).toBe(1);
+
+        // Teardown completes: dispose → idle CLEARS softStopped (existing contract).
+        c.setInputMode('idle');
+
+        // The redirect has NOT drained yet (onSubmit null). softStopped is now false —
+        // a poke typed here previously stranded as a 2nd payload (one turn behind).
+        stdin.emit('keypress', '.', { name: '.', sequence: '.' });
+        stdin.emit('keypress', undefined, { name: 'return' });
+        // FIXED: the poke merges into the still-pending redirect → ONE payload.
+        expect(c.getPendingCount()).toBe(1);
+
+        const onSubmit = vi.fn();
+        c.setOnSubmit(onSubmit);
+        c.setInputMode('idle');
+        expect(onSubmit).toHaveBeenCalledTimes(1);
+        expect(onSubmit).toHaveBeenCalledWith({ text: 'redirect\n.', attachments: [] });
+      });
+
+      it('post-ESC epoch ENDS when the redirect drains — later type-ahead is sequential again (no leak)', async () => {
+        // The epoch must not leak past the redirect. Once the coalesced payload
+        // drains to a running turn, subsequent mid-turn type-ahead accumulates one
+        // payload per message again (normal sequential delivery) — NOT folded into
+        // the already-running redirect.
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
+        await c.arm();
+        c.setInputMode('idle');
+        c.setInputMode('streaming'); // turn arm
+
+        stdin.emit('keypress', undefined, { name: 'escape' });
+        for (const ch of 'redirect') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+        stdin.emit('keypress', undefined, { name: 'return' });
+
+        // Drain the redirect → it runs as a turn (idle→streaming), ending the epoch.
+        const onSubmit = vi.fn();
+        c.setOnSubmit(onSubmit);
+        c.setInputMode('idle'); // drain redirect
+        expect(onSubmit).toHaveBeenNthCalledWith(1, { text: 'redirect', attachments: [] });
+        c.setInputMode('streaming'); // the redirect's turn starts
+
+        // Two fresh mid-turn messages (no new ESC) must accumulate as TWO payloads.
+        for (const msg of ['one', 'two']) {
+          for (const ch of msg) stdin.emit('keypress', ch, { name: ch, sequence: ch });
+          stdin.emit('keypress', undefined, { name: 'return' });
+        }
+        expect(c.getPendingCount()).toBe(2); // sequential — not coalesced into one
+      });
+
+      it('↑-recall of the post-ESC merge target does NOT resurrect stale text on re-send', async () => {
+        // Regression guard (P2/medium review finding on PR #644): popping a
+        // payload off pendingSubmissions for ↑-recall left postEscPayload
+        // pointing at it. Without the fix, the re-Enter below hits the merge
+        // branch's `idx < 0` defensive path (the popped payload is no longer
+        // in the queue) and resurrects the stale pre-edit text, submitting
+        // "redirect\nredirectX" instead of just the edited "redirectX".
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
+        await c.arm();
+        c.setInputMode('idle');
+        c.setInputMode('streaming'); // turn arm
+
+        stdin.emit('keypress', undefined, { name: 'escape' });
+        for (const ch of 'redirect') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+        stdin.emit('keypress', undefined, { name: 'return' });
+        expect(c.getPendingCount()).toBe(1);
+
+        // ↑ recalls the just-committed payload (also the epoch's merge target)
+        // back into the live buffer for editing; the FIFO empties.
+        stdin.emit('keypress', undefined, { name: 'up' });
+        expect(c.getBuffer().text).toBe('redirect');
+        expect(c.getPendingCount()).toBe(0);
+
+        // Edit the recalled draft (grow the buffer — the exact suffix doesn't
+        // matter, only that the re-sent text differs from the popped one).
+        stdin.emit('keypress', 'X', { name: 'X', sequence: 'X' });
+
+        // Re-Enter: still inside the post-ESC epoch (postEscCoalesce stays
+        // armed). Fixed behavior: postEscPayload was cleared on pop above, so
+        // this becomes a fresh single entry — NOT a merge with the stale text.
+        stdin.emit('keypress', undefined, { name: 'return' });
+        expect(c.getPendingCount()).toBe(1);
+
+        const onSubmit = vi.fn();
+        c.setOnSubmit(onSubmit);
+        c.setInputMode('idle');
+        expect(onSubmit).toHaveBeenCalledTimes(1);
+        expect(onSubmit).toHaveBeenCalledWith({ text: 'redirectX', attachments: [] });
+      });
+
+      it('dangling post-ESC merge target: loud in dev/test, safe-degrade in prod (invariant guard)', async () => {
+        // Defense-in-depth for the #644 class. The merge branch must NEVER feed
+        // an ABSENT postEscPayload back through mergeSubmissionPayloads — that
+        // resurrects stale text. All real removal sites (pop/shift/reset) clear
+        // the reference, so this dangling state is unreachable via normal input;
+        // we FORCE it by setting the (module-internal) field directly to prove
+        // the guard behaves — this tests the invariant guard, not a real path.
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
+        await c.arm();
+        c.setInputMode('idle');
+        c.setInputMode('streaming'); // turn arm
+
+        // Arm the epoch via a real ESC, then force a DANGLING target: a payload
+        // reference that is NOT present in pendingSubmissions (simulating a
+        // future removal site that popped/shifted it without clearing the ref).
+        stdin.emit('keypress', undefined, { name: 'escape' });
+        c.postEscPayload = { text: 'ghost', attachments: [] };
+
+        // Dev/test: the next committing Enter must THROW (loud CI signal) rather
+        // than silently merge the ghost text.
+        stdin.emit('keypress', 'x', { name: 'x', sequence: 'x' });
+        expect(() => stdin.emit('keypress', undefined, { name: 'return' })).toThrow(/dangling/);
+        c.disarm();
+
+        // Production: the SAME dangling state degrades safely — no throw, a fresh
+        // target, and the ghost text is NEVER resurrected into the submission.
+        vi.stubEnv('NODE_ENV', 'production');
+        try {
+          const c2 = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), onSoftStop: vi.fn() });
+          await c2.arm();
+          c2.setInputMode('idle');
+          c2.setInputMode('streaming');
+          stdin.emit('keypress', undefined, { name: 'escape' });
+          c2.postEscPayload = { text: 'ghost', attachments: [] };
+          stdin.emit('keypress', 'x', { name: 'x', sequence: 'x' });
+          stdin.emit('keypress', undefined, { name: 'return' });
+          const onSubmit = vi.fn();
+          c2.setOnSubmit(onSubmit);
+          c2.setInputMode('idle');
+          expect(onSubmit).toHaveBeenCalledTimes(1);
+          expect(onSubmit).toHaveBeenCalledWith({ text: 'x', attachments: [] });
+          c2.disarm();
+        } finally {
+          vi.unstubAllEnvs();
+        }
       });
     });
 
@@ -1011,6 +1163,153 @@ describe('TerminalCompositor — keypress + history + buffer + spinner', () => {
       await c.arm();
       stdin.emit('keypress', undefined, { name: 'x', sequence: 'x' });
       expect(c.getBuffer()).toEqual({ text: 'x', queued: false });
+    });
+  });
+
+  // ── Same-tick keystroke repaint coalescing (perf) ──────────────────────
+  //
+  // A synchronous burst of keypresses (rapid typing delivered in one
+  // event-loop tick — the common paste-into-a-non-bracketed-paste-terminal
+  // and fast-typist case) used to cost one FULL-frame repaint per key. The
+  // compositor now coalesces: the FIRST edit in a tick paints synchronously
+  // (leading edge — every single-keystroke sync contract above is preserved),
+  // and subsequent edits in the SAME tick mark the frame dirty and defer to a
+  // single trailing repaint on a microtask. A burst of N keys therefore costs
+  // 2 physical frame writes (1 leading + 1 trailing) instead of N.
+  //
+  // Physical frames are counted via the synchronized-output start marker
+  // (`\x1b[?2026h`), which CupFrameRenderer.render() emits exactly once per
+  // frame write (mock stdout is a TTY, so sync output is on). Buffer STATE
+  // stays fully synchronous — getBuffer() reads self.input, mutated per key —
+  // so the deferral is invisible to every existing state assertion.
+  describe('same-tick repaint coalescing', () => {
+    const SYNC_FRAME = '\x1b[?2026h';
+    const countFrames = (s: string): number => s.split(SYNC_FRAME).length - 1;
+
+    it('a same-tick burst of ≥3 keypresses produces ≤2 frame paints', async () => {
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      writes.clear(); // isolate the paints produced by the burst alone
+      // Five printable keys delivered synchronously (one libuv read tick).
+      for (const ch of 'hello') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      // Synchronously (before any await drains the microtask): the leading
+      // edge painted once; the other four coalesced into at most one pending
+      // trailing paint that has not fired yet. So ≤1 frame is on the wire now.
+      const framesSync = countFrames(writes.all());
+      expect(framesSync).toBeLessThanOrEqual(1);
+      // State is fully synchronous regardless of paint deferral.
+      expect(c.getBuffer().text).toBe('hello');
+      // Drain the microtask so the trailing repaint fires.
+      await Promise.resolve();
+      const framesAfterFlush = countFrames(writes.all());
+      // ≤2 total: one leading + one trailing. Far fewer than the 5 a
+      // per-key repaint would have produced.
+      expect(framesAfterFlush).toBeLessThanOrEqual(2);
+      expect(framesAfterFlush).toBeGreaterThanOrEqual(1);
+      c.disarm();
+    });
+
+    it('the final coalesced frame reflects the LAST keystroke of the burst', async () => {
+      const chalkModule = await import('chalk');
+      const priorLevel = chalkModule.default.level;
+      chalkModule.default.level = 1;
+      try {
+        const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+        await c.arm();
+        for (const ch of 'abcde') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+        // Isolate the trailing repaint: clear everything painted synchronously,
+        // then drain the microtask so ONLY the coalesced trailing frame lands.
+        writes.clear();
+        await Promise.resolve();
+        const frame = writes.all();
+        // The trailing frame renders the full buffer including the last key.
+        expect(frame).toContain('abcde');
+        // Buffer state matches the painted frame.
+        expect(c.getBuffer().text).toBe('abcde');
+        c.disarm();
+      } finally {
+        chalkModule.default.level = priorLevel;
+      }
+    });
+
+    it('a lone keystroke still paints synchronously (leading edge, no deferral needed)', async () => {
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      writes.clear();
+      stdin.emit('keypress', 'z', { name: 'z', sequence: 'z' });
+      // Single key = first-in-tick = leading edge: the frame is on the wire
+      // immediately, no await required (preserves the synchronous-write
+      // contract the caret/queue suites rely on).
+      expect(countFrames(writes.all())).toBe(1);
+      expect(c.getBuffer().text).toBe('z');
+      c.disarm();
+    });
+
+    it('flushPendingRepaint() forces the coalesced trailing frame synchronously', async () => {
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      writes.clear();
+      for (const ch of 'sync') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      // Leading edge painted once; trailing is pending on the microtask.
+      writes.clear();
+      // flushPendingRepaint drains the pending trailing paint WITHOUT waiting
+      // for the microtask — the synchronous flush lifecycle points rely on.
+      c.flushPendingRepaint();
+      expect(countFrames(writes.all())).toBe(1);
+      // A second flush is a no-op — nothing is pending anymore (idempotent).
+      writes.clear();
+      c.flushPendingRepaint();
+      expect(writes.all()).toBe('');
+      // And the microtask that was already queued must not double-paint.
+      await Promise.resolve();
+      expect(writes.all()).toBe('');
+      c.disarm();
+    });
+
+    it('flushPendingRepaint() is idempotent and safe with nothing pending', async () => {
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      writes.clear();
+      // No burst — nothing pending. Flushing must not paint or throw.
+      expect(() => c.flushPendingRepaint()).not.toThrow();
+      expect(writes.all()).toBe('');
+      c.disarm();
+    });
+
+    it('flushPendingRepaint() is safe after disarm and a stale pending paint never fires', async () => {
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      // Start a burst so a trailing paint is pending, then tear down BEFORE
+      // the microtask drains — the classic use-after-teardown hazard.
+      for (const ch of 'abc') stdin.emit('keypress', ch, { name: ch, sequence: ch });
+      c.disarm();
+      writes.clear();
+      // Explicit flush after disarm must be a no-op (never paints a torn-down
+      // compositor, never throws).
+      expect(() => c.flushPendingRepaint()).not.toThrow();
+      expect(writes.all()).toBe('');
+      // The microtask queued during the burst now drains — it must NOT paint
+      // either (the disarm cancelled the pending trailing repaint).
+      await Promise.resolve();
+      expect(writes.all()).toBe('');
+      expect(c.isArmed()).toBe(false);
+    });
+
+    it('a printable keystroke bumps repaintCount exactly once (coalesced-away paint still counts)', async () => {
+      // The caret-blink un-hide logic keys off repaintCount to tell whether
+      // dispatchKey already painted this keystroke. A coalesced (deferred)
+      // paint must still register as a logical paint so the caret logic stays
+      // coherent — otherwise every non-leading key in a burst would trigger a
+      // spurious synchronous un-hide repaint, defeating the coalescing.
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+      await c.arm();
+      // Second key in the tick is the coalesced case.
+      stdin.emit('keypress', 'a', { name: 'a', sequence: 'a' });
+      const before = c.repaintCount;
+      stdin.emit('keypress', 'b', { name: 'b', sequence: 'b' });
+      // Exactly one logical paint for the coalesced key — no extra un-hide frame.
+      expect(c.repaintCount - before).toBe(1);
+      c.disarm();
     });
   });
 

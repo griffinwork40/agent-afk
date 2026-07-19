@@ -1,17 +1,20 @@
 import { emitKeypressEvents, type Interface } from 'readline';
 
 /**
- * Tuned `escapeCodeTimeout` for `readline.emitKeypressEvents` so a lone ESC
- * fires on the FIRST press without misreading split escape sequences.
+ * Sets `escapeCodeTimeout` to 50ms (see {@link LONE_ESC_TIMEOUT_MS}) for
+ * `readline.emitKeypressEvents`, so a lone ESC fires on the FIRST press
+ * without misreading split escape sequences. 50ms is the ONLY value AFK ships;
+ * the 500ms mentioned below is Node's DEFAULT, which this module overrides.
  *
- * History: ESC is the soft-stop / cancel affordance across AFK's TTY
- * surfaces (compositor stream-stop, reader, elicitation prompts). Node's
- * readline buffers a chunk-trailing `\x1b` for `escapeCodeTimeout`
- * (default 500ms, the GNU readline keyseq-timeout) to disambiguate a lone
- * ESC from the start of an escape sequence (arrows, alt-keys): the `escape`
- * keypress fires only after that timeout OR when the next key arrives. The
- * 500ms delay is why ESC "needs two presses" — pressing ESC again flushes
- * the first buffered ESC.
+ * History: ESC is the soft-stop / cancel affordance across AFK's TTY surfaces
+ * (compositor stream-stop, reader, elicitation prompts). Node's readline
+ * buffers a chunk-trailing `\x1b` for `escapeCodeTimeout` — whose default is
+ * 500ms (the GNU readline keyseq-timeout) — to disambiguate a lone ESC from
+ * the start of an escape sequence (arrows, alt-keys): the `escape` keypress
+ * fires only after that timeout OR when the next key arrives. Under Node's
+ * 500ms default ESC "needs two presses" (the second press flushes the first
+ * buffered ESC); overriding it to 50ms below is what makes a single ESC
+ * register.
  *
  * Why a small NONZERO timeout (not 0): the disambiguation window only needs
  * to drop below human perception (~100ms) to fix the double-press bug — it

@@ -23,6 +23,7 @@ import { isSoftNewlineEnter, endsWithBackslashContinuation } from './input/enter
 import { readClipboardImage } from './input/clipboard-image.js';
 import { MAX_DROPDOWN_ROWS } from './terminal-compositor.autocomplete.js';
 import * as Paste from './terminal-compositor.paste.js';
+import { env } from '../config/env.js';
 import type { AutocompleteState } from './input/autocomplete-state.js';
 import type { IHistoryRing } from './input/types.js';
 import type { ImageAttachment } from './input/attachments.js';
@@ -45,8 +46,14 @@ import type {
  * mutated/invoked through it).
  */
 export interface KeyDispatchHost {
-  /** Re-render the live frame. */
+  /** Re-render the live frame synchronously. */
   repaint(): void;
+  /**
+   * Coalescing repaint for the per-keystroke edit path: leading edge paints
+   * synchronously, subsequent same-tick edits defer to one trailing microtask
+   * paint. See {@link TerminalCompositor.scheduleRepaint}.
+   */
+  scheduleRepaint(): void;
   /**
    * Clear the terminal viewport (erase entire screen + cursor home) and
    * repaint the live compositor frame. Used by the Ctrl+L binding.
@@ -109,14 +116,15 @@ export interface KeyDispatchHost {
   /** Once-only soft-stop guard for ESC in streaming mode. */
   softStopped: boolean;
   /**
-   * Snapshot of `pendingSubmissions.length` taken at ESC soft-stop time
-   * (handleEscape). Entries at indices `0..softStopQueueBase-1` were queued
-   * BEFORE esc and are contract-protected (handleEscape comment lines 318-327):
-   * "Already-queued messages: left untouched." Post-ESC Enters coalesce by
-   * MERGING everything at/above this base into one payload, so neither the
-   * pre-ESC queue nor earlier post-ESC messages are ever silently dropped.
+   * Post-ESC coalesce epoch — armed at ESC soft-stop, held until the coalesced
+   * redirect payload drains (authoritative field docs on the class in
+   * terminal-compositor.ts). While true, handleEnter MERGES each new message
+   * into {@link postEscPayload} rather than pushing a separate FIFO entry, so
+   * post-ESC pokes fold into ONE next turn instead of stranding one-per-turn.
    */
-  softStopQueueBase: number;
+  postEscCoalesce: boolean;
+  /** Merge target for the {@link postEscCoalesce} epoch (by reference), or null before the first post-ESC Enter / after it drains. */
+  postEscPayload: SubmissionPayload | null;
   /** Hard-abort flag set by Ctrl+C in streaming mode. */
   canceled: boolean;
   /** Once-only guard for Ctrl+B background in streaming mode. */
@@ -161,7 +169,14 @@ export function applyEdit(self: KeyDispatchHost, next: InputCoreState): boolean 
   // guard), so this per-character ghost refresh never fires mid-paste —
   // it would be stale by paste end anyway.
   self.updateGhost();
-  self.repaint();
+  // Coalesce per-keystroke repaints: the first edit in an event-loop tick
+  // paints synchronously (leading edge — buffer STATE is already mutated above,
+  // so single-keystroke sync contracts hold); subsequent edits in the same tick
+  // defer to ONE trailing microtask paint. A rapid-typing burst of N keys thus
+  // costs 2 frame writes instead of N. Autocomplete/ghost state is updated
+  // synchronously above regardless, so a coalesced frame always renders the
+  // latest buffer + dropdown state.
+  self.scheduleRepaint();
   return true;
 }
 
@@ -340,10 +355,15 @@ function handleEscape(self: KeyDispatchHost, key: KeyInfo): boolean {
   // committing it would fling it as a turn the user never submitted. Ctrl+C
   // (handleInterrupt below) follows the same no-auto-commit rule.
   self.softStopped = true;
-  // Snapshot the queue length so post-ESC coalesce (handleEnter) can merge
-  // everything at/above this base — preserving pre-ESC payloads per the
-  // contract above while folding post-ESC messages into one next turn.
-  self.softStopQueueBase = self.pendingSubmissions.length;
+  // Arm the post-ESC coalesce epoch. Unlike `softStopped` (cleared at the first
+  // teardown → idle), this is held until the coalesced redirect payload drains,
+  // so pokes typed AFTER teardown but before the redirect runs still merge in
+  // (the residual the softStopped-window coalesce missed — the lone-"." symptom).
+  // A fresh epoch starts with NO merge target: any pre-ESC payloads already on
+  // the FIFO stay as their own entries (handleEscape contract — "already-queued
+  // messages: left untouched"), and the first post-ESC Enter creates the target.
+  self.postEscCoalesce = true;
+  self.postEscPayload = null;
   if (self.onSoftStop) self.onSoftStop();
   return true;
 }
@@ -379,9 +399,12 @@ function handleClipboardImageKey(self: KeyDispatchHost, key: KeyInfo): boolean {
   // for users on terminals where bracketed-paste is disabled or who
   // prefer the keyboard binding. Ported from reader.ts:464-479.
   // In-flight guard prevents concurrent osascript spawns from key
-  // repeats. schedulePaint() in reader.ts is replaced here by
-  // self.repaint() because the compositor's log-update frame is
-  // burst-coalesced internally.
+  // repeats. reader.ts's schedulePaint() is replaced here by a plain
+  // self.repaint(): this paint fires from the clipboard probe's async
+  // `.then` (its own event-loop turn, one probe at a time via the
+  // in-flight guard), so there is no synchronous burst to coalesce — a
+  // direct repaint is correct. (Per-keystroke TYPING repaints ARE
+  // coalesced, but through applyEdit → scheduleRepaint, not this path.)
   if (key?.ctrl && key?.name === 'v') {
     if (!self.clipboardInFlight) {
       self.clipboardInFlight = true;
@@ -444,6 +467,11 @@ function handleVerticalNav(self: KeyDispatchHost, key: KeyInfo): boolean {
     // commit time are restored to the live list so re-Enter re-captures them.
     if (self.pendingSubmissions.length > 0 && self.input.buffer.length === 0) {
       const payload = self.pendingSubmissions.pop()!;
+      // If this was the post-ESC epoch's merge target, clear the reference so
+      // the next Enter treats the edited buffer as a FRESH payload (the `else
+      // if (postEscCoalesce)` branch) instead of re-merging this stale, now-
+      // popped text via the `idx < 0` defensive path. The epoch itself stays armed.
+      if (payload === self.postEscPayload) self.postEscPayload = null;
       self.queued = self.pendingSubmissions.length > 0; // maintain the mirror
       self.attachments = [...payload.attachments];
       self.history?.resetRecall();
@@ -671,41 +699,86 @@ function handleEnter(self: KeyDispatchHost, key: KeyInfo, sequence: string): boo
     expandedText === displayText
       ? { text: expandedText, attachments }
       : { text: expandedText, displayText, attachments };
-  // Invariant: during the ESC soft-stop window — `softStopped` is set by
-  // handleEscape and cleared only at the post-soft-stop `→ idle` transition
-  // (setInputMode, terminal-compositor.input-mode.ts) — Enter must NOT
-  // accumulate a type-ahead backlog. That window is the async turn-teardown
-  // gap: for a subagent turn, cancelActiveForeground() (subagent-executor.ts)
-  // resolves the parent `await` only after the child settles — seconds for a
-  // deep/wide wave — and the compositor lingers in 'streaming' the whole time.
-  // Each Enter would otherwise push onto the FIFO, which drains ONE payload per
-  // turn (the `→ idle` flush), stranding the user one turn behind: the "it
-  // doesn't send, then I keep sending characters to catch up" report. So during
-  // a soft-stop, all post-ESC messages COALESCE into a single payload that runs
-  // as exactly one next turn — no backlog.
+  // Invariant: after an ESC soft-stop, Enter must NOT accumulate a type-ahead
+  // backlog. The teardown gap — the async window between ESC and the turn loop
+  // actually breaking (for a subagent turn, cancelActiveForeground() in
+  // subagent-executor.ts resolves the parent `await` only after the child
+  // settles, seconds for a deep/wide wave) — keeps the compositor in 'streaming'
+  // while the user, seeing no new turn, types a redirect and pokes ".". If each
+  // Enter pushed its own FIFO entry, the queue would drain ONE payload per turn
+  // (the `→ idle` flush), stranding the user one turn behind: the "it doesn't
+  // send, then I keep sending characters to catch up" report — the lone-"."
+  // messages. So across the whole post-ESC epoch, messages COALESCE into a
+  // single payload that runs as exactly one next turn — no backlog.
   //
-  // Coalesce = MERGE, not last-wins. The original #403 fix kept only the
-  // latest post-ESC message, which silently DROPPED earlier ones: a user who
-  // typed a real instruction during the settle window and then poked with "."
-  // (because nothing appeared to send) had the instruction replaced by the "."
-  // — the "message → no response → retype it" report, round 2. Merging joins
-  // the post-ESC texts with newlines (and concatenates attachments) so the
-  // user's full post-stop intent survives while the no-backlog invariant —
-  // exactly ONE next turn — still holds.
+  // Epoch, not just the softStopped window. `postEscCoalesce` is armed at ESC
+  // and held until the coalesced payload DRAINS (setInputMode's `→ idle` shift),
+  // NOT cleared at the first teardown `→ idle` the way `softStopped` is. This
+  // covers the residual #81/#403/#467 missed: a poke that lands AFTER teardown
+  // (softStopped already false) but before the redirect visibly starts. It used
+  // to strand as a separate turn; now it merges.
   //
-  // Contract preservation: `softStopQueueBase` was snapshotted by handleEscape
-  // at ESC time, capturing the count of pre-ESC payloads already on the FIFO.
-  // Entries below the base are pre-ESC turns and are left untouched (they
-  // drain as their own sequential turns via the `→ idle` flush), so the
-  // handleEscape contract — "Already-queued messages: left untouched" — holds.
-  // Only entries at/above the base participate in the merge. Normal mid-turn
-  // type-ahead (softStopped === false) still accumulates: sequential-turn
-  // delivery is the intended contract there (the "NO ESC" regression tests).
-  if (self.softStopped) {
-    const postEsc = self.pendingSubmissions.slice(self.softStopQueueBase);
-    self.pendingSubmissions.length = self.softStopQueueBase;
-    self.pendingSubmissions.push(mergeSubmissionPayloads([...postEsc, payload]));
+  // Merge target by REFERENCE (`postEscPayload`), not a FIFO index. Any pre-ESC
+  // payloads stay their own entries (handleEscape leaves postEscPayload null, so
+  // they are never the merge target) and drain as their own sequential turns —
+  // the handleEscape contract ("already-queued messages: left untouched") holds.
+  // A reference survives those pre-ESC entries draining ahead of it, whereas the
+  // old index (`softStopQueueBase`) went stale after any `shift()`.
+  //
+  // Merge joins texts with newlines + concatenates attachments (never last-wins,
+  // which silently dropped earlier post-ESC messages — the #467 regression).
+  // Normal mid-turn type-ahead (no ESC, postEscCoalesce === false) still
+  // accumulates one payload per message: sequential-turn delivery is the intended
+  // contract there (the "NO ESC" regression tests).
+  if (self.postEscCoalesce) {
+    // Invariant: while the coalesce epoch is armed, `postEscPayload` is either
+    // null (no target committed yet this epoch) OR a reference that is PRESENT
+    // in `pendingSubmissions`. Every site that removes the tracked payload
+    // clears this reference — with DELIBERATELY asymmetric epoch semantics that
+    // must NOT be collapsed into one shared helper:
+    //   • ↑-recall pop (handleVerticalNav) clears `postEscPayload` ONLY and
+    //     leaves the epoch armed, so the edited draft re-establishes a fresh
+    //     target on re-Enter.
+    //   • drain shift (input-mode `→ idle`) clears BOTH — the target is now a
+    //     running turn, so the epoch is over.
+    //   • resetState clears everything on disarm/rearm.
+    // Therefore a NON-null `postEscPayload` that is ABSENT from the queue is an
+    // invariant violation (a future removal site that forgot to clear it),
+    // never a normal state. We must NOT feed an absent reference back into
+    // mergeSubmissionPayloads — doing so resurrects stale, already-recalled text
+    // (the exact PR #644 ↑-recall bug). So: merge only a target that is actually
+    // present; otherwise start a FRESH target. Worst case under a future
+    // violation is a stranded extra turn — never resurrected text.
+    const target = self.postEscPayload;
+    const idx = target !== null ? self.pendingSubmissions.indexOf(target) : -1;
+    if (target !== null && idx >= 0) {
+      // Live target present — merge in place (same FIFO slot) so the whole
+      // post-stop burst becomes ONE next turn. Merge joins texts with newlines +
+      // concatenates attachments (never last-wins, which silently dropped
+      // earlier post-ESC messages — the #467 regression).
+      const merged = mergeSubmissionPayloads([target, payload]);
+      self.pendingSubmissions[idx] = merged;
+      self.postEscPayload = merged;
+    } else {
+      // Either the first message this epoch (target === null — the normal case)
+      // or, under a FUTURE invariant violation, a dangling reference. Fail loud
+      // in dev/test so CI catches the offending removal site; production
+      // degrades safely by starting a fresh target rather than re-merging the
+      // absent reference.
+      if (target !== null && env.NODE_ENV !== 'production') {
+        throw new Error(
+          'terminal-compositor: post-ESC coalesce reference is dangling ' +
+            '(postEscPayload non-null but absent from pendingSubmissions) — a ' +
+            'pendingSubmissions removal site failed to clear the epoch reference.',
+        );
+      }
+      self.postEscPayload = payload;
+      self.pendingSubmissions.push(payload);
+    }
   } else {
+    // Normal mid-turn type-ahead (no ESC, postEscCoalesce === false): accumulate
+    // one payload per message — sequential-turn delivery is the intended
+    // contract there (the "NO ESC" regression tests).
     self.pendingSubmissions.push(payload);
   }
   self.queued = true; // maintained mirror: pendingSubmissions is now non-empty

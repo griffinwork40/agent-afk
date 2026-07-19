@@ -42,8 +42,11 @@ export interface InputModeHost {
   /** Once-only ESC soft-stop guard. */
   softStopped: boolean;
 
-  /** Queue-length snapshot at ESC time; coalesce boundary for post-ESC Enters. */
-  softStopQueueBase: number;
+  /** Post-ESC coalesce epoch — held until the coalesced redirect drains (authoritative field docs in terminal-compositor.ts). */
+  postEscCoalesce: boolean;
+
+  /** Merge target for the post-ESC coalesce epoch (by reference), or null before the first post-ESC Enter / after it drains. */
+  postEscPayload: SubmissionPayload | null;
 
   /** Hard-abort flag (Ctrl+C in streaming mode). */
   canceled: boolean;
@@ -176,7 +179,12 @@ export function setInputMode(self: InputModeHost, mode: CompositorInputMode): vo
     self.canceled = false;
     self.backgrounded = false;
     self.softStopped = false;
-    self.softStopQueueBase = 0;
+    // Clear the post-ESC coalesce epoch ONLY when no coalesced redirect is still
+    // pending (postEscPayload === null): a fresh user turn — or a stale ESC where
+    // the user never typed a post-ESC message — must start clean, but a pre-ESC
+    // payload draining ahead of the redirect must NOT drop the epoch (the redirect
+    // is still queued and later pokes should keep merging into it).
+    if (self.postEscPayload === null) self.postEscCoalesce = false;
     // Reset autocomplete at the idle→streaming transition so any
     // open dropdown rows are not rendered into the first streaming
     // frame. Mirrors the reset in the idle Enter handler above.
@@ -214,7 +222,12 @@ export function setInputMode(self: InputModeHost, mode: CompositorInputMode): vo
   // keeps an EMPTY-buffer ESC from leaving it armed into the idle period.
   if (mode === 'idle' && self.softStopped) {
     self.softStopped = false;
-    self.softStopQueueBase = 0;
+    // Deliberately do NOT clear `postEscCoalesce` / `postEscPayload` here. The
+    // epoch must survive this teardown → idle so a poke typed after teardown
+    // (softStopped now false) but before the redirect drains still merges into
+    // it — the residual the old softStopped-window coalesce missed (the lone-"."
+    // symptom). The epoch is ended where the coalesced payload actually drains
+    // (the flush branch below) or at idle→streaming when nothing is pending.
     // No early return: fall through so a queued buffer flushes via the branch
     // below when onSubmit is installed (readLine→idle), or — at the
     // dispose→idle transition where onSubmit is still null — stays queued for
@@ -242,6 +255,13 @@ export function setInputMode(self: InputModeHost, mode: CompositorInputMode): vo
     // the already-consumed queue and cannot double-fire the same payload.
     const payload = self.pendingSubmissions.shift()!;
     self.queued = self.pendingSubmissions.length > 0;
+    // The coalesced post-ESC redirect is now draining to a running turn — end
+    // the epoch so input typed against the NEW turn is normal (sequential)
+    // type-ahead again, not folded into an already-running redirect.
+    if (payload === self.postEscPayload) {
+      self.postEscCoalesce = false;
+      self.postEscPayload = null;
+    }
     self.repaint();
     handler(payload);
     return;
