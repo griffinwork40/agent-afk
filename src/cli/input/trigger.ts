@@ -6,8 +6,7 @@
  * pop the dropdown and which entries to show.
  */
 
-import { readdirSync, statSync } from 'fs';
-import { join } from 'path';
+import { readdirSync, promises as fsp, type Dirent } from 'fs';
 import { list as listSlashCommands, aliasEntries } from '../slash/registry.js';
 import { resolveQuery, MAX_FILE_MATCHES } from '../multi-line-reader.js';
 import type { Candidate, Trigger } from './types.js';
@@ -130,45 +129,178 @@ export function filterSlashCandidates(query: string): Candidate[] {
 }
 
 /**
- * Filter @-file candidates. Values are returned with the leading `@`
- * preserved (e.g. `@src/index.ts`), mirroring how slash candidates keep
- * their `/` prefix. The dropdown then reads as a unified menu of
- * trigger-shaped tokens, and `applySelection` — which replaces the
- * trailing non-whitespace run (the `@token`) with the candidate's value —
- * lines up byte-for-byte with what the user typed.
+ * Contract: minimal Dirent slice the file-candidate core reads. A real
+ * `fs.Dirent` (from `readdir(dir, { withFileTypes: true })`) satisfies this
+ * structurally, and tests can supply plain objects without stubbing the
+ * whole class. Only `name` and `isDirectory()` are ever consulted.
+ */
+export interface FileDirent {
+  name: string;
+  isDirectory(): boolean;
+}
+
+/**
+ * Contract: one entry in the per-directory scan cache. `entries` is the raw
+ * directory listing (unfiltered, unsorted); `at` is the epoch-ms timestamp the
+ * scan resolved, used to expire the entry after {@link FILE_SCAN_TTL_MS}.
+ */
+interface ScanCacheEntry {
+  entries: FileDirent[];
+  at: number;
+}
+
+/**
+ * Invariant: the directory-scan cache is the ONLY place fs results are
+ * retained between keystrokes. Keyed by absolute `scanDir`, it lets the common
+ * "user types another char in the same directory" path serve candidates
+ * synchronously (see {@link filterFileCandidatesCached}) instead of hitting the
+ * filesystem on every keypress. Entries older than the TTL are treated as
+ * absent and re-scanned; `invalidateFileScanCache()` clears it wholesale when
+ * the dropdown is dismissed or a prompt is submitted, so a directory mutated
+ * between prompts is never served stale.
  *
- * `resolveQuery` (shared with the multi-line reader's tab-completer) routes
- * the query into one of three scan modes — tilde (`~/`), absolute (`/`), or
- * relative — and yields the `displayPrefix` so a `@~/foo` candidate stays
- * `@~/foo` rather than expanding to the absolute home path. `homeDir` is
- * injectable for test isolation; production lets it default to `os.homedir()`.
+ * History: replaced the previous synchronous `readdirSync` + per-entry
+ * `statSync` that ran inline on the compositor keystroke path and blocked the
+ * input thread on large / slow (network) directories.
+ */
+const scanCache = new Map<string, ScanCacheEntry>();
+
+/** Cache TTL: how long a directory listing may be served without re-reading. */
+export const FILE_SCAN_TTL_MS = 2000;
+
+/**
+ * Clear the directory-scan cache. Call when the dropdown is dismissed or a
+ * prompt is submitted so a directory mutated between prompts is re-read fresh
+ * on the next scan (belt-and-suspenders alongside the TTL).
+ */
+export function invalidateFileScanCache(): void {
+  scanCache.clear();
+}
+
+/** Test-only: current number of cached directory listings. */
+export function __fileScanCacheSize(): number {
+  return scanCache.size;
+}
+
+/**
+ * Pure core: turn a raw directory listing into ranked `@`-file candidates for
+ * `query`. No I/O — the caller supplies `entries` (from the cache or a fresh
+ * scan) so this stays trivially testable and identical across the sync and
+ * async entry points.
+ *
+ * Values keep the leading `@` (e.g. `@src/index.ts`), mirroring how slash
+ * candidates keep their `/` prefix, so `applySelection` — which replaces the
+ * trailing non-whitespace run (the `@token`) with the candidate's value —
+ * lines up byte-for-byte with what the user typed. `resolveQuery` yields the
+ * `displayPrefix` so a `@~/foo` candidate stays `@~/foo` rather than expanding
+ * to the absolute home path.
+ *
+ * Invariant: cap is MAX_FILE_MATCHES from the shared upstream source. Do NOT
+ * re-cap to a smaller number here — a secondary cap silently hides entries
+ * beyond it even when the dropdown scrolls. filter → sort → cap → decorate
+ * matches the fileMatchesFor ordering contract.
+ *
+ * Directory flag is derived from the Dirent (`isDirectory()`), NOT a follow-up
+ * `statSync`. Tradeoff: a symlink that points at a directory reports as a
+ * symlink (not a directory) and therefore loses its trailing `/`. That is an
+ * accepted cosmetic loss — dropping the per-entry stat is what keeps the scan
+ * off the blocking syscall path.
+ */
+export function buildFileCandidates(
+  entries: FileDirent[],
+  query: string,
+  rootDir: string = process.cwd(),
+  homeDir?: string,
+): Candidate[] {
+  const { leafPrefix, displayPrefix } = resolveQuery(query, rootDir, homeDir);
+  // Sort by NAME before the cap so the ≤MAX_FILE_MATCHES survivors are the
+  // alphabetically-first entries (readdir order is OS-unspecified), THEN
+  // decorate directories with a trailing '/'. Plain string `.sort()` on the
+  // bare name matches the sibling `fileMatchesFor` in multi-line-reader
+  // byte-for-byte (filter → sort names → cap → decorate) — keep them identical.
+  const dirFlag = new Map<string, boolean>();
+  const names = entries
+    .filter((entry) => entry.name.startsWith(leafPrefix))
+    .filter((entry) => !(entry.name.startsWith('.') && !leafPrefix.startsWith('.')))
+    .map((entry) => {
+      dirFlag.set(entry.name, entry.isDirectory());
+      return entry.name;
+    })
+    .sort()
+    .slice(0, MAX_FILE_MATCHES);
+  return names.map((name) => ({
+    value: '@' + displayPrefix + name + (dirFlag.get(name) ? '/' : ''),
+  }));
+}
+
+/**
+ * Synchronous cache-only lookup. Returns ranked candidates when the query's
+ * scan directory is cached and fresh (within the TTL); returns `null` on a
+ * miss so the caller can decide to dispatch the async scan. Never touches the
+ * filesystem — safe to call on the keystroke path.
+ */
+export function filterFileCandidatesCached(
+  query: string,
+  rootDir: string = process.cwd(),
+  homeDir?: string,
+): Candidate[] | null {
+  const { scanDir } = resolveQuery(query, rootDir, homeDir);
+  const hit = scanCache.get(scanDir);
+  if (!hit || Date.now() - hit.at > FILE_SCAN_TTL_MS) return null;
+  return buildFileCandidates(hit.entries, query, rootDir, homeDir);
+}
+
+/**
+ * Async @-file candidate scan. Serves from the per-directory cache when fresh
+ * (resolving without any fs call), otherwise reads the directory with
+ * `fs.promises.readdir(..., { withFileTypes: true })`, caches the listing, and
+ * builds candidates via the pure core.
+ *
+ * fs errors (unreadable / nonexistent scan dir) resolve to `[]` — the promise
+ * never rejects, preserving the historical error-swallowing behavior so the
+ * keystroke path has no unhandled rejection to catch.
+ */
+export async function filterFileCandidatesAsync(
+  query: string,
+  rootDir: string = process.cwd(),
+  homeDir?: string,
+): Promise<Candidate[]> {
+  const { scanDir } = resolveQuery(query, rootDir, homeDir);
+  const cached = scanCache.get(scanDir);
+  if (cached && Date.now() - cached.at <= FILE_SCAN_TTL_MS) {
+    return buildFileCandidates(cached.entries, query, rootDir, homeDir);
+  }
+  try {
+    const entries: Dirent[] = await fsp.readdir(scanDir, { withFileTypes: true });
+    scanCache.set(scanDir, { entries, at: Date.now() });
+    return buildFileCandidates(entries, query, rootDir, homeDir);
+  } catch {
+    // unreadable scan dir → no candidates (never rejects)
+    return [];
+  }
+}
+
+/**
+ * Synchronous @-file candidate scan (legacy user-turn reader path).
+ *
+ * The between-turn `reader.ts` repaint closure is synchronous and writes to
+ * stdout inline, so it cannot await the async scan. This keeps a blocking
+ * `readdirSync` for that surface only — the hot agent-turn compositor path
+ * uses {@link filterFileCandidatesAsync} / {@link filterFileCandidatesCached}.
+ * It reads Dirents (`withFileTypes: true`) so it shares the exact
+ * `buildFileCandidates` core (no `statSync`) and warms the same cache, so a
+ * later async lookup for the same directory is an instant cache hit.
  */
 export function filterFileCandidates(
   query: string,
   rootDir: string = process.cwd(),
   homeDir?: string,
 ): Candidate[] {
-  // Invariant: cap is MAX_FILE_MATCHES from the shared upstream source.
-  // Do NOT re-cap to a smaller number here — a secondary cap silently hides
-  // entries beyond it even when the dropdown scrolls. filter → sort → cap →
-  // stat matches the fileMatchesFor ordering contract.
-  const { scanDir, leafPrefix, displayPrefix } = resolveQuery(query, rootDir, homeDir);
+  const { scanDir } = resolveQuery(query, rootDir, homeDir);
   try {
-    const names = readdirSync(scanDir)
-      .filter((name) => name.startsWith(leafPrefix))
-      .filter((name) => !(name.startsWith('.') && !leafPrefix.startsWith('.')))
-      .sort()
-      .slice(0, MAX_FILE_MATCHES);
-    return names
-      .map((name) => {
-        let relPath = displayPrefix + name;
-        try {
-          if (statSync(join(scanDir, name)).isDirectory()) relPath += '/';
-        } catch {
-          // stat errors don't block completion
-        }
-        return { value: '@' + relPath };
-      });
+    const entries = readdirSync(scanDir, { withFileTypes: true });
+    scanCache.set(scanDir, { entries, at: Date.now() });
+    return buildFileCandidates(entries, query, rootDir, homeDir);
   } catch {
     // unreadable scan dir → no candidates
     return [];
