@@ -12,9 +12,9 @@
   "dependencies": {
     "@types/mdx": "2.0.14",
     "@vercel/analytics": "^2.0.1",
-    "fumadocs-core": "16.11.3",
-    "fumadocs-mdx": "15.1.0",
-    "fumadocs-ui": "16.11.3",
+    "fumadocs-core": "16.11.5",
+    "fumadocs-mdx": "15.2.0",
+    "fumadocs-ui": "16.11.5",
     "next": "16.2.10",
     "next-themes": "0.4.6",
     "react": "19.2.7",
