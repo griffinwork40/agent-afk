@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.59.0] - 2026-07-19
+
+### Added
+- /editor handoff to $EDITOR seeded with input buffer + Ctrl+O chord (#651) (3a89afd)
+
+### Changed
+- async at-file autocomplete scan with per-dir cache + stale guard (#648) (bd99a34)
+
 ## [5.58.1] - 2026-07-18
 
 ### Changed
