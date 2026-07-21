@@ -85,7 +85,14 @@ const PINNED_HASHES = {
   // ~/.afk/skills/ if it drifts back.
   refactor: '3adf801b9a61eba80afd34fef1e8c78a892ec07256dabb073370622a62d1b40f',
   research: 'abe79d75a5f3c74696ef002293dbe8714e446f8955de97089d1005f1e70bc269',
-  review: 'f313e3779af068a623692473abab2300938db8da3ebf3e2998d47fcb21ee9627',
+  // Hash bumped: added a "Bounded git access" directive to the citation block —
+  // re-read only file-state citations (skip diff-context), batch all re-reads into
+  // a single git-investigator dispatch, at most one per agent. Load-reduction
+  // mitigation for the review git-investigator fan-out (a FULL review ran ~43 min
+  // then 429'd with no output); citation integrity unchanged (Wave 1.5 backstop).
+  // BACK-PORT GAP: mirror this into the upstream example-plugin review SKILL.md
+  // (not co-located here, so the drift test skips) — see workflow above.
+  review: '6ae1d3b497101f4114cf149ec2645761d84cfc417c7eb4d583d4728121dacc5a',
   // Hash bumped 2026-06-09 (PR #52): records the confidence-trigger enhancement
   // landed in this branch's commit 1e35850 — adds high-confidence language
   // ("confident", "certain", "clearly", ≥80%) as a verification trigger in its
