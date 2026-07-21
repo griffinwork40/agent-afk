@@ -30,7 +30,6 @@ import { SessionToolDispatcher } from '../../tools/dispatcher.js';
 import { PathGrantManager } from '../../tools/grant-manager.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
 import { createBuiltinHandlers } from '../../tools/handlers/index.js';
-import { MODEL_CAP_BYTES } from '../../tools/handlers/_output-cap.js';
 import {
   exitPlanModeTool,
   createExitPlanModeHandler,
@@ -241,6 +240,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ...(this._sharedWriteRoots !== undefined ? { writeRoots: this._sharedWriteRoots } : {}),
           ...(config.sessionId !== undefined ? { sessionId: config.sessionId } : {}),
           ...(config.parentSessionId !== undefined ? { parentSessionId: config.parentSessionId } : {}),
+          // Fork-scoped central output cap (#661): forwarded from the child
+          // config that forkSubagent stamped, arming maxOutputBytes for forks
+          // only (top-level leaves it unset). Parity with anthropic-direct.
+          ...(config.subagentToolOutputCapBytes !== undefined
+            ? { subagentToolOutputCapBytes: config.subagentToolOutputCapBytes }
+            : {}),
           ...(config.traceWriter !== undefined ? { traceWriter: config.traceWriter } : {}),
           runtimeStateSource,
           ...(config.isSkillDispatch ? { isSkillDispatch: true } : {}),
@@ -354,6 +359,14 @@ export class OpenAICompatibleProvider implements ModelProvider {
       writeRoots?: string[];
       sessionId?: string;
       parentSessionId?: string;
+      /**
+       * Explicit "this session is a forked subagent" signal carrying the
+       * per-result output-cap budget (#661) — parity with
+       * `anthropic-direct/index.ts:buildDispatcher`. Set to MODEL_CAP_BYTES by
+       * `SubagentManager.forkSubagent` for EVERY fork; undefined on a top-level
+       * session. Arms the dispatcher's `maxOutputBytes` backstop declaratively.
+       */
+      subagentToolOutputCapBytes?: number;
       traceWriter?: import('../../trace/index.js').TraceWriter;
       /**
        * Live source for the `get_runtime_state` tool — see the matching
@@ -495,11 +508,16 @@ export class OpenAICompatibleProvider implements ModelProvider {
     if (opts.sessionId !== undefined) dispatcherOpts.sessionId = opts.sessionId;
     if (opts.parentSessionId !== undefined) dispatcherOpts.parentSessionId = opts.parentSessionId;
     // Central output-cap backstop (#661), FORK-SCOPED — parity with
-    // AnthropicDirectProvider.buildDispatcher. `parentSessionId` is set only for
-    // FORKED children; enabling maxOutputBytes exactly then bounds every tool
-    // result at MODEL_CAP_BYTES (100KB) via headAndTail, containing the overflow
-    // crash class for forks while leaving the top-level session uncapped.
-    if (opts.parentSessionId !== undefined) dispatcherOpts.maxOutputBytes = MODEL_CAP_BYTES;
+    // AnthropicDirectProvider.buildDispatcher. Armed from the explicit
+    // `subagentToolOutputCapBytes` signal that `SubagentManager.forkSubagent`
+    // stamps (as MODEL_CAP_BYTES = 100KB) on EVERY forked child; a value here
+    // means "forked child" ⇒ bound each tool result at that budget via
+    // headAndTail, containing the overflow crash class for forks. The top-level
+    // session is built directly (never via forkSubagent), leaves this unset, and
+    // stays UNCAPPED. Replaces the prior `parentSessionId !== undefined` gate,
+    // which missed skill-forked descendants whose parent carries no sessionId.
+    if (opts.subagentToolOutputCapBytes !== undefined)
+      dispatcherOpts.maxOutputBytes = opts.subagentToolOutputCapBytes;
     if (opts.traceWriter !== undefined) dispatcherOpts.traceWriter = opts.traceWriter;
     // Read-only-skill bash gate — parity with anthropic-direct. Forwarded from
     // the provider's construction-time flag so a read-only skill's forked

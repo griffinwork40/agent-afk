@@ -540,6 +540,31 @@ export interface AgentConfig {
    */
   subagentId?: string;
 
+  /**
+   * Central per-result tool-output byte cap for THIS session's dispatcher, in
+   * UTF-8 bytes (#661). Set UNCONDITIONALLY to {@link
+   * import('../tools/handlers/_output-cap.js').MODEL_CAP_BYTES} by
+   * `SubagentManager.forkSubagent` for EVERY forked child — the single choke
+   * point through which the agent-tool, skill, and compose fork paths all
+   * create their child session — so the provider's `buildDispatcher` can arm
+   * the dispatcher's `maxOutputBytes` backstop declaratively from this value.
+   *
+   * This is the explicit "I am a forked subagent" signal that REPLACES the
+   * prior `parentSessionId !== undefined` heuristic: `parentSessionId` is
+   * undefined for forks whose parent carries no sessionId (a skill-forked
+   * child built with `createStubParentSession`, plus every subagent it in turn
+   * dispatches), so keying the cap on it left those descendants uncapped and
+   * exposed to the tool-output-overflow crash class. Because `forkSubagent` is
+   * the sole path to a child `AgentSession` and the top-level session is
+   * ALWAYS constructed via `new AgentSession(...)` directly at the entry
+   * points (never through `forkSubagent`), a value here means "forked child"
+   * and its absence means "top-level" — so the top-level session is never
+   * capped. Fork-only, like `subagentId`/`depth`/`isNonInteractive` above;
+   * undefined on a top-level session ⇒ dispatcher `maxOutputBytes` unset ⇒ no
+   * central capping (behavior unchanged).
+   */
+  subagentToolOutputCapBytes?: number;
+
   /** Nesting depth assigned at fork (0-indexed). Top-level → undefined. */
   depth?: number;
 
