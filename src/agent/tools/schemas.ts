@@ -265,8 +265,10 @@ export const webScrapeTool: AnthropicToolDef = {
     'you need to FIND a URL, not read one. Provide `query` instead of `url`. ' +
     'Requires `EXA_API_KEY` (free tier at https://exa.ai); ' +
     'the handler returns a clear error if it is unset.\n\n' +
-    'Outputs are capped at `max_bytes` UTF-8 bytes (default 1MB, ceiling 10MB) ' +
-    'and the request is aborted after `timeout_ms` (default 30000, ceiling 120000).',
+    'Outputs are capped at `max_bytes` UTF-8 bytes (default 100KB, ceiling 1MB); ' +
+    'content over the cap is reduced to head+tail with a `… [N bytes truncated: …] …` ' +
+    'marker so both ends survive. The request is aborted after `timeout_ms` ' +
+    '(default 30000, ceiling 120000).',
   input_schema: {
     type: 'object',
     properties: {
@@ -291,8 +293,8 @@ export const webScrapeTool: AnthropicToolDef = {
       max_bytes: {
         type: 'number',
         description:
-          'Maximum UTF-8 bytes returned. Content beyond this is truncated with a marker. ' +
-          'Default 1000000, clamped to 10000000.',
+          'Maximum UTF-8 bytes returned. Content beyond this is reduced to head+tail ' +
+          'with a truncation marker (both ends preserved). Default 100000, clamped to 1000000.',
       },
     },
     required: [],

@@ -13,6 +13,10 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ### Added
 - additive `readRoots` param on the `agent` (subagent-dispatch) tool: grant a forked child READ access to absolute paths outside its repo/worktree (e.g. `~/Downloads`, a scratch dir), composed WITH (never replacing) its inherited read scope — writes stay confined, grandchildren must be re-granted. Hardened at parse time (rejects filesystem roots, the home dir / its ancestors, and read-denylisted credential paths — evaluated on symlink-resolved targets, so a symlink to a broad dir can't slip past the lexical check) and, unlike `writeRoots`, permitted alongside `isolation:"worktree"`. Flows through the distinct `AgentConfig.extraReadRoots` field so the `afk farm` read-scope pin is untouched. (#662)
+## [5.59.3] - 2026-07-21
+
+### Fixed
+- bound web_scrape + tool output to prevent subagent context overflow (#663) (4556645)
 
 ## [5.59.2] - 2026-07-19
 

@@ -41,6 +41,7 @@ import { getAfkStateDir } from '../paths.js';
 import path from 'path';
 import { env } from '../config/env.js';
 import { buildPhaseRestrictedProvider, type PhaseRole } from './tools/nesting.js';
+import { MODEL_CAP_BYTES } from './tools/handlers/_output-cap.js';
 import { applyManagerApiKeyFallback } from './tools/child-credential.js';
 import { providerForModel, type BundledProviderName } from './providers/index.js';
 import {
@@ -708,6 +709,23 @@ export class SubagentManager {
       // trace file, so without this tag the parent trace cannot say which fork
       // ran which tool (issue #612).
       subagentId: id,
+      // Central output-cap signal (#661), stamped UNCONDITIONALLY on EVERY
+      // fork. forkSubagent is the single choke point through which the
+      // agent-tool, skill, and compose paths all create their child session
+      // (subagent-executor.ts, skill-executor/fork-dispatch.ts, and
+      // dag-subagent.ts all converge here), and the top-level session is always
+      // built via `new AgentSession(...)` directly at the entry points — never
+      // here — so this value marks "forked child" and its absence marks
+      // "top-level". The provider's buildDispatcher arms the dispatcher's
+      // `maxOutputBytes` backstop from this field, bounding every tool result
+      // at MODEL_CAP_BYTES (100KB) via headAndTail and containing the
+      // tool-output-overflow crash class (#661) for ALL forks — including
+      // skill-forked descendants whose `parentSessionId` is undefined (a stub
+      // parent carries no sessionId), which the prior `parentSessionId`-keyed
+      // gate left uncapped. Set here (not left to the `...options.config`
+      // spread) so it cannot be omitted by any fork path; a caller override is
+      // intentionally NOT honored — the cap is a non-negotiable fork backstop.
+      subagentToolOutputCapBytes: MODEL_CAP_BYTES,
       abortSignal: childController.signal,
       // Invariant (cross-provider credential anti-leak): the parent-credential
       // fallback below must never hand a credential across the provider
