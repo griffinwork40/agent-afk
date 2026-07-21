@@ -42,9 +42,11 @@ import type {
   ProviderMcpServerStatus,
   ProviderModelInfo,
   ProviderQuery,
+  ProviderRewindConversationResult,
   ProviderRewindResult,
   ProviderSessionInfo,
   ProviderUserTurn,
+  RewindTarget,
 } from '../../provider.js';
 import { buildRequestHeaders } from './auth.js';
 import {
@@ -70,6 +72,7 @@ import { type SessionState, createSessionState } from './query/session-state.js'
 import { AbortCoordinator } from './query/abort-coordinator.js';
 import { RetryLayer } from './query/retry-layer.js';
 import { compactHistory } from './query/compact-handler.js';
+import { listUserTurns, rewindConversationHistory } from './query/rewind-conversation.js';
 import { contextWindowTokensUsed, shouldAutoCompact, buildContextUsageFields } from './query/auto-compact.js';
 import type { HookRegistry } from '../../hooks.js';
 import { HookBlockedError } from '../../../utils/errors.js';
@@ -822,6 +825,28 @@ export class AnthropicDirectQuery implements ProviderQuery {
       initSessionId: this.initSessionId,
       ...(this.traceWriter ? { traceWriter: this.traceWriter } : {}),
     });
+  }
+
+  /**
+   * Enumerate genuine user-text turns (newest-first) for the rewind picker.
+   * See `query/rewind-conversation.ts`.
+   */
+  listRewindTargets(): RewindTarget[] {
+    return listUserTurns(this.state.messages);
+  }
+
+  /**
+   * Discard a chosen user turn and everything after it, returning the removed
+   * message's text for reload-and-edit. In-place, idle-guarded (same interlock
+   * as {@link compact}). See `query/rewind-conversation.ts`.
+   */
+  async rewindConversation(
+    turnIndex: number,
+  ): Promise<ProviderRewindConversationResult> {
+    return rewindConversationHistory(
+      { state: this.state, abort: this.abort },
+      turnIndex,
+    );
   }
 
   close(): void {

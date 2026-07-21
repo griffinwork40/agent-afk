@@ -24,7 +24,12 @@ import type {
   SendMessageOptions,
   StructuredMessageOptions,
 } from './message-types.js';
-import type { ProviderCompactResult, ProviderQuery } from '../provider.js';
+import type {
+  ProviderCompactResult,
+  ProviderQuery,
+  ProviderRewindConversationResult,
+  RewindTarget,
+} from '../provider.js';
 import type { HookRegistry } from '../hooks.js';
 import type { ZodType } from 'zod';
 
@@ -294,6 +299,22 @@ export interface IAgentSession {
    * 'not-supported' }` instead of throwing.
    */
   compact(): Promise<ProviderCompactResult>;
+
+  /**
+   * Enumerate the genuine user-text turns for the "edit a previous message"
+   * rewind picker, newest-first. Empty when the provider manages history
+   * opaquely (no rewind support).
+   */
+  listRewindTargets(): RewindTarget[];
+
+  /**
+   * Rewind the conversation to a `turnIndex` from {@link listRewindTargets}:
+   * discard that user turn and everything after it, returning the removed
+   * message's text as `reloadText` for reload-and-edit. `rewound: false`
+   * (with a `reason`) on any no-op — session busy, invalid target, or a
+   * provider without rewind support.
+   */
+  rewindConversation(turnIndex: number): Promise<ProviderRewindConversationResult>;
 
   close(): Promise<void>;
 }

@@ -54,7 +54,9 @@ import type {
   ProviderMcpServerStatus,
   ProviderAccountInfo,
   ProviderRewindResult,
+  ProviderRewindConversationResult,
   ProviderCompactResult,
+  RewindTarget,
 } from '../../provider.js';
 import type { AgentConfig, ResumeHistoryTurn } from '../../types/config-types.js';
 import { QueryInputStream } from '../../session/input-iterable.js';
@@ -435,6 +437,23 @@ export class ProviderRouter implements ProviderQuery {
     return {
       compacted: false,
       reason: 'provider does not support compaction',
+      messagesBefore: 0,
+      messagesAfter: 0,
+    };
+  }
+
+  listRewindTargets(): RewindTarget[] {
+    return this.active?.query.listRewindTargets?.() ?? [];
+  }
+
+  async rewindConversation(
+    turnIndex: number,
+  ): Promise<ProviderRewindConversationResult> {
+    const a = this.active;
+    if (a?.query.rewindConversation) return a.query.rewindConversation(turnIndex);
+    return {
+      rewound: false,
+      reason: 'not-supported',
       messagesBefore: 0,
       messagesAfter: 0,
     };

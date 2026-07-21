@@ -159,6 +159,12 @@ export async function runInputLoop(
       ? { text: ctx.initialInput, attachments: [] }
       : undefined;
 
+  // Rewind reload-for-edit: `/rewind` (or double-Esc) returns
+  // `{ kind: 'prefill', message }` — the discarded message's text. Unlike
+  // `seedBuffer` (auto-submit), this pre-fills the NEXT readLine's editable
+  // input buffer so the user edits and presses Enter to resend. Consumed once.
+  let prefillBuffer: string | undefined;
+
   // First-use notice for ! shell passthrough: shown once per session on the
   // first `!cmd` dispatch so users who relied on `!literal text` as model
   // input are informed of the behavior change and the opt-out flag.
@@ -315,8 +321,12 @@ export async function runInputLoop(
         // onSubmit path when armed (TTY); falls back to readWithAutocomplete
         // on non-TTY surfaces. Shift+Tab and onSigint are wired ONCE at
         // armCompositor time (above) — no need to re-pass per-call.
+        // Consume a one-shot rewind prefill (editable, not auto-submitted).
+        const initialBuffer = prefillBuffer;
+        prefillBuffer = undefined;
         const result = await surface.readLine({
           promptFn: () => buildPrompt(ctx.stats.permissionMode),
+          ...(initialBuffer !== undefined ? { initialBuffer } : {}),
           onSigint: sigintHandler,
           onShiftTab: () => {
             // Shift+Tab is the keyboard speed lane: it advances the permission-
@@ -401,6 +411,18 @@ export async function runInputLoop(
             res.result.kind === 'submit'
           ) {
             seedBuffer = { text: res.result.message, attachments: attachments ?? [] };
+            ctx.statusLine.rearm();
+            continue;
+          }
+          if (
+            res.result !== null &&
+            typeof res.result === 'object' &&
+            'kind' in res.result &&
+            res.result.kind === 'prefill'
+          ) {
+            // Rewind: load the discarded message's text into the next prompt,
+            // editable. No auto-submit — the user edits and presses Enter.
+            prefillBuffer = res.result.message;
             ctx.statusLine.rearm();
             continue;
           }
