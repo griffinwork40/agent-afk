@@ -283,31 +283,77 @@ describe('web_scrape handler — search mode (Exa)', () => {
 });
 
 describe('web_scrape handler — truncation', () => {
-  it('truncates body exceeding max_bytes and appends a marker (raw mode)', async () => {
+  // The shared headAndTail primitive emits `… [N bytes truncated: …] …` and
+  // keeps BOTH ends, so truncation is asserted via the marker + the fact that
+  // the head is preserved (not a trailing-only slice).
+  const TRUNC_MARKER = /… \[\d+ bytes truncated: showing first \d+ \+ last \d+ of \d+\] …/;
+
+  it('truncates body exceeding max_bytes to head+tail with a marker and truncated:true (raw mode)', async () => {
     const big = 'x'.repeat(5000);
     const fetchFn = makeFetch(() => makeResponse({ body: big }));
     const handler = createWebScrapeHandler({ fetchFn, env: {} });
-    const r = await handler({ mode: 'raw', url: 'https://example.com', max_bytes: 100 }, signal());
+    // 500 > the marker's ~160-byte reserve, so head AND tail are non-empty and
+    // head-preservation is observable (a cap below the reserve degenerates to
+    // marker-only, which is a headAndTail edge case, not what we assert here).
+    const r = await handler({ mode: 'raw', url: 'https://example.com', max_bytes: 500 }, signal());
     expect(r.isError).toBeUndefined();
-    expect(r.content).toMatch(/\[…truncated by agent-afk web_scrape\]$/);
-    expect(r.content.startsWith('x'.repeat(100))).toBe(true);
+    expect(r.content).toMatch(TRUNC_MARKER);
+    expect(r.truncated).toBe(true);
+    // Output is bounded by max_bytes (marker reserve makes it slightly under).
+    expect(Buffer.byteLength(r.content, 'utf8')).toBeLessThanOrEqual(500);
+    // Head is preserved (starts with the original leading bytes) — head+tail,
+    // not a tail-only slice.
+    expect(r.content.startsWith('x')).toBe(true);
   });
 
-  it('does NOT truncate body smaller than max_bytes', async () => {
+  it('does NOT truncate body smaller than max_bytes (no marker, no truncated flag)', async () => {
     const small = 'hello world';
     const fetchFn = makeFetch(() => makeResponse({ body: small }));
     const handler = createWebScrapeHandler({ fetchFn, env: {} });
     const r = await handler({ mode: 'raw', url: 'https://example.com', max_bytes: 1000 }, signal());
     expect(r.content).toBe(small);
+    expect(r.truncated).toBeUndefined();
   });
 
-  it('handles multi-byte UTF-8 cleanly (no garbage at the cut point)', async () => {
-    const body = '🎉'.repeat(10);
+  it('handles multi-byte UTF-8 cleanly (no garbage at the cut points)', async () => {
+    const body = '🎉'.repeat(200); // 800 bytes; cut at 200 keeps head+tail of whole emoji
     const fetchFn = makeFetch(() => makeResponse({ body }));
     const handler = createWebScrapeHandler({ fetchFn, env: {} });
-    const r = await handler({ mode: 'raw', url: 'https://example.com', max_bytes: 6 }, signal());
+    const r = await handler({ mode: 'raw', url: 'https://example.com', max_bytes: 200 }, signal());
+    // Head begins on a code-point boundary and the tail ends on one — no U+FFFD.
     expect(r.content.startsWith('🎉')).toBe(true);
-    expect(r.content).toMatch(/\[…truncated by agent-afk web_scrape\]$/);
+    expect(r.content.endsWith('🎉')).toBe(true);
+    expect(r.content).not.toContain('\uFFFD');
+    expect(r.content).toMatch(TRUNC_MARKER);
+    expect(r.truncated).toBe(true);
+  });
+
+  it('truncates a body larger than the DEFAULT max_bytes to <= default with a marker and truncated:true', async () => {
+    // No explicit max_bytes → the 100KB default applies. A 150KB body must be
+    // reduced below the default so a default web_scrape can never overflow a
+    // (sub)agent context window (issue #661).
+    const big = 'y'.repeat(150_000);
+    const fetchFn = makeFetch(() => makeResponse({ body: big }));
+    const handler = createWebScrapeHandler({ fetchFn, env: {} });
+    const r = await handler({ mode: 'raw', url: 'https://example.com' }, signal());
+    expect(r.isError).toBeUndefined();
+    expect(r.truncated).toBe(true);
+    expect(r.content).toMatch(TRUNC_MARKER);
+    expect(Buffer.byteLength(r.content, 'utf8')).toBeLessThanOrEqual(100_000);
+  });
+
+  it('clamps an explicit max_bytes above the 1MB ceiling down to 1MB', async () => {
+    // Request 5MB (above the 1MB hard ceiling). A ~2MB body must therefore be
+    // truncated to <= 1MB rather than passed through — this is the exact class
+    // of caller-raised cap that let a 4MB body crash a child before #661.
+    const twoMb = 'z'.repeat(2_000_000);
+    const fetchFn = makeFetch(() => makeResponse({ body: twoMb }));
+    const handler = createWebScrapeHandler({ fetchFn, env: {} });
+    const r = await handler({ mode: 'raw', url: 'https://example.com', max_bytes: 5_000_000 }, signal());
+    expect(r.isError).toBeUndefined();
+    expect(r.truncated).toBe(true);
+    expect(r.content).toMatch(TRUNC_MARKER);
+    expect(Buffer.byteLength(r.content, 'utf8')).toBeLessThanOrEqual(1_000_000);
   });
 });
 

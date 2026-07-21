@@ -34,6 +34,7 @@ import { scrapeToMarkdown } from '../../../web/scrape.js';
 import { resolveSearchBackend, formatSearchResults } from '../../../web/search.js';
 import { retryFetch } from '../../../web/retryFetch.js';
 import type { RenderFn } from '../../../web/types.js';
+import { headAndTail } from './_output-cap.js';
 
 // External constraint: Node 20+ ships `fetch` as a global. Older runtimes
 // would throw before reaching this handler because tsconfig targets >=20.
@@ -41,9 +42,16 @@ type FetchFn = typeof fetch;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 120_000;
-const DEFAULT_MAX_BYTES = 1_000_000; // 1 MB
-const MAX_MAX_BYTES = 10_000_000; // 10 MB hard ceiling
-const TRUNC_MARKER = '\n\n[…truncated by agent-afk web_scrape]';
+// Default model-facing byte budget (100KB). Aligned with MODEL_CAP_BYTES so a
+// default web_scrape can never overflow a (sub)agent context window the way a
+// 1MB body could (~286K tokens > 200K/1M limits — see issue #661). `max_bytes`
+// remains a real, caller-overridable knob within the ceiling below.
+const DEFAULT_MAX_BYTES = 100_000; // 100 KB
+// Hard ceiling on any caller-supplied `max_bytes` (1MB). A caller that raised
+// this toward the old 10MB ceiling let a ~4MB body through, translating to
+// >1M tokens and crashing the child (#661); 1MB caps the worst case well under
+// even the smallest context window.
+const MAX_MAX_BYTES = 1_000_000; // 1 MB hard ceiling
 const DEFAULT_SEARCH_LIMIT = 10;
 
 // Hints in a thrown error message that mean the optional Playwright peer dep
@@ -132,14 +140,20 @@ function parseInput(raw: unknown): ParsedInput | { error: string } {
   return { mode, url, query, timeoutMs, maxBytes };
 }
 
-function truncateUtf8(body: string, maxBytes: number): string {
-  // External constraint: maxBytes is a UTF-8 byte ceiling, but `.subarray()`
-  // can split a multi-byte sequence. Convert to Buffer, slice, decode with
-  // 'utf8' which replaces a partial trailing code point with U+FFFD rather
-  // than emitting garbage.
-  const buf = Buffer.from(body, 'utf8');
-  if (buf.byteLength <= maxBytes) return body;
-  return buf.subarray(0, maxBytes).toString('utf8') + TRUNC_MARKER;
+/**
+ * Cap `body` to at most `maxBytes` UTF-8 bytes for model consumption via the
+ * shared {@link headAndTail} primitive (keeps head+tail with an explicit
+ * `… [N bytes truncated: …] …` marker, UTF-8 safe at both cut points). Returns
+ * the capped content plus a `truncated` flag the caller plumbs onto
+ * `ToolResult.truncated` — the structured signal non-model consumers read
+ * instead of substring-scanning `content`. Idempotent: content already within
+ * budget is returned byte-for-byte unchanged with `truncated: false`.
+ */
+function capBody(body: string, maxBytes: number): { content: string; truncated: boolean } {
+  if (Buffer.byteLength(body, 'utf8') <= maxBytes) {
+    return { content: body, truncated: false };
+  }
+  return { content: headAndTail(body, maxBytes), truncated: true };
 }
 
 /** Did this error (or its cause chain) signal a missing Playwright install? */
@@ -236,7 +250,8 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
             isError: true,
           };
         }
-        return { content: truncateUtf8(body, parsed.maxBytes) };
+        const capped = capBody(body, parsed.maxBytes);
+        return { content: capped.content, ...(capped.truncated ? { truncated: true } : {}) };
       }
 
       // ---- markdown mode: fetch-first scrape + render escalation ------------
@@ -254,7 +269,8 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
               isError: true,
             };
           }
-          return { content: truncateUtf8(result.markdown, parsed.maxBytes) };
+          const capped = capBody(result.markdown, parsed.maxBytes);
+          return { content: capped.content, ...(capped.truncated ? { truncated: true } : {}) };
         } catch (err) {
           if (ac.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
           const base = err instanceof Error ? err.message : String(err);
@@ -279,7 +295,8 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
           timeoutMs: parsed.timeoutMs,
           signal: ac.signal,
         });
-        return { content: truncateUtf8(formatSearchResults(parsed.query!, results), parsed.maxBytes) };
+        const capped = capBody(formatSearchResults(parsed.query!, results), parsed.maxBytes);
+        return { content: capped.content, ...(capped.truncated ? { truncated: true } : {}) };
       } catch (err) {
         if (ac.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
         return {
