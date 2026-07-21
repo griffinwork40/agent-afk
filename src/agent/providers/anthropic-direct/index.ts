@@ -53,6 +53,7 @@ import type { ToolDispatcher } from './tool-dispatcher.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
 import { PathGrantManager } from '../../tools/grant-manager.js';
 import { createBuiltinHandlers } from '../../tools/handlers/index.js';
+import { MODEL_CAP_BYTES } from '../../tools/handlers/_output-cap.js';
 import {
   exitPlanModeTool,
   createExitPlanModeHandler,
@@ -485,6 +486,14 @@ export class AnthropicDirectProvider implements ModelProvider {
       ...(opts?.env !== undefined ? { env: opts.env } : {}),
       sessionId: opts?.sessionId,
       parentSessionId: opts?.parentSessionId,
+      // Central output-cap backstop (#661), FORK-SCOPED. A forked child is the
+      // only session that carries a `parentSessionId`; the top-level session
+      // leaves it undefined. Enabling the cap exactly when parentSessionId is
+      // set means every FORKED child bounds each tool result at MODEL_CAP_BYTES
+      // (100KB) via headAndTail — containing the whole overflow crash class
+      // (MCP dumps, browser output, read_file of a huge file) for the actual
+      // victims — while the top-level session's behavior is UNCHANGED (no cap).
+      ...(opts?.parentSessionId !== undefined ? { maxOutputBytes: MODEL_CAP_BYTES } : {}),
       ...(opts?.traceWriter ? { traceWriter: opts.traceWriter } : {}),
       // Read-only-skill bash gate: forwarded from the provider's stored flag
       // (set by createChildProviderFactory / buildReadOnlyReconProvider) so a

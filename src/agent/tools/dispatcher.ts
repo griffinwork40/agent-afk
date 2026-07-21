@@ -25,6 +25,7 @@ import type { ToolHandler, ToolHandlerContext, ConcurrencyClassifier } from './t
 import { checkToolPermission, type ToolPermissionConfig } from './permissions.js';
 import type { CanUseTool, PermissionResult } from '../types/sdk-types.js';
 import { classifyBashCommand } from './readonly-bash.js';
+import { headAndTail } from './handlers/_output-cap.js';
 import { PathGrantManager, type GrantSnapshot } from './grant-manager.js';
 import type { GrantManager } from '../../cli/slash/commands/allow-dir.js';
 import { emitHookDecision } from '../trace/emit.js';
@@ -179,6 +180,24 @@ export interface SessionToolDispatcherOptions {
    * Defaults to false.
    */
   readOnlyBash?: boolean;
+  /**
+   * Central per-result output cap, in UTF-8 bytes. When set, `executeCore`
+   * reduces any tool result whose `content` exceeds this to head+tail via
+   * {@link headAndTail} (and stamps `truncated: true`) as the FINAL step before
+   * returning — a crash-class backstop that bounds EVERY tool's output (MCP
+   * bridges, browser dumps, read_file of a huge file, …), not just the ones
+   * that self-cap. Idempotent: content already within budget (e.g. web_scrape
+   * already capped it) is returned unchanged, so there is no double-truncation.
+   * Never touches `result.image`.
+   *
+   * Fork-scoped by design: the SubagentManager/provider path sets this to
+   * {@link import('./handlers/_output-cap.js').MODEL_CAP_BYTES} for FORKED
+   * children only (keyed on `parentSessionId`). The TOP-LEVEL session leaves it
+   * `undefined` ⇒ no central capping ⇒ behavior unchanged. Because a forked
+   * child that overflows its context window crashes the whole turn (issue #661),
+   * containing the class at the child dispatcher is the narrow, high-value fix.
+   */
+  maxOutputBytes?: number;
 }
 
 export class SessionToolDispatcher implements ToolDispatcher {
@@ -227,6 +246,13 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly traceWriter: TraceWriter | undefined;
   /** When true, mutating `bash` commands are blocked (read-only skill child). */
   private readonly readOnlyBash: boolean;
+  /**
+   * Central per-result output byte cap (see
+   * {@link SessionToolDispatcherOptions.maxOutputBytes}). `undefined` ⇒ no
+   * central capping (top-level default). Set to MODEL_CAP_BYTES for forked
+   * children so the whole tool-output-overflow crash class is contained (#661).
+   */
+  private readonly maxOutputBytes: number | undefined;
   /**
    * Repeat-loop circuit breaker state. The dispatcher is built per `query()`,
    * so this naturally tracks CONSECUTIVE byte-identical calls within a single
@@ -278,6 +304,15 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this.sessionGrantManager = opts.sessionGrantManager;
     this.traceWriter = opts.traceWriter;
     this.readOnlyBash = opts.readOnlyBash === true;
+    // Central output cap: only a positive finite number arms the backstop; any
+    // other value (undefined, 0, negative, NaN) leaves it off — matching the
+    // top-level default of "no central capping".
+    this.maxOutputBytes =
+      typeof opts.maxOutputBytes === 'number' &&
+      Number.isFinite(opts.maxOutputBytes) &&
+      opts.maxOutputBytes > 0
+        ? opts.maxOutputBytes
+        : undefined;
     this._allowAll = opts.allowAll === true;
 
     // When caller passes arrays by reference (provider sharing pattern), use
@@ -940,11 +975,54 @@ export class SessionToolDispatcher implements ToolDispatcher {
   }
 
   /**
-   * Core execution: agent routing + handler dispatch + PostToolUse hook.
-   * Shared by both `execute()` (single-tool path) and `executeBatch()`
-   * (after pre-hooks and permissions are already handled).
+   * Core execution + central output-cap backstop. The single result path both
+   * `execute()` and `executeBatch()` call per tool, so applying the cap here
+   * (after {@link executeCoreInner} has run the handler AND fired PostToolUse)
+   * bounds EVERY tool result exactly once, regardless of which entry path
+   * dispatched it. See {@link SessionToolDispatcherOptions.maxOutputBytes}.
+   *
+   * Ordering rationale: the cap is applied AFTER `executeCoreInner` returns —
+   * i.e. after PostToolUse has already observed the full, uncapped `content`
+   * (fired fire-and-forget inside the inner method). Hooks and the model see
+   * consistent truncation: the model-facing `content` is the capped view, and
+   * `truncated: true` is the structured signal for non-model consumers.
    */
   private async executeCore(call: ToolCall): Promise<ToolResult> {
+    const result = await this.executeCoreInner(call);
+    return this.applyOutputCap(result);
+  }
+
+  /**
+   * Reduce `result.content` to head+tail when a central `maxOutputBytes` cap is
+   * armed AND the content exceeds it; otherwise return the result untouched.
+   *
+   * - No-op when `this.maxOutputBytes` is undefined (top-level default) or the
+   *   content already fits — {@link headAndTail} itself returns short input
+   *   byte-for-byte, so this is idempotent and never double-truncates content a
+   *   handler (e.g. web_scrape) already capped.
+   * - NEVER touches `result.image`: the cap governs the text budget only; an
+   *   attached screenshot rides through unchanged.
+   * - Mutates and returns the same object (results are freshly constructed per
+   *   call, never shared), setting `truncated: true` — the same structured flag
+   *   bash/web_scrape set — so trace/hook consumers need not scan `content`.
+   */
+  private applyOutputCap(result: ToolResult): ToolResult {
+    const cap = this.maxOutputBytes;
+    if (cap === undefined) return result;
+    if (Buffer.byteLength(result.content, 'utf8') <= cap) return result;
+    result.content = headAndTail(result.content, cap);
+    result.truncated = true;
+    return result;
+  }
+
+  /**
+   * Core execution: agent routing + handler dispatch + PostToolUse hook.
+   * Shared by both `execute()` (single-tool path) and `executeBatch()`
+   * (after pre-hooks and permissions are already handled). Wrapped by
+   * {@link executeCore}, which applies the central output-cap backstop to
+   * whatever result this returns.
+   */
+  private async executeCoreInner(call: ToolCall): Promise<ToolResult> {
     // Agent tool — provider-level dispatch
     if (call.name === 'agent') {
       if (!this.subagentExecutor) {

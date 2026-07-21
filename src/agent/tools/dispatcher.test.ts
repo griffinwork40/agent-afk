@@ -1618,3 +1618,107 @@ describe('SessionToolDispatcher — canUseTool (Dim 8 in-process permission poli
     expect(writer.events.filter((e) => e.kind === 'hook_decision')).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// maxOutputBytes — central fork-scoped output-cap backstop (#661)
+//
+// A forked child's dispatcher is constructed with maxOutputBytes set (to
+// MODEL_CAP_BYTES) so EVERY tool result — MCP bridges, browser dumps,
+// read_file of a huge file — is bounded before it re-enters the child's
+// context, containing the whole overflow crash class. The top-level session
+// leaves maxOutputBytes undefined ⇒ no central capping ⇒ behavior unchanged.
+// ---------------------------------------------------------------------------
+
+describe('SessionToolDispatcher — maxOutputBytes central output cap (#661)', () => {
+  const TRUNC_MARKER = /… \[\d+ bytes truncated: showing first \d+ \+ last \d+ of \d+\] …/;
+
+  /** A handler that returns `content` of a caller-chosen size. */
+  function bigContentHandler(bytes: number): ToolHandler {
+    return async () => ({ content: 'A'.repeat(bytes) });
+  }
+
+  function makeCapDispatcher(
+    handler: ToolHandler,
+    maxOutputBytes: number | undefined,
+  ): SessionToolDispatcher {
+    return new SessionToolDispatcher({
+      handlers: new Map([['big', handler]]),
+      schemas: [],
+      permissions: { allowedTools: ['big'] },
+      ...(maxOutputBytes !== undefined ? { maxOutputBytes } : {}),
+    });
+  }
+
+  it('truncates an over-budget tool result and sets truncated:true when maxOutputBytes is set', async () => {
+    const d = makeCapDispatcher(bigContentHandler(5000), 500);
+    const r = await d.execute(makeCall({ name: 'big', input: {} }));
+    expect(r.isError).toBeUndefined();
+    expect(r.truncated).toBe(true);
+    expect(r.content).toMatch(TRUNC_MARKER);
+    // Output bounded by the cap (marker reserve makes it slightly under).
+    expect(Buffer.byteLength(r.content, 'utf8')).toBeLessThanOrEqual(500);
+    // Head is preserved (head+tail, not a tail-only slice).
+    expect(r.content.startsWith('A')).toBe(true);
+  });
+
+  it('leaves content untouched (no truncated flag) when maxOutputBytes is undefined', async () => {
+    const original = 'A'.repeat(5000);
+    const d = makeCapDispatcher(bigContentHandler(5000), undefined);
+    const r = await d.execute(makeCall({ name: 'big', input: {} }));
+    expect(r.content).toBe(original);
+    expect(r.content).not.toMatch(TRUNC_MARKER);
+    expect(r.truncated).toBeUndefined();
+  });
+
+  it('does NOT truncate content already within the cap (idempotent, no double-truncation)', async () => {
+    const small = 'A'.repeat(50);
+    const d = makeCapDispatcher(bigContentHandler(50), 500);
+    const r = await d.execute(makeCall({ name: 'big', input: {} }));
+    expect(r.content).toBe(small);
+    expect(r.truncated).toBeUndefined();
+  });
+
+  it('preserves result.image while capping the text content', async () => {
+    const withImage: ToolHandler = async () => ({
+      content: 'A'.repeat(5000),
+      image: { mediaType: 'image/png' as const, data: 'BASE64DATA' },
+    });
+    const d = makeCapDispatcher(withImage, 500);
+    const r = await d.execute(makeCall({ name: 'big', input: {} }));
+    expect(r.truncated).toBe(true);
+    expect(r.content).toMatch(TRUNC_MARKER);
+    // The screenshot rides through untouched — the cap governs text only.
+    expect(r.image).toEqual({ mediaType: 'image/png', data: 'BASE64DATA' });
+  });
+
+  it('caps over-budget results dispatched through executeBatch too (shared executeCore path)', async () => {
+    // Two safe calls in one batch → executeBatch → executeCore per call, so the
+    // cap must apply on the batched path exactly as on the single-call path.
+    const d = new SessionToolDispatcher({
+      handlers: new Map([['big', bigContentHandler(5000)]]),
+      schemas: [{ name: 'big', input_schema: { type: 'object' }, concurrencySafe: true }],
+      permissions: { allowedTools: ['big'] },
+      maxOutputBytes: 500,
+    });
+    const results = await d.executeBatch([
+      makeCall({ id: 'a', name: 'big', input: {} }),
+      makeCall({ id: 'b', name: 'big', input: {} }),
+    ]);
+    expect(results).toHaveLength(2);
+    for (const r of results) {
+      expect(r.truncated).toBe(true);
+      expect(r.content).toMatch(TRUNC_MARKER);
+      expect(Buffer.byteLength(r.content, 'utf8')).toBeLessThanOrEqual(500);
+    }
+  });
+
+  it('ignores non-positive / non-finite maxOutputBytes (cap stays off)', async () => {
+    const original = 'A'.repeat(5000);
+    for (const bad of [0, -100, Number.NaN]) {
+      const d = makeCapDispatcher(bigContentHandler(5000), bad);
+      const r = await d.execute(makeCall({ name: 'big', input: {} }));
+      expect(r.content).toBe(original);
+      expect(r.truncated).toBeUndefined();
+    }
+  });
+});
