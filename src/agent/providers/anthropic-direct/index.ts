@@ -343,6 +343,13 @@ export class AnthropicDirectProvider implements ModelProvider {
       env?: Record<string, string>;
       sessionId?: string;
       parentSessionId?: string;
+      /**
+       * Explicit "this session is a forked subagent" signal carrying the
+       * per-result output-cap budget (#661). Set to MODEL_CAP_BYTES by
+       * `SubagentManager.forkSubagent` for EVERY fork; undefined on a top-level
+       * session. Arms the dispatcher's `maxOutputBytes` backstop declaratively.
+       */
+      subagentToolOutputCapBytes?: number;
       traceWriter?: TraceWriter;
       /**
        * Live source for the `get_runtime_state` tool. Constructed per-query
@@ -485,6 +492,21 @@ export class AnthropicDirectProvider implements ModelProvider {
       ...(opts?.env !== undefined ? { env: opts.env } : {}),
       sessionId: opts?.sessionId,
       parentSessionId: opts?.parentSessionId,
+      // Central output-cap backstop (#661), FORK-SCOPED. Armed from the
+      // explicit `subagentToolOutputCapBytes` signal that
+      // `SubagentManager.forkSubagent` stamps (as MODEL_CAP_BYTES = 100KB) on
+      // EVERY forked child — the single choke point for the agent-tool, skill,
+      // and compose fork paths. A value here means "forked child" ⇒ bound each
+      // tool result at that budget via headAndTail, containing the whole
+      // overflow crash class (MCP dumps, browser output, read_file of a huge
+      // file). The top-level session is built directly (never via forkSubagent),
+      // leaves this unset, and is therefore UNCAPPED (behavior unchanged). This
+      // replaces the prior `parentSessionId !== undefined` gate, which missed
+      // skill-forked descendants whose parent carries no sessionId (a stub
+      // parent) and were left silently exposed.
+      ...(opts?.subagentToolOutputCapBytes !== undefined
+        ? { maxOutputBytes: opts.subagentToolOutputCapBytes }
+        : {}),
       ...(opts?.traceWriter ? { traceWriter: opts.traceWriter } : {}),
       // Read-only-skill bash gate: forwarded from the provider's stored flag
       // (set by createChildProviderFactory / buildReadOnlyReconProvider) so a
@@ -726,6 +748,12 @@ export class AnthropicDirectProvider implements ModelProvider {
           ...(config.env !== undefined ? { env: config.env } : {}),
           sessionId: config.sessionId,
           parentSessionId: config.parentSessionId,
+          // Fork-scoped central output cap (#661): forwarded from the child
+          // config that forkSubagent stamped, arming maxOutputBytes for forks
+          // only (top-level leaves it unset).
+          ...(config.subagentToolOutputCapBytes !== undefined
+            ? { subagentToolOutputCapBytes: config.subagentToolOutputCapBytes }
+            : {}),
           traceWriter: config.traceWriter,
           runtimeStateSource,
           hookRegistry: config.hookRegistry,
