@@ -14,6 +14,7 @@
 import { describe, expect, it } from 'vitest';
 import os from 'node:os';
 import path from 'node:path';
+import fs from 'node:fs';
 import { parseAgentInput, type AgentInput } from './input-parse.js';
 
 describe('parseAgentInput', () => {
@@ -492,6 +493,54 @@ describe('parseAgentInput', () => {
       expect(() => parseAgentInput({ prompt: 'p', readRoots: [parentOfHome] })).toThrow(
         /must not be a filesystem root, your home directory, or an ancestor/,
       );
+    });
+
+    // --- Hardening: breadth rejection resolves symlinks (#664 Codex P1) ---
+    // The lexical breadth check alone is bypassable: a symlink whose target is
+    // `/` or the home dir is not itself broad, but the containment layer
+    // realpaths granted roots, so it becomes a broad real root at read time.
+    // The breadth check must therefore run on the symlink-resolved target too.
+    it('throws when an entry is a symlink pointing at the filesystem root (#664)', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rr-sym-'));
+      const link = path.join(dir, 'broad-link');
+      const fsRoot = path.parse(dir).root || path.sep;
+      try {
+        fs.symlinkSync(fsRoot, link, 'dir');
+        expect(() => parseAgentInput({ prompt: 'p', readRoots: [link] })).toThrow(
+          /must not be a filesystem root, your home directory, or an ancestor/,
+        );
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('throws when an entry is a symlink pointing at the home directory (#664)', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rr-sym-'));
+      const link = path.join(dir, 'home-link');
+      try {
+        fs.symlinkSync(os.homedir(), link, 'dir');
+        expect(() => parseAgentInput({ prompt: 'p', readRoots: [link] })).toThrow(
+          /must not be a filesystem root, your home directory, or an ancestor/,
+        );
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('accepts an entry that is a symlink pointing at a safe (non-broad) subdirectory', () => {
+      // The symlink pass must not OVER-reject: a link to an ordinary subdir is a
+      // legitimate grant and its stored value stays the original entry.
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rr-sym-'));
+      const target = path.join(dir, 'data');
+      const link = path.join(dir, 'data-link');
+      try {
+        fs.mkdirSync(target);
+        fs.symlinkSync(target, link, 'dir');
+        const result = parseAgentInput({ prompt: 'p', readRoots: [link] });
+        expect(result.readRoots).toEqual([link]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     // --- Hardening: denylist rejection ---

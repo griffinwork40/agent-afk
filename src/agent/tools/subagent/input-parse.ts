@@ -11,6 +11,7 @@
 import { isAbsolute, parse as parsePath, resolve as resolvePath, relative as relativePath } from 'node:path';
 import { homedir } from 'node:os';
 import { isReadDenied } from '../handlers/read-denylist.js';
+import { realpathSafe } from '../handlers/_cwd-utils.js';
 
 export type AgentExecutionMode = 'foreground' | 'background';
 
@@ -285,6 +286,10 @@ export function parseAgentInput(input: unknown): AgentInput {
   // cannot over-grant or shadow the credential floor:
   //   (a) BREADTH — reject a filesystem root, os.homedir(), or an ANCESTOR of
   //       homedir (homedir inside the entry). Blocks `/`, `~`, `/Users`, `/home`.
+  //       Checked on BOTH the lexical path AND its symlink-resolved target: the
+  //       containment layer realpaths granted roots (realpathRoot, _cwd-utils),
+  //       so a symlink to `/`/home would otherwise pass a lexical-only check and
+  //       become a broad real root at read time (#664 Codex P1).
   //   (b) DENYLIST — reject any entry that resolves into the read-denylist
   //       (isReadDenied: ~/.ssh, ~/.afk/config, …). isReadDenied is a pure,
   //       string/realpath-based, non-throwing check (safeRealpath swallows fs
@@ -301,6 +306,20 @@ export function parseAgentInput(input: unknown): AgentInput {
       );
     }
     const home = homedir();
+    // Check against BOTH the lexical home and its realpath: if the home dir is
+    // itself behind a symlink, a symlink-resolved candidate would otherwise slip
+    // past a lexical-only home comparison.
+    const homeTargets = [...new Set([home, realpathSafe(home)])];
+    // A candidate root is "too broad" to pre-grant when it is a filesystem root,
+    // the home dir itself, or an ANCESTOR of home (home lexically inside it →
+    // relative(candidate, home) neither escapes with '..' nor is absolute).
+    const isTooBroad = (candidate: string): boolean => {
+      if (candidate === parsePath(candidate).root) return true;
+      return homeTargets.some((h) => {
+        const rel = relativePath(candidate, h);
+        return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+      });
+    };
     const roots: string[] = [];
     for (const entry of readRootsValue) {
       if (typeof entry !== 'string' || entry.length === 0) {
@@ -318,21 +337,26 @@ export function parseAgentInput(input: unknown): AgentInput {
           `Agent tool readRoots entries must not contain '..' segments, got: ${JSON.stringify(entry)}`,
         );
       }
-      // (a) Breadth rejection. Resolve once so `~`-shaped inputs and trailing
-      // separators normalize before the comparisons. A filesystem root, the
-      // home dir itself, or any ANCESTOR of the home dir (homedir lexically
-      // inside the entry → `relative(entry, home)` neither escapes nor is
-      // absolute) is too broad to pre-grant.
+      // (a) Breadth rejection. Resolve lexically (normalizes `~`-shaped inputs
+      // and trailing separators) AND to the symlink target, then reject if
+      // EITHER is too broad. The symlink pass is load-bearing: the containment
+      // layer realpaths granted roots before comparison (realpathRoot,
+      // _cwd-utils.ts), so a symlink to `/` or the home dir would pass a
+      // lexical-only check yet grant the confined child a broad real root at
+      // read time (#664 Codex P1). realpathSafe resolves existing symlinks and
+      // falls back to the nearest existing ancestor for a not-yet-created path.
       const resolved = resolvePath(entry);
-      const rel = relativePath(resolved, home);
-      const homeInsideEntry = rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-      if (resolved === parsePath(resolved).root || homeInsideEntry) {
+      const realResolved = realpathSafe(resolved);
+      if (isTooBroad(resolved) || isTooBroad(realResolved)) {
         throw new Error(
           `Agent tool readRoots entries must not be a filesystem root, your home directory, ` +
-            `or an ancestor of it — grant a specific subdirectory instead, got: ${JSON.stringify(entry)}`,
+            `or an ancestor of it (checked after resolving symlinks) — grant a specific ` +
+            `subdirectory instead, got: ${JSON.stringify(entry)}`,
         );
       }
       // (b) Denylist rejection — never let a grant target the credential floor.
+      // isReadDenied realpaths internally, so a symlinked credential path is
+      // caught here too.
       const denied = isReadDenied(resolved);
       if (denied.denied) {
         throw new Error(
