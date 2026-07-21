@@ -238,3 +238,116 @@ describe('forkSubagent — explicit write-root pre-grant (#435)', () => {
     expect(cfg?.writeRoots).toBeUndefined();
   });
 });
+
+describe('forkSubagent — additive read-root pre-grant (extraReadRoots, #662)', () => {
+  const EXTRA = '/scratch/data';
+
+  beforeEach(() => {
+    shared.lastConfig = null;
+    mockedResolve.mockReset();
+    mockedResolve.mockResolvedValue(undefined);
+  });
+
+  it('composes extraReadRoots with a CONFINED fork inherited scope (union, inherited PRESERVED)', async () => {
+    // Confined worktree parent → inherited scope = [WORKTREE, MAIN, STATE].
+    // extraReadRoots widens it to the union: the out-of-repo dir is present AND
+    // the inherited roots (cwd/main/state) are STILL present (no suppression).
+    mockedResolve.mockResolvedValue(MAIN);
+    const mgr = new SubagentManager({ cwd: WORKTREE });
+    await mgr.forkSubagent(forkOpts({ model: 'sonnet', apiKey: 'k', extraReadRoots: [EXTRA] }));
+
+    const cfg = shared.lastConfig as { readRoots?: string[] } | null;
+    expect(new Set(cfg?.readRoots)).toEqual(new Set([WORKTREE, MAIN, STATE, EXTRA]));
+  });
+
+  it('composes extraReadRoots when the fork is confined by cwd alone (no distinct main root)', async () => {
+    // A plain (non-worktree) confined parent → inherited = [cwd, STATE]; the
+    // extra dir joins the union without dropping cwd or state.
+    mockedResolve.mockResolvedValue(undefined);
+    const mgr = new SubagentManager({ cwd: '/plain/repo' });
+    await mgr.forkSubagent(forkOpts({ model: 'sonnet', apiKey: 'k', extraReadRoots: [EXTRA] }));
+
+    const cfg = shared.lastConfig as { readRoots?: string[] } | null;
+    expect(new Set(cfg?.readRoots)).toEqual(new Set(['/plain/repo', STATE, EXTRA]));
+  });
+
+  it('does NOT confine an already-unconfined child (invariant #2 — stays read-open)', async () => {
+    // No manager cwd AND no per-call cwd → UNCONFINED parent → child is
+    // read-open (readRoots undefined → resolveBase undefined → reads anywhere).
+    // extraReadRoots must NOT turn that into a finite list (which would REGRESS
+    // the child from read-open to confined). The child can already read EXTRA.
+    const mgr = new SubagentManager(); // no cwd → UNCONFINED
+    await mgr.forkSubagent(forkOpts({ model: 'sonnet', apiKey: 'k', extraReadRoots: [EXTRA] }));
+
+    const cfg = shared.lastConfig as { readRoots?: string[] } | null;
+    expect(cfg?.readRoots).toBeUndefined();
+    expect(mockedResolve).not.toHaveBeenCalled();
+  });
+
+  it('confines+widens an unconfined parent when the child has an explicit cwd (read-open would be regressed, so cwd wins)', async () => {
+    // An unconfined parent with a per-call cwd yields a read-OPEN child
+    // ([FS_ROOT]) by inheritance. Since inheritedReadRoots is then defined
+    // (=[FS_ROOT]), extraReadRoots composes with it — read-open already covers
+    // EXTRA, so the union stays effectively read-open (FS_ROOT present).
+    const mgr = new SubagentManager(); // unconfined parent
+    await mgr.forkSubagent(
+      forkOpts({ model: 'sonnet', apiKey: 'k', cwd: WORKTREE, extraReadRoots: [EXTRA] }),
+    );
+
+    const cfg = shared.lastConfig as { readRoots?: string[] } | null;
+    // FS_ROOT (read-open) is preserved; the extra dir is folded in but redundant.
+    expect(cfg?.readRoots).toContain(FS_ROOT);
+    expect(cfg?.readRoots).toContain(path.resolve(EXTRA));
+  });
+
+  it('dedupes when extraReadRoots already contains an inherited root', async () => {
+    // Granting a root already in the inherited scope is a no-op (Set dedup).
+    mockedResolve.mockResolvedValue(MAIN);
+    const mgr = new SubagentManager({ cwd: WORKTREE });
+    await mgr.forkSubagent(
+      forkOpts({ model: 'sonnet', apiKey: 'k', extraReadRoots: [MAIN, EXTRA] }),
+    );
+
+    const cfg = shared.lastConfig as { readRoots?: string[] } | null;
+    expect(new Set(cfg?.readRoots)).toEqual(new Set([WORKTREE, MAIN, STATE, EXTRA]));
+    // MAIN appears once despite being in both inherited scope and extraReadRoots.
+    expect(cfg?.readRoots?.filter((r) => r === MAIN)).toHaveLength(1);
+  });
+
+  it('does not grant a write root — writes stay confined (invariant #4)', async () => {
+    // The extra READ grant must never leak into writeRoots.
+    mockedResolve.mockResolvedValue(MAIN);
+    const mgr = new SubagentManager({ cwd: WORKTREE });
+    await mgr.forkSubagent(forkOpts({ model: 'sonnet', apiKey: 'k', extraReadRoots: [EXTRA] }));
+
+    const cfg = shared.lastConfig as { readRoots?: string[]; writeRoots?: string[] } | null;
+    expect(cfg?.readRoots).toContain(EXTRA);
+    expect(cfg?.writeRoots).toBeUndefined();
+  });
+
+  it('does not touch readRoots when extraReadRoots is an empty array', async () => {
+    // Empty grant is a no-op: the inherited scope stands unchanged.
+    mockedResolve.mockResolvedValue(MAIN);
+    const mgr = new SubagentManager({ cwd: WORKTREE });
+    await mgr.forkSubagent(forkOpts({ model: 'sonnet', apiKey: 'k', extraReadRoots: [] }));
+
+    const cfg = shared.lastConfig as { readRoots?: string[] } | null;
+    expect(cfg?.readRoots).toEqual([WORKTREE, MAIN, STATE]);
+  });
+
+  it('does NOT override a caller-pinned readRoots (farm pin) — extraReadRoots composes only with inheritance', async () => {
+    // Invariant #1: config.readRoots is the farm pin — it SUPPRESSES inheritance
+    // entirely. When both the pin and extraReadRoots are (pathologically) set,
+    // the pin wins and inheritedReadRoots stays undefined, so the extra grant
+    // does not compose. (child-config.ts never sets both; this guards the seam.)
+    const mgr = new SubagentManager({ cwd: WORKTREE });
+    await mgr.forkSubagent(
+      forkOpts({ model: 'sonnet', apiKey: 'k', readRoots: [WORKTREE], extraReadRoots: [EXTRA] }),
+    );
+
+    const cfg = shared.lastConfig as { readRoots?: string[] } | null;
+    // Pin stands; extra did NOT compose (inheritance was suppressed).
+    expect(cfg?.readRoots).toEqual([WORKTREE]);
+    expect(mockedResolve).not.toHaveBeenCalled();
+  });
+});

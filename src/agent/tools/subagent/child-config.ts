@@ -284,6 +284,10 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     // #435: pass raw writeRoots through; SubagentManager.forkSubagent composes
     // them with the child's effective cwd so the child never loses its own tree.
     ...(parsed.writeRoots !== undefined ? { writeRoots: parsed.writeRoots } : {}),
+    // #662: pass readRoots through as the DISTINCT `extraReadRoots` field (never
+    // `readRoots`, which is the farm pin that SUPPRESSES inheritance).
+    // forkSubagent composes these with the child's inherited read scope.
+    ...(parsed.readRoots !== undefined ? { extraReadRoots: parsed.readRoots } : {}),
   } as AgentConfig;
 
   // Wire nesting: give the child its own executor + provider so it can

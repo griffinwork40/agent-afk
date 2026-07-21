@@ -38,6 +38,7 @@ import { touchWorktreeOccupancy } from './worktree-occupancy.js';
 import { resolveWorktreeMainRoot } from './worktree-read-root.js';
 import { computeInheritedReadRoots, type ReadScopeInputs } from './subagent-read-scope.js';
 import { getAfkStateDir } from '../paths.js';
+import path from 'path';
 import { env } from '../config/env.js';
 import { buildPhaseRestrictedProvider, type PhaseRole } from './tools/nesting.js';
 import { MODEL_CAP_BYTES } from './tools/handlers/_output-cap.js';
@@ -653,6 +654,32 @@ export class SubagentManager {
         // already read-open, so this is a confined-parent-only grant.
         ...(parentUnconfined ? {} : { afkStateRoot: getAfkStateDir() }),
       });
+    }
+
+    // #662: additive read roots from the `readRoots` agent-tool param. Compose with
+    // the inherited scope so the child keeps its repo/worktree/state reach AND gains
+    // the named out-of-repo dirs. Mirrors composedWriteRoots (#435). Two guards:
+    //   - Invariant #1 (farm pin untouched): only compose when the caller did NOT
+    //     pin `config.readRoots`. A pin ("confine to exactly these" — `afk farm`)
+    //     suppresses inheritance entirely (the `=== undefined` gate above), so
+    //     `inheritedReadRoots` stays undefined; composing here would silently
+    //     override the pin at the childConfig literal. extraReadRoots flows through
+    //     the DISTINCT `extraReadRoots` field precisely so the pin is never touched.
+    //   - Invariant #2 (never confine an unconfined child): only compose when the
+    //     child is (or will be) CONFINED. An unconfined child (no inherited roots
+    //     AND no cwd -> resolveBase undefined -> read-open) can already read these
+    //     paths; turning its read scope into a finite list would REGRESS it from
+    //     read-open to confined.
+    if (
+      options.config.readRoots === undefined &&
+      options.config.extraReadRoots !== undefined &&
+      options.config.extraReadRoots.length > 0
+    ) {
+      const willBeConfined = inheritedReadRoots !== undefined || effectiveChildCwd !== undefined;
+      if (willBeConfined) {
+        const base = inheritedReadRoots ?? (effectiveChildCwd !== undefined ? [effectiveChildCwd] : []);
+        inheritedReadRoots = [...new Set([...base, ...options.config.extraReadRoots.map((r) => path.resolve(r))])];
+      }
     }
 
     // Explicit write-root pre-grant (#435): when the caller passed writeRoots on

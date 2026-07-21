@@ -407,6 +407,12 @@ export const agentTool: AnthropicToolDef = {
         description:
           'Optional extra write roots to pre-grant to the forked child. By default a fork can only write inside its cwd/worktree; out-of-root writes are auto-denied. Each entry must be an absolute path with no `..` segments. Composed WITH (never replaces) the child cwd. Mutually exclusive with isolation:"worktree".',
       },
+      readRoots: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'Optional extra read roots to pre-grant to the forked child. Use when the task data lives OUTSIDE the repo — e.g. `~/Downloads`, a scratch data dir. Each entry must be an absolute path with no `..` segments (and not a filesystem root or your home dir). Composed WITH (never replaces) the fork\'s inherited read scope, so the child keeps its repo/worktree/state reach AND gains the named dirs. Writes stay confined. Grandchildren must be re-granted (not inherited). Unlike writeRoots, NOT mutually exclusive with isolation:"worktree" — widening reads inside an isolated worktree is legitimate.',
+      },
       isolation: {
         type: 'string',
         enum: ['none', 'worktree'],

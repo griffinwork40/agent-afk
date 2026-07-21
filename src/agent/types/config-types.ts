@@ -296,6 +296,17 @@ export interface AgentConfig {
   writeRoots?: string[];
 
   /**
+   * Additive extra READ roots from the `agent`-tool `readRoots` param (#662).
+   * DISTINCT from {@link readRoots}: `readRoots` PINS the read scope (the
+   * `afk farm` "confine to exactly these roots" path — setting it SUPPRESSES
+   * read-scope inheritance in `forkSubagent`). This field instead COMPOSES with
+   * the child's inherited read scope (union, in `forkSubagent`), so the fork
+   * keeps its repo/worktree/state reach AND gains the named out-of-repo dirs.
+   * Writes stay confined. Not the farm pin — never suppresses inheritance.
+   */
+  extraReadRoots?: string[];
+
+  /**
    * Extra environment variables to inject into Bash-tool subprocess spawns
    * for THIS session. Merged into the child's env on top of `process.env`,
    * with these entries winning on collision.
