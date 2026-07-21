@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.59.3] - 2026-07-21
+
+### Fixed
+- bound web_scrape + tool output to prevent subagent context overflow (#663) (4556645)
+
 ## [5.59.2] - 2026-07-19
 
 ### Fixed
