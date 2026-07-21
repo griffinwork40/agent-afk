@@ -1009,9 +1009,25 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private applyOutputCap(result: ToolResult): ToolResult {
     const cap = this.maxOutputBytes;
     if (cap === undefined) return result;
-    if (Buffer.byteLength(result.content, 'utf8') <= cap) return result;
+    const originalBytes = Buffer.byteLength(result.content, 'utf8');
+    if (originalBytes <= cap) return result;
     result.content = headAndTail(result.content, cap);
     result.truncated = true;
+    // Observability (#661): fork-side truncation is otherwise invisible — the
+    // `truncated` flag is a structured signal for downstream consumers, but the
+    // ORIGINAL-vs-capped byte delta (how much a fork's tool actually
+    // overflowed) is dropped. Emit it via the file's existing lightweight
+    // logger (debugLog, gated on AFK_DEBUG/DEBUG). Deliberately NOT a witness
+    // trace event: no existing trace kind carries an original+capped byte pair,
+    // and adding one would expand the closed trace schema (types.ts + events.ts
+    // zod union + tests) for a non-blocking diagnostic — out of scope here. The
+    // per-call `tool_call.completed` trace event already records the final
+    // (capped) `resultBytes` + `truncated`; this line adds the original size
+    // the cap ate, which that event does not carry.
+    debugLog(
+      `[output-cap #661] fork tool result capped: original=${originalBytes}B ` +
+        `capped=${Buffer.byteLength(result.content, 'utf8')}B (cap=${cap}B)`,
+    );
     return result;
   }
 
