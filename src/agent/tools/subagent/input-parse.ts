@@ -8,7 +8,9 @@
  * @module agent/tools/subagent/input-parse
  */
 
-import { isAbsolute } from 'node:path';
+import { isAbsolute, parse as parsePath, resolve as resolvePath, relative as relativePath } from 'node:path';
+import { homedir } from 'node:os';
+import { isReadDenied } from '../handlers/read-denylist.js';
 
 export type AgentExecutionMode = 'foreground' | 'background';
 
@@ -75,6 +77,27 @@ export interface AgentInput {
    * explicit parent intent.
    */
   writeRoots?: string[];
+  /**
+   * Optional extra READ roots to pre-grant to the forked child (#662). Mirrors
+   * {@link writeRoots} but on the read axis: lets the PARENT grant the fork read
+   * access to absolute paths OUTSIDE the repo/worktree it is confined to (e.g.
+   * `~/Downloads`, a scratch data dir). ADDITIVE — composed WITH (never replaces)
+   * the child's normally-inherited read scope in `forkSubagent`, so the child
+   * keeps its repo/worktree/state reach AND gains the named dirs. Writes stay
+   * confined. Grandchildren must be re-granted (not inherited).
+   *
+   * Per-entry rules (parse-time): non-empty absolute path, no `..` segment. PLUS
+   * two hardening rejections: (a) breadth — a filesystem root, the home dir, or
+   * an ancestor of the home dir is refused (the model must not over-grant a broad
+   * root); (b) denylist — an entry that resolves into the credential floor
+   * (`isReadDenied`: ~/.ssh, ~/.afk/config, …) is refused, so a grant can never
+   * even attempt to shadow secrets. This is defense-in-depth ON TOP of the
+   * read-time floor in `resolveAndContain` / the path-approval hook.
+   *
+   * Deliberately NOT mutually exclusive with `isolation:'worktree'` — widening a
+   * confined worktree fork's READS is legitimate (only WRITES break isolation).
+   */
+  readRoots?: string[];
   /**
    * Filesystem-isolation mode. When `'worktree'`, the executor forks the child
    * inside a fresh afk-managed git worktree (`.afk-worktrees/<slug>` on a new
@@ -256,6 +279,72 @@ export function parseAgentInput(input: unknown): AgentInput {
     if (roots.length > 0) writeRoots = roots;
   }
 
+  // readRoots: optional array of absolute paths pre-granted as extra READ roots
+  // to the fork (#662). Same per-entry format rules as writeRoots (non-empty,
+  // absolute, no '..' segments), PLUS two hardening rejections so the model
+  // cannot over-grant or shadow the credential floor:
+  //   (a) BREADTH — reject a filesystem root, os.homedir(), or an ANCESTOR of
+  //       homedir (homedir inside the entry). Blocks `/`, `~`, `/Users`, `/home`.
+  //   (b) DENYLIST — reject any entry that resolves into the read-denylist
+  //       (isReadDenied: ~/.ssh, ~/.afk/config, …). isReadDenied is a pure,
+  //       string/realpath-based, non-throwing check (safeRealpath swallows fs
+  //       errors), so it is safe to call at parse time. Defense-in-depth ON TOP
+  //       of the read-time floor in resolveAndContain / the path-approval hook.
+  // An empty array normalizes to undefined (no-op grant). Deliberately NOT
+  // mutually exclusive with isolation:'worktree' (that constraint is write-only).
+  let readRoots: string[] | undefined;
+  const readRootsValue = agentInput['readRoots'];
+  if (readRootsValue !== undefined) {
+    if (!Array.isArray(readRootsValue)) {
+      throw new Error(
+        `Agent tool readRoots must be an array of absolute paths, got: ${JSON.stringify(readRootsValue)}`,
+      );
+    }
+    const home = homedir();
+    const roots: string[] = [];
+    for (const entry of readRootsValue) {
+      if (typeof entry !== 'string' || entry.length === 0) {
+        throw new Error(
+          `Agent tool readRoots entries must be non-empty strings, got: ${JSON.stringify(entry)}`,
+        );
+      }
+      if (!isAbsolute(entry)) {
+        throw new Error(
+          `Agent tool readRoots entries must be absolute paths, got: ${JSON.stringify(entry)}`,
+        );
+      }
+      if (entry.split(/[/\\]/).includes('..')) {
+        throw new Error(
+          `Agent tool readRoots entries must not contain '..' segments, got: ${JSON.stringify(entry)}`,
+        );
+      }
+      // (a) Breadth rejection. Resolve once so `~`-shaped inputs and trailing
+      // separators normalize before the comparisons. A filesystem root, the
+      // home dir itself, or any ANCESTOR of the home dir (homedir lexically
+      // inside the entry → `relative(entry, home)` neither escapes nor is
+      // absolute) is too broad to pre-grant.
+      const resolved = resolvePath(entry);
+      const rel = relativePath(resolved, home);
+      const homeInsideEntry = rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+      if (resolved === parsePath(resolved).root || homeInsideEntry) {
+        throw new Error(
+          `Agent tool readRoots entries must not be a filesystem root, your home directory, ` +
+            `or an ancestor of it — grant a specific subdirectory instead, got: ${JSON.stringify(entry)}`,
+        );
+      }
+      // (b) Denylist rejection — never let a grant target the credential floor.
+      const denied = isReadDenied(resolved);
+      if (denied.denied) {
+        throw new Error(
+          `Agent tool readRoots entries must not target a protected/credential path ` +
+            `(matches read-denylist entry: ${denied.matched}), got: ${JSON.stringify(entry)}`,
+        );
+      }
+      roots.push(entry);
+    }
+    if (roots.length > 0) readRoots = roots;
+  }
+
   // isolation: optional enum. 'none' (or omitted) is a no-op and normalizes to
   // undefined so the executor's `=== 'worktree'` check is total. 'worktree'
   // asks the executor to fork the child inside a fresh managed git worktree.
@@ -303,6 +392,7 @@ export function parseAgentInput(input: unknown): AgentInput {
     ...(agent_type !== undefined ? { agent_type } : {}),
     ...(cwd !== undefined ? { cwd } : {}),
     ...(writeRoots !== undefined ? { writeRoots } : {}),
+    ...(readRoots !== undefined ? { readRoots } : {}),
     ...(isolation !== undefined ? { isolation } : {}),
   };
 }

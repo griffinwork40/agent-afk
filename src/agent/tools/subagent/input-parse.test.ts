@@ -12,6 +12,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import os from 'node:os';
+import path from 'node:path';
 import { parseAgentInput, type AgentInput } from './input-parse.js';
 
 describe('parseAgentInput', () => {
@@ -419,6 +421,111 @@ describe('parseAgentInput', () => {
       });
       expect(result.cwd).toBe('/tmp/wt/x');
       expect(result.writeRoots).toEqual(['/sibling/repo']);
+    });
+  });
+
+  describe('readRoots (#662)', () => {
+    // A concrete, non-broad, non-denylisted absolute path (mirrors the
+    // writeRoots test style). Not a filesystem root, not the home dir nor an
+    // ancestor of it, and not inside the read-denylist.
+    const SAFE = '/abs/data';
+
+    it('is undefined (key omitted) when not supplied', () => {
+      const result = parseAgentInput({ prompt: 'p' });
+      expect(result.readRoots).toBeUndefined();
+      expect('readRoots' in result).toBe(false);
+    });
+
+    it('accepts an array of absolute paths', () => {
+      const result = parseAgentInput({ prompt: 'p', readRoots: ['/abs/a', '/abs/b'] });
+      expect(result.readRoots).toEqual(['/abs/a', '/abs/b']);
+    });
+
+    it('throws when readRoots is not an array (string)', () => {
+      expect(() => parseAgentInput({ prompt: 'p', readRoots: '/abs/a' })).toThrow(
+        /readRoots must be an array/,
+      );
+    });
+
+    it('throws when an entry is a relative path', () => {
+      expect(() => parseAgentInput({ prompt: 'p', readRoots: ['relative/path'] })).toThrow(
+        /readRoots entries must be absolute paths/,
+      );
+    });
+
+    it("throws when an entry contains a '..' segment", () => {
+      expect(() =>
+        parseAgentInput({ prompt: 'p', readRoots: ['/tmp/../escape'] }),
+      ).toThrow(/readRoots entries must not contain '\.\.' segments/);
+    });
+
+    it('throws when an entry is an empty string', () => {
+      expect(() => parseAgentInput({ prompt: 'p', readRoots: [''] })).toThrow(
+        /readRoots entries must be non-empty strings/,
+      );
+    });
+
+    it('normalizes an empty array to undefined (field absent)', () => {
+      const result = parseAgentInput({ prompt: 'p', readRoots: [] });
+      expect(result.readRoots).toBeUndefined();
+      expect('readRoots' in result).toBe(false);
+    });
+
+    // --- Hardening: breadth rejection ---
+    it('throws when an entry is a filesystem root', () => {
+      const FS_ROOT = path.parse(path.resolve('.')).root || path.sep;
+      expect(() => parseAgentInput({ prompt: 'p', readRoots: [FS_ROOT] })).toThrow(
+        /must not be a filesystem root, your home directory, or an ancestor/,
+      );
+    });
+
+    it('throws when an entry is the home directory', () => {
+      expect(() => parseAgentInput({ prompt: 'p', readRoots: [os.homedir()] })).toThrow(
+        /must not be a filesystem root, your home directory, or an ancestor/,
+      );
+    });
+
+    it('throws when an entry is an ancestor of the home directory', () => {
+      // The parent of homedir (e.g. /Users or /home) lexically CONTAINS homedir,
+      // so granting it would over-grant the whole user tree.
+      const parentOfHome = path.dirname(os.homedir());
+      expect(() => parseAgentInput({ prompt: 'p', readRoots: [parentOfHome] })).toThrow(
+        /must not be a filesystem root, your home directory, or an ancestor/,
+      );
+    });
+
+    // --- Hardening: denylist rejection ---
+    it('throws when an entry targets a read-denylisted credential path (~/.ssh)', () => {
+      const ssh = path.join(os.homedir(), '.ssh');
+      expect(() => parseAgentInput({ prompt: 'p', readRoots: [ssh] })).toThrow(
+        /must not target a protected\/credential path/,
+      );
+    });
+
+    it('throws when an entry targets the AFK config (credential) dir', () => {
+      const afkConfig = path.join(os.homedir(), '.afk', 'config');
+      expect(() => parseAgentInput({ prompt: 'p', readRoots: [afkConfig] })).toThrow(
+        /must not target a protected\/credential path/,
+      );
+    });
+
+    // --- Deliberate divergence from writeRoots ---
+    it('is ALLOWED together with isolation:worktree (does NOT throw — divergence from writeRoots)', () => {
+      // Widening a confined worktree fork's READS is legitimate; only WRITES
+      // break isolation. This is the deliberate #662 divergence.
+      const result = parseAgentInput({
+        prompt: 'p',
+        readRoots: [SAFE],
+        isolation: 'worktree',
+      });
+      expect(result.readRoots).toEqual([SAFE]);
+      expect(result.isolation).toBe('worktree');
+    });
+
+    it('accepts readRoots together with cwd (the main use case)', () => {
+      const result = parseAgentInput({ prompt: 'p', cwd: '/tmp/wt/x', readRoots: [SAFE] });
+      expect(result.cwd).toBe('/tmp/wt/x');
+      expect(result.readRoots).toEqual([SAFE]);
     });
   });
 
