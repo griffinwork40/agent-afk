@@ -83,13 +83,14 @@ import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
 import type { ToolResult } from '../anthropic-direct/types.js';
 import {
   contextWindowTokensUsed,
+  contextFullnessFraction,
   buildContextUsageFields,
   shouldAutoCompact,
   resolveAutoCompactThreshold,
 } from '../shared/auto-compact.js';
 import { HookBlockedError, DenialCircuitBreakerError } from '../../../utils/errors.js';
 import { COMPACT_SYSTEM_PROMPT, wrapTranscriptForSummary } from '../shared/compaction.js';
-import { compactOpenAIHistory } from './compact.js';
+import { compactOpenAIHistory, readShrinkFraction } from './compact.js';
 import { oneShotChatCompletion } from './oneshot.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../shared/plan-mode-addendum.js';
 import { AFK_MODE_ADDENDUM_TEXT } from '../shared/afk-mode-addendum.js';
@@ -888,8 +889,18 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       };
     }
     const compactModel = env.AFK_COMPACT_MODEL ?? this.currentModel;
+    // Token-fullness fallback for the adaptive keep-window (mirrors
+    // anthropic-direct/query/compact-handler.ts): measured against the same
+    // working budget the auto-compaction trigger uses, so a short-but-full
+    // session compacts instead of no-oping on turn count alone.
+    const usedFraction = contextFullnessFraction(
+      contextWindowTokensUsed(this.lastUsage ?? {}),
+      autoCompactLimitFor(this.currentModel),
+    );
     return compactOpenAIHistory({
       priorTurns: this.priorTurns,
+      usedFraction,
+      shrinkAtFraction: readShrinkFraction(),
       summarize: (transcript, signal) =>
         oneShotChatCompletion({
           client: this.client,

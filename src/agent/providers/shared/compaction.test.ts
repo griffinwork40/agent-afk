@@ -7,9 +7,11 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   COMPACT_ACK_TEXT,
   COMPACT_SUMMARY_HEADER,
+  DEFAULT_COMPACT_SHRINK_THRESHOLD,
   applyCompaction,
   estimateTokensSaved,
   findCompactionBoundary,
+  findCompactionBoundaryAdaptive,
   renderTranscript,
   runCompactionCore,
   wrapTranscriptForSummary,
@@ -52,6 +54,60 @@ describe('findCompactionBoundary (generic)', () => {
   });
   it('returns 0 when the whole history is within the keep window', () => {
     expect(findCompactionBoundary(history(), 3, fakeOps)).toBe(0);
+  });
+});
+
+// Two fresh user turns — the "short but full" shape that the turn-count
+// keep-window (default 2) cannot compact without the fullness fallback.
+function twoTurns(): FakeMsg[] {
+  return [
+    { role: 'user', text: 'u1' },
+    { role: 'assistant', text: 'a1' },
+    { role: 'user', text: 'u2' },
+    { role: 'assistant', text: 'a2' },
+  ];
+}
+
+describe('findCompactionBoundaryAdaptive', () => {
+  const full = DEFAULT_COMPACT_SHRINK_THRESHOLD; // exactly at the gate counts as full
+  const empty = 0;
+
+  it('returns the normal boundary unchanged when the turn-count window already works', () => {
+    // history() has fresh users at 0,2,4 → keepLastN=2 lands at index 2. A full
+    // window must not change a boundary that was already > 0.
+    expect(findCompactionBoundaryAdaptive(history(), 2, fakeOps, full)).toBe(2);
+    expect(findCompactionBoundaryAdaptive(history(), 2, fakeOps, empty)).toBe(2);
+  });
+
+  it('does NOT shrink below the fullness threshold (preserves the no-op)', () => {
+    // Two turns, keepLastN=2 → base boundary 0 (nothing-to-summarize). Below the
+    // gate the boundary stays 0 so a near-empty session is left alone.
+    expect(findCompactionBoundary(twoTurns(), 2, fakeOps)).toBe(0);
+    expect(findCompactionBoundaryAdaptive(twoTurns(), 2, fakeOps, 0.5, 0.7)).toBe(0);
+  });
+
+  it('shrinks the keep-window on a short-but-full session so an older turn becomes eligible', () => {
+    // At/above the gate, keepLastN relaxes from 2 → 1, landing the boundary on
+    // the second fresh user turn (index 2) so turn 1 gets summarized.
+    expect(findCompactionBoundaryAdaptive(twoTurns(), 2, fakeOps, 0.7, 0.7)).toBe(2);
+    expect(findCompactionBoundaryAdaptive(twoTurns(), 2, fakeOps, 0.95, 0.7)).toBe(2);
+  });
+
+  it('cannot help a genuinely single-turn session even when full', () => {
+    // One fresh user turn (index 0). keepLastN=2 → -1; shrinking to 1 still lands
+    // at index 0 (not > 0), so the honest history-too-short boundary is returned.
+    const oneTurn: FakeMsg[] = [
+      { role: 'user', text: 'only' },
+      { role: 'assistant', text: 'reply' },
+    ];
+    expect(findCompactionBoundaryAdaptive(oneTurn, 2, fakeOps, 0.99, 0.7)).toBe(-1);
+  });
+
+  it('has nothing to shrink when keepLastN is already 1', () => {
+    // Base boundary 0 and the shrink loop (n from 0) never runs → stays 0.
+    expect(findCompactionBoundaryAdaptive(twoTurns(), 1, fakeOps, 0.99, 0.7)).toBe(2);
+    const oneTurn: FakeMsg[] = [{ role: 'user', text: 'only' }];
+    expect(findCompactionBoundaryAdaptive(oneTurn, 1, fakeOps, 0.99, 0.7)).toBe(0);
   });
 });
 
@@ -193,6 +249,45 @@ describe('runCompactionCore', () => {
       messages,
       ops: fakeOps,
       keepLastN: 3,
+      isAborted: () => false,
+      summarize,
+    });
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe('nothing-to-summarize');
+    expect(summarize).not.toHaveBeenCalled();
+    expect(messages).toEqual(before);
+  });
+
+  it('compacts a short-but-full session via the adaptive keep-window (usedFraction >= threshold)', async () => {
+    // Two fresh user turns, keepLastN=2 → the turn-count boundary is 0
+    // (nothing-to-summarize). A full window relaxes the keep-window to 1 so
+    // turn 1 is summarized and spliced away.
+    const summarize = vi.fn(async () => 'COMPRESSED');
+    const messages = twoTurns();
+    const result = await runCompactionCore({
+      messages,
+      ops: fakeOps,
+      keepLastN: 2,
+      usedFraction: 0.95,
+      isAborted: () => false,
+      summarize,
+    });
+    expect(result.compacted).toBe(true);
+    expect(summarize).toHaveBeenCalledTimes(1);
+    // [user(summary), assistant(ack), u2, a2]
+    expect(messages[0]?.text).toContain('COMPRESSED');
+    expect(messages[2]?.text).toBe('u2');
+  });
+
+  it('leaves a short session untouched when usedFraction is below the threshold', async () => {
+    const summarize = vi.fn();
+    const messages = twoTurns();
+    const before = [...messages];
+    const result = await runCompactionCore({
+      messages,
+      ops: fakeOps,
+      keepLastN: 2,
+      usedFraction: 0.1,
       isAborted: () => false,
       summarize,
     });

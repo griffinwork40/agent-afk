@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**130 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**131 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -12,6 +12,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 |------|------|----------|---------|---------|-------------|
 | `AFK_COMPACT_KEEP_LAST_TURNS` | number |  |  | `6` | Number of recent turns the compactor keeps verbatim during /compact. Default tuned in compact-handler.ts. |
 | `AFK_COMPACT_MODEL` | string |  |  | `claude-haiku-4-5` | Override the model used by the /compact summarizer. Falls back to a cheap default (haiku-class). |
+| `AFK_COMPACT_SHRINK_FRACTION` | number |  |  | `0.8` | Context-fullness fraction (0–1, exclusive) at/above which /compact and auto-compaction relax the keep-window so a short-but-full session (few turns, huge tool exchanges) can still be summarized instead of no-oping on turn count. Default 0.7 (see shared/compaction.ts DEFAULT_COMPACT_SHRINK_THRESHOLD). |
 | `AFK_DEFAULT_SUBAGENT_MODEL` | string |  |  | `sonnet` | Override the default model used when a subagent is dispatched without an explicit model. |
 | `AFK_DISABLE_PROMPT_CACHE` | boolean |  | `0` | `1` | Disable Anthropic prompt caching when set to 1/true/yes/on. Unset = caching enabled. |
 | `AFK_EFFORT` | string |  |  | `medium` | Effort hint guiding adaptive-thinking depth, forwarded as Anthropic output_config.effort (model-gated; ignored where unsupported). Accepts low \| medium \| high \| xhigh \| max. |

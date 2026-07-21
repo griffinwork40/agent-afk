@@ -114,6 +114,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_COMPACT_SHRINK_FRACTION',
+    description: 'Context-fullness fraction (0–1, exclusive) at/above which /compact and auto-compaction relax the keep-window so a short-but-full session (few turns, huge tool exchanges) can still be summarized instead of no-oping on turn count. Default 0.7 (see shared/compaction.ts DEFAULT_COMPACT_SHRINK_THRESHOLD).',
+    type: 'number',
+    required: false,
+    example: '0.8',
+    category: 'model',
+  },
+  {
     name: 'AFK_DEFAULT_SUBAGENT_MODEL',
     description: 'Override the default model used when a subagent is dispatched without an explicit model.',
     type: 'string',
@@ -1286,6 +1294,7 @@ export const env = {
   // Model / agent runtime
   get AFK_COMPACT_KEEP_LAST_TURNS(): string | undefined { return process.env['AFK_COMPACT_KEEP_LAST_TURNS']; },
   get AFK_COMPACT_MODEL(): string | undefined { return process.env['AFK_COMPACT_MODEL']; },
+  get AFK_COMPACT_SHRINK_FRACTION(): string | undefined { return process.env['AFK_COMPACT_SHRINK_FRACTION']; },
   get AFK_COMPANION_PRIMER(): string | undefined { return process.env['AFK_COMPANION_PRIMER']; },
   get AFK_DEFAULT_SUBAGENT_MODEL(): string | undefined { return process.env['AFK_DEFAULT_SUBAGENT_MODEL']; },
   get AFK_DIAGNOSE_BASELINE(): string | undefined { return process.env['AFK_DIAGNOSE_BASELINE']; },
