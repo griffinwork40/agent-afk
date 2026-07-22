@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.63.0] - 2026-07-22
+
+### Added
+- edit a previous message — /rewind + double-Esc conversation rewind (#668) (d80601b)
+
 ## [5.62.0] - 2026-07-22
 
 ### Added
