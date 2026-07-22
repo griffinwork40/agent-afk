@@ -1179,17 +1179,19 @@ export class AgentSession implements IAgentSession {
       finalCostUsd: this.sessionRunningCostUsd,
       runningTokens: this.sessionRunningTokens,
     }).catch(() => {});
-    // Invariant: only the TOP-LEVEL session (no parent) may seal the writer.
+    // Invariant: only the TOP-LEVEL session (no fork marker) may seal the writer.
     // A session tree shares ONE TraceWriter by reference (forkSubagent threads
     // the parent's writer into every descendant), and seal() is one-shot /
     // idempotent (NdjsonTraceWriter). If a subagent sealed on its own close(),
     // the FIRST descendant torn down would seal the whole shared file while the
     // top-level is still mid-run — stranding every later ancestor event as the
     // "started without terminal" gap (a nested grandchild's end_turn sealing the
-    // root trace 30+ min before the real session ends). Subagents still emit
-    // their own `closure` record above; if the top-level never runs close(), the
-    // process-exit backstop (NdjsonTraceWriter.sealOnProcessExit) still seals.
-    if (this.config.parentSessionId === undefined) {
+    // root trace 30+ min before the real session ends). The seal owner gate uses
+    // forkSubagent's explicit fork marker, not parentSessionId: stub-parent skill
+    // forks can have no parent session id while still sharing the root writer.
+    // Subagents still emit their own `closure` record above; if the top-level
+    // never runs close(), the process-exit backstop still seals.
+    if (this.config.subagentToolOutputCapBytes === undefined) {
       await sealTraceWriter(this.config.traceWriter, {
         ...signals,
         finalTurnCount: this.turnCount,

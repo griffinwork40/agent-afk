@@ -10,8 +10,8 @@
  * thus reported a clean success for a session that hung and was cancelled, and
  * every subsequent ancestor event hit the sealed writer and was swallowed.
  *
- * Fix: `dispatchSessionEndOnce` gates `sealTraceWriter(...)` on
- * `this.config.parentSessionId === undefined` (top-level only). Subagents still
+ * Fix: `dispatchSessionEndOnce` gates `sealTraceWriter(...)` on the explicit
+ * fork marker (`subagentToolOutputCapBytes` absent ⇒ top-level). Subagents still
  * emit their own `closure` record; the process-exit backstop still seals an
  * orphaned top-level trace if close() never runs.
  *
@@ -75,6 +75,7 @@ describe('witness seal ownership', () => {
         provider,
         depth: 1,
         parentSessionId: 'parent-abc',
+        subagentToolOutputCapBytes: 100_000,
         traceWriter: writer,
       });
 
@@ -90,4 +91,32 @@ describe('witness seal ownership', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('stub-parent fork close() does NOT seal even without parentSessionId', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-seal-own-stub-sub-'));
+    try {
+      const writer = new NdjsonTraceWriter({ traceDir: dir });
+      const provider = createMockProvider({ sessionId: `seal-stub-sub-${Date.now()}` });
+      const session = new AgentSession({
+        model: 'sonnet',
+        provider,
+        depth: 1,
+        // Stub-parent skill forks may not have a real parent session id, but
+        // forkSubagent still stamps the explicit fork marker below. That marker,
+        // not parentSessionId, owns trace-seal gating.
+        subagentToolOutputCapBytes: 100_000,
+        traceWriter: writer,
+      });
+
+      await drainTurn(session, 'stub child work');
+      await session.close();
+
+      const kinds = readTrace(dir).map((e) => e.kind);
+      expect(kinds).toContain('closure');
+      expect(kinds).not.toContain('session_sealed');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
 });
