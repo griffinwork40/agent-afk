@@ -83,6 +83,17 @@ class FakeQuery implements ProviderQuery {
   async rewindFiles() {
     return { canRewind: false };
   }
+  listRewindTargets() {
+    return [{ turnIndex: 0, preview: `turn-${this.sessionId}` }];
+  }
+  async rewindConversation(turnIndex: number) {
+    return {
+      rewound: true,
+      reloadText: `reload-${turnIndex}`,
+      messagesBefore: 4,
+      messagesAfter: turnIndex,
+    };
+  }
   compact?(): Promise<import('../../provider.js').ProviderCompactResult>;
   close(): void {
     this.rec.closed = true;
@@ -360,6 +371,32 @@ describe('ProviderRouter', () => {
     expect(result.compacted).toBe(false);
     expect(result.reason).toMatch(/does not support/i);
     await router.close();
+  });
+
+  it('delegates listRewindTargets / rewindConversation to the active inner', async () => {
+    const { router, outer } = makeRouter({ model: 'sonnet', apiKey: 'key-anthropic' });
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+    void outer;
+
+    const targets = router.listRewindTargets();
+    expect(targets).toHaveLength(1);
+    expect(targets[0]!.preview).toContain('anthropic-direct#0');
+
+    const result = await router.rewindConversation(2);
+    expect(result.rewound).toBe(true);
+    expect(result.reloadText).toBe('reload-2');
+    expect(result.messagesAfter).toBe(2);
+    await router.close();
+  });
+
+  it('returns empty targets / not-supported rewind before any provider is active', async () => {
+    const { router } = makeRouter({ model: 'sonnet', apiKey: 'key-anthropic' });
+    // No iteration yet → no active inner.
+    expect(router.listRewindTargets()).toEqual([]);
+    const result = await router.rewindConversation(0);
+    expect(result.rewound).toBe(false);
+    expect(result.reason).toBe('not-supported');
   });
 
   it('drops the credential entirely when the family has no resolvable key', async () => {

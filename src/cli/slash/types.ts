@@ -288,7 +288,8 @@ export type SlashResult =
                  // (used by plugin-skill passthrough handlers — the SDK's
                  // subprocess natively parses `/<skill>` as an invocation)
   | { rerun: string }   // dispatch another command (e.g. /help after unknown)
-  | { kind: 'submit'; message: string };  // pre-fill prompt and auto-submit
+  | { kind: 'submit'; message: string }   // pre-fill prompt and auto-submit
+  | { kind: 'prefill'; message: string };  // pre-fill prompt for editing, do NOT submit
 
 /** A registered slash command. */
 export interface SlashCommand {

@@ -19,7 +19,13 @@ import type { HookRegistry } from '../hooks.js';
 import { resolveProvider, providerForModel } from '../providers/index.js';
 import { ProviderRouter } from '../providers/router/provider-router.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
-import type { ProviderCompactResult, ProviderEvent, ProviderQuery } from '../provider.js';
+import type {
+  ProviderCompactResult,
+  ProviderEvent,
+  ProviderQuery,
+  ProviderRewindConversationResult,
+  RewindTarget,
+} from '../provider.js';
 import { DEFAULT_SESSION_TIMEOUT_MS, RESET_DRAIN_TIMEOUT_MS, withTimeout } from '../timeout.js';
 import { dispatchSessionEnd, dispatchSessionStart } from './hooks-dispatch.js';
 import { HookBlockedError } from '../../utils/errors.js';
@@ -1065,6 +1071,37 @@ export class AgentSession implements IAgentSession {
     } finally {
       this.currentState = 'idle';
     }
+  }
+
+  listRewindTargets(): RewindTarget[] {
+    if (this.currentState === 'closed') return [];
+    return this.providerQuery.listRewindTargets?.() ?? [];
+  }
+
+  async rewindConversation(
+    turnIndex: number,
+  ): Promise<ProviderRewindConversationResult> {
+    if (this.currentState === 'closed') {
+      throw new Error('Cannot rewind: session is closed');
+    }
+    if (this.currentState !== 'idle') {
+      return {
+        rewound: false,
+        reason: 'session-busy',
+        messagesBefore: 0,
+        messagesAfter: 0,
+      };
+    }
+    const fn = this.providerQuery.rewindConversation?.bind(this.providerQuery);
+    if (!fn) {
+      return {
+        rewound: false,
+        reason: 'not-supported',
+        messagesBefore: 0,
+        messagesAfter: 0,
+      };
+    }
+    return fn(turnIndex);
   }
 
   getLastResponseMetadata(): ResponseMetadata | null {

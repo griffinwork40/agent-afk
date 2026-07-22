@@ -35,6 +35,13 @@ import type {
 } from './terminal-compositor.types.js';
 
 /**
+ * Max gap (ms) between the two Escapes of a double-Esc rewind trigger at an
+ * empty idle prompt. Short enough that a deliberate double-tap registers but a
+ * stray lone Esc followed much later by another does not.
+ */
+const DOUBLE_ESC_WINDOW_MS = 600;
+
+/**
  * Narrowest TerminalCompositor state slice the input-dispatch functions touch.
  * Buffer/flag/paste fields are mutated in place; `repaint`/`applyEdit`/
  * `updateAutocomplete`/`applyDropdownSelection`/`applyGhostAccept` are class
@@ -115,6 +122,8 @@ export interface KeyDispatchHost {
 
   /** Once-only soft-stop guard for ESC in streaming mode. */
   softStopped: boolean;
+  /** Timestamp (ms) of the last Esc at an empty idle prompt — double-tap detection. */
+  lastIdleEscAt: number;
   /**
    * Post-ESC coalesce epoch — armed at ESC soft-stop, held until the coalesced
    * redirect payload drains (authoritative field docs on the class in
@@ -136,6 +145,8 @@ export interface KeyDispatchHost {
   readonly onCancel?: () => void;
   readonly onSoftStop?: () => void;
   readonly onBackground?: () => void;
+  /** Double-Esc-at-empty-idle rewind handler — see {@link TerminalCompositor.onRewindRequest}. */
+  readonly onRewindRequest?: () => void;
   /** Submitted-line-during-pause handler — see {@link TerminalCompositorOptions.onPauseInterrupt}. */
   readonly onPauseInterrupt?: () => void;
   readonly onShiftTab?: () => void;
@@ -337,7 +348,28 @@ function handleEscape(self: KeyDispatchHost, key: KeyInfo): boolean {
     ac.candidates = [];
     self.repaint();
   }
-  if (self.inputMode === 'idle') return true;
+  if (self.inputMode === 'idle') {
+    // Idle ESC is normally a pure UI-dismissal no-op. Exception: a DOUBLE Esc
+    // at an EMPTY prompt opens the rewind picker ("edit a previous message").
+    // Detect the double-tap here; a lone Esc just arms the window. A non-empty
+    // draft disarms — ESC stays a no-op and leaves the typed text untouched
+    // (same "graceful stop preserves the draft" contract as streaming mode).
+    if (self.input.buffer.length === 0) {
+      const now = Date.now();
+      if (
+        self.lastIdleEscAt !== 0 &&
+        now - self.lastIdleEscAt <= DOUBLE_ESC_WINDOW_MS
+      ) {
+        self.lastIdleEscAt = 0;
+        if (self.onRewindRequest) self.onRewindRequest();
+      } else {
+        self.lastIdleEscAt = now;
+      }
+    } else {
+      self.lastIdleEscAt = 0;
+    }
+    return true;
+  }
   // Soft-stop: once-only per turn. Second ESC while streaming is
   // a no-op — the stream is already halting.
   if (self.softStopped) return true;
