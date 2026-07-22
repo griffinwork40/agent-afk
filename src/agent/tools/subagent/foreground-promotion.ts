@@ -50,6 +50,14 @@ export interface RunForegroundArgs {
   idPrefix: string | undefined;
   /** Child model for the promotion registry record; falls back to 'sonnet'. */
   model: string | undefined;
+  /**
+   * Parent session's model. Used ONLY to decide whether to stamp a provenance
+   * header on the returned result — the header is added only when the child ran
+   * on a different model than the parent (the mixed-model fan-out case, where
+   * the parent benefits from knowing which model produced a finding). Absent in
+   * contexts that don't wire it, in which case no header is ever added.
+   */
+  parentModel?: string;
   /** Child manager to tear down in the finally (unless promoted). */
   childManager: SubagentManager | undefined;
   /** Routing-decision identity fields (empty when this executor lacks a surface). */
@@ -73,6 +81,24 @@ export interface RunForegroundArgs {
 }
 
 /**
+ * Prepend a compact provenance header naming the subagent's model — but ONLY
+ * when it differs from the parent's. That is the mixed-model fan-out case where
+ * the parent benefits from knowing which model produced a finding (trust
+ * calibration: a result from a cheaper/different model warrants independent
+ * checking). When the child inherited the parent's model the header is pure
+ * noise and is omitted, so same-model dispatches stay byte-for-byte unchanged.
+ * Descriptive metadata, not an instruction.
+ */
+export function withProvenanceHeader(
+  content: string,
+  model: string | undefined,
+  parentModel: string | undefined,
+): string {
+  if (!model || !parentModel || model === parentModel) return content;
+  return `[subagent result · model=${model} (parent: ${parentModel})]\n\n${content}`;
+}
+
+/**
  * Run the foreground branch: race the run against a promotion signal, handle
  * success/failure, and clean up in a finally. Returns the `ToolResult`, or
  * re-throws on the defense-in-depth error path.
@@ -84,6 +110,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
     prompt,
     idPrefix,
     model,
+    parentModel,
     childManager,
     identity,
     depth,
@@ -242,8 +269,16 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
       // Assign (don't return) so the finally can append the in-turn
       // SubagentStop injectContext after teardown. See `toolResult` above.
       // annotateIfIncomplete marks capped/stream-truncated partials so the
-      // parent model doesn't treat them as a final answer (no-op if clean).
-      toolResult = { content: annotateIfIncomplete(content, result.stopReason) };
+      // parent model doesn't treat them as a final answer (no-op if clean);
+      // withProvenanceHeader stamps the producing model on a mixed-model
+      // dispatch (no-op when child == parent).
+      toolResult = {
+        content: withProvenanceHeader(
+          annotateIfIncomplete(content, result.stopReason),
+          model,
+          parentModel,
+        ),
+      };
       return toolResult;
     }
 

@@ -54,7 +54,9 @@ import type {
   ProviderMcpServerStatus,
   ProviderAccountInfo,
   ProviderRewindResult,
+  ProviderRewindConversationResult,
   ProviderCompactResult,
+  RewindTarget,
 } from '../../provider.js';
 import type { AgentConfig, ResumeHistoryTurn } from '../../types/config-types.js';
 import { QueryInputStream } from '../../session/input-iterable.js';
@@ -108,6 +110,50 @@ function stringifyUserContent(content: ProviderUserTurn['content']): string {
     })
     .filter((t) => t.length > 0)
     .join('\n');
+}
+
+/**
+ * Build the one-turn "your model was switched" system context prepended to the
+ * first turn a freshly-swapped inner serves.
+ *
+ * Motivation: an inner rebuild is otherwise INVISIBLE to the model — the new
+ * inner's `session.init` is swallowed (so no re-init is surfaced) and the
+ * carried conversation is anonymous prose (the module-level cross-family
+ * invariant). Without this notice the switched-to model has no in-context signal
+ * that (a) it is a different model than the one that produced earlier turns, or
+ * (b) prior structured tool/thinking content was flattened to text — which
+ * invites it to over-trust or misattribute the history (e.g. narrate its own
+ * identity from a stale premise). The notice is descriptive context, NOT an
+ * instruction, and rides only the swap turn — it expires after one turn like any
+ * framework nudge.
+ */
+function buildSwitchNotice(
+  previousModel: string,
+  currentModel: string,
+  previousFamily: string | undefined,
+  currentFamily: string,
+): string {
+  const familyClause =
+    previousFamily && previousFamily !== currentFamily
+      ? ` (provider ${previousFamily} → ${currentFamily})`
+      : '';
+  return (
+    `[System context — not from the user. Your model was switched at the start of this turn: ` +
+    `${previousModel} → ${currentModel}${familyClause}. Earlier turns in this conversation were produced ` +
+    `by ${previousModel}; the history carried across the switch is plain text only, so any prior tool ` +
+    `calls and extended reasoning are now prose — treat their structure as lost, not authoritative.]`
+  );
+}
+
+/** Prepend a synthetic notice as a leading text block (or line) to outbound turn content. */
+function prependNotice(
+  content: ProviderUserTurn['content'],
+  notice: string,
+): ProviderUserTurn['content'] {
+  if (typeof content === 'string') {
+    return content.length > 0 ? `${notice}\n\n${content}` : notice;
+  }
+  return [{ type: 'text' as const, text: notice }, ...content];
 }
 
 export class ProviderRouter implements ProviderQuery {
@@ -291,20 +337,42 @@ export class ProviderRouter implements ProviderQuery {
         const needSwap =
           !this.active ||
           (modelChanged && this.resolveInner(this.currentModel).signature !== this.active.signature);
+        // Capture the outgoing identity BEFORE `activeModel` is overwritten, so a
+        // swap can tell the new inner which model/family it succeeded.
+        const previousModel = this.activeModel;
+        const previousFamily = this.active?.family;
         this.activeModel = this.currentModel;
+        let switchNotice: string | undefined;
         if (needSwap) {
           await this.closeActive();
           this.active = this.buildInner(this.currentModel, /* seed */ true);
           debugLog(`🔀 ProviderRouter: switched inner provider → ${this.active.family} (model=${this.currentModel})`);
+          // A rebuild is otherwise invisible to the model (init swallowed, history
+          // carried as anonymous prose). On a genuine model change, prepend a
+          // one-turn notice so the new inner knows it was switched and that the
+          // carried history lost its structure. Guarded on a real prior model so
+          // the first inner construction never emits one.
+          if (previousModel !== undefined && previousModel !== this.currentModel) {
+            switchNotice = buildSwitchNotice(
+              previousModel,
+              this.currentModel ?? '(unset)',
+              previousFamily,
+              this.active.family,
+            );
+          }
           // Swallow the new inner's session.init; propagate a construction error.
           const failed = yield* this.driveUntilInit(/* swallow */ true);
           if (failed) break;
         }
 
-        // Route the user turn to the active inner and pump until turn end.
+        // Route the user turn to the active inner and pump until turn end. The
+        // shadow history records the user's REAL text (no notice); only the
+        // outbound content handed to a freshly-swapped inner carries the notice.
         this.pendingUserText = stringifyUserContent(turn.content);
         this.pendingAssistantText = '';
-        this.active!.input.pushUserMessage(turn.content);
+        this.active!.input.pushUserMessage(
+          switchNotice ? prependNotice(turn.content, switchNotice) : turn.content,
+        );
 
         while (true) {
           const r = await this.active!.iterator.next();
@@ -435,6 +503,23 @@ export class ProviderRouter implements ProviderQuery {
     return {
       compacted: false,
       reason: 'provider does not support compaction',
+      messagesBefore: 0,
+      messagesAfter: 0,
+    };
+  }
+
+  listRewindTargets(): RewindTarget[] {
+    return this.active?.query.listRewindTargets?.() ?? [];
+  }
+
+  async rewindConversation(
+    turnIndex: number,
+  ): Promise<ProviderRewindConversationResult> {
+    const a = this.active;
+    if (a?.query.rewindConversation) return a.query.rewindConversation(turnIndex);
+    return {
+      rewound: false,
+      reason: 'not-supported',
       messagesBefore: 0,
       messagesAfter: 0,
     };

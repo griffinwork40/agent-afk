@@ -114,6 +114,14 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     category: 'model',
   },
   {
+    name: 'AFK_COMPACT_SHRINK_FRACTION',
+    description: 'Context-fullness fraction (0–1, exclusive) at/above which /compact and auto-compaction relax the keep-window so a short-but-full session (few turns, huge tool exchanges) can still be summarized instead of no-oping on turn count. Default 0.7 (see shared/compaction.ts DEFAULT_COMPACT_SHRINK_THRESHOLD).',
+    type: 'number',
+    required: false,
+    example: '0.8',
+    category: 'model',
+  },
+  {
     name: 'AFK_DEFAULT_SUBAGENT_MODEL',
     description: 'Override the default model used when a subagent is dispatched without an explicit model.',
     type: 'string',
@@ -245,6 +253,24 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     required: false,
     example: '1',
     category: 'misc',
+  },
+  {
+    name: 'AFK_MICROCOMPACT_KEEP_LAST',
+    description: 'Number of the most-recent tool_result blocks that tool-result microcompaction keeps intact regardless of size, so the agent does not lose the tool output it is actively reasoning over. Older results are the safe ones to trim. Default 4 (see shared/compaction.ts DEFAULT_MICROCOMPACT_KEEP_LAST). Values <= 0 protect nothing.',
+    type: 'number',
+    required: false,
+    default: '4',
+    example: '3',
+    category: 'model',
+  },
+  {
+    name: 'AFK_MICROCOMPACT_TOOL_RESULT_BYTES',
+    description: 'Byte threshold (tool_result content length) at/above which a tool_result block becomes a microcompaction candidate. When /compact and auto-compaction would otherwise no-op on a short-but-full session, microcompaction clears large/old tool_result CONTENT in place (largest first) — replacing it with a short placeholder, never removing the block — to reclaim context deterministically (no LLM call). Blocks below this size are left intact. Default 2048 (see shared/compaction.ts DEFAULT_MICROCOMPACT_TOOL_RESULT_BYTES).',
+    type: 'number',
+    required: false,
+    default: '2048',
+    example: '4096',
+    category: 'model',
   },
   {
     name: 'AFK_MODEL',
@@ -953,6 +979,31 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     example: '1',
     category: 'process',
   },
+  {
+    name: 'AFK_THEME',
+    description:
+      'TUI color palette for the interactive REPL and all CLI rendering: dark | light | auto. ' +
+      'Display-only — swaps the semantic color palette, never behavior (cost/latency unaffected). ' +
+      'auto detects from COLORFGBG and falls back to dark. ' +
+      'Overridden per-launch by --theme and mutable mid-session via /theme. ' +
+      'Precedence: --theme flag > this env > config theme > auto-detect > dark. Invalid values are ignored (dark).',
+    type: 'string',
+    required: false,
+    default: 'dark',
+    example: 'light',
+    category: 'misc',
+  },
+  {
+    name: 'COLORFGBG',
+    description:
+      'Terminal-set "foreground;background" color hint (e.g. "15;0"), read only for AFK_THEME=auto detection. ' +
+      'The trailing field is the background color index; >= 7 is treated as a light background, otherwise dark. ' +
+      'Not set by AFK — emitted by some terminals (rxvt, Konsole, iTerm2). Absent or unparseable => dark.',
+    type: 'string',
+    required: false,
+    example: '15;0',
+    category: 'process',
+  },
 
   // ── Debug / diagnostics ───────────────────────────────────────────────────
   {
@@ -1286,6 +1337,7 @@ export const env = {
   // Model / agent runtime
   get AFK_COMPACT_KEEP_LAST_TURNS(): string | undefined { return process.env['AFK_COMPACT_KEEP_LAST_TURNS']; },
   get AFK_COMPACT_MODEL(): string | undefined { return process.env['AFK_COMPACT_MODEL']; },
+  get AFK_COMPACT_SHRINK_FRACTION(): string | undefined { return process.env['AFK_COMPACT_SHRINK_FRACTION']; },
   get AFK_COMPANION_PRIMER(): string | undefined { return process.env['AFK_COMPANION_PRIMER']; },
   get AFK_DEFAULT_SUBAGENT_MODEL(): string | undefined { return process.env['AFK_DEFAULT_SUBAGENT_MODEL']; },
   get AFK_DIAGNOSE_BASELINE(): string | undefined { return process.env['AFK_DIAGNOSE_BASELINE']; },
@@ -1299,6 +1351,8 @@ export const env = {
   get AFK_MAX_TOKENS(): string | undefined { return process.env['AFK_MAX_TOKENS']; },
   get AFK_MAX_TOOL_USE_ITERATIONS(): string | undefined { return process.env['AFK_MAX_TOOL_USE_ITERATIONS']; },
   get AFK_MEMORY_EVIDENCE_GATE(): string | undefined { return process.env['AFK_MEMORY_EVIDENCE_GATE']; },
+  get AFK_MICROCOMPACT_KEEP_LAST(): string | undefined { return process.env['AFK_MICROCOMPACT_KEEP_LAST']; },
+  get AFK_MICROCOMPACT_TOOL_RESULT_BYTES(): string | undefined { return process.env['AFK_MICROCOMPACT_TOOL_RESULT_BYTES']; },
   get AFK_MODEL(): string | undefined { return process.env['AFK_MODEL']; },
   get AFK_MODEL_TTFB_TIMEOUT_MS(): string | undefined { return process.env['AFK_MODEL_TTFB_TIMEOUT_MS']; },
   get AFK_MODEL_LARGE(): string | undefined { return process.env['AFK_MODEL_LARGE']; },
@@ -1400,6 +1454,8 @@ export const env = {
   get AFK_SKILL_STREAM_VERBOSE(): string | undefined { return process.env['AFK_SKILL_STREAM_VERBOSE']; },
   get FORCE_COLOR(): string | undefined { return process.env['FORCE_COLOR']; },
   get NO_COLOR(): string | undefined { return process.env['NO_COLOR']; },
+  get AFK_THEME(): string | undefined { return process.env['AFK_THEME']; },
+  get COLORFGBG(): string | undefined { return process.env['COLORFGBG']; },
 
   // Debug
   get AFK_DEBUG(): string | undefined { return process.env['AFK_DEBUG']; },

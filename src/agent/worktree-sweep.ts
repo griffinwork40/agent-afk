@@ -521,6 +521,9 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
     // Process registered worktrees (skip main/bare)
     let hasOrphanedRegistrations = false;
     const mainPath = parsed[0]?.path;
+    // The main worktree's HEAD is the fallback base for the commits-ahead
+    // count when a candidate's meta has no recorded `baseSha` (see below).
+    const mainHead = parsed[0]?.head;
 
     for (const entry of parsed) {
       // Skip main worktree and bare repos
@@ -576,10 +579,34 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
       } catch { isDirty = true; /* treat as dirty — safe fallback */ }
 
       if (!isDirty && entry.head) {
-        const baseSha = meta?.baseSha ?? entry.head;
+        // Contract: `commitsAhead > 0` marks a worktree as holding unmerged
+        // committed work, which the classifier preserves (`stale-clean`) and
+        // never reaps. Getting this count right is load-bearing for not
+        // destroying work.
+        //
+        // Invariant: when meta has NO `baseSha`, we must NOT fall back to
+        // `entry.head` as the base. `rev-list HEAD..HEAD` is always 0, so a
+        // baseSha-less worktree that actually holds commits would look empty
+        // and be force-removed by the `empty`/`dead-owner` verdicts. Meta is
+        // absent/minimal exactly for hand-created `git worktree add` trees
+        // adopted by touchWorktreeOccupancy (which writes `{owner:'agent'}`
+        // with no baseSha). Fall back to the main worktree's HEAD and count
+        // commits reachable from this tree but not from main — the true
+        // "unmerged work" signal.
         try {
-          const countResult = await execFile('git', ['-C', repoRoot, 'rev-list', `${baseSha}..${entry.head}`, '--count']);
-          commitsAhead = parseInt(countResult.stdout.trim(), 10) || 0;
+          const revListArgs =
+            meta?.baseSha !== undefined
+              ? ['-C', repoRoot, 'rev-list', `${meta.baseSha}..${entry.head}`, '--count']
+              : mainHead !== undefined && mainHead !== entry.head
+                ? ['-C', repoRoot, 'rev-list', entry.head, '--not', mainHead, '--count']
+                : undefined;
+          // `revListArgs === undefined` means no recorded base AND the tree
+          // sits at the main worktree's commit (or main HEAD is unknown) —
+          // genuinely nothing ahead, so leave commitsAhead at 0.
+          if (revListArgs !== undefined) {
+            const countResult = await execFile('git', revListArgs);
+            commitsAhead = parseInt(countResult.stdout.trim(), 10) || 0;
+          }
         } catch { commitsAhead = 0; }
       }
 

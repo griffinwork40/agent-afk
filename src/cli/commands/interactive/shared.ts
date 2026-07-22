@@ -280,6 +280,15 @@ export interface CliOptions {
    * config > `'live'` precedence (see `resolveThinkingUi`) and assigns it back.
    */
   thinkingUi?: ThinkingUiMode;
+  /**
+   * `--theme` color palette: `'dark' | 'light' | 'auto'`. Optional — the
+   * Commander option carries no static default, so this is `undefined` until
+   * the action handler resolves the flag > `AFK_THEME` env > `theme` config
+   * precedence (see `resolveThemeMode`) and applies it. Kept as a plain union
+   * (rather than importing `ThemeMode`) to avoid coupling the options shape to
+   * the theme module.
+   */
+  theme?: 'dark' | 'light' | 'auto';
   effort?: string;
   maxOutputTokens?: string;
   resume?: string;

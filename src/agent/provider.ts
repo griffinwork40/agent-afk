@@ -321,6 +321,26 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
    */
   compact?(): Promise<ProviderCompactResult>;
   /**
+   * Optional. Enumerate the genuine user-text turns in the current
+   * conversation, newest-first, for the "rewind to a previous message"
+   * picker. Each entry carries an opaque `turnIndex` handle the provider
+   * maps back to its internal history, plus a short single-line `preview`.
+   * Pure read — no mutation. Providers whose backend manages history
+   * opaquely leave this undefined; the harness returns an empty list.
+   */
+  listRewindTargets?(): RewindTarget[];
+  /**
+   * Optional. Rewind the conversation to a `turnIndex` returned by
+   * {@link listRewindTargets}: discard that user turn and everything after
+   * it, repairing any orphaned tool_use at the new tail so the Messages API
+   * contract holds. Returns the removed message's text as `reloadText` so
+   * the surface can reload it into the input for editing. In-place history
+   * mutation guarded by the same idle interlock as {@link compact} — a no-op
+   * (`rewound: false`) mid-turn. Providers that manage history opaquely leave
+   * this undefined; the harness surfaces a `not-supported` result.
+   */
+  rewindConversation?(turnIndex: number): Promise<ProviderRewindConversationResult>;
+  /**
    * Optional. Update the working directory used by the system prompt and
    * tool handlers for all **subsequent** turns in this query's lifetime.
    *
@@ -409,6 +429,13 @@ export interface ProviderRewindResult {
  * `compacted: false` is not an error — it signals a deliberate no-op (history
  * too short, provider doesn't support it, or the user aborted). `reason`
  * carries a short identifier the surface can render to the user.
+ *
+ * The `reason: 'microcompacted'` outcome is a special "success-ish" no-op:
+ * turn-granular summarization found nothing to do (the session is short but the
+ * window is full), so a deterministic tool-result microcompaction pass cleared
+ * large tool_result payloads in place instead. No messages were removed
+ * (`messagesBefore === messagesAfter`), so callers key off `microcompaction`
+ * rather than the message-count delta to report the reclaimed bytes/blocks.
  */
 export interface ProviderCompactResult {
   compacted: boolean;
@@ -417,6 +444,52 @@ export interface ProviderCompactResult {
   messagesAfter: number;
   /** Best-effort estimate of input tokens saved on subsequent turns. */
   tokensSavedEstimate?: number;
+  /**
+   * Present only when a deterministic tool-result microcompaction pass ran and
+   * reclaimed context (paired with `reason: 'microcompacted'`). No message was
+   * removed — only large `tool_result` block CONTENT was replaced by a
+   * placeholder — so this carries the win the message-count delta cannot.
+   */
+  microcompaction?: {
+    /** Number of tool_result blocks whose content was cleared. */
+    blocksCleared: number;
+    /** Total content bytes reclaimed. */
+    bytesReclaimed: number;
+  };
+}
+
+/**
+ * One rewindable user turn, surfaced to the "edit a previous message" picker
+ * by {@link ProviderQuery.listRewindTargets}.
+ */
+export interface RewindTarget {
+  /**
+   * Opaque handle the provider maps back to its internal history position.
+   * For {@link ProviderQuery.rewindConversation}. Callers must not assume it
+   * is a contiguous 0..N index — treat it as a token from `listRewindTargets`.
+   */
+  turnIndex: number;
+  /** Short, single-line preview of the user message text (already truncated). */
+  preview: string;
+}
+
+/**
+ * Result of a {@link ProviderQuery.rewindConversation} call.
+ *
+ * `rewound: false` is not necessarily an error — it signals a deliberate no-op
+ * (session busy, turn in flight, invalid target, or provider doesn't support
+ * it). `reason` carries a short identifier the surface can render.
+ */
+export interface ProviderRewindConversationResult {
+  rewound: boolean;
+  reason?: string;
+  /**
+   * Text of the discarded user message, for reloading into the input box so
+   * the user can edit and resend. Present only when `rewound: true`.
+   */
+  reloadText?: string;
+  messagesBefore: number;
+  messagesAfter: number;
 }
 
 /**

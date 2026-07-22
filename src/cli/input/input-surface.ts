@@ -91,6 +91,14 @@ export interface InputSurfaceReadOpts {
   onSigint?: () => void;
   onShiftTab?: () => void;
   /**
+   * Pre-fill the editable input buffer before blocking for input (the
+   * rewind reload-for-edit path — `/rewind` / double-Esc loads a discarded
+   * message's text here to edit and resend). Distinct from an auto-submit:
+   * the text is placed in the input row and awaits an explicit Enter.
+   * Honored on both the compositor (TTY) and readline-fallback paths.
+   */
+  initialBuffer?: string;
+  /**
    * Currently-armed agent-turn compositor (if any). Today: always
    * `undefined` between turns because the compositor disarms at
    * end-of-turn. Forwarded to the underlying reader as a defensive
@@ -347,6 +355,9 @@ export class InputSurface {
     });
     await compositor.arm();
     compositor.setInputMode('idle');
+    // Double-Esc at an empty idle prompt → resolve the in-flight readLine with
+    // `/rewind` so the REPL dispatches the rewind picker between turns.
+    compositor.setOnRewindRequest(() => { this.requestRewind(); });
     this.compositor = compositor;
     this.armedStdout = stdout;
   }
@@ -531,6 +542,12 @@ export class InputSurface {
           resolve({ text: payload.text, attachments: [...payload.attachments] });
         };
         compositor.setOnSubmit(handler);
+        // Rewind reload-for-edit: seed the editable buffer BEFORE flipping to
+        // idle + repainting so the discarded message's text appears in the
+        // input row ready to edit. Mirrors history-recall's applyEdit(seed).
+        if (opts.initialBuffer !== undefined && opts.initialBuffer.length > 0) {
+          compositor.prefillInput(opts.initialBuffer);
+        }
         // Flip to idle mode. Side effects:
         //   1. The turn-handler's renderer.dispose() already flipped
         //      to idle and may have left a queued buffer (user typed
@@ -557,6 +574,7 @@ export class InputSurface {
     return readWithAutocomplete({
       rl: this.rl,
       promptFn: opts.promptFn,
+      ...(opts.initialBuffer !== undefined ? { initialBuffer: opts.initialBuffer } : {}),
       ...(opts.onSigint ? { onSigint: opts.onSigint } : {}),
       ...(opts.onShiftTab ? { onShiftTab: opts.onShiftTab } : {}),
       ...(opts.compositor ? { compositor: opts.compositor } : {}),
@@ -610,6 +628,25 @@ export class InputSurface {
     this.pendingReadReject = null;
     this.pendingReadResolve = null;
     resolve({ text: '', attachments: [] });
+  }
+
+  /**
+   * Resolve an in-flight compositor-path {@link readLine} with the text
+   * `/rewind` WITHOUT a keypress — the double-Esc rewind trigger. Mirrors
+   * {@link abortPendingRead}'s wake+cleanup (clear the one-shot onSubmit so a
+   * later Enter can't double-fire), but resolves with `/rewind` so the REPL
+   * loop dispatches the rewind command (which runs the picker between turns,
+   * where selectors are safe). No-op when no read is in flight (non-TTY, or a
+   * turn is streaming). Returns whether it fired.
+   */
+  requestRewind(): boolean {
+    if (!this.pendingReadResolve) return false;
+    this.compositor?.setOnSubmit(null);
+    const resolve = this.pendingReadResolve;
+    this.pendingReadReject = null;
+    this.pendingReadResolve = null;
+    resolve({ text: '/rewind', attachments: [] });
+    return true;
   }
 
   /**

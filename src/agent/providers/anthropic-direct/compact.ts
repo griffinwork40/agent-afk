@@ -28,11 +28,19 @@ import {
   COMPACT_SUMMARY_HEADER,
   COMPACT_SYSTEM_PROMPT,
   applyCompaction as sharedApplyCompaction,
+  byteLengthOf,
   estimateTokensSaved as sharedEstimateTokensSaved,
   findCompactionBoundary as sharedFindCompactionBoundary,
+  findCompactionBoundaryAdaptive as sharedFindCompactionBoundaryAdaptive,
+  isMicrocompactPlaceholder,
+  microcompactToolResults as sharedMicrocompactToolResults,
   renderTranscript as sharedRenderTranscript,
   wrapTranscriptForSummary,
   type CompactionOps,
+  type MicrocompactOps,
+  type MicrocompactOptions,
+  type MicrocompactResult,
+  type ToolResultRef,
 } from '../shared/compaction.js';
 
 // Re-export the shared constants so existing importers (compact-handler.ts,
@@ -126,6 +134,90 @@ export const anthropicCompactionOps: CompactionOps<MessageParam> = {
 };
 
 /**
+ * Byte length of an Anthropic `tool_result` block's content, matching how it
+ * counts toward the context window: a string is measured directly; a content
+ * array sums the text of its `text` blocks (images/other non-text blocks are
+ * ignored — clearing them is out of scope and they are not the byte hogs a file
+ * read or grep dump is).
+ */
+function toolResultContentBytes(content: unknown): number {
+  if (typeof content === 'string') return byteLengthOf(content);
+  if (Array.isArray(content)) {
+    let total = 0;
+    for (const block of content) {
+      const t = (block as { type?: string }).type;
+      if (t === 'text' && 'text' in (block as object)) {
+        total += byteLengthOf((block as { text: string }).text);
+      }
+    }
+    return total;
+  }
+  return 0;
+}
+
+/** True when a `tool_result` block's content already carries the placeholder. */
+function isToolResultPlaceholder(content: unknown): boolean {
+  if (typeof content === 'string') return isMicrocompactPlaceholder(content);
+  if (Array.isArray(content)) {
+    // A cleared block is rewritten to a single text block, so inspect the first
+    // text block's payload.
+    for (const block of content) {
+      const t = (block as { type?: string }).type;
+      if (t === 'text' && 'text' in (block as object)) {
+        return isMicrocompactPlaceholder((block as { text: string }).text);
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Anthropic microcompaction primitives. Walks every `role:'user'` message's
+ * content array for `tool_result` blocks (the only place Anthropic puts them)
+ * and yields a {@link ToolResultRef} per block. `clear()` swaps the block's
+ * `content` for a plain-string placeholder in place — the block object, its
+ * `tool_use_id`, and its array position are all preserved, so the
+ * tool_use/tool_result pairing the Messages API enforces is untouched.
+ */
+export const anthropicMicrocompactOps: MicrocompactOps<MessageParam> = {
+  listToolResults(messages: ReadonlyArray<MessageParam>): ToolResultRef[] {
+    const refs: ToolResultRef[] = [];
+    for (const msg of messages) {
+      if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
+      const content = msg.content as ContentBlockParam[];
+      for (const block of content) {
+        if ((block as { type?: string }).type !== 'tool_result') continue;
+        const resultBlock = block as { content?: unknown };
+        refs.push({
+          byteLength: toolResultContentBytes(resultBlock.content),
+          isPlaceholder: isToolResultPlaceholder(resultBlock.content),
+          clear(placeholder: string): void {
+            // Replace content in place with a single text-string payload. Keeps
+            // the tool_result block (and its tool_use_id) exactly where it was.
+            resultBlock.content = placeholder;
+          },
+        });
+      }
+    }
+    return refs;
+  },
+};
+
+/**
+ * Deterministic tool-result microcompaction for Anthropic history. Thin adapter
+ * over the shared {@link sharedMicrocompactToolResults} bound to
+ * {@link anthropicMicrocompactOps}. Mutates `messages` in place; returns the
+ * reclaimed block/byte counts. See the shared docs for the full algorithm and
+ * invariants (pairing preserved, no LLM call, works at any turn count).
+ */
+export function microcompactToolResults(
+  messages: ReadonlyArray<MessageParam>,
+  opts?: MicrocompactOptions,
+): MicrocompactResult {
+  return sharedMicrocompactToolResults(messages, anthropicMicrocompactOps, opts ?? {});
+}
+
+/**
  * Find the index in `messages` that marks the start of the kept tail. Thin
  * adapter over the shared generic bound to {@link anthropicCompactionOps}.
  *
@@ -137,6 +229,28 @@ export function findCompactionBoundary(
   keepLastN: number,
 ): number {
   return sharedFindCompactionBoundary(messages, keepLastN, anthropicCompactionOps);
+}
+
+/**
+ * Boundary selection with the token-fullness fallback. Thin adapter over the
+ * shared {@link sharedFindCompactionBoundaryAdaptive} bound to
+ * {@link anthropicCompactionOps}. See the shared docs: when the turn-count
+ * keep-window is a no-op but `usedFraction >= shrinkAtFraction`, the keep-window
+ * relaxes toward 1 turn so a short-but-full session can still be compacted.
+ */
+export function findCompactionBoundaryAdaptive(
+  messages: ReadonlyArray<MessageParam>,
+  keepLastN: number,
+  usedFraction: number,
+  shrinkAtFraction: number,
+): number {
+  return sharedFindCompactionBoundaryAdaptive(
+    messages,
+    keepLastN,
+    anthropicCompactionOps,
+    usedFraction,
+    shrinkAtFraction,
+  );
 }
 
 /**

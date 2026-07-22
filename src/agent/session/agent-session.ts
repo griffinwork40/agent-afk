@@ -19,7 +19,13 @@ import type { HookRegistry } from '../hooks.js';
 import { resolveProvider, providerForModel } from '../providers/index.js';
 import { ProviderRouter } from '../providers/router/provider-router.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
-import type { ProviderCompactResult, ProviderEvent, ProviderQuery } from '../provider.js';
+import type {
+  ProviderCompactResult,
+  ProviderEvent,
+  ProviderQuery,
+  ProviderRewindConversationResult,
+  RewindTarget,
+} from '../provider.js';
 import { DEFAULT_SESSION_TIMEOUT_MS, RESET_DRAIN_TIMEOUT_MS, withTimeout } from '../timeout.js';
 import { dispatchSessionEnd, dispatchSessionStart } from './hooks-dispatch.js';
 import { HookBlockedError } from '../../utils/errors.js';
@@ -1067,6 +1073,37 @@ export class AgentSession implements IAgentSession {
     }
   }
 
+  listRewindTargets(): RewindTarget[] {
+    if (this.currentState === 'closed') return [];
+    return this.providerQuery.listRewindTargets?.() ?? [];
+  }
+
+  async rewindConversation(
+    turnIndex: number,
+  ): Promise<ProviderRewindConversationResult> {
+    if (this.currentState === 'closed') {
+      throw new Error('Cannot rewind: session is closed');
+    }
+    if (this.currentState !== 'idle') {
+      return {
+        rewound: false,
+        reason: 'session-busy',
+        messagesBefore: 0,
+        messagesAfter: 0,
+      };
+    }
+    const fn = this.providerQuery.rewindConversation?.bind(this.providerQuery);
+    if (!fn) {
+      return {
+        rewound: false,
+        reason: 'not-supported',
+        messagesBefore: 0,
+        messagesAfter: 0,
+      };
+    }
+    return fn(turnIndex);
+  }
+
   getLastResponseMetadata(): ResponseMetadata | null {
     return this.lastResponseMetadata;
   }
@@ -1164,7 +1201,8 @@ export class AgentSession implements IAgentSession {
     //      WHY the session ended (model_end_turn, abort, budget_exceeded,
     //      timeout). Carries the final cost / token tuple + last stopReason.
     //   2. Seal the trace via session_sealed — the sealed-clean terminal
-    //      record. Sealing happens BEFORE the SessionEnd hook fires so a
+    //      record — but ONLY for the top-level session (see the ownership
+    //      guard below). Sealing happens BEFORE the SessionEnd hook fires so a
     //      hook-thrown exception cannot leave the trace `sealed-crashed`
     //      on the normal close path (a hook crash would surface as a
     //      separate `hook_decision: block` record, not erase the seal).
@@ -1178,14 +1216,28 @@ export class AgentSession implements IAgentSession {
       finalCostUsd: this.sessionRunningCostUsd,
       runningTokens: this.sessionRunningTokens,
     }).catch(() => {});
-    await sealTraceWriter(this.config.traceWriter, {
-      ...signals,
-      finalTurnCount: this.turnCount,
-      finalCostUsd: this.sessionRunningCostUsd,
-      subagentCompletedCount: this.subagentCompletedCount,
-      subagentRunningTokens: this.subagentRunningTokens,
-      subagentRunningCostUsd: this.subagentRunningCostUsd,
-    }).catch(() => {});
+    // Invariant: only the TOP-LEVEL session (no fork marker) may seal the writer.
+    // A session tree shares ONE TraceWriter by reference (forkSubagent threads
+    // the parent's writer into every descendant), and seal() is one-shot /
+    // idempotent (NdjsonTraceWriter). If a subagent sealed on its own close(),
+    // the FIRST descendant torn down would seal the whole shared file while the
+    // top-level is still mid-run — stranding every later ancestor event as the
+    // "started without terminal" gap (a nested grandchild's end_turn sealing the
+    // root trace 30+ min before the real session ends). The seal owner gate uses
+    // forkSubagent's explicit fork marker, not parentSessionId: stub-parent skill
+    // forks can have no parent session id while still sharing the root writer.
+    // Subagents still emit their own `closure` record above; if the top-level
+    // never runs close(), the process-exit backstop still seals.
+    if (this.config.subagentToolOutputCapBytes === undefined) {
+      await sealTraceWriter(this.config.traceWriter, {
+        ...signals,
+        finalTurnCount: this.turnCount,
+        finalCostUsd: this.sessionRunningCostUsd,
+        subagentCompletedCount: this.subagentCompletedCount,
+        subagentRunningTokens: this.subagentRunningTokens,
+        subagentRunningCostUsd: this.subagentRunningCostUsd,
+      }).catch(() => {});
+    }
     await dispatchSessionEnd(
       this._hookRegistry,
       {

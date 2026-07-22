@@ -11,6 +11,31 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.63.1] - 2026-07-22
+
+### Fixed
+- seal witness trace only from the top-level session (#666) (b98f911)
+
+## [5.63.0] - 2026-07-22
+
+### Added
+- edit a previous message — /rewind + double-Esc conversation rewind (#668) (d80601b)
+
+## [5.62.0] - 2026-07-22
+
+### Added
+- tool-result microcompaction to reclaim context on short-but-full sessions (#671) (9b7b3ec)
+
+### Fixed
+- count commits vs main HEAD when meta has no baseSha (#670) (97b3619)
+
+## [5.61.0] - 2026-07-22
+
+### Added
+- stamp a provenance header on cross-model subagent results (#656) (71b8601)
+- notify the model when its provider is swapped mid-session (#655) (39a9ef7)
+- token-aware keep-window so /compact works on short-but-full sessions (#667) (c5b6354)
+
 ## [5.60.0] - 2026-07-21
 
 ### Added

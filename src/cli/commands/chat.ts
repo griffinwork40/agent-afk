@@ -16,6 +16,7 @@ import { formatDuration, formatCost, formatTokens } from '../format-utils.js';
 import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getMaxToolUseIterations, getDefaultSubagentModel, resolveBaseSystemPrompt } from '../shared-helpers.js';
 import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
 import { loadConfig } from '../config.js';
+import { applyTheme, resolveTheme, resolveThemeMode, parseThemeFlag } from '../theme.js';
 import { assembleSystemPrompt } from '../../agent/routing-directive.js';
 import { renderMarkdownToTerminal } from '../formatter.js';
 import { formatSubagentCompletion } from './interactive/progress-banner.js';
@@ -140,6 +141,7 @@ export function registerChatCommand(program: Command): void {
     .option('--max-turns <number>', 'Maximum conversation turns', '10')
     .option('--thinking <mode>', "Thinking mode: 'adaptive' | 'disabled' | 'enabled:<N>'", 'enabled:max')
     .option('--effort <level>', "Effort level: low|medium|high|xhigh|max")
+    .option('--theme <mode>', 'TUI color palette: dark|light|auto. Default dark. Also: AFK_THEME env, or theme in afk.config.json.', parseThemeFlag)
     .option('--max-budget-usd <usd>', 'Hard session cost ceiling in USD. Env: AFK_MAX_BUDGET_USD')
     .option('--task-budget <tokens>', 'Soft per-task token budget. Env: AFK_TASK_BUDGET')
     .option('--max-output-tokens <n|max>', "Per-response output cap ('max' = model ceiling). Env: AFK_MAX_OUTPUT_TOKENS")
@@ -167,6 +169,7 @@ export function registerChatCommand(program: Command): void {
       maxTurns: string;
       thinking?: string;
       effort?: string;
+      theme?: 'dark' | 'light' | 'auto';
       maxBudgetUsd?: string;
       taskBudget?: string;
       maxOutputTokens?: string;
@@ -353,6 +356,11 @@ export function registerChatCommand(program: Command): void {
         // --dump-prompt (`framework`, `framework+afk-md:/path`, …).
         const { prompt: basePrompt, source: systemPromptSource } = resolveBaseSystemPrompt();
         const cliConfig = loadConfig();
+        // Apply the color theme (--theme flag > AFK_THEME env > config.theme >
+        // auto-detect > dark) before any markdown renders. index.ts already set
+        // the env/default baseline; this adds the config value, which index.ts
+        // could not see (config is not loaded that early).
+        applyTheme(resolveTheme(resolveThemeMode(options.theme, cliConfig.theme)));
         const autoRouting = cliConfig.autoRouting?.chat ?? false;
         const systemPrompt = assembleSystemPrompt(basePrompt, autoRouting, 'one-shot');
 

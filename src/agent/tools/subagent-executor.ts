@@ -668,6 +668,7 @@ export class SubagentExecutor implements SubagentControl {
       prompt: parsed.prompt,
       idPrefix: parsed.id_prefix,
       model: childConfig.model,
+      ...(this.ctx.parentModel !== undefined ? { parentModel: this.ctx.parentModel } : {}),
       childManager,
       identity,
       depth,
