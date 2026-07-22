@@ -1201,7 +1201,8 @@ export class AgentSession implements IAgentSession {
     //      WHY the session ended (model_end_turn, abort, budget_exceeded,
     //      timeout). Carries the final cost / token tuple + last stopReason.
     //   2. Seal the trace via session_sealed — the sealed-clean terminal
-    //      record. Sealing happens BEFORE the SessionEnd hook fires so a
+    //      record — but ONLY for the top-level session (see the ownership
+    //      guard below). Sealing happens BEFORE the SessionEnd hook fires so a
     //      hook-thrown exception cannot leave the trace `sealed-crashed`
     //      on the normal close path (a hook crash would surface as a
     //      separate `hook_decision: block` record, not erase the seal).
@@ -1215,14 +1216,28 @@ export class AgentSession implements IAgentSession {
       finalCostUsd: this.sessionRunningCostUsd,
       runningTokens: this.sessionRunningTokens,
     }).catch(() => {});
-    await sealTraceWriter(this.config.traceWriter, {
-      ...signals,
-      finalTurnCount: this.turnCount,
-      finalCostUsd: this.sessionRunningCostUsd,
-      subagentCompletedCount: this.subagentCompletedCount,
-      subagentRunningTokens: this.subagentRunningTokens,
-      subagentRunningCostUsd: this.subagentRunningCostUsd,
-    }).catch(() => {});
+    // Invariant: only the TOP-LEVEL session (no fork marker) may seal the writer.
+    // A session tree shares ONE TraceWriter by reference (forkSubagent threads
+    // the parent's writer into every descendant), and seal() is one-shot /
+    // idempotent (NdjsonTraceWriter). If a subagent sealed on its own close(),
+    // the FIRST descendant torn down would seal the whole shared file while the
+    // top-level is still mid-run — stranding every later ancestor event as the
+    // "started without terminal" gap (a nested grandchild's end_turn sealing the
+    // root trace 30+ min before the real session ends). The seal owner gate uses
+    // forkSubagent's explicit fork marker, not parentSessionId: stub-parent skill
+    // forks can have no parent session id while still sharing the root writer.
+    // Subagents still emit their own `closure` record above; if the top-level
+    // never runs close(), the process-exit backstop still seals.
+    if (this.config.subagentToolOutputCapBytes === undefined) {
+      await sealTraceWriter(this.config.traceWriter, {
+        ...signals,
+        finalTurnCount: this.turnCount,
+        finalCostUsd: this.sessionRunningCostUsd,
+        subagentCompletedCount: this.subagentCompletedCount,
+        subagentRunningTokens: this.subagentRunningTokens,
+        subagentRunningCostUsd: this.subagentRunningCostUsd,
+      }).catch(() => {});
+    }
     await dispatchSessionEnd(
       this._hookRegistry,
       {
