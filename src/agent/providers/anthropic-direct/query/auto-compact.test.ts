@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { shouldAutoCompact, computeUsedTokens, contextWindowTokensUsed, buildContextUsageFields } from './auto-compact.js';
+import { shouldAutoCompact, computeUsedTokens, contextWindowTokensUsed, contextFullnessFraction, buildContextUsageFields } from './auto-compact.js';
 
 const DEFAULT_THRESHOLD = 0.9;
 
@@ -173,6 +173,23 @@ describe('contextWindowTokensUsed', () => {
 
   it('returns 0 for an empty usage object', () => {
     expect(contextWindowTokensUsed({})).toBe(0);
+  });
+});
+
+describe('contextFullnessFraction', () => {
+  it('returns the raw used/limit ratio', () => {
+    expect(contextFullnessFraction(90_000, 180_000)).toBe(0.5);
+    expect(contextFullnessFraction(180_000, 200_000)).toBeCloseTo(0.9);
+  });
+
+  it('can exceed 1 when usage overruns the limit (never clamped)', () => {
+    expect(contextFullnessFraction(250_000, 200_000)).toBeGreaterThan(1);
+  });
+
+  it('returns 0 when usage or limit is non-positive (unknown → never looks full)', () => {
+    expect(contextFullnessFraction(0, 200_000)).toBe(0);
+    expect(contextFullnessFraction(100_000, 0)).toBe(0);
+    expect(contextFullnessFraction(-5, 200_000)).toBe(0);
   });
 });
 

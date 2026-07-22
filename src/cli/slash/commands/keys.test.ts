@@ -81,6 +81,14 @@ describe('/keys slash command', () => {
     expect(body).toContain('ctrl+x');
   });
 
+  it('documents the ctrl+o $EDITOR handoff', async () => {
+    const { ctx, lines } = makeCtx();
+    await keysCmd.handler(ctx, '');
+    const body = lines.join('\n');
+    expect(body).toContain('ctrl+o');
+    expect(body).toContain('$EDITOR');
+  });
+
   it('is registered in the global slash registry', () => {
     registerAll();
     const registered = list();

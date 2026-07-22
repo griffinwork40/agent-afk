@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as traceEmit from '../trace/emit.js';
+import * as nodeCron from 'node-cron';
 
 const schedulerTestState = vi.hoisted(() => ({ cleanupOrder: [] as string[] }));
 
@@ -24,6 +25,25 @@ vi.mock('../default-hook-registry.js', () => ({
     registry: undefined,
     memoryStore: { close: () => schedulerTestState.cleanupOrder.push('memory.close') },
   }),
+}));
+
+// Invariant: these unit tests exercise the scheduler exclusively through the
+// explicit `scheduler.tick(...)` seam, which invokes `runOnce` directly and
+// never needs a live wall-clock cron. node-cron auto-STARTS a real timer at
+// register(); under full-suite load a genuine minute-boundary tick can fire a
+// background `runOnce` whose slow `McpManager.fromConfig` outlives `stop()`
+// (which cancels the timer but never awaits an in-flight run) and leaks its
+// fire-and-forget `mcp_connect_done` into a sibling test's module-level
+// `emitSessionPhase` spy — the intermittent duplicate in issue #657. Stubbing
+// `schedule()` so register() arms no real timer removes that source entirely;
+// every assertion below stays exact.
+vi.mock('node-cron', () => ({
+  schedule: vi.fn(() => ({
+    start: () => {},
+    stop: () => {},
+    destroy: () => {},
+    getStatus: () => 'stopped',
+  })),
 }));
 
 import { CronScheduler, daemonTraceLabel, resolveWorktreePruneRoot } from './scheduler.js';
@@ -867,6 +887,35 @@ describe('CronScheduler — mcp_connect_* trace phases', () => {
     },
     { timeout: 15_000 },
   );
+});
+
+describe('CronScheduler — cron-timer isolation (#657)', () => {
+  it('register() routes cron scheduling through the stubbed node-cron so tests arm no live wall-clock timer', () => {
+    // Regression guard for the flaky duplicate `mcp_connect_done` in issue #657.
+    // If this file's `vi.mock('node-cron', …)` stub is ever removed, register()
+    // would arm a real minute-boundary timer whose background `runOnce` can leak
+    // a fire-and-forget trace phase into a sibling test's `emitSessionPhase` spy
+    // under full-suite load. Assert the stub is in effect AND load-bearing.
+    expect(vi.isMockFunction(nodeCron.schedule)).toBe(true);
+
+    const dir = makeTmpDir();
+    try {
+      const scheduler = new CronScheduler({ telemetryPath: join(dir, 'forge-telemetry.jsonl') });
+      scheduler.register({
+        taskId: 'isolation-guard-657',
+        command: 'noop',
+        trigger: 'cron',
+        cronExpression: '* * * * *',
+      });
+      expect(nodeCron.schedule).toHaveBeenCalledWith(
+        '* * * * *',
+        expect.any(Function),
+        expect.objectContaining({ name: 'isolation-guard-657' }),
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('daemonTraceLabel', () => {

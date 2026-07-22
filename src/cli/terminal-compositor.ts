@@ -108,6 +108,21 @@ export class TerminalCompositor {
   /** @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost). */
   onBackground?: () => void;
   /**
+   * Double-Esc-at-empty-idle handler — the "edit a previous message" rewind
+   * trigger. Fired by `handleEscape` when two Escapes land within
+   * {@link DOUBLE_ESC_WINDOW_MS} at an empty idle prompt. Wired via
+   * {@link setOnRewindRequest} at REPL arm time; the surface resolves the
+   * in-flight readLine with `/rewind`.
+   * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
+   */
+  onRewindRequest?: () => void;
+  /**
+   * Timestamp (ms) of the last Escape at an empty idle prompt, for double-tap
+   * detection in `handleEscape`. 0 = disarmed.
+   * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
+   */
+  lastIdleEscAt = 0;
+  /**
    * Per-turn pause-interrupt handler — see
    * {@link TerminalCompositorOptions.onPauseInterrupt}. Invoked when the user
    * submits a line while {@link paused} is true; ends the usage-limit wait so
@@ -117,6 +132,13 @@ export class TerminalCompositor {
   onPauseInterrupt?: () => void;
   /** @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost). */
   onShiftTab?: () => void;
+  /**
+   * Ctrl+O "open $EDITOR" handler — see
+   * {@link TerminalCompositorOptions.onOpenEditor}. Installed once at REPL
+   * arm time (the handoff is REPL-global, not per-turn).
+   * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
+   */
+  onOpenEditor?: () => void;
   /**
    * Resolved prompt accessor. Always a function — strings supplied at
    * construction are wrapped in a constant-returning closure so the
@@ -505,6 +527,7 @@ export class TerminalCompositor {
     this.onBackground = opts.onBackground;
     this.onPauseInterrupt = opts.onPauseInterrupt;
     this.onShiftTab = opts.onShiftTab;
+    this.onOpenEditor = opts.onOpenEditor;
     // Normalize promptText to a function: string → constant closure;
     // function → use as-is; falsy → dim-chevron fallback.
     const promptOpt = opts.promptText;
@@ -652,6 +675,15 @@ export class TerminalCompositor {
   }
 
   /**
+   * Install or clear the double-Esc rewind handler (the "edit a previous
+   * message" trigger). Wired once by the persistent InputSurface at REPL arm
+   * time; fired from `handleEscape` on a double-Esc at an empty idle prompt.
+   */
+  setOnRewindRequest(handler: (() => void) | null): void {
+    this.onRewindRequest = handler ?? undefined;
+  }
+
+  /**
    * Install or clear the Shift+Tab handler — see
    * {@link TerminalCompositorOptions.onShiftTab}. The persistent
    * InputSurface typically installs this once at REPL start (the
@@ -659,6 +691,16 @@ export class TerminalCompositor {
    */
   setOnShiftTab(handler: (() => void) | null): void {
     this.onShiftTab = handler ?? undefined;
+  }
+
+  /**
+   * Install or clear the Ctrl+O "open $EDITOR" handler — see
+   * {@link TerminalCompositorOptions.onOpenEditor}. Like Shift+Tab, the
+   * persistent InputSurface installs this once at REPL start (the editor
+   * handoff is REPL-global, not per-turn).
+   */
+  setOnOpenEditor(handler: (() => void) | null): void {
+    this.onOpenEditor = handler ?? undefined;
   }
 
   /**
@@ -1018,6 +1060,17 @@ export class TerminalCompositor {
    */
   applyEdit(next: InputCoreState): boolean {
     return InputDispatch.applyEdit(this, next);
+  }
+
+  /**
+   * Seed the editable input buffer with `text` (cursor at end), as if the
+   * user had typed it. Used by the rewind reload-for-edit path
+   * (`readLine({ initialBuffer })`) to load a discarded message back into the
+   * prompt. Routes through {@link applyEdit} so autocomplete/ghost/repaint
+   * refresh exactly like history recall (input-dispatch's `InputCore.seed`).
+   */
+  prefillInput(text: string): void {
+    this.applyEdit(InputCore.seed(text));
   }
 
   /**

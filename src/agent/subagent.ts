@@ -38,8 +38,10 @@ import { touchWorktreeOccupancy } from './worktree-occupancy.js';
 import { resolveWorktreeMainRoot } from './worktree-read-root.js';
 import { computeInheritedReadRoots, type ReadScopeInputs } from './subagent-read-scope.js';
 import { getAfkStateDir } from '../paths.js';
+import path from 'path';
 import { env } from '../config/env.js';
 import { buildPhaseRestrictedProvider, type PhaseRole } from './tools/nesting.js';
+import { MODEL_CAP_BYTES } from './tools/handlers/_output-cap.js';
 import { applyManagerApiKeyFallback } from './tools/child-credential.js';
 import { providerForModel, type BundledProviderName } from './providers/index.js';
 import {
@@ -654,6 +656,32 @@ export class SubagentManager {
       });
     }
 
+    // #662: additive read roots from the `readRoots` agent-tool param. Compose with
+    // the inherited scope so the child keeps its repo/worktree/state reach AND gains
+    // the named out-of-repo dirs. Mirrors composedWriteRoots (#435). Two guards:
+    //   - Invariant #1 (farm pin untouched): only compose when the caller did NOT
+    //     pin `config.readRoots`. A pin ("confine to exactly these" — `afk farm`)
+    //     suppresses inheritance entirely (the `=== undefined` gate above), so
+    //     `inheritedReadRoots` stays undefined; composing here would silently
+    //     override the pin at the childConfig literal. extraReadRoots flows through
+    //     the DISTINCT `extraReadRoots` field precisely so the pin is never touched.
+    //   - Invariant #2 (never confine an unconfined child): only compose when the
+    //     child is (or will be) CONFINED. An unconfined child (no inherited roots
+    //     AND no cwd -> resolveBase undefined -> read-open) can already read these
+    //     paths; turning its read scope into a finite list would REGRESS it from
+    //     read-open to confined.
+    if (
+      options.config.readRoots === undefined &&
+      options.config.extraReadRoots !== undefined &&
+      options.config.extraReadRoots.length > 0
+    ) {
+      const willBeConfined = inheritedReadRoots !== undefined || effectiveChildCwd !== undefined;
+      if (willBeConfined) {
+        const base = inheritedReadRoots ?? (effectiveChildCwd !== undefined ? [effectiveChildCwd] : []);
+        inheritedReadRoots = [...new Set([...base, ...options.config.extraReadRoots.map((r) => path.resolve(r))])];
+      }
+    }
+
     // Explicit write-root pre-grant (#435): when the caller passed writeRoots on
     // the agent tool, COMPOSE them with the child's own cwd so the child never
     // loses write access to its own tree — the provider REPLACES the default
@@ -681,6 +709,23 @@ export class SubagentManager {
       // trace file, so without this tag the parent trace cannot say which fork
       // ran which tool (issue #612).
       subagentId: id,
+      // Central output-cap signal (#661), stamped UNCONDITIONALLY on EVERY
+      // fork. forkSubagent is the single choke point through which the
+      // agent-tool, skill, and compose paths all create their child session
+      // (subagent-executor.ts, skill-executor/fork-dispatch.ts, and
+      // dag-subagent.ts all converge here), and the top-level session is always
+      // built via `new AgentSession(...)` directly at the entry points — never
+      // here — so this value marks "forked child" and its absence marks
+      // "top-level". The provider's buildDispatcher arms the dispatcher's
+      // `maxOutputBytes` backstop from this field, bounding every tool result
+      // at MODEL_CAP_BYTES (100KB) via headAndTail and containing the
+      // tool-output-overflow crash class (#661) for ALL forks — including
+      // skill-forked descendants whose `parentSessionId` is undefined (a stub
+      // parent carries no sessionId), which the prior `parentSessionId`-keyed
+      // gate left uncapped. Set here (not left to the `...options.config`
+      // spread) so it cannot be omitted by any fork path; a caller override is
+      // intentionally NOT honored — the cap is a non-negotiable fork backstop.
+      subagentToolOutputCapBytes: MODEL_CAP_BYTES,
       abortSignal: childController.signal,
       // Invariant (cross-provider credential anti-leak): the parent-credential
       // fallback below must never hand a credential across the provider

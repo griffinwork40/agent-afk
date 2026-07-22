@@ -296,6 +296,17 @@ export interface AgentConfig {
   writeRoots?: string[];
 
   /**
+   * Additive extra READ roots from the `agent`-tool `readRoots` param (#662).
+   * DISTINCT from {@link readRoots}: `readRoots` PINS the read scope (the
+   * `afk farm` "confine to exactly these roots" path — setting it SUPPRESSES
+   * read-scope inheritance in `forkSubagent`). This field instead COMPOSES with
+   * the child's inherited read scope (union, in `forkSubagent`), so the fork
+   * keeps its repo/worktree/state reach AND gains the named out-of-repo dirs.
+   * Writes stay confined. Not the farm pin — never suppresses inheritance.
+   */
+  extraReadRoots?: string[];
+
+  /**
    * Extra environment variables to inject into Bash-tool subprocess spawns
    * for THIS session. Merged into the child's env on top of `process.env`,
    * with these entries winning on collision.
@@ -539,6 +550,31 @@ export interface AgentConfig {
    * `subagent_lifecycle.started` event for cross-correlation.
    */
   subagentId?: string;
+
+  /**
+   * Central per-result tool-output byte cap for THIS session's dispatcher, in
+   * UTF-8 bytes (#661). Set UNCONDITIONALLY to {@link
+   * import('../tools/handlers/_output-cap.js').MODEL_CAP_BYTES} by
+   * `SubagentManager.forkSubagent` for EVERY forked child — the single choke
+   * point through which the agent-tool, skill, and compose fork paths all
+   * create their child session — so the provider's `buildDispatcher` can arm
+   * the dispatcher's `maxOutputBytes` backstop declaratively from this value.
+   *
+   * This is the explicit "I am a forked subagent" signal that REPLACES the
+   * prior `parentSessionId !== undefined` heuristic: `parentSessionId` is
+   * undefined for forks whose parent carries no sessionId (a skill-forked
+   * child built with `createStubParentSession`, plus every subagent it in turn
+   * dispatches), so keying the cap on it left those descendants uncapped and
+   * exposed to the tool-output-overflow crash class. Because `forkSubagent` is
+   * the sole path to a child `AgentSession` and the top-level session is
+   * ALWAYS constructed via `new AgentSession(...)` directly at the entry
+   * points (never through `forkSubagent`), a value here means "forked child"
+   * and its absence means "top-level" — so the top-level session is never
+   * capped. Fork-only, like `subagentId`/`depth`/`isNonInteractive` above;
+   * undefined on a top-level session ⇒ dispatcher `maxOutputBytes` unset ⇒ no
+   * central capping (behavior unchanged).
+   */
+  subagentToolOutputCapBytes?: number;
 
   /** Nesting depth assigned at fork (0-indexed). Top-level → undefined. */
   depth?: number;

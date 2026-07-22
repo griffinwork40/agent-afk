@@ -11,9 +11,11 @@
 import { InputCore, type InputCoreState } from './input-core.js';
 import {
   detectTrigger,
-  filterFileCandidates,
+  filterFileCandidatesAsync,
+  filterFileCandidatesCached,
   filterFlagCandidates,
   filterSlashCandidates,
+  invalidateFileScanCache,
 } from './input/trigger.js';
 import { stripGhostControlChars } from './input/suggest.js';
 import type { AutocompleteState } from './input/autocomplete-state.js';
@@ -42,10 +44,37 @@ export interface AutocompleteHost {
 }
 
 /**
+ * Store a freshly-computed candidate list into the dropdown state and reclamp
+ * the selection/viewport so they stay valid for the new length. Shared by the
+ * synchronous branches of {@link updateAutocomplete} and by the async @-file
+ * resolution so both apply results through identical selection math.
+ */
+function commitCandidates(ac: AutocompleteState, candidates: AutocompleteState['candidates']): void {
+  ac.candidates = candidates;
+  ac.dropdownOpen = candidates.length > 0;
+  if (ac.selectedIndex >= ac.candidates.length) {
+    ac.selectedIndex = Math.max(0, ac.candidates.length - 1);
+  }
+  if (ac.viewportStart > ac.selectedIndex) ac.viewportStart = ac.selectedIndex;
+  if (ac.selectedIndex >= ac.viewportStart + MAX_DROPDOWN_ROWS) {
+    ac.viewportStart = ac.selectedIndex - MAX_DROPDOWN_ROWS + 1;
+  }
+}
+
+/**
  * Recompute autocomplete candidates from the current buffer/cursor and
  * store results back into the shared AutocompleteState. Called on every
  * printable keypress, backspace, and left/right so the dropdown stays
  * consistent with the buffer content during the agent turn.
+ *
+ * Invariant: MUST NOT block the keystroke path. The slash and flag branches
+ * are pure/synchronous. The @-file branch reads the filesystem, so it is served
+ * from a per-directory cache synchronously when possible and otherwise scanned
+ * asynchronously (fire-and-forget) — mirroring the `getGhost().then(...)`
+ * stale-async guard in {@link updateGhost}: the async result is applied only
+ * when the buffer's trigger is still the SAME @-file query it was dispatched
+ * for, and is silently dropped otherwise so a late scan never repaints over a
+ * newer dropdown state. A repaint is scheduled only after the guard passes.
  */
 export function updateAutocomplete(self: AutocompleteHost): void {
   const ac = self.autocompleteState;
@@ -58,27 +87,50 @@ export function updateAutocomplete(self: AutocompleteHost): void {
   }
   if (ac.trigger && ac.suppressedSignature === null) {
     if (ac.trigger.kind === 'slash') {
-      ac.candidates = filterSlashCandidates(ac.trigger.query).slice(0, 12);
+      commitCandidates(ac, filterSlashCandidates(ac.trigger.query).slice(0, 12));
     } else if (ac.trigger.kind === 'file') {
-      // File candidates are bounded upstream (MAX_FILE_MATCHES) and the
-      // dropdown scrolls; do NOT re-cap to 12, or entries past the 12th
-      // (e.g. src/, tests/ in a typical cwd) become unreachable.
-      ac.candidates = filterFileCandidates(ac.trigger.query);
+      updateFileCandidates(self, ac, ac.trigger.query);
     } else {
-      ac.candidates = filterFlagCandidates(ac.trigger.command, ac.trigger.query);
+      commitCandidates(ac, filterFlagCandidates(ac.trigger.command, ac.trigger.query));
     }
-    ac.dropdownOpen = ac.candidates.length > 0;
   } else {
-    ac.dropdownOpen = false;
-    ac.candidates = [];
+    commitCandidates(ac, []);
   }
-  if (ac.selectedIndex >= ac.candidates.length) {
-    ac.selectedIndex = Math.max(0, ac.candidates.length - 1);
+}
+
+/**
+ * @-file branch of {@link updateAutocomplete}. Serves a fresh cache hit
+ * synchronously so the common same-directory keystroke stays instant; on a
+ * miss, dispatches the async scan and applies its result behind the stale
+ * guard.
+ *
+ * Note: file candidates are bounded upstream (MAX_FILE_MATCHES) and the
+ * dropdown scrolls; do NOT re-cap to 12, or entries past the 12th (e.g. src/,
+ * tests/ in a typical cwd) become unreachable.
+ */
+function updateFileCandidates(self: AutocompleteHost, ac: AutocompleteState, query: string): void {
+  const cached = filterFileCandidatesCached(query);
+  if (cached !== null) {
+    commitCandidates(ac, cached);
+    return;
   }
-  if (ac.viewportStart > ac.selectedIndex) ac.viewportStart = ac.selectedIndex;
-  if (ac.selectedIndex >= ac.viewportStart + MAX_DROPDOWN_ROWS) {
-    ac.viewportStart = ac.selectedIndex - MAX_DROPDOWN_ROWS + 1;
-  }
+
+  // Cache miss: leave the dropdown in its current (pre-scan) state — clearing
+  // to closed here would flicker an open dropdown shut for one frame on every
+  // fresh directory. Snapshot the query BEFORE dispatch; the resolve handler
+  // discards the result unless the live trigger is still this exact @-file
+  // query (stale guard), so a slow scan for query A that resolves after the
+  // user has typed on to query B never repaints A's candidates.
+  const requestedQuery = query;
+  filterFileCandidatesAsync(query)
+    .then((candidates) => {
+      const live = ac.trigger;
+      if (live?.kind === 'file' && live.query === requestedQuery && ac.suppressedSignature === null) {
+        commitCandidates(ac, candidates);
+        self.repaint();
+      }
+    })
+    .catch(() => { /* filterFileCandidatesAsync never rejects, but be defensive */ });
 }
 
 /**
@@ -185,6 +237,10 @@ export function applyDropdownSelection(self: AutocompleteHost): boolean {
   );
   if (next === self.input) return false;
   self.input = next;
+  // Accepting a candidate ends this dropdown episode — drop the directory-scan
+  // cache so a directory mutated since the scan is re-read fresh next time
+  // (explicit invalidation alongside the TTL; see invalidateFileScanCache).
+  invalidateFileScanCache();
   // Reset dropdown viewport — same as reader.ts:303-305. The follow-up
   // updateAutocomplete() call may re-open the dropdown if the new cursor
   // position still matches a trigger (e.g. after applying `/mint ` the

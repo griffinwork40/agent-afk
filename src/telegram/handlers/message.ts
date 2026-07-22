@@ -2,7 +2,7 @@ import { Context } from 'telegraf';
 import type { Message } from 'telegraf/types';
 import { Telegraf } from 'telegraf';
 import { SessionManager } from '../session-manager.js';
-import { formatError, formatClear, formatInternalError, formatCompact, formatCompactNoop, formatQueued, escapeHtml } from '../formatter.js';
+import { formatError, formatClear, formatInternalError, formatCompact, formatCompactNoop, formatMicrocompact, formatQueued, escapeHtml } from '../formatter.js';
 import { isRateLimitError, isNetworkError, isTelegramTransportError } from '../error-utils.js';
 import { streamResponse } from '../streaming.js';
 import { withTypingIndicator } from '../typing-indicator.js';
@@ -593,7 +593,11 @@ export class MessageHandler {
         reEnqueued = true;
         return;
       }
-      if (!result.compacted) {
+      if (result.reason === 'microcompacted' && result.microcompaction) {
+        // Success-ish deterministic outcome: no messages removed, but large
+        // tool_result payloads were cleared in place. Render the reclaimed win.
+        await ctx.reply(formatMicrocompact(result.microcompaction));
+      } else if (!result.compacted) {
         await ctx.reply(formatCompactNoop(result.reason ?? 'unknown'));
       } else {
         await ctx.reply(formatCompact({

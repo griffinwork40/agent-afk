@@ -454,6 +454,10 @@ export function formatCompact(opts?: {
  * Format a no-op compaction notice. Reasons come from
  * `ProviderCompactResult.reason` (e.g. `history-too-short`, `not-supported`,
  * `aborted`, `summarization-failed: ...`).
+ *
+ * Note: the `microcompacted` "success-ish" outcome is NOT rendered here — it
+ * carries a byte/block payload and is formatted by {@link formatMicrocompact}
+ * at the call site.
  */
 export function formatCompactNoop(reason: string): string {
   if (reason === 'aborted') return '📦 Compaction cancelled.';
@@ -463,6 +467,23 @@ export function formatCompactNoop(reason: string): string {
     return `⚠️ Compaction failed: ${reason}. History unchanged.`;
   }
   return `📦 Nothing to compact (${reason}).`;
+}
+
+/**
+ * Format the `microcompacted` outcome: turn-granular summarization no-oped on a
+ * short-but-full session, so a deterministic tool-result microcompaction pass
+ * cleared large tool_result payloads in place. Surfaces the reclaimed win.
+ */
+export function formatMicrocompact(mc: { blocksCleared: number; bytesReclaimed: number }): string {
+  const plural = mc.blocksCleared === 1 ? '' : 's';
+  return `📦 Reclaimed context — cleared ${mc.blocksCleared} tool result${plural} (~${formatByteSize(mc.bytesReclaimed)} reclaimed).`;
+}
+
+/** Compact human-readable byte size for the microcompaction notice. */
+function formatByteSize(n: number): string {
+  if (n >= 1_000_000) return `${Math.round(n / 100_000) / 10}MB`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}KB`;
+  return `${n}B`;
 }
 
 function formatTokenCount(n: number): string {

@@ -25,6 +25,9 @@ import type { OpenAIChunk } from './translate.js';
 import { SessionToolDispatcher } from '../../tools/dispatcher.js';
 import { createHookRegistry, type HookRegistry } from '../../hooks.js';
 import { createPlanModeGate } from '../../plan-mode-gate.js';
+import { tool } from '../../tools/custom-tool.js';
+import { MODEL_CAP_BYTES } from '../../tools/handlers/_output-cap.js';
+import { z } from 'zod';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import type { ToolHandler } from '../../tools/types.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../anthropic-direct/plan-mode-addendum.js';
@@ -460,6 +463,120 @@ describe('OpenAICompatibleProvider — plan-mode gate via config.hookRegistry', 
     if (out?.type === 'tool.output') {
       expect(out.content).not.toContain('plan mode');
       expect(out.content).not.toContain('blocked by PreToolUse hook');
+    }
+  });
+});
+
+describe('OpenAICompatibleProvider — central output cap armed from config.subagentToolOutputCapBytes (#661)', () => {
+  // Parity with anthropic-direct/output-cap-wiring.test.ts. Proves the openai
+  // provider's buildDispatcher arms the dispatcher's maxOutputBytes from the
+  // explicit fork signal (not the leaky parentSessionId), so a forked child's
+  // tool output is bounded while a top-level session is not.
+  const OVERSIZE_BYTES = MODEL_CAP_BYTES + 50_000;
+  const TRUNC_MARKER = /… \[\d+ bytes truncated: showing first \d+ \+ last \d+ of \d+\] …/;
+
+  // Custom tool that returns oversized content, registered on the provider so
+  // it flows through the REAL buildDispatcher path (not a hand-built dispatcher).
+  const bigTool = tool(
+    'big_output',
+    'Returns a large blob of text for output-cap testing.',
+    z.object({}),
+    async () => ({ content: 'A'.repeat(OVERSIZE_BYTES) }),
+  );
+
+  function scriptBigOutputThenDone(): void {
+    installScriptedClient();
+    scriptedTurns = [
+      {
+        chunks: [
+          {
+            choices: [
+              {
+                delta: {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: 'call_big',
+                      type: 'function',
+                      function: { name: 'big_output', arguments: '{}' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+            usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
+          },
+        ],
+      },
+      {
+        chunks: [
+          {
+            choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+          },
+        ],
+      },
+    ];
+  }
+
+  beforeEach(() => {
+    scriptedTurns = [];
+    scriptedTurnIndex = 0;
+  });
+
+  it('CAPS a forked child (subagentToolOutputCapBytes set) even when parentSessionId is UNDEFINED', async () => {
+    scriptBigOutputThenDone();
+    const provider = new OpenAICompatibleProvider({ customTools: [bigTool] });
+    const q = provider.query({
+      prompt: singleInput('call the tool'),
+      // Fork signal present; parentSessionId deliberately ABSENT.
+      config: baseConfig({ subagentToolOutputCapBytes: MODEL_CAP_BYTES }),
+    });
+    const events = await collect(q);
+
+    const out = events.find((e) => e.type === 'tool.output');
+    expect(out?.type).toBe('tool.output');
+    if (out?.type === 'tool.output') {
+      expect(out.content).toMatch(TRUNC_MARKER);
+      expect(Buffer.byteLength(out.content, 'utf8')).toBeLessThanOrEqual(MODEL_CAP_BYTES);
+    }
+  });
+
+  it('does NOT cap a top-level session (no subagentToolOutputCapBytes, no parentSessionId)', async () => {
+    scriptBigOutputThenDone();
+    const provider = new OpenAICompatibleProvider({ customTools: [bigTool] });
+    const q = provider.query({
+      prompt: singleInput('call the tool'),
+      config: baseConfig(),
+    });
+    const events = await collect(q);
+
+    const out = events.find((e) => e.type === 'tool.output');
+    expect(out?.type).toBe('tool.output');
+    if (out?.type === 'tool.output') {
+      expect(out.content).not.toMatch(TRUNC_MARKER);
+      expect(Buffer.byteLength(out.content, 'utf8')).toBe(OVERSIZE_BYTES);
+    }
+  });
+
+  it('does NOT cap when only parentSessionId is set (proves the cap no longer keys on parentSessionId)', async () => {
+    scriptBigOutputThenDone();
+    const provider = new OpenAICompatibleProvider({ customTools: [bigTool] });
+    const q = provider.query({
+      prompt: singleInput('call the tool'),
+      // parentSessionId set, but the explicit fork-cap signal is NOT.
+      config: baseConfig({ parentSessionId: 'parent-session-123' }),
+    });
+    const events = await collect(q);
+
+    const out = events.find((e) => e.type === 'tool.output');
+    expect(out?.type).toBe('tool.output');
+    if (out?.type === 'tool.output') {
+      expect(out.content).not.toMatch(TRUNC_MARKER);
+      expect(Buffer.byteLength(out.content, 'utf8')).toBe(OVERSIZE_BYTES);
     }
   });
 });
@@ -1218,9 +1335,17 @@ describe('OpenAICompatibleQuery — ProviderQuery surface', () => {
       config: baseConfig({ autoCompact: true }),
     });
     await collect(q);
-    // Exactly one compaction: history-too-short after turn 1, nothing-to-
-    // summarize after turn 2 (boundary 0), then a real splice after turn 3.
-    expect(summarizeCalls).toHaveLength(1);
+    // Each turn reports ~200k — far over the window — so the adaptive
+    // keep-window (see shared/compaction.ts:findCompactionBoundaryAdaptive)
+    // engages whenever there is an older turn to summarize:
+    //   turn 1 → still history-too-short (a single fresh user turn can't be
+    //            compacted — shrinking to keepLastN=1 lands the boundary at 0);
+    //   turn 2 → 2 fresh user turns + full window → keep-window relaxes 2→1 and
+    //            turn 1 is summarized (summarize call #1);
+    //   turn 3 → normal boundary (3 fresh user turns) → summarize call #2.
+    // Before the fullness fallback this was 1 call (compaction only at turn 3);
+    // firing earlier on a full window is the point of the feature.
+    expect(summarizeCalls).toHaveLength(2);
   });
 
   it('does NOT auto-compact when config.autoCompact is unset (default off)', async () => {

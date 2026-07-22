@@ -7,7 +7,7 @@
  */
 
 import { nextGraphemeIndex, previousGraphemeIndex } from './display.js';
-import { visualCursorPos } from './input/echo.js';
+import { buildVisualPositionMap } from './input/echo.js';
 
 // ---------------------------------------------------------------------------
 // Discriminated return types for vertical line movement
@@ -268,9 +268,19 @@ export const InputCore = {
    * the first visual row (caller should consider history recall instead).
    *
    * External constraint: terminal column arithmetic is governed by
-   * `visualCursorPos`, which is the same function the repaint layer uses.
-   * Injecting `terminalWidth` and `promptVisibleLen` from the caller keeps
-   * InputCore pure.
+   * `buildVisualPositionMap`, which shares the exact width primitive that
+   * `visualCursorPos` (the repaint layer's cursor-positioner) measures with —
+   * so the row/col mapping here cannot drift from what the terminal actually
+   * renders. Injecting `terminalWidth` and `promptVisibleLen` from the caller
+   * keeps InputCore pure.
+   *
+   * PERF: builds the (row, col) map for every index in ONE forward pass
+   * (O(buffer.length)) and scans it for the landing index, replacing the
+   * former O(n^2) loop that re-probed `visualCursorPos` (itself O(n)) at every
+   * candidate index. The landing rule is preserved verbatim: among indices on
+   * the target visual row, pick the one whose column is closest to the source
+   * column, LEFTMOST winning ties (strict `<`), starting from index 0 so a
+   * target row with no exact column match still lands on its first index.
    */
   moveUpLine(
     state: InputCoreState,
@@ -278,29 +288,28 @@ export const InputCore = {
     promptVisibleLen: number,
   ): MoveLineResult {
     const cols = terminalWidth || 80;
-    const { row, col } = visualCursorPos(state.buffer, state.cursor, promptVisibleLen, cols);
+    const { rowAt, colAt } = buildVisualPositionMap(state.buffer, promptVisibleLen, cols);
+    const row = rowAt[state.cursor]!;
     if (row === 0) {
       // Already on the first visual row — signal to caller for history recall.
       return { moved: false };
     }
     // Target: same visual column on the row above.
     const targetRow = row - 1;
-    const targetCol = col;
-    // Walk backward through the buffer looking for the character at (targetRow, targetCol).
-    // We re-derive position for each candidate index via visualCursorPos — this is O(n)
-    // over buffer length, acceptable for typical REPL inputs (< a few hundred chars).
+    const targetCol = colAt[state.cursor]!;
     let best = 0;
     let bestDist = Infinity;
     for (let i = 0; i <= state.buffer.length; i++) {
-      const pos = visualCursorPos(state.buffer, i, promptVisibleLen, cols);
-      if (pos.row === targetRow) {
-        const dist = Math.abs(pos.col - targetCol);
+      const r = rowAt[i]!;
+      if (r === targetRow) {
+        const dist = Math.abs(colAt[i]! - targetCol);
         if (dist < bestDist) {
           bestDist = dist;
           best = i;
         }
-        // Once we've passed targetRow, stop (rows are monotonically non-decreasing).
-      } else if (pos.row > targetRow) {
+      } else if (r > targetRow) {
+        // Rows are monotonically non-decreasing in index — once past the
+        // target row, no later index can be on it.
         break;
       }
     }
@@ -316,7 +325,17 @@ export const InputCore = {
    * Returns `{ moved: true; state }` on success, `{ moved: false }` when
    * already on the last visual row (caller may advance history forward).
    *
-   * External constraint: same `visualCursorPos` invariant as `moveUpLine`.
+   * External constraint: same `buildVisualPositionMap` invariant as
+   * `moveUpLine`.
+   *
+   * PERF: single O(buffer.length) forward pass over the shared position map
+   * (was O(n^2) via per-index `visualCursorPos`). The landing rule is
+   * preserved verbatim: `best` defaults to `buffer.length` (the buffer-end
+   * index), then among interior indices `0..length-1` on the target row the
+   * closest column wins (LEFTMOST on ties, strict `<`); the buffer-end index
+   * is considered LAST with the same strict comparison, so it only wins when
+   * it is strictly closer than every interior candidate — matching the
+   * original ordering exactly.
    */
   moveDownLine(
     state: InputCoreState,
@@ -324,35 +343,38 @@ export const InputCore = {
     promptVisibleLen: number,
   ): MoveLineResult {
     const cols = terminalWidth || 80;
-    const { row, col } = visualCursorPos(state.buffer, state.cursor, promptVisibleLen, cols);
-    // Compute the total number of visual rows in the buffer block.
-    const lastPos = visualCursorPos(state.buffer, state.buffer.length, promptVisibleLen, cols);
-    if (row >= lastPos.row) {
+    const { rowAt, colAt, totalRows } = buildVisualPositionMap(
+      state.buffer,
+      promptVisibleLen,
+      cols,
+    );
+    const row = rowAt[state.cursor]!;
+    if (row >= totalRows) {
       // Already on the last visual row.
       return { moved: false };
     }
     const targetRow = row + 1;
-    const targetCol = col;
+    const targetCol = colAt[state.cursor]!;
     let best = state.buffer.length;
     let bestDist = Infinity;
-    // PERF-4: loop bound is `< buffer.length` — the buffer-end position is
-    // handled below by reusing the already-computed `lastPos`, avoiding a
-    // duplicate O(n) call to visualCursorPos at i === buffer.length.
+    // Interior indices first (0..length-1), then the buffer-end index below —
+    // preserves the original's ordering, where `best` starts at buffer.length
+    // and the end index is only overwritten by a strictly-closer interior hit.
     for (let i = 0; i < state.buffer.length; i++) {
-      const pos = visualCursorPos(state.buffer, i, promptVisibleLen, cols);
-      if (pos.row === targetRow) {
-        const dist = Math.abs(pos.col - targetCol);
+      const r = rowAt[i]!;
+      if (r === targetRow) {
+        const dist = Math.abs(colAt[i]! - targetCol);
         if (dist < bestDist) {
           bestDist = dist;
           best = i;
         }
-      } else if (pos.row > targetRow) {
+      } else if (r > targetRow) {
         break;
       }
     }
-    // Reuse lastPos (already computed above) for the buffer-end position.
-    if (lastPos.row === targetRow) {
-      const dist = Math.abs(lastPos.col - targetCol);
+    // Buffer-end index, considered last with the same strict comparison.
+    if (rowAt[state.buffer.length]! === targetRow) {
+      const dist = Math.abs(colAt[state.buffer.length]! - targetCol);
       if (dist < bestDist) {
         best = state.buffer.length;
       }

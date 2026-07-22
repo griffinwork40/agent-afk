@@ -11,6 +11,63 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.63.1] - 2026-07-22
+
+### Fixed
+- seal witness trace only from the top-level session (#666) (b98f911)
+
+## [5.63.0] - 2026-07-22
+
+### Added
+- edit a previous message — /rewind + double-Esc conversation rewind (#668) (d80601b)
+
+## [5.62.0] - 2026-07-22
+
+### Added
+- tool-result microcompaction to reclaim context on short-but-full sessions (#671) (9b7b3ec)
+
+### Fixed
+- count commits vs main HEAD when meta has no baseSha (#670) (97b3619)
+
+## [5.61.0] - 2026-07-22
+
+### Added
+- stamp a provenance header on cross-model subagent results (#656) (71b8601)
+- notify the model when its provider is swapped mid-session (#655) (39a9ef7)
+- token-aware keep-window so /compact works on short-but-full sessions (#667) (c5b6354)
+
+## [5.60.0] - 2026-07-21
+
+### Added
+- additive `readRoots` param on the `agent` (subagent-dispatch) tool: grant a forked child READ access to absolute paths outside its repo/worktree (e.g. `~/Downloads`, a scratch dir), composed WITH (never replacing) its inherited read scope — writes stay confined, grandchildren must be re-granted. Hardened at parse time (rejects filesystem roots, the home dir / its ancestors, and read-denylisted credential paths — evaluated on symlink-resolved targets, so a symlink to a broad dir can't slip past the lexical check) and, unlike `writeRoots`, permitted alongside `isolation:"worktree"`. Flows through the distinct `AgentConfig.extraReadRoots` field so the `afk farm` read-scope pin is untouched. (#662)
+
+### Added
+- add additive readRoots param to the agent tool (#662) (#664) (aa327ab)
+
+## [5.59.3] - 2026-07-21
+
+### Fixed
+- bound web_scrape + tool output to prevent subagent context overflow (#663) (4556645)
+
+## [5.59.2] - 2026-07-19
+
+### Fixed
+- eliminate scheduler.test.ts cron-timer leak causing flaky duplicate mcp_connect_done (#657) (#659) (0639378)
+
+## [5.59.1] - 2026-07-19
+
+### Changed
+- bump the fumadocs group in /website with 3 updates (#658) (b6e99dc)
+- single-pass line nav + memoized input colorization (#649) (10787a8)
+
+## [5.59.0] - 2026-07-19
+
+### Added
+- /editor handoff to $EDITOR seeded with input buffer + Ctrl+O chord (#651) (3a89afd)
+
+### Changed
+- async at-file autocomplete scan with per-dir cache + stale guard (#648) (bd99a34)
+
 ## [5.58.1] - 2026-07-18
 
 ### Changed

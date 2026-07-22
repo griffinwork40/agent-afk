@@ -286,6 +286,23 @@ describe('buildChildConfig', () => {
     });
   });
 
+  describe('readRoots → extraReadRoots mapping (#662)', () => {
+    it('maps parsed.readRoots to the DISTINCT childConfig.extraReadRoots field', () => {
+      const { childConfig } = buildChildConfig(
+        baseArgs({ parsed: parsed({ readRoots: ['/scratch/data', '/abs/b'] }) }),
+      );
+      expect(childConfig.extraReadRoots).toEqual(['/scratch/data', '/abs/b']);
+      // Invariant #1: must NOT set `readRoots` (the farm pin that suppresses
+      // read-scope inheritance in forkSubagent) — only `extraReadRoots`.
+      expect(Object.prototype.hasOwnProperty.call(childConfig, 'readRoots')).toBe(false);
+    });
+
+    it('omits extraReadRoots entirely when parsed.readRoots is absent', () => {
+      const { childConfig } = buildChildConfig(baseArgs({ parsed: parsed() }));
+      expect(Object.prototype.hasOwnProperty.call(childConfig, 'extraReadRoots')).toBe(false);
+    });
+  });
+
   describe('credential wiring (deterministic slice)', () => {
     it('resolves the child apiKey via the injected resolver, keyed by the child model', () => {
       const resolveApiKeyForModel = vi.fn((_m: string) => 'child-resolved-key');

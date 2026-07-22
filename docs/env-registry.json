@@ -107,6 +107,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_COMPACT_SHRINK_FRACTION",
+      "description": "Context-fullness fraction (0–1, exclusive) at/above which /compact and auto-compaction relax the keep-window so a short-but-full session (few turns, huge tool exchanges) can still be summarized instead of no-oping on turn count. Default 0.7 (see shared/compaction.ts DEFAULT_COMPACT_SHRINK_THRESHOLD).",
+      "type": "number",
+      "required": false,
+      "example": "0.8",
+      "category": "model"
+    },
+    {
       "name": "AFK_COMPANION_PRIMER",
       "description": "Opt-in: absolute path to a single companion-primer file. When set, its content is bounded (capped, fenced as <companion-primer>) and appended to the system prompt at session start for top-level sessions (chat/REPL/telegram/daemon), as lower-authority \"reflections, not facts\" context. Unset (default) = no-op. Only the one named file is ever read — never a directory or repo walk.",
       "type": "string",
@@ -341,6 +349,24 @@
       "required": false,
       "example": "1",
       "category": "misc"
+    },
+    {
+      "name": "AFK_MICROCOMPACT_KEEP_LAST",
+      "description": "Number of the most-recent tool_result blocks that tool-result microcompaction keeps intact regardless of size, so the agent does not lose the tool output it is actively reasoning over. Older results are the safe ones to trim. Default 4 (see shared/compaction.ts DEFAULT_MICROCOMPACT_KEEP_LAST). Values <= 0 protect nothing.",
+      "type": "number",
+      "required": false,
+      "default": "4",
+      "example": "3",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MICROCOMPACT_TOOL_RESULT_BYTES",
+      "description": "Byte threshold (tool_result content length) at/above which a tool_result block becomes a microcompaction candidate. When /compact and auto-compaction would otherwise no-op on a short-but-full session, microcompaction clears large/old tool_result CONTENT in place (largest first) — replacing it with a short placeholder, never removing the block — to reclaim context deterministically (no LLM call). Blocks below this size are left intact. Default 2048 (see shared/compaction.ts DEFAULT_MICROCOMPACT_TOOL_RESULT_BYTES).",
+      "type": "number",
+      "required": false,
+      "default": "2048",
+      "example": "4096",
+      "category": "model"
     },
     {
       "name": "AFK_MODEL",
@@ -927,6 +953,14 @@
       "category": "debug"
     },
     {
+      "name": "EDITOR",
+      "description": "Standard POSIX env var naming the user's preferred editor (with optional flags). Consulted by the /editor slash command AFTER VISUAL, as the standard fallback. No default editor is assumed when both are unset — /editor prints a hint telling the user to set one.",
+      "type": "string",
+      "required": false,
+      "example": "vim",
+      "category": "process"
+    },
+    {
       "name": "EXA_API_KEY",
       "description": "Exa (exa.ai) search API key, enabling web_scrape search mode. Free tier (20k requests/month) available at https://exa.ai. When unset, search mode returns an actionable error; markdown and raw modes are unaffected.",
       "type": "string",
@@ -1033,6 +1067,14 @@
       "required": false,
       "example": "1",
       "category": "telegram"
+    },
+    {
+      "name": "VISUAL",
+      "description": "Standard POSIX env var naming the user's preferred full-screen editor (with optional flags). Consulted FIRST by the /editor slash command (and its key chord) to compose a long prompt externally; takes precedence over EDITOR. No fallback editor is assumed — if neither VISUAL nor EDITOR is set, /editor prints a hint instead of guessing.",
+      "type": "string",
+      "required": false,
+      "example": "nvim",
+      "category": "process"
     },
     {
       "name": "VITEST",

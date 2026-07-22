@@ -131,6 +131,22 @@ export function shouldAutoCompact(
   return usedTokens / contextLimit >= threshold;
 }
 
+/**
+ * Context-window fullness as a raw fraction of a limit.
+ *
+ * Unlike {@link shouldAutoCompact} (a boolean gate against a configured
+ * threshold), this returns the magnitude for callers that need to reason about
+ * how full the window is — e.g. the compaction handlers deciding whether to
+ * shrink the keep-window on a short-but-full session (see
+ * `shared/compaction.ts:findCompactionBoundaryAdaptive`). Returns `0` when
+ * either input is non-positive (unknown usage / limit) so an unknown state
+ * never looks "full" and never triggers the shrink fallback.
+ */
+export function contextFullnessFraction(usedTokens: number, contextLimit: number): number {
+  if (contextLimit <= 0 || usedTokens <= 0) return 0;
+  return usedTokens / contextLimit;
+}
+
 /** Default auto-compaction threshold (fraction of the context window). */
 export const DEFAULT_AUTO_COMPACT_THRESHOLD = 0.9;
 

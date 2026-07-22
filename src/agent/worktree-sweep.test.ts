@@ -611,6 +611,110 @@ describe('base-sha-fallback', () => {
     const verdict = result.candidates[0]?.verdict;
     expect(['empty', 'stale-clean', 'stale-dirty', 'active', 'locked']).toContain(verdict);
   });
+
+  it('preserves a baseSha-less worktree that holds unmerged commits (counts against main HEAD, not self)', async () => {
+    // Regression guard: a meta with no `baseSha` (exactly what
+    // touchWorktreeOccupancy writes when it adopts a hand-created
+    // `git worktree add` tree) must NOT self-compare its HEAD to itself —
+    // that always yields 0 commits ahead and makes a tree holding real
+    // unmerged work look `empty`, force-removing the checkout.
+    const worktreePath = join(afkWorktreesDir, 'afk-nobase-ahead');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'agent',
+        createdAt: new Date(Date.now() - 2 * 3_600_000).toISOString(), // 2h old
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot, head: 'mainsha111' });
+    const wtBlock = worktreeBlock({
+      path: worktreePath,
+      head: 'wtsha222', // differs from main HEAD
+      branch: 'refs/heads/afk/nobase-ahead',
+    });
+    const porcelainOut = `${mainBlock}\n\n${wtBlock}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' }; // clean
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        // The fix counts commits reachable from the worktree HEAD but NOT from
+        // main (`--not`). The old self-comparing fallback (base === head) would
+        // instead resolve to 0 here and misclassify the tree as empty.
+        return args.includes('--not')
+          ? { stdout: '2\n', stderr: '' }
+          : { stdout: '0\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    const verdict = result.candidates.find((c) => c.path === worktreePath)?.verdict;
+    expect(verdict).not.toBe('empty');
+    expect(verdict).not.toBe('dead-owner');
+    expect(result.removed).not.toContain(worktreePath);
+  });
+
+  it('still reaps a baseSha-less worktree with no commits (sitting at main HEAD)', async () => {
+    // Complement of the previous test: the fallback must not over-preserve.
+    // A baseSha-less tree that sits at main's HEAD is genuinely empty and
+    // remains reapable.
+    const worktreePath = join(afkWorktreesDir, 'afk-nobase-empty');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'agent',
+        createdAt: new Date(Date.now() - 2 * 3_600_000).toISOString(), // 2h old
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot, head: 'samesha000' });
+    const wtBlock = worktreeBlock({
+      path: worktreePath,
+      head: 'samesha000', // identical to main HEAD → nothing ahead
+      branch: 'refs/heads/afk/nobase-empty',
+    });
+    const porcelainOut = `${mainBlock}\n\n${wtBlock}\n`;
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: porcelainOut, stderr: '' };
+      }
+      if (args.includes('status') && args.includes('--porcelain')) {
+        return { stdout: '', stderr: '' }; // clean
+      }
+      if (args.includes('rev-list') && args.includes('--count')) {
+        return { stdout: '0\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn,
+      repoRoot,
+      lockPath: lockFile,
+      dryRun: false,
+      telemetryPath: telemetryFile,
+    });
+
+    const verdict = result.candidates.find((c) => c.path === worktreePath)?.verdict;
+    expect(verdict).toBe('empty');
+    expect(result.removed).toContain(worktreePath);
+  });
 });
 
 // ---------------------------------------------------------------------------

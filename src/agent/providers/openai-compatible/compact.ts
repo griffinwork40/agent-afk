@@ -32,8 +32,17 @@ import type { CompactionTrigger } from '../../trace/types.js';
 import {
   COMPACT_ACK_TEXT,
   COMPACT_SUMMARY_HEADER,
+  DEFAULT_COMPACT_SHRINK_THRESHOLD,
+  byteLengthOf,
+  isMicrocompactPlaceholder,
+  microcompactToolResults as sharedMicrocompactToolResults,
+  resolveMicrocompactOptions,
   runCompactionCore,
   type CompactionOps,
+  type MicrocompactOps,
+  type MicrocompactOptions,
+  type MicrocompactResult,
+  type ToolResultRef,
 } from '../shared/compaction.js';
 import type { OpenAIMessage } from './messages.js';
 
@@ -110,6 +119,71 @@ function countChars(msg: OpenAIMessage): number {
   return total;
 }
 
+/**
+ * Byte length of an OpenAI `role:'tool'` message's content: a string is measured
+ * directly; a content-part array sums its `text` parts (image parts ignored —
+ * they are not the byte hogs and clearing them is out of scope).
+ */
+function toolMessageContentBytes(content: OpenAIMessage['content']): number {
+  if (typeof content === 'string') return byteLengthOf(content);
+  if (Array.isArray(content)) {
+    let total = 0;
+    for (const part of content) {
+      if (part.type === 'text') total += byteLengthOf(part.text);
+    }
+    return total;
+  }
+  return 0;
+}
+
+/** True when a tool message's content already carries the placeholder sentinel. */
+function isToolMessagePlaceholder(content: OpenAIMessage['content']): boolean {
+  if (typeof content === 'string') return isMicrocompactPlaceholder(content);
+  if (Array.isArray(content)) {
+    for (const part of content) {
+      if (part.type === 'text') return isMicrocompactPlaceholder(part.text);
+    }
+  }
+  return false;
+}
+
+/**
+ * OpenAI microcompaction primitives. Each `role:'tool'` message is one tool
+ * result; `clear()` swaps its `content` for a plain-string placeholder in place,
+ * preserving the message and its `tool_call_id` so the assistant `tool_calls` →
+ * `role:'tool'` pairing the API enforces (HTTP 400 otherwise) is never disturbed.
+ */
+export const openaiMicrocompactOps: MicrocompactOps<OpenAIMessage> = {
+  listToolResults(messages: ReadonlyArray<OpenAIMessage>): ToolResultRef[] {
+    const refs: ToolResultRef[] = [];
+    for (const msg of messages) {
+      if (msg.role !== 'tool') continue;
+      refs.push({
+        byteLength: toolMessageContentBytes(msg.content),
+        isPlaceholder: isToolMessagePlaceholder(msg.content),
+        clear(placeholder: string): void {
+          // Only the content payload changes; role:'tool' and tool_call_id stay.
+          msg.content = placeholder;
+        },
+      });
+    }
+    return refs;
+  },
+};
+
+/**
+ * Deterministic tool-result microcompaction for OpenAI history. Thin adapter
+ * over the shared {@link sharedMicrocompactToolResults} bound to
+ * {@link openaiMicrocompactOps}. Mutates `messages` in place; returns the
+ * reclaimed block/byte counts. See shared docs for algorithm + invariants.
+ */
+export function microcompactToolResults(
+  messages: ReadonlyArray<OpenAIMessage>,
+  opts?: MicrocompactOptions,
+): MicrocompactResult {
+  return sharedMicrocompactToolResults(messages, openaiMicrocompactOps, opts ?? {});
+}
+
 /** OpenAI message-representation primitives for the shared compaction core. */
 export const openaiCompactionOps: CompactionOps<OpenAIMessage> = {
   isFreshUserTurn,
@@ -131,6 +205,20 @@ export function readKeepLastN(): number {
     if (Number.isFinite(n) && n > 0) return n;
   }
   return DEFAULT_COMPACT_KEEP_LAST_TURNS;
+}
+
+/**
+ * Fullness fraction at/above which the keep-window may shrink so a
+ * short-but-full session can still be compacted. `AFK_COMPACT_SHRINK_FRACTION`
+ * overrides it; values outside (0, 1) exclusive fall back to the default.
+ */
+export function readShrinkFraction(): number {
+  const raw = env.AFK_COMPACT_SHRINK_FRACTION;
+  if (raw !== undefined && raw.length > 0) {
+    const n = Number.parseFloat(raw);
+    if (Number.isFinite(n) && n > 0 && n < 1) return n;
+  }
+  return DEFAULT_COMPACT_SHRINK_THRESHOLD;
 }
 
 /** Injected collaborators for {@link compactOpenAIHistory}. */
@@ -158,6 +246,15 @@ export interface CompactOpenAIHistoryDeps {
    */
   trigger?: CompactionTrigger;
   traceWriter?: TraceWriter;
+  /**
+   * Context-window fullness fraction (0–1) at compaction time. Enables the
+   * adaptive keep-window so a short-but-full session can still be compacted.
+   * See `shared/compaction.ts:findCompactionBoundaryAdaptive`. Defaults to `0`
+   * (unknown → no shrink) when omitted.
+   */
+  usedFraction?: number;
+  /** Fullness fraction at/above which the keep-window may shrink. */
+  shrinkAtFraction?: number;
 }
 
 /**
@@ -179,11 +276,14 @@ export async function compactOpenAIHistory(
   }
 
   const controller = deps.beginAbort();
+  let result: ProviderCompactResult;
   try {
-    return await runCompactionCore<OpenAIMessage>({
+    result = await runCompactionCore<OpenAIMessage>({
       messages: deps.priorTurns,
       ops: openaiCompactionOps,
       keepLastN: readKeepLastN(),
+      usedFraction: deps.usedFraction,
+      shrinkAtFraction: deps.shrinkAtFraction,
       summarize: (transcript) => deps.summarize(transcript, controller.signal),
       isAborted: () => controller.signal.aborted,
       abortInFlight: () => controller.abort(),
@@ -204,4 +304,30 @@ export async function compactOpenAIHistory(
   } finally {
     deps.clearAbort(controller);
   }
+
+  // Deterministic fallback: when turn-granular summarization found nothing to do
+  // (short-but-full session — huge tool payloads inside the one kept turn), clear
+  // large/old tool_result CONTENT in place. Additive: the summarization success
+  // path above is untouched; this only runs on the no-op reasons.
+  if (
+    !result.compacted &&
+    (result.reason === 'history-too-short' || result.reason === 'nothing-to-summarize')
+  ) {
+    const opts = resolveMicrocompactOptions(
+      env.AFK_MICROCOMPACT_TOOL_RESULT_BYTES,
+      env.AFK_MICROCOMPACT_KEEP_LAST,
+    );
+    const { blocksCleared, bytesReclaimed } = microcompactToolResults(deps.priorTurns, opts);
+    if (blocksCleared > 0) {
+      return {
+        compacted: false,
+        reason: 'microcompacted',
+        messagesBefore,
+        messagesAfter: deps.priorTurns.length,
+        microcompaction: { blocksCleared, bytesReclaimed },
+      };
+    }
+  }
+
+  return result;
 }

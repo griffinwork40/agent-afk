@@ -646,6 +646,45 @@ describe('SubagentExecutor', () => {
       expect(() => JSON.parse(result.content)).toThrow();
     });
 
+    it('stamps a provenance header when the child model differs from the parent model', async () => {
+      // Parent on opus, child inherits the sonnet default → mixed-model fan-out.
+      const exec = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        depth: 0,
+        parentModel: 'opus',
+      });
+      const handle = mockHandle({
+        message: { role: 'assistant', content: 'child finding', timestamp: new Date() },
+      });
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      const result = await exec.execute(makeCall());
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toBe('[subagent result · model=sonnet (parent: opus)]\n\nchild finding');
+    });
+
+    it('omits the provenance header when the child model equals the parent model', async () => {
+      // Parent AND child on sonnet → header is pure noise, so it is not added.
+      const exec = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        depth: 0,
+        parentModel: 'sonnet',
+      });
+      const handle = mockHandle({
+        message: { role: 'assistant', content: 'same-model finding', timestamp: new Date() },
+      });
+      mockSubagentMgr.forkSubagent = vi.fn().mockResolvedValue(handle);
+
+      const result = await exec.execute(makeCall());
+
+      expect(result.content).toBe('same-model finding');
+    });
+
     // T-1 (review finding C-1): when the SDK returns a ContentBlock[] array
     // instead of a plain string, the executor must serialize it to a string
     // so ToolResult.content is always a valid string.

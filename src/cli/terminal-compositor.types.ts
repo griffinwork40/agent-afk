@@ -288,6 +288,16 @@ export interface TerminalCompositorOptions {
    */
   onShiftTab?: () => void;
   /**
+   * Fires on Ctrl+O — the "open $EDITOR" chord. Wired by the REPL to the
+   * same handoff the /editor slash command runs: seed a temp file with the
+   * current buffer, hand the terminal to $VISUAL/$EDITOR, and load the result
+   * back into the input box on a clean exit (no auto-submit). The handler owns
+   * the suspend/spawn/restore dance internally, so the compositor just fires
+   * this and returns from dispatch. REPL-global (fires in idle mode where a
+   * prompt is composed); absent on surfaces without an external editor handoff.
+   */
+  onOpenEditor?: () => void;
+  /**
    * One-shot submission handler invoked when a message "submits" —
    * either immediately on Enter in `'idle'` mode, or deferred until
    * the mode transitions to `'idle'` (draining one queued payload,

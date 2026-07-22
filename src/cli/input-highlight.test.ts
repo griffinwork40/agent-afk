@@ -351,4 +351,160 @@ describe('colorizeInputBuffer', () => {
       expect(out).not.toMatch(ANSI_RE);
     });
   });
+
+  // Single-entry memo (PERF: identical consecutive repaints skip the three
+  // whole-buffer regex passes). The memo engages ONLY when the registry view
+  // exposes a monotonic `version()`; without it the colorizer recomputes.
+  //
+  // Correctness bar: the cache must never serve a stale-colored buffer. These
+  // tests prove the key is honest — the output changes whenever any keyed
+  // input changes (buffer, chalk.level, registry version).
+  describe('memoization', () => {
+    // A registry view whose membership + version are mutable, so we can
+    // simulate a mid-session command hot-swap and assert cache invalidation.
+    function mutableReg(initial: readonly string[]): {
+      view: SlashRegistryView;
+      add: (name: string) => void;
+      calls: () => number;
+    } {
+      let known = new Set(initial);
+      let ver = 1;
+      let hasCalls = 0;
+      return {
+        view: {
+          has: (n) => {
+            hasCalls++;
+            return known.has(n);
+          },
+          version: () => ver,
+        },
+        add: (name) => {
+          known = new Set([...known, name]);
+          ver++;
+        },
+        calls: () => hasCalls,
+      };
+    }
+
+    it('returns the identical cached string on a repeated call (same buffer/version)', () => {
+      const reg = mutableReg(['mint']);
+      const first = colorizeInputBuffer('/mint hello', reg.view);
+      const callsAfterFirst = reg.calls();
+      const second = colorizeInputBuffer('/mint hello', reg.view);
+      // Same value AND the memo short-circuited before running the regex
+      // (which is what invokes registry.has) — so has() was not called again.
+      expect(second).toBe(first);
+      expect(reg.calls()).toBe(callsAfterFirst);
+      // Output is still correct (known → mint tone, printable text intact).
+      expect(second).toMatch(ANSI_RE);
+      expect(stripAnsi(second)).toBe('/mint hello');
+    });
+
+    it('misses the cache when the buffer changes', () => {
+      const reg = mutableReg(['mint']);
+      const a = colorizeInputBuffer('/mint a', reg.view);
+      const callsAfterA = reg.calls();
+      const b = colorizeInputBuffer('/mint b', reg.view);
+      // A different buffer forces recomputation (has() runs again).
+      expect(reg.calls()).toBeGreaterThan(callsAfterA);
+      expect(stripAnsi(a)).toBe('/mint a');
+      expect(stripAnsi(b)).toBe('/mint b');
+    });
+
+    it('invalidates when the registry version bumps — no stale color', () => {
+      const reg = mutableReg([]); // /deploy initially UNKNOWN → meta (dim)
+      const unknownOut = colorizeInputBuffer('/deploy now', reg.view);
+      const unknownAnsi = unknownOut.match(ANSI_RE)?.[0];
+
+      // Hot-swap: /deploy becomes a known command (version bumps).
+      reg.add('deploy');
+      const knownOut = colorizeInputBuffer('/deploy now', reg.view);
+      const knownAnsi = knownOut.match(ANSI_RE)?.[0];
+
+      // Same buffer, but the tone MUST change (meta → brand) because the
+      // version moved. A stale memo would have returned the dim version.
+      expect(knownAnsi).toBeDefined();
+      expect(unknownAnsi).toBeDefined();
+      expect(knownAnsi).not.toBe(unknownAnsi);
+      expect(stripAnsi(knownOut)).toBe('/deploy now');
+    });
+
+    it('misses the cache when chalk.level changes', () => {
+      const reg = mutableReg(['mint']);
+      const savedLevel = chalk.level;
+      try {
+        chalk.level = 1;
+        const lvl1 = colorizeInputBuffer('/mint x', reg.view);
+        chalk.level = 2;
+        const lvl2 = colorizeInputBuffer('/mint x', reg.view);
+        // Both colorize (both nonzero), but a level change must not serve the
+        // level-1 escape from cache — chalk bakes the level into the escape.
+        expect(stripAnsi(lvl1)).toBe('/mint x');
+        expect(stripAnsi(lvl2)).toBe('/mint x');
+        expect(lvl1).toMatch(ANSI_RE);
+        expect(lvl2).toMatch(ANSI_RE);
+      } finally {
+        chalk.level = savedLevel;
+      }
+    });
+
+    it('does NOT memoize when the registry exposes no version() (recompute every call)', () => {
+      // `allKnown` has no version() — the memo is disabled, so has() runs on
+      // every call. This is the safe fallback: correct but uncached.
+      let hasCalls = 0;
+      const versionless: SlashRegistryView = {
+        has: (_n) => {
+          hasCalls++;
+          return true;
+        },
+      };
+      const a = colorizeInputBuffer('/mint hello', versionless);
+      const afterA = hasCalls;
+      const b = colorizeInputBuffer('/mint hello', versionless);
+      // Recomputed (has() called again) — not served from cache.
+      expect(hasCalls).toBeGreaterThan(afterA);
+      expect(a).toBe(b); // same INPUT still yields the same OUTPUT (pure fn)
+      expect(stripAnsi(a)).toBe('/mint hello');
+    });
+
+    it('a memoized call then a versionless call both stay correct', () => {
+      // Interleaving a memo-eligible view and a versionless view must not
+      // cross-contaminate results.
+      const reg = mutableReg(['mint']);
+      const memoed = colorizeInputBuffer('/mint hi', reg.view);
+      const versionless: SlashRegistryView = { has: () => false };
+      const plain = colorizeInputBuffer('/mint hi', versionless);
+      // reg says known (mint tone); versionless says unknown (meta tone).
+      const memoedAnsi = memoed.match(ANSI_RE)?.[0];
+      const plainAnsi = plain.match(ANSI_RE)?.[0];
+      expect(memoedAnsi).not.toBe(plainAnsi);
+      expect(stripAnsi(memoed)).toBe('/mint hi');
+      expect(stripAnsi(plain)).toBe('/mint hi');
+    });
+
+    it('memoized output equals the equivalent non-memoized output (parity)', () => {
+      // The memo must be behavior-transparent: for the same logical inputs,
+      // a versioned (cacheable) view and a versionless view produce the same
+      // colored string.
+      const cases: Array<[string, readonly string[]]> = [
+        ['/mint hello', ['mint']],
+        ['/notreal foo', []],
+        ['hello /mint @src/x.ts [Pasted text #1 +3 lines]', ['mint']],
+        ['/mint then /diagnose', ['mint', 'diagnose']],
+        ['plain text no tokens', []],
+      ];
+      for (const [buf, known] of cases) {
+        const withVersion: SlashRegistryView = {
+          has: (n) => known.includes(n),
+          version: () => 42,
+        };
+        const withoutVersion: SlashRegistryView = { has: (n) => known.includes(n) };
+        // Warm the memo, then read it back.
+        colorizeInputBuffer(buf, withVersion);
+        const cached = colorizeInputBuffer(buf, withVersion);
+        const uncached = colorizeInputBuffer(buf, withoutVersion);
+        expect(cached).toBe(uncached);
+      }
+    });
+  });
 });

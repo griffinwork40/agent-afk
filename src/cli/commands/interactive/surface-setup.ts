@@ -7,6 +7,8 @@ import { runTextInput } from '../../render/text-input.js';
 import { debugLog } from '../../../utils/debug.js';
 import { env } from '../../../config/env.js';
 import { cyclePermissionMode } from '../../permission-mode-cycle.js';
+import { openEditorForBuffer } from '../../slash/commands/editor-open.js';
+import { palette } from '../../palette.js';
 import type { InteractiveCtx } from './shared.js';
 import { formatStatusFields } from './shared.js';
 import type { TranscriptHandle } from './transcript.js';
@@ -108,6 +110,27 @@ export async function setupSurface(
       // /afk); cf. `/plan off`, which saves the plan + implements it.
       cyclePermissionMode(ctx.slashCtx).catch(() => {});
       ctx.statusLine.rearm();
+    },
+    // Ctrl+O → open $EDITOR seeded with the input buffer, mirroring the
+    // /editor slash command. Fire-and-forget (matches the onShiftTab idiom):
+    // the keypress dispatch is synchronous, so we kick off the async handoff
+    // and swallow rejections rather than blocking dispatch. The handoff reads
+    // the live compositor + surfaces its own notices via commitAbove, so an
+    // absent compositor (should never happen once armed) is a safe no-op.
+    onOpenEditor: () => {
+      const compositor = surface.getCompositor();
+      openEditorForBuffer({
+        compositor,
+        notify: (kind, message) => {
+          // Chords have no `ctx.out`; write the notice above the live input
+          // frame. Color by severity to match the REPL writer's conventions.
+          const painted =
+            kind === 'error' ? palette.error(message)
+            : kind === 'warn' ? palette.warning(message)
+            : palette.dim(message);
+          compositor?.commitAbove(painted);
+        },
+      }).catch(() => {});
     },
     // StatusLine doubles as DECSTBM scroll-region guard so commitAbove
     // writes survive the persistent bottom-row reservation.
