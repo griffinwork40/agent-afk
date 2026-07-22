@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.65.0] - 2026-07-22
+
+### Added
+- show stopping state + queued count on ESC soft-stop (#646) (6fda98f)
+
 ## [5.64.0] - 2026-07-22
 
 ### Added
