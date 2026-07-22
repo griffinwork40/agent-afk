@@ -9,12 +9,25 @@ import { maxInnerBoxWidth, truncateDisplay } from './utils.js';
 /** Indicator kind controls the coloured dot shown next to a value. */
 export type StatusKind = 'ok' | 'warn' | 'error' | 'info';
 
-const DOT: Record<StatusKind, string> = {
-  ok:    palette.success('●'),
-  warn:  palette.warning('●'),
-  error: palette.error('●'),
-  info:  palette.info('◆'),
-};
+/**
+ * Render the coloured indicator glyph for a status kind.
+ *
+ * Invariant: this MUST be a function, not a module-level const/lookup table.
+ * `palette` is a live view over the active theme (see palette.ts) —
+ * capturing `palette.success('●')` etc. into a const at import time would
+ * freeze the glyph to whatever theme was active at module load, so a
+ * `light` swap would leave stale dark-theme dots on screen. Resolving per
+ * call (mirrors `buildSyntaxTheme()` in syntax-theme.ts) keeps the glyph in
+ * lock-step with `applyTheme()`.
+ */
+function dot(kind: StatusKind): string {
+  switch (kind) {
+    case 'ok':    return palette.success('●');
+    case 'warn':  return palette.warning('●');
+    case 'error': return palette.error('●');
+    case 'info':  return palette.info('◆');
+  }
+}
 
 /** A single row inside a status panel. */
 export interface StatusRow {
@@ -75,12 +88,12 @@ export function statusPanel(title: string, rows: StatusRow[]): string {
 
   // Row lines
   const rowLines = rows.map((r) => {
-    const dot    = r.kind ? DOT[r.kind] + ' ' : '  ';
+    const dotGlyph = r.kind ? dot(r.kind) + ' ' : '  ';
     const label  = palette.dim(padDisplayRight(truncateDisplay(r.label, maxLabel), maxLabel));
     const gap    = ' '.repeat(LABEL_GAP);
     const displayVal = truncateDisplay(r.value, valColW);
     const value  = padDisplayRight(displayVal, valColW);
-    const content = label + gap + dot + value;
+    const content = label + gap + dotGlyph + value;
     return pipe + '  ' + content + '  ' + pipe;
   });
 

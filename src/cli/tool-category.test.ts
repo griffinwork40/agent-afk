@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import chalk from 'chalk';
+import chalk, { type ChalkInstance } from 'chalk';
 import {
   categorizeTool,
   dispatchTagForCategory,
@@ -15,6 +15,18 @@ import {
   NESTING_TOOLS,
   type ToolCategory,
 } from './tool-category.js';
+import { palette } from './palette.js';
+
+/**
+ * A stand-in `ChalkInstance` that renders `<tag>:<text>` uncolored. Used to
+ * prove a "read `palette.<role>` at call time" invariant deterministically,
+ * sidestepping chalk's own ANSI-downsample quantization (which bakes in at
+ * `hex()` property-access time and can make two distinct tones coincidentally
+ * render identical bytes at a low color level).
+ */
+function sentinelChalk(tag: string): ChalkInstance {
+  return ((...text: unknown[]) => `${tag}:${text.join(' ')}`) as ChalkInstance;
+}
 
 const ALL_CATEGORIES: ToolCategory[] = [
   'read',
@@ -172,6 +184,36 @@ describe('styleForCategory', () => {
 
   it('dag is not the same glyph as other (was the bug pre-fix)', () => {
     expect(styleForCategory('dag').glyph).not.toBe(styleForCategory('other').glyph);
+  });
+
+  it('resolves palette-sourced category colors from `palette` at call time, not at module load (no theme-swap freeze)', () => {
+    // Regression: subagent/planning/other resolved `palette.plan`/`palette.meta`
+    // into a module-level const lookup at import time, so a theme swap (which
+    // mutates `palette`'s members in place — see applyTheme()) left them
+    // frozen to whatever theme was active at module load. Swapping the
+    // backing palette roles to distinct sentinel renderers directly (the
+    // same mechanism applyTheme uses) proves each is re-read on every call
+    // rather than captured once. The chalk.hex(...) literal entries (e.g.
+    // read/write) are theme-agnostic by design and intentionally excluded.
+    // See PR #643 review.
+    const savedPlan = palette.plan;
+    const savedMeta = palette.meta;
+    try {
+      palette.plan = sentinelChalk('PLAN-A');
+      palette.meta = sentinelChalk('META-A');
+      expect(styleForCategory('subagent').color('x')).toBe('PLAN-A:x');
+      expect(styleForCategory('planning').color('x')).toBe('META-A:x');
+      expect(styleForCategory('other').color('x')).toBe('META-A:x');
+
+      palette.plan = sentinelChalk('PLAN-B');
+      palette.meta = sentinelChalk('META-B');
+      expect(styleForCategory('subagent').color('x')).toBe('PLAN-B:x');
+      expect(styleForCategory('planning').color('x')).toBe('META-B:x');
+      expect(styleForCategory('other').color('x')).toBe('META-B:x');
+    } finally {
+      palette.plan = savedPlan;
+      palette.meta = savedMeta;
+    }
   });
 });
 

@@ -10,6 +10,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import stringWidth from 'string-width';
+import type { ChalkInstance } from 'chalk';
 import {
   statusPanel,
   welcomeBanner,
@@ -19,10 +20,28 @@ import {
   card,
   usageLimitBox,
 } from './render.js';
+import { palette } from './palette.js';
 
 /** Remove ANSI escape sequences so assertions work in any chalk level. */
 function strip(s: string): string {
   return s.replace(/\x1B\[[0-9;]*m/g, '');
+}
+
+/**
+ * A stand-in `ChalkInstance` that renders `<tag>:<text>` uncolored. Used to
+ * prove a "read `palette.<role>` at call time" invariant deterministically —
+ * chalk's own `hex()` builders bake their ANSI-downsample approximation at
+ * property-access time, so two different hex tones can coincidentally
+ * render identical bytes once downsampled to a low color level, which would
+ * make a raw before/after string-equality check against real theme colors
+ * flaky. A sentinel marker function sidesteps that entirely. `.bold` is
+ * attached too since `drawBox` (card.ts's bordered-card path) chains it off
+ * the border color for the title chip.
+ */
+function sentinelChalk(tag: string): ChalkInstance {
+  const fn = ((...text: unknown[]) => `${tag}:${text.join(' ')}`) as ChalkInstance;
+  fn.bold = ((...text: unknown[]) => `${tag}-bold:${text.join(' ')}`) as unknown as ChalkInstance;
+  return fn;
 }
 
 // ─── statusPanel ──────────────────────────────────────────────────────────────
@@ -77,6 +96,29 @@ describe('statusPanel', () => {
     const title = 'Agent AFK · Status Check (long title)';
     const out = strip(statusPanel(title, []));
     expect(out).toContain(title);
+  });
+
+  it('resolves the status dot glyph from `palette` at call time, not at module load (no theme-swap freeze)', () => {
+    // Regression: the dot glyph used to live in a module-level const built
+    // from `palette.<role>` at import time, so a theme swap (which mutates
+    // `palette`'s members in place — see applyTheme()) left it frozen to
+    // whatever theme was active at module load. Swapping `palette.success`
+    // to two distinct sentinel renderers directly (the same mechanism
+    // applyTheme uses) proves the glyph is re-read on every call rather
+    // than captured once. See PR #643 review.
+    const savedSuccess = palette.success;
+    try {
+      palette.success = sentinelChalk('SENTINEL-A');
+      const a = statusPanel('Status', [{ label: 'SDK', value: 'Up', kind: 'ok' }]);
+      expect(a).toContain('SENTINEL-A');
+
+      palette.success = sentinelChalk('SENTINEL-B');
+      const b = statusPanel('Status', [{ label: 'SDK', value: 'Up', kind: 'ok' }]);
+      expect(b).toContain('SENTINEL-B');
+      expect(b).not.toContain('SENTINEL-A');
+    } finally {
+      palette.success = savedSuccess;
+    }
   });
 });
 
@@ -611,6 +653,29 @@ describe('card', () => {
     expect(out).toContain('╭');
     expect(out).toContain('╰');
     expect(out).toContain('│');
+  });
+
+  it('resolves the bordered-card border color from `palette` at call time, not at module load (no theme-swap freeze)', () => {
+    // Regression: the border-color lookup used to live in a module-level
+    // const built from `palette.<role>` at import time, so a theme swap
+    // (which mutates `palette`'s members in place — see applyTheme()) left
+    // it frozen to whatever theme was active at module load. Swapping
+    // `palette.plan` to two distinct sentinel renderers directly (the same
+    // mechanism applyTheme uses) proves the border color is re-read on
+    // every call rather than captured once. See PR #643 review.
+    const savedPlan = palette.plan;
+    try {
+      palette.plan = sentinelChalk('SENTINEL-A');
+      const a = card({ kind: 'plan', body: 'step 1' });
+      expect(a).toContain('SENTINEL-A');
+
+      palette.plan = sentinelChalk('SENTINEL-B');
+      const b = card({ kind: 'plan', body: 'step 1' });
+      expect(b).toContain('SENTINEL-B');
+      expect(b).not.toContain('SENTINEL-A');
+    } finally {
+      palette.plan = savedPlan;
+    }
   });
 
   it('renders status kind with default STATUS title', () => {

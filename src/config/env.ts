@@ -979,6 +979,31 @@ export const ENV_REGISTRY: readonly EnvVarMeta[] = [
     example: '1',
     category: 'process',
   },
+  {
+    name: 'AFK_THEME',
+    description:
+      'TUI color palette for the interactive REPL and all CLI rendering: dark | light | auto. ' +
+      'Display-only — swaps the semantic color palette, never behavior (cost/latency unaffected). ' +
+      'auto detects from COLORFGBG and falls back to dark. ' +
+      'Overridden per-launch by --theme and mutable mid-session via /theme. ' +
+      'Precedence: --theme flag > this env > config theme > auto-detect > dark. Invalid values are ignored (dark).',
+    type: 'string',
+    required: false,
+    default: 'dark',
+    example: 'light',
+    category: 'misc',
+  },
+  {
+    name: 'COLORFGBG',
+    description:
+      'Terminal-set "foreground;background" color hint (e.g. "15;0"), read only for AFK_THEME=auto detection. ' +
+      'The trailing field is the background color index; >= 7 is treated as a light background, otherwise dark. ' +
+      'Not set by AFK — emitted by some terminals (rxvt, Konsole, iTerm2). Absent or unparseable => dark.',
+    type: 'string',
+    required: false,
+    example: '15;0',
+    category: 'process',
+  },
 
   // ── Debug / diagnostics ───────────────────────────────────────────────────
   {
@@ -1429,6 +1454,8 @@ export const env = {
   get AFK_SKILL_STREAM_VERBOSE(): string | undefined { return process.env['AFK_SKILL_STREAM_VERBOSE']; },
   get FORCE_COLOR(): string | undefined { return process.env['FORCE_COLOR']; },
   get NO_COLOR(): string | undefined { return process.env['NO_COLOR']; },
+  get AFK_THEME(): string | undefined { return process.env['AFK_THEME']; },
+  get COLORFGBG(): string | undefined { return process.env['COLORFGBG']; },
 
   // Debug
   get AFK_DEBUG(): string | undefined { return process.env['AFK_DEBUG']; },

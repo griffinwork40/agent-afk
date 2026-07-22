@@ -167,6 +167,7 @@ export function loadConfig(overrides?: Partial<CliConfig>): CliConfig {
     ...(merged.enablePluginHooks !== undefined ? { enablePluginHooks: merged.enablePluginHooks } : {}),
     ...(merged.enforceDoneEvidence !== undefined ? { enforceDoneEvidence: merged.enforceDoneEvidence } : {}),
     ...(merged.importFrom !== undefined ? { importFrom: merged.importFrom } : {}),
+    ...(merged.theme !== undefined ? { theme: merged.theme } : {}),
   };
 
   // Resolve + install the process-global model-slot bindings (Stage 1).

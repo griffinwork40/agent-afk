@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**133 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**135 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -164,6 +164,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AGENT_SURFACE` | string |  |  | `cli` | Internal surface marker propagated to subprocesses. Identifies which AFK surface (cli, telegram, daemon) spawned the process. |
 | `ASCIINEMA_REC` | boolean |  |  | `1` | Set to 1 by asciinema rec while a session is being recorded. Triggers capture-mode. |
 | `CI` | string |  |  | `true` | Standard CI-detection convention. Auto-set by GitHub Actions, CircleCI, etc. Used to switch off TTY-only UX. |
+| `COLORFGBG` | string |  |  | `15;0` | Terminal-set "foreground;background" color hint (e.g. "15;0"), read only for AFK_THEME=auto detection. The trailing field is the background color index; >= 7 is treated as a light background, otherwise dark. Not set by AFK — emitted by some terminals (rxvt, Konsole, iTerm2). Absent or unparseable => dark. |
 | `EDITOR` | string |  |  | `vim` | Standard POSIX env var naming the user's preferred editor (with optional flags). Consulted by the /editor slash command AFTER VISUAL, as the standard fallback. No default editor is assumed when both are unset — /editor prints a hint telling the user to set one. |
 | `FORCE_COLOR` | string |  |  | `1` | Standard Node convention. Force-enable ANSI color output even when stdout is not a TTY. |
 | `HOME` | string |  |  |  | Standard Unix home directory. Used as the fallback when AFK_HOME is unset. |
@@ -194,6 +195,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_SHOW_DIFFS` | boolean |  |  |  | Show inline diffs in the tool-lane output for edit/write tool calls. 1 = on, 0 = off. |
 | `AFK_SPINNER_TIPS` | boolean |  |  |  | Show rotating tips in the loading spinner during long calls. 1 = on, 0 = off. |
 | `AFK_TERM_TITLE` | boolean |  |  | `0` | Set the terminal/tab title (OSC 2) to reflect afk state — "afk — <cwd> · running" during a turn, "afk — <cwd>" when idle, cleared on exit. 1 = on (default when stdout is a TTY), 0 = leave the title alone. TTY-only. |
+| `AFK_THEME` | string |  | `dark` | `light` | TUI color palette for the interactive REPL and all CLI rendering: dark \| light \| auto. Display-only — swaps the semantic color palette, never behavior (cost/latency unaffected). auto detects from COLORFGBG and falls back to dark. Overridden per-launch by --theme and mutable mid-session via /theme. Precedence: --theme flag > this env > config theme > auto-detect > dark. Invalid values are ignored (dark). |
 | `AFK_THINKING_UI` | string |  | `live` | `digest` | Default thinking-display mode for the interactive REPL: summary \| live \| digest \| off. Display-only — controls how extended-thinking blocks render, never whether thinking runs (cost/latency unaffected). Overridden per-launch by --thinking-ui and mutable mid-session via /thinking. Precedence: --thinking-ui flag > this env > interactive.thinkingUi config > live. Invalid values are ignored. |
 | `AFK_USER_CARD_MAX_ROWS` | number |  |  | `24` | Maximum number of visual rows emitted by renderUserCard before collapsing the remainder into a dim "…(N lines collapsed)" summary row. Defaults to 24. Non-integer or non-positive values are silently ignored and the default applies. |
 | `AFK_WRITE_DENYLIST` | string |  |  | `**/.env,**/secrets/**` | Comma-separated list of additional path globs that the write_file tool refuses to write to. |
