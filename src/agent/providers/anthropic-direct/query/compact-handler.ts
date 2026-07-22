@@ -41,9 +41,11 @@ import {
   buildSummarizationRequest,
   estimateTokensSaved,
   findCompactionBoundaryAdaptive,
+  microcompactToolResults,
 } from '../compact.js';
 import {
   DEFAULT_COMPACT_SHRINK_THRESHOLD,
+  resolveMicrocompactOptions,
 } from '../../shared/compaction.js';
 import {
   contextFullnessFraction,
@@ -120,23 +122,19 @@ export async function compactHistory(
     readShrinkFraction(),
   );
   if (boundary < 0) {
-    return {
-      compacted: false,
-      reason: 'history-too-short',
-      messagesBefore,
-      messagesAfter: messagesBefore,
-    };
+    // Turn-granular summarization has nothing to do (fewer than keepLastN fresh
+    // user turns). Fall back to a deterministic tool-result microcompaction pass
+    // — a single-turn-but-full session has all its bytes inside the one kept
+    // turn, where summarization can't reach, but microcompaction can. See
+    // shared/compaction.ts:microcompactToolResults.
+    return runMicrocompactFallback(state, messagesBefore, 'history-too-short');
   }
   if (boundary === 0) {
     // Kept tail starts at message 0 — nothing older to summarize.
     // History is not too short; the entire history falls within the keep
-    // window. Emit a distinct reason so surfaces can give accurate feedback.
-    return {
-      compacted: false,
-      reason: 'nothing-to-summarize',
-      messagesBefore,
-      messagesAfter: messagesBefore,
-    };
+    // window. Try the deterministic microcompaction fallback before reporting
+    // the no-op so a short-but-full session still reclaims context.
+    return runMicrocompactFallback(state, messagesBefore, 'nothing-to-summarize');
   }
 
   const olderSlice = state.messages.slice(0, boundary);
@@ -262,6 +260,50 @@ function readShrinkFraction(): number {
     if (Number.isFinite(n) && n > 0 && n < 1) return n;
   }
   return DEFAULT_COMPACT_SHRINK_THRESHOLD;
+}
+
+/**
+ * Deterministic no-LLM fallback: when turn-granular summarization is a no-op,
+ * clear large/old `tool_result` block CONTENT in place to reclaim context. On a
+ * short-but-full session (the window filled by huge tool payloads inside the one
+ * kept turn) this reclaims exactly the bytes summarization cannot reach.
+ *
+ * Returns a `microcompacted` success-ish result carrying the reclaimed
+ * block/byte counts when it cleared anything; otherwise returns the honest
+ * no-op `fallbackReason` so surfaces still report accurately. `messagesBefore`
+ * === `messagesAfter` always — microcompaction never removes a message, only
+ * swaps a result's content for a placeholder.
+ */
+function runMicrocompactFallback(
+  state: SessionState,
+  messagesBefore: number,
+  fallbackReason: 'history-too-short' | 'nothing-to-summarize',
+): ProviderCompactResult {
+  const opts = readMicrocompactOptions();
+  const { blocksCleared, bytesReclaimed } = microcompactToolResults(state.messages, opts);
+  if (blocksCleared > 0) {
+    return {
+      compacted: false,
+      reason: 'microcompacted',
+      messagesBefore,
+      messagesAfter: state.messages.length,
+      microcompaction: { blocksCleared, bytesReclaimed },
+    };
+  }
+  return {
+    compacted: false,
+    reason: fallbackReason,
+    messagesBefore,
+    messagesAfter: messagesBefore,
+  };
+}
+
+/** Resolve the microcompaction threshold/keep-last from env (see shared resolver). */
+function readMicrocompactOptions(): { thresholdBytes: number; keepLast: number } {
+  return resolveMicrocompactOptions(
+    env.AFK_MICROCOMPACT_TOOL_RESULT_BYTES,
+    env.AFK_MICROCOMPACT_KEEP_LAST,
+  );
 }
 
 function readCompactModel(): string {

@@ -409,6 +409,13 @@ export interface ProviderRewindResult {
  * `compacted: false` is not an error — it signals a deliberate no-op (history
  * too short, provider doesn't support it, or the user aborted). `reason`
  * carries a short identifier the surface can render to the user.
+ *
+ * The `reason: 'microcompacted'` outcome is a special "success-ish" no-op:
+ * turn-granular summarization found nothing to do (the session is short but the
+ * window is full), so a deterministic tool-result microcompaction pass cleared
+ * large tool_result payloads in place instead. No messages were removed
+ * (`messagesBefore === messagesAfter`), so callers key off `microcompaction`
+ * rather than the message-count delta to report the reclaimed bytes/blocks.
  */
 export interface ProviderCompactResult {
   compacted: boolean;
@@ -417,6 +424,18 @@ export interface ProviderCompactResult {
   messagesAfter: number;
   /** Best-effort estimate of input tokens saved on subsequent turns. */
   tokensSavedEstimate?: number;
+  /**
+   * Present only when a deterministic tool-result microcompaction pass ran and
+   * reclaimed context (paired with `reason: 'microcompacted'`). No message was
+   * removed — only large `tool_result` block CONTENT was replaced by a
+   * placeholder — so this carries the win the message-count delta cannot.
+   */
+  microcompaction?: {
+    /** Number of tool_result blocks whose content was cleared. */
+    blocksCleared: number;
+    /** Total content bytes reclaimed. */
+    bytesReclaimed: number;
+  };
 }
 
 /**
