@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.63.1] - 2026-07-22
+
+### Fixed
+- seal witness trace only from the top-level session (#666) (b98f911)
+
 ## [5.63.0] - 2026-07-22
 
 ### Added
