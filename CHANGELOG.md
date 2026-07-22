@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.64.0] - 2026-07-22
+
+### Added
+- add a light theme for the TUI (theme: dark|light|auto) (#643) (d9b42a9)
+
 ## [5.63.1] - 2026-07-22
 
 ### Fixed
