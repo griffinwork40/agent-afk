@@ -241,6 +241,9 @@ export class StreamRenderer {
   /** Live interrupt state — flipped by {@link setInterrupting} on Ctrl+C. */
   private interrupting = false;
 
+  /** Live soft-stop state — flipped by {@link setSoftStopping} on ESC. */
+  private softStopping = false;
+
   /**
    * Single ordering authority for all scrollback writes during this turn.
    * Constructed fresh per-StreamRenderer-instance (= per-turn). Drains via
@@ -460,6 +463,7 @@ export class StreamRenderer {
       toolLane: this.toolLane,
       lastProgressByTask: this.lastProgressByTask,
       getInterrupting: () => this.interrupting,
+      getSoftStopping: () => this.softStopping,
     });
 
     // Reduced-motion suppresses the spinner ticker at the source. State-transition
@@ -500,6 +504,29 @@ export class StreamRenderer {
     this.interrupting = active;
     if (this.overlayComposer) {
       this.overlayComposer.markDirty('interrupt');
+      this.overlayComposer.flush();
+    }
+  }
+
+  /**
+   * Flip the live "stopping…" progress-banner state. Called from the REPL's
+   * ESC soft-stop handler (turn-handler.ts) the instant ESC is handled, so the
+   * banner shows the stop was accepted on the NEXT repaint — before the turn
+   * finishes tearing down (which can take seconds while subagents cancel).
+   *
+   * Invariant: the OverlayComposer is the single overlay owner — this flips the
+   * renderer's `softStopping` flag (read by the 'progress-banner' slot's
+   * render() via the `getSoftStopping` accessor) and triggers exactly one
+   * composed flush rather than writing the compositor overlay directly (the
+   * corruption-fix contract). Order: mutate state, THEN recompose. Mirrors
+   * {@link setInterrupting} — the Ctrl+C affordance's sibling. A no-op after
+   * dispose so a late ESC that lands during teardown can't touch a torn frame.
+   */
+  setSoftStopping(active: boolean): void {
+    if (this.disposed) return;
+    this.softStopping = active;
+    if (this.overlayComposer) {
+      this.overlayComposer.markDirty('progress-banner');
       this.overlayComposer.flush();
     }
   }
@@ -728,6 +755,17 @@ export class StreamRenderer {
     // dispose without a 'done' event (error aborts, interrupts) so the
     // overlay flushes below never repaint a stale progress banner.
     this.lastProgressByTask.clear();
+
+    // Reset the soft-stop flag too — without this, an ESC that landed just
+    // before dispose() leaves `softStopping=true` past teardown. The
+    // borrowed-compositor path below invalidates + flushes the overlay
+    // composer to clear the live frame; with lastProgressByTask now empty but
+    // getSoftStopping() still true, the 'progress-banner' slot's synthetic
+    // fallback (stream-renderer-lifecycle.ts) recreates a `Turn / stopping…`
+    // banner instead of contributing '' — painting a stale banner into the
+    // idle prompt until the next unrelated repaint overwrites it. Clearing
+    // here BEFORE that flush guarantees the slot renders empty.
+    this.softStopping = false;
 
     // CommitCoordinator.flushAll() is the single async owner at turn end.
     // It drains all scheduled commit batches in fixed anchor order:

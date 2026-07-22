@@ -259,6 +259,14 @@ export async function runTurn(
     if (h.setSoftStopHandler) {
       h.setSoftStopHandler(() => {
         softStopRequested = true;
+        // Immediate visible feedback: flip the live progress banner to its
+        // "stopping…" state on the SAME frame this handler runs, so the user
+        // sees the ESC was accepted before teardown completes (which can take
+        // seconds while subagents cancel). setSoftStopping recomposes the
+        // overlay once (mirrors the Ctrl+C setInterrupting affordance). The
+        // closure dereferences `renderer` so it targets the live renderer even
+        // after a paused→resumed hot-swap; a no-op if the renderer is disposed.
+        renderer.setSoftStopping(true);
         // Fire interrupt() synchronously on ESC instead of waiting for the
         // for-await loop below to observe `softStopRequested`. During a long
         // tool call the loop is blocked awaiting the stream's next event, so a
@@ -654,11 +662,21 @@ export async function runTurn(
     // same session.")
     if (softStopRequested) {
       const write = completionWriter ? completionWriter.fn : console.log;
+      // Surface how many type-ahead messages are still queued (Enter-committed
+      // pendingSubmissions preserved across the soft-stop per the ESC contract).
+      // The authoritative count is the persistent compositor's getPendingCount()
+      // — `borrowedCompositor` is the same instance the input dispatcher queues
+      // into; null on non-TTY surfaces, where there's no input row to type-ahead
+      // into, so the suffix is simply omitted. Singular/plural handled.
+      const queuedCount = borrowedCompositor ? borrowedCompositor.getPendingCount() : 0;
+      const queuedSuffix = queuedCount > 0
+        ? ` · ${queuedCount} queued`
+        : '';
       // Invariant (TUI rhythm contract): the soft-stop notice owns ONE
       // trailing blank line. The predecessor (last committed paragraph
       // or tool block) already emitted its own trailing blank, so a
       // leading blank here would double-up. See docs/tui-rhythm.md.
-      write(palette.warning('⏸ Stopped — work so far kept.') +
+      write(palette.warning(`⏸ Stopped${queuedSuffix} — work so far kept.`) +
         palette.dim('  Send a message to continue.'));
       write('');
     }

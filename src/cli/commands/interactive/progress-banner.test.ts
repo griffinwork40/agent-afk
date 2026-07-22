@@ -114,6 +114,79 @@ describe('progress-banner — terminal width clamping', () => {
     });
   });
 
+  // Regression: ESC soft-stop must give immediate visible feedback. When the
+  // banner is asked to render in the stopping state (soft-stop requested but the
+  // turn hasn't finished tearing down), it must swap to a clear "stopping…"
+  // indicator and drop the now-misleading "esc to interrupt" hint — the
+  // interrupt has already been accepted. Normal streaming must be untouched.
+  describe('formatProgressBanner — stopping state', () => {
+    it('shows a "stopping…" indicator when the stopping flag is set', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'Tool-use loop', summary: 'round 3: bash ls', lastToolName: 'Bash', toolUses: 5 }),
+        Infinity,
+        undefined,
+        true,
+      );
+      const joined = stripAnsi(lines.join('\n'));
+      expect(joined).toContain('stopping…');
+    });
+
+    it('drops the "esc to interrupt" hint in the stopping state (interrupt already accepted)', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'Tool-use loop', lastToolName: 'Bash', toolUses: 5 }),
+        Infinity,
+        undefined,
+        true,
+      );
+      const joined = stripAnsi(lines.join('\n'));
+      expect(joined).not.toContain('esc to interrupt');
+    });
+
+    it('replaces the activity/summary clause with "stopping…" (does not show the stale tool clause)', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'Tool-use loop', summary: 'round 3: bash ls' }),
+        Infinity,
+        'Now checking the config loader',
+        true,
+      );
+      const joined = stripAnsi(lines.join('\n'));
+      expect(joined).toContain('stopping…');
+      // The in-flight activity clause and tool summary are the "what it WAS
+      // doing" signal — suppressed once the user has asked it to stop.
+      expect(joined).not.toContain('Now checking the config loader');
+      expect(joined).not.toContain('round 3: bash ls');
+    });
+
+    it('does NOT show the stopping indicator during normal streaming (flag unset)', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'Tool-use loop', summary: 'round 3: bash ls', lastToolName: 'Bash', toolUses: 5 }),
+        Infinity,
+      );
+      const joined = stripAnsi(lines.join('\n'));
+      expect(joined).not.toContain('stopping…');
+      // Normal streaming keeps the interrupt hint.
+      expect(joined).toContain('esc to interrupt · ctrl+b background');
+    });
+
+    it('does NOT show the stopping indicator when the flag is explicitly false', () => {
+      const lines = formatProgressBanner(
+        mkEvent({ description: 'Tool-use loop', lastToolName: 'Bash' }),
+        Infinity,
+        undefined,
+        false,
+      );
+      expect(stripAnsi(lines.join('\n'))).not.toContain('stopping…');
+    });
+
+    it('clamps the stopping banner to the provided column width', () => {
+      const cols = 40;
+      const lines = formatProgressBanner(mkEvent({ description: LONG }), cols, undefined, true);
+      for (const line of lines) {
+        expect(displayWidth(stripAnsi(line))).toBeLessThanOrEqual(cols);
+      }
+    });
+  });
+
   describe('formatProgressBanner — sanitization (LLM-sourced fields)', () => {
     it('strips ANSI escapes injected via description', () => {
       const lines = formatProgressBanner(

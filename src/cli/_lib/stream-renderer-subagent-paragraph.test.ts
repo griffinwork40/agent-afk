@@ -101,6 +101,7 @@ function setup() {
     toolLane,
     lastProgressByTask: new Map(),
     getInterrupting: () => false,
+    getSoftStopping: () => false,
   });
 
   // Build a minimal OrchestratorCtx so subagent handlers can call
